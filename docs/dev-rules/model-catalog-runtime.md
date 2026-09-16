@@ -146,7 +146,7 @@ Registry 的全部模型及其 routes，防止只翻译当前默认启用的几�
 ### 本地模型目录
 
 本地模型筛选与更新遵循 [`local-model-selection.md`](../product-rules/local-model-selection.md)。
-Server 维护 Registry V4 的 `localModels`，本仓 `model-registry.json` 仅作离线副本；
+Server 数据库发布 Registry 的 `localModels`，客户端离线只读最后有效发布缓存；
 不得重新增加独立的硬编码推荐名单。更新时协调完整 Registry revision 和服务端覆盖源，
 保持旧客户端的版本投影与显式空推荐语义。
 
@@ -176,8 +176,9 @@ Gateway 下发不是所有模型事实的唯一依据。先对照官方规格、
 Astra / Sol / Terra / Luna 的官方容量为 1,050,000；本地 Registry 分开写模型容量和
 Codex / Claude 的 272,000 工作默认，账号原生明确的最大值继续优先。Pi 按显式订阅路由声明，
 不借公共 API 扩大订阅能力。用户可显式调整工作预算，预算不代表通道承诺。
-GPT `[1m]` 是旧窗口预设，退出 Desktop 管理和新选择清单；完整运行目录及历史价保留兼容，
-不改收藏、历史模型 ID 或用户已保存的窗口。自定义供应商、Claude / GLM 的真实变体不受影响。
+GPT `[1m]` 等窗口变体的默认显示统一由服务端 `defaultEnabled` 控制，客户端不再按名称
+从管理页或新选择清单剔除。内置账号、独立订阅账号和自定义供应商沿用同一原则；用户显式
+显示开关仍优先，历史模型 ID、已保存窗口与运行兼容逻辑保持不变。
 
 对应批次的源侧同步记录见 [历史记录](../model-catalog-history.md)；今天的发布状态必须重新核对目标环境。
 

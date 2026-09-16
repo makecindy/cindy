@@ -3462,6 +3462,13 @@ describe('model price override handlers', () => {
 });
 
 describe('provider:presets handler', () => {
+  it('returns the injected public publication without reading user connections', async () => {
+    const harness = new IpcHarness();
+    const catalog = { version: '1', providers: [], presets: [], providerModelCatalog: { schemaVersion: 1 as const, generatedAt: '2026-09-14T00:00:00Z', providers: {} } };
+    registerProviderHandlers(harness, makeDeps({ listPresets: () => [], getServerCatalog: () => catalog }));
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_PRESETS_LIST)).toEqual({ presets: [], catalog });
+  });
+
   it('returns injected presets as { presets }', async () => {
     const harness = new IpcHarness();
     const presets = [

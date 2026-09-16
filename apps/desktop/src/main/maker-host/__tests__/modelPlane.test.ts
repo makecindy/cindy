@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * modelPlane.test.ts —— 模型平面收敛(2026-08-02)的 invariant 矩阵:
  * registry presence 实体化 / 生命周期(retired tombstone + keepSelected 豁免)/
@@ -8,7 +9,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  BUNDLED_CATALOG,
   buildRegistry,
   deriveModelList,
   resolveModelNativeApi,
@@ -86,18 +86,8 @@ function withNativeMetadataAndDefaults(
   providerId: string,
   models: readonly CatalogModel[] = [],
 ): CatalogModel[] {
-  const defaults: Record<string, readonly string[]> = {
-    xai: ['grok-4.6'],
-    anthropic: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
-    openai: [
-      'chatgpt/gpt-6-astra',
-      'chatgpt/gpt-5.6-sol',
-      'chatgpt/gpt-5.6-terra',
-      'chatgpt/gpt-5.6-luna',
-    ],
-  };
   return models.map((model) => {
-    const nativeApi = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
+    const nativeApi = resolveModelNativeApi(getActiveCatalog().modelRegistry, providerId, model.id);
     return {
       ...model,
       ...(nativeApi === null ||
@@ -107,7 +97,6 @@ function withNativeMetadataAndDefaults(
       nativeApi === 'google-generative-ai'
         ? { nativeApi }
         : {}),
-      ...(defaults[providerId]?.includes(model.id) ? {} : { defaultEnabled: false }),
     };
   });
 }

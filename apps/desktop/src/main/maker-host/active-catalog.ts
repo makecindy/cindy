@@ -1,4 +1,4 @@
-import { projectProviderMediaModels } from '@cindy/model-providers';
+import { projectProviderMediaModels, applySubscriptionDefaults } from '@cindy/model-providers';
 import {
   applyExistingModelLocalPatch,
   applyLocalModelCatalogOverrides,
@@ -13,9 +13,9 @@ import {
 /**
  * active-catalog —— 进程级「当前生效目录」单例(纯状态 holder,零 Electron 依赖)。
  *
- * 设计(用户敲定):OSS 上的 `providers.json` 是运行时真源,启动时(splash 阶段)由
- * `ensureActiveCatalogLoaded`(见 createDesktopProviderService.ts)拉取一次、存进这里、
- * **无 TTL**;内置 `BUNDLED_CATALOG` 仅作「尚未加载完成 / 拉取失败」时的兜底。
+ * 服务端数据库发布是配置来源，启动时由 `ensureActiveCatalogLoaded` 拉取并保存。
+ * 网络失败只回退同来源的上次有效快照；没有快照时保持空目录。
+ * `SERVER_CATALOG` 是已接受的公开发布，不含本机用户连接。
  *
  * **自定义供应商**:用户在本机配置的 user provider(见 custom-provider-store)经
  * `buildUserProvider` 展开成标准 `Provider` 后由 `setCustomProviders` 注入,**追加在内置之后**。
@@ -24,7 +24,7 @@ import {
  * 的首见展示元数据；Pi 的扁平 capability 另对涉及 custom 的 effort 做交集，避免旧消费者
  * 在丢失 provider provenance 后展示某条实际路由不支持的档位。
  *
- * 所有消费方统一读 `getActiveCatalog()`,而非各自 import `BUNDLED_CATALOG`:
+ * 所有消费方统一读 `getActiveCatalog()`,而非各自 import `SERVER_CATALOG`:
  *   - maker availableModels 派生(maker-host/index.ts)
  *   - 统一路由器(provider-route.ts)
  *   - 会话标题模型(provider-one-shot.ts)
@@ -39,7 +39,8 @@ import {
 import { isDeepStrictEqual } from 'node:util';
 
 import {
-  BUNDLED_CATALOG,
+  SERVER_CATALOG,
+  installServerCatalog,
   buildUserProvider,
   runtimeUserModelMetadata,
   clampEffortToSupported,
@@ -60,8 +61,6 @@ import {
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
-
-import { selectDefaultModels } from './model-default-selection.js';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
@@ -96,20 +95,20 @@ import {
   type RootAgentKind,
 } from './model-plane/modelPlanePolicy.js';
 
-/** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
+/** 已加载的服务端基础目录；null = 尚未加载。 */
 let base: Catalog | null = null;
-/** Exact accepted Cindy Server/local/LKG snapshot before bundled compatibility backfill. */
+/** Exact accepted Cindy Server/local/LKG publication. */
 let piGatewayAuthorityCatalog: Catalog | null = null;
 /** 当前基础目录是否由本次配置的 Catalog 真源明确证明；fallback 只保兼容元数据。 */
 let baseCapabilityEvidence: CatalogCapabilityEvidence = 'fallback';
-/** XD media fields inherited from bundled rather than proven by the current source. */
+/** XD media fields not proven by the current source. */
 let baseUnverifiedXdMediaKinds: ReadonlySet<CatalogXdMediaKind> = new Set([
   'image',
   'video',
   'embedding',
 ]);
 /** Last trusted Registry used only to re-project user configs; it never changes catalog membership. */
-let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.modelRegistry;
+let trustedCustomProviderRegistry: Catalog['modelRegistry'] = SERVER_CATALOG.modelRegistry;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
 let custom: Provider[] = [];
 /** 当前 owner 的原始配置；仅用于 Registry 热更新后的运行时重投影。 */
@@ -360,7 +359,7 @@ function preserveNonGrok46DiscoveryEfforts(
   models: readonly CatalogModel[],
   discovered: readonly XaiDiscoveredModel[],
 ): CatalogModel[] {
-  if (((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion ?? 0) >= 4) return [...models];
+  if (((base ?? SERVER_CATALOG).modelRegistry?.schemaVersion ?? 0) >= 4) return [...models];
   const byId = new Map(discovered.map((entry) => [entry.id, entry]));
   return models.map((model) => {
     const entry = byId.get(model.id) ?? byId.get(`xai/${model.id}`);
@@ -411,12 +410,12 @@ function resolveXdPiGatewayServerModelApi(
  * unknowns and retirements still win. No prices, windows or availability are backfilled.
  */
 function nativeApiForRoute(providerId: string, modelId: string): PiModelApi | null | undefined {
-  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  const registry = (base ?? SERVER_CATALOG).modelRegistry;
   const declared = resolveModelNativeApi(registry, providerId, modelId);
   const resolved =
     declared !== undefined
       ? declared
-      : resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, modelId);
+      : resolveModelNativeApi(SERVER_CATALOG.modelRegistry, providerId, modelId);
   return resolved == null
     ? resolved
     : [
@@ -705,7 +704,7 @@ function modelRegistryMetaFields(
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
   const registryAgent = agent === 'pi' ? undefined : agent;
-  const catalog = base ?? BUNDLED_CATALOG;
+  const catalog = base ?? SERVER_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
   if (!matched) return undefined;
   const { entry } = matched;
@@ -752,7 +751,7 @@ function buildEffectiveRegistryMetaIndex(): Map<string, RegistryMetaFields> {
   if (effectiveRegistryMetaIndex) return effectiveRegistryMetaIndex;
 
   const effective = new Map<string, RegistryMetaFields>();
-  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  const registry = (base ?? SERVER_CATALOG).modelRegistry;
   for (const entry of registry?.models ?? []) {
     for (const route of entry.routes) {
       if (route.providerId !== 'anthropic' || !route.agents.includes('claude-code')) continue;
@@ -838,7 +837,7 @@ function assembleRoot(
       };
     });
   }
-  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  const registry = (base ?? SERVER_CATALOG).modelRegistry;
   if ((registry?.schemaVersion ?? 0) >= 4) {
     const live = new Map(models.map((model) => [model.id, model]));
     out = out.map((model) => {
@@ -876,7 +875,7 @@ function applyLayeredConsumer(
   plan: ModelPlaneRegistryPlan,
 ): CatalogModel {
   const overlaid = applyRegistryConsumerOverlay(model, providerId, agent, model.id, plan);
-  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  const registry = (base ?? SERVER_CATALOG).modelRegistry;
   return (registry?.schemaVersion ?? 0) >= 4
     ? applyModelMetadata(
         overlaid,
@@ -897,7 +896,7 @@ function xaiCatalogModelById(
   id: string,
   agent: RootAgentKind,
 ): CatalogModel | undefined {
-  const bundled = BUNDLED_CATALOG.providers.find((entry) => entry.id === 'xai');
+  const bundled = SERVER_CATALOG.providers.find((entry) => entry.id === 'xai');
   return (
     provider.models[agent]?.find((model) => model.id === id) ??
     bundled?.models[agent]?.find((model) => model.id === id)
@@ -984,12 +983,12 @@ function normalizePiModelId(providerId: string, modelId: string): string {
 
 /**
  * An explicit per-Harness declaration owns membership, including an empty list.
- * Old snapshots without this field use the bundled declaration. Native runtime
- * catalogs supply transport compatibility, never a second public membership list.
+ * Only the accepted publication supplies this list. Adapter metadata provides transport
+ * compatibility, never a second public membership list.
  */
 function declaredPiModels(providerId: string): CatalogModel[] {
   const bundled =
-    BUNDLED_CATALOG.providers.find((provider) => provider.id === providerId)?.models.pi ?? [];
+    SERVER_CATALOG.providers.find((provider) => provider.id === providerId)?.models.pi ?? [];
   const explicit = (piGatewayAuthorityCatalog ?? base)?.providers.find(
     (provider) => provider.id === providerId,
   )?.models.pi;
@@ -1081,7 +1080,7 @@ function projectXdGatewayMediaModels(
 }
 
 function computeMerged(): Catalog {
-  const source = base ?? BUNDLED_CATALOG;
+  const source = base ?? SERVER_CATALOG;
   const b =
     baseCapabilityEvidence === 'current'
       ? projectUnverifiedCatalogFallbackForBuildRegion(
@@ -1099,14 +1098,14 @@ function computeMerged(): Catalog {
   const fallbackXdCatalog =
     baseCapabilityEvidence === 'current'
       ? projectUnverifiedCatalogFallbackForBuildRegion(
-          BUNDLED_CATALOG,
+          SERVER_CATALOG,
           CURRENT_CINDY_REGION,
           baseUnverifiedXdMediaKinds,
         )
-      : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
+      : projectUnverifiedCatalogFallbackForBuildRegion(SERVER_CATALOG, CURRENT_CINDY_REGION);
   const catalogXd = b.providers.find((provider) => provider.id === 'xd');
   const xdShell = catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
-  const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
+  const bundledXai = SERVER_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers
     .filter((provider) => provider.id !== 'xd')
@@ -1213,7 +1212,7 @@ function computeMerged(): Catalog {
             ...(model.contextWindowMax !== undefined
               ? { contextWindowMax: model.contextWindowMax }
               : {}),
-            ...(((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion ?? 0) < 4 &&
+            ...(((base ?? SERVER_CATALOG).modelRegistry?.schemaVersion ?? 0) < 4 &&
             model.supportsFastMode === false
               ? { supportsFastMode: false }
               : {}),
@@ -1304,7 +1303,7 @@ function computeMerged(): Catalog {
       // Pi's separate local list is assembled below and never participates in this choice.
       const authoritativeMembers = useAccountMembership
         ? accountModels
-        : b === BUNDLED_CATALOG || p === bundledXai
+        : b === SERVER_CATALOG || p === bundledXai
           ? bundledXaiFallbackMembers(p)
           : null;
       const claudeSeed = authoritativeMembers
@@ -1358,7 +1357,7 @@ function computeMerged(): Catalog {
   //   - perAgent 覆盖块按 tab 应用在基线字段之上;
   //   - efforts 缺失或 [] = 没有可调档位，不合成任何档位;
   //   - defaultEffort 优先 Cindy 已接受的 Registry 模型默认，缺失时按实际能力优先选中档;
-  //   - supportsFastMode 缺失保持缺失；defaultEnabled 叠加本地精简陈列策略，用户显式选择另行优先;
+  //   - supportsFastMode 缺失保持缺失；defaultEnabled 直接使用服务端结果，用户显式选择另行优先;
   //   - v3 name / contextWindow 已在 HTTP 协议边界强制要求，这里绝不补 id / 200K。
   // 放在所有 augment 之后:只影响 xd 供应商自己的模型列表,同 id 模型经其它供应商
   // (如 anthropic 订阅直连)仍照常可用。
@@ -1408,21 +1407,10 @@ function computeMerged(): Catalog {
           efforts.length === 0
             ? null
             : ((clampEffortToSupported(intent, efforts) ?? null) as Effort | null);
-        // Canonical Registry API determines native versus compatibility defaults. Explicit
-        // per-harness policy remains an override; user visibility preferences are applied later.
+        // Execution metadata and display policy are independent. The server owns all defaults.
         const nativeApi = nativeApiForRoute('xd', gm.id);
         const piApi = agent === 'pi' ? resolveXdPiGatewayModelApi(gm) : undefined;
-        const harnessApi =
-          agent === 'claude-code'
-            ? 'anthropic-messages'
-            : agent === 'codex'
-              ? 'openai-responses'
-              : piApi;
-        const outboundApi = agent === 'pi' ? piApi : (ov.wireProtocol ?? harnessApi);
-        const compatible = Boolean(
-          nativeApi && (harnessApi !== nativeApi || outboundApi !== nativeApi),
-        );
-        const defaultEnabled = ov.defaultEnabled ?? (compatible ? false : gm.defaultEnabled);
+        const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
         const cost = effectiveGatewayModelCost(gm);
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
         const merged: CatalogModel = {
@@ -1459,27 +1447,6 @@ function computeMerged(): Catalog {
         };
         models[agent]!.push(merged);
       }
-    }
-    // Choose only among routes which have a usable, default-enabled harness after the
-    // native/compatibility projection. A cheaper but unsupported route must not hide its sibling.
-    const eligibleIds = new Set(
-      Object.values(models).flatMap((entries) =>
-        (entries ?? []).filter((model) => model.defaultEnabled !== false).map((model) => model.id),
-      ),
-    );
-    const defaultGatewayModels = selectDefaultModels(
-      gwModels
-        .filter((model) => eligibleIds.has(model.id))
-        .map((model) => ({ ...model, defaultEnabled: true })),
-      'xd',
-    );
-    for (const agent of agentKeys) {
-      models[agent] = models[agent]!.map((model) =>
-        (!model.mode || model.mode === 'chat' || model.mode === 'responses') &&
-        !defaultGatewayModels.has(model.id)
-          ? { ...model, defaultEnabled: false }
-          : model,
-      );
     }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。
     for (const agent of agentKeys) {
@@ -1561,30 +1528,13 @@ function computeMerged(): Catalog {
       ]),
     ),
   }));
-  // Subscription providers use the same small default selection, scoped per harness so
-  // chatgpt/ aliases never hide their sibling Codex route. Explicit user visibility stays external.
-  providers = providers.map((provider) => {
-    const catalogId = providerCatalogId(provider);
-    if (!isOpenAiSubscriptionProvider(provider) &&
-      ((provider.source === 'user' && !provider.auth.native) || !['anthropic', 'xai'].includes(catalogId)))
-      return provider;
-    return {
-      ...provider,
-      models: Object.fromEntries(
-        Object.entries(provider.models).map(([agent, models]) => {
-          const selected = selectDefaultModels(models ?? []);
-          return [
-            agent,
-            models?.map((model) =>
-              (!model.mode || model.mode === 'chat' || model.mode === 'responses') &&
-              !selected.has(model.id)
-                ? { ...model, defaultEnabled: false }
-                : model,
-            ),
-          ];
-        }),
-      ),
-    };
+  // Model defaults come from the accepted server publication. User overrides stay external.
+  providers = providers.map(provider => {
+    const defaults = b.providers.find(source => source.id === providerCatalogId(provider))?.newSessionDefaults;
+    // Native subscription accounts share catalog policy, while retaining their own identity/overrides.
+    return applySubscriptionDefaults(provider.access?.kind === 'subscription'
+      && provider.newSessionDefaults === undefined && defaults !== undefined
+      ? { ...provider, newSessionDefaults: defaults } : provider);
   });
   // The xAI API-key preset is chat-first in CustomProviderConfig, but its official
   // endpoint can execute the same Imagine catalog. Keep the executable media facts
@@ -1718,7 +1668,7 @@ function computeMerged(): Catalog {
 function projectLocalModelCatalog(catalog: Catalog) {
   // A local fallback is not a server Registry revision or a source of cloud routes.
   const localModels =
-    catalog.modelRegistry?.localModels ?? BUNDLED_CATALOG.modelRegistry!.localModels;
+    catalog.modelRegistry?.localModels ?? SERVER_CATALOG.modelRegistry?.localModels;
   const userNamedLocalModels = localModels
     ? {
         ...localModels,
@@ -1733,16 +1683,16 @@ function projectLocalModelCatalog(catalog: Catalog) {
   return applyLocalModelCatalogOverrides(
     userNamedLocalModels,
     localOverrides.localModels,
-    catalog.modelRegistry?.baseModels ?? BUNDLED_CATALOG.modelRegistry!.baseModels,
+    catalog.modelRegistry?.baseModels ?? SERVER_CATALOG.modelRegistry?.baseModels,
   );
 }
 
 export function getActiveLocalModelCatalog() {
-  return projectLocalModelCatalog(base ?? BUNDLED_CATALOG);
+  return projectLocalModelCatalog(base ?? SERVER_CATALOG);
 }
 
 /**
- * 同步返回当前生效目录(base + 自定义供应商)。未加载完成 → base 回落 `BUNDLED_CATALOG`
+ * 同步返回当前生效目录(base + 自定义供应商)。未加载完成 → base 回落 `SERVER_CATALOG`
  * (安全兜底,绝不抛)。消费方(路由 / 标题 / 能力派生 / 注册表)统一走这里。
  */
 export function getActiveCatalog(): Catalog {
@@ -1782,7 +1732,7 @@ function installActiveCatalog(
   unverifiedXdMediaKinds: readonly CatalogXdMediaKind[],
   force: boolean,
 ): boolean {
-  const previous = base ?? BUNDLED_CATALOG;
+  const previous = base ?? SERVER_CATALOG;
   const nextUnverifiedXdMediaKinds = new Set(unverifiedXdMediaKinds);
   if (
     !force &&
@@ -1798,6 +1748,7 @@ function installActiveCatalog(
     catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
   trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
+  installServerCatalog(catalog);
   piGatewayAuthorityCatalog = authorityCatalog;
   baseCapabilityEvidence = capabilityEvidence;
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
@@ -1868,7 +1819,7 @@ export function commitModelPlaneFromCatalog(
     unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
   } = {},
 ): void {
-  const current = base ?? BUNDLED_CATALOG;
+  const current = base ?? SERVER_CATALOG;
   const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
   const providers =
     incomingXai && current.providers.some((provider) => provider.id === 'xai')
@@ -1890,7 +1841,7 @@ export function commitModelPlaneFromCatalog(
     custom = customConfigs.map((config) =>
       buildUserProvider(config, {
         modelRegistry: trustedCustomProviderRegistry,
-        presets: (base ?? BUNDLED_CATALOG).presets,
+        presets: (base ?? SERVER_CATALOG).presets,
       }),
     );
   }
@@ -1935,7 +1886,7 @@ export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void 
   custom = customConfigs.map((config) =>
     buildUserProvider(config, {
       modelRegistry: trustedCustomProviderRegistry,
-      presets: (base ?? BUNDLED_CATALOG).presets,
+      presets: (base ?? SERVER_CATALOG).presets,
     }),
   );
   markChanged();

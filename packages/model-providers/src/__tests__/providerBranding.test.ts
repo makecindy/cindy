@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 /** Provider branding contract shared by desktop and mobile. */
 import { describe, expect, it } from 'vitest';
 
-import { BUNDLED_CATALOG } from '../catalog.js';
+
 import {
   hasProviderLogo,
   isProviderLogoKind,

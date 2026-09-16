@@ -1,5 +1,5 @@
 import {
-  BUILTIN_PROVIDERS,
+  SERVER_CATALOG,
   validModelMetadata,
   type ModelMetadata,
   type BaseModel,
@@ -366,7 +366,7 @@ export function sanitizeModelCatalogOverrides(raw: unknown): SanitizeResult {
       // Independent connections may not exist when this file is read. Retain complete
       // dormant additions; only the actual connection's root policy can materialize them.
       // Known non-root providers (e.g. the Gateway) remain forbidden.
-      if (section === 'additions' && !BUILTIN_PROVIDERS.some(p => p.id === parsed.providerId)) {
+      if (section === 'additions' && !SERVER_CATALOG.providers.some(p => p.id === parsed.providerId)) {
         const candidates: RootAgentKind[] = ['codex', 'claude-code'];
         agents = candidates.filter(agent =>
           (!entry.agents || entry.agents.includes(agent)) &&

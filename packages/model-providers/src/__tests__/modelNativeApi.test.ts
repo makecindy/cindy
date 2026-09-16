@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from "vitest";
-import { BUNDLED_CATALOG, type ModelRegistry } from "../index.js";
+import { type ModelRegistry } from '../index.js';
 import { parseModelRegistry } from "../modelAccessValidator.js";
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from "../modelRegistry.js";
 
@@ -45,7 +46,7 @@ describe('native declarations for verified catalog identities', () => {
   });
   it('does not let a retired sibling suppress the active catalog identity', () => {
     const r = registry();
-    r.baseModels = [{ id: 'gemini-99', name: 'Gemini 99', aliases: [] }];
+    r.baseModels = [{ id: 'gemini-99', defaults: { name: 'Gemini 99' }, aliases: [] }];
     r.models = [
       { id: 'google/gemini-99', name: 'Gemini', modelRef: 'gemini-99', nativeApi: 'google-generative-ai', routes: [] },
       { id: 'google/gemini-99-preview', name: 'Gemini preview', modelRef: 'gemini-99', status: 'retired', nativeApi: 'google-generative-ai', routes: [] },

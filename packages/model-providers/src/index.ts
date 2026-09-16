@@ -2,8 +2,8 @@
  * @cindy/model-providers — 模型供应商目录 + 路由抽象（纯逻辑，零 Electron / maker-core 运行时依赖）。
  *
  * - types：Provider / CatalogModel / RoutingDescriptor（models.dev 形状 + agents/routing/runtime 扩展）
- * - catalog：内置目录 BUNDLED_CATALOG + parseCatalog 校验
- * - source：目录源解析与加载（公共 API / 旧 OSS / 本地 / bundled 兜底，IO 由 host 注入）
+ * - catalog：服务端发布 SERVER_CATALOG + parseCatalog 校验
+ * - source：目录源解析与加载（服务端公共 API / 同源 LKG / 空目录；显式文件仅测试诊断，IO 由 host 注入）
  * - registry：连接状态合成、按 agent 算可见性、resolveRoute 解析路由素材
  */
 
@@ -52,8 +52,9 @@ export { resolveCodexCompatibilityWireProtocol } from "./codexCompatibility.js";
 export { modelProtocolComparison, nativeModelAgents } from "./modelProtocol.js";
 
 export {
-  BUNDLED_CATALOG,
-  BUILTIN_PROVIDERS,
+  EMPTY_CATALOG,
+  SERVER_CATALOG,
+  installServerCatalog,
   parseCatalog,
   presetDisplayName,
   sanitizePresets,
@@ -79,11 +80,8 @@ export { findReservedOAuthExtraParam } from "./provider-oauth.js";
 
 export {
   CATALOG_API_PATH,
-  CATALOG_CFG_PATH,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   resolveCatalogUrl,
-  resolveFallbackCatalogUrl,
-  mergeWithBundled,
   loadCatalog,
   loadCatalogWithSource,
 } from "./source.js";
@@ -307,3 +305,4 @@ export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
 
 export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
+export { applySubscriptionDefaults, subscriptionModelKey } from './subscriptionDefaults.js';

@@ -1,8 +1,9 @@
+import { trimTrailingSlashes } from '@cindy/model-compat/url';
 import type { ProviderPresetRuntime } from './types.js';
 
 const token = /\{([A-Za-z][A-Za-z0-9_]*)\}/g;
 export function providerEndpointBindings(template: string, endpoint: string): Record<string, string> | null {
-  if (!template.includes('{')) return template.replace(/\/+$/, '') === endpoint.replace(/\/+$/, '') ? {} : null;
+  if (!template.includes('{')) return trimTrailingSlashes(template) === trimTrailingSlashes(endpoint) ? {} : null;
   const names: string[] = [];
   const escaped = template.split(token).map((part, index) => {
     if (index % 2) { names.push(part); return '([A-Za-z0-9_-]+)'; }

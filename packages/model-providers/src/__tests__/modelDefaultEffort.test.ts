@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
 import { describe, expect, it } from "vitest";
-import rawRegistry from "../../catalog/model-registry.json";
+const rawRegistry = BUNDLED_CATALOG.modelRegistry;
 import {
   modelDefaultEffort,
   defaultEffortForCapabilities,

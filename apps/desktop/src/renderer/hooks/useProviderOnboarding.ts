@@ -1,3 +1,4 @@
+import { loadProviderPresetCatalog } from '@/lib/providerPresetCatalog';
 /**
  * useProviderOnboarding — 「连接供应商」引导(首屏卡片 + 会话 banner)的唯一判定
  * 与数据装配点,两处 UI 都消费本 hook,防止判定口径漂移。
@@ -121,8 +122,7 @@ export function useProviderOnboarding(
   useEffect(() => {
     if (!wantPresets || rawPresets != null) return;
     let cancelled = false;
-    void window.electronAPI.maker
-      .listProviderPresets()
+    void loadProviderPresetCatalog()
       .then((r) => {
         if (!cancelled) setRawPresets(r.presets);
       })

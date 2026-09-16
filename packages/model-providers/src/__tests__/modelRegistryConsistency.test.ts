@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import {
   expandedRegistryEntries,
   referencePricesForRoute,
@@ -5,7 +6,7 @@ import {
 } from "../modelMetadataLayers.js";
 import { describe, expect, it } from "vitest";
 
-import modelRegistryJson from "../../catalog/model-registry.json" with { type: "json" };
+const modelRegistryJson = BUNDLED_CATALOG.modelRegistry;
 import type {
   ModelAgent,
   ModelRegistry,

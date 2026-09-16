@@ -1,16 +1,6 @@
-/**
- * 目录运行时校验(parseCatalog)+ presets 清洗排序。
- *
- * 2026-07-19 起 bundled 目录由 `builtin.ts` 组装:内置供应商身份卡是 TS 常量,
- * `catalog/providers.json`(v2)承载 xAI 的离线 fallback 元数据 + presets 模板——它仍是
- * ① OSS `cfg/providers.json` 的发布物 ② dev 直读的仓库文件。anthropic/openai/xd
- * 的模型清单运行时动态注入(见 apps/desktop maker-host active-catalog),不再进目录文件。
- * xAI 登录后同样由账号 `/v1/models` 决定成员；此处静态段只在尚无成功账号快照时救急，
- * 并为已发现成员补上下文、价格、能力与路由。
- * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
- */
-
+import { validateProviderModelCatalog, validatePresetInterfaces } from './providerModelCatalogValidation.js';
 import { projectProviderMediaModels } from './providerMediaModels.js';
+import { validateSubscriptionDefaults } from './subscriptionDefaults.js';
 import { validModelMetadata } from './modelMetadataLayers.js';
 import { parseModelRegistry } from './modelAccessValidator.js';
 
@@ -29,7 +19,7 @@ import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
 import { isProviderRequestPath } from './provider-url.js';
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
+export { EMPTY_CATALOG, SERVER_CATALOG, installServerCatalog } from './builtin.js';
 
 const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -407,6 +397,7 @@ function validateProvider(p: Provider, allowEmptyModalities = false): void {
     assert(['audio_speech', 'audio_transcription', 'audio_generation', 'realtime'].includes(m.mode ?? ''), `provider '${p.id}' audio model '${m.id}' requires an audio mode`);
   }
   validateAccess(p);
+  validateSubscriptionDefaults(p);
   validateOAuthDescriptor(p);
 }
 
@@ -530,6 +521,7 @@ function validateModelConsistency(catalog: Catalog): void {
 function isValidPreset(v: unknown): v is ProviderPreset {
   if (!v || typeof v !== 'object') return false;
   const p = v as Record<string, unknown>;
+  try { validatePresetInterfaces(p); } catch { return false; }
   if (typeof p.id !== 'string' || p.id.length === 0) return false;
   if (typeof p.name !== 'string' || p.name.length === 0) return false;
   if (p.docsUrl !== undefined && typeof p.docsUrl !== 'string') return false;
@@ -642,7 +634,7 @@ function isLegacyAnthropicPiRuntime(
 }
 
 /**
- * runtime.modelsUrl 非法（非 http(s) URL 或含内嵌凭据）时剥掉该字段、保留预设本体——OSS 推错一个
+ * runtime.modelsUrl 非法（非 http(s) URL 或含内嵌凭据）时剥掉该字段、保留预设本体——服务端推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
  */
 function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
@@ -717,8 +709,8 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
 /**
  * 预设段容错清洗：逐条校验、坏条目丢弃 + 按 id 去重（first-wins）。
  *
- * 刻意**不走 assert**：预设是纯 UI 模板数据，不参与路由；OSS 推错一条预设不应让
- * 整份远端目录 parse 失败回退 bundled（那会连带丢掉远端的模型/路由更新）。
+ * 刻意**不走 assert**：预设是纯 UI 模板数据，不参与路由；服务端推错一条预设不应让
+ * 整份远端目录 parse 失败回退同源 LKG（那会连带丢掉远端的模型/路由更新）。
  */
 export function sanitizePresets(input: unknown): ProviderPreset[] {
   if (!Array.isArray(input)) return [];
@@ -803,15 +795,16 @@ export function sortPresetsForRegion(
 export function parseCatalog(input: string | unknown): Catalog {
   const obj: unknown = typeof input === 'string' ? JSON.parse(input) : input;
   assert(obj && typeof obj === 'object', 'root is not an object');
-  const allowedRootFields = new Set(['version', 'providers', 'presets', 'modelRegistry']);
+  const allowedRootFields = new Set(['version', 'providers', 'presets', 'modelRegistry', 'providerModelCatalog']);
   const unknownRootField = Object.keys(obj).find((field) => !allowedRootFields.has(field));
   assert(!unknownRootField, `catalog.${unknownRootField} is not allowed`);
-  const catalog = obj as Catalog;
+  const catalog = { ...obj } as Catalog;
+  if (catalog.providerModelCatalog !== undefined) validateProviderModelCatalog(catalog.providerModelCatalog);
   assert(typeof catalog.version === 'string', 'catalog.version missing');
   assert(Array.isArray(catalog.providers) && catalog.providers.length > 0, 'catalog.providers missing/empty');
   // presets 容错清洗（坏条目丢弃，不让预设错误拖垮整份目录）。
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
-  if (presets.length > 0) catalog.presets = presets;
+  if (presets.length > 0 || Array.isArray(catalog.presets) && catalog.presets.length === 0) catalog.presets = presets;
   else delete catalog.presets;
   if ((catalog as { modelRegistry?: unknown }).modelRegistry !== undefined) {
     const registry = parseModelRegistry((catalog as { modelRegistry: unknown }).modelRegistry);
@@ -828,11 +821,6 @@ export function parseCatalog(input: string | unknown): Catalog {
     projectProviderMediaModels(provider, catalog.modelRegistry, { addDeclared: true })) };
   for (const provider of projected.providers) validateProvider(provider, (catalog.modelRegistry?.schemaVersion ?? 0) >= 4);
   validateModelConsistency(projected);
-  // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
-  // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
-  //
-  // 刻意**不**原地替换 catalog.providers:入参可能就是 BUNDLED_CATALOG(共享的 import 对象),
-  // 原地改会把标记悄悄写回那份共享目录 —— 既是跨调用方的副作用,也会让「bundled 自己有没有
-  // 标记」这类断言变成假通过。
+  // Declared server windows are verified; return a new view without mutating the publication.
   return { ...projected, providers: projected.providers.map(withVerifiedStaticWindows) };
 }

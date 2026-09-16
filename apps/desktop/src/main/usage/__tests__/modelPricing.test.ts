@@ -1,3 +1,4 @@
+import '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import os from 'node:os';

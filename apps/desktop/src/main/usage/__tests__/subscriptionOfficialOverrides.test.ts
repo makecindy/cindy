@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, type AgentKind } from '@cindy/model-providers';
+import { type AgentKind } from '@cindy/model-providers';
 import { modelPricingKey, providerReferencePriceQuote } from '../../../shared/modelPriceQuote.js';
 import {
   __testing,

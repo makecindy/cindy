@@ -28,8 +28,7 @@
   `docs/dev-rules/environment-setup.md`。
 - 首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
   或排查目录下发与显示错误前，必须先读 `docs/dev-rules/model-catalog-maintenance.md`：
-  先看结构、覆盖顺序与修改位置，再按其中导航读取专题规则和实际代码；Server 正本与客户端
-  离线副本需协调更新，客户端已支持、Server 已实现和生产已部署必须分别核验。
+  先看结构、覆盖顺序与修改位置，再按其中导航读取专题规则和实际代码；Server 数据库发布是唯一配置来源，客户端仅保留最后有效缓存，客户端已支持、Server 已实现和生产已部署必须分别核验。
 - 启动、调试或验证 Desktop 时，必须先读 `docs/dev-rules/desktop-development.md`。
 - 修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、导航或 Electron
   特权能力前，必须先读 `docs/dev-rules/electron-security-and-process-boundaries.md`。

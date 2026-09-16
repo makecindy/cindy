@@ -47,9 +47,8 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
 - 收藏、历史选择、引擎偏好不能当成开关。
 - 桌面、IM 与远端用同一套 override；没 override 的路线由各端按当时目录 defaultEnabled 计算。
 
-实现核对须区分上游原始目录与执行端活动目录：当前仍有客户端精简陈列投影，见
-[已知实现差异](model-catalog-maintenance.md#visibility)。该说明不是对本节合同的豁免；
-不得仅因代码仍在筛选就反向修改产品规则，也不能未验证便声称两者已一致。
+模型默认显示由服务端发布配置维护，客户端不再二次筛选。验证应同时检查原始目录、
+执行端活动目录和用户 override，见 [默认可见性](model-catalog-maintenance.md#visibility)。
 
 ## 3. 默认值演进与迁移
 

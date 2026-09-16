@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+
 import { setCustomProviders } from '../../maker-host/active-catalog.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptSessionRuntimeMutation, getPendingSessionRuntimeMutation, clearSessionRuntimeControlState } from '../sessionRuntimeControl.js';

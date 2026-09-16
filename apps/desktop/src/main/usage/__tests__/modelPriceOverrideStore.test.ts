@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+
 
 import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';

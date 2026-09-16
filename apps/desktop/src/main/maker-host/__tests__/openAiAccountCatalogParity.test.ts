@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider, type CatalogModel } from '@cindy/model-providers';
+import { buildUserProvider, type CatalogModel } from '@cindy/model-providers';
 import {
   getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels,
   setLocalCatalogOverrides, setCustomProviderConfigs, setDiscoveredProviderMediaModels,
@@ -62,6 +63,14 @@ describe('OpenAI account catalog identity', () => {
     expect(images(accountId).imageModels?.map(m => m.id.replace(`${accountId}/`, 'openai/')))
       .toEqual(images('openai').imageModels?.map(m => m.id));
     expect(images(accountId).imageModels?.length).toBeGreaterThan(0);
+    // Those remaining members come from the same server Registry, not a bundled fallback.
+    catalog.modelRegistry!.models = catalog.modelRegistry!.models.filter(model =>
+      model.mode !== 'image_generation' || !model.routes.some(route => route.providerId === 'openai'));
+    setActiveCatalog(structuredClone(catalog));
+    for (const id of ['openai', accountId]) {
+      expect(images(id).imageModels).toBeUndefined();
+      expect(images(id).imageDefaults).toBeUndefined();
+    }
   });
 
   it('keeps Platform discovery and connection overrides out of other subscription image lists', () => {
@@ -197,7 +206,7 @@ describe('OpenAI account catalog identity', () => {
 });
 
 
-it('applies server Pi replacement, removal and missing-field fallback equally to both accounts', () => {
+it('applies server Pi replacement, removal and missing-field withdrawal equally to both accounts', () => {
   setCustomProviders([account()]);
   const catalog = structuredClone(BUNDLED_CATALOG);
   const openai = catalog.providers.find(p => p.id === 'openai')!;
@@ -218,7 +227,7 @@ it('applies server Pi replacement, removal and missing-field fallback equally to
   delete openai.models.pi;
   setActiveCatalog(structuredClone(catalog), { authorityCatalog: structuredClone(catalog) });
   for (const providerId of ['openai', accountId]) {
-    expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.pi?.length).toBeGreaterThan(0);
+    expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.pi).toEqual([]);
   }
 });
 

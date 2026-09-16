@@ -16,6 +16,7 @@
  * dispose: 由 bootstrap-electron.ts 的 onQuit 注册器在退出阶段调用。
  */
 
+import { trimTrailingSlashes } from '@cindy/model-compat/url';
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
@@ -154,7 +155,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
     const row = nativeRow ?? providerModelRecord(model.id, base, protocol);
     const thinkingFormat = row?.execution.pi.compat?.thinkingFormat;
     const handler = createClaudeProviderBridge({
-      url: `${base.replace(/\/+$/, '')}/${requestPath.replace(/^\/+/, '')}`,
+      url: `${trimTrailingSlashes(base)}/${requestPath.replace(/^\/+/, '')}`,
       protocol, headers: route.headerOverride ?? {}, efforts: model.efforts,
       providerId: provider.id,
       ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),

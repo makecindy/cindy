@@ -1983,7 +1983,7 @@
           "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
           "restoreDefault": "Restore default",
-          "engines": "Engine support",
+          "engines": "Harness Support",
           "enginesHint": "Compatibility mode converts requests. It is off by default and can be enabled when needed.",
           "engineUnsupported": "Not supported",
           "engineNotConfigured": "Not configured",

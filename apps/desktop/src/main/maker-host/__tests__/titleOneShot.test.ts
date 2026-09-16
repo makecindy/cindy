@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * title-one-shot —— 会话标题「单次 HTTP」生成器测试。
  *
@@ -106,7 +107,7 @@ async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
     setDiscoveredCodexModels([]);
   }
 }
-import { BUNDLED_CATALOG, type Catalog, type ProviderView } from '@cindy/model-providers';
+import { type Catalog, type ProviderView } from '@cindy/model-providers';
 
 /** 造一个 fetch 替身:按传入 handler 返回类 Response 对象,并记录调用。 */
 function fakeFetch(

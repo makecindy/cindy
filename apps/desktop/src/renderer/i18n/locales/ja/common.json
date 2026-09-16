@@ -1982,7 +1982,7 @@
           "contextLimitRoute": "現在 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
           "restoreDefault": "既定に戻す",
-          "engines": "エンジン対応",
+          "engines": "対応する Harness",
           "enginesHint": "互換モードはリクエストを変換します。初期状態ではオフですが、必要に応じて有効にできます。",
           "engineUnsupported": "非対応",
           "engineNotConfigured": "未設定",

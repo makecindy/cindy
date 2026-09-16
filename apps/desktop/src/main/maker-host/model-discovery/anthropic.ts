@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from '@cindy/model-compat/url';
 import { pickModelMetadata } from '@cindy/model-providers';
 /**
  * model-discovery/anthropic —— Anthropic(Claude.ai 订阅)模型清单的动态发现。
@@ -1051,7 +1052,7 @@ export function refreshAnthropicModelsFromHttp(options?: {
     const provider = getActiveCatalog().providers.find((p) => p.id === 'anthropic');
     const upstream = provider?.routing['claude-code']?.upstream ?? 'https://api.anthropic.com';
     const entries: unknown[] = [];
-    let url: string | null = `${upstream.replace(/\/+$/, '')}/v1/models?limit=1000`;
+    let url: string | null = `${trimTrailingSlashes(upstream)}/v1/models?limit=1000`;
     try {
       for (let page = 0; url && page < MAX_MODEL_PAGES; page += 1) {
         const res: Response = await outboundFetch(url, {
@@ -1106,7 +1107,7 @@ export function refreshAnthropicModelsFromHttp(options?: {
               })`,
             );
           }
-          url = `${upstream.replace(/\/+$/, '')}/v1/models?limit=1000&after_id=${encodeURIComponent(body.last_id)}`;
+          url = `${trimTrailingSlashes(upstream)}/v1/models?limit=1000&after_id=${encodeURIComponent(body.last_id)}`;
         } else {
           url = null;
         }

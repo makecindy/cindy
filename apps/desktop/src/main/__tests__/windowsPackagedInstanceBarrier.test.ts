@@ -1,12 +1,7 @@
 import { EventEmitter } from 'node:events';
-import os from 'node:os';
-import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  acquireWindowsPackagedInstanceBarrier,
-  __testing,
-} from '../windowsPackagedInstanceBarrier.js';
+import { __testing } from '../windowsPackagedInstanceBarrier.js';
 
 describe('windowsPackagedInstanceBarrier', () => {
   it('parses only complete helper statuses', () => {
@@ -75,38 +70,4 @@ describe('windowsPackagedInstanceBarrier', () => {
     await waiting;
     expect(finished).toBe(true);
   });
-
-  it.runIf(process.platform === 'win32')(
-    'holds the packaged startup mutex until release and allows a later retry',
-    async () => {
-      const programName = `CindyBarrierTest${process.pid}`;
-      const userDataDir = path.join(os.tmpdir(), programName);
-      const first = await acquireWindowsPackagedInstanceBarrier({
-        userDataDir,
-        programName,
-        timeoutMs: 1_000,
-      });
-      try {
-        expect(first.isHeld()).toBe(true);
-        await expect(
-          acquireWindowsPackagedInstanceBarrier({
-            userDataDir,
-            programName,
-            timeoutMs: 50,
-          }),
-        ).rejects.toThrow('startup barrier is busy');
-      } finally {
-        await first.release();
-      }
-      expect(first.isHeld()).toBe(false);
-
-      const retry = await acquireWindowsPackagedInstanceBarrier({
-        userDataDir,
-        programName,
-        timeoutMs: 1_000,
-      });
-      expect(retry.isHeld()).toBe(true);
-      await retry.release();
-    },
-  );
 });

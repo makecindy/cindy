@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * model-discovery/anthropic 单测。
  *
@@ -13,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
+import { type Catalog } from '@cindy/model-providers';
 
 // 规则 23:测试涉及路径一律用 os.tmpdir() 下的临时目录,收尾清理。
 const TEST_USER_DATA = path.join(os.tmpdir(), `cindy-anthropic-discovery-test-${process.pid}`);

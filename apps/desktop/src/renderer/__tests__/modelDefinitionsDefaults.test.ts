@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * getDefaultModelForVendor 的种子默认取法 —— 目录排序第一的默认可见模型。
  *
@@ -148,7 +149,7 @@ describe('getDefaultModelForVendor', () => {
     // bundle，为一个瞬态 label 不值得），所以 label 只能写在代码里 —— 那就由这条断言保证
     // 它不漂移，而不是靠人记得两处一起改。
     stubCapabilities({ 'claude-code': [], codex: [] });
-    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
     const md = await import('@/lib/modelDefinitions');
     const first = Object.entries(bundledMeta(BUNDLED_CATALOG))
       .filter(([, v]) => v.agents?.includes('claude-code') && v.defaultEnabled !== false)
@@ -170,7 +171,7 @@ describe('getDefaultModelForVendor', () => {
     // 占位按订阅口径取（校准规则优先订阅供应商），锁死目录静态序会锁成另一个模型。
     // 这个不一致本身是目录数据问题，待产品裁决后再收紧本条断言。
     stubCapabilities({ 'claude-code': [], codex: [] });
-    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
     const md = await import('@/lib/modelDefinitions');
     const meta = bundledMeta(BUNDLED_CATALOG);
     const placeholder = md.coldStartModelIdForVendor('codex');

@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, type ModelRegistry } from '@cindy/model-providers';
+import { type ModelRegistry } from '@cindy/model-providers';
 
 import type { ModelAccessGatewayModel } from '../modelAccess.js';
 import {
@@ -21,6 +22,13 @@ function model(
 }
 
 describe('gatewayPricingCatalog', () => {
+  it('preserves special model IDs as prices without changing the dictionary prototype', () => {
+    const catalog = gatewayPricingCatalog([model('__proto__'), model('constructor')], 'USD');
+    expect(Object.keys(catalog.xd)).toEqual(['__proto__', 'constructor']);
+    expect(Object.getPrototypeOf(catalog.xd)).toBeNull();
+    expect(catalog.xd['__proto__']).toMatchObject({ modelId: '__proto__', inputPerMtok: 2 });
+  });
+
   it('rejects the whole catalog when the Gateway declares mixed currencies', () => {
     // 混币目录已被 resolveGatewayAccountCurrency 判定不可信(账本随之回退构建币种)。
     // 若这里继续产出混币 catalog，非账本币种的那部分模型金额会被账本写入守卫选择性
@@ -115,6 +123,36 @@ describe('gatewayPricingCatalog', () => {
 });
 
 describe('registryPricingCatalog', () => {
+  it.each(['__proto__', 'constructor', 'toString', 'ordinary'])('keeps special IDs as own JSON keys for provider %s', (providerId) => {
+    const modelId = '__cindyPricingPrototypeRegression__';
+    const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
+    const registry: ModelRegistry = {
+      schemaVersion: 1, updatedAt: '2026-09-15T00:00:00Z',
+      models: [{ id: 'test/model', name: 'Model', routes: [{
+        providerId, modelId, agents: ['codex'],
+        referencePrices: [{ currency: 'USD', variant: 'standard', inputPerMtok: 2, outputPerMtok: 8,
+          effectiveFrom: '2026-01-01', source: { kind: 'provider-official', url: 'https://example.test/prices', verifiedAt: '2026-09-15' } }],
+      }] }],
+    };
+    try {
+      const catalog = registryPricingCatalog(registry);
+      expect(Object.hasOwn(catalog, providerId)).toBe(true);
+      expect(Object.hasOwn(catalog[providerId], modelId)).toBe(true);
+      expect(catalog[providerId][modelId]).toMatchObject({ providerId, modelId, inputPerMtok: 2, outputPerMtok: 8 });
+      expect(JSON.parse(JSON.stringify(catalog))[providerId][modelId]).toEqual(catalog[providerId][modelId]);
+      expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
+    } finally {
+      Reflect.deleteProperty(Object.prototype, modelId);
+      Reflect.deleteProperty(Object, modelId);
+      Reflect.deleteProperty(Object.prototype.toString, modelId);
+    }
+    registry.models[0].routes[0].modelId = '__proto__';
+    const catalog = registryPricingCatalog(registry);
+    expect(Object.hasOwn(catalog[providerId], '__proto__')).toBe(true);
+    expect(catalog[providerId]['__proto__']).toMatchObject({ modelId: '__proto__', inputPerMtok: 2 });
+    expect(Object.getPrototypeOf(catalog[providerId])).toBe(Object.prototype);
+  });
+
   it('projects the audited public tariffs without backfilling Gateway sale prices', () => {
     const registry = BUNDLED_CATALOG.modelRegistry!;
     const luna = providerReferencePriceQuote('openai', 'gpt-5.6-luna', registry, { at: '2026-09-11' });

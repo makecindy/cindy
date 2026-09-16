@@ -62,6 +62,7 @@ import type {
   UserMessage,
 } from '@cindy/maker-core';
 import {
+  SERVER_CATALOG,
   effectiveSourceIdForModel,
   findCatalogModel,
   storedCustomProviderId,
@@ -5476,7 +5477,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),
     setProviderOrder: (providerIds) => setProviderOrder(providerIds),
     getProviderOrder: () => readProviderOrder(),
-    listPresets: () => getActiveCatalog().presets ?? [],
+    listPresets: () => SERVER_CATALOG.presets ?? [],
+    getServerCatalog: () => SERVER_CATALOG,
     testConnection: (input) => testProviderConnection(input),
     fetchModels: async (spec) => {
       if (spec.savedProviderId && subscriptionAccountKind(spec.savedProviderId)) {

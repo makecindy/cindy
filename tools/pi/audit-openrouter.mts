@@ -6,10 +6,15 @@ import {
   buildUserProvider,
   providerModelRecord,
   PROVIDER_MODEL_CATALOG,
-  BUNDLED_CATALOG,
+  SERVER_CATALOG,
+  installServerCatalog,
+  parseCatalog,
   type CustomProviderConfig,
 } from "../../packages/model-providers/src/index.js";
 import { buildModelsFetchRequest } from '../../apps/desktop/src/main/maker-host/provider-model-fetch.js';
+// Explicitly supply an exported publication; audits never use a second local baseline.
+if (!process.argv[3]) throw new Error('Usage: audit-openrouter.mts <models-response.json> <server-catalog.json>');
+installServerCatalog(parseCatalog(await readFile(process.argv[3], 'utf8')));
 const source = "https://openrouter.ai/api/v1/models";
 const response = process.argv[2]
   ? JSON.parse(await readFile(process.argv[2], "utf8"))
@@ -21,7 +26,7 @@ const response = process.argv[2]
     );
 const discovered = parseModelsListResponse(response, source);
 assert(discovered?.length);
-const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!;
+const preset = SERVER_CATALOG.presets!.find(p => p.id === 'openrouter')!;
 const runtimes: CustomProviderConfig['runtimes'] = {};
 const requestCounts: Record<string, number> = {};
 for (const agent of ['claude-code', 'codex', 'pi'] as const) {
@@ -46,7 +51,7 @@ const provider = buildUserProvider({
   id: "audit-router",
   name: "Audit",
   runtimes,
-}, { modelRegistry: BUNDLED_CATALOG.modelRegistry, presets: [preset] });
+}, { modelRegistry: SERVER_CATALOG.modelRegistry, presets: [preset] });
 let known = 0;
 const catalogIds = new Set(
   PROVIDER_MODEL_CATALOG.providers.openrouter!.map((m) => m.id),

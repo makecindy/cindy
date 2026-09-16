@@ -1,6 +1,7 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
 
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
+import { installServerCatalog, type Catalog } from '@cindy/model-providers';
 
 import {
   resolveBundledPiGatewayModelProfile,
@@ -211,7 +212,9 @@ describe('Pi Gateway version-matched local supplement catalog', () => {
   });
 
   it('does not reuse serializer metadata after an authoritative API correction', () => {
-    const entry = BUNDLED_CATALOG.modelRegistry!.models.find((model) =>
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    installServerCatalog(catalog);
+    const entry = catalog.modelRegistry!.models.find((model) =>
       model.routes.some(
         (route) => route.providerId === 'xd' && route.modelId === 'moonshot/kimi-k3',
       ),

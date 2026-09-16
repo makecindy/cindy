@@ -1,5 +1,7 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import * as activeCatalog from '../../maker-host/active-catalog.js';
+import { buildUserProvider } from '@cindy/model-providers';
 import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from '../../../shared/modelPriceQuote.js';
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
@@ -116,5 +118,34 @@ it('values subscriptions from manufacturer prices even when the supplier publish
   } finally {
     if (original === undefined) delete route.referencePrices;
     else route.referencePrices = original;
+  }
+});
+
+
+it.each(['local-price', 'oauth-reference'] as const)('projects %s under special account IDs without inherited writes', (source) => {
+  const base = activeCatalog.getActiveCatalog();
+  const template = base.providers.find(provider => provider.id === (source === 'local-price' ? 'router-account' : 'openai-account'))!;
+  const providers = ['__proto__', 'constructor', 'toString'].map(id => ({ ...template, id }));
+  const prototypeBefore = Object.getOwnPropertyDescriptors(Object.prototype);
+  const spy = vi.spyOn(activeCatalog, 'getActiveCatalog').mockReturnValue({ ...base, providers });
+  try {
+    const pricing = getReferenceModelPricing();
+    for (const provider of providers) {
+      expect(Object.hasOwn(pricing, provider.id)).toBe(true);
+      const [modelId, agent] = source === 'local-price' ? ['new/model', 'pi'] as const : ['gpt-5.6-luna', 'codex'] as const;
+      expect(getModelPriceQuote(pricing, provider.id, modelId, agent)).toMatchObject({
+        providerId: provider.id, modelId, currency: 'USD', source: 'provider-reference',
+      });
+    }
+    expect(Object.getOwnPropertyDescriptors(Object.prototype)).toEqual(prototypeBefore);
+  } finally {
+    spy.mockRestore();
+    // Also clean up if this regression is run against the unsafe implementation.
+    for (const provider of providers) for (const [agent, models] of Object.entries(provider.models)) {
+      for (const model of models ?? []) for (const target of [Object.prototype, Object, Object.prototype.toString]) {
+        const key = modelPricingKey(model.id, agent as 'pi' | 'codex' | 'claude-code');
+        if (!Object.hasOwn(prototypeBefore, key)) Reflect.deleteProperty(target, key);
+      }
+    }
   }
 });

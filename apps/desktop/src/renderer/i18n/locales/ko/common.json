@@ -1982,7 +1982,7 @@
           "contextLimitRoute": "현재 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
           "restoreDefault": "기본값 복원",
-          "engines": "엔진 지원",
+          "engines": "지원하는 Harness",
           "enginesHint": "호환 모드는 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
           "engineUnsupported": "지원 안 함",
           "engineNotConfigured": "설정되지 않음",

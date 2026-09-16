@@ -110,6 +110,7 @@ describe('newMakerDraft store', () => {
         agents: ['codex'],
         auth: { method: 'oauth' },
         access: { kind: 'subscription', product: 'ChatGPT' },
+        newSessionDefaults: { codex: 'gpt-5.6-sol' },
         routing: {},
         models: {
           codex: [

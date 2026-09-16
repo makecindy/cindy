@@ -1,3 +1,4 @@
+import '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { buildUserProvider, providerPresetOAuth } from '@cindy/model-providers';
 import { setCustomProviders } from '../active-catalog';
 /**

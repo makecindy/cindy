@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,7 +8,7 @@ import {
 import { applyAstraCatalogAdditions } from '../../../../tools/pi/openai-catalog-corrections.mjs';
 import { providerCatalogForPi } from '../providerModelCatalog.js';
 const piCatalog = providerCatalogForPi();
-import { BUNDLED_CATALOG } from '../catalog.js';
+
 import { modelProtocolComparison } from '../modelProtocol.js';
 
 describe('Pi xAI catalog corrections', () => {

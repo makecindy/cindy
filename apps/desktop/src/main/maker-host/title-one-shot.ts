@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from '@cindy/model-compat/url';
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { getValidClaudeAccountOAuth, isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
@@ -20,7 +21,7 @@ import { getValidClaudeAccountOAuth, isClaudeSubscriptionProviderId } from './su
  *     (它们读写同一处凭证),本模块每次实时读当下值;过期就当次失败、优雅降级。
  *   - 三条标题调用都**不注入任何 system / 身份提示词**(实测 anthropic 裸调即 200),不触及系统提示词。
  *
- * 路由素材(upstream / authStrategy)取自当前生效目录 `getActiveCatalog()`(OSS 真源 / bundled 兜底)
+ * 路由素材(upstream / authStrategy)取自当前生效目录 `getActiveCatalog()`(服务端发布目录 / 同源 LKG 镜像)
  * —— 与统一路由器(provider-route)同源。例外:xd 网关的 upstream 不取 catalog,
  * 运行期用 model-access server 下发的 endpoint(effectiveXdGatewayBaseUrl,与 key 同租户)。
  *
@@ -149,7 +150,7 @@ function lowestEffort(efforts: Effort[]): Effort | null {
 }
 
 function trimTrailingSlash(s: string): string {
-  return s.replace(/\/+$/, '');
+  return trimTrailingSlashes(s);
 }
 
 /** 标题请求固定走供应商自己的原生通道，不能被其它 harness 的同名模型遮住状态。 */

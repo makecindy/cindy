@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * catalog → availableModels 派生契约(2026-07-19 模型列表统一重构后)。
  *
@@ -12,7 +13,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { buildUserProvider } from '@cindy/model-providers';
 import type { Catalog, CatalogModel } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 

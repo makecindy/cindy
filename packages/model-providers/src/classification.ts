@@ -76,7 +76,7 @@ export function exclusiveXaiCatalogModelId(model: string | null | undefined): st
 // 认不出的模型一律被标成「中国」;分组名是用户直接看见的断言,认不出就不该替它断言产地。
 //
 // 相应地,`china` 从此**只由目录数据产生** —— 服务端下发 `group:'china'` 才进「中国」
-// (catalog/model-registry.json 里国产条目全部已标)。客户端不做国产厂商的 id 猜测:
+// (服务端 modelRegistry 里国产条目全部已标)。客户端不做国产厂商的 id 猜测:
 // 产地不是 id 能可靠推断的属性,猜错的代价是把别家模型挂到「中国」下面。服务端漏标的
 // 后果是它落进「未分组」——可自愈,补 group 即归位。
 //
@@ -198,7 +198,7 @@ export function categorize(rawId: string): ModelCategory {
   // 只返回分类标签,不回传 id,小写化不影响展示 / 请求用的原始 id。
   const id = rawId.toLowerCase();
   // 厂商前缀同样要认命名空间形态 —— 目录里的 id 本来就是带命名空间的
-  // (catalog/model-registry.json 全是 anthropic/claude-opus-5、openai/gpt-5.5、
+  // (服务端 modelRegistry 全是 anthropic/claude-opus-5、openai/gpt-5.5、
   // google/gemini-3.5-flash 这种写法)。只认裸 id 的话,这些条目一旦缺 group 就会
   // 整批落进中性的 `ungrouped`,不猜产地。与 dall-e/sora/veo-/embed-/legacy 的命名空间
   // 兜底同一处理。

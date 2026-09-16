@@ -1,6 +1,8 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, providerMediaField } from '@cindy/model-providers';
+import { providerMediaField, buildRegistry } from '@cindy/model-providers';
+import { resolveNewMakerDefaultTuple } from '../../../shared/newMakerDefaultTuple.js';
 
 import {
   commitModelPlaneFromCatalog,
@@ -15,6 +17,40 @@ import {
 } from '../active-catalog.js';
 
 describe('active catalog revision', () => {
+  it('refreshes subscription defaults through assembled models and the new-task selector', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const source = catalog.providers.find(p => p.id === 'openai')!;
+    const ids = ['gpt-configured-one', 'gpt-configured-two'];
+    setDiscoveredCodexModels(ids.map((id, index) => ({ id, name: id, contextWindow: 200000,
+      efforts: ['high'], defaultEffort: 'high', sortOrder: 999 + index, defaultEnabled: true })));
+    const selected = () => resolveNewMakerDefaultTuple({ providers: buildRegistry(getActiveCatalog(), { openai: true }),
+      providersLoading: false, availableAgents: new Set(['codex']), availableAgentsLoaded: true });
+    for (const id of ids) {
+      source.newSessionDefaults = { codex: id };
+      setActiveCatalog(structuredClone(catalog));
+      expect(selected()).toMatchObject({ vendor: 'codex', providerId: 'openai', model: id });
+      const models = getActiveCatalog().providers.find(p => p.id === 'openai')!.models.codex!;
+      expect(models.filter(m => m.newSessionDefault?.includes('codex')).map(m => m.id)).toEqual([id]);
+    }
+    source.newSessionDefaults = {};
+    setActiveCatalog(catalog);
+    expect(selected()).toBeNull();
+  });
+  it('shares subscription defaults with another native account without changing its identity', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.find(p => p.id === 'openai')!.newSessionDefaults = { pi: 'chatgpt/gpt-5.6-sol' };
+    setActiveCatalog(catalog);
+    setCustomProviderConfigs([{ id: 'openai-second', name: 'Second account', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
+    }]);
+    const providers = buildRegistry(getActiveCatalog(), { 'openai-second': true });
+    const account = providers.find(p => p.id === 'openai-second')!;
+    expect(account.newSessionDefaults).toEqual({ pi: 'chatgpt/gpt-5.6-sol' });
+    expect(account.models.pi?.find(m => m.id === 'chatgpt/gpt-5.6-sol')?.newSessionDefault).toEqual(['pi']);
+    expect(resolveNewMakerDefaultTuple({ providers, providersLoading: false,
+      availableAgents: new Set(['pi']), availableAgentsLoaded: true }))
+      .toMatchObject({ providerId: 'openai-second', vendor: 'pi', model: 'chatgpt/gpt-5.6-sol' });
+  });
   afterEach(() => {
     setActiveCatalogChangedListener(null);
     setActiveCatalog(BUNDLED_CATALOG);
@@ -122,7 +158,7 @@ describe('active catalog revision', () => {
     expect(read().routing.codex?.upstream).toBe('https://private.example/v1');
   });
 
-  it.each([1, 2, 3, 5] as const)('publishes Gemini defaults before notifying and retains native declarations across sparse V%s refresh', schemaVersion => {
+  it.each([1, 2, 3, 5] as const)('publishes server adapter defaults before notifying without inventing missing V%s native declarations', schemaVersion => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = { schemaVersion, updatedAt: '2099-09-13T00:00:00Z', models: [] };
     setActiveCatalog(catalog);
@@ -137,11 +173,12 @@ describe('active catalog revision', () => {
     ) }]);
     const check = (provider: ReturnType<typeof read>) => {
       for (const agent of agents) expect(provider.models[agent]![0]).toMatchObject({
-        id, nativeApi: 'google-generative-ai', defaultEnabled: agent === 'pi',
+        id, defaultEnabled: agent === 'pi',
         contextWindow: 1_048_576, maxOutput: 65_536, supportsImageInput: true,
       });
     };
     expect(listener).toHaveBeenCalledOnce();
+    for (const agent of agents) expect(read().models[agent]![0].nativeApi).toBeUndefined();
     check(listener.mock.results[0].value);
     setActiveCatalog(structuredClone(catalog));
     check(read());

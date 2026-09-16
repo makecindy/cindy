@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createInstance } from 'i18next';
-import registry from '../../../../../../packages/model-providers/catalog/model-registry.json';
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
+const registry = BUNDLED_CATALOG.modelRegistry!;
 import en from '../../i18n/locales/en/common.json';
 import cn from '../../i18n/locales/zh-CN/common.json';
 import tw from '../../i18n/locales/zh-TW/common.json';

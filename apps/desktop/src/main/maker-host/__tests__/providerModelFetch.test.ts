@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * provider-model-fetch 单测：URL 推导（modelsUrl 优先 / baseUrl 推导）、cc vs codex 鉴权头、
  * 响应三形状解析（{data} / {models} / 字符串数组）与错误分类。fetch 注入不联网
@@ -431,7 +432,7 @@ it('does not rewrite private Google-compatible discovery or an explicit catalog'
 });
 
  it('normalizes the real bundled Google discovery URL for all generated harnesses', async () => {
-  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
   const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
   for (const agent of ['claude-code', 'codex', 'pi'] as const) {
     const runtime = preset.runtimes[agent]!;

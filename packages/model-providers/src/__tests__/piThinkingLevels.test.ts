@@ -1,3 +1,4 @@
+import '../../test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
 import { piSupportedEfforts } from '../piThinkingLevels.mjs';
 import { piNativeCatalogModels } from '../piNativeCatalog.js';

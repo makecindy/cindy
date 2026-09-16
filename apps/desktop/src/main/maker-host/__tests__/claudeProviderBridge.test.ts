@@ -1,3 +1,4 @@
+import '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';

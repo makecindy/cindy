@@ -1,6 +1,7 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { providerInterfaceModelRoute } from '../providerInterfaceRoutes.js';
 import { describe, it, expect } from 'vitest';
-import { BUNDLED_CATALOG } from '../catalog.js';
+
 import { buildUserProvider } from '../user-provider.js';
 
 describe('OpenRouter import protocol ownership', () => {

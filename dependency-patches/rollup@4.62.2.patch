@@ -1,24 +1,16 @@
 diff --git a/dist/es/shared/node-entry.js b/dist/es/shared/node-entry.js
-index 0c67f4b0befbb8af05adc5c4b0216cacbf8c169a..d270a376f10c5da4c36f8579914954c824804522 100644
+index 0c67f4b0befbb8af05adc5c4b0216cacbf8c169a..c98cae830f2ae944c4fb47592bd5e408e85fcef4 100644
 --- a/dist/es/shared/node-entry.js
 +++ b/dist/es/shared/node-entry.js
-@@ -7226,10 +7226,12 @@
+@@ -7226,7 +7226,7 @@ const copyOwnPropertyLiveBinding = (t, index, { _, cnst, getDirectReturnFunction
          name: null
      });
      return (`${index}${cnst} d${_}=${_}Object.getOwnPropertyDescriptor(e,${_}k);${n}` +
 -        `${index}Object.defineProperty(n,${_}k,${_}d.get${_}?${_}d${_}:${_}{${n}` +
--        `${index}${t}enumerable:${_}true,${n}` +
--        `${index}${t}get:${_}${left}e[k]${right}${n}` +
--        `${index}});${n}`);
-+        `${index}if${_}(d)${_}{${n}` +
-+        `${index}${t}Object.defineProperty(n,${_}k,${_}d.get${_}?${_}d${_}:${_}{${n}` +
-+        `${index}${t}${t}enumerable:${_}true,${n}` +
-+        `${index}${t}${t}get:${_}${left}e[k]${right}${n}` +
-+        `${index}${t}});${n}` +
-+        `${index}}${n}`);
- };
- const copyPropertyLiveBinding = (t, index, { _, cnst, getDirectReturnFunction, n }) => {
-     const [left, right] = getDirectReturnFunction([], {
++        `${index}Object.defineProperty(n,${_}k,${_}d${_}&&${_}d.get${_}?${_}d${_}:${_}{${n}` +
+         `${index}${t}enumerable:${_}true,${n}` +
+         `${index}${t}get:${_}${left}e[k]${right}${n}` +
+         `${index}});${n}`);
 @@ -16953,6 +16953,14 @@ function resetSourcemapCache(map, sourcemapChain) {
      }
  }
@@ -34,3 +26,16 @@ index 0c67f4b0befbb8af05adc5c4b0216cacbf8c169a..d270a376f10c5da4c36f8579914954c8
      if (!map)
          return null;
      if (typeof map === 'string') {
+diff --git a/dist/shared/rollup.js b/dist/shared/rollup.js
+index 30daac96da9300d5d1e60b3df9143c2a37083741..999b3e1a3d66fb7e71ab7154c3f4289379372649 100644
+--- a/dist/shared/rollup.js
++++ b/dist/shared/rollup.js
+@@ -11323,7 +11323,7 @@ const copyOwnPropertyLiveBinding = (t, index, { _, cnst, getDirectReturnFunction
+         name: null
+     });
+     return (`${index}${cnst} d${_}=${_}Object.getOwnPropertyDescriptor(e,${_}k);${n}` +
+-        `${index}Object.defineProperty(n,${_}k,${_}d.get${_}?${_}d${_}:${_}{${n}` +
++        `${index}Object.defineProperty(n,${_}k,${_}d${_}&&${_}d.get${_}?${_}d${_}:${_}{${n}` +
+         `${index}${t}enumerable:${_}true,${n}` +
+         `${index}${t}get:${_}${left}e[k]${right}${n}` +
+         `${index}});${n}`);

@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * active-catalog XD 网关权威模型清单重建单测(2026-07-19 统一重构后语义)。
  * 不变量:
@@ -11,7 +12,7 @@
  * 另含 anthropic 权威清单 setter 的同款语义单测。
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
+import { type CatalogModel } from '@cindy/model-providers';
 
 import {
   getActiveCatalog,
@@ -880,7 +881,7 @@ describe('Anthropic 权威模型清单注入', () => {
 });
 
 describe('gateway cross-harness defaults', () => {
-  it('projects reviewed Gateway defaults through native harness policy and live capability changes', () => {
+  it('preserves server Gateway visibility independently of native protocol and live image capabilities', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const candidates = [
       ['deepseek/deepseek-v4-pro', ['text']],
@@ -903,12 +904,9 @@ describe('gateway cross-harness defaults', () => {
       xdModels('pi')
         .filter((model) => model.defaultEnabled !== false)
         .map((model) => model.id);
-    expect(enabled().sort()).toEqual([
-      'deepseek/deepseek-v4-flash-vision-exp',
-      'tencent/hy4-preview',
-    ]);
+    expect(enabled().sort()).toEqual(candidates.map(([id]) => id).sort());
     for (const agent of ['claude-code', 'codex'] as const) {
-      expect(xdModels(agent).every((model) => model.defaultEnabled === false)).toBe(true);
+      expect(xdModels(agent).every((model) => model.defaultEnabled === true)).toBe(true);
     }
     expect(xdModels('pi').every((model) => model.piApi === 'openai-completions')).toBe(true);
     setXdGatewayModels(
@@ -918,11 +916,11 @@ describe('gateway cross-harness defaults', () => {
         modalities: { input: ['text'], output: ['text'] },
       })),
     );
-    expect(enabled().sort()).toEqual(['deepseek/deepseek-v4-pro', 'tencent/hy4-preview']);
+    expect(enabled().sort()).toEqual(candidates.map(([id]) => id).sort());
   });
 
   it.each([1, 2, 3] as const)(
-    'retains local native APIs with a sparse Server V%s catalog and misleading Gateway hints',
+    'does not infer native APIs from Gateway hints when Server V%s withdraws declarations',
     (schemaVersion) => {
       const next = structuredClone(BUNDLED_CATALOG);
       next.modelRegistry = { schemaVersion, updatedAt: '2099-02-01T00:00:00.000Z', models: [] };
@@ -951,26 +949,14 @@ describe('gateway cross-harness defaults', () => {
           perAgent: { pi: { wireProtocol: 'openai-responses' } },
         })),
       );
-      for (const [id, api] of examples) {
-        const everyday = !['deepseek/deepseek-v4-flash-vision-exp', 'tencent/hy4-preview'].includes(
-          id,
-        );
-        const pi = xdModels('pi').find((m) => m.id === id)!;
-        expect(pi).toMatchObject({
-          nativeApi: api,
-          piApi: api,
-          defaultEnabled: everyday,
-          contextWindow: 123_456,
-        });
-        expect(resolveXdPiGatewayApi(id)).toBe(api);
-        expect(xdModels('claude-code').find((m) => m.id === id)).toMatchObject({
-          nativeApi: api,
-          defaultEnabled: everyday && api === 'anthropic-messages',
-        });
-        expect(xdModels('codex').find((m) => m.id === id)).toMatchObject({
-          nativeApi: api,
-          defaultEnabled: everyday && api === 'openai-responses',
-        });
+      for (const [id] of examples) {
+        for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+          const model = xdModels(agent).find(model => model.id === id)!;
+          expect(model).toMatchObject({ id, contextWindow: 123_456 });
+          expect(model.nativeApi).toBeUndefined();
+        }
+        // Execution metadata is still published independently of canonical native declarations.
+        expect(resolveXdPiGatewayApi(id)).toBe(xdModels('pi').find(model => model.id === id)!.piApi);
       }
       setXdGatewayModels([]);
       expect(xdModels('pi')).toEqual([]);
@@ -992,9 +978,9 @@ describe('gateway cross-harness defaults', () => {
     ]);
     expect(xdModels('claude-code')[0]).toMatchObject({
       nativeApi: 'google-generative-ai',
-      defaultEnabled: false,
+      defaultEnabled: true,
     });
-    expect(xdModels('codex')[0].defaultEnabled).toBe(false);
+    expect(xdModels('codex')[0].defaultEnabled).toBe(true);
     expect(xdModels('pi')[0]).toMatchObject({
       piApi: 'google-generative-ai',
       defaultEnabled: true,
@@ -1012,18 +998,18 @@ describe('gateway cross-harness defaults', () => {
       nativeApi: 'openai-responses',
       defaultEnabled: true,
     });
-    expect(xdModels('claude-code')[0].defaultEnabled).toBe(false);
+    expect(xdModels('claude-code')[0].defaultEnabled).toBe(true);
     expect(xdModels('pi')[0].piApi).toBe('openai-responses');
     // Explicitly unverified native metadata does not disable a declared execution route.
     next.modelRegistry!.models.at(-1)!.nativeApi = null;
     setActiveCatalog(next, { authorityCatalog: next });
     expect(xdModels('pi')[0]).toMatchObject({ nativeApi: null, piApi: 'openai-responses' });
-    // Omitting metadata in a later V3 catalog must not erase Cindy's local protocol knowledge.
+    // A later publication can remove declarations; there is no static native-API backfill.
     next.modelRegistry!.nativeApiRules = [];
     next.modelRegistry!.models = [];
     setActiveCatalog(next, { authorityCatalog: next });
-    expect(xdModels('pi')[0].nativeApi).toBe('google-generative-ai');
-    expect(xdModels('pi')[0].piApi).toBe('google-generative-ai');
+    expect(xdModels('pi')[0].nativeApi).toBeUndefined();
+    expect(xdModels('pi')[0].piApi).toBe('openai-responses');
   });
 
   it('prefers a usable route over a more discounted route with every harness disabled', () => {
@@ -1054,7 +1040,7 @@ describe('gateway cross-harness defaults', () => {
     expect(xdModels('codex')).toHaveLength(2);
   });
 
-  it('applies per-agent policy to the selected models while keeping old generations opt-in', () => {
+  it('preserves server display policy across all declared Harnesses and model generations', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const entries = ['codex/gpt-6', 'claude-opus-5', 'anthropic-claude/claude-opus-4-8'].map(
       (id) => ({
@@ -1066,9 +1052,9 @@ describe('gateway cross-harness defaults', () => {
       }),
     );
     setXdGatewayModels(entries.map((e) => ({ ...e, agents: [...e.agents] })));
-    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([false, true, false]);
-    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, false, false]);
-    expect(xdModels('pi').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
+    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
+    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
+    expect(xdModels('pi').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
     setXdGatewayModels(
       entries.map((e) => ({
         ...e,
@@ -1076,7 +1062,7 @@ describe('gateway cross-harness defaults', () => {
         perAgent: { 'claude-code': { defaultEnabled: true }, codex: { defaultEnabled: true } },
       })),
     );
-    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
-    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, true, false]);
+    expect(xdModels('claude-code').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
+    expect(xdModels('codex').map((m) => m.defaultEnabled)).toEqual([true, true, true]);
   });
 });

@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../../../../packages/model-providers/test/catalog-fixture.js';
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, unifiedModelEntries, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
+import { unifiedModelEntries, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
 import { parseModelsSyncPayload } from '../../main/model-access/modelsSyncRefresh';
 import {
   getActiveCatalog,
@@ -97,11 +98,11 @@ it('lists downloaded Gateway models in settings and follows catalog defaults unt
   const existing = raw('deepseek/deepseek-current', 'Existing Model');
   download([existing]);
   await migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
-  // A known native family uses Pi by default while compatibility stays opt-in.
+  // Native protocol metadata does not override server display flags.
   expect(snapshot().models.pi?.find((m) => m.id === existing.id)).toMatchObject({
     nativeApi: 'openai-completions', piApi: 'openai-completions',
   });
-  expect(snapshot().models['claude-code']?.find((m) => m.id === existing.id)?.defaultEnabled).toBe(false);
+  expect(snapshot().models['claude-code']?.find((m) => m.id === existing.id)?.defaultEnabled).toBeUndefined();
   const view = render(<UnifiedModelList provider={snapshot()} />);
   expect(screen.getByText('Existing Model')).toBeTruthy();
   expect(screen.queryByText('Future Model 9')).toBeNull();

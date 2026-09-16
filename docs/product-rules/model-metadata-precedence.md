@@ -144,7 +144,7 @@ Pi 已识别的 OpenAI 订阅连接之间可复用同一运行时：每个账号
 
 发布遵循 [维护入口](../dev-rules/model-catalog-maintenance.md#release)，同为 V4 仍须满足 [媒体扩展发布前置条件](../model-registry-v4-media.md#发布前置条件)。
 
-Server `catalog/providers.json` 是数据正本；客户端 `catalog/model-registry.json` 是同 revision、同内容的离线副本。`baseModels`、模型引用和本地域必须随整个 Registry 一起校验、发布和同步，禁止只复制子域造成悬空引用。坏快照、网络失败、回退 revision 和同 revision 冲突沿用上一份合法快照。
+Server 数据库发布是数据正本，Platform WebUI 管理；唯一的 `migration.deprecated.json` 只用于首次初始化，冻结后不再维护。客户端只保存同源最后有效缓存和用户配置。`baseModels`、模型引用和本地域随整个 Registry 校验与发布，禁止只复制子域造成悬空引用。坏快照、网络失败、回退 revision 和同 revision 冲突沿用同源上一份合法快照。
 
 复用当前目录接口与 Registry V4 协商，不增加请求或数据库表。旧 V1/V2/V3 客户端收到展开后的旧字段；不同资料的多条路由在兼容响应中拆成独立条目，保留上游 ID，额外条目使用派生目录 ID。旧协议不支持的公共引用、覆盖指令与图片字段被移除，空默认以缺省表达。
 

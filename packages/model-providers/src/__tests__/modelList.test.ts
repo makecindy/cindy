@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 /**
  * modelList 标准派生的行为锁:
  *   1. parity 矩阵 —— visibleModelUnion / buildProviderSections 薄壳化后,输出必须与
@@ -13,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveModelList, deriveModelSections } from '../modelList.js';
 import { buildProviderSections, visibleModelUnion, type SectionModel } from '../sections.js';
 import { connectedProvidersForAgent, type ProviderView } from '../registry.js';
-import { BUNDLED_CATALOG } from '../catalog.js';
+
 import type { AgentKind, CatalogModel } from '../types.js';
 
 // ── 历史实现参照物(改写前 sections.ts 原文,只删 export;parity 的对照组,勿动)──

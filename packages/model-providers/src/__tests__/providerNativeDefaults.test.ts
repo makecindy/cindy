@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG } from '../catalog.js';
+
 import { buildUserProvider } from '../user-provider.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
 import type { CustomProviderConfig, ProviderRuntimeModelConfig } from '../types.js';

@@ -173,9 +173,13 @@ pnpm --filter desktop test
 pnpm build
 pnpm test:unit:related
 pnpm test:unit
+pnpm test:workspaces --tier integration --workspace desktop
 ```
 
 - 改 TypeScript 至少运行相关类型检查和定向测试。
+- Windows 的真实 PowerShell 启动锁测试属于 Desktop `integration` tier，使用独占的单 worker
+  执行，避免与普通单测竞争 CPU。Windows CI 在第一分片的 unit 完成后强制执行，失败仍阻断
+  汇总检查；状态解析和退出处理继续由 unit 覆盖，生产超时与互斥锁断言不因 CI 调整而放宽。
 - 跨模块、共享 package、构建链或广泛重构再扩大到 Desktop 全量测试、构建或根级单测。
 - 调整 Desktop Vitest worker 或测试分池前，先读取
   [`desktop-unit-test-performance.md`](desktop-unit-test-performance.md)，并用其中的

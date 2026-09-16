@@ -10,7 +10,7 @@
   推理、渠道报价与协议字段。Pi 专属请求兼容字段放在执行适配数据中。
 - 供应商 API 发现更新按连接保存，准确 ID 合并，不模糊匹配；无声明与明确 false 分开。
 - 渠道资料只借给地址和协议相符的连接，不能跨代理地址继承报价或协议承诺。
-- 生成过程输出可重现的数据文件与来源，校验完成才替换；离线继续使用最后有效目录。
+- 首版迁移记录两仓 Git 提交与数据摘要；后续在 Platform 审阅草稿差异后发布，离线使用最后有效发布。
 - 保留模型原始 ID、账号、Key、开关、用户覆盖；刷新不把默认值固化成用户设置。
 
 ## 接入与界面
@@ -29,23 +29,15 @@
 4. 新连接和旧连接均无需逐个编辑模型；旧编辑入口及无消费者代码清除。
 5. 接口验收只发公共资料 GET，不发生成请求。Desktop DEV 仅在用户明确授权后启动。
 
-## 更新命令
+## 当前维护方式
 
-客户端只存 `packages/model-providers/catalog/provider-models.json`；Pi 原始字段由 adapter
-按需还原。`providers.json` 的连接预设与推荐名单继续单独维护，不被导入脚本重写。
+配置由 Server 数据库发布：连接模板在 `presets`，供应商模型资料在 `providerModelCatalog`，精确接口在模板的 `interfaceDefaults` / `modelInterfaces`。Platform WebUI 提供对应编辑入口。
+客户端只接受完整发布或其同源最后有效缓存，不运行预设生成器，不内置上述数据文件。
+`sync:pi-model-catalog` 已删除，升级 SDK 不再自动改配置。首次迁移基线包含 39 个来源、1,356 条渠道资料和 54 个接入模板；数量不代表账号可调用数量。
 
-- 在线刷新已知供应商：`pnpm sync:pi-model-catalog`。公开 Pi 端点可能拒绝请求；失败时不替换目录。
-- 导入 Pi 生成器的完整导出：`pnpm sync:pi-model-catalog --input /path/to/providers.json --source-version <version>`。
-  输入是 provider ID 到完整 Pi 模型数组的映射；新供应商自动进入标准表，缺少已有供应商则报错，避免误删。
-- 从 Cindy 已固定版本的 Pi 二进制读取生成数据：
-  `pnpm sync:pi-model-catalog --pi-bundle /path/to/pi --source-version 0.85.1 --generated-at 2026-09-12T00:00:00Z`。
-  仅解析生成的字面量数据，不执行二进制。旧版本已有的 Astra/xAI 修正由具名函数保留，新版本不套旧版本修正。
-- OpenRouter 全量资料审计：`pnpm exec tsx tools/pi/audit-openrouter.mts`。
-  只调用公开 `GET /api/v1/models`，不用 Key、不发推理请求；也可传本地响应 JSON 路径离线审计。
+只读 OpenRouter 审计仍可运行：`pnpm exec tsx tools/pi/audit-openrouter.mts /path/to/models-response.json /path/to/server-catalog.json`，第二个文件必须是服务端导出的完整发布，用后无需保留为客户端配置。
 
-本次导入 Pi 0.85.1 共 39 个有模型的供应商、1,355 条记录（另有一个空 `.manifest` 元数据键，不计作供应商），包含同型号的不同渠道。
-这不是可调用数量：账号准入、余额和实时供应状态仍由实际连接决定。
-未更改 Server 正本，也未声称生产客户端已部署。用户已授权启动隔离 DEV 并反馈实测问题。
+## 历史验收记录（以下为迁移前状态，不是当前维护指令）
 
 ## 用户实测后的补充验收
 

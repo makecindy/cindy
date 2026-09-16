@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 /**
  * buildUserProvider —— 用户自定义配置（per-runtime）→ 标准 Provider 的映射。
@@ -22,7 +23,7 @@ import {
 } from "../user-provider.js";
 import type { CustomProviderConfig } from "../types.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
-import { BUNDLED_CATALOG } from "../catalog.js";
+
 import { providerCatalogId } from "../provider-identity.js";
 
 describe('native subscription instances', () => {

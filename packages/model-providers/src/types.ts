@@ -257,7 +257,7 @@ export interface ProviderModelDiscoverySource extends ProviderModelRouteConfig {
   modelsUrl?: string;
 }
 
-/** 模型计费（$/1M tokens）。可选——OSS 目录可后补，缺值 UI 不展示价格。 */
+/** 模型计费（$/1M tokens）。可选——服务端目录可后补，缺值 UI 不展示价格。 */
 export interface ModelCost {
   input?: number;
   output?: number;
@@ -399,7 +399,7 @@ export interface CatalogModel {
   codexCompatibilityWireProtocol?: CodexCompatibilityWireProtocol;
   /**
    * 展示图标 id —— 模型行 / composer 药丸上显示什么图标,**以 AI Gateway / 目录设定为准**
-   * (XD 模型经 model-access-server GET /models 下发,其它供应商可由 OSS 目录配置)。
+   * (XD 模型经 model-access-server GET /models 下发,其它供应商可由 服务端目录配置)。
    * 已知取值见 sections.ts `resolveModelIconKind`('claude' | 'codex' | 'cindy' 及别名);
    * 缺省或未知值 ⇒ 客户端回落该行来源供应商标(ProviderMark),桌面与手机同一套规则。
    * 故意**不纳入** `modelSignature` 跨供应商一致性校验:同一 model id 在不同供应商下
@@ -442,6 +442,7 @@ export interface CatalogModel {
    * `modelPlanePolicy` 刻意不把它投影进 CatalogModel，避免 Global 绕过区域门。
    *
    * 渲染层优先取被标记、当前可用且默认可见的模型；无标记时回退 `sortOrder` 第一。
+   * 订阅来源另外由 Provider.newSessionDefaults 按 Harness 投影，独立于网关区域策略。
    * v3 可显式标记 'claude-code'、'codex' 或 'pi'；客户端不跨 Agent 投影。缺省 = 不作为默认。
    * 故意**不纳入** `modelSignature` 跨供应商一致性校验：同一 id 在不同供应商下可各自表态。
    */
@@ -499,8 +500,12 @@ export interface Provider {
    * （anthropic / openai / xai 现状）。
    */
   auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: "codex" | "claude" | "xai" };
-  /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
+  /** 用户使用该供应商时的额度来源，由服务端目录声明。 */
   access?: ProviderAccess;
+  /** Subscription defaults per Harness. Absent or {} = no configured default.
+   * IDs are scoped to this provider; selection still requires a usable, visible model.
+   */
+  newSessionDefaults?: Partial<Record<AgentKind, string>>;
   /**
    * 该供应商用于「起会话标题」一次性轻任务的最经济模型 id（须存在于本供应商任一 agent 的
    * `models` 里）。host 侧标题 oneShot（见 apps/desktop title-one-shot）按本字段选模型、取该
@@ -528,7 +533,7 @@ export interface Provider {
    * 图像能力的默认选型(与 imageModels 配套;值必须是 imageModels 里的 id):
    * - standard:未指定任何偏好时的默认模型(意识 cindy 槽"默认"档的真身);
    * - draft / best:档位意图的翻译表(缺省回落 standard)。
-   * 默认选型是主机资产:改这里(OSS 热更)即可整体切换所有"跟随默认"的
+   * 默认选型是主机资产:改这里(服务端发布)即可整体切换所有"跟随默认"的
    * 消费方,代码零模型字面量。
    */
   imageDefaults?: { standard: string; draft?: string; best?: string };
@@ -648,9 +653,11 @@ export interface ProviderPresetRuntime {
  *
  * 与 `Provider` 的区别：预设只在「创建自定义供应商」对话框里消费，选中即快照进用户自己的
  * `CustomProviderConfig`，地址与用户修改保持不变；新建连接可通过 catalogPresetId 继承当前模型默认资料。
- * 数据随目录走 OSS 热更：各家 baseUrl / 模型 id 变化只需推数据，无需发版。
+ * 数据随目录走 服务端发布：各家 baseUrl / 模型 id 变化只需推数据，无需发版。
  */
 export interface ProviderPreset {
+  modelInterfaces?: Record<string, { baseUrl: string; api: NonNullable<ProviderRuntimeModelConfig['api']>; inputs: string[] }>;
+  interfaceDefaults?: Partial<Record<AgentKind, { baseUrl: string; api: string; inputs: string[] }>>;
   /** 预设 id（小写 slug，仅用于 UI 去重 / 埋点，不占用 provider id 命名空间）。 */
   id: string;
   /** 展示名（如 "OpenRouter" / "DeepSeek"）。 */
@@ -685,14 +692,16 @@ export interface ProviderPreset {
 /** 客户端实际构建区域；模型预设排序只看该版本身份，不看 UI 语言。 */
 export type PresetSortRegion = "cn" | "global" | "dev";
 
-/** 完整目录（OSS / 本地 / 内置 三处都是这个形状）。 */
+/** 完整目录（服务端发布与同源缓存使用相同形状）。 */
 export interface Catalog {
+  /** Public transport metadata from the same server publication. */
+  providerModelCatalog?: { schemaVersion: number; generatedAt: string; providers: Record<string, import('./providerModelCatalog.js').ProviderModelRecord[]> };
   /** 目录版本号（语义随意，仅用于诊断 / 缓存比对）。 */
   version: string;
   providers: Provider[];
   /**
    * 自定义供应商创建模板（可选）。容错语义：解析时逐条校验、坏条目丢弃（见 catalog.ts
-   * `sanitizePresets`），绝不因预设数据错误导致整份远端目录回退 bundled。
+   * `sanitizePresets`），绝不因预设数据错误导致整份远端目录回退同源 LKG。
    */
   presets?: ProviderPreset[];
   /**

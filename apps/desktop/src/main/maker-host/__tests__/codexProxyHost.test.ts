@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import fs from 'node:fs';
 import { once } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -148,6 +149,8 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
 
 async function freshCodexProxyHost() {
   vi.resetModules();
+  const { installServerCatalog } = await import('@cindy/model-providers');
+  installServerCatalog(structuredClone(BUNDLED_CATALOG));
   mockState.createAnthropicCompatProxy.mockReset();
   mockState.createResponsesChatHandler.mockClear();
   mockState.createResponsesAnthropicHandler.mockClear();
@@ -1277,7 +1280,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
 
   it('refreshes non-Anthropic provider OAuth without applying Claude.ai credentials or policy', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -3425,7 +3428,7 @@ describe('codex proxy host', () => {
 
   it('keeps custom-context Host generations isolated when the superseded proxy retires', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
     const { deriveCodexCustomProviderRoutes } =
@@ -3942,7 +3945,7 @@ describe('codex proxy host', () => {
 
   it('keeps the codex/ budget prefix on the wire for an explicit Gateway session (no silent tier rewrite)', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -6231,7 +6234,7 @@ describe('codex proxy host', () => {
 
   it('normalizes implicit-source xAI Codex requests before forwarding', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
     const { setActiveCatalog, setXaiDiscoveredModels } = await import('../active-catalog.js');
     const { clearSessionProvider } = await import('../session-provider-store.js');
     setActiveCatalog(BUNDLED_CATALOG);
@@ -6734,7 +6737,7 @@ describe('createModelRoutingTransform —— Anthropic 桥的额度回调安装�
 describe('createModelRoutingTransform —— custom Provider native imagegen prefix', () => {
   it('routes generate/edit to the selected custom Provider and strips internal actor auth', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
     const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
@@ -6832,7 +6835,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
 
   it('keeps auth-none, generic OAuth, and Provider-owned actor headers isolated on the prefix', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const {
       setCustomProviderHeaderReader,
@@ -6997,7 +7000,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
 
   it('gates image endpoints by the frozen capability while keeping generic Responses routing', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
     const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
@@ -7062,7 +7065,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
 
   it('keeps the running Host snapshot during capability/model changes and fails closed after deletion', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
     const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
@@ -7159,7 +7162,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
 
   it('never combines an old Host image route with a newer credential generation', async () => {
     const host = await freshCodexProxyHost();
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { beginProviderRouteMutation, setCustomProviderKeyReader } =
       await import('../provider-route.js');
@@ -7283,7 +7286,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
     mockState.createAnthropicCompatProxy.mockImplementationOnce(
       actualProxy.createAnthropicCompatProxy,
     );
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setCustomProviderHeaderReader, setCustomProviderKeyReader } = await import('../provider-route.js');
     const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
@@ -7682,7 +7685,7 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       '@cindy/anthropic-compat-proxy',
     );
     mockState.createAnthropicCompatProxy.mockImplementationOnce(actualProxy.createAnthropicCompatProxy);
-    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
     const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');

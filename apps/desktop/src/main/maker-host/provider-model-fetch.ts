@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from '@cindy/model-compat/url';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -158,10 +159,10 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     && /^\/v1(?:beta)?(?:\/openai)?\/?$/.test(baseUrl.pathname);
   const googleProtocol = googleCatalog || spec.wireProtocol === 'google-generative-ai';
   const discoveryUrl = googleCatalog
-    ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
+    ? `${baseUrl.origin}${trimTrailingSlashes(baseUrl.pathname.replace(/\/openai\/?$/, ''))}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
-      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+      ? `${trimTrailingSlashes(spec.baseUrl)}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders

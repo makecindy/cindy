@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { BUNDLED_CATALOG, buildRegistry, type Catalog } from '@cindy/model-providers';
+import { buildRegistry, type Catalog } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
 import { readOrcaWorkerProviderRoutingContext } from '../orcaProviderRoutingContext.js';

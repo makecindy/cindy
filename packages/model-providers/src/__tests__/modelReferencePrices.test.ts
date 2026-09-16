@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from "vitest";
 import { parseModelRegistry } from "../modelAccessValidator.js";
 import { referencePricesForRoute } from "../modelMetadataLayers.js";
@@ -104,7 +105,7 @@ import {
   resolveBaseModelReferencePrice,
   resolveModelReferencePrice,
 } from "../modelRegistry.js";
-import { BUNDLED_CATALOG } from "../builtin.js";
+
 
 it("selects by public identity, market, currency, historical date and input band", () => {
   const r = structuredClone(BUNDLED_CATALOG.modelRegistry!);

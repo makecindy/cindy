@@ -1,8 +1,8 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
+import { isModelVisible, type Catalog } from '@cindy/model-providers';
 import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
 
-import { filterLegacyGptContextProfiles } from '../legacy-context-profiles.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 // Exercise the actual post-merge catalog consumed by model settings. Optional
@@ -97,24 +97,26 @@ it('keeps Gateway restrictions, unknown tiers and discounted prices independent 
     .toMatchObject({ efforts: [], displayEfforts: [], defaultEffort: null });
 });
 
-it('removes GPT window presets from new choices while preserving runtime history and custom providers', () => {
+it.each(['claude-code', 'codex', 'pi'] as const)('preserves server-controlled GPT window variants in %s descriptors', agent => {
   setActiveCatalog(BUNDLED_CATALOG);
   const runtime = getActiveCatalog();
   const openai = runtime.providers.find((p) => p.id === 'openai')!;
   const legacy = openai.models['claude-code']!.find((m) => m.id.endsWith('[1m]'))!;
   expect(legacy).toBeDefined();
-  const withCustom: Catalog = {
-    ...runtime, providers: [...runtime.providers,
-      { ...openai, id: 'openai-independent', source: 'user', auth: { method: 'oauth', native: 'codex' } },
-      { ...openai, id: 'user:test', source: 'user', auth: { method: 'apiKey' } },
-    ],
-  };
-  const selectable = filterLegacyGptContextProfiles(withCustom);
-  expect(selectable.providers.find((p) => p.id === 'openai')!.models['claude-code']!.some((m) => m.id.endsWith('[1m]'))).toBe(false);
-  expect(selectable.providers.find((p) => p.id === 'openai-independent')!.models['claude-code']!.some((m) => m.id.endsWith('[1m]'))).toBe(false);
-  expect(selectable.providers.find((p) => p.id === 'user:test')!.models['claude-code']).toContain(legacy);
+  const providers: Catalog['providers'] = [openai,
+    { ...openai, id: 'openai-independent', source: 'user', auth: { method: 'oauth', native: 'codex' } },
+    { ...openai, id: 'user:test', source: 'user', auth: { method: 'apiKey' } },
+  ];
+  for (const provider of providers) for (const defaultEnabled of [true, false]) {
+    const catalog: Catalog = { ...runtime, providers: [{ ...provider,
+      models: { [agent]: [{ ...legacy, defaultEnabled }] },
+    }] };
+    const descriptor = deriveAvailableModels(catalog, agent).find(model => model.id === legacy.id);
+    expect(descriptor, `${provider.id}/${defaultEnabled}`).toMatchObject({ id: legacy.id, defaultEnabled });
+    expect(isModelVisible(undefined, descriptor!.defaultEnabled)).toBe(defaultEnabled);
+    expect(isModelVisible(true, descriptor!.defaultEnabled)).toBe(true);
+  }
   expect(openai.models['claude-code']).toContain(legacy);
-  expect(deriveAvailableModels(runtime, 'claude-code').some((m) => m.id === legacy.id)).toBe(false);
 });
 
 

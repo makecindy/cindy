@@ -1,4 +1,5 @@
-import { providerEndpointBindings, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
+import { loadProviderPresetCatalog } from '@/lib/providerPresetCatalog';
+import { providerEndpointBindings, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
@@ -477,7 +478,7 @@ export function ProviderConnectionDialog({
   const [imageGenerationHelpHovered, setImageGenerationHelpHovered] = useState(false);
   const [imageGenerationHelpFocused, setImageGenerationHelpFocused] = useState(false);
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
-  const [presets, setPresets] = useState<ProviderPreset[]>(() => [...(BUNDLED_CATALOG.presets ?? [])]);
+  const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
   // 嵌套 dismiss layer 互斥且由表单统一持有：Radix Popover 只负责呈现，
   // 不再让退场中的菜单与新打开的模型选择器同时成为 Escape owner。
@@ -818,8 +819,7 @@ export function ProviderConnectionDialog({
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.maker
-      .listProviderPresets()
+    void loadProviderPresetCatalog()
       .then((r) => {
         if (!cancelled) setPresets(sortPresetsForRegion(r.presets, CURRENT_CINDY_REGION));
       })
@@ -831,7 +831,7 @@ export function ProviderConnectionDialog({
     };
   }, [editing]);
 
-  /** 应用预设：预填显示名 + 各 runtime 的 baseUrl / 模型 / headers（创建时快照，之后与预设脱钩）。 */
+  /** 应用预设：预填显示名 + 各 runtime 的 baseUrl / 模型 / headers（保留模板引用，公共参数随服务端更新，显式编辑归用户）。 */
   const applyPreset = useCallback(
     (p: ProviderPreset) => {
       setAppliedPreset(p.id);

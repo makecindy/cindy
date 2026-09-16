@@ -8,8 +8,6 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./catalog": "./catalog/providers.json",
-    "./provider-model-catalog": "./catalog/provider-models.json",
     "./pi-thinking-levels": "./src/piThinkingLevels.mjs",
     "./sections": "./src/sections.ts",
     "./branding": "./src/providerBranding.ts",

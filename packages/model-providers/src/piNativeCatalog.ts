@@ -24,7 +24,7 @@ interface PiCatalogRow {
   cost?: ModelCost;
 }
 
-const PI_CATALOG = providerCatalogForPi() as unknown as {
+const piCatalog = () => providerCatalogForPi() as unknown as {
   generatedAt: string;
   providers: Record<string, PiCatalogRow[]>;
 };
@@ -45,8 +45,8 @@ function portablePiApi(api: string | undefined): PiModelApi | undefined {
 }
 
 /**
- * Convert Pi's pinned native catalog into a legacy/offline Pi declaration fallback.
- * Explicit server declarations replace this public membership list; native transport
+ * Project the server-published Pi adapter metadata into model declarations.
+ * Runtime membership uses the publication's explicit provider lists; native transport
  * compatibility is consumed separately by pi-host.
  *
  * The OpenAI subscription route keeps Cindy's `chatgpt/` identity prefix, while its native
@@ -56,7 +56,7 @@ export function piNativeCatalogModels(
   piProviderId: string,
   options: { idPrefix?: string; group?: string } = {},
 ): CatalogModel[] {
-  const rows = PI_CATALOG.providers[piProviderId];
+  const rows = piCatalog().providers[piProviderId];
   if (!rows) {
     throw new Error(
       `[model-providers] Pi catalog missing provider '${piProviderId}'`,
@@ -126,7 +126,7 @@ export function piNativeCatalogRouteMatches(
   baseUrl: string,
   wireProtocol: ProviderWireProtocol | undefined,
 ): boolean {
-  const rows = PI_CATALOG.providers[piProviderId];
+  const rows = piCatalog().providers[piProviderId];
   if (!rows?.length) return false;
   const baseUrls = new Set(
     rows.map((row) => (row.baseUrl ?? "").trim().replace(/\/+$/, "")),
@@ -151,7 +151,7 @@ export function piNativeCatalogModelDefaults(
   piProviderId: string,
   modelId: string,
 ): ModelMetadata | undefined {
-  const row = PI_CATALOG.providers[piProviderId]?.find(
+  const row = piCatalog().providers[piProviderId]?.find(
     (candidate) => candidate.id === modelId,
   );
   if (!row) return undefined;

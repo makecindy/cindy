@@ -1,7 +1,7 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  BUNDLED_CATALOG,
   buildUserProvider,
   type CustomProviderConfig,
 } from '@cindy/model-providers';

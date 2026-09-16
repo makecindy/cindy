@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * active-catalog 的 discovered augment 单测 —— 验证同一份 Codex 快照同时投影原生 Codex 与
  * Claude bridge:新 id 被加入、名称/排序同源、legacy 静态 id first-wins、空/清空安全。
@@ -9,7 +10,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  BUNDLED_CATALOG,
   buildUserProvider,
   type AgentKind,
   type Catalog,
@@ -92,7 +92,7 @@ describe('active-catalog discovered augment', () => {
   it.each([
     ['anthropic', 'claude', 'claude-sonnet-4-5', 'claude-sonnet-4-6'],
     ['xai', 'xai', 'grok-4.5', 'grok-4.6'],
-  ] as const)('uses the same default selection for builtin and independent %s accounts', (id, native, oldId, newId) => {
+  ] as const)('preserves the same catalog defaults for builtin and independent %s accounts', (id, native, oldId, newId) => {
     const catalog = bundledWithoutRegistry();
     const builtin = catalog.providers.find(provider => provider.id === id)!;
     const models = [fake(oldId), fake(newId)].map(model => ({ ...model, group: id === 'anthropic' ? 'claude' : 'grok' }));
@@ -110,7 +110,7 @@ describe('active-catalog discovered augment', () => {
         .toEqual(listed(builtin.id).map(model => [model.id, model.defaultEnabled]));
       for (const providerId of [builtin.id, account.id]) {
         expect(listed(providerId).find(model => model.id === oldId)?.defaultEnabled,
-          `${providerId}/${agent}: ${listed(providerId).map(model => model.id).join(',')}`).toBe(false);
+          `${providerId}/${agent}: ${listed(providerId).map(model => model.id).join(',')}`).toBe(!(id === 'anthropic' && agent === 'codex'));
         // Claude's Codex bridge is explicitly disabled by default; keep it disabled.
         expect(listed(providerId).find(model => model.id === newId)?.defaultEnabled)
           .toBe(!(id === 'anthropic' && agent === 'codex'));
@@ -254,12 +254,11 @@ describe('active-catalog discovered augment', () => {
     expect(openaiIds('pi')).not.toContain('chatgpt/gpt-5.7');
   });
 
-  it('missing Pi declarations use fallback but explicit empty lists remove public Pi membership', () => {
-    const expected = openaiIds('pi');
+  it('missing and explicitly empty Pi declarations do not resurrect public members', () => {
     const omitted = bundledWithoutRegistry();
     delete omitted.providers.find((provider) => provider.id === 'openai')!.models.pi;
     setActiveCatalog(omitted, { authorityCatalog: omitted });
-    expect(openaiIds('pi')).toEqual(expected);
+    expect(openaiIds('pi')).toEqual([]);
 
     const empty = bundledWithoutRegistry();
     empty.providers.find((provider) => provider.id === 'openai')!.models.pi = [];
@@ -651,7 +650,7 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
         .filter((model) => model.defaultEnabled !== false)
         .map((model) => model.id)
         .sort(),
-    ).toEqual(['claude-fable-5-1', 'claude-haiku-4-5', 'claude-opus-5', 'claude-sonnet-5']);
+    ).toEqual(['claude-fable-5', 'claude-fable-5-1', 'claude-haiku-4-5', 'claude-mythos-5', 'claude-opus-4-8', 'claude-opus-5', 'claude-sonnet-5']);
     expect(anthropicList('codex')).toEqual(
       anthropicList('claude-code').map((model) => ({
         ...model,
