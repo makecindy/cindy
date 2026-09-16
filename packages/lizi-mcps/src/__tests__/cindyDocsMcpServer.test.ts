@@ -1220,9 +1220,9 @@ describe('路径边界与覆盖语义', () => {
   it('Host 授权后可以把文档写到工作目录外', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-'));
     created.push(outside);
-    const outPath = path.join(outside, 'granted.docx');
+    const outPath = path.join(await fs.realpath(outside), 'granted.docx');
     setSessionPathAuthorizer(async (request) => {
-      expect(request.path).toBe(path.resolve(outPath));
+      expect(request.path).toBe(outPath);
       expect(request.operation).toBe('write');
       return { allowed: true };
     });
@@ -1233,6 +1233,28 @@ describe('路径边界与覆盖语义', () => {
     });
     expect(result.ok).toBe(true);
     await expect(fs.stat(outPath)).resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it('Host 授权经工作目录链接时写入真实目标', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-link-granted-'));
+    created.push(outside);
+    await fs.symlink(
+      outside,
+      path.join(workdir, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const canonical = path.join(await fs.realpath(outside), 'escaped.docx');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(canonical);
+      return { allowed: true };
+    });
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# escaped',
+      outPath: 'link/escaped.docx',
+    });
+    expect(result.ok).toBe(true);
+    await expect(fs.stat(canonical)).resolves.toMatchObject({ size: expect.any(Number) });
   });
 
   it('Host 拒绝后工作目录外的文档写入仍失败', async () => {

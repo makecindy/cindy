@@ -17,5 +17,6 @@ describe('docs output writer packaging', () => {
     expect(controller).toContain('cwd: rootDir');
     expect(controller).toContain('authorizedOutsideWorkdir');
     expect(controller).toContain('await fs.mkdir(lexicalParent, { recursive: true })');
+    expect(controller).toContain('grantedParent.isSymbolicLink()');
   });
 });

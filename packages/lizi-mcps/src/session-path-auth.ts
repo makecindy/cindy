@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -16,7 +17,7 @@ export type SessionPathAuthorizationRequest = {
 };
 
 export type SessionPathAuthorization =
-  | { allowed: true }
+  | { allowed: true; isCurrent?: () => boolean }
   | { allowed: false; reason: string };
 
 export type SessionPathAuthorizer = (
@@ -36,6 +37,28 @@ export function getSessionPathAuthorizer(): SessionPathAuthorizer | undefined {
 export function resolveAbsoluteSessionPath(root: string, inputPath: string): string {
   const rootAbs = path.resolve(root);
   return path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(rootAbs, inputPath);
+}
+
+/**
+ * Identity shown on the Host grant card and used for later I/O. Follows
+ * existing ancestors so a workdir symlink cannot hide an outside target.
+ */
+export async function resolveCanonicalSessionPath(root: string, inputPath: string): Promise<string> {
+  const lexical = resolveAbsoluteSessionPath(root, inputPath);
+  const tail: string[] = [];
+  let cursor = lexical;
+  for (;;) {
+    try {
+      const real = await fs.realpath(cursor);
+      return tail.length === 0 ? real : path.join(real, ...tail);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return lexical;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return lexical;
+      tail.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
 }
 
 export async function authorizeSessionPathOutsideWorkdir(

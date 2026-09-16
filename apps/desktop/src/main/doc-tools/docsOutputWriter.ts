@@ -107,9 +107,19 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
       );
     }
     await fs.mkdir(lexicalParent, { recursive: true });
+    const grantedParent = await fs.lstat(lexicalParent, { bigint: true });
+    if (!grantedParent.isDirectory() || grantedParent.isSymbolicLink()) {
+      throw new DocsPathError(
+        'PATH_NOT_ALLOWED',
+        `授权后的输出目录不再是普通目录: ${lexicalParent}`,
+        '请改用任务工作目录内的输出路径，或确认外部目录在授权后没有被替换。',
+      );
+    }
+    const realParent = await fs.realpath(lexicalParent);
     return writeDocsOutput({
       ...input,
-      root: lexicalParent,
+      path: path.join(realParent, path.basename(input.path)),
+      root: realParent,
       authorizedOutsideWorkdir: false,
     });
   }

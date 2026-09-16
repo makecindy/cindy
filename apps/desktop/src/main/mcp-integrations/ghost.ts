@@ -159,18 +159,52 @@ function classifyForgeSourceRelativeToWorkdir(
   }
 }
 
+function resolveCanonicalForgeDir(source: string): string {
+  let cursor = path.resolve(source);
+  const tail: string[] = [];
+  const { root } = path.parse(cursor);
+  while (true) {
+    try {
+      const real = fs.realpathSync.native(cursor);
+      return path.join(real, ...tail);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return path.resolve(source);
+      if (cursor === root) return path.resolve(source);
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return path.resolve(source);
+      tail.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+type ForgeOutsideAccess =
+  | { ok: true; allowOutsideWorkdir: false }
+  | { ok: true; allowOutsideWorkdir: true; authorizedDir: string; isCurrent?: () => boolean }
+  | { ok: false; errorCode: 'PERMISSION_DENIED'; message: string };
+
+function forgeOutsidePackFlags(access: Extract<ForgeOutsideAccess, { ok: true }>): {
+  allowOutsideWorkdir?: boolean;
+  authorizedDir?: string;
+} {
+  return access.allowOutsideWorkdir
+    ? { allowOutsideWorkdir: true, authorizedDir: access.authorizedDir }
+    : {};
+}
+
 async function authorizeForgeOutsideWorkdir(params: {
   dir: string;
   sessionWorkdir: string;
   sessionContext: LiziMcpSessionContext | undefined;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
-}): Promise<{ ok: true; allowOutsideWorkdir: boolean } | { ok: false; errorCode: 'PERMISSION_DENIED'; message: string }> {
+}): Promise<ForgeOutsideAccess> {
   const location = classifyForgeSourceRelativeToWorkdir(params.dir, params.sessionWorkdir);
   if (location !== 'outside') return { ok: true, allowOutsideWorkdir: false };
+  const authorizedDir = resolveCanonicalForgeDir(params.dir);
   let size = 0;
   let isDirectory = true;
   try {
-    const stat = fs.statSync(params.dir);
+    const stat = fs.statSync(authorizedDir);
     isDirectory = stat.isDirectory() || stat.isSymbolicLink();
     size = stat.size;
   } catch {
@@ -182,8 +216,8 @@ async function authorizeForgeOutsideWorkdir(params: {
     sessionInstanceId: params.sessionContext?.sessionInstanceId ?? null,
     lane: 'forge_source',
     items: [{
-      name: path.basename(params.dir) || params.dir,
-      absPath: params.dir,
+      name: path.basename(authorizedDir) || authorizedDir,
+      absPath: authorizedDir,
       size,
       isDirectory,
     }],
@@ -192,7 +226,17 @@ async function authorizeForgeOutsideWorkdir(params: {
   if (!granted.ok) {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: granted.message };
   }
-  return { ok: true, allowOutsideWorkdir: true };
+  if (granted.isCurrent?.() === false) {
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
+  }
+  return { ok: true, allowOutsideWorkdir: true, authorizedDir, isCurrent: granted.isCurrent };
+}
+
+function assertForgeGrantCurrent(access: Extract<ForgeOutsideAccess, { ok: true }>): ForgeOutsideAccess {
+  if (access.allowOutsideWorkdir && access.isCurrent?.() === false) {
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
+  }
+  return access;
 }
 
 export async function authorizeDesktopSessionPath(
@@ -231,7 +275,9 @@ export async function authorizeDesktopSessionPath(
   if (granted.isCurrent?.() === false) {
     return { allowed: false, reason: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   }
-  return { allowed: true };
+  return granted.isCurrent
+    ? { allowed: true, isCurrent: granted.isCurrent }
+    : { allowed: true };
 }
 
 /** pack 与显式 install 共用同一套可选 AI 图标叠加，避免二次打包丢失图标。 */
@@ -239,7 +285,7 @@ async function packForgeSource(
   dir: string,
   sessionWorkdir: string,
   iconSource?: string,
-  packFlags: { allowOutsideWorkdir?: boolean } = {},
+  packFlags: { allowOutsideWorkdir?: boolean; authorizedDir?: string } = {},
 ) {
   let iconPng: Buffer | undefined;
   let iconNote = '';
@@ -266,7 +312,9 @@ async function packForgeSource(
   const packOptions = {
     sessionWorkdir,
     forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
-    ...(packFlags.allowOutsideWorkdir ? { allowOutsideWorkdir: true } : {}),
+    ...(packFlags.allowOutsideWorkdir
+      ? { allowOutsideWorkdir: true, authorizedDir: packFlags.authorizedDir }
+      : {}),
   };
   let packed = await packGhostDir(dir, iconPng ? { ...packOptions, iconPng } : packOptions);
   // icon overlay 的任何失败都不是打包门槛：用原源码再打一次。若原源码
@@ -2170,11 +2218,13 @@ export function getCindyGhostsMcpDeps(
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!access.ok) return access;
+        const currentAccess = assertForgeGrantCurrent(access);
+        if (!currentAccess.ok) return currentAccess;
         const result = await scaffoldGhostDir({ ...request, minCindyVersion }, {
           sessionWorkdir: gate.workingDir,
           forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
           writeScaffold: writeForgeScaffoldWithStableParent,
-          ...(access.allowOutsideWorkdir ? { allowOutsideWorkdir: true } : {}),
+          ...forgeOutsidePackFlags(currentAccess),
         });
         if (result.ok) {
           log.info('ghost forge scaffold created', {
@@ -2198,9 +2248,9 @@ export function getCindyGhostsMcpDeps(
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!access.ok) return access;
-        const attempt = await packForgeSource(dir, gate.workingDir, iconSource, {
-          allowOutsideWorkdir: access.allowOutsideWorkdir,
-        });
+        const currentAccess = assertForgeGrantCurrent(access);
+        if (!currentAccess.ok) return currentAccess;
+        const attempt = await packForgeSource(dir, gate.workingDir, iconSource, forgeOutsidePackFlags(currentAccess));
         if (!attempt.ok) return attempt.result;
         const { packed, iconNote } = attempt;
         if (intent === 'publish') {
@@ -2257,9 +2307,9 @@ export function getCindyGhostsMcpDeps(
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!access.ok) return access;
-        const attempt = await packForgeSource(dir, gate.workingDir, iconSource, {
-          allowOutsideWorkdir: access.allowOutsideWorkdir,
-        });
+        const currentAccess = assertForgeGrantCurrent(access);
+        if (!currentAccess.ok) return currentAccess;
+        const attempt = await packForgeSource(dir, gate.workingDir, iconSource, forgeOutsidePackFlags(currentAccess));
         if (!attempt.ok) return attempt.result;
         const { packed, iconNote } = attempt;
         try {

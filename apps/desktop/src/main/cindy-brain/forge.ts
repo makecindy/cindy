@@ -559,6 +559,7 @@ export async function scaffoldGhostDir(
     forbiddenRootDirs?: readonly string[];
     writeScaffold?: ForgeScaffoldWriter;
     allowOutsideWorkdir?: boolean;
+    authorizedDir?: string;
   },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
@@ -604,11 +605,17 @@ export async function scaffoldGhostDir(
     };
   }
   if (
-    !options?.allowOutsideWorkdir
-    && !realTarget.startsWith(`${realWorkdir}${path.sep}`)
+    !realTarget.startsWith(`${realWorkdir}${path.sep}`)
     && realTarget !== realWorkdir
   ) {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
+    if (
+      !options?.allowOutsideWorkdir
+      || !options.authorizedDir
+      || !isPathInsideDir(options.authorizedDir, realTarget)
+      || !isPathInsideDir(realTarget, options.authorizedDir)
+    ) {
+      return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
+    }
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     let resolvedForbiddenRoot: string;
@@ -636,7 +643,9 @@ export async function scaffoldGhostDir(
       };
     }
   }
-  const targetDir = path.resolve(input.dir);
+  const targetDir = options?.allowOutsideWorkdir && options.authorizedDir
+    ? path.resolve(options.authorizedDir)
+    : path.resolve(input.dir);
   const files = scaffoldFiles(input);
   const manifestRaw = files[GHOST_MANIFEST_FILE];
   if (typeof manifestRaw !== 'string') {
@@ -1325,9 +1334,11 @@ export async function packGhostDir(
     /**
      * Host already authorized this source via the session permission path
      * (Full Access / auto-review / user confirm). Forbidden managed roots
-     * still apply.
+     * still apply. `authorizedDir` is the granted canonical identity and is
+     * required whenever `allowOutsideWorkdir` is true.
      */
     allowOutsideWorkdir?: boolean;
+    authorizedDir?: string;
   },
 ): Promise<ForgePackResult> {
   // Forge 打包出口专属安全门(C-4 + #7):source 默认必须在会话 workdir 内;Host 已按
@@ -1358,12 +1369,19 @@ export async function packGhostDir(
   } catch {
     return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `目录不存在:${dir}` };
   }
-  if (!isPathInsideDir(realWorkdir, realSourceDir) && !options?.allowOutsideWorkdir) {
-    return {
-      ok: false,
-      errorCode: 'SOURCE_OUTSIDE_WORKDIR',
-      message: 'Forge source must be inside the current session workdir',
-    };
+  if (!isPathInsideDir(realWorkdir, realSourceDir)) {
+    if (
+      !options?.allowOutsideWorkdir
+      || !options.authorizedDir
+      || !isPathInsideDir(options.authorizedDir, realSourceDir)
+      || !isPathInsideDir(realSourceDir, options.authorizedDir)
+    ) {
+      return {
+        ok: false,
+        errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+        message: 'Forge source must be inside the current session workdir',
+      };
+    }
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);

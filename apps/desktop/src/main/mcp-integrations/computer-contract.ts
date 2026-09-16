@@ -9,6 +9,9 @@ export class ComputerContractError extends Error {
   readonly code = 'COMPUTER_DRIVER_INCOMPATIBLE';
 }
 
+/** Fields Cindy may advertise after an older installed driver froze its schema. */
+const DRIVER_COMPAT_OPTIONAL_FIELDS = new Set(['delivery_mode']);
+
 export function adaptComputerDriverArgs(
   name: string,
   input: Record<string, unknown>,
@@ -45,10 +48,15 @@ export function adaptComputerDriverArgs(
   for (const key of Object.keys(args)) {
     if (args[key] === undefined) delete args[key];
     else if (schema.additionalProperties === false && !(key in props)) {
-      // Cindy may advertise a newer field (e.g. delivery_mode) than the installed
-      // driver. Strip it so the call still dispatches instead of failing closed
-      // after the model already chose a valid action.
-      delete args[key];
+      // Only strip fields Cindy added after older drivers froze their schema.
+      // Unknown keys still fail closed so a misspelled target cannot dispatch.
+      if (DRIVER_COMPAT_OPTIONAL_FIELDS.has(key)) {
+        delete args[key];
+        continue;
+      }
+      throw new ComputerContractError(
+        `Installed driver ${name} does not accept ${key}; no action was dispatched.`,
+      );
     }
   }
   for (const key of schema.required ?? []) {

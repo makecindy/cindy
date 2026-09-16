@@ -18,7 +18,7 @@ import path from 'node:path';
 import { resolveLiziMcpSessionContext, getLiziMcpSessionContext } from '../session-context.js';
 import {
   authorizeSessionPathOutsideWorkdir,
-  resolveAbsoluteSessionPath,
+  resolveCanonicalSessionPath,
 } from '../session-path-auth.js';
 import { PathBoundaryError, resolvePathInsideRoot } from '../shared/assertInsidePath.js';
 import type { DocsMcpSessionCtx } from './types.js';
@@ -105,7 +105,7 @@ async function resolveDocsPath(
     const ctx = sessionCtx
       ? resolveLiziMcpSessionContext(sessionCtx)
       : getLiziMcpSessionContext();
-    const abs = resolveAbsoluteSessionPath(root, inputPath);
+    const abs = await resolveCanonicalSessionPath(root, inputPath);
     const auth = await authorizeSessionPathOutsideWorkdir({
       sessionId: ctx?.sessionId,
       sessionInstanceId: ctx?.sessionInstanceId,
@@ -116,6 +116,9 @@ async function resolveDocsPath(
       operation,
     });
     if (!auth.allowed) toPathError(err, inputPath, auth.reason);
+    if (auth.isCurrent?.() === false) {
+      toPathError(err, inputPath, '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。');
+    }
     return { abs, authorizedOutsideWorkdir: true };
   }
 }

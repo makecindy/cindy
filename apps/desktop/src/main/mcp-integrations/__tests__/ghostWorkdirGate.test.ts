@@ -796,6 +796,7 @@ describe('Forge workdir-out permission path', () => {
       expect.objectContaining({
         sessionWorkdir: localWorkdir,
         allowOutsideWorkdir: true,
+        authorizedDir: fs.realpathSync.native(sourceDir),
       }),
     );
   });
@@ -817,7 +818,10 @@ describe('Forge workdir-out permission path', () => {
     expect(confirmRequestMock).not.toHaveBeenCalled();
     expect(packGhostDirMock).toHaveBeenCalledWith(
       sourceDir,
-      expect.objectContaining({ allowOutsideWorkdir: true }),
+      expect.objectContaining({
+        allowOutsideWorkdir: true,
+        authorizedDir: fs.realpathSync.native(sourceDir),
+      }),
     );
   });
 
@@ -852,7 +856,10 @@ describe('Forge workdir-out permission path', () => {
     );
     expect(packGhostDirMock).toHaveBeenCalledWith(
       sourceDir,
-      expect.objectContaining({ allowOutsideWorkdir: true }),
+      expect.objectContaining({
+        allowOutsideWorkdir: true,
+        authorizedDir: fs.realpathSync.native(sourceDir),
+      }),
     );
   });
 
@@ -884,8 +891,20 @@ describe('Forge workdir-out permission path', () => {
       expect.objectContaining({
         sessionWorkdir: localWorkdir,
         allowOutsideWorkdir: true,
+        authorizedDir: path.join(fs.realpathSync.native(outsideRoot), 'new-plugin'),
       }),
     );
+  });
+
+  it('rejects an outside source after the live grant expires', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => false,
+    });
+    const result = await makeDeps('pi', 'forge-expired').forgePack({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(packGhostDirMock).not.toHaveBeenCalled();
   });
 });
 

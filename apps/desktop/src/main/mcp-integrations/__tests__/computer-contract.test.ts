@@ -58,7 +58,6 @@ describe('installed Computer Use contract', () => {
       window_id: 2,
       element_index: 3,
       snapshot_id: 's01234567',
-      unsupported: true,
       delivery_mode: 'background',
     }, olderClick)).toEqual({
       pid: 1,
@@ -66,6 +65,13 @@ describe('installed Computer Use contract', () => {
       element_index: 3,
       snapshot_id: 's01234567',
     });
+    expect(() => adaptComputerDriverArgs('click', {
+      pid: 1,
+      window_id: 2,
+      element_index: 3,
+      snapshot_id: 's01234567',
+      unsupported: true,
+    }, olderClick)).toThrow('does not accept unsupported');
     expect(() =>
       adaptComputerDriverArgs('verify_state', { pid: 1, window_id: 2 }, schemas),
     ).toThrow('requires expect');

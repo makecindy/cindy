@@ -6,7 +6,7 @@ import { jsonObjectArg } from '../json-object-arg.js';
 import { resolvePathInsideRoot, PathBoundaryError } from '../shared/assertInsidePath.js';
 import {
   authorizeSessionPathOutsideWorkdir,
-  resolveAbsoluteSessionPath,
+  resolveCanonicalSessionPath,
 } from '../session-path-auth.js';
 import type {
   ComputerMcpCallContext,
@@ -928,7 +928,7 @@ export function createComputerMcpServer(
       } catch (e) {
         if (e instanceof PathBoundaryError) {
           const sessionContext = options.getSessionContext?.();
-          const abs = resolveAbsoluteSessionPath(workingDir, value);
+          const abs = await resolveCanonicalSessionPath(workingDir, value);
           const auth = await authorizeSessionPathOutsideWorkdir({
             sessionId: sessionContext?.sessionId,
             sessionInstanceId: sessionContext?.sessionInstanceId,
@@ -939,6 +939,20 @@ export function createComputerMcpServer(
             operation: 'write',
           });
           if (auth.allowed) {
+            if (auth.isCurrent?.() === false) {
+              return textResult(
+                {
+                  ok: false,
+                  errorCode: 'PATH_NOT_ALLOWED',
+                  data: {
+                    tool: name,
+                    arg: key,
+                    message: '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。',
+                  },
+                },
+                true,
+              );
+            }
             parsedData[key] = abs;
             continue;
           }

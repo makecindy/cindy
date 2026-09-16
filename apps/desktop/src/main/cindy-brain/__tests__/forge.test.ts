@@ -382,10 +382,21 @@ describe('packGhostDir', () => {
       const packed = await packGhostDirRaw(outsideDir, {
         sessionWorkdir: workDir,
         allowOutsideWorkdir: true,
+        authorizedDir: await fs.promises.realpath(outsideDir),
       });
       expect(packed).toMatchObject({ ok: true });
       if (!packed.ok) return;
       await expect(fs.promises.access(path.join(outsideDir, 'demo-1.0.0.cindy'))).resolves.toBeUndefined();
+
+      await expect(packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        allowOutsideWorkdir: true,
+      })).resolves.toMatchObject({ ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR' });
+      await expect(packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        allowOutsideWorkdir: true,
+        authorizedDir: path.join(outsideRoot, 'other-src'),
+      })).resolves.toMatchObject({ ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR' });
     } finally {
       await fs.promises.rm(outsideRoot, { recursive: true, force: true });
     }
@@ -406,6 +417,7 @@ describe('packGhostDir', () => {
           sessionWorkdir: workDir,
           forbiddenRootDirs: [managedRoot],
           allowOutsideWorkdir: true,
+          authorizedDir: await fs.promises.realpath(installedDir),
         }),
       ).resolves.toMatchObject({
         ok: false,
@@ -1552,13 +1564,31 @@ describe('scaffoldGhostDir', () => {
       ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
       expect(fs.existsSync(dir)).toBe(false);
 
+      const authorizedDir = path.join(await fs.promises.realpath(outsideRoot), 'plugin');
       await expect(
         scaffoldGhostDir(
           { dir, template: 'plain', id: 'out-plugin', name: 'Out plugin' },
           { sessionWorkdir: workDir, allowOutsideWorkdir: true },
         ),
-      ).resolves.toMatchObject({ ok: true, dir });
-      expect(fs.existsSync(path.join(dir, 'ghost.json'))).toBe(true);
+      ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+      expect(fs.existsSync(dir)).toBe(false);
+
+      await expect(
+        scaffoldGhostDir(
+          { dir, template: 'plain', id: 'out-plugin', name: 'Out plugin' },
+          { sessionWorkdir: workDir, allowOutsideWorkdir: true, authorizedDir },
+        ),
+      ).resolves.toMatchObject({ ok: true, dir: authorizedDir });
+      expect(fs.existsSync(path.join(authorizedDir, 'ghost.json'))).toBe(true);
+
+      const swapped = path.join(outsideRoot, 'swapped');
+      await expect(
+        scaffoldGhostDir(
+          { dir: swapped, template: 'plain', id: 'swap-plugin', name: 'Swap plugin' },
+          { sessionWorkdir: workDir, allowOutsideWorkdir: true, authorizedDir },
+        ),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+      expect(fs.existsSync(swapped)).toBe(false);
     } finally {
       await fs.promises.rm(outsideRoot, { recursive: true, force: true });
     }

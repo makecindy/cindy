@@ -968,7 +968,7 @@ describe('createComputerMcpServer', () => {
       callTool: vi.fn(async () => ({ ok: true })),
     };
     const root = await makeWorkingDir();
-    const outside = path.resolve(root, '..', 'granted.png');
+    const outside = path.join(await fs.realpath(path.resolve(root, '..')), 'granted.png');
     setSessionPathAuthorizer(async (request) => {
       expect(request.path).toBe(outside);
       expect(request.toolName).toBe('cindy-computer:get_window_state');
@@ -1003,6 +1003,55 @@ describe('createComputerMcpServer', () => {
     );
     await h.cleanup();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('authorizes a workdir symlink screenshot path as the real target', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outsideDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-link-')));
+    await fs.symlink(
+      outsideDir,
+      path.join(root, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const canonical = path.join(outsideDir, 'granted.png');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(canonical);
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-link-granted',
+      }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: path.join(root, 'link', 'granted.png'),
+        },
+      },
+    })) as { ok: boolean };
+
+    expect(payload.ok).toBe(true);
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'get_window_state',
+      expect.objectContaining({ screenshot_out_file: canonical }),
+      expect.anything(),
+    );
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
   });
 
   it('suggests omitting screenshot_out_file when the session has no workingDir', async () => {
