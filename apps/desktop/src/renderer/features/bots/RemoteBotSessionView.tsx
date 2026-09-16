@@ -48,14 +48,23 @@ export function RemoteBotSessionView() {
         throw new Error('Conflicting remote session owner');
       // Origin must precede every read/write in the shared conversation view.
       remoteProjectsStore.pinSessionOrigin(deviceId, canonicalId);
+      const isSessionReadCurrent = remoteProjectsStore.captureSessionRead(deviceId, canonicalId);
       const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [
         canonicalId,
       ]);
       if (disposed) return;
-      const session = value as Session | null;
-      if (!session || session.id !== canonicalId || session.source !== 'bot')
+      // A settings change or reconnect may finish while this GET is in flight.
+      // Use the newer mirror when available; never publish the late response.
+      const readIsCurrent = isSessionReadCurrent();
+      const currentMirror = remoteProjectsStore.getDeviceSessions(deviceId).find((row) => row.id === canonicalId);
+      const session = readIsCurrent ? value as Session | null : currentMirror;
+      if (!session || session.id !== canonicalId || session.source !== 'bot' ||
+        session.status !== 'active' ||
+        (!readIsCurrent && session.deviceLinkConnectionStatus !== 'connected'))
         throw new Error('Invalid remote companion session');
-      remoteProjectsStore.mergeDeviceSessions(deviceId, bot.deviceName, [session]);
+      if (readIsCurrent) remoteProjectsStore.mergeDeviceSessions(deviceId, currentMirror?.deviceLinkDeviceName ?? bot.deviceName, [
+        isSessionReadCurrent.mergeActivity(session),
+      ]);
       setReady(resolved);
       setValidatedSessionId(sessionId);
     })().catch(() => {

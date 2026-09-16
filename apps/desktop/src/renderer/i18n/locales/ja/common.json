@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Webhook を削除できませんでした"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "ログイン時に Cindy を自動起動",
+        "hint": "パソコンへのログイン時に Cindy を自動的に開きます。初期設定ではオフです。",
+        "requiresApproval": "自動起動を有効にするには、macOS のシステム設定のログイン項目で Cindy を許可してください。",
+        "loading": "システム設定を読み込み中…",
+        "loadFailed": "起動設定を読み込めませんでした。この設定ページを開き直して再試行してください。",
+        "saveFailed": "起動設定を保存できませんでした。再試行するか、システムの起動項目を確認してください。",
+        "notApplied": "システムに設定が反映されませんでした。システムの起動項目を確認して再試行してください。"
+      },
       "title": "アプリの動作",
       "closeBehavior": {
         "label": "メインウィンドウを閉じるとき",
@@ -3759,6 +3768,12 @@
           "statusPendingSuffix_other": "({{count}} 件対応待ち)",
           "statusOffKept_one": "オフ · {{count}} 個のワークスペース連携を保持中",
           "statusOffKept_other": "オフ · {{count}} 個のワークスペース連携を保持中",
+          "removeCommunicationsConfirmDescription": "このデバイスのワークスペースへの通信権限を削除します。他のデバイスや Bot の受信設定には影響しません。",
+          "localCommunications": "このデバイスでの Slack 通信",
+          "communicationsActive": "Slack 通信オン",
+          "communicationsInactive": "Slack 通信オフ",
+          "botNotReceiving": "Bot チャットを受信しない",
+          "receiveBot": "Bot チャットを受信",
           "displaced": "別のデバイスで連携済み",
           "rebind": "再連携",
           "removeAria": "このワークスペースの連携を解除",

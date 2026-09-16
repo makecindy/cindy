@@ -1,8 +1,21 @@
 // @vitest-environment jsdom
 
 import { createElement, type ReactNode } from 'react';
-import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  applyRemoteSessionActivity,
+  clearRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
@@ -214,6 +227,7 @@ function sessionRowEl(): HTMLElement {
 
 describe('SessionCard visual cases', () => {
   beforeEach(() => {
+    clearRemoteSessionActivity();
     mocks.navigate.mockReset();
     mocks.dropdownMenuOpen = false;
     mocks.boundSchedulesBySession.clear();
@@ -936,5 +950,46 @@ describe('SessionCard visual cases', () => {
         node.className.includes('bg-[var(--card-status-done)]'),
       ),
     ).toBe(true);
+  });
+  it.each(['card', 'list'] as const)('keeps %s status scoped to the task origin', (variant) => {
+    const base = sessionCardVisualCases[0];
+    const session = { ...base.session, id: 'origin-regression', deviceLinkDeviceId: undefined };
+    applyRemoteSessionActivity('other', { sessionId: session.id, phase: 'running' });
+    const view = renderCase(base.id, {
+      session,
+      variant,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
+    view.unmount();
+
+    // The remote row must not fall back to a same-ID local activity either.
+    mocks.runningDetailBySession.set(session.id, 'local turn is running');
+    renderCase(base.id, {
+      session: { ...session, deviceLinkDeviceId: 'target' },
+      variant,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
+    act(() => applyRemoteSessionActivity('target', { sessionId: session.id, phase: 'running' }));
+    expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+    act(() =>
+      applyRemoteSessionActivity('other', {
+        sessionId: session.id,
+        phase: 'completed',
+        attention: false,
+      }),
+    );
+    expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+    act(() =>
+      applyRemoteSessionActivity('target', {
+        sessionId: session.id,
+        phase: 'completed',
+        attention: false,
+      }),
+    );
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
   });
 });

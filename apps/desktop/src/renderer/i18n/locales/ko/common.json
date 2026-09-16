@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "로그인 시 Cindy 자동 시작",
+        "hint": "컴퓨터에 로그인하면 Cindy를 자동으로 엽니다. 기본값은 꺼짐입니다.",
+        "requiresApproval": "자동 시작을 켜려면 macOS 시스템 설정의 로그인 항목에서 Cindy를 허용하세요.",
+        "loading": "시스템 설정을 읽는 중…",
+        "loadFailed": "시작 설정을 읽지 못했습니다. 이 설정 페이지를 다시 열어 재시도하세요.",
+        "saveFailed": "시작 설정을 저장하지 못했습니다. 다시 시도하거나 시스템 시작 항목을 확인하세요.",
+        "notApplied": "시스템에 설정이 적용되지 않았습니다. 시스템 시작 항목을 확인한 후 다시 시도하세요."
+      },
       "title": "앱 동작",
       "closeBehavior": {
         "label": "기본 창을 닫을 때",
@@ -3759,6 +3768,12 @@
           "statusPendingSuffix_other": "({{count}}개 처리 대기)",
           "statusOffKept_one": "꺼짐 · 워크스페이스 바인딩 {{count}}개 유지됨",
           "statusOffKept_other": "꺼짐 · 워크스페이스 바인딩 {{count}}개 유지됨",
+          "removeCommunicationsConfirmDescription": "이 기기의 워크스페이스 통신 권한을 제거합니다. 다른 기기나 Bot 수신 설정에는 영향을 주지 않습니다.",
+          "localCommunications": "이 기기의 Slack 통신",
+          "communicationsActive": "Slack 통신 켜짐",
+          "communicationsInactive": "Slack 통신 꺼짐",
+          "botNotReceiving": "Bot 대화 수신 안 함",
+          "receiveBot": "Bot 대화 수신",
           "displaced": "다른 기기에서 바인딩됨",
           "rebind": "다시 바인딩",
           "removeAria": "이 워크스페이스 바인딩 해제",

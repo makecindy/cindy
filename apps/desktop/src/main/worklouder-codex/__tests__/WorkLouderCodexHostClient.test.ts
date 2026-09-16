@@ -25,6 +25,65 @@ function logger() {
 }
 
 describe('WorkLouderCodexHostClient', () => {
+  it('starts the connection watchdog after native preparation, not during a slow build', async () => {
+    vi.useFakeTimers();
+    let ready!: () => void;
+    const child = Object.assign(new FakeChild(), {
+      whenReady: new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+    });
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: 'native', source: 'cindy-native' }),
+      fork,
+      log: logger(),
+    });
+    try {
+      client.setHidInputHandler(vi.fn());
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(fork).toHaveBeenCalledOnce();
+      ready();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      const disposed = client.dispose();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await disposed;
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not arm a late native-ready watchdog after disposal', async () => {
+    vi.useFakeTimers();
+    let ready!: () => void;
+    const child = Object.assign(new FakeChild(), {
+      whenReady: new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+    });
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: 'native', source: 'cindy-native' }),
+      fork: () => child,
+      log: logger(),
+    });
+    try {
+      client.setHidInputHandler(vi.fn());
+      const disposed = client.dispose();
+      child.emit('message', { kind: 'stopped' });
+      await disposed;
+      ready();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('does not load the optional native SDK for an idle Cindy', () => {
     const resolveSdk = vi.fn(() => null);
     const client = new WorkLouderCodexHostClient({
@@ -751,9 +810,12 @@ describe('WorkLouderCodexHostClient', () => {
 describe('Work Louder SDK resolution', () => {
   it('looks for ChatGPT and Codex installs on Windows as well as macOS', () => {
     const source = readFileSync(resolve(__dirname, '..', 'index.ts'), 'utf8');
+    const resolver = readFileSync(resolve(__dirname, '..', 'sdkResolver.ts'), 'utf8');
     expect(source).toContain("process.platform === 'win32'");
-    expect(source).toContain('LOCALAPPDATA');
-    expect(source).toContain("path.join(root, 'Programs', appName, packageTail)");
+    expect(source).toContain('createWorkLouderSdkResolver');
+    expect(source).toContain('nativeFallback:');
+    expect(resolver).toContain('LOCALAPPDATA');
+    expect(resolver).toContain("paths.join(root, 'Programs', name, tail)");
     expect(source).not.toContain("if (process.platform !== 'darwin') return null;");
   });
 });
