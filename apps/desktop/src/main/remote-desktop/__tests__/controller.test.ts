@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RemoteDesktopController, type DesktopControllerDeps } from '../controller';
-import { acquireHumanDesktopInput, withAgentDesktopInput } from '../inputOwnership';
 import { enumerateDesktopSources } from '../captureSource';
 import type { RemoteDesktopIceReply, RemoteDesktopLease } from '@cindy/device-link';
 
@@ -652,19 +651,5 @@ describe('remote desktop authority and lifecycle', () => {
     expect(h.deps.stopInput).not.toHaveBeenCalled();
     expect(h.deps.stopVideo).not.toHaveBeenCalled();
     expect(h.controller.hasLease(lease.lease)).toBe(true);
-  });
-});
-describe('human / Agent input ownership', () => {
-  it('excludes simultaneous input in both directions and releases on error', async () => {
-    const release = acquireHumanDesktopInput();
-    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('person');
-    release();
-    await expect(
-      withAgentDesktopInput(async () => {
-        expect(() => acquireHumanDesktopInput()).toThrow('BUSY');
-        throw new Error('action');
-      }),
-    ).rejects.toThrow('action');
-    acquireHumanDesktopInput()();
   });
 });

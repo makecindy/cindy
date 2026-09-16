@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Webhook 移除失败"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "登录电脑后自动启动 Cindy",
+        "hint": "登录系统后自动打开 Cindy，默认关闭",
+        "requiresApproval": "请在 macOS 系统设置的登录项中允许 Cindy，完成后此设置才会生效",
+        "loading": "正在读取系统设置…",
+        "loadFailed": "无法读取启动设置，请重新打开此设置页重试",
+        "saveFailed": "无法保存启动设置，请重试或检查系统启动项",
+        "notApplied": "系统未应用此设置，请检查系统启动项后重试"
+      },
       "title": "应用行为",
       "closeBehavior": {
         "label": "关闭主窗口时",
@@ -6157,6 +6166,7 @@
     "loadFailed": "无法加载用量历史。请重新打开设置后重试。",
     "range": {
       "label": "时间范围",
+      "date": "日期",
       "ariaLabel": "筛选用量时间范围",
       "all": "所有时间",
       "30d": "最近 30 天",

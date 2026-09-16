@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "로그인 시 Cindy 자동 시작",
+        "hint": "컴퓨터에 로그인하면 Cindy를 자동으로 엽니다. 기본값은 꺼짐입니다.",
+        "requiresApproval": "자동 시작을 켜려면 macOS 시스템 설정의 로그인 항목에서 Cindy를 허용하세요.",
+        "loading": "시스템 설정을 읽는 중…",
+        "loadFailed": "시작 설정을 읽지 못했습니다. 이 설정 페이지를 다시 열어 재시도하세요.",
+        "saveFailed": "시작 설정을 저장하지 못했습니다. 다시 시도하거나 시스템 시작 항목을 확인하세요.",
+        "notApplied": "시스템에 설정이 적용되지 않았습니다. 시스템 시작 항목을 확인한 후 다시 시도하세요."
+      },
       "title": "앱 동작",
       "closeBehavior": {
         "label": "기본 창을 닫을 때",
@@ -6161,6 +6170,7 @@
     "loadFailed": "사용량 기록을 불러오지 못했습니다. 설정을 다시 열어 재시도해 주세요.",
     "range": {
       "label": "기간",
+      "date": "날짜",
       "ariaLabel": "사용량 기간 필터",
       "all": "전체 기간",
       "30d": "최근 30일",

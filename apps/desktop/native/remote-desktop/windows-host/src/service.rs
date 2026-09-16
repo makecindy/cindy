@@ -633,24 +633,20 @@ pub fn worker(name: &str) -> Result<()> {
         return denied();
     }
     pipe.write(b"ready\n")?;
-    // Observe input failure without blocking normal per-batch replies.
-    let failed = std::sync::Arc::new(AtomicBool::new(false));
-    let output = failed.clone();
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        let _ = reader.read_line(&mut line);
-        output.store(true, Ordering::SeqCst);
-    });
     loop {
         let line = pipe.line(32768)?;
-        if failed.load(Ordering::SeqCst) {
-            return denied();
-        }
         let events: Vec<serde_json::Value> = serde_json::from_slice(&line)?;
         if events.len() > 64 {
             return denied();
         }
         child.0.stdin.as_mut().ok_or_else(error)?.write_all(&line)?;
+        // A pipe write is not input completion. Do not let Agent input overlap
+        // a remote text batch still being applied by the worker.
+        let mut acknowledgement = String::new();
+        reader.read_line(&mut acknowledgement)?;
+        if acknowledgement != "ok\n" {
+            return denied();
+        }
         pipe.write(b"ok\n")?;
     }
 }

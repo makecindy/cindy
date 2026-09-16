@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Could not remove the Webhook"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "Start Cindy at Login",
+        "hint": "Open Cindy automatically when you sign in to your computer. Off by default.",
+        "requiresApproval": "Allow Cindy in Login Items in macOS System Settings to finish enabling startup.",
+        "loading": "Reading system settings…",
+        "loadFailed": "Could not read startup settings. Reopen this settings page to retry.",
+        "saveFailed": "Could not save startup settings. Retry or check your system startup items.",
+        "notApplied": "The system did not apply this setting. Check your system startup items and retry."
+      },
       "title": "App Behavior",
       "closeBehavior": {
         "label": "When closing the main window",
@@ -6163,6 +6172,7 @@
     "loadFailed": "Unable to load usage history. Reopen Settings to try again.",
     "range": {
       "label": "Time range",
+      "date": "Date",
       "ariaLabel": "Filter usage time range",
       "all": "All time",
       "30d": "Last 30 days",
