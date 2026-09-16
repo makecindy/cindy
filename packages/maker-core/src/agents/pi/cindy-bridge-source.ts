@@ -1779,8 +1779,14 @@ function installTextOnlyTurnPolicy(pi: any): void {
   const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
   if (!token) return;
   const prefix = ${JSON.stringify(CINDY_PI_TEXT_ONLY_INPUT_PREFIX)} + token + '\n';
-  pi.on('input', (event: any) => {
-    if (event.source !== 'rpc' || typeof event.text !== 'string' || !event.text.startsWith(prefix)) return;
+  pi.on('input', (event: any, ctx: any) => {
+    if (event.source !== 'rpc' || typeof event.text !== 'string') return;
+    if (!event.text.startsWith(prefix)) {
+      // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
+      // resets their latch; steer, follow-ups and extension continuations retain it.
+      if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
+      return;
+    }
     textOnlyTurnActive = true;
     return { action: 'transform', text: event.text.slice(prefix.length), images: event.images };
   });

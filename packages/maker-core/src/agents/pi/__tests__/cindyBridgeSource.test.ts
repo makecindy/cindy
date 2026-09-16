@@ -62,6 +62,23 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   expect(handlers.has('agent_end')).toBe(false); // Intermediate retry/compaction boundaries retain the policy.
   handlers.get('agent_settled')!({}, { ...ctx, isIdle: () => false });
   expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  // A failed/aborted welcome can omit agent_settled entirely.
+  const input = handlers.get('input')!;
+  for (const event of [
+    { source: 'extension', text: 'Continue.' },
+    { source: 'rpc', text: 'Continue.', streamingBehavior: 'steer' },
+    { source: 'rpc', text: 'Continue.', streamingBehavior: 'followUp' },
+  ]) {
+    input(event, ctx);
+    expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  }
+  input({ source: 'rpc', text: 'Continue.' }, { ...ctx, isIdle: () => false });
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  expect(input({ source: 'rpc', text: 'New ordinary request.' }, ctx)).toBeUndefined();
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  // A subsequent welcome still arms the policy; normal settlement still clears it.
+  input({ source: 'rpc', text: prefix + 'Hello again.' }, ctx);
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
   handlers.get('agent_settled')!({}, ctx);
   expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
 });
