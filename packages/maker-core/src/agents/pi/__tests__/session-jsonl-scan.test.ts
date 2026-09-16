@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -39,5 +39,15 @@ describe('scanPiSessionJsonl', () => {
 
   it('returns null when the session file is missing', async () => {
     await expect(scanPiSessionJsonl(path.join(os.tmpdir(), 'missing-pi-session.jsonl'))).resolves.toBeNull();
+  });
+
+  it('returns null for a symlink or directory instead of following it', async () => {
+    const file = await sessionFile([
+      '{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}',
+    ]);
+    const link = path.join(path.dirname(file), 'session.link');
+    await symlink(file, link);
+    await expect(scanPiSessionJsonl(link)).resolves.toBeNull();
+    await expect(scanPiSessionJsonl(path.dirname(file))).resolves.toBeNull();
   });
 });

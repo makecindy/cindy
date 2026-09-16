@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 
 const ENTRY_PREFIX_CHARS = 4096;
@@ -67,12 +67,34 @@ function applyEntry(scan: PiSessionJsonlScan, line: string): void {
  * 不经过 Pi RPC,也不把整段带图历史装进 16 Mi 字符的 JSONL 响应帧。
  */
 export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSessionJsonlScan | null> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    const listed = await fs.lstat(sessionFile);
+    if (!listed.isFile() || listed.isSymbolicLink()) return null;
+    handle = await fs.open(
+      sessionFile,
+      fsConstants.O_RDONLY
+        | (fsConstants.O_NOFOLLOW ?? 0)
+        | (fsConstants.O_NONBLOCK ?? 0),
+    );
+    const opened = await handle.stat();
+    if (!opened.isFile()) {
+      await handle.close();
+      return null;
+    }
+  } catch {
+    await handle?.close().catch(() => {});
+    return null;
+  }
+  if (!handle) return null;
+  const openedHandle = handle;
+
   return new Promise((resolve) => {
     const scan: PiSessionJsonlScan = {
       userEntryIds: new Set<string>(),
       lastPlanModeEnabled: null,
     };
-    const stream = createReadStream(sessionFile);
+    const stream = openedHandle.createReadStream({ autoClose: true });
     const decoder = new StringDecoder('utf8');
     let buffer = '';
     let prefix = '';
@@ -82,6 +104,7 @@ export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSession
     const finish = (result: PiSessionJsonlScan | null): void => {
       if (settled) return;
       settled = true;
+      stream.destroy();
       resolve(result);
     };
 

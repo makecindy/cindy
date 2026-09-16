@@ -5385,7 +5385,8 @@ export class PiAgent extends BaseAgent {
       // 远端 sessionFile 不在本机;带图长任务的 get_entries 会撑破 16 Mi 字符 JSONL 帧。
       if (remote || typeof sdkSessionId !== 'string' || !path.isAbsolute(sdkSessionId)) return null;
       try {
-        const stat = await fs.stat(sdkSessionId);
+        const stat = await fs.lstat(sdkSessionId);
+        if (!stat.isFile() || stat.isSymbolicLink()) return null;
         if (
           localSessionScanCache
           && localSessionScanCache.file === sdkSessionId
