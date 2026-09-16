@@ -241,6 +241,8 @@ async function authorizeForgeOutsideWorkdir(params: {
   dir: string;
   sessionWorkdir: string;
   sessionContext: LiziMcpSessionContext | undefined;
+  toolName: 'ghost_forge_scaffold' | 'ghost_forge_pack' | 'ghost_forge_install';
+  operation: 'read' | 'write';
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
 }): Promise<ForgeOutsideAccess> {
   const location = classifyForgeSourceRelativeToWorkdir(params.dir, params.sessionWorkdir);
@@ -278,6 +280,8 @@ async function authorizeForgeOutsideWorkdir(params: {
       size,
       isDirectory,
     }],
+    toolName: params.toolName,
+    operation: params.operation,
     getLiveSessionGrantState: params.getLiveSessionGrantState,
   });
   if (!granted.ok) {
@@ -2330,6 +2334,8 @@ export function getCindyGhostsMcpDeps(
           dir: request.dir,
           sessionWorkdir: gate.workingDir,
           sessionContext: resolveSessionContext(),
+          toolName: 'ghost_forge_scaffold',
+          operation: 'write',
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!access.ok) return access;
@@ -2360,6 +2366,8 @@ export function getCindyGhostsMcpDeps(
           dir,
           sessionWorkdir: gate.workingDir,
           sessionContext,
+          toolName: 'ghost_forge_pack',
+          operation: 'write',
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!access.ok) return access;
@@ -2421,6 +2429,8 @@ export function getCindyGhostsMcpDeps(
           dir,
           sessionWorkdir: gate.workingDir,
           sessionContext,
+          toolName: 'ghost_forge_install',
+          operation: 'write',
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!access.ok) return access;

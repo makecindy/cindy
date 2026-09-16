@@ -847,6 +847,8 @@ describe('Forge workdir-out permission path', () => {
     const action = reviewAction.mock.calls[0]?.[0];
     expect(action?.description).toContain('plugin_file_handoff');
     expect(action?.description).toContain('forge_source');
+    expect(action?.description).toContain('ghost_forge_pack');
+    expect(action?.description).toContain('write');
     expect(confirmRequestMock).not.toHaveBeenCalled();
     expect(packGhostDirMock).toHaveBeenCalledWith(
       sourceDir,
