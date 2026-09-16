@@ -2,7 +2,7 @@
  * Context 面板的媒体视图:最近照片横向条(主视图顶部)+ 截图网格(二级视图)。
  *
  * 两者共用 useContextSheetMediaAssets 加载资产,点选走页面注入的 onToggleAsset
- * (页面负责 getAssetInfoAsync 换 localUri → 原生直传既有 presign→OSS 链路,或移除已附加项)。
+ * (页面负责 getAssetInfoAsync 换 localUri → 原生直传既有 presign→OSS 链路)。
  * 选中态由页面传入 selectedAssetIds(assetId ↔ 附件映射的真相在页面)。
  */
 import { Check } from 'lucide-react-native';
@@ -13,6 +13,7 @@ import { Image } from 'expo-image';
 import {
   ActivityIndicator,
   Pressable,
+  Platform,
   ScrollView,
   View,
 } from 'react-native';
@@ -23,16 +24,14 @@ import {
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
 
-const STRIP_THUMB_SIZE = 84;
+const STRIP_THUMB_SIZE = 80;
 const GRID_COLUMNS = 3;
 
 export interface ContextSheetMediaCallbacks {
-  /** 点选资产:已附加 → 移除;待选 → 取消;其余 → 加入待选(由底部「加入对话」统一提交)。页面实现。 */
+  /** 单张点按即加入附件，由页面同步入队并关闭面板。 */
   onToggleAsset: (asset: ContextSheetMediaAsset) => void;
   /** 已附加为附件的 assetId 集(展示勾选角标)。 */
   selectedAssetIds: ReadonlySet<string>;
-  /** 待选资产 assetId → 选中序号(从 1 起,展示数字角标,对照 Cursor)。 */
-  pendingOrder?: ReadonlyMap<string, number>;
   /** 正在上传中的 assetId 集(对应格子显示 spinner 并禁点;其余照常可选——上传已后台并发,不再整面板锁定)。 */
   busyAssetIds?: ReadonlySet<string>;
   disabled?: boolean;
@@ -43,7 +42,6 @@ export function RecentPhotosStrip({
   enabled,
   onToggleAsset,
   selectedAssetIds,
-  pendingOrder,
   busyAssetIds,
   disabled,
   testID,
@@ -76,10 +74,9 @@ export function RecentPhotosStrip({
         <MediaThumb
           asset={asset}
           busy={busyAssetIds?.has(asset.id) ?? false}
-          disabled={disabled || busyAssetIds?.has(asset.id)}
+          disabled={disabled || selectedAssetIds.has(asset.id) || busyAssetIds?.has(asset.id)}
           key={asset.id}
           onPress={() => onToggleAsset(asset)}
-          pendingIndex={pendingOrder?.get(asset.id)}
           selected={selectedAssetIds.has(asset.id)}
           size={STRIP_THUMB_SIZE}
         />
@@ -93,7 +90,6 @@ export function ScreenshotsGrid({
   enabled,
   onToggleAsset,
   selectedAssetIds,
-  pendingOrder,
   busyAssetIds,
   disabled,
   contentWidth,
@@ -127,11 +123,10 @@ export function ScreenshotsGrid({
             <MediaThumb
               asset={asset}
               busy={busyAssetIds?.has(asset.id) ?? false}
-              disabled={disabled || busyAssetIds?.has(asset.id)}
+              disabled={disabled || selectedAssetIds.has(asset.id) || busyAssetIds?.has(asset.id)}
               key={asset.id}
               onPress={() => onToggleAsset(asset)}
-              pendingIndex={pendingOrder?.get(asset.id)}
-              selected={selectedAssetIds.has(asset.id)}
+                  selected={selectedAssetIds.has(asset.id)}
               size={thumbSize}
             />
           ))}
@@ -146,7 +141,6 @@ function MediaThumb({
   busy,
   disabled,
   onPress,
-  pendingIndex,
   selected,
   size,
 }: {
@@ -154,24 +148,18 @@ function MediaThumb({
   busy: boolean;
   disabled?: boolean;
   onPress: () => void;
-  /** 待选序号(从 1 起);与 selected(已附加勾选)互斥展示。 */
-  pendingIndex?: number;
   selected: boolean;
   size: number;
 }) {
   const styles = useThemedStyles(makeMediaStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const accessibilityLabel = selected
-    ? t('interaction.contextSheet.mediaRemove', { name: asset.filename })
-    : pendingIndex
-      ? t('interaction.contextSheet.mediaDeselect', { name: asset.filename })
-      : t('interaction.contextSheet.mediaSelect', { name: asset.filename });
+  const accessibilityLabel = t('interaction.contextSheet.mediaSelect', { name: asset.filename });
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
-      accessibilityState={{ disabled: disabled || busy, selected: selected || pendingIndex !== undefined }}
+      accessibilityState={{ disabled: disabled || busy, selected }}
       disabled={disabled || busy}
       onPress={onPress}
       style={({ pressed }) => [
@@ -185,10 +173,6 @@ function MediaThumb({
       {selected ? (
         <View style={styles.thumbBadge}>
           <Check color={colors.ctaText} size={iconSize.xs} strokeWidth={iconStroke.bold} />
-        </View>
-      ) : pendingIndex ? (
-        <View style={styles.thumbBadge}>
-          <Text style={styles.thumbBadgeText}>{pendingIndex}</Text>
         </View>
       ) : null}
       {busy ? (
@@ -221,7 +205,7 @@ function PermissionHint({ onRequest, testID }: { onRequest: () => void; testID?:
 function makeMediaStyles(colors: ThemeColors) {
   return {
     strip: {
-      marginTop: spacing.md,
+      marginTop: Platform.OS === 'ios' ? 0 : spacing.md,
     },
     stripContent: {
       gap: spacing.sm,

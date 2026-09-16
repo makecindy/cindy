@@ -2,16 +2,21 @@
  * MobileAgentMark —— Claude Code / Codex CLI 的 Agent 身份 mark。
  * 不用于 Anthropic / OpenAI provider 或模型品牌；后两者由 MobileProviderMark 负责。
  */
-import Svg, { G, Path, Text as SvgText } from 'react-native-svg';
-import { StyleSheet } from 'react-native';
+import Svg, { G, Path } from 'react-native-svg';
 
-import { iconSize, iconStroke } from '@/theme';
+import { iconSize } from '@/theme';
 
 import {
   CLAUDE_AGENT_PATH,
   CODEX_AGENT_FLOWER_PATH,
   CODEX_AGENT_PROMPT_PATH,
 } from './vendorIconPaths';
+
+// Brand geometry in the shared 24-unit viewBox, matching Desktop PiMark / CodexMark.
+const PI_STROKE = 2.4;
+const CODEX_PROMPT_STROKE = 0.5;
+const CODEX_SMALL_STROKE = 2;
+const CODEX_LARGE_STROKE = 1.6;
 
 export interface MobileAgentMarkProps {
   agentKind: 'claude-code' | 'codex' | 'pi';
@@ -21,11 +26,11 @@ export interface MobileAgentMarkProps {
 
 /** 单色 CLI mark；颜色由宿主的主题 / 状态 token 决定。 */
 export function MobileAgentMark({ agentKind, color, size = iconSize.sm }: MobileAgentMarkProps) {
-  const codexStrokeWidth = size <= iconSize.sm ? iconStroke.regular : iconStroke.thin;
+  const codexStrokeWidth = size <= iconSize.sm ? CODEX_SMALL_STROKE : CODEX_LARGE_STROKE;
   return (
     <Svg accessible={false} height={size} viewBox="0 0 24 24" width={size}>
       {agentKind === 'pi' ? (
-        <SvgText fill={color} fontSize="19" fontWeight="600" textAnchor="middle" x="12" y="18">π</SvgText>
+        <G fill="none" stroke={color} strokeWidth={PI_STROKE} strokeLinecap="round" strokeLinejoin="round"><Path d="M3.6 6.6h16.8" /><Path d="M8.4 6.6v11.8" /><Path d="M15.6 6.6v9.6c0 1.5.9 2.2 2.4 2.2" /></G>
       ) : agentKind === 'codex' ? (
         <G transform="translate(12 12) scale(1.1) translate(-12 -12)">
           <Path
@@ -40,7 +45,7 @@ export function MobileAgentMark({ agentKind, color, size = iconSize.sm }: Mobile
             fill={color}
             stroke={color}
             strokeLinejoin="round"
-            strokeWidth={StyleSheet.hairlineWidth}
+            strokeWidth={CODEX_PROMPT_STROKE}
           />
         </G>
       ) : (

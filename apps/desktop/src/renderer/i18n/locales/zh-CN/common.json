@@ -7955,7 +7955,8 @@
         "effortEndFast": "更高效",
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
-        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容"
+        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
+        "favoritesSyncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。"
       }
     },
     "permissionSelector": {

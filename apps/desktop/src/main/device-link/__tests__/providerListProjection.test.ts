@@ -39,11 +39,13 @@ const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
+    providerOrder?: string[];
   };
 const projectForCurrentController = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
+    providerOrder?: string[];
   };
 
 describe('controller capability metadata', () => {
@@ -373,6 +375,12 @@ describe('active runtime summary projection', () => {
   );
 });
 
+it('preserves the host display order in the remote projection, without changing catalog order',()=>{
+  const result=project({providers:[{id:'a'},{id:'b'}],providerOrder:['b','a','b',null,42]});
+  expect(result.providerOrder).toEqual(['b','a']);
+  expect(result.providers.map(p=>p.id)).toEqual(['a','b']);
+  expect(project({providers:[]}).providerOrder).toBeUndefined();
+});
 describe('schedule sidebar index tunnel cap', () => {
   it('coalesces the schedule index channel with other listing reads', () => {
     expect(__testing.coalesceRemoteInvokeChannels.has('maker:schedule:list-sidebar-index-runs')).toBe(true);

@@ -47,9 +47,12 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).not.toContain('<SafeAreaView style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
     expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
-    expect(source).toContain("function TranslucentBackdrop()");
-    expect(source).toContain("<TranslucentBackdrop />");
-    expect(source).toContain('return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;');
+    // iOS floats individual glass capsules over the message canvas.
+    expect(source).not.toContain('<TranslucentBackdrop />');
+    expect(source).not.toContain('colors.chatHeaderSurface');
+    expect(source).toContain('safeArea: { flex: 1, backgroundColor: colors.surface }');
+    const chromeStyle = source.slice(source.indexOf('  sessionChrome: {'), source.indexOf('  sessionChromeContent: {'));
+    expect(chromeStyle).toContain("backgroundColor: Platform.OS === 'ios' ? 'transparent' : colors.surface");
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>');
     expect(source).toContain("sessionChrome: {\n    left: 0,\n    overflow: 'hidden',\n    position: 'absolute',");
@@ -156,7 +159,9 @@ describe('mobile session header desktop-first surface', () => {
     expect(boundary).toContain('setAttachments([]);');
     expect(boundary).toContain('setAttachmentPreviews({});');
     expect(boundary).toContain('setMediaAssetAttachments({});');
-    expect(boundary).toContain('setPendingMediaAssets([]);');
+    // Thumbnail selections are committed immediately; task switches clear the
+    // canonical attachment collection instead of a separate pending-media list.
+    expect(boundary).toContain('attachmentsRef.current = [];');
     expect(boundary).toContain('setComposerPreviewAttachmentId(null);');
     expect(boundary).toContain('composerAnnotationsRef.current?.forgetAllAttachments();');
     expect(boundary).toContain('discardMobileUploadedAttachment(attachment');

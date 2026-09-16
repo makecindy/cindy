@@ -12,6 +12,8 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 /** PROVIDER_LIST 隧道回包:目录 + 被控端「模型显示/隐藏」override 快照(旧被控端无)。 */
 export interface DeviceProvidersPayload {
   providers: ProviderView[];
+  /** Host-owned display order; absent on older hosts. */
+  providerOrder?: string[];
   /** key = `${agent}:${providerId}:${modelId}`;undefined = 旧被控端,调用方不过滤。 */
   modelVisibilityOverrides?: Record<string, boolean>;
 }
@@ -44,7 +46,24 @@ async function requestDeviceProviders(
 ): Promise<DeviceProvidersPayload> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetcher();
+      const payload = await fetcher();
+      if (!Array.isArray(payload.providerOrder)) return payload;
+      // Match Desktop: explicitly ordered ids first, new ids append in catalog order.
+      const byId = new Map(payload.providers.map(provider => [provider.id, provider]));
+      const providers: ProviderView[] = [];
+      const seen = new Set<string>();
+      for (const id of payload.providerOrder) {
+        const provider = byId.get(id);
+        if (!provider || seen.has(id)) continue;
+        seen.add(id);
+        providers.push(provider);
+      }
+      for (const provider of payload.providers) {
+        if (seen.has(provider.id)) continue;
+        seen.add(provider.id);
+        providers.push(provider);
+      }
+      return { ...payload, providers };
     } catch (error) {
       if (!isDeviceProvidersVisibilityNotReadyError(error) || attempt >= 2 || !isCurrent()) throw error;
       await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
