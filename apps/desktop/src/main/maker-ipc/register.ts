@@ -14342,6 +14342,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
     delete normalized.autoReviewUserText;
+    // Only Main-created welcomes and restored host snapshots may carry this policy.
+    delete normalized.toolsDisabled;
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
       // preload/renderer 不属于可信边界，不能直接注入历史正文。
