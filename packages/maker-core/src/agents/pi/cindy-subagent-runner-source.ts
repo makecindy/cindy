@@ -757,6 +757,10 @@ function main() {
         CINDY_PI_PERMISSION_FILE: config.permissionFile,
         PI_CODING_AGENT_DIR: config.childConfigHome,
       });
+      const childRg = path.join(config.childConfigHome, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');
+      try {
+        if (fs.statSync(childRg).isFile()) childEnv.CINDY_PI_MANAGED_RG_PATH = childRg;
+      } catch (_) { /* parent may not have staged ripgrep */ }
       let routeProxySessionToken = '';
       try {
         routeProxySessionToken = deriveRouteProxySessionToken(task);

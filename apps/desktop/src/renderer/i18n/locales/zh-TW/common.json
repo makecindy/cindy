@@ -10960,6 +10960,8 @@
       "descriptionRevealPath": "該路徑只會在你允許後回傳給目前 Agent，並進入對話記錄；配對裝置可能同步該記錄。此操作不授予插件讀取檔案的權限。",
       "descriptionFsWrite": "該插件請求在當前任務的工作目錄寫入以下檔案。允許後，本任務內它寫同一目錄不再詢問。",
       "descriptionWorkspace": "該資料夾在當前任務的工作目錄之外。允許後，Cindy 會以它為工作目錄在側邊欄建立一個空任務(已有任務時直接複用)，不會讀取其中的檔案。",
+      "descriptionForgeSource": "以下目錄在當前任務的工作目錄之外。允許後，Forge 會在該目錄打包或產生插件源碼(會寫入 .cindy 產物或骨架檔案)。",
+      "descriptionOutsideWorkdir": "以下路徑在當前任務的工作目錄之外。允許後，目前工具可以讀取或寫入該位置。",
       "dirMeta": "{{count}} 個檔案 · {{size}}",
       "directory": "目錄",
       "allowDirs": "同時允許這些檔案所在目錄(本任務內同目錄媒體檔案不再詢問)",

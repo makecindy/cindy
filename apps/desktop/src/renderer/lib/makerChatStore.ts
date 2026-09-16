@@ -850,9 +850,11 @@ export interface PendingGhostGrantConfirm {
    * 往目录里存文件;reveal_path = 允许当前 Agent 获得单个媒体仓本机路径;
    * fs_write = 意识申请写工作目录文件(会话 permission 为
    * 逐条确认档时逐次弹,同目录本会话批一次);workspace = 意识申请以该目录
-   * 为工作区在侧边栏创建/复用会话入口(不过户字节)。
+   * 为工作区在侧边栏创建/复用会话入口(不过户字节);
+   * forge_source = Forge 打包/骨架的源码目录在工作目录外;
+   * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
-  lane: 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace';
+  lane: 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
   items: Array<{
     name: string;
     absPath: string;
@@ -15465,7 +15467,9 @@ function parseGhostGrantConfirmRequest(request: {
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&
     lane !== 'fs_write' &&
-    lane !== 'workspace'
+    lane !== 'workspace' &&
+    lane !== 'forge_source' &&
+    lane !== 'outside_workdir'
   )
     return null;
   if (typeof request.ghostId !== 'string' || typeof request.ghostName !== 'string') return null;

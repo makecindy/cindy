@@ -10980,6 +10980,8 @@
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
+      "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
+      "descriptionOutsideWorkdir": "The path below is outside this session's working directory. If you allow, the current tool can read or write there.",
       "dirMeta": "{{count}} files · {{size}}",
       "directory": "Directory",
       "allowDirs": "Also allow their folders (media files in the same folders won't ask again this session)",

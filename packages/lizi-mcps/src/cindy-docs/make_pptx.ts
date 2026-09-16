@@ -485,7 +485,8 @@ export function registerMakePptxTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.pptx');
-        const abs = await prepareOutputPath(root, outPath, overwrite);
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx);
+        const abs = prepared.abs;
         const palette = resolveDocsTheme(theme as DocsThemeName);
 
         // 图片先全部过边界闸和字节上限、再转成内存 data URI。后续 pptxgenjs 不再
@@ -495,7 +496,8 @@ export function registerMakePptxTool(
         let totalImageBytes = 0;
         for (const [index, slide] of slides.entries()) {
           if (!slide.imagePath) continue;
-          const imageAbs = await prepareInputPath(root, slide.imagePath);
+          const imagePrepared = await prepareInputPath(root, slide.imagePath, sessionCtx);
+          const imageAbs = imagePrepared.abs;
           // pptxgenjs 只按扩展名决定内嵌的 content-type,喂个 .webp 进去会生成一个
           // PowerPoint 打不开的坏包 —— 那正是「看着成功、其实交了坏文件」,必须先拦。
           if (!isSupportedPptxImage(imageAbs)) {
@@ -517,6 +519,7 @@ export function registerMakePptxTool(
                   `第 ${index + 1} 页的图片过大: ${size} 字节`,
                   `图片 "${slide.imagePath}" 有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单张图片上限(12 MB)。请先压缩或缩小图片。`,
                 ),
+              { allowOutsideRoot: imagePrepared.authorizedOutsideWorkdir },
             );
             const mime = detectPptxImageMime(bytes);
             if (!mime || !(await validateDecodablePptxImage(bytes))) {
@@ -843,7 +846,13 @@ export function registerMakePptxTool(
         const buffer = (await pptx.write({
           outputType: 'nodebuffer',
         })) as Buffer;
-        await writeDocsOutput({ root, path: abs, data: buffer, overwrite });
+        await writeDocsOutput({
+          root,
+          path: abs,
+          data: buffer,
+          overwrite,
+          authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
+        });
         return okPayload({
           ...describeOutput(root, abs, buffer.byteLength),
           format: 'pptx',

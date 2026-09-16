@@ -4,6 +4,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonObjectArg } from '../json-object-arg.js';
 import { resolvePathInsideRoot, PathBoundaryError } from '../shared/assertInsidePath.js';
+import {
+  authorizeSessionPathOutsideWorkdir,
+  resolveAbsoluteSessionPath,
+} from '../session-path-auth.js';
 import type {
   ComputerMcpCallContext,
   ComputerMcpDeps,
@@ -923,6 +927,21 @@ export function createComputerMcpServer(
         parsedData[key] = await resolvePathInsideRoot(workingDir, value);
       } catch (e) {
         if (e instanceof PathBoundaryError) {
+          const sessionContext = options.getSessionContext?.();
+          const abs = resolveAbsoluteSessionPath(workingDir, value);
+          const auth = await authorizeSessionPathOutsideWorkdir({
+            sessionId: sessionContext?.sessionId,
+            sessionInstanceId: sessionContext?.sessionInstanceId,
+            workingDir,
+            remoteHostId: sessionContext?.remoteHostId,
+            path: abs,
+            toolName: `cindy-computer:${name}`,
+            operation: 'write',
+          });
+          if (auth.allowed) {
+            parsedData[key] = abs;
+            continue;
+          }
           return textResult(
             {
               ok: false,
@@ -931,8 +950,8 @@ export function createComputerMcpServer(
                 tool: name,
                 arg: key,
                 message: key === 'screenshot_out_file'
-                  ? `${e.message} 请省略 screenshot_out_file 由 driver 使用默认路径，或将其改为当前 workingDir 内的路径。`
-                  : e.message,
+                  ? `${auth.reason} 也可省略 screenshot_out_file 由 driver 使用默认路径。`
+                  : auth.reason,
               },
             },
             true,

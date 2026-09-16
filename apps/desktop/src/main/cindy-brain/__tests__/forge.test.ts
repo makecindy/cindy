@@ -370,6 +370,52 @@ describe('packGhostDir', () => {
     }
   });
 
+  it('packs a host-authorized source outside the session workdir', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {}',
+    });
+    const outsideRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-granted-'));
+    try {
+      const outsideDir = path.join(outsideRoot, 'src');
+      await fs.promises.cp(dir, outsideDir, { recursive: true });
+      const packed = await packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        allowOutsideWorkdir: true,
+      });
+      expect(packed).toMatchObject({ ok: true });
+      if (!packed.ok) return;
+      await expect(fs.promises.access(path.join(outsideDir, 'demo-1.0.0.cindy'))).resolves.toBeUndefined();
+    } finally {
+      await fs.promises.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('still rejects Host-managed roots after outside-workdir authorization', async () => {
+    const managedRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-managed-'));
+    try {
+      const installedDir = path.join(managedRoot, 'demo');
+      await fs.promises.mkdir(installedDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(installedDir, 'ghost.json'),
+        JSON.stringify(GOOD_MANIFEST),
+      );
+      await fs.promises.writeFile(path.join(installedDir, 'main.js'), '// installed');
+      await expect(
+        packGhostDirRaw(installedDir, {
+          sessionWorkdir: workDir,
+          forbiddenRootDirs: [managedRoot],
+          allowOutsideWorkdir: true,
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+      });
+    } finally {
+      await fs.promises.rm(managedRoot, { recursive: true, force: true });
+    }
+  });
+
   it('rejects Host-managed roots, descendants, case aliases, and junction aliases', async () => {
     const managedRoot = path.join(workDir, 'managed');
     const installedDir = path.join(managedRoot, 'demo');
@@ -1491,6 +1537,30 @@ describe('scaffoldGhostDir', () => {
       });
     } finally {
       await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('scaffolds outside the session workdir only after host authorization', async () => {
+    const outsideRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-scaffold-out-'));
+    const dir = path.join(outsideRoot, 'plugin');
+    try {
+      await expect(
+        scaffoldGhostDir(
+          { dir, template: 'plain', id: 'out-plugin', name: 'Out plugin' },
+          { sessionWorkdir: workDir },
+        ),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+      expect(fs.existsSync(dir)).toBe(false);
+
+      await expect(
+        scaffoldGhostDir(
+          { dir, template: 'plain', id: 'out-plugin', name: 'Out plugin' },
+          { sessionWorkdir: workDir, allowOutsideWorkdir: true },
+        ),
+      ).resolves.toMatchObject({ ok: true, dir });
+      expect(fs.existsSync(path.join(dir, 'ghost.json'))).toBe(true);
+    } finally {
+      await fs.promises.rm(outsideRoot, { recursive: true, force: true });
     }
   });
 });

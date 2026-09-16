@@ -4,7 +4,7 @@
  * 覆盖:
  *   - createPiStdioTransport:spawn 参数、onClose 单次、close() 幂等竞态
  *     (轮 21 H-1)、SIGTERM→SIGKILL 升级、writeLine 关闭后拒绝、stderr 缓冲
- *   - attachJsonlReader:跨 chunk UTF-8、尾部 flush、OOM 守卫(轮 21 H-3)、
+ *   - attachJsonlReader:跨 chunk UTF-8、尾部 flush、OOM 守卫后resync 到下一行、
  *     CRLF strip、error 事件不崩(轮 21 M-1)
  */
 
@@ -333,16 +333,27 @@ describe('attachJsonlReader', () => {
     expect(lines).toEqual(['{"a":1}']);
   });
 
-  it('discards buffer over OOM guard (round 21 H-3)', () => {
+  it('discards an oversized unterminated line through its newline, then resumes (round 21 H-3)', () => {
     const stream = makeStream();
     const lines: string[] = [];
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     attachJsonlReader(stream, (l) => lines.push(l));
-    // 超 16MB 无换行的流
+    // 超 16MB 无换行的流仍是同一行,不能把后续残余当新帧。
     const big = 'a'.repeat(16 * 1024 * 1024 + 100);
     stream.emit('data', big);
-    // 缓冲被丢弃, 后续合法行不受影响
-    stream.emit('data', '{"ok":1}\n');
+    stream.emit('data', 'residual-base64-fragment\n{"ok":1}\n');
+    expect(lines).toEqual(['{"ok":1}']);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('does not emit leftover bytes of an oversized complete line as JSON', () => {
+    const stream = makeStream();
+    const lines: string[] = [];
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    attachJsonlReader(stream, (l) => lines.push(l));
+    const oversized = `${'a'.repeat(16 * 1024 * 1024 + 50)}\n{"ok":1}\n`;
+    stream.emit('data', oversized);
     expect(lines).toEqual(['{"ok":1}']);
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();

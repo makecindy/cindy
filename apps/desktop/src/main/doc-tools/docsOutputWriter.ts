@@ -96,16 +96,24 @@ function throwResultError(
 
 export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
   const parentDir = path.dirname(input.path);
-  const realRoot = await fs.realpath(input.root);
   const lexicalParent = path.resolve(parentDir);
   const parentRelativePath = relativeOutputParentPath(input.root, lexicalParent);
   if (parentRelativePath === null) {
-    throw new DocsPathError(
-      'PATH_NOT_ALLOWED',
-      `输出目录不在任务工作目录内: ${lexicalParent}`,
-      '请改用任务工作目录内的输出路径。',
-    );
+    if (!input.authorizedOutsideWorkdir) {
+      throw new DocsPathError(
+        'PATH_NOT_ALLOWED',
+        `输出目录不在任务工作目录内: ${lexicalParent}`,
+        '请改用任务工作目录内的输出路径。',
+      );
+    }
+    await fs.mkdir(lexicalParent, { recursive: true });
+    return writeDocsOutput({
+      ...input,
+      root: lexicalParent,
+      authorizedOutsideWorkdir: false,
+    });
   }
+  const realRoot = await fs.realpath(input.root);
   const rootStat = await fs.lstat(realRoot, { bigint: true });
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     throw new DocsPathError(

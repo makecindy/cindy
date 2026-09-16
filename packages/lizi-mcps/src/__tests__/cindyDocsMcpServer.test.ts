@@ -27,6 +27,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
+import { setSessionPathAuthorizer } from '../session-path-auth.js';
 import {
   DOCX_MAX_MARKDOWN_BYTES,
   DOCX_MAX_SUBTITLE_BYTES,
@@ -65,7 +66,7 @@ it('preserves the authoritative root including trailing whitespace', async () =>
   await fs.mkdir(root);
   await fs.mkdir(root.trim());
   const output = await prepareOutputPath(resolveSessionRoot(sessionCtx({ workingDir: root })), 'result.txt', false);
-  await fs.writeFile(output, 'exact');
+  await fs.writeFile(output.abs, 'exact');
   expect(await fs.readFile(path.join(root, 'result.txt'), 'utf8')).toBe('exact');
   await expect(fs.stat(path.join(root.trim(), 'result.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -76,6 +77,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setSessionPathAuthorizer(undefined);
   vi.restoreAllMocks();
   while (created.length > 0) {
     const dir = created.pop()!;
@@ -1213,6 +1215,37 @@ describe('路径边界与覆盖语义', () => {
     });
     expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
     await expect(fs.stat(path.join(outside, 'escaped.docx'))).rejects.toThrow();
+  });
+
+  it('Host 授权后可以把文档写到工作目录外', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-'));
+    created.push(outside);
+    const outPath = path.join(outside, 'granted.docx');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(path.resolve(outPath));
+      expect(request.operation).toBe('write');
+      return { allowed: true };
+    });
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# granted',
+      outPath,
+    });
+    expect(result.ok).toBe(true);
+    await expect(fs.stat(outPath)).resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it('Host 拒绝后工作目录外的文档写入仍失败', async () => {
+    const outside = path.join(os.tmpdir(), 'cindy-docs-denied.docx');
+    setSessionPathAuthorizer(async () => ({ allowed: false, reason: '审阅拒绝了这次越界写入。' }));
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# denied',
+      outPath: outside,
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect((result.data as Record<string, string>).hint).toContain('审阅拒绝');
+    await expect(fs.stat(outside)).rejects.toThrow();
   });
 
   it('同名文件默认不覆盖,overwrite:true 才覆盖', async () => {

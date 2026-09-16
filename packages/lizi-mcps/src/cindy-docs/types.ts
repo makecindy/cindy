@@ -74,6 +74,8 @@ export type WriteDocsOutputFn = (input: {
   path: string;
   data: Uint8Array;
   overwrite: boolean;
+  /** Host already authorized a path outside the session workingDir. */
+  authorizedOutsideWorkdir?: boolean;
 }) => Promise<void>;
 
 /** 单页结构快照。宽高单位是 PDF point(1/72 英寸)。 */

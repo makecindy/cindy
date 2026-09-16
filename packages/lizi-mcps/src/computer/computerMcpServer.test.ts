@@ -3,11 +3,16 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setSessionPathAuthorizer } from '../session-path-auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from './server.js';
 import type { ComputerMcpDeps } from '../types.js';
+
+afterEach(() => {
+  setSessionPathAuthorizer(undefined);
+});
 
 const canLinkFile = (() => {
   const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'computer-file-link-probe-'));
@@ -951,8 +956,51 @@ describe('createComputerMcpServer', () => {
     expect(payload.ok).toBe(false);
     expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
     expect(payload.data.message).toContain('省略 screenshot_out_file');
-    expect(payload.data.message).toContain('workingDir 内');
+    expect(payload.data.message).toContain('工作目录');
     expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('dispatches an outside screenshot path after host authorization', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = path.resolve(root, '..', 'granted.png');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(outside);
+      expect(request.toolName).toBe('cindy-computer:get_window_state');
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-granted',
+      }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: outside,
+        },
+      },
+    })) as { ok: boolean };
+
+    expect(payload.ok).toBe(true);
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'get_window_state',
+      expect.objectContaining({ screenshot_out_file: outside }),
+      expect.anything(),
+    );
     await h.cleanup();
     await fs.rm(root, { recursive: true, force: true });
   });

@@ -92,7 +92,8 @@ export function registerMakeDocxTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.docx');
-        const abs = await prepareOutputPath(root, outPath, overwrite);
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx);
+        const abs = prepared.abs;
         const trimmedTitle = title?.trim() ?? '';
         const useCover = trimmedTitle.length > 0 && (cover ?? true);
         const buffer = await markdownToDocxBuffer(markdown, {
@@ -101,7 +102,13 @@ export function registerMakeDocxTool(
           ...(trimmedTitle.length > 0 ? { title: trimmedTitle } : {}),
           ...(subtitle ? { subtitle } : {}),
         });
-        await writeDocsOutput({ root, path: abs, data: buffer, overwrite });
+        await writeDocsOutput({
+          root,
+          path: abs,
+          data: buffer,
+          overwrite,
+          authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
+        });
         return okPayload({
           ...describeOutput(root, abs, buffer.byteLength),
           format: 'docx',

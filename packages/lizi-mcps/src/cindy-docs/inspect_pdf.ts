@@ -148,7 +148,8 @@ export function registerInspectPdfTool(
         }
         const carriedVerdict = previousVerdict ?? 'incomplete';
         const root = resolveSessionRoot(sessionCtx);
-        const abs = await prepareInputPath(root, inputPath);
+        const prepared = await prepareInputPath(root, inputPath, sessionCtx);
+        const abs = prepared.abs;
         if (path.extname(abs).toLowerCase() !== '.pdf') {
           return errorPayload(
             'UNSUPPORTED_FORMAT',
@@ -167,6 +168,7 @@ export function registerInspectPdfTool(
               `PDF 过大: ${bytes} 字节`,
               `PDF 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出检查上限(64 MB)。请先压缩或拆分 PDF。`,
             ),
+          { allowOutsideRoot: prepared.authorizedOutsideWorkdir },
         );
         if (data.byteLength === 0) {
           return errorPayload(

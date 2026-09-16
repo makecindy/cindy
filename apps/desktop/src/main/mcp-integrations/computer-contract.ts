@@ -45,9 +45,10 @@ export function adaptComputerDriverArgs(
   for (const key of Object.keys(args)) {
     if (args[key] === undefined) delete args[key];
     else if (schema.additionalProperties === false && !(key in props)) {
-      throw new ComputerContractError(
-        `Installed driver ${name} does not accept ${key}; no action was dispatched.`,
-      );
+      // Cindy may advertise a newer field (e.g. delivery_mode) than the installed
+      // driver. Strip it so the call still dispatches instead of failing closed
+      // after the model already chose a valid action.
+      delete args[key];
     }
   }
   for (const key of schema.required ?? []) {

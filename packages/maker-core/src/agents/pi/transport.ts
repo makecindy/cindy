@@ -345,10 +345,13 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
  * (pi docs/rpc.md 明确警告 Node readline 不合规。)
  *
  * 轮 21 H-3:缓冲无界增长防护 —— 损坏/恶意 pi 进程持续输出无 \n 的字节流时
- * buffer 无限累积会 OOM 整个进程。超过上限丢弃缓冲并告警(单条 JSONL 帧
- * 远超任何合法负载;pi 协议帧都是小 JSON)。
+ * buffer 无限累积会 OOM 整个进程。超过上限必须丢掉**当前这一行**并告警。
+ *
+ * 合法 `get_entries` 在带图长任务里可以超过 16 Mi 字符。超限不能把行边界重置成
+ * “从此开始是新帧”:那会把同一行的残余 base64 当下一行 JSON。正确做法是继续丢到
+ * 下一个 `\n`,再恢复分帧。
  */
-const MAX_JSONL_BUFFER_CHARS = 16 * 1024 * 1024;
+export const MAX_JSONL_BUFFER_CHARS = 16 * 1024 * 1024;
 
 export function attachJsonlReader(
   stream: NodeJS.ReadableStream,
@@ -356,34 +359,66 @@ export function attachJsonlReader(
 ): void {
   let decoder = new StringDecoder('utf8');
   let buffer = '';
+  let skippingOversizedLine = false;
 
-  stream.on('data', (chunk: Buffer | string) => {
-    buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
-    // OOM 守卫:超限丢弃缓冲(与 pi-manager 的 NDJSONDecoder 同策略)。
+  const resetDecoder = (): void => {
     // 轮 40-w4-t9 HIGH:丢弃时**必须重建 StringDecoder** —— 否则被丢帧末尾
-    // 残留的半个多字节字符会留在 decoder 内, 污染后续合法帧(JSONL 内容
-    // 损坏或解析失败)。
-    if (buffer.length > MAX_JSONL_BUFFER_CHARS) {
-      console.warn(
-        `[pi] JSONL line buffer exceeded ${MAX_JSONL_BUFFER_CHARS} chars without newline — discarding (corrupt stream?)`,
-      );
+    // 残留的半个多字节字符会留在 decoder 内, 污染后续合法帧。
+    decoder = new StringDecoder('utf8');
+  };
+
+  const dropThroughNewline = (): boolean => {
+    const newlineIndex = buffer.indexOf('\n');
+    if (newlineIndex === -1) {
       buffer = '';
-      decoder = new StringDecoder('utf8');
-      return;
+      resetDecoder();
+      return false;
     }
+    buffer = buffer.slice(newlineIndex + 1);
+    skippingOversizedLine = false;
+    return true;
+  };
+
+  const emitCompleteLines = (): void => {
     while (true) {
+      if (skippingOversizedLine) {
+        if (!dropThroughNewline()) return;
+        continue;
+      }
       const newlineIndex = buffer.indexOf('\n');
-      if (newlineIndex === -1) break;
+      if (newlineIndex === -1) {
+        if (buffer.length > MAX_JSONL_BUFFER_CHARS) {
+          console.warn(
+            `[pi] JSONL line buffer exceeded ${MAX_JSONL_BUFFER_CHARS} chars without newline — discarding until next newline`,
+          );
+          skippingOversizedLine = true;
+          dropThroughNewline();
+        }
+        return;
+      }
+      if (newlineIndex > MAX_JSONL_BUFFER_CHARS) {
+        console.warn(
+          `[pi] JSONL line exceeded ${MAX_JSONL_BUFFER_CHARS} chars — discarding oversized frame`,
+        );
+        buffer = buffer.slice(newlineIndex + 1);
+        continue;
+      }
       let line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
       if (line.endsWith('\r')) line = line.slice(0, -1);
       onLine(line);
     }
+  };
+
+  stream.on('data', (chunk: Buffer | string) => {
+    buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
+    emitCompleteLines();
   });
 
   stream.on('end', () => {
     buffer += decoder.end();
-    if (buffer.length > 0) {
+    emitCompleteLines();
+    if (!skippingOversizedLine && buffer.length > 0 && buffer.length <= MAX_JSONL_BUFFER_CHARS) {
       onLine(buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer);
     }
   });

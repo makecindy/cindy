@@ -38,7 +38,12 @@ import type {
   CindyGhostsMcpDeps,
 } from 'cindy-tools';
 import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
-import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
+import {
+  getLiziMcpSessionContext,
+  type LiziMcpSessionContext,
+  type SessionPathAuthorization,
+  type SessionPathAuthorizationRequest,
+} from '@cindy/mcps';
 
 import {
   GRANT_AUTHORIZATION_CHANGED_MESSAGE,
@@ -126,11 +131,115 @@ const convertForgeIconToPng = createForgeIconConverter({
   fork: forkForgeIconConversionHost,
 });
 
+const CINDY_FORGE_GRANT_ID = 'cindy-forge';
+const CINDY_SESSION_FS_GRANT_ID = 'cindy-session-fs';
+
+/** realpath 对尚未创建的 scaffold 目标会失败,改走已存在的最深祖先。 */
+function classifyForgeSourceRelativeToWorkdir(
+  source: string,
+  workdir: string,
+): 'inside' | 'outside' | 'unknown' {
+  try {
+    const realWorkdir = fs.realpathSync.native(path.resolve(workdir));
+    let cursor = path.resolve(source);
+    const { root } = path.parse(cursor);
+    while (true) {
+      try {
+        const realSource = fs.realpathSync.native(cursor);
+        return isPathInsideDir(realWorkdir, realSource) ? 'inside' : 'outside';
+      } catch {
+        if (cursor === root) return 'unknown';
+        const parent = path.dirname(cursor);
+        if (parent === cursor) return 'unknown';
+        cursor = parent;
+      }
+    }
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function authorizeForgeOutsideWorkdir(params: {
+  dir: string;
+  sessionWorkdir: string;
+  sessionContext: LiziMcpSessionContext | undefined;
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+}): Promise<{ ok: true; allowOutsideWorkdir: boolean } | { ok: false; errorCode: 'PERMISSION_DENIED'; message: string }> {
+  const location = classifyForgeSourceRelativeToWorkdir(params.dir, params.sessionWorkdir);
+  if (location !== 'outside') return { ok: true, allowOutsideWorkdir: false };
+  let size = 0;
+  let isDirectory = true;
+  try {
+    const stat = fs.statSync(params.dir);
+    isDirectory = stat.isDirectory() || stat.isSymbolicLink();
+    size = stat.size;
+  } catch {
+    /* pack/scaffold still report DIR_NOT_FOUND */
+  }
+  const granted = await requestGrantConfirm({
+    ghostId: CINDY_FORGE_GRANT_ID,
+    sessionId: params.sessionContext?.sessionId ?? null,
+    sessionInstanceId: params.sessionContext?.sessionInstanceId ?? null,
+    lane: 'forge_source',
+    items: [{
+      name: path.basename(params.dir) || params.dir,
+      absPath: params.dir,
+      size,
+      isDirectory,
+    }],
+    getLiveSessionGrantState: params.getLiveSessionGrantState,
+  });
+  if (!granted.ok) {
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: granted.message };
+  }
+  return { ok: true, allowOutsideWorkdir: true };
+}
+
+export async function authorizeDesktopSessionPath(
+  request: SessionPathAuthorizationRequest,
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'],
+): Promise<SessionPathAuthorization> {
+  if (request.remoteHostId) {
+    return {
+      allowed: false,
+      reason: '远程会话不能授权控制端本机路径。请改用当前任务工作目录内的路径，或在本机会话中重试。',
+    };
+  }
+  let size = 0;
+  let isDirectory = false;
+  try {
+    const stat = fs.statSync(request.path);
+    isDirectory = stat.isDirectory();
+    size = stat.size;
+  } catch {
+    /* write targets may not exist yet */
+  }
+  const granted = await requestGrantConfirm({
+    ghostId: CINDY_SESSION_FS_GRANT_ID,
+    sessionId: request.sessionId ?? null,
+    sessionInstanceId: request.sessionInstanceId ?? null,
+    lane: 'outside_workdir',
+    items: [{
+      name: path.basename(request.path) || request.path,
+      absPath: request.path,
+      size,
+      isDirectory,
+    }],
+    getLiveSessionGrantState,
+  });
+  if (!granted.ok) return { allowed: false, reason: granted.message };
+  if (granted.isCurrent?.() === false) {
+    return { allowed: false, reason: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
+  }
+  return { allowed: true };
+}
+
 /** pack 与显式 install 共用同一套可选 AI 图标叠加，避免二次打包丢失图标。 */
 async function packForgeSource(
   dir: string,
   sessionWorkdir: string,
   iconSource?: string,
+  packFlags: { allowOutsideWorkdir?: boolean } = {},
 ) {
   let iconPng: Buffer | undefined;
   let iconNote = '';
@@ -157,6 +266,7 @@ async function packForgeSource(
   const packOptions = {
     sessionWorkdir,
     forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
+    ...(packFlags.allowOutsideWorkdir ? { allowOutsideWorkdir: true } : {}),
   };
   let packed = await packGhostDir(dir, iconPng ? { ...packOptions, iconPng } : packOptions);
   // icon overlay 的任何失败都不是打包门槛：用原源码再打一次。若原源码
@@ -175,12 +285,14 @@ async function packForgeSource(
 }
 
 /* ────────────────────────────────────────────────────────────────────────
- * workdir 外过户确认:
- *   - 过户对象在会话 workdir 内 → 自动放行(与目录过户同信任等级);
+ * workdir 外过户 / Forge 源码确认:
+ *   - 对象在会话 workdir 内 → 自动放行;
  *   - 本地活跃会话当前为 Full Access(bypassPermissions) → Host 自动放行;
- *   - 其余 workdir 外场景(含无会话/远程会话)→ 弹确认卡,用户点允许才继续。
- * Full Access 只替代本处文件/目录交接确认,不扩大插件 manifest slot、网络、
- * 凭证、Setup、安装/更新等其它授权边界。
+ *   - Auto → 当前会话统一审阅器(allow 继续 / block 返回原因 / ask 才弹卡);
+ *   - 其余(Ask、无会话、远程、查询失败)→ 弹确认卡,用户点允许才继续。
+ * 禁止在 Host 已按当前档位放行后再因目录边界悄悄硬断。
+ * Full Access 只替代本处确认,不扩大插件 manifest slot、网络、
+ * 凭证、Setup、安装/更新等其它授权边界。Forge 受管根仍硬拒。
  * ──────────────────────────────────────────────────────────────────────── */
 
 export interface GhostGrantLiveSessionState {
@@ -365,6 +477,8 @@ async function getForgeSessionFsGate(
 
 /** 意识显示名(确认卡标题用;查不到回落 id)。 */
 function ghostDisplayName(ghostId: string): string {
+  if (ghostId === CINDY_FORGE_GRANT_ID) return 'Forge';
+  if (ghostId === CINDY_SESSION_FS_GRANT_ID) return 'Cindy';
   const g = getGhostManager()
     .list()
     .find((x) => x.manifest.id === ghostId);
@@ -2049,10 +2163,18 @@ export function getCindyGhostsMcpDeps(
               '当前是未发布或预发布 Cindy 构建，请明确填写 minCindyVersion（插件实际依赖的首个 Cindy 正式版本）',
           };
         }
+        const access = await authorizeForgeOutsideWorkdir({
+          dir: request.dir,
+          sessionWorkdir: gate.workingDir,
+          sessionContext: resolveSessionContext(),
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+        });
+        if (!access.ok) return access;
         const result = await scaffoldGhostDir({ ...request, minCindyVersion }, {
           sessionWorkdir: gate.workingDir,
           forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
           writeScaffold: writeForgeScaffoldWithStableParent,
+          ...(access.allowOutsideWorkdir ? { allowOutsideWorkdir: true } : {}),
         });
         if (result.ok) {
           log.info('ghost forge scaffold created', {
@@ -2066,9 +2188,19 @@ export function getCindyGhostsMcpDeps(
     },
     async forgePack({ dir, iconSource, intent }): Promise<CindyForgePackResult> {
       return withForgeOwnerLease(async () => {
-        const gate = await getForgeSessionFsGate(resolveSessionContext());
+        const sessionContext = resolveSessionContext();
+        const gate = await getForgeSessionFsGate(sessionContext);
         if (!gate.ok) return gate;
-        const attempt = await packForgeSource(dir, gate.workingDir, iconSource);
+        const access = await authorizeForgeOutsideWorkdir({
+          dir,
+          sessionWorkdir: gate.workingDir,
+          sessionContext,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+        });
+        if (!access.ok) return access;
+        const attempt = await packForgeSource(dir, gate.workingDir, iconSource, {
+          allowOutsideWorkdir: access.allowOutsideWorkdir,
+        });
         if (!attempt.ok) return attempt.result;
         const { packed, iconNote } = attempt;
         if (intent === 'publish') {
@@ -2115,9 +2247,19 @@ export function getCindyGhostsMcpDeps(
     },
     async forgeInstall({ dir, iconSource }): Promise<CindyForgeInstallResult> {
       return withForgeOwnerLease(async () => {
-        const gate = await getForgeSessionFsGate(resolveSessionContext());
+        const sessionContext = resolveSessionContext();
+        const gate = await getForgeSessionFsGate(sessionContext);
         if (!gate.ok) return gate;
-        const attempt = await packForgeSource(dir, gate.workingDir, iconSource);
+        const access = await authorizeForgeOutsideWorkdir({
+          dir,
+          sessionWorkdir: gate.workingDir,
+          sessionContext,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+        });
+        if (!access.ok) return access;
+        const attempt = await packForgeSource(dir, gate.workingDir, iconSource, {
+          allowOutsideWorkdir: access.allowOutsideWorkdir,
+        });
         if (!attempt.ok) return attempt.result;
         const { packed, iconNote } = attempt;
         try {

@@ -84,8 +84,8 @@ export function redactCredentialText(text: string): string {
     `${pre}${quote}[REDACTED]${sep}[REDACTED]`);
   return out;
 }
-// 轮 40-w1 HIGH:SSH stdout JSONL 缓冲上限 —— 与本地 attachJsonlReader 的
-// MAX_JSONL_BUFFER_CHARS(16MB)对齐, 防远端异常输出无换行流导致 OOM。
+// SSH stdout JSONL 缓冲上限 —— 与本地 attachJsonlReader 的
+// MAX_JSONL_BUFFER_CHARS(16MB)对齐。超限resync 到下一行,不关 transport。
 const SSH_JSONL_MAX_BUFFER_CHARS = 16 * 1024 * 1024;
 // 轮 40-w4 MEDIUM-1:写队列(pendingWrites)硬上限 —— SSH channel 建立阶段
 // (execStream 挂住/极慢)时每次 writeLine 都会 push 闭包, 无上限会无界增长
@@ -526,10 +526,11 @@ function createSshPiChannelTransport(
   const pendingWrites: Array<{ line: string; resolve: () => void; reject: (err: Error) => void }> = [];
   /** stdout 行切分缓冲(ssh channel 文本块可能跨行/半行)。 */
   let stdoutBuffer = '';
+  let skippingOversizedLine = false;
   // 轮 8 发现 5:ExecStreamHandle.onStdout 用 chunk.toString('utf8') 逐块解码,
   // 跨 chunk 的多字节 UTF-8 字符会被切成 U+FFFD。改用 onStdoutBytes +
   // StringDecoder(与 attachJsonlReader 同款), 保证 JSONL 帧内中文/emoji 不损坏。
-  const stdoutDecoder = new StringDecoder('utf8');
+  let stdoutDecoder = new StringDecoder('utf8');
 
   /** stdout 尾部 flush(幂等):channel 关闭/主动 close 前把 stdoutBuffer 里
    *  残留的未换行尾帧(pi 崩溃前输出半行 / 最后一行无 \n)吐给 lineHandlers,
@@ -542,7 +543,7 @@ function createSshPiChannelTransport(
     flushedTail = true;
     const tail = stdoutBuffer + stdoutDecoder.end();
     stdoutBuffer = '';
-    if (tail.trim().length > 0) {
+    if (!skippingOversizedLine && tail.trim().length > 0 && tail.length <= SSH_JSONL_MAX_BUFFER_CHARS) {
       fireLine(tail.endsWith('\r') ? tail.slice(0, -1) : tail);
     }
   };
@@ -705,21 +706,41 @@ function createSshPiChannelTransport(
         if (closed) return;
         if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null; }
         stdoutBuffer += stdoutDecoder.write(chunk);
-        // 轮 40-w1 HIGH:SSH stdout 缓冲无 OOM 上限(本地 attachJsonlReader 有
-        // 16MB guard, 双实现契约不一致)。远端路径更不可信 —— 超限丢弃缓冲并
-        // 关闭(继续解析已无意义, 且防 OOM)。
-        if (stdoutBuffer.length > SSH_JSONL_MAX_BUFFER_CHARS) {
-          logger.warn('pi ssh stdout buffer exceeded limit — closing transport', {
-            hostId: opts.remoteHost.id,
-            bytes: stdoutBuffer.length,
-          });
-          stdoutBuffer = '';
-          fireClose({ code: null, signal: null, reason: 'pi ssh stdout buffer overflow (no newline in stream)' });
-          return;
-        }
+        // 与本地 attachJsonlReader 对齐:超限丢掉当前行并resync 到下一个 \n。
+        // 合法 get_entries 带图历史可以超过 16MB;关 transport 会把整段会话打死。
         while (true) {
+          if (skippingOversizedLine) {
+            const newlineIndex = stdoutBuffer.indexOf('\n');
+            if (newlineIndex === -1) {
+              stdoutBuffer = '';
+              stdoutDecoder = new StringDecoder('utf8');
+              break;
+            }
+            stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+            skippingOversizedLine = false;
+            continue;
+          }
           const newlineIndex = stdoutBuffer.indexOf('\n');
-          if (newlineIndex === -1) break;
+          if (newlineIndex === -1) {
+            if (stdoutBuffer.length > SSH_JSONL_MAX_BUFFER_CHARS) {
+              logger.warn('pi ssh stdout buffer exceeded limit — discarding until next newline', {
+                hostId: opts.remoteHost.id,
+                bytes: stdoutBuffer.length,
+              });
+              skippingOversizedLine = true;
+              stdoutBuffer = '';
+              stdoutDecoder = new StringDecoder('utf8');
+            }
+            break;
+          }
+          if (newlineIndex > SSH_JSONL_MAX_BUFFER_CHARS) {
+            logger.warn('pi ssh stdout discarded oversized JSONL frame', {
+              hostId: opts.remoteHost.id,
+              bytes: newlineIndex,
+            });
+            stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+            continue;
+          }
           let line = stdoutBuffer.slice(0, newlineIndex);
           stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
           if (line.endsWith('\r')) line = line.slice(0, -1);

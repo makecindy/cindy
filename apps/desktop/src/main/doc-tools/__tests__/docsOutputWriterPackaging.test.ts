@@ -15,5 +15,7 @@ describe('docs output writer packaging', () => {
     expect(forge).toContain("entry: 'src/main/doc-tools/docsOutputWriterUtilityProcess.ts'");
     expect(controller).toContain("path.join(__dirname, 'docsOutputWriterUtilityProcess.js')");
     expect(controller).toContain('cwd: rootDir');
+    expect(controller).toContain('authorizedOutsideWorkdir');
+    expect(controller).toContain('await fs.mkdir(lexicalParent, { recursive: true })');
   });
 });

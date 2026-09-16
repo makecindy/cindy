@@ -47,6 +47,7 @@ export {
   prepareOutputPath,
   readInputFileWithinLimit,
   resolveSessionRoot,
+  type PreparedDocsPath,
 } from './_paths.js';
 export { okPayload, errorPayload, type DocsPayloadResult } from './_payload.js';
 

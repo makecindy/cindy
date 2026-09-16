@@ -5,7 +5,8 @@
  * 才是权威**(resolveLiziMcpSessionContext:Claude 走闭包、Codex/Pi 走
  * AsyncLocalStorage;解析不出归属时它会把 workingDir 抹成空串)。所有
  * 模型给的路径先经 resolvePathInsideRoot 做「.. 穿越 + symlink 逃逸 + 绝对路径
- * 越界」三重钳制,再决定能不能写。
+ * 越界」三重钳制;越界后交给 Host 会话权限(bypass 放行 / auto 审阅 / ask 确认),
+ * 不再悄悄失败。
  *
  * 为什么写类工具默认不覆盖:文档产出常常是用户手里唯一的一份(改了三轮的报告),
  * 模型重跑一次就静默盖掉是不可接受的。覆盖必须由模型显式 overwrite:true 表态。
@@ -14,9 +15,18 @@
 import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 
-import { resolveLiziMcpSessionContext } from '../session-context.js';
+import { resolveLiziMcpSessionContext, getLiziMcpSessionContext } from '../session-context.js';
+import {
+  authorizeSessionPathOutsideWorkdir,
+  resolveAbsoluteSessionPath,
+} from '../session-path-auth.js';
 import { PathBoundaryError, resolvePathInsideRoot } from '../shared/assertInsidePath.js';
 import type { DocsMcpSessionCtx } from './types.js';
+
+export type PreparedDocsPath = {
+  abs: string;
+  authorizedOutsideWorkdir: boolean;
+};
 
 /** 工具层可识别的路径类失败。code 直接进 payload 的 errorCode。 */
 export class DocsPathError extends Error {
@@ -67,32 +77,61 @@ export function resolveSessionRoot(sessionCtx: DocsMcpSessionCtx): string {
 }
 
 /** 把 PathBoundaryError 统一翻成工具层的 PATH_NOT_ALLOWED。 */
-function toPathError(err: unknown, inputPath: string): never {
+function toPathError(err: unknown, inputPath: string, hint?: string): never {
   if (err instanceof PathBoundaryError) {
     throw new DocsPathError(
       'PATH_NOT_ALLOWED',
       err.message,
-      `路径 "${inputPath}" 不在本任务的工作目录内。请改用工作目录内的相对路径(例如 documents/report.pdf)。`,
+      hint
+        ?? `路径 "${inputPath}" 不在本任务的工作目录内。请改用工作目录内的相对路径(例如 documents/report.pdf)。`,
     );
   }
   throw err;
 }
 
+async function resolveDocsPath(
+  root: string,
+  inputPath: string,
+  operation: 'read' | 'write',
+  sessionCtx?: DocsMcpSessionCtx,
+): Promise<PreparedDocsPath> {
+  try {
+    return {
+      abs: await resolvePathInsideRoot(root, inputPath),
+      authorizedOutsideWorkdir: false,
+    };
+  } catch (err) {
+    if (!(err instanceof PathBoundaryError)) throw err;
+    const ctx = sessionCtx
+      ? resolveLiziMcpSessionContext(sessionCtx)
+      : getLiziMcpSessionContext();
+    const abs = resolveAbsoluteSessionPath(root, inputPath);
+    const auth = await authorizeSessionPathOutsideWorkdir({
+      sessionId: ctx?.sessionId,
+      sessionInstanceId: ctx?.sessionInstanceId,
+      workingDir: root,
+      remoteHostId: ctx?.remoteHostId,
+      path: abs,
+      toolName: 'cindy-docs',
+      operation,
+    });
+    if (!auth.allowed) toPathError(err, inputPath, auth.reason);
+    return { abs, authorizedOutsideWorkdir: true };
+  }
+}
+
 /**
- * 校验并准备一个输出路径:边界钳制 → 覆盖判定。
- * 返回可直接写入的绝对路径。
+ * 校验并准备一个输出路径:边界钳制 → 会话权限 → 覆盖判定。
+ * 工作目录外的路径在 Host 授权后放行,不再悄悄失败。
  */
 export async function prepareOutputPath(
   root: string,
   outPath: string,
   overwrite: boolean,
-): Promise<string> {
-  let abs: string;
-  try {
-    abs = await resolvePathInsideRoot(root, outPath);
-  } catch (err) {
-    toPathError(err, outPath);
-  }
+  sessionCtx?: DocsMcpSessionCtx,
+): Promise<PreparedDocsPath> {
+  const prepared = await resolveDocsPath(root, outPath, 'write', sessionCtx);
+  const abs = prepared.abs;
 
   let exists = true;
   try {
@@ -108,7 +147,7 @@ export async function prepareOutputPath(
     );
   }
 
-  return abs;
+  return prepared;
 }
 
 /** 生成器只允许与实际字节格式一致的后缀，避免产出“内容是 Word、名字却是 PDF”的文件。 */
@@ -124,13 +163,13 @@ export function assertOutputExtension(outPath: string, expectedExtension: string
 }
 
 /** 校验一个读取路径:边界钳制 + 必须是普通文件。 */
-export async function prepareInputPath(root: string, inPath: string): Promise<string> {
-  let abs: string;
-  try {
-    abs = await resolvePathInsideRoot(root, inPath);
-  } catch (err) {
-    toPathError(err, inPath);
-  }
+export async function prepareInputPath(
+  root: string,
+  inPath: string,
+  sessionCtx?: DocsMcpSessionCtx,
+): Promise<PreparedDocsPath> {
+  const prepared = await resolveDocsPath(root, inPath, 'read', sessionCtx);
+  const abs = prepared.abs;
   let isFile = false;
   try {
     const st = await fs.stat(abs);
@@ -145,7 +184,7 @@ export async function prepareInputPath(root: string, inPath: string): Promise<st
       `找不到文件 "${inPath}"。先确认它在本任务的工作目录里,并检查文件名与扩展名。`,
     );
   }
-  return abs;
+  return prepared;
 }
 
 /**
@@ -210,6 +249,7 @@ export async function readInputFileWithinLimit(
   abs: string,
   maxBytes: number,
   tooLarge: (bytes: number) => DocsPathError,
+  options?: { allowOutsideRoot?: boolean },
 ): Promise<Buffer> {
   // 校验与读取绑定到同一个已打开文件身份，封住路径检查后父目录被换成根外
   // symlink 的窗口；身份不可用的网络盘 fail closed，不拿 0 === 0 放行。
@@ -217,7 +257,9 @@ export async function readInputFileWithinLimit(
   let realRoot: string;
   try {
     [canonicalPath, realRoot] = await Promise.all([fs.realpath(abs), fs.realpath(root)]);
-    if (!isInsideRealRoot(realRoot, canonicalPath)) throw changedInputPath(abs);
+    if (!options?.allowOutsideRoot && !isInsideRealRoot(realRoot, canonicalPath)) {
+      throw changedInputPath(abs);
+    }
   } catch (err) {
     if (err instanceof DocsPathError) throw err;
     if (err instanceof PathBoundaryError) toPathError(err, abs);
@@ -233,7 +275,9 @@ export async function readInputFileWithinLimit(
     if (!stat.isFile() || !sameFileIdentity(expectedStat, stat)) {
       throw changedInputPath(canonicalPath);
     }
-    await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, stat);
+    if (!options?.allowOutsideRoot) {
+      await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, stat);
+    }
     if (stat.size > BigInt(maxBytes)) throw tooLarge(Number(stat.size));
     const size = Number(stat.size);
 
@@ -252,7 +296,9 @@ export async function readInputFileWithinLimit(
     if (offset !== data.length || !sameFileVersion(stat, after)) {
       throw changedInputPath(canonicalPath);
     }
-    await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, after);
+    if (!options?.allowOutsideRoot) {
+      await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, after);
+    }
     return data;
   } finally {
     await handle.close();
@@ -266,9 +312,10 @@ export function describeOutput(
   bytes: number,
 ): { path: string; relativePath: string; bytes: number } {
   const rel = path.relative(path.resolve(root), abs);
+  const outside = rel.startsWith('..') || path.isAbsolute(rel);
   return {
     path: abs,
-    relativePath: rel.length > 0 ? rel : path.basename(abs),
+    relativePath: outside ? abs : (rel.length > 0 ? rel : path.basename(abs)),
     bytes,
   };
 }

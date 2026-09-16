@@ -164,9 +164,11 @@
   真正越出沙箱的技能继续使用 receipt 绑定的字节指纹与 Host 状态根快照。不要把审计字段误写成
   全量运行时内容校验，也不要因取消能力确认弹窗而删除现有完整性守门。
 - **Forge 的源码区与 Host 受管根互斥。** `ghost_forge_scaffold` / `ghost_forge_pack` /
-  `ghost_forge_install` 的目标
-  必须是当前会话工作目录里的独立作者目录；命中安装根或状态根一律拒绝，并按 realpath
-  挡住大小写折叠与软链／junction 别名。`ghost_forge_pack` 只负责校验与打包；只有用户明确
+  `ghost_forge_install` 的目标必须是独立作者目录，不得是安装根或状态根；按 realpath
+  挡住大小写折叠与软链／junction 别名。会话工作目录内直接放行；工作目录外走与
+  `ghost_call` 过户相同的会话权限路径（本地 Full Access 自动放行，Auto 交当前会话
+  AI 审阅，Ask 弹确认卡，远程／缺会话／查询失败 fail closed），禁止在 Host 已放行
+  后再因目录边界悄悄硬断。`ghost_forge_pack` 只负责校验与打包；只有用户明确
   要求后调用独立的 `ghost_forge_install` 才安装或更新，不因 scaffold／pack 成功而隐式安装。
 - `skill` 是唯一**越出沙箱**的能力：技能指令由主 Agent 以用户全部权限执行、全局
   生效、不随 workdir 级停用隐藏。其安全边界是**声明一致性**（manifest 里的
@@ -302,7 +304,9 @@
   记忆。附件自动交接必须写独立 `ghost-tool-grant`，不得写 `ghost-grant`；这是回退兼容
   边界——旧客户端只认识后者，降级时必须 fail closed，不能把新版自动交接误读成人工永久
   授权。切回 Ask 后新请求恢复确认。在途插件操作统一沿用当前会话的操作审批：包括工作区
-  草稿创建、工作目录写入和媒体路径揭示，Full Access 不额外审批，Auto 进入现有统一审阅器，
+  草稿创建、工作目录写入、媒体路径揭示，Forge 在工作目录外的打包／骨架，以及
+  cindy-docs / 电脑工具读写工作目录外路径，
+  Full Access 不额外审批，Auto 进入现有统一审阅器，
   Ask 沿用原确认流程。MCP 的 `prompt-each-time` 仅限制授权记忆，不得覆盖 Full Access，
   也不得跳过 Auto 审阅。审批期间实例、权限或调用归属失效时，旧 allow 不可执行。
   Plan 与操作审批档位正交：Host 副作用须先检查实时 Plan 状态，未知或切换中拒绝；

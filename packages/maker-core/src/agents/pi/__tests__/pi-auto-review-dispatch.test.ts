@@ -462,6 +462,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resolvedCredentialPaths?: unknown;
       resolvedWritePath?: unknown;
       resolvedWritableRoots?: unknown;
+      controlPlaneWrite?: unknown;
     },
   ): void {
     const writeEvidence = toolName === 'write' || toolName === 'edit'
@@ -3588,6 +3589,70 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(referenceDir, { recursive: true, force: true });
     rmSync(writableDir, { recursive: true, force: true });
     rmSync(replacementWritableDir, { recursive: true, force: true });
+  });
+
+  it('forces an explicit decision for agent-home writes even under Full Access', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('bypassPermissions', review);
+    const resolver = vi.fn(async (): Promise<{ kind: 'permission'; behavior: 'allow' | 'deny' }> => ({
+      kind: 'permission',
+      behavior: 'allow',
+    }));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'control-plane-bypass',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    expect(await waitForResponse('control-plane-bypass')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+
+    resolver.mockResolvedValueOnce({ kind: 'permission', behavior: 'deny' });
+    firePermissionRequest(
+      'control-plane-deny',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    expect(await waitForResponse('control-plane-deny')).toMatchObject({ confirmed: false });
+    await handle.close();
+  });
+
+  it('does not settle a pending agent-home write when switching to Full Access', async () => {
+    const handle = await start('ask');
+    handle.setInteractionResolver?.(async () => await new Promise(() => {}));
+    firePermissionRequest(
+      'control-plane-pending',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    await flush();
+    expect(captured.sent.find((m) => m.id === 'control-plane-pending')).toBeUndefined();
+    await handle.setPermissionMode?.('bypassPermissions');
+    expect(await waitForResponse('control-plane-pending')).toMatchObject({ confirmed: false });
+    await handle.close();
+  });
+
+  it('does not let Auto-review silently allow agent-home writes', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' as const }));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'control-plane-auto',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    expect(await waitForResponse('control-plane-auto')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    await handle.close();
   });
 
   it('reviews evidence for remote Pi destructive paths instead of using controller realpath', async () => {

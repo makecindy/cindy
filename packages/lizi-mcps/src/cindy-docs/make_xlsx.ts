@@ -341,7 +341,8 @@ export function registerMakeXlsxTool(
         assertXlsxAggregateBounds(sheets);
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.xlsx');
-        const abs = await prepareOutputPath(root, outPath, overwrite);
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx);
+        const abs = prepared.abs;
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
 
         const workbook = new ExcelJS.Workbook();
@@ -459,6 +460,7 @@ export function registerMakeXlsxTool(
           path: abs,
           data: Buffer.from(arrayBuffer as ArrayBuffer),
           overwrite,
+          authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
         });
         return okPayload({
           ...describeOutput(root, abs, arrayBuffer.byteLength),

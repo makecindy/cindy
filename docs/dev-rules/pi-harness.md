@@ -25,15 +25,20 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   **不得**用凭证路径 / `/proc/*/environ` 文本硬拦拒绝原生允许的读、搜、bash。Ask/Auto
   仍把这类调用升级为审批;Full access 选择即接受父进程环境里的代理 token / 网关 key /
   BYOM key / 外部 MCP header **可能被读取**。允许保留的机械隔离仅限 Cindy 自身运行所必需:
-  模型不得写 agent home(`models.json` / 权限档),Extra Dirs 的结构化写工具保持只读。
+  模型写 agent home(`models.json` / 权限档 / subagent 快照)必须强制用户确认,即使
+  Full Access 也不得静默放行或静默拒绝。Extra Dirs 的结构化写跟随会话权限:本地
+  Full Access 放行,Auto 交审阅,Ask 确认,禁止再在 bridge 里悄悄硬断。
   bash 写入 Extra Dirs 仍非 OS 强制。真正的强隔离需要 OS 级手段(macOS `sandbox-exec`、
   Linux 只读 bind mount / seccomp),**本阶段未接入**。需要硬边界时用 ask/auto 档,或等 OS
   沙箱落地。改动权限相关代码时不要再堆「看起来能拦」的正则并当成安全边界。
   与 Claude Code／Codex 一致，Pi 会话的 Full Access 也会让插件 `ghost_call` 的
-  `attachments`／`dir`／`save_dir` 在 Host 侧免去额外过户确认；实现必须现读活跃 Session
+  `attachments`／`dir`／`save_dir`，以及 Forge 在工作目录外的 scaffold／pack／install
+  在 Host 侧免去额外确认；实现必须现读活跃 Session
   的稳定状态并同时匹配其 runtime instance identity；权限切换或关闭在途、远程／缺会话／
   实例不匹配／查询失败均 fail closed。工作区草稿、工作目录写入和媒体路径揭示等操作审批
-  同样沿用会话权限；MCP 逐次审批标记不得覆盖 Full Access。Setup、OAuth、Secret 的信息
+  同样沿用会话权限；MCP 逐次审批标记不得覆盖 Full Access。Host 已按当前档位放行后，
+  不得再因「不在会话工作目录内」悄悄硬断，把 Agent 晾在空转里。cindy-docs 与电脑截图 /
+  录制路径同样走这条会话权限，不得在工具层再静默 PATH_NOT_ALLOWED。Setup、OAuth、Secret 的信息
   输入与安装／更新策略保持原边界。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
   注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
   instance，使 Full Access 自动交接保持 fail closed。
@@ -58,7 +63,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
-  时从 `get_entries` 校正。
+  时从本机 session JSONL 校正；远端仍走 `get_entries`。
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
