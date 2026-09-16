@@ -82,6 +82,18 @@ describe('authorized session path ancestors', () => {
       path: file,
       dev: 0n,
       ino: 0n,
+      kind: 'file',
+      size: 0n,
+      mtimeNs: 0n,
+      ctimeNs: 0n,
+    }, ...(first?.slice(1) ?? [])])).toBe(false);
+    const reusedInode = first?.[0];
+    expect(reusedInode).toBeDefined();
+    expect(sameSessionPathAncestors(first ?? [], [{
+      ...reusedInode!,
+      size: reusedInode!.size + 1n,
+      mtimeNs: reusedInode!.mtimeNs + 1n,
+      ctimeNs: reusedInode!.ctimeNs + 1n,
     }, ...(first?.slice(1) ?? [])])).toBe(false);
   });
 

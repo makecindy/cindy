@@ -65,7 +65,32 @@ export type SessionPathAncestorIdentity = {
   path: string;
   dev: bigint;
   ino: bigint;
+  kind: 'file' | 'directory';
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
 };
+
+function sameSessionPathNode(
+  left: SessionPathAncestorIdentity,
+  right: SessionPathAncestorIdentity,
+): boolean {
+  if (
+    left.path !== right.path
+    || left.dev !== right.dev
+    || left.ino !== right.ino
+    || left.kind !== right.kind
+  ) {
+    return false;
+  }
+  // Directories change mtime when children appear; only files need a
+  // content-generation pin. Linux ext4 can also reuse the inode of a
+  // just-unlinked file, so size/mtime/ctime must participate.
+  if (left.kind !== 'file') return true;
+  return left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs;
+}
 
 /**
  * Identity of every existing path component from `target` up to the root.
@@ -73,8 +98,8 @@ export type SessionPathAncestorIdentity = {
  * cannot open a file the confirm card never showed.
  *
  * Missing leafs are skipped so a write target can be granted before it
- * exists. Fail-closed when any existing ancestor is a symlink, or the
- * filesystem reports a zero device/inode (those equalities are meaningless).
+ * exists. Fail-closed when any existing ancestor is a symlink, not a
+ * file/directory, or the filesystem reports a zero device/inode.
  */
 export async function captureSessionPathAncestors(
   target: string,
@@ -85,8 +110,24 @@ export async function captureSessionPathAncestors(
   for (;;) {
     try {
       const listed = await fs.lstat(cursor, { bigint: true });
-      if (listed.isSymbolicLink() || listed.dev === 0n || listed.ino === 0n) return null;
-      identities.push({ path: cursor, dev: listed.dev, ino: listed.ino });
+      const kind = listed.isFile() ? 'file' : listed.isDirectory() ? 'directory' : null;
+      if (
+        !kind
+        || listed.isSymbolicLink()
+        || listed.dev === 0n
+        || listed.ino === 0n
+      ) {
+        return null;
+      }
+      identities.push({
+        path: cursor,
+        dev: listed.dev,
+        ino: listed.ino,
+        kind,
+        size: listed.size,
+        mtimeNs: listed.mtimeNs,
+        ctimeNs: listed.ctimeNs,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
     }
@@ -105,12 +146,7 @@ export function sameSessionPathAncestors(
   if (expected.length === 0 || expected.length !== actual.length) return false;
   return expected.every((left, index) => {
     const right = actual[index];
-    return Boolean(
-      right
-      && left.path === right.path
-      && left.dev === right.dev
-      && left.ino === right.ino,
-    );
+    return Boolean(right && sameSessionPathNode(left, right));
   });
 }
 
@@ -152,7 +188,7 @@ export function grantedSessionPathAncestorsStillPresent(
   const byPath = new Map(current.map((item) => [item.path, item]));
   return granted.every((item) => {
     const now = byPath.get(item.path);
-    return Boolean(now && now.dev === item.dev && now.ino === item.ino);
+    return Boolean(now && sameSessionPathNode(item, now));
   });
 }
 

@@ -137,7 +137,17 @@ vi.mock('../../logger.js', () => ({
 vi.mock('@cindy/mcps', () => ({
   getLiziMcpSessionContext: () => alsSessionContextMock(),
   captureSessionPathAncestors: async (target: string) => (
-    target ? [{ path: target, dev: 1n, ino: 1n }] : null
+    target
+      ? [{
+        path: target,
+        dev: 1n,
+        ino: 1n,
+        kind: 'directory' as const,
+        size: 0n,
+        mtimeNs: 1n,
+        ctimeNs: 1n,
+      }]
+      : null
   ),
   grantedSessionPathAncestorsStillMatch: () => true,
   SESSION_PATH_IDENTITY_CHANGED_REASON: '路径在确认期间发生了变化，这次越界路径授权已失效。请确认目标仍是当时看到的文件后重试。',
@@ -810,7 +820,15 @@ describe('Forge workdir-out permission path', () => {
     );
     expect(packGhostDirMock.mock.calls[0]?.[1]?.isCurrent?.()).toBe(true);
     expect(packGhostDirMock.mock.calls[0]?.[1]?.authorizedAncestors).toEqual([
-      { path: fs.realpathSync.native(sourceDir), dev: 1n, ino: 1n },
+      {
+        path: fs.realpathSync.native(sourceDir),
+        dev: 1n,
+        ino: 1n,
+        kind: 'directory',
+        size: 0n,
+        mtimeNs: 1n,
+        ctimeNs: 1n,
+      },
     ]);
   });
 

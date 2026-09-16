@@ -314,8 +314,12 @@ async function pinAuthorizedOutsideInput(
   if (
     !listed.isFile()
     || listed.isSymbolicLink()
+    || leaf.kind !== 'file'
     || listed.dev !== leaf.dev
     || listed.ino !== leaf.ino
+    || listed.size !== leaf.size
+    || listed.mtimeNs !== leaf.mtimeNs
+    || listed.ctimeNs !== leaf.ctimeNs
   ) {
     throw changedInputPath(abs);
   }
@@ -367,7 +371,15 @@ export async function readInputFileWithinLimit(
     }
     if (outsideAncestors) {
       await pinAuthorizedOutsideInput(root, abs, outsideAncestors);
-      if (stat.dev !== outsideAncestors[0]!.dev || stat.ino !== outsideAncestors[0]!.ino) {
+      const leaf = outsideAncestors[0]!;
+      if (
+        leaf.kind !== 'file'
+        || stat.dev !== leaf.dev
+        || stat.ino !== leaf.ino
+        || stat.size !== leaf.size
+        || stat.mtimeNs !== leaf.mtimeNs
+        || stat.ctimeNs !== leaf.ctimeNs
+      ) {
         throw changedInputPath(canonicalPath);
       }
     } else {
@@ -393,7 +405,15 @@ export async function readInputFileWithinLimit(
     }
     if (outsideAncestors) {
       await pinAuthorizedOutsideInput(root, abs, outsideAncestors);
-      if (after.dev !== outsideAncestors[0]!.dev || after.ino !== outsideAncestors[0]!.ino) {
+      const leaf = outsideAncestors[0]!;
+      if (
+        leaf.kind !== 'file'
+        || after.dev !== leaf.dev
+        || after.ino !== leaf.ino
+        || after.size !== leaf.size
+        || after.mtimeNs !== leaf.mtimeNs
+        || after.ctimeNs !== leaf.ctimeNs
+      ) {
         throw changedInputPath(canonicalPath);
       }
     } else {
