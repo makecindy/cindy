@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { withAgentDesktopInput } from '../remote-desktop/inputOwnership';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -526,6 +527,9 @@ const cuaMcpSessionCleanups = new Map<string, Promise<void>>();
 // applied/pending 仍保留在 entry 内，因为新 generation 必须重新应用成功的设置。
 const cuaMcpSessionCursorCapabilities = new Map<string, CuaMcpSessionCursorCapabilities>();
 const cuaDriverSessionGenerations = new Map<string, number>();
+// Retained across transport retries; cleared only when the owning run closes.
+const cuaDriverSessionNames = new Map<string, string>();
+let cuaDriverNamedRunSequence = 0;
 const cuaMcpSessionCloseVersions = new Map<string, number>();
 
 function getInstallCommand(): string {
@@ -1940,7 +1944,8 @@ function parseMcpToolResult(result: unknown): unknown {
 
 function getDriverSessionId(sessionId: string): string {
   const generation = cuaDriverSessionGenerations.get(sessionId) ?? 0;
-  return `${sessionId}-cua-${CUA_DRIVER_SESSION_PROCESS_NONCE}-${generation}`;
+  const name = cuaDriverSessionNames.get(sessionId) ?? sessionId;
+  return `${name}-cua-${CUA_DRIVER_SESSION_PROCESS_NONCE}-${generation}`;
 }
 
 function rotateDriverSessionId(sessionId: string, failedDriverSessionId: string): void {
@@ -1957,9 +1962,10 @@ function applyDriverSessionArgs(
 ): Record<string, unknown> {
   if (!DRIVER_SESSION_ARG_TOOL_NAMES.has(name)) return args;
   const result = { ...args };
-  const keys = name === 'get_agent_cursor_state' ? ['cursor_id']
-    : name === 'move_cursor' ? ['cursor_id', 'session'] : ['session'];
   const schema = schemas.get(name);
+  const keys = name === 'get_agent_cursor_state'
+    ? ['cursor_id', ...(schema?.properties && 'session' in schema.properties ? ['session'] : [])]
+    : name === 'move_cursor' ? ['cursor_id', 'session'] : ['session'];
   for (const key of keys) {
     // Host-owned routing metadata is injected only when the installed tool accepts it.
     if (schema?.additionalProperties === false && !(key in (schema.properties ?? {}))) delete result[key];
@@ -3357,6 +3363,16 @@ export async function callComputerDriverTool(
   args: Record<string, unknown>,
   context?: ComputerMcpCallContext,
 ): Promise<unknown> {
+  return getComputerTool(name)?.readOnly === true
+    ? callComputerDriverToolImpl(name, args, context)
+    : withAgentDesktopInput(() => callComputerDriverToolImpl(name, args, context));
+}
+
+async function callComputerDriverToolImpl(
+  name: ComputerMcpToolName,
+  args: Record<string, unknown>,
+  context?: ComputerMcpCallContext,
+): Promise<unknown> {
   const signal = context?.signal;
   signal?.throwIfAborted();
   assertComputerDriverToolDispatchAvailable();
@@ -3373,7 +3389,16 @@ export async function callComputerDriverTool(
     }
   };
   const rawArgs = args ?? {};
-  const driverInputArgs = stripLocalListWindowsArgs(name, rawArgs);
+  const { session_goal: sessionGoal, ...operationArgs } = rawArgs;
+  // Claim synchronously before shared startup, so concurrent first calls cannot
+  // rename an in-flight cursor. Even callers without a goal lock their old name.
+  if (!cuaDriverSessionNames.has(sessionId)) {
+    const goal = typeof sessionGoal === 'string'
+      ? Array.from(sessionGoal.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/gu, ' ').trim()).slice(0, 40).join('')
+      : '';
+    cuaDriverSessionNames.set(sessionId, goal ? `${goal} · ${++cuaDriverNamedRunSequence}` : sessionId);
+  }
+  const driverInputArgs = stripLocalListWindowsArgs(name, operationArgs);
   const normalizedArgs = normalizeToolArgsForDriver(name, driverInputArgs);
   const entry = await getCuaMcpSession(sessionId, signal);
   const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId, entry.toolSchemas);
@@ -3476,6 +3501,7 @@ export function cleanupComputerDriverSession(sessionId: string): Promise<void> {
   if (entry) {
     rotateDriverSessionId(sessionId, entry.driverSessionId);
   }
+  cuaDriverSessionNames.delete(sessionId);
   return cleanupComputerDriverSessionInternal(sessionId, { resetGeneration: false });
 }
 
@@ -3514,6 +3540,7 @@ export async function cleanupAllComputerDriverSessions(): Promise<void> {
   await cleanupActiveComputerDriverSessions();
   cuaMcpSessionCursorCapabilities.clear();
   cuaDriverSessionGenerations.clear();
+  cuaDriverSessionNames.clear();
   cuaMcpSessionCloseVersions.clear();
 }
 

@@ -562,8 +562,20 @@ function formatTimestamp(value: RemoteTimestamp, localizer?: PresentationLocaliz
   return `${month}-${day} ${hour}:${minute}`;
 }
 
+export function isFailedScheduleRun(run: { status: string }): boolean {
+  return run.status === 'failed' || run.status === 'interrupted';
+}
+
+export function isUnreadFailedScheduleRun(run: { status: string; readAt?: unknown }): boolean {
+  return !run.readAt && isFailedScheduleRun(run);
+}
+
+export function isUnreadScheduleRun(run: { status: string; readAt?: unknown }): boolean {
+  return !run.readAt && (run.status === 'success' || isFailedScheduleRun(run));
+}
+
 function isUnreadRun(run: RemoteScheduleRun, now = Date.now()): boolean {
-  if (run.status === 'running') return false;
+  if (!isUnreadScheduleRun(run)) return false;
   const firedAt = toMillis(run.firedAt);
   if (!firedAt || firedAt > now) return false;
   return !toMillis(run.readAt);
@@ -583,4 +595,62 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readString(value: Record<string, unknown>, key: string): string | null {
   const raw = value[key];
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/** Historical failure notices are independent of read receipts. */
+export type ScheduleFailureKind = 'precheck' | 'rate-limit' | 'execution';
+export interface FailedScheduleRunSnapshot {
+  runId: string;
+  firedAt: number;
+  scheduleId?: string;
+  failureKind?: ScheduleFailureKind;
+}
+
+/** Old hosts can omit the classification; keep their warning generic. */
+export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
+  return run.failureKind === 'rate-limit' ? 'rateLimited'
+    : run.failureKind === 'precheck' ? 'precheck' : 'text';
+}
+
+export function classifyScheduleFailure(run: RemoteScheduleRun): ScheduleFailureKind {
+  if (run.failureKind) return run.failureKind;
+  if (run.preRunHookResult?.decision === 'block') {
+    return /rate limit/i.test(run.preRunHookResult.stderr ?? '') ? 'rate-limit' : 'precheck';
+  }
+  return run.errorMsg?.startsWith('pre-run hook') ? 'precheck' : 'execution';
+}
+
+/** Full-history callers and lightweight host projections use the same recovery rule. */
+export function activeScheduleFailures(runs: readonly RemoteScheduleRun[]): Set<string> {
+  const successes = new Map<string, FailedScheduleRunSnapshot>();
+  const checks = new Map<string, FailedScheduleRunSnapshot>();
+  for (const run of runs) {
+    const candidate = { runId: run.id, firedAt: toMillis(run.firedAt) };
+    const targets = [
+      ...(run.status === 'success' ? [successes] : []),
+      ...(['success', 'failed', 'skipped'].includes(run.status) && run.preRunHookResult?.checkSucceeded === true ? [checks] : []),
+    ];
+    for (const target of targets) {
+      const previous = target.get(run.scheduleId);
+      if (!previous || compareFailedScheduleRuns(candidate, previous) > 0) target.set(run.scheduleId, candidate);
+    }
+  }
+  return new Set(runs.filter((run) => {
+    if (!isFailedScheduleRun(run) || run.failureRecovered === true) return false;
+    const success = successes.get(run.scheduleId);
+    const check = classifyScheduleFailure(run) !== 'execution' ? checks.get(run.scheduleId) : undefined;
+    return ![success, check].some((recovered) => recovered
+      && compareFailedScheduleRuns(recovered, { runId: run.id, firedAt: toMillis(run.firedAt) }) > 0);
+  }).map((run) => run.id));
+}
+export function compareFailedScheduleRuns(a: FailedScheduleRunSnapshot, b: FailedScheduleRunSnapshot): number {
+  return a.firedAt - b.firedAt || (a.runId > b.runId ? 1 : a.runId < b.runId ? -1 : 0);
+}
+export function shouldShowFailedScheduleNotice(state: {
+  latestFailedRun?: FailedScheduleRunSnapshot | null;
+  readOnly: boolean; tailError: boolean; interrupted: boolean; continuationPending: boolean;
+  error: boolean; credentialWait: boolean; streaming: boolean; running: boolean;
+}): boolean {
+  return !!state.latestFailedRun && !state.readOnly && !state.tailError && !state.interrupted
+    && !state.continuationPending && !state.error && !state.credentialWait && !state.streaming && !state.running;
 }

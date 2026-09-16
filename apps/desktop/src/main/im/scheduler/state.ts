@@ -1,0 +1,53 @@
+/** Pure state and deterministic election rules for the dormant Discord ingress scheduler. */
+
+import type { SchedulerChannelIdentity } from '@cindy/device-link';
+
+export type { SchedulerChannelIdentity } from '@cindy/device-link';
+
+export type SchedulerPlatform = 'darwin' | 'linux' | 'win32';
+
+export interface SchedulerDevice {
+  deviceId: string;
+  online: boolean;
+  platform: string;
+  channels: readonly SchedulerChannelIdentity[];
+  lastSeenAt: number;
+}
+
+const DESKTOP_PLATFORMS = new Set<SchedulerPlatform>(['darwin', 'linux', 'win32']);
+
+/** Locale-independent ordering for values that participate in election state. */
+export function compareSchedulerStrings(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+export function isDesktopSchedulerPlatform(
+  platform: string | null | undefined,
+): platform is SchedulerPlatform {
+  return typeof platform === 'string' && DESKTOP_PLATFORMS.has(platform as SchedulerPlatform);
+}
+
+/**
+ * Pick exactly one ingress owner. Device ids are the only tie-breaker: time,
+ * process ordering, and random values must not affect the result.
+ */
+export function selectIngressDevice(
+  channel: 'discord',
+  identity: string,
+  devices: readonly SchedulerDevice[],
+): string | null {
+  return (
+    devices
+      .filter(
+        (device) =>
+          device.online &&
+          isDesktopSchedulerPlatform(device.platform) &&
+          device.channels.some(
+            (configured) => configured.channel === channel && configured.identity === identity,
+          ),
+      )
+      .map((device) => device.deviceId)
+      .sort(compareSchedulerStrings)[0] ?? null
+  );
+}

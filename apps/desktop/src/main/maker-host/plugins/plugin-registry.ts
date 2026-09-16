@@ -154,18 +154,18 @@ export class PluginRegistry {
   /**
    * List non-essential plugins with their enable state for the Settings UI.
    * Essential plugins are hidden — they can't be toggled, so showing them
-   * adds only cognitive burden.
+   * adds only cognitive burden. Capability pickers opt into the complete read-only catalog.
    */
-  async listPlugins(workingDir?: string): Promise<PluginListItem[]> {
+  async listPlugins(workingDir?: string, includeHidden = false): Promise<PluginListItem[]> {
     const results: PluginListItem[] = [];
     for (const plugin of this.plugins) {
-      if (ESSENTIAL_PLUGIN_IDS.has(plugin.id)) continue;
+      if (!includeHidden && ESSENTIAL_PLUGIN_IDS.has(plugin.id)) continue;
       // Toggleable but surfaced in a dedicated Settings section (e.g. browser
       // under「电脑使用」), so omit from the generic project list. Browser is
       // also an ordinary per-conversation tool, however, and must remain
       // configurable when this list represents the user-default scope.
       if (
-        HOSTED_ELSEWHERE_PLUGIN_IDS.has(plugin.id)
+        !includeHidden && HOSTED_ELSEWHERE_PLUGIN_IDS.has(plugin.id)
         && !(workingDir === undefined && plugin.id === 'browser')
       ) {
         continue;
@@ -176,7 +176,7 @@ export class PluginRegistry {
         name: plugin.name,
         description: plugin.description,
         source: plugin.source,
-        essential: false,
+        essential: ESSENTIAL_PLUGIN_IDS.has(plugin.id),
         effectiveEnabled: state.effectiveEnabled,
         productDefaultEnabled: state.productDefaultEnabled,
         projectOverride: state.projectOverride ?? undefined,

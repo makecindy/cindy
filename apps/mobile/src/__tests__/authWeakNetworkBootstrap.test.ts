@@ -36,7 +36,7 @@ describe('auth weak-network bootstrap', () => {
       'activateMobileSessionRealm(storedSession.realm);',
     );
     const publishUserAt = restoreBody.indexOf('setUser(cachedUser);');
-    const publishOwnerAt = restoreBody.indexOf('setMobileAuthOwner(cachedUser.id);');
+    const publishOwnerAt = restoreBody.indexOf('setMobileAuthOwner(cachedUser.id, storedSession.realm);');
     expect(loadRealmAt).toBeGreaterThanOrEqual(0);
     expect(activateRealmAt).toBeGreaterThan(loadRealmAt);
     expect(publishOwnerAt).toBeGreaterThan(activateRealmAt);
@@ -63,7 +63,7 @@ describe('auth weak-network bootstrap', () => {
     const applyUserStart = authSource.indexOf('const applyUser = useCallback');
     const applyUserEnd = authSource.indexOf('\n  );', applyUserStart);
     const applyUserBody = authSource.slice(applyUserStart, applyUserEnd);
-    expect(applyUserBody.indexOf('setMobileAuthOwner(next?.id);'))
+    expect(applyUserBody.indexOf('setMobileAuthOwner(next?.id, activeAuthRealmRef.current);'))
       .toBeLessThan(applyUserBody.indexOf('setUser(next);'));
     expect(applyUserBody).toContain(
       'accountVaultKey(activeAuthRealmRef.current, next.id)',

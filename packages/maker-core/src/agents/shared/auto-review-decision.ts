@@ -1,5 +1,5 @@
 import type { AgentKind, UserMessage } from '../../types/common.js';
-import { AUTO_REVIEW_SOURCE_CONTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
@@ -195,6 +195,15 @@ export function isSystemPermissionDenialReason(reason: unknown): boolean {
   if (typeof reason !== 'string' || reason.length === 0) return false;
   if (SYSTEM_PERMISSION_DENIAL_REASONS.has(reason)) return true;
   return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
+}
+
+/** Model-visible text on the rejected tool result, never an extra conversation message. */
+export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
+  const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
+    : source === 'user' ? 'User denied this tool call via Cindy'
+      : 'Cindy could not approve this tool call';
+  const detail = reason?.trim().slice(0, 240);
+  return detail ? `${label}: ${detail}` : `${label}.`;
 }
 
 export function isAutoReviewUnavailableMetadata(
@@ -519,6 +528,11 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
 
 /** Preserve bounded user authorization across follow-ups; later restrictions take precedence. */
 export function appendAutoReviewUserIntent(previous: string, content: UserMessage['content'], sendOpts?: SendOptions): string {
+  // A restored snapshot already includes the current input and its preceding restrictions.
+  // Re-appending live adapter state would duplicate history or resurrect an older grant.
+  if (sendOpts?.[AUTO_REVIEW_USER_INTENT] !== undefined) {
+    return extractAutoReviewUserIntent(sendOpts[AUTO_REVIEW_USER_INTENT]);
+  }
   // Only Main's Symbol carries authenticated channel text. Decorated replies and
   // group history remain model context, never evidence of the requester's consent.
   const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? content;

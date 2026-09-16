@@ -181,7 +181,7 @@ export interface MobileLocalAttachmentUploadController {
    * 要带走哪些在途上传」。failed = 已失败结算的卡(claim 后随消息进失败态);
    * kind / previewUri 供乐观消息气泡直接渲染本地缩略图(图片 = candidate.uri)。
    */
-  claimableTasks(): Array<{ localId: string; failed: boolean; kind: MobileLocalAttachmentKind; previewUri: string }>;
+  claimableTasks(): Array<{ localId: string; failed: boolean; kind: MobileLocalAttachmentKind; previewUri: string; name: string }>;
   /** 退屏兜底:全部标记丢弃(不再回调 onUploaded/onFailed,完成后回收 OSS)。 */
   dispose(): void;
 }
@@ -558,6 +558,7 @@ export function createMobileLocalAttachmentUploadController(
         failed: boolean;
         kind: MobileLocalAttachmentKind;
         previewUri: string;
+        name: string;
       }> = [];
       for (const task of tasks.values()) {
         if (task.discarded || task.claimed) continue;
@@ -566,6 +567,7 @@ export function createMobileLocalAttachmentUploadController(
           failed: task.state === 'failed',
           kind: task.candidate.kind,
           previewUri: task.candidate.uri,
+          name: task.candidate.name,
         });
       }
       return out;

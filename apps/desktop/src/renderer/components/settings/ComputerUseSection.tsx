@@ -44,6 +44,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
+import { ComputerPermissionRow } from './ComputerPermissionRow';
 import { BrowserRealProfileSubsection } from './BrowserRealProfileSubsection';
 import {
   REAL_PROFILE_READ_DENIED,
@@ -156,55 +157,6 @@ interface ComputerUseSectionProps {
   workingDir?: string;
 }
 
-function ComputerPermissionRow({
-  label,
-  iconSrc,
-  granted,
-  pending,
-  actionLabel,
-  onAction,
-}: {
-  label: string;
-  iconSrc: string;
-  granted: boolean;
-  pending: boolean;
-  actionLabel: string;
-  onAction: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onAction}
-      disabled={pending}
-      className={cn(
-        'flex min-h-[64px] w-full min-w-0 items-center gap-3 rounded-xl px-3.5 py-3 text-left',
-        'border border-solid border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-        'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-        'disabled:cursor-default disabled:hover:bg-[var(--settings-input-bg)]',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-      )}
-    >
-      <img className="size-8 shrink-0 object-contain grayscale opacity-70" src={iconSrc} alt="" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-title)]">
-        {label}
-      </span>
-      <span
-        className={cn(
-          'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
-          pending
-            ? 'border border-dashed border-[var(--settings-input-border)] bg-[var(--surface-chip)] text-[var(--settings-section-desc)]'
-            : granted
-              ? 'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] text-[var(--settings-section-title)]'
-              : 'border border-[var(--surface-chip)] bg-[var(--surface-chip)] text-[var(--settings-section-title)]',
-        )}
-      >
-        {pending ? <Spinner size={12} /> : null}
-        <span>{actionLabel}</span>
-        {granted && !pending ? <Check size={13} strokeWidth={2.3} aria-hidden="true" /> : null}
-      </span>
-    </button>
-  );
-}
 
 export function ComputerUseSection({
   workingDir,

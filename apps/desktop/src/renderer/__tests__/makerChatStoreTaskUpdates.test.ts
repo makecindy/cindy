@@ -85,6 +85,22 @@ import {
 import type { SessionChatState } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 
+describe('makerChatStore IM source projection', () => {
+  it.each(['imSource', 'hookSource'] as const)('projects %s into the common Desktop card', (field) => {
+    const source = {
+      im: 'telegram', userText: 'question', contentFormat: 'user-text' as const,
+      contextSnapshot: { groupContext: 'background', groupMessageCount: 1 },
+    };
+    const [mapped] = makerChatStore.__mapServerMessagesForTest([{
+      id: 'im-row', clientId: 'im-client', sessionId: 's1', role: 'user',
+      content: 'question', agentMeta: { [field]: source },
+      toolUseId: null,
+      createdAt: '2026-09-12T00:00:00.000Z',
+    } satisfies Message]);
+    expect(mapped).toMatchObject({ role: 'user', content: 'question', hookSource: source });
+  });
+});
+
 describe('makerChatStore agent task updates', () => {
   it('restores an agent task terminal state from persisted tool_use metadata', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([{

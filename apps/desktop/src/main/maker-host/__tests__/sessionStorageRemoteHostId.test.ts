@@ -217,6 +217,16 @@ describe('DesktopSessionStorage.create workingDir 规范化', () => {
     h.rows.clear();
   });
 
+  it.each([undefined, 'ssh-host'])('stores the exact Worker directory identity (remote=%s)', async (remoteHostId) => {
+    const storage = new DesktopSessionStorage();
+    const created = await storage.create({
+      id: 'worker-space', title: 'Worker', workDir: '/repo ',
+      model: 'gpt-5.4', agentKind: 'codex', remoteHostId,
+    });
+    expect(h.captured?.workingDir).toBe('/repo ');
+    expect(created.workDir).toBe('/repo ');
+  });
+
   it('Windows 反斜杠路径入库前归一为 storage spelling', async () => {
     const storage = new DesktopSessionStorage();
     const created = await storage.create({

@@ -26,7 +26,7 @@
 //   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
@@ -54,13 +54,14 @@ import {
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
 import {
-  cwdOfPid,
+  clearMetroOwner,
   gitSourceIdentity,
-  gitSourceOfPid,
   isMetroPid,
-  listenerPid,
+  metroEnvironmentFingerprint,
   portInUse,
+  probeMetroOwnership,
   terminateMetro,
+  writeMetroOwner,
 } from './sim-metro.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -84,6 +85,13 @@ const buildEnv = withLocalMobileRegionConfig(
 const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: buildEnv });
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
+const envFingerprint = metroEnvironmentFingerprint({
+  env: buildEnv,
+  files: {
+    '.env': readFileSync(envResult.envPath, 'utf8'),
+    'scripts/self-host-regions.json': readFileSync(localConfigResult.configPath, 'utf8'),
+  },
+});
 
 function git(args) {
   try {
@@ -106,9 +114,10 @@ async function ensureAndroidTarget() {
 const args = ['exec', 'expo', 'start', '--dev-client', ...portArgs.passthrough];
 if (portArgs.port === DEFAULT_PORT) {
   if (await portInUse(DEFAULT_PORT)) {
-    const pid = listenerPid(DEFAULT_PORT);
-    const cwd = pid ? cwdOfPid(pid) : null;
-    const runningSource = pid ? gitSourceOfPid(pid) : null;
+    const ownership = probeMetroOwnership(DEFAULT_PORT);
+    const pid = ownership?.pid ?? null;
+    const cwd = ownership?.cwd ?? null;
+    const runningSource = ownership?.source ?? null;
     const listener = classifySimMetroListener({
       cwd,
       source: runningSource,
@@ -122,6 +131,10 @@ if (portArgs.port === DEFAULT_PORT) {
       envChanged,
       currentSource: sourceIdentity,
       runningSource,
+      currentRegion: process.platform === 'win32' ? region : undefined,
+      runningRegion: process.platform === 'win32' ? ownership?.region : undefined,
+      currentEnvFingerprint: envFingerprint,
+      runningEnvFingerprint: ownership?.envFingerprint,
       listener,
       listenerWorktreeExists,
     });
@@ -135,11 +148,14 @@ if (portArgs.port === DEFAULT_PORT) {
       process.exit(1);
     }
 
-    if (!pid || !isMetroPid(pid)) {
+    const confirmedMetro = process.platform === 'win32'
+      ? Boolean(ownership?.cwd && ownership?.source)
+      : Boolean(pid && isMetroPid(pid));
+    if (!pid || !confirmedMetro) {
       console.error(`✗ ${DEFAULT_PORT} 上的进程不是可确认的 Metro,拒绝接管。`);
       process.exit(1);
     }
-    const stopped = await terminateMetro(pid, { worktreeRoot: listener.worktree });
+    const stopped = await terminateMetro(ownership?.launcherPid ?? pid, { worktreeRoot: listener.worktree });
     if (!stopped) {
       console.error(`✗ 无法在限定时间内停止旧 Metro(pid=${pid}),拒绝继续。`);
       process.exit(1);
@@ -182,6 +198,18 @@ const child = spawn(invocation.command, invocation.args, {
   shell: invocation.shell,
   windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 });
+
+if (portArgs.port === DEFAULT_PORT && Number.isInteger(child.pid)) {
+  writeMetroOwner(DEFAULT_PORT, {
+    pid: child.pid,
+    launcherPid: child.pid,
+    source: sourceIdentity,
+    region,
+    envFingerprint,
+    worktreeRoot,
+  });
+  child.once('exit', () => clearMetroOwner(DEFAULT_PORT, child.pid));
+}
 
 child.once('error', (error) => {
   console.error(`✗ 无法启动 Metro: ${error.message}`);

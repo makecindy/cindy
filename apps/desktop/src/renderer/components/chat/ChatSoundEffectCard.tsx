@@ -22,6 +22,8 @@
  * ChatVideoView 同一套黑白反色规范。
  */
 
+import { Tip } from '@/components/ui/tooltip';
+import { CHAT_MEDIA_PLAY_BUTTON_CLASS } from './chatChrome';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FolderOpen, Pause, Play } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -165,7 +167,7 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-[12px] px-4 py-3',
+        'flex items-center gap-3 rounded-xl px-4 py-3',
         'border bg-[var(--msg-tool-card-bg)] border-[var(--msg-tool-card-border)]',
       )}
       // 跟 ChatAudioCard 同款最大宽度 — 与音乐卡混排时左对齐 + 视觉密度一致。
@@ -178,22 +180,20 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
       }}
     >
       {/* Play button — 与 ChatAudioCard 同尺寸 (28px) 同色,保持 affordance 一致 */}
-      <button
-        type="button"
-        onClick={handleTogglePlay}
-        aria-label={playing ? 'Pause' : 'Play'}
-        className={cn(
-          'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
-          'bg-[var(--msg-tool-card-text)] text-[var(--msg-tool-card-bg)]',
-          'transition-opacity hover:opacity-90',
-        )}
-      >
-        {playing ? (
-          <Pause size={14} fill="currentColor" />
-        ) : (
-          <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
-        )}
-      </button>
+      <Tip text={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}>
+        <button
+          type="button"
+          onClick={handleTogglePlay}
+          aria-label={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}
+          className={CHAT_MEDIA_PLAY_BUTTON_CLASS}
+        >
+          {playing ? (
+            <Pause size={14} fill="currentColor" />
+          ) : (
+            <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
+          )}
+        </button>
+      </Tip>
 
       {/* Title — 单行截断,留给进度条主要宽度 */}
       <div

@@ -160,7 +160,7 @@ describe('mobile message list container', () => {
     expect(maybeFinishSource).toContain('historyTouchStartYRef.current !== null');
     expect(source).toContain('transaction.userHandoffPending = true;');
     expect(source).toContain('currentTransaction.userHandoffPending = false;');
-    // 直接拖动结束前不发请求，避免远端页在手指仍控制 ScrollView 时落地。
+    // Android 的手动锚定等手势结束；iOS 由 native MVCP 保持视口，可在手势中预取。
     expect(source).toContain('queuedLoadEarlierRef.current = true');
     expect(source).toContain('setHistoryPrependNativeMvcpDisabled(true)');
     expect(source).toMatch(
@@ -245,15 +245,18 @@ describe('mobile message list container', () => {
     expect(source).toContain('const [listRevealed, setListRevealed] = useState(false);');
     expect(source).toContain('setListRevealed(true);');
     expect(source).toContain('const initialRevealProgress = useMemo(');
-    expect(source).toContain('const initialRevealOpacity = useMemo(');
+    expect(source).toContain('const initialRevealOpacity = listRevealed ? 1 : initialRevealProgress;');
     expect(source).toContain('<Animated.View style={[styles.messageList, { opacity: initialRevealOpacity }]}>');
-    expect(source).toContain('MOBILE_INITIAL_ANCHOR_SETTLE_MS');
-    expect(source).toContain('MOBILE_INITIAL_REVEAL_MAX_MS');
+    expect(source).toContain('const MOBILE_INITIAL_REVEAL_MAX_MS = 300;');
+    expect(source).not.toContain('MOBILE_INITIAL_REVEAL_FADE_MS');
+    expect(source).toContain('onSettled: revealPositionedHistory');
+    expect(source).toContain('tailFollowerRef.current = null;');
     const initialAnchorEffectStart = source.indexOf('// 首次落底：完整历史已经在列表里');
     const initialAnchorEffectEnd = source.indexOf('// 会话切换(scrollResetKey)', initialAnchorEffectStart);
     const initialAnchorEffectSource = source.slice(initialAnchorEffectStart, initialAnchorEffectEnd);
     expect(initialAnchorEffectSource).toContain('Animated.timing(initialRevealProgress, {');
     expect(initialAnchorEffectSource).toContain('useNativeDriver: true');
+    expect(initialAnchorEffectSource).toContain('easing: Easing.step1');
     expect(initialAnchorEffectSource).not.toContain('const verify =');
     expect(initialAnchorEffectSource).not.toContain('setTimeout(');
     expect(initialAnchorEffectSource).toContain('scrollToEndProgrammatically(false);');

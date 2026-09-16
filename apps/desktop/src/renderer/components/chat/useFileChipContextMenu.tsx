@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * useFileChipContextMenu
  * ---------------------------------------------------------------------------
@@ -261,7 +262,7 @@ export function useFileChipContextMenu({
     setMenuPos(null);
     const abs = await getAbsPath();
     const res = await window.electronAPI.openPath(abs);
-    if (!res.success) toast.error(res.error ?? t('chat.markdownRenderer.openWithAppFailed'));
+    if (shouldShowOpenPathError(res)) toast.error(res.error ?? t('chat.markdownRenderer.openWithAppFailed'));
   }
 
   async function handleOpenWithApp(appId: string): Promise<void> {

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -95,6 +96,7 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     })),
     getWorkerDefaults: vi.fn(() => ({})),
     getWorkerPermissionMode: vi.fn(() => 'auto' as const),
+    resolveWorkerWorkingDir: vi.fn(async (dir) => dir),
     getAvailableModels: vi.fn((agent: AgentKind) => (
       agent === 'codex'
         ? [
@@ -185,6 +187,74 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     service: createOrcaWorkerCreationService(deps),
   };
 }
+
+describe('Orca worker working directory', () => {
+  const params: OrcaWorkerCreateParams = {
+    leadSessionId: 'lead-1', role: 'developer', agent: 'codex', label: 'worker',
+    initialTask: 'Run in the assigned project',
+  };
+
+  it('binds the resolved directory before bootstrap (dispatch belongs to lifecycle)', async () => {
+    const requested = path.resolve('candidate link ');
+    const resolved = path.resolve('candidate real ');
+    const { deps, service } = createDeps({
+      resolveWorkerWorkingDir: vi.fn(async () => resolved),
+    });
+    const result = await service.createWorker({ ...params, workingDir: requested });
+    expect(result.ok).toBe(true);
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith(requested, expect.objectContaining({ id: 'lead-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: resolved, workspaceKind: 'project',
+    }));
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.resolveWorkerWorkingDir).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deps.bootstrapSession).mock.invocationCallOrder[0]!);
+  });
+
+  it('preserves Lead directory inheritance when the override is omitted', async () => {
+    const { deps, service } = createDeps();
+    await service.createWorker(params);
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: 'C:\\repo' }));
+  });
+
+  it.each(['', ' ', 'relative/project', './project', 'a\0b'])('rejects invalid directory %j before creating anything', async (workingDir) => {
+    const { deps, service } = createDeps();
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing directory', 'not a directory', 'collaboration disabled'])('does not fall back when resolution fails: %s', async (reason) => {
+    const { deps, service } = createDeps({ resolveWorkerWorkingDir: vi.fn(async () => { throw new Error(reason); }) });
+    expect(await service.createWorker({ ...params, workingDir: path.resolve('candidate') }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it('uses project context when a dialogue Lead explicitly selects a directory', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, workspaceKind: 'dialogue' });
+    const workingDir = path.resolve('explicit project');
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir, workspaceKind: 'project' }));
+  });
+
+  it('resolves SSH paths on the inherited host and binds the result', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, remoteHostId: 'host-1' });
+    vi.mocked(deps.resolveWorkerWorkingDir).mockResolvedValue('/remote/real');
+    expect(await service.createWorker({ ...params, workingDir: '/remote/project' })).toMatchObject({ ok: true });
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith('/remote/project', expect.objectContaining({ remoteHostId: 'host-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/real', remoteHostId: 'host-1' }));
+  });
+});
 
 describe('OrcaWorkerCreationService', () => {
   const workerStatus = (status: OrcaWorkerStatus): OrcaWorkerStatus => status;
@@ -2464,15 +2534,15 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     });
   });
 
-  it('rejects chat-bridged codex providers for a remote lead (wireProtocol=openai-chat)', async () => {
-    const { service } = createDeps({
+  it.each([['deepseek', 'codex'], ['user-openai-account', 'codex'], ['user-claude-account', 'pi']] as const)('rejects local-only source %s/%s before allocating a remote worker', async (providerId, agent) => {
+    const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getAvailableModels: vi.fn(() => [
         { id: 'deepseek-v4', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true },
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        [agent]: [{ id: providerId, name: providerId, models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2480,16 +2550,17 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       service.createWorker({
         leadSessionId: 'lead-1',
         role: 'reviewer',
-        agent: 'codex',
+        agent,
         label: 'reviewer',
         model: 'deepseek-v4',
-        providerId: 'deepseek',
+        providerId,
       }),
     ).resolves.toMatchObject({
       ok: false,
       errorCode: 'INVALID_PARAMS',
       message: expect.stringContaining('not available for SSH remote workers'),
     });
+    expect(deps.createSessionId).not.toHaveBeenCalled();
   });
 
   it('still allows SSH-compatible models for a remote lead', async () => {
@@ -2558,7 +2629,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2600,7 +2671,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 

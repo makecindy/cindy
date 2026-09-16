@@ -177,6 +177,11 @@ export interface AgentInputClearBoundaryOpts {
 export interface AutoResumeInfo {
   /** 中断原文（terminal error 的 message，通常是 SDK 的英文文案）。 */
   error?: string;
+  /**
+   * translator / watchdog 给出的稳定 reason。展示用，自动续跑也靠它决定
+   * CONTINUE-only（已 accept 的 stall/idle/reconnect-stalled）还是可以克隆原文。
+   */
+  reason?: string;
   /** 本轮连续第几次重连（从 1 起）。 */
   attempt: number;
   /** 本轮上限。 */
@@ -213,6 +218,8 @@ export interface RecoveryCheckpoint {
 }
 
 export interface AgentInputQueuedMessage {
+  /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
+  autoReviewUserText?: string;
   clientId: string;
   text: string;
   /**
@@ -400,7 +407,7 @@ export interface AgentInputProjection {
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /**
    * 中断自动续跑接管中:上游把「已经干到一半」的 turn 打断了,main 守卫已决定自动
-   * 续跑,正在退避窗口里(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
+   * 续跑,正在退避或出队后的派发准备阶段(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
    *
    * 此时 `error` 刻意保持 null —— 自愈过程不该弹红色横幅,只在聊天流里显示一条低调
    * 的「正在自动继续」分隔条(renderer 据本字段插 ephemeral system card)。真正救不

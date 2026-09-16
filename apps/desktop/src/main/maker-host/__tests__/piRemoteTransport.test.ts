@@ -170,6 +170,18 @@ describe('pi remote file ops command hygiene', () => {
     expect(await ops.stat('/nope')).toBeNull();
   });
 
+  it.each(['EACCES', 'EPERM', 'EIO'])('stat rejects %s instead of reporting a missing file', async (code) => {
+    const { host } = makeHostExec('MISSING\n', 1, code);
+    await expect(createRemotePiFileOps(host).stat('/private/AGENTS.md'))
+      .rejects.toThrow(`remote stat failed (exit 1): ${code}`);
+  });
+
+  it('stat rejects malformed successful responses without exposing command output', async () => {
+    const { host } = fakeHost('unexpected remote output');
+    await expect(createRemotePiFileOps(host).stat('/private/AGENTS.md'))
+      .rejects.toThrow('remote stat returned an invalid response');
+  });
+
   it('hashes the complete remote file in place without transferring its contents', async () => {
     const digest = 'a'.repeat(64);
     const { calls, host } = makeHostExec(`${digest}\n`);

@@ -24,20 +24,14 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
 import { parseMarketSource } from './sources/parse.js';
 import { LocalIconRequestGate } from './localIconRequestGate.js';
 import {
-  PluginMarketService,
+  getPluginMarketService as service,
   type PluginMarketSnapshotOptions,
 } from './service.js';
 
 const log = createLogger('plugin-market-ipc');
 let registered = false;
-let serviceSingleton: PluginMarketService | null = null;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
 const localIconRequestGate = new LocalIconRequestGate();
-
-function service(): PluginMarketService {
-  serviceSingleton ??= new PluginMarketService();
-  return serviceSingleton;
-}
 
 function signalRemovalNoticeAvailable(): void {
   if (!service().hasPendingRemovalNotice()) return;

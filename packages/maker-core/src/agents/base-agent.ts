@@ -7,6 +7,8 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
+import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
+
 import type {
   AgentEvent,
   InteractionDecision,
@@ -188,6 +190,10 @@ export type PiNativeApi =
   | 'openai-responses'
   | 'openai-completions'
   | 'google-generative-ai'
+  | 'bedrock-converse-stream'
+  | 'azure-openai-responses'
+  | 'google-vertex'
+  | 'mistral-conversations'
   /** PI's native ChatGPT subscription adapter; not a portable BYOM protocol. */
   | 'openai-codex-responses';
 
@@ -251,6 +257,8 @@ export interface RemoteAgentFileOps {
   listDir(dir: string): Promise<string[]>;
   /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
   readFile(file: string, maxBytes?: number): Promise<string>;
+  /** Bounded UTF-8 tail for native history receipts; absent on older hosts. */
+  readFileTail?(file: string, maxBytes: number): Promise<string>;
   /** Hash the complete remote file without transferring its contents to the client. */
   sha256File(file: string): Promise<string>;
 }
@@ -273,6 +281,8 @@ export type PiGatewayModelSpec = Pick<
  * 解析产出;PiAgent 写进 models.json 的独立 provider 块,并按 model→provider 路由 set_model。
  */
 export interface PiNativeProviderSpec {
+  /** Pi adapter identity; the user connection retains its independent ID and credential. */
+  adapterProvider?: string;
   /** PI runtime provider id(slug,禁与网关 provider `cindy` 撞名)。 */
   id: string;
   /** Cindy catalog / persisted provider id; defaults to the runtime id. */
@@ -364,6 +374,14 @@ export interface PiExtraSpawnConfigContext {
 
 export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default' | 'smart';
 
+/**
+ * Session facts the host may consult when building per-thread MCP config
+ * overrides (e.g. hiding a session-purpose server from ordinary threads).
+ */
+export interface CodexSessionMcpConfigInput {
+  vendorOptions?: Record<string, unknown>;
+}
+
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
@@ -401,7 +419,10 @@ export interface CodexExtraSpawnConfig {
    * config only supplies the unbound base URL; thread/start|resume must add the
    * opaque route identity for the concrete Session using this callback.
    */
-  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
+  buildSessionMcpConfig?: (
+    sessionInstanceId: string,
+    session?: CodexSessionMcpConfigInput,
+  ) => Record<string, unknown>;
   codexProxyActive?: boolean;
   /**
    * ChatGPT 订阅直连的内部 OpenAI transport identity，仅 oauth-bearer spawn 下发。
@@ -448,6 +469,7 @@ export interface CodexLocalCredentialModeSwitchContext {
 }
 
 export interface RefreshLocalModelsOptions {
+  providerId?: string;
   /**
    * Bind model discovery to a specific local credential route.
    * Codex serves explicit routes from an isolated control-plane host so live
@@ -500,9 +522,7 @@ export interface TurnChangeCaptureHooks {
 
 export type PiNativePackageEntry = string | ({ source: string } & Record<string, unknown>);
 
-export interface PiManagedPackageMutationRequest {
-  action: 'install' | 'update' | 'remove';
-  source: string;
+export type PiManagedPackageMutationRequest = import('./pi/managed-command.js').PiManagementCommand & {
   /** Host-trusted evidence. This value is never accepted from Renderer or model input. */
   authorization:
     | 'local-desktop-command'
@@ -527,16 +547,87 @@ export type PiManagedPackageMutationFailureCode =
   | 'state-unavailable'
   | 'native-command-failed';
 
+/** Public diagnostics contain only host-selected enums/numbers, never CLI text or argv. */
+export interface PiPackageCommandDiagnostic {
+  phase: 'prepare' | 'native-command' | 'cindy-analysis';
+  outcome: 'failed' | 'timed-out' | 'unknown';
+  command?: 'install' | 'update' | 'remove' | 'list' | 'version' | 'dependency-install' | 'build';
+  exitCode?: number | null;
+  nativeCode?: 'E401' | 'E403' | 'EACCES' | 'EPERM' | 'ETARGET' | 'E404' | 'ENOTFOUND'
+    | 'EAI_AGAIN' | 'ECONNREFUSED' | 'ETIMEDOUT' | 'ENOSPC' | 'ENOENT' | 'ELIFECYCLE';
+  signal?: 'SIGTERM' | 'SIGKILL' | 'SIGINT' | 'other';
+  reason: 'authentication' | 'permission' | 'network' | 'package-not-found'
+    | 'version-not-found' | 'missing-executable' | 'disk-full' | 'build-failed'
+    | 'state-unavailable' | 'missing-file' | 'unknown';
+  recovery: 'check-credentials' | 'check-permissions' | 'check-network'
+    | 'check-source' | 'check-version' | 'check-runtime' | 'free-disk-space'
+    | 'check-build-dependencies' | 'refresh-package-state' | 'inspect-state-before-retry';
+}
+
+/** Pick bounded diagnostic fields at transcript boundaries. Keep self-contained: embedded in the Pi bridge. */
+export function projectPiPackageCommandDiagnostic(value: unknown): PiPackageCommandDiagnostic | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const data = value as Record<string, unknown>;
+  const choices = {
+    phase: ['prepare', 'native-command', 'cindy-analysis'],
+    outcome: ['failed', 'timed-out', 'unknown'],
+    reason: ['authentication', 'permission', 'network', 'package-not-found', 'version-not-found',
+      'missing-executable', 'disk-full', 'build-failed', 'state-unavailable', 'missing-file', 'unknown'],
+    recovery: ['check-credentials', 'check-permissions', 'check-network', 'check-source', 'check-version',
+      'check-runtime', 'free-disk-space', 'check-build-dependencies', 'refresh-package-state', 'inspect-state-before-retry'],
+  };
+  for (const [key, values] of Object.entries(choices)) {
+    if (typeof data[key] !== 'string' || !values.includes(data[key] as string)) return undefined;
+  }
+  return {
+    phase: data.phase as PiPackageCommandDiagnostic['phase'],
+    outcome: data.outcome as PiPackageCommandDiagnostic['outcome'],
+    reason: data.reason as PiPackageCommandDiagnostic['reason'],
+    recovery: data.recovery as PiPackageCommandDiagnostic['recovery'],
+    ...(data.exitCode === null || (Number.isSafeInteger(data.exitCode) && Math.abs(data.exitCode as number) <= 0xffffffff)
+      ? { exitCode: data.exitCode as number | null } : {}),
+    ...(typeof data.command === 'string' && ['install', 'update', 'remove', 'list', 'version', 'dependency-install', 'build'].includes(data.command)
+      ? { command: data.command as PiPackageCommandDiagnostic['command'] } : {}),
+    ...(typeof data.nativeCode === 'string' && ['E401', 'E403', 'EACCES', 'EPERM', 'ETARGET', 'E404', 'ENOTFOUND',
+      'EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOSPC', 'ENOENT', 'ELIFECYCLE'].includes(data.nativeCode)
+      ? { nativeCode: data.nativeCode as PiPackageCommandDiagnostic['nativeCode'] } : {}),
+    ...(typeof data.signal === 'string' && ['SIGTERM', 'SIGKILL', 'SIGINT', 'other'].includes(data.signal)
+      ? { signal: data.signal as PiPackageCommandDiagnostic['signal'] } : {}),
+  };
+}
+
+/** Safe command-stage evidence, also embedded in the generated Pi bridge. */
+export function projectPiManagedCommandFailure(value: unknown): import('./pi/managed-command.js').PiManagedCommandFailure | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const data = value as Record<string, unknown>;
+  if (typeof data.phase !== 'string' || !['native-packages', 'native-core', 'native-query', 'host-binary-update'].includes(data.phase)
+    || typeof data.packagesUpdated !== 'boolean'
+    || typeof data.recovery !== 'string' || !['retry-core-only', 'check-host-update-and-retry-core', 'inspect-state-before-retry'].includes(data.recovery)) return undefined;
+  return {
+    phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
+    packagesUpdated: data.packagesUpdated,
+    recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+      ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
+  };
+}
+
 /** Host-classified package failure; raw cause remains Main-local. */
 export class PiManagedPackageMutationFailedError extends Error {
   readonly code = 'PI_PACKAGE_MUTATION_FAILED';
+  readonly diagnostic?: PiPackageCommandDiagnostic;
+  readonly commandFailure?: import('./pi/managed-command.js').PiManagedCommandFailure;
 
   constructor(
     readonly mayHaveChangedState: boolean,
     readonly failureCode: PiManagedPackageMutationFailureCode,
+    details?: PiPackageCommandDiagnostic | import('./pi/managed-command.js').PiManagedCommandFailure,
+    diagnostic?: PiPackageCommandDiagnostic,
   ) {
     super('Pi extension mutation failed');
     this.name = 'PiManagedPackageMutationFailedError';
+    this.diagnostic = projectPiPackageCommandDiagnostic(diagnostic ?? details);
+    this.commandFailure = projectPiManagedCommandFailure(details);
   }
 }
 
@@ -545,11 +636,14 @@ export interface PiExtensionUiStrings {
   cancel: string;
   mutationFailed: string;
   mutationFailure?: Partial<Record<PiManagedPackageMutationFailureCode, string>>;
-  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+  mutationSuccess: Record<'install' | 'update' | 'remove', string> & {
+    /** Only used when the returned package explicitly confirms enablement. */
+    installEnabled?: string;
+  };
 }
 
 export interface PiManagedPackageRuntimeConvergence {
-  runtimeConvergence: 'complete' | 'partial';
+  runtimeConvergence: 'complete' | 'partial' | 'deferred';
   recoveryAction?: 'restart-cindy-to-refresh-packages';
 }
 
@@ -575,6 +669,8 @@ export interface PiSubagentRunnerLaunchRequest {
 }
 
 export interface AgentDeps {
+  /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
+  getDisabledSkillPaths?: () => readonly string[];
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;
@@ -621,13 +717,19 @@ export interface AgentDeps {
    * 其它 agent 不消费此字段。
    */
   resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
+  /** Native user context root, separate from Cindy's models/auth runtime home. */
+  resolvePiGlobalContextHome?: (remoteHostId?: string | null) => string | undefined;
 
   /**
    * Pi-only: advisory metadata for Cindy UI/command projection. This resolver
    * may inspect or snapshot known resources, but its result is never the launch
    * allowlist; resolvePiNativePackagePaths preserves Pi-native discovery.
    */
-  resolvePiManagedPackageResources?: (options?: { snapshotRoot: string }) => Promise<{
+  resolvePiManagedPackageResources?: (options?: {
+    snapshotRoot?: string;
+    /** Redacted per-start correlation id for structured startup timing logs. */
+    startupTraceId?: string;
+  }) => Promise<{
     extensions: string[];
     skills: Array<{ path: string; name: string; description?: string }>;
     promptTemplates: string[];
@@ -642,7 +744,8 @@ export interface AgentDeps {
   resolvePiNativePackagePaths?: () => Promise<PiNativePackageEntry[]>;
 
   /**
-   * Pi-only: mutate the shared package home through Pi's own package CLI.
+   * Pi-only: shared Host service for typed Pi management commands and legacy
+   * package mutations. Core operations never invoke package retirement hooks.
    * Host routing binds an exact user/tool action but must not add a second
    * compatibility, fingerprint, or content-approval decision.
    */
@@ -650,13 +753,18 @@ export interface AgentDeps {
 
   /**
    * Pi-only: host callback after a package mutation receipt has been queued/sent.
-   * Desktop publishes a bounded convergence outcome before retiring the caller,
-   * then retires its exact stale local ordinary Pi snapshot. Native package
-   * success remains authoritative.
+   * Desktop retires idle instances and defers busy captured instances until
+   * their product turn settles. A sent receipt is not proof Pi consumed it.
+   * Native package success remains authoritative; deferred is not a failure.
+   * publishOutcome returns the exact queued event so the Host can retain its
+   * caller lease until Session dispatches that receipt (not a persistence ACK).
+   * The event factory supplies a fresh complete receipt for eventual retirement
+   * failure, without writing into the possibly closed caller queue.
    */
   onPiManagedPackageMutationSettled?: (
     callerSessionId: string | undefined,
-    publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => void,
+    publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => AgentEvent,
+    createRetirementFailureEvent: () => AgentEvent,
   ) => Promise<void>;
 
   /**
@@ -827,7 +935,8 @@ export interface AgentDeps {
     ensureCodexBrowserUseReady: () => Promise<boolean>;
   }) => CapabilityRoutingPolicy | undefined | Promise<CapabilityRoutingPolicy | undefined>;
 
-  /** Explicit user context budget for this route. Missing means native/catalog defaults. */
+  /** Host working budget for this route (user override, optionally catalog default).
+   * Missing means the adapter uses its route/native defaults. */
   resolveModelContextLimit?: (
     providerId: string | null | undefined,
     modelId: string,
@@ -838,6 +947,7 @@ export interface AgentDeps {
     modelId: string,
     config: Record<string, unknown>,
     reportedUsableWindow: number | null,
+    codexHome?: string,
   ) => Promise<CodexContextWindowInfo | null>;
 
   /**
@@ -886,6 +996,11 @@ export interface AgentDeps {
   prepareCodexExtraSpawnConfig?: (
     providers: McpProvider[],
     ctx: {
+      providerId?: string;
+      codexHome?: string;
+      /** Actual native config/history root; credential/catalog preparation keeps codexHome above. */
+      runtimeCodexHome?: string;
+      accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
       /** Original session request when the shared host was upgraded to a credential superset. */
@@ -905,6 +1020,7 @@ export interface AgentDeps {
   resolveCodexSubagentRoutingSignature?: (
     providers: McpProvider[],
     ctx: {
+      providerId?: string;
       credentialMode?: AgentCredentialMode;
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
     },
@@ -951,7 +1067,13 @@ export interface AgentDeps {
    */
   onCodexLocalModelsListed?: (
     models: readonly CodexModelListItem[],
+    providerId?: string,
   ) => void | Promise<void>;
+
+  /** Host-confirmed native account identity; ordinary custom API providers return false. */
+  isCodexAccountProvider?: (providerId?: string | null) => boolean;
+  /** Retire each local task's writer on close so native history can change accounts. */
+  isolateCodexAccountSessions?: boolean;
 
   /**
    * Host-owned lightweight reviewer for routes without a healthy vendor-native
@@ -960,6 +1082,11 @@ export interface AgentDeps {
    */
   reviewAutoPermissionAction?: AutoReviewDelegate;
 
+  /** Scope tools/list during native startup, before a real thread id exists. Never authorizes tools/call. */
+  withCodexMcpDiscoveryContext?: <T>(
+    args: Pick<CodexMcpThreadContextArgs, 'sessionId' | 'sessionInstanceId' | 'workingDir' | 'vendorOptions' | 'remoteHostId'>,
+    run: () => Promise<T>,
+  ) => Promise<T>;
   /**
    * Codex-only: bind app-server thread ids back to xdt-maker session context
    * for host-owned HTTP MCP bridges. Missing hooks keep the old no-session
@@ -1163,7 +1290,11 @@ export interface AgentDeps {
    *
    * 缺省 / no-op → 行为与改动前一致。
    */
-  prepareCodexResumeSession?: (threadId: string) => Promise<string | void>;
+  prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
+  recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
+  resolveCodexThreadStorage?: (threadId: string) => Promise<{ historyHome: string; sqliteHome: string } | undefined>;
+  /** Freeze the owner/account scope before async host startup; never expose tokens to the renderer. */
+  createCodexAuthTokenReader?: (providerId?: string) => () => Promise<import('./codex/app-server/external-auth.js').CodexChatgptTokens>;
 
   /**
    * Codex 专用:把已拼好的产品级 system prompt 同步登记到 host 的 codex proxy registry。
@@ -1288,6 +1419,8 @@ export interface AgentDeps {
    */
   remoteCcQueryFactory?: (opts: {
     remoteHostId: string;
+    /** Inject the narrow helper transport for a Bot runtime. */
+    botSession?: boolean;
     sessionId: string;
     /** 当前 Maker Session 实例代号；只在宿主 MCP 身份上下文中流转。 */
     sessionInstanceId?: string;
@@ -1465,6 +1598,28 @@ export class AgentNotAuthenticatedError extends Error {
   constructor(public readonly agentKind: string, msg?: string) {
     super(msg ?? `agent-not-authenticated:${agentKind}`);
     this.name = 'AgentNotAuthenticatedError';
+  }
+}
+
+/**
+ * An adapter failed before returning a handle and has confirmed its process stopped.
+ * Maker unwraps the cause after releasing only this startup's host resources.
+ */
+export class AgentStartupStoppedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'AgentStartupStoppedError';
+  }
+}
+
+/** An adapter failed before returning a handle, but its process has not confirmed exit. */
+export class AgentStartupCleanupPendingError extends Error {
+  readonly whenStopped: Promise<void>;
+
+  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void> }) {
+    super(message, { cause: options.cause });
+    this.name = 'AgentStartupCleanupPendingError';
+    this.whenStopped = options.whenStopped;
   }
 }
 
@@ -1746,6 +1901,12 @@ export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
 /** Call-local user content before Session replaces images with generated descriptions. */
 export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
 
+/** Host-restored user authorization for this send; never accepted from wire options. */
+export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
+
+/** Main-only selection from the original input for a retained-history continuation. */
+export const INHERITED_CAPABILITY_SELECTION = Symbol('cindy.inherited-capability-selection');
+
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
@@ -1758,6 +1919,8 @@ export interface MainOwnedSendContext {
  */
 export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
+  readonly [AUTO_REVIEW_USER_INTENT]?: string;
+  readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
@@ -1943,6 +2106,8 @@ export interface CodexContextWindowInfo {
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
 export interface AgentSessionHandle {
+  /** Canonical physical Skill identities frozen at native runtime startup. */
+  readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
   /** SDK 内部 sessionId，session.started 后会回填 */
   readonly id: string;
@@ -2118,6 +2283,9 @@ export interface AgentSessionHandle {
   /** 当前 maker 进程内记录的计划模式状态；不支持的 agent 不实现。 */
   getPlanMode?(): boolean | null;
 
+  /** Execution authority, including an active one-shot Plan turn after the UI toggle is consumed. */
+  getExecutionPlanMode?(): boolean | null;
+
   /**
    * 把当前会话导出成 HTML 文件,返回写入的绝对路径。
    * `outputPath` 省略时由 agent 决定默认落盘位置。仅 Capabilities.sessionHtmlExport
@@ -2199,6 +2367,11 @@ export interface AgentSessionHandle {
    * 默认实现为 false (capability 缺失时 host 不该问)。
    */
   isTurnRunning?(): boolean;
+  /** A provider-owned preparatory turn still precedes the accepted user input.
+   * Host timeouts must not resume it with a generic CONTINUE. Read synchronously
+   * before abort clears the provider's existing preparation state.
+   */
+  isPreparingUserTurn?(): boolean;
 }
 
 export abstract class BaseAgent {
@@ -2317,6 +2490,15 @@ export abstract class BaseAgent {
     return [];
   }
 
+  /** Filter only the palette projection; management discovery retains disabled sources. */
+  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[]): ListAgentSkillsResult {
+    const disabled = remoteHostId ? [] : snapshot ?? this.deps.getDisabledSkillPaths?.() ?? [];
+    if (disabled.length === 0) return result;
+    return { ...result, skills: result.skills.filter((skill) => !skill.path || !(snapshot
+      ? disabled.includes(canonicalSkillPath(skill.path)) : isSkillDisabled(skill.path, disabled))) };
+  }
+
+
   /**
    * Agent 用户/项目目录扫描出的 skill 列表 —— ChatInput `/` palette 的
    * 'agent-skill' 类目。
@@ -2325,6 +2507,7 @@ export abstract class BaseAgent {
    * app-server skills/list。子类自己负责缓存策略与未授权静默处理。
    * 默认无实现, 不暴露任何 skill。
    */
+
   async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
     void opts;
     return { skills: [] };
@@ -2426,13 +2609,14 @@ export abstract class BaseAgent {
    * Read provider account rate limits without starting a model turn.
    * Codex implements this through the app-server control plane.
    */
-  async readAccountRateLimits(): Promise<AccountRateLimitsResponse> {
+  async readAccountRateLimits(_providerId?: string): Promise<AccountRateLimitsResponse> {
     return this.throwNotSupported('account:rate-limits:read', 'not-implemented');
   }
 
   /** Consume one banked provider reset credit without starting a model turn. */
   async consumeAccountRateLimitResetCredit(
     params: ConsumeAccountRateLimitResetCreditParams,
+    _providerId?: string,
   ): Promise<ConsumeAccountRateLimitResetCreditResponse> {
     void params;
     return this.throwNotSupported('account:rate-limit-reset:consume', 'not-implemented');

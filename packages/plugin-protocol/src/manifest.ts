@@ -1,3 +1,4 @@
+import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 
 /** `.cindy` 包根目录中的 manifest 文件名。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
@@ -238,6 +239,8 @@ export function isGhostNodeMcpReservedMethod(method: string): boolean {
  * Worker 获得明文后仍可能主动回传或泄露。未声明 entry 时只允许主入口。
  */
 export interface GhostNodeSecretBinding {
+  /** 引用本插件 network.secrets 中的 OAuth key；仅注入短期 access token。 */
+  oauthSecret?: string;
   /** 凭证键(插件内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
   key: string;
   /** 给用户看的名称(插件详情与设置状态使用)。 */
@@ -939,6 +942,8 @@ export interface GhostManifest {
    * hooks 非空时 launch 必须为 'resident'(校验强制)。
    */
   subscribe?: GhostSubscribeNeeds;
+  /** Autonomous publishing of declared events into user-configured routines. */
+  routineEvents?: GhostRoutineEvents;
   /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
@@ -1139,6 +1144,7 @@ function isGhostManifestReservedRecordKey(value: string): boolean {
 }
 
 const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'routineEvents',
   'schemaVersion',
   'id',
   'name',
@@ -1902,6 +1908,11 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   // 订阅槽详单(卡槽①):与 slots 含 'subscribe' 成对(有详单必有槽;有槽
   // 无详单允许装入但零事件,同 cindy 语义)。硬规则:声明了 hooks(拦截)
   // 必须 launch:'resident'——要挡路就得常驻在场,每条消息等冷启动不可接受。
+  if (raw.routineEvents !== undefined && prepared.schemaVersion !== 3) {
+    return { ok: false, reason: 'routineEvents requires schemaVersion 3' };
+  }
+  const routineEvents = raw.routineEvents === undefined ? undefined : parseGhostRoutineEvents(raw.routineEvents);
+  if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -3139,7 +3150,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         }
         const binding = bindingRaw as Record<string, unknown>;
         const unknownBindingField = Object.keys(binding).find(
-          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url'].includes(key),
+          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url', 'oauthSecret'].includes(key),
         );
         if (unknownBindingField) {
           return {
@@ -3253,7 +3264,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             };
           }
         }
+        if (binding.oauthSecret !== undefined &&
+          (typeof binding.oauthSecret !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(binding.oauthSecret))) {
+          return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须是本插件 OAuth 凭证键' };
+        }
         nodeSecretBindings.push({
+          ...(binding.oauthSecret !== undefined ? { oauthSecret: binding.oauthSecret as string } : {}),
           key: binding.key,
           label: binding.label,
           methods,
@@ -3585,6 +3601,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
 
   // setup 引用必须在交付边界就与同一份 manifest 的凭证、连接和设置入口对齐；
   // 不能让服务端接受、Desktop 装入时才拒绝。
+  for (const binding of node?.secretBindings ?? []) {
+    if (binding.oauthSecret === undefined) continue;
+    const source = network?.secrets?.find((secret) => secret.key === binding.oauthSecret);
+    if (source?.source !== 'oauth' || !source.oauth) {
+      return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须引用本插件已声明的 OAuth 凭证' };
+    }
+  }
   let setup: GhostSetupDecl | undefined;
   if (raw.setup !== undefined) {
     if (!isPlainObject(raw.setup)) {
@@ -3621,7 +3644,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             },
           ] as const,
       ),
-      ...(node?.secretBindings ?? []).map(
+      ...(node?.secretBindings ?? []).filter((secret) => !secret.oauthSecret).map(
         (secret) => [secret.key, { hostDerivedSource: null }] as const,
       ),
     ]);
@@ -3818,6 +3841,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(tools !== undefined ? { tools } : {}),
       ...(cindy !== undefined ? { cindy } : {}),
       ...(subscribe !== undefined ? { subscribe } : {}),
+      ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

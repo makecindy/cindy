@@ -165,12 +165,27 @@ describe('saveBotSkill — 形成', () => {
   });
 
   it('caps how many skills one Bot can accumulate', async () => {
-    for (let index = 0; index < BOT_SKILL_MAX_COUNT; index += 1) {
-      await saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, name: `skill-${index}` });
+    // Capture this test's directory so a timed-out continuation cannot use a later fixture.
+    const testUserDataDir = userDataDir;
+    // Seed existing files directly: saving each one repeatedly scans the growing directory.
+    for (let index = 0; index < BOT_SKILL_MAX_COUNT - 1; index += 1) {
+      const slug = `skill-${index}`;
+      const skillDir = path.join(botSkillsDir(testUserDataDir, 'bot-1'), slug);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(path.join(skillDir, 'SKILL.md'), renderBotSkillFile({
+        ...SAMPLE,
+        slug,
+        name: slug,
+        updatedAt: '2026-08-19T00:00:00.000Z',
+      }));
     }
+    const lastSkill = { ...SAMPLE, name: `skill-${BOT_SKILL_MAX_COUNT - 1}` };
+    expect((await saveBotSkill(testUserDataDir, 'bot-1', lastSkill)).created).toBe(true);
     await expect(
-      saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, name: 'one-too-many' }),
+      saveBotSkill(testUserDataDir, 'bot-1', { ...SAMPLE, name: 'one-too-many' }),
     ).rejects.toMatchObject({ errorCode: 'SKILL_LIMIT_REACHED' });
+    expect((await saveBotSkill(testUserDataDir, 'bot-1', lastSkill)).created).toBe(false);
+    expect(await listBotSkills(testUserDataDir, 'bot-1')).toHaveLength(BOT_SKILL_MAX_COUNT);
   });
 
   it('never lets a slug escape the per-bot skills dir', async () => {

@@ -1,3 +1,4 @@
+import { captureImContext } from '../../../shared/imMessageSource';
 /**
  * main/im/telegram/adapter.ts
  * ---------------------------------------------------------------------------
@@ -138,7 +139,10 @@ export function buildTelegramAdapter(
       if (!lane) {
         // DM: 无群窗口, 但人格块与引用注入(回复某条消息触发)同样生效。
         if (!replyBlock && !persona) return null;
-        return { agentText: `${persona}${replyBlock}${event.text}` };
+        return {
+          agentText: `${persona}${replyBlock}${event.text}`,
+          contextSnapshot: captureImContext({ replyPrefix: replyBlock, replyMessageCount: 1 }),
+        };
       }
       const { messageId: triggerMessageId } = decodeTelegramMessageId(event.messageId);
       // 一群一 lane: 窗口维度与会话维度重合((chat, topic) 即 lane), 游标单条 —
@@ -170,6 +174,12 @@ export function buildTelegramAdapter(
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
         agentText: `${persona}${ambientBlock}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
+        contextSnapshot: captureImContext({
+          groupPrefix: assembly.prefix,
+          groupMessageCount: assembly.messageCount,
+          replyPrefix: replyBlock,
+          replyMessageCount: 1,
+        }),
         commit: async () => {
           await assembly.commit();
         },

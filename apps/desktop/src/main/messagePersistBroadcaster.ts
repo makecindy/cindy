@@ -57,6 +57,7 @@ import { commitMessageMediaRefs } from './cindy-media/chatAttachments.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { capToolResultTextForPersist } from '../shared/toolResultPersistCap.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { parseBrowserProxyServer } from '@cindy/browser-control-runtime';
 import {
   isAgentTaskToolName,
   normalizeAgentTaskTerminalStatus,
@@ -66,10 +67,132 @@ import {
 import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
-import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import type { AgentMeta, Message } from '../renderer/lib/ccAgent.types';
 import { parseToolLoopErrorDetails, type ToolLoopErrorDetails } from '@cindy/maker-core';
 
 const log = createLogger('messagePersistBroadcaster');
+
+const REDACTED_PROXY_SERVER = '[REDACTED]';
+
+function redactProxyServerInput(value: unknown): unknown {
+  if (typeof value !== 'string') return REDACTED_PROXY_SERVER;
+  try {
+    // The parser rejects any userinfo (authenticated proxies are unsupported),
+    // so a value that parses is a clean, credential-free proxy URL — safe to
+    // keep verbatim for legibility. Anything with credentials or otherwise
+    // malformed throws and is redacted whole.
+    parseBrowserProxyServer(value);
+    return value;
+  } catch {
+    return REDACTED_PROXY_SERVER;
+  }
+}
+
+function redactBrowserCallArgs(args: unknown): unknown {
+  if (typeof args === 'string') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(args);
+    } catch {
+      return args.includes('proxyServer') ? REDACTED_PROXY_SERVER : args;
+    }
+    const redacted = redactBrowserCallArgs(parsed);
+    return redacted === parsed ? args : JSON.stringify(redacted);
+  }
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  const record = args as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(record, 'proxyServer')) return args;
+  const proxyServer = redactProxyServerInput(record.proxyServer);
+  return proxyServer === record.proxyServer ? args : { ...record, proxyServer };
+}
+
+/**
+ * Tool names that can carry a browser `proxyServer`: the browser MCP tool
+ * itself and the Pi gateway that wraps it. Anything else — `apply_patch`, a
+ * shell command, a free-form dynamic tool — is passed through untouched.
+ *
+ * Without this gate the non-JSON string fallback below redacts an ENTIRE input
+ * that merely contains the text `proxyServer`, so editing a file that mentions
+ * the identifier would blank that tool call in the live UI, the persisted
+ * record, and the rehydrated history.
+ *
+ * Matched EXACTLY, never as a substring. A custom MCP id may contain `__`
+ * (the id regex allows underscores), so a third-party server registered as
+ * `cindy_browser__evil` produces `mcp__cindy_browser__evil__call_tool` — which
+ * a substring test reads as the first-party browser. `mcp-tool-target.ts`
+ * documents that exact name as the reason attribution must not be naive.
+ * There the consequence is inheriting first-party trust; here it is having an
+ * unrelated tool's input blanked in the UI and history. Same root cause.
+ */
+const PROXY_SERVER_CARRYING_TOOLS = new Set([
+  'browser',
+  'cindy_browser',
+  'cindy_mcp_call_tool',
+  // Claude Code's MCP tool id form...
+  'mcp__cindy_browser__call_tool',
+  // ...and Codex's, which its translator builds as `mcp:${server}:${tool}`
+  // (agents/codex/translator.ts). Missing this form meant a local Codex
+  // session's browser call skipped redaction entirely, so a credential-bearing
+  // proxyServer was persisted and broadcast before the browser tool rejected it.
+  'mcp:cindy_browser:call_tool',
+  // Codex's APPROVAL identity is a third form: the elicitation path names the
+  // server alone, with no tool suffix (agents/codex/index.ts), and nests the
+  // real call under `toolParams`. Without it an Ask-mode permission request
+  // carries the credential into the Desktop / device-link / IM card.
+  'mcp:cindy_browser',
+]);
+
+function mayCarryProxyServer(toolName: string): boolean {
+  return PROXY_SERVER_CARRYING_TOOLS.has(toolName);
+}
+
+/** Remove proxy userinfo before tool inputs cross a persistence or UI boundary. */
+export function redactToolInputForUntrustedBoundary(toolName: string, input: unknown): unknown {
+  // An empty name marks an internal recursive call on an already-identified
+  // browser input; only top-level calls carry a real tool name to check.
+  if (toolName !== '' && !mayCarryProxyServer(toolName)) return input;
+  if (typeof input === 'string') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(input);
+    } catch {
+      return input.includes('proxyServer') ? REDACTED_PROXY_SERVER : input;
+    }
+    const redacted = redactToolInputForUntrustedBoundary('', parsed);
+    return redacted === parsed ? input : JSON.stringify(redacted);
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const record = input as Record<string, unknown>;
+  let redacted: Record<string, unknown> = record;
+  if (Object.prototype.hasOwnProperty.call(record, 'proxyServer')) {
+    const proxyServer = redactProxyServerInput(record.proxyServer);
+    if (proxyServer !== record.proxyServer) redacted = { ...redacted, proxyServer };
+  }
+  // Codex MCP approval envelope: `{ serverName, message, toolName, toolParams,
+  // toolParamsDisplay }`. The browser arguments live one level down under
+  // `toolParams`, with a rendered copy under `toolParamsDisplay`; neither is
+  // reached by the checks above. Safe to recurse with an empty name here — the
+  // top-level tool name already identified this as a browser envelope.
+  for (const field of ['toolParams', 'toolParamsDisplay'] as const) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
+    const redactedField = redactToolInputForUntrustedBoundary('', record[field]);
+    if (redactedField !== record[field]) redacted = { ...redacted, [field]: redactedField };
+  }
+  if (record.name === 'browser') {
+    const redactedArgs = redactBrowserCallArgs(record.args);
+    if (redactedArgs !== record.args) redacted = { ...redacted, args: redactedArgs };
+  } else if (record.server === 'cindy_browser' && record.tool === 'call_tool') {
+    // Pi MCP gateway envelope: call_tool({server, tool, args}) wraps the real
+    // tool input one level deeper than a direct call_tool({name, args}).
+    // Match the exact server/tool, not merely their types: recursing with an
+    // empty name re-enters past the mayCarryProxyServer gate, so a shape-only
+    // check would let any unrelated MCP call have an `args.proxyServer` field
+    // rewritten — blanking that tool call in the live UI and persisted record.
+    const redactedArgs = redactToolInputForUntrustedBoundary('', record.args);
+    if (redactedArgs !== record.args) redacted = { ...redacted, args: redactedArgs };
+  }
+  return redacted;
+}
 
 /** 每会话当前在飞的 assistant 文本 block:分配一次 persistId、累积全文,边界落库后清。 */
 interface AssistantBlock {
@@ -82,6 +205,21 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+// In-flight thinking is not in SQLite until final. Keep one recoverable snapshot
+// so expanding midway does not depend on deltas a collapsed controller never received.
+const historyThinkingBlocks = new Map<string, Map<string, Message>>();
+const historyThinkingOwners = new Map<string, OwnerScope>();
+export function clearSessionThinkingSnapshots(sessionId: string): void {
+  historyThinkingBlocks.delete(sessionId);
+  historyThinkingOwners.delete(sessionId);
+}
+export function getSessionThinkingSnapshots(sessionId: string): Message[] {
+  if (!isOwnerScopeCurrent(historyThinkingOwners.get(sessionId) ?? null)) {
+    clearSessionThinkingSnapshots(sessionId);
+    return [];
+  }
+  return [...(historyThinkingBlocks.get(sessionId)?.values() ?? [])];
+}
 
 /** Read the in-flight block without flushing or changing its persistence identity. */
 export function getSessionTextSnapshot(sessionId: string) {
@@ -114,6 +252,33 @@ interface SealedAssistantLateFinalCandidate {
  * the late snapshot can update/reuse the same row instead of creating another.
  */
 const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFinalCandidate>();
+
+/**
+ * 最近一次边界(tool_use / interaction / done)flush 掉的 assistant block 身份。
+ *
+ * 交互边界会先 flushAssistantBlock 再落 ask_user / plan_review 行,而交互行会把
+ * lastPersistedMsgBySession 刷成非 assistant —— 紧随其后的 message_end 全文快照
+ * (isFinal + isFullText)看到的上一条已是交互行,相邻 DUP-SKIP 失效,于是同一段
+ * 正文落第二行(现象:回复 → 提问卡 → 同一条回复)。这里单独记住这块已落库的身份,
+ * 让同源快照复用它。
+ *
+ * 复用只发生在"交互行仍是最后一条已落库消息"的窗口内(见 onAssistantTextEvent):
+ * 窗口内到达的全文快照按构造属于刚 flush 的同一块。新 assistant 行落库、开始新的
+ * delta block、turn reset / clear 时都作废记录,避免吞掉合法的同文本新消息。
+ * 交互被回答(onInteractionResolved)**不**作废记录:message_end 的全文快照与交互
+ * 回答是两条竞速路径,用户可能在快照被消费前就答完,此时记录必须还活着,否则同一块
+ * 正文会再落一行;窗口改由紧随其后的 tool_result 行(ask_user 工具结果)自然关闭 ——
+ * 下一条 assistant 消息只可能在 tool_result 之后产生。复用命中后也不消费记录:终态
+ * 快照可能重复投递,而交互行还占着 lastPersistedMsgBySession 时相邻 DUP-SKIP 看不到
+ * 已落库的 assistant 行,删早了第二次投递就会再落一行。
+ * 记录只在"flush 与交互行紧邻"时成立:flush 之后任何非交互消息先落库都会作废它
+ * (见 notePersistedMessage),否则更晚到达的交互行会仅凭角色把陈旧记录重新激活,
+ * 把当前这条 assistant 的终态全文写到更早那一行上。
+ */
+const lastBoundaryFlushedAssistantBySession = new Map<
+  string,
+  { persistId: string; text: string; agentMessageId?: string }
+>();
 
 function matchesSealedAssistantIdentity(
   candidate: SealedAssistantLateFinalCandidate,
@@ -149,8 +314,10 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   if (!Number.isFinite(parsed)) return;
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
+    clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
     // A cleared transcript must not be revived by a late terminal update from an
     // older background task. New tool calls repopulate this linkage after the boundary.
     clearAgentTaskPersistState(sessionId);
@@ -326,6 +493,14 @@ function notePersistedMessage(
   text = '',
   agentMessageId?: string,
 ): void {
+  // 边界复用候选只在"交互行紧随 flush 落库"时有效:flushAssistantBlock 与
+  // onInteractionMessage 在同一段同步代码里先后落库,所以 flush 之后第一条落库的不是
+  // 交互行,就说明这次 flush 不是交互边界(或交互行不是紧邻的那条)。立即作废候选,
+  // 防止更晚到达的 ask_user / plan_review 行仅凭角色把陈旧候选重新激活,把当前这条
+  // assistant 的终态全文写到更早那一行上。
+  if (role !== 'ask_user' && role !== 'plan_review') {
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
+  }
   lastPersistedMsgBySession.set(sessionId, { role, text, persistId, agentMessageId });
 }
 
@@ -522,9 +697,14 @@ function enqueueVisibleDbMessage(
   label: string,
   sessionId: string,
   body: CreateDbMessageBody,
+  onPersisted?: () => void,
 ): void {
   const stamped = withAgentKindStamp(sessionId, body);
-  enqueueWrite(label, (ownerScope) => createVisibleDbMessage(sessionId, stamped, ownerScope));
+  enqueueWrite(label, async (ownerScope) => {
+    const result = await createVisibleDbMessage(sessionId, stamped, ownerScope);
+    onPersisted?.();
+    return result;
+  });
 }
 
 /**
@@ -598,6 +778,9 @@ function enqueuePersistAssistant(
   createdAt: number,
   agentMessageId?: string,
 ): void {
+  // 有新的 assistant 行要落库:上一条边界 flush 身份作废,防止迟到的全文快照
+  // 误复用到更早的消息上。flushAssistantBlockInternal 在本函数返回后重新登记。
+  lastBoundaryFlushedAssistantBySession.delete(sessionId);
   noteAssistantTranscriptUuid(sessionId, agentMeta);
   enqueueVisibleDbMessage(`assistant:${sessionId}:${clientId}`, sessionId, {
     clientId,
@@ -646,6 +829,10 @@ const codexPlanRowByTurnToolUseId = new Map<
 >();
 
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
+export function getHistoryToolName(sessionId: string, toolUseId: string): string {
+  return toolUseInfoBySession.get(sessionId)?.get(toolUseId)?.toolName ?? '';
+}
+
 const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>();
 /**
  * Agent/Task terminal events are live-only, while the originating tool_use is durable.
@@ -1034,6 +1221,7 @@ export function onToolUseEvent(
   const createdAt = Date.now();
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
+  const persistedInput = redactToolInputForUntrustedBoundary(toolName, data.input);
 
   if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
     const planUpdate = parseCodexPlanUpdate(data);
@@ -1083,7 +1271,7 @@ export function onToolUseEvent(
     enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
       clientId: persistId,
       role: 'tool_use',
-      content: { toolUseId, toolName, input: data.input },
+      content: { toolUseId, toolName, input: persistedInput },
       toolUseId: toolUseId || undefined,
       agentMeta: persistedMeta,
       createdAt,
@@ -1095,20 +1283,20 @@ export function onToolUseEvent(
     rememberToolUseId(sessionId, toolUseId, createdAt);
     getOrCreateSessionMap(toolUseInfoBySession, sessionId).set(toolUseId, {
       toolName,
-      input: data.input,
+      input: persistedInput,
     });
   }
   const existingPersistId = isUpdatableToolUse(toolName) && toolUseId
     ? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
     : undefined;
   if (existingPersistId) {
-    const content = { toolUseId, toolName, input: data.input };
+    const content = { toolUseId, toolName, input: persistedInput };
     enqueueWrite(`tool_use_update:${sessionId}:${existingPersistId}`, () =>
       updateDbMessageContent(sessionId, existingPersistId, content),
     );
     // 同一 turn 的第二次 update_plan 走这条复用分支,按-turn 缓存必须跟着刷新:
     // 终态写入优先读它,停在首版快照会把已更新的计划整行盖回第一版(review P1)。
-    rememberCodexPlanRow(sessionId, toolName, toolUseId, existingPersistId, data.input);
+    rememberCodexPlanRow(sessionId, toolName, toolUseId, existingPersistId, persistedInput);
     notePersistedMessage(sessionId, 'tool_use', existingPersistId);
     return existingPersistId;
   }
@@ -1124,7 +1312,7 @@ export function onToolUseEvent(
   enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
     clientId: persistId,
     role: 'tool_use',
-    content: { toolUseId, toolName, input: data.input },
+    content: { toolUseId, toolName, input: persistedInput },
     toolUseId: toolUseId || undefined,
     agentMeta: meta,
     createdAt,
@@ -1132,7 +1320,7 @@ export function onToolUseEvent(
   if (isUpdatableToolUse(toolName) && toolUseId) {
     rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
   }
-  rememberCodexPlanRow(sessionId, toolName, toolUseId, persistId, data.input);
+  rememberCodexPlanRow(sessionId, toolName, toolUseId, persistId, persistedInput);
   notePersistedMessage(sessionId, 'tool_use', persistId);
   return persistId;
 }
@@ -1311,16 +1499,43 @@ export function prepareSyntheticToolEventForBroadcast(
  */
 export function onThinkingEvent(
   sessionId: string,
-  data: { stage?: unknown; blockId?: unknown; text?: unknown; durationMs?: unknown },
+  data: { stage?: unknown; blockId?: unknown; text?: unknown; durationMs?: unknown; startedAt?: unknown },
   agentMeta: AgentMeta | null,
 ): void {
   const blockId = typeof data.blockId === 'string' ? data.blockId : '';
   if (!blockId) return;
+  const receivedAt = Date.now();
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
   noteAssistantTranscriptUuid(sessionId, meta);
 
+  getSessionThinkingSnapshots(sessionId);
+  const blocks = historyThinkingBlocks.get(sessionId) ?? new Map<string, Message>();
+  const previous = blocks.get(blockId);
+  if (data.stage === 'start' || data.stage === 'delta' || data.stage === 'final') {
+    const previousText = (previous?.content as { text?: string } | undefined)?.text ?? '';
+    const text = typeof data.text === 'string' ? data.text : '';
+    blocks.set(blockId, {
+      id: `history-live:${blockId}`, clientId: blockId, sessionId, role: 'thinking', toolUseId: null,
+      agentMeta: meta,
+      createdAt: previous?.createdAt ?? new Date(typeof data.startedAt === 'number' ? data.startedAt : receivedAt).toISOString(),
+      content: { kind: 'thinking', text: data.stage === 'delta' ? previousText + text : text,
+        durationMs: typeof data.durationMs === 'number' ? data.durationMs : 0 },
+    });
+    historyThinkingBlocks.set(sessionId, blocks);
+    historyThinkingOwners.set(sessionId, captureOwnerScope());
+  }
+  const finalSnapshot = blocks.get(blockId);
+  const releaseSnapshot = () => {
+    if (blocks.get(blockId) !== finalSnapshot) return;
+    blocks.delete(blockId);
+    if (blocks.size === 0 && historyThinkingBlocks.get(sessionId) === blocks) {
+      historyThinkingBlocks.delete(sessionId);
+      historyThinkingOwners.delete(sessionId);
+    }
+  };
+
   if (data.stage === 'final') {
-    const finishedAt = Date.now();
+    const finishedAt = receivedAt;
     const text = typeof data.text === 'string' ? data.text : '';
     const durationMs = typeof data.durationMs === 'number' ? data.durationMs : 0;
     enqueueVisibleDbMessage(`thinking:${sessionId}:${blockId}`, sessionId, {
@@ -1329,10 +1544,11 @@ export function onThinkingEvent(
       content: { kind: 'thinking', text, durationMs, isRedacted: false, finishedAt },
       agentMeta: meta,
       createdAt: finishedAt,
-    });
+    }, releaseSnapshot);
     notePersistedMessage(sessionId, 'thinking', blockId);
   } else if (data.stage === 'redacted') {
-    const finishedAt = Date.now();
+    releaseSnapshot();
+    const finishedAt = receivedAt;
     enqueueVisibleDbMessage(`thinking_redacted:${sessionId}:${blockId}`, sessionId, {
       clientId: blockId,
       role: 'thinking',
@@ -1603,7 +1819,8 @@ export function onInteractionMessage(
   const createdAt = Date.now();
   const requestId = typeof req.requestId === 'string' ? req.requestId : '';
   if (!requestId) return undefined;
-  const meta = lastAgentMetaBySession.get(sessionId) ?? null;
+  const meta: AgentMeta & { autoReviewUserText?: unknown } = { ...lastAgentMetaBySession.get(sessionId) };
+  delete meta.autoReviewUserText;
 
   if (req.kind === 'ask_user_question') {
     const persistId = createId();
@@ -1644,8 +1861,8 @@ export function onInteractionMessage(
  * 不在 device-link allowlist;远程会话被控端的 row 因此永留 pending,reload 经 mapServerMessages
  * 被映射成 expired → 用户回答/批准记录丢失。这里在 RESOLVE_INTERACTION(任何调用方:本机 renderer /
  * 远程控制端隧道 / 未来手机)成功后由 main 落库,使被控端 DB 成为真相,所有端 reload 拿到正确状态。
- * 复用 onInteractionMessage 同款 enqueueWrite 串行写队列;不广播(对齐 updateMessageContent 语义,
- * 其它端 panel 已由 INTERACTION_DISMISSED 清,reload 时读这条真值)。
+ * 复用 onInteractionMessage 同款 enqueueWrite 串行写队列；写入完成后广播权威行，
+ * 让本机及远程历史投影接管最终状态，不依赖后续 turn。
  *
  * 仅 ask_user_question / plan_review 落库(permission 无 chat 消息,persistId 为空时直接跳过)。
  */
@@ -1673,18 +1890,25 @@ export function onInteractionResolved(
   const requestId = typeof request.requestId === 'string' ? request.requestId : '';
   if (!requestId) return;
   if (!claimInteractionPersistId(sessionId, persistId)) return;
+  // 刻意不动 lastBoundaryFlushedAssistantBySession:回答完成不等于 message_end 的
+  // 全文快照已被消费(见该 map 的注释)。交互行本身不刷新 lastPersistedMsgBySession,
+  // 复用窗口仍然成立;等 ask_user 的 tool_result 行落库后窗口自然关闭。
+  const acceptedAt = Date.now();
 
   if (kind === 'ask_user_question') {
     const answers = (decision.answers as Record<string, string> | undefined) ?? {};
     const cancelled = decision.dismissed === true;
-    enqueueWrite(`ask_user_resolved:${sessionId}:${persistId}`, () =>
-      updateDbMessageContent(sessionId, persistId, {
+    enqueueWrite(`ask_user_resolved:${sessionId}:${persistId}`, async (ownerScope) => {
+      const updated = await updateDbMessageContent(sessionId, persistId, {
         requestId,
         questions: request.questions ?? [],
         status: cancelled ? 'cancelled' : 'answered',
         answers,
-      }),
-    );
+      }, { acceptedAt, text: cancelled ? '' : 'Clarifications:\n' + Object.entries(answers)
+        .filter(([, answer]) => typeof answer === 'string' && answer.trim())
+        .map(([question, answer]) => `- ${question} → ${answer}`).join('\n') });
+      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+    });
     return;
   }
 
@@ -1703,15 +1927,17 @@ export function onInteractionResolved(
   const planFilePath = typeof request.planFilePath === 'string' ? request.planFilePath : '';
   const feedback =
     behavior === 'deny' && !dismissed ? ((decision.reason as string | undefined) ?? null) : null;
-  enqueueWrite(`plan_review_resolved:${sessionId}:${persistId}`, () =>
-    updateDbMessageContent(sessionId, persistId, {
+  enqueueWrite(`plan_review_resolved:${sessionId}:${persistId}`, async (ownerScope) => {
+    const updated = await updateDbMessageContent(sessionId, persistId, {
       requestId,
       plan,
       planFilePath,
       status,
       feedback,
-    }),
-  );
+    }, { acceptedAt, text: behavior === 'allow' ? `Approved plan:\n${plan}`
+      : dismissed ? '' : feedback ?? '' });
+    if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+  });
 }
 
 /**
@@ -1780,6 +2006,8 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
  * + knownToolUseIds + lastAgentMeta。必须在 flushOrphanToolResults 之后调用。
  */
 export function resetTurnPersistState(sessionId: string): void {
+  // Event-stream completion is not a persistence barrier. Thinking snapshots
+  // survive until their write succeeds or an explicit history/owner cleanup.
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);
@@ -1801,6 +2029,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // 不经 notePersistedMessage),若跨 turn 保留,turn1 burst "X" → 用户发消息(不更新 main
   // tracker)→ turn2 又 burst "X" 会被误判重复、跳 create → turn2 回复丢失。清在这里堵死。
   lastPersistedMsgBySession.delete(sessionId);
+  lastBoundaryFlushedAssistantBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
 }
 
@@ -1890,6 +2119,73 @@ export function onAssistantTextEvent(
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
     }
+    // 边界 flush 后同源的全文快照:交互边界(ask_user / plan_review)会先落
+    // assistant 行、再落交互行,交互行把 lastPersistedMsgBySession 刷成非
+    // assistant,相邻 DUP-SKIP 看不到刚落库的行 —— 这里按身份复用,不落第二行。
+    //
+    // 复用窗口严格限定在"交互行紧随本次 flush 落库"期间:flush 之后先落库了任何非
+    // 交互消息(如 tool_use / tool_result)记录即作废(见 notePersistedMessage),所以
+    // 这里看到 lastPersisted 是交互行,就说明它就是紧邻本次 flush 的那条,不会把更早
+    // 的陈旧记录重新激活;又开始新 delta block 后同样失效,合法的同文本新消息不会被
+    // 吞。交互被回答本身不作废窗口:终态全文可能与回答竞速,迟到的那条仍要更新这一
+    // 行;一份快照重复投递时也走这里(否则第二次会另起一行)。
+    const boundaryFlushed = lastBoundaryFlushedAssistantBySession.get(sessionId);
+    const lastPersisted = lastPersistedMsgBySession.get(sessionId);
+    const atInteractionBoundary =
+      lastPersisted?.role === 'ask_user' || lastPersisted?.role === 'plan_review';
+    if (
+      boundaryFlushed &&
+      visible &&
+      atInteractionBoundary &&
+      (!agentMessageId || boundaryFlushed.agentMessageId === agentMessageId) &&
+      (boundaryFlushed.text === visible || isFullText)
+    ) {
+      // 命中后不删记录:同一份终态快照可能被重复投递(对齐紧邻 DUP-SKIP 的存在意义),
+      // 而此时上一条已落库消息是交互行,相邻 DUP-SKIP 挡不住第二次 —— 记录留到窗口
+      // 被推进(tool_result 等其它消息落库 / 新 delta block / reset)再失效。
+      // message_end 的 isFullText 是权威全文:边界 flush 可能只攒到部分文本(尾部
+      // delta 未消费 / 流式纠错),此时用全文更新既有行,而不是要求逐字相等后另起
+      // 一行(否则仍是"部分文本 + 提问卡 + 完整文本"两行)。
+      if (isFullText && boundaryFlushed.text !== visible) {
+        enqueueWrite(
+          `boundary_flushed_content:${sessionId}:${boundaryFlushed.persistId}`,
+          async (ownerScope) => {
+            const updated = await updateDbMessageContent(
+              sessionId,
+              boundaryFlushed.persistId,
+              visible,
+            );
+            if (updated) {
+              // 缓存已落库的全文:重复投递同一份快照时不再重复 UPDATE。
+              boundaryFlushed.text = visible;
+              broadcastMessageRow(sessionId, updated, ownerScope);
+            }
+          },
+        );
+      }
+      // 交互边界 flush 时 delta 往往还没带 model / usage / stopReason,message_end 的
+      // 全文快照才是权威终态 meta;复用旧行时必须把这些字段合并回去,否则 reload 与
+      // 费用统计会读到不完整记录。
+      if (agentMeta) {
+        enqueueWrite(
+          `boundary_flushed_meta:${sessionId}:${boundaryFlushed.persistId}`,
+          async (ownerScope) => {
+            const patched = await patchMessageAgentMetaWithResult(
+              sessionId,
+              boundaryFlushed.persistId,
+              { ...agentMeta },
+            );
+            if (patched) {
+              // 与其它 agent-meta 落库路径一致 await:广播内部要回查行,DB worker 正在
+              // 关停/替换时它会 reject;不 await 的话这个 promise 会逃出 enqueueWrite
+              // 的错误处理,变成 main 进程的 unhandled rejection。
+              await broadcastMessageAgentMetaUpdate(sessionId, boundaryFlushed.persistId, ownerScope);
+            }
+          },
+        );
+      }
+      return boundaryFlushed.persistId;
+    }
     // 非流式 isFinal burst(result 兜底补推也走这):无在飞 block,立即落库。
     if (visible) {
       // DUP-SKIP(对齐 renderer 老 757-762):若紧邻的上一条已落库消息正是内容完全
@@ -1922,6 +2218,9 @@ export function onAssistantTextEvent(
   // delta: accumulate the raw snapshot; strip only the completed block.
   let block = assistantBlocks.get(sessionId);
   if (!block) {
+    // 新的 delta block 已开始:上一条边界 flush 的身份不再可复用(它的全文快照
+    // 已经过去,或会走 block 分支),避免吞掉这条新消息。
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
     block = {
       persistId: createId(),
       text: rawText,
@@ -1977,6 +2276,13 @@ function flushAssistantBlockInternal(
     block.createdAt,
     block.agentMessageId,
   );
+  // 登记这次边界 flush 的身份,供随后到达的同源 isFinal 全文快照复用(见
+  // onAssistantTextEvent 的 burst 分支)。
+  lastBoundaryFlushedAssistantBySession.set(sessionId, {
+    persistId: block.persistId,
+    text: visible,
+    ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
+  });
   return {
     persistId: block.persistId,
     text: visible,
@@ -2388,6 +2694,7 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 }
 
 export function clearSessionPersistState(sessionId: string): void {
+  clearSessionThinkingSnapshots(sessionId);
   clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);
   sealedAssistantLateFinalBySession.delete(sessionId);
@@ -2402,6 +2709,7 @@ export function clearSessionPersistState(sessionId: string): void {
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
+  lastBoundaryFlushedAssistantBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);

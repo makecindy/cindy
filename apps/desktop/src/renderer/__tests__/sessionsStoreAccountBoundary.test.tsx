@@ -12,9 +12,7 @@ type SpendPayload = {
 type OwnerStamp = { dataOwnerId: string | null; ownerGeneration: number };
 
 const mocks = vi.hoisted(() => {
-  let spendListener:
-    | ((payload: SpendPayload, ownerStamp?: OwnerStamp) => void)
-    | undefined;
+  let spendListener: ((payload: SpendPayload, ownerStamp?: OwnerStamp) => void) | undefined;
   const onUsageSessionSpendChanged = vi.fn(
     (listener: (payload: SpendPayload, ownerStamp?: OwnerStamp) => void) => {
       spendListener = listener;
@@ -88,9 +86,7 @@ describe('sessionsStore account boundaries', () => {
     oldRequest.resolve([session('old-account')]);
     await oldLoad;
 
-    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual([
-      'new-account',
-    ]);
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['new-account']);
     expect(mocks.list).toHaveBeenCalledTimes(2);
   });
 
@@ -113,6 +109,33 @@ describe('sessionsStore account boundaries', () => {
     });
     expect(view.result.current.isLoading).toBe(false);
   });
+
+  it.each(['active', 'all'] as const)(
+    'clears a failed %s load after another caller recovers the bucket',
+    async (filter) => {
+      mocks.list.mockRejectedValueOnce(new Error('temporary load failure'));
+      const view = renderHook(() => useCCSessions({ includeArchived: filter }));
+      await waitFor(() =>
+        expect(view.result.current.error?.message).toBe('temporary load failure'),
+      );
+      expect(view.result.current.isLoading).toBe(false);
+      expect(view.result.current.sessions).toEqual([]);
+
+      mocks.list.mockResolvedValueOnce([session('recovered')]);
+      await act(async () => {
+        await sessionsStore.forceRefresh(filter);
+      });
+      expect(view.result.current.sessions.map(({ id }) => id)).toEqual(['recovered']);
+      expect(view.result.current.error).toBeNull();
+
+      mocks.list.mockResolvedValueOnce([]);
+      await act(async () => {
+        await sessionsStore.forceRefresh(filter);
+      });
+      expect(view.result.current.sessions).toEqual([]);
+      expect(view.result.current.error).toBeNull();
+    },
+  );
 
   it('removes a deleted session from every loaded filter without refetching', async () => {
     mocks.list
@@ -195,9 +218,7 @@ describe('sessionsStore account boundaries', () => {
   });
 
   it('patches structured CNY spend without fabricating a USD projection', async () => {
-    mocks.list.mockResolvedValueOnce([
-      session('target', { totalCostUsd: 1 }),
-    ]);
+    mocks.list.mockResolvedValueOnce([session('target', { totalCostUsd: 1 })]);
     await sessionsStore.ensureByFilter('active');
 
     act(() => {

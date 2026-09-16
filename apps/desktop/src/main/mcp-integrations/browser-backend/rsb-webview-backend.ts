@@ -363,6 +363,13 @@ export class RsbWebviewBackend implements BrowserBackend {
         return this.handleDoctor(request);
       case 'start':
       case 'stop':
+        if (request.proxyServer !== undefined) {
+          return actionFailed(
+            request.action,
+            'proxyServer is unsupported by the embedded browser backend; switch to the managed browser backend',
+            'BROWSER_RUNTIME_INVALID_REQUEST',
+          );
+        }
         // Webview lifecycle is owned by the RSB itself — these are no-ops.
         return actionOk(request.action, { ready: true });
       case 'profiles':

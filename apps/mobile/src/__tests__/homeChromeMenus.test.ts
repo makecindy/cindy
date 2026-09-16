@@ -26,6 +26,12 @@ function filter(
 }
 
 describe("home chrome menus", () => {
+  it("keeps cached offline and unknown computers without granting revoked access", () => {
+    const filters = ["offline", "unknown", "access_revoked", "remote_disabled"].map((state) =>
+      filter({ id: state, label: state, deviceId: state, available: false, state, sessionCount: 2 }));
+    expect(buildHomeScopeMenuItems(filters, "All").map((item) => item.key)).toEqual(["offline", "unknown"]);
+    expect(buildHomeScopePullDownActions(filters, "All").map((item) => item.id)).toEqual(["offline", "unknown"]);
+  });
   it("selects native device scopes directly without a management submenu", () => {
     const actions = buildHomeScopePullDownActions([
       filter({ id: "all", label: "全部任务" }),

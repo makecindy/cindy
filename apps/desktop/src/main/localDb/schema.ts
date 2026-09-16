@@ -36,6 +36,7 @@ const SESSION_SOURCES = [
   'shared',
   'plugin',
   'bot',
+  'cindy-make',
 ] as const satisfies readonly SessionSource[];
 
 export const sessions = sqliteTable(
@@ -79,6 +80,9 @@ export const sessions = sqliteTable(
       .default(false),
     contextTokens: integer('context_tokens').notNull().default(0),
     contextWindow: integer('context_window').notNull().default(0),
+    /** Last window written by the runtime snapshot writer. Equality with contextWindow
+     * proves provenance; a later legacy/import writer changing the value invalidates it. */
+    contextWindowRuntime: integer('context_window_runtime'),
     fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
     /**
      * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经用户
@@ -889,6 +893,21 @@ export const accountUsageSnapshots = sqliteTable('account_usage_snapshots', {
   updatedAt: integer('updated_at').notNull(),
 });
 
+/** Provider notification receipts. Retain the source id after session deletion to reject stale replies. */
+export const imNotificationOrigins = sqliteTable(
+  'im_notification_origins',
+  {
+    channel: text('channel').notNull(),
+    botContextId: text('bot_context_id').notNull(),
+    userId: text('user_id').notNull(),
+    messageId: text('message_id').notNull(),
+    chatId: text('chat_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.botContextId, t.userId, t.messageId] }) }),
+);
+
 /**
  * IM 身份 → desktop session 的接管绑定表 (feishu /ctr 流程产物)。
  *
@@ -1145,6 +1164,8 @@ export const schedules = sqliteTable(
      */
     intervalMs: integer('interval_ms'),
     agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    /** NULL preserves legacy bound-task Harness inheritance. */
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,

@@ -40,7 +40,7 @@ describe('Bot 对话的判定条件', () => {
 
   it('伙伴对话换掉任务顶栏,而不是在它旁边再加一个', () => {
     expect(sessionView).toContain(
-      '<BotSessionContentHeaderRegistration bot={botChatIdentity} sessionId={sessionId} />',
+      '<BotSessionContentHeaderRegistration bot={botChatIdentity} />',
     );
     expect(sessionView).toContain('<SessionContentHeaderRegistration');
   });
@@ -55,9 +55,11 @@ describe('消息流的头像挂载', () => {
 
   it('只有 assistant 分支挂头像', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
-    // 全文只有「定义 + 一处调用」两次出现:user 气泡、工具卡、工作组里的中间
-    // 过程文字都不经过它。
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(2);
+    // Assistant text shows the avatar; the single task anchor reserves the same
+    // space invisibly. User messages and internal tool/work cards still bypass it.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(3);
+    expect(messageStream).toContain("simplifiedBotConversation && message.systemCardType === 'bot-session-task'");
+    expect(messageStream).toContain('<span aria-hidden="true" className="invisible">{assistantAvatar}</span>');
   });
 });
 
@@ -81,10 +83,10 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 });
 
-describe('伙伴设置收口为基本资料与高级文件入口', () => {
-  it('不再挂载旧成长列表或全局能力目录', () => {
-    expect(botSettings).not.toContain('import { BotCapabilitySettings }');
-    expect(botSettings).not.toContain('<BotCapabilitySettings');
+describe('伙伴设置包含独立能力选择入口', () => {
+  it('保留基本资料、按需能力选择与高级文件入口', () => {
+    expect(botSettings).toContain('import { BotCapabilitySettings }');
+    expect(botSettings).toContain('<BotCapabilitySettings');
     expect(botSettings).not.toContain('<BotGrowthLists');
     expect(botSettings).toContain('<BotBasicProfileFields');
     expect(botSettings).toContain("t('bots.homeFolder.title')");

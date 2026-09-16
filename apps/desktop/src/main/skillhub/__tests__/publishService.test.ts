@@ -6,6 +6,8 @@ const authState = vi.hoisted(() => ({
   ownerId: 'user-1' as string | null,
   membershipKind: 'personal' as 'personal' | 'org',
   orgSlug: null as string | null,
+  generation: 1,
+  boundaryPending: false,
 }));
 const serverPolicy = vi.hoisted(() => ({
   canWrite: true,
@@ -92,6 +94,11 @@ vi.mock('../../authManager', () => ({
   })),
 }));
 
+vi.mock('../../appSessionState', () => ({
+  activeOwnerScopeKey: () => `signed-in:${authState.ownerId}:${authState.generation}`,
+  isAppSessionBoundaryPending: () => authState.boundaryPending,
+}));
+
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseSkillHubCloud: true }),
   requireAppCapability: vi.fn(),
@@ -115,6 +122,8 @@ describe('SkillPublishService', () => {
     authState.ownerId = 'user-1';
     authState.membershipKind = 'personal';
     authState.orgSlug = null;
+    authState.generation = 1;
+    authState.boundaryPending = false;
     serverPolicy.canWrite = true;
     serverPolicy.ownerType = 'personal';
     serverPolicy.allowedVisibilities = ['PUBLIC', 'PRIVATE'];
@@ -241,7 +250,7 @@ describe('SkillPublishService', () => {
     });
     expect(commitCall?.[1]?.body).not.toHaveProperty('tags');
     expect(commitCall?.[1]?.body).not.toHaveProperty('visibility');
-    expect(scanPollSpy).toHaveBeenCalledWith('lark-task', '1.1.0');
+    expect(scanPollSpy).toHaveBeenCalledWith('lark-task', '1.1.0', 'signed-in:user-1:1');
   });
 
   it('publishes through Hub without requiring a local LLM API key file', async () => {
@@ -1044,6 +1053,30 @@ describe('SkillPublishService', () => {
     }
   });
 
+  it('delivers manual rejection feedback when review finishes during the publish poll', async () => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+      vi.mocked(serverApiFetch).mockResolvedValue({
+        status: 'rejected', rejectionReason: 'Remove private notes',
+        gates: [{ name: 'security-scan', status: 'passed' }],
+      });
+      const onProgress = vi.fn();
+      const service = new SkillPublishService({ scanPollIntervalMs: 10, onProgress });
+      service.startScanPoll('review-helper', '1.0.1');
+      await vi.advanceTimersByTimeAsync(30);
+      expect(onProgress).toHaveBeenCalledWith({
+        phase: 'scan-result', name: 'review-helper', version: '1.0.1',
+        status: 'rejected', rejectionReason: 'Remove private notes',
+        gates: [{ name: 'security-scan', status: 'passed' }],
+      });
+      expect(serverApiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('finishes the publish-scoped poll when machine review hands off to manual review', async () => {
     vi.useFakeTimers();
     try {
@@ -1107,6 +1140,67 @@ describe('SkillPublishService', () => {
         ['scan-result', 'pending'],
       ]);
       expect(serverApiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['different-owner', 'same-owner-new-generation', 'boundary-pending'] as const)(
+    'drops private feedback and stops polling across %s', async (transition) => {
+      vi.useFakeTimers();
+      try {
+        const { serverApiFetch } = await import('../../serverApiClient');
+        const { SkillPublishService } = await import('../publishService');
+        let resolvePoll!: (value: unknown) => void;
+        vi.mocked(serverApiFetch).mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+        const onProgress = vi.fn();
+        const service = new SkillPublishService({ scanPollIntervalMs: 10, onProgress });
+        service.startScanPoll('review-helper', '1.0.1');
+        await vi.advanceTimersByTimeAsync(10);
+        expect(serverApiFetch).toHaveBeenCalledTimes(1);
+
+        if (transition === 'different-owner') authState.ownerId = 'user-2';
+        if (transition === 'same-owner-new-generation') authState.generation += 1;
+        if (transition === 'boundary-pending') authState.boundaryPending = true;
+        resolvePoll({ status: 'rejected', gates: [], rejectionReason: 'Private owner feedback' });
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(onProgress).not.toHaveBeenCalled();
+        expect(serverApiFetch).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('does not send a scheduled scan request with the next account credentials', async () => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+      const service = new SkillPublishService({ scanPollIntervalMs: 10 });
+      service.startScanPoll('review-helper', '1.0.1');
+      authState.ownerId = 'user-2';
+      await vi.advanceTimersByTimeAsync(100);
+      expect(serverApiFetch).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['signed-out', 'boundary-pending'] as const)('does not start a poll while %s', async (state) => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+      if (state === 'signed-out') authState.ownerId = null;
+      if (state === 'boundary-pending') authState.boundaryPending = true;
+      const service = new SkillPublishService({ scanPollIntervalMs: 10 });
+      service.startScanPoll('review-helper', '1.0.1');
+      expect(vi.getTimerCount()).toBe(0);
+      expect(serverApiFetch).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

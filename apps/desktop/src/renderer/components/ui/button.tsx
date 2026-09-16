@@ -11,12 +11,13 @@
  * 禁用态指针遵循既有「禁用统一普通指针」裁决（#3246）：class 仍写
  * disabled:cursor-not-allowed，globals.css 把它收成普通箭头。
  *
- * loading 首批调用点未用到，本张不做。
+ * loading 仅表达调用方持有的进行中状态；不执行请求或改变提交语义。
  */
 
 import * as React from 'react';
 
 import { cn } from '@/lib/utils';
+import { Spinner } from './spinner';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'cta';
 export type ButtonSize = 'md' | 'lg';
@@ -24,6 +25,8 @@ export type ButtonSize = 'md' | 'lg';
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
+  /** Busy actions retain their label and width, and cannot be activated again. */
+  loading?: boolean;
 }
 
 const SIZE_STYLES: Record<ButtonSize, string> = {
@@ -55,13 +58,26 @@ const VARIANT_STYLES: Record<ButtonVariant, string> = {
 };
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'primary', size = 'md', type = 'button', disabled, ...props }, ref) => (
+  (
+    {
+      className,
+      variant = 'primary',
+      size = 'md',
+      type = 'button',
+      disabled,
+      loading = false,
+      children,
+      ...props
+    },
+    ref,
+  ) => (
     <button
       ref={ref}
       type={type}
-      disabled={disabled}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={cn(
-        'inline-flex shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
+        'relative inline-flex shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         SIZE_STYLES[size],
         VARIANT_STYLES[variant],
@@ -69,7 +85,20 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         className,
       )}
       {...props}
-    />
+    >
+      {loading ? (
+        <span className="inline-flex items-center justify-center gap-[inherit] opacity-0">
+          {children}
+        </span>
+      ) : (
+        children
+      )}
+      {loading && (
+        <span aria-hidden="true" className="absolute inset-0 flex items-center justify-center">
+          <Spinner size={14} />
+        </span>
+      )}
+    </button>
   ),
 );
 Button.displayName = 'Button';

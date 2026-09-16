@@ -8,7 +8,7 @@
  * 那个页面不出现任何金额, 见 issue #2785)。两种口径共用同一套分位分桶与色阶。
  *
  * 视觉: 7 行 (周日起) × 至少 20 列周网格, 单色阶 — 非零值按 4 分位分桶,
- * 用 color-mix 在 --accent-emphasis 上做透明度阶梯 (黑白反色设计, 不引入彩色)。
+ * 用 color-mix 做强度阶梯：用量历史使用登记蓝色，其余入口沿用 --accent-emphasis。
  * 格子用原生 title 做 tooltip (Radix per-cell 实例太重)。
  */
 
@@ -19,7 +19,6 @@ import { formatCompactTokens, formatMoney } from '@/lib/usageFormat';
 import { DEFAULT_USAGE_CURRENCY, type RegionalMoney } from '../../../shared/regionalMoney';
 
 const CELL_PX = 12;
-const INTERACTIVE_CELL_PX = 24;
 const GAP_PX = 3;
 const MIN_HEATMAP_WEEKS = 20;
 const EMPTY_MONEY_CURRENCY = DEFAULT_USAGE_CURRENCY;
@@ -177,11 +176,12 @@ export function UsageHeatmap({
   }, []);
 
   const minimumWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(windowDays / 7));
-  const cellSize = onDayClick ? INTERACTIVE_CELL_PX : CELL_PX;
+  // Data geometry stays compact when a cell also acts as a date filter (DESIGN.md §4).
+  const cellSize = CELL_PX;
   const visibleWeeks = resolveHeatmapWeeks({
     days,
     todayKey,
-    availableWidth,
+    availableWidth: Math.max(0, availableWidth - GAP_PX * 2),
     minimumWeeks,
     windowDays,
     metric,
@@ -257,13 +257,17 @@ export function UsageHeatmap({
 
   return (
     <div ref={plotRef} className="w-full min-w-0 overflow-x-auto">
-      <div className="flex min-w-max flex-col gap-1.5">
+      {/* Reserve the outside indicator stroke inside the scrolling viewport. */}
+      <div className="flex min-w-max flex-col gap-1.5 p-[3px]">
         {/* 月份标签行。nowrap 防止最右侧月份被挤成上下两行。 */}
-        <div className="relative h-[14px]" style={{ width: columns.length * colPitch - GAP_PX }}>
+        <div
+          className="usage-heatmap-months relative h-[14px]"
+          style={{ width: columns.length * colPitch - GAP_PX }}
+        >
           {monthLabels.map((m) => (
             <span
               key={`${m.col}-${m.text}`}
-              className="absolute top-0 whitespace-nowrap text-10 leading-[1.4] text-[var(--text-tertiary)]"
+              className="usage-heatmap-month-label absolute top-0 whitespace-nowrap text-10 leading-[1.4] text-[var(--text-tertiary)]"
               style={{ left: m.col * colPitch }}
             >
               {m.text}
@@ -293,20 +297,23 @@ export function UsageHeatmap({
                       }`;
                 const title = `${cell.day} · ${usageSummary}`;
                 const accessibleLabel = `${dateFormatter.format(parseDayKey(cell.day))} · ${usageSummary}`;
-                const visualClassName = onDayClick ? 'rounded-full' : 'rounded-[3px]';
+                // DESIGN §5: usage-heatmap-day, independent of its interaction wrapper.
+                const visualClassName = 'usage-chart-mark shrink-0 rounded-[2px]';
                 const visualStyle = {
-                  width: CELL_PX,
-                  height: CELL_PX,
+                  width: `calc(${CELL_PX}px + var(--usage-mark-grow, 0px))`,
+                  height: `calc(${CELL_PX}px + var(--usage-mark-grow, 0px))`,
                   backgroundColor:
                     cell.level === 0
                       ? 'var(--surface-chip)'
-                      : `color-mix(in srgb, var(--accent-emphasis) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
-                  outline:
-                    selectedDay === cell.day ? '2px solid var(--focus-ring-soft)' : undefined,
-                  outlineOffset: selectedDay === cell.day ? '1px' : undefined,
+                      : `color-mix(in srgb, var(--usage-heatmap-accent, var(--accent-emphasis)) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
                 };
                 const visual = (
-                  <div title={title} className={visualClassName} style={visualStyle} />
+                  <div
+                    data-usage-mark="usage-heatmap-day"
+                    title={title}
+                    className={visualClassName}
+                    style={visualStyle}
+                  />
                 );
 
                 return onDayClick ? (
@@ -314,12 +321,17 @@ export function UsageHeatmap({
                     key={ri}
                     type="button"
                     aria-label={accessibleLabel}
+                    title={title}
                     aria-pressed={selectedDay === cell.day}
                     onClick={() => onDayClick(cell.day)}
-                    className="flex cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                    className="usage-chart-target usage-heatmap-target group relative flex cursor-pointer items-center justify-center rounded-none border-0 bg-transparent p-0 outline-none"
                     style={{ width: cellSize, height: cellSize }}
                   >
                     {visual}
+                    <span
+                      aria-hidden="true"
+                      className="usage-chart-indicator pointer-events-none absolute inset-0 rounded-[2px]"
+                    />
                   </button>
                 ) : (
                   <div key={ri}>{visual}</div>

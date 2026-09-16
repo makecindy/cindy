@@ -2055,6 +2055,130 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getMessageVersion()).toBeGreaterThan(versionAfterAppend);
   });
 
+  it('uses fresh list metadata after opening history without rewriting the old message mirror', () => {
+    const meta = session('s1', { preview: 'old reply', _count: { messages: 1 } });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta, session('s2')]);
+    remoteSessionStore.setMessages('s1', [{ ...message('m1', 's1'), content: 'old reply' }]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    const oldMirror = remoteSessionStore.getMessages('s1');
+    const first = vi.fn();
+    const second = vi.fn();
+    const offFirst = remoteSessionStore.subscribeSessionMessagePreview('s1', first);
+    const offSecond = remoteSessionStore.subscribeSessionMessagePreview('s2', second);
+    try {
+      // The history-view route commits fresh metadata but keeps persisted
+      // history outside this legacy mirror. Returning home must use that metadata.
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', {
+        ...meta, preview: 'new reply', updatedAt: '2026-01-01T00:00:02.000Z', _count: { messages: 2 },
+      });
+      expect(remoteSessionStore.getMessages('s1')).toBe(oldMirror);
+      expect(remoteSessionStore.getSessionMessagePreview('s1')).toBe('old reply');
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('new reply');
+      expect(remoteSessionStore.getSessionListMessagePreviewIndex(remoteSessionStore.getSessions()).get('s1')).toBe('new reply');
+      expect(first).toHaveBeenCalled();
+      expect(second).not.toHaveBeenCalled();
+    } finally { offFirst(); offSecond(); }
+  });
+
+  it('notifies list previews when the same message array becomes synchronized', () => {
+    const meta = session('s1', { preview: 'host preview', _count: { messages: 1 } });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+    remoteSessionStore.setMessages('s1', [{ ...message('m1', 's1'), content: 'loaded reply' }]);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('host preview');
+    const changed = vi.fn();
+    const off = remoteSessionStore.subscribeSessionMessagePreview('s1', changed);
+    const version = remoteSessionStore.getMessageVersion();
+    try {
+      remoteSessionStore.markSessionMessagesSynced('s1', meta);
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('loaded reply');
+      expect(remoteSessionStore.getMessageVersion()).toBeGreaterThan(version);
+      expect(changed).toHaveBeenCalledTimes(1);
+      remoteSessionStore.markSessionMessagesSynced('s1', meta);
+      expect(changed).toHaveBeenCalledTimes(1);
+      remoteSessionStore.applySessionPatch('dev-1', 's1', { preview: 'edited reply' });
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('edited reply');
+      // Preview selection must not make the history-loading gate more eager.
+      expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(true);
+      remoteSessionStore.applySessionPatch('dev-1', 's1', { _count: { messages: 2 }, preview: 'next reply' });
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('next reply');
+    } finally { off(); }
+  });
+
+  it('preserves actual live text over metadata but does not trust cached streaming flags', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { preview: 'host preview' })]);
+      remoteSessionStore.setMessages('s1', [{ ...message('m1', 's1'), content: 'stale stream', agentMeta: { isStreaming: true } }]);
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('host preview');
+      pushMakerText('s1', 'live-tail', 'live reply', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('live reply');
+      pushMakerText('s1', 'live-tail', ' continues', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('live reply continues');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['done', 'status'] as const)('retains received text when %s only finalizes streaming flags', (type) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { preview: 'old reply' })]);
+      pushMakerText('s1', 'live-tail', 'new reply', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', event: { type, data: { isRunning: false } },
+      });
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('new reply');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps loaded previews for old hosts without preview metadata', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('hello');
+  });
+
+  it.each([false, true])('refreshes the preview after missing completion in background (final received: %s)', (finalReceived) => {
+    vi.useFakeTimers();
+    try {
+      const meta = session('s1', { preview: 'earlier reply', _count: { messages: 1 } });
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+      pushMakerText('s1', 'live-tail', 'partial reply', finalReceived);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('partial reply');
+      // No final/status push while suspended. The existing foreground loadHome
+      // refreshes sessions; it does not download all message mirrors.
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [{
+        ...meta, preview: 'completed reply', updatedAt: '2026-01-01T00:00:04.000Z', _count: { messages: 2 },
+      }]);
+      expect(remoteSessionStore.getSessionMessagePreview('s1')).toBe('partial reply');
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('completed reply');
+      expect(remoteSessionStore.getSessionListMessagePreviewIndex(remoteSessionStore.getSessions()).get('s1')).toBe('completed reply');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['offline', 'deletion'] as const)('notifies when %s invalidates only message freshness', (reason) => {
+    const meta = session('s1', { preview: 'host reply', _count: { messages: 1 } });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('hello');
+    const changed = vi.fn();
+    const off = remoteSessionStore.subscribeSessionMessagePreview('s1', changed);
+    try {
+      if (reason === 'offline') remoteSessionStore.markDeviceOffline('dev-1');
+      else remoteSessionStore.removeMessages('s1', ['not-in-mirror']);
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('host reply');
+      expect(changed).toHaveBeenCalled();
+    } finally { off(); }
+  });
+
+  it('does not resurrect an old cached preview when Host explicitly clears it', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { preview: '' })]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('');
+  });
+
   it('tracks which session metadata the message window has been synced against', () => {
     const meta = session('s1', {
       updatedAt: '2026-01-01T00:00:01.000Z',
@@ -2910,6 +3034,38 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('markDevicesOffline sweeps a wave with a single notification', () => {
+    const deviceIds = ['dev-a', 'dev-b', 'dev-c'];
+    deviceIds.forEach((id, i) => {
+      remoteSessionStore.setDeviceSessions(id, `Mac-${i}`, [session(`s-${id}`)]);
+    });
+    for (const id of deviceIds) {
+      pushMakerStatus(`s-${id}`, {
+        isRunning: true,
+        outputTokens: 12,
+        generationDurationMs: 400,
+        generationActive: true,
+        generationReliable: true,
+      });
+    }
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+
+    remoteSessionStore.markDevicesOffline(deviceIds);
+
+    // 整波只 notify 一轮;逐台 markDeviceOffline 会 notify N 轮,叠加 schedule
+    // store 的逐台失效后在设备多时击穿 React 嵌套上限(2026-09-10)。
+    expect(notify).toHaveBeenCalledTimes(1);
+    for (const id of deviceIds) {
+      expect(remoteSessionStore.isSessionMakerTurnRunning(`s-${id}`)).toBe(false);
+    }
+
+    // 清理已生效:同批重复离线无变化、静默。
+    remoteSessionStore.markDevicesOffline(deviceIds);
+    expect(notify).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
   it('still zeros leftover live metrics when a new turn starts without them', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     pushMakerStatus('s1', {
@@ -3128,10 +3284,11 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
   });
 
-  it('keeps the product turn running across claimed mobile continuation boundaries', () => {
+  it.each(['ask_user_question', 'plan_review'])('keeps the product running while %s awaits confirmation across an SDK boundary', (kind) => {
     vi.useFakeTimers();
     try {
       pushMakerStatus('s1', { isRunning: true });
+      remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId: 'human-1' } }]);
       pushMakerText('s1', 'persist-1', 'first segment', false);
       vi.runOnlyPendingTimers();
 
@@ -3149,16 +3306,21 @@ describe('remoteSessionStore', () => {
       });
 
       expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+      expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(1);
       expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
       expect(remoteSessionStore.getSessionRunStatus('s1').startedAt).not.toBeNull();
       expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).toBe(true);
 
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+        sessionId: 's1', requestId: 'human-1', resolvedAs: 'allow',
+      });
       remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
         sessionId: 's1',
         event: { type: 'done', data: {} },
       });
 
       expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+      expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(0);
       expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
       expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).not.toBe(true);
     } finally {
@@ -4981,6 +5143,21 @@ describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)',
 
 describe('任务消息内存治理', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  it('补读结果区分已接受的相同窗口与失效代际或过旧窗口', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const first = remoteSessionStore.enterSessionMessageDetail('s1');
+    const latest = [messageAt('latest', 's1', '2026-09-08T00:00:00.000Z')];
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('old', 's1', '2026-09-07T00:00:00.000Z'),
+    ], { authority: first })).toBe(false);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', first);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(false);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['latest']);
+  });
 
   const manyMessages = (sessionId: string, count: number): RemoteMessage[] =>
     Array.from({ length: count }, (_, index) => messageAt(

@@ -1,3 +1,8 @@
+import {
+  registryEntryDefaults,
+  findBaseModel,
+  referencePricesForRoute,
+} from "./modelMetadataLayers.js";
 import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
 import type {
   ModelAccessV2Agent,
@@ -58,6 +63,47 @@ export function resolveModelNativeApi(
     ?.nativeApi;
 }
 
+/** Model identity only, for a model verified in an imported catalog or the Registry.
+ * Reuse the declarations already used by Gateway; do not turn an execution API
+ * into a manufacturer declaration or copy a Gateway endpoint/capability override.
+ * Callers must not pass arbitrary names from a hand-written connection here.
+ */
+export function resolveCatalogModelNativeApi(
+  registry: ModelRegistry | undefined,
+  modelId: string,
+): import("./modelAccessBean.js").ModelNativeApi | null | undefined {
+  if (!registry) return undefined;
+  const base = findBaseModel(registry, modelId);
+  const entries = registry.models.filter(entry =>
+    entry.id === modelId || (base && (entry.id === base.id || entry.modelRef === base.id)),
+  );
+  const target = entries.find(entry => entry.id === modelId);
+  if (target?.status === 'retired') return null;
+  if (registry.schemaVersion < 3) return undefined;
+  const live = entries.filter(entry => entry.status !== 'retired');
+  const declarations = new Set(live.flatMap(entry =>
+    entry.nativeApi !== undefined ? [entry.nativeApi] : [],
+  ));
+  if (declarations.size) return declarations.size === 1 ? [...declarations][0] : null;
+  const canonicalId = base?.id ?? modelId;
+  const declared = resolveModelNativeApi(registry, 'xd', canonicalId);
+  if (declared !== undefined) return declared;
+  if (canonicalId.includes('/')) return undefined;
+  // Direct catalogs may omit the vendor namespace (gemini-*, claude-*, qwen*).
+  // Apply only existing declared family prefixes; never strip an unknown input namespace.
+  const rules = registry.nativeApiRules?.flatMap(rule => {
+    const slash = rule.modelIdPrefix.lastIndexOf('/');
+    const prefix = rule.modelIdPrefix.slice(slash + 1);
+    return rule.providerId === 'xd' && slash >= 0 && prefix && canonicalId.startsWith(prefix)
+      ? [{ prefix, nativeApi: resolveModelNativeApi(registry, 'xd', `${rule.modelIdPrefix.slice(0, slash + 1)}${canonicalId}`) }]
+      : [];
+  }) ?? [];
+  const longest = Math.max(0, ...rules.map(rule => rule.prefix.length));
+  const matches = new Set(rules.filter(rule => rule.prefix.length === longest)
+    .flatMap(rule => rule.nativeApi !== undefined ? [rule.nativeApi] : []));
+  return matches.size > 1 ? null : [...matches][0];
+}
+
 export type ModelRegistrySnapshotDecision =
   "accept-incoming" | "preserve-current" | "preserve-current-conflict";
 
@@ -112,14 +158,23 @@ export interface ResolvedModelReferencePrice {
   entry: ModelRegistryEntry;
   route: ModelRegistryRoute;
   price: ModelReferencePrice;
+  prices: ModelReferencePrice[];
 }
 
-export interface ResolveModelReferencePriceOptions {
-  agent?: ModelAccessV2Agent;
+export interface ModelReferencePriceSelection {
+  currency?: import("./modelAccessBean.js").ModelCurrency;
   inputTokens?: number;
   variant?: ModelPriceVariant;
   /** ISO date or Date; defaults to the current day. */
   at?: string | Date;
+}
+export interface ResolveBaseModelReferencePriceOptions extends ModelReferencePriceSelection {
+  priceGroup?: string;
+}
+export interface ResolveModelReferencePriceOptions extends ModelReferencePriceSelection {
+  /** Subscription value uses manufacturer tariffs even when a route has its own price. */
+  officialOnly?: boolean;
+  agent?: ModelAccessV2Agent;
 }
 
 function calendarDate(value: string | Date | undefined): string {
@@ -193,7 +248,21 @@ export function findModelRegistryRoute(
   modelId: string,
   agent?: ModelAccessV2Agent,
 ): { entry: ModelRegistryEntry; route: ModelRegistryRoute } | undefined {
-  return matchingModelRegistryRoutes(registry, providerId, modelId, agent)[0];
+  const matched = matchingModelRegistryRoutes(
+    registry,
+    providerId,
+    modelId,
+    agent,
+  )[0];
+  if (!matched || !registry || registry.schemaVersion < 4) return matched;
+  return {
+    route: matched.route,
+    entry: {
+      ...matched.entry,
+      ...registryEntryDefaults(registry, matched.entry, matched.route),
+      ...matched.route.forceOverrides,
+    } as ModelRegistryEntry,
+  };
 }
 
 /**
@@ -214,36 +283,65 @@ export function resolveModelReferencePrice(
     modelId,
     options.agent,
   );
+  if (!registry) return undefined;
+  for (const matched of matches) {
+    const prices = referencePricesForRoute(
+      registry,
+      matched.entry,
+      matched.route,
+      options.officialOnly,
+    );
+    const price = selectReferencePrice(prices, options);
+    if (price && prices) return { ...matched, price, prices };
+  }
+  return undefined;
+}
+
+/** Reads a manufacturer's price without requiring any supplier route or account. */
+export function resolveBaseModelReferencePrice(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  options: ResolveBaseModelReferencePriceOptions = {},
+) {
+  const model = findBaseModel(registry ?? undefined, modelId);
+  const groups =
+    model?.referencePriceGroups?.filter(
+      (group) =>
+        options.priceGroup === undefined || group.id === options.priceGroup,
+    ) ?? [];
+  const matches = groups.flatMap((group) => {
+    const price = selectReferencePrice(group.prices, options);
+    return price ? [{ model: model!, group, price, prices: group.prices }] : [];
+  });
+  // Market/currency ambiguity is unknown, never array order or a currency conversion.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function selectReferencePrice(
+  prices: ModelReferencePrice[] | undefined,
+  options: ModelReferencePriceSelection,
+): ModelReferencePrice | undefined {
   const day = calendarDate(options.at);
   const inputTokens = options.inputTokens;
   const variant = options.variant ?? "standard";
-  for (const matched of matches) {
-    const prices = matched.route.referencePrices
-      ?.filter((price) => {
-        if (price.variant !== variant) return false;
-        if (day < price.effectiveFrom) return false;
-        if (price.effectiveUntil !== undefined && day >= price.effectiveUntil)
-          return false;
-        if (inputTokens === undefined) return (price.minInputTokens ?? 0) === 0;
-        if (
-          price.minInputTokens !== undefined &&
-          inputTokens < price.minInputTokens
-        )
-          return false;
-        if (
-          price.maxInputTokens !== undefined &&
-          inputTokens >= price.maxInputTokens
-        )
-          return false;
-        return true;
-      })
-      .sort(
-        (a, b) =>
-          b.effectiveFrom.localeCompare(a.effectiveFrom) ||
-          (b.minInputTokens ?? 0) - (a.minInputTokens ?? 0),
+  const matches =
+    prices?.filter((price) => {
+      if (
+        price.variant !== variant ||
+        (options.currency && price.currency !== options.currency)
+      )
+        return false;
+      if (
+        day < price.effectiveFrom ||
+        (price.effectiveUntil !== undefined && day >= price.effectiveUntil)
+      )
+        return false;
+      if (inputTokens === undefined) return (price.minInputTokens ?? 0) === 0;
+      return (
+        inputTokens >= (price.minInputTokens ?? 0) &&
+        (price.maxInputTokens === undefined ||
+          inputTokens < price.maxInputTokens)
       );
-    const price = prices?.[0];
-    if (price) return { ...matched, price };
-  }
-  return undefined;
+    }) ?? [];
+  return matches.length === 1 ? matches[0] : undefined;
 }

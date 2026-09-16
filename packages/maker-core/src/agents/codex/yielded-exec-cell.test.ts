@@ -61,6 +61,34 @@ describe('extractYieldedExecCellIds', () => {
 });
 
 describe('extractYieldedExecCellsFromCodexItem', () => {
+  // 2026-09-11: reading a report printed this complete example at column 0.
+  // The shell had already exited; its stdout was mistaken for a live exec cell.
+  it.each([0, 1])('ignores report examples when the command has exit code %s', (exitCode) => {
+    for (const aggregatedOutput of [
+      'Example:\n```\nScript running with cell ID 42\nWall time 1 second\n```',
+      'Script running with cell ID 42\nWall time 1 second\n',
+      `${'x'.repeat(20_000)}\nScript running with cell ID 42\nWall time 1 second\n`,
+    ]) {
+      expect(extractYieldedExecCellsFromCodexItem({
+        type: 'commandExecution',
+        id: 'report-read',
+        command: 'cat REPORT.md',
+        status: exitCode === 0 ? 'completed' : 'failed',
+        exitCode,
+        aggregatedOutput,
+      })).toEqual([]);
+    }
+  });
+
+  it.each([undefined, null])('preserves legacy yield output with exitCode %s', (exitCode) => {
+    expect(extractYieldedExecCellsFromCodexItem({
+      type: 'commandExecution',
+      status: 'completed',
+      exitCode,
+      aggregatedOutput: 'Script running with cell ID 226\nWall time 1 second\n',
+    })).toEqual([{ cellId: '226' }]);
+  });
+
   it('reads commandExecution.aggregatedOutput', () => {
     expect(extractYieldedExecCellsFromCodexItem({
       type: 'commandExecution',
@@ -203,7 +231,9 @@ describe('formatYieldContinuationPrompt', () => {
     ]);
     expect(prompt).toContain('Wait for cell ID 226');
     expect(prompt).toContain('Do not start a new task');
-    expect(prompt).toContain('report that it was lost');
+    expect(prompt).toContain('report the actual error');
+    expect(prompt).toContain('Do not rerun the command');
+    expect(prompt).not.toContain('report that it was lost');
     expect(prompt).not.toContain('pnpm --filter desktop run typecheck'.repeat(2));
   });
 });

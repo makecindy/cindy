@@ -16,10 +16,11 @@ function harness() {
   });
   const correctOffset = vi.fn((offset: number) => { snapshot.metrics.offsetY = offset; });
   const onMeasurementOscillation = vi.fn();
+  const onSettled = vi.fn();
   const follower = createMobileTailFollower({
-    read: () => snapshot, seekEnd, correctOffset, onMeasurementOscillation,
+    read: () => snapshot, seekEnd, correctOffset, onMeasurementOscillation, onSettled,
   });
-  return { snapshot, seekEnd, correctOffset, onMeasurementOscillation, follower };
+  return { snapshot, seekEnd, correctOffset, onMeasurementOscillation, onSettled, follower };
 }
 
 function deferredSeek() {
@@ -54,6 +55,42 @@ describe('one mobile tail follower', () => {
     vi.advanceTimersByTime(200);
     expect(h.correctOffset).toHaveBeenLastCalledWith(1200);
     expect(h.seekEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports readiness before the fallback deadline once native layout and position agree', () => {
+    const h = harness();
+    h.snapshot.layoutSettleAt = Date.now() + 120;
+    h.follower.requestEnd(false);
+    vi.advanceTimersByTime(100);
+    expect(h.onSettled).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(60);
+    expect(h.onSettled).toHaveBeenCalledTimes(1);
+    expect(h.correctOffset).not.toHaveBeenCalled();
+  });
+
+  it('does not confuse seek completion or exhausted retries with verified positioning', async () => {
+    const h = harness();
+    const seek = deferredSeek();
+    h.seekEnd.mockReturnValue(seek.promise);
+    h.snapshot.metrics.offsetY = 0;
+    h.correctOffset.mockImplementation(() => {});
+    h.follower.requestEnd(false);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.onSettled).not.toHaveBeenCalled();
+    seek.resolve();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.onSettled).not.toHaveBeenCalled();
+    expect(h.correctOffset).toHaveBeenCalledTimes(MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS);
+  });
+
+  it.each(['missing metrics', 'gesture', 'reset'])('does not reveal on %s', (reason) => {
+    const h = harness();
+    if (reason === 'missing metrics') h.snapshot.metrics.viewportHeight = 0;
+    h.follower.requestEnd(false);
+    if (reason === 'gesture') h.snapshot.userControllingScroll = true;
+    if (reason === 'reset') h.follower.reset();
+    vi.advanceTimersByTime(2000);
+    expect(h.onSettled).not.toHaveBeenCalled();
   });
 
   it('allows a queued last-index seek to discover the tail before correcting native geometry', async () => {

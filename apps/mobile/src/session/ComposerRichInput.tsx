@@ -24,6 +24,7 @@ import {
 } from '@/session/composerRichInputProtocol';
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachment';
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
+import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery';
 
 export interface ComposerRichInputHandle {
   getSelection(draft: string): ComposerSelection;
@@ -148,6 +149,20 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     const inject = useCallback((script: string) => {
       webViewRef.current?.injectJavaScript(`try { ${script} } catch (_) {} true;`);
     }, []);
+    const recovery = useComposerWebViewRecovery(inject, () => {
+      readyRef.current = false;
+      pendingFocusRef.current = false;
+      if (pendingDocumentRef.current) pendingDocumentRef.current.focusAfter = false;
+      const failedPastes = pendingImagePastesRef.current.size;
+      pendingImagePastesRef.current.clear();
+      pendingImagePasteOrderRef.current = [];
+      const pendingUris = [...pendingPastedImageFilesRef.current];
+      pendingPastedImageFilesRef.current.clear();
+      if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
+      for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
+      onBlur?.();
+    }, () => readyRef.current);
+    const { generation, current: currentGeneration } = recovery;
     const focusEditor = useCallback(() => {
       if (!readyRef.current) {
         pendingFocusRef.current = true;
@@ -245,7 +260,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         await FileSystem.writeAsStringAsync(file.uri, message.base64, {
           encoding: FileSystem.EncodingType.Base64,
         });
-        if (disposedRef.current) {
+        if (disposedRef.current || generation !== currentGeneration.current) {
           throw new Error('composer disposed during pasted image write');
         }
         return file.uri;
@@ -254,7 +269,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         pendingPastedImageFilesRef.current.delete(file.uri);
         throw error;
       }
-    }, []);
+    }, [generation, currentGeneration]);
 
     const drainCompletedImagePastes = useCallback(() => {
       while (pendingImagePasteOrderRef.current.length > 0) {
@@ -318,6 +333,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
           text = '';
         }
       }
+      if (disposedRef.current || generation !== currentGeneration.current) return;
       const nodes = composerNodesForBoundedPlainTextPaste(text);
       if (!nodes) {
         inject(
@@ -335,7 +351,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       hrefs.forEach((href) => {
         void resolveSessionLinkLabel(href)
           .then((semantic) => {
-            if (!semantic) return;
+            if (!semantic || disposedRef.current || generation !== currentGeneration.current) return;
             inject(
               `window.cindyComposer.resolveSessionLink(${JSON.stringify(href)}, ${JSON.stringify(semantic)});`,
             );
@@ -344,13 +360,16 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
             // Keep the stable short-id placeholder when the target is unavailable.
           });
       });
-    }, [inject, resolveSessionLinkLabel]);
+    }, [inject, resolveSessionLinkLabel, generation, currentGeneration]);
 
     const handleMessage = useCallback((event: WebViewMessageEvent) => {
       if (disposedRef.current) return;
+      if (generation !== currentGeneration.current) return;
       const message = parseComposerWebMessage(event.nativeEvent.data);
       if (!message) return;
+      if (message.type === 'pong') return recovery.onPong(message.id);
       if (message.type === 'ready') {
+        recovery.onReady();
         readyRef.current = true;
         inject(`window.cindyComposer.setConfig(${JSON.stringify(runtimeConfig)});`);
         const pending = pendingDocumentRef.current;
@@ -420,10 +439,20 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       }
       if (message.type === 'paste-image') {
         void persistPastedImage(message)
-          .then((uri) => settlePastedImage(message.requestId, message.index, uri))
-          .catch(() => settlePastedImage(message.requestId, message.index));
+          .then((uri) => {
+            if (generation === currentGeneration.current && !disposedRef.current) {
+              settlePastedImage(message.requestId, message.index, uri);
+            } else {
+              void deleteComposerPastedImageUris([uri]);
+            }
+          })
+          .catch(() => {
+            if (generation === currentGeneration.current && !disposedRef.current) {
+              settlePastedImage(message.requestId, message.index);
+            }
+          });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
     return (
@@ -431,7 +460,10 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       // Animate its native View container and let the WebView fill that frame.
       <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
       <WebView
+        key={generation}
         ref={webViewRef}
+        onContentProcessDidTerminate={recovery.onTerminated}
+        onRenderProcessGone={recovery.onTerminated}
         accessibilityHint={accessibilityHint}
         accessibilityLabel={accessibilityLabel}
         // hidden 期间(语音听写)把整棵子树从无障碍树里摘掉。opacity: 0 只影响视觉与

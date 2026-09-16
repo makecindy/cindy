@@ -173,16 +173,16 @@ describe('mobile auth-server login', () => {
     expect(authSource).toContain("action.type === 'start-social-browser' ||");
     expect(authSource).toContain("action.type === 'native-social'");
     expect(authSource).toContain(
-      'if (startsBuildRealmFlow) {\n            pendingAuthRealmRef.current = null;',
+      "if (startsBuildRealmFlow && action.type !== 'request-code') {\n            pendingAuthRealmRef.current = null;",
     );
 
     const discoveryStart = authSource.indexOf(
-      "if (action.type === 'discover-sso-org') {",
+      'const discoverOrganization = async (',
     );
     const discoveryBody = authSource.slice(
       discoveryStart,
       authSource.indexOf(
-        'const realmConfig = getMobileEndpointRealmConfig();',
+        "if (action.type === 'reset')",
         discoveryStart,
       ),
     );
@@ -214,6 +214,20 @@ describe('mobile auth-server login', () => {
     expect(authSource).toContain("kind: 'sso'");
     expect(authSource).toContain('startBrowserAuthorization({');
     expect(authSource).toContain("sole?.type === 'email_code'");
+  });
+
+  it('shares email-domain discovery and keeps the enterprise realm until personal code sending succeeds', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+    const discoverStart = source.indexOf("if (action.type === 'discover') {");
+    const discover = source.slice(discoverStart, source.indexOf("if (action.type === 'discover-sso-org') {", discoverStart));
+    expect(discover).toContain('discoverEmailLogin(action.email');
+    expect(discover).toContain('discoverOrganization,');
+    expect(discover).toContain('pendingAuthRealmRef.current = region;');
+    expect(discover.indexOf("type: 'realm-switch-required'")).toBeLessThan(discover.indexOf("await ensureCaptchaGate('email')"));
+    expect(source).toContain("email: confirmation.email ?? ''");
+    const requestStart = source.indexOf("if (action.type === 'request-code') {");
+    const request = source.slice(requestStart, source.indexOf("if (action.type === 'verify-code') {", requestStart));
+    expect(request.indexOf('pendingAuthRealmRef.current = BUILD_AUTH_REGION;')).toBeGreaterThan(request.indexOf('await requestCodeWithCaptchaFallback('));
   });
 
   it('remembers successful organization discovery before sole-SSO browser auth starts', () => {
@@ -788,5 +802,41 @@ describe('mobile auth-server login', () => {
     );
     expect(loginSource).toContain('maxLength={253}');
     expect(loginSource).toContain("type: 'discover-sso-org'");
+  });
+});
+
+
+describe('fresh personal login enterprise suggestion boundaries', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+  it('guards late discovery before prompting and preserves the original region until the choice', () => {
+    const start = source.indexOf('const acceptOutcome = useCallback');
+    const body = source.slice(start, source.indexOf('const refresh = useCallback', start));
+    const discovery = body.indexOf('await discoverPersonalLoginOrganization');
+    const guard = body.indexOf('assertLoginFlowCurrent(expectedLoginFlowEpoch)', discovery);
+    const prompt = body.indexOf('pendingPersonalLoginRef.current = { outcome, realm: personalRealm }');
+    expect(discovery).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(discovery);
+    expect(prompt).toBeGreaterThan(guard);
+    expect(body.slice(discovery, prompt)).not.toContain('pendingAuthRealmRef.current =');
+    expect(body).toContain('personalLoginAvailable: true');
+    expect(body).toContain('pendingPersonalLoginRef.current = null');
+    const lookupStart = source.indexOf('const lookupOrganizationRealm = useCallback');
+    expect(source.slice(lookupStart, start)).not.toContain('pendingAuthRealmRef.current =');
+  });
+  it('continues personal login without rediscovery or starts SSO with a freshly selected realm', () => {
+    const confirmStart = source.indexOf("if (action.type === 'confirm-sso-realm')");
+    const cancelStart = source.indexOf("if (action.type === 'cancel-sso-realm')");
+    const confirm = source.slice(confirmStart, cancelStart);
+    expect(confirm.indexOf('pendingAccountRefreshTokenRef.current = null')).toBeLessThan(confirm.indexOf('pendingAuthRealmRef.current = confirmation.targetRegion'));
+    const cancel = source.slice(cancelStart, source.indexOf("if (action.type === 'discover')", cancelStart));
+    expect(cancel).toContain('pendingAuthRealmRef.current = personal.realm');
+    expect(cancel).toContain('acceptOutcome(personal.outcome, did, expectedLoginFlowEpoch');
+    expect(cancel).toContain('skipOrganizationDiscovery: true');
+    const browserStart = source.indexOf('const startBrowserAuthorization = async');
+    const browser = source.slice(browserStart, source.indexOf('const discoverOrganization = async', browserStart));
+    expect(browser).toContain('authClientFor(did, authorizationRealm)');
+    expect(browser).toContain('realm: authorizationRealm');
+    expect(browser).toContain('authorizationClient.buildAuthorizeUrl');
+    expect(browser).not.toContain('realm: loginRealm');
   });
 });

@@ -44,7 +44,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     // banner 渲染条件(useShowConnectionBanner):请求级 / transport hold error、可分类连接问题、
     // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
-    expect(routeSource).toContain('{showConnectionBanner ? (');
+    expect(routeSource).toContain('{showConnectionBanner || showCachedHistoryNotice ? (');
+    expect(routeSource).toContain('cachedOnly={showCachedHistoryNotice}');
     expect(source.replace(/\r\n/g, '\n'))
       .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');
     expect(routeSource).not.toContain('connectionError || (loading && !currentSession)');
@@ -87,7 +88,9 @@ describe('mobile session main layer desktop-first noise budget', () => {
     // 输入框换成只读卡片,而它们只表示还不能 enqueue。composer 保持可用,发送改走 outbox
     // 排队(见 optimisticSessionComposer.test.ts),这两条理由只留给队列行操作。
     expect(source).toContain('      readOnlyReason: composerReadOnlyReason,\n');
-    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason\n    ?? cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueAvailabilityReason = cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason');
+    expect(source).toContain('const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason');
     expect(source).toContain('readOnlyReason={composerReadOnlyReason}');
     // header notice:协作会话(可聊天的 Lead)显示协作标签而非"只读模式"。
     expect(source).toContain('const collaborationLabel = sessionCollaborationLabel(session);');
@@ -117,11 +120,12 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const staleOfferStart = resetSource.indexOf('if (!offer');
     const refresh = resetSource.indexOf('await refreshAccountUsage();', staleOfferStart);
     const sessionGuard = resetSource.indexOf(
-      'if (contextUsageSessionRef.current !== sessionId) return;',
+      'if (accountControlScopeRef.current !== accountControlScope) return;',
       refresh,
     );
     const alert = resetSource.indexOf("Alert.alert(t('session.screen.resetReconfirmTitle'), t('session.screen.resetOfferExpired'))", refresh);
 
+    expect(source).toContain('const accountControlScope = `${deviceId}\\0${sessionId}\\0${accountProviderId}`;');
     expect(refresh).toBeGreaterThan(-1);
     expect(sessionGuard).toBeGreaterThan(refresh);
     expect(alert).toBeGreaterThan(sessionGuard);

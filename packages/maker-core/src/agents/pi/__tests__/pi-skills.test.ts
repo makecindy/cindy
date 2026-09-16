@@ -100,6 +100,9 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     expect(ordinary.skills).toContainEqual(expect.objectContaining({
       name: 'managed-sample',
       runtimeStatus: 'approved',
+      origin: 'package',
+      enabled: true,
+      runtimeCommandName: 'skill:managed-sample',
     }));
     expect(resolver).toHaveBeenCalledOnce();
   });

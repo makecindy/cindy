@@ -106,4 +106,25 @@ describe('worktreeStore', () => {
     expect(storesByName.get('worktrees')?.worktrees).toEqual({ [meta.sessionId]: meta });
     expect(storesByName.get('worktree-safe-directory-cleanup')).toEqual({ pending: ['/deferred'] });
   });
+
+  it('replaces pooled generations atomically in the registry', async () => {
+    const store = await import('../worktree/worktreeStore');
+    const previous: WorktreeMeta = {
+      sessionId: 'previous', name: 'old', path: '/repo/.xdt-worktrees/old',
+      baseRepo: '/repo', branch: 'xdt/old', sourceBranch: 'main',
+      createdAt: '2026-05-26T00:00:00.000Z', ephemeral: true,
+    };
+    const next: WorktreeMeta = {
+      ...previous, sessionId: 'next', name: 'new', path: '/repo/.xdt-worktrees/new',
+      branch: 'xdt/new', createdAt: '2026-05-26T00:01:00.000Z',
+    };
+
+    await store.set(previous.sessionId, previous);
+    setWorktreePathInDbMock.mockClear();
+    await store.replace(previous.sessionId, next.sessionId, next);
+
+    expect(store.get(previous.sessionId)).toBeNull();
+    expect(store.get(next.sessionId)).toEqual(next);
+    expect(setWorktreePathInDbMock).toHaveBeenCalledWith(next.sessionId, next.path);
+  });
 });

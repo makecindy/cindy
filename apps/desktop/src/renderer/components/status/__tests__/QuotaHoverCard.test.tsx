@@ -19,6 +19,11 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.usageWarning') return '用量偏高';
       if (key === 'quotaCard.limitRejected') return '已触发套餐限额，请求可能被拒绝';
       if (key === 'quotaCard.limitWarning') return '接近套餐限额';
+      if (key === 'quotaCard.resetIn') return `${options.duration}后重置`;
+      if (key === 'quotaCard.resetPending') return '等待重置数据更新';
+      if (key === 'todaySpend.unit.day') return '天';
+      if (key === 'todaySpend.unit.hour') return '小时';
+      if (key === 'todaySpend.unit.minute') return '分钟';
       if (key === 'quotaCard.resetAt') return `${options.at} 重置`;
       if (key === 'quotaCard.paceTrendFast') return '按当前平均速度偏快（粗略趋势）';
       if (key === 'quotaCard.paceTrendNormal') return '按当前平均速度正常（粗略趋势）';
@@ -104,6 +109,7 @@ describe('QuotaHoverCard', () => {
   it('renders five-hour, weekly, and every scoped window with percentages and reset labels', () => {
     render(
       <QuotaHoverCard
+        variant="embedded"
         nowMs={NOW_MS}
         snapshot={makeSnapshot({
           fiveHour: {
@@ -139,14 +145,26 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getByText('Fable 周限')).toBeTruthy();
     expect(screen.getByText('Opus 周限')).toBeTruthy();
-    expect(screen.getByText('已用 1%')).toBeTruthy();
+    expect(screen.getByText('剩余 99%')).toBeTruthy();
     expect(screen.getByText('剩余 96%')).toBeTruthy();
     expect(screen.getByText('剩余 100%')).toBeTruthy();
     expect(screen.getByText('剩余 24%')).toBeTruthy();
+    expect(screen.getByText('7小时 5分钟后重置')).toBeTruthy();
     expect(screen.getByText('17:05 重置')).toBeTruthy();
     expect(screen.getByText('8月7日 00:00 重置')).toBeTruthy();
     expect(screen.getByText('8月6日 23:59 重置')).toBeTruthy();
     expect(screen.getByText('18:30 重置')).toBeTruthy();
+  });
+
+  it('prioritizes countdown in compact cards and updates to pending after reset', () => {
+    const snapshot = makeSnapshot({
+      sevenDay: { utilization: 30, resetsAt: (NOW_MS + 65 * 60_000) / 1000 },
+    });
+    const { rerender } = render(<QuotaHoverCard nowMs={NOW_MS} snapshot={snapshot} />);
+    expect(screen.getByText('1小时 5分钟后重置')).toBeTruthy();
+    expect(screen.queryByText('11:05 重置')).toBeNull();
+    rerender(<QuotaHoverCard nowMs={NOW_MS + 65 * 60_000} snapshot={snapshot} />);
+    expect(screen.getByText('等待重置数据更新')).toBeTruthy();
   });
 
   it('accepts the unified-headers shape without scoped windows or severity', () => {
@@ -234,15 +252,15 @@ describe('QuotaHoverCard', () => {
     expect(screen.queryByText(/重置$/)).toBeNull();
   });
 
-  it('clamps dirty utilization for both the bar and used-percent text', () => {
+  it('clamps dirty utilization for both the bar and remaining-percent text', () => {
     render(
       <QuotaHoverCard nowMs={NOW_MS} snapshot={makeSnapshot({ fiveHour: { utilization: 250 } })} />,
     );
 
     const bar = screen.getByRole('progressbar');
-    expect(bar.getAttribute('aria-valuenow')).toBe('100');
-    expect((bar.firstElementChild as HTMLElement | null)?.style.width).toBe('100%');
-    expect(screen.getByText('已用 100%')).toBeTruthy();
+    expect(bar.getAttribute('aria-valuenow')).toBe('0');
+    expect((bar.firstElementChild as HTMLElement | null)?.style.width).toBe('0%');
+    expect(screen.getByText('剩余 0%')).toBeTruthy();
   });
 
   it.each([

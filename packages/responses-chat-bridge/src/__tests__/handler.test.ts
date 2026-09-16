@@ -93,6 +93,44 @@ describe('createResponsesChatHandler', () => {
     },
   );
 
+  it.each([
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', effort: 'high', expected: { thinking: { type: 'adaptive' } } },
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', effort: 'none', expected: { thinking: { type: 'disabled' } } },
+    { upstreamBase: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seed-2-1-pro-260628', effort: 'high', expected: { thinking: { type: 'enabled' } } },
+    { upstreamBase: 'https://api.neuralwatt.com/v1', model: 'qwen3.5-397b', effort: 'high', expected: { thinking_budget: 24576 } },
+  ])('retains $model reasoning until final provider normalization ($effort)', async ({ upstreamBase, model, effort, expected }) => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject(expected);
+      expect(body).not.toHaveProperty('reasoning_effort');
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({ upstreamBase, buildHeaders: async () => ({}), capabilities: { developerRole: 'system' } }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model, input: 'hello', reasoning: { effort } }, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', capabilities: { reasoningField: 'none' } as ChatBridgeCapabilities },
+    { upstreamBase: 'https://unrelated.example/v1', model: 'MiniMax-M3', capabilities: {} },
+    { upstreamBase: 'https://api.kimi.com/coding/v1', model: 'k3', capabilities: {} },
+  ])('respects explicit disable, unknown endpoints and declared noReasoning: $upstreamBase', async ({ upstreamBase, model, capabilities }) => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body).not.toHaveProperty('thinking');
+      expect(body).not.toHaveProperty('thinking_budget');
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({ upstreamBase, buildHeaders: async () => ({}), capabilities }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model, input: 'hello', reasoning: { effort: 'high' } }, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
+
   it('leaves a consecutive system prefix intact when the upstream accepts it', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(JSON.parse(String(init?.body)).messages).toEqual([
@@ -1080,4 +1118,78 @@ describe('createResponsesChatHandler', () => {
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain('system message must be at the beginning');
   });
+  describe('outbound headers carry only the stable conversation id (#4073)', () => {
+    function captureHeaders(requestHeaders?: Record<string, string>, providerHeaders: Record<string, string> = { authorization: 'Bearer secret' }) {
+      const fetchImpl = vi.fn(async () => streamResponse([
+        { id: 'chat_1', choices: [{ delta: { content: 'hi' } }] },
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]));
+      const handler = createResponsesChatHandler({
+        upstreamBase: 'https://opencode.example/zen/go/v1',
+        buildHeaders: async () => providerHeaders,
+      }, { fetchImpl });
+      const res = new FakeResponse();
+      return handler.handle({
+        parsedBody: { model: 'kimi-k2', input: [{ role: 'user', content: 'hi' }] },
+        res: res as never,
+        ...(requestHeaders ? { requestHeaders } : {}),
+      }).then(() => {
+        expect(res.status).toBe(200);
+        return (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+      });
+    }
+
+    it('derives x-opencode-session from the Codex thread-id and drops every other inbound header', async () => {
+      const headers = await captureHeaders({
+        'thread-id': 'thr_abc',
+        'x-codex-parent-thread-id': 'thr_parent',
+        authorization: 'Bearer client-token-must-not-leak',
+        'chatgpt-account-id': 'acct-must-not-leak',
+        'x-client-request-id': 'req-1',
+      });
+      expect(headers['x-opencode-session']).toBe('thr_abc');
+      expect(headers.authorization).toBe('Bearer secret');
+      expect(headers).not.toHaveProperty('chatgpt-account-id');
+      expect(headers).not.toHaveProperty('x-codex-parent-thread-id');
+      expect(headers).not.toHaveProperty('x-client-request-id');
+      expect(headers['user-agent']).toBe('Cindy-CodexChatBridge/1');
+    });
+
+    it('lets an explicit inbound x-opencode-session win over thread-id and provider static headers', async () => {
+      const headers = await captureHeaders(
+        { 'x-opencode-session': 'conv-explicit', 'thread-id': 'thr_abc' },
+        { authorization: 'Bearer secret', 'x-opencode-session': 'machine-wide-fixed', 'user-agent': 'custom/1' },
+      );
+      expect(headers['x-opencode-session']).toBe('conv-explicit');
+      expect(headers['user-agent']).toBe('custom/1');
+    });
+
+    it('replaces a provider static header written in a different casing instead of sending both (Greptile P1)', async () => {
+      const headers = await captureHeaders(
+        { 'thread-id': 'thr_abc' },
+        { authorization: 'Bearer secret', 'X-OpenCode-Session': 'machine-wide-fixed' },
+      );
+      const sessionKeys = Object.keys(headers).filter((key) => key.toLowerCase() === 'x-opencode-session');
+      expect(sessionKeys).toEqual(['x-opencode-session']);
+      expect(headers['x-opencode-session']).toBe('thr_abc');
+      expect(new Headers(headers).get('x-opencode-session')).toBe('thr_abc');
+    });
+
+    it('keeps a provider static session header as-is when no stable conversation id is available', async () => {
+      const headers = await captureHeaders(
+        { 'x-client-request-id': 'req-only' },
+        { authorization: 'Bearer secret', 'X-OpenCode-Session': 'machine-wide-fixed' },
+      );
+      expect(headers['X-OpenCode-Session']).toBe('machine-wide-fixed');
+      expect(headers).not.toHaveProperty('x-opencode-session');
+    });
+
+    it('sends no session header when the request carries no stable conversation id', async () => {
+      const headers = await captureHeaders({ 'x-client-request-id': 'req-only' });
+      expect(headers).not.toHaveProperty('x-opencode-session');
+      const legacy = await captureHeaders(undefined);
+      expect(legacy).not.toHaveProperty('x-opencode-session');
+    });
+  });
+
 });

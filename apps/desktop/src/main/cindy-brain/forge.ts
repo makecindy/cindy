@@ -1453,6 +1453,39 @@ export async function packGhostDirToFile(
  */
 export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 
+## 本地例行任务事件
+
+插件通过 schemaVersion 3 的 routineEvents 声明事件来源：
+声明后，宿主在启动、启用和恢复时自动运行插件的浏览器逻辑页并保持监听，即使 launch 省略或为 on-demand；停用插件仍会停止监听。Node 常驻仍独立要求 node.lifecycle: resident。
+
+    "routineEvents": { "events": [{ "type": "message.received", "name": "新消息", "fields": ["chatId", "senderId"] }] }
+
+这只授予提交事件的能力，不授予创建、修改例行任务或指定伙伴的能力。用户在伙伴的例行任务界面选择来源、事件和条件后才能触发执行。插件自行选择 SDK 长连接、系统监听或本地 CLI 等接入方式，继续遵守原有 node/network 能力边界；来源与连接器不绑定。第一阶段没有公网 webhook 接收服务。
+
+插件确认监听连接已建立后，调用：
+
+    await cindy.send({ type: "routine-request", action: "status", status: "listening" });
+
+连接断开/故障时提交 disconnected/error。连接重建后重新报告 listening。发送事件：
+
+    await cindy.send({ type: "routine-request", action: "publish", event: {
+      id: "upstream-delivery-id", type: "message.received", occurredAt: Date.now(),
+      subject: "thread-id", data: { chatId: "chat-1", senderId: "user-1" }
+    } });
+
+也可使用 cindy.routines.request，参数省略 type。Host 从真实管子身份生成 plugin:<id> 来源，不接受自报 sourceId、botId 或 prompt。id 必须使用上游稳定投递 ID；重投同一个 ID 得到 duplicate:true，不重复执行。没有上游 ID 时由插件生成并持久化后重投，不得每次重试重造 ID。data 只允许字符串、有限数字和布尔值，总计至多 32000 字符；只提交处理所需的事件引用和筛选字段，不提交凭证。需要邮件/文档全文时由伙伴通过已配置工具读取。知道由哪条例行任务造成的回声时，填写 originRoutineId；接入端也应过滤自己发出的消息。
+
+返回 {ok:true,accepted,duplicate} 表示事件已持久接收（accepted 是匹配例行任务数），不代表模型已运行或业务已成功。ok:false 时保留投递 ID，按退避重试；不可假报已处理。多条件 OR 命中只入队一次；运行期间的新事件可合并进下一轮。重启不自动重放已经开始、结果未知的执行，以免重复外部副作用。时间与事件共用运行历史。去重针对投递身份，业务对象已完成与否仍由任务指令和工具记录判断。
+
+宿主硬上限：单插件每 60 秒最多 60 次发布，全账号最多 240 次；待处理发布请求分别最多 8 和 32。
+管子入口在等待引擎或数据库就绪前预留并发额度：状态与事件请求合计单插件最多 8 个、整个宿主最多 32 个，跨引擎重建保留计数，直到请求完成或失败才归还。无效操作、状态和超大事件在等待前拒绝；超额请求立即返回可重试错误，不进入等待队列。
+整个请求（含未知字段、字段名和数组附加属性）在等待前受 128 KiB UTF-8 保守预算、4096 个值和 16 层嵌套限制；循环引用、二进制对象等非普通 JSON 数据会被拒绝。小型未知字段仍忽略，data 的 32000 字符限制保持不变。超限返回固定文案 Routine request is too large or invalid，应精简请求后再投递。
+去重窗口为 24 小时，回执按 UTF-8 JSON 限制为单插件 256 KiB、账号 2 MiB；超限返回 ok:false，
+应保留原 event.id 稍后重试，不要改 ID 或紧密循环重试。容量满时不会驱逐窗口内回执；旧版过量
+回执在启动时保留最新的有界部分。事件运行历史不受回执清理影响。
+状态上报另有独立的每插件 60 次/分钟、全账号 240 次/分钟额度，重复状态同样计数；相同状态和声明不会触发界面刷新，也不会清空最近事件时间。请只在状态变化或重连后上报，超限时退避重试。
+失败回执只包含固定公开文案；未知宿主错误统一返回 Routine request failed; please retry later，底层路径和异常仅留在 Main 日志。保留原投递 ID，按退避重试。
+
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
 写一个意识。**流程:先取手册目录 → 按 §0 用提问卡片和用户对齐设计 → 按需用 section
@@ -1857,7 +1890,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 **setup 就绪声明**(可选,顶层字段):回答"这段意识**用之前必须配好什么**"。用户在
 插件页点「使用」或 Agent 调用你的工具时,主机按它做前置检查；没配齐就用统一设置卡
 引导用户完成配置：普通 user Secret 直接在卡内填写，OAuth 在卡内发起授权，KV 与连接等
-复杂配置再进入插件详情页。配齐后继续原调用。检查、字段绑定、保存状态和恢复都在主机
+复杂配置再进入插件详情页。普通任务配齐后继续原调用；伙伴会保留独立授权卡并结束当前轮，
+授权完成后由主机通知伙伴继续原工作。没有图标时不生成占位图标，插件已有配置面板与成果
+UI 保留。检查、字段绑定、保存状态和恢复都在主机
 代码里执行,你只声明需求,不用写卡片回调或检查逻辑,也不要在电子脑里自己重复检查。
 
 \`\`\`json
@@ -1986,6 +2021,11 @@ Manual 的归属不按篇幅长短判断。它对标 Skill 正文与 references,
 都必须是普通 \`.md\` 文件,单文件不超过 64KB。Markdown 不写 frontmatter;二进制、非法
 UTF-8、符号链接和其它扩展名都会在打包与装入两侧拒绝。
 
+**Manual-only 插件**可以只声明非空 \`manual.items\`,不需要声明虚假工具。
+已启用、账号可用且当前工作目录未停用时,它同样进入花名册、\`ghost_list\` 和
+\`ghost_info\`;返回的 \`tools\` 可以为空。\`ghost_manual\` 读取手册不启动插件运行时,
+\`ghost_call\` 仍只能调用实际声明的工具。既无工具也无手册的插件不进入发现清单。
+
 四层信息各司其职:
 
 - \`whenToUse\`:只放系统提示词区插件花名册需要的召回场景;
@@ -2014,6 +2054,8 @@ Cindy 先发布，确认首个支持它的**正式版本号**后，再把 \`minC
 \`skill.items\` 的迁移版本也必须设置上述 \`minCindyVersion\`，并遵守 Cindy 先发、插件
 后发的顺序；服务端还要保留上一份带 Skill 的历史 release，使旧客户端能通过历史版本回退
 继续取得兼容包。
+Manual-only 插件还必须等首个支持 Manual-only 发现与读取的 Cindy 正式版本发布,
+并将 \`minCindyVersion\` 设为不低于该版本;不能只以最早提供 \`ghost_manual\` 的版本为准。
 
 ## 4. main.js 电子脑(沙箱后台逻辑)
 
@@ -2729,8 +2771,9 @@ cindy.onHostMessage(function (msg) {
   // ── did- 旁听:收到就收到,主机不等你,你也改变不了任何事 ──
   if (msg.name === 'did-turn-end') {
     // msg.data = { sessionId, agent, model?, durationMs, endReason, usage? }
-    // usage 各字段可选(cc/codex 上报详尽度不同,别假设字段必在):
+    // usage 各字段可选(各引擎上报详尽度不同,别假设字段必在):
     //   { inputTokens?, outputTokens?, cacheReadTokens?, cacheCreationTokens? }
+    // error 终态也可带已消耗的 usage；Pi 输出上限会保留它，不要只统计 completed。
     // msg.seq 每意识单调递增;msg.dropped(可选)= 你熄灯期溢出丢弃的事件数。
     // 生命周期:会话被关掉或引擎被替换时,主机会给还在场的那一轮补发
     // endReason: 'interrupted',让 start/end 成对。但这不是投递保证——熄灯期
@@ -3053,6 +3096,10 @@ await fetch('/oauth/acct/default', { method:'POST', body: JSON.stringify({ accou
 await fetch('/oauth/acct/insufficient-scopes', { method:'POST', body: JSON.stringify({ scopes:['write.b'] }) });  // 204
 \`\`\`
 
+昵称等自定义账号元数据由插件通过 \`/kv\` 保存(§4.8)，按账号 id 与上述清单合并；
+Host OAuth 不提供昵称字段或重命名接口。昵称只供展示和匹配用户意图，存在歧义时询问，
+执行仍传账号 id，不把昵称当作指令或授权。
+
 多账号:每个 oauth 凭证项最多 8 个账号;cindy.fetch 可带 \`authAccount: '<账号id>'\`
 指定用哪个账号的令牌(缺省 = 默认账号)。同一身份重复授权 = 重连:授权回来的
 身份标签(identity.labelPath 的值)与已连账号相同时,主机覆盖那条的令牌并复活状态,不新增
@@ -3119,8 +3166,8 @@ const r = await cindy.fetch({
 **目录上传(uploadDir,目录过户票据)**:要把用户的一个本地目录整体传给你的
 服务(静态站点部署等),流程是"主 agent 过户 → 你凭票上传"——主 agent 调
 ghost_call 时把目录**绝对路径**放在顶层 \`dir\` 参数(会话工作目录内直接放行,
-工作目录外若主 agent 是本地 Full Access 会话则自动过户、不弹卡;其它权限档及
-远程会话仍由用户确认;自动排除 node_modules/.git/.env 等),主机收集文件后把一次性限时票据注入你的
+工作目录外若主 agent 是本地 Full Access 会话则自动过户、不弹卡;Auto 交当前会话统一审阅,
+Ask 及远程会话仍由用户确认;自动排除 node_modules/.git/.env 等),主机收集文件后把一次性限时票据注入你的
 \`args.dir_deposit\`(含 token / file_count / total_bytes / rel_paths 相对路径清单);
 你在工具描述里写清"目录经 ghost_call 顶层 dir 交付",然后:
 
@@ -3148,7 +3195,7 @@ preset 判定等纯逻辑);伪造/过期/别人的票据统一"票据无效"。�
 (邮件附件、云盘文档等任意类型)存到用户本地时,流程同样是"主 agent 过户 →
 你凭票下载"——主 agent 调 ghost_call 时把**目标目录绝对路径**放在顶层
 \`save_dir\` 参数(目录必须已存在;会话工作目录内直接放行,工作目录外主机会
-在本地 Full Access 下自动过户、不弹卡;其它权限档及远程会话仍弹确认卡),主机把限时
+在本地 Full Access 下自动过户、不弹卡;Auto 交当前会话统一审阅,Ask 及远程会话仍弹确认卡),主机把限时
 票据注入你的 \`args.save_deposit\`(含 token / dir_name 目录名);你在工具
 描述里写清"下载目录经 ghost_call 顶层 save_dir 交付",然后:
 
@@ -3898,6 +3945,15 @@ cindy.onHostMessage((msg) => {
 
 ### 4.12.2 stdio MCP
 
+Node 可通过既有 \`secretBindings\` 引用本插件 OAuth 账号，不必复制或重新授权：
+\`{ key: 'access_token', label: '账号', methods: ['service/run'], oauthSecret: '已有的 network.secrets OAuth key' }\`。
+引用必须指向同一插件的 \`source:'oauth'\` 声明；它不是新的可填写 Secret，设置页继续使用
+\`/oauth\` 管理多账号。\`cindy.node.request({ method:'service/run', authAccount: accountId, params })\`
+可选择账号，省略时使用该 OAuth 槽的默认账号。Host 刷新后仅把 access token 放入 Worker 的
+\`cindy.secrets.access_token\`，不交付 refresh token；未绑定的方法不注入。
+Worker 与它启动的 CLI 是受信任的原生代码，会接触短期令牌；不得回传、落盘或记录令牌，
+每次调用使用独立子进程环境，不修改全局 \`process.env\`。令牌失效后的写操作不能自动重放。
+
 把 \`protocol\` 改成 \`"mcp-stdio"\`，worker 实现标准的逐行 JSON-RPC MCP server。
 Cindy 会统一完成 \`initialize\` + \`notifications/initialized\`，你的 main.js 不要重复初始化，
 直接调用标准方法：
@@ -4221,8 +4277,11 @@ if (r.ok && r.confirmed) {
 要给插件提供内置 iOS 模拟器的状态入口或工作流面板时,声明 \`"iosSimulator": true\`。
 电子脑只能读取**当前台前任务**的公开状态,并请求主机打开 Cindy 自己的模拟器面板:
 
-标准产品形态只需 \`skill + iosSimulator\`:Host 会在任务右侧栏提供手动入口,
-Agent 通过 Skill 调 Host MCP。不要为了重复同一状态再声明 \`panel\`;插件停靠面板的关闭
+标准产品形态只需 \`manual + iosSimulator\`:Host 会在任务右侧栏提供手动入口,
+Agent 按需读取 \`ghost_manual({ ghost_id: "ios-simulator", path: "ios-simulator" })\`
+获取跨工具工作流,再调用 Host 注册的 \`cindy_ios_simulator\` MCP。插件无需声明 \`tools\`,
+Manual 的发现与读取仍受安装、启用、账号与工作目录门禁约束。
+不要为了重复同一状态再声明 \`panel\`;插件停靠面板的关闭
 语义是停用整份插件,不适合作为模拟器 viewer 的替身。只有确实存在 Host viewer 没有的独立
 工作流 UI 时才额外声明 panel。
 
@@ -4263,13 +4322,13 @@ const opened = await cindy.iosSimulator.request({
   在 Host 面板里选择设备;连续请求会限速;
 - panel.html 保持零桥。面板要使用本能力时,按 §5 先 \`/wake\`,再用同源
   BroadcastChannel 把请求交给 main.js,由 main.js 调 \`cindy.iosSimulator.request\`;
-- 插件 Skill 选择内嵌路线后,Agent 构建、安装、启动与 UI 操作调用 Host 注册的
+- Agent 按 Manual 指引选择内嵌路线后,构建、安装、启动与 UI 操作调用 Host 注册的
   \`cindy_ios_simulator\` MCP,不要重复打包一份 WDA/Sidecar。内嵌能力不存在或不可用时,
-  Skill 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
+  Agent 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
   Computer Use;Host 不会把这些外部操作自动转换为内嵌调用;
 - 本能力仅存在于支持并授权 \`iosSimulator\` 字段的 Cindy Desktop。未知 v3 顶层字段会被
   保留，但不会因此获得 Host 权限；依赖新字段的插件必须用 \`minCindyVersion\` 标明最低版本。
-  Skill 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
+  Agent 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
   可以继续使用正常的外部工具链,否则再引导用户升级 Cindy。
 
 ## 4.20 一级主视图(mainView 能力)

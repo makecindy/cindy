@@ -143,6 +143,12 @@ export {
   type CreateTeammateCallbacks,
 } from './create_teammate.js';
 export {
+  registerBotCapabilityTools,
+  buildFindBotCapabilitiesDescription,
+  withCindyGatedBotToolDescriptions,
+  type BotCapabilityCallbacks,
+} from './bot_capabilities.js';
+export {
   registerSubmitGithubIssueTool,
   type SubmitGithubIssueDeps,
   type SubmitGithubIssueHostResult,

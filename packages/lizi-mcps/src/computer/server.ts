@@ -30,7 +30,7 @@ const DESCRIPTION_LIST =
   'Use read-only status/get_accessibility_tree/list_apps/list_windows/get_window_state before click/type_text/press_key/hotkey.';
 
 const DESCRIPTION_CALL =
-  'Invoke a local desktop computer-use tool. Arguments are validated before dispatching to the host driver.';
+  'Invoke a local desktop computer-use tool. After status/permission checks, include session_goal in the first call\'s args as a short English name for the overall objective (not the current step); omit it thereafter. Arguments are validated before dispatching to the host driver.';
 
 function textResult(value: unknown, isError?: boolean) {
   return {

@@ -18,6 +18,7 @@ import {
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 import { listProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
+import { isCatalogMediaModelVisible } from '../cindy-brain/mediaDisplayVisibility.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
 
@@ -225,14 +226,24 @@ async function fetchGatewayMediaModels(): Promise<GatewayMediaCatalogEntry[]> {
 
 export async function listAvailableMediaModels(
   capability?: MediaCapability,
+  options?: { skipGateway?: boolean },
 ): Promise<ExecutableMediaModel[]> {
   const providerModels = availableProviderMediaModels(capability);
+  if (options?.skipGateway) return providerModels;
   try {
     const gatewayModels = filterEnabledGatewayMediaModels(
       await fetchGatewayMediaModels(),
       capability,
       readModelDisableOverrides(),
-    ).map((model) => ({ ...model, providerId: CINDY_AI_PROVIDER_ID }));
+    )
+      .filter((model) =>
+        isCatalogMediaModelVisible(
+          CINDY_AI_PROVIDER_ID,
+          model.id,
+          'defaultEnabled' in model ? model.defaultEnabled : undefined,
+        ),
+      )
+      .map((model) => ({ ...model, providerId: CINDY_AI_PROVIDER_ID }));
     return mergeMediaModels(gatewayModels, providerModels);
   } catch (error) {
     if (providerModels.length > 0) return providerModels;
@@ -494,9 +505,16 @@ export async function listExecutableMediaModels(
     snapshot.models,
     undefined,
     options.includeDisabled ? undefined : readModelDisableOverrides(),
-  ).filter((model) =>
-    capabilities.every((capability) => supportsMediaCapability(model.modalities, capability)),
-  );
+  ).filter((model) => {
+    if (!capabilities.every((capability) => supportsMediaCapability(model.modalities, capability))) {
+      return false;
+    }
+    return isCatalogMediaModelVisible(
+      CINDY_AI_PROVIDER_ID,
+      model.id,
+      'defaultEnabled' in model ? model.defaultEnabled : undefined,
+    );
+  });
   const gatewayModels: ExecutableMediaModel[] = [];
   const unavailable: UnavailableMediaModel[] = [];
   for (const model of candidates) {

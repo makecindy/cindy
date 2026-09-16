@@ -249,6 +249,7 @@ function referencePriceCalendarDate(value: string | Date | undefined): string {
 
 /** Selects a dated provider reference tariff, optionally for a specific agent/input size. */
 interface ReferencePriceOptions {
+  officialOnly?: boolean;
   agent?: AgentKind;
   inputTokens?: number;
   at?: string | Date;
@@ -291,7 +292,7 @@ function referencePriceQuoteForVariant(
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);
   const variant = options.variant ?? 'standard';
-  const inputTokenPriceBands = resolved.route.referencePrices
+  const inputTokenPriceBands = resolved.prices
     ?.filter(
       (price) =>
         price.variant === variant &&
@@ -418,9 +419,9 @@ export function subscriptionDirectPriceQuote(
   const routedId = exclusiveXaiCatalogModelId(modelId) ?? modelId;
   let quote: ModelPriceQuote | undefined;
   if (routedId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at });
+    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at, officialOnly: true });
   } else if (routedId.startsWith(XAI_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at });
+    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at, officialOnly: true });
   }
   return quote
     ? {

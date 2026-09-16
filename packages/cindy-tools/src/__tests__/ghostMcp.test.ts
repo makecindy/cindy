@@ -127,6 +127,19 @@ const READY_WITH_REAUTH_SUGGEST = {
 };
 
 describe("cindy_ghosts · ghost_list(总机接线簿,现查现报)", () => {
+  it("Manual-only plugins retain empty tools and the same manual index through list/info", async () => {
+    const ghost = { ...ART_GHOST, tools: [] };
+    const deps = fakeDeps({
+      listAwakeGhosts: async () => [ghost],
+      getAwakeGhost: async () => ({ ok: true, ghost }),
+    });
+    const list = parsePayload(await handleGhostList(deps));
+    const info = parsePayload(await handleGhostInfo(deps, { ghost_id: ghost.id }));
+    expect(list.ghosts).toEqual([ghost]);
+    expect(info).toEqual({ ok: true, ghost });
+    expect(list.hint).toContain("ghost_manual");
+  });
+
   it("返回唤醒中的意识与工具,附调用提示", async () => {
     const result = await handleGhostList(fakeDeps());
     const payload = parsePayload(result);
@@ -1216,7 +1229,7 @@ describe("cindy_ghosts · server 构建", () => {
     expect(infoDescription).toContain("完全没有目标线索时才用 ghost_list");
     expect(infoDescription).toContain("不要缓存");
     expect(infoDescription).toContain(
-      "GHOST_NOT_FOUND(不存在、已卸载或当前账号不可用)",
+      "GHOST_NOT_FOUND(不存在、已卸载、当前账号不可用或未提供工具和手册)",
     );
     expect(infoDescription).toContain("GHOST_DISABLED_IN_WORKDIR");
     expect(infoDescription).toContain("INTERNAL(内部查询失败)");
@@ -1233,6 +1246,11 @@ describe("cindy_ghosts · server 构建", () => {
     expect(manualDescription).toContain(
       'path:"x-ops/references/reply-limits.md"',
     );
+    for (const name of ["ghost_list", "ghost_info"]) {
+      expect(server._registeredTools[name]?.description).toContain("tools 可能为空");
+    }
+    expect(manualDescription).toContain("Manual-only");
+    expect(manualDescription).toContain("未声明手册");
   });
 });
 
@@ -1846,6 +1864,7 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     const prompt = buildGhostRosterPrompt(items);
     expect(prompt).toBe(formatGhostRoster(items));
     expect(prompt).toContain("直接调用 ghost_info({ghost_id})");
+    expect(prompt).toContain("ghost_manual");
     expect(prompt.indexOf('"id":"a"')).toBeLessThan(prompt.indexOf('"id":"z"'));
     expect(buildGhostRosterPrompt([])).toBe("");
   });
@@ -1957,5 +1976,68 @@ describe("cindy · 卡槽③(xdt_card_id 提升 + agentToolUseId 提取)", () =>
     );
     await handleGhostCall(deps, { ghost_id: "art", tool: "gen_image" });
     expect(callGhostTool.mock.calls[1][0]).not.toHaveProperty("agentToolUseId");
+  });
+});
+
+describe('connect_account transport', () => {
+  it('exposes a Host connection without requiring an installed plugin', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ listAwakeGhosts: async () => [], connectAccount }));
+    const client = new Client({ name: 'test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined });
+      const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
+      expect(rejected.isError).toBe(true);
+      expect(connectAccount).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+});
+
+describe('Cindy market MCP transport', () => {
+  it('keeps discovery, installation, account connection and execution separate', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const searchMarket = vi.fn(async () => ({ ok: true, items: [{ plugin_id: 'p1', release_id: 'r1', ghost_id: 'art' }] }));
+    const installMarket = vi.fn<NonNullable<CindyGhostsMcpDeps['installMarket']>>(async () => ({ ok: true, status: 'installed', ghost_id: 'art' }));
+    const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
+    const callGhostTool = vi.fn(async () => ({ ok: true as const, result: 'image' }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ searchMarket, installMarket, connectAccount, callGhostTool }));
+    const client = new Client({ name: 'market-test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const search = await client.callTool({ name: 'ghost_market_search', arguments: { query: ' image ' } });
+      expect(search.isError).not.toBe(true);
+      expect(searchMarket).toHaveBeenCalledWith('image');
+      expect(installMarket).not.toHaveBeenCalled();
+      const invalid = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1' } });
+      expect(invalid.isError).toBe(true);
+      expect(installMarket).not.toHaveBeenCalled();
+      const installed = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1', release_id: 'r1' } });
+      expect(installed.isError).not.toBe(true);
+      expect(installMarket).toHaveBeenCalledWith({ pluginId: 'p1', releaseId: 'r1' }, expect.any(AbortSignal));
+      expect(connectAccount).not.toHaveBeenCalled();
+      expect(callGhostTool).not.toHaveBeenCalled();
+      await client.callTool({ name: 'ghost_info', arguments: { ghost_id: 'art' } });
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art' } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined });
+      expect(callGhostTool).not.toHaveBeenCalled();
+      // Host authorization continuation retries the original work through the same gateway.
+      await client.callTool({ name: 'ghost_call', arguments: { ghost_id: 'art', tool: 'gen_image', args: {} } });
+      expect(callGhostTool).toHaveBeenCalledOnce();
+      installMarket.mockResolvedValueOnce({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+      expect((await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1', release_id: 'r1' } })).isError).toBe(true);
+      searchMarket.mockRejectedValueOnce(new Error('private-token'));
+      const failed = await client.callTool({ name: 'ghost_market_search', arguments: { query: 'image' } });
+      expect(failed.isError).toBe(true);
+      expect(JSON.stringify(failed)).not.toContain('private-token');
+    } finally { await client.close(); await server.close(); }
   });
 });

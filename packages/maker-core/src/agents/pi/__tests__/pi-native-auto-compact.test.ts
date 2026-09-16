@@ -3,7 +3,7 @@
  * events and only latches deterministic failures for the next-send rollover.
  */
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, renameSync, symlinkSync, unlinkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ const knobs = vi.hoisted(() => ({
   runtimeProvider: "cindy",
   runtimeModel: "m",
   runtimeContextWindow: 200_000,
+  contextTokens: null as number | null,
   targetRuntimeContextWindow: 100_000,
   setModelReportsContextWindow: true,
   verifiedContextWindows: [] as number[],
@@ -58,6 +59,11 @@ vi.mock("../rpc-client.js", () => ({
       error?: string;
     }> {
       knobs.rpcCalls.push(cmd);
+      if (cmd.type === "get_session_stats" && knobs.contextTokens !== null) {
+        return { success: true, data: { contextUsage: {
+          tokens: knobs.contextTokens, contextWindow: knobs.runtimeContextWindow,
+        } } };
+      }
       if (cmd.type === "get_state") {
         return {
           success: true,
@@ -129,6 +135,10 @@ const noopLogger: Logger = {
 };
 
 describe("Pi native settings", () => {
+  it.each([1_000, 32_000, 200_000])('uses budget %s for compaction without shrinking request capacity', (budget) => {
+    const settings = JSON.parse(buildPiSettingsJsonContent(200_000, 90, [], budget));
+    expect(200_000 - settings.compaction.reserveTokens).toBe(budget * 0.9);
+  });
   it("maps the configured percentage to Pi reserve tokens", () => {
     const retry = {
       enabled: true,
@@ -168,6 +178,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.runtimeProvider = "cindy";
     knobs.runtimeModel = "m";
     knobs.runtimeContextWindow = 200_000;
+    knobs.contextTokens = null;
     knobs.targetRuntimeContextWindow = 100_000;
     knobs.setModelReportsContextWindow = true;
     knobs.verifiedContextWindows = [];
@@ -181,6 +192,47 @@ describe("PiAgent native auto-compaction ownership", () => {
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('keeps the applied small budget until native settings are reloaded', async () => {
+    let budget: number | null = 1_000;
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = () => budget;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'small-budget', workingDir: cwd, model: 'm', providerId: 'xd' });
+    try {
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect((await handle.getContextUsage!()).maxTokens).toBe(1_000);
+      knobs.contextTokens = 6_000;
+      expect(await handle.getContextUsage!()).toMatchObject({
+        totalTokens: 6_000, maxTokens: 1_000, rawMaxTokens: 1_000, percentage: 100,
+      });
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(false);
+      budget = 32_000;
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(true);
+      budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it.each([null, 'xd', 'cindy'] as const)('refreshes gateway aliases from a %s source without changing routes', async (providerId) => {
+    let window = 200_000;
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = () => window;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'context-alias', workingDir: cwd, model: 'm', providerId });
+    try {
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(false);
+      }
+      window = 100_000;
+      for (const target of [null, 'xd', 'cindy']) {
+        expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: target })).toBe(true);
+      }
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'other-source' })).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('n', { providerId: 'xd' })).toBe(false);
+    } finally {
+      await handle.close();
+    }
   });
 
   function buildDeps(): AgentDeps {
@@ -363,16 +415,16 @@ describe("PiAgent native auto-compaction ownership", () => {
       "prompt",
       (handle: AgentSessionHandle) =>
         handle.send({
-          role: "user",
-          content: [{ type: "text", text: "hi" }],
+          type: "user",
+          content: "hi",
         }),
     ],
     [
       "steer",
       (handle: AgentSessionHandle) =>
         handle.steer!({
-          role: "user",
-          content: [{ type: "text", text: "steer now" }],
+          type: "user",
+          content: "steer now",
         }),
     ],
   ] as const)(
@@ -394,7 +446,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     },
   );
 
-  function readLatestPiSettings(): { compaction?: { reserveTokens?: number } } {
+  function readLatestPiSettings(): { compaction?: { reserveTokens?: number }; skills?: string[]; packages?: Array<{ source: string; skills?: string[] }> } {
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -488,7 +540,7 @@ describe("PiAgent native auto-compaction ownership", () => {
       piAutoCompactThresholdPct: 90,
     };
     deps.capabilityAdditions = {
-      availableModels: deps.capabilityAdditions!.availableModels.map((model) =>
+      availableModels: deps.capabilityAdditions!.availableModels!.map((model) =>
         model.id === "n" ? { ...model, contextWindow: 200_000 } : model,
       ),
     };
@@ -583,6 +635,51 @@ describe("PiAgent native auto-compaction ownership", () => {
     expect(rewritten.shellPath).toBe("C:/cygwin64/bin/bash.exe");
     expect(rewritten.compaction?.reserveTokens).toBe(25_000);
     await handle.close();
+  });
+
+  it.each(["unchanged", "alias", "physical", "startup"])("keeps frozen Skill exclusions across both settings rewrites (%s)", async (change) => {
+    const a = path.join(cwd, "a");
+    const b = path.join(cwd, "b");
+    const alias = path.join(cwd, "alias");
+    mkdirSync(a);
+    mkdirSync(b);
+    writeFileSync(path.join(a, "SKILL.md"), "fixture a");
+    writeFileSync(path.join(b, "SKILL.md"), "fixture b");
+    symlinkSync(a, alias, process.platform === "win32" ? "junction" : "dir");
+    const deps = buildDeps();
+    deps.getDisabledSkillPaths = () => [a];
+    deps.resolvePiNativePackagePaths = async () => [{ source: cwd, skills: ["**/*"] }];
+    deps.resolvePiManagedPackageResources = async () => {
+      if (change === "startup") {
+        renameSync(a, `${a}-moved`);
+        symlinkSync(b, a, process.platform === "win32" ? "junction" : "dir");
+      }
+      return { extensions: [], skills: [{ name: "alias", path: alias }], promptTemplates: [], packageRoots: [cwd] };
+    };
+    const handle = await new PiAgent(deps).startSession({ sessionId: "frozen-skills", workingDir: cwd, model: "m" });
+    try {
+      if (change === "startup") expect(readLatestPiSettings().skills ?? []).not.toContain(`-${a}`);
+      else expect(readLatestPiSettings().skills).toContain(`-${alias}`);
+      if (change === "alias") {
+        unlinkSync(alias);
+        symlinkSync(b, alias, process.platform === "win32" ? "junction" : "dir");
+      } else if (change === "physical") {
+        renameSync(a, `${a}-moved`);
+        symlinkSync(b, a, process.platform === "win32" ? "junction" : "dir");
+      }
+      knobs.targetRuntimeContextWindow = 1_000_000;
+      knobs.setModelReportsContextWindow = false;
+      knobs.rpcCalls = [];
+      await handle.setModel!("n");
+      const rewritten = readLatestPiSettings();
+      expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+      expect(rewritten.packages?.[0]?.source).toBe(cwd);
+      expect(rewritten.skills ?? []).not.toContain(`-${b}`);
+      expect(rewritten.packages?.[0]?.skills ?? []).not.toContain("-b");
+      if (change === "unchanged") expect(rewritten.skills).toContain(`-${alias}`);
+      else expect(rewritten.skills ?? []).not.toContain(`-${alias}`);
+      if (change === "physical" || change === "startup") expect(rewritten.skills ?? []).not.toContain(`-${a}`);
+    } finally { await handle.close(); }
   });
 
   it("terminates the session when compaction settings reload fails after a window change", async () => {

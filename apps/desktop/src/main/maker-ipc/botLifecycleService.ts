@@ -40,7 +40,12 @@ export interface BotLifecycleServiceDeps {
     sessionIds: string[],
     keepTaskHistory: boolean,
   ) => Promise<void>;
+  /** Rebuild only the canonical runtime; retain the product task and all Bot data. */
+  restartRuntime?: (sessionId: string, assertOwnerCurrent: () => void) => Promise<void>;
   now?: () => number;
+  onPaused?: (botId: string) => void | Promise<void>;
+  /** Cleanup must finish before the owning profile disappears. Failure leaves deletion retryable. */
+  onBeforeDelete?: (botId: string) => void | Promise<void>;
   /** Resume durable work owned by the Bot after lifecycle state is active. */
   onResumed?: (botId: string) => void | Promise<void>;
   /** Refresh hidden runtime services after any lifecycle ownership change. */
@@ -171,6 +176,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
         'The Bot was paused by the user.',
       ) ?? Promise.resolve(0),
       closeBotSessions(botId),
+      deps.onPaused?.(botId),
     ]);
     const warnings = [...closed.warnings];
     const completedAt = now();
@@ -214,6 +220,42 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     await notifyLifecycleChanged(botId, 'resume');
     await deps.onResumed?.(botId);
     return result;
+  };
+
+  const restart = async (botId: string, owner: string): Promise<BotLifecycleActionResult> => {
+    const assertOwnerCurrent = () => {
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) {
+        throwIpcError('PRECONDITION_FAILED', 'Bot restart owner changed');
+      }
+    };
+    assertOwnerCurrent();
+    const profile = await readProfile(botId);
+    assertOwnerCurrent();
+    if (profile.status !== 'active' && profile.status !== 'error') {
+      throwIpcError('PRECONDITION_FAILED', 'Bot must be active to restart');
+    }
+    const sessionId = await readCanonicalSessionId(botId);
+    assertOwnerCurrent();
+    if (!sessionId || !deps.restartRuntime) {
+      throwIpcError('PRECONDITION_FAILED', 'Bot runtime is not available for restart');
+    }
+    try {
+      await deps.restartRuntime(sessionId, assertOwnerCurrent);
+    } catch (error) {
+      log.warn('Bot restart failed', { botId, error: String(error) });
+      throwIpcError('PRECONDITION_FAILED', 'Bot restart failed; retry when the runtime is available');
+    }
+    assertOwnerCurrent();
+    await getDbClient().tx('bots.resumeLifecycle', {
+      botId,
+      canonicalSessionId: sessionId,
+      expectedProfileStatus: profile.status,
+      at: now(),
+      eventId: randomUUID(),
+    });
+    assertOwnerCurrent();
+    await notifyLifecycleChanged(botId, 'restart');
+    return lifecycleResult(botId, 'restart', 'active', { sessions: 1 });
   };
 
   /**
@@ -299,6 +341,8 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     ]);
 
     assertOwnerUnchanged();
+    await deps.onBeforeDelete?.(request.botId);
+    assertOwnerUnchanged();
     await deleteProfileAndDetachSessions(
       request.botId,
       sessionIds,
@@ -334,13 +378,16 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     return result;
   };
 
-  const run = (request: BotLifecycleActionRequest): Promise<BotLifecycleActionResult> =>
-    withBotLifecycleLock(request.botId, request.action, async () => {
+  const run = (request: BotLifecycleActionRequest): Promise<BotLifecycleActionResult> => {
+    const owner = activeOwnerScopeKey();
+    return withBotLifecycleLock(request.botId, request.action, async () => {
       if (request.action === 'pause') return pause(request.botId);
       if (request.action === 'resume') return resume(request.botId);
+      if (request.action === 'restart') return restart(request.botId, owner);
       if (request.action === 'delete') return remove(request);
       throwIpcError('PRECONDITION_FAILED', `${request.action} 尚未接入 Bot 生命周期协调器`);
     });
+  };
 
   return { run };
 }
@@ -352,7 +399,7 @@ export function registerBotLifecycleHandlers(deps: BotLifecycleServiceDeps): voi
     const body = requireObject(raw, 'request');
     const botId = requireString(body.botId, 'botId');
     const action = requireString(body.action, 'action');
-    if (!['pause', 'resume', 'delete'].includes(action)) {
+    if (!['pause', 'resume', 'restart', 'delete'].includes(action)) {
       throwIpcError('INVALID_PARAMS', '未知 Bot 生命周期操作');
     }
     return service.run({

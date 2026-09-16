@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   DEFAULT_MATERIALIZE_LIMITS,
   addManualEntry,
+  coalesceDictionaryLearningActions,
   deleteTerms,
   dictionaryTermKey,
   materializeDictionary,
@@ -242,11 +243,10 @@ export class VoiceInputDataStore {
       let nextClock = clock;
       let changed = false;
       const nowMs = Date.now();
-      for (const action of actions) {
-        // 与单机学习路径一致:低置信度或没有别名证据的建议不进词典。
+      for (const action of coalesceDictionaryLearningActions(actions)) {
+        // 词汇证据与纠错别名独立:低置信度不学习,但允许没有别名的词汇。
         if (action.confidence === 'low') continue;
         const aliases = action.aliases ?? [];
-        if (aliases.length === 0) continue;
         const result = recordLearningEvent(nextState, nextClock, {
           text: action.term,
           aliases,

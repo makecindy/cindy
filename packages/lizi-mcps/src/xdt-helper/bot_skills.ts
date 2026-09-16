@@ -31,7 +31,7 @@ export interface BotSkillCallbacks {
     slug?: string;
   }): Promise<
     ControlResult<
-      { skill: BotSkillSummaryWire; created: boolean; effective: 'next-session' },
+      { skill: BotSkillSummaryWire; created: boolean; effective: 'next-turn' | 'next-session' },
       string
     >
   >;
@@ -58,13 +58,14 @@ export function registerBotSkillTools(
   deps: BotSkillToolDeps,
 ): void {
   registry.register({
-    name: 'save_bot_skill',
+    name: 'save_teammate_skill',
     category: 'bots',
     description:
-      '把刚做完的一类任务的可复用做法,存成当前 Bot 自己的一个技能(真技能文件,不是记忆分片)。'
+      '把刚做完的一类任务的可复用做法,存成当前伙伴自己的一个技能(真技能文件,不是记忆分片)。'
       + '同名技能会被原地更新 —— 发现更好的做法就用同一个 name 再存一次。'
       + 'body 写成可照做的步骤,不要写这一次的具体结论。'
-      + '技能在**下一次任务**才会被挂载,本次任务里不要指望能立刻调用它。',
+      + '需要当前运行位置支持伙伴自有 Skill 存储；远端未挂载时返回不可用，不会代写本机，也不能声称已保存或生效。'
+      + '宿主会在当前聊天的安全轮次边界加载技能；以返回的 effective 为准，旧宿主可能需要下一任务。当前轮不要调用尚未挂载的新技能。',
     inputShape: {
       name: z
         .string()
@@ -101,10 +102,11 @@ export function registerBotSkillTools(
   });
 
   registry.register({
-    name: 'list_bot_skills',
+    name: 'list_teammate_skills',
     category: 'bots',
     description:
-      '列出当前 Bot 已经学会的技能(名称 / 说明 / 更新时间,不含正文)。'
+      '列出当前伙伴已经学会的技能(名称 / 说明 / 更新时间,不含正文)。'
+      + '需要当前运行位置支持伙伴自有 Skill 存储；远端未挂载时返回不可用，不把本机技能表冒充远端可用技能。'
       + '打算沉淀新技能前先看一眼:已经有的就用同名更新,不要重复学一遍。',
     inputShape: {},
     handler: async () => {
@@ -116,4 +118,6 @@ export function registerBotSkillTools(
         : errorPayload(result.errorCode, result.message);
     },
   });
+  registry.registerAlias('save_bot_skill', 'save_teammate_skill');
+  registry.registerAlias('list_bot_skills', 'list_teammate_skills');
 }

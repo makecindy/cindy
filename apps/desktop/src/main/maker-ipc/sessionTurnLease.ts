@@ -415,9 +415,19 @@ export class SessionTurnLeaseTracker {
   }
 
   /** End one exact generation and report whether no local/shared successor remains. */
-  async markTurnEndedAndCheckIdle(sessionId: string, expectedTurnId: string): Promise<boolean> {
-    await this.markTurnEnded(sessionId, expectedTurnId);
-    return !(await this.isTurnActive(sessionId));
+  async markTurnEndedAndCheckIdle(
+    sessionId: string,
+    expectedTurnId: string,
+    onSettled?: () => void,
+  ): Promise<boolean> {
+    try {
+      await this.markTurnEnded(sessionId, expectedTurnId);
+      return !(await this.isTurnActive(sessionId));
+    } finally {
+      // Runtime continuation ownership must not leak when durable bookkeeping
+      // fails. The owner callback fences its exact instance and generation.
+      onSettled?.();
+    }
   }
 
   async isTurnActive(sessionId: string): Promise<boolean> {

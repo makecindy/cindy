@@ -270,6 +270,10 @@ function registerSendMessageToUser(
       return buildJsonResult({
         ok: true,
         messageId: result.messageId,
+        ...(result.sessionLinked !== undefined ? { sessionLinked: result.sessionLinked } : {}),
+        ...(result.sessionLinked === false ? {
+          warning: '消息已发送，但回复关联保存失败；不要重新发送这条消息。请告知用户在 Cindy 原任务中继续。',
+        } : {}),
       });
     },
   });

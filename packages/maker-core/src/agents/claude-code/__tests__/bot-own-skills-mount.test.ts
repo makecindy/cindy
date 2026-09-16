@@ -96,23 +96,35 @@ const OWN_SKILL_ROOT = '/userdata/bot-skills/bot-1';
 async function startBotSession(input: {
   ownSkillPluginRoots?: string[];
   reviewMode?: boolean;
+  remote?: boolean;
+  ordinary?: boolean;
 }) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
   sdkMock.query.mockReturnValue(createFakeQuery());
 
-  const agent = new ClaudeCodeAgent(createDeps());
+  const deps = createDeps();
+  let remoteOptions: unknown;
+  if (input.remote) {
+    deps.remoteCcQueryFactory = async ({ startParams, botSession }) => {
+      expect(botSession).toBe(!input.reviewMode && !input.ordinary);
+      remoteOptions = startParams.extraOptions;
+      return createFakeQuery() as never;
+    };
+  }
+  const agent = new ClaudeCodeAgent(deps);
   await agent.startSession({
     sessionId: 'session-bot-skills',
     model: 'claude-opus-4-6',
     workingDir,
+    ...(input.remote ? { remoteHostId: 'remote-bot-host' } : {}),
     permissionMode: 'acceptEdits',
     botProfilePrompt: 'BOT SOUL',
     botProfileContextPrompt: 'BOT HOME CONTEXT',
     userPrompt: 'GLOBAL USER PROMPT',
     ...(input.reviewMode ? { reviewMode: true as const } : {}),
-    botRuntimeProfile: {
+    botRuntimeProfile: input.ordinary ? undefined : {
       botId: 'bot-1',
       profileVersion: 1,
       skillPolicy: {
@@ -131,10 +143,13 @@ async function startBotSession(input: {
     },
   });
 
-  const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
+  const options = (input.remote ? remoteOptions : sdkMock.query.mock.calls.at(-1)?.[0]?.options) as
     | {
         plugins?: Array<{ type: string; path: string }>;
         settingSources?: string[];
+        disallowedTools?: string[];
+        strictMcpConfig?: boolean;
+        settings?: { autoMemoryEnabled?: boolean; autoDreamEnabled?: boolean };
         systemPrompt?: { append?: string };
       }
     | undefined;
@@ -158,6 +173,23 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     const options = await startBotSession({ ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
     expect(options.settingSources).toEqual([]);
+    expect(options.disallowedTools).toEqual(['Task', 'Agent']);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.settings).toMatchObject({ autoMemoryEnabled: false, autoDreamEnabled: false });
+  });
+
+  it('keeps remote Bot tools and memory in the same scope as local Bots', async () => {
+    const options = await startBotSession({ remote: true });
+    expect(options.disallowedTools).toEqual(['Task', 'Agent']);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.settings).toMatchObject({ autoMemoryEnabled: false, autoDreamEnabled: false });
+  });
+
+  it('preserves ordinary session native delegation and MCP settings', async () => {
+    const options = await startBotSession({ ordinary: true });
+    expect(options.disallowedTools).toBeUndefined();
+    expect(options.strictMcpConfig).toBeUndefined();
+    expect(options.settingSources).toEqual(['user', 'project', 'local']);
   });
 
   it('omits the field entirely when the Bot has not learned anything', async () => {

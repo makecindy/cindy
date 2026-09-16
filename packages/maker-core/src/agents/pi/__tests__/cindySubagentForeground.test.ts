@@ -398,6 +398,7 @@ const timer = setInterval(() => {
   let files = [];
   try { files = fs.readdirSync(path.join(config.runDir, 'controls')); } catch {}
   for (const file of files) {
+    if (!file.endsWith('.json')) continue;
     const control = JSON.parse(fs.readFileSync(path.join(config.runDir, 'controls', file), 'utf8'));
     if (control.action !== 'stop') continue;
     clearInterval(timer);
@@ -407,6 +408,10 @@ const timer = setInterval(() => {
 // Publish readiness only after the stop-control poller is installed. Writing
 // this before setInterval leaves a small CI race where the parent aborts while
 // this fixture is still initializing and observes only the process exit.
+// The writer publishes controls by renaming temporary files. Keep one incomplete
+// temporary file present to exercise the reader during that publication window.
+fs.mkdirSync(path.join(config.runDir, 'controls'), { recursive: true });
+fs.writeFileSync(path.join(config.runDir, 'controls', 'pending.json.tmp-placeholder'), '{');
 fs.writeFileSync(path.join(config.runDir, 'started'), '1');
 setTimeout(() => process.exit(2), 5000).unref();
 `, { mode: 0o700 });

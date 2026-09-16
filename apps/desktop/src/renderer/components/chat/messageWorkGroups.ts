@@ -92,6 +92,7 @@ interface WorkGroupRenderItem {
   type: 'work_group';
   key: string;
   children: WorkGroupChildItem[];
+  deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
   durationMs?: number;
   /** 当前是否是仍在执行的尾部动作段。完成态时间线始终 false。 */
   isStreaming: boolean;

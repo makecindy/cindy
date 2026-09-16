@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { createPiPackageCommandError } from '../pi-package-diagnostic.js';
 
-import { PiManagedPackageMutationFailedError } from '@cindy/maker-core';
+import { PiManagedPackageMutationCancelledError, PiManagedPackageMutationFailedError } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loggerMocks = vi.hoisted(() => ({
@@ -9,10 +9,14 @@ const loggerMocks = vi.hoisted(() => ({
 
 const storeMocks = vi.hoisted(() => ({
   mayHaveChangedState: vi.fn(() => false),
+  command: vi.fn(),
+  commandFailure: vi.fn(),
 }));
 
 vi.mock('../pi-package-store.js', () => ({
   mutatePiPackage: vi.fn(),
+  executePiNativeManagementCommand: storeMocks.command,
+  piNativeManagementFailure: storeMocks.commandFailure,
   piPackageMutationMayHaveChangedState: storeMocks.mayHaveChangedState,
 }));
 
@@ -39,6 +43,23 @@ function buildDeps() {
 }
 
 describe('Pi managed package Main authorization', () => {
+  it('retains safe core failure diagnostics through the legacy error wrapper', async () => {
+    const details = { phase: 'host-binary-update', hostStage: 'download', packagesUpdated: true,
+      recovery: 'check-host-update-and-retry-core' } as const;
+    storeMocks.command.mockRejectedValueOnce(createPiPackageCommandError('ENOTFOUND token=secret', {
+      phase: 'native-command', outcome: 'failed', command: 'update', exitCode: 1,
+    }));
+    storeMocks.commandFailure.mockReturnValueOnce(details);
+    storeMocks.mayHaveChangedState.mockReturnValueOnce(true);
+    const error = await mutateAuthorizedPiManagedPackage({ action: 'command', command: { kind: 'all', force: false },
+      authorization: 'confirmed-tool-call' }).catch(error => error);
+    expect(error).toBeInstanceOf(PiManagedPackageMutationFailedError);
+    expect(error).toMatchObject({ mayHaveChangedState: true, commandFailure: details,
+      diagnostic: { reason: 'network', exitCode: 1, recovery: 'check-network' } });
+    expect(error).not.toHaveProperty('cause');
+    expect(JSON.stringify(error)).not.toContain('secret');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -85,38 +106,6 @@ describe('Pi managed package Main authorization', () => {
       );
     },
   );
-
-  it('publishes sibling convergence before retiring the exact caller snapshot', () => {
-    const piHostSource = readFileSync(new URL('../pi-host.ts', import.meta.url), 'utf8');
-    const makerHostSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
-
-    expect(piHostSource).toContain(
-      '{ onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }',
-    );
-    expect(piHostSource).toContain(
-      'onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled',
-    );
-    expect(makerHostSource).toContain(
-      "onPiManagedPackageMutationCommitted: async (phase = 'commit') =>",
-    );
-    expect(makerHostSource).toContain(
-      'await captureLocalPiPackageRuntimeInvalidationSnapshot(maker)',
-    );
-    expect(makerHostSource).toContain(
-      'pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot',
-    );
-    expect(makerHostSource).toContain(
-      'snapshot.entries.filter(({ session }) => session.id === callerSessionId)',
-    );
-    expect(makerHostSource).toContain(
-      'snapshot.entries.filter(({ session }) => session.id !== callerSessionId)',
-    );
-    expect(makerHostSource).toContain("recoveryAction: 'restart-cindy-to-refresh-packages'");
-    const publishIndex = makerHostSource.indexOf('if (initiallyPartial) partial()');
-    const callerRetirementIndex = makerHostSource.indexOf('{ entries: callerEntries }');
-    expect(publishIndex).toBeGreaterThan(-1);
-    expect(callerRetirementIndex).toBeGreaterThan(publishIndex);
-  });
 
   it('keeps the exact action and source bound to the one-shot grant', async () => {
     const { deps, grant } = buildDeps();
@@ -194,6 +183,47 @@ describe('Pi managed package Main authorization', () => {
         mayHaveChangedState: false,
       },
     );
+  });
+
+  it('preserves cancellation without logging a native failure', async () => {
+    const { deps } = buildDeps();
+    const cancellation = new PiManagedPackageMutationCancelledError();
+    vi.mocked(deps.mutate).mockRejectedValueOnce(cancellation);
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install', source: 'npm:sample', authorization: 'confirmed-tool-call',
+    }, deps)).rejects.toBe(cancellation);
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['timed-out', 'unknown'] as const)('does not turn %s into a deterministic source failure', async (outcome) => {
+    const { deps } = buildDeps();
+    vi.mocked(deps.mutate).mockRejectedValueOnce(createPiPackageCommandError('npm ERR! E404 package not found', {
+      phase: 'native-command', outcome, exitCode: null,
+    }));
+    await expect(mutateAuthorizedPiManagedPackage({
+      action: 'install', source: 'npm:sample', authorization: 'confirmed-tool-call',
+    }, deps)).rejects.toMatchObject({
+      failureCode: 'native-command-failed', diagnostic: { outcome, nativeCode: 'E404', recovery: 'inspect-state-before-retry' },
+    });
+  });
+
+  it('carries safe process evidence without publishing arbitrary output or cause', async () => {
+    const { deps } = buildDeps();
+    const raw = 'npm ERR! E401 Authorization: Bearer deliberately-invalid-secret';
+    vi.mocked(deps.mutate).mockRejectedValueOnce(createPiPackageCommandError(raw, {
+      phase: 'native-command', outcome: 'failed', exitCode: 128,
+    }));
+    const failure = await mutateAuthorizedPiManagedPackage({
+      action: 'install', source: 'npm:sample', authorization: 'confirmed-tool-call',
+    }, deps).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ diagnostic: {
+      phase: 'native-command', outcome: 'failed', exitCode: 128,
+      reason: 'authentication', recovery: 'check-credentials',
+    } });
+    expect(failure).not.toHaveProperty('cause');
+    const published = JSON.stringify([failure, loggerMocks.warn.mock.calls]);
+    expect(published).not.toContain('deliberately-invalid-secret');
+    expect(published).not.toContain(raw);
   });
 
   it('rejects authorization values outside the host-owned union at runtime', async () => {

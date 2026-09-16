@@ -1,3 +1,7 @@
+import { isCindySkillEnabled, renameSkillWithActivation } from './activationPreferences';
+import { skillInstallLockKey, tryAcquireSkillInstallLock } from './installLock';
+import { acquireSharedSkillMutationLease, type SkillMutationRelease } from './sharedMutationLease';
+import { inspectLocalSkillTarget, isPluginManagedSkillPath } from './localSkillTarget';
 /**
  * SkillHub Scanner — 商店层 (registry / market) 视图组装。
  *
@@ -14,13 +18,14 @@
  * Read-only for scan; write helpers gated by SKILL_PATH_WHITELIST.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import matter from 'gray-matter';
 import type { AgentCustomization, Maker, PiRuntimeCapabilityStatus } from '@cindy/maker-core';
 import { registryService, type StoredInstall } from './registry';
+import { reconcileScannedInstall } from './registryReconciliation';
 import { isIgnoredSkillPackagePath } from './packageIgnore';
 
 import { createLogger } from '../logger';
@@ -38,6 +43,13 @@ export interface SkillFileEntry {
 }
 
 export interface Skill {
+  /** Local Cindy override, independent of each engine's native availability. */
+  cindyEnabled?: boolean;
+  canUninstall?: boolean;
+  managedByPlugin?: boolean;
+  uninstallLinkOnly?: boolean;
+  /** All lexical discovery aliases; Main owns their validation. */
+  discoveryPaths?: string[];
   /**
    * Stable id — React key，含 engine 前缀防跨引擎同名冲突。同一 engine 下
    * 若 URL 基键重复，会再追加 canonical source path 的不可逆 hash。
@@ -99,6 +111,8 @@ export interface Skill {
    * 仅 kind=skill 才会填；command/agent 始终 null。
    */
   registryEntry: StoredInstall | null;
+  /** Original market slug from the registry joined by physical path. */
+  registrySkillName?: string;
 }
 
 export type SourceStatus =
@@ -186,6 +200,7 @@ function filterSkillPackageFileEntries(rootDir: string, entries: SkillFileEntry[
 export async function scanAllSkills(
   params: { projects?: ProjectInput[] },
   maker: Maker,
+  managedSkillRoots: readonly string[] = [],
 ): Promise<ScanResult> {
   const projects = params.projects ?? [];
   const projectByWorkingDir = new Map<string, ProjectInput>();
@@ -324,6 +339,13 @@ export async function scanAllSkills(
       frontmatter: c.frontmatter,
       parseError: c.parseError,
       registryEntry: null,            // 下面 join 阶段填
+      ...(c.kind === 'skill' ? (() => {
+        const discoveryPaths = all.map((item) => item.absolutePath);
+        const target = inspectLocalSkillTarget(realPath, discoveryPaths, managedSkillRoots);
+        return { cindyEnabled: isCindySkillEnabled(realPath), discoveryPaths,
+          managedByPlugin: isPluginManagedSkillPath(realPath, managedSkillRoots),
+          canUninstall: target !== null, uninstallLinkOnly: target?.linkOnly ?? false };
+      })() : {}),
       ...(project ? { projectRoot: project.projectRoot } : {}),
       ...(projectHash ? { projectHash } : {}),
     };
@@ -338,15 +360,15 @@ export async function scanAllSkills(
     log.warn('registry list failed, fallback to empty:', err);
     registryEntries = [];
   }
-  const registryByPath = new Map<string, StoredInstall>();
+  const registryByPath = new Map<string, (typeof registryEntries)[number]>();
   const registryLiveKeys = new Map<string, string>();
   for (const r of registryEntries) {
     const installPathKey = path.normalize(r.installPath);
-    registryByPath.set(installPathKey, r.entry);
+    registryByPath.set(installPathKey, r);
     registryLiveKeys.set(installPathKey, installPathKey);
     try {
       const realInstallPathKey = path.normalize(fs.realpathSync(r.installPath));
-      registryByPath.set(realInstallPathKey, r.entry);
+      registryByPath.set(realInstallPathKey, r);
       registryLiveKeys.set(installPathKey, realInstallPathKey);
     } catch {
       // If the path no longer exists, keep the original key so orphan cleanup
@@ -365,64 +387,18 @@ export async function scanAllSkills(
     const normPath = path.normalize(resolved);
     // path 是物理唯一标识；允许 registry skillName 和 scanner directory name 不一致
     // （历史数据或 frontmatter name 与目录名不同步时会出现）
-    s.registryEntry = registryByPath.get(normPath) ?? null;
+    const registered = registryByPath.get(normPath);
+    s.registryEntry = registered?.entry ?? null;
+    s.registrySkillName = registered?.skillName;
     liveRealPaths.add(normPath);
   }
 
-  // ── orphan cleanup (fire-and-forget) ───────────────────────────────────────
-  // 只删除磁盘上目录已不存在的条目；未被当前 scan 覆盖但目录仍在的不算孤儿
-  // （可能只是该项目不在本次 workingDirs 里）。
-  const orphans = registryEntries.filter((r) => {
-    const installPathKey = path.normalize(r.installPath);
-    return !liveRealPaths.has(registryLiveKeys.get(installPathKey) ?? installPathKey);
-  });
-  if (orphans.length > 0) {
-    void Promise.all(
-      orphans.map(async (o) => {
-        try {
-          await fs.promises.access(o.installPath);
-        } catch {
-          await registryService.removeInstall(o.skillName, o.installPath).catch((err) =>
-            log.warn(`orphan cleanup failed for ${o.skillName}@${o.installPath}:`, err),
-          );
-        }
-      }),
-    );
-  }
-
-  // ── Claude symlink repair (fire-and-forget) ────────────────────────────────
-  // 存量安装可能缺少 .claude/skills/ symlink（Codex 原生扫 .agents/ 但 Claude 只扫 .claude/）。
-  // 每次 scan 时检测并补建，确保 Claude Code 能稳定发现。
-  void Promise.all(
-    registryEntries
-      .filter((r) => /[/\\]\.agents[/\\]skills[/\\]/.test(r.installPath))
-      .map(async (r) => {
-        try {
-          await fs.promises.access(r.installPath);
-        } catch { return; }
-        const agentsIdx = r.installPath.replace(/\\/g, '/').lastIndexOf('/.agents/skills/');
-        if (agentsIdx < 0) return;
-        const base = r.installPath.slice(0, agentsIdx);
-        const claudeLink = path.join(base || os.homedir(), '.claude', 'skills', r.skillName);
-        try {
-          const stat = await fs.promises.lstat(claudeLink);
-          if (stat.isSymbolicLink()) {
-            const target = path.resolve(path.dirname(claudeLink), await fs.promises.readlink(claudeLink));
-            if (path.normalize(target) === path.normalize(r.installPath)) return;
-            await fs.promises.unlink(claudeLink);
-          } else {
-            return;
-          }
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return;
-        }
-        await fs.promises.mkdir(path.dirname(claudeLink), { recursive: true });
-        await fs.promises.symlink(
-          r.installPath, claudeLink,
-          process.platform === 'win32' ? 'junction' : 'dir',
-        ).catch((e) => log.warn(`claude symlink repair failed for ${r.skillName}:`, e));
-      }),
-  );
+  // Maintenance uses the same mutation protocol as install/uninstall and
+  // revalidates each registry/source snapshot after acquiring the lease.
+  void Promise.all(registryEntries.map((record) => {
+    const key = path.normalize(record.installPath);
+    return reconcileScannedInstall(record, !liveRealPaths.has(registryLiveKeys.get(key) ?? key));
+  }));
 
   // ── sources[] 兼容 (renderer 只存不读) ─────────────────────────────────────
   const sources: SourceReport[] = listed.errors.map((e) => ({
@@ -794,7 +770,7 @@ export async function writeSkillFile(params: { filePath: string; content: string
 export async function renameLocalSkill(params: {
   absolutePath: string;
   newName: string;
-}): Promise<{ success: true; newAbsolutePath: string } | { success: false; error: string }> {
+}, canMutate: () => boolean = () => true): Promise<{ success: true; newAbsolutePath: string } | { success: false; error: string }> {
   const { absolutePath, newName } = params;
 
   if (!absolutePath || !path.isAbsolute(absolutePath)) {
@@ -853,51 +829,67 @@ export async function renameLocalSkill(params: {
     return { success: false, error: 'SKILL.md 不存在,无法改名' };
   }
 
-  // ── Step 1: rename 目录
-  try {
-    fs.renameSync(absolutePath, newAbsolutePath);
-  } catch (err) {
-    return { success: false, error: `重命名目录失败: ${err instanceof Error ? err.message : String(err)}` };
+  const releases: Array<() => void> = [];
+  for (const name of new Set([oldName, newName].map(skillInstallLockKey))) {
+    const release = tryAcquireSkillInstallLock(name, 'local-rename');
+    if (!release) {
+      releases.forEach((unlock) => unlock());
+      return { success: false, error: 'Skill is busy; retry after the current operation' };
+    }
+    releases.push(release);
   }
-
-  // ── Step 2: 改写 SKILL.md frontmatter 的 name 字段
   const newSkillMd = path.join(newAbsolutePath, 'SKILL.md');
+  const tmpPath = `${newSkillMd}.xdt-tmp`;
+  const backupPath = `${newSkillMd}.xdt-rename-${randomUUID()}`;
+  let renamed = false;
+  let backedUp = false;
+  let releaseShared: SkillMutationRelease | null = null;
   try {
-    const raw = fs.readFileSync(newSkillMd, 'utf-8');
-    const parsed = matter(raw);
-    const data = (parsed.data && typeof parsed.data === 'object'
-      ? parsed.data
-      : {}) as Record<string, unknown>;
-    // 只在 frontmatter 真有 name 字段时才覆写,没有就插入
-    data.name = newName;
-    const next = matter.stringify(parsed.content, data);
-
-    // Atomic tmp + rename 一致地写
-    const tmpPath = `${newSkillMd}.xdt-tmp`;
-    const fd = fs.openSync(tmpPath, 'w');
-    try {
-      fs.writeSync(fd, next);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmpPath, newSkillMd);
+    releaseShared = await acquireSharedSkillMutationLease([oldName, newName]);
+    if (!releaseShared) return { success: false, error: 'Skill is busy; retry after the current operation' };
+    await renameSkillWithActivation(absolutePath, newAbsolutePath, () => {
+      if (!canMutate()) throw new Error('Skill mutation context changed');
+      // Recheck after waiting for the preferences lock; never replace a new entity.
+      const current = fs.lstatSync(absolutePath);
+      if (current.dev !== stat.dev || current.ino !== stat.ino || fs.existsSync(newAbsolutePath)) {
+        throw new Error('Skill changed; refresh and retry');
+      }
+      const currentMd = fs.lstatSync(oldSkillMd);
+      if (currentMd.isSymbolicLink() || currentMd.dev !== skillMdStat.dev || currentMd.ino !== skillMdStat.ino) {
+        throw new Error('Skill content changed; refresh and retry');
+      }
+      const parsed = matter(fs.readFileSync(oldSkillMd, 'utf-8'));
+      const data = (parsed.data && typeof parsed.data === 'object' ? parsed.data : {}) as Record<string, unknown>;
+      data.name = newName;
+      const next = matter.stringify(parsed.content, data);
+      fs.renameSync(absolutePath, newAbsolutePath);
+      renamed = true;
+      const fd = fs.openSync(tmpPath, 'w');
+      try { fs.writeSync(fd, next); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
+      fs.renameSync(newSkillMd, backupPath);
+      backedUp = true;
+      fs.renameSync(tmpPath, newSkillMd);
+    });
+    // packageIgnore excludes this reserved backup from browsing, hashes,
+    // snapshots and ZIPs even if Windows keeps it locked after commit.
+    try { fs.unlinkSync(backupPath); } catch { /* Do not roll back committed preferences. */ }
+    return { success: true, newAbsolutePath };
   } catch (err) {
-    // 回滚:把目录改回去,避免本地处于"目录新名 + frontmatter 旧名"的半完成状态
-    try {
-      fs.renameSync(newAbsolutePath, absolutePath);
-    } catch {
-      // 回滚也失败 — 报双重失败,让调用方提示用户手动修
-      return {
-        success: false,
-        error: `改写 SKILL.md 失败且回滚也失败: ${err instanceof Error ? err.message : String(err)}`,
-      };
+    if (renamed) {
+      try {
+        // Keep the original file until preferences commit, so even a full disk
+        // can roll back with renames instead of writing the contents again.
+        if (backedUp) fs.renameSync(backupPath, newSkillMd);
+        try { fs.unlinkSync(tmpPath); } catch { /* No staging file after a completed switch. */ }
+        fs.renameSync(newAbsolutePath, absolutePath);
+      } catch (rollbackError) {
+        return { success: false, error: `Skill rename and rollback failed: ${String(rollbackError)}` };
+      }
     }
-    return {
-      success: false,
-      error: `改写 SKILL.md frontmatter 失败,已回滚目录: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    return { success: false, error: `Skill rename failed: ${String(err)}` };
+  } finally {
+    await releaseShared?.();
+    releases.forEach((unlock) => unlock());
   }
-
-  return { success: true, newAbsolutePath };
 }

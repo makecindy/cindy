@@ -26,14 +26,7 @@ export interface BotChatIdentity {
   avatarColor?: string | null;
 }
 
-export function BotSessionContentHeader({
-  bot,
-  sessionId,
-}: {
-  bot: BotChatIdentity;
-  /** 没有会话 id 就打不开那一个会话的仓库 —— 此时整枚入口不渲染,不给死按钮。 */
-  sessionId?: string | null;
-}) {
+export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
@@ -59,15 +52,17 @@ export function BotSessionContentHeader({
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
-      {!bot.deviceId ? <button
-        type="button"
-        onClick={openSettings}
-        aria-label={t('bots.settings')}
-        className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-        style={WINDOW_NO_DRAG_STYLE}
-      >
-        <Settings2 size={15} />
-      </button> : <span className="ml-auto truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {!bot.deviceId ? <button
+          type="button"
+          onClick={openSettings}
+          aria-label={t('bots.settings')}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          style={WINDOW_NO_DRAG_STYLE}
+        >
+          <Settings2 size={15} />
+        </button> : <span className="truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>}
+      </div>
     </div>
   );
 }
@@ -79,13 +74,11 @@ export function BotSessionContentHeader({
  */
 export function BotSessionContentHeaderRegistration({
   bot,
-  sessionId,
 }: {
   bot: BotChatIdentity;
-  sessionId?: string | null;
 }) {
   useRegisterContentHeader(
-    useMemo(() => <BotSessionContentHeader bot={bot} sessionId={sessionId} />, [bot, sessionId]),
+    useMemo(() => <BotSessionContentHeader bot={bot} />, [bot]),
   );
   return null;
 }

@@ -117,6 +117,39 @@ function collectBuildMeta() {
   return { schemaVersionMax, migrationFiles, commitSha, electronVersion };
 }
 
+function verifyPackagedSourceMetadata({ appName, platform, arch, expectedCommit }) {
+  const packagedDir = path.join(DESKTOP_ROOT, 'out', `${appName}-${platform}-${arch}`);
+  const metadataPath =
+    platform === 'darwin'
+      ? path.join(packagedDir, `${appName}.app`, 'Contents', 'Resources', 'cindy-source.json')
+      : path.join(packagedDir, 'resources', 'cindy-source.json');
+  if (!fs.existsSync(metadataPath)) {
+    throw new Error(`packaged Cindy source metadata missing at ${metadataPath}`);
+  }
+  let metadata;
+  try {
+    metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`packaged Cindy source metadata is invalid JSON: ${err.message}`);
+  }
+  if (
+    !metadata ||
+    typeof metadata.sourceCommit !== 'string' ||
+    !metadata.sourceCommit ||
+    typeof metadata.builtAt !== 'string' ||
+    !metadata.builtAt ||
+    Number.isNaN(Date.parse(metadata.builtAt))
+  ) {
+    throw new Error(`packaged Cindy source metadata has invalid sourceCommit/builtAt: ${metadataPath}`);
+  }
+  if (expectedCommit && metadata.sourceCommit !== expectedCommit) {
+    throw new Error(
+      `packaged Cindy source metadata commit mismatch: expected ${expectedCommit}, got ${metadata.sourceCommit}`,
+    );
+  }
+  console.log(`    verified packaged source metadata: ${metadata.sourceCommit}`);
+}
+
 // ── CDN 基线(仅 --version major/minor/patch 时调用,只读)─────────────────────
 
 async function fetchCdnBaselineVersion(platformKey, region) {
@@ -625,6 +658,13 @@ async function main() {
       versionless,
       noSign,
       webAuthnAppleTeamId: webAuthnProvisioningProfile ? macSigningIdentity?.teamId : undefined,
+    });
+
+    verifyPackagedSourceMetadata({
+      appName,
+      platform,
+      arch,
+      expectedCommit: meta.commitSha,
     });
 
     // drizzle 资源校验(平台差异只在 packaged 内路径)。

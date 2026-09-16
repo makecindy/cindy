@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
 import {
@@ -16,12 +16,13 @@ import {
   shouldReleaseConversationSearchLock,
   stampRemoteSearchResponse,
 } from '@/lib/conversationSearchFanout';
-import { searchConversationsAcrossOrigins } from '@/lib/conversationSearchService';
+import { searchConversations, searchConversationsAcrossOrigins } from '@/lib/conversationSearchService';
 import type {
   ConversationSearchRequest,
   ConversationSearchResponse,
   ConversationSearchResultItem,
 } from '../../../shared/conversationSearch';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { MACHINE_ALL, MACHINE_LOCAL } from '@/features/device-link/selectedMachineStore';
 
 function session(partial: Partial<Session> & Pick<Session, 'id' | 'title'>): Session {
@@ -300,6 +301,23 @@ describe('merge and stamp', () => {
 });
 
 describe('searchCachedSessionsByTitle', () => {
+  it('excludes active and archived companions before ranking and limiting title matches', () => {
+    const rows = [
+      session({ id: 'bot-active', title: 'needle', source: 'bot' }),
+      session({ id: 'bot-archived', title: 'needle', source: 'bot', status: 'archived' }),
+      session({ id: 'ordinary', title: 'Needle planning', source: 'desktop' }),
+      session({ id: 'legacy', title: 'Needle notes' }),
+    ];
+    const page = searchCachedSessionsByTitle(rows, { query: 'needle', limit: 2 });
+    expect(page.results.map((item) => item.session.id).sort()).toEqual(['legacy', 'ordinary']);
+    expect(
+      searchCachedSessionsByTitle(rows, {
+        query: 'needle',
+        filters: { sessionIds: ['bot-active', 'bot-archived'] },
+      }).results,
+    ).toEqual([]);
+  });
+
   it('matches visible titles and skips workers', () => {
     const request: ConversationSearchRequest = { query: 'remote', limit: 10 };
     const page = searchCachedSessionsByTitle(
@@ -318,6 +336,79 @@ describe('searchCachedSessionsByTitle', () => {
     expect(page.results.map((item) => item.session.id)).toEqual(['hit']);
     expect(page.results[0]?.matchKind).toBe('title');
   });
+});
+
+describe('ordinary search against a retained remote companion mirror', () => {
+  afterEach(() => {
+    remoteProjectsStore.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['offline', 'disconnect', 'timeout', 'legacy-list', 'legacy-cache'] as const)(
+    'hides companion titles on %s fallback while preserving their model metadata',
+    async (mode) => {
+      const deviceId = 'companion-search-host';
+      const bot = session({
+        id: 'bot-active',
+        title: 'needle',
+        source: 'bot',
+        model: 'gpt-6-astra',
+        agentKind: 'codex',
+      });
+      const archivedBot = { ...bot, id: 'bot-archived', status: 'archived' as const };
+      const ordinary = session({ id: 'ordinary', title: 'Needle planning', source: 'desktop' });
+      remoteProjectsStore.pinSessionOrigin(deviceId, bot.id);
+      remoteProjectsStore.mergeDeviceSessions(deviceId, 'MacBook', [bot, ordinary]);
+      remoteProjectsStore.mergeDeviceSessions(deviceId, 'MacBook', [archivedBot], 'archived');
+      // An ordinary list excludes companions; their chat metadata survives its refresh.
+      remoteProjectsStore.setDeviceSessions(deviceId, 'MacBook', [ordinary]);
+      remoteProjectsStore.markDeviceDisconnected(deviceId);
+      const snapshot = remoteProjectsStore.getDeviceSessions(deviceId);
+      const invoke = vi.fn(async (_device, channel) => {
+        if (mode === 'disconnect') throw new Error('[DEVICE_LINK_NOT_CONNECTED] closed');
+        if (mode === 'timeout') throw new Error('[DEVICE_LINK_TIMEOUT] unavailable');
+        if (channel === 'local-db:conversations:search')
+          throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] unsupported');
+        if (mode === 'legacy-list') return [bot, archivedBot, ordinary];
+        throw new Error('[DEVICE_LINK_TIMEOUT] list unavailable');
+      });
+      vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+      const page = await searchConversations(
+        { query: 'needle', limit: 1 },
+        {
+          origins: [
+            {
+              kind: 'remote',
+              deviceId,
+              deviceName: 'MacBook',
+              connected: mode !== 'offline',
+              sessionIds: null,
+            },
+          ],
+        },
+      );
+      expect(page.results.map((item) => item.session.id)).toEqual(['ordinary']);
+      expect(page.remoteResults?.map((item) => item.session.id)).toEqual(['ordinary']);
+      expect(page.results[0]?.session.deviceLinkDeviceId).toBe(deviceId);
+      expect(invoke).toHaveBeenCalledTimes(
+        mode === 'offline' ? 0 : mode.startsWith('legacy') ? 2 : 1,
+      );
+      expect(remoteProjectsStore.getDeviceSessions(deviceId)).toBe(snapshot);
+      expect(snapshot.filter((row) => row.source === 'bot')).toEqual(
+        expect.arrayContaining(
+          [bot, archivedBot].map((row) =>
+            expect.objectContaining({
+              id: row.id,
+              status: row.status,
+              model: 'gpt-6-astra',
+              agentKind: 'codex',
+              deviceLinkDeviceId: deviceId,
+            }),
+          ),
+        ),
+      );
+    },
+  );
 });
 
 describe('searchConversationsAcrossOrigins', () => {

@@ -2119,7 +2119,9 @@ export function initUpdateService(): void {
     assertTrustedAppRendererEvent(event);
     log.info('relaunch requested for update channel change');
     discardUnappliedStagedPatchForChannelRelaunch();
-    app.relaunch();
+    // Explicit JS argv has had import credentials removed; Electron's default
+    // relaunch arguments retain the original native command line.
+    app.relaunch({ args: process.argv.slice(1) });
     app.quit();
   });
 

@@ -68,11 +68,11 @@ export function toLegacyUsdModelPricing(
 /** usage handler 需要的 host-level 查询与刷新能力。 */
 export interface MakerUsageHandlerDeps {
   readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTodayUsage>;
-  readCodexAccountUsageSnapshot(): Promise<RateLimitSnapshot | null>;
-  readCodexRateLimits(): Promise<MobileCodexRateLimitsResult>;
-  consumeCodexRateLimitReset(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
-  readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
-  readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null>;
+  readCodexAccountUsageSnapshot(providerId?: string): Promise<RateLimitSnapshot | null>;
+  readCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
+  consumeCodexRateLimitReset(idempotencyKey: string, providerId?: string): Promise<MobileCodexRateLimitResetResult>;
+  readClaudeSubscriptionUsageSnapshot(providerId?: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readXaiSubscriptionUsageSnapshot(providerId?: string): Promise<XaiSubscriptionUsageSnapshot | null>;
   /**
    * 用量历史会读取完整的 sessions 表，必须在任何参数解析或 DB 查询前确认
    * 请求来自受信任的主页面 renderer。
@@ -94,9 +94,13 @@ export function registerMakerUsageHandlers(
     return await deps.readAgentTodayUsage(requireString(agentKind, 'agentKind') as AgentKind);
   });
 
-  registry.handle(MAKER_INVOKE.USAGE_ACCOUNT, async (_e, agentKind: unknown) => {
+  registry.handle(MAKER_INVOKE.USAGE_ACCOUNT, async (_e, agentKind: unknown, providerId?: unknown) => {
     const kind = requireString(agentKind, 'agentKind');
-    if (kind === 'codex') return await deps.readCodexAccountUsageSnapshot();
+    if (kind === 'codex') {
+      const id = providerId === undefined ? undefined : requireString(providerId, 'providerId');
+      const snapshot = await deps.readCodexAccountUsageSnapshot(id);
+      return snapshot && id && id !== 'openai' ? { ...snapshot, providerId: id } : snapshot;
+    }
     if (kind === 'claude-code') {
       // Both first load and explicit refresh must reach the existing owner-scoped fetcher.
       // Cached reads retain its throttle; an empty cache gets the existing warm-start path.
@@ -106,9 +110,9 @@ export function registerMakerUsageHandlers(
     return null;
   });
 
-  registry.handle(MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS, async () => {
+  registry.handle(MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS, async (_e, providerId?: unknown) => {
     try {
-      return await deps.readCodexRateLimits();
+      return await deps.readCodexRateLimits(providerId === undefined ? undefined : requireString(providerId, 'providerId'));
     } catch (err) {
       if (err instanceof CodexRateLimitResetRejectedError) {
         throwIpcError('PRECONDITION_FAILED', `${err.reason}: ${err.message}`);
@@ -119,13 +123,13 @@ export function registerMakerUsageHandlers(
 
   registry.handle(
     MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET,
-    async (_e, idempotencyKey: unknown) => {
+    async (_e, idempotencyKey: unknown, providerId?: unknown) => {
       const key = requireString(idempotencyKey, 'idempotencyKey');
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) {
         throwIpcError('INVALID_PARAMS', 'idempotencyKey must be a UUID');
       }
       try {
-        return await deps.consumeCodexRateLimitReset(key);
+        return await (providerId === undefined ? deps.consumeCodexRateLimitReset(key) : deps.consumeCodexRateLimitReset(key, requireString(providerId, 'providerId')));
       } catch (err) {
         if (err instanceof CodexRateLimitResetRejectedError) {
           throwIpcError('PRECONDITION_FAILED', `${err.reason}: ${err.message}`);
@@ -136,13 +140,14 @@ export function registerMakerUsageHandlers(
   );
 
   // Claude 订阅账号余量 (5h/周/分模型窗口) — cached-first, 内部按需后台刷新。
-  registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async () => {
-    return await deps.readClaudeSubscriptionUsageSnapshot();
+  registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async (event, providerId) => {
+    if (providerId !== undefined) deps.assertTrustedSender?.(event);
+    return await deps.readClaudeSubscriptionUsageSnapshot(providerId === undefined ? undefined : requireString(providerId, 'providerId'));
   });
 
-  registry.handle(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION, async (event) => {
+  registry.handle(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION, async (event, providerId) => {
     deps.assertTrustedSender?.(event);
-    return await deps.readXaiSubscriptionUsageSnapshot();
+    return await deps.readXaiSubscriptionUsageSnapshot(providerId === undefined ? undefined : requireString(providerId, 'providerId'));
   });
 
   // device-link v1:保留旧扁平 USD 形状，不能把 CNY 伪装成 *Usd。

@@ -22,10 +22,13 @@ vi.mock('electron', () => ({
 }));
 
 import type { Logger, McpProvider } from '@cindy/maker-core';
+import { CustomMcpProvider } from '../custom-mcp-provider.js';
+import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
 } from '../codexBuiltinToolPolicy.js';
+import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession.js';
 import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
@@ -263,8 +266,9 @@ describe('piEnvironment per-session identity', () => {
     config!.disposeSessionCtx!();
   });
 
-  it('gives a Bot only its frozen built-ins plus configured custom MCPs', async () => {
+  it.each([true, false])('keeps the plugin gateway with frozen Bot tools when memory is %s', async (memoryEnabled) => {
     const config = await getPiExtraSpawnConfig([
+      makeProvider('cindy'),
       makeProvider('cindy_memory'),
       makeProvider('cindy_helper'),
       makeProvider('cindy_orca'),
@@ -274,7 +278,7 @@ describe('piEnvironment per-session identity', () => {
       sessionId: 'pi-bot-minimal-tools',
       workingDir: '/repo',
       memoryScopeKey: 'bot:bot-minimal-tools',
-      memoryEnabled: true,
+      memoryEnabled,
       vendorOptions: {
         [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory', 'xdt_helper'],
       },
@@ -288,10 +292,43 @@ describe('piEnvironment per-session identity', () => {
     });
 
     expect(config?.mcpBridge?.servers.map((server) => server.name).sort()).toEqual([
+      'cindy',
       'cindy_helper',
-      'cindy_memory',
+      ...(memoryEnabled ? ['cindy_memory'] : []),
       'custom_probe',
     ]);
+    expect(config?.mcpBridge?.botMemoryFacade).toBe(true);
+    const gateway = config!.mcpBridge!.servers.find((server) => server.name === 'cindy')!;
+    const headers = {
+      authorization: `Bearer ${config!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initialized = await fetch(gateway.url, { method: 'POST', headers, body: INIT_BODY(1) });
+    expect(initialized.status).toBe(200);
+    const mcpSessionId = initialized.headers.get('mcp-session-id')!;
+    await initialized.text();
+    const called = await fetch(gateway.url, {
+      method: 'POST', headers: { ...headers, 'mcp-session-id': mcpSessionId },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'current_session', arguments: {} } }),
+    });
+    expect(called.status).toBe(200);
+    expect(await readRpcText(called)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'pi-bot-minimal-tools' }] },
+    });
+    config?.disposeSessionCtx?.();
+  });
+
+  it('keeps native companion helpers available when memory is disabled', async () => {
+    const config = await getPiExtraSpawnConfig([
+      makeProvider('cindy_memory'), makeProvider('cindy_helper'),
+    ], noopLogger(), {
+      sessionId: 'pi-bot-no-memory', workingDir: '/repo',
+      memoryEnabled: false,
+      botMcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+    });
+    expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(['cindy_helper']);
     expect(config?.mcpBridge?.botMemoryFacade).toBe(true);
     config?.disposeSessionCtx?.();
   });
@@ -308,6 +345,32 @@ describe('piEnvironment per-session identity', () => {
 
     expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
     config?.disposeSessionCtx?.();
+  });
+
+  it('exposes cindy_make only to a Session carrying the Cindy Make marker', async () => {
+    const providers = [makeProvider('cindy_make'), makeProvider('custom_probe')];
+    const ordinary = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-ordinary',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(ordinary?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    ordinary?.disposeSessionCtx?.();
+
+    const anonymous = await getPiExtraSpawnConfig(providers, noopLogger());
+    expect(anonymous?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    anonymous?.disposeSessionCtx?.();
+
+    const make = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-make',
+      workingDir: '/cindy-make/source',
+      vendorOptions: { [CINDY_MAKE_VENDOR_OPTION_KEY]: true },
+    });
+    expect(make?.mcpBridge?.servers.map((server) => server.name)).toEqual([
+      'cindy_make',
+      'custom_probe',
+    ]);
+    make?.disposeSessionCtx?.();
   });
 
   it('omits a stable built-in server when the frozen Bot Toolset disables it', async () => {
@@ -720,6 +783,65 @@ describe('piEnvironment per-session identity', () => {
     expect(logs).not.toContain(logCanary);
     expect(logs).not.toContain('user:secret');
     config!.disposeSessionCtx!();
+  });
+
+  it('advertises only custom transports the Pi bridge can actually assemble', async () => {
+    const configs = [
+      { id: 'https', transport: 'http' as const, url: 'https://example.test/mcp' },
+      { id: 'sse', transport: 'sse' as const, url: 'https://example.test/events' },
+      { id: 'public-http', transport: 'http' as const, url: 'http://example.test/mcp' },
+      { id: 'local-http', transport: 'http' as const, url: 'http://localhost:4321/mcp' },
+      { id: 'ipv4', transport: 'http' as const, url: 'http://127.0.0.1:4321/mcp' },
+      { id: 'ipv6', transport: 'http' as const, url: 'http://[::1]:4321/mcp' },
+      { id: 'other-loopback', transport: 'http' as const, url: 'http://127.0.0.2:4321/mcp' },
+      { id: 'credentials', transport: 'http' as const, url: 'https://user:canary@example.test/mcp' },
+      { id: 'invalid-url', transport: 'http' as const, url: 'not a url' },
+    ].map((config) => ({ ...config, name: config.id, headers: {}, updatedAt: 1 }));
+    const builtin = makeProvider('cindy_memory');
+    const sdkFactory = vi.spyOn(builtin, 'toClaudeSdkConfig');
+    const providers = [builtin, ...configs.map((config) => new CustomMcpProvider(config, () => 'TOKEN_CANARY'))];
+    const catalog = buildBotMcpCatalog({ agentKind: 'pi', providers,
+      builtinNames: ['cindy_memory'], customServers: configs });
+    expect(sdkFactory).not.toHaveBeenCalled();
+    const available = catalog.filter((entry) => entry.available).map((entry) => entry.name);
+    expect(available).toEqual(['cindy_memory', 'https', 'local-http', 'ipv4', 'ipv6']);
+    expect(JSON.stringify(catalog)).not.toMatch(/TOKEN_CANARY|example.test|user:canary/);
+
+    const config = await getPiExtraSpawnConfig(providers, noopLogger(), { workingDir: '', memoryEnabled: true });
+    try {
+      expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(available);
+    } finally {
+      config?.disposeSessionCtx?.();
+    }
+  });
+
+  it('does not advertise desktop-loopback custom MCPs to SSH Pi', async () => {
+    const configs = [
+      { id: 'https', transport: 'http' as const, url: 'https://example.test/mcp' },
+      { id: 'local-http', transport: 'http' as const, url: 'http://localhost:4321/mcp' },
+      { id: 'ipv4', transport: 'http' as const, url: 'http://127.0.0.1:4321/mcp' },
+      { id: 'ipv6', transport: 'http' as const, url: 'http://[::1]:4321/mcp' },
+    ].map((config) => ({ ...config, name: config.id, headers: {}, updatedAt: 1 }));
+    const builtin = makeProvider('cindy_memory');
+    const providers = [builtin, ...configs.map((config) => new CustomMcpProvider(config, () => 'TOKEN_CANARY'))];
+    const catalog = buildBotMcpCatalog({
+      agentKind: 'pi', remoteHostId: 'ssh-host', providers,
+      builtinNames: ['cindy_memory'], customServers: configs,
+    });
+    expect(catalog.filter((entry) => entry.available).map((entry) => entry.name))
+      .toEqual(['cindy_memory', 'https']);
+    expect(JSON.stringify(catalog)).not.toMatch(/TOKEN_CANARY|example.test|localhost|127\.0\.0\.1/);
+
+    const config = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      workingDir: '', memoryEnabled: true, remoteHostId: 'ssh-host',
+    });
+    try {
+      expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(['cindy_memory', 'https']);
+      expect(config?.mcpBridge?.servers.some((server) => server.remote && /localhost|127\.0\.0\.1|::1/.test(server.url)))
+        .toBe(false);
+    } finally {
+      config?.disposeSessionCtx?.();
+    }
   });
 
   it('snapshots remote MCP lifecycle changes for new sessions while old leases keep their startup config', async () => {

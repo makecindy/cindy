@@ -16,8 +16,8 @@
 - [`repo-map.md`](repo-map.md)：仓库地图——apps、packages 与顶层目录的定位导航。
 - [`environment-setup.md`](environment-setup.md)：公共开发环境、依赖安装与 submodule
   准备。
-- [`model-catalog-maintenance.md`](model-catalog-maintenance.md)：模型窗口、价格与能力的
-  Server／客户端数据归属、目录更新和运行验收。
+- [`model-catalog-maintenance.md`](model-catalog-maintenance.md)：模型配置与下发统一入口——架构图、字段职责、覆盖顺序、修改位置、代码导航与发布验收。
+- [`model-catalog-runtime.md`](model-catalog-runtime.md)：模型窗口、压缩预算、原生缓存、参考价与显示细则；从架构入口按需进入。
 - [`desktop-development.md`](desktop-development.md)：Desktop 的 Agent 安全启动入口与
   分层验证命令。
 - [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)：

@@ -29,6 +29,10 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
 }
 
 describe('session runtime control wiring', () => {
+  it('replays Windows attention after the main window is shown independently of inventory loading', () => {
+    const body = handlerBody(bootstrapSource, "mainWindow.once('ready-to-show'", 'if (!app.isPackaged) markDesktopDevWindowReady();');
+    expect(body.indexOf('refreshWindowsAppBadge();')).toBeGreaterThan(body.indexOf('showMainWindowAndRestoreFullscreen('));
+  });
   it('advertises host-side model-window protection to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
@@ -171,6 +175,10 @@ describe('session runtime control wiring', () => {
       '// ── Custom protocol registration',
     );
     expect(body).toContain('ghostPanelWindowsController.closeForOwnerChange();');
+    expect(body.indexOf('clearAllSessionAttention();')).toBeGreaterThan(-1);
+    expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
+      body.indexOf('authManager.setStableOwnerPostCommitTask('),
+    );
     expect(body).toContain('clearAllSessionProviders();');
     expect(body).toContain('clearAllSessionRuntimeAxes();');
     expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(
@@ -266,8 +274,9 @@ describe('session runtime control wiring', () => {
       'async function syncLibraryReadonlyExtraDir(',
       'let agentInputCoordinatorHolder',
     );
-    expect(syncLibrary).toContain('listVisibleActiveSessionIds()');
-    expect(syncLibrary).toContain('targets.add(focused)');
+    expect(syncLibrary).toContain('listVisibleActiveSessionDirectoryGrants()');
+    expect(syncLibrary).toContain('libraryExtraDirSyncTargets(');
+    expect(syncLibrary).toContain('listActiveSessions()');
     expect(syncLibrary).toContain('sessionIsRemote(sessionId)');
     expect(syncLibrary).toContain('!remote && grantRoot && sessionId === focused ? grantRoot : null');
     expect(syncLibrary).toContain("return 'superseded'");
@@ -275,6 +284,7 @@ describe('session runtime control wiring', () => {
     expect(syncLibrary).toContain("throw new Error('library extraDirs not granted to focused session')");
     expect(syncLibrary).toContain('if (!remote && nextRoot && sessionId === focused) throw error');
     expect(syncLibrary).toContain('libraryExtraDirSyncChain.then(run, run)');
+    expect(syncLibrary).toContain('applied?.some(isLibraryExtraDirSlot)');
     expect(syncLibrary).toMatch(
       /await applyLibraryReadonlyExtraDir\(sessionId, nextRoot\);[\s\S]*if \(generation !== libraryExtraDirSyncGeneration\) return 'superseded'/,
     );
@@ -289,20 +299,15 @@ describe('session runtime control wiring', () => {
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    const guard = setModel.indexOf(
-      "if (internalOptions.source === 'user' && !internalOptions.sessionLockHeld && !isDeviceLinkInvoke()) {",
-    );
-    expect(guard).toBeGreaterThan(-1);
-    expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeGreaterThan(
-      guard,
-    );
-    expect(setModel.indexOf('assertTrustedAppRendererEvent(')).toBeLessThan(
-      setModel.indexOf("typeof sessionId !== 'string'"),
-    );
+    const ingress = setModel.indexOf('registerSessionSetModelHandler(makerSessionRegistry, {');
+    expect(ingress).toBeGreaterThan(-1);
+    expect(setModel.slice(0, ingress)).not.toContain('assertTrustedAppRendererEvent(');
+    expect(setModel.slice(ingress)).toContain('assertTrustedSender: (event) => assertTrustedAppRendererEvent(');
+    expect(setModel.slice(ingress)).toContain('isDeviceLinkInvoke,');
     expect(setModel).toContain('!isSupportedRuntimeEffort(selectionEffort)');
     expect(setModel).toContain("internalOptions.source !== 'user'");
     expect(registerSource).toMatch(
-      /handleSetModel\(\s*undefined,\s*sessionId,\s*model,\s*providerId,\s*undefined,\s*selection,\s*options,?\s*\)/,
+      /handleSetModel\(\s*sessionId,\s*model,\s*providerId,\s*undefined,\s*selection,\s*options,?\s*\)/,
     );
     expect(setModel).toMatch(/\{\s*source:\s*'user',?\s*\}/);
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
@@ -544,15 +549,18 @@ describe('session runtime control wiring', () => {
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
     const commitRebuild = handlerBody(
       registerSource,
-      'commitRebuild: async (sessionId, handoff, meta) => {',
+      'commitRebuild: async (sessionId, handoff, meta, signal) => {',
       'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
     );
     const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
     const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
+    const cancellation = commitRebuild.indexOf('signal?.throwIfAborted();');
     const broadcast = commitRebuild.indexOf('broadcastSessionPatched(\n        sessionId,');
 
     expect(query).toBeGreaterThan(-1);
     expect(commit).toBeGreaterThan(query);
+    expect(cancellation).toBeGreaterThan(query);
+    expect(commit).toBeGreaterThan(cancellation);
     expect(broadcast).toBeGreaterThan(commit);
     expect(commitRebuild).toContain('contextTokens: 0,');
     expect(commitRebuild).toContain('{ contextWindow: projectionContextWindow }');

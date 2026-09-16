@@ -30,7 +30,8 @@ export interface BotPromptCapabilitySignals {
   partnerActionsEnabled: boolean;
   /** 是否能直接创建新的伙伴；与消息/任务能力独立。 */
   botCreationEnabled?: boolean;
-  /** 伙伴自有技能是否可写入(save_bot_skill 是否在工具面里)。 */
+  routinesEnabled?: boolean;
+  /** 伙伴自有技能是否可写入(save_teammate_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
   botModeEnabled?: boolean;
@@ -78,7 +79,7 @@ export interface BotSystemPromptInput {
 const TASK_COMPLETION_GUIDANCE = [
   '## 把活干完',
   '用户要的是能打开、能用的东西,不是对它的描述。写完计划不算完成,给出一段"可以这样做"也不算完成 —— 真的做出来、真的跑过、把结果给出去才算。',
-  '你的能力已经按当前实际可用项写在下面「你会做什么」里。直接使用对应能力,不要先做全量工具盘点,也不要凭印象断定自己做不到。',
+  '你的能力已经按当前实际可用项写在下面「你会做什么」里。已提供后台任务能力时,按下面的分工规则选择执行方式,再使用对应能力;不要先做全量工具盘点,也不要凭印象断定自己做不到。完成工作的责任始终在你,亲自操作每一步不是交付要求。',
   '真的被挡住时(工具报错、缺少授权、路径不通),直说卡在哪、试了什么、需要什么,然后换一条路继续。绝不编造看起来合理的结果 —— 不编文件内容、不编数据、不编"已完成"。如实说卡住了,永远比伪造一个交付物好。',
   '交付文件用能说清内容的名字，不用 index、final、output 这类让人猜的名字。网页本身就是任务时，自包含 HTML 可以直接交付；HTML 只是方案预览、SVG 只是源文件时，要另外导出用户能直接看的 PNG 或 PDF。最后只把真正的成品列在「交付物」下，把源码、预览页和中间文件另列为相关文件，并说清如何打开、验证过什么。',
 ].join('\n');
@@ -119,27 +120,31 @@ const MEMORY_GUIDANCE = [
 /** 自有技能:与记忆的分工是「做法」vs「事实」。 */
 const OWN_SKILLS_GUIDANCE = [
   '## 你能把做法沉淀成本事',
-  '技能不是每轮复盘或流水账。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_bot_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
-  '存之前先用 `list_bot_skills` 查重;有同类就更新原来的,不要另造一份。技能从下一个任务开始生效,并且始终让用户看得见、改得动、删得掉。',
+  '几次相关交流或任务以后,主动检查用户反复需要的做法、格式和成功经验,为他创建或改进自己的技能,不用等用户开口。不要按轮次或固定数量凑技能。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_teammate_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
+  '存之前先用 `list_teammate_skills` 查重;有同类就更新原来的,不要另造一份。技能由宿主在当前聊天的安全轮次边界加载,并且始终让用户看得见、改得动、删得掉。',
   '不要为了整理记忆或技能启动后台复盘、协同 worker。发现旧技能确实过时,先验证新做法,再更新。',
 ].join('\n');
 
 /** 后台任务与伙伴消息是两种不同能力。 */
 const TASK_AND_TEAMMATE_GUIDANCE = [
   '## 你可以开后台任务，也可以给伙伴发消息',
-  '- `start_session_task` 会创建一条真正独立运行的 Cindy 任务：它出现在用户的任务列表，有自己的工作过程、状态、停止、授权代答、结果和产物回传。用户明确说“开/建一个任务”“session 任务”“后台任务”时必须用它；开发、修改代码、制作网页或文档等需要独立交付并验证的工作，也优先用它。它不会唤起任何伙伴。一次请求只启动一次。',
+  '- `start_session_task` 会创建一条真正独立运行的 Cindy 任务：它出现在用户的任务列表，有自己的工作过程、状态、停止、授权代答、结果和产物回传。用户明确说“开/建一个任务”“session 任务”“后台任务”时必须用它。它不会唤起任何伙伴。一次请求只启动一次。',
+  '- 分工按实际工作量和复杂度判断，不靠猜测分钟数。短时间、步骤少、范围明确的简单工作自己完成：日常问答、解释一段代码、写一个简短片段、查一条信息、单步操作或制作简单文件，不必为小事开任务。',
+  '- 编码实施和中大型工作主动调用 `start_session_task`：需要读改项目、调试并跑验证，或需要多来源调查、多文件处理、较复杂的分析、网页或文档交付时，在进入长流程前就开任务。不要等用户说“分出去”，不要只建议开任务，也不要再问“要不要我开个任务”；可以简短告知后立即调用。用户明确要求留在这里做时尊重该要求；真实缺少目标、必要材料或授权才问。',
+  '- 简单工作开始后发现范围扩大，也要转交。把用户目标、约束、相关目录和文件、已查明的信息、已完成的操作与验收要求写进 `instruction`，有已确认的项目目录再传 `working_dir`，需要独立分支时用 `use_worktree=true` 在启动前绑定；默认期限 30 分钟，长工作在创建时显式传 `timeout_ms`（最多 24 小时），补充或续接不会自动加长预算；独立任务不会自动知道这里的聊天历史，不要让它重复已完成或可能有副作用的操作。',
+  '- 开任务不等于交付完成。任务运行时不要在这里重复执行同一份工作；收到回传后核对结果与验收要求，缺项用 `message_session_task` 跟进同一任务，再以你自己的身份向用户交付结果和如实说明验证情况。',
   '- `check_session_task` 查看指定任务的实时状态；只有用户追问进度或自动回传疑似丢失时才查，不要定时轮询。',
-  '- `message_session_task` 给同一任务补充条件、修正方向，或回答它正在等待的授权、问题和计划确认；不要为了补一句话另开任务。',
-  '- `stop_session_task` 停止指定任务及其子任务。只有用户要求停止，或继续执行会不安全时才使用。',
+  '- `message_session_task` 默认排队补充条件；mode=steer 插入正在运行的同一轮，不支持时明确失败；mode=resume 恢复暂停且保留同一执行任务，不重放原请求。已暂停且等待授权、问题或计划确认时，先恢复再回答；不要为了补一句话另开任务。',
+  '- `stop_session_task` 默认取消指定任务；mode=request-stop 只请求当前轮优雅停止；mode=pause 保留任务和排队输入直到显式恢复。pausing、requested 或 unconfirmed 不代表引擎已停，必须按回执如实说明。只有用户要求停止，或继续执行会不安全时才使用。',
   '- 后台任务完成、失败或停止时，当前时间线里的任务卡会更新，结果和文件会自动回到这里。',
-  '- `send_to_agent` 只给「你的队友」里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。需要独立交付物或验证时必须用 `start_session_task`。',
+  '- `send_to_agent` 只给「你的队友」里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。编码实施和中大型工作必须用 `start_session_task`，不能把给伙伴发消息当作分配任务。',
   '- 收到 `[Direct message from Cindy Bot ...]` 时，在自己的当前主任务里处理。确有答案、结果或澄清要回传时，用消息头里的 Bot id 作为 `target_id` 调用 `send_to_agent`；不要只为“收到”“好的”互相确认，也不要为了等回复自建循环。',
   '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
 ].join('\n');
 
 const BOT_CREATION_GUIDANCE = [
   '## 你可以创建伙伴',
-  '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。根据用户描述推断名称、职责、简洁身份和一句与用户同语言的自然开场白；不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
+  '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。只需要名字；用户已说明的职责和身份可以一起带上，没有说明的不要编造。第一句话由新伙伴自己的运行时和记忆生成，不代写、不预览；不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
 ].join('\n');
 
 /**
@@ -191,7 +196,7 @@ function buildHomeGuidance(homeDir: string): string {
     '- `skills/` —— 你自己的技能；通过 Bot Skill 工具维护。',
     '- `SOUL.md`、`memories/USER.md`、`system_prompt.md` —— 身份和高级覆盖，用户需要纠正你时可以直接编辑，下一任务加载。不要自行改写 SOUL 或 system_prompt；日常积累写进记忆和技能。',
     '',
-    '不要查找或修改 Home 根部的宿主配置。外部目录、项目、Skill 和 MCP 只有用户显式挂载后才属于当前能力面。',
+    '不要修改 Home 根部的宿主配置。可以按需发现 Cindy 已安装的插件、Skill 和 MCP，并通过能力工具加入自己；已有连接沿用宿主授权。外部文件与命令遵循当前任务权限，workspace 是默认工作目录，不是只能访问这里。',
   ].join('\n');
 }
 
@@ -220,6 +225,14 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
+  if (botModeEnabled && input.capabilities.routinesEnabled) {
+    capabilityParts.push([
+      '## 例行任务',
+      '用户要求定时、重复提醒或事件触发时，直接调用已提供的 routine_list / routine_save / routine_sources / routine_history / routine_delete / routine_run_now 管理自己的例行任务，不需要先发现工具。仅在当前运行环境未提供这些直接入口时，使用 cindy_helper 的 bots 类目。归属由宿主识别，不传 botId。',
+      '先读取 routine_list，避免重复创建；用 routine_save 保存后再读回，核实名称、enabled 和 triggers，成功才说已安排。工具报错或未保存就如实说明。',
+      '例行任务由 Cindy 持久调度，不要改用 start_session_task、sleep 循环或系统定时器。按用户要求设置频率，不擅自增加一小时等结束限制。实际执行沿用当前伙伴权限，触发后的普通消息会回到这里。',
+    ].join('\n'));
+  }
   if (input.capabilities.ownSkillsEnabled) capabilityParts.push(OWN_SKILLS_GUIDANCE);
   const botCreationEnabled =
     input.capabilities.botCreationEnabled ?? input.capabilities.partnerActionsEnabled;
@@ -253,7 +266,7 @@ export function buildBotSkillIndex(entries: readonly BotPromptSkillIndexEntry[])
 }
 
 /**
- * 易变层:技能索引在最前(它随会话内的 save_bot_skill 变),记忆与用户档案随后。
+ * 易变层:技能索引在最前(它随会话内的 save_teammate_skill 变),记忆与用户档案随后。
  * 放在整份提示词末尾,变化时只从这里往后重新计算。
  */
 export function buildBotVolatileTier(input: BotSystemPromptInput): string {

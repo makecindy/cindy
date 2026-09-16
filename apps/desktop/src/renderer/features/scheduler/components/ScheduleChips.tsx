@@ -1,11 +1,10 @@
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
-import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import {
   addRecentFolder,
   FolderPickerPopover,
@@ -17,10 +16,8 @@ import { useProviders } from '@/hooks/useProviders';
 import { ModelIconMark, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
-  connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  nativeDefaultSourceId,
 } from '@cindy/model-providers';
 import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
@@ -163,28 +160,6 @@ export function ProjectChip({
         className="[&>span:nth-child(2)]:min-w-[94px] max-w-[220px] gap-[7px]"
       />
     </FolderPickerPopover>
-  );
-}
-
-/**
- * Scheduler compatibility adapter: keep the persisted scheduler kind shape,
- * while sharing the same AgentSelect dropdown used by IM settings and chat.
- */
-export function AgentTabs({ value, onChange, disabled }: { value: AgentKind; onChange: (v: AgentKind) => void; disabled?: boolean }) {
-  return (
-    <AgentSelect
-      value={agentKindToVendor(value)}
-      disabled={disabled}
-      side="top"
-      // ScheduleFormDialog 是 Radix modal。MorphPopover 的 custom portal 不在
-      // Dialog focus scope 内，动画结束聚焦选中项时会被拉回并立即自动收起；
-      // 此处使用 Radix Popover，让嵌套焦点与 outside-interaction 语义正确组合。
-      useMorphPopover={false}
-      overlayContentClassName="z-[10010]"
-      onChange={(vendor) => {
-        onChange(vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex');
-      }}
-    />
   );
 }
 
@@ -1047,6 +1022,8 @@ function previewConfigFor(mode: EditableScheduleMenuMode, current: CodexSchedule
 }
 
 export function ModelEffortChip({
+  onSelect,
+  onFollowSession,
   agentKind,
   modelValue,
   onChangeModel,
@@ -1060,6 +1037,8 @@ export function ModelEffortChip({
   fastMode,
   onChangeFast,
 }: {
+  onSelect: NonNullable<React.ComponentProps<typeof ModelSelectorContent>['onUnifiedSelect']>;
+  onFollowSession: () => void;
   agentKind: AgentKind;
   modelValue: string;
   onChangeModel: (v: string) => void;
@@ -1078,7 +1057,7 @@ export function ModelEffortChip({
   onChangeProviderId: (providerId: string) => void;
   /** 0 个 / 引导连接来源时跳设置→供应商页;不传则来源轨不显示「连接」入口。 */
   onNavigateToProviders?: () => void;
-  /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。heartbeat 态不传 → Edit 无 Fast。 */
+  /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
   fastMode?: boolean;
   onChangeFast?: (v: boolean) => void;
 }) {
@@ -1107,6 +1086,7 @@ export function ModelEffortChip({
     },
     [disabled, discovery],
   );
+  const pickerAgents = useModelPickerAgents(agentKind);
   const caps = useAgentCapabilities(agentKind);
   // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
@@ -1133,9 +1113,12 @@ export function ModelEffortChip({
   const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
   const effectiveId = followsSessionModel ? '' : modelValue || getScheduleDefaultModel(agentKind);
   const current = models.find((m) => m.id === effectiveId);
-  const allowedEfforts = (current?.efforts ?? []) as readonly EffortValue[];
-  const fallbackEffort = (current?.defaultEffort ?? 'high') as EffortValue;
-  const effectiveEffort: EffortValue = effortValue && allowedEfforts.includes(effortValue) ? effortValue : fallbackEffort;
+  const sourceId = effectiveSourceIdForModel(providers, providerId || null, effectiveId, agentKind);
+  const source = providers.find((provider) => provider.id === sourceId);
+  const catalogModel = source ? getModel(source, effectiveId, agentKind) : undefined;
+  const effectiveEffort = effortValue || catalogModel?.defaultEffort || current?.defaultEffort || '';
+  const modelLabel = catalogModel?.name || current?.displayName || effectiveId;
+  const agentLabel = t(`newChat.modelSelector.trigger.agent.${agentKind === 'claude-code' ? 'claudeCode' : agentKind}`);
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
   const display = followsSessionModel
     ? [
@@ -1145,22 +1128,10 @@ export function ModelEffortChip({
         : null,
       effortValue ? effortLabel(effortValue) : null,
     ].filter(Boolean).join(' · ')
-    : current
-      ? `${current.displayName} · ${allowedEfforts.length ? effortLabel(effectiveEffort) : t('scheduler.chips.model.effortDefault')}`
-      : t('scheduler.chips.model.default');
+    : [agentLabel, modelLabel, effectiveEffort ? effortLabel(effectiveEffort as EffortValue) : null,
+      fastMode ? '⚡' : null].filter(Boolean).join(' · ');
 
-  // railSources 仅用于 nativeDefault 归一化(下拉宽度由 ModelSelectorContent 内容自适应,见 w-auto)。
   const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind;
-  const railSources = useMemo(
-    () => connectedProvidersForAgent(providers, agentKind),
-    [providers, agentKind],
-  );
-  // 归一化:选中的来源 == 原生默认 → 存 ''(= 跟随默认,与老数据/未升级字节级一致),
-  // 否则存显式 id。这样只有「钉到非原生来源」才在 schedule 上落非空 providerId。
-  const nativeDefault = useMemo(
-    () => nativeDefaultSourceId(railSources, agentKind),
-    [railSources, agentKind],
-  );
   // 当前生效来源 —— 与聊天 trigger 同口径(effectiveSourceIdForModel):按「已连接且**确实
   // 提供当前模型**」收窄后再应用显式选择 / 原生默认。只查「已连接」会在显式来源不提供
   // effectiveId 时渲染错误来源的标识(如 providerId=openai 而默认模型只有 xd 提供);
@@ -1215,6 +1186,9 @@ export function ModelEffortChip({
         {/* 直接复用聊天的下拉内容本体(唯一真源:聊天选择器改了这里跟着变)。
             来源轨 / 模型分组 / 搜索 / effort / 空态全套自带;followSession 行为 opt-in。 */}
         <ModelSelectorContent
+          fastModeConfigurable={['codex', 'pi']}
+          unifiedAgents={pickerAgents}
+          onUnifiedSelect={onSelect}
           vendorKey={vendorKey}
           modelId={effectiveId}
           effort={effectiveEffort}
@@ -1225,7 +1199,7 @@ export function ModelEffortChip({
           onDismiss={() => setOpenWithoutAutoRefresh(false)}
           currentProviderId={providerId || null}
           onProviderChange={(pid, reconciledModelId, reconciledEffort, reconciledFast) => {
-            onChangeProviderId(pid && pid !== nativeDefault ? pid : '');
+            onChangeProviderId(pid ?? '');
             if (reconciledFast !== undefined) onChangeFast?.(reconciledFast);
             if (reconciledModelId) onChangeModel(reconciledModelId);
             if (reconciledEffort !== undefined) {
@@ -1233,9 +1207,7 @@ export function ModelEffortChip({
             }
           }}
           onNavigateToProviders={onNavigateToProviders}
-          // A stale explicit provider is rendered as the effective fallback row.
-          // Re-selecting that highlighted row must repair the stored provider
-          // before the effort configuration card opens.
+          // An explicit selection always pins the connection, including the native default.
           reselectEmitsChange
           selectedRowClickOpensConfiguration
           overlayContentClassName="z-[10020]"
@@ -1246,9 +1218,7 @@ export function ModelEffortChip({
                   active: isFollowingSession,
                   label: t('scheduler.chips.model.followSession'),
                   onFollow: () => {
-                    onChangeModel('');
-                    onChangeEffort('');
-                    onChangeProviderId('');
+                    onFollowSession();
                   },
                 }
               : undefined

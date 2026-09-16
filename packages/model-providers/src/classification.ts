@@ -92,6 +92,7 @@ export type ModelCategory =
   | 'ungrouped'
   | 'image'
   | 'video'
+  | 'audio'
   | 'tts'
   | 'stt'
   | 'realtime'
@@ -110,6 +111,7 @@ export const CATEGORY_ORDER: ModelCategory[] = [
   'ungrouped',
   'image',
   'video',
+  'audio',
   'tts',
   'stt',
   'realtime',
@@ -155,6 +157,7 @@ const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
   image_generation: 'image',
   video_generation: 'video',
   audio_speech: 'tts',
+  audio_generation: 'audio',
   audio_transcription: 'stt',
   realtime: 'realtime',
 };
@@ -365,7 +368,7 @@ export function isChatEligible(model: { id: string; group?: string; mode?: strin
  *
  * `opts.userProvider` = 该条目来自用户自定义供应商(Provider.source === 'user',由
  * 调用方注入 —— 本模块纯逻辑不持 provider 上下文):此时目录带的**未知 group**
- * (buildUserProvider 的 `custom:<providerId>`)= 用户显式配置的 agent 模型,直接放行,
+ * (buildUserProvider 的 `custom:<providerId>`)，且没有显式 mode 时视为用户配置的 agent 模型,放行,
  * 不让 groupOf 的未知组回退吃 id 启发式 —— 否则 `gpt-4o-audio-preview` 这类合法
  * 自定义对话模型会被误判成能力模型而从全部对话清单消失(PR #744 review)。
  *
@@ -378,6 +381,8 @@ export function isAgentSelectableModel(
   model: { id: string; group?: string; mode?: string },
   opts?: { userProvider?: boolean },
 ): boolean {
+  // Explicit endpoint type is authoritative, including for user-owned groups.
+  if (model.mode !== undefined) return isChatEligible(model);
   if (opts?.userProvider === true && model.group && !KNOWN_CATEGORIES.has(model.group)) {
     return true;
   }

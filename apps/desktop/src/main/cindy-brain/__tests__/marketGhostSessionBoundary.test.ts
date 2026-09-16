@@ -201,7 +201,7 @@ describe('market Ghost session boundary', () => {
     expect(helperBody).not.toContain('GHOST_SOURCE_CONFLICT');
   });
 
-  it('runs the final market callback before both initial install and update placement', () => {
+  it('forwards the first-install check into package placement and guards update entry', () => {
     const installStart = source.indexOf(
       'async function installOrUpdateMarketGhostPackageLocked(',
     );
@@ -215,11 +215,8 @@ describe('market Ghost session boundary', () => {
       body.indexOf('const runtime = getGhostRuntime();'),
     );
 
-    expect(initialBranch.indexOf('expected.beforeCommitInLock?.();')).toBeGreaterThan(-1);
-    expect(initialBranch.indexOf('expected.beforeCommitInLock?.();')).toBeLessThan(
-      initialBranch.indexOf('await installAndDock('),
-    );
-    expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(2);
+    expect(initialBranch).toContain('beforePackagePlacement: expected.beforeCommitInLock,');
+    expect(body.match(/expected\.beforeCommitInLock\?\.\(\);/g)).toHaveLength(1);
 
     const waitIndex = body.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);',

@@ -156,6 +156,12 @@ describe('overloadFailureNotice', () => {
 });
 
 describe('terminalErrorText', () => {
+  it('maps output-limit for user turns, scheduler relay and hook failures', () => {
+    expect(terminalErrorText({ reason: 'output-limit', message: 'Pi reached the model output limit.' }))
+      .toBe('模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。');
+    expect(terminalErrorText({ reason: 'output-limit' })).toContain('回复可能不完整');
+  });
+
   it('Codex 容量终态 → 本地化说明(定时转播卡与用户 turn 共用同一映射)', () => {
     // 三条渠道终态路径(handleTurnErrorAsync / finalizeTranspond / hook session-runner)
     // 必须口径一致: 之前转播路径自己 extractErrMessage 取原文, 重试耗尽时卡片会从

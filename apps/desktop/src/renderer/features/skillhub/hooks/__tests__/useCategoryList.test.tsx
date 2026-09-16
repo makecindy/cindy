@@ -52,6 +52,7 @@ describe('useCategoryList data-owner isolation', () => {
 
     const first = renderHook(() => useCategoryList('team'));
     await waitFor(() => expect(listCategories).toHaveBeenCalledTimes(1));
+    expect(listCategories).toHaveBeenLastCalledWith({ scope: 'team', includeEmpty: false });
     first.unmount();
 
     setDataOwnerGeneration('owner-b', 2);

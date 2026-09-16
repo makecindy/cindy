@@ -1,4 +1,8 @@
 {
+  "cachedHistory": {
+    "title": "Computer not connected",
+    "hint": "Saved content is available. Connect your computer to load more."
+  },
   "recovery": {
     "syncing": "Syncing…",
     "recovered": "Restored",
@@ -54,7 +58,7 @@
     "default": "{{agent}} can't be used because its computer sign-in is unavailable. Sign in again through {{appName}} on the computer under Settings → Model Providers. ({{reason}})"
   },
   "remoteError": {
-    "remoteDisabled": "The controlled computer has disabled remote control.",
+    "remoteDisabled": "The remote computer has disabled remote control.",
     "channelNotAllowed": "The current desktop version doesn't support this remote capability.",
     "accessRevoked": "This computer has revoked mobile access.",
     "deviceUnresponsive": "The computer isn't responding. Automatic retry is in progress; try again shortly.",
@@ -66,7 +70,7 @@
     "accountChanged": "The Codex account or workspace changed. Refresh the quota and confirm again.",
     "offerExpired": "The Codex reset offer expired. Refresh the quota and confirm again.",
     "preconditionFailed": "The operation conditions changed. Refresh and confirm again.",
-    "transient": "The network or controlled computer is temporarily unavailable. Sync again later.",
+    "transient": "The network or remote computer is temporarily unavailable. Sync again later.",
     "callFailed": "The remote call failed. Try again later. ({{error}})"
   }
 }

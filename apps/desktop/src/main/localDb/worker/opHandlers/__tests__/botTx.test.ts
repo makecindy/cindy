@@ -49,6 +49,25 @@ describe('Bot named worker transactions', () => {
 
   afterEach(() => db.close());
 
+  it('atomically rejects duplicate names and a second Cindy without touching the first profile', () => {
+    const args = { id: 'first', displayName: 'Renamed', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Custom identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
+    tx(db, { name: 'bots.createProfile', args });
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'second', displayName: 'Cindy' } })).toThrow('matching companion');
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third', displayName: 'Ｒｅｎａｍｅｄ ', capabilitiesJson: '{}' } })).toThrow('matching companion');
+    expect(db.prepare('SELECT id, display_name FROM bot_profiles').all()).toEqual([{ id: 'first', display_name: 'Renamed' }]);
+    expect(db.prepare('SELECT count(*) AS n FROM bot_profile_versions').get()).toEqual({ n: 1 });
+  });
+
+  it('keeps distinct names after settings edits and allows re-adding an archived identity', () => {
+    const args = { id: 'first', displayName: 'Cindy', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
+    tx(db, { name: 'bots.createProfile', args });
+    tx(db, { name: 'bots.createProfile', args: { ...args, id: 'second', displayName: 'Mika', capabilitiesJson: '{}' } });
+    expect(() => tx(db, { name: 'bots.updateProfile', args: { id: 'second', expectedCurrentVersion: 1, displayName: ' cindy ', now: 2 } })).toThrow('this name');
+    db.prepare("UPDATE bot_profiles SET status = 'archived' WHERE id = 'first'").run();
+    tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third' } });
+    expect(db.prepare('SELECT count(*) AS n FROM bot_profiles').get()).toEqual({ n: 3 });
+  });
+
   it('keeps durable Bot attention monotonic and lets only a later success clear it', () => {
     tx(db, { name: 'bots.createProfile', args: {
       id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',

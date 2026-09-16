@@ -43,11 +43,11 @@ export function selectExecutableCoreMediaModels<T extends { mode?: string }>(
 export interface CindyMediaProviderSlice {
   /** 供应商 id —— 停用过滤(isModelDisabled)按 (供应商, 模型) 定位 override。 */
   id: string;
-  imageModels?: { id: string; name: string }[];
+  imageModels?: { id: string; name: string; defaultEnabled?: boolean }[];
   imageDefaults?: { standard: string; draft?: string; best?: string };
-  videoModels?: { id: string; name: string }[];
+  videoModels?: { id: string; name: string; defaultEnabled?: boolean }[];
   videoDefaults?: { standard: string; draft?: string; best?: string };
-  embeddingModels?: { id: string; name: string }[];
+  embeddingModels?: { id: string; name: string; defaultEnabled?: boolean }[];
   embeddingDefaults?: { standard: string; draft?: string; best?: string };
 }
 
@@ -123,6 +123,11 @@ export function deriveCindyMediaConfig(
   isModelDisabled?: (providerId: string, modelId: string) => boolean,
   isProviderReady?: (providerId: string) => boolean,
   isProviderEditReady?: (providerId: string) => boolean,
+  isModelVisible?: (
+    providerId: string,
+    modelId: string,
+    defaultEnabled?: boolean,
+  ) => boolean,
 ): CindyMediaCatalogConfig {
   const models: Array<{ id: string; label: string; providerId: string; supportsEdit: boolean }> = [];
   const seen = new Set<string>();
@@ -142,6 +147,7 @@ export function deriveCindyMediaConfig(
     for (const m of list ?? []) {
       if (seen.has(m.id)) continue;
       if (isModelDisabled?.(p.id, m.id)) continue;
+      if (isModelVisible && !isModelVisible(p.id, m.id, m.defaultEnabled)) continue;
       seen.add(m.id);
       models.push({
         id: m.id,

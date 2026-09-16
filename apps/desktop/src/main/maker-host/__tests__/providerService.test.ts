@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, connectedProvidersForAgent } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService } from '../provider-service.js';
@@ -9,6 +9,45 @@ import { createProviderService } from '../provider-service.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('uses managed provider configuration names instead of stale presentation overrides', async () => {
+    const provider = buildUserProvider({
+      id: 'cindy-local-ollama', name: 'Ollama', auth: { method: 'none' },
+      runtimes: { codex: { baseUrl: 'http://localhost:11434/v1', models: [] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getProviderPresentation: () => ({ name: 'Deleted name', removed: true }),
+    });
+    expect((await svc.listProviders())[0]).toMatchObject({ id: 'cindy-local-ollama', name: 'Ollama' });
+  });
+  it('keeps authenticated accounts visible despite a stale removal preference', async () => {
+    let connected = true;
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => connected, openai: () => connected, xai: () => false },
+      getProviderPresentation: (id) => ({ name: `My ${id}`, removed: true }),
+    });
+    for (const id of ['openai', 'anthropic']) {
+      expect((await svc.listProviders()).find(p => p.id === id)).toMatchObject({ id, name: `My ${id}`, connected: true, removed: false });
+    }
+    connected = false;
+    for (const id of ['openai', 'anthropic']) {
+      expect((await svc.listProviders()).find(p => p.id === id)).toMatchObject({ connected: false, removed: true });
+    }
+  });
+  it('applies local presentation without changing provider identity or catalog', async () => {
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getProviderPresentation: (id) => id === 'openai' ? { name: 'Personal OpenAI', removed: true } : {},
+    });
+    const providers = await svc.listProviders();
+    expect(providers.find((p) => p.id === 'openai')).toMatchObject({ id: 'openai', name: 'Personal OpenAI', removed: true });
+    expect(providers.find((p) => p.id === 'anthropic')?.removed).toBeUndefined();
+    expect(providers.map((p) => p.id)).toEqual(BUNDLED_CATALOG.providers.map((p) => p.id));
+  });
+
   it('keeps media readiness separate from subscription authorization and scopes it by provider', async () => {
     let media = [{ providerId: 'openai', id: 'gpt-image-2' }];
     const svc = createProviderService({
@@ -21,6 +60,49 @@ describe('createProviderService', () => {
     expect(providers.find((p) => p.id === 'xd')?.availableMediaModelIds).toEqual([]);
     media = [];
     expect((await svc.listProviders()).find((p) => p.id === 'openai')?.availableMediaModelIds).toEqual([]);
+  });
+
+  it('keeps guest provider configuration available when optional media discovery fails', async () => {
+    let failed = true;
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getAvailableMediaModels: () => {
+        if (failed) throw new Error('art: proxy.baseUrl is required');
+        return [{ providerId: 'openai', id: 'gpt-image-2' }];
+      },
+    });
+    const providers = await svc.listProviders();
+    expect(providers.map((provider) => provider.id)).toEqual(BUNDLED_CATALOG.providers.map((provider) => provider.id));
+    expect(providers.every((provider) => !provider.connected)).toBe(true);
+    expect(providers.every((provider) => provider.availableMediaModelIds?.length === 0)).toBe(true);
+    failed = false;
+    expect((await svc.listProviders()).find((provider) => provider.id === 'openai')?.availableMediaModelIds).toEqual(['gpt-image-2']);
+  });
+
+  it.each([
+    'image_generation', 'video_generation', 'audio_generation', 'audio_speech',
+    'audio_transcription', 'realtime', 'embedding',
+  ])('keeps custom %s manageable without a Gateway provider or media discovery', async (mode) => {
+    const provider = buildUserProvider({
+      id: 'private-media', name: 'Private media', auth: { method: 'none' },
+      runtimes: { codex: { baseUrl: 'https://private.example/v1',
+        models: [{ id: 'private-model', name: 'Private model', mode }] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getAvailableMediaModels: () => { throw new Error('Gateway is not configured'); },
+    });
+    const result = await svc.listProviders();
+    expect(result.map((p) => p.id)).toEqual(['private-media']);
+    expect(result[0][providerMediaField(mode)!]).toEqual([
+      expect.objectContaining({ id: 'private-model', name: 'Private model', mode }),
+    ]);
+    expect(result[0].models.codex).toEqual([
+      expect.objectContaining({ id: 'private-model', mode }),
+    ]);
+    expect(result[0].availableMediaModelIds).toEqual([]);
   });
 
   it('lists providers with injected connection state', async () => {

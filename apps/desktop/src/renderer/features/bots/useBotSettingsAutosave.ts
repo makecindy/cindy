@@ -33,7 +33,9 @@ export interface UseBotSettingsAutosaveOptions {
   fallbackName: string;
   /** 是否允许写入。归档 bot 等只读场景传 false,连脏检查都不做。 */
   enabled: boolean;
-  /** 真正提交。成功 resolve;失败 reject。基线由本 hook 在成功后推进。 */
+  /** Shared with profile reconciliation and patch generation; only confirmed saves advance it. */
+  baseline: { current: BotSettingsPayload };
+  /** 真正提交。成功 resolve 并推进基线;失败 reject。 */
   commit: (payload: BotSettingsPayload) => Promise<void>;
   textDelayMs?: number;
   instantDelayMs?: number;
@@ -64,7 +66,7 @@ export function useBotSettingsAutosave(
 
   // 基线 = 上次成功落库的快照。用与当前值同一个归一化函数产生,否则挂载瞬间就会
   // 因为 trim 差异被判成脏。
-  const baselineRef = useRef(payload);
+  const baselineRef = options.baseline;
   const commitRef = useRef(commit);
   commitRef.current = commit;
   const enabledRef = useRef(enabled);
@@ -98,8 +100,6 @@ export function useBotSettingsAutosave(
       commit: async (next) => {
         if (!enabledRef.current) return;
         await commitRef.current(next);
-        // 只有落库成功才推进基线;失败后基线不动,脏仍然是脏,重试才有意义。
-        baselineRef.current = next;
       },
       onStatusChange: handleStatus,
     });

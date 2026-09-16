@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
@@ -21,6 +21,7 @@ import {
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { swiftTargetTriple, swiftTargetTriplesForForgeArch } from './src/main/remote-desktop/swiftTarget';
 import { READ_SHEET_RUNTIME_PACKAGES } from '../../packages/lizi-mcps/src/cindy-docs/readSheetRuntimeDeps';
 import { reviewPdfRuntimePackages } from './src/main/reviewer/reviewPdfRuntimeDeps';
 import {
@@ -30,6 +31,50 @@ import {
 
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
+const CINDY_SOURCE_METADATA_PATH = path.join(__dirname, 'resources', 'cindy-source.json');
+
+function resolveSourceCommit(): string {
+  try {
+    return execSync('git rev-parse HEAD', { cwd: __dirname, encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function formatLocalBuildTime(date = new Date()): string {
+  const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offsetHours = Math.floor(absoluteOffset / 60);
+  const offsetRemainder = absoluteOffset % 60;
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`,
+    `${sign}${pad(offsetHours)}:${pad(offsetRemainder)}`,
+  ].join('');
+}
+
+/**
+ * Stage the source identity file before electron-packager copies extraResource
+ * files into the application. It is generated at build time so installed
+ * Cindy can identify the exact source checkout that produced it, even when
+ * package.json still contains the 0.0.0 placeholder.
+ */
+function stageCindySourceMetadata(): void {
+  const sourceCommit = resolveSourceCommit();
+  const builtAt = formatLocalBuildTime();
+  fs.writeFileSync(
+    CINDY_SOURCE_METADATA_PATH,
+    `${JSON.stringify({ sourceCommit, builtAt }, null, 2)}\n`,
+    'utf8',
+  );
+  console.log(`[forge:prePackage] staged Cindy source metadata (${sourceCommit || 'unknown commit'})`);
+}
+
+function removeCindySourceMetadata(): void {
+  fs.rmSync(CINDY_SOURCE_METADATA_PATH, { force: true });
+}
 
 // ── 构建期身份(2026-07-17 Cindy 渠道分叉) ─────────────────────────────────────
 // 区域默认 global;中国大陆包由发布脚本显式注入 CINDY_AUTH_REGION=cn。appId 随区域
@@ -758,6 +803,10 @@ function stageRipgrep(targetPlatform: string, targetArch: string): void {
 function extraResourcesForTarget(targetPlatform: string): string[] {
   const base = [
     'resources/icon.png',
+    'resources/cindy-source.json',
+    // Input bytes for upgrading retired preset avatars to ordinary managed images.
+    'resources/legacy-teammate-avatars',
+    'resources/teammate-portrait-gallery.png',
     'resources/tools',
     'drizzle',
     'resources/cc-manager',
@@ -911,26 +960,7 @@ const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
 const MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0';
-
-function swiftTargetTriple(cpuArch: 'arm64' | 'x86_64', deploymentTarget: string): string {
-  return `${cpuArch}-apple-${deploymentTarget}`;
-}
-
-function swiftTargetTriplesForForgeArch(arch: ForgeArch, deploymentTarget: string): string[] {
-  switch (arch) {
-    case 'x64':
-      return [swiftTargetTriple('x86_64', deploymentTarget)];
-    case 'arm64':
-      return [swiftTargetTriple('arm64', deploymentTarget)];
-    case 'universal':
-      return [
-        swiftTargetTriple('x86_64', deploymentTarget),
-        swiftTargetTriple('arm64', deploymentTarget),
-      ];
-    default:
-      throw new Error(`[forge] unsupported macOS Swift helper arch: ${arch}`);
-  }
-}
+const MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET = 'macos10.15';
 
 function swiftArchLabel(arch: ForgeArch, deploymentTarget: string): string {
   return swiftTargetTriplesForForgeArch(arch, deploymentTarget)
@@ -1025,6 +1055,70 @@ function buildSwiftHelperForForgeArch(
     if (r.status !== 0) throw new Error(`[forge] lipo failed for ${label} with exit code ${r.status}`);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void {
+  const destDir = path.join(__dirname, 'resources', 'tools', 'remote-desktop');
+  fs.mkdirSync(destDir, { recursive: true });
+  if (process.platform === 'darwin' && isMacForgePlatform(platform)) {
+    const dest = path.join(destDir, 'cindy-macos-desktop-input');
+    const inputBuild = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-input-build-'));
+    try {
+      const main = path.join(inputBuild, 'main.swift');
+      const caller = fs.readFileSync(path.resolve(__dirname, '../../packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift'), 'utf8');
+      fs.writeFileSync(main, caller + '\n' + fs.readFileSync(path.join(__dirname, 'native', 'remote-desktop', 'macos-input.swift'), 'utf8'));
+      buildSwiftHelperForForgeArch(
+      main,
+      dest,
+      arch,
+      MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,
+      [],
+      'remote desktop input',
+      );
+    } finally { fs.rmSync(inputBuild, { recursive: true, force: true }); }
+    fs.chmodSync(dest, 0o755);
+    const credentialBuild = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-credential-build-'));
+    try {
+      const root = path.resolve(__dirname, '../../packages/remote-credentials-native');
+      const outputs: string[] = [];
+      for (const target of swiftTargetTriplesForForgeArch(arch, 'macos12.0')) {
+        const args = ['build', '--package-path', root, '-c', 'release', '--product', 'cindy-macos-remote-credentials',
+          '--triple', target, '--scratch-path', path.join(credentialBuild, target)];
+        const compiled = spawnSync('swift', args, { stdio: 'inherit' });
+        if (compiled.error || compiled.status !== 0) throw new Error('Remote credentials native build failed');
+        const location = spawnSync('swift', [...args, '--show-bin-path'], { encoding: 'utf8' });
+        if (location.error || location.status !== 0) throw new Error('Remote credentials output unavailable');
+        outputs.push(path.join(location.stdout.trim(), 'cindy-macos-remote-credentials'));
+      }
+      const credential = path.join(destDir, 'cindy-macos-remote-credentials');
+      if (outputs.length === 1) fs.copyFileSync(outputs[0], credential);
+      else {
+        const result = spawnSync('lipo', ['-create', ...outputs, '-output', credential], { stdio: 'inherit' });
+        if (result.error || result.status !== 0) throw new Error('Remote credentials universal build failed');
+      }
+      fs.chmodSync(credential, 0o755);
+    } finally { fs.rmSync(credentialBuild, { recursive: true, force: true }); }
+    const capture = path.join(destDir, 'cindy-macos-desktop-capture');
+    const captureArch = arch === 'universal' ? ['-arch', 'arm64', '-arch', 'x86_64'] : ['-arch', arch === 'arm64' ? 'arm64' : 'x86_64'];
+    const result = spawnSync('xcrun', ['clang', path.join(__dirname, 'native', 'remote-desktop', 'macos-capture.m'),
+      ...captureArch, '-mmacosx-version-min=10.15', '-fobjc-arc', '-fblocks', '-O2',
+      '-framework', 'Foundation', '-framework', 'AppKit', '-framework', 'CoreGraphics', '-framework', 'CoreImage',
+      '-framework', 'IOSurface', '-framework', 'ImageIO', '-framework', 'IOKit', '-o', capture], { stdio: 'inherit' });
+    if (result.error || result.status !== 0) throw new Error('Remote desktop capture build failed');
+    fs.chmodSync(capture, 0o755);
+  } else if (process.platform === 'win32' && platform === 'win32') {
+    if (arch !== 'x64' && arch !== 'arm64') throw new Error('Unsupported Windows desktop architecture');
+    const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+    for (const helper of ['windows-input', 'windows-host']) {
+      const root = path.join(__dirname, 'native', 'remote-desktop', helper);
+      const result = spawnSync('cargo', ['build', '--release', '--locked', '--target', target, '--manifest-path', path.join(root, 'Cargo.toml')], { stdio: 'inherit' });
+      if (result.error || result.status !== 0) throw new Error(`Remote desktop ${helper} build failed`);
+      const output = path.join(root, 'target', target, 'release');
+      const name = `cindy-windows-desktop-${helper === 'windows-input' ? 'input' : 'host'}`;
+      fs.copyFileSync(path.join(output, `${name}.exe`), path.join(destDir, `${name}.exe`));
+      if (helper === 'windows-host') fs.copyFileSync(path.join(output, 'cindy_windows_desktop_host.dll'), path.join(destDir, `${name}.node`));
+    }
   }
 }
 
@@ -1416,6 +1510,7 @@ const config: ForgeConfig = {
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
       // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
       NSDesktopFolderUsageDescription:
@@ -1484,6 +1579,7 @@ const config: ForgeConfig = {
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       NSDesktopFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files on your Desktop.",
       NSDocumentsFolderUsageDescription:
@@ -1529,6 +1625,7 @@ const config: ForgeConfig = {
     prePackage: async (_forgeConfig, platform, arch) => {
       const targetPlatform = requestedTargetPlatform();
       const targetArch = requestedTargetArch();
+      stageCindySourceMetadata();
       ensureMacIOSSimulatorWdaArchive(platform);
       if (targetPlatform === 'win32') {
         if (targetArch !== 'x64') {
@@ -1554,17 +1651,22 @@ const config: ForgeConfig = {
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
       buildMacSessionDragReleaseHelper(platform, arch);
+      buildRemoteDesktopInput(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，
     // 都是已签名版本。详见 signPackagedExes() 注释。
     postPackage: async (_forgeConfig, opts) => {
-      for (const buildPath of opts.outputPaths) {
-        const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
-        console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
-        signPackagedExes(buildPath);
-        stageMacIOSSimulatorHelper(buildPath, opts.platform, opts.arch);
-        applyMacPackagedDisplayName(buildPath, opts.platform);
+      try {
+        for (const buildPath of opts.outputPaths) {
+          const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
+          console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
+          signPackagedExes(buildPath);
+          stageMacIOSSimulatorHelper(buildPath, opts.platform, opts.arch);
+          applyMacPackagedDisplayName(buildPath, opts.platform);
+        }
+      } finally {
+        removeCindySourceMetadata();
       }
     },
   },
@@ -1574,6 +1676,10 @@ const config: ForgeConfig = {
     // 使其在 packaged 应用中可以被 require()——asar 会阻止原生模块的 dlopen 调用。
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({
+      // Dev keeps all watcher targets in one process. Build them serially at
+      // startup so the initial graph does not multiply the same high baseline;
+      // packaged builds retain Forge's normal concurrency.
+      concurrent: isDev ? false : true,
       build: [
         {
           entry: 'src/main/index.ts',
@@ -1695,11 +1801,17 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/preload/desktopCapturePreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },
+        { entry: 'src/preload/remoteDesktopViewerPreload.ts', config: 'vite.preload.config.ts', target: 'preload' },
         {
           // 右侧栏独立子窗口专用 preload:最小权限 bridge,不加载主 preload 完整桥。
           entry: 'src/preload/sidebarWindowPreload.ts',
@@ -1730,6 +1842,7 @@ const config: ForgeConfig = {
         },
       ],
       renderer: [
+        { name: 'desktop_capture', config: 'vite.capture.config.ts' },
         {
           name: 'main_window',
           config: 'vite.renderer.config.ts',

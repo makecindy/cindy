@@ -17,6 +17,7 @@ describe('Bot avatar profile transaction', () => {
         id TEXT PRIMARY KEY,
         current_version INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        display_name TEXT NOT NULL DEFAULT 'Teammate',
         avatar TEXT NOT NULL
       );
       CREATE TABLE media_blobs (hash TEXT PRIMARY KEY);
@@ -28,7 +29,7 @@ describe('Bot avatar profile transaction', () => {
         origin_kind TEXT,
         created_at INTEGER NOT NULL
       );
-      INSERT INTO bot_profiles VALUES ('bot-1', 1, 1, '🤖');
+      INSERT INTO bot_profiles (id, current_version, updated_at, avatar) VALUES ('bot-1', 1, 1, '🤖');
       INSERT INTO media_blobs VALUES ('${HASH_A}'), ('${HASH_B}');
       INSERT INTO media_refs VALUES ('old-ref', '${HASH_A}', 'bot-avatar', 'bot-1', 'user', 1);
     `);
@@ -78,6 +79,14 @@ describe('Bot avatar profile transaction', () => {
     ]);
   });
 
+  it('does not overwrite a user avatar replaced without a profile version change', () => {
+    update({ avatar: '🚀', clearBotAvatarRefs: true });
+    expect(() => update({ expectedAvatar: '🤖', botAvatarRef: { id: 'migration-ref', hash: HASH_B, createdAt: 3 } }))
+      .toThrow('Teammate avatar changed');
+    expect(db.prepare('SELECT avatar, current_version FROM bot_profiles').get()).toEqual({ avatar: '🚀', current_version: 1 });
+    expect(db.prepare('SELECT * FROM media_refs').all()).toEqual([]);
+  });
+
   it('clears the private image ref when the Bot returns to an emoji', () => {
     update({ avatar: '🚀', clearBotAvatarRefs: true });
     expect(db.prepare('SELECT avatar FROM bot_profiles WHERE id = ?').get('bot-1')).toEqual({
@@ -87,7 +96,6 @@ describe('Bot avatar profile transaction', () => {
   });
   it('creates the profile and image reference atomically, rolling both back on reference failure', () => {
     db.exec(`
-      ALTER TABLE bot_profiles ADD COLUMN display_name TEXT;
       ALTER TABLE bot_profiles ADD COLUMN description TEXT;
       ALTER TABLE bot_profiles ADD COLUMN avatar_color TEXT;
       ALTER TABLE bot_profiles ADD COLUMN status TEXT;

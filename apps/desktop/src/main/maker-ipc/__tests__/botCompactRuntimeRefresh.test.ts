@@ -2,9 +2,55 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createBotCompactRuntimeRefreshCoordinator,
+  refreshBotRuntimeAfterModelSelection,
   replaceBotRuntimeAfterPreflight,
   type BotCompactRuntimeSession,
 } from '../botCompactRuntimeRefresh';
+
+describe('profile refresh after model selection', () => {
+  it.each([true, false])('keeps the newly bootstrapped handle alive (prior handle: %s)', async (hadRuntime) => {
+    let current = hadRuntime ? createSession().session : undefined;
+    const next = createSession('bot-session', 'new-codex-thread').session;
+    const refresh = vi.fn(async () => 'refreshed' as const);
+    await expect(refreshBotRuntimeAfterModelSelection({
+      current: () => current,
+      select: async () => { current = next; },
+      refresh,
+    })).resolves.toBe('not-bot');
+    expect(current).toBe(next);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('keeps a busy selection queued until the safe boundary', async () => {
+    const runtime = createSession();
+    runtime.setRunning(true);
+    const refresh = vi.fn(async () => 'refreshed' as const);
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({ hasPendingInteraction: () => false, refresh });
+    await expect(refreshBotRuntimeAfterModelSelection({
+      current: () => runtime.session,
+      select: async () => {},
+      refresh: async (session) => {
+        coordinator.noteBoundary(session);
+        return coordinator.attempt(session);
+      },
+    })).resolves.toBe('deferred');
+    expect(refresh).not.toHaveBeenCalled();
+    runtime.setRunning(false);
+    await expect(coordinator.attempt(runtime.session)).resolves.toBe('refreshed');
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it('does not refresh or close the current handle when switching fails', async () => {
+    const runtime = createSession();
+    const refresh = vi.fn(async () => 'refreshed' as const);
+    await expect(refreshBotRuntimeAfterModelSelection({
+      current: () => runtime.session,
+      select: async () => { throw new Error('provider unavailable'); },
+      refresh,
+    })).rejects.toThrow('provider unavailable');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
 
 function createSession(id = 'bot-session', instanceId = 'runtime-1') {
   let running = false;

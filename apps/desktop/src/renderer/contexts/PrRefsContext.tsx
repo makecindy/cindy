@@ -76,6 +76,7 @@ interface PrCacheStore {
   getStatus: (sessionId: string, key: string) => PrStatusResult | undefined;
   /** 单会话状态快照(该会话未变时引用稳定)。 */
   getStatusesForSession: (sessionId: string) => ReadonlyMap<string, PrStatusResult>;
+  getSuccessfulStatusesForSession: (sessionId: string) => ReadonlyMap<string, PrStatusResult>;
   /** 本地全量加载:整表替换,但保住 keep 判定为真的既有条目(远程先到的)与未变引用。 */
   mergeLocalRefs: (
     grouped: Map<string, SessionPrRef[]>,
@@ -85,6 +86,8 @@ interface PrCacheStore {
   setSessionRefs: (sessionId: string, refs: readonly SessionPrRef[]) => void;
   /** 批量落入指定会话的状态。同会话后写覆盖前写;跨会话互不干扰。 */
   applyStatuses: (sessionId: string, results: readonly PrStatusResult[]) => void;
+  hasRefreshError: (sessionId: string, channel?: 'refs' | 'statuses') => boolean;
+  setRefreshError: (sessionId: string, channel: 'refs' | 'statuses', failed: boolean) => void;
   clearAll: () => void;
 }
 
@@ -92,6 +95,8 @@ function createPrCacheStore(): PrCacheStore {
   const refsBySession = new Map<string, SessionPrRef[]>();
   const statusesBySession = new Map<string, Map<string, PrStatusResult>>();
   const statusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
+  const successfulStatusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
+  const refreshErrors = new Map<string, Set<'refs' | 'statuses'>>();
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of listeners) listener();
@@ -111,6 +116,9 @@ function createPrCacheStore(): PrCacheStore {
     },
     getStatusesForSession(sessionId) {
       return statusSnapshots.get(sessionId) ?? EMPTY_STATUSES;
+    },
+    getSuccessfulStatusesForSession(sessionId) {
+      return successfulStatusSnapshots.get(sessionId) ?? EMPTY_STATUSES;
     },
     mergeLocalRefs(grouped, keep) {
       let changed = false;
@@ -156,13 +164,36 @@ function createPrCacheStore(): PrCacheStore {
       }
       if (!changed) return;
       statusSnapshots.set(sessionId, new Map(map));
+      const successful = new Map(successfulStatusSnapshots.get(sessionId));
+      for (const result of results) {
+        if (result.ok) successful.set(prStatusKey(result), result);
+        // A definitive missing/inaccessible PR invalidates its previous success,
+        // including after consumer remount or a later transient failure.
+        else if (result.reason === 'not-found') successful.delete(prStatusKey(result));
+      }
+      successfulStatusSnapshots.set(sessionId, successful);
+      notify();
+    },
+    hasRefreshError(sessionId, channel) {
+      const errors = refreshErrors.get(sessionId);
+      return channel ? errors?.has(channel) === true : (errors?.size ?? 0) > 0;
+    },
+    setRefreshError(sessionId, channel, failed) {
+      const errors = refreshErrors.get(sessionId) ?? new Set<'refs' | 'statuses'>();
+      if (errors.has(channel) === failed) return;
+      if (failed) errors.add(channel);
+      else errors.delete(channel);
+      if (errors.size) refreshErrors.set(sessionId, errors);
+      else refreshErrors.delete(sessionId);
       notify();
     },
     clearAll() {
-      if (refsBySession.size === 0 && statusesBySession.size === 0) return;
+      if (refsBySession.size === 0 && statusesBySession.size === 0 && refreshErrors.size === 0) return;
+      refreshErrors.clear();
       refsBySession.clear();
       statusesBySession.clear();
       statusSnapshots.clear();
+      successfulStatusSnapshots.clear();
       notify();
     },
   };
@@ -194,11 +225,14 @@ interface PrActionsContextValue {
   registerPrConsumer: (sessionId: string, deviceId?: string) => () => void;
   /** tip 打开时按需拉该会话前几条 PR 的状态(共享缓存,重复调用便宜)。 */
   fetchStatusesForSession: (sessionId: string) => void;
+  /** A task update invalidates only its remote association list, including an in-flight read. */
+  invalidateRemotePrRefs: (sessionId: string) => void;
 }
 
 const PrActionsContext = createContext<PrActionsContextValue>({
   registerPrConsumer: () => () => undefined,
   fetchStatusesForSession: () => undefined,
+  invalidateRemotePrRefs: () => undefined,
 });
 
 function groupBySession(rows: SessionPrRef[]): Map<string, SessionPrRef[]> {
@@ -235,6 +269,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   // 时序竞态就让该会话永远静默,置顶重挂载也救不回来。)
   const remoteRefsInFlight = useRef(new Map<string, number>());
   const remoteRefsFetchedAt = useRef(new Map<string, number>());
+  const remoteRefsInvalidated = useRef(new Set<string>());
   // 本机 / SSH 引用按会话回退:listAllPrRefs 有 2000 行上限,截断后的会话
   // 不会出现在启动缓存里。已注册消费者必须能走 listPrRefs(sessionId) 补齐,
   // 与远程 fetchRefsForRemoteSession 对称(2026-08-13 review P1)。
@@ -263,6 +298,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
       ownerGenRef.current += 1;
       store.clearAll();
       remoteRefsFetchedAt.current.clear();
+      remoteRefsInvalidated.current.clear();
       localRefsFetchedAt.current.clear();
       remoteDeviceBySession.current.clear();
     }
@@ -320,12 +356,14 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
           const refs = await window.electronAPI.gitContext.listPrRefs(data.sessionId);
           if (cancelled) return;
           store.setSessionRefs(data.sessionId, refs);
+          store.setRefreshError(data.sessionId, 'refs', false);
           // 该会话有消费者在展示(顶栏/侧栏徽标)→ 引用变化后立即刷状态,
           // 不等 90s 周期(对齐顶栏旧行为:引用变化即时补状态)。
           if (refs.length > 0 && prConsumers.current.has(data.sessionId)) {
             fetchStatusesForRefs(data.sessionId, refs);
           }
         } catch (err) {
+          if (!cancelled) store.setRefreshError(data.sessionId, 'refs', true);
           log.warn('pr refs refresh failed', String(err));
         }
       })();
@@ -369,12 +407,21 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃
         if (!Array.isArray(results)) return;
         store.applyStatuses(sessionId, results);
+        store.setRefreshError(sessionId, 'statuses', false);
       } catch (err) {
+        if (gen === ownerGenRef.current) store.setRefreshError(sessionId, 'statuses', true);
         log.warn('pr statuses fetch failed', String(err));
       } finally {
         // 身份匹配释放:标记可能已被新代请求覆盖,旧请求 settle 不得误删。
         if (inFlightSessions.current.get(sessionId) === gen) {
           inFlightSessions.current.delete(sessionId);
+          if (gen === ownerGenRef.current && prConsumers.current.has(sessionId)) {
+            const latest = store.getRefs(sessionId).slice(0, MAX_STATUS_QUERIES);
+            const requested = new Set(refs.map(prStatusKey));
+            if (latest.some((ref) => !requested.has(prStatusKey(ref)))) {
+              fetchStatusesForRefs(sessionId, latest);
+            }
+          }
         }
       }
     })();
@@ -402,6 +449,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     const fetchedAt = remoteRefsFetchedAt.current.get(sessionId);
     if (fetchedAt !== undefined && Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000)
       return;
+    remoteRefsInvalidated.current.delete(sessionId);
     remoteRefsInFlight.current.set(sessionId, gen);
     void (async () => {
       try {
@@ -412,7 +460,9 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         )) as SessionPrRef[];
         // owner 已切换:结果与簿记(时间戳会抑制新 owner 的重查)都不能落。
         if (gen !== ownerGenRef.current) return;
+        if (remoteRefsInvalidated.current.has(sessionId)) return;
         remoteRefsFetchedAt.current.set(sessionId, Date.now());
+        store.setRefreshError(sessionId, 'refs', false);
         log.debug('remote pr refs fetched', { sessionId, count: refs.length });
         store.setSessionRefs(sessionId, refs);
         // 该会话仍有消费者在展示 → 引用到位后立即补状态,不等 90s 周期
@@ -422,23 +472,39 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         }
       } catch (err) {
         // 断链/超时:不写时间戳,下个刷新周期(或行重挂载)立即重试。
+        if (gen === ownerGenRef.current && !remoteRefsInvalidated.current.has(sessionId)) {
+          store.setRefreshError(sessionId, 'refs', true);
+        }
         log.warn('remote pr refs fetch failed', String(err));
       } finally {
         // 身份匹配释放(同 inFlightSessions):旧代请求 settle 不得误删新代标记。
         if (remoteRefsInFlight.current.get(sessionId) === gen) {
           remoteRefsInFlight.current.delete(sessionId);
+          if (gen === ownerGenRef.current && remoteRefsInvalidated.current.delete(sessionId)) {
+            const consumer = prConsumers.current.get(sessionId);
+            if (consumer?.deviceId) fetchRefsForRemoteSession(sessionId, consumer.deviceId);
+          }
         }
       }
     })();
   }).current;
 
+  const invalidateRemotePrRefs = useRef((sessionId: string) => {
+    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
+    if (!deviceId) return;
+    remoteRefsFetchedAt.current.delete(sessionId);
+    remoteRefsInvalidated.current.add(sessionId);
+    fetchRefsForRemoteSession(sessionId, deviceId);
+  }).current;
+
   const fetchRefsForLocalSession = useRef((sessionId: string) => {
-    // 启动全表已经命中的会话不必再打 IPC;缺席才按会话回退。
-    if (store.getRefs(sessionId).length > 0) return;
+    // 已有成功引用不重复读取；缺席或上次刷新失败时沿原有节拍补查。
+    const refsFailed = store.hasRefreshError(sessionId, 'refs');
+    if (store.getRefs(sessionId).length > 0 && !refsFailed) return;
     const gen = ownerGenRef.current;
     if (localRefsInFlight.current.get(sessionId) === gen) return;
     const fetchedAt = localRefsFetchedAt.current.get(sessionId);
-    if (fetchedAt !== undefined && Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000) {
+    if (!refsFailed && fetchedAt !== undefined && Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000) {
       return;
     }
     localRefsInFlight.current.set(sessionId, gen);
@@ -447,11 +513,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         const refs = await window.electronAPI.gitContext.listPrRefs(sessionId);
         if (gen !== ownerGenRef.current) return;
         localRefsFetchedAt.current.set(sessionId, Date.now());
+        store.setRefreshError(sessionId, 'refs', false);
         store.setSessionRefs(sessionId, refs);
         if (refs.length > 0 && prConsumers.current.has(sessionId)) {
           fetchStatusesForRefs(sessionId, refs);
         }
       } catch (err) {
+        if (gen === ownerGenRef.current) store.setRefreshError(sessionId, 'refs', true);
         log.warn('local pr refs fetch failed', String(err));
       } finally {
         if (localRefsInFlight.current.get(sessionId) === gen) {
@@ -510,8 +578,8 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   }, [refreshConsumer]);
 
   const actionsValue = useMemo(
-    () => ({ registerPrConsumer, fetchStatusesForSession }),
-    [registerPrConsumer, fetchStatusesForSession],
+    () => ({ registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs }),
+    [registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs],
   );
 
   return (
@@ -542,8 +610,11 @@ export function usePrStatus(sessionId: string, key: string): PrStatusResult | un
 }
 
 interface PrStatusesContextValue {
+  refreshError: boolean;
   /** prStatusKey(ref) → 该会话的状态查询结果。 */
   statuses: ReadonlyMap<string, PrStatusResult>;
+  /** Last confirmed values survive consumer unmounts; raw failures remain in statuses. */
+  successfulStatuses: ReadonlyMap<string, PrStatusResult>;
   fetchStatusesForSession: (sessionId: string) => void;
 }
 
@@ -556,9 +627,19 @@ export function usePrStatuses(sessionId: string): PrStatusesContextValue {
     () => store.getStatusesForSession(sessionId),
     () => store.getStatusesForSession(sessionId),
   );
+  const successfulStatuses = useSyncExternalStore(
+    store.subscribe,
+    () => store.getSuccessfulStatusesForSession(sessionId),
+    () => store.getSuccessfulStatusesForSession(sessionId),
+  );
+  const refreshError = useSyncExternalStore(
+    store.subscribe,
+    () => store.hasRefreshError(sessionId),
+    () => store.hasRefreshError(sessionId),
+  );
   return useMemo(
-    () => ({ statuses, fetchStatusesForSession }),
-    [statuses, fetchStatusesForSession],
+    () => ({ statuses, successfulStatuses, refreshError, fetchStatusesForSession }),
+    [statuses, successfulStatuses, refreshError, fetchStatusesForSession],
   );
 }
 

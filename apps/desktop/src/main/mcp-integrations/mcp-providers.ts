@@ -1,3 +1,7 @@
+import { getPluginMarketService } from '../plugin-market/service.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
+import { routineTools } from '../routines/service.js';
 import { join as pathJoin } from 'node:path';
 import { and, eq } from 'drizzle-orm';
 
@@ -16,6 +20,7 @@ import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
   getCindyGhostsMcpDeps,
   type GhostGrantLiveSessionState,
+  type CindyGhostsHostDeps,
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
@@ -27,6 +32,7 @@ import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
 import { feishuIm, wechatIm } from '../im';
+import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { getScheduler } from '../scheduler-host/index.js';
@@ -76,6 +82,8 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 
 export interface DesktopMcpProvidersDeps {
+  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
+  createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
@@ -185,8 +193,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // branch-free. Feishu returns 400 with structured `response.data.code/msg`
       // for business errors (rate-limit, invalid text, …); those get folded
       // into `reason` for logging without leaking axios internals to the tool.
-      sendMessage: async (chatId, markdown) => {
+      sendMessage: async (chatId, markdown, notificationSessionId) => {
         try {
+          if (notificationSessionId && chatId === feishuIm.getOwnerOpenId()) {
+            const { messageId, sessionLinked } = await sendFeishuSessionNotification(
+              feishuIm, notificationSessionId, markdown,
+            );
+            return { ok: true, messageId, sessionLinked };
+          }
           const { messageId } = await feishuIm.sendMarkdownText(chatId, markdown);
           return { ok: true, messageId };
         } catch (err) {
@@ -513,7 +527,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
         },
-        getSessionTask: async ({ callerSessionId, taskId }) => {
+        getSessionTask: async ({ callerSessionId, taskId, queuedMessageId }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
@@ -522,9 +536,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               message: 'Session task service not initialized',
             };
           }
-          return svc.getSessionTask(callerSessionId, taskId);
+          return svc.getSessionTask(callerSessionId, taskId, queuedMessageId);
         },
-        stopSessionTask: async ({ callerSessionId, taskId }) => {
+        stopSessionTask: async ({ callerSessionId, taskId, mode }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
@@ -533,7 +547,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               message: 'Session task service not initialized',
             };
           }
-          return svc.stopSessionTask(callerSessionId, taskId);
+          return svc.stopSessionTask(callerSessionId, taskId, mode);
         },
       },
       botMessaging: {
@@ -557,8 +571,34 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
         },
       },
+      botRoutines: {
+        service: routineTools,
+        resolveBotId: async (callerSessionId) => {
+          const scope = activeOwnerScopeKey();
+          if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+            throw new Error('Routine account is no longer active');
+          }
+          const dbClient = tryGetDbClient();
+          if (!dbClient) throw new Error('localDb not ready');
+          const [owned] = await dbClient.drizzle
+            .select({ botId: botSessionLinks.botId })
+            .from(botSessionLinks)
+            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+            .where(and(
+              eq(botSessionLinks.sessionId, callerSessionId),
+              eq(sessions.source, 'bot'),
+              eq(botSessionLinks.role, 'canonical'),
+            ))
+            .limit(1);
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
+            throw new Error('Routine account is no longer active');
+          }
+          if (!owned) throw new Error('当前调用未绑定伙伴主任务');
+          return owned.botId;
+        },
+      },
       botProfiles: {
-        create: async ({ callerSessionId, name, description, identitySource, welcomeMessage }) => {
+        create: async ({ callerSessionId, name, description, identitySource }) => {
           const dbClient = tryGetDbClient();
           if (!dbClient) {
             return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -583,7 +623,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               name,
               description,
               identitySource,
-              welcomeMessage,
+              prepareInvitation: true,
             });
             return {
               ok: true,
@@ -599,6 +639,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
+      botCapabilities: deps.botCapabilities,
       botSkills: {
         save: (params) => saveBotSkillForSession(params),
         list: (params) => listBotSkillsForSession(params),
@@ -739,8 +780,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       name: 'cindy',
       instance: createCindyGhostsMcpServer(
         getCindyGhostsMcpDeps(ctx, {
+          pluginMarket: getPluginMarketService(),
           getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          createMediaDownloadContext: deps.createMediaDownloadContext,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,
         }),

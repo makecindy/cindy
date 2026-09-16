@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseMessageToolUse } from '../messageNormalize.js';
 import {
   createdPathsFromDescriptor,
   describeToolUse,
@@ -10,6 +11,26 @@ import {
 } from '../toolUseDescriptor';
 
 describe('parseToolName', () => {
+  it('describes persisted Pi MCP wrappers with the same descriptor as direct calls', () => {
+    const args = { query: 'card' };
+    expect(describeToolUse('cindy_mcp_call_tool', { server: 'custom', tool: 'search', args }))
+      .toEqual(describeToolUse('mcp:custom:search', args));
+  });
+  it.each(['start_team', 'part__tool'])('preserves Pi server boundaries for %s in raw and normalized messages', (tool) => {
+    const server = 'cindy_orca__evil';
+    const input = { value: 1 };
+    const gateway = { server, tool, args: input };
+    const normalized = parseMessageToolUse({ role: 'tool_use', toolUseId: 'pi-id', content: {
+      toolName: 'cindy_mcp_call_tool', input: gateway,
+    } });
+    expect(normalized.toolUseId).toBe('pi-id');
+    expect(parseToolName(normalized.toolName)).toEqual({ kind: 'mcp', server, tool });
+    const expected = describeToolUse(`mcp:${server}:${tool}`, input);
+    expect(describeToolUse('cindy_mcp_call_tool', gateway)).toEqual(expected);
+    expect(describeToolUse(normalized.toolName, normalized.input)).toEqual(expected);
+    expect(parseMessageToolUse({ role: 'tool_use', content: normalized })).toEqual(normalized);
+  });
+
   it('parses Claude Code mcp__server__tool names', () => {
     expect(parseToolName('mcp__feishu__read_by_url')).toEqual({
       kind: 'mcp',

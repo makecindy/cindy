@@ -7,6 +7,8 @@ import { SessionListDrawer } from "@/session/SessionListDrawer";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
 import { buildMobileHomePresentation } from "@/session/mobileHome";
 import { buildRemoteSessionCardPreview } from "@/session/sessionList";
+import { clearSessionScheduleIndexCache } from "@/session/scheduleIndex";
+import { remoteScheduleEventStore } from "@/scheduler/remoteScheduleEvents";
 import { i18n } from "@/i18n";
 import type { HomeRow, HomeSection } from "@/session/homeSections";
 import type { RemoteMessage, RemoteSession } from "@/session/types";
@@ -17,6 +19,8 @@ const native = vi.hoisted(() => ({
   sections: [] as HomeSection[],
   search: { query: "", onChangeQuery: (_value: string) => {} },
   invoke: vi.fn(),
+  appState: 'active',
+  appStateListeners: new Set<(state: string) => void>(),
 }));
 
 vi.mock("react-native", async () => {
@@ -67,6 +71,13 @@ vi.mock("react-native", async () => {
       );
     },
     AccessibilityInfo: { setAccessibilityFocus: vi.fn() },
+    AppState: {
+      get currentState() { return native.appState; },
+      addEventListener: (_event: string, listener: (state: string) => void) => {
+        native.appStateListeners.add(listener);
+        return { remove: () => native.appStateListeners.delete(listener) };
+      },
+    },
     BackHandler: { addEventListener: () => ({ remove() {} }) },
     findNodeHandle: () => null,
     StyleSheet: {
@@ -235,6 +246,10 @@ describe("drawer selective updates", () => {
   };
 
   beforeEach(async () => {
+    native.appState = 'active';
+    native.appStateListeners.clear();
+    clearSessionScheduleIndexCache();
+    remoteScheduleEventStore.clearAll();
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.useFakeTimers();
     remoteSessionStore.clear();
@@ -314,9 +329,16 @@ describe("drawer selective updates", () => {
     ]);
     await render();
     expect(row("s1")?.textContent).toContain("host preview");
-    await act(async () =>
-      remoteSessionStore.setMessages("s1", [message("s1", "loaded preview")]),
-    );
+    await act(async () => {
+      remoteSessionStore.setMessages("s1", [message("s1", "loaded preview")]);
+    });
+    expect(row("s1")?.textContent).toContain("host preview");
+    await act(async () => {
+      remoteSessionStore.markSessionMessagesSynced(
+        "s1",
+        session("s1", { preview: "host preview" }),
+      );
+    });
     expect(row("s1")?.textContent).toContain("loaded preview");
     await act(async () => remoteSessionStore.setMessages("s1", []));
     expect(row("s1")?.textContent).toContain("host preview");
@@ -351,7 +373,7 @@ describe("drawer selective updates", () => {
     }
   });
 
-  it("changes an automation group primary and its click target when an older run needs attention", async () => {
+  it("keeps the latest group run for an older waiting interaction, matching desktop", async () => {
     remoteSessionStore.setDeviceSessions("dev-1", "Studio", [
       session("old", { source: "scheduler", title: "daily" }),
       session("new", {
@@ -372,12 +394,42 @@ describe("drawer selective updates", () => {
         { request: { kind: "ask_user_question", requestId: "question" } },
       ]),
     );
-    expect(row("new")).toBeNull();
-    expect(status("old", "awaiting")).not.toBeNull();
-    await act(async () => (row("old") as HTMLElement).click());
-    expect(onSelect.mock.calls.at(-1)?.[0].session.id).toBe("old");
+    expect(row("old")).toBeNull();
+    expect(row("new")?.textContent).toContain("newer run");
+    await act(async () => (row("new") as HTMLElement).click());
+    expect(onSelect.mock.calls.at(-1)?.[0].session.id).toBe("new");
     await act(async () => remoteSessionStore.setPendingInteractions("old", []));
     expect(row("new")?.textContent).toContain("newer run");
+  });
+
+  it("refreshes failed unread from the lightweight host index when read elsewhere", async () => {
+    let readAt: number | undefined;
+    native.invoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:schedule:list') return [{ id: 'auto', name: 'auto', status: 'active', targetSessionId: 's1' }];
+      expect(channel).toBe("maker:schedule:list-sidebar-index-runs");
+      return { runs: [{ sessionId: "s1", scheduleId: "auto", runId: "run", scheduleName: "auto", scheduleStatus: "active", status: "failed", firedAt: 1, readAt }] };
+    });
+    await render();
+    expect(status("s1", "error")).not.toBeNull();
+    readAt = 10;
+    await act(async () => remoteScheduleEventStore.apply("dev-1", { type: "read", scheduleId: "auto" }));
+    expect(status("s1", "error")).toBeNull();
+    expect(native.invoke).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not retry or start schedule scans in the background and refreshes on return', async () => {
+    native.invoke.mockRejectedValue(new Error('[INVOKE_TIMEOUT] timeout'));
+    await render();
+    expect(native.invoke).toHaveBeenCalledTimes(1);
+    native.appState = 'background';
+    await act(async () => native.appStateListeners.forEach((listener) => listener('background')));
+    await tick(5000);
+    await act(async () => remoteScheduleEventStore.apply('dev-1', { type: 'read', scheduleId: 'auto' }));
+    expect(native.invoke).toHaveBeenCalledTimes(1);
+    native.invoke.mockImplementation(async (_device, channel) => channel === 'maker:schedule:list' ? [] : { runs: [] });
+    native.appState = 'active';
+    await act(async () => native.appStateListeners.forEach((listener) => listener('active')));
+    expect(native.invoke).toHaveBeenCalledTimes(3);
   });
 
   it("refreshes device search reachability without a session-array change", async () => {
@@ -387,7 +439,7 @@ describe("drawer selective updates", () => {
     await render();
     await act(async () => native.search.onChangeQuery("needle"));
     await tick(300);
-    expect(native.invoke).not.toHaveBeenCalled();
+    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(0);
     const sessions = remoteSessionStore.getSessions();
     await act(async () =>
       remoteSessionStore.setConversationSearchDeviceModels([
@@ -396,8 +448,8 @@ describe("drawer selective updates", () => {
     );
     expect(remoteSessionStore.getSessions()).toBe(sessions);
     await tick(300);
-    expect(native.invoke).toHaveBeenCalledTimes(1);
-    expect(native.invoke.mock.calls[0].slice(0, 2)).toEqual([
+    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(1);
+    expect(native.invoke.mock.calls.find((call) => call[1] === "local-db:conversations:search")?.slice(0, 2)).toEqual([
       "dev-1",
       "local-db:conversations:search",
     ]);
@@ -432,9 +484,9 @@ describe("drawer selective updates", () => {
     expect(row("s1")?.textContent).toContain("needle");
     await act(async () => delta("s1", " more"));
     await tick(100);
-    expect(native.invoke).toHaveBeenCalledTimes(1);
+    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(1);
     await tick(300);
-    expect(native.invoke).toHaveBeenCalledTimes(1);
+    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(1);
   });
 
   it("preserves indexed hit snippets and message focus while newer loaded messages arrive", async () => {

@@ -3,6 +3,7 @@ import { AlertCircle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { scheduleFailureMessageKey } from '@cindy/maker-shared/schedule-model';
 import {
   compareFailedScheduleRuns,
   dismissScheduleFailure,
@@ -89,7 +90,7 @@ function FailedScheduleNotice({
     >
       <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
       <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {t('chat.unreadFailedScheduleBanner.text')}
+        {t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
       </span>
       <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>
         <button

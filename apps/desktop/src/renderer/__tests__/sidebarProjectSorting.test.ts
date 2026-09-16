@@ -4,6 +4,7 @@ import {
   sortProjectsForSidebar,
   sortSessionsForSidebar,
 } from '@/features/cc-agent/lib/sidebarProjectSorting';
+import { buildMainListEntries } from '@/features/cc-agent/lib/mainListModel';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
 import type { ProjectNode } from '@/features/cc-agent/lib/projectGrouping';
 import type { Session } from '@/lib/ccAgent.types';
@@ -72,6 +73,21 @@ describe('sidebar project sorting', () => {
     expect(sorted.map((p) => p.workingDir)).toEqual(['/p/gamma', '/p/alpha', '/p/beta']);
   });
 
+  it('applies a stored Windows order to persistent representatives with different casing', () => {
+    const sorted = sortProjectsForSidebar(
+      [
+        project({ workingDir: 'd:/école/alpha', displayName: 'alpha' }),
+        project({ workingDir: 'd:/école/beta', displayName: 'beta' }),
+      ],
+      'recency',
+      ['local:D:/École/BETA', 'local:D:/École/ALPHA'],
+      'custom',
+      'win32',
+    );
+
+    expect(sorted.map((p) => p.workingDir)).toEqual(['d:/école/beta', 'd:/école/alpha']);
+  });
+
   // 排序时钟 = userSendAt ?? updatedAt(以用户最近一次按下发送为主键)。原先经
   // sortSessionsForSidebar(…, 'time') 间接验证;'time'(最早优先)2026-08-12 用户
   // 裁决删除后,直接对时钟函数断言——不变量本身没变,只是不再借道那个档位。
@@ -117,4 +133,36 @@ describe('sidebar project sorting', () => {
     expect(sortSessionsForSidebar([a, b], 'recency').map((s) => s.id)).toEqual(['a', 'b']);
     expect(sortSessionsForSidebar([b, a], 'priority').map((s) => s.id)).toEqual(['b', 'a']);
   });
+});
+
+it('sorts project-panel tasks by creation time, with stable ties and no activity fallback', () => {
+  const old = session({ id: 'old', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' });
+  const a = session({ id: 'a', createdAt: '2026-02-01T00:00:00Z' });
+  const b = session({ id: 'b', createdAt: a.createdAt });
+  const invalid = session({ id: 'invalid', createdAt: 'invalid', updatedAt: '2026-09-09T00:00:00Z' });
+  const input = [old, b, invalid, a];
+  expect(sortSessionsForSidebar(input, 'created').map((s) => s.id)).toEqual(['a', 'b', 'old', 'invalid']);
+  expect(input.map((s) => s.id)).toEqual(['old', 'b', 'invalid', 'a']);
+});
+
+
+it.each(['activity', 'custom'] as const)('keeps collapsed and expanded project ordering consistent for %s order', (projectOrder) => {
+  const older = project({
+    workingDir: '/older', displayName: 'older',
+    sessions: [session({ id: 'older', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' })],
+  });
+  const newer = project({
+    workingDir: '/newer', displayName: 'newer',
+    sessions: [session({ id: 'newer', createdAt: '2026-02-01T00:00:00Z', updatedAt: '2026-02-01T00:00:00Z' })],
+  });
+  const projects = [older, newer];
+  const manualOrder = [older.projectKey, newer.projectKey];
+  const collapsed = sortProjectsForSidebar(projects, 'created', manualOrder, projectOrder);
+  const expanded = buildMainListEntries({
+    projects, dialogues: [], groupBy: 'project', groupDialogue: false,
+    sortBy: 'created', projectOrder, manualProjectOrder: manualOrder,
+  });
+  const keys = collapsed.map((item) => item.projectKey);
+  expect(keys).toEqual(projectOrder === 'custom' ? manualOrder : [...manualOrder].reverse());
+  expect(keys).toEqual(expanded.map((entry) => entry.kind === 'project' ? entry.project.projectKey : 'unexpected'));
 });

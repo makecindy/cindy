@@ -156,6 +156,7 @@ export const router = createHashRouter([
                             index: true,
                             element: <SkillhubHomeView />,
                           },
+                          { path: 'by-path', element: <SkillhubDetailView /> },
                           { path: ':kind/global/:name', element: <SkillhubDetailView /> },
                           {
                             path: ':kind/project/:projectHash/:name',

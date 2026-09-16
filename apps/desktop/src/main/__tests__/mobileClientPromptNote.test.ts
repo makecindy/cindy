@@ -218,7 +218,7 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
       },
       'claude-code',
     )).toBe(true);
-    expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(false);
     expect(shouldPrependMobileClientPromptNote('/compact', 'codex')).toBe(true);
   });
 });

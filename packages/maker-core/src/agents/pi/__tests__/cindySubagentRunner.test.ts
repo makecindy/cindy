@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -101,6 +101,35 @@ async function readCommandsIfPresent(
   const trimmed = text.trim();
   if (!trimmed) return null;
   return trimmed.split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+}
+
+/**
+ * Publish a set of controls so that no runner scan can observe a subset of
+ * them: the controls are written into a staging directory and the whole
+ * directory is swapped over the runner-created (still empty) `controls` dir.
+ * While the swap is in flight a scan reads ENOENT, which both scan sites
+ * treat as "no controls" — so the first scan that sees anything sees every
+ * control, and a shared batch is guaranteed by construction instead of by
+ * the timing of individual writes.
+ */
+async function publishControlsAtomically(
+  runDir: string,
+  controls: Array<Record<string, unknown>>,
+): Promise<void> {
+  const controlsDir = path.join(runDir, 'controls');
+  const stagingDir = path.join(runDir, `controls-staging-${randomUUID()}`);
+  const retiredDir = path.join(runDir, `controls-retired-${randomUUID()}`);
+  await mkdir(stagingDir, { recursive: true });
+  for (const control of controls) {
+    const requestId = randomUUID();
+    await writeFile(
+      path.join(stagingDir, `${requestId}.json`),
+      `${JSON.stringify({ version: 1, requestId, ...control })}\n`,
+      { mode: 0o600 },
+    );
+  }
+  await rename(controlsDir, retiredDir);
+  await rename(stagingDir, controlsDir);
 }
 
 async function tempRoot(): Promise<string> {
@@ -1175,26 +1204,24 @@ describe('Cindy durable PI Subagent runner', () => {
       const [run] = await listPiSubagentRuns(fixture.root);
       return run?.tasks[0]?.pendingApproval ? run : null;
     });
-    const controlsDir = path.join(fixture.runDir, 'controls');
-    await mkdir(controlsDir, { recursive: true });
-    const write = async (control: Record<string, unknown>): Promise<void> => {
-      const requestId = randomUUID();
-      await writeFile(
-        path.join(controlsDir, `${requestId}.json`),
-        `${JSON.stringify({ version: 1, requestId, ...control })}\n`,
-        { mode: 0o600 },
-      );
-    };
-    // Approval first by every ordering key the runner sorts on.
-    await write({
-      seq: 1,
-      requestedAt: 1,
-      action: 'approval',
-      childId: pending.tasks[0]?.childId,
-      approvalId: 'approval-1',
-      confirmed: true,
-    });
-    await write({ seq: 2, requestedAt: 2, action: 'stop' });
+    // Approval first by every ordering key the runner sorts on. Both controls
+    // are published in one atomic directory swap, so no control scan can ever
+    // observe the approval without the stop: the shared batch this case is
+    // about is guaranteed by construction, not by the timing of two separate
+    // writes. (Two direct writes raced a poll that consumed the approval
+    // alone, which forwarded it, let the child finish, and completed the run
+    // before the stop was ever seen — once, on a slow Windows runner.)
+    await publishControlsAtomically(fixture.runDir, [
+      {
+        seq: 1,
+        requestedAt: 1,
+        action: 'approval',
+        childId: pending.tasks[0]?.childId,
+        approvalId: 'approval-1',
+        confirmed: true,
+      },
+      { seq: 2, requestedAt: 2, action: 'stop' },
+    ]);
 
     const stopped = await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);
@@ -1228,29 +1255,21 @@ describe('Cindy durable PI Subagent runner', () => {
       const [run] = await listPiSubagentRuns(fixture.root);
       return run?.tasks[0]?.pendingApproval ? run : null;
     });
-    const controlsDir = path.join(fixture.runDir, 'controls');
-    await mkdir(controlsDir, { recursive: true });
-    const stopId = randomUUID();
-    await writeFile(
-      path.join(controlsDir, `${stopId}.json`),
-      `${JSON.stringify({ version: 1, requestId: stopId, seq: 2, requestedAt: 2, action: 'stop' })}\n`,
-      { mode: 0o600 },
-    );
-    const approvalId = randomUUID();
-    await writeFile(
-      path.join(controlsDir, `${approvalId}.json`),
-      `${JSON.stringify({
-        version: 1,
-        requestId: approvalId,
+    // Same atomic publication as the previous case: one directory swap makes
+    // the stop and the approval visible to the same scan by construction, so
+    // the partition's "approval first by ordering key" premise holds without
+    // relying on write timing.
+    await publishControlsAtomically(fixture.runDir, [
+      { seq: 2, requestedAt: 2, action: 'stop' },
+      {
         seq: 1,
         requestedAt: 1,
         action: 'approval',
         childId: pending.tasks[0]?.childId,
         approvalId: 'approval-1',
         confirmed: true,
-      })}\n`,
-      { mode: 0o600 },
-    );
+      },
+    ]);
 
     const stopped = await waitFor(async () => {
       const [run] = await listPiSubagentRuns(fixture.root);
@@ -1355,7 +1374,18 @@ describe('Cindy durable PI Subagent runner', () => {
       childId: running.tasks[0]?.childId,
       message: 'continue from the completed result',
     })).resolves.toBe(1);
-    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    const commands = await waitFor(
+      async () => {
+        const parsed = await readCommandsIfPresent(fixture.commandsFile);
+        return parsed?.some((command) => (
+          command.type === 'follow_up' && command.message === 'continue from the completed result'
+        ))
+          ? parsed
+          : null;
+      },
+      undefined,
+      'the exact follow-up command to reach the child',
+    );
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'steer', message: 'late correction' }));
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'follow_up', message: 'continue from the completed result',
@@ -1595,7 +1625,27 @@ describe('Cindy durable PI Subagent runner', () => {
         undefined,
         'the runner to launch its hanging child',
       );
-      const childPid = Number((await readFile(fixture.pidsFile, 'utf8')).trim().split('\n')[0]);
+      // The runner publishes `running` once the lane dispatches the task, but
+      // the freshly spawned child has not necessarily booted far enough to
+      // have recorded its pid yet — the same spawn/write window that
+      // `gateFinishOnPidCount` closes for the multi-lane cases. Wait for the
+      // pid to land on disk instead of racing the first read, or this flakes
+      // as an ENOENT under a loaded CI runner. The file must also carry a
+      // positive pid: an empty or newline-only file parses as 0, and
+      // `process.kill(0, 0)` probes the caller's process group, which stays
+      // alive for the whole suite and turns the race into a timeout.
+      const childPid = await waitFor(
+        async () => {
+          try {
+            const pid = Number((await readFile(fixture.pidsFile, 'utf8')).trim().split('\n')[0]);
+            return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+          } catch {
+            return null;
+          }
+        },
+        undefined,
+        'the hanging child to record its pid',
+      );
       expect(Number.isSafeInteger(childPid)).toBe(true);
 
       process.kill(fixture.child.pid!, 'SIGTERM');

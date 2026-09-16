@@ -19,6 +19,9 @@
  */
 
 import { useSyncExternalStore } from 'react';
+import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
+import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
+import type { BotModelRoute } from '../../shared/botModelChain';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
@@ -746,6 +749,11 @@ export function getDraftForPreferenceSync(): NewMakerDraft {
     : persistedDraft;
 }
 
+/** Do not stamp a previous owner's draft during the auth namespace handoff. */
+export function getDraftForOwnerPreferenceSync(ownerId: string | null): NewMakerDraft | null {
+  return activeDataOwnerId === ownerId ? getDraftForPreferenceSync() : null;
+}
+
 /** Switch the persistent draft namespace together with the active data owner. */
 export function setNewMakerDraftOwner(ownerId: string | null): void {
   const normalized = typeof ownerId === 'string' && ownerId.trim().length > 0 ? ownerId : null;
@@ -897,6 +905,40 @@ export function switchVendor(next: MakerVendor): void {
   };
   scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
+}
+
+/** Explicit Bot-requested default uses the same persisted tuple, with owner/CAS and no partial writes. */
+export function applyAppDefaultModelSelection(selection: AppDefaultModelSelection): boolean {
+  if (!isDataOwnerPushStampCurrent(selection.ownerStamp)
+    || activeDataOwnerId !== selection.ownerStamp.dataOwnerId
+    || Date.now() > selection.expiresAt) return false;
+  const stored = readStoredDraftRecord();
+  const base = stored ? sanitize(stored) : currentDraft;
+  const prefs = base.lastByVendor[base.vendor];
+  const current: BotModelRoute | null = prefs.model ? {
+    harness: base.vendor === 'cc' || base.vendor === 'orca' ? 'claude' : base.vendor,
+    model: prefs.model, providerId: prefs.providerId ?? null, effort: prefs.effort ?? '',
+    fastMode: base.fastModeByModel[prefs.model] === true,
+  } : null;
+  if (!sameModelRoute(current, selection.expectedRoute) && !sameModelRoute(current, selection.route)) return false;
+  const route = selection.route;
+  const vendor = route.harness === 'claude' ? 'cc' : route.harness;
+  const next: NewMakerDraft = { ...base, vendor,
+    defaultTupleCustomized: true, defaultTupleSelectionCustomized: true,
+    modelChosenByVendor: { ...base.modelChosenByVendor, [vendor]: true },
+    lastByVendor: { ...base.lastByVendor, [vendor]: { ...base.lastByVendor[vendor],
+      model: route.model, providerId: route.providerId, effort: route.effort as Effort } },
+    effortByModel: { ...base.effortByModel, [route.model]: route.effort as Effort },
+    fastModeByModel: { ...base.fastModeByModel, [route.model]: route.fastMode },
+  };
+  try {
+    window.localStorage.setItem(storageKey(), JSON.stringify(next));
+  } catch { return false; }
+  currentDraft = { ...currentDraft, ...defaultTuplePreferenceOf(next),
+    effortByModel: next.effortByModel, fastModeByModel: next.fastModeByModel };
+  preferenceSyncFallback = null;
+  emit();
+  return true;
 }
 
 /**

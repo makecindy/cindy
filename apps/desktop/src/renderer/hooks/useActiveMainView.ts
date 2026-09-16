@@ -1,7 +1,7 @@
 /**
  * useActiveMainView
  * ---------------------------------------------------------------------------
- * 推导主区域当前激活的 View（Chat / Issues / Plugins），并返回 navigateToView 切换函数。
+ * 推导主区域当前激活的 View（任务 / Issues / Plugins / 伙伴），并返回 navigateToView 切换函数。
  *
  * 激活态由 URL 派生：pathname === prefix || pathname.startsWith(prefix + '/')。
  * 当 pathname 不匹配任何 view prefix 时（如 /settings），通常保留最近一次匹配过的 key —
@@ -11,14 +11,21 @@
  * navigateToView 内部做同源去重，避免重复 navigate 触发 FadeSwitcher
  * 不必要的子树重挂载。
  *
- * URL 派生与最近一次有效 view 的保持语义由本 hook 维护。
+ * URL 派生由本 hook 维护；各视图最后位置由账号级 MainViewHistoryProvider 共享，
+ * 避免侧栏滚动段卸载后丢失返回位置。未提供 Provider 时使用实例内记忆。
+ * 自动化页保留当前视图归属，但不覆盖任务返回位置。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useContext, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  MainViewHistoryContext,
+  type MainViewHistory,
+  type MainViewKey,
+} from '@/contexts/MainViewHistoryContext';
 
-export type MainViewKey = 'cc-agent' | 'issues' | 'plugins' | 'bots';
+export type { MainViewKey } from '@/contexts/MainViewHistoryContext';
 
 interface ViewDef {
   key: MainViewKey;
@@ -48,20 +55,35 @@ export function useActiveMainView() {
 
   // Sticky last-matched key — when path leaves a view (e.g. /settings),
   // keep showing the previously active tab as selected.
-  const lastMatchedRef = useRef<MainViewKey>(matchedKey ?? DEFAULT_KEY);
+  const sharedHistory = useContext(MainViewHistoryContext);
+  const localHistory = useRef<MainViewHistory>({
+    lastMatchedKey: matchedKey ?? DEFAULT_KEY,
+    paths: {},
+  });
+  const history = sharedHistory ?? localHistory;
   // Per-view last full pathname — switching back to a tab restores its sub-route
   // (e.g. /cc-agent/<sessionId>, /skillhub/local/...) instead of dropping to the bare prefix.
-  const lastPathPerViewRef = useRef<Partial<Record<MainViewKey, string>>>({});
   useEffect(() => {
+    if (
+      history.current.ignoredLocationKey !== undefined &&
+      history.current.ignoredLocationKey === location.key
+    ) return;
     if (matchedKey) {
-      lastMatchedRef.current = matchedKey;
-      lastPathPerViewRef.current[matchedKey] = location.pathname + location.search;
+      history.current.lastMatchedKey = matchedKey;
+      // Automations share the task layout, but are not a task destination.
+      // Keep the previous task (or the index fallback) for return navigation.
+      const isAutomations =
+        location.pathname === '/cc-agent/scheduled' ||
+        location.pathname.startsWith('/cc-agent/scheduled/');
+      if (!isAutomations) {
+        history.current.paths[matchedKey] = location.pathname + location.search + location.hash;
+      }
     }
-  }, [matchedKey, location.pathname, location.search]);
+  }, [history, matchedKey, location.key, location.pathname, location.search, location.hash]);
 
   const isGhostMainView = location.pathname === '/apps' || location.pathname.startsWith('/apps/');
   const activeKey: MainViewKey | null =
-    matchedKey ?? (isGhostMainView ? null : lastMatchedRef.current);
+    matchedKey ?? (isGhostMainView ? null : history.current.lastMatchedKey);
 
   const navigateToView = useCallback(
     (key: MainViewKey) => {
@@ -74,9 +96,9 @@ export function useActiveMainView() {
       ) {
         return; // 同视图不重复 navigate，与旧 FeatureRail 行为一致
       }
-      navigate(lastPathPerViewRef.current[key] ?? view.to);
+      navigate(history.current.paths[key] ?? view.to);
     },
-    [location.pathname, navigate],
+    [history, location.pathname, navigate],
   );
 
   return { activeKey, navigateToView };

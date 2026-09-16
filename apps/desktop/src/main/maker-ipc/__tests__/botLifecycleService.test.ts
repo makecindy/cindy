@@ -120,14 +120,81 @@ describe('Bot lifecycle coordinator', () => {
     });
   });
 
-  function service() {
+  function service(hooks: Partial<import('../botLifecycleService.js').BotLifecycleServiceDeps> = {}) {
     return createBotLifecycleService({
       maker: { closeSession } as unknown as Maker,
       getDelegationService: () => ({ cancelDelegationsForBot } as never),
       deleteProfileAndDetachSessions,
       now: () => 10,
+      ...hooks,
     });
   }
+
+  it('restarts only the canonical runtime and preserves ownership, history and delegated work', async () => {
+    const restartRuntime = vi.fn(async (_id: string, assertCurrent: () => void) => assertCurrent());
+    const lifecycle = service({ restartRuntime });
+    const beforeLinks = sqlite.prepare('SELECT * FROM bot_session_links').all();
+    const result = await lifecycle.run({ botId: 'bot-1', action: 'restart' });
+    expect(restartRuntime).toHaveBeenCalledWith('canonical', expect.any(Function));
+    expect(result).toMatchObject({ action: 'restart', status: 'active', affected: { sessions: 1 } });
+    expect(sqlite.prepare('SELECT * FROM bot_session_links').all()).toEqual(beforeLinks);
+    expect(row(sqlite, 'sessions', 'canonical').status).toBe('active');
+    expect(row(sqlite, 'bot_profiles', 'bot-1').canonical_session_id).toBe('canonical');
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(cancelDelegationsForBot).not.toHaveBeenCalled();
+    expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
+  });
+
+  it('coalesces duplicate restart clicks and permits retry after a failed close', async () => {
+    let reject!: (error: Error) => void;
+    const restartRuntime = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+    const lifecycle = service({ restartRuntime });
+    const first = lifecycle.run({ botId: 'bot-1', action: 'restart' });
+    const second = lifecycle.run({ botId: 'bot-1', action: 'restart' });
+    expect(second).toBe(first);
+    const failed = expect(first).rejects.toThrow('Bot restart failed');
+    await vi.waitFor(() => expect(restartRuntime).toHaveBeenCalledOnce());
+    reject(new Error('close failed'));
+    await failed;
+    expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('active');
+    restartRuntime.mockImplementation(async () => undefined);
+    await lifecycle.run({ botId: 'bot-1', action: 'restart' });
+    expect(restartRuntime).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['paused', 'archived', 'deleting'])('does not restart a %s teammate', async (status) => {
+    sqlite.prepare('UPDATE bot_profiles SET status = ? WHERE id = ?').run(status, 'bot-1');
+    const restartRuntime = vi.fn();
+    await expect(service({ restartRuntime }).run({ botId: 'bot-1', action: 'restart' }))
+      .rejects.toThrow('Bot must be active');
+    expect(restartRuntime).not.toHaveBeenCalled();
+  });
+
+  it('awaits routine pause/resume and keeps permanent deletion retryable until cleanup succeeds', async () => {
+    const onPaused = vi.fn(async () => {
+      expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('paused');
+    });
+    const onResumed = vi.fn(async () => {
+      expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('active');
+    });
+    const onBeforeDelete = vi.fn<() => Promise<void>>(async () => {
+      expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeDefined();
+      throw new Error('routine cleanup failed');
+    });
+    const lifecycle = service({ onPaused, onResumed, onBeforeDelete });
+    await lifecycle.run({ botId: 'bot-1', action: 'pause' });
+    await lifecycle.run({ botId: 'bot-1', action: 'resume' });
+    expect(onPaused).toHaveBeenCalledOnce();
+    expect(onResumed).toHaveBeenCalledOnce();
+    const request = { botId: 'bot-1', action: 'delete' as const, confirmName: 'Helper' };
+    await expect(lifecycle.run(request)).rejects.toThrow('routine cleanup failed');
+    expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
+    expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('archived');
+    onBeforeDelete.mockResolvedValue(undefined);
+    await lifecycle.run(request);
+    expect(deleteProfileAndDetachSessions).toHaveBeenCalledOnce();
+    expect(onBeforeDelete.mock.invocationCallOrder.at(-1)).toBeLessThan(deleteProfileAndDetachSessions.mock.invocationCallOrder[0]);
+  });
 
   it('pauses the Bot and closes its linked sessions', async () => {
     const result = await service().run({ botId: 'bot-1', action: 'pause' });

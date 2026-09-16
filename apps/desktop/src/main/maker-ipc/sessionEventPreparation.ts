@@ -1,3 +1,4 @@
+import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
   AgentEvent,
@@ -15,6 +16,7 @@ import { noteSubagentObservationTurnStarted } from '../subagentObservationRewind
 import { persistSessionFields } from '../localDb/ipc/sessions.js';
 
 import { createLogger } from '../logger.js';
+import { t } from '../i18n.js';
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { markSessionTurnStarted } from '../localDb/sessionActiveTurn.js';
 import {
@@ -28,7 +30,6 @@ import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedge
 import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
-import { getSessionFastMode } from '../maker-host/session-effort-store.js';
 import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
 import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import {
@@ -100,7 +101,7 @@ export interface PrepareSessionEventDeps {
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTurnStarted'> | null;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly readSessionModelForUsage: (sessionId: string) => Promise<string>;
-  readonly turnPiFastModeBySession: Map<string, boolean>;
+  readonly turnUsageContextBySession: Map<string, TurnUsageContext>;
   readonly silentStopTurnLeaseGate: Pick<SilentStopTurnLeaseGate, 'turnLeaseIdForEvent'>;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
@@ -144,6 +145,17 @@ export function prepareSessionEvent(
       sessionInstanceId: event.sessionInstanceId ?? null,
     });
     return;
+  }
+  // Post-terminal Host recovery bypasses the model. Localize before both
+  // persistence and renderer delivery, without mutating the internal receipt.
+  if (event.runtimeRecovery && event.source === 'pi' && event.type === 'text') {
+    event = {
+      ...event,
+      data: {
+        ...(event.data as Record<string, unknown>),
+        text: t('settings.piPackages.failure.runtimeRetirementFailed'),
+      },
+    };
   }
   // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
   // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
@@ -305,8 +317,9 @@ export function prepareSessionEvent(
       ) {
         deps.turnModelPromiseBySession.set(session.id, deps.readSessionModelForUsage(session.id));
       }
-      if (event.source === 'pi' && !deps.turnPiFastModeBySession.has(session.id)) {
-        deps.turnPiFastModeBySession.set(session.id, getSessionFastMode(session.id));
+      if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
+        && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
+        deps.turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id));
       }
     } else if (
       data.isRunning === false &&
@@ -420,7 +433,8 @@ export function prepareSessionEvent(
     shouldMarkTurnTerminalIdleAfterBroadcast = true;
     if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') {
       deps.turnModelPromiseBySession.delete(session.id);
-      if (event.source === 'pi') deps.turnPiFastModeBySession.delete(session.id);
+      // A paired done may still carry usage after this error. Retain its billing
+      // identity until done; a new product turn overwrites it using wasInTurn.
     }
     const errData =
       attributedEvent.type === 'error'

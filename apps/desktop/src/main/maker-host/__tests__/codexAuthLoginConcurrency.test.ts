@@ -1,7 +1,15 @@
 import type { AgentLoginMode, AuthLoginOptions, AuthState } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ userDataDir: '/tmp/cindy-codex-login-concurrency' }));
+const h = vi.hoisted(() => ({
+  userDataDir: '/tmp/cindy-codex-login-concurrency',
+  setLocalCodexProviderRemoved: vi.fn(),
+}));
+
+vi.mock('../provider-presentation-store.js', () => ({
+  retainProviderPresentationAfterAuthChange: h.setLocalCodexProviderRemoved,
+  retainInvalidatedProviderPresentation: vi.fn(),
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -61,6 +69,7 @@ describe('DesktopCodexAuthAdapter login single-flight', () => {
       errorReason: 'login_cancelled',
     });
     expect(disconnectCodexOAuth).toHaveBeenCalledOnce();
+    expect(h.setLocalCodexProviderRemoved).not.toHaveBeenCalled();
   });
 
   it('coalesces the same mode but cancels and serializes a different mode', async () => {

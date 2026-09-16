@@ -228,6 +228,24 @@ describe('mobileVoiceController', () => {
     expect(await session.stop()).toBe('用户刚修改\nraw final');
   });
 
+  it('reports the original range when the first transcript is published after a user move', async () => {
+    let draft = '前后';
+    let firstReplacement: { start: number; end: number; text: string } | undefined;
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), initialDraft: draft, initialSelection: { start: 1, end: 1 },
+      asr: new FakeAsrProvider(), refiner: null,
+      startAudio: async () => async () => undefined,
+      readCurrentDraft: () => draft,
+      onDraftChanged: (text, _selection, replacement) => {
+        draft = text;
+        firstReplacement ??= replacement;
+      },
+    });
+    await session.start();
+    expect(await session.stop()).toBe('前raw final后');
+    expect(firstReplacement).toEqual({ start: 1, end: 1, text: 'raw final' });
+  });
+
   it('propagates and localizes empty-transcript failures from stop()', async () => {
     const errors: string[] = [];
     const states: string[] = [];

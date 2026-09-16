@@ -97,9 +97,13 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
       : null,
 }));
 
-vi.mock('@/contexts/WorktreeContext', () => ({
-  useWorktreeForSession: () => null,
-}));
+vi.mock('@/contexts/WorktreeContext', () => {
+  const reportLiveness = vi.fn();
+  return {
+    useWorktreeForSession: () => null,
+    useReportWorktreeLiveness: () => reportLiveness,
+  };
+});
 
 vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivity: (sessionId: string) => {

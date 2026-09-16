@@ -18,6 +18,7 @@ export function resolveVerifiedContextWindow(
   agent: AgentKind,
   providerId: string | null | undefined,
   modelId: string,
+  workingBudget?: number | null,
 ): number | null {
   const candidates: CatalogModel[] = [];
   for (const provider of catalog.providers) {
@@ -30,7 +31,15 @@ export function resolveVerifiedContextWindow(
   if (candidates.length !== 1) return null;
   const only = candidates[0];
   if (only.contextWindowVerified !== true) return null;
-  return Number.isFinite(only.contextWindow) && only.contextWindow > 0 ? only.contextWindow : null;
+  if (!Number.isFinite(only.contextWindow) || only.contextWindow <= 0) return null;
+  // The working default may be deliberately below the verified route maximum.
+  // An explicit budget can raise that default, but cannot raise physical capacity.
+  const maximum = typeof only.contextWindowMax === 'number' &&
+    Number.isFinite(only.contextWindowMax) && only.contextWindowMax > 0
+    ? only.contextWindowMax : only.contextWindow;
+  const budget = typeof workingBudget === 'number' && Number.isFinite(workingBudget) && workingBudget > 0
+    ? workingBudget : only.contextWindow;
+  return Math.min(budget, maximum);
 }
 
 /** Codex and Pi report their effective runtime windows; catalogs cannot replace them. */
@@ -47,10 +56,12 @@ export function resolveSessionContextWindow(
   );
 }
 
-/** Read-only projection: retain token counts and storage, refresh only the denominator. */
+/** Preserve proven runtime budgets; legacy catalog snapshots retain read-time correction. */
 export function projectSessionContextWindow<
-  T extends ContextWindowSession & { contextWindow: number },
+  T extends ContextWindowSession & { contextWindow: number; contextWindowRuntime?: number | null },
 >(session: T, resolve?: (session: ContextWindowSession) => number | null): T {
+  if (Number.isFinite(session.contextWindow) && session.contextWindow > 0 &&
+      session.contextWindowRuntime === session.contextWindow) return session;
   const window = resolve?.(session);
   return window && Number.isFinite(window) && window > 0 && window !== session.contextWindow
     ? { ...session, contextWindow: window }

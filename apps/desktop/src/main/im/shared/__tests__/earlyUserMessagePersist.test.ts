@@ -65,7 +65,7 @@ interface Harness {
   reactToMessage: ReturnType<typeof vi.fn>;
 }
 
-function wire(opts: { withPrepare: boolean } = { withPrepare: true }): Harness {
+function wire(opts: { withPrepare: boolean; notificationSessionId?: string } = { withPrepare: true }): Harness {
   const calls: string[] = [];
   const runAgentTurn = vi.fn(async () => undefined);
   const reactToMessage = vi.fn(async () => 'reaction-1');
@@ -76,7 +76,10 @@ function wire(opts: { withPrepare: boolean } = { withPrepare: true }): Harness {
   const prepareAgentTurnText = opts.withPrepare
     ? vi.fn(async (event: IMMessageEvent) => {
         calls.push('prepare');
-        return { agentText: `<group_chat_context>…</group_chat_context>${event.text}` };
+        return {
+          agentText: `<group_chat_context>…</group_chat_context>${event.text}`,
+          contextSnapshot: { groupContext: 'filtered background' },
+        };
       })
     : undefined;
 
@@ -93,6 +96,7 @@ function wire(opts: { withPrepare: boolean } = { withPrepare: true }): Harness {
 
   const adapter = {
     channel: 'feishu',
+    ...(opts.notificationSessionId ? { resolveNotificationReply: async () => opts.notificationSessionId } : {}),
     im,
     ui: slackUi,
     threadScoped: false,
@@ -149,6 +153,9 @@ describe('messageHandler early user-message persist', () => {
     // 前缀只进模型消息。
     expect(turnArgs(h.runAgentTurn).agentText).toContain('group_chat_context');
     expect(turnArgs(h.runAgentTurn).text).toBe('总结上面');
+    expect(turnArgs(h.runAgentTurn).contextSnapshot).toEqual({
+      groupContext: 'filtered background',
+    });
   });
 
   it('会话忙 / 还没建行时 runner 返回 null ⇒ turn 不带该字段, 退回原行为', async () => {
@@ -188,4 +195,15 @@ describe('messageHandler early user-message persist', () => {
     expect(h.persistEarly).not.toHaveBeenCalled();
     expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toBeUndefined();
   });
+});
+
+
+it('does not persist a notification reply into the default IM session before dispatch', async () => {
+  activateImAccountBoundary();
+  const h = wire({ withPrepare: true, notificationSessionId: 'original-session' });
+  h.deliver(makeEvent({ senderId: 'ou_owner', replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+  await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+    notificationSessionId: 'original-session', scopeKey: 'om_root',
+  })));
+  expect(h.persistEarly).not.toHaveBeenCalled();
 });

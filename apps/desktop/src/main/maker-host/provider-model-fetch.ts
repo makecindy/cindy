@@ -1,3 +1,4 @@
+import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
  *
@@ -13,15 +14,19 @@
 
 import {
   isLoopbackProviderUrl,
+  isOpenRouterModelsUrl,
   type AgentKind,
   type ProviderWireProtocol,
+  type Provider,
 } from '@cindy/model-providers';
 
+import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
-  classifyProviderError,
-  type ProviderErrorCode,
-} from '../../shared/providerErrors.js';
-import { deriveModelsDiscoveryUrl, parseModelsListResponse } from './generic-oauth.js';
+  deriveModelsDiscoveryUrl,
+  parseModelsListResponse,
+  readCachedGenericOAuthAccessToken,
+  refreshGenericOAuthIfNeeded,
+} from './generic-oauth.js';
 import { outboundFetch } from './outbound-fetch.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
@@ -50,19 +55,59 @@ export interface ProviderModelsFetchSpec {
    * isRendererAccessibleSafeStorageKey）。仅用于“刷新模型”复用已存请求头鉴权的端点。
    */
   savedProviderId?: string;
+  /** Main-only import constraints; ordinary settings discovery keeps its existing policy. */
+  redirect?: 'error';
+  responseByteLimit?: number;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
 export interface ProviderModelsFetchResult {
   ok: boolean;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
-  models?: { id: string; name: string; contextWindow?: number }[];
+  models?: DiscoveredModel[];
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
   status?: number;
   /** 上游原始信息摘要（详情展开用，UI 主文案走 i18n）。 */
   detail?: string;
+}
+
+/** Refresh a saved OAuth connection using only Main's route and credential snapshot. */
+export async function fetchSavedOAuthProviderModels(
+  provider: Provider | undefined,
+  agent: AgentKind,
+  storageProviderId: string,
+  isCurrent: () => boolean,
+  fetchImpl: typeof fetch = outboundFetch,
+  headers?: Record<string, string>,
+): Promise<ProviderModelsFetchResult> {
+  const oauth = provider?.auth.oauth;
+  const route = provider?.routing[agent];
+  if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
+    return { ok: false, code: 'AUTH_INVALID' };
+  }
+  try {
+    await refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+  } catch {
+    return { ok: false, code: 'UNKNOWN' };
+  }
+  // A token refresh can outlive logout, account switching, or edits to this connection.
+  // Never use the old endpoint snapshot with credentials from the new owner/configuration.
+  if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
+  const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
+  if (!token) return { ok: false, code: 'AUTH_INVALID' };
+  const result = await fetchProviderModels({
+    agent,
+    baseUrl: route.upstream,
+    modelsUrl: route.modelsUrl ?? oauth.modelsDiscoveryUrl,
+    wireProtocol: route.wireProtocol,
+    authMethod: 'oauth',
+    apiKey: token,
+    headers,
+    redirect: 'error',
+  }, fetchImpl);
+  return isCurrent() ? result : { ok: false, code: 'AUTH_INVALID' };
 }
 
 /** origin 不含 userinfo；先独立验证地址，错误中不带原始 URL 或解析器异常。 */
@@ -84,7 +129,7 @@ function withoutCredentialHeaders(
   const normalized: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers ?? {})) {
     const lower = name.toLowerCase();
-    if (lower !== 'authorization' && lower !== 'x-api-key') normalized[lower] = value;
+    if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
   }
   return normalized;
 }
@@ -98,19 +143,48 @@ function normalizedHeaders(headers: Record<string, string> | undefined): Record<
 }
 
 /** 构造列模型请求（纯函数，单测直断言）。鉴权头组合与 buildProbeRequest 同口径。 */
-export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: string; init: RequestInit } {
+export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
+  url: string;
+  init: RequestInit;
+} {
   const baseUrl = parseModelsFetchUrl(spec.baseUrl);
   const explicit = spec.modelsUrl?.trim();
   const modelsUrl = explicit ? parseModelsFetchUrl(explicit) : null;
+  // Google's saved compatibility entry is an inference endpoint, not its catalog.
+  // Resolve discovery independently, after Main has selected this connection's credentials.
+  // The old bundled /openai/models address is normalized too. Other explicit
+  // discovery URLs and private proxies remain user-owned.
+  const googleCatalog = (!explicit || /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?\/openai\/models\/?$/.test(explicit)) && baseUrl.origin === 'https://generativelanguage.googleapis.com'
+    && /^\/v1(?:beta)?(?:\/openai)?\/?$/.test(baseUrl.pathname);
+  const googleProtocol = googleCatalog || spec.wireProtocol === 'google-generative-ai';
+  const discoveryUrl = googleCatalog
+    ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
+    : explicit && modelsUrl?.origin === baseUrl.origin
+    ? explicit : spec.wireProtocol === 'google-generative-ai'
+      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
     ? withoutCredentialHeaders(spec.headers)
     : normalizedHeaders(spec.headers);
   const anthropicMessages =
-    spec.wireProtocol === 'anthropic-messages'
-    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
-  if (anthropicMessages) {
+    spec.wireProtocol === 'anthropic-messages' ||
+    (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+  const discoveryEndpoint = new URL(discoveryUrl);
+  const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
+    && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
+  if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
+    // Discovery is provider-specific, not the generation harness's wire format.
+    // OpenRouter's Anthropic view rewrites IDs and defaults to only 20 results.
+    // LongCat explicitly shares its OpenAI catalog with the Messages runtime.
+    const discoveryKey = spec.apiKey ?? (longcatOpenAiCatalog && !headers.authorization ? headers['x-api-key'] : undefined);
+    delete headers['anthropic-version'];
+    delete headers['anthropic-beta'];
+    delete headers['x-api-key'];
+    if (discoveryKey) headers['authorization'] = `Bearer ${discoveryKey}`;
+  } else if (googleProtocol) {
+    if (spec.apiKey) headers['x-goog-api-key'] = spec.apiKey;
+  } else if (anthropicMessages) {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
@@ -125,8 +199,8 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
   // modelsUrl 是用户不可见的隐藏字段（预设/配置快照）。只有与 baseUrl 同源才采用——
   // 防止用户改了 baseUrl 后，key 仍被发往快照里的旧主机 / 被降级成明文（现有预设全部同源）。
   return {
-    url: explicit && modelsUrl?.origin === baseUrl.origin ? explicit : deriveModelsDiscoveryUrl(spec.baseUrl),
-    init: { method: 'GET', headers },
+    url: discoveryUrl,
+    init: { method: 'GET', headers, ...(spec.redirect ? { redirect: spec.redirect } : {}) },
   };
 }
 
@@ -141,17 +215,40 @@ function networkErrorCode(err: unknown): string {
   return 'UNKNOWN_NETWORK_ERROR';
 }
 
+/** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
+async function readLimitedBody(res: Response, limit: number): Promise<string> {
+  if (Number(res.headers.get('content-length')) > limit) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error('models response exceeds byte limit');
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) throw new Error('models response exceeds byte limit');
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
 /** 拉一次模型列表并分类结果。fetch 可注入（单测）。 */
 export async function fetchProviderModels(
   spec: ProviderModelsFetchSpec,
   fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderModelsFetchResult> {
   if (
-    spec.authMethod === 'none'
-    && (
-      !isLoopbackProviderUrl(spec.baseUrl)
-      || (!!spec.modelsUrl?.trim() && !isLoopbackProviderUrl(spec.modelsUrl.trim()))
-    )
+    spec.authMethod === 'none' &&
+    (!isLoopbackProviderUrl(spec.baseUrl) ||
+      (!!spec.modelsUrl?.trim() && !isLoopbackProviderUrl(spec.modelsUrl.trim())))
   ) {
     return {
       ok: false,
@@ -176,7 +273,9 @@ export async function fetchProviderModels(
   if (!res.ok) {
     let bodyText = '';
     try {
-      bodyText = (await res.text()).slice(0, MAX_ERROR_BODY_BYTES);
+      bodyText = spec.responseByteLimit === undefined
+        ? (await res.text()).slice(0, MAX_ERROR_BODY_BYTES)
+        : await readLimitedBody(res, Math.min(spec.responseByteLimit, MAX_ERROR_BODY_BYTES));
     } catch {
       /* 读体失败按空体分类 */
     }
@@ -185,14 +284,26 @@ export async function fetchProviderModels(
   }
   let json: unknown;
   try {
-    json = await res.json();
+    json = spec.responseByteLimit === undefined
+      ? await res.json()
+      : JSON.parse(await readLimitedBody(res, spec.responseByteLimit));
   } catch {
-    return { ok: false, code: 'UNKNOWN', status: res.status, detail: 'models response is not JSON' };
+    return {
+      ok: false,
+      code: 'UNKNOWN',
+      status: res.status,
+      detail: 'models response is not JSON or exceeds the response limit',
+    };
   }
-  const models = parseModelsListResponse(json);
+  const models = parseModelsListResponse(json, url);
   if (!models || models.length === 0) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
-    return { ok: false, code: 'UNKNOWN', status: res.status, detail: 'no models found in response' };
+    return {
+      ok: false,
+      code: 'UNKNOWN',
+      status: res.status,
+      detail: 'no models found in response',
+    };
   }
   return { ok: true, models };
 }

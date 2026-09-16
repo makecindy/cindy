@@ -83,7 +83,7 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  *
  * 先过 reason 门（带稳定 reason 的都是 translator 已归类的错误：`turn-failed`
  * 连错误详情都没有、`silent-stop-exhausted` 是另一套自愈的耗尽信号），然后认
- * 三类：
+ * 四类：
  *
  *  1. **SSE 流被切断**（`isStreamTruncationError`）——最初的实测形态。
  *  2. **网络到不了上游**（`isNetworkishErrorMessage`：502/503/504、errno、
@@ -94,6 +94,9 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  *     `reason: 'upstream-overload'`**（translator 对每条容量错误都盖这个 key，renderer
  *     隔着 IPC 只能靠它本地化文案），所以 reason 门必须给它开例外 —— 否则第 3 类对 Codex
  *     恒为死代码，本份声称要接的「容量 + 已有产出」那一格永远走不到（codex review P1）。
+ *  4. **没有产品进展的假运行**（`turn_no_event_timeout` /
+ *     `upstream_response_idle_timeout`，以及已有的 `codex_reconnect_stalled`）。
+ *     用量心跳不能冒充进展；看门狗打断之后必须走自动续跑，不能当成「还在跑」。
  *
  * **第 3 类与 #844 的分工靠「本 turn 有没有产出」自动划清，两者互斥、不会叠加重试**：
  * 容量拒绝发生在 admission 阶段（模型一个字都没写）时，Codex 侧会重投同一份
@@ -104,6 +107,57 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  * 认这三类刻意**不**要求 `server_error` tag、也**允许**带状态码——502 / 529 本身就带
  * 状态码，网络 errno 也没有 SDK tag。收紧只对第 1 类成立。
  */
+/**
+ * 这类 reason 表示 turn **已经被上游 / daemon accept** 之后卡死，不是 admission 失败。
+ *
+ * 自动续跑只能发 CONTINUE，不能克隆原始用户 prompt：本 turn 可能已经跑过工具、写过
+ * 文件，即使 DB 里还没有 assistant 行（心跳 zombie 就是这种形态）。
+ * `empty-response` / 流截断可以发生在零副作用的 admission 阶段，克隆原文仍然安全。
+ */
+export function isAcceptedTurnContinuationOnlyReason(reason: unknown): boolean {
+  return (
+    reason === 'turn_no_event_timeout' ||
+    reason === 'upstream_response_idle_timeout' ||
+    reason === 'codex_reconnect_stalled'
+  );
+}
+
+/**
+ * continuation-only 自动续跑已批准后，provider/Session 可能因为 stall abort 复核、
+ * terminal-error drain、或 Codex interrupt ACK 失败而 unexpected close。这时必须保住
+ * 已批准的自动续跑，不论退避 timer 是否已经开火。
+ *
+ * 只认 `unexpected`：用户 Stop / 关会话 / 切 agent 仍取消。lease 优先绑在**当时那个**
+ * Session 实例的 attemptToken 上，避免替身会话继承迟到的 close 回调。
+ *
+ * 交棒窗口包括：timer 还在等、callback 正在跑、CONTINUE 已因 SESSION_RUNNING
+ * 回到 pendingQueue，以及 CONTINUE 已进入 drain 但尚未 vendor dispatch。
+ * 连续 replacement close 时 WeakMap 可能已经跟着旧实例走了；此时只要
+ * coordinator / guard / book 仍指向同一 attemptToken，且队里或 live schedule
+ * 还活着，就用 coordinator token 交棒，不能把已批准的续跑拆掉。
+ */
+export function shouldPreserveWaitingContinuationOnlyAutoResume(input: {
+  closeReason: unknown;
+  leasedAttemptToken: number | undefined;
+  guardIsCurrentAttempt: boolean;
+  bookIsCurrentAttempt: boolean;
+  coordinatorAttemptToken: number | null | undefined;
+  hasLiveSchedule: boolean;
+  hasQueuedAutoResume: boolean;
+  isContinuationOnly: boolean;
+}): boolean {
+  if (input.closeReason !== 'unexpected') return false;
+  if (input.isContinuationOnly !== true) return false;
+  const token =
+    input.leasedAttemptToken ??
+    (typeof input.coordinatorAttemptToken === 'number' ? input.coordinatorAttemptToken : undefined);
+  if (token === undefined) return false;
+  if (!input.guardIsCurrentAttempt || !input.bookIsCurrentAttempt) return false;
+  if (input.coordinatorAttemptToken !== token) return false;
+  // autoRetryLastError 在入队前就清掉 autoResumePending；不能靠它判断交棒窗口。
+  return input.hasLiveSchedule || input.hasQueuedAutoResume;
+}
+
 export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): boolean {
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
   // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
@@ -117,10 +171,13 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   // 见 performRetryLastError），对已有 durable progress 的长任务则带 RecoveryCheckpoint
   // 续跑——两种形态都有安全动作可执行。连续空响应仍由同一份连续失败上限 / 人工介入周期
   // 硬上限 / 退避止损，预算耗尽后横幅交还用户，不会无界重试。
+  //
+  // stall / idle / reconnect-stalled 也放行，但 coordinator 对它们是 **CONTINUE-only**：
+  // 见 `isAcceptedTurnContinuationOnlyReason`。
   if (
     reason === UPSTREAM_OVERLOAD_REASON ||
-    reason === 'codex_reconnect_stalled' ||
-    reason === 'empty-response'
+    reason === 'empty-response' ||
+    isAcceptedTurnContinuationOnlyReason(reason)
   ) {
     return true;
   }

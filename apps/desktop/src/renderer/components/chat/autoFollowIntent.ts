@@ -54,6 +54,14 @@ export interface WheelUnpinArgs {
   clientHeight: number;
 }
 
+/** Direction is independent of whether the current content can scroll. */
+export function isUpwardWheelIntent({
+  deltaX,
+  deltaY,
+}: Pick<WheelUnpinArgs, 'deltaX' | 'deltaY'>): boolean {
+  return deltaY < 0 && Math.abs(deltaY) >= Math.abs(deltaX);
+}
+
 /**
  * wheel 事件是否构成「用户想向上滚、应解除 auto-follow」。
  *
@@ -73,8 +81,7 @@ export function shouldUnpinOnWheel({
   scrollHeight,
   clientHeight,
 }: WheelUnpinArgs): boolean {
-  if (deltaY >= 0) return false;
-  if (Math.abs(deltaY) < Math.abs(deltaX)) return false;
+  if (!isUpwardWheelIntent({ deltaX, deltaY })) return false;
   return scrollHeight - clientHeight > UNPIN_MIN_SCROLLABLE_PX;
 }
 

@@ -503,7 +503,14 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   root.addEventListener('compositionend', () => { composing = false; notify(); });
   root.addEventListener('compositioncancel', () => { composing = false; notify(); });
   root.addEventListener('focus', () => post({ type: 'focus' }));
-  root.addEventListener('blur', () => { reportSelection(); post({ type: 'blur' }); });
+  // A resize-to-collapsed gesture blurs the WebView immediately. Flush any
+  // settled DOM edits before native changes state. A pending paste has already
+  // deleted its selection; let commitPaste publish the completed replacement.
+  root.addEventListener('blur', () => {
+    const pendingPaste = Array.from(pasteMarkers.values()).some(({ marker }) => root.contains(marker));
+    if (!pendingPaste) notify();
+    post({ type: 'blur' });
+  });
   root.addEventListener('keydown', (event) => {
     const backward = event.key === 'Backspace';
     if (!backward && event.key !== 'Delete') return;
@@ -571,6 +578,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   }, { passive: false });
 
   window.cindyComposer = {
+    ping(id) { post({ type: 'pong', id }); },
     applyDocument(value, focusAfter, caret, nextDocumentId) {
       if (Number.isSafeInteger(nextDocumentId)) documentId = nextDocumentId;
       render(value, focusAfter === true && !caret);

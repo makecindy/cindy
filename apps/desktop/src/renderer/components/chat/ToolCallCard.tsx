@@ -8,6 +8,13 @@
  *            (Edit tools render DiffView instead of JSON — F-MSG-6)
  */
 
+import {
+  CHAT_COMPACT_CODE_CLASS,
+  CHAT_CODE_SURFACE_CLASS,
+  CHAT_CHEVRON_TRANSITION_CLASS,
+  CHAT_FOCUS_CLASS,
+  CHAT_COLOR_TRANSITION_CLASS,
+} from './chatChrome';
 import { useRef, useState } from 'react';
 import { ChevronRight, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -120,7 +127,7 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
     <div className="flex w-full justify-start">
       <div
         className={cn(
-          'rounded-[12px] border border-[var(--msg-tool-card-border)]',
+          'rounded-xl border border-[var(--msg-tool-card-border)]',
           'bg-[var(--msg-tool-card-bg)]',
           'overflow-hidden',
           'max-w-full',
@@ -130,18 +137,21 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
         <button
           type="button"
           onClick={() => setExpanded((prev) => !prev)}
+          aria-expanded={expanded}
           className={cn(
             'flex w-full items-center gap-2',
-            'px-[14px] py-[10px]',
+            'px-3.5 py-2.5',
             'cursor-pointer select-none',
-            'hover:opacity-80 transition-opacity',
+            'hover:bg-[var(--msg-code-inline-bg)] focus-visible:ring-inset',
+            CHAT_FOCUS_CLASS,
+            CHAT_COLOR_TRANSITION_CLASS,
           )}
         >
           <ChevronRight
             size={14}
             className={cn(
               'shrink-0 text-[var(--msg-tool-card-chevron)]',
-              'transition-transform duration-[var(--motion-fast,150ms)]',
+              CHAT_CHEVRON_TRANSITION_CLASS,
               expanded && 'rotate-90',
             )}
           />
@@ -159,7 +169,7 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
 
         {/* Expanded content */}
         <Collapse open={expanded}>
-          <div className="border-t border-[var(--msg-tool-card-border)] px-[14px] py-[10px]">
+          <div className="border-t border-[var(--msg-tool-card-border)] px-3.5 py-2.5">
             {/* text-lightbox F1/F2: Chip-Row preview entry — only for the 4
                 supported tools. Click → open TextLightbox. */}
             {previewablePaths.length > 0 && (
@@ -183,13 +193,15 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
                       className={cn(
                         'inline-flex items-center gap-1.5',
                         'h-7 px-2.5 py-1.5',
-                        'rounded-[9999px]',
+                        'rounded-full',
                         'bg-[var(--msg-tool-card-bg)]',
                         'border border-[var(--msg-tool-card-border)]',
                         'text-13 font-medium',
                         'text-[var(--msg-tool-card-text)]',
                         'hover:bg-[var(--msg-code-inline-bg)]',
-                        'transition-colors max-w-[280px]',
+                        'max-w-[280px]',
+                        CHAT_FOCUS_CLASS,
+                        CHAT_COLOR_TRANSITION_CLASS,
                         'cursor-pointer',
                       )}
                     >
@@ -223,9 +235,9 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
                 </div>
                 <pre
                   className={cn(
-                    'overflow-x-auto rounded-[12px] border border-[var(--msg-code-block-border)]',
-                    'bg-[var(--msg-code-block-bg)] p-3',
-                    'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
+                    CHAT_CODE_SURFACE_CLASS,
+                    CHAT_COMPACT_CODE_CLASS,
+                    'overflow-x-auto p-3',
                     'text-[var(--msg-tool-card-text)]',
                     // App-shell sets user-select:none globally (globals.css L12).
                     // Mirror message-bubble / TextLightbox by opting tool-card
@@ -247,9 +259,9 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
                 </div>
                 <pre
                   className={cn(
-                    'overflow-x-auto rounded-[12px] border border-[var(--msg-code-block-border)]',
-                    'bg-[var(--msg-code-block-bg)] p-3',
-                    'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
+                    CHAT_CODE_SURFACE_CLASS,
+                    CHAT_COMPACT_CODE_CLASS,
+                    'overflow-x-auto p-3',
                     'text-[var(--msg-tool-card-text)]',
                     'max-h-[300px] overflow-y-auto',
                     'select-text',

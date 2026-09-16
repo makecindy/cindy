@@ -1,26 +1,45 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Check, FolderOpen } from 'lucide-react';
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
+import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
+import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  ArrowLeft,
+  Bot,
+  Camera,
+  Check,
+  ChevronRight,
+  Clock3,
+  FolderOpen,
+  History,
+  Info,
+  Settings2,
+  Sparkles,
+  UserRound,
+} from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useBotTranslation } from './botPronounContext';
 
 import { Spinner } from '@/components/ui/spinner';
-import * as sessionService from '@/lib/sessionService';
+import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
+import * as sessionService from '@/lib/sessionService';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import { useRegisterContentHeader } from '../feature-context';
 import {
   canonicalBotSessionId,
+  hasLoadedBotProfiles,
   chooseBotAvatar,
   retryBotInvitation,
   setCanonicalBotSession,
   updateBotProfile,
   useBotProfiles,
   getEffectiveBotModelChain,
+  subscribeBotGlobalModel,
   type BotCapabilities,
   type BotProfile,
 } from './botStore';
-import { BotCreateMenu } from './BotCreateMenu';
+import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
 import {
@@ -31,7 +50,14 @@ import {
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
-import type { BotSettingsPayload } from './botSettingsAutosave';
+import { BotCapabilitySettings } from './BotCapabilitySettings';
+import { BotRoutines } from './BotRoutines';
+import {
+  botSettingsChanges,
+  normalizeBotSettingsPayload,
+  reconcileBotSettingsDraft,
+  type BotSettingsPayload,
+} from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -62,12 +88,15 @@ export function BotSettings({
   bot,
   onBack,
   onOpenSession,
+  beforeCloseRef,
 }: {
   bot: BotProfile;
+  beforeCloseRef?: { current: (() => Promise<boolean>) | null };
   onBack: () => void;
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useBotTranslation();
+  const navigate = useNavigate();
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
   const [portraitRetryFailed, setPortraitRetryFailed] = useState(false);
@@ -77,36 +106,80 @@ export function BotSettings({
   const [avatarColor, setAvatarColor] = useState(bot.avatarColor);
   const [selectedSkills, setSelectedSkills] = useState<string[]>(bot.skills);
   const [capabilities, setCapabilities] = useState<BotCapabilities>(bot.capabilities);
-  const [folderError, setFolderError] = useState<string | null>(null);
-  const [avatarBusy, setAvatarBusy] = useState(false);
-  const [avatarError, setAvatarError] = useState(false);
+  // Live defaults are display state, not form edits: refreshing them must not
+  // dirty autosave or overwrite a local model override / pending text edits.
+  useProviders();
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
   const hiddenVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
     return (['cc', 'codex', 'pi'] as const).filter((item) => !availableVendors.has(item));
   }, [availableAgentsLoaded, availableVendors]);
+  useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
+  const displayedModelChain =
+    capabilities.modelChainOverride === null
+      ? getEffectiveBotModelChain()
+      : capabilities.modelChain;
+  const [page, setPage] = useState<
+    | 'home'
+    | 'profile'
+    | 'personality'
+    | 'model'
+    | 'capabilities'
+    | 'history'
+    | 'advanced'
+    | 'routines'
+  >('home');
+  const routineLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const pageTitle =
+    page === 'model'
+      ? t('bots.settingsTabs.model')
+      : page === 'routines'
+        ? t('routines.title')
+        : page === 'history'
+          ? t('bots.historySearch.title')
+          : page === 'advanced'
+            ? t('bots.homeFolder.title')
+            : page === 'capabilities'
+              ? t('bots.capabilities.title')
+              : page === 'personality'
+                ? t('bots.profile.personality')
+                : t('bots.profile.title');
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const avatarInFlight = useRef(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState(false);
   // 只在切到另一个 Bot 时重灌表单。自动保存下 `bot` 每次落库(以及失败回滚)都会
   // 换一个新对象,若仍按对象身份重灌,用户在提交在途期间敲的字会被服务端快照盖掉,
   // 失败回滚时更会把刚改的内容整批还原 —— 那是比「忘记点保存」更严重的丢字。
   // 页面挂载期间本地 state 才是编辑权威;`bot.channels` / `bot.sessions` 等非表单
   // 字段仍直接读 prop,保持实时。
   const botIdentityRef = useRef(bot.id);
-  useEffect(() => {
-    if (botIdentityRef.current === bot.id) return;
-    botIdentityRef.current = bot.id;
-    setName(bot.name);
-    setDescription(bot.description);
-    setIdentitySource(bot.identitySource ?? '');
-    setUserContextSource(bot.userContextSource ?? '');
-    setAvatar(bot.avatar);
-    setAvatarColor(bot.avatarColor);
-    setSelectedSkills(bot.skills);
-    setCapabilities(bot.capabilities);
-  }, [bot]);
-
+  const reconciledBotRef = useRef(bot);
+  const savingProfileRef = useRef(false);
+  const savedSettingsRef = useRef(
+    normalizeBotSettingsPayload(
+      {
+        name,
+        description,
+        identitySource,
+        userContextSource,
+        avatar,
+        avatarColor,
+        capabilities,
+        skills: selectedSkills,
+      },
+      bot.name,
+    ),
+  );
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload) => {
-      await updateBotProfile(bot.id, payload);
+      savingProfileRef.current = true;
+      try {
+        await updateBotProfile(bot.id, botSettingsChanges(savedSettingsRef.current, payload, true));
+        savedSettingsRef.current = payload;
+      } finally {
+        savingProfileRef.current = false;
+      }
     },
     [bot.id],
   );
@@ -125,8 +198,73 @@ export function BotSettings({
     fallbackName: bot.name,
     // 归档 bot 的设置页是只读的(不渲染任何表单字段),自动保存不得为它引入写入。
     enabled: bot.status !== 'archived',
+    baseline: savedSettingsRef,
     commit: commitProfile,
   });
+
+  const canLeave = useCallback(async () => {
+    if (avatarInFlight.current) return false;
+    await autosave.flush();
+    if (autosave.isDirty()) return false;
+    return (await routineLeaveRef.current?.()) ?? true;
+  }, [autosave.flush, autosave.isDirty]);
+  useEffect(() => {
+    if (!beforeCloseRef) return;
+    beforeCloseRef.current = canLeave;
+    return () => {
+      beforeCloseRef.current = null;
+    };
+  }, [beforeCloseRef, canLeave]);
+  const go = (next: typeof page) => {
+    if (!autosave.isDirty() && !routineLeaveRef.current) {
+      setPage(next);
+      return;
+    }
+    void canLeave().then((allowed) => {
+      if (allowed) setPage(next);
+    });
+  };
+  useEffect(() => {
+    // Store props include optimistic writes and rollback. Reconcile only after
+    // our save settles, retaining edits typed while that request was in flight.
+    if (savingProfileRef.current || reconciledBotRef.current === bot) return;
+    const incoming = normalizeBotSettingsPayload(
+      {
+        ...bot,
+        identitySource: bot.identitySource ?? '',
+        userContextSource: bot.userContextSource ?? '',
+      },
+      bot.name,
+    );
+    const next =
+      botIdentityRef.current === bot.id
+        ? reconcileBotSettingsDraft(
+            savedSettingsRef.current,
+            {
+              name,
+              description,
+              identitySource,
+              userContextSource,
+              avatar,
+              avatarColor,
+              capabilities,
+              skills: selectedSkills,
+            },
+            incoming,
+          )
+        : incoming;
+    botIdentityRef.current = bot.id;
+    reconciledBotRef.current = bot;
+    savedSettingsRef.current = incoming;
+    setName(next.name);
+    setDescription(next.description);
+    setIdentitySource(next.identitySource);
+    setUserContextSource(next.userContextSource);
+    setAvatar(next.avatar);
+    setAvatarColor(next.avatarColor);
+    setSelectedSkills(next.skills);
+    setCapabilities(next.capabilities);
+  }, [bot, autosave.status]);
 
   const updateCapability = <K extends keyof BotCapabilities>(key: K, value: BotCapabilities[K]) => {
     setCapabilities((current) => ({
@@ -139,9 +277,8 @@ export function BotSettings({
     autosave.onEdit('instant');
   };
   const handleBack = () => {
-    void autosave.flush().then(() => {
-      if (autosave.isDirty()) return; // 保存失败:留在页面,状态条给出重试入口
-      onBack();
+    void canLeave().then((allowed) => {
+      if (allowed) onBack();
     });
   };
 
@@ -168,11 +305,13 @@ export function BotSettings({
   }
 
   const handleChooseAvatar = async () => {
-    setAvatarError(false);
-    await autosave.flush();
-    if (autosave.isDirty()) return;
+    if (avatarInFlight.current) return;
+    avatarInFlight.current = true;
     setAvatarBusy(true);
+    setAvatarError(false);
     try {
+      await autosave.flush();
+      if (autosave.isDirty()) return;
       const next = await chooseBotAvatar(bot.id);
       if (!next) return;
       setAvatar(next.avatar);
@@ -180,6 +319,7 @@ export function BotSettings({
     } catch {
       setAvatarError(true);
     } finally {
+      avatarInFlight.current = false;
       setAvatarBusy(false);
     }
   };
@@ -191,10 +331,34 @@ export function BotSettings({
   )
     return <BotInvitationWelcome bot={bot} />;
 
+  const settingsRows = [
+    ['profile', Info, t('bots.profile.title')],
+    ['personality', UserRound, t('bots.profile.personality')],
+    ['model', Sparkles, t('bots.settingsTabs.model')],
+    ['capabilities', Settings2, t('bots.capabilities.title')],
+    ['routines', Clock3, t('routines.title')],
+    ['history', History, t('bots.historySearch.title')],
+    ['advanced', FolderOpen, t('bots.homeFolder.title')],
+  ] as const;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8 sm:px-7">
-      <div className="mx-auto flex w-full max-w-xl flex-col gap-5 pb-10">
-        <div className="flex min-h-5 items-center justify-end pt-1">
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8">
+      <div className="mx-auto w-full max-w-xl">
+        <div className="flex min-h-12 flex-wrap items-center justify-between gap-3">
+          {page !== 'home' ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void go('home')}
+                aria-label={t('bots.settingsBack')}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+              >
+                <ArrowLeft size={18} />
+              </button>
+              <h2 className="text-14 font-medium text-[var(--text-primary)]">{pageTitle}</h2>
+            </div>
+          ) : (
+            <span />
+          )}
           {autosave.status === 'saving' ? (
             <span
               role="status"
@@ -222,46 +386,95 @@ export function BotSettings({
             </p>
           ) : null}
         </div>
-
-        <BotBasicProfileFields
-          value={{ name, description, avatar, avatarColor }}
-          avatarBusy={avatarBusy}
-          onChooseAvatar={() => void handleChooseAvatar()}
-          onChange={(next, kind) => {
-            setName(next.name);
-            setDescription(next.description);
-            setAvatar(next.avatar);
-            setAvatarColor(next.avatarColor);
-            autosave.onEdit(kind);
-          }}
-        />
-        {bot.invitation?.avatarSkipped ? (
-          <p className="text-12 text-[var(--text-tertiary)]">
-            {t('bots.invitation.avatarSkipped')}
-            <button
-              type="button"
-              onClick={() => {
-                setPortraitRetryFailed(false);
-                void retryBotInvitation(bot.id).catch(() => setPortraitRetryFailed(true));
-              }}
-              disabled={bot.invitation.stage === 'avatar'}
-              className="ml-2 text-[var(--text-primary)] underline underline-offset-2 disabled:opacity-50"
-            >
-              {t('commonUi.retry')}
-            </button>
-            {portraitRetryFailed ? (
-              <span role="alert">{t('bots.invitation.retryFailed')}</span>
-            ) : null}
-          </p>
+        {page === 'home' ? (
+          <>
+            <div className="flex flex-col items-center pb-6 pt-2 text-center">
+              <button
+                type="button"
+                onClick={() => void handleChooseAvatar()}
+                disabled={avatarBusy}
+                aria-label={t('bots.profile.changeAvatar')}
+                className="relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+              >
+                <BotAvatar bot={{ name, avatar, avatarColor }} size="xl" />
+                <span className="absolute bottom-0 right-0 flex h-6 w-6 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+                  <Camera size={12} />
+                </span>
+              </button>
+              <h1 className="mt-2 max-w-full break-words text-18 font-medium text-[var(--text-primary)]">
+                {name}
+              </h1>
+              {avatarError ? (
+                <p className="mt-2 text-12 text-[var(--text-danger)]" role="alert">
+                  {t('bots.profile.avatarFailed')}
+                </p>
+              ) : null}
+            </div>
+            <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+              {settingsRows.map(([next, Icon, title]) => (
+                <button
+                  key={next}
+                  type="button"
+                  onClick={() => void go(next)}
+                  className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-default)] px-4 py-3 text-left text-14 text-[var(--text-primary)] last:border-b-0 hover:bg-[var(--surface-hover)]"
+                >
+                  <Icon size={18} className="shrink-0 text-[var(--text-secondary)]" />
+                  <span className="min-w-0 flex-1">{title}</span>
+                  <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+                </button>
+              ))}
+            </div>
+            <div className="mt-6">
+              <BotLifecycleSettings
+                bot={bot}
+                onOpenSession={onOpenSession}
+                mode="actions"
+                beforeAction={canLeave}
+                onDeleted={() => navigate('/bots', { replace: true })}
+              />
+            </div>
+          </>
         ) : null}
-        {avatarError ? (
-          <p className="text-center text-11 text-[var(--text-danger)]" role="alert">
-            {t('bots.profile.avatarFailed')}
-          </p>
-        ) : null}
-
-        <details className="text-13 text-[var(--text-secondary)]">
-          <summary className="cursor-pointer py-2">{t('bots.profile.personality')}</summary>
+        <div hidden={page !== 'profile'} className="pt-3">
+          <BotBasicProfileFields
+            centeredAvatar
+            value={{ name, description, avatar, avatarColor }}
+            avatarBusy={avatarBusy}
+            onChooseAvatar={() => void handleChooseAvatar()}
+            onChange={(next, kind) => {
+              setName(next.name);
+              setDescription(next.description);
+              setAvatar(next.avatar);
+              setAvatarColor(next.avatarColor);
+              autosave.onEdit(kind);
+            }}
+          />
+          {bot.invitation?.avatarSkipped ? (
+            <p className="text-12 text-[var(--text-tertiary)]">
+              {t('bots.invitation.avatarSkipped')}
+              <button
+                type="button"
+                onClick={() => {
+                  setPortraitRetryFailed(false);
+                  void retryBotInvitation(bot.id).catch(() => setPortraitRetryFailed(true));
+                }}
+                disabled={bot.invitation.stage === 'avatar'}
+                className="ml-2 text-[var(--text-primary)] underline underline-offset-2 disabled:opacity-50"
+              >
+                {t('commonUi.retry')}
+              </button>
+              {portraitRetryFailed ? (
+                <span role="alert">{t('bots.invitation.retryFailed')}</span>
+              ) : null}
+            </p>
+          ) : null}
+          {avatarError ? (
+            <p className="text-center text-11 text-[var(--text-danger)]" role="alert">
+              {t('bots.profile.avatarFailed')}
+            </p>
+          ) : null}
+        </div>
+        <div hidden={page !== 'personality'} className="pt-3">
           <textarea
             aria-label={t('bots.profile.personality')}
             value={identitySource}
@@ -272,30 +485,29 @@ export function BotSettings({
             rows={6}
             className="mt-2 w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-3 text-13 leading-6 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           />
-        </details>
-
+        </div>
         <section
+          hidden={page !== 'model'}
+          className="pt-3"
           aria-label={t('bots.settingsTabs.model')}
-          className="min-w-0 border-t border-[var(--border-default)] pt-4"
         >
           <div data-testid="bot-model-controls" className="min-w-0">
             <BotModelChainEditor
               label={t('bots.settingsTabs.model')}
+              hiddenVendors={hiddenVendors}
               onRestoreDefault={() => {
                 const modelChain = getEffectiveBotModelChain();
                 const primary = modelChain[0];
-                if (!primary) return;
                 setCapabilities((current) => ({
                   ...current,
-                  ...primary,
+                  ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
                   modelOverride: null,
                   modelChain,
                   modelChainOverride: null,
                 }));
                 autosave.onEdit('instant');
               }}
-              value={capabilities.modelChain}
-              hiddenVendors={hiddenVendors}
+              value={displayedModelChain}
               onChange={(modelChain) => {
                 const primary = modelChain[0];
                 if (!primary) return;
@@ -316,12 +528,42 @@ export function BotSettings({
             />
           </div>
         </section>
-
-        <details className="group rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-          <summary className="cursor-pointer list-none px-4 py-3 text-12 font-medium text-[var(--text-secondary)] marker:content-none">
-            {t('bots.homeFolder.title')}
-          </summary>
-          <div className="border-t border-[var(--border-default)] p-4">
+        {page === 'capabilities' && (
+          <div>
+            {' '}
+            <BotCapabilitySettings
+              expanded={page === 'capabilities'}
+              bot={bot}
+              capabilities={capabilities}
+              skills={selectedSkills}
+              onChange={(kind, values) => {
+                if (kind === 'skill') setSelectedSkills(values);
+                setCapabilities((current) => ({
+                  ...current,
+                  ...(kind === 'skill'
+                    ? { skillMode: 'allowlist' as const }
+                    : kind === 'mcp'
+                      ? { mcpMode: 'allowlist' as const, mcpServers: values }
+                      : { toolsetMode: 'allowlist' as const, toolsets: values }),
+                }));
+                autosave.onEdit('instant');
+              }}
+            />
+          </div>
+        )}
+        {page === 'history' ? (
+          <BotLifecycleSettings
+            bot={bot}
+            mode="history"
+            onOpenSession={(...args) => {
+              void canLeave().then((ok) => {
+                if (ok) onOpenSession(...args);
+              });
+            }}
+          />
+        ) : null}
+        {page === 'advanced' ? (
+          <div className="mt-4 flex flex-col gap-5 px-3">
             <div className="flex items-start gap-3">
               <FolderOpen size={16} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
               <div className="min-w-0 flex-1">
@@ -338,11 +580,11 @@ export function BotSettings({
                     if (!bot.homeDir) return;
                     setFolderError(null);
                     void window.electronAPI.openPath(bot.homeDir).then((result) => {
-                      if (!result.success)
+                      if (shouldShowOpenPathError(result))
                         setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
                     });
                   }}
-                  className="mt-3 h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                  className="mt-3 h-9 rounded-full border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
                 >
                   {t('bots.homeFolder.open')}
                 </button>
@@ -350,7 +592,7 @@ export function BotSettings({
                   <button
                     type="button"
                     onClick={() => updateCapability('memory', true)}
-                    className="ml-2 mt-3 h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                    className="ml-2 mt-3 h-9 rounded-full border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
                   >
                     {t('bots.memoryRecovery.action')}
                   </button>
@@ -362,11 +604,11 @@ export function BotSettings({
                 ) : null}
               </div>
             </div>
-            <div className="mt-4">
-              <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
-            </div>
           </div>
-        </details>
+        ) : null}
+        {page === 'routines' ? (
+          <BotRoutines embedded botId={bot.id} beforeLeaveRef={routineLeaveRef} />
+        ) : null}
       </div>
       <button type="button" onClick={handleBack} className="sr-only">
         {t('bots.backToChat')}
@@ -381,10 +623,33 @@ export function BotsHomeView() {
   const { botId, sessionId } = useParams();
   const [searchParams] = useSearchParams();
   const bots = useBotProfiles();
+  const providerOnboarding = useProviderOnboarding({ dismissible: false });
+  useProviders();
+  const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
+  const hiddenVendors = useMemo<MakerVendor[]>(() => {
+    if (!availableAgentsLoaded) return [];
+    return (['cc', 'codex', 'pi'] as const).filter((item) => !availableVendors.has(item));
+  }, [availableAgentsLoaded, availableVendors]);
+  const hasDefaultModel = useSyncExternalStore(
+    subscribeBotGlobalModel,
+    () => getEffectiveBotModelChain().length > 0,
+  );
   const creatingBotRef = useRef<{ botId: string; token: symbol } | null>(null);
+  const [unavailableCanonicalId, setUnavailableCanonicalId] = useState<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [createSessionError, setCreateSessionError] = useState<unknown>(null);
   const selectedBot = useMemo(() => bots.find((bot) => bot.id === botId) ?? null, [botId, bots]);
+  // An empty profile projection can predate the newly connected source/runtime.
+  // Only followers may resume from live defaults; Main resolves the actual route
+  // when opening the canonical task without writing a per-Bot override.
+  const modelUnavailable =
+    selectedBot?.capabilities.modelChain.length === 0 &&
+    !(selectedBot.capabilities.modelChainOverride === null && hasDefaultModel);
+  const currentCanonicalId = selectedBot ? canonicalBotSessionId(selectedBot) : undefined;
+  const needsCanonicalCreation =
+    !currentCanonicalId || unavailableCanonicalId === currentCanonicalId;
+  const needsModelSelection = needsCanonicalCreation && modelUnavailable;
+  const needsProviderConnection = needsCanonicalCreation && providerOnboarding.visible;
   // `?add=1` 是阵容还在弹模态那阵子的入口。阵容页面化之后它只剩兼容职责:
   // 老书签、老深链通过 /bots/roster 复用同一个创建弹窗。
   const addRequested = searchParams.get('add') === '1';
@@ -454,7 +719,9 @@ export function BotsHomeView() {
       return;
     }
     if (!botId && bots[0]) {
-      const target = bots.find((bot) => bot.status !== 'archived') ?? bots[0];
+      const target = bots.filter((bot) => bot.templateId === 'cindy' && bot.status !== 'archived' && bot.status !== 'deleting')
+        .sort((a, b) => a.createdAt - b.createdAt)[0];
+      if (!target) return;
       const query = searchParams.toString();
       const nextQuery =
         target.status !== 'active'
@@ -490,7 +757,8 @@ export function BotsHomeView() {
   useRegisterContentHeader(headerContent);
 
   useEffect(() => {
-    if (selectedBot?.invitation && selectedBot.invitation.stage !== 'ready') return;
+    if (needsProviderConnection || needsModelSelection) return;
+    if (selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId) return;
     if (!selectedBot || shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addRequested }))
       return;
     if (selectedBot.status !== 'active') {
@@ -500,12 +768,19 @@ export function BotsHomeView() {
 
     const canonicalSessionId = canonicalBotSessionId(selectedBot);
     let cancelled = false;
+    // Read existing history even without a route; only reconstruction needs one.
+    const deferReconstruction = () => {
+      if (!providerOnboarding.visible && !modelUnavailable) return false;
+      setUnavailableCanonicalId(canonicalSessionId ?? null);
+      return true;
+    };
     if (canonicalSessionId) {
       setIsCreatingSession(false);
       void withBotCanonicalSessionReadTimeout(() => sessionService.get(canonicalSessionId))
         .then(async (session) => {
           if (cancelled) return;
           if (session.status !== 'active') {
+            if (deferReconstruction()) return;
             setIsCreatingSession(true);
             const next = await createCanonicalSession(selectedBot);
             if (!cancelled) {
@@ -515,6 +790,7 @@ export function BotsHomeView() {
             return;
           }
           if (session.source !== 'bot') {
+            if (deferReconstruction()) return;
             // A renderer-held canonicalSessionId is not authority to reclassify an
             // arbitrary existing Session. Preserve the existing task and create a
             // fresh Bot-owned Session instead.
@@ -536,7 +812,7 @@ export function BotsHomeView() {
           }
         })
         .catch(async () => {
-          if (cancelled) return;
+          if (cancelled || deferReconstruction()) return;
           setIsCreatingSession(true);
           // The profile pointer is still the CAS authority even when its Session
           // row disappeared. Passing null can never repair that state because
@@ -581,31 +857,64 @@ export function BotsHomeView() {
         creatingBotRef.current = null;
       }
     };
-  }, [addRequested, createCanonicalSession, selectedBot, sessionId, settingsOpen, navigate]);
+  }, [
+    addRequested,
+    createCanonicalSession,
+    selectedBot,
+    sessionId,
+    settingsOpen,
+    navigate,
+    providerOnboarding.visible,
+    needsModelSelection,
+    needsProviderConnection,
+    modelUnavailable,
+  ]);
 
-  if (!selectedBot) {
-    if (bots.length === 0)
-      return (
-        <div className="flex flex-1 items-center justify-center">
-          <BotCreateMenu label={t('bots.add')} />
-        </div>
-      );
+  if (needsProviderConnection && !settingsOpen) {
     return (
-      <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
-        <Spinner
-          size={20}
-          className="text-[var(--text-tertiary)]"
-          role="status"
-          aria-label={t('ccAgent.common.loading')}
-        />
+      <main className="flex h-full items-center justify-center px-6" role="main">
+        <ConnectProviderCard dismissible={false} />
       </main>
     );
   }
 
-  if (selectedBot.invitation && selectedBot.invitation.stage !== 'ready')
+  if (!selectedBot && !hasLoadedBotProfiles()) return <main className="flex h-full items-center justify-center"><Spinner size={20} /></main>;
+  if (!selectedBot) return <BotRosterView inline />;
+
+  if (needsModelSelection) {
+    return (
+      <main className="flex h-full flex-col items-center justify-center gap-3 px-6" role="main">
+        <BotModelChainEditor
+          label={t('bots.settingsTabs.model')}
+          hiddenVendors={hiddenVendors}
+          value={[]}
+          onNavigateToProviders={() => navigate('/settings?tab=providers')}
+          onChange={(modelChain) => {
+            if (!modelChain[0]?.model) return;
+            setCreateSessionError(null);
+            void updateBotProfile(selectedBot.id, {
+              capabilities: {
+                ...selectedBot.capabilities,
+                ...modelChain[0],
+                modelChain,
+                modelChainOverride: modelChain,
+              },
+            }).catch(setCreateSessionError);
+          }}
+        />
+        {createSessionError ? (
+          <p role="alert" className="text-12 text-[var(--text-danger)]">
+            {t('bots.createWizard.createFailed')}
+          </p>
+        ) : null}
+      </main>
+    );
+  }
+
+  if (selectedBot.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId)
     return (
       <main className="flex h-full items-center justify-center px-6" role="main">
-        <BotInvitationWelcome bot={selectedBot} />
+        {selectedBot.invitation.stage === 'failed' ? <button type="button" className="h-10 rounded-full px-5 text-13 hover:bg-[var(--surface-hover)]" onClick={() => void retryBotInvitation(selectedBot.id)}>{t('commonUi.retry')}</button> : <Spinner size={20} />}
       </main>
     );
 

@@ -11,6 +11,11 @@ const loginFixturesStub = path.resolve(
   '../../packages/auth-client/fixtures/loginScenarios.production-stub.ts',
 );
 
+// Git operations can deliver a burst of file events. Waiting briefly before a
+// development rebuild lets Rollup invalidate that burst as one graph update,
+// keeping the watcher peak bounded without changing packaged builds.
+const DEV_WATCH_BUILD_DELAY_MS = 250;
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   // Local dev does not go through dev-remote-env.mjs, so provide the same
@@ -102,6 +107,8 @@ export default defineConfig(({ mode }) => {
       ),
     },
     build: {
+      watch:
+        mode === 'development' ? { buildDelay: DEV_WATCH_BUILD_DELAY_MS } : undefined,
       rollupOptions: {
         output: {
           // Keep the vendored @cindy/browser-control-runtime (including its

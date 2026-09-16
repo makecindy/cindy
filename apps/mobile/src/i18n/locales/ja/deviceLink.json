@@ -1,4 +1,8 @@
 {
+  "cachedHistory": {
+    "title": "コンピューター未接続",
+    "hint": "保存済みの内容を表示できます。続きを読み込むには接続が必要です。"
+  },
   "recovery": {
     "syncing": "同期中…",
     "recovered": "復旧しました",
@@ -33,7 +37,11 @@
   "unstableTitle": "接続が繰り返し切断されています",
   "unstableHint": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合はアプリを再起動してください。",
   "relay": {
-    "label": { "online": "Relay 接続済み", "connecting": "Relay に接続中", "stopped": "Relay 未接続" },
+    "label": {
+      "online": "Relay 接続済み",
+      "connecting": "Relay に接続中",
+      "stopped": "Relay 未接続"
+    },
     "hint": {
       "online": "リモートタスクを同期できます。",
       "lastSynced": "最終同期 {{time}}",
@@ -50,7 +58,7 @@
     "default": "{{agent}} を使用できません。コンピューターのログイン情報が無効です。コンピューターの {{appName}} で「設定 → モデルプロバイダー」を開き、再ログインしてください。（{{reason}}）"
   },
   "remoteError": {
-    "remoteDisabled": "操作対象のコンピューターでリモート操作が無効になっています。",
+    "remoteDisabled": "リモートのパソコンでリモート操作が無効になっています。",
     "channelNotAllowed": "現在のデスクトップ版はこのリモート機能に対応していません。",
     "accessRevoked": "このコンピューターはモバイルからのアクセスを取り消しました。",
     "deviceUnresponsive": "コンピューターが応答していません。自動再試行中です。しばらくしてから再試行してください。",
@@ -62,7 +70,7 @@
     "accountChanged": "Codex のアカウントまたはワークスペースが変わりました。使用枠を更新して再確認してください。",
     "offerExpired": "Codex のリセット資格が失効しました。使用枠を更新して再確認してください。",
     "preconditionFailed": "操作条件が変わりました。更新して再確認してください。",
-    "transient": "ネットワークまたは操作対象のコンピューターを一時的に利用できません。後で再同期してください。",
+    "transient": "ネットワークまたはリモートのパソコンを一時的に利用できません。後で再同期してください。",
     "callFailed": "リモート呼び出しに失敗しました。後でもう一度お試しください。（{{error}}）"
   }
 }

@@ -118,6 +118,7 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'CINDY_CLAUDE_ACCOUNT_PROVIDER_ID',
   'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
   'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
   // 订阅身份元数据(与 OAUTH_TOKEN 配套,cc env-token 分支消费):不剥离的话,从
@@ -163,6 +164,7 @@ export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'CINDY_CLAUDE_ACCOUNT_PROVIDER_ID',
   'CLAUDE_CODE_OAUTH_SCOPES',
   'CLAUDE_CODE_SUBSCRIPTION_TYPE',
   'CLAUDE_CODE_RATE_LIMIT_TIER',
@@ -448,7 +450,13 @@ export async function buildClaudeEnv(
     env.ANTHROPIC_BASE_URL = endpoint;
   }
   const authOptions = options.credentialMode
-    ? { credentialMode: options.credentialMode }
+    ? {
+        credentialMode: options.credentialMode,
+        // A remote gateway fallback must not pick credentials from the original subscription.
+        ...(options.credentialMode !== 'gateway-key' && options.sessionProviderId
+          ? { providerId: options.sessionProviderId }
+          : {}),
+      }
     : undefined;
   const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
   if (mode === 'remote') {
@@ -528,22 +536,7 @@ export async function buildClaudeEnv(
       (model) => model.id.replace(/\[1m\]$/i, '')
         === options.activeModel?.replace(/\[1m\]$/i, ''),
     )?.contextWindow;
-  if (
-    activeContextWindow !== undefined
-    && Number.isFinite(activeContextWindow)
-    && activeContextWindow > 0
-  ) {
-    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.floor(activeContextWindow));
-  } else {
-    delete env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
-  }
-
-  const configuredCompactPct = Math.round(runtimeConfig.autoCompactThresholdPct ?? Number.NaN);
-  if (configuredCompactPct >= 50 && configuredCompactPct <= 95) {
-    env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(configuredCompactPct);
-  } else {
-    delete env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
-  }
+  applyClaudeContextWindow(env, activeContextWindow, runtimeConfig.autoCompactThresholdPct);
 
   // 关掉 CC SDK 内部的遥测 / 错误上报 / OTEL metrics export。
   // 我们走自家 compat proxy + xd.inc token, 这些字段都是直打 api.anthropic.com 的
@@ -594,4 +587,38 @@ export async function buildClaudeEnv(
   }
 
   return env;
+}
+
+/** Apply the active working budget on both first spawn and history-preserving rebuilds. */
+export function applyClaudeContextWindow(
+  env: Record<string, string>,
+  activeContextWindow: number | undefined,
+  autoCompactThresholdPct: number | undefined,
+): void {
+  if (
+    activeContextWindow !== undefined
+    && Number.isFinite(activeContextWindow)
+    && activeContextWindow > 0
+  ) {
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.floor(activeContextWindow));
+    // Known Claude models resolve their native capacity before MAX_CONTEXT_TOKENS.
+    // The working window is a separate native control, used by auto-compaction.
+    env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(Math.floor(activeContextWindow));
+  } else {
+    delete env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+    delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+  }
+
+  const configuredCompactPct = Math.round(autoCompactThresholdPct ?? Number.NaN);
+  if (configuredCompactPct >= 50 && configuredCompactPct <= 95) {
+    // Claude 2.1.259 clamps AUTO_COMPACT_WINDOW to at least 100K. Preserve
+    // smaller user budgets through its native percentage override instead of
+    // silently allowing them to grow to 100K. Native output/summary reserves
+    // can trigger compaction earlier, never later than the requested budget.
+    const windowScale = activeContextWindow !== undefined && activeContextWindow > 0
+      ? Math.min(1, activeContextWindow / 100_000) : 1;
+    env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(configuredCompactPct * windowScale);
+  } else {
+    delete env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+  }
 }

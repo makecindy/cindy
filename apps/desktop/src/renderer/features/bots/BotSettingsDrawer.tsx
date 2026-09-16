@@ -1,12 +1,13 @@
+import { useEffect, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
-import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { matchPath, useBlocker, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
 
-/** Route-owned half-window that keeps the current teammate chat mounted below it. */
+/** Route-owned compact drawer that keeps the current teammate chat mounted below it. */
 export function BotSettingsDrawer() {
   const { t } = useBotTranslation();
   const location = useLocation();
@@ -18,7 +19,49 @@ export function BotSettingsDrawer() {
   const bot = bots.find((candidate) => candidate.id === match?.params.botId) ?? null;
   const open = searchParams.get('settings') === '1' && bot !== null;
 
-  const close = () => {
+  const allowNavigation = useRef(false);
+  const pendingGuard = useRef<Promise<boolean> | null>(null);
+  const beforeCloseRef = useRef<(() => Promise<boolean>) | null>(null);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    if (allowNavigation.current) {
+      allowNavigation.current = false;
+      return false;
+    }
+    return (
+      open &&
+      beforeCloseRef.current !== null &&
+      (currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search)
+    );
+  });
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    let active = true;
+    const check =
+      pendingGuard.current ?? Promise.resolve().then(() => beforeCloseRef.current?.() ?? true);
+    pendingGuard.current = check;
+    void check
+      .then(
+        (allowed) => {
+          if (!active) return;
+          if (allowed) blocker.proceed();
+          else blocker.reset();
+        },
+        () => {
+          if (active) blocker.reset();
+        },
+      )
+      .finally(() => {
+        if (pendingGuard.current === check) pendingGuard.current = null;
+      });
+    return () => {
+      active = false;
+    };
+  }, [blocker]);
+
+  const performClose = (alreadyChecked = true) => {
+    // These callers already passed BotSettings' async save/draft guard.
+    allowNavigation.current = alreadyChecked;
     if (bot?.status === 'archived') {
       navigate('/bots', { replace: true });
       return;
@@ -33,6 +76,10 @@ export function BotSettingsDrawer() {
     );
   };
 
+  // Header, Escape and overlay dismissal take the same route guard as Back
+  // and sidebar navigation. BotSettings' own Back action already checked it.
+  const close = () => performClose(false);
+
   if (!bot) return null;
 
   return (
@@ -42,14 +89,14 @@ export function BotSettingsDrawer() {
         <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]">
           <Dialog.Content
             aria-describedby={undefined}
-            className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none sm:w-[min(640px,70vw)] lg:w-1/2 lg:max-w-[720px]"
+            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
           >
-            <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5 sm:px-7">
+            <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
               <Dialog.Title className="text-15 font-medium text-[var(--text-primary)]">
                 {t('bots.settings')}
               </Dialog.Title>
               <Dialog.Close
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 aria-label={t('bots.close')}
               >
                 <X size={17} />
@@ -58,8 +105,9 @@ export function BotSettingsDrawer() {
             <BotPronounProvider bot={bot}>
               <BotSettings
                 key={bot.id}
+                beforeCloseRef={beforeCloseRef}
                 bot={bot}
-                onBack={close}
+                onBack={performClose}
                 onOpenSession={(sessionId, searchJump) => {
                   const projection = bot.sessions.find((item) => item.id === sessionId);
                   const route =

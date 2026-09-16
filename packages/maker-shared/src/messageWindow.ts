@@ -1,3 +1,10 @@
+export { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from './remoteTextStream.js';
+export * from './historyView.js';
+export { projectHistoryView, isHistoryDetailTool, hasVisibleHistoryResult } from './historyViewProjection.js';
+export * from './historyViewController.js';
+export { renderHistoryView } from './historyViewRender.js';
+export { HistoryViewHandoff } from './historyViewHandoff.js';
+
 export interface MessageScrollMetrics {
   contentHeight: number;
   offsetY: number;
@@ -6,6 +13,12 @@ export interface MessageScrollMetrics {
 
 export const DEFAULT_NEAR_BOTTOM_THRESHOLD = 96;
 export const DEFAULT_LOAD_EARLIER_THRESHOLD = 96;
+
+/** Start reading older history two viewports ahead of the loaded boundary. */
+export function historyPrefetchThreshold(viewportHeight: number): number {
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return DEFAULT_LOAD_EARLIER_THRESHOLD;
+  return Math.max(DEFAULT_LOAD_EARLIER_THRESHOLD, Math.ceil(viewportHeight * 2));
+}
 
 export function isNearMessageListBottom(
   metrics: MessageScrollMetrics,

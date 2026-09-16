@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { BotChatIdentity } from './BotSessionContentHeader';
+import { useBotIslandVisibleSession } from './useBotIslandVisibleSession';
 
 function readBotChatIdentity(bot: unknown, botId: string): BotChatIdentity | null {
   if (!bot || typeof bot !== 'object') return null;
@@ -18,9 +19,15 @@ function readBotChatIdentity(bot: unknown, botId: string): BotChatIdentity | nul
 
 /** Historical Bot transcripts are reviewable but never writable from the history route. */
 export function BotHistorySessionView() {
+  const { botId, sessionId } = useParams();
+  return <BotHistorySessionGateView key={JSON.stringify([botId, sessionId])} />;
+}
+
+function BotHistorySessionGateView() {
   const { t } = useTranslation();
   const { botId, sessionId } = useParams();
   const [allowed, setAllowed] = useState<boolean | null>(null);
+  useBotIslandVisibleSession(allowed === true ? sessionId ?? null : null);
   /**
    * 归档的对话里,那个伙伴仍然是那个伙伴:气泡挂 TA 的头像,顶栏是 TA 的 lockup。
    * 这个视图本来就已经查过 `bots.history(botId)` 确认归属,顺手把身份取回来即可

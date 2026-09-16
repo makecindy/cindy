@@ -492,6 +492,20 @@ export interface ThreadRollbackParams {
   numTurns: number;
 }
 
+/** Codex 0.153.4: bounded turn metadata, including failed/interrupted turns. */
+export interface ThreadTurnsListParams {
+  threadId: string;
+  cursor?: string;
+  limit: number;
+  sortDirection: 'desc';
+  itemsView: 'notLoaded';
+}
+
+export interface ThreadTurnsListResponse {
+  data: Array<{ id: string; status: string; startedAt?: number | null }>;
+  nextCursor: string | null;
+}
+
 export interface ThreadRollbackResponse {
   thread: { id: string; [k: string]: unknown };
   [k: string]: unknown;
@@ -1210,8 +1224,10 @@ export const Method = {
   SkillsList: 'skills/list',
   ThreadStart: 'thread/start',
   ThreadResume: 'thread/resume',
+  ThreadInjectItems: 'thread/inject_items',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
+  ThreadTurnsList: 'thread/turns/list',
   ThreadUnsubscribe: 'thread/unsubscribe',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',

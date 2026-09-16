@@ -4,7 +4,7 @@
  *
  * 选择器复用草稿页同一套组件(2026-07-31 Lizi 要求,不另搭下拉),展示与
  * 交互与新建对话一致,不暴露「跟随默认 / 钉住」这层概念:
- * - Agent = VendorSegmentedSwitcher(cc/codex/pi 分段);
+ * - Harness 与模型作为完整配置由共享选择器一起保存;
  * - 模型/推理强度/Fast/供应商 = ModelSelector 的 field 形态,占满整行(标题在上、
  *   控件 w-full 在下,与 IM 默认配置同款);面板宽度绑定 trigger(DESIGN.md §4);
  * - 动手权限 = PermissionSelector(权限下拉全仓只此一份,不得私搭),
@@ -19,6 +19,7 @@
  * 亲选(与 pick 槽同一哲学)。
  */
 
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, FolderOpen, X } from 'lucide-react';
@@ -27,7 +28,6 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
-import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import {
   getEffortForModel,
   getFastModeForModel,
@@ -95,6 +95,8 @@ export function GhostErrandPrefs({
   const followVendor: 'cc' | 'codex' | 'pi' =
     draft.vendor === 'pi' ? 'pi' : draft.vendor === 'codex' ? 'codex' : 'cc';
   const vendor: 'cc' | 'codex' | 'pi' = config.agentKind ?? followVendor;
+  const pickerAgents = useModelPickerAgents(vendor === 'cc' ? 'claude-code' : vendor);
+
   const shownModel = config.model ?? draft.lastByVendor[vendor].model;
   const shownEffort = (config.effort ??
     getEffortForModel(shownModel) ??
@@ -149,35 +151,21 @@ export function GhostErrandPrefs({
         {t('settings.ghosts.detail.errandPrefs.desc')}
       </p>
 
-      {row(
-        'agent',
-        <VendorSegmentedSwitcher
-          value={vendor}
-          dense
-          width={200}
-          ariaLabel={t('settings.ghosts.detail.errandPrefs.agent')}
-          onChange={(next) => {
-            if (next === vendor && config.agentKind !== undefined) return;
-            // 换 agent 连带清掉模型组(跨 agent 的模型 id 互不通用);点选即把该组
-            // 值钉进本插件配置(未选过时才实时跟随草稿)。
-            save({
-              ...config,
-              agentKind: next === 'pi' ? 'pi' : next === 'codex' ? 'codex' : 'cc',
-              model: undefined,
-              effort: undefined,
-              fastMode: undefined,
-              providerId: undefined,
-            });
-          }}
-        />,
-      )}
-
       {/* 模型选择器占满整行(标题在上、控件 w-full 在下,与 IM 默认配置同款):
           field 形态的面板宽度绑定 trigger 宽度(DESIGN.md §4),压到 60% 会让下拉
           窄到把模型名截断,所以这里给它整行宽度。 */}
       <div className="flex min-w-0 flex-col gap-2">
         <span className={labelCls}>{t('settings.ghosts.detail.errandPrefs.model')}</span>
         <ModelSelector
+          unifiedAgents={pickerAgents}
+          onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) => save({
+            ...config,
+            agentKind: engine,
+            providerId,
+            model: modelId,
+            effort: ERRAND_EFFORTS.has(effort ?? '') ? effort : undefined,
+            fastMode: fast,
+          })}
           modelId={shownModel}
           effort={shownEffort}
           fastMode={shownFast}

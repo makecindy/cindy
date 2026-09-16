@@ -1,6 +1,6 @@
 // @ts-nocheck —— 被测对象是 .mjs 开发工具模块，vitest 跑其纯函数与注入式流程。
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, win32 } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_ANDROID_AVD,
@@ -65,6 +65,61 @@ describe('Android SDK 与 adb 输出解析', () => {
       adb: 'C:\\Users\\dev\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe',
       emulator: 'C:\\Users\\dev\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe',
     });
+  });
+
+  it('build-only 可在缺少 emulator 时仍解析 SDK 根目录', () => {
+    const sdkRoot = win32.join('D:\\', 'Android', 'Sdk');
+    const platforms = win32.join(sdkRoot, 'platforms');
+    const buildTools = win32.join(sdkRoot, 'build-tools');
+    expect(resolveAndroidSdkTools({
+      platform: 'win32',
+      requireTools: false,
+      env: { ANDROID_SDK_ROOT: sdkRoot },
+      exists: (target) => target === platforms || target === buildTools,
+      readDir: (target) => target === platforms ? ['android-36'] : ['35.0.0'],
+    })).toMatchObject({ sdkRoot });
+  });
+
+  it('build-only 跳过失效的环境变量路径，回退到标准 SDK 目录', () => {
+    const localAppData = win32.join('C:\\', 'Users', 'dev', 'AppData', 'Local');
+    const sdkRoot = win32.join(localAppData, 'Android', 'Sdk');
+    expect(resolveAndroidSdkTools({
+      platform: 'win32',
+      requireTools: false,
+      env: {
+        ANDROID_SDK_ROOT: win32.join('D:\\', 'missing-sdk'),
+        ANDROID_HOME: win32.join('D:\\', 'old-sdk'),
+        LOCALAPPDATA: localAppData,
+      },
+      exists: (target) => target === win32.join(sdkRoot, 'platforms')
+        || target === win32.join(sdkRoot, 'build-tools'),
+      readDir: (target) => target.endsWith('platforms') ? ['android-36'] : ['35.0.0'],
+    })).toMatchObject({ sdkRoot });
+  });
+
+  it('build-only skips an existing but incomplete SDK candidate', () => {
+    const stale = win32.join('D:\\', 'stale-sdk');
+    const valid = win32.join('C:\\', 'Users', 'dev', 'AppData', 'Local', 'Android', 'Sdk');
+    const existing = new Set([
+      stale,
+      win32.join(valid, 'platforms'),
+      win32.join(valid, 'build-tools'),
+    ]);
+    expect(resolveAndroidSdkTools({
+      platform: 'win32',
+      requireTools: false,
+      env: { ANDROID_SDK_ROOT: stale, LOCALAPPDATA: win32.join('C:\\', 'Users', 'dev', 'AppData', 'Local') },
+      exists: (target) => existing.has(target),
+      readDir: (target) => target.endsWith('platforms') ? ['android-36'] : ['35.0.0'],
+    })).toMatchObject({ sdkRoot: valid });
+  });
+
+  it('build-only 没有有效 SDK 候选时明确失败', () => {
+    expect(() => resolveAndroidSdkTools({
+      platform: 'win32', requireTools: false,
+      env: { ANDROID_SDK_ROOT: win32.join('D:\\', 'missing-sdk') },
+      exists: () => false,
+    })).toThrow('未找到 Android SDK 目录');
   });
 
   it('只接受在线 emulator，并去掉 avd name 的 OK 尾行', () => {

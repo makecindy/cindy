@@ -45,6 +45,11 @@ export interface MobileHomeDeviceFilterItem {
   waitingCount: number;
 }
 
+/** Cached history is readable offline; it never grants permission to control a device. */
+export function canBrowseMobileHomeDevice(item: MobileHomeDeviceFilterItem): boolean {
+  return item.available || (item.sessionCount > 0 && (item.state === 'offline' || item.state === 'unknown'));
+}
+
 export interface MobileHomeProjectGroup {
   deviceId: string | null;
   deviceName: string;
@@ -278,14 +283,14 @@ function buildDeviceFilters(
     if (!deviceId || deviceById.has(deviceId) || filters.some((item) => item.deviceId === deviceId)) continue;
     const stats = statsByDevice.get(deviceId) ?? { sessionCount: 0, waitingCount: 0 };
     filters.push({
-      available: true,
+      available: false,
       deviceId,
       id: deviceId,
       label: session.deviceLinkDeviceName || deviceId,
       selected: selectedDeviceId === deviceId,
       sessionCount: stats.sessionCount,
-      state: 'ready',
-      statusLabel: stats.waitingCount > 0 ? `${stats.waitingCount} 待处理` : '已同步',
+      state: 'unknown',
+      statusLabel: '',
       waitingCount: stats.waitingCount,
     });
   }

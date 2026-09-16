@@ -35,6 +35,7 @@ function createHarness() {
   const abandons: Array<{ sessionId: string; message?: string }> = [];
   const surfaced: Array<{ sessionId: string; detail: SuppressedTurnError }> = [];
   const orcaFinalized: Array<{ sessionId: string; payload: OrcaSuppressedTerminal }> = [];
+  const autoResumeFailed: Array<{ sessionId: string; attemptToken?: number }> = [];
   const deps: AutoResumeBookkeepingDeps = {
     persistSuppressedError: (sessionId, detail) => persisted.push({ sessionId, detail }),
     surfaceSuppressedError: (sessionId, detail) => surfaced.push({ sessionId, detail }),
@@ -44,6 +45,7 @@ function createHarness() {
     rollbackGuardPendingResume: (sessionId) => guardRollbacks.push(sessionId),
     abandonTakeover: (sessionId, message) =>
       abandons.push({ sessionId, ...(message !== undefined ? { message } : {}) }),
+    onAutoResumeFailed: (sessionId, attemptToken) => autoResumeFailed.push({ sessionId, attemptToken }),
   };
   return {
     book: new AutoResumeBookkeeping(deps),
@@ -53,6 +55,7 @@ function createHarness() {
     outcomes,
     guardRollbacks,
     abandons,
+    autoResumeFailed,
   };
 }
 
@@ -245,6 +248,48 @@ describe('待确认的重连记录:必有一次结算', () => {
     expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'c-1', outcome: 'failed' }]);
     expect(h.book.isPendingOutcomeClientId('s2', 'c-2')).toBe(true);
   });
+
+  it('unconfirmed persisted resume 一次结清 failed，不补落旧错误', () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 7);
+    h.book.stashSuppressedError('s1', { message: 'idle timeout' }, 7);
+    h.book.bindSuppressedErrorToClient('s1', 7, 'continue-1');
+    h.book.registerPendingOutcome('s1', 7, 'continue-1');
+
+    const payload = createOrcaTerminal();
+    expect(h.book.stashOrcaSuppressedTerminal('s1', payload)).toBe(true);
+
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 7, 'continue-1')).toBe(true);
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 7, 'continue-1')).toBe(false);
+    expect(h.orcaFinalized).toEqual([{ sessionId: 's1', payload }]);
+    expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'continue-1', outcome: 'failed' }]);
+    expect(h.persisted).toEqual([]);
+    expect(h.surfaced).toEqual([]);
+    expect(h.abandons).toEqual([]);
+    expect(h.guardRollbacks).toEqual(['s1']);
+    expect(h.autoResumeFailed).toEqual([{ sessionId: 's1', attemptToken: 7 }]);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
+    expect(h.book.isPendingOutcomeClientId('s1', 'continue-1')).toBe(false);
+    expect(h.book.isCurrentAttempt('s1', 7)).toBe(false);
+  });
+
+  it('unconfirmed persisted resume 过期 token 或别人的 clientId 是 no-op', () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 7);
+    h.book.stashSuppressedError('s1', { message: 'idle timeout' }, 7);
+    h.book.bindSuppressedErrorToClient('s1', 7, 'continue-1');
+    h.book.registerPendingOutcome('s1', 7, 'continue-1');
+
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 8, 'continue-1')).toBe(false);
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 7, 'continue-other')).toBe(false);
+    expect(h.outcomes).toEqual([]);
+    expect(h.persisted).toEqual([]);
+    expect(h.guardRollbacks).toEqual([]);
+    expect(h.autoResumeFailed).toEqual([]);
+    expect(h.book.hasSuppressedError('s1')).toBe(true);
+    expect(h.book.isPendingOutcomeClientId('s1', 'continue-1')).toBe(true);
+    expect(h.book.isCurrentAttempt('s1', 7)).toBe(true);
+  });
 });
 
 describe('退避排期:必可撤销、必只认自己那次', () => {
@@ -392,13 +437,15 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     });
 
     expect(h.book.hasWaitingSchedule('s1', 7)).toBe(true);
+    expect(h.book.hasLiveSchedule('s1', 7)).toBe(true);
     expect(h.book.hasWaitingSchedule('s1', 8)).toBe(false);
     vi.advanceTimersByTime(1_000);
     await Promise.resolve();
     expect(h.book.hasSchedule('s1')).toBe(true);
+    expect(h.book.hasLiveSchedule('s1', 7)).toBe(true);
     expect(
       h.book.hasWaitingSchedule('s1', 7),
-      'timer 已触发、async callback 在跑时不再属于 provider rebuild 交棒窗口',
+      'timer 已触发、async callback 在跑时 waiting 为 false，但 live schedule 仍在',
     ).toBe(false);
     expect(callbackAttempt.isCurrent()).toBe(true);
 

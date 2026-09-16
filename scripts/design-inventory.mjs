@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   BARE_RADIUS_RE,
+  mobileRouteCoverage,
   createBareRadiusRe,
   INVENTORY_REL_PATH,
   MAIN_ENTRY_REL_PATH,
@@ -77,12 +78,17 @@ function buildGenerated(existing) {
   );
   const routerCoverage = productionRouterCoverage(routerSource, catalog);
   const redirects = listRedirectExclusions(routerSource);
+  const mobileCoverage = mobileRouteCoverage(repoRoot, catalog);
+  if (mobileCoverage.missing.length || mobileCoverage.stale.length) {
+    throw new Error('Mobile route inventory mismatch: ' + JSON.stringify(mobileCoverage));
+  }
   const snapshotDate = checkOnly ? snapshotDateFromExisting(existing) : new Date().toISOString().slice(0, 10);
   const generated = renderGeneratedBlock(surfaces, {
     snapshotDate,
     generateCommand: GENERATE_COMMAND,
     routerCoverage,
     redirects,
+    mobileCoverage,
   });
   return { surfaces, routerCoverage, generated, missingStyleRoots, danglingExtraStyleRoots };
 }

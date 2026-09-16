@@ -79,3 +79,24 @@
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.xdtshare\shell\${PRODUCT_FILENAME}"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 !macroend
+
+; Runs before removing files, including the old-version uninstall during upgrade.
+; Never leave a SYSTEM service referring to a removed or partially updated image.
+!macro customUnInit
+  IfFileExists "$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" 0 cindy_remote_service_done
+  nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --uninstall'
+  Pop $R0
+  Pop $R1
+  ${If} $R0 != 0
+    ; Per-user uninstallers may lack service permissions. Keep the direct path
+    ; first so missing services (including ordinary per-user installs) need no UAC.
+    nsExec::ExecToStack '"$INSTDIR\resources\tools\remote-desktop\cindy-windows-desktop-host.exe" --elevate-uninstall'
+    Pop $R0
+    Pop $R1
+  ${EndIf}
+  ${If} $R0 != 0
+    MessageBox MB_OK|MB_ICONSTOP "Could not stop the Cindy remote desktop service. Run the uninstaller as administrator and try again."
+    Abort
+  ${EndIf}
+  cindy_remote_service_done:
+!macroend

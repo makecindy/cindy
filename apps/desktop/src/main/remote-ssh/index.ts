@@ -2039,6 +2039,14 @@ export function registerRemoteSshIpc(): void {
   log.info('remote-ssh IPC registered', { home: os.homedir() });
 }
 
+/** Validate an existing Worker directory using the host filesystem, not local fs. */
+export async function probeRemoteWorkingDirectory(hostId: string, inputPath: string): Promise<string> {
+  await ensureRemoteHostReady(hostId);
+  const result = await statRemotePath(requireConnectedHost(hostId), inputPath);
+  if (result.kind !== 'dir') throw new Error('Remote working directory is unavailable');
+  return result.resolvedPath;
+}
+
 /**
  * stat-remote-path — POSIX-bash-driven stat that also expands a leading `~`
  * or `~/...` to `$HOME` safely (no `eval`, no command injection).
@@ -2059,6 +2067,7 @@ async function statRemotePath(
   host: RemoteHost,
   inputPath: string,
 ): Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }> {
+  if (/[\r\n\0]/.test(inputPath)) throw new Error('Remote path contains unsupported control characters');
   // 归一化为绝对路径:
   // - 存在的目录 → cd && pwd -P (展开 symlink 与相对路径,与 daemon cwd 契约一致)
   // - 存在的文件 → parent cd && pwd -P + basename
@@ -2071,28 +2080,38 @@ case "$1" in
   '~'|'~/'*) p="$HOME${'$'}{1:1}" ;;
   *)         p="$1" ;;
 esac
+case "$p" in
+  *$'\\r'*|*$'\\n'*) exit 64 ;;
+esac
 abs_for() {
   local target="$1"
   if [ -d "$target" ]; then
-    (cd "$target" && pwd -P)
+    (cd -P -- "$target" && printf '%s' "$PWD")
   else
     local parent base
     parent="$(dirname -- "$target")"
     base="$(basename -- "$target")"
     if [ -d "$parent" ]; then
-      printf '%s/%s' "$(cd "$parent" && pwd -P)" "$base"
+      (cd -P -- "$parent" && printf '%s/%s' "$PWD" "$base")
     else
       printf '%s' "$target"
     fi
   fi
 }
 if [ -d "$p" ]; then
-  printf 'dir %s\\n' "$(abs_for "$p")"
+  kind=dir
 elif [ -e "$p" ]; then
-  printf 'file %s\\n' "$(abs_for "$p")"
+  kind=file
 else
-  printf 'missing %s\\n' "$(abs_for "$p")"
+  kind=missing
 fi
+# Preserve trailing newlines until validation, including symlink targets.
+resolved="$(abs_for "$p" && printf '.')" || exit 64
+resolved="${'$'}{resolved%.}"
+case "$resolved" in
+  *$'\\r'*|*$'\\n'*) exit 64 ;;
+esac
+printf '%s %s\\n' "$kind" "$resolved"
 `;
   const result = await host.exec(
     `bash -c ${shellQuoteSh(script)} _ ${shellQuoteSh(inputPath)}`,
@@ -2101,7 +2120,9 @@ fi
   if (result.exitCode !== 0) {
     throw new Error(`bash exit=${result.exitCode}: ${result.stderr.trim().slice(0, 200) || '(no stderr)'}`);
   }
-  const line = result.stdout.trim().split(/\r?\n/).pop() ?? '';
+  // Shell startup can print banners before the final protocol line. Remove
+  // only its terminator: trailing spaces belong to the path, not the framing.
+  const line = result.stdout.replace(/\r?\n$/, '').split(/\r?\n/).pop() ?? '';
   // Allow spaces in the resolved path — only split on the first space.
   const spaceIdx = line.indexOf(' ');
   if (spaceIdx < 0) {

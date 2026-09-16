@@ -15,6 +15,8 @@
  * 重试,覆盖被控端启动窗口;对**永久**错误(被控开关关 / channel 不允许)立即放弃,不空转。
  */
 
+import { projectScheduleSidebarIndex } from '../scheduler/lib/projectScheduleSidebarIndex';
+import type { ScheduleSidebarIndexSnapshot } from '../scheduler/lib/scheduleSidebarIndexRuns';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -199,6 +201,7 @@ function backoffMs(attempt: number): number {
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export interface RefreshOptions {
+  scope?: 'sessions' | 'schedule' | 'both';
   /** 注入式 sleep(测试用,默认真实 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
   /** 最大尝试次数(含首次),默认 DEFAULT_MAX_ATTEMPTS。 */
@@ -234,22 +237,22 @@ function refreshTaskKey(deviceId: string, status: RemoteSessionStatus): string {
 }
 
 /**
- * 满窗口缺席行的轮询队列(per-device)。不能用 snapshot epoch 推导数组下标：前一轮
+ * 满窗口缺席行的轮询队列(per-device + status)。不能用 snapshot epoch 推导数组下标：前一轮
  * 确认终态并移除候选后，数组会收缩，重算下标会跳过紧邻项。队列在每轮开始时与当前
  * missing ids 对账，保留旧轮询顺序、移除已不缺席项，并把新缺席项追加到队尾。
  */
 const missingStatusProbeQueues = new Map<string, string[]>();
 
 function reconcileMissingStatusProbeQueue(
-  deviceId: string,
+  queueKey: string,
   missingSessionIds: readonly string[],
 ): string[] {
   if (missingSessionIds.length === 0) {
-    missingStatusProbeQueues.delete(deviceId);
+    missingStatusProbeQueues.delete(queueKey);
     return [];
   }
   const missingIds = new Set(missingSessionIds);
-  const previous = missingStatusProbeQueues.get(deviceId) ?? [];
+  const previous = missingStatusProbeQueues.get(queueKey) ?? [];
   const queuedIds = new Set<string>();
   const queue: string[] = [];
   for (const sessionId of previous) {
@@ -262,7 +265,7 @@ function reconcileMissingStatusProbeQueue(
     queuedIds.add(sessionId);
     queue.push(sessionId);
   }
-  missingStatusProbeQueues.set(deviceId, queue);
+  missingStatusProbeQueues.set(queueKey, queue);
   return queue;
 }
 
@@ -285,6 +288,8 @@ export async function refreshRemoteDeviceSessions(
     existing.opts = {
       ...existing.opts,
       ...opts,
+      scope:
+        (existing.opts.scope ?? 'sessions') === (opts.scope ?? 'sessions') ? opts.scope : 'both',
       // 显式 replace 是更强的 snapshot 覆盖要求，不能被后续 merge 降级；默认的事件型
       // refresh 则保持安全的有界 merge，并通过上面的强 coalescing 语义确保补跑。
       snapshotMode:
@@ -327,11 +332,16 @@ async function probeMissingSessionStatuses(
   deviceId: string,
   epoch: number,
   missingSessionIds: readonly string[],
+  status: RemoteSessionStatus,
 ): Promise<void> {
-  const queue = reconcileMissingStatusProbeQueue(deviceId, missingSessionIds);
+  const queueKey = refreshTaskKey(deviceId, status);
+  const queue = reconcileMissingStatusProbeQueue(queueKey, missingSessionIds);
   if (queue.length === 0) return;
   const count = Math.min(MISSING_STATUS_PROBE_LIMIT, queue.length);
   const candidates = queue.slice(0, count);
+  const snapshots = new Map(
+    remoteProjectsStore.getDeviceSessions(deviceId).map((session) => [session.id, session]),
+  );
   const results = await Promise.all(
     candidates.map(async (sessionId) => {
       try {
@@ -347,9 +357,15 @@ async function probeMissingSessionStatuses(
     }),
   );
   // 更强的 refresh / remove / disconnect 已使本轮失效时，不应用迟到的补查结果。
-  if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, 'active')) return;
+  if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return;
   const terminalIds = new Set<string>();
   for (const result of results) {
+    // A live push accepted while this GET was in flight is newer than its
+    // snapshot. Do not roll its model/status back; the next tick can reconcile.
+    const current = remoteProjectsStore
+      .getDeviceSessions(deviceId)
+      .find((session) => session.id === result.sessionId);
+    if (current !== snapshots.get(result.sessionId)) continue;
     if (result.errorCode === 'NOT_FOUND') {
       terminalIds.add(result.sessionId);
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, { status: 'deleted' });
@@ -359,7 +375,7 @@ async function probeMissingSessionStatuses(
     if (!result.value || typeof result.value !== 'object') continue;
     const session = result.value as Partial<Session>;
     if (session.id !== result.sessionId) continue;
-    if (session.status === 'archived' || session.status === 'deleted') {
+    if (session.status === 'deleted' || (status === 'active' && session.status === 'archived')) {
       terminalIds.add(result.sessionId);
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, {
         status: session.status,
@@ -368,8 +384,9 @@ async function probeMissingSessionStatuses(
       removeRemoteSessionActivityEntry(result.sessionId);
       continue;
     }
-    // sessions:get 返回窗口外 active 行时同样是权威快照，回填 title / pinnedAt / model 等
+    // sessions:get 返回缺席行时同样是权威快照，回填 title / pinnedAt / model 等
     // 元数据；否则丢失 patched push 后会永久保留旧字段。
+    if (session.status !== status) terminalIds.add(result.sessionId);
     remoteProjectsStore.applyPatch(deviceId, result.sessionId, { ...session });
   }
   const nextQueue = [
@@ -377,9 +394,9 @@ async function probeMissingSessionStatuses(
     ...candidates.filter((sessionId) => !terminalIds.has(sessionId)),
   ];
   if (nextQueue.length === 0) {
-    missingStatusProbeQueues.delete(deviceId);
+    missingStatusProbeQueues.delete(queueKey);
   } else {
-    missingStatusProbeQueues.set(deviceId, nextQueue);
+    missingStatusProbeQueues.set(queueKey, nextQueue);
   }
 }
 
@@ -400,44 +417,88 @@ async function runRefreshRemoteDeviceSessions(
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
     try {
-      const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:list', [
-        listLimit,
-        status,
-        {
-          includePinned: true,
-          // 周期 tick 保持单飞；created / bootstrap 等事件重拉必须绕开写前查询。
-          ...(opts.coalescingMode === 'weak' ? {} : { fresh: true }),
-        },
-      ]);
-      // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
-      if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
-      const sessions = parseRemoteSessionList(value, status);
-      if ((opts.snapshotMode ?? 'merge') === 'merge') {
+      if (opts.scope !== 'schedule') {
+        const value = await window.electronAPI.deviceLink.invoke(
+          deviceId,
+          'local-db:sessions:list',
+          [
+            listLimit,
+            status,
+            {
+              includePinned: true,
+              // 周期 tick 保持单飞；created / bootstrap 等事件重拉必须绕开写前查询。
+              ...(opts.coalescingMode === 'weak' ? {} : { fresh: true }),
+            },
+          ],
+        );
+        // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
+        if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
+          return 'superseded';
+        const sessions = parseRemoteSessionList(value, status);
+        // Companions are fetched by resource:get + sessions:get, not by the
+        // ordinary task list. Keep their live state and reconcile them by id,
+        // even when the ordinary list is empty or is a full replacement.
         const incomingIds = new Set(sessions.map((session) => session.id));
-        const missingSessionIds = remoteProjectsStore
+        const missingSessions = remoteProjectsStore
           .getDeviceSessions(deviceId, status)
-          .filter((session) => !incomingIds.has(session.id))
+          .filter((session) => !incomingIds.has(session.id));
+        const missingCompanionIds = missingSessions
+          .filter((session) => session.source === 'bot')
           .map((session) => session.id);
-        // archived 使用与本地侧栏一致的 1000 条产品窗口，可直接替换并清掉断线期间的
-        // 删除 / 取消归档陈旧行；active 仍保持 200 条轻量窗口，满窗时有界补查缺席缓存。
-        if (status === 'archived' || sessions.length < LIST_LIMIT) {
-          if (status === 'active') {
-            missingStatusProbeQueues.delete(deviceId);
-            for (const sessionId of missingSessionIds) {
-              removeRemoteSessionActivityEntry(sessionId);
+        if ((opts.snapshotMode ?? 'merge') === 'merge') {
+          const missingSessionIds = missingSessions.map((session) => session.id);
+          // archived 使用与本地侧栏一致的 1000 条产品窗口，可直接替换并清掉断线期间的
+          // 删除 / 取消归档陈旧行；active 仍保持 200 条轻量窗口，满窗时有界补查缺席缓存。
+          if (status === 'archived' || sessions.length < LIST_LIMIT) {
+            if (status === 'active') {
+              for (const session of missingSessions) {
+                if (session.source !== 'bot') removeRemoteSessionActivityEntry(session.id);
+              }
+            }
+            remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
+            await probeMissingSessionStatuses(deviceId, epoch, missingCompanionIds, status);
+          } else {
+            remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions, status);
+            if (status === 'active') {
+              await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds, status);
             }
           }
-          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
         } else {
-          remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions, status);
-          if (status === 'active') {
-            await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
-          }
+          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
+          await probeMissingSessionStatuses(deviceId, epoch, missingCompanionIds, status);
         }
-      } else {
-        remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
       }
-      return 'ok'; // 成功
+      if (opts.scope === 'schedule' || opts.scope === 'both') {
+        try {
+          const raw = await window.electronAPI.deviceLink.invoke(
+            deviceId,
+            'maker:schedule:list-sidebar-index-runs',
+            [],
+          );
+          if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
+            return 'superseded';
+          if (
+            !raw ||
+            typeof raw !== 'object' ||
+            !Array.isArray((raw as ScheduleSidebarIndexSnapshot).runs)
+          ) {
+            throw new Error('Invalid remote schedule index');
+          }
+          remoteProjectsStore.setDeviceScheduleIndex(
+            deviceId,
+            projectScheduleSidebarIndex((raw as ScheduleSidebarIndexSnapshot).runs),
+          );
+        } catch (error) {
+          // Older peers may not expose this existing channel. Keep the last mirror;
+          // failure of optional schedule metadata must not hide a valid session list.
+          if (opts.scope === 'schedule' || String(error).includes(ACCESS_REVOKED_MARKER))
+            throw error;
+          log.debug('remote schedule index unavailable');
+        }
+      }
+      return remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)
+        ? 'ok'
+        : 'superseded';
     } catch (err) {
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) {
         return 'superseded';

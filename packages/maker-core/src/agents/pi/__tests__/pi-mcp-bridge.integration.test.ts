@@ -150,6 +150,19 @@ function latestToolResultContent(request: Record<string, unknown>): string {
 
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('exercise task control modes')) {
+    const calls = [
+      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'steer', message: 'new direction' } },
+      { name: 'stop_session_task', input: { task_id: 'task-fixture', mode: 'pause' } },
+      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'resume' } },
+      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'edit', queued_message_id: 'mine', message: 'revised' } },
+      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'withdraw', queued_message_id: 'mine' } },
+      { name: 'stop_session_task', input: { task_id: 'task-fixture', mode: 'request-stop' } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(5, 'Task controls complete');
+  }
   if (requestBody.includes('multi command MCP workflow')) {
     const turns: Array<{ name: string; input: Record<string, unknown> }> = [
       { name: 'cindy_mcp_list_tools', input: {} },
@@ -317,6 +330,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const contactsLookupCalls: Array<{ query: string }> = [];
   const agentMessageCalls: Array<Record<string, unknown>> = [];
   const sessionTaskCalls: Array<Record<string, unknown>> = [];
+  const taskControlCalls: Array<{ name: string; args: unknown }> = [];
   const botMemoryCalls: Array<Record<string, unknown>> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
@@ -622,9 +636,12 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                 name,
                 {
                   description: name,
-                  inputSchema: { task_id: z.string() },
-          },
-          async () => ({ content: [{ type: 'text', text: "OK" }] }),
+                  inputSchema: { task_id: z.string(), mode: z.string().optional(), message: z.string().optional(), queued_message_id: z.string().optional() },
+                },
+                async (args) => {
+                  taskControlCalls.push({ name, args });
+                  return { content: [{ type: 'text', text: 'OK' }] };
+                },
               );
             }
           } else if (isMemory) {
@@ -1010,6 +1027,27 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     },
   );
 
+  it('passes control modes through the real Pi facade and permission identity', { timeout: 90_000 }, async () => {
+    taskControlCalls.length = 0;
+    const permissions: Array<{ toolName: string; input: unknown }> = [];
+    const { requests } = await runOneTurn('ask', async (req) => {
+      if (req.kind === 'permission') permissions.push({ toolName: req.toolName, input: req.input });
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'local-multi', 'exercise task control modes');
+    expect(taskControlCalls).toEqual([
+      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'steer', message: 'new direction' } },
+      { name: 'stop_session_task', args: { task_id: 'task-fixture', mode: 'pause' } },
+      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'resume' } },
+      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'edit', queued_message_id: 'mine', message: 'revised' } },
+      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'withdraw', queued_message_id: 'mine' } },
+      { name: 'stop_session_task', args: { task_id: 'task-fixture', mode: 'request-stop' } },
+    ]);
+    expect(permissions).toEqual(taskControlCalls.map(({ name, args }) => ({
+      toolName: `mcp__cindy_helper__${name}`, input: args,
+    })));
+    expect(requests).toHaveLength(7);
+  });
+
   it(
     'starts a typed independent Session task without selecting a Bot',
     { timeout: 90_000 },
@@ -1259,7 +1297,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
-    'invalid MCP args expose the selected schema and let Pi correct the call without losing the capability',
+    'invalid MCP args preserve validation feedback and the inspected schema so Pi can correct the call',
     { timeout: 90_000 },
     async () => {
       echoCalls.length = 0;
@@ -1272,9 +1310,13 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
       expect(permissionAsked).toBe(false);
       expect(echoCalls).toEqual([{ text: 'hello-pi' }]);
-      expect(requestBodies.some((body) =>
-        body.includes('Expected args schema') && body.includes('"required"') && body.includes('"text"')
-      )).toBe(true);
+      expect(requestBodies.some((body) => body.includes('"required"') && body.includes('"text"'))).toBe(true);
+      const errorResult = events.filter(event => event.type === 'tool_result_full')
+        .map(event => event.data as { isError?: boolean; fullText: string })
+        .find(result => result.isError);
+      expect(errorResult?.fullText).toMatch(/validation|invalid/i);
+      expect(errorResult?.fullText).toContain('text');
+      expect(errorResult?.fullText).not.toContain('Expected args schema');
       const finalText = events
         .filter((event) => event.type === 'text')
         .map((event) => event.data as { text: string; isFinal?: boolean })

@@ -1,3 +1,4 @@
+import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 /**
  * textOneshotPinOptions.ts — 快问快答(text.oneshot)钉档的目录模型清单与路由解析。
  *
@@ -79,6 +80,7 @@ function isRoutableForOneshot(provider: Provider, agentKind: AgentKind): boolean
   if (!provider.agents.includes(agentKind)) return false;
   const routing = provider.routing[agentKind];
   if (!routing || routing.disabled) return false;
+  if (isOpenAiSubscriptionProvider(provider) || provider.auth.native === 'claude' || provider.auth.native === 'xai') return true;
   if (provider.source === 'builtin') return ONESHOT_EXECUTABLE_BUILTIN_PROVIDERS.has(provider.id);
   if (agentKind === 'claude-code') {
     if (routing.wireProtocol !== undefined && routing.wireProtocol !== 'anthropic-messages') return false;

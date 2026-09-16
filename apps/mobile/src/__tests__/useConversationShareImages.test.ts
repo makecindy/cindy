@@ -1,33 +1,56 @@
 // @vitest-environment jsdom
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Image } from "react-native";
+import { File } from "expo-file-system";
 import { useConversationShareImages } from "@/session/useConversationShareImages";
 import type { ConversationShareMessage } from "@/session/conversationShareWebViewHtml";
 import type { ResolveRemoteMediaFn } from "@/session/remoteMedia";
-import { downloadRemoteMediaAsDataUri } from "@/session/remoteMediaDiskCacheExpo";
+import { withDownloadedRemoteMediaFile } from "@/session/remoteMediaDiskCacheExpo";
 import { createRemoteMediaResolveQueue } from "@/session/remoteMediaResolveQueue";
 
 vi.mock("react-native", () => ({
-  Image: { getSize: vi.fn(async () => ({ width: 40, height: 20 })) },
+  Image: { getSize: vi.fn() },
 }));
 const thumbs = vi.hoisted(() => ({
   entries: new Map<string, string>(),
   reads: vi.fn(async () => "aGVsbG8="),
+  writes: vi.fn(async () => undefined),
+  deletes: vi.fn(),
+  size: 5,
 }));
 vi.mock("expo-file-system", () => ({
-  File: class {
-    exists = true;
-    size = 5;
-    base64 = thumbs.reads;
+  Paths: { cache: "file:///app/cache" },
+  Directory: class {
+    uri: string;
+    constructor(parent: string, name: string) {
+      this.uri = `${parent}/${name}`;
+    }
+    create() {}
   },
+  File: class {
+    uri: string;
+    constructor(parent: string | { uri: string }, name?: string) {
+      this.uri = typeof parent === "string" ? parent : parent.uri;
+      if (name) this.uri += `/${name}`;
+    }
+    exists = true;
+    get size() { return thumbs.size; }
+    base64 = thumbs.reads;
+    delete() { thumbs.deletes(this.uri); }
+  },
+}));
+vi.mock("expo-file-system/legacy", () => ({
+  writeAsStringAsync: thumbs.writes,
+  EncodingType: { Base64: "base64" },
 }));
 vi.mock("@/session/sentAttachmentThumbStore", () => ({
   ensureSentAttachmentThumbsHydrated: vi.fn(async () => undefined),
   getSentAttachmentThumbUri: (uri: string) => thumbs.entries.get(uri) ?? null,
 }));
 vi.mock("@/session/remoteMediaDiskCacheExpo", () => ({
-  downloadRemoteMediaAsDataUri: vi.fn(),
+  withDownloadedRemoteMediaFile: vi.fn(),
 }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -68,16 +91,172 @@ const media = {
   expiresAt: "",
   previewable: true,
 };
+beforeEach(() => {
+  vi.mocked(Image.getSize).mockReset().mockImplementation(async (uri) => {
+    if (!uri.startsWith("file://")) {
+      throw new Error("Unsupported uri scheme for encoded image fetch!");
+    }
+    return { width: 40, height: 20 };
+  });
+  thumbs.size = 5;
+});
 afterEach(async () => {
   await act(async () => root.unmount());
   vi.useRealTimers();
   thumbs.entries.clear();
   thumbs.reads.mockClear();
-  vi.mocked(downloadRemoteMediaAsDataUri).mockReset();
+  thumbs.writes.mockReset();
+  thumbs.deletes.mockReset();
+  vi.mocked(withDownloadedRemoteMediaFile).mockReset();
   root = createRoot(container);
 });
 
 describe("share image readiness", () => {
+  it("sizes a controlled local file before embedding its bytes", async () => {
+    const uri = "file:///app/cache/remote.png";
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => ({ ...media, url: uri }));
+    await act(async () => root.render(createElement(Probe, { messages: [source], resolve })));
+    await startShare();
+    expect((await ready)[0]?.images?.get("cindy-media://paste")).toEqual({
+      uri: media.url, width: 40, height: 20,
+    });
+    expect(Image.getSize).toHaveBeenCalledWith(uri);
+    expect(vi.mocked(Image.getSize).mock.invocationCallOrder[0]).toBeLessThan(
+      thumbs.reads.mock.invocationCallOrder[0]!,
+    );
+    expect(thumbs.writes).not.toHaveBeenCalled();
+    expect(thumbs.deletes).not.toHaveBeenCalled();
+  });
+
+  it("sizes inline bytes via a temporary file and keeps the original data URI", async () => {
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => media);
+    await act(async () => root.render(createElement(Probe, { messages: [source], resolve })));
+    await startShare();
+    expect((await ready)[0]?.images?.get("cindy-media://paste")).toEqual({
+      uri: media.url, width: 40, height: 20,
+    });
+    const tempUri = vi.mocked(Image.getSize).mock.calls[0]![0];
+    expect(tempUri).toMatch(/^file:\/\/\/app\/cache\/conversation-share-images\/image-.*\.png$/);
+    expect(thumbs.writes).toHaveBeenCalledWith(tempUri, "aGVsbG8=", { encoding: "base64" });
+    expect(thumbs.deletes).toHaveBeenCalledExactlyOnceWith(tempUri);
+    expect(thumbs.reads).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "data:image/png;charset=utf-8;base64,aGVsbG8=",
+    "data:image/png;charset=utf-8;name=photo;BASE64,aGVsbG8%3D",
+  ])("preserves MIME parameters and escaped Base64 in %s", async (uri) => {
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => ({ ...media, url: uri }));
+    await act(async () => root.render(createElement(Probe, { messages: [source], resolve })));
+    await startShare();
+    expect((await ready)[0]?.images?.get("cindy-media://paste")).toEqual({
+      uri, width: 40, height: 20,
+    });
+    const tempUri = vi.mocked(Image.getSize).mock.calls[0]![0];
+    expect(tempUri).toMatch(/^file:\/\/\/app\/cache\/conversation-share-images\/image-.*\.png$/);
+    expect(thumbs.writes).toHaveBeenCalledWith(tempUri, "aGVsbG8=", { encoding: "base64" });
+    expect(thumbs.deletes).toHaveBeenCalledExactlyOnceWith(tempUri);
+  });
+
+  it.each([true, false])("preserves non-Base64 data images when native sizing supports them: %s", async (supported) => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jBvkAAAAASUVORK5CYII=";
+    const encoded = Array.from(atob(png), (byte) => `%${byte.charCodeAt(0).toString(16).padStart(2, "0")}`).join("");
+    const uri = `data:image/png,${encoded}`;
+    if (supported) vi.mocked(Image.getSize).mockImplementationOnce(async () => ({ width: 1, height: 1 }));
+    const message = { ...source, attachments: [{ kind: "image" as const, name: "pixel", uri }] };
+    const resolve = vi.fn<ResolveRemoteMediaFn>();
+    await act(async () => root.render(createElement(Probe, { messages: [message], resolve })));
+    await startShare();
+    expect((await ready)[0]?.images?.get(uri)).toEqual(supported ? { uri, width: 1, height: 1 } : undefined);
+    expect(Image.getSize).toHaveBeenCalledWith(uri);
+    expect(thumbs.writes).not.toHaveBeenCalled();
+    expect(thumbs.deletes).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["cancel", "resolve"], ["cancel", "reject"],
+    ["timeout", "resolve"], ["timeout", "reject"],
+  ])("cleans a pending write on %s and again after its late %s", async (event, outcome) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const files = new Set<string>();
+    let finish!: () => void;
+    let tempUri!: string;
+    thumbs.deletes.mockImplementation((uri: string) => { files.delete(uri); });
+    thumbs.writes.mockImplementationOnce((...args: unknown[]) => {
+      tempUri = args[0] as string;
+      files.add(tempUri);
+      return new Promise<undefined>((resolve, reject) => {
+        finish = () => {
+          // The native writer can create or finish a partial file after cancellation.
+          files.add(tempUri);
+          if (outcome === "resolve") resolve(undefined);
+          else reject(new Error("late write failed"));
+        };
+      });
+    });
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => media);
+    await act(async () => root.render(createElement(Probe, { messages: [source], resolve })));
+    await startShare();
+    expect(files.has(tempUri)).toBe(true);
+    await act(async () => {
+      if (event === "cancel") current.cancel();
+      else await vi.advanceTimersByTimeAsync(20_000);
+    });
+    const result = await ready;
+    expect(event === "cancel" ? result.length : result[0]?.images?.size).toBe(0);
+    expect(files.size).toBe(0);
+    expect(thumbs.deletes).toHaveBeenCalledExactlyOnceWith(tempUri);
+    await act(async () => finish());
+    expect(files.size).toBe(0);
+    expect(thumbs.deletes).toHaveBeenCalledTimes(2);
+    expect(Image.getSize).not.toHaveBeenCalled();
+    expect(thumbs.reads).not.toHaveBeenCalled();
+  });
+
+  it.each(["error", "cancel", "timeout"])("cleans inline sizing files on %s", async (event) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let finish!: (size: { width: number; height: number }) => void;
+    if (event === "error") {
+      vi.mocked(Image.getSize).mockRejectedValueOnce(new Error("invalid image"));
+    } else {
+      vi.mocked(Image.getSize).mockImplementationOnce(() => new Promise<{ width: number; height: number }>((done) => { finish = done; }));
+    }
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => media);
+    await act(async () => root.render(createElement(Probe, { messages: [source], resolve })));
+    await startShare();
+    const tempUri = vi.mocked(Image.getSize).mock.calls[0]![0];
+    await act(async () => {
+      if (event === "cancel") current.cancel();
+      if (event === "timeout") await vi.advanceTimersByTimeAsync(20_000);
+    });
+    const result = await ready;
+    expect(event === "cancel" ? result.length : result[0]?.images?.size).toBe(0);
+    expect(thumbs.deletes).toHaveBeenCalledExactlyOnceWith(tempUri);
+    if (finish) await act(async () => finish({ width: 40, height: 20 }));
+    expect(event === "cancel" ? current.messages.length : current.messages[0]?.images?.size).toBe(0);
+  });
+
+  it("cleans a partial inline write without trying to size it", async () => {
+    thumbs.writes.mockRejectedValueOnce(new Error("disk full"));
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => media);
+    await act(async () => root.render(createElement(Probe, { messages: [source], resolve })));
+    await startShare();
+    expect((await ready)[0]?.images?.size).toBe(0);
+    expect(Image.getSize).not.toHaveBeenCalled();
+    expect(thumbs.deletes).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 8 * 1024 * 1024 + 1])("rejects an inline file of %s bytes before native sizing", async (size) => {
+    thumbs.size = size;
+    const resolve = vi.fn<ResolveRemoteMediaFn>(async () => media);
+    await act(async () => root.render(createElement(Probe, { messages: [source], resolve })));
+    await startShare();
+    expect((await ready)[0]?.images?.size).toBe(0);
+    expect(Image.getSize).not.toHaveBeenCalled();
+    expect(thumbs.deletes).toHaveBeenCalledOnce();
+  });
+
   it.each(["timeout", "cancel", "selection", "session", "unmount"])(
     "removes queued media work on %s before a free slot can start it",
     async (event) => {
@@ -183,7 +362,7 @@ describe("share image readiness", () => {
     await startShare();
     expect((await ready)[0]?.images?.size).toBe(0);
     expect(resolve).not.toHaveBeenCalled();
-    expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
+    expect(withDownloadedRemoteMediaFile).not.toHaveBeenCalled();
   });
 
   it.each([5, 0, -1, NaN, Infinity, 8 * 1024 * 1024 + 1])(
@@ -195,13 +374,13 @@ describe("share image readiness", () => {
         size,
         url,
       }));
-      vi.mocked(downloadRemoteMediaAsDataUri).mockResolvedValue(media.url);
+      vi.mocked(withDownloadedRemoteMediaFile).mockImplementation(async (_url, _mime, _maxBytes, read) => read(new File("file:///app/cache/download.png")));
       await act(async () =>
         root.render(createElement(Probe, { messages: [source], resolve })),
       );
       await startShare();
       expect((await ready)[0]?.images?.size).toBe(size === 5 ? 1 : 0);
-      expect(downloadRemoteMediaAsDataUri).toHaveBeenCalledTimes(
+      expect(withDownloadedRemoteMediaFile).toHaveBeenCalledTimes(
         size === 5 ? 1 : 0,
       );
     },
@@ -248,6 +427,9 @@ describe("share image readiness", () => {
       expect(result[0]?.images?.size).toBe(1);
       expect(result[0]?.attachments?.[0]?.uri).toBe(uri);
       expect(thumbs.reads).toHaveBeenCalledTimes(1);
+      expect(Image.getSize).toHaveBeenCalledWith("file:///app/sent-attachment-thumbs/paste.png");
+      expect(thumbs.writes).not.toHaveBeenCalled();
+      expect(thumbs.deletes).not.toHaveBeenCalled();
       expect(resolve).not.toHaveBeenCalled();
     },
   );
@@ -358,7 +540,7 @@ describe("share image readiness", () => {
       );
       expect(current.messages).toBe(result);
       expect(result[0]?.images?.size).toBe(2);
-      expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
+      expect(withDownloadedRemoteMediaFile).not.toHaveBeenCalled();
     },
   );
 
@@ -417,7 +599,7 @@ describe("share image readiness", () => {
     await act(async () =>
       finish({ ...media, url: "https://example.com/cancelled.png" }),
     );
-    expect(downloadRemoteMediaAsDataUri).not.toHaveBeenCalled();
+    expect(withDownloadedRemoteMediaFile).not.toHaveBeenCalled();
     await startShare();
     expect((await ready).map((message) => message.clientId)).toEqual(["next"]);
     expect(current.messages[0]?.images?.size).toBe(0);

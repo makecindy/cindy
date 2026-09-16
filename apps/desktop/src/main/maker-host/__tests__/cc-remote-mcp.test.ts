@@ -15,7 +15,9 @@ import {
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
   isFrozenBuiltinPluginAllowed,
 } from '../../mcp-integrations/codexBuiltinToolPolicy.js';
-import { buildCcRemoteHttpMcpServers } from '../cc-remote-mcp.js';
+import { buildCcRemoteHttpMcpServers, prepareCcRemoteQueryMcp } from '../cc-remote-mcp.js';
+import { isBotToolsetAvailableOnTarget } from '../../../shared/botRemoteCapabilities.js';
+import { resolveBotAllowedBuiltinPluginIds } from '../plugins/types.js';
 
 function fakeBridge() {
   const registered = new Map<
@@ -55,9 +57,88 @@ function fakeBridge() {
 
 const HOST = { id: 'host-1' } as unknown as RemoteHost;
 
+describe('prepareCcRemoteQueryMcp', () => {
+  it.each(['bridge', 'forward', 'token', 'missing-helper', 'policy', 'instance'] as const)(
+    'rejects a Bot query on %s failure, cleans partial injection, and permits retry', async (failure) => {
+      const { bridge, registered } = fakeBridge();
+      let recovered = false;
+      const openQuery = vi.fn();
+      const prepare = () => prepareCcRemoteQueryMcp({
+        host: HOST, sessionId: 'bot-session', workingDir: '/remote/bot', botSession: true,
+        sessionInstanceId: !recovered && failure === 'instance' ? undefined : 'bot-instance',
+        makerMemoryEnabled: true,
+        vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]:
+          !recovered && failure === 'policy' ? ['memory'] : ['memory', 'xdt_helper'] },
+      }, {
+        ensureBridgeStarted: async () => !recovered && failure === 'bridge' ? null : {
+          port: 38080, bridge,
+          serverNames: !recovered && failure === 'missing-helper' ? ['cindy_memory'] : ['cindy_memory', 'cindy_helper'],
+        },
+        ensureForward: async () => {
+          if (!recovered && failure === 'forward') throw new Error('forward unavailable');
+          return 47921;
+        },
+        getBridgeToken: () => !recovered && failure === 'token' ? null : 'remote-test-token',
+      });
+
+      await expect(prepare().then(openQuery)).rejects.toThrow();
+      expect(openQuery).not.toHaveBeenCalled();
+      expect(registered.size).toBe(0);
+
+      recovered = true;
+      const injected = await prepare();
+      expect(injected.servers.cindy_helper).toBeDefined();
+      expect(registered.size).toBe(1);
+      injected.cleanup();
+      expect(registered.size).toBe(0);
+    },
+  );
+
+  it.each(['bridge', 'forward'] as const)('keeps optional MCP degradation for ordinary queries (%s)', async (failure) => {
+    const { bridge, registered } = fakeBridge();
+    const onOptionalInjectionError = vi.fn();
+    const injected = await prepareCcRemoteQueryMcp({
+      host: HOST, sessionId: 'ordinary', sessionInstanceId: 'ordinary-instance', workingDir: '/remote/project',
+      vendorOptions: {},
+    }, {
+      ensureBridgeStarted: async () => failure === 'bridge' ? null : { port: 38080, bridge, serverNames: ['cindy_orca'] },
+      ensureForward: async () => { throw new Error('forward unavailable'); },
+      getBridgeToken: () => 'remote-test-token',
+      onOptionalInjectionError,
+    });
+    expect(injected.servers).toEqual({});
+    expect(registered.size).toBe(0);
+    expect(onOptionalInjectionError).toHaveBeenCalledTimes(failure === 'forward' ? 1 : 0);
+  });
+});
+
 describe('buildCcRemoteHttpMcpServers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([true, false])('injects the helper only for an identified Bot (bot=%s)', async (botSession) => {
+    const { bridge, registered } = fakeBridge();
+    const allowed = resolveBotAllowedBuiltinPluginIds([{
+      id: 'xdt_helper',
+      available: isBotToolsetAvailableOnTarget({
+        agentKind: 'claude-code', remoteHostId: HOST.id, toolsetId: 'xdt_helper',
+      }),
+    }], []);
+    const { servers, cleanup } = await buildCcRemoteHttpMcpServers({
+      host: HOST, sessionId: 'bot-session', sessionInstanceId: 'bot-instance', workingDir: '/remote/bot', botSession,
+      vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: allowed },
+    }, {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_helper', 'cindy_orca'], bridge }),
+      ensureForward: async () => 47921, getBridgeToken: () => 'remote-test-token', isCollabEnabled: () => false,
+    });
+    expect(Object.keys(servers)).toEqual(botSession ? ['cindy_helper'] : []);
+    if (botSession) {
+      expect(servers.cindy_helper).toEqual({ type: 'http', url: 'http://127.0.0.1:47921/mcp/cindy_helper?session=bot-session&instance=bot-instance', headers: { Authorization: 'Bearer remote-test-token' } });
+      expect(registered.get('bot-session')).toMatchObject({ sessionInstanceId: 'bot-instance', remoteHostId: 'host-1' });
+    }
+    cleanup();
+    expect(registered.size).toBe(0);
   });
 
   it('returns empty when the bridge is unavailable', async () => {

@@ -15,6 +15,22 @@ export interface BotCompactBoundary {
 
 export type BotCompactRuntimeRefreshOutcome = 'refreshed' | 'not-bot' | 'deferred';
 
+/** Model switching may already bootstrap the latest Profile. Do not close that
+ * fresh handle again: a native thread may not persist a rollout until its first
+ * turn. An unchanged (including busy) handle still needs the safe refresh path.
+ */
+export async function refreshBotRuntimeAfterModelSelection<T>(deps: {
+  current(): T | undefined;
+  select(): Promise<void>;
+  refresh(session: T): Promise<BotCompactRuntimeRefreshOutcome>;
+}): Promise<BotCompactRuntimeRefreshOutcome> {
+  const before = deps.current();
+  await deps.select();
+  const after = deps.current();
+  if (!after || after !== before) return 'not-bot';
+  return deps.refresh(after);
+}
+
 export interface BotCompactRuntimeRefreshDeps {
   hasPendingInteraction(sessionId: string): boolean;
   refresh(

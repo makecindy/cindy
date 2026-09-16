@@ -311,6 +311,8 @@ export interface TranslateRequestOptions {
    * 省略 = 不回放任何带 signature 的 reasoning(保守:无法证明出处即不回放)。
    */
   providerPrefix?: string;
+  /** Preserve connection-scoped native tool state when thinking is disabled. */
+  preserveReasoningState?: boolean;
   /**
    * 上游自带的服务端工具声明(如 xAI 的 `{ type: 'x_search' }`),由 provider 配置按 model 决定。
    * 恒定追加在 function tools **之后**,顺序稳定,保证请求前缀在会话内逐轮一致。
@@ -338,7 +340,7 @@ export function translateRequest(
   const input: ResponsesInputItem[] = [];
   const reasoningReplay: ReasoningReplayOpts = {
     providerPrefix: opts.providerPrefix ?? '',
-    dropAll: opts.reasoningEffort === 'none',
+    dropAll: opts.reasoningEffort === 'none' && !opts.preserveReasoningState,
   };
   for (const msg of req.messages ?? []) {
     input.push(...messageToInputItems(msg, reasoningReplay));

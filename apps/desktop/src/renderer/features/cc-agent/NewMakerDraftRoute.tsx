@@ -1,3 +1,4 @@
+import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 /**
  * NewMakerDraftRoute —— "/cc-agent/new" 路由组件:transient draft,无后端 session。
  * ---------------------------------------------------------------------------
@@ -1237,15 +1238,17 @@ export function NewMakerDraftRoute() {
     () => hasAnyModelEngineOverride() || hasAnyProviderModelOverride(),
     [modelEnginePrefsVersion, modelPresetVersion],
   );
+  const defaultVisibilityVersion = useModelVisibilityVersion();
   const suggestedDefaultTuple = useMemo(
     () =>
       resolveNewMakerDefaultTuple({
+        isModelEnabled,
         providers: localProviders,
         providersLoading: localProvidersLoading,
         availableAgents: availableVendors,
         availableAgentsLoaded,
       }),
-    [localProviders, localProvidersLoading, availableVendors, availableAgentsLoaded],
+    [localProviders, localProvidersLoading, availableVendors, availableAgentsLoaded, defaultVisibilityVersion],
   );
   useEffect(() => {
     // 远程主机 / device-link 的可用 Harness 与来源属于执行端，不能拿控制端本机登录态替它选。
@@ -2020,20 +2023,7 @@ export function NewMakerDraftRoute() {
   const chatInitialPermissionMode = isDeviceLinkDraft
     ? (deviceLinkInitial?.permissionMode ?? chatPrefs.permissionMode)
     : chatPrefs.permissionMode;
-  // 显式来源只在**仍是当前生效来源**时才带进建会话。
-  //
-  // 只比对「模型有没有被校准换掉」不够:存储的来源断开 / 不再提供该模型、而另一个已连接
-  // 来源恰好提供同一个 model id 时,校准会原样保留模型 id(它确实可用),相等条件因此成立,
-  // 却把已经失效的来源一起带了下去 —— 而 effectiveSourceId 早已解析到另一个来源。送出去
-  // 就是一对 model / provider 错配,首条请求会打到不服务该模型的上游(PR #548 review)。
-  //
-  // 但「置 null = 交回默认路由」只在两边会解析到同一个来源时才成立:main 的默认解析吃的是
-  // **未过滤**的目录,被用户隐藏、被 SSH 订阅直连排除、被 chat-bridge 排除掉的来源在那边
-  // 依然是候选。此时 UI 高亮 B、main 却路由到 A,会话就从一个用户看不见的来源发出去。所以
-  // 只在默认路由确实落回 effectiveSourceId 时才省略它,不一致时显式带上(PR #548 review)。
-  // 这里的「默认」还必须覆盖 main 的 spawn-aware 语义:Claude OAuth 会话收到 providerId=null
-  // 且存在 Gateway key 时会按 agent 默认走 XD,即使 XD 的动态目录并不提供当前模型。只比较
-  // effectiveSourceIdForModel 的模型级默认会把这种分叉误判成「可安全省略」(issue #1196)。
+  // 显式连接始终随草稿提交；未指定连接时才按 UI 与 main 的默认来源差异决定是否固化。
   const localProviderIdForDraft = useMemo<string | null>(() => {
     return resolveDraftSessionProviderId({
       providers: localProviders,
@@ -2049,26 +2039,13 @@ export function NewMakerDraftRoute() {
     calibratedDraftModel,
     capabilityAgentKind,
   ]);
-  /**
-   * 传给 ChatInput 的初始来源 / 「新建目标」实际提交的来源。
-   *
-   * 本机分支已经用 effectiveSourceIdForModel 校准过(见 localProviderIdForDraft);**device-link
-   * 分支原来是原样透传** dlSel.providerId —— 那是个漏洞(Codex review P1):被控端把该来源断开 /
-   * 移除、或它不再提供当前模型之后,这个值仍留在草稿里。普通发送不受影响(ChatInput 内部会用
-   * effectiveSourceId 重算,失效即回落),但**「新建目标」是直接拿这个值提交给 maker:create-session**
-   * 的 —— 于是会把一个未认证的来源写进 sessions.provider_id,新目标起不来。
-   *
-   * 所以在**派生处**统一校准,而不是在某个消费点补一次:用与 main 同源、且注释明确要求「新会话 /
-   * 切模型 / worker / schedule 一律用」的 effectiveSourceIdForModel,按**被控端**目录 + 草稿当前
-   * 模型复算。仍有效则原样保留;失效则落到被控端对该模型的原生默认来源 —— 这也正是 ChatInput 高亮
-   * 给用户看的那一个,提交值与界面所见因此一致(比一律置 null 更贴合「所见即所得」)。
-   * 目录尚未加载完时可能解析为 null,无害:发送 / 建目标都被 deviceProvidersLoading 三重 gate 挡着。
-   */
+  // 本机与远程草稿均保留明确选中的连接。显示可用性与提交身份分开，
+  // 防止控制端暂时缺少目录时把账号 A 变成默认账号 B。
   const chatInitialProviderId = useMemo<string | null>(() => {
     if (!isDeviceLinkDraft) return localProviderIdForDraft;
-    return effectiveSourceIdForModel(
+    return deviceLinkInitial?.providerId || effectiveSourceIdForModel(
       deviceProviders,
-      deviceLinkInitial?.providerId ?? null,
+      null,
       draftInitialModel,
       capabilityAgentKind,
     );
@@ -2396,7 +2373,11 @@ export function NewMakerDraftRoute() {
       // (当 device-link 草稿活跃时 chatPrefs.model 是旧的 controller-local 值)。
       // bridge 模型(chatgpt/ / xai/)在远程模式不可用(不经本地 compat-proxy),需降级。
       // 非 bridge 模型也必须在已连接的本地来源中存在,否则 SSH 会话首消息会被阻塞。
-      const sshConnected = connectedProvidersForAgent(localProviders, capabilityAgentKind);
+      const sshConnected = filterChatBridgedCodexProviders(
+        connectedProvidersForAgent(localProviders, capabilityAgentKind),
+        capabilityAgentKind,
+        true,
+      );
       // admissionFiltered:SSH 候选是「挑一个可路由模型」的清单,停用条目与能力模型
       // 不参与(降级兜底也不能落到停用模型上,PR #744 review)。
       const sshVisibleModels = deriveModelsFromProviders(sshConnected, capabilityAgentKind, {
@@ -2413,18 +2394,17 @@ export function NewMakerDraftRoute() {
       // chatPrefs.providerId(可能是旧的 controller-local 值)。
       const rawProviderId = chatInitialProviderId ?? null;
       const sshLocalSourceId = effectiveSourceIdForModel(
-        localProviders,
+        sshConnected,
         rawProviderId,
         sshModel,
         capabilityAgentKind,
       );
-      // 只有用户显式选中的来源在本地仍可用时才保留;否则 null = 走默认路由。
-      const sshProviderId =
-        rawProviderId && sshLocalSourceId === rawProviderId ? rawProviderId : null;
+      // 固定已通过 SSH 筛选的实际来源，避免 null 默认路由重新选回被排除的本机账号。
+      const sshProviderId = sshLocalSourceId;
       // fast mode:来源不支持就关闭;支持时保留用户在 composer 里看到的 effectiveFastMode
       // (device-link 草稿活跃时来自 dlSel/deviceLinkInitial,本地草稿来自 per-model 记忆)。
       const sshSourceSupportsFast = sessionModelSupportsFastMode(
-        localProviders,
+        sshConnected,
         sshProviderId,
         sshModel,
         capabilityAgentKind,
@@ -2433,7 +2413,7 @@ export function NewMakerDraftRoute() {
       // effort: 用 draftInitialEffort(用户在 composer 里看到的值)作 currentEffort,
       // 再由 resolveNewMakerDraftEffort 按本地 SSH model 支持的 levels 做 clamp。
       const sshLocalProvider = sshLocalSourceId
-        ? localProviders.find((p) => p.id === sshLocalSourceId)
+        ? sshConnected.find((p) => p.id === sshLocalSourceId)
         : undefined;
       const sshLocalModelDesc = sshLocalProvider
         ? getModel(sshLocalProvider, sshModel, capabilityAgentKind)

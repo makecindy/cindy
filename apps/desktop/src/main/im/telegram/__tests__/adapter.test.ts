@@ -1,11 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { IMMessageEvent } from '@cindy/im';
 
 import { buildTelegramAdapter } from '../adapter';
 import { ui } from '../uiText';
+vi.mock('../behaviorStore', () => ({
+  readTelegramPersona: () => ({ botName: 'Private persona', soul: 'Private instructions' }),
+}));
 
 describe('Telegram group history access scope', () => {
   const adapter = buildTelegramAdapter({} as never, {} as never);
+
+  it('saves the actual quoted text but excludes persona and technical instructions', async () => {
+    const result = await adapter.prepareAgentTurnText?.({
+      senderId: '123',
+      text: 'question',
+      replyContext: { author: 'Alice', text: 'quoted text' },
+    } as IMMessageEvent);
+    expect(result?.agentText).toContain('Private instructions');
+    expect(result?.contextSnapshot).toEqual({ replyContext: '[Alice] quoted text', replyMessageCount: 1 });
+  });
 
   it('only lets owner-triggered group turns omit the policy in Full access', () => {
     const groupEvent = {

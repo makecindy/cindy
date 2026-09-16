@@ -35,7 +35,7 @@
 | 包 | 一句话用途 | 主要使用方 |
 |---|---|---|
 | `maker-core` | Cindy 核心：agent 抽象（BaseAgent）、session 编排与事件流，零 Electron 依赖；改动前必读 [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md) | desktop、lizi-mcps、orca-workflow |
-| [`design-tokens`](../../packages/design-tokens/README.md) | DTCG reference / semantic / 薄 component 影子字典；当前与冻结快照一致，未来设计值生成合同见 README | 当前影子层，无生产消费者；后续按设计治理路线 DS-8（Desktop）/ DS-10（Mobile）接管 |
+| [`design-tokens`](../../packages/design-tokens/README.md) | DTCG reference / semantic / 薄 component 字典与 Terrazzo 生成合同 | DS-8 已接 Desktop 生产颜色、主题与通用基础；DS-9 消费现有链路，Mobile 后续独立接管 |
 | `maker-shared` | 桌面与手机共享的展示层契约模型，零 React／Electron／Expo 依赖 | desktop + mobile |
 | `maker-cc-manager` | cc-remote：跑在远程 SSH 机器上的 NDJSON RPC 守护进程，封装 Claude Agent SDK，向本地桌面暴露多会话／detach-reattach 能力 | desktop（remote-ssh） |
 | `maker-pi-manager` | pi-remote：跑在远程 SSH 机器上的 PI 单例 daemon（TS NDJSON RPC + unix socket bridge），持有 pi 会话、条件 restart、空闲回收 | desktop（remote-ssh） |
@@ -44,7 +44,7 @@
 | `orca-workflow` | Orca 多 worker 协同的 lead 侧：MCP 桥接 + lead prompt；改动前必读 [`orca-team-architecture.md`](orca-team-architecture.md) | desktop |
 | `device-link` | 跨设备远程控制（同账号互联）：envelope 协议、IPC 隧道 allowlist、重连／心跳；零依赖，WS 实现由 host 注入 | desktop + mobile |
 | `auth-client` | 平台无关的 Cindy auth-server 客户端契约（zod） | desktop + mobile |
-| `model-providers` | 模型供应商目录 + 路由抽象（Anthropic／OpenAI／XD），纯逻辑 | desktop + mobile |
+| `model-providers` | 模型供应商目录、Registry 资料合并与路由抽象；先读 [模型配置与下发](model-catalog-maintenance.md) 获取代码导航 | desktop + mobile |
 | `anthropic-compat-proxy` | 本地回环 HTTP 代理：剥离 Anthropic 专有字段，让 Claude Code SDK 可经网关访问非 Anthropic 后端 | desktop |
 | `anthropic-responses-bridge` | 挂载在 `anthropic-compat-proxy` 回环 HTTP 代理内部的进程内协议转换处理器：作为 `RoutingDecision.localHandler` 完成 Anthropic Messages API ↔ OpenAI Responses API 转换 | desktop |
 | `responses-anthropic-bridge` | 本地 Responses → Anthropic Messages 桥：请求、图片／工具／thinking 转换与 Responses SSE 回译 | desktop |

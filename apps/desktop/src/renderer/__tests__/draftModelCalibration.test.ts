@@ -786,4 +786,14 @@ describe('resolveDraftSessionProviderId', () => {
       }),
     ).toBe('xd');
   });
+
+  it.each([null, 'account-b'])('不会把失效的显式账号替换成 %s', (effectiveProviderId) => {
+    const other = provider('account-b', true, {
+      'claude-code': [model('same-model')],
+    });
+    expect(resolveDraftSessionProviderId({
+      providers: [other], agent: 'claude-code', model: 'same-model',
+      explicitProviderId: 'account-a', effectiveProviderId,
+    })).toBe('account-a');
+  });
 });

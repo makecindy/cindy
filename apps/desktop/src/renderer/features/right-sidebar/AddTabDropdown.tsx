@@ -23,6 +23,7 @@ import {
   ListTodo,
   Smartphone,
   Terminal,
+  Wrench,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -118,6 +119,14 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     icon: Terminal,
     order: 30,
     enabled: true,
+  },
+  {
+    kind: 'cindy-make',
+    labelKey: 'settings.cindyMake.title',
+    icon: Wrench,
+    order: 12,
+    enabled: true,
+    singleton: true,
   },
 ];
 

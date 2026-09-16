@@ -1,3 +1,5 @@
+import type { BaseModel, ModelMetadata } from "./modelMetadataLayers.js";
+import type { LocalModelCatalog } from "./localModelCatalog.js";
 /**
  * Client-owned DTOs for the Model Access HTTP/catalog boundary.
  *
@@ -12,61 +14,81 @@ export const MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION = 2 as const;
 export const MODEL_ACCESS_CATALOG_V3_SCHEMA_VERSION = 3 as const;
 export const MODEL_ACCESS_CATALOG_SCHEMA_VERSION = 4 as const;
 export const MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION = 5 as const;
-export const MODEL_ACCESS_MODELS_PATH = '/api/model-access/models' as const;
+export const MODEL_ACCESS_MODELS_PATH = "/api/model-access/models" as const;
 
-export const MODEL_ACCESS_CURRENCIES = ['CNY', 'USD'] as const;
+export const MODEL_ACCESS_CURRENCIES = ["CNY", "USD"] as const;
 export type ModelCurrency = (typeof MODEL_ACCESS_CURRENCIES)[number];
 
-export const MODEL_ACCESS_V2_AGENTS = ['claude-code', 'codex'] as const;
-export const MODEL_ACCESS_AGENTS = ['claude-code', 'codex', 'pi'] as const;
+export const MODEL_ACCESS_V2_AGENTS = ["claude-code", "codex"] as const;
+export const MODEL_ACCESS_AGENTS = ["claude-code", "codex", "pi"] as const;
 export type ModelAgent = (typeof MODEL_ACCESS_AGENTS)[number];
 export type ModelAccessV2Agent = (typeof MODEL_ACCESS_V2_AGENTS)[number];
 
 export const MODEL_ACCESS_WIRE_PROTOCOLS = [
-  'anthropic-messages',
-  'openai-responses',
-  'openai-completions',
-  'google-generative-ai',
+  "anthropic-messages",
+  "openai-responses",
+  "openai-completions",
+  "google-generative-ai",
 ] as const;
-export type ModelAccessWireProtocol = (typeof MODEL_ACCESS_WIRE_PROTOCOLS)[number];
+export type ModelAccessWireProtocol =
+  (typeof MODEL_ACCESS_WIRE_PROTOCOLS)[number];
 
 export const MODEL_ACCESS_MEDIA_CAPABILITIES = [
-  'image.generate',
-  'image.edit',
-  'video.generate',
-  'video.image_to_video',
+  "image.generate",
+  "image.edit",
+  "video.generate",
+  "video.image_to_video",
 ] as const;
 export type MediaCapability = (typeof MODEL_ACCESS_MEDIA_CAPABILITIES)[number];
 
 export const MODEL_ACCESS_EFFORTS = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-  'ultra',
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
 ] as const;
 export type ModelEffort = (typeof MODEL_ACCESS_EFFORTS)[number];
 
 export const MODEL_REGISTRY_LEGACY_SCHEMA_VERSION = 1 as const;
 export const MODEL_REGISTRY_SCHEMA_VERSION = 2 as const;
 export const MODEL_REGISTRY_V3_SCHEMA_VERSION = 3 as const;
+export const MODEL_REGISTRY_V4_SCHEMA_VERSION = 4 as const;
+export const MODEL_REGISTRY_V5_SCHEMA_VERSION = 5 as const;
 export const MODEL_NATIVE_APIS = [
-  'anthropic-messages',
-  'openai-responses',
-  'openai-completions',
-  'google-generative-ai',
+  "anthropic-messages",
+  "openai-responses",
+  "openai-completions",
+  "google-generative-ai",
+  "openai-images",
+  "openai-videos",
+  "xai-videos",
+  "openai-audio-speech",
+  "openai-audio-transcriptions",
+  "openai-realtime",
+  "openai-embeddings",
 ] as const;
 export type ModelNativeApi = (typeof MODEL_NATIVE_APIS)[number];
-export const MODEL_REGISTRY_STATUSES = ['preview', 'active', 'deprecated', 'retired'] as const;
+export const MODEL_REGISTRY_STATUSES = [
+  "preview",
+  "active",
+  "deprecated",
+  "retired",
+] as const;
 export type ModelRegistryStatus = (typeof MODEL_REGISTRY_STATUSES)[number];
 
-export const MODEL_PRICE_VARIANTS = ['standard', 'priority', 'batch', 'fast'] as const;
+export const MODEL_PRICE_VARIANTS = [
+  "standard",
+  "priority",
+  "batch",
+  "fast",
+] as const;
 export type ModelPriceVariant = (typeof MODEL_PRICE_VARIANTS)[number];
 
 export interface ModelReferencePriceSource {
-  kind: 'provider-official';
+  kind: "provider-official";
   url: string;
   verifiedAt: string;
 }
@@ -86,7 +108,19 @@ export interface ModelReferencePrice {
   source: ModelReferencePriceSource;
 }
 
+/** A manufacturer's tariff for a named market, independent of any reseller. */
+export interface ModelReferencePriceGroup {
+  id: string;
+  prices: ModelReferencePrice[];
+}
+
 export interface ModelRegistryRoute {
+  /** V5: explicitly selects a tariff on the entry's public model. */
+  referencePriceGroup?: string;
+  defaults?: ModelMetadata;
+  forceOverrides?: ModelMetadata;
+  overrideReason?: string;
+  overrideVerifiedAt?: string;
   providerId: string;
   modelId: string;
   agents: ModelAccessV2Agent[];
@@ -103,6 +137,7 @@ export interface ModelAgentOverride {
 }
 
 interface ModelRegistryEntryBase {
+  modelRef?: string;
   id: string;
   name: string;
   routes: ModelRegistryRoute[];
@@ -123,7 +158,22 @@ export interface ModelRegistryEntryV1 extends ModelRegistryEntryBase {
   newSessionDefault?: never;
 }
 
-export interface ModelRegistryEntry extends ModelRegistryEntryBase {
+export interface ModelRegistryAgentOverride extends Omit<
+  ModelAgentOverride,
+  "defaultEffort"
+> {
+  defaultEffort?: ModelEffort | null;
+}
+
+export interface ModelRegistryEntry
+  extends
+    Pick<ModelMetadata, "mode" | "modalities" | "officialDocs">,
+    Omit<ModelRegistryEntryBase, "defaultEffort" | "perAgent"> {
+  /** V4 entry-level image capability default. */
+  supportsImageInput?: boolean;
+  /** V4 only: null explicitly clears an inherited default. */
+  defaultEffort?: ModelEffort | null;
+  perAgent?: Partial<Record<ModelAgent, ModelRegistryAgentOverride>>;
   newSessionDefault?: ModelAccessV2Agent[];
   /** V3: model's canonical API, independent of any harness. Null explicitly means unverified. */
   nativeApi?: ModelNativeApi | null;
@@ -143,7 +193,11 @@ export interface ModelRegistry extends ModelRegistryBase {
   schemaVersion:
     | typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION
     | typeof MODEL_REGISTRY_SCHEMA_VERSION
-    | typeof MODEL_REGISTRY_V3_SCHEMA_VERSION;
+    | typeof MODEL_REGISTRY_V3_SCHEMA_VERSION
+    | typeof MODEL_REGISTRY_V4_SCHEMA_VERSION
+    | typeof MODEL_REGISTRY_V5_SCHEMA_VERSION;
+  baseModels?: BaseModel[];
+  localModels?: LocalModelCatalog;
   models: ModelRegistryEntry[];
   /** V3: route-scoped rules for new members of established model families. */
   nativeApiRules?: ModelNativeApiRule[];
@@ -210,7 +264,10 @@ export interface ModelModalities {
   output: string[];
 }
 
-interface ModelCatalogAgentOverride extends Omit<ModelAgentOverride, 'defaultEffort'> {
+interface ModelCatalogAgentOverride extends Omit<
+  ModelAgentOverride,
+  "defaultEffort"
+> {
   /** Older Model Access responses use null to mean that no effort is preferred. */
   defaultEffort?: ModelEffort | null;
 }
@@ -245,8 +302,8 @@ export interface ModelCatalogEntry extends ModelCatalogEntryBase {
   newSessionDefault?: ModelAgent[];
 }
 
-export type ModelAccessAvailability = 'available' | 'requires_payment';
-export type ModelAccessAccountTier = 'free' | 'paid' | 'not_applicable';
+export type ModelAccessAvailability = "available" | "requires_payment";
+export type ModelAccessAccountTier = "free" | "paid" | "not_applicable";
 
 export interface ModelCatalogEntryV5 extends ModelCatalogEntry {
   availability: ModelAccessAvailability;
@@ -289,4 +346,5 @@ export interface ListModelsResponseV5 extends ListModelsResponse {
 }
 
 /** Result returned by local Model Access boundary parsers. */
-export type ModelAccessParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+export type ModelAccessParseResult<T> =
+  { ok: true; value: T } | { ok: false; error: string };

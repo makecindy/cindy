@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import type {
   PiPackageMutationAction,
+  PiPackageMutationResult,
   PiPackageResourceKind,
   PiPackageResourceView,
   PiPackageRuntimeRequirement,
@@ -37,6 +38,49 @@ const ICON_ACTION_CLASS = cn(
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
   'disabled:cursor-not-allowed disabled:opacity-50',
 );
+
+const PACKAGE_RECOVERY_KEYS = {
+  'check-credentials': 'settings.piPackages.recovery.check-credentials',
+  'check-permissions': 'settings.piPackages.recovery.check-permissions',
+  'check-network': 'settings.piPackages.recovery.check-network',
+  'check-source': 'settings.piPackages.recovery.check-source',
+  'check-version': 'settings.piPackages.recovery.check-version',
+  'check-runtime': 'settings.piPackages.recovery.check-runtime',
+  'free-disk-space': 'settings.piPackages.recovery.free-disk-space',
+  'check-build-dependencies': 'settings.piPackages.recovery.check-build-dependencies',
+  'refresh-package-state': 'settings.piPackages.recovery.refresh-package-state',
+  'inspect-state-before-retry': 'settings.piPackages.recovery.inspect-state-before-retry',
+} as const satisfies Record<NonNullable<PiPackageMutationResult['diagnostics']>[number]['recovery'], string>;
+
+function packageRecoveryKey(recovery: unknown) {
+  return typeof recovery === 'string' && Object.prototype.hasOwnProperty.call(PACKAGE_RECOVERY_KEYS, recovery)
+    ? PACKAGE_RECOVERY_KEYS[recovery as keyof typeof PACKAGE_RECOVERY_KEYS]
+    : PACKAGE_RECOVERY_KEYS['inspect-state-before-retry'];
+}
+
+function packageFailureMessage(message: string, t: ReturnType<typeof useTranslation>['t']): string {
+  // Electron preserves only code/message. Decode the existing optional suffix
+  // here; keep legacy plain messages, but never render machine diagnostic JSON.
+  const offset = message.lastIndexOf(' {');
+  if (offset < 0) return message;
+  try {
+    const diagnostic = JSON.parse(message.slice(offset + 1));
+    if (!diagnostic || !['prepare', 'native-command'].includes(diagnostic.phase)
+      || !['failed', 'timed-out', 'unknown'].includes(diagnostic.outcome)) {
+      return t('settings.piPackages.operationFailed');
+    }
+    const statusKey = diagnostic.outcome === 'timed-out'
+      ? 'settings.piPackages.failure.commandTimedOut'
+      : diagnostic.outcome === 'unknown'
+        ? 'settings.piPackages.failure.commandUnknown'
+        : diagnostic.phase === 'prepare'
+          ? 'settings.piPackages.failure.commandNotStarted'
+          : 'settings.piPackages.failure.commandFailed';
+    return `${t(statusKey)} ${t(packageRecoveryKey(diagnostic.recovery))}`;
+  } catch {
+    return t('settings.piPackages.operationFailed');
+  }
+}
 
 type PiPackagesLoadState = 'loading' | 'ready' | 'error';
 
@@ -201,10 +245,11 @@ export function PiPackagesSection() {
         }
         if (action === 'install' && result.affectedPackage?.enabled) setSource('');
       }
-      // Installation success means installed and enabled. Keep this Renderer
-      // assertion even though Main enforces the same invariant so an older or
-      // malformed receipt can never produce a false success toast.
-      if (action === 'install' && result.affectedPackage?.enabled !== true) {
+      // A confirmed native success survives a missing Cindy projection. Older
+      // receipts still need their enabled-package evidence; changed alone is
+      // not proof that installation succeeded.
+      if (action === 'install' && result.nativeCommandSucceeded !== true
+        && result.affectedPackage?.enabled !== true) {
         toast.error(t('settings.piPackages.operationFailed'));
         return false;
       }
@@ -226,12 +271,20 @@ export function PiPackagesSection() {
       if (result.projectionUnavailable) {
         toast.error(t('settings.piPackages.failure.stateUnavailable'));
       }
+      const diagnostic = result.diagnostics?.find((entry) => entry.phase === 'cindy-analysis');
+      if (diagnostic) {
+        // Projection failure must not hide the host's recovery decision.
+        // Timeout/unknown outcomes may require checking state before retrying.
+        const recoveryKey = packageRecoveryKey(diagnostic.recovery);
+        toast.error(`${t('settings.piPackages.warning.analysisIncomplete')} ${t(recoveryKey)}`);
+      }
       return true;
     } catch (error) {
       const ipcError = extractIpcError(error);
+      if (ipcError?.code === 'MUTATION_CANCELLED') return false;
       toast.error(
         ipcError?.code === 'PI_PACKAGE_MUTATION_FAILED'
-          ? ipcError.message
+          ? packageFailureMessage(ipcError.message, t)
           : t('settings.piPackages.operationFailed'),
       );
       return false;

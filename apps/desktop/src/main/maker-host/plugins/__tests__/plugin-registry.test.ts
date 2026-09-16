@@ -379,6 +379,15 @@ describe('PluginRegistry — scoped priority', () => {
 
   // ── listPlugins ───────────────────────────────────────────────────────
 
+  it('exposes hosted and essential tools to capability pickers without changing authorization', async () => {
+    await registry.setProjectEnabled('browser', workingDir, false);
+    const list = await registry.listPlugins(workingDir, true);
+    expect(list.find((item) => item.id === 'browser')).toMatchObject({ effectiveEnabled: false });
+    expect(list.find((item) => item.id === 'scheduler')).toMatchObject({ essential: true, effectiveEnabled: true });
+    expect(list.some((item) => item.id === 'contacts')).toBe(true);
+    expect((await registry.listPlugins(workingDir)).some((item) => item.id === 'scheduler')).toBe(false);
+  });
+
   it('listPlugins returns project-scoped builtin plugins (essential + hosted-elsewhere hidden)', async () => {
     const list = await registry.listPlugins(workingDir);
     const visiblePluginIds = registry

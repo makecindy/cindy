@@ -66,6 +66,49 @@ describe('mobile message media thumbnail wiring', () => {
     expect(mediaPreview).not.toContain('mediaCaption');
   });
 
+  it('uses delivered media and file renderers above the pending text bubble', () => {
+    const pending = readTextLf(resolve(process.cwd(), 'src/session/PendingSendBubble.tsx'), 'utf8');
+    const pendingBranch = rendererSource.slice(
+      rendererSource.indexOf("case 'pending_send':"),
+      rendererSource.indexOf('const RenderListItemView'),
+    );
+    expect(pendingBranch).toContain('<PendingAttachmentImage');
+    expect(pendingBranch).not.toContain('previewable: true');
+    const pendingImage = rendererSource.slice(
+      rendererSource.indexOf('function PendingAttachmentImage'),
+      rendererSource.indexOf('function MediaPreview'),
+    );
+    // iOS ph:// 必须沿用相册托盘的 Expo 解码器，并从加载结果量尺寸。
+    expect(rendererSource).toContain("import { Image as ExpoImage } from 'expo-image'");
+    expect(pendingImage).toContain('<ExpoImage');
+    expect(pendingImage).toContain('contentFit="contain"');
+    expect(pendingImage).toContain('source: { width, height }');
+    expect(pendingImage).toContain('attachmentImageDisplaySize');
+    expect(pendingImage).toContain('styles.attachmentImageWrap');
+    expect(pendingImage).not.toContain('Image.getSize');
+    expect(pendingBranch).toContain('<FileChip');
+    expect(pendingBranch).toContain('<MarkdownBody');
+    expect(pendingBranch).not.toContain('onOpenPayload=');
+    expect(pending.indexOf('<AttachmentThumbStrip')).toBeLessThan(pending.indexOf('{hasBody ?'));
+    expect(pending).toContain('item.fileNames.map(renderFile)');
+    expect(pending).not.toContain('height: 72');
+    expect(pending).not.toContain('contentFit="cover"');
+  });
+
+  it('does not expose a managed-media press handler without a payload viewer', () => {
+    const markdownBody = rendererSource.slice(
+      rendererSource.indexOf('function MarkdownBody'),
+      rendererSource.indexOf('function renderInline'),
+    );
+    expect(markdownBody).toContain('const openMarkdownMedia = useMemo(() => onOpenPayload');
+    expect(markdownBody).toContain(': undefined, [onOpenPayload]);');
+    const mediaCallback = markdownBody.slice(
+      markdownBody.indexOf('const openMarkdownMedia'),
+      markdownBody.indexOf('// Preserve the inline renderer'),
+    );
+    expect(mediaCallback).not.toContain('if (!onOpenPayload) return;');
+  });
+
   it('exempts images from close-time release in the payload viewer', () => {
     expect(rendererSource).toContain("remoteMedia.kind !== 'image'");
     // 查看器取件插队头;重试按钮显式 forceRefresh 穿透负缓存(挂载取件不传)

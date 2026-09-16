@@ -65,9 +65,9 @@ const UNKNOWN_VALUE = '—';
  * 没有可收缩的宽度而失效。max-w-0 让这一列先塌到 0, w-full 再让它领走余量。
  */
 const TH_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-11 font-medium text-[var(--text-tertiary)]';
+  'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-12 font-medium text-[var(--text-secondary)]';
 const TD_CLASS =
-  'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-12 tabular-nums';
+  'whitespace-nowrap border-b border-[var(--border-default)] py-2 pl-3 text-right text-13 tabular-nums';
 const TASK_COL_CLASS = 'w-full max-w-0 pl-0';
 
 /** 与 SessionItem 一致: 取两者中较新的值, 兼容只写 userSendAt 的存量行。 */
@@ -254,7 +254,7 @@ export function useTopTokenSessions(
 export function UsageTaskTable({
   rows,
   rangeLabel,
-  }: {
+}: {
   rows: UsageHistorySession[];
   rangeLabel: string;
 }): React.JSX.Element {
@@ -297,7 +297,7 @@ export function UsageTaskTable({
                     className="size-2 shrink-0 rounded-[2px]"
                     style={{ backgroundColor: usageRankColor(index) }}
                   />
-                  <span className="truncate" title={session.title}>
+                  <span className="truncate font-medium" title={session.title}>
                     {session.title}
                   </span>
                 </span>

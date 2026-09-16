@@ -8,6 +8,7 @@ export type ComposerWebMessage =
    * 开始的听写掐断(2026-07 实机日志确认)。
    */
   | { type: 'ready' | 'focus' | 'blur' }
+  | { type: 'pong'; id: number }
   | { type: 'height'; height: number }
   | { type: 'change'; document: unknown; documentId?: number }
   | { type: 'selection'; documentId: number; before: ComposerSelectionPrefix; through: ComposerSelectionPrefix }
@@ -39,6 +40,7 @@ export function parseComposerWebMessage(raw: string): ComposerWebMessage | null 
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== 'object') return null;
     const message = value as Record<string, unknown>;
+    if (message.type === 'pong') return isOffset(message.id) ? { type: 'pong', id: message.id } : null;
     if (
       message.type === 'ready'
       || message.type === 'focus'

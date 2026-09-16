@@ -1,3 +1,4 @@
+import { isLegacyGptContextProfile } from './legacy-context-profiles.js';
 /**
  * catalog-to-descriptors —— 把 @cindy/model-providers 目录派生成 maker-core 的 per-agent
  * availableModels（ModelDescriptor[]）。
@@ -160,6 +161,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // availableModels 是旧 mobile / device-link 等消费方的新选择清单，不能依赖下游
       // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
       const userProvider = provider.source === 'user';
+      if (isLegacyGptContextProfile(provider, m.id)) continue;
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
       const descriptor = toDescriptor(m, agent, {
         preserveExplicitPiEfforts:
@@ -246,6 +248,22 @@ export function resolvePiGatewayDescriptorProviderId(
  * 返回 null 一律意味着「不收敛」，也就是改动前的行为（fail-safe）。
  */
 export { resolveVerifiedContextWindow } from '../../shared/sessionContextWindow';
+
+/** Resolve settings identity without borrowing a same-name model's provider. */
+export function resolveModelContextProviderId(
+  catalog: Pick<Catalog, 'providers'>, agent: AgentKind, providerId: string | null | undefined, modelId: string,
+  implicitDefaultProviderId?: string | null,
+): string | null {
+  if (agent === 'pi' && (providerId == null || providerId === 'cindy')) {
+    return resolvePiGatewayDescriptorProviderId(providerId);
+  }
+  if (providerId) return providerId;
+  const candidates = catalog.providers.filter((provider) => provider.routing[agent]?.disabled !== true &&
+    provider.models[agent]?.some((model) => model.id === modelId));
+  if (candidates.length === 1) return candidates[0]!.id;
+  return implicitDefaultProviderId && candidates.some((provider) => provider.id === implicitDefaultProviderId)
+    ? implicitDefaultProviderId : null;
+}
 
 /**
  * The model editor's default window for this exact provider/harness route.

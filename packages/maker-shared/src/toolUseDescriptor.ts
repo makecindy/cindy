@@ -1,4 +1,5 @@
 import { basenameRemotePath } from './filePreview.js';
+import { parseMessageToolUse } from './messageNormalize.js';
 import { normalizeDisplayCommand } from './commandDisplay.js';
 import {
   commandIntentFromActions,
@@ -21,7 +22,7 @@ import {
  *   `dynamic:ns:tool` / `collab:tool` / `web_search`。
  * - pi：内置工具名全小写（bash/read/edit/write/grep/find/ls），文件参数字段为
  *   `path`（fileDescriptor 已双认 file_path/path）；bash 无 description 字段，
- *   桥接 MCP 复用 Claude Code 的 `mcp__server__tool` 形态。
+ *   桥接 MCP 复用 Codex 的 `mcp:server:tool` 形态，保留 server 中的双下划线。
  */
 
 // ── 工具名拆解 ───────────────────────────────────────────────────────────────
@@ -251,6 +252,7 @@ const DETAIL_MAX_CHARS = 80;
  * generic（文件/搜索/Web 类）或空串回退（command 类）。
  */
 export function describeToolUse(toolName: string, input: unknown): ToolUseDescriptor {
+  ({ toolName, input } = parseMessageToolUse({ role: 'tool_use', content: { toolName, input } }));
   const inp = readRecord(input);
 
   const parsed = parseToolName(toolName);

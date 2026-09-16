@@ -1,13 +1,15 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { net } from 'electron';
 import { getCurrentUserId } from '../../authManager';
 import type { StoredInstall } from '../registry/types';
 import { registryService } from '../registry';
 import { parseAutoSyncConfig, SkillhubAutoSyncService } from '../autoSyncService';
 import type { install as installFn } from '../installService';
+import { acquireSharedSkillMutationLease } from '../sharedMutationLease';
 
 type InstallResult = Awaited<ReturnType<typeof installFn>>;
 type SuccessfulInstallResult = Extract<InstallResult, { success: true }>;
@@ -24,13 +26,13 @@ const loggerMocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 const originalAutoSyncConfigUrl = process.env.XDT_SKILLHUB_AUTO_SYNC_CONFIG_URL;
-const TEST_ROOT = path.join('/tmp', 'xdt-auto-sync-test');
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-auto-sync-test-'));
 const TEST_HOME = path.join(TEST_ROOT, 'home');
 const TEST_USER_DATA = path.join(TEST_ROOT, 'userData');
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => path.join('/tmp', 'xdt-auto-sync-test', 'userData')),
+    getPath: vi.fn(() => TEST_USER_DATA),
   },
   net: {
     fetch: vi.fn(),
@@ -151,6 +153,33 @@ function makeService(options: {
 }
 
 describe('SkillhubAutoSyncService', () => {
+  afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
+
+  it('defers automatic cancellation cleanup behind a pending uninstall and retries after release', async () => {
+    vi.mocked(registryService.removeInstall).mockResolvedValue(undefined);
+    const installPath = path.join(TEST_HOME, '.agents', 'skills', 'alpha');
+    fs.mkdirSync(installPath, { recursive: true });
+    fs.writeFileSync(path.join(installPath, 'SKILL.md'), 'fixture');
+    const token = randomUUID();
+    const lease = (await acquireSharedSkillMutationLease(['alpha']))!;
+    lease.retainUntilComplete(token);
+    await lease();
+    const store = path.join(TEST_USER_DATA, 'skillhub', 'auto-sync-pending-cleanups.json');
+    fs.mkdirSync(path.dirname(store), { recursive: true });
+    fs.writeFileSync(store, JSON.stringify({ schemaVersion: 1, cleanups: [{ slug: 'alpha', absolutePath: installPath }] }));
+    const setup = makeService({ useDefaultCleanupInstall: true, configSkills: [] });
+    await setup.service.runOnceAfterLogin();
+    expect(fs.existsSync(installPath)).toBe(true);
+    expect(fs.existsSync(store)).toBe(true);
+    expect(registryService.removeInstall).not.toHaveBeenCalled();
+    const resumed = (await acquireSharedSkillMutationLease(['alpha'], token))!;
+    resumed.complete(token);
+    await resumed();
+    await setup.service.runOnceAfterLogin();
+    expect(fs.existsSync(installPath)).toBe(false);
+    expect(fs.existsSync(store)).toBe(false);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     fs.rmSync(TEST_ROOT, { recursive: true, force: true });

@@ -65,7 +65,8 @@ function isProviderWireProtocol(value: unknown): boolean {
     value === undefined ||
     value === 'anthropic-messages' ||
     value === 'openai-responses' ||
-    value === 'openai-chat'
+    value === 'openai-chat' ||
+    value === 'google-generative-ai'
   );
 }
 
@@ -209,13 +210,20 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
 
   const dl = getDeviceLink();
   if (!dl) throw new Error('device-link IPC not available');
-  const p = (
-    dl.invoke(deviceId, 'maker:provider:list', [
-      {
-        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-      },
-    ]) as Promise<DeviceProvidersPayload>
-  )
+  const request = async (): Promise<DeviceProvidersPayload> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await dl.invoke(deviceId, 'maker:provider:list', [
+          { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
+        ]) as DeviceProvidersPayload;
+      } catch (error) {
+        if (extractIpcError(error)?.code !== 'MODEL_VISIBILITY_NOT_READY' || attempt >= 2 || !isCurrent()) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+        if (!isCurrent()) throw error;
+      }
+    }
+  };
+  const p = request()
     .then((res) => {
       const payload = parseDeviceProvidersPayload(res);
       if (isCurrent()) {

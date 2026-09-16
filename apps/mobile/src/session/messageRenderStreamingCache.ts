@@ -50,6 +50,7 @@ interface BuildMobileStreamingRenderWindowInput {
   messageStructureToken?: object;
   options: MessageRenderOptions & {
     autoResumePending?: Record<string, unknown> | null;
+    preserveSourceOrder?: boolean;
     sessionId?: string;
   };
   prefixCache?: MobileStreamingRenderPrefixCacheRef;

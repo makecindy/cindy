@@ -23,6 +23,8 @@ import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFil
 // Windows topology semantics. Durability capabilities belong to the actual
 // host filesystem, so capture them before any such override can occur.
 const NATIVE_BINDING_HOST_PLATFORM = hostPlatform();
+// Preserve the same rejection check in this process when durable revocation cannot be written.
+const rejectedCredentialFallback = new Map<string, string>();
 
 const NATIVE_PROVIDER_IDS = [
   'anthropic',
@@ -33,18 +35,19 @@ type BindingFile = Partial<Record<NativeProviderId, string>> & {
   legacyClaimOwner?: string;
   legacyClaimToken?: string;
   /**
-   * 被**显式登出**过、且尚未重新授权的 provider（值 = 执行登出的 owner，仅供诊断）。
+   * 已撤销 Cindy 使用许可、且尚未重新连接的 provider（值 = 操作 owner，仅供诊断）。
    *
-   * 登出会先删凭证再解绑，但删除是 best-effort 的（Anthropic 的文件删除吞 ENOENT 之外的
-   * 错误、`logoutGrok` 忽略 secret store 的失败返回）。删除失败时 slot 已空、凭证却还在，
-   * 自动认领会立刻把它绑回来——等于悄悄撤销用户刚做的登出。
+   * 本机 Codex/Claude 保留系统凭证；其它来源清理凭证也可能失败。slot 已空但凭证还在时，
+   * 不能让自动认领悄悄恢复刚断开的连接。
    *
    * 判定**不比对 owner**：标记说的是「这份残留凭证已被弃用」，而凭证存在共享的系统
    * keychain / CLI 里，换个账号它也还是登出那个账号的凭证——按 owner 比对等于给下一个
    * 账号开了继承别人凭证的口子（PR #548 review）。解除只有一条路：用户再次显式授权
-   * （`bindNativeProviderAuth` 清除），那时凭证已由本人重新写入。
+   * （`bindNativeProviderAuth` 清除）；本机重连须先核对服务端拒绝摘要。
    */
   revoked?: Partial<Record<NativeProviderId, string>>;
+  /** SHA-256 of a server-rejected credential; retained across manual disconnects. */
+  rejectedCredentialDigests?: Partial<Record<NativeProviderId, string>>;
   /**
    * 由**用户在 Cindy 里亲自完成授权**而绑定的 provider（值 = 执行授权的 owner）。
    *
@@ -111,6 +114,7 @@ type BindingRead =
   | { ok: true; bindings: BindingFile }
   /** 文件本身读不出来 / 根不是对象：整份归属都无从判断，没有可挽救的部分。 */
   | { ok: false; reason: 'unreadable' }
+  | { ok: false; reason: 'badDigests'; bindings: BindingFile }
   /** 根有效、各 provider 归属可信，只有 revoked 这个字段被改坏。 */
   | { ok: false; reason: 'badRevoked'; bindings: Omit<BindingFile, 'revoked'> };
 
@@ -174,6 +178,18 @@ function readBindingsOrFail(): BindingRead {
     // 只修 revoked、保住其余归属 —— 否则一次「修复」会把别人的 owner 抹掉,反倒开出新的
     // 误认领口子(PR #548 review)。
     const revoked = (value as { revoked?: unknown }).revoked;
+    const digests = (value as BindingFile).rejectedCredentialDigests;
+    const badDigests = digests !== undefined && (
+      !digests || typeof digests !== 'object' || Array.isArray(digests) ||
+      Object.values(digests).some(digest => typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest))
+    );
+    if (badDigests) {
+      // Explicit repair preserves valid rejection evidence and unrelated owner metadata.
+      (value as BindingFile).rejectedCredentialDigests = Object.fromEntries(
+        Object.entries(digests && typeof digests === 'object' && !Array.isArray(digests) ? digests : {})
+          .filter(([, digest]) => typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest)),
+      );
+    }
     if (
       revoked !== undefined &&
       (typeof revoked !== 'object' || revoked === null || Array.isArray(revoked))
@@ -182,7 +198,9 @@ function readBindingsOrFail(): BindingRead {
       delete rest.revoked;
       return { ok: false, reason: 'badRevoked', bindings: rest };
     }
-    return { ok: true, bindings: value as BindingFile };
+    return badDigests
+      ? { ok: false, reason: 'badDigests', bindings: value as BindingFile }
+      : { ok: true, bindings: value as BindingFile };
   } catch {
     return { ok: false, reason: 'unreadable' };
   }
@@ -469,19 +487,31 @@ export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean
   return Boolean(read.ok && read.bindings.revoked && provider in read.bindings.revoked);
 }
 
+/** Unreadable binding state cannot prove that reusing a native credential is safe. */
+export function isNativeProviderCredentialRejected(provider: NativeProviderId, digest: string, opts?: { explicitReconnect: true }): boolean {
+  if (rejectedCredentialFallback.get(`${bindingPath()}:${provider}`) === digest) return true;
+  const read = readBindingsOrFail();
+  if (!read.ok && !opts?.explicitReconnect) return true;
+  // An explicit reconnect can reach bindNativeProviderAuth's conservative repair path.
+  return read.ok || read.reason !== 'unreadable'
+    ? read.bindings.rejectedCredentialDigests?.[provider] === digest
+    : false;
+}
+
 /** Bind newly completed native OAuth to the current data owner. */
 export function bindNativeProviderAuth(
   provider: NativeProviderId,
-  opts?: { instanceIsolated?: boolean },
+  opts?: { instanceIsolated?: boolean; sharedSystem?: boolean },
 ): void {
   const owner = getActiveAppSession().dataOwnerId;
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
   const written = withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
-    if (read.ok) {
+    if (read.ok || read.reason === 'badDigests') {
       const bindings = read.bindings;
       const sharedSystemCredential = sharedSystemCredentialOwners(bindings);
-      delete sharedSystemCredential[provider];
+      if (opts?.sharedSystem) sharedSystemCredential[provider] = owner;
+      else delete sharedSystemCredential[provider];
       const instanceIsolatedCredential = instanceIsolatedCredentialOwners(bindings);
       if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
       else delete instanceIsolatedCredential[provider];
@@ -494,10 +524,10 @@ export function bindNativeProviderAuth(
       // 记下「这是用户自己在 Cindy 里授权的」——继承类文案据此不再对它成立。
       writeBindings({
         ...bindings,
-        selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+        selfAuthorized: { ...bindings.selfAuthorized, [provider]: opts?.sharedSystem ? undefined : owner },
         sources: {
           ...bindings.sources,
-          [provider]: 'explicit-provider-oauth',
+          [provider]: opts?.sharedSystem ? 'native-harness-inherited' : 'explicit-provider-oauth',
         },
         sharedSystemCredential,
         instanceIsolatedCredential,
@@ -519,7 +549,8 @@ export function bindNativeProviderAuth(
     // 授权即可恢复。
     const salvaged = read.reason === 'badRevoked' ? read.bindings : {};
     const sharedSystemCredential = sharedSystemCredentialOwners(salvaged);
-    delete sharedSystemCredential[provider];
+    if (opts?.sharedSystem) sharedSystemCredential[provider] = owner;
+      else delete sharedSystemCredential[provider];
     const instanceIsolatedCredential = instanceIsolatedCredentialOwners(salvaged);
     if (opts?.instanceIsolated) instanceIsolatedCredential[provider] = owner;
     else delete instanceIsolatedCredential[provider];
@@ -530,10 +561,10 @@ export function bindNativeProviderAuth(
     writeBindings({
       ...salvaged,
       revoked: suppressed,
-      selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
+      selfAuthorized: { ...salvaged.selfAuthorized, [provider]: opts?.sharedSystem ? undefined : owner },
       sources: {
         ...salvaged.sources,
-        [provider]: 'explicit-provider-oauth',
+        [provider]: opts?.sharedSystem ? 'native-harness-inherited' : 'explicit-provider-oauth',
       },
       sharedSystemCredential,
       instanceIsolatedCredential,
@@ -686,14 +717,19 @@ export function getNativeProviderAuthSource(
 /**
  * Remove the current owner binding after logout/invalidation.
  *
- * `revoked: true` 只用于**用户显式登出**：它会留下一个持久标记，挡住后续的自动认领。
- * 服务端作废凭证（401 invalidate）不传——那不是用户意图，凭证也已被清掉，用户之后在本机
- * CLI 重新登录时仍应享有设计内的自动继承。
+ * `revoked: true` 阻止自动认领，适用于用户断开及仍保留原生凭证的服务端失效。
+ * 已确认服务端拒绝时可附凭证摘要；它与撤销标记原子落盘，手动断开不清除摘要。
  */
 export function unbindNativeProviderAuth(
   provider: NativeProviderId,
-  opts?: { revoked?: boolean },
+  opts?: { revoked?: boolean; rejectedCredentialDigest?: string },
 ): void {
+  if (opts?.rejectedCredentialDigest !== undefined && (
+    !opts.revoked || !/^[a-f0-9]{64}$/.test(opts.rejectedCredentialDigest)
+  )) throw new Error('Invalid rejected credential digest');
+  if (opts?.rejectedCredentialDigest) {
+    rejectedCredentialFallback.set(`${bindingPath()}:${provider}`, opts.rejectedCredentialDigest);
+  }
   // 归属读不出来时放弃写入。用户的意图是「登出这一个 provider」,不是「把其余 provider 的
   // 归属清空」—— 而把损坏文件覆盖成一份只剩撤销标记的新文件正是后者,其余 provider 从此
   // 无主,下一次可信读取就会把它们的残留凭证认领给当前账号(PR #548 review)。
@@ -767,6 +803,12 @@ export function unbindNativeProviderAuth(
       bindings.instanceIsolatedCredential = instanceIsolatedCredential;
     }
     if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
+    if (marking && opts?.rejectedCredentialDigest) {
+      bindings.rejectedCredentialDigests = {
+        ...bindings.rejectedCredentialDigests,
+        [provider]: opts.rejectedCredentialDigest,
+      };
+    }
     writeBindings(bindings);
   });
 }

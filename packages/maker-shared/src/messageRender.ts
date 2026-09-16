@@ -209,6 +209,7 @@ export interface MessageRenderWorkGroupItem<
   type: 'work_group';
   key: string;
   children: MessageRenderWorkChildItem<TMessage>[];
+  deferred?: import('./historyView.js').DeferredHistoryWork;
   durationMs?: number;
   /** True only for the trailing activity run in an active turn. */
   isStreaming?: boolean;

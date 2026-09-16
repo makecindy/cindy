@@ -116,6 +116,11 @@ export async function create(body?: {
    * 让新会话与「会话内切来源」行为一致(首个请求即走对供应商)。
    */
   providerId?: string | null;
+  /**
+   * Cindy Make code task marker. Main only accepts it for the managed source
+   * checkout; the persisted source later drives the `cindy_make` tool injection.
+   */
+  source?: 'cindy-make';
 }): Promise<Session> {
   return wrap(window.electronAPI.localDb.sessions.create(body));
 }

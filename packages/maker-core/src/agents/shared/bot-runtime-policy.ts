@@ -1,9 +1,9 @@
 import type { BotRuntimeMcpPolicy } from '../base-agent.js';
 
-const BOT_ESSENTIAL_MCP_SERVERS = new Set(['cindy_memory', 'cindy_helper']);
+const BOT_ESSENTIAL_MCP_SERVERS = new Set(['cindy_memory', 'cindy_helper', 'cindy']);
 
 /**
- * A Bot gets its memory and narrow helper gateway, plus servers the profile
+ * A Bot gets its memory, helper and shared plugin discovery gateway, plus servers the profile
  * explicitly mounted. Builtin capability servers (e.g. cindy_docs for the
  * docs toolset) go through the same explicit allowlist as custom MCPs: the
  * runtime writes them into the policy when the corresponding toolset is

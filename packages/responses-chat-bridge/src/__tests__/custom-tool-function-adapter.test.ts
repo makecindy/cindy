@@ -3,7 +3,7 @@ import type { Transform } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createResponsesCustomToolFunctionAdapter } from "../custom-tool-function-adapter.js";
+import { createResponsesCustomToolFunctionAdapter, normalizeResponsesToolItemIds } from "../custom-tool-function-adapter.js";
 
 async function collect(transform: Transform, body: string): Promise<string> {
   const chunks: Buffer[] = [];
@@ -31,9 +31,97 @@ function execRequest() {
   };
 }
 
+describe("legacy Responses tool item ids", () => {
+  it("repairs tool-less compact history without changing invocation ids, payloads or opaque items", () => {
+    const body = { model: "gpt-6", input: [
+      { type: "custom_tool_call", id: "fc_old", call_id: "fc_invocation", name: "exec", input: "fc_literal" },
+      { type: "custom_tool_call_output", id: "fco_old", call_id: "fc_invocation", output: [{ type: "input_text", text: "fc_literal" }] },
+      { type: "function_call", id: "ctc_old2", call_id: "ctc_invocation", arguments: "{}" },
+      { type: "function_call_output", id: "ctco_old2", call_id: "ctc_invocation", output: "ok" },
+      { type: "item_reference", id: "fc_old" },
+      { type: "compaction", id: "fc_opaque", encrypted_content: "unchanged" },
+      { type: "message", id: "fc_message", content: "unchanged" },
+      { type: "custom_tool_call", id: "opaque_provider", call_id: "opaque" },
+      { type: "custom_tool_call", call_id: "legacy" },
+      { type: "function_call", id: "fc_valid", call_id: "valid" },
+    ] };
+    const original = structuredClone(body);
+    const repaired = normalizeResponsesToolItemIds(body)!;
+    const items = repaired.input as typeof body.input;
+    expect(items.map(item => item.id)).toEqual([
+      "ctc_old", "ctco_old", "fc_old2", "fco_old2", "fc_old", "fc_opaque", "fc_message",
+      "opaque_provider", undefined, "fc_valid",
+    ]);
+    expect(items[0]).toEqual({ ...body.input[0], id: "ctc_old" });
+    expect(items[1]).toEqual({ ...body.input[1], id: "ctco_old" });
+    expect(items[1]!.output).toBe(body.input[1]!.output);
+    expect(body).toEqual(original);
+    expect(normalizeResponsesToolItemIds(repaired)).toBeNull();
+    expect(normalizeResponsesToolItemIds({ input: "hello" })).toBeNull();
+  });
+});
+
 describe("Responses custom-tool function adapter", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it.each([false, true])("keeps response ids consistent across parallel calls and final output (SSE=%s)", async (sse) => {
+    const adapter = createResponsesCustomToolFunctionAdapter(["exec"]);
+    adapter.adaptRequest(execRequest(), 1);
+    const calls = ["a", "b"].map(key => ({
+      type: "function_call", id: `fc_${key}`, call_id: `call_${key}`, name: "exec",
+      arguments: JSON.stringify({ input: `text("你好 ${key}")` }),
+    }));
+    const unrelated = { type: "function_call", id: "fc_other", call_id: "call_other", name: "read_file", arguments: "{}" };
+    const final = { type: "response.completed", response: { output: [...calls, unrelated] } };
+    const events = [
+      ...calls.map((item, output_index) => ({ type: "response.output_item.added", output_index, item: { ...item, arguments: "" } })),
+      { type: "response.output_item.added", output_index: 2, item: unrelated },
+      { type: "response.function_call_arguments.done", output_index: 2, item_id: unrelated.id, arguments: "{}" },
+      ...[1, 0].flatMap(output_index => {
+        const item = calls[output_index]!;
+        return [
+          { type: "response.function_call_arguments.delta", output_index, item_id: item.id, delta: item.arguments },
+          { type: "response.function_call_arguments.done", output_index, item_id: item.id, arguments: item.arguments },
+          { type: "response.output_item.done", output_index, item },
+        ];
+      }),
+      final,
+    ];
+    const transform = adapter.createResponseTransform(1, { contentType: sse ? "text/event-stream" : "application/json", contentEncoding: "" })!;
+    const body = sse ? events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("") : JSON.stringify(final.response);
+    const chunks: Buffer[] = [];
+    transform.on("data", chunk => chunks.push(Buffer.from(chunk)));
+    const completed = new Promise<void>((resolve, reject) => { transform.on("end", resolve); transform.on("error", reject); });
+    // Exercise split framing and multi-byte text while two calls are in flight.
+    const bytes = Buffer.from(body);
+    for (let offset = 0; offset < bytes.length; offset += 7) transform.write(bytes.subarray(offset, offset + 7));
+    transform.end();
+    await completed;
+    const output = Buffer.concat(chunks).toString("utf8");
+    const rewritten = sse ? output.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6))) : [];
+    const response = sse ? rewritten.at(-1).response : JSON.parse(output);
+    expect(response.output).toEqual([
+      ...calls.map((call, index) => ({ type: "custom_tool_call", id: index ? "ctc_b" : "ctc_a", call_id: call.call_id, name: "exec", input: JSON.parse(call.arguments).input })),
+      unrelated,
+    ]);
+    if (sse) {
+      expect(rewritten.filter(event => event.type === "response.custom_tool_call_input.done").map(event => event.item_id)).toEqual(["ctc_b", "ctc_a"]);
+      for (const event of rewritten) {
+        if (event.output_index === 0 || event.output_index === 1) {
+          const expected = event.output_index === 0 ? "ctc_a" : "ctc_b";
+          if (event.item) expect(event.item.id).toBe(expected);
+          if (event.item_id) expect(event.item_id).toBe(expected);
+        }
+      }
+      expect(rewritten).toContainEqual(events[3]);
+    }
+    const compactBody = { model: "gpt-6", input: response.output };
+    expect(normalizeResponsesToolItemIds(compactBody)).toBeNull();
+    const adapted = adapter.adaptRequest({ ...execRequest(), input: response.output }, 2) as { input: Array<{ id: string; call_id: string }> };
+    expect(adapted.input.map(item => item.id)).toEqual(["fc_a", "fc_b", "fc_other"]);
+    expect(adapted.input.map(item => item.call_id)).toEqual(["call_a", "call_b", "call_other"]);
   });
 
   it("flips dialect-coupled item id prefixes and drops ids in neither dialect", () => {

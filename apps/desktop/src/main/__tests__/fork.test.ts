@@ -18,6 +18,7 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { projectSessionContextWindow } from '../../shared/sessionContextWindow';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -204,7 +205,11 @@ async function writeClaudeJsonlInConfigDir(
 // ── tests ──────────────────────────────────────────────────────────────────
 
 describe('forkSessionAtMessage', () => {
-  it('happy path: fork copies prior messages, calls maker.forkSdkSession with assistant uuid, seeds context snapshot', async () => {
+  it.each([
+    { marker: 200000, projectedWindow: 200000 },
+    { marker: null, projectedWindow: 272000 },
+    { marker: 100000, projectedWindow: 272000 },
+  ])('fork preserves only proven runtime context (marker=$marker)', async ({ marker, projectedWindow }) => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     const priorAssistant = makeMessageRow({
       id: 'asst-1',
@@ -220,7 +225,7 @@ describe('forkSessionAtMessage', () => {
       createdAt: 2000,
     });
 
-    selectQueue.push([makeSourceRow()]); // source session
+    selectQueue.push([makeSourceRow({ contextWindowRuntime: marker })]); // source session
     selectQueue.push([target]); // target message
     selectQueue.push([priorUser, priorAssistant]); // prior messages asc (for bulk copy)
     selectQueue.push([
@@ -276,6 +281,13 @@ describe('forkSessionAtMessage', () => {
     expect(sv.totalCostUsd).toBe(0);
     expect(sv.contextTokens).toBe(123456);
     expect(sv.contextWindow).toBe(200000);
+    expect(sv.contextWindowRuntime).toBe(marker === 200000 ? 200000 : null);
+    // list/get apply this projection after loading the inserted fork row.
+    const projected = projectSessionContextWindow({
+      contextWindow: sv.contextWindow as number,
+      contextWindowRuntime: sv.contextWindowRuntime as number | null,
+    }, () => 272000);
+    expect(projected.contextWindow).toBe(projectedWindow);
     expect(sv.clearedAt).toBeNull();
     expect(sv.pinnedAt).toBeNull();
     expect(typeof sv.userSendAt).toBe('number');
@@ -340,6 +352,7 @@ describe('forkSessionAtMessage', () => {
       providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
+      forkAtTimestampMs: 2500,
       title: '[Fork] Project A',
       workingDir: '/work',
       // 轮 26:Pi fork 守卫透传 remoteHostId(本地源 → null)。
@@ -449,7 +462,7 @@ describe('forkSessionAtMessage', () => {
     ]);
   });
 
-  it('codex path: keeps the legacy fork path when the latest copied turn has no native anchor', async () => {
+  it('codex path: supplies event time for native lookup when the latest copied turn has no anchor', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     const priorUser = makeMessageRow({ id: 'user-1', role: 'user', createdAt: 2000 });
     const olderAnchoredAssistant = makeMessageRow({
@@ -479,7 +492,10 @@ describe('forkSessionAtMessage', () => {
       makeSourceRow({ agentKind: 'codex', sdkSessionId: 'legacy-codex-thread' }),
     ]);
     selectQueue.push([target]);
-    selectQueue.push([priorUser, olderAnchoredAssistant, priorAssistant]);
+    selectQueue.push([priorUser, olderAnchoredAssistant, priorAssistant,
+      // Error rows have a synthetic display timestamp, not native event time.
+      makeMessageRow({ id: 'failed-error', role: 'error', createdAt: 2600 }),
+    ]);
     selectQueue.push([
       makeSourceRow({
         agentKind: 'codex',
@@ -498,6 +514,9 @@ describe('forkSessionAtMessage', () => {
     expect(forkSdkSessionMock).toHaveBeenCalledWith(
       'codex',
       expect.not.objectContaining({ lastTurnId: expect.anything() }),
+    );
+    expect(forkSdkSessionMock).toHaveBeenCalledWith(
+      'codex', expect.objectContaining({ forkAtTimestampMs: 2500 }),
     );
     const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as {
       nativeForkAnchorSessionMap?: Array<[string, string]>;
@@ -1175,7 +1194,13 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
-  it('forks a historical Claude node from the parked native session instead of the current Codex thread', async () => {
+  it.each([
+    { route: 'current Codex thread', agentKind: 'codex', model: 'gpt-5.4', providerId: 'xd', expectedMarker: null },
+    { route: 'different engine', agentKind: 'pi', model: 'claude-sonnet-4-6', providerId: null, expectedMarker: null },
+    { route: 'different model', agentKind: 'cc', model: 'claude-opus-4-6', providerId: null, expectedMarker: null },
+    { route: 'different provider', agentKind: 'cc', model: 'claude-sonnet-4-6', providerId: 'xd', expectedMarker: null },
+    { route: 'same route', agentKind: 'cc', model: 'claude-sonnet-4-6', providerId: null, expectedMarker: 1000000 },
+  ])('forks historical Claude history with $route window provenance', async ({ agentKind, model, providerId, expectedMarker }) => {
     const target = makeMessageRow({
       id: 'historical-assistant',
       clientId: 'historical-assistant-cid',
@@ -1194,8 +1219,11 @@ describe('forkSessionAtMessage', () => {
     });
     selectQueue.push([
       makeSourceRow({
-        agentKind: 'codex',
-        model: 'gpt-5.4',
+        agentKind,
+        model,
+        providerId,
+        contextWindow: 1000000,
+        contextWindowRuntime: 1000000,
         sdkSessionId: 'current-codex-thread',
       }),
     ]);
@@ -1217,6 +1245,7 @@ describe('forkSessionAtMessage', () => {
           fromAgentKind: 'cc',
           toAgentKind: 'codex',
           fromModel: 'claude-sonnet-4-6',
+          fromProviderId: null,
           fromSdkSessionId: 'parked-claude-session',
           handoff: 'handoff',
         }),
@@ -1250,6 +1279,12 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.agentKind).toBe('cc');
     expect(txArgs.newSession.model).toBe('claude-sonnet-4-6');
     expect(txArgs.newSession.providerId).toBeNull();
+    expect(txArgs.newSession.contextWindowRuntime).toBe(expectedMarker);
+    const projected = projectSessionContextWindow({
+      contextWindow: txArgs.newSession.contextWindow as number,
+      contextWindowRuntime: txArgs.newSession.contextWindowRuntime as number | null,
+    }, () => 200000);
+    expect(projected.contextWindow).toBe(expectedMarker ?? 200000);
   });
 
   it.each([false, true])('restores the provider snapshot from a new historical switch boundary (recovery=%s)', async (recovery) => {
@@ -2052,6 +2087,7 @@ describe('forkSessionAtMessage', () => {
       providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 1,
+      forkAtTimestampMs: 2500,
       title: '[Fork] Project A',
       workingDir: '/work',
       // 轮 26:Pi fork 守卫透传 remoteHostId(本地源 → null)。

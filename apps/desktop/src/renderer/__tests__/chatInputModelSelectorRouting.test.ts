@@ -9,6 +9,11 @@ const chatInputSource = normalizeSourceText(
 );
 
 describe('ChatInput model source switching wiring', () => {
+  it('preserves an explicit connection for submission even when its catalog row is unavailable', () => {
+    expect(chatInputSource).toContain('const sendProviderId = activeProviderId || null;');
+    expect(chatInputSource).toContain('providerId: sendProviderId');
+    expect(chatInputSource).not.toContain('effectiveSourceIdForModel(sendProviders, activeProviderId');
+  });
   it('normalizes Windows checkout line endings before matching guard order', () => {
     const windowsCheckoutSource = chatInputSource.replace(/\n/g, '\r\n');
     expect(normalizeSourceText(windowsCheckoutSource)).toBe(chatInputSource);

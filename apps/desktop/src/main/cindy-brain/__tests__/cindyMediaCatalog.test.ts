@@ -262,6 +262,20 @@ describe('deriveCindyMediaConfig — 停用过滤(model-disable override)', () =
   it('不传谓词 = 不过滤(既有调用方为空的兼容路径)', () => {
     expect(deriveCindyMediaConfig([XD], 'image').models).toHaveLength(3);
   });
+
+  it('显示开关关闭的图像型号不进作图清单,目录默认回落可见项', () => {
+    const cfg = deriveCindyMediaConfig(
+      [XD],
+      'image',
+      undefined,
+      undefined,
+      undefined,
+      (_providerId, modelId, defaultEnabled) =>
+        modelId === 'gpt-image-2' ? false : defaultEnabled !== false,
+    );
+    expect(cfg.models.map((m) => m.id)).toEqual(['gemini-3-pro-image', 'gemini-3.1-flash-image']);
+    expect(cfg.defaults?.standard).toBe('gemini-3-pro-image');
+  });
 });
 
 describe('deriveCindyMediaConfig — 就绪过滤(isProviderReady,2026-07 图像多来源)', () => {

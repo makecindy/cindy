@@ -19,7 +19,9 @@ import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
-import { usageModelKey, usageRankColor, usageRankOf } from '@/components/new-chat/usagePalette';
+import { usageModelKey } from '@/components/new-chat/usagePalette';
+
+import { usageHistoryModelColor } from './usageHistoryColors';
 
 const WINDOW_DAYS = 30;
 const CHART_HEIGHT_PX = 96;
@@ -66,13 +68,16 @@ export function UsageTokenBars({
   colorOrder,
   todayKey,
   selectedDay,
+  highlightRecentWeek = false,
   onDayClick,
 }: {
   modelDaily: UsageHistoryModelDay[];
-  /** 前 N 名模型 key (payload.models 排序), 决定分段与图例配色。 */
+  /** 完整历史的模型 key（按 token 排序），决定分段与表格配色。 */
   colorOrder: string[];
   todayKey: string;
   selectedDay?: string | null;
+  /** Visual emphasis only; a multi-day range does not select individual buttons. */
+  highlightRecentWeek?: boolean;
   onDayClick?: (day: string) => void;
 }): React.JSX.Element {
   const { t, i18n } = useTranslation();
@@ -87,10 +92,11 @@ export function UsageTokenBars({
   );
 
   const bars = useMemo(() => {
+    const ranks = new Map(colorOrder.map((key, rank) => [key, rank]));
     const segsByDay = new Map<string, Map<number, DaySegment>>();
     for (const row of modelDaily) {
       if (row.tokens <= 0) continue;
-      const rank = usageRankOf(colorOrder, usageModelKey(row.agentKind, row.model));
+      const rank = ranks.get(usageModelKey(row.agentKind, row.model)) ?? colorOrder.length;
       let daySegs = segsByDay.get(row.day);
       if (!daySegs) {
         daySegs = new Map();
@@ -99,7 +105,7 @@ export function UsageTokenBars({
       const seg = daySegs.get(rank);
       if (seg) {
         seg.tokens += row.tokens;
-        // 尾部档 (rank === colorOrder.length) 会把所有非前 N 名模型并进同一分段,
+        // 防御性兜底：调用方未登记的模型合并到尾部档 (rank === colorOrder.length),
         // 保留首个模型名会把合计错误地挂到它头上 —— 改标「其它」, 与图例同义。
         if (rank >= colorOrder.length) seg.label = t('usageDashboard.othersLegend');
       } else {
@@ -125,16 +131,17 @@ export function UsageTokenBars({
   }, [modelDaily, colorOrder, todayKey, t]);
 
   const ticks = niceTicks(bars.max);
+  const recentWeekStart = shiftDayKeyLocal(todayKey, -6);
 
   return (
     <div className="flex gap-1.5" style={{ height: CHART_HEIGHT_PX }}>
       {/* Y 轴 token 刻度 (有数据才显示; 宽度固定避免数字位数变化引起布局抖动) */}
       {ticks.length > 0 && (
-        <div className="relative w-[30px] shrink-0">
+        <div className="relative w-[4.5ch] shrink-0 text-11 tabular-nums">
           {ticks.map((v) => (
             <span
               key={v}
-              className="absolute right-0 translate-y-1/2 text-10 leading-none tabular-nums text-[var(--text-tertiary)]"
+              className="absolute right-0 translate-y-1/2 text-11 leading-none tabular-nums text-[var(--text-tertiary)]"
               style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
             >
               {formatCompactTokens(v)}
@@ -151,11 +158,8 @@ export function UsageTokenBars({
             style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
           />
         ))}
-        <div className="absolute inset-0 overflow-x-auto">
-          <div
-            className="flex h-full items-end gap-[3px]"
-            style={{ minWidth: bars.list.length * 24 + Math.max(0, bars.list.length - 1) * 3 }}
-          >
+        <div className="absolute inset-0">
+          <div className="usage-token-plot flex h-full items-end gap-[3px]">
             {bars.list.map((b) => {
               const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
               const visualHeight =
@@ -181,22 +185,25 @@ export function UsageTokenBars({
                   title={titleLines.join('\n')}
                   aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
                   aria-pressed={selectedDay === b.day}
+                  data-highlighted={
+                    selectedDay
+                      ? selectedDay === b.day
+                      : highlightRecentWeek && b.day >= recentWeekStart
+                  }
                   onClick={() => onDayClick?.(b.day)}
                   disabled={!onDayClick}
-                  // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
-                  className="flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-full border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-                  style={{
-                    height: hitHeight,
-                    minWidth: 24,
-                    outline: selectedDay === b.day ? '2px solid var(--focus-ring-soft)' : undefined,
-                    outlineOffset: selectedDay === b.day ? '1px' : undefined,
-                  }}
+                  // Hit height remains generous without forcing the visible bar width.
+                  // Target sizing remains pending after cancellation of the added date entry.
+                  className="usage-chart-target group relative flex min-w-0 flex-1 cursor-pointer items-end justify-center rounded-none border-0 bg-transparent p-0 outline-none"
+                  style={{ height: hitHeight }}
                 >
                   <span
                     aria-hidden="true"
-                    className="flex w-full flex-col overflow-hidden rounded-full"
+                    data-usage-mark="usage-token-bar"
+                    className="usage-chart-mark pointer-events-none flex shrink-0 flex-col overflow-hidden rounded-[2px]"
                     style={{
                       height: visualHeight,
+                      width: 'calc(100% + var(--usage-mark-grow, 0px))',
                       backgroundColor: b.segments.length === 0 ? 'var(--surface-chip)' : undefined,
                     }}
                   >
@@ -205,11 +212,15 @@ export function UsageTokenBars({
                         key={s.rank}
                         style={{
                           height: `${(s.tokens / b.tokens) * 100}%`,
-                          backgroundColor: usageRankColor(s.rank),
+                          backgroundColor: usageHistoryModelColor(s.rank, colorOrder.length),
                         }}
                       />
                     ))}
                   </span>
+                  <span
+                    aria-hidden="true"
+                    className="usage-chart-indicator pointer-events-none absolute inset-0 rounded-[2px]"
+                  />
                 </button>
               );
             })}

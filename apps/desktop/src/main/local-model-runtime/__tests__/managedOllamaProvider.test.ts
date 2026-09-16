@@ -21,6 +21,7 @@ import {
   syncManagedOllamaAgentProjections,
   upsertManagedOllamaModel,
   upsertManagedOllamaModels,
+  toPlainRuntimeModel,
 } from '../managedOllamaProvider.js';
 
 function providerWith(id: string) {
@@ -74,6 +75,26 @@ describe('managed Ollama model identity', () => {
     expect(saved.runtimes.pi?.models.map((model) => model.id)).toEqual(['kept-local:latest']);
     expect(saved.runtimes.pi?.models.map((model) => model.id)).not.toContain('gone-local');
   });
+
+  it.each(['Remote catalog name', 'glm-4.7-flash:latest'])(
+    'preserves the resolved name %s through import and projection sync',
+    async (name) => {
+      let existing = providerWith('glm-4.7-flash:latest');
+      vi.mocked(getCustomProvider).mockImplementation(async () => existing);
+      vi.mocked(updateCustomProvider).mockImplementation(async (_id, next) => {
+        existing = next as typeof existing;
+        return next;
+      });
+      await upsertManagedOllamaModel({ id: 'glm-4.7-flash:latest', name });
+      for (const runtime of Object.values(existing.runtimes)) {
+        expect(runtime.models[0].name).toBe(name);
+      }
+      await syncManagedOllamaAgentProjections();
+      for (const runtime of Object.values(existing.runtimes)) {
+        expect(runtime.models[0].name).toBe(name);
+      }
+    },
+  );
 
   it('does not write when the captured owner is no longer active', async () => {
     const existing = providerWith('glm-4.7-flash');
@@ -138,5 +159,16 @@ describe('managed Ollama model identity', () => {
     });
     expect(wrote).toBe(false);
     expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('local model display names', () => {
+  it.each([
+    ['hf.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF:Q4_K_M', 'Ornith 1.5 35B A3B (Q4_K_M)'],
+    ['hf.co/team/Example-GGUF:Q8_0', 'Example (Q8_0)'],
+    ['hf.co/team/Example-GGUF:latest', 'Example'],
+    ['custom-model:8b', 'custom-model:8b'],
+  ])('formats %s without changing its execution ID', (id, name) => {
+    expect(toPlainRuntimeModel(id)).toMatchObject({ id, name });
   });
 });

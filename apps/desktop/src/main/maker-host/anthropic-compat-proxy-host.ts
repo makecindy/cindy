@@ -47,6 +47,12 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { providerModelRecord } from '@cindy/model-providers';
+import { outboundFetch } from './outbound-fetch.js';
+import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
+import { createClaudeProviderBridge } from './claude-provider-bridge.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
   getPiNativeSubscriptionHandler,
   getResponsesBridgeHandler,
@@ -76,6 +82,7 @@ import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider } from './session-provider-store.js';
 import {
   buildRouteDecision,
+  providerRoutingForModel,
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
   resolveImplicitLocalBridgeRouteResolution,
@@ -129,6 +136,43 @@ let _initialized = false;
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
 // 复刻 codex-proxy-host.ts 的 setCodexProxyGatewayKeyReader 套路。
 let _readGatewayKey: () => string | null = () => null;
+
+function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, wireModel: string, sessionId?: string): RoutingDecision {
+  if (route.localHandler) return route;
+  const provider = getActiveCatalog().providers.find(p => p.id === providerId);
+  const model = provider?.models['claude-code']?.find(m => m.id === wireModel);
+  const routing = provider ? providerRoutingForModel(provider, 'claude-code', wireModel) : null;
+  // Adapter identity belongs to the declared route. An OAuth account can select
+  // another host without becoming a different provider (e.g. Copilot Business).
+  const nativeRow = model && routing && model.api ? invocationModelRecord(model, routing.upstream) : undefined;
+  const requiresNativeAuth = requiresNativeProviderAuth(nativeRow);
+  if (provider?.source === 'user' && model && routing &&
+      (requiresNativeAuth || routing.wireProtocol === 'openai-chat' || routing.wireProtocol === 'openai-responses' || (model.api && model.api !== 'anthropic-messages'))) {
+    const base = route.upstreamOverride ?? routing.upstream;
+    const protocol = routing.wireProtocol === 'openai-responses' ? 'openai-responses' : 'openai-chat';
+    const requestPath = routing.requestPath ?? (protocol === 'openai-chat' ? '/chat/completions' : '/responses');
+    const row = nativeRow ?? providerModelRecord(model.id, base, protocol);
+    const thinkingFormat = row?.execution.pi.compat?.thinkingFormat;
+    const handler = createClaudeProviderBridge({
+      url: `${base.replace(/\/+$/, '')}/${requestPath.replace(/^\/+/, '')}`,
+      protocol, headers: route.headerOverride ?? {}, efforts: model.efforts,
+      providerId: provider.id,
+      ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),
+      capabilities: {
+        ...(model.supportsImageInput ? { imageInput: 'image_url' as const } : {}),
+        reasoningField: thinkingFormat === 'qwen' ? 'enable_thinking'
+          : thinkingFormat === 'zai' ? 'thinking.type' : 'reasoning_effort',
+      },
+      fetchImpl: outboundFetch,
+    });
+    return { ...route, localHandler: args => handler.handle({ ...args,
+      prefs: { reasoningEffort: (sessionId ? getSessionEffort(sessionId) : null) ?? model.defaultEffort ?? undefined,
+        fast: sessionId ? getSessionFastMode(sessionId) : false },
+    }) };
+  }
+  return route;
+}
+
 export function setClaudeProxyGatewayKeyReader(fn: () => string | null): void {
   _readGatewayKey = fn;
 }
@@ -522,7 +566,7 @@ export function createModelRoutingTransform(): RoutingTransform {
           && piProviderId !== selectedPiProviderId
         ))
         || (!subagentRoute && (
-          (selectedPiProviderId === 'openai' || selectedPiProviderId === 'xai')
+          (isOpenAiSubscriptionProviderId(selectedPiProviderId) || isXaiSubscriptionProviderId(selectedPiProviderId))
           && piProviderId !== selectedPiProviderId
         ))
       )
@@ -549,7 +593,7 @@ export function createModelRoutingTransform(): RoutingTransform {
         },
       };
     }
-    if (piSessionId && (piProviderId === 'openai' || piProviderId === 'xai')) {
+    if (piSessionId && piProviderId && (isOpenAiSubscriptionProviderId(piProviderId) || isXaiSubscriptionProviderId(piProviderId))) {
       return {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
@@ -626,9 +670,9 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (
       !piSessionId
       && isSubscriptionDirectRoute(wireModel)
-      && !(explicitCustomProvider && isExclusiveXaiModelId(wireModel) && !wireModel.startsWith(XAI_MODEL_PREFIX))
+      && !(explicitCustomProvider && !isXaiSubscriptionProviderId(selectedProviderId) && isExclusiveXaiModelId(wireModel) && !wireModel.startsWith(XAI_MODEL_PREFIX))
     ) {
-      const bridgeHandler = getResponsesBridgeHandler();
+      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
           log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {
@@ -668,11 +712,21 @@ export function createModelRoutingTransform(): RoutingTransform {
       );
     }
 
-    if (subagentRoute && piProviderId) {
+    if (piProviderId && piProviderId !== 'xd' && (subagentRoute || !selectedPiProviderId)) {
       // A provider-pinned child token is both the authorization boundary and
       // the route source. Re-reading the parent session provider here would
       // authenticate Anthropic but still route through an OpenAI/XD parent,
       // eventually falling into the proxy's default upstream.
+      //
+      // Root tokens take the same pin whenever the session store holds no
+      // explicit source: a model-only `set_model` (runtimeSetModel only writes
+      // the store when `providerId !== undefined`) and a legacy session whose
+      // `sessions.provider_id` is empty both leave it null while PI already
+      // runs on the resolved subscription provider. ② 段默认路由会把这种请求
+      // 拿网关 key 打到网关(用户以为在用 Claude 订阅,实际计费在网关),无网关
+      // key 时更会把 `sk-ant-oat` 占位 token 直发 api.anthropic.com。这里的
+      // piProviderId 已过 registered 匹配门,就是授权边界也是路由来源;openai /
+      // xai 在上方已按同一判据早返回,'xd' 留给网关分支(记账 + sanitize)。
       return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
         .then((resolved) => resolved?.decision ?? unavailablePiProviderRoute(piProviderId))
         .catch(() => unavailablePiProviderRoute(piProviderId));
@@ -689,7 +743,7 @@ export function createModelRoutingTransform(): RoutingTransform {
         // A missing descriptor is not permission to use the default upstream.
         // Keep builtin subscription scope fallbacks, but pin explicit custom
         // requests even while their catalog/runtime is temporarily unavailable.
-        if (!route && requestAgent === 'claude-code' && explicitCustomProvider) {
+        if (!route && ((requestAgent === 'claude-code' && explicitCustomProvider) || (requestAgent === 'pi' && piProviderId && piProviderId !== 'xd'))) {
           return retryableLocalRoute(
             'provider_route_unavailable',
             'The selected provider route is unavailable; check its configuration and retry.',
@@ -706,10 +760,13 @@ export function createModelRoutingTransform(): RoutingTransform {
             selectedProviderId === 'xd' ? 'gateway' : 'subscription',
           );
         }
+        if (route && requestAgent === 'claude-code' && explicitCustomProvider && selectedProviderId) {
+          return attachClaudeProviderBridge(route, selectedProviderId, wireModel, sessionId);
+        }
         return isPiGatewayRequest ? sanitizePiGatewayDecision(route, ctx.url) : route;
       };
       if (perSession instanceof Promise) return perSession.then(recordSelectedRoute);
-      if (perSession || (requestAgent === 'claude-code' && explicitCustomProvider)) {
+      if (perSession || (requestAgent === 'claude-code' && explicitCustomProvider) || (requestAgent === 'pi' && piProviderId && piProviderId !== 'xd')) {
         return recordSelectedRoute(perSession);
       }
       if (isPiGatewayRequest && selectedProviderId === 'xd') {
@@ -746,7 +803,7 @@ export function createModelRoutingTransform(): RoutingTransform {
         // wire 缺省推断与 provider-route 的 implicitBridgeWire 同口径:claude-code 的
         // 用户 Anthropic 兼容上游在目录里省略 wireProtocol(buildUserProvider 约定)。
         const bridgeWire = bridgeRoute?.routing.wireProtocol ?? 'anthropic-messages';
-        if (bridgeRoute && bridgeRoute.providerId !== 'xd' && bridgeWire === 'anthropic-messages') {
+        if (bridgeRoute && bridgeRoute.providerId !== 'xd' && ['anthropic-messages', 'openai-chat', 'openai-responses', 'google-generative-ai'].includes(bridgeWire)) {
           const bridged = buildRouteDecision(
             bridgeRoute.routing,
             gatewayKey,
@@ -758,7 +815,7 @@ export function createModelRoutingTransform(): RoutingTransform {
             bridged && bridgeRoute.routing.requestPath
               ? { ...bridged, pathOverride: bridgeRoute.routing.requestPath }
               : bridged;
-          if (withRequestPath) return withRequestPath;
+          if (withRequestPath) return attachClaudeProviderBridge(withRequestPath, bridgeRoute.providerId, wireModel, sessionId ?? undefined);
         }
         const implicitOAuth = resolveImplicitProviderOAuthRouteDecision(
           wireModel,

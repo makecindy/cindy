@@ -1,3 +1,4 @@
+vi.mock('../worktree/recycleMaintenance', () => ({ auditRegisteredWorktrees: vi.fn() }));
 /**
  * sessionRemovalRecycle 回归(P0 重构:回收唯一驱动点):
  *   - ephemeral worktree 跳过(池生命周期)
@@ -441,7 +442,7 @@ describe('sessionRemovalRecycle', () => {
   });
 
   describe('reconcileWorktreesForDeletedSessions', () => {
-    it('recycles only deleted / missing owners; active and archived preserved', async () => {
+    it('preserves historical deleted, missing, active and archived registrations without a durable request', async () => {
       storeMap.set('active', makeMeta('active'));
       storeMap.set('archived', makeMeta('archived'));
       storeMap.set('deleted', makeMeta('deleted'));
@@ -457,7 +458,7 @@ describe('sessionRemovalRecycle', () => {
       await mod.reconcileWorktreesForDeletedSessions();
 
       const removed = removeMock.mock.calls.map((c) => c[0]).sort();
-      expect(removed).toEqual(['deleted', 'missing']);
+      expect(removed).toEqual([]);
     });
 
     it('empty store → no db query, no removals', async () => {
@@ -475,14 +476,14 @@ describe('sessionRemovalRecycle', () => {
       expect(removeMock).not.toHaveBeenCalled();
     });
 
-    it('single remove failure does not abort the rest', async () => {
+    it('does not begin historical removal during startup audit', async () => {
       storeMap.set('d1', makeMeta('d1'));
       storeMap.set('d2', makeMeta('d2'));
       removeMock.mockRejectedValueOnce(new Error('locked'));
 
       await mod.reconcileWorktreesForDeletedSessions();
 
-      expect(removeMock).toHaveBeenCalledTimes(2);
+      expect(removeMock).not.toHaveBeenCalled();
     });
   });
 });

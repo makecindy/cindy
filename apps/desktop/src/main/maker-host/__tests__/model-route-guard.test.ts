@@ -82,23 +82,32 @@ describe('checkModelRoute', () => {
     expect(checkModelRoute(views(), 'claude-code', 'unknown-model', null)).toEqual({ kind: 'pass' });
   });
 
-  it('显式点名:停用的来源 reject;启用的来源 pass;未知来源按隐式口径裁决', () => {
+  it('显式点名:停用或已删除的来源 reject;启用的来源 pass', () => {
     const v = views({ disabledModels: { 'xd:claude-opus-5': true } });
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'xd')).toEqual({
       kind: 'reject',
       reason: 'explicit-source-disabled',
     });
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'anthropic')).toEqual({ kind: 'pass' });
-    // 未知/陈旧的显式来源:实际路由层查不到 routing 会回退原生默认(xd,已停用)——
-    // 不 pass-through,按隐式口径裁决 ⇒ 改道到启用替代拷贝(R23)。
+    // 已删除的连接不得借用同模型的其它账号，无论默认来源是否启用。
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'nonexistent')).toEqual({
-      kind: 'reroute',
-      providerId: 'anthropic',
+      kind: 'reject',
+      reason: 'explicit-source-unavailable',
     });
-    // 未知显式来源 + 原生默认未停用 ⇒ 隐式口径 pass(不新增拒绝面)。
     expect(checkModelRoute(views(), 'claude-code', 'claude-opus-5', 'nonexistent')).toEqual({
-      kind: 'pass',
+      kind: 'reject',
+      reason: 'explicit-source-unavailable',
     });
+  });
+
+  it('删除账号后未知模型、空目录和宽松入口也不能回退其它账号', () => {
+    for (const v of [views(), []]) {
+      expect(checkModelRoute(v, 'claude-code', 'unknown-model', 'deleted-account'))
+        .toEqual({ kind: 'reject', reason: 'explicit-source-unavailable' });
+      expect(resolveLenientRoute(v, 'claude-code', 'claude-opus-5', 'deleted-account', { fallbackModel: 'unknown-model' }))
+        .toEqual({ model: undefined, providerId: 'deleted-account', degraded: true });
+    }
+    expect(checkModelRoute(views(), 'claude-code', 'unknown-model', 'anthropic')).toEqual({ kind: 'pass' });
   });
 
   it('隐式来源:原生默认落点(xd)被停用且替代拷贝已连接启用 ⇒ reroute 到替代来源', () => {

@@ -1,3 +1,4 @@
+import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type {
@@ -53,6 +54,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner';
+import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -299,7 +301,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
-  it('applies a deferred switch before heartbeat meta lookup and creates the target engine session', async () => {
+  it.each([false, true])('applies the route before heartbeat meta lookup (explicit selection: %s)', async (explicit) => {
     const order: string[] = [];
     const h = createSessionHarness(async () => {
       order.push('send');
@@ -311,9 +313,9 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const releaseAgentSwitchLock = vi.fn(() => {
       order.push('release');
     });
-    const acquirePendingAgentSwitch = vi.fn(async () => {
+    const acquirePendingAgentSwitch = vi.fn(async (_id: string, _signal?: AbortSignal, selection?: ScheduledModelSelection) => {
       order.push('apply');
-      return releaseAgentSwitchLock;
+      return selection ? { release: releaseAgentSwitchLock, selection } : releaseAgentSwitchLock;
     });
     const { runner, maker } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
     vi.mocked(maker.getSessionMeta).mockImplementation(async () => {
@@ -340,14 +342,21 @@ describe('MakerScheduleRunner send outcome policy', () => {
         baseSchedule({
           targetSessionId: 'scheduler-session',
           agentKind: 'claude-code',
-          model: undefined,
+          model: explicit ? 'gpt-5.5-codex' : undefined,
+          ...(explicit ? { modelAgentKind: 'codex' as const, providerId: 'xd', effort: 'high', fastMode: true } : {}),
         }),
         ctx,
       ),
     ).rejects.toThrow(/cancelled-before-dispatch/);
 
     expect(order.slice(0, 2)).toEqual(['apply', 'meta']);
-    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal);
+    if (explicit) {
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal, {
+        agentKind: 'codex', model: 'gpt-5.5-codex', providerId: 'xd', effort: 'high', fastMode: true,
+      });
+    } else {
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal);
+    }
     expect(maker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'scheduler-session',
@@ -357,6 +366,19 @@ describe('MakerScheduleRunner send outcome policy', () => {
     );
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['apply', 'meta', 'send', 'release']);
+  });
+
+
+  it('defers an explicit selection when the target is busy without dispatching', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker } = createRunnerHarness(h.session, {
+      acquirePendingAgentSwitch: vi.fn(async () => { throw new ScheduledModelSelectionBusyError('busy'); }),
+    });
+    const result = await runner.fire(baseSchedule({ targetSessionId: 'scheduler-session',
+      modelAgentKind: 'pi', model: 'grok-4.6' }), createFireContext());
+    expect(result).toMatchObject({ deferred: true, sessionId: 'scheduler-session' });
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
   });
 
   it('releases the heartbeat route lock before deferring to recent user activity', async () => {
@@ -397,7 +419,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
-  it('releases the heartbeat route lock before reporting an archived target', async () => {
+  it.each([false, true])('retires an archived target and releases an acquired lock (racing=%s)', async (racing) => {
     const order: string[] = [];
     const h = createSessionHarness(async () => ({ accepted: true }));
     const releaseAgentSwitchLock = vi.fn(() => {
@@ -413,16 +435,37 @@ describe('MakerScheduleRunner send outcome policy', () => {
       userSendAt: null,
       providerId: null,
     });
+    if (racing) mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active', userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); });
+    runner.attachScheduler({ pause } as never);
 
     await expect(
       runner.fire(
         baseSchedule({ targetSessionId: 'scheduler-session' }),
         createFireContext(),
       ),
-    ).rejects.toThrow(/target session not available/);
+    ).resolves.toMatchObject({ skipped: true });
 
-    expect(order).toEqual(['release', 'notify']);
-    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(racing ? ['release', 'pause'] : ['pause']);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(racing ? 1 : 0);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['archived', 'deleted'])('keeps unavailable %s bot targets in the routine failure lifecycle', async (status) => {
+    const order: string[] = [];
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const acquirePendingAgentSwitch = vi.fn(async () => () => { order.push('release'); });
+    const { runner, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    notifier.notify.mockImplementation(async () => { order.push('notify'); });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status, userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); throw new Error('Schedule not found: schedule-1'); });
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(baseSchedule({ source: 'bot', manual: true, targetSessionId: 'scheduler-session' }),
+      createFireContext())).rejects.toThrow(`target session not available (${status})`);
+    expect(order).toEqual(['release', 'pause', 'notify']);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
     expect(h.send).not.toHaveBeenCalled();
   });
 

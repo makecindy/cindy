@@ -13,6 +13,7 @@ import {
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
+import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
@@ -348,6 +349,58 @@ function requireReadyDb() {
   throw err;
 }
 
+function worktreeReferenceQuery(nextDb) {
+  const info = nextDb.prepare('PRAGMA table_info(sessions)').all();
+  const columns = new Set(info.map((column) => column.name));
+  const hasWorktree = columns.has('worktree_path');
+  const hasSource = columns.has('source');
+  const hasRemote = columns.has('remote_host_id');
+  if (!['id', 'status', 'working_dir'].every((name) => columns.has(name))
+    || (hasSource && !hasWorktree) || (hasRemote && !hasSource)) {
+    throw new Error('unsupported task reference schema');
+  }
+  const status = hasRemote ? 'status' : 'NULL';
+  return 'SELECT id, ' + status + ' AS status, ' + (hasSource ? 'source' : 'NULL') + ' AS source, '
+    + 'working_dir AS workingDir, ' + (hasWorktree ? 'worktree_path' : 'NULL') + ' AS worktreePath '
+    + 'FROM sessions' + (hasRemote ? ' WHERE remote_host_id IS NULL' : '');
+}
+
+function readLocalWorktreeReferences() {
+  const location = db.prepare('PRAGMA database_list').all();
+  const main = location.find((entry) => entry.name === 'main');
+  const databasePath = main && main.file;
+  if (!databasePath || !path.isAbsolute(databasePath)) throw new Error('task database path unavailable');
+  const currentPath = path.resolve(databasePath);
+  const root = path.dirname(currentPath);
+  const profiles = path.join(root, 'profiles');
+  if (fs.existsSync(profiles) && fs.readdirSync(profiles).length) {
+    throw new Error('profile database catalog requires a compatible reader');
+  }
+  const names = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
+  if (!names.includes(path.basename(currentPath))) throw new Error('unknown task database layout');
+  const rows = [];
+  for (const name of names) {
+    const file = path.join(root, name);
+    if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
+    const isCurrent = file === currentPath;
+    const nextDb = isCurrent ? db : new Database(file, {
+      readonly: true, fileMustExist: true,
+      ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
+    });
+    try {
+      const references = nextDb.transaction(() => nextDb.prepare(worktreeReferenceQuery(nextDb)).all())();
+      rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } finally {
+      if (!isCurrent) nextDb.close();
+    }
+  }
+  const after = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
+  if (after.length !== names.length || after.some((name) => !names.includes(name))) {
+    throw new Error('task database catalog changed during scan');
+  }
+  return rows;
+}
+
 const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1000, 5000, 30000, 5 * 60000, 30 * 60000];
@@ -396,6 +449,12 @@ function dispatchTx(readyDb, payload) {
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(readyDb, request.args);
+    case 'recentWorkdirs.removeWindowsIdentity':
+      return recentWorkdirsRemoveWindowsIdentity(readyDb, request.args);
+    case 'projectAliases.replaceIdentity':
+      return projectAliasesReplaceIdentity(readyDb, request.args);
     case 'toolResults.compactSession':
       return compactSessionToolResults(readyDb, request.args);
     case 'session.agentSwitchFallback':
@@ -423,6 +482,71 @@ function dispatchTx(readyDb, payload) {
     default:
       throw Object.assign(new Error('unknown tx: ' + name), { code: 'UNKNOWN_TX' });
   }
+}
+
+function recentWorkdirsMergeWindowsIdentity(readyDb, args) {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  return readyDb.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(readyDb, path);
+    const representative = matches
+      .slice()
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.rowid - b.rowid)[0];
+    const representativePath = representative?.path ?? path;
+    const newestTimestamp = Math.max(lastUsedAt, ...matches.map((row) => row.lastUsedAt));
+    readyDb
+      .prepare(
+        'INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)',
+      )
+      .run(representativePath, newestTimestamp);
+    const removeVariant = readyDb.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    for (const row of matches) {
+      if (row.path !== representativePath) removeVariant.run(row.path);
+    }
+  })();
+}
+
+function recentWorkdirsRemoveWindowsIdentity(readyDb, args) {
+  const payload = asRecord(args, 'recentWorkdirs.removeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  return readyDb.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(readyDb, path);
+    const removeVariant = readyDb.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    let changes = 0;
+    for (const row of matches) changes += removeVariant.run(row.path).changes;
+    return { changes };
+  })();
+}
+
+function recentWorkdirWindowsIdentityRows(readyDb, path) {
+  const identity = path.toLowerCase();
+  return readyDb
+    .prepare('SELECT rowid, path, last_used_at AS lastUsedAt FROM recent_workdirs')
+    .all()
+    .filter((row) => row.path.toLowerCase() === identity);
+}
+
+function projectAliasesReplaceIdentity(readyDb, args) {
+  const payload = asRecord(args, 'projectAliases.replaceIdentity args');
+  const projectKey = expectString(payload.projectKey, 'projectKey');
+  const comparisonKey = expectString(payload.comparisonKey, 'comparisonKey');
+  if (typeof payload.foldCase !== 'boolean') throw invalidArgs('foldCase must be a boolean');
+  const alias = nullableString(payload.alias);
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  return readyDb.transaction(() => {
+    const rows = readyDb.prepare('SELECT project_key AS projectKey FROM project_aliases').all();
+    const removeAlias = readyDb.prepare('DELETE FROM project_aliases WHERE project_key = ?');
+    for (const row of rows) {
+      const identity = payload.foldCase ? row.projectKey.toLowerCase() : row.projectKey;
+      if (identity === comparisonKey) removeAlias.run(row.projectKey);
+    }
+    if (alias == null) return null;
+    readyDb
+      .prepare('INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?)')
+      .run(projectKey, alias, updatedAt);
+    return { projectKey, alias, updatedAt };
+  })();
 }
 
 // Keep in sync with worker/opHandlers/tx.ts:skillUsageApplyMutation.
@@ -954,7 +1078,7 @@ function sessionsSetStatus(readyDb, args) {
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
+    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   return readyDb.transaction(() => {
     const applied = [];
@@ -979,6 +1103,8 @@ function sessionsSetStatus(readyDb, args) {
         title: updated.title,
         workingDir: updated.workingDir,
         workspaceKind: updated.workspaceKind,
+        remoteHostId: updated.remoteHostId,
+        source: updated.source,
         status,
       });
     }
@@ -1498,6 +1624,7 @@ function rewindCommit(readyDb, args) {
   const preserveMessageUuid = typeof payload.preserveMessageUuid === 'string' ? payload.preserveMessageUuid : null;
   const sdkSessionId = typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
   const requireLatestUser = payload.requireLatestUser === true;
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(payload.nativeForkAnchorSessionMap);
   const now = expectNumber(payload.now, 'now');
   const rows = readyDb.prepare(
     'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
@@ -1533,8 +1660,19 @@ function rewindCommit(readyDb, args) {
   const rewindParentlessSubagentTail = hasSubagentRuns
     ? readyDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE session_id = ? AND rewind_at IS NULL AND parent_tool_use_id IS NULL AND started_at >= ?')
     : null;
+  const updateAgentMeta = readyDb.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   readyDb.transaction(() => {
     for (const id of idsToRewind) updateMessage.run(now, id);
+    // Mirror worker/opHandlers/tx.ts: surviving rows that still anchor the old
+    // Codex thread are remapped to the replacement thread in the same transaction.
+    if (nativeForkAnchorSessionMap.size > 0) {
+      const rewoundIds = new Set(idsToRewind);
+      for (const row of rows) {
+        if (rewoundIds.has(row.id) || !row.agent_meta) continue;
+        const remapped = remapNativeForkAnchorSession(row.agent_meta, nativeForkAnchorSessionMap);
+        if (remapped !== row.agent_meta) updateAgentMeta.run(remapped, row.id);
+      }
+    }
     if (rewindSubagentByParent && rewindParentlessSubagentTail) {
       const rewoundIds = new Set(idsToRewind);
       const parentToolUseIds = new Set(
@@ -1802,7 +1940,7 @@ function forkSession(readyDb, args) {
       throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
     }
     readyDb.prepare(
-      'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, context_window_runtime, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     ).run(
       expectString(newSession.id, 'newSession.id'),
       expectString(newSession.title, 'newSession.title'),
@@ -1817,6 +1955,7 @@ function forkSession(readyDb, args) {
       expectNumber(newSession.totalCostUsd, 'newSession.totalCostUsd'),
       expectNumber(newSession.contextTokens, 'newSession.contextTokens'),
       expectNumber(newSession.contextWindow, 'newSession.contextWindow'),
+      nullableNumber(newSession.contextWindowRuntime),
       newSession.fastMode ? 1 : 0,
       nullableNumber(newSession.clearedAt),
       nullableNumber(newSession.pinnedAt),
@@ -2088,6 +2227,30 @@ function extractContentText(content) {
   return parts.join('\\n\\n');
 }
 
+// Mirror of worker/opHandlers/tx.ts remapNativeForkAnchorSession: only the
+// nativeForkAnchor.sdkSessionId moves; uuid / parent chains are untouched.
+function remapNativeForkAnchorSession(raw, map) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!isRecord(parsed)) return raw;
+  const nativeForkAnchor = parsed.nativeForkAnchor;
+  if (
+    !isRecord(nativeForkAnchor) ||
+    nativeForkAnchor.agentKind !== 'codex' ||
+    nativeForkAnchor.kind !== 'turn' ||
+    typeof nativeForkAnchor.sdkSessionId !== 'string'
+  ) {
+    return raw;
+  }
+  const mapped = map.get(nativeForkAnchor.sdkSessionId);
+  if (!mapped || mapped === nativeForkAnchor.sdkSessionId) return raw;
+  return JSON.stringify({ ...parsed, nativeForkAnchor: { ...nativeForkAnchor, sdkSessionId: mapped } });
+}
+
 function remapForkedAgentMeta(raw, map, legacyTranscriptParentUuids = new Set(), toolParentUuids = new Set(), nativeForkAnchorSessionMap = new Map()) {
   if (!raw || raw === 'null') return raw;
   let parsed;
@@ -2281,6 +2444,8 @@ function invalidArgs(message) {
 async function dispatch(op, args) {
   const readyDb = requireReadyDb();
   switch (op) {
+    case 'worktreeReferences':
+      return readLocalWorktreeReferences();
     case 'query': {
       const { sql, params } = args || {};
       return readyDb.prepare(sql).all(...normalizeParams(params));
@@ -2342,6 +2507,7 @@ interface PendingRpc {
   timeout: ReturnType<typeof setTimeout>;
   /** 当前预算窗口的起点(挂钟)。跨睡眠重武装时会重置,见 evaluateRpcTimeout。 */
   sentAtMs: number;
+  background: boolean;
 }
 
 interface QueuedRpc {
@@ -2352,6 +2518,7 @@ interface QueuedRpc {
   /** RPC 总预算从进入 transport 开始计,而不是等 dispatch 后才开始。 */
   budgetStartedAtMs: number;
   queueTimeout?: ReturnType<typeof setTimeout>;
+  background: boolean;
 }
 
 /**
@@ -2362,8 +2529,7 @@ const SLEEP_DETECTION_SLACK_MS = 5_000;
 
 /** RPC 超时评估结果:reject = 真超时;rearm = 定时器横跨系统睡眠,应重置预算续等。 */
 export type RpcTimeoutVerdict =
-  | { kind: 'reject'; wallElapsedMs: number }
-  | { kind: 'rearm'; wallElapsedMs: number };
+  { kind: 'reject'; wallElapsedMs: number } | { kind: 'rearm'; wallElapsedMs: number };
 
 /**
  * 判定一次 RPC 超时是真超时还是「跨睡眠假超时」。
@@ -2406,12 +2572,19 @@ export interface WorkerThreadTransportOptions {
   maxQueuedRpcs?: number;
   /** 单个 RPC 从入队到完成的总预算；生产默认 30s，测试可缩短。 */
   rpcTimeoutMs?: number;
+  /** 后台读（侧栏/对账）在途上限；写入和发消息走主配额。 */
+  maxBackgroundInFlightRpcs?: number;
+  /** 后台读排队上限；超出只拒后台读，不挡写入。 */
+  maxBackgroundQueuedRpcs?: number;
 }
 
 export class WorkerThreadTransport implements DbTransport {
   private static readonly RPC_TIMEOUT_MS = 30_000;
   private static readonly DEFAULT_MAX_IN_FLIGHT_RPCS = 128;
   private static readonly DEFAULT_MAX_QUEUED_RPCS = 512;
+  /** 一次侧栏索引大约 4 路 rawAll；16 够几路对账并行，占不满 128。 */
+  private static readonly DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS = 16;
+  private static readonly DEFAULT_MAX_BACKGROUND_QUEUED_RPCS = 32;
 
   private worker: Worker;
   private nextId = 1;
@@ -2432,14 +2605,12 @@ export class WorkerThreadTransport implements DbTransport {
   send<R = unknown>(op: string, args?: unknown, transferList?: unknown[]): Promise<R> {
     if (this.closed || this.closing) {
       return Promise.reject(
-        createDbTransportError(
-          DB_TRANSPORT_NOT_SENT,
-          'db worker transport is closed',
-        ),
+        createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport is closed'),
       );
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
+    const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
       const queued: QueuedRpc = {
         req,
@@ -2447,17 +2618,20 @@ export class WorkerThreadTransport implements DbTransport {
         resolve: resolve as (value: unknown) => void,
         reject,
         budgetStartedAtMs: Date.now(),
+        background,
       };
-      if (this.pending.size < this.maxInFlightRpcs) {
+      if (this.canDispatchImmediately(queued)) {
         this.dispatch(queued);
         return;
       }
-      if (this.queued.length >= this.maxQueuedRpcs) {
+      if (!this.canEnqueue(queued)) {
         reject(
           createDbTransportError(
             DB_TRANSPORT_NOT_SENT,
             `db worker RPC queue overloaded: op="${op}" inFlight=${this.pending.size}` +
-              ` queued=${this.queued.length}`,
+              ` queued=${this.queued.length}` +
+              ` backgroundInFlight=${this.backgroundPendingCount()}` +
+              ` backgroundQueued=${this.backgroundQueuedCount()}`,
           ),
         );
         return;
@@ -2471,9 +2645,7 @@ export class WorkerThreadTransport implements DbTransport {
   on(event: 'vec-status', cb: (payload: VecStatusEvent) => void): void;
   on(
     event: EventName,
-    cb:
-      | ((payload: LogEvent) => void)
-      | ((payload: VecStatusEvent) => void),
+    cb: ((payload: LogEvent) => void) | ((payload: VecStatusEvent) => void),
   ): void {
     const listeners = this.eventListeners.get(event) ?? new Set<(payload: unknown) => void>();
     listeners.add(cb as (payload: unknown) => void);
@@ -2498,10 +2670,7 @@ export class WorkerThreadTransport implements DbTransport {
     } finally {
       this.closed = true;
       this.rejectAllPending(
-        createDbTransportError(
-          DB_TRANSPORT_OUTCOME_UNKNOWN,
-          'db worker transport closed',
-        ),
+        createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'db worker transport closed'),
         createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport closed'),
       );
       await this.worker.terminate();
@@ -2528,15 +2697,57 @@ export class WorkerThreadTransport implements DbTransport {
     return this.opts.rpcTimeoutMs ?? WorkerThreadTransport.RPC_TIMEOUT_MS;
   }
 
+  private get maxBackgroundInFlightRpcs(): number {
+    return Math.min(
+      this.maxInFlightRpcs,
+      this.opts.maxBackgroundInFlightRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS,
+    );
+  }
+
+  private get maxBackgroundQueuedRpcs(): number {
+    return Math.min(
+      this.maxQueuedRpcs,
+      this.opts.maxBackgroundQueuedRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_QUEUED_RPCS,
+    );
+  }
+
+  private backgroundPendingCount(): number {
+    let count = 0;
+    for (const pending of this.pending.values()) {
+      if (pending.background) count += 1;
+    }
+    return count;
+  }
+
+  private backgroundQueuedCount(): number {
+    let count = 0;
+    for (const item of this.queued) {
+      if (item.background) count += 1;
+    }
+    return count;
+  }
+
+  private canDispatchImmediately(item: QueuedRpc): boolean {
+    if (this.pending.size >= this.maxInFlightRpcs) return false;
+    if (item.background && this.backgroundPendingCount() >= this.maxBackgroundInFlightRpcs) {
+      return false;
+    }
+    return true;
+  }
+
+  private canEnqueue(item: QueuedRpc): boolean {
+    if (this.queued.length >= this.maxQueuedRpcs) return false;
+    if (item.background && this.backgroundQueuedCount() >= this.maxBackgroundQueuedRpcs) {
+      return false;
+    }
+    return true;
+  }
+
   private armQueuedTimeout(item: QueuedRpc): void {
     const onTimeout = (): void => {
       const index = this.queued.indexOf(item);
       if (index < 0) return;
-      const verdict = evaluateRpcTimeout(
-        item.budgetStartedAtMs,
-        Date.now(),
-        this.rpcTimeoutMs,
-      );
+      const verdict = evaluateRpcTimeout(item.budgetStartedAtMs, Date.now(), this.rpcTimeoutMs);
       if (verdict.kind === 'rearm') {
         item.budgetStartedAtMs = Date.now();
         item.queueTimeout = setTimeout(onTimeout, this.rpcTimeoutMs);
@@ -2560,11 +2771,7 @@ export class WorkerThreadTransport implements DbTransport {
     const onTimeout = (): void => {
       const pending = this.pending.get(id);
       if (!pending) return;
-      const verdict = evaluateRpcTimeout(
-        pending.sentAtMs,
-        Date.now(),
-        this.rpcTimeoutMs,
-      );
+      const verdict = evaluateRpcTimeout(pending.sentAtMs, Date.now(), this.rpcTimeoutMs);
       if (verdict.kind === 'rearm') {
         // 跨睡眠假超时:重置预算续等,请求在唤醒后照常完成或在真超时时拒绝。
         this.emitClientLog('warn', {
@@ -2588,36 +2795,44 @@ export class WorkerThreadTransport implements DbTransport {
       this.drainQueue();
     };
     const budgetElapsedMs = Date.now() - item.budgetStartedAtMs;
-    const remainingBudgetMs = Math.max(
-      1,
-      this.rpcTimeoutMs - budgetElapsedMs,
-    );
+    const remainingBudgetMs = Math.max(1, this.rpcTimeoutMs - budgetElapsedMs);
     const timeout = setTimeout(onTimeout, remainingBudgetMs);
     this.pending.set(id, {
       resolve: item.resolve,
       reject: item.reject,
       timeout,
       sentAtMs: item.budgetStartedAtMs,
+      background: item.background,
     });
     try {
       this.worker.postMessage(item.req, item.transferList as never);
     } catch (err) {
       clearTimeout(timeout);
       this.pending.delete(id);
-      item.reject(
-        createDbTransportError(
-          DB_TRANSPORT_NOT_SENT,
-          toError(err).message,
-          err,
-        ),
-      );
+      item.reject(createDbTransportError(DB_TRANSPORT_NOT_SENT, toError(err).message, err));
       this.drainQueue();
     }
   }
 
+  private takeNextQueued(): QueuedRpc | undefined {
+    const interactiveIndex = this.queued.findIndex((item) => !item.background);
+    if (interactiveIndex >= 0) {
+      const next = this.queued[interactiveIndex];
+      if (!this.canDispatchImmediately(next)) return undefined;
+      this.queued.splice(interactiveIndex, 1);
+      return next;
+    }
+    const backgroundIndex = this.queued.findIndex((item) => item.background);
+    if (backgroundIndex < 0) return undefined;
+    const next = this.queued[backgroundIndex];
+    if (!this.canDispatchImmediately(next)) return undefined;
+    this.queued.splice(backgroundIndex, 1);
+    return next;
+  }
+
   private drainQueue(): void {
     while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
-      const next = this.queued.shift();
+      const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
     }

@@ -1233,7 +1233,7 @@ describe('startup update relaunch safety', () => {
       const relaunch = ipcHandlers.get('update-channel-relaunch');
       expect(relaunch).toBeTypeOf('function');
       relaunch?.({ sender: { id: 1 } });
-      expect(appRelaunch).toHaveBeenCalled();
+      expect(appRelaunch).toHaveBeenCalledWith({ args: process.argv.slice(1) });
       expect(appQuit).toHaveBeenCalled();
       expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'))).toBe(false);
     } finally {

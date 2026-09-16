@@ -1341,3 +1341,29 @@ describe('feishu group inbound gate', () => {
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
   });
 });
+
+describe('private topic notification ancestry', () => {
+  it('preserves root and thread separately while keeping the real owner identity', async () => {
+    await connect();
+    const events = collectEvents();
+    const raw = groupMessage({ rootId: 'om_notification', parentId: 'om_previous_reply', threadId: 'omt_topic' });
+    raw.message.chat_type = 'p2p';
+    await mocks.eventHandlers['im.message.receive_v1']!(raw);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      senderId: OWNER, chatId: 'oc_chat1',
+      replyThread: { rootMessageId: 'om_notification', threadId: 'omt_topic' },
+    });
+    expect(events[0].speaker).toBeUndefined();
+  });
+
+  it('does not treat an ordinary quoted reply without thread_id as a topic', async () => {
+    await connect();
+    const events = collectEvents();
+    const raw = groupMessage({ rootId: 'om_notification', parentId: 'om_notification' });
+    raw.message.chat_type = 'p2p';
+    await mocks.eventHandlers['im.message.receive_v1']!(raw);
+    expect(events).toHaveLength(1);
+    expect(events[0].replyThread).toBeUndefined();
+  });
+});

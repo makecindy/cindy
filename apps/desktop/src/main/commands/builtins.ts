@@ -11,10 +11,20 @@
  */
 
 import { spawn } from 'node:child_process';
-import { BrowserWindow, webContents } from 'electron';
+import { app, BrowserWindow, webContents } from 'electron';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
+import { t } from '../i18n.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
+import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
+import { createMakeDoctorCommand } from '../cindy-make/doctorCommand.js';
+import { createMakeToolchainEnvironment } from '../cindy-make/toolchainEnvironment.js';
+import { prepareCindyMakeEnvironment } from '../cindy-make/prepare.js';
+import { searchCindyUpstream } from '../cindy-make/upstreamQuery.js';
+import { makeToolRoot } from '../cindy-make/toolInstaller.js';
+import { makeSourceRoot, prepareCindySource } from '../cindy-make/sourcePreparation.js';
+import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
 // type-only:不引入对 goal-host / learn-host 的运行时依赖(避免潜在 import 环),
 // 运行时实例由 bootstrap 经 deps.getGoalController / getLearnController 注入。
 import type { GoalController } from '../goal-host/controller.js';
@@ -32,7 +42,18 @@ const log = createLogger('desktop-commands');
  */
 export interface DesktopCommandTriggeredPayload {
   command:
-    'help' | 'clear' | 'cmd' | 'issue' | 'review' | 'jump-session' | 'goal' | 'workflows' | 'learn';
+    | 'help'
+    | 'clear'
+    | 'cmd'
+    | 'issue'
+    | 'review'
+    | 'jump-session'
+    | 'goal'
+    | 'workflows'
+    | 'learn'
+    | 'cindy-make-doctor'
+    | 'cindy-make';
+  doctorReport?: MakeDoctorReport;
   sessionId?: string;
   workingDir?: string;
   args?: string;
@@ -77,7 +98,10 @@ function broadcastDesktopCommand(payload: DesktopCommandTriggeredPayload): void 
   }
 }
 
-function sendDesktopCommandToSender(ctx: DesktopCommandContext, payload: DesktopCommandTriggeredPayload): void {
+function sendDesktopCommandToSender(
+  ctx: DesktopCommandContext,
+  payload: DesktopCommandTriggeredPayload,
+): void {
   // 只回发起窗口:无 sessionId 的 draft 命令如果广播,会被其它已挂载 SessionView
   // 当成全局命令消费。sender id 缺失(防御未来非 IPC 调用路径)时回退广播。
   const target =
@@ -204,8 +228,12 @@ export async function runShellCommand(opts: RunCmdOptions): Promise<CmdExecution
         cmdLine,
         cwd,
         exitCode,
-        stdout: stdoutTruncated ? `${stdoutText}\n... (truncated, ${MAX_OUTPUT_BYTES}B cap)` : stdoutText,
-        stderr: stderrTruncated ? `${stderrText}\n... (truncated, ${MAX_OUTPUT_BYTES}B cap)` : stderrText,
+        stdout: stdoutTruncated
+          ? `${stdoutText}\n... (truncated, ${MAX_OUTPUT_BYTES}B cap)`
+          : stdoutText,
+        stderr: stderrTruncated
+          ? `${stderrText}\n... (truncated, ${MAX_OUTPUT_BYTES}B cap)`
+          : stderrText,
         elapsedMs,
         timedOut,
         ...(spawnError ? { spawnError } : {}),
@@ -240,7 +268,10 @@ export async function runShellCommand(opts: RunCmdOptions): Promise<CmdExecution
     child.stdout?.on('data', (chunk: Buffer) => {
       if (stdoutTruncated) return;
       const remaining = MAX_OUTPUT_BYTES - stdoutBytes;
-      if (remaining <= 0) { stdoutTruncated = true; return; }
+      if (remaining <= 0) {
+        stdoutTruncated = true;
+        return;
+      }
       if (chunk.length <= remaining) {
         stdoutChunks.push(chunk);
         stdoutBytes += chunk.length;
@@ -254,7 +285,10 @@ export async function runShellCommand(opts: RunCmdOptions): Promise<CmdExecution
     child.stderr?.on('data', (chunk: Buffer) => {
       if (stderrTruncated) return;
       const remaining = MAX_OUTPUT_BYTES - stderrBytes;
-      if (remaining <= 0) { stderrTruncated = true; return; }
+      if (remaining <= 0) {
+        stderrTruncated = true;
+        return;
+      }
       if (chunk.length <= remaining) {
         stderrChunks.push(chunk);
         stderrBytes += chunk.length;
@@ -277,11 +311,19 @@ export async function runShellCommand(opts: RunCmdOptions): Promise<CmdExecution
     // 超时 → SIGTERM, 再 5s 兜底 SIGKILL
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
-      try { child.kill('SIGTERM'); } catch { /* ignore */ }
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
     }, CMD_TIMEOUT_MS);
     const graceHandle = setTimeout(() => {
       if (!settled) {
-        try { child.kill('SIGKILL'); } catch { /* ignore */ }
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* ignore */
+        }
       }
     }, CMD_TIMEOUT_MS + CMD_KILL_GRACE_MS);
   });
@@ -336,6 +378,114 @@ export function registerBuiltinDesktopCommands(
   registry: DesktopCommandRegistry,
   deps: BuiltinDesktopCommandDeps,
 ): void {
+  for (const name of ['cindy-make-doctor', 'cindy-make'] as const)
+    registry.register(
+      createMakeDoctorCommand({
+        name,
+        description: () =>
+          t(name === 'cindy-make' ? 'cindyMake.description' : 'cindyMakeDoctor.description'),
+        environment: (ctx) =>
+          createMakeToolchainEnvironment(app.getPath('userData'), {
+            forceManagedTools: ctx.forceManagedTools === true,
+          }),
+        allowInstallTest: () => !app.isPackaged,
+        searchUpstream: async (request, signal) => {
+          const { outboundFetch } = await import('../maker-host/outbound-fetch.js');
+          return searchCindyUpstream(request, signal, { fetch: outboundFetch });
+        },
+        prepare: (runId, env, signal, publish) =>
+          prepareCindyMakeEnvironment(
+            runId,
+            env,
+            makeToolRoot(app.getPath('userData')),
+            signal,
+            publish,
+          ),
+        prepareSource: async (runId, env, signal, publish, options) => {
+          const version = app.getVersion();
+          const channel = !app.isPackaged
+            ? 'dev'
+            : /-beta(?:\.|$)/i.test(version)
+              ? 'beta'
+              : 'release';
+          const result = await prepareCindySource(
+            env,
+            makeSourceRoot(app.getPath('userData')),
+            { channel, version },
+            signal,
+            (progress) => {
+              publish({
+                runId,
+                platform: env.platform,
+                arch: env.arch,
+                mode: 'prepare',
+                status:
+                  progress.status === 'preparing'
+                    ? 'running'
+                    : progress.status === 'ready'
+                      ? 'completed'
+                      : progress.status,
+                checks: [],
+                source: {
+                  status:
+                    options?.clearOnly && progress.status === 'ready'
+                      ? 'missing'
+                      : progress.status,
+                  path: progress.path,
+                  channel: progress.target.channel,
+                  version: progress.target.version,
+                  ref: progress.target.ref,
+                  commit: progress.commit,
+                  branch: progress.branch,
+                  baseCommit: progress.baseCommit,
+                  error: progress.error,
+                  phase: progress.phase,
+                  progress: progress.progress,
+                },
+              });
+            },
+            options,
+          );
+          return {
+            runId,
+            platform: env.platform,
+            arch: env.arch,
+            mode: 'prepare',
+            status: result.status === 'ready' ? 'completed' : result.status,
+            checks: [],
+            source: {
+              status: options?.clearOnly && result.status === 'ready' ? 'missing' : result.status,
+              path: result.path,
+              channel: result.target.channel,
+              version: result.target.version,
+              ref: result.target.ref,
+              commit: result.commit,
+              branch: result.branch,
+              baseCommit: result.baseCommit,
+              error: result.error,
+            },
+          };
+        },
+        publish: (ctx, doctorReport) => {
+          const target =
+            typeof ctx.senderWebContentsId === 'number'
+              ? webContents.fromId(ctx.senderWebContentsId)
+              : undefined;
+          // Local diagnostics are private to the invoking trusted window; never broadcast.
+          if (
+            !target ||
+            target.isDestroyed() ||
+            !isTrustedAppRendererWindow(BrowserWindow.fromWebContents(target))
+          )
+            return;
+          try {
+            target.send(MAKER_PUSH.DESKTOP_COMMAND_TRIGGERED, { command: name, doctorReport });
+          } catch {
+            /* Closing a view does not change the diagnostic result. */
+          }
+        },
+      }),
+    );
   registry.register({
     name: 'help',
     description: 'Show the help card with every available command and usage example.',
@@ -385,8 +535,13 @@ export function registerBuiltinDesktopCommands(
           broadcastDesktopCommand({
             ...buildPayload('cmd', ctx),
             result: {
-              cmdLine, cwd: '', exitCode: -1, stdout: '', stderr: '',
-              elapsedMs: 0, timedOut: false,
+              cmdLine,
+              cwd: '',
+              exitCode: -1,
+              stdout: '',
+              stderr: '',
+              elapsedMs: 0,
+              timedOut: false,
               spawnError: 'remote session has no working directory',
             },
           });
@@ -422,8 +577,12 @@ export function registerBuiltinDesktopCommands(
       log.info('/cmd exec ▶', { cmdLine, cwd, sessionId: ctx.sessionId ?? '<none>' });
       const result = await runShellCommand({ cmdLine, cwd });
       log.info('/cmd exec ◀', {
-        cmdLine, cwd, exitCode: result.exitCode, elapsedMs: result.elapsedMs,
-        timedOut: result.timedOut, stdoutBytes: Buffer.byteLength(result.stdout, 'utf8'),
+        cmdLine,
+        cwd,
+        exitCode: result.exitCode,
+        elapsedMs: result.elapsedMs,
+        timedOut: result.timedOut,
+        stdoutBytes: Buffer.byteLength(result.stdout, 'utf8'),
         stderrBytes: Buffer.byteLength(result.stderr, 'utf8'),
         spawnError: result.spawnError ?? null,
       });
@@ -436,8 +595,7 @@ export function registerBuiltinDesktopCommands(
 
   registry.register({
     name: 'issue',
-    description:
-      `File feedback to the ${BRAND_NAME} team — the agent helps clarify details, then submits a GitHub issue after your confirmation. Usage: /issue [initial description]`,
+    description: `File feedback to the ${BRAND_NAME} team — the agent helps clarify details, then submits a GitHub issue after your confirmation. Usage: /issue [initial description]`,
     execute: (ctx) => {
       sendDesktopCommandToSender(ctx, buildPayload('issue', ctx));
     },

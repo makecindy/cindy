@@ -46,7 +46,7 @@ describe('Bot skill tools', () => {
       callbacks: { save, list: vi.fn() },
     });
 
-    const result = await reg.call('save_bot_skill', {
+    const result = await reg.call('save_teammate_skill', {
       name: 'weekly-report',
       description: 'How I put the weekly report together',
       body: '1. Pull merged PRs\n2. Group by author',
@@ -74,7 +74,7 @@ describe('Bot skill tools', () => {
       },
     });
 
-    const result = await reg.call('save_bot_skill', {
+    const result = await reg.call('save_teammate_skill', {
       name: 'weekly-report',
       description: 'sharper now',
       body: 'step 1',
@@ -83,7 +83,7 @@ describe('Bot skill tools', () => {
   });
 
   it('lists what the Bot already learned so it does not learn it twice', async () => {
-    const result = await registry().call('list_bot_skills', {});
+    const result = await registry().call('list_teammate_skills', {});
     expect(parse(result)).toMatchObject({ ok: true, skills: [SKILL] });
   });
 
@@ -94,10 +94,10 @@ describe('Bot skill tools', () => {
       callbacks: { save: vi.fn(), list: vi.fn() },
     });
 
-    for (const tool of ['save_bot_skill', 'list_bot_skills']) {
+    for (const tool of ['save_teammate_skill', 'list_teammate_skills']) {
       const result = await reg.call(
         tool,
-        tool === 'save_bot_skill' ? { name: 'a', description: 'b', body: 'c' } : {},
+        tool === 'save_teammate_skill' ? { name: 'a', description: 'b', body: 'c' } : {},
       );
       expect(result.isError).toBe(true);
       expect(parse(result)).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
@@ -116,7 +116,7 @@ describe('Bot skill tools', () => {
       },
     });
 
-    const result = await reg.call('save_bot_skill', {
+    const result = await reg.call('save_teammate_skill', {
       name: '周报怎么写',
       description: 'b',
       body: 'c',
@@ -128,7 +128,7 @@ describe('Bot skill tools', () => {
   it('rejects a stray field instead of silently dropping it', async () => {
     // registry 用 strictObject 校验:模型把 botId 塞进来必须被打回,不能静默剥掉后
     // 当成「写进自己名下」成功返回。
-    const result = await registry().call('save_bot_skill', {
+    const result = await registry().call('save_teammate_skill', {
       name: 'a',
       description: 'b',
       body: 'c',

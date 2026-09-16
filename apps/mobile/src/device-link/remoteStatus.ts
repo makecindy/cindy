@@ -146,6 +146,7 @@ export function describeRemoteError(error: string | null): string | null {
 
 function localizedStableRemoteError(error: string): string | null {
   const simpleMarkers: Array<[string, string]> = [
+    ['MODEL_VISIBILITY_NOT_READY', 'transient'],
     ['REMOTE_DISABLED', 'remoteDisabled'],
     ['CHANNEL_NOT_ALLOWED', 'channelNotAllowed'],
     ['ACCESS_REVOKED', 'accessRevoked'],

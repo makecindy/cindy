@@ -1496,6 +1496,13 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('账号业务元数据使用插件 KV，不声明 Host 昵称接口', () => {
+    expect(FORGE_GUIDE).toContain('昵称等自定义账号元数据由插件通过 `/kv` 保存');
+    expect(FORGE_GUIDE).toContain('执行仍传账号 id，不把昵称当作指令或授权');
+    expect(FORGE_GUIDE).not.toContain('/accounts/<accountId>/nickname');
+    expect(FORGE_GUIDE).not.toContain('accounts 中可选 nickname');
+  });
+
   it('documents the org-only token publish flow without exposing a file path handoff', () => {
     expect(FORGE_GUIDE).toContain("intent: 'publish'");
     expect(FORGE_GUIDE).toContain('一次性 `publishToken`');
@@ -1605,6 +1612,29 @@ describe('FORGE_GUIDE', () => {
     ]) {
       expect(skillSection).toContain(marker);
     }
+  });
+
+  it('Manual-only 插件可发现，iOS 标准形态使用 Manual 与 Host MCP', () => {
+    const manualSection = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 3.6 manual:'), FORGE_GUIDE.indexOf('## 4. main.js'),
+    );
+    expect(manualSection).toContain('Manual-only');
+    expect(manualSection).toContain('不需要声明虚假工具');
+    expect(manualSection).toContain('首个支持 Manual-only 发现与读取的 Cindy 正式版本');
+    const iosSection = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 4.19'), FORGE_GUIDE.indexOf('## 4.20'),
+    );
+    for (const marker of [
+      '`manual + iosSimulator`',
+      'ghost_manual({ ghost_id: "ios-simulator", path: "ios-simulator" })',
+      '`cindy_ios_simulator` MCP',
+      '运行时 capability 检查',
+      '插件拿不到视频帧、viewer lease、触控入口',
+      '普通权限规则改走外部 Xcode、Simulator.app、`simctl`',
+      '未知 v3 顶层字段',
+    ]) expect(iosSection).toContain(marker);
+    expect(iosSection).not.toContain('Skill');
+    expect(iosSection).not.toContain('skill + iosSimulator');
   });
 
   it('manual 发布契约按顺序锁定 Cindy 版本门槛与旧客户端回退', () => {
@@ -1865,8 +1895,9 @@ describe('FORGE_GUIDE', () => {
       'CONFIRM_DENIED',
       'uploadDir',
       'dir_deposit',
-      // 目录/保存交接的权限档契约:本地 Full Access 自动，其余/远程确认。
+      // 目录/保存交接沿用会话档位:Full 自动、Auto 审阅、Ask/远程确认。
       '本地 Full Access 会话则自动过户、不弹卡',
+      'Auto 交当前会话统一审阅',
       '远程会话仍由用户确认',
       // fs 槽(2026-07-14):三档代写(私有目录/工作目录/save 票据)。
       'fs-request',

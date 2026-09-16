@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HOOK_DEFAULT_PERMISSION_MODE,
-  patchForAgentChange,
   patchForModelChange,
   resolveEffectiveRow,
   resolveEffectivePermissionMode,
@@ -26,34 +25,6 @@ const CODEX_CAPS: PrefsAgentCaps = {
   models: [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' }],
   permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }],
 };
-
-describe('patchForAgentChange', () => {
-  it('换 agent: 清 model/effort(与 agent 强绑定)', () => {
-    expect(patchForAgentChange('codex')).toEqual({
-      agentKind: 'codex',
-      model: null,
-      effort: null,
-    });
-  });
-
-  // 2026-07 安全修正:原实现会在「新 agent 不支持该权限档」时把 permissionMode 清成 null,
-  // 而 null = 无显式偏好 = 派发侧回落 bypassPermissions(完全访问)。于是用户选了更严的
-  // acceptEdits, 只要切一下 agent 就被静默放宽 —— 正是原注释声称要防的那件事。
-  // 现在一律原样保留, 由 resolveEffectivePermissionMode 统一校准到最严档。
-  it('换 agent: 权限档永不清空 —— 清空会静默放宽成 bypassPermissions', () => {
-    const patch = patchForAgentChange('codex');
-    expect(patch).not.toHaveProperty('permissionMode');
-    expect(patchForAgentChange('claude-code')).not.toHaveProperty('permissionMode');
-  });
-
-  it('agent 置 null(跟随默认): 整组清空, 权限档保留', () => {
-    expect(patchForAgentChange(null)).toEqual({
-      agentKind: null,
-      model: null,
-      effort: null,
-    });
-  });
-});
 
 describe('resolveEffectiveRow — 过期存量值归一化(与派发侧 defaults.ts 同口径)', () => {
   const IM_DEFAULTS = {

@@ -21,7 +21,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DiffView } from '@/components/chat/DiffView';
 import { MarkdownDiffBlock } from '@/components/chat/MarkdownDiffBlock';
@@ -146,6 +146,7 @@ describe('DiffView 虚拟化分支', () => {
         };
       },
     });
+    vi.useFakeTimers();
     try {
       const { container } = render(
         <DiffView oldString={oldString} newString={newString} analysis={analysis} />,
@@ -170,6 +171,9 @@ describe('DiffView 虚拟化分支', () => {
       });
       await act(async () => {
         fireEvent.scroll(scroller!);
+        // Finish the virtualizer's debounced scroll-end update while jsdom is
+        // still alive; its observer cleanup only removes the scroll listener.
+        await vi.runOnlyPendingTimersAsync();
       });
       const afterScrollIndexes = Array.from(
         scroller?.querySelectorAll<HTMLElement>('[data-index]') ?? [],
@@ -177,7 +181,10 @@ describe('DiffView 虚拟化分支', () => {
       );
       expect(afterScrollIndexes.length).toBeGreaterThan(0);
       expect(afterScrollIndexes).not.toEqual(initialIndexes);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
+      cleanup();
+      vi.useRealTimers();
       if (clientHeightDescriptor) {
         Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeightDescriptor);
       }

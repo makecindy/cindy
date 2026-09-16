@@ -11,13 +11,7 @@ interface ResolveDisplayContextWindowOptions {
   runtimeWindowAuthoritative?: boolean;
 }
 
-/**
- * Resolve the context window shown in the renderer.
- *
- * SDK/modelUsage values are normally runtime ground truth, but 200K is also
- * Claude Code's unknown-model default and can remain in session state after a
- * model switch. Maker capabilities are more accurate for provider-routed models.
- */
+/** Runtime snapshots already contain the applied working budget. Catalogs only fill missing data. */
 export function resolveDisplayContextWindow({
   sdkContextWindow,
   modelContextWindow,
@@ -31,23 +25,11 @@ export function resolveDisplayContextWindow({
     return Number.isFinite(nativeContextWindow) && (nativeContextWindow ?? 0) > 0
       ? Math.floor(nativeContextWindow!) : 0;
   }
-  // Restored snapshots and SDK values share this slot. Only route-verified
-  // metadata may supersede it, matching the host's runtime normalization.
-  if (Number.isFinite(verifiedContextWindow) && (verifiedContextWindow ?? 0) > 0) {
-    return Math.floor(verifiedContextWindow!);
+  if (Number.isFinite(sdkContextWindow) && sdkContextWindow > 0) {
+    return Math.floor(sdkContextWindow);
   }
-  const configured =
-    Number.isFinite(modelContextWindow) && (modelContextWindow ?? 0) > 0
-      ? Math.floor(modelContextWindow!)
-      : undefined;
-  const sdk =
-    Number.isFinite(sdkContextWindow) && sdkContextWindow > 0
-      ? Math.floor(sdkContextWindow)
-      : undefined;
-
-  if (configured && (!sdk || (sdk <= DEFAULT_CONTEXT_WINDOW && configured > sdk))) {
-    return configured;
+  for (const fallback of [verifiedContextWindow, modelContextWindow]) {
+    if (Number.isFinite(fallback) && (fallback ?? 0) > 0) return Math.floor(fallback!);
   }
-
-  return sdk ?? configured ?? DEFAULT_CONTEXT_WINDOW;
+  return DEFAULT_CONTEXT_WINDOW;
 }

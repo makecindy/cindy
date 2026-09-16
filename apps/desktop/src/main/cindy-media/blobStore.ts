@@ -92,80 +92,106 @@ export function mimeForExt(ext: string): string | null {
   return MIME_BY_EXT[ext] ?? null;
 }
 
-/**
- * 写入一段字节:算指纹 → 分桶落盘(幂等)→ 返回指纹与地址。
- * 只写字节仓;账本记账(recordBlob/addRef)由调用方接着做。
- */
-export async function writeBlob(params: {
-  buffer: Uint8Array;
+/** File sources are private Host-owned downloads, never plugin-supplied paths. */
+export type BlobSource =
+  | { buffer: Uint8Array; filePath?: never }
+  | { filePath: string; buffer?: never };
+
+/** 写入内存或 Host 文件字节，复用相同的指纹、原子发布和去重校验。 */
+export async function writeBlob(params: BlobSource & {
   mimeType: string;
+  assertStillValid?: () => void;
 }): Promise<WrittenBlob> {
-  const { buffer, mimeType } = params;
-  if (!buffer || buffer.byteLength === 0) {
-    throw new Error('cindy-media: empty buffer');
-  }
+  const { mimeType } = params;
   const ext = EXT_BY_MIME[mimeType];
-  if (!ext) {
-    throw new Error(`cindy-media: unsupported mime type: ${mimeType}`);
-  }
+  if (!ext) throw new Error(`cindy-media: unsupported mime type: ${mimeType}`);
+  const source = params.filePath !== undefined ? await fs.open(params.filePath, noFollowReadFlags()) : undefined;
+  try {
+    const hasher = createHash('sha256');
+    let bytes = 0;
+    if (source) {
+      if (!(await source.stat()).isFile()) throw new Error('cindy-media: source is not a regular file');
+      for await (const chunk of source.createReadStream({ autoClose: false, emitClose: false })) {
+        params.assertStillValid?.();
+        hasher.update(chunk);
+        bytes += chunk.byteLength;
+      }
+    } else if (params.buffer) {
+      hasher.update(params.buffer);
+      bytes = params.buffer.byteLength;
+    }
+    if (bytes === 0) throw new Error('cindy-media: empty buffer');
+    const hash = hasher.digest('hex');
+    const { dir, dest } = await prepareBlobDestination(hash, ext);
 
-  const hash = createHash('sha256').update(buffer).digest('hex');
-  const bytes = buffer.byteLength;
-  const { dir, dest } = await prepareBlobDestination(hash, ext);
-
-  return withDestLock(dest, async () => {
-    // 同目录 tmp + link/rename 发布:终点不以半截内容出现;已存在分支
-    // (EEXIST 与不支持 hard-link 且 dest 已在)共用 inspectExistingBlob。
-    let deduplicated = false;
-    const tmpPath = path.join(dir, `.tmp-${hash}-${process.pid}-${randomUUID()}`);
-    try {
-      await fs.writeFile(tmpPath, buffer, { flag: 'wx' });
+    return await withDestLock(dest, async () => {
+      // 同目录 tmp + link/rename 发布:终点不以半截内容出现;已存在分支
+      // (EEXIST 与不支持 hard-link 且 dest 已在)共用 inspectExistingBlob。
+      let deduplicated = false;
+      const tmpPath = path.join(dir, `.tmp-${hash}-${process.pid}-${randomUUID()}`);
       try {
-        await fs.link(tmpPath, dest);
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException)?.code;
-        if (code === 'EEXIST') {
-          deduplicated = await reconcileExistingBlob(tmpPath, dest, hash, bytes);
+        if (source) {
+          const output = await fs.open(tmpPath, 'wx', 0o600);
+          try {
+            for await (const chunk of source.createReadStream({ start: 0, autoClose: false, emitClose: false })) {
+              params.assertStillValid?.();
+              await output.writeFile(chunk);
+            }
+          } finally {
+            await output.close();
+          }
         } else {
-          // 个别文件系统不支持硬链接(exFAT 等):已存在走同一校验出口,
-          // 缺失才 rename 发布。destExists 不得在未核验时当去重成功。
-          const destExists = await fs.lstat(dest).then(
-            () => true,
-            (accessErr: NodeJS.ErrnoException) => {
-              if (accessErr.code === 'ENOENT') return false;
-              throw accessErr;
-            },
-          );
-          if (destExists) {
+          await fs.writeFile(tmpPath, params.buffer!, { flag: 'wx' });
+        }
+        try {
+          await fs.link(tmpPath, dest);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException)?.code;
+          if (code === 'EEXIST') {
             deduplicated = await reconcileExistingBlob(tmpPath, dest, hash, bytes);
           } else {
-            await publishByRename(tmpPath, dest, hash, bytes);
+            // 个别文件系统不支持硬链接(exFAT 等):已存在走同一校验出口,
+            // 缺失才 rename 发布。destExists 不得在未核验时当去重成功。
+            const destExists = await fs.lstat(dest).then(
+              () => true,
+              (accessErr: NodeJS.ErrnoException) => {
+                if (accessErr.code === 'ENOENT') return false;
+                throw accessErr;
+              },
+            );
+            if (destExists) {
+              deduplicated = await reconcileExistingBlob(tmpPath, dest, hash, bytes);
+            } else {
+              await publishByRename(tmpPath, dest, hash, bytes);
+            }
           }
         }
-      }
 
-      let finalState = await inspectExistingBlob(dest, hash, bytes);
-      if (finalState.kind !== 'ok') {
-        finalState = await rereadOnce(dest, hash, bytes);
+        let finalState = await inspectExistingBlob(dest, hash, bytes);
+        if (finalState.kind !== 'ok') {
+          finalState = await rereadOnce(dest, hash, bytes);
+        }
+        if (finalState.kind !== 'ok') {
+          throw finalState.kind === 'invalid'
+            ? existingBlobError(finalState)
+            : new Error('cindy-media: blob destination did not match input hash');
+        }
+        await assertBlobPathContained(dest);
+        return {
+          hash,
+          ext,
+          mimeType,
+          bytes,
+          url: blobUrl(hash, ext),
+          deduplicated,
+        };
+      } finally {
+        await fs.rm(tmpPath, { force: true }).catch(() => {});
       }
-      if (finalState.kind !== 'ok') {
-        throw finalState.kind === 'invalid'
-          ? existingBlobError(finalState)
-          : new Error('cindy-media: blob destination did not match input hash');
-      }
-      await assertBlobPathContained(dest);
-      return {
-        hash,
-        ext,
-        mimeType,
-        bytes,
-        url: blobUrl(hash, ext),
-        deduplicated,
-      };
-    } finally {
-      await fs.rm(tmpPath, { force: true }).catch(() => {});
-    }
-  });
+    });
+  } finally {
+    await source?.close();
+  }
 }
 
 async function withDestLock<T>(dest: string, fn: () => Promise<T>): Promise<T> {

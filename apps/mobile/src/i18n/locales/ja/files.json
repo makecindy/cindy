@@ -48,8 +48,13 @@
   },
   "presentation": {
     "grid": {
-      "today": "今日 {{time}}", "yesterday": "昨日 {{time}}", "empty": "フォルダーは空です",
-      "summaryMixed": "フォルダー {{dirs}} 件、ファイル {{files}} 件", "summaryDirs": "フォルダー {{count}} 件", "summaryFiles": "ファイル {{count}} 件", "workdir": "作業ディレクトリ"
+      "today": "今日 {{time}}",
+      "yesterday": "昨日 {{time}}",
+      "empty": "フォルダーは空です",
+      "summaryMixed": "フォルダー {{dirs}} 件、ファイル {{files}} 件",
+      "summaryDirs": "フォルダー {{count}} 件",
+      "summaryFiles": "ファイル {{count}} 件",
+      "workdir": "作業ディレクトリ"
     },
     "preview": {
       "nonText": {
@@ -66,8 +71,8 @@
       "idle": "リモートのテキストプレビューは必要に応じて読み込みます。メッセージ一覧でファイル内容を一括取得しません。",
       "failure": {
         "oversize": "ファイルがリモートプレビューの上限を超えています · {{limit}} · 現在 {{size}}",
-        "forbidden": "操作対象のコンピューターがこのパスの読み取りを拒否しました。",
-        "notFound": "操作対象のコンピューターにこのファイルがありません。",
+        "forbidden": "リモートのパソコンがこのパスの読み取りを拒否しました。",
+        "notFound": "リモートのパソコンにこのファイルがありません。",
         "readFailed": "読み込みに失敗しました。",
         "readFailedWithError": "読み込みに失敗しました：{{error}}",
         "default": "このファイルはプレビューできません。"

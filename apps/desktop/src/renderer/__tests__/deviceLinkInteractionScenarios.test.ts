@@ -83,7 +83,7 @@ function makeFakeHost(deviceId: string) {
           requestId: args[0] as string,
           decision: args[1] as Record<string, unknown>,
         });
-        return null;
+        return { accepted: true };
       case 'maker:get-pending-interactions':
         return pending.get(args[0] as string) ?? [];
       case 'local-db:messages:list':
@@ -147,7 +147,7 @@ type FakeHost = ReturnType<typeof makeFakeHost>;
 /** window.electronAPI 桩:maker.* 本机响应通道用 vi.fn(校验「本机会话不经隧道」),deviceLink 接 FakeHost。 */
 function stubElectronApi(host: FakeHost) {
   const fanOut = () => () => () => {};
-  const localResolveInteraction = vi.fn(async () => {});
+  const localResolveInteraction = vi.fn(async () => ({ accepted: true }));
   const localSetPermissionMode = vi.fn(async () => {});
   const localSetFastMode = vi.fn(async () => {});
   const localGetPendingInteractions = vi.fn(
@@ -237,6 +237,39 @@ afterEach(() => {
 });
 
 describe('device-link 远程交互往返 — permission', () => {
+  it('远程确认失败只重查当前请求，不影响同一被控端的另一条确认', async () => {
+    const failedSession = sid();
+    const healthySession = sid();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: failedSession }, { id: healthySession }] as Session[]);
+    const request = { kind: 'permission', requestId: 'failed-receipt', toolName: 'Read', input: {} };
+    host.seedPending(failedSession, request);
+    host.hostInteraction(failedSession, request);
+    host.hostInteraction(healthySession, { ...request, requestId: 'healthy-receipt' });
+    host.invoke.mockRejectedValueOnce(new Error('receipt lost'));
+    makerChatStore.respondToPermission(failedSession, { behavior: 'allow' });
+    makerChatStore.respondToPermission(healthySession, { behavior: 'allow' });
+    await flush();
+    expect(makerChatStore.getSnapshot(failedSession).pendingPermission).toMatchObject({ submitting: false, submissionFailed: true });
+    expect(makerChatStore.getSnapshot(healthySession).pendingPermission).toBeNull();
+    expect(host.resolved.map((call) => call.requestId)).toEqual(['healthy-receipt']);
+    expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'maker:get-pending-interactions', [failedSession]);
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    expect(local.localGetPendingInteractions).not.toHaveBeenCalled();
+  });
+
+  it('切换数据归属后，旧的确认回包不得修改当前卡片', async () => {
+    const s = openRemoteSession();
+    let resolveReceipt!: (value: { accepted: boolean }) => void;
+    host.invoke.mockReturnValueOnce(new Promise((resolve) => { resolveReceipt = resolve; }));
+    host.hostInteraction(s, { kind: 'permission', requestId: 'old-owner', toolName: 'Read', input: {} });
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    const pending = makerChatStore.getSnapshot(s).pendingPermission;
+    setDataOwnerGeneration('new-owner', 1);
+    resolveReceipt({ accepted: true });
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBe(pending);
+  });
+
   it('被控端 permission 请求 → 控制端置 pendingPermission → allow 经隧道回传', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {
@@ -1240,7 +1273,7 @@ describe('远程交互接线不变式', () => {
 
   it('跨窗口 worktree 写穿只合并目标字段，main 镜像读取共享持久快照', () => {
     const src = read('App.tsx');
-    expect(src).toContain('const draft = getDraftForPreferenceSync();');
+    expect(src).toContain('const draft = getDraftForOwnerPreferenceSync(owner.dataOwnerId);');
     expect(src).toContain('setWorktreePreference(worktreeEnabled === true);');
     expect(src).not.toContain('patchDraft({ worktreeEnabled: worktreeEnabled === true });');
   });
@@ -1336,15 +1369,13 @@ describe('远程交互接线不变式', () => {
   //    状态变更未广播收敛」家族残留,锁住防回归 ──────────────────────────────────────────
   const mainSrc = (rel: string) => readFileSync(resolve(__dirname, '../../main', rel), 'utf8');
 
-  it('F1: ask 本地远程都只由 main 落库；plan answered 写库仍远程跳过', () => {
+  it.each(['answerUserQuestion', 'respondToPlanReview', 'cancelPlanReview', 'submitPlanReviewDecision'])(
+    'F1: %s 本地远程都只由 main 落库，避免迟到提交覆盖权威决定', (name) => {
     const src = read('lib/makerChatStore.ts');
-    const askStart = src.indexOf('function answerUserQuestion(');
-    expect(askStart).toBeGreaterThan(-1);
-    const askEnd = src.indexOf('\nfunction ', askStart + 1);
-    const askBody = src.slice(askStart, askEnd === -1 ? undefined : askEnd);
-    expect(askBody).not.toContain('askMsg');
-    expect(askBody).not.toContain('messageService');
-    expect(src).toContain('if (planMsg && !isRemoteSession(sessionId))');
+    const start = src.indexOf(`function ${name}(`);
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf('\nfunction ', start + 1);
+    expect(src.slice(start, end === -1 ? undefined : end)).not.toContain('messageService');
   });
 
   it('F2: fork IPC handler 广播 sessions:created(否则 fork 会话在被控端/其它控制端不出现)', () => {
@@ -1379,7 +1410,7 @@ describe('远程交互接线不变式', () => {
 
   it('F8: 周期对账从实际 link status 启动，且状态 push 不被迟到快照覆盖', () => {
     const src = read('features/device-link/useDeviceLinkRemoteProjects.ts');
-    expect(src).toContain('let linkOnline = false');
+    expect(src).toContain('let linkOnline: boolean | null = null');
     expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
     expect(src).toContain('linkStatusPushSeen = true');
     // debounce 排队后 relay 可能已进入 connecting；执行时必须重查实时状态，不能离线重试。
@@ -1407,7 +1438,7 @@ describe('远程交互接线不变式', () => {
 
   it('F5: loadAroundMessage 经 aroundMessagesFor 路由(远程隧道,不查控制端空库)', () => {
     const src = read('lib/makerChatStore.ts');
-    expect(src).toContain('aroundMessagesFor(sessionId, messageId, opts)');
+    expect(src).toContain('aroundMessagesFor(sessionId, messageId, view?.getSnapshot().ready ? { radius: 0 } : opts)');
   });
 
   it('F7: dispatch handleSubscriptionFrame 拒绝 legacy "*"(只 link-open 可订全量)', () => {

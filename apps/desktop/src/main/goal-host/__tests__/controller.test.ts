@@ -4074,16 +4074,49 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(1); // 本应续跑,但被改判,不续
   });
 
-  it('auto-resumes at resetAt: posts a usage-resumed notice and continues', async () => {
-    h.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → delay 0,tick 内触发
-    await startGoal(h);
-    h.session.emitErrorTurn({ sdkError: 'rate_limit' });
-    await tick(); // usageLimited → schedule(delay 0) → autoResume → resumeGoal
-    expect(h.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
-    const st = await h.storage.get('s1');
-    expect(st?.status).toBe('active');
-    expect(st?.usageResetAt).toBeNull(); // resume 清掉
-    expect(h.session.sends.length).toBeGreaterThanOrEqual(2); // 自动续了一轮
+  it.each([false, true])('auto-resumes at resetAt: posts a usage-resumed notice and continues (deferred hydration: %s)', async (deferHydration) => {
+    let releaseEnsure!: () => void;
+    const blockedEnsure = new Promise<void>((resolve) => { releaseEnsure = resolve; });
+    let restoring = false;
+    let ensurePending = false;
+    const local = makeController({
+      ensureSession: async () => {
+        if (restoring && deferHydration) {
+          ensurePending = true;
+          await blockedEnsure;
+        }
+        return local.session;
+      },
+    });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → real timer, delay 0
+      await startGoal(local);
+      restoring = true;
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+
+      if (deferHydration) {
+        await vi.waitFor(() => expect(ensurePending).toBe(true));
+        // Even after the old 10ms wait, hydration can still be pending legitimately.
+        await tick();
+        expect(local.notices).toEqual([]);
+        expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+        expect(local.session.sends).toHaveLength(1);
+      }
+
+      // Observe the entire chain, not just the first notice or elapsed wall time.
+      const resumed = vi.waitFor(async () => {
+        expect(local.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
+        const st = await local.storage.get('s1');
+        expect(st?.status).toBe('active');
+        expect(st?.usageResetAt).toBeNull();
+        expect(local.session.sends.length).toBeGreaterThanOrEqual(2);
+      });
+      releaseEnsure();
+      await resumed;
+    } finally {
+      releaseEnsure();
+      await local.controller.dispose();
+    }
   });
 
   it('Stop cancels auto-resume while session hydration is pending without persisting a recovery notice', async () => {

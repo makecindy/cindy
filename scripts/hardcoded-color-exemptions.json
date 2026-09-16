@@ -62,7 +62,22 @@
  {
   "glob": "apps/desktop/src/renderer/styles/globals.css",
   "reason": "D hljs 整改段 [data-theme=cindy-dark] .hljs-section 提亮值 #2573ec + 注释引用 default/CINDY 色",
-  "owner": "D"
+  "owner": "D",
+  "matches": [
+   {
+    "value": "#2573ec",
+    "before": "color:\\s*",
+    "selector": "[data-theme=\"cindy-dark\"] .hljs-section"
+   },
+   {
+    "value": "#c9d1d9",
+    "before": "color:\\s*",
+    "selector": "[data-theme=\"cindy-dark\"] .hljs-punctuation,\n[data-theme=\"cindy-dark\"] .hljs-tag"
+   }
+  ],
+  "reviewDate": "2026-09-17",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/src/main/vibrancyConfig.ts",
@@ -92,7 +107,32 @@
  {
   "glob": "apps/desktop/src/renderer/components/ui/toast/Toast.tsx",
   "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 已导出供 toastColors 守)",
-  "owner": "E5D"
+  "owner": "E5D",
+  "matches": [
+   {
+    "value": "#417CDD",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.info"
+   },
+   {
+    "value": "#2AAE5B",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.success"
+   },
+   {
+    "value": "#F3A115",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.warning"
+   },
+   {
+    "value": "#D91F37",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.error"
+   }
+  ],
+  "reviewDate": "2026-09-17",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/src/renderer/__tests__/toastColors.test.ts",
@@ -117,7 +157,28 @@
  {
   "glob": "apps/desktop/src/renderer/components/new-chat/*.tsx",
   "reason": "composer-pill fallback var(--composer-pill-*,hex)(lead 裁决 a+fallback,token 已注册 b5d7310,集成收口删)",
-  "owner": "E3-fix"
+  "owner": "E3-fix",
+  "matches": [
+   {
+    "value": "#3C3F43",
+    "before": "var\\(--composer-pill-icon,\\s*"
+   },
+   {
+    "value": "#D9D9D9",
+    "before": "var\\(--composer-pill-icon,\\s*"
+   },
+   {
+    "value": "#FCFCFC",
+    "before": "var\\(--composer-pill-bg,\\s*"
+   },
+   {
+    "value": "#393838",
+    "before": "var\\(--composer-pill-bg,\\s*"
+   }
+  ],
+  "reviewDate": "2026-09-17",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx",
@@ -217,7 +278,117 @@
  {
   "glob": "apps/desktop/src/renderer/components/settings/AgentIslandSection.tsx",
   "reason": "灵动岛 mascot 预览的角色素材固有色(眼色/键盘条):与原生 SpriteMascotConfig 一一对应的素材参数,不是界面语义色;改用 token 会与原生渲染脱钩",
-  "owner": "agent-island"
+  "owner": "agent-island",
+  "matches": [
+   {
+    "value": "rgb(38 43 69)",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.cindy"
+   },
+   {
+    "value": "rgb(103 118 240)",
+    "before": "keyboardKey:\\s*['\\\"]",
+    "object": ["MASCOT_PREVIEW_CONFIGS.cindy", "MASCOT_PREVIEW_CONFIGS.blackcat"]
+   },
+   {
+    "value": "rgb(107 61 50)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.cindy"
+   },
+   {
+    "value": "rgb(31 36 41)",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.blackcat"
+   },
+   {
+    "value": "rgb(253 207 69)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": ["MASCOT_PREVIEW_CONFIGS.blackcat", "MASCOT_PREVIEW_CONFIGS.chaku"]
+   },
+   {
+    "value": "rgb(51 71 77)",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.erika"
+   },
+   {
+    "value": "rgb(90 156 170)",
+    "before": "keyboardKey:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.erika"
+   },
+   {
+    "value": "rgb(135 93 66)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.erika"
+   },
+   {
+    "value": "#00615c",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.tarara"
+   },
+   {
+    "value": "#00d9c5",
+    "before": "keyboardKey:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.tarara"
+   },
+   {
+    "value": "rgb(61 114 228)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.tarara"
+   },
+   {
+    "value": "#292e3a",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": ["MASCOT_PREVIEW_CONFIGS.boli", "MASCOT_PREVIEW_CONFIGS.whitesnow"]
+   },
+   {
+    "value": "#707d94",
+    "before": "keyboardKey:\\s*['\\\"]",
+    "object": ["MASCOT_PREVIEW_CONFIGS.boli", "MASCOT_PREVIEW_CONFIGS.whitesnow"]
+   },
+   {
+    "value": "black",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": ["MASCOT_PREVIEW_CONFIGS.boli", "MASCOT_PREVIEW_CONFIGS.whitesnow", "MASCOT_PREVIEW_CONFIGS.muffin"]
+   },
+   {
+    "value": "#2e6b8f",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.annie"
+   },
+   {
+    "value": "#77c4ea",
+    "before": "keyboardKey:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.annie"
+   },
+   {
+    "value": "rgb(174 33 70)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.annie"
+   },
+   {
+    "value": "rgb(115 82 8)",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.chaku"
+   },
+   {
+    "value": "rgb(253 207 69)",
+    "before": "keyboardKey:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.chaku"
+   },
+   {
+    "value": "rgb(48 61 97)",
+    "before": "keyboardBase:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.muffin"
+   },
+   {
+    "value": "rgb(125 153 213)",
+    "before": "keyboardKey:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.muffin"
+   }
+  ],
+  "reviewDate": "2026-09-17",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/native/agent-island/macos-agent-island-helper.swift",
@@ -227,7 +398,120 @@
  {
   "glob": "apps/desktop/src/renderer/components/settings/WorkLouderCodexKeyboardLayout.tsx",
   "reason": "Codex Micro 设置页复刻实体键盘的固有色(透白任务帽/深灰命令帽/摇杆座),不是界面语义色;走 surface token 会在 dark mode 反相",
-  "owner": "worklouder-codex"
+  "owner": "worklouder-codex",
+  "matches": [
+   {
+    "value": "rgb(255 255 255 / 0.06)",
+    "before": "'\\-\\-wl\\-board\\-shadow':\\s*'inset\\ 0\\ 1px\\ 0\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.12)",
+    "before": "'\\-\\-wl\\-board\\-shadow':\\s*'inset\\ 0\\ 1px\\ 0\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.22)",
+    "before": "'\\-\\-wl\\-board\\-shadow':\\s*'inset\\ 0\\ 1px\\ 0\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.12\\),\\ 0\\ 2px\\ 8px\\ "
+   },
+   {
+    "value": "rgb(214 214 214 / 0.92)",
+    "before": "'\\-\\-wl\\-agent\\-cap':\\s*'"
+   },
+   {
+    "value": "rgb(255 255 255 / 0.5)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.6)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.5\\),\\ inset\\ 0\\ 1px\\ 2px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.35)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.5\\),\\ inset\\ 0\\ 1px\\ 2px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.6\\),\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "#8177c8",
+    "before": "'\\-\\-wl\\-agent\\-dot':\\s*'"
+   },
+   {
+    "value": "#2a2b30",
+    "before": "'\\-\\-wl\\-command\\-cap':\\s*'"
+   },
+   {
+    "value": "rgb(255 255 255 / 0.08)",
+    "before": "'\\-\\-wl\\-command\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.06)",
+    "before": "'\\-\\-wl\\-command\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.4)",
+    "before": "'\\-\\-wl\\-command\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "rgb(236 236 236)",
+    "before": "'\\-\\-wl\\-command\\-glyph':\\s*'"
+   },
+   {
+    "value": "rgb(198 198 200 / 0.96)",
+    "before": "'\\-\\-wl\\-stick\\-housing':\\s*'"
+   },
+   {
+    "value": "rgb(0 0 0 / 0.22)",
+    "before": "'\\-\\-wl\\-stick\\-housing\\-shadow':\\s*'inset\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.08)",
+    "before": "'\\-\\-wl\\-stick\\-housing\\-shadow':\\s*'inset\\ 0\\ 1px\\ 3px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.22\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.35)",
+    "before": "'\\-\\-wl\\-stick\\-housing\\-shadow':\\s*'inset\\ 0\\ 1px\\ 3px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.22\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.08\\),\\ 0\\ 1px\\ 0\\ "
+   },
+   {
+    "value": "#2a2b30",
+    "before": "'\\-\\-wl\\-stick\\-cap':\\s*'"
+   },
+   {
+    "value": "#2a2b30",
+    "before": "'\\-\\-wl\\-agent\\-cap':\\s*'"
+   },
+   {
+    "value": "rgb(255 255 255 / 0.08)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.06)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.4)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "#a99df2",
+    "before": "'\\-\\-wl\\-agent\\-dot':\\s*'"
+   },
+   {
+    "value": "rgb(255_255_255/0.18)",
+    "before": "shadow\\-\\[inset_0_1px_1px_"
+   },
+   {
+    "value": "rgb(0_0_0/0.28)",
+    "before": "shadow\\-\\[inset_0_1px_1px_rgb\\(255_255_255/0\\.18\\),0_1px_2px_"
+   },
+   {
+    "value": "#4c8dff",
+    "before": "className=\"block\\ size\\-1\\ rounded\\-full\\ bg\\-\\["
+   },
+   {
+    "value": "#e0b341",
+    "before": "className=\"block\\ size\\-1\\ rounded\\-full\\ bg\\-\\["
+   }
+  ],
+  "reviewDate": "2026-09-17",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/src/main/worklouder-codex/protocol.ts",

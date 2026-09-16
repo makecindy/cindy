@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
+import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProjectsStore';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import {
@@ -28,14 +29,9 @@ import {
   scheduleClearSilencedRun,
 } from '@/lib/silencedSessionDoneStore';
 import type { AutomationScheduleSessionInfo } from '../lib/automationSidebarGrouping';
-import {
-  isFailedScheduleRun,
-  isUnreadFailedScheduleRun,
-  isUnreadScheduleRun,
-} from '../../scheduler/lib/runUnread';
 import { loadScheduleSidebarIndexSnapshot } from '../../scheduler/lib/scheduleSidebarIndexRuns';
 import { subscribeScheduleRunReadSync } from '../../scheduler/lib/scheduleRunReadSync';
-import { compareFailedScheduleRuns } from '../../scheduler/lib/failedScheduleDismissal';
+import { projectScheduleSidebarIndex } from '../../scheduler/lib/projectScheduleSidebarIndex';
 
 const log = createLogger('AutomationScheduleSessionIndex');
 
@@ -130,11 +126,13 @@ export function usePublishedAutomationScheduleSessionIndex(): ReadonlyMap<
 export function useAutomationScheduleSessionInfo(
   sessionId: string | undefined,
 ): AutomationScheduleSessionInfo | undefined {
-  return useSyncExternalStore(
+  const remoteInfo = useRemoteSessionScheduleInfo(sessionId ?? '');
+  const localInfo = useSyncExternalStore(
     subscribePublishedIndex,
     () => (sessionId ? publishedIndex.get(sessionId) : undefined),
     () => (sessionId ? publishedIndex.get(sessionId) : undefined),
   );
+  return remoteInfo ?? localInfo;
 }
 
 /**
@@ -209,53 +207,7 @@ export function useAutomationScheduleSessionIndex(
         }, RECONCILE_RECHECK_DELAY_MS);
       }
 
-      const next = new Map<string, AutomationScheduleSessionInfo>();
-      const latestUnreadFailedFiredAt = new Map<string, number>();
-      for (const run of runs) {
-        if (!run.sessionId) continue;
-        const existing = next.get(run.sessionId);
-        const unreadRunIds = existing?.unreadRunIds ? [...existing.unreadRunIds] : [];
-        const unreadFailedRunIds = existing?.unreadFailedRunIds
-          ? [...existing.unreadFailedRunIds]
-          : [];
-        // 只对未读 run 累加(与 isUnreadScheduleRun 对齐)。failed / interrupted
-        // 未读 run 拉高本 session 的 urgency 让侧栏涂红而不是涂绿。
-        const isRunUnread = isUnreadScheduleRun(run);
-        if (isRunUnread) unreadRunIds.push(run.runId);
-        let latestFailedRun = existing?.latestFailedRun;
-        if (isFailedScheduleRun(run)) {
-          const candidate = { runId: run.runId, firedAt: run.firedAt ?? 0 };
-          if (!latestFailedRun || compareFailedScheduleRuns(candidate, latestFailedRun) > 0)
-            latestFailedRun = candidate;
-        }
-        let latestUnreadFailedRunId = existing?.latestUnreadFailedRunId;
-        if (isUnreadFailedScheduleRun(run)) {
-          unreadFailedRunIds.push(run.runId);
-          const firedAt = run.firedAt ?? 0;
-          if (
-            firedAt >= (latestUnreadFailedFiredAt.get(run.sessionId) ?? Number.NEGATIVE_INFINITY)
-          ) {
-            latestUnreadFailedFiredAt.set(run.sessionId, firedAt);
-            latestUnreadFailedRunId = run.runId;
-          }
-        }
-        next.set(run.sessionId, {
-          scheduleId: run.scheduleId,
-          scheduleName: run.scheduleName,
-          scheduleStatus: run.scheduleStatus,
-          scheduleSource: run.scheduleSource,
-          nextFireAt: run.nextFireAt,
-          workingDir: run.workingDir,
-          projectConfigId: run.projectConfigId,
-          unreadRunIds,
-          unreadFailedRunIds,
-          latestUnreadFailedRunId,
-          latestFailedRun,
-          hasFailedRun: Boolean(existing?.hasFailedRun || isFailedScheduleRun(run)),
-          hasUnreadRun: unreadRunIds.length > 0,
-          hasUnreadFailedRun: unreadFailedRunIds.length > 0,
-        });
-      }
+      const next = projectScheduleSidebarIndex(runs);
       applyOptimisticUnreads(next);
       setIndex(next);
       publishIndex(next);

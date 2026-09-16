@@ -9,6 +9,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ScriptTarget, transpileModule } from 'typescript';
+import type { AgentEvent } from '@cindy/maker-core';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -23,6 +25,30 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it.each([undefined, null, { text: 'Restart Cindy before using Pi again.', isFinal: true }])(
+    'strips Host recovery metadata from the boundary copy with data %j',
+    (data) => {
+      // Execute the actual boundary function without booting Desktop/register side effects.
+      const start = source.indexOf('function redactEventForRenderer');
+      const code = source.slice(start, source.indexOf('\nfunction ', start + 1));
+      const js = transpileModule(code, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText;
+      const redact = new Function(`${js}; return redactEventForRenderer;`)() as
+        (event: AgentEvent) => AgentEvent;
+      const original: AgentEvent = {
+        type: 'text', source: 'pi', data, runtimeRecovery: true,
+        sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
+      };
+      const boundary = redact(original);
+      expect(boundary).toEqual({ type: 'text', source: 'pi', data });
+      expect(original.runtimeRecovery).toBe(true);
+      expect(original.sessionInstanceId).toBe('runtime');
+      expect(original.sessionTurnGeneration).toBe(7);
+      expect(boundary).not.toBe(original);
+    },
+  );
+
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
     const redactor = source.slice(
       source.indexOf('function redactEventForRenderer'),
@@ -52,6 +78,7 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toMatch(
       /registration\.disposers\.push\(\s*session\.onEvent\(\(event: AgentEvent\) => \{/,
     );
+    expect(wireSessionSource).toContain('session.onRuntimeRecovery(emitWiredSessionEvent)');
     expectOrder(
       wireSessionSource,
       'sessionBindings.attachStatusListener(registration);',
@@ -90,7 +117,7 @@ describe('maker:event hot path ordering', () => {
       'lastReportedCostUsdBySession.delete(',
       'lastReportedModelUsageBySession.delete(',
       'turnModelPromiseBySession.delete(',
-      'turnPiFastModeBySession.delete(',
+      'turnUsageContextBySession.delete(',
       'productTurnWallClockTracker.clear(',
       'productTurnUsageTargetTracker.clear(',
       'claudeOutputLagTimingGuard.clear(',
@@ -117,7 +144,7 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       continuation,
       'productTurnWallClockTracker.preserveForContinuation(session.id);',
-      'const sendResult = await session.send(',
+      'const sendResult = await session.sendHostTurnContinuation(',
     );
   });
 
@@ -363,6 +390,30 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('stores the redacted permission request for reconnect and Feishu takeover', () => {
+    const interactionListenerSource = extractInstallDesktopInteractionListenerSource();
+    const boundaryIndex = interactionListenerSource.indexOf(
+      'const boundaryRequest: InteractionRequest =',
+    );
+    const entryIndex = interactionListenerSource.indexOf(
+      'const entry: PendingInteractionEntry =',
+    );
+    const pendingIndex = interactionListenerSource.indexOf(
+      'pendingInteractionResolvers.set(req.requestId, entry);',
+    );
+
+    expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+    expect(entryIndex).toBeGreaterThan(boundaryIndex);
+    expect(pendingIndex).toBeGreaterThan(entryIndex);
+    expect(interactionListenerSource.slice(entryIndex, pendingIndex)).toContain(
+      'request: boundaryRequest,',
+    );
+    expect(source).toContain('out.push({ request: entry.request, persistId: entry.persistId });');
+    expect(source).toContain(
+      'taken.push({ requestId, request: entry.request, resolve:',
+    );
+  });
+
   it('clears git snapshot coordinator state when sessions close', () => {
     const closedBlock = extractSessionCloseAdaptersSource();
 
@@ -394,30 +445,37 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('preserves only a waiting Codex reconnect-stall retry across its exact provider rebuild', () => {
+  it('preserves continuation-only retry across its exact unexpected provider rebuild', () => {
     const closedBlock = extractSessionCloseAdaptersSource();
 
     expect(source).toContain(
-      'const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();',
+      'const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();',
     );
-    expect(source).toContain("if (signals.reason === 'codex_reconnect_stalled') {");
+    expect(source).toContain('if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {');
     expect(source).toContain(
-      'pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);',
+      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
     );
-    expect(source).toContain("if (closeReason !== 'unexpected') return false;");
+    expect(source).toContain('shouldPreserveWaitingContinuationOnlyAutoResume({');
+    expect(source).toContain('leasedAttemptToken,');
     expect(source).toContain(
       'interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)',
     );
-    expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
-    expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
+    expect(source).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
+    expect(source).toContain('coordinator?.hasQueuedAutoResume(session.id)');
+    expect(source).toContain('isContinuationOnly:');
+    expect(source).toContain('coordinator?.isContinuationOnlyAutoResume(session.id) === true');
+    expect(source).toContain('coordinator?.isContinuationOnlyAutoResume(session.id) !== true');
     expect(closedBlock).toContain(
-      'shouldPreserveCodexReconnectStalledAutoResume(session, closeReason)',
+      'shouldPreserveContinuationOnlyAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain('runSessionCloseCleanup(context.preserveAutoResumeIntent, {');
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
+    expect(source).toMatch(/onBind: \(session: WiredSession\) => \{\s*advanceSessionTurnBoundaryGeneration\(session.id\);\s*bindContinuationOnlyAutoResumeLease\(session\);/);
+    expect(source).toContain('onUnconfirmedAutoResumeTurn:');
+    expect(source).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {
@@ -772,7 +830,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneIndex).toBeGreaterThanOrEqual(0);
 
     const codexDoneSource = wireSessionSource.slice(codexDoneIndex);
-    expect(codexDoneSource).toContain('const sessionProvider = getSessionProvider(session.id);');
+    expect(codexDoneSource).toContain('const sessionProvider = turnContext.providerId;');
     expect(codexDoneSource).toContain(
       'const isRemoteCodexSession = Boolean(session.remoteHostId);',
     );
@@ -795,7 +853,7 @@ describe('maker:event hot path ordering', () => {
       'promptTokens + completionTokens + reasoningTokens + cachedTokens',
     );
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
-    expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
+    expect(codexDoneSource).toContain('turnContext.isUserProviderRoute');
     expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
     expect(codexDoneSource).toMatch(/&&\s*isExclusiveXaiModelId\(pricingModel\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
@@ -845,7 +903,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
+      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: cacheCreationTokens,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
     );
     expect(codexDoneSource).toMatch(
       /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
@@ -911,10 +969,10 @@ describe('maker:event hot path ordering', () => {
     );
     expect(claudeDoneSource).toContain('const subscriptionTurnEstimates: RegionalMoney[] = [];');
     expect(claudeDoneSource).toMatch(
-      /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*currentLedgerCurrency\(\),\s*m\.segments,\s*\)/,
+      /computePriceQuoteTurnMoney\(\s*m\.deltas,\s*\(sessionProviderForBilling\s*\? getCodexProviderSubscriptionValuePrice\(sessionProviderForBilling, m\.model, pricing, undefined, undefined, 'claude-code'\)\s*: undefined\) \?\? getSubscriptionValuePriceFor\('claude-code', m\.model, pricing\),\s*currentLedgerCurrency\(\),\s*m\.segments,\s*\)/,
     );
     // 订阅判定对齐 proxy 路由: 显式选 Anthropic, 或默认路由优先按 observed route, 未观察再回落无网关 key 启发式
-    expect(claudeDoneSource).toContain("sessionProviderForBilling === 'anthropic'");
+    expect(claudeDoneSource).toContain("turnContext.subscriptionKind === 'claude'");
     expect(claudeDoneSource).toContain('const observedClaudeRoute =');
     expect(claudeDoneSource).toContain('readClaudeSessionRoute(session.id)');
     expect(claudeDoneSource).toContain("observedClaudeRoute === 'subscription'");
@@ -944,9 +1002,9 @@ describe('maker:event hot path ordering', () => {
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
     expect(piDoneSource).toContain(
-      '(turnPiFastModeBySession.get(session.id) ?? getSessionFastMode(session.id))',
+      'turnContext.piFastMode',
     );
-    expect(piDoneSource).toContain('turnPiFastModeBySession.delete(session.id);');
+    expect(piDoneSource).toContain('turnUsageContextBySession.delete(session.id);');
     expect(piDoneSource).toContain(
       "segment.priceVariant ?? (segment.id?.startsWith('pi:') ? piPriceVariant : 'standard'),",
     );

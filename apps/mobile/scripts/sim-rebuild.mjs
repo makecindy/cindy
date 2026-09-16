@@ -55,6 +55,10 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import {
+  resolvePnpmInvocation,
+  usablePnpmExecPath,
+} from '../../../scripts/shared/pnpm-invocation.mjs';
 import { ensureMobileEnv, formatMobileEnvStatus } from './ensure-mobile-env.mjs';
 import { computeFingerprintReport, parseFingerprintCliOutput } from './ci-fingerprint.mjs';
 import {
@@ -66,12 +70,16 @@ import {
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
 import { podInstallBounded } from './sim-pod-install.mjs';
+import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';
+import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import {
   cwdOfPid,
   gitSourceIdentity,
   gitSourceOfPid,
   isInside,
   listenerPid,
+  portInUse,
+  probeMetroOwnership,
 } from './sim-metro.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -114,11 +122,45 @@ const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: 
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 console.log(`==> Mobile dev region: ${region}`);
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
+const currentSource = gitSourceIdentity(worktreeRoot);
 
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', cwd: mobileDir, env: devProcessEnv, ...opts });
 const capture = (cmd, args) =>
   execFileSync(cmd, args, { cwd: mobileDir, env: devProcessEnv, encoding: 'utf8' }).trim();
+function pnpmInvocation(args) {
+  return resolvePnpmInvocation(args, {
+    npmExecPath: usablePnpmExecPath(process.env.npm_execpath, existsSync),
+  });
+}
+
+function runPnpm(args, opts = {}) {
+  const invocation = pnpmInvocation(args);
+  return run(invocation.command, invocation.args, {
+    ...opts,
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    env: { ...devProcessEnv, ...(invocation.env ?? {}), ...(opts.env ?? {}) },
+  });
+}
+
+function capturePnpm(args) {
+  const invocation = pnpmInvocation(args);
+  return execFileSync(invocation.command, invocation.args, {
+    cwd: mobileDir,
+    env: { ...devProcessEnv, ...(invocation.env ?? {}) },
+    encoding: 'utf8',
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }).trim();
+}
+
+// Windows 开发机没有 xcrun/Xcode。这里走 Android debug dev client，避免在任何
+// Windows 路径上触发 iOS 的 xcrun、pod 或 xcodebuild。
+if (process.platform === 'win32') {
+  await rebuildAndroidSimulator();
+  process.exit(0);
+}
 
 // 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。
 if (!buildOnly) {
@@ -127,6 +169,105 @@ if (!buildOnly) {
     console.error('✗ 没有 booted 的模拟器。先打开 Simulator.app 并启动一台 iPhone,再重试。');
     process.exit(1);
   }
+}
+
+async function ensureMetroOwnershipBeforeLaunch(packageName) {
+  if (!await portInUse(8081)) return true;
+  const ownership = probeMetroOwnership(8081);
+  const metroPid = ownership?.pid ?? null;
+  if (!metroPid) {
+    console.log(`\nNative package installed (${packageName}).`);
+    console.error('Metro on 8081 is occupied, but its listener PID could not be verified.');
+    console.error('Refusing to launch until the port owner can be identified.');
+    return false;
+  }
+  const metroCwd = ownership.cwd;
+  const foreign = !metroCwd || !isInside(worktreeRoot, metroCwd);
+  const runningSource = ownership.source;
+  if (foreign || runningSource !== currentSource) {
+    const why = foreign
+      ? `foreign worktree (${metroCwd || 'unknown'})`
+      : `stale source (${runningSource || 'unknown'}; current=${currentSource})`;
+    console.log(`\\nNative package installed (${packageName}).`);
+    console.error(`Metro on 8081 is not owned by the current source: ${why}.`);
+    console.error('Stop it, start this worktree with pnpm mobile:sim:start, then launch the app.');
+    return false;
+  }
+  if (envChanged) {
+    console.log(`\\nNative package installed (${packageName}).`);
+    console.error('Metro on 8081 was started with an older apps/mobile/.env.');
+    console.error('Restart Metro with pnpm mobile:sim:start before launching the app.');
+    return false;
+  }
+  if (ownership.region !== region) {
+    console.log(`\nNative package installed (${packageName}).`);
+    console.error(`Metro on 8081 uses region ${ownership.region || '(unknown)'}, but this build requested ${region}.`);
+    console.error('Restart Metro with the matching --region before launching the app.');
+    return false;
+  }
+  return true;
+}
+
+async function rebuildAndroidSimulator() {
+  const androidTools = process.platform === 'win32'
+    ? resolveAndroidSdkTools({
+      env: devProcessEnv,
+      platform: process.platform,
+      requireTools: !buildOnly,
+    })
+    : null;
+  const emulator = buildOnly
+    ? { serial: null, adb: null, sdkRoot: androidTools?.sdkRoot }
+    : await ensureWindowsAndroidEmulator({ port: 8081 });
+  const sdkRoot = emulator.sdkRoot ?? androidTools?.sdkRoot;
+  const androidDir = join(mobileDir, 'android');
+  const javaEnv = resolveJavaRuntimeEnv({
+    ...devProcessEnv,
+    ...(sdkRoot ? { ANDROID_SDK_ROOT: sdkRoot, ANDROID_HOME: sdkRoot } : {}),
+  });
+  console.log('› Android expo prebuild (debug development client)');
+  runPnpm(['exec', 'expo', 'prebuild', '--platform', 'android', '--no-install']);
+
+  const gradle = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
+  console.log('› Android gradle assembleDebug');
+  if (process.platform === 'win32') {
+    run('cmd.exe', ['/d', '/s', '/c', 'gradlew.bat assembleDebug'], {
+      cwd: androidDir,
+      env: javaEnv,
+      windowsVerbatimArguments: true,
+    });
+  } else {
+    run(gradle, ['assembleDebug'], { cwd: androidDir, env: javaEnv });
+  }
+
+  const apk = join(androidDir, 'app/build/outputs/apk/debug/app-debug.apk');
+  if (!existsSync(apk)) {
+    throw new Error(`prebuild/gradle 后未找到 Android debug APK: ${apk}`);
+  }
+  const config = JSON.parse(capturePnpm(['exec', 'expo', 'config', '--type', 'public', '--json']));
+  const packageName = config?.android?.package;
+  if (typeof packageName !== 'string' || !packageName.trim()) {
+    throw new Error(`Expo config 缺少 android.package(region=${region})`);
+  }
+  if (buildOnly) {
+    console.log(`✓ Android --build-only 完成: ${apk}`);
+    return;
+  }
+  const { adb, serial } = emulator;
+  const target = ['-s', serial];
+  if (clean) {
+    try {
+      run(adb, [...target, 'uninstall', packageName]);
+    } catch {
+      console.log('  (没有可卸载的旧 Android 包,跳过)');
+    }
+  }
+  console.log(`› 安装 Android debug 包到 ${serial}`);
+  run(adb, [...target, 'install', '-r', apk]);
+  run(adb, [...target, 'shell', 'am', 'force-stop', packageName]);
+  if (!await ensureMetroOwnershipBeforeLaunch(packageName)) return;
+  run(adb, [...target, 'shell', 'monkey', '-p', packageName, '1']);
+  console.log(`\n✓ 完成: ${packageName} 已重装并启动。JS 改动直接由 Metro Fast Refresh 提供。`);
 }
 
 // 宿主机架构只参与缓存隔离；真实构建架构由 Xcode 与各 Pod 的支持矩阵决定。
@@ -240,7 +381,6 @@ const metroPid = listenerPid(8081);
 if (metroPid) {
   const metroCwd = cwdOfPid(metroPid);
   const foreign = !metroCwd || !isInside(worktreeRoot, metroCwd);
-  const currentSource = gitSourceIdentity(worktreeRoot);
   const runningSource = gitSourceOfPid(metroPid);
   if (foreign || runningSource !== currentSource) {
     const why = foreign

@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { LedgerDb } from '../ledger';
+import type { StorageIpcDeps } from '../storageIpc';
 
 let tmpUserData = '';
 
@@ -102,6 +103,8 @@ function makeHandlers(overrides?: {
   clearLegacyImagesDir?: () => Promise<void>;
   openChatAttachmentsDir?: () => Promise<boolean>;
   clearChatAttachmentsDir?: () => Promise<void>;
+  getLegacyImagesDirStats?: StorageIpcDeps['getLegacyImagesDirStats'];
+  getChatAttachmentsDirStats?: StorageIpcDeps['getChatAttachmentsDirStats'];
 }) {
   return createStorageIpcHandlers({
     getQueueScanTexts: () => overrides?.queueTexts ?? [],
@@ -113,10 +116,36 @@ function makeHandlers(overrides?: {
     clearLegacyImagesDir: overrides?.clearLegacyImagesDir ?? (async () => undefined),
     openChatAttachmentsDir: overrides?.openChatAttachmentsDir ?? (async () => false),
     clearChatAttachmentsDir: overrides?.clearChatAttachmentsDir ?? (async () => undefined),
+    getLegacyImagesDirStats: overrides?.getLegacyImagesDirStats,
+    getChatAttachmentsDirStats: overrides?.getChatAttachmentsDirStats,
   });
 }
 
 describe('stats(占用总览)', () => {
+  it.each(['getLegacyImagesDirStats', 'getChatAttachmentsDirStats'] as const)(
+    'sanitizes %s failures without changing the query fallback',
+    async (source) => {
+      const privatePath = path.join(legacyRoot, 'private-cache');
+      const getStats = vi.fn()
+        .mockRejectedValueOnce(new Error(`EACCES: permission denied, scandir '${privatePath}'`))
+        .mockResolvedValue({ bytes: 12, fileCount: 1 });
+      const handlers = makeHandlers({ [source]: getStats });
+
+      const failed = await handlers.stats();
+      expect(failed).toMatchObject({
+        success: false,
+        error: 'storage statistics unavailable',
+        blobs: { totalBytes: 0 },
+        fixedCaches: {
+          legacyImages: { bytes: 0, fileCount: 0 },
+          chatAttachments: { bytes: 0, fileCount: 0 },
+        },
+      });
+      expect(JSON.stringify(failed)).not.toContain(privatePath);
+      expect((await handlers.stats()).success).toBe(true);
+    },
+  );
+
   it('账面统计 + 历史兼容层占用 + 死目录状态', async () => {
     const a = await seedBlob('stats-a');
     const c = await seedBlob('stats-cache', { isCache: true });

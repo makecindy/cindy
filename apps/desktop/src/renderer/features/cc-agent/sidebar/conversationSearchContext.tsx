@@ -27,12 +27,17 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import {
   requestRemoteSessionStatus,
   useRemoteProjectSessions,
 } from '@/features/device-link/remoteProjectsStore';
-import { selectVisibleSessions } from '@/features/device-link/selectedMachineStore';
+import {
+  MACHINE_ALL,
+  MACHINE_LOCAL,
+  selectVisibleSessions,
+} from '@/features/device-link/selectedMachineStore';
 import {
   useEffectiveSelectedMachineId,
   useSwitcherDevices,
@@ -54,7 +59,11 @@ import {
   reconcileProjectSelectionWithVisibleProjects,
   useConversationSearch,
 } from './ConversationSearchBox';
-import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
+import {
+  buildPersistentLocalProjects,
+  type PersistentLocalProject,
+  type ProjectNode as ProjectNodeData,
+} from '../lib/projectGrouping';
 
 interface ConversationSearchContextValue {
   /** 搜索状态机(query / 排序 / 筛选 / 结果 / handleSelect 等)。 */
@@ -91,6 +100,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   }, [searchDevices]);
   const { aliases } = useProjectAliases();
   const { hiddenProjectKeys } = useHiddenProjects();
+  const { entries: recentWorkdirs } = useRecentWorkdirs();
   const searchSessions = useMemo(
     () =>
       selectVisibleSessions(sessions, remoteProjectSessions, selectedMachineId).filter(
@@ -98,7 +108,24 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
       ),
     [remoteProjectSessions, selectedMachineId, sessions],
   );
-  const { projects } = useProjectGroups(searchSessions, aliases);
+  const persistentLocalProjects = useMemo<PersistentLocalProject[]>(
+    () => buildPersistentLocalProjects(recentWorkdirs, sessions, window.electronAPI.platform),
+    [recentWorkdirs, sessions],
+  );
+  const visiblePersistentLocalProjects = useMemo(
+    () =>
+      selectedMachineId === MACHINE_ALL || selectedMachineId.includes(MACHINE_LOCAL)
+        ? persistentLocalProjects
+        : [],
+    [persistentLocalProjects, selectedMachineId],
+  );
+  const { projects } = useProjectGroups(
+    searchSessions,
+    aliases,
+    false,
+    visiblePersistentLocalProjects,
+    window.electronAPI.platform,
+  );
   const visibleProjects = useMemo(
     () => visibleSidebarProjects(projects, hiddenProjectKeys, window.electronAPI.platform),
     [projects, hiddenProjectKeys],

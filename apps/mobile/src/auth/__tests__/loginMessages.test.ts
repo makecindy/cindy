@@ -91,6 +91,8 @@ describe("loginMessages 5 语 catalog", () => {
       for (const body of [
         messages.realmConsentBodyCn,
         messages.realmConsentBodyGlobal,
+        messages.realmConsentPersonalBodyCn,
+        messages.realmConsentPersonalBodyGlobal,
       ]) {
         const lines = body.split("\n");
         expect(lines, `locale=${locale}: ${body}`).toHaveLength(2);

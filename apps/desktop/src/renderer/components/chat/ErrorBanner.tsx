@@ -1,3 +1,5 @@
+import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
+import { useProviders } from '@/hooks/useProviders';
 /**
  * ErrorBanner — 错误横幅 + Retry / Cancel
  * ---------------------------------------------------------------------------
@@ -213,7 +215,11 @@ export function ErrorBanner({
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
     isQuotaExhaustedErrorMessage(error);
-  const hasExplicitOpenAiProvider = normalizedProviderId === 'openai';
+  const { providers: errorProviders, refetch: refreshErrorProviders } = useProviders();
+  const selectedOpenAiAccount = errorProviders.find((provider) => provider.id === normalizedProviderId);
+  const independentOpenAiAccount = selectedOpenAiAccount?.auth.native === 'codex';
+  const [accountReconnecting, setAccountReconnecting] = useState(false);
+  const hasExplicitOpenAiProvider = normalizedProviderId === 'openai' || isOpenAiSubscriptionProvider(selectedOpenAiAccount);
   const hasImplicitOpenAiProvider =
     normalizedProviderId === null &&
     codexAuthInjection !== 'provider-oauth' &&
@@ -233,7 +239,7 @@ export function ErrorBanner({
   // env-key，再把错误渲染到会话；继续依赖 route 会把真实失效原因漏成原始英文报错。
   // Claude 的 chatgpt/* 模型复用同一份连接，bridge 鉴权不可用时也走同一恢复入口。
   const isClaudeChatgptBridgeModel =
-    agentKind === 'cc' &&
+    (agentKind === 'cc' || agentKind === 'pi') &&
     (hasExplicitOpenAiProvider || normalizedProviderId === null) &&
     !!modelId &&
     modelId.startsWith('chatgpt/');
@@ -251,17 +257,17 @@ export function ErrorBanner({
     recoveryCheck: openAiRecoveryCheck,
     refresh: refreshOpenAiAuth,
   } = useCodexAuth({
-    enabled: isOpenAiConnectionExpired,
+    enabled: isOpenAiConnectionExpired && !independentOpenAiAccount,
     recoveryHint: isOpenAiConnectionExpired ? { reason: error } : undefined,
   });
   const openAiConnectionRecoveredSinceError =
-    isOpenAiConnectionExpired && isChatGptConnectionConnected(openAiAuthState, false);
+    isOpenAiConnectionExpired && (independentOpenAiAccount ? selectedOpenAiAccount?.connected === true : isChatGptConnectionConnected(openAiAuthState, false));
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
   const openAiAuthLoading = openAiAuthState.kind === 'loading';
   const openAiLoginPending = openAiAuthState.kind === 'login-pending';
   const openAiRecoveryBusy =
-    openAiAuthLoading || openAiRecoveryCheck === 'checking' || openAiLoginPending;
-  const openAiCredentialScope =
+    independentOpenAiAccount ? accountReconnecting : openAiAuthLoading || openAiRecoveryCheck === 'checking' || openAiLoginPending;
+  const openAiCredentialScope = independentOpenAiAccount ? 'instance-isolated' :
     openAiAuthState.kind === 'reconnect-required'
       ? (openAiAuthState.credentialScope ?? 'unknown')
       : (reconnectCredentialScope ?? 'unknown');
@@ -481,6 +487,21 @@ export function ErrorBanner({
 
   const handleOpenAiRecovery = async (): Promise<void> => {
     if (openAiRecoveryBusy) return;
+    if (independentOpenAiAccount && normalizedProviderId) {
+      setAccountReconnecting(true);
+      try {
+        const result = await window.electronAPI.maker.providerOAuthLogin(normalizedProviderId);
+        if (result.ok) refreshErrorProviders();
+        else if (result.reason !== 'login_cancelled') {
+          toast.error(t('settings.providers.wizard.authorizeFailed', { name: 'OpenAI' }));
+        }
+      } catch {
+        toast.error(t('settings.providers.wizard.authorizeFailed', { name: 'OpenAI' }));
+      } finally {
+        setAccountReconnecting(false);
+      }
+      return;
+    }
     if (openAiRecoveryCheck === 'failed') {
       await refreshOpenAiAuth();
       return;

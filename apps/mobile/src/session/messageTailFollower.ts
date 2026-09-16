@@ -24,6 +24,8 @@ export interface MobileTailFollowerAdapter {
   /** Correct using the same native coordinate system used to verify the result. */
   correctOffset: (offset: number) => void;
   onMeasurementOscillation?: () => void;
+  /** Native geometry is verified; seeking completion alone is not readiness. */
+  onSettled?: () => void;
 }
 
 /**
@@ -120,6 +122,7 @@ export function createMobileTailFollower(adapter: MobileTailFollowerAdapter) {
           });
           if (action === 'settled' || action === 'give-up') {
             active = false;
+            if (action === 'settled') adapter.onSettled?.();
             return;
           }
           if (action === 'retry') adapter.correctOffset(mobileMessageListEndOffset(current.metrics));

@@ -1,12 +1,14 @@
 import { MenuView, type MenuAction } from "@react-native-menu/menu";
 import { type ReactNode } from "react";
 import { NativeModules, Platform, UIManager } from "react-native";
+import { useTheme, type ThemeColors } from "@/theme";
 
 export type NativePullDownAction = {
   disabled?: boolean;
   destructive?: boolean;
   displayInline?: boolean;
   id: string;
+  image?: MenuAction["image"];
   keepPresented?: boolean;
   preferredElementSize?: "small" | "medium" | "large";
   state?: "on" | "off" | "mixed";
@@ -26,10 +28,23 @@ export function usesNativePullDownMenu(): boolean {
   return nativePullDownAvailable;
 }
 
-function toMenuAction(action: NativePullDownAction): MenuAction {
+function toMenuAction(
+  action: NativePullDownAction,
+  colors: ThemeColors,
+): MenuAction {
   return {
     id: action.id,
     title: action.title,
+    // Fabric defaults the library's optional Int32 imageColor to transparent.
+    // Always pair a symbol with a visible semantic color.
+    ...(action.image
+      ? {
+          image: action.image,
+          imageColor: action.destructive
+            ? colors.destructive
+            : colors.textPrimary,
+        }
+      : {}),
     ...(action.subtitle ? { subtitle: action.subtitle } : {}),
     ...(action.state ? { state: action.state } : {}),
     ...(action.displayInline ? { displayInline: true } : {}),
@@ -46,7 +61,11 @@ function toMenuAction(action: NativePullDownAction): MenuAction {
         }
       : {}),
     ...(action.subactions?.length
-      ? { subactions: action.subactions.map(toMenuAction) }
+      ? {
+          subactions: action.subactions.map((item) =>
+            toMenuAction(item, colors),
+          ),
+        }
       : {}),
   };
 }
@@ -68,10 +87,11 @@ export function NativePullDownMenu({
   onAction(id: string): void;
   testID?: string;
 }) {
+  const { colors } = useTheme();
   if (!usesNativePullDownMenu()) return children;
   return (
     <MenuView
-      actions={actions.map(toMenuAction)}
+      actions={actions.map((action) => toMenuAction(action, colors))}
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event) onAction(nativeEvent.event);
       }}

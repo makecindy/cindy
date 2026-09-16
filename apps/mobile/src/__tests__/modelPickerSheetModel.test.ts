@@ -60,16 +60,16 @@ describe('provider availability changes', () => {
     const view = { kind: 'options', providerId: null, modelId: 'legacy' } as const;
     const options = [flat('legacy', 'Legacy')];
     const permitted = (providersReady: boolean) => canUseFlatModelFallback({
-      providers: [], providersReady, browsingOtherAgent: false,
+      providers: [], providersReady, providersUnsupported: true, browsingOtherAgent: false,
     }) ? options : [];
     expect(findOptionsTarget(view, [], permitted(false))).not.toBeNull();
     expect(findOptionsTarget(view, [], permitted(true))).toBeNull();
   });
 
   it('keeps legacy-host fallback and forbids using it to cross harnesses', () => {
-    expect(canUseFlatModelFallback({ providers: [], providersReady: false, browsingOtherAgent: false })).toBe(true);
-    expect(canUseFlatModelFallback({ providers: [], providersReady: false, browsingOtherAgent: true })).toBe(false);
-    expect(canUseFlatModelFallback({ providers: [], providersReady: false, browsingOtherAgent: false, loading: true })).toBe(false);
+    expect(canUseFlatModelFallback({ providers: [], providersReady: false, providersUnsupported: true, browsingOtherAgent: false })).toBe(true);
+    expect(canUseFlatModelFallback({ providers: [], providersReady: false, providersUnsupported: true, browsingOtherAgent: true })).toBe(false);
+    expect(canUseFlatModelFallback({ providers: [], providersReady: false, providersUnsupported: true, browsingOtherAgent: false, loading: true })).toBe(false);
   });
 });
 

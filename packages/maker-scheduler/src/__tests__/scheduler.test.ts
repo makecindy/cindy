@@ -69,9 +69,9 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
-  async deleteRun(id: string): Promise<ScheduleRun | null> {
+  async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
-    if (!ex) return null;
+    if (!ex || (options?.excludeBotSchedules && this.schedules.get(ex.scheduleId)?.source === 'bot')) return null;
     this.runs.delete(id);
     return { ...ex };
   }
@@ -163,6 +163,7 @@ function makeHarness(opts?: {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
+    selection: Pick<Schedule, 'modelAgentKind'>,
   ) => Promise<void>;
   /** 传入共享 storage / clock 模拟"两个 app 实例共用同一 DB"的双开场景。 */
   storage?: InMemoryStorage;
@@ -214,6 +215,16 @@ describe('Scheduler', () => {
     h = makeHarness();
   });
 
+
+  it('persists an explicit Harness with its model and clears it when following the target', async () => {
+    const saved = await h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: 'grok-4.6' });
+    expect(saved.modelAgentKind).toBe('pi');
+    await expect(h.scheduler.update(saved.id, { model: undefined })).rejects.toThrow(/Harness/);
+    const followed = await h.scheduler.update(saved.id, { modelAgentKind: undefined, model: undefined });
+    expect(followed?.modelAgentKind).toBeUndefined();
+    await expect(h.scheduler.create({ ...baseInput, modelAgentKind: 'pi', model: '' })).rejects.toThrow(/Harness/);
+  });
+
   it('create() computes nextFireAt and adds to active map', async () => {
     const sch = await h.scheduler.create({ ...baseInput });
     // From 00:00:30, next minute boundary = 00:01:00
@@ -263,6 +274,43 @@ describe('Scheduler', () => {
     // 空白串 workingDir 等同未传 → dialogue
     const blankDir = await h.scheduler.create({ ...baseInput, workingDir: '  ' });
     expect(blankDir.workspaceKind).toBe('dialogue');
+  });
+
+  it('passes the complete candidate Harness to host validation before saving and firing', async () => {
+    let allowedAgent = 'codex';
+    const validateTargetSession = vi.fn(async (
+      _target: string,
+      _operation: 'create' | 'update' | 'fire',
+      selection: Pick<Schedule, 'modelAgentKind'>,
+    ) => {
+      if (selection.modelAgentKind && selection.modelAgentKind !== allowedAgent) {
+        throw new Error('target Harness is fixed');
+      }
+    });
+    const local = makeHarness({ validateTargetSession });
+    await expect(local.scheduler.create({ ...baseInput, targetSessionId: 'bound',
+      modelAgentKind: 'pi', model: 'test-model' })).rejects.toThrow('Harness is fixed');
+    expect(local.storage.schedules.size).toBe(0);
+    const schedule = await local.scheduler.create({ ...baseInput, targetSessionId: 'bound',
+      modelAgentKind: 'codex', model: 'test-model' });
+    await expect(local.scheduler.update(schedule.id, { modelAgentKind: 'pi' }))
+      .rejects.toThrow('Harness is fixed');
+    expect((await local.storage.get(schedule.id))?.modelAgentKind).toBe('codex');
+    await local.scheduler.update(schedule.id, { name: 'same route' });
+    expect(validateTargetSession).toHaveBeenLastCalledWith('bound', 'update',
+      expect.objectContaining({ modelAgentKind: 'codex' }));
+
+    // A changed host capability must also be checked on automatic and manual runs.
+    allowedAgent = 'pi';
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    await local.scheduler.tick();
+    expect(local.fireCalls).toHaveLength(0);
+    expect(validateTargetSession).toHaveBeenLastCalledWith('bound', 'fire',
+      expect.objectContaining({ modelAgentKind: 'codex' }));
+    await local.scheduler.runNow(schedule.id);
+    expect(local.fireCalls).toHaveLength(0);
+    const follow = await local.scheduler.update(schedule.id, { modelAgentKind: undefined });
+    expect(follow.modelAgentKind).toBeUndefined();
   });
 
   it('rejects persisted Review targets at create, update, automatic fire, and runNow after restart', async () => {
@@ -361,6 +409,63 @@ describe('Scheduler', () => {
       workingDir: '/managed/2026-06-12/sess-3',
     });
     expect(plain.workspaceKind).toBe('project');
+  });
+
+  it('update() 换 agentKind 时丢弃上一引擎的 model / providerId / effort(回到默认路由)', async () => {
+    // 伙伴接管期把任务钉在 Codex 的 gpt-6-astra@openai 上,之后改回 Claude Code 却没法
+    // 清模型 → 任务带着 Claude Code 跑不了的路由,每轮 fire 都被上游拒绝。
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: true,
+    });
+    const switched = await h.scheduler.update(sch.id, { agentKind: 'claude-code' });
+    expect(switched.agentKind).toBe('claude-code');
+    expect(switched.model).toBeUndefined();
+    expect(switched.providerId).toBeUndefined();
+    expect(switched.effort).toBeUndefined();
+    // 旧引擎的 Fast 开关不能潜伏到下次切回 Codex/Pi 时复活
+    expect(switched.fastMode).toBe(false);
+    const back = await h.scheduler.update(sch.id, { agentKind: 'codex' });
+    expect(back.fastMode).toBe(false);
+    expect(back.model).toBeUndefined();
+    // 落库 patch 必须带 key(storage 按 hasOwnProperty 清列),不能只是省略
+    const stored = h.storage.schedules.get(sch.id)!;
+    expect(Object.prototype.hasOwnProperty.call(stored, 'model')).toBe(true);
+    expect(stored.model).toBeUndefined();
+    expect(stored.providerId).toBeUndefined();
+
+    // 反证 1:agentKind 没变 → 路由原样保留
+    const sch2 = await h.scheduler.create({
+      ...baseInput,
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+      providerId: 'openai',
+      fastMode: true,
+    });
+    const same = await h.scheduler.update(sch2.id, { agentKind: 'codex', prompt: 'p2' });
+    expect(same.model).toBe('gpt-6-astra');
+    expect(same.providerId).toBe('openai');
+    expect(same.fastMode).toBe(true);
+    const untouched = await h.scheduler.update(sch2.id, { prompt: 'p3' });
+    expect(untouched.model).toBe('gpt-6-astra');
+
+    // 反证 2:换引擎同时显式给了新路由 → 按调用方意图
+    const explicit = await h.scheduler.update(sch2.id, {
+      agentKind: 'claude-code',
+      model: 'claude-fable-5-1',
+      providerId: 'anthropic',
+    });
+    expect(explicit.model).toBe('claude-fable-5-1');
+    expect(explicit.providerId).toBe('anthropic');
+    expect(explicit.effort).toBeUndefined();
+    expect(explicit.fastMode).toBe(false);
+    // 显式带 fastMode 按调用方意图
+    const keepFast = await h.scheduler.update(sch2.id, { agentKind: 'codex', fastMode: true });
+    expect(keepFast.fastMode).toBe(true);
   });
 
   it('update() 给了真实 workingDir 时翻成 project(与 create 推断对称)', async () => {
@@ -4420,4 +4525,64 @@ describe('Scheduler: attempt 生命周期状态机(#1016)', () => {
     expect(second.runId).toBeTruthy();
     await h.scheduler.stop();
   });
+});
+
+describe('caller-owned deferred dispatch', () => {
+  it('returns deferred without arming a manual schedule or recording a failure', async () => {
+    const canDispatch = vi.fn(() => false);
+    const h = makeHarness({ runnerImpl: async (_schedule, ctx) => {
+      expect(ctx.deferToCaller).toBe(true);
+      expect(ctx.canDispatch).toBe(canDispatch);
+      expect(ctx.canDispatch?.()).toBe(false);
+      return { sessionId: 'bot-task', deferred: true, deferRetryMs: 1000 };
+    } });
+    const schedule = await h.scheduler.create({ ...baseInput, manual: true });
+    await h.scheduler.start();
+    const failed = vi.fn();
+    h.scheduler.on('failed', failed);
+    const result = await h.scheduler.runNow(schedule.id, { deferToCaller: true, canDispatch });
+    expect(result.deferred).toBe(true);
+    expect(await h.storage.listRuns(schedule.id)).toEqual([]);
+    expect(await h.storage.get(schedule.id)).toMatchObject({
+      nextFireAt: undefined, lastFiredAt: undefined,
+    });
+    h.clock.advance(120000);
+    await h.scheduler.tick();
+    expect(h.runner.fire).toHaveBeenCalledTimes(1);
+    expect(failed).not.toHaveBeenCalled();
+    await h.scheduler.stop();
+  });
+});
+
+it('keeps internal routine schedules out of public management while retaining host execution and cleanup', async () => {
+  const h = makeHarness();
+  const publicSchedule = await h.scheduler.create(baseInput);
+  const internal = { ...publicSchedule, id: 'routine-owned', source: 'bot' as const, manual: true, nextFireAt: undefined };
+  await h.storage.insert(internal);
+  expect(await h.scheduler.list()).toEqual([publicSchedule]);
+  expect(await h.scheduler.get(internal.id)).toBeNull();
+  const buildPatch = vi.fn(async () => ({ name: 'changed' }));
+  const actions = [
+    () => h.scheduler.listRuns(internal.id),
+    () => h.scheduler.update(internal.id, { name: 'changed' }),
+    () => h.scheduler.updateFromCurrent(internal.id, buildPatch),
+    () => h.scheduler.pause(internal.id),
+    () => h.scheduler.resume(internal.id),
+    () => h.scheduler.delete(internal.id),
+    () => h.scheduler.runNow(internal.id),
+  ];
+  for (const action of actions) await expect(action()).rejects.toThrow('not found');
+  expect(buildPatch).not.toHaveBeenCalled();
+  expect(h.runner.fire).not.toHaveBeenCalled();
+  expect(await h.storage.get(internal.id)).toEqual(internal);
+  const result = await h.scheduler.runNow(internal.id, { internalRoutine: true, deferToCaller: true });
+  expect(h.runner.fire).toHaveBeenCalledTimes(1);
+  await expect(h.scheduler.deleteRun(result.runId)).rejects.toThrow('not found');
+  expect(await h.storage.listRuns(internal.id)).toHaveLength(1);
+  await h.scheduler.pause(internal.id, { internalRoutine: true });
+  await h.scheduler.delete(internal.id, { internalRoutine: true });
+  expect(await h.storage.get(internal.id)).toBeNull();
+  await h.scheduler.runNow(publicSchedule.id);
+  expect(h.runner.fire).toHaveBeenCalledTimes(2);
+  await h.scheduler.stop();
 });

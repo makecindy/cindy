@@ -9,6 +9,7 @@
  * so the lightbox never mounts thousands of DOM nodes at once.
  */
 
+import { CHAT_COMPACT_CODE_CLASS } from './chatChrome';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
@@ -49,7 +50,7 @@ interface SkipMarker {
 type RenderRow = DiffLine | SkipMarker;
 
 const DIFF_PRE_CLASS_NAME =
-  'm-0 w-max min-w-full p-0 text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5] font-mono';
+  cn('m-0 w-max min-w-full p-0', CHAT_COMPACT_CODE_CLASS);
 
 /**
  * 把超出 ±contextLines 范围的连续 ctx 行折叠成一个 SkipMarker。
@@ -234,7 +235,7 @@ export function DiffView({ oldString, newString, analysis, contextLines }: DiffV
 
   if (!resolvedAnalysis) {
     return (
-      <div className="diff-hscroll overflow-x-auto rounded-[12px] border border-[var(--msg-tool-card-border)]">
+      <div className="diff-hscroll overflow-x-auto rounded-xl border border-[var(--msg-tool-card-border)]">
         <div className="px-3 py-3 text-13 text-[var(--msg-tool-card-chevron)]">
           {t('chat.lightbox.diffPreviewLoading')}
         </div>
@@ -254,7 +255,7 @@ export function DiffView({ oldString, newString, analysis, contextLines }: DiffV
       <div
         ref={parentRef}
         data-diff-virtualized="true"
-        className="diff-hscroll select-text overflow-x-auto overflow-y-auto max-h-[60vh] rounded-[12px] border border-[var(--msg-tool-card-border)]"
+        className="diff-hscroll select-text overflow-x-auto overflow-y-auto max-h-[60vh] rounded-xl border border-[var(--msg-tool-card-border)]"
       >
         <pre
           className={cn('relative', DIFF_PRE_CLASS_NAME)}
@@ -277,7 +278,7 @@ export function DiffView({ oldString, newString, analysis, contextLines }: DiffV
   }
 
   return (
-    <div className="diff-hscroll select-text overflow-x-auto rounded-[12px] border border-[var(--msg-tool-card-border)]">
+    <div className="diff-hscroll select-text overflow-x-auto rounded-xl border border-[var(--msg-tool-card-border)]">
       <pre className={DIFF_PRE_CLASS_NAME}>
         {rows.map((row, index) => (
           <div

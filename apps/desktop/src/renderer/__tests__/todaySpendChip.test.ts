@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { TFunction } from 'i18next';
+import { formatCompactTimeUntilReset } from '../lib/compactQuotaCountdown';
 import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
@@ -47,7 +48,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(compact("codexAuthInjection === 'oauth-bearer'"));
     expect(compact(source)).toContain(compact("vendorKey === 'codex' && !isCodexXaiProvider"));
     expect(compact(source)).toContain(compact('isRemoteCodexSession ||'));
-    expect(compact(source)).toContain(compact("(providerId == null || providerId === 'openai')"));
+    expect(compact(source)).toContain(compact("(providerId == null || isOpenAiAccount)"));
     expect(compact(source)).toContain(compact('modelId.startsWith(XAI_MODEL_PREFIX)'));
     expect(compact(source)).toContain(compact("providerId === 'xai'"));
     expect(compact(source)).toContain(
@@ -74,12 +75,36 @@ describe('TodaySpendChip dashboard routing', () => {
         "vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null",
       ),
     );
-    // 订阅形态分类整体排除 device-link(专属分支接管渲染)
+    // 订阅形态分类的本机启发式整体排除 device-link;显式 anthropic / 被控端路由观察为
+    // 订阅的远程会话走被控端镜像快照(useRemoteClaudeSubscriptionUsage),不读本机账号状态。
     expect(compact(source)).toContain(
-      compact("(vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')"),
+      compact("const isClaudeSubscription = isDeviceLinkRemoteClaudeSubscription || (!isDeviceLinkRemote &&"),
     );
-    // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
-    expect(compact(source)).toContain(compact('if (isDeviceLinkRemote) {'));
+    expect(compact(source)).toContain(compact('const isDeviceLinkRemoteClaudeSubscription ='));
+    expect(compact(source)).toContain(
+      compact('isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? (deviceLinkDeviceId ?? null) : null,'),
+    );
+    // 本机订阅快照 hook 对 device-link 关闭(两个 hook 的 enabled 互斥)
+    expect(compact(source)).toContain(
+      compact('isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,'),
+    );
+    // 形态未解析(默认路由无观察值 / 老被控端)的远程会话走占位分支:估算价值 / 累计 cost
+    // 有哪个显哪个,不显示本机限额窗口;形态已解析的走对应形态分支,用被控端镜像渲染同一套卡片。
+    expect(compact(source)).toContain(compact('const deviceLinkRemoteFormResolved ='));
+    expect(compact(source)).toContain(
+      compact('if (isDeviceLinkRemote && !deviceLinkRemoteFormResolved) {'),
+    );
+    // 只有 SSH 远程(无镜像)不构建账号卡片;device-link 用镜像快照构建
+    expect(compact(source)).toContain(compact('if (!remoteHostId) {'));
+    expect(compact(source)).toContain(
+      compact('if (usesGatewayQuota || isDeviceLinkRemoteGateway) {'),
+    );
+    // cc 默认路由的远程形态判定只认被控端路由观察镜像,不做本机启发式。
+    expect(compact(source)).toContain(
+      compact('const remoteClaudeRoute = useRemoteClaudeSessionRoute('),
+    );
+    // #4197 多账号:本机 Claude 账号判定经 isClaudeAccount(providerId / auth.native),pi 与 codex 同口径
+    expect(compact(source)).toContain(compact("((vendorKey === 'pi' || vendorKey === 'codex') && !remoteHostId && isClaudeAccount)"));
     // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)
     expect(source).toMatch(/usageDashboardUrl: string \| null = isDeviceLinkRemote\s*\?\s*null/);
   });
@@ -137,7 +162,10 @@ describe('TodaySpendChip dashboard routing', () => {
   it('ticks the reset countdown per second in the last minute and rolls remaining % up after a reset', () => {
     // 最后一分钟秒级倒计时: formatCompactTimeUntilReset 落到秒单位, tick 节奏由
     // computeCountdownTickDelayMs 决定 (setTimeout 链, 非固定 interval)
-    expect(compact(source)).toContain(compact("t('todaySpend.unit.second')"));
+    const seconds = ((key: string) => key === 'todaySpend.unit.second' ? '秒' : key) as TFunction;
+    expect(formatCompactTimeUntilReset(61, 20_000, seconds)).toBe('41秒');
+    expect(formatCompactTimeUntilReset(61, 21_000, seconds)).toBe('40秒');
+    expect(formatCompactTimeUntilReset(61, 61_000, seconds)).toBeNull();
     expect(compact(source)).toContain(
       compact('computeCountdownTickDelayMs(chipResetsAtMsList, Date.now())'),
     );
@@ -153,7 +181,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(
       compact("import { QuotaResetConfetti } from './QuotaResetConfetti';"),
     );
-    expect(compact(source)).toContain(compact('if (celebrating && !prevCelebratingRef.current)'));
+    expect(compact(source)).toContain(compact('const key = quotaFullCelebrations.observe('));
     expect(compact(source)).toContain(compact('segmentElsRef.current[window.key] = el;'));
     expect(compact(source)).toContain(compact('?? chipRef.current;'));
     expect(compact(source)).toContain(compact('<QuotaResetConfetti'));
@@ -193,14 +221,19 @@ describe('TodaySpendChip dashboard routing', () => {
     // 形态显示 app-server 槽, WHAM 刷新帮不上它(靠 turn 事件 / 悬念超时兜底),
     // 不得催 —— WHAM 桶与 CLI 配额可能不同(账号多限额桶, 2026-07-24 实报 bug)
     expect(compact(source)).toContain(
+      compact('if (isChatgptBridge || (isDeviceLinkRemote && usesCodexQuotaForm)) {'),
+    );
+    expect(compact(source)).toContain(compact('requestCodexAccountRefresh(providerId ?? undefined);'));
+    expect(compact(source)).toContain(compact("requestXaiSubscriptionRefresh(providerId ?? 'xai');"));
+    // 悬念期催刷按会话来源分路:远程订阅会话催被控端(隧道,被控端节流兜底),
+    // 本机订阅会话催本机;不得拿本机通道替远程会话催刷(账号不同)。
+    expect(compact(source)).toContain(
       compact(
-        'if (isChatgptBridge) {\n' +
-          '      requestCodexAccountRefresh();\n' +
-          '    } else if (usesXaiQuotaForm) {\n' +
-          '      requestXaiSubscriptionRefresh();\n' +
-          '    } else if (isClaudeSubscription && !usesCodexQuotaForm) {\n' +
-          '      requestClaudeSubscriptionRefresh();\n' +
-          '    }',
+        'if (isDeviceLinkRemoteClaudeSubscription && deviceLinkDeviceId) {\n' +
+          "        requestRemoteClaudeSubscriptionRefresh(deviceLinkDeviceId, providerId ?? 'anthropic');\n" +
+          '      } else if (!isDeviceLinkRemote) {\n' +
+          "        requestClaudeSubscriptionRefresh(providerId ?? 'anthropic');\n" +
+          '      }',
       ),
     );
     expect(compact(source)).toContain(
@@ -335,7 +368,7 @@ describe('shared usage-card provider projections', () => {
     expect(buildCodexUsageCard(null, null, t, now).emptyText).toBe('quotaCard.waiting');
   });
 
-  it('preserves Grok product, prepaid USD, and instantaneous rate-limit details', () => {
+  it('keeps Grok shared remaining quota, prepaid USD and rate-limit details without presenting product contributions as balances', () => {
     const card = buildXaiUsageCard(
       {
         planLabel: 'SuperGrok',
@@ -360,16 +393,7 @@ describe('shared usage-card provider projections', () => {
       now,
     );
     expect(card.windows.map((window) => window.window.utilization)).toEqual([9]);
-    expect(card.windows[0].breakdown).toEqual([
-      {
-        label: 'quotaCard.includedLabel:{"name":"Grok Build"}',
-        value: 'quotaCard.usedPercent:{"percent":2}',
-      },
-      {
-        label: 'quotaCard.includedLabel:{"name":"Other Product"}',
-        value: 'quotaCard.usedPercent:{"percent":7}',
-      },
-    ]);
+    expect(card.windows[0].breakdown).toBeUndefined();
     expect(card.windows[0].detail).toBe('todaySpend.xai.accountWeeklyHint');
     expect(card.details).toEqual(
       expect.arrayContaining([

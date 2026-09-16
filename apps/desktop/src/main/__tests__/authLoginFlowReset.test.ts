@@ -42,6 +42,34 @@ describe('auth login-flow reset', () => {
     expect(clearBody).toContain('canaryFlagStore.clear();');
   });
 
+  it('keeps successful personal credentials private until the region choice and excludes saved-account activation', () => {
+    const start = source.indexOf('async function finishFreshLogin(');
+    const finish = source.slice(start, source.indexOf('async function runLoginAction(', start));
+    expect(finish).toContain('discoverPersonalLoginOrganization(outcome.membership');
+    expect(finish.indexOf('assertLoginFlowCurrent(expectedLoginFlowEpoch)')).toBeGreaterThan(finish.indexOf('await discoverPersonalLoginOrganization'));
+    expect(finish).toContain('pendingPersonalLogin = { outcome, realm: personalRealm }');
+    expect(finish).toContain('personalLoginAvailable: true');
+    expect(finish).not.toContain('pendingAuthRealm = discovery.region');
+    expect(finish).toContain('return completeLogin(outcome, expectedLoginFlowEpoch)');
+    const lookupStart = source.indexOf('async function lookupOrganizationRealm(');
+    const lookup = source.slice(lookupStart, source.indexOf('async function completeLogin(', lookupStart));
+    expect(lookup).not.toContain('pendingAuthRealm =');
+    const continueStart = source.indexOf("if (action.type === 'cancel-sso-realm')");
+    const continueBody = source.slice(continueStart, source.indexOf('if (!providerConfig)', continueStart));
+    expect(continueBody).toContain('pendingAuthRealm = personal.realm');
+    expect(continueBody).toContain('await completeLogin(personal.outcome, actionLoginFlowEpoch)');
+    expect(continueBody).not.toContain('finishFreshLogin(');
+    const confirmStart = source.indexOf("if (action.type === 'confirm-sso-realm')");
+    const confirmBody = source.slice(confirmStart, continueStart);
+    expect(confirmBody.indexOf('pendingPersonalLogin = null')).toBeLessThan(confirmBody.indexOf('pendingAuthRealm = confirmation.targetRegion'));
+    expect(confirmBody).toContain('pendingAccountRefreshToken = null');
+    expect(source.slice(0, source.indexOf('async function acceptLoginOutcome('))).not.toContain('await finishFreshLogin(');
+    expect(source).toContain("await finishFreshLogin({ status: 'ok', ...pair }, actionLoginFlowEpoch)");
+    const reset = source.slice(source.indexOf('function resetLoginFlowState()'), source.indexOf('function clearAuth('));
+    expect(reset).toContain('pendingPersonalLogin = null');
+    expect(reset).toContain('handledLoginEmail = null');
+  });
+
   it('keeps the login-epoch guard and does not resurrect the legacy feishu token chain', () => {
     const completeStart = source.indexOf('async function completeLogin(');
     const completeEnd = source.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
@@ -109,8 +137,25 @@ describe('auth login-flow reset', () => {
       source.indexOf("if (action.type === 'discover')", actionStart),
     );
     expect(personalActionSetup).toContain(
-      'if (startsBuildRealmFlow) pendingAuthRealm = loginRealm;',
+      "if (startsBuildRealmFlow && action.type !== 'request-code') pendingAuthRealm = loginRealm;",
     );
+  });
+
+  it('keeps cross-region email choices gated and preserves SSO after failed personal code sending', () => {
+    const discover = source.slice(
+      source.indexOf("if (action.type === 'discover') {"),
+      source.indexOf("if (action.type === 'discover-sso-org') {"),
+    );
+    expect(discover).toContain('discoverEmailLogin(action.email');
+    expect(discover.indexOf('discoveredMethods = [];')).toBeLessThan(discover.indexOf('await discoverEmailLogin'));
+    expect(discover).toContain('discoverOrganizationRealm(domain, actionLoginFlowEpoch)');
+    expect(discover).toContain('pendingAuthRealm = region;');
+    expect(discover.indexOf("type: 'realm-switch-required'")).toBeLessThan(discover.indexOf('discoveredMethods = methods;'));
+    expect(source).toContain("email: confirmation.email ?? ''");
+    const requestStart = source.indexOf("if (action.type === 'request-code') {");
+    const request = source.slice(requestStart, source.indexOf("if (action.type === 'verify-code') {", requestStart));
+    expect(request.indexOf('pendingAuthRealm = AUTH_REGION;')).toBeGreaterThan(request.indexOf('await client.requestCode('));
+    expect(request).toContain('discoveredMethods = [];');
   });
 
   it('does not leave expired private tickets on a screen that can only reuse them', () => {
@@ -829,6 +874,13 @@ describe('auth login-flow reset', () => {
     const getLoginStart = source.indexOf('export async function getLoginState(');
     const getLoginEnd = source.indexOf('\n}\n\nasync function completeLogin(', getLoginStart);
     const getLoginBody = source.slice(getLoginStart, getLoginEnd);
+    const waitForOwnerChange = getLoginBody.indexOf('await ownerChangeShellGate.waitForSettled();');
+    const captureLoginEpoch = getLoginBody.indexOf(
+      'const expectedLoginFlowEpoch = loginFlowEpoch;',
+    );
+    expect(waitForOwnerChange).toBeGreaterThan(-1);
+    expect(captureLoginEpoch).toBeGreaterThan(-1);
+    expect(waitForOwnerChange).toBeLessThan(captureLoginEpoch);
     expect(getLoginBody).toContain('await loadLoginProviders(expectedLoginFlowEpoch)');
     expect(getLoginBody).toContain('mapLoginProvidersLoadFailure(error)');
   });
@@ -897,6 +949,27 @@ describe('auth login-flow reset', () => {
     expect(helperBody).toContain('writePersistedAuthSessionOrThrow(pair.refreshToken, realm);');
   });
 
+  it('advances the existing owner generation when login or restoration commits another realm', () => {
+    for (const [entry, realm] of [
+      ['async function runColdStartRefreshFlow(', 'storedRealm'],
+      ['async function completeLogin(', 'committedRealm'],
+    ]) {
+      const start = source.indexOf(entry);
+      expect(start).toBeGreaterThan(-1);
+      const body = source.slice(start, source.indexOf('\n}\n', start));
+      const capture = body.indexOf(`const authRealmChanged = ${realm} !== activeAuthRealm;`);
+      const activate = body.indexOf(`activeAuthRealm = ${realm};`);
+      const commit = body.indexOf('commitCloudAppSession(currentUser.id, authRealmChanged);');
+      expect(capture).toBeGreaterThan(-1);
+      expect(activate).toBeGreaterThan(capture);
+      expect(commit).toBeGreaterThan(activate);
+    }
+    const start = source.indexOf('function commitCloudAppSession(');
+    const helper = source.slice(start, source.indexOf('\n}\n', start));
+    expect(helper).toContain("commitActiveAppSession('cloud', ownerId, authRealmChanged);");
+    expect(helper).toContain("commitVolatileAppSession('cloud', ownerId, authRealmChanged);");
+  });
+
   it('reconnects realm-bound main clients after a runtime realm change commits its new token', () => {
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
@@ -905,6 +978,7 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
+    expect(refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g)).toHaveLength(2);
     expect(refreshBody).toContain(
       'const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;',
     );
@@ -1087,11 +1161,13 @@ describe('auth login-flow reset', () => {
     const completeStart = source.indexOf('async function completeLogin(');
     const completeEnd = source.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
     const completeBody = source.slice(completeStart, completeEnd);
-    const ownerCommit = completeBody.indexOf('commitCloudAppSession(currentUser.id);');
-    const clearPreviousFlag = completeBody.indexOf('canaryFlagStore.clear();', ownerCommit);
-    expect(ownerCommit).toBeGreaterThan(-1);
-    expect(clearPreviousFlag).toBeGreaterThan(ownerCommit);
-    expect(completeBody.slice(ownerCommit, clearPreviousFlag)).toContain(
+    const acceptedUser = completeBody.indexOf('currentUser = nextUser;');
+    const ownerCommit = completeBody.indexOf('commitCloudAppSession(currentUser.id, authRealmChanged);');
+    const clearPreviousFlag = completeBody.indexOf('canaryFlagStore.clear();', acceptedUser);
+    expect(acceptedUser).toBeGreaterThan(-1);
+    expect(clearPreviousFlag).toBeGreaterThan(acceptedUser);
+    expect(ownerCommit).toBeGreaterThan(clearPreviousFlag);
+    expect(completeBody.slice(acceptedUser, clearPreviousFlag)).toContain(
       'if (!isPassiveSharedUserDataInstance()) {',
     );
 

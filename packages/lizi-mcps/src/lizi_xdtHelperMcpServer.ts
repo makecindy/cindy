@@ -27,7 +27,9 @@
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
@@ -61,6 +63,11 @@ import {
   registerBotSkillTools,
   type BotSkillCallbacks,
 } from './xdt-helper/bot_skills.js';
+import {
+  registerBotCapabilityTools,
+  withCindyGatedBotToolDescriptions,
+  type BotCapabilityCallbacks,
+} from './xdt-helper/bot_capabilities.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
@@ -91,6 +98,14 @@ const D_LIST_TOOLS =
 const D_CALL_TOOL =
   '调用 list_tools 为当前任务返回的一个具体工具。不要猜工具名，也不要把它当成通用命令入口。';
 
+const LIST_TOOLS_INPUT = {
+  category: z.string().optional().describe('list_tools 上一步返回的类目；不传则先取类目概览。'),
+};
+const CALL_TOOL_INPUT = {
+  name: z.string().describe('工具名,从 list_tools 获取(如 get_capabilities)'),
+  args: jsonObjectArg('工具参数(JSON 对象)。不确定 schema 时可先传 {} 触发错误反馈。'),
+};
+
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
 const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'bots'] as const;
@@ -102,6 +117,7 @@ interface SessionTaskCallbacks {
     contextRefs?: string[];
     title?: string;
     workingDir?: string;
+    useWorktree?: boolean;
     timeoutMs?: number;
   }): Promise<ControlResult<Record<string, unknown>, string>>;
   messageSessionTask(params: {
@@ -111,15 +127,20 @@ interface SessionTaskCallbacks {
       | { kind: 'approve' }
       | { kind: 'deny'; reason?: string }
       | { kind: 'answer'; answers: Record<string, string> }
-      | { kind: 'message'; text: string; idempotencyKey?: string };
+      | { kind: 'message'; text: string; idempotencyKey?: string; mode?: 'queue' | 'steer' }
+      | { kind: 'resume'; text?: string }
+      | { kind: 'edit'; queuedMessageId: string; text: string }
+      | { kind: 'withdraw'; queuedMessageId: string };
   }): Promise<ControlResult<Record<string, unknown>, string>>;
   getSessionTask(params: {
     callerSessionId: string;
     taskId: string;
+    queuedMessageId?: string;
   }): Promise<ControlResult<{ task: unknown }, string>>;
   stopSessionTask(params: {
     callerSessionId: string;
     taskId: string;
+    mode?: 'cancel' | 'request-stop' | 'pause';
   }): Promise<ControlResult<Record<string, unknown>, string>>;
 }
 
@@ -147,24 +168,33 @@ interface BotMessagingCallbacks {
 
 // ── Entry tool registration ──────────────────────────────────────────────────
 
+function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
+  const ctx = resolveLiziMcpSessionContext(sessionCtx);
+  // Match helper / remoteBotOnly: cindy is missing only for remote Claude/Codex.
+  // Remote Pi tunnels the in-process cindy gateway over the MCP bridge.
+  return !ctx.remoteHostId || ctx.agentKind === 'pi';
+}
+
 function registerListToolsEntry(
   server: McpServer,
   registry: XdtHelperToolRegistry,
   allowedCategories: () => Promise<ReadonlySet<string> | null>,
+  sessionCtx: XdtHelperMcpSessionCtx,
 ): void {
   server.tool(
     'list_tools',
     D_LIST_TOOLS,
-    {
-      category: z.string().optional().describe('list_tools 上一步返回的类目；不传则先取类目概览。'),
-    },
+    LIST_TOOLS_INPUT,
     async ({ category }) => {
       const allowed = await allowedCategories();
       if (category) {
         if (allowed && !allowed.has(category)) {
           return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个类目不属于当前任务的能力面。');
         }
-        const tools = registry.list(category as (typeof CATEGORY_ENUM)[number]);
+        const tools = withCindyGatedBotToolDescriptions(
+          registry.list(category as (typeof CATEGORY_ENUM)[number]),
+          cindyAvailableForSession(sessionCtx),
+        );
         return {
           content: [
             {
@@ -221,12 +251,7 @@ function registerCallToolEntry(
   server.tool(
     'call_tool',
     D_CALL_TOOL,
-    {
-      name: z
-        .string()
-        .describe('工具名,从 list_tools 获取(如 get_capabilities)'),
-      args: jsonObjectArg('工具参数(JSON 对象)。不确定 schema 时可先传 {} 触发错误反馈。'),
-    },
+    CALL_TOOL_INPUT,
     async ({ name, args }) => {
       const allowed = await allowedCategories();
       const definition = registry.get(name);
@@ -270,8 +295,9 @@ function registerStartSessionTaskEntry(
     name: 'start_session_task',
     category: 'bots',
     description: [
-      'Start one real independent Cindy Session task in the background.',
-      'Use this when the user explicitly asks to create/start a task, Session, or background task, and for development or deliverable work that should run independently with progress, cancellation, verification, and automatic result/artifact return.',
+      'Start one real independent Cindy Session task in the background. For project work, pass the actual project/worktree path in working_dir before starting. Set use_worktree=true to create and register an isolated worktree before runtime starts; failure never falls back to the shared directory; creating a worktree later in a shell does not relocate the registered Session. timeout_ms defaults to 1800000 (30 minutes), maximum 86400000 (24 hours); specify the needed budget at creation. Follow-up after timeout inherits the original budget, it does not extend it.',
+      'Proactively use this for coding implementation and medium or large work: reading/modifying a project and running checks, multi-source research, multi-file processing, or complex analysis and deliverables. Do not wait for the user to request delegation or ask permission merely to start a task. Handle short simple questions, code explanations, small snippets, and single-step work yourself unless the user explicitly requests a separate task. Respect an explicit request to work inline.',
+      'Pass the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. Do not duplicate its work. Review the returned result and follow up on the same task if needed.',
       "This never calls a Cindy Bot or any other teammate. Use send_to_agent for a bounded message to a named teammate.",
       "The task appears in the user's task list and returns its completion automatically. Start it once and use check_session_task, message_session_task, or stop_session_task only when there is a concrete reason.",
     ].join('\n'),
@@ -279,10 +305,11 @@ function registerStartSessionTaskEntry(
       instruction: z.string().min(1).max(12_000),
       title: z.string().min(1).max(120).optional(),
       working_dir: z.string().min(1).max(1_024).optional(),
+      use_worktree: z.boolean().optional(),
       context_refs: z.array(z.string().max(512)).max(32).optional(),
       timeout_ms: z.number().int().min(1_000).max(86_400_000).optional(),
     },
-    handler: async ({ instruction, title, working_dir, context_refs, timeout_ms }) => {
+    handler: async ({ instruction, title, working_dir, use_worktree, context_refs, timeout_ms }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
       if (!callerSessionId) {
         return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
@@ -293,6 +320,7 @@ function registerStartSessionTaskEntry(
         contextRefs: context_refs,
         title,
         workingDir: working_dir,
+        ...(use_worktree === undefined ? {} : { useWorktree: use_worktree }),
         timeoutMs: timeout_ms,
       });
       return result.ok
@@ -377,14 +405,15 @@ function registerSessionTaskControlEntries(
   registry.register({
     name: 'check_session_task',
     category: 'bots',
-    description: 'Read the current state and result of one Session task. Use only when the user asks for progress or the automatic completion return appears to be missing.',
-    inputShape: { task_id: z.string().min(1).max(128) },
-    handler: async ({ task_id }) => {
+    description: 'Read state, registered working_dir, stop confirmation and your own pending queue. Optional queued_message_id returns queued/consuming/dispatched/not-found/unavailable. Queue restoration failure preserves task state and result with queue_error=QUEUE_UNAVAILABLE; dispatched means accepted into host history, not proof the model acted on it. Use only when the user asks for progress or the automatic completion return appears to be missing.',
+    inputShape: { task_id: z.string().min(1).max(128), queued_message_id: z.string().min(1).max(256).optional() },
+    handler: async ({ task_id, queued_message_id }) => {
       const callerError = requireCaller();
       if (callerError) return callerError;
       const result = await deps.sessionTasks!.getSessionTask({
         callerSessionId: callerSessionId()!,
         taskId: task_id,
+        ...(queued_message_id ? { queuedMessageId: queued_message_id } : {}),
       });
       return result.ok
         ? okPayload({
@@ -400,13 +429,16 @@ function registerSessionTaskControlEntries(
     name: 'message_session_task',
     category: 'bots',
     description: [
-      'Send a follow-up to one Session task without starting another task.',
-      'Use message to add or correct instructions. Use decision or answers only when the task is waiting for that exact response.',
-      'A completed task resumes in a fresh execution of the same tracked task.',
+      'Send a follow-up to one Session task without starting another task. check_session_task includes your pending queue; edit/withdraw require its queued_message_id. Only your own unconsumed messages can be changed; consuming input is rejected. Absence from the pending queue does not prove the model acted on it.',
+      'mode=queue (default) adds input for the next turn when busy. mode=steer requires a running engine with same-turn steer; it never falls back to queue. Reuse idempotency_key when retrying the same steer from this Session to avoid duplicate injection.',
+      'mode=resume releases a reversible pause on the same Session; optional message supplies new instructions, never replays the original request. Use decision or answers only for the exact pending interaction; if paused, resume first.',
+      'Ordinary queued input to a completed task starts a fresh execution of the same tracked task; mode=resume only releases a reversible pause.',
     ].join('\n'),
     inputShape: {
       task_id: z.string().min(1).max(128),
       message: z.string().min(1).max(4_000).optional(),
+      mode: z.enum(['queue', 'steer', 'resume', 'edit', 'withdraw']).optional(),
+      queued_message_id: z.string().min(1).max(256).optional(),
       decision: z.enum(['approve', 'deny']).optional(),
       answers: z.record(z.string(), z.string()).optional(),
       reason: z.string().max(4_000).optional(),
@@ -415,6 +447,8 @@ function registerSessionTaskControlEntries(
     handler: async ({
       task_id,
       message,
+      mode,
+      queued_message_id,
       decision,
       answers,
       reason,
@@ -422,21 +456,37 @@ function registerSessionTaskControlEntries(
     }) => {
       const callerError = requireCaller();
       if (callerError) return callerError;
+      if (mode === 'edit' || mode === 'withdraw') {
+        if (!queued_message_id || decision || answers || (mode === 'edit' ? !message?.trim() : !!message)) {
+          return errorPayload('INVALID_ARGS', 'edit requires queued_message_id and message; withdraw requires only queued_message_id.');
+        }
+        const result = await deps.sessionTasks!.messageSessionTask({ callerSessionId: callerSessionId()!, taskId: task_id,
+          reply: mode === 'edit' ? { kind: 'edit', queuedMessageId: queued_message_id, text: message!.trim() }
+            : { kind: 'withdraw', queuedMessageId: queued_message_id } });
+        return result.ok ? okPayload({ action: 'message_session_task', task_id, session_id: result.childSessionId,
+          queued_message_id: result.queuedMessageId, delivery: result.delivery, resumed: false }) : errorPayload(result.errorCode, result.message);
+      }
+      if (queued_message_id) return errorPayload('INVALID_ARGS', 'queued_message_id requires edit or withdraw mode.');
       const choices =
         Number(Boolean(message?.trim())) +
         Number(Boolean(decision)) +
         Number(Boolean(answers));
-      if (choices !== 1) {
+      if ((mode === 'resume' ? Boolean(decision || answers) : choices !== 1)
+        || (mode === 'steer' && !message?.trim())
+        || (mode && mode !== 'queue' && Boolean(decision || answers))) {
         return errorPayload(
           'INVALID_ARGS',
           'Provide exactly one of message, decision, or answers.',
         );
       }
-      const reply = message?.trim()
+      const reply = mode === 'resume'
+        ? { kind: 'resume' as const, ...(message?.trim() ? { text: message.trim() } : {}) }
+        : message?.trim()
         ? {
             kind: 'message' as const,
             text: message.trim(),
             idempotencyKey: idempotency_key,
+            ...(mode ? { mode: mode as 'queue' | 'steer' } : {}),
           }
         : decision === 'approve'
           ? { kind: 'approve' as const }
@@ -455,6 +505,9 @@ function registerSessionTaskControlEntries(
             session_id: result.childSessionId,
             resumed: result.resumed,
             ...(result.queued === undefined ? {} : { queued: result.queued }),
+            ...(result.delivery === undefined ? {} : { delivery: result.delivery }),
+            ...(result.queuedMessageId === undefined ? {} : { queued_message_id: result.queuedMessageId }),
+            ...(result.control === undefined ? {} : { control: result.control }),
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -463,20 +516,22 @@ function registerSessionTaskControlEntries(
   registry.register({
     name: 'stop_session_task',
     category: 'bots',
-    description: 'Stop one running Session task and its child tasks. Use only when the user asks to stop it or continuing would be unsafe.',
-    inputShape: { task_id: z.string().min(1).max(128) },
-    handler: async ({ task_id }) => {
+    description: 'mode=cancel (default) terminates the task. mode=request-stop requests graceful stop of the current turn only. mode=pause holds the same task and pending input until message_session_task(mode=resume); pausing/unconfirmed is not proof the engine stopped. Only control tasks owned by your teammate.',
+    inputShape: { task_id: z.string().min(1).max(128), mode: z.enum(['cancel', 'request-stop', 'pause']).optional() },
+    handler: async ({ task_id, mode }) => {
       const callerError = requireCaller();
       if (callerError) return callerError;
       const result = await deps.sessionTasks!.stopSessionTask({
         callerSessionId: callerSessionId()!,
         taskId: task_id,
+        ...(mode ? { mode } : {}),
       });
       return result.ok
         ? okPayload({
             action: 'stop_session_task',
             task_id,
             session_id: result.childSessionId,
+            ...(result.control === undefined ? {} : { control: result.control }),
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -538,6 +593,7 @@ export interface XdtHelperMcpDeps {
   sendToSession?: SendToSessionCallback;
   /** Cindy Bot-only background Session-task controls. Host validates the caller Session. */
   sessionTasks?: SessionTaskCallbacks;
+  botRoutines?: BotRoutineCallbacks;
   /** Direct Bot-to-Bot messages over each partner's canonical Cindy Session. */
   botMessaging?: BotMessagingCallbacks;
   /** Direct lightweight Bot creation for a Bot-bound session. */
@@ -548,6 +604,7 @@ export interface XdtHelperMcpDeps {
    * the caller Session.
    */
   botSkills?: BotSkillCallbacks;
+  botCapabilities?: BotCapabilityCallbacks;
   /**
    * 官方反馈 issue 提交回调(弹确认卡片 → 用户确认 → POST server)。host 注入后,
    * feedback 类工具 submit_github_issue 会被注册; 不注入则不出现在 list_tools 里。
@@ -577,6 +634,7 @@ export interface XdtHelperMcpDeps {
 export interface XdtHelperMcpSessionCtx {
   agentKind: 'claude-code' | 'codex' | 'pi';
   workingDir: string;
+  remoteHostId?: string;
   getSessionContext?: () => import('./types.js').LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
@@ -593,15 +651,17 @@ export function createXdtHelperMcpServer(
 
   const registry = new XdtHelperToolRegistry();
   const allowedCategories = async (): Promise<ReadonlySet<string> | null> => {
-    const sessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+    const context = resolveLiziMcpSessionContext(sessionCtx);
+    const sessionId = context.sessionId;
+    const remoteBotOnly = !!context.remoteHostId && context.agentKind !== 'pi';
     const defaultCategories = new Set(CATEGORY_ENUM.filter((category) => category !== 'bots'));
-    if (!sessionId || !deps.resolveSurface) return defaultCategories;
+    if (!sessionId || !deps.resolveSurface) return remoteBotOnly ? new Set() : defaultCategories;
     const surface = await deps.resolveSurface({ sessionId }).catch(() => 'restricted' as const);
     // Bot-specific memory, Skills, messaging, delegation and durable notes all
     // live in this single category. Cindy-wide history/control/feedback/handoff
     // stay out of the Bot's discovery loop.
-    if (surface === 'bot') return new Set(['bots']);
-    return surface === 'restricted' ? new Set() : defaultCategories;
+    if (surface === 'bot') return new Set(['bots', 'cindy']);
+    return remoteBotOnly || surface === 'restricted' ? new Set() : defaultCategories;
   };
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
@@ -684,6 +744,17 @@ export function createXdtHelperMcpServer(
     });
   }
 
+  if (deps.botCapabilities) {
+    registerBotCapabilityTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.botCapabilities,
+    });
+  }
+  if (deps.botRoutines) {
+    registerBotRoutineTools(registry, deps.botRoutines,
+      () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
+  }
+
   registerStartSessionTaskEntry(registry, deps, sessionCtx);
   registerSendToAgentEntry(registry, deps, sessionCtx);
   registerSessionTaskControlEntries(registry, deps, sessionCtx);
@@ -693,7 +764,7 @@ export function createXdtHelperMcpServer(
       callbacks: deps.botProfiles,
     });
   }
-  registerListToolsEntry(server, registry, allowedCategories);
+  registerListToolsEntry(server, registry, allowedCategories, sessionCtx);
   registerCallToolEntry(server, registry, {
     logger: deps.logger,
     // per-call 解析:codex HTTP bridge 的 server factory 阶段 ctx 是空的,
@@ -701,5 +772,43 @@ export function createXdtHelperMcpServer(
     getSessionId: () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
   }, allowedCategories);
 
+  // Pi already provides direct Bot tools through its native bridge. CC and Codex
+  // consume MCP tools/list instead; expose the same registered definitions there.
+  // Resolve identity per request: Codex's HTTP server is shared across sessions.
+  if (sessionCtx.agentKind !== 'pi') {
+    const directTools = registry.list('bots').map((summary) => registry.get(summary.name)!);
+    for (const definition of directTools) {
+      server.registerTool(definition.name, {
+        description: definition.description, inputSchema: z.strictObject(definition.inputShape),
+      }, async (args) => {
+        const allowed = await allowedCategories();
+        if (!allowed?.has('bots')) {
+          return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
+        }
+        const result = await registry.call(definition.name, args);
+        logToolResultErrorCode({
+          logger: deps.logger, server: 'cindy_helper', tool: definition.name, result,
+          sessionId: resolveLiziMcpSessionContext(sessionCtx).sessionId,
+        });
+        return result;
+      });
+    }
+    const schema = (shape: z.ZodRawShape): Tool['inputSchema'] =>
+      z.toJSONSchema(z.strictObject(shape)) as Tool['inputSchema'];
+    const entryTools: Tool[] = [
+      { name: 'list_tools', description: D_LIST_TOOLS, inputSchema: schema(LIST_TOOLS_INPUT) },
+      { name: 'call_tool', description: D_CALL_TOOL, inputSchema: schema(CALL_TOOL_INPUT) },
+    ];
+    const botTools: Tool[] = directTools.map((definition) => ({
+      name: definition.name, description: definition.description, inputSchema: schema(definition.inputShape),
+    }));
+    // Codex/remote Claude share one helper factory; rewrite ghost guidance from
+    // the request-time session, not the empty factory ctx.
+    server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: (await allowedCategories())?.has('bots')
+        ? [...entryTools, ...withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx))]
+        : entryTools,
+    }));
+  }
   return server;
 }

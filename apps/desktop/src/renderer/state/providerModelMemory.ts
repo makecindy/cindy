@@ -557,6 +557,11 @@ export function hasAnyProviderModelOverride(): boolean {
   );
 }
 
+/** Saved selections identify an existing profile without creating a settings override. */
+export function hasProviderModelHistory(): boolean {
+  return Object.values(load()).some((slot) => slot.lastModel.length > 0);
+}
+
 function persist(
   map: Record<string, ProviderMemory>,
   ops: ProviderMemoryOp[],
@@ -573,12 +578,6 @@ function persist(
     // 只记最小操作；恢复可写后重放到最新共享快照，不能用本窗口旧整表覆盖另一 renderer。
     for (const op of ops) recordPendingOp(key, op, base);
   }
-}
-
-/** Last selected model, including models without an effort control. */
-export function getProviderLastModel(agent: AgentKind, providerId: string): string | undefined {
-  if (!providerId || providerId === MODEL_PRESET_SLOT_ID) return undefined;
-  return load()[keyOf(agent, providerId)]?.lastModel || undefined;
 }
 
 /**
@@ -762,22 +761,12 @@ export function clearProviderModelFast(agent: AgentKind, providerId: string, mod
  * 用于 renderer → main 缓存和 device-link 控制端镜像被控设备的全局模型预设。
  * 深拷贝,调用方拿到的快照不随后续本地改动变化。
  */
-export function snapshotForSeed(): Record<
-  string,
-  {
-    effortByModel: Record<string, Effort>;
-    fastByModel: Record<string, boolean>;
-    thinkingByModel: Record<string, boolean>;
-  }
-> {
-  const out: Record<
-    string,
-    {
-      effortByModel: Record<string, Effort>;
-      fastByModel: Record<string, boolean>;
-      thinkingByModel: Record<string, boolean>;
-    }
-  > = {};
+type ModelMemorySeed = Record<string, Pick<ProviderMemory, 'effortByModel' | 'fastByModel' | 'thinkingByModel'>>;
+export function snapshotForSeed(): ModelMemorySeed;
+export function snapshotForSeed(expectedOwner: string | null): ModelMemorySeed | null;
+export function snapshotForSeed(expectedOwner?: string | null): ModelMemorySeed | null {
+  if (expectedOwner !== undefined && activeDataOwnerId !== expectedOwner) return null;
+  const out: ModelMemorySeed = {};
   for (const [k, slot] of Object.entries(load())) {
     out[k] = {
       effortByModel: { ...slot.effortByModel },

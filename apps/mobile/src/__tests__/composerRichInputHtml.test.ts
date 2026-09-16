@@ -387,6 +387,67 @@ describe('mobile composer rich input HTML', () => {
       nodes: [{ type: 'text', text: 'hello world' }],
     }, true);
 
+    // Blur can happen before WebView delivers a final input event (for
+    // example when the resize handle collapses the composer). The blur hook
+    // must flush that DOM value before native receives the blur message.
+    children[0].nodeValue = 'draft flushed on blur';
+    const beforeBlur = messages.length;
+    listeners.get('blur')?.();
+    expect(messages.slice(beforeBlur)).toEqual([
+      {
+        type: 'change',
+        document: { version: 1, nodes: [{ type: 'text', text: 'draft flushed on blur' }] },
+      },
+      { type: 'blur' },
+    ]);
+
+    // IME completion may arrive on either side of blur. Keep preedit text
+    // private until completion/cancellation, then publish the final DOM once.
+    for (const completion of ['compositionend', 'compositioncancel']) {
+      for (const blurFirst of [false, true]) {
+        windowStub.cindyComposer?.applyDocument({
+          version: 1,
+          nodes: [{ type: 'text', text: '草稿' }],
+        }, true);
+        const beforeComposition = messages.length;
+        listeners.get('compositionstart')?.();
+        children[0].nodeValue = '草稿候选';
+        listeners.get('input')?.();
+        expect(messages.slice(beforeComposition)).toEqual([]);
+        if (blurFirst) {
+          listeners.get('blur')?.();
+          expect(messages.slice(beforeComposition)).toEqual([{ type: 'blur' }]);
+          expect(children[0].nodeValue).toBe('草稿候选');
+        }
+
+        const finalText = completion === 'compositionend' ? '草稿完成' : '草稿';
+        children[0].nodeValue = finalText;
+        listeners.get(completion)?.();
+        listeners.get('input')?.();
+        if (!blurFirst) listeners.get('blur')?.();
+        const changes = completion === 'compositionend' ? [{
+          type: 'change',
+          document: { version: 1, nodes: [{ type: 'text', text: finalText }] },
+        }] : [];
+        expect(messages.slice(beforeComposition)).toEqual(blurFirst
+          ? [{ type: 'blur' }, ...changes]
+          : [...changes, { type: 'blur' }]);
+
+        // Completion must also unlock ordinary editing after refocusing.
+        listeners.get('focus')?.();
+        children[0].nodeValue = `${finalText}继续编辑`;
+        listeners.get('input')?.();
+        expect(messages.at(-1)).toEqual({
+          type: 'change',
+          document: { version: 1, nodes: [{ type: 'text', text: `${finalText}继续编辑` }] },
+        });
+      }
+    }
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
+
     const pasteRange = createRange();
     pasteRange.setStart(children[0], String(children[0].nodeValue).length);
     selection.addRange(pasteRange);
@@ -423,6 +484,61 @@ describe('mobile composer rich input HTML', () => {
       },
     });
     expect(legacyHtml).not.toContain('replaceChildren');
+    for (const finish of ['commit', 'replace-document']) {
+      windowStub.cindyComposer?.applyDocument({
+        version: 1,
+        nodes: [{ type: 'text', text: 'hello world' }],
+      }, true);
+      const selectedPasteRange = createRange();
+      selectedPasteRange.setStart(children[0], 5);
+      // Model replacing the selected suffix: Range.deleteContents mutates
+      // the DOM before native returns the asynchronously processed paste.
+      selectedPasteRange.deleteContents = () => { children[0].nodeValue = 'hello'; };
+      selection.addRange(selectedPasteRange);
+      const beforePaste = messages.length;
+      listeners.get('paste')?.({
+        clipboardData: { getData: () => ' replacement', items: [] },
+        preventDefault() {},
+      });
+      const requestId = finish === 'commit' ? '2' : '3';
+      const pasteRequest = { type: 'paste-text-request', requestId, text: ' replacement' };
+      expect(children[0].nodeValue).toBe('hello');
+      listeners.get('blur')?.();
+      expect(messages.slice(beforePaste)).toEqual([pasteRequest, { type: 'blur' }]);
+
+      if (finish === 'commit') {
+        windowStub.cindyComposer?.commitPaste(requestId, [{ type: 'text', text: ' replacement' }]);
+        expect(messages.slice(beforePaste)).toEqual([
+          pasteRequest,
+          { type: 'blur' },
+          {
+            type: 'change',
+            document: { version: 1, nodes: [{ type: 'text', text: 'hello replacement' }] },
+          },
+        ]);
+      } else {
+        // Replacing the document detaches the pending marker. Its late reply
+        // must neither overwrite the new draft nor block a later blur flush.
+        windowStub.cindyComposer?.applyDocument({
+          version: 1,
+          nodes: [{ type: 'text', text: 'new draft' }],
+        }, true);
+        children[0].nodeValue = 'new draft edited';
+        const beforeNewBlur = messages.length;
+        listeners.get('blur')?.();
+        expect(messages.slice(beforeNewBlur)).toEqual([
+          {
+            type: 'change',
+            document: { version: 1, nodes: [{ type: 'text', text: 'new draft edited' }] },
+          },
+          { type: 'blur' },
+        ]);
+        const beforeLatePaste = messages.length;
+        windowStub.cindyComposer?.commitPaste(requestId, [{ type: 'text', text: ' replacement' }]);
+        expect(messages).toHaveLength(beforeLatePaste);
+        expect(children[0].nodeValue).toBe('new draft edited');
+      }
+    }
     windowStub.cindyComposer?.applyDocument({
       version: 1,
       nodes: [

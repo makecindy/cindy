@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { pickDefaultVersion } from './versionUtils';
 import { triggerIncrementalSync } from './hooks/useSkillSync';
@@ -62,6 +63,7 @@ interface FailurePayload {
 
 export interface ScanResultPayload {
   status: string;
+  rejectionReason?: string;
   gates?: Array<{ name: string; label?: Record<string, string>; status: string; issues?: unknown[] }>;
 }
 
@@ -517,6 +519,10 @@ export function PublishDialog({
   const navigate = useNavigate();
   const { user } = useAuth();
   const identityPolicy = useSkillhubIdentityPolicy(user);
+  // A same-membership auth realm change preserves this route, but must not
+  // preserve a dialog opened for the previous identity or its continuations.
+  const dialogOwner = useMemo(() => getDataOwnerGeneration(), [open]);
+  const isDialogOwnerCurrent = isDataOwnerGenerationCurrent(dialogOwner);
 
   // refresh/sync 延迟到 dialog 关闭后才触发，isFirstPublish 在 dialog 生命周期内不会翻转
   const effectiveFirstPublish = isFirstPublish;
@@ -528,6 +534,11 @@ export function PublishDialog({
   const renamedToRef = useRef<{ absolutePath: string; name: string } | null>(null);
   const activePublishNameRef = useRef<string | null>(null);
   const failedProgressNameRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   /** 拿当前应使用的 (absolutePath, name) — rename 之后是新值,否则用 prop。 */
   const effectiveSkill = useCallback(
     (): { absolutePath: string; name: string } => ({
@@ -550,6 +561,21 @@ export function PublishDialog({
     }
   }, [onLocalRenamed]);
 
+  const reconcileCommittedRename = useCallback(() => {
+    // A committed filesystem rename remains real across auth realms sharing
+    // this local owner. Repair its mounted route without resuming publication.
+    if (mountedRef.current && isDataOwnerIdCurrent(dialogOwner)) notifyRenameAndReset();
+    else renamedToRef.current = null;
+  }, [dialogOwner, notifyRenameAndReset]);
+
+  useEffect(() => {
+    if (!open || isDialogOwnerCurrent) return;
+    activePublishNameRef.current = null;
+    failedProgressNameRef.current = null;
+    reconcileCommittedRename();
+    dispatch({ type: 'CLOSE' });
+    onOpenChange(false);
+  }, [open, isDialogOwnerCurrent, onOpenChange, reconcileCommittedRename]);
 
   // ── Hub categories (required for first publish only) ─────────────────────
   const [categoryState, setCategoryState] = useState<CategoryState>({
@@ -563,6 +589,7 @@ export function PublishDialog({
     setCategoryState({ loading: true, categories: [], error: null });
     try {
       const res = await window.electronAPI.skillhub.listCategories();
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       if (res.success) {
         setCategoryState({
           loading: false,
@@ -577,13 +604,14 @@ export function PublishDialog({
         error: res.error ?? 'Failed to load categories',
       });
     } catch (err) {
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       setCategoryState({
         loading: false,
         categories: [],
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  }, []);
+  }, [dialogOwner]);
 
   useEffect(() => {
     if (!open || !effectiveFirstPublish) return;
@@ -639,6 +667,7 @@ export function PublishDialog({
   useEffect(() => {
     if (!open) return;
     const unsubscribe = window.electronAPI.skillhub.onPublishProgress((event) => {
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       const activeName = activePublishNameRef.current;
       if (!shouldHandlePublishProgressEvent(event, activeName)) return;
       if (event.phase === 'done') {
@@ -652,11 +681,13 @@ export function PublishDialog({
         return;
       }
       if (event.phase === 'scan-result') {
+        const owner = getDataOwnerGeneration();
         const eff = effectiveSkill();
         if (event.name !== eff.name) return;
         void (async () => {
           invalidateHash(eff.absolutePath);
           await refreshSkillhub();
+          if (!isDataOwnerGenerationCurrent(owner)) return;
           void triggerIncrementalSync([event.name]);
           dispatch({ type: 'CLOSE' });
           onOpenChange(false);
@@ -666,7 +697,9 @@ export function PublishDialog({
           }
           activePublishNameRef.current = null;
           failedProgressNameRef.current = null;
-          onScanResult?.({ status: event.status, gates: event.gates });
+          if (isDataOwnerGenerationCurrent(owner)) {
+            onScanResult?.({ status: event.status, gates: event.gates, rejectionReason: event.rejectionReason });
+          }
         })();
         return;
       }
@@ -676,7 +709,7 @@ export function PublishDialog({
       dispatch({ type: 'PROGRESS', event });
     });
     return unsubscribe;
-  }, [open, onOpenChange, onLocalRenamed, onScanResult, effectiveSkill]);
+  }, [open, onOpenChange, onLocalRenamed, onScanResult, effectiveSkill, dialogOwner]);
 
   // ── Form validation ───────────────────────────────────────────────────────
   const nameMissing = effectiveFirstPublish && form.name.length === 0;
@@ -725,10 +758,12 @@ export function PublishDialog({
   );
 
   const runPublish = useCallback((params: SkillhubPublishParams) => {
+    if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
     activePublishNameRef.current = params.name;
     failedProgressNameRef.current = null;
     void window.electronAPI.skillhub.publish(params)
       .then((res) => {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         if (res.success) {
           if (activePublishNameRef.current !== params.name) return;
           if (res.result) {
@@ -743,17 +778,18 @@ export function PublishDialog({
         });
       })
       .catch((err) => {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         if (!shouldDispatchPublishResultFallback(params.name, activePublishNameRef.current, failedProgressNameRef.current)) return;
         dispatch({
           type: 'PROGRESS',
           event: buildPublishFailureEvent(params.name, 'INTERNAL', err),
         });
       });
-  }, []);
+  }, [dialogOwner]);
 
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = useCallback(async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || !isDataOwnerGenerationCurrent(dialogOwner)) return;
 
     const eff = effectiveSkill();
     const submitName = effectiveFirstPublish
@@ -770,7 +806,7 @@ export function PublishDialog({
       confirmText: t('skillhub.publishDialog.confirmPublish'),
       cancelText: t('skillhub.publishDialog.confirmReconsider'),
     });
-    if (!ok) return;
+    if (!ok || !isDataOwnerGenerationCurrent(dialogOwner)) return;
 
     // ── autoCleanName(撞名后改名)流程:先在本地改名,再走 publish ──────────
     // 不改名(autoCleanName=false 或新旧名一致)时跳过这一步。
@@ -786,6 +822,7 @@ export function PublishDialog({
         newName: submitName,
       });
       if (!renameRes.success) {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         toast.error(t('skillhub.publishDialog.renameFailed', { error: renameRes.error }));
         return;
       }
@@ -793,6 +830,10 @@ export function PublishDialog({
       publishAbsolutePath = renameRes.newAbsolutePath;
       // 旧路径的 hash 缓存清掉(它指向已不存在的目录)
       invalidateHash(eff.absolutePath);
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) {
+        reconcileCommittedRename();
+        return;
+      }
     }
 
     dispatch({ type: 'SUBMIT' });
@@ -814,10 +855,13 @@ export function PublishDialog({
     buildCurrentPublishParams,
     runPublish,
     skill.discoveredPath,
+    dialogOwner,
+    reconcileCommittedRename,
   ]);
 
   // ── Cancel publish in progress (working / failure 都可调) ────────────────
   const handleCancelWorking = useCallback(async () => {
+    if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
     if (pubState.phase === 'scanning') {
       activePublishNameRef.current = null;
       failedProgressNameRef.current = null;
@@ -832,14 +876,14 @@ export function PublishDialog({
       confirmText: t('skillhub.publishDialog.cancelDialog.confirm'),
       cancelText: t('skillhub.publishDialog.cancelDialog.cancel'),
     });
-    if (!ok) return;
+    if (!ok || !isDataOwnerGenerationCurrent(dialogOwner)) return;
     void window.electronAPI.skillhub.cancelPublish();
     activePublishNameRef.current = null;
     failedProgressNameRef.current = null;
     dispatch({ type: 'CLOSE' });
     notifyRenameAndReset();
     onOpenChange(false);
-  }, [pubState.phase, onOpenChange, confirm, notifyRenameAndReset, t]);
+  }, [pubState.phase, onOpenChange, confirm, notifyRenameAndReset, t, dialogOwner]);
 
   // ── 关闭整个 dialog (X / Esc / backdrop) ────────────────────────────────
   const handleClose = useCallback(() => {
@@ -944,7 +988,7 @@ export function PublishDialog({
     <>
       {/* ── Main PublishDialog (Empty / Working / Failure 共用) ───────────── */}
       <Dialog.Root
-        open={open}
+        open={open && isDialogOwnerCurrent}
         onOpenChange={(v) => {
           if (!v) handleClose();
         }}

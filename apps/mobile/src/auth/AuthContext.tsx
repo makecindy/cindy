@@ -19,6 +19,8 @@ import {
   passportVaultKey,
   captchaRequiredActionForVerificationKind,
   discoverSsoOrgRealm,
+  discoverEmailLogin,
+  discoverPersonalLoginOrganization,
   parseAccountDeletionReceiptRecord,
   parseAuthSessionRecord,
   reduceAuthFlow,
@@ -36,6 +38,7 @@ import {
   type AccountDeletionStatus,
   type CaptchaConfig,
   type LoginOutcome,
+  type ProviderConfig,
   type SocialProvider,
   type SsoOrgDiscovery,
   type VerificationKind,
@@ -119,7 +122,9 @@ import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
+import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
 import {
   clearAllMobileVoiceDictionaryCaches,
@@ -415,6 +420,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pendingSsoVerificationTicketRef = useRef<string | null>(null);
   const activeAuthRealmRef = useRef<AuthRegion>(BUILD_AUTH_REGION);
   const pendingAuthRealmRef = useRef<AuthRegion | null>(null);
+  const handledLoginEmailRef = useRef<string | null>(null);
+  const pendingPersonalLoginRef = useRef<{
+    outcome: Extract<LoginOutcome, { status: 'ok' }>;
+    realm: AuthRegion;
+  } | null>(null);
   const accountDeletionReceiptRealmRef = useRef<AuthRegion | null>(null);
   const pendingAccountDeletionRestoredRef = useRef(false);
   const loginActionInFlightRef = useRef<Promise<boolean> | null>(null);
@@ -706,6 +716,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /* ── 登录人机验证(Turnstile 托管挑战页,按 requiredFor 控制邮箱/短信发码)── */
   const captchaConfigRef = useRef<CaptchaConfig | null>(null);
+  const loginProvidersRef = useRef<ProviderConfig | null>(null);
   const [captchaChallenge, setCaptchaChallenge] = useState<{ url: string } | null>(null);
   const captchaResolveRef = useRef<((token: string | null) => void) | null>(null);
 
@@ -715,6 +726,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 服务端未开启时字段缺席,captcha 闸整体 no-op。
     if (next?.step === 'identifier' || next?.step === 'realm-confirmation') {
       captchaConfigRef.current = next.providers.captcha ?? null;
+      loginProvidersRef.current = next.providers;
     }
     loginStateRef.current = next;
     setLoginState(next);
@@ -806,6 +818,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setToken = useCallback((token: string | null) => {
     accessTokenRef.current = token;
+    updateCredentialAccessToken(token);
     setAccessToken(token);
   }, []);
 
@@ -817,7 +830,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? accountVaultKey(activeAuthRealmRef.current, next.id)
         : null;
       setDeferredSessionRecovery(false);
-      setMobileAuthOwner(next?.id);
+      setMobileAuthOwner(next?.id, activeAuthRealmRef.current);
       userRef.current = next;
       setUser(next);
       void serializeUserProfileMutation(() =>
@@ -850,6 +863,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages().catch(() => undefined),
+      clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
     ]);
@@ -902,11 +916,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyUser, refreshSavedAccountsSnapshot],
   );
 
+  // Optional post-login discovery must not mutate the realm that issued the personal tokens.
+  const lookupOrganizationRealm = useCallback(async (
+    org: string,
+    did: string,
+    expectedLoginFlowEpoch: number,
+  ): Promise<SsoOrgDiscovery> => {
+    const realmConfig = getMobileEndpointRealmConfig();
+    let discovery: SsoOrgDiscovery;
+    if (
+      realmConfig.crossRealmOrgLoginEnabled &&
+      realmConfig.realmManifestBaseUrls
+    ) {
+      try {
+        await Promise.all([
+          loadMobileEndpointsForRealm('cn'),
+          loadMobileEndpointsForRealm('global'),
+        ]);
+        assertLoginFlowCurrent(expectedLoginFlowEpoch);
+      } catch {
+        throw new AuthApiError(
+          'ORG_REALM_UNAVAILABLE',
+          503,
+          'Unable to load both enterprise auth region manifests',
+        );
+      }
+      const selected = await discoverSsoOrgRealm(org, {
+        cn: authClientFor(did, 'cn'),
+        global: authClientFor(did, 'global'),
+      });
+      assertLoginFlowCurrent(expectedLoginFlowEpoch);
+      discovery = selected.discovery;
+    } else {
+      discovery = await authClientFor(
+        did,
+        BUILD_AUTH_REGION,
+      ).discoverSsoOrg(org);
+      assertLoginFlowCurrent(expectedLoginFlowEpoch);
+    }
+    return discovery;
+  }, [assertLoginFlowCurrent]);
+
   const acceptOutcome = useCallback(
     async (
       outcome: LoginOutcome,
       did: string,
       expectedLoginFlowEpoch = loginFlowEpochRef.current,
+      options: { skipOrganizationDiscovery?: boolean } = {},
     ): Promise<void> => {
       await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
       assertLoginFlowCurrent(expectedLoginFlowEpoch);
@@ -955,6 +1011,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           reduceAuthFlow(loginStateRef.current, { type: 'outcome', outcome }),
         );
         return;
+      }
+
+      if (!options.skipOrganizationDiscovery) {
+        const personalRealm = pendingAuthRealmRef.current ?? BUILD_AUTH_REGION;
+        const discovery = await discoverPersonalLoginOrganization(outcome.membership, {
+          handledEmail: handledLoginEmailRef.current,
+          discoverOrganization: (domain) => lookupOrganizationRealm(domain, did, expectedLoginFlowEpoch),
+        });
+        assertLoginFlowCurrent(expectedLoginFlowEpoch);
+        // A cold OAuth callback can arrive before the login screen loads providers.
+        const providers = discovery
+          ? (loginProvidersRef.current ?? await authClientFor(did, BUILD_AUTH_REGION)
+              .getProviders().catch(() => null))
+          : null;
+        assertLoginFlowCurrent(expectedLoginFlowEpoch);
+        if (discovery && providers) {
+          pendingPersonalLoginRef.current = { outcome, realm: personalRealm };
+          updateLoginState(reduceAuthFlow(loginStateRef.current, {
+            type: 'realm-switch-required',
+            targetRegion: discovery.region,
+            personalLoginAvailable: true,
+            providers,
+            methods: ssoOrgDiscoveryToMethods(discovery),
+          }));
+          return;
+        }
       }
 
       const deletionWasRestored =
@@ -1035,6 +1117,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 pendingAccountTokenRef.current = null;
                 pendingAccountRefreshTokenRef.current = null;
                 pendingAccountMembershipsRef.current = [];
+                pendingPersonalLoginRef.current = null;
+                handledLoginEmailRef.current = null;
                 pendingBindTicketRef.current = null;
                 pendingSsoVerificationTicketRef.current = null;
                 pendingAuthRealmRef.current = null;
@@ -1072,7 +1156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // old owner and advance its generation after cleanup settles so
             // account-scoped effects reconnect from the restored session.
             activateMobileSessionRealm(previousRealm);
-            setMobileAuthOwner(userRef.current?.id ?? null);
+            setMobileAuthOwner(userRef.current?.id ?? null, previousRealm);
             setAccountGeneration((value) => value + 1);
           }
           throw error;
@@ -1093,6 +1177,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAccountScopedRuntimeForSwitch,
       commitWithClearedAccountDeletionReceipt,
       loadMe,
+      lookupOrganizationRealm,
       scheduleCanaryChannelSync,
       scheduleXdOrgBetaDefault,
       refreshSavedAccountsSnapshotBestEffort,
@@ -1436,7 +1521,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             activateMobileSessionRealm(storedSession.realm);
             activeAuthRealmRef.current = storedSession.realm;
             userRef.current = cachedUser;
-            setMobileAuthOwner(cachedUser.id);
+            setMobileAuthOwner(cachedUser.id, storedSession.realm);
             setUser(cachedUser);
             if (cachedProfile.accountKey === null) {
               void serializeUserProfileMutation(() =>
@@ -1730,9 +1815,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             action.type === 'verify-code' ||
             action.type === 'start-social-browser' ||
             action.type === 'native-social';
-          if (startsBuildRealmFlow) {
+          if (startsBuildRealmFlow && action.type !== 'request-code') {
             pendingAuthRealmRef.current = null;
             if (!additionalLoginRef.current) resetMobileSessionRealm();
+          }
+          if (action.type === 'start-social-browser' || action.type === 'native-social') {
+            handledLoginEmailRef.current = null;
           }
           const loginRealm = pendingAuthRealmRef.current ?? BUILD_AUTH_REGION;
           const client = authClientFor(did, loginRealm);
@@ -1742,6 +1830,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             providerOrConnectionId: string;
             label: string;
           }): Promise<boolean> => {
+            const authorizationRealm = pendingAuthRealmRef.current ?? BUILD_AUTH_REGION;
+            const authorizationClient = authClientFor(did, authorizationRealm);
             const { codeVerifier, codeChallenge } = await createPkcePair();
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             const state = createState();
@@ -1753,7 +1843,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 state,
                 createdAt: Date.now(),
                 label: input.label,
-                realm: loginRealm,
+                realm: authorizationRealm,
               } satisfies PendingOAuth),
             );
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
@@ -1763,7 +1853,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 label: input.label,
               }),
             );
-            const authUrl = client.buildAuthorizeUrl({
+            const authUrl = authorizationClient.buildAuthorizeUrl({
               kind: input.kind,
               providerOrConnectionId: input.providerOrConnectionId,
               redirectUri: MOBILE_REDIRECT_URL,
@@ -1786,10 +1876,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             throw authCodeError('USER_CANCELLED');
           };
 
+          const discoverOrganization = async (org: string): Promise<SsoOrgDiscovery> => {
+            pendingAuthRealmRef.current = null;
+            const discovery = await lookupOrganizationRealm(org, did, expectedLoginFlowEpoch);
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            pendingAuthRealmRef.current = discovery.region;
+            return discovery;
+          };
           if (action.type === 'reset') {
             pendingAccountTokenRef.current = null;
             pendingAccountRefreshTokenRef.current = null;
             pendingAccountMembershipsRef.current = [];
+            pendingPersonalLoginRef.current = null;
+            handledLoginEmailRef.current = null;
             pendingLoginTicketRef.current = null;
             pendingBindTicketRef.current = null;
             pendingSsoVerificationTicketRef.current = null;
@@ -1816,9 +1915,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const confirmation = loginStateRef.current;
             if (
               confirmation?.step !== 'realm-confirmation' ||
-              pendingAuthRealmRef.current !== confirmation.targetRegion
+              (confirmation.personalLoginAvailable
+                ? !pendingPersonalLoginRef.current
+                : pendingAuthRealmRef.current !== confirmation.targetRegion)
             ) {
               throw authCodeError('INVALID_AUTH_ACTION');
+            }
+            if (confirmation.personalLoginAvailable) {
+              pendingAccountTokenRef.current = null;
+              pendingAccountRefreshTokenRef.current = null;
+              pendingAccountMembershipsRef.current = [];
+              pendingPersonalLoginRef.current = null;
+              handledLoginEmailRef.current = null;
+              pendingLoginTicketRef.current = null;
+              pendingBindTicketRef.current = null;
+              pendingSsoVerificationTicketRef.current = null;
+              pendingAccountDeletionRestoredRef.current = false;
+              pendingAuthRealmRef.current = confirmation.targetRegion;
             }
             const sole = soleAutoStartSsoMethod(confirmation.methods);
             if (sole) {
@@ -1832,7 +1945,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             updateLoginState(
               reduceAuthFlow(confirmation, {
                 type: 'discovery-loaded',
-                email: '',
+                email: confirmation.email ?? '',
                 methods: confirmation.methods,
               }),
             );
@@ -1842,6 +1955,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const confirmation = loginStateRef.current;
             if (confirmation?.step !== 'realm-confirmation') {
               throw authCodeError('INVALID_AUTH_ACTION');
+            }
+            if (confirmation.personalLoginAvailable) {
+              const personal = pendingPersonalLoginRef.current;
+              if (!personal) throw authCodeError('INVALID_AUTH_ACTION');
+              pendingAuthRealmRef.current = personal.realm;
+              await acceptOutcome(personal.outcome, did, expectedLoginFlowEpoch, {
+                skipOrganizationDiscovery: true,
+              });
+              return true;
             }
             pendingAuthRealmRef.current = null;
             if (!additionalLoginRef.current) resetMobileSessionRealm();
@@ -1854,13 +1976,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return true;
           }
           if (action.type === 'discover') {
-            const email = action.email.trim().toLowerCase();
-            const methods = await authClientFor(
-              did,
-              BUILD_AUTH_REGION,
-            ).discover(email);
+            const { email, methods, region } = await discoverEmailLogin(action.email, {
+              buildRegion: BUILD_AUTH_REGION,
+              discoverOrganization,
+              discoverPersonal: (email) => authClientFor(did, BUILD_AUTH_REGION).discover(email),
+            });
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            handledLoginEmailRef.current = email;
+            pendingAuthRealmRef.current = region;
             const currentState = loginStateRef.current;
+            if (region !== BUILD_AUTH_REGION) {
+              if (currentState?.step !== 'identifier') {
+                throw authCodeError('INVALID_AUTH_ACTION');
+              }
+              updateLoginState(
+                reduceAuthFlow(currentState, {
+                  type: 'realm-switch-required',
+                  targetRegion: region,
+                  email,
+                  providers: currentState.providers,
+                  methods,
+                }),
+              );
+              return true;
+            }
             const sole = soleLoginMethod(methods);
             if (sole?.type === 'sso' && currentState) {
               return startBrowserAuthorization({
@@ -1914,43 +2053,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 多连接才映射进 method-choice，复用连接选择 UI 与 start-sso 流程。
           if (action.type === 'discover-sso-org') {
             const org = action.org.trim().toLowerCase();
-            // 新的一次组织发现不得复用上一轮成功结果；只有本轮双区判定成功后
-            // 才重新冻结 pending realm。
-            pendingAuthRealmRef.current = null;
-            const realmConfig = getMobileEndpointRealmConfig();
-            let discovery: SsoOrgDiscovery;
-            if (
-              realmConfig.crossRealmOrgLoginEnabled &&
-              realmConfig.realmManifestBaseUrls
-            ) {
-              try {
-                await Promise.all([
-                  loadMobileEndpointsForRealm('cn'),
-                  loadMobileEndpointsForRealm('global'),
-                ]);
-                assertLoginFlowCurrent(expectedLoginFlowEpoch);
-              } catch {
-                throw new AuthApiError(
-                  'ORG_REALM_UNAVAILABLE',
-                  503,
-                  'Unable to load both enterprise auth region manifests',
-                );
-              }
-              const selected = await discoverSsoOrgRealm(org, {
-                cn: authClientFor(did, 'cn'),
-                global: authClientFor(did, 'global'),
-              });
-              assertLoginFlowCurrent(expectedLoginFlowEpoch);
-              pendingAuthRealmRef.current = selected.region;
-              discovery = selected.discovery;
-            } else {
-              pendingAuthRealmRef.current = BUILD_AUTH_REGION;
-              discovery = await authClientFor(
-                did,
-                BUILD_AUTH_REGION,
-              ).discoverSsoOrg(org);
-              assertLoginFlowCurrent(expectedLoginFlowEpoch);
-            }
+            const discovery = await discoverOrganization(org);
             const methods = ssoOrgDiscoveryToMethods(discovery);
             // A sole same-region connection auto-starts browser authorization
             // below. Persist the successful discovery first so cancel/timeout
@@ -2003,6 +2106,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               gate.captchaToken,
             );
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            // Commit the personal realm only after sending; a failed attempt leaves SSO usable.
+            pendingAuthRealmRef.current = BUILD_AUTH_REGION;
+            if (!additionalLoginRef.current) resetMobileSessionRealm();
             updateLoginState(
               reduceAuthFlow(loginStateRef.current, {
                 type: 'code-requested',
@@ -2177,6 +2283,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pendingAccountTokenRef.current = null;
             pendingAccountRefreshTokenRef.current = null;
             pendingAccountMembershipsRef.current = [];
+            pendingPersonalLoginRef.current = null;
+            handledLoginEmailRef.current = null;
             pendingLoginTicketRef.current = null;
             pendingBindTicketRef.current = null;
             pendingSsoVerificationTicketRef.current = null;
@@ -2202,6 +2310,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       acceptOutcome,
       assertLoginFlowCurrent,
       completeOAuthCallback,
+      lookupOrganizationRealm,
       ensureCaptchaGate,
       requestCodeWithCaptchaFallback,
       prepareBetaChannelForCurrentDevice,
@@ -2472,14 +2581,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 authGenerationRef.current === generation
               ) {
                 activateMobileSessionRealm(previousRealm);
-                setMobileAuthOwner(userRef.current?.id ?? null);
+                setMobileAuthOwner(userRef.current?.id ?? null, previousRealm);
                 setAccountGeneration((value) => value + 1);
               }
               throw error;
             }
           });
         } catch (error) {
-          setMobileAuthOwner(userRef.current?.id ?? null);
+          setMobileAuthOwner(userRef.current?.id ?? null, activeAuthRealmRef.current);
           throw error;
         }
 
@@ -2526,6 +2635,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingAccountTokenRef.current = null;
     pendingAccountRefreshTokenRef.current = null;
     pendingAccountMembershipsRef.current = [];
+    pendingPersonalLoginRef.current = null;
+    handledLoginEmailRef.current = null;
     pendingLoginTicketRef.current = null;
     pendingBindTicketRef.current = null;
     pendingSsoVerificationTicketRef.current = null;
@@ -2535,7 +2646,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionRecoverySuspendedRef.current = false;
     await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
     activateMobileSessionRealm(activeAuthRealmRef.current);
-    setMobileAuthOwner(userRef.current?.id ?? null);
+    setMobileAuthOwner(userRef.current?.id ?? null, activeAuthRealmRef.current);
     updateLoginState(null);
     setAuthError(null);
   }, [updateLoginState]);
@@ -2553,6 +2664,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 同步失效认证代次，必须早于第一个 await。否则推送 token 注销的网络等待窗口内，
     // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。
     authGenerationRef.current += 1;
+    loginFlowEpochRef.current += 1;
     refreshInFlightRef.current = null;
     await unregisterPushTokenBestEffort(
       accessTokenRef.current,
@@ -2565,6 +2677,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingAccountTokenRef.current = null;
     pendingAccountRefreshTokenRef.current = null;
     pendingAccountMembershipsRef.current = [];
+    pendingPersonalLoginRef.current = null;
+    handledLoginEmailRef.current = null;
     additionalLoginRef.current = false;
     pendingLoginTicketRef.current = null;
     pendingBindTicketRef.current = null;
@@ -2580,6 +2694,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // deviceId,不清就会让下一个账号读到上一个账号的词条并发给润色模型。
     await clearAllMobileVoiceDictionaryCaches().catch(() => undefined);
     await clearCachedSessionMessages().catch(() => undefined);
+    await clearHistoryDisk();
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);

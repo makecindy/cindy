@@ -1,11 +1,31 @@
+import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
+import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
 import Database from 'better-sqlite3';
+import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
+import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
+import { authorizeSessionQueueItem, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
+import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
+import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
-import { rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
+import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
+import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
+import type { BotModelRoute } from '../../../../shared/botModelChain';
+import type { AgentKind } from '@cindy/maker-core';
+import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
+import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
+import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider';
+import type { McpProvider } from '@cindy/maker-core';
+import type { CustomMcpConfig } from '../../../../shared/customMcp';
+import { getMaker, getPluginRegistry, isBotToolsetAvailable } from '../../../maker-host/index';
+import { getBuiltinMcpServerNames, refreshCustomMcpProviders, registerCustomMcpArrays, resetCustomMcpRegistry } from '../../../mcp-integrations/custom-mcp-registry';
+import { isBotToolsetAvailableOnTarget } from '../../../../shared/botRemoteCapabilities';
+import { resolveBotAllowedBuiltinPluginIds } from '../../../maker-host/plugins/types';
 
 import {
   botDelegations,
@@ -43,7 +63,7 @@ const h = await vi.hoisted(async () => {
     h.worktrees = [];
   }),
   isSessionAlive: vi.fn(() => false),
-  remove: vi.fn(async () => undefined),
+  remove: vi.fn(async (_path: import('node:fs').PathLike, _options?: import('node:fs').RmOptions) => undefined),
   ensureGit: vi.fn(async () => undefined),
   closeSession: vi.fn(async () => undefined),
   getSession: vi.fn(() => null as {
@@ -53,16 +73,34 @@ const h = await vi.hoisted(async () => {
   ensureDialogue: vi.fn((sessionId: string) => join(userDataDir, sessionId)),
   searchConversations: vi.fn(),
   requestRuntimeRefresh: vi.fn(),
-  seedTemplateSkills: vi.fn(async () => ({ completedNow: true, skills: [] })),
+  validateCapabilityAdditions: vi.fn(async (_update: BotCapabilityUpdate) => {}),
+  toolsetsAvailable: false,
+  customMcpConfigs: [] as CustomMcpConfig[],
+  mcpProviders: [] as McpProvider[],
+  providers: [] as ProviderView[],
+  listProviders: vi.fn(async (): Promise<ProviderView[]> => h.providers),
   ownerScopeKey: 'owner-a:1',
   ownerBoundaryPending: false,
 });
 });
 
-vi.mock('node:fs/promises', () => ({ default: { rm: h.remove } }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, default: { ...actual, rm: h.remove } };
+});
+// Legacy byte migration has its own real-storage suite.
+vi.mock('../legacyTeammateAvatar.js', () => ({ migrateLegacyTeammateAvatar: async () => false }));
+vi.mock('../../../maker-ipc/botDefaultProvisioning.js', () => ({
+  provisionDefaultBot: vi.fn(), markDefaultBotOffered: vi.fn(),
+  withDefaultBotProvisioningLock: async (_root: string, assertOwner: () => void, action: () => Promise<unknown>) => {
+    assertOwner();
+    return action();
+  },
+}));
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => h.userDataDir),
+    getAppPath: () => resolve(__dirname, '../../../../..'),
   },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -92,8 +130,23 @@ vi.mock('../../../git-snapshot/projectGitBootstrap.js', () => ({
 vi.mock('../../../maker-host/git-safety-settings-store.js', () => ({
   readGitSafetySettings: () => ({ autoSnapshotEnabled: true }),
 }));
+vi.mock('../../../maker-host/custom-mcp-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../maker-host/custom-mcp-store.js')>(),
+  listCustomMcpServers: async () => h.customMcpConfigs,
+}));
+vi.mock('../../../maker-host/createDesktopProviderService.js', () => ({
+  getDesktopProviderService: () => ({ listProviders: h.listProviders }),
+}));
 vi.mock('../../../maker-host/index.js', () => ({
+  validateBotCapabilityAdditions: h.validateCapabilityAdditions,
+  getMaker: () => ({ getSession: h.getSession, listAgentSkills: async () => ({ skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] }) }),
+  getPluginRegistry: () => ({
+    getPlugins: () => ['memory', 'xdt_helper', 'contacts', 'lsp'].map((id) => ({ id, name: id, description: id })),
+    getEnableState: async () => ({ effectiveEnabled: true }),
+  }),
+  isBotToolsetAvailable: () => h.toolsetsAvailable,
   getMakerIfReady: () => ({
+    listAvailableAgents: () => ['claude-code', 'codex', 'pi'],
     isSessionAlive: h.isSessionAlive,
     closeSession: h.closeSession,
     getSession: h.getSession,
@@ -125,9 +178,6 @@ vi.mock('../../conversationSearch.js', () => ({
 vi.mock('../../../maker-ipc/botRuntimeEpochRefreshSignal.js', () => ({
   requestBotRuntimeEpochRefresh: h.requestRuntimeRefresh,
 }));
-vi.mock('../../../maker-ipc/botTemplateSkillSeed.js', () => ({
-  seedBotTemplateSkills: h.seedTemplateSkills,
-}));
 vi.mock('../../../appSessionState.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../appSessionState.js')>();
   return {
@@ -141,10 +191,12 @@ vi.mock('../../../appSessionState.js', async (importOriginal) => {
 import {
   createBotCanonicalSession,
   registerBotIpc,
+  updateBotProfile as updateStoredBotProfile,
   getBotRemoteResourceSource,
   listBotRemoteResourceSources,
 } from '../bots';
 import { tx as runWorkerTx } from '../../worker/opHandlers/tx.js';
+import * as modelSettings from '../../../maker-host/bot-model-chain-settings-store.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context.js';
 import {
@@ -168,6 +220,8 @@ import { readRemoteBotSessionAccess } from '../botRemoteSessionAccess';
 import { assertRemoteBotInvocationAllowed, projectRemoteSessionResult, projectRemoteBotPush } from '../../../device-link/remoteBotSessionBoundary';
 import { listBotSkillsForSession, saveBotSkillForSession } from '../../../maker-ipc/botSkillService';
 import { resolveBotCanonicalSession } from '../../../maker-ipc/botCanonicalSessionRegistry';
+import { provisionDefaultBot } from '../../../maker-ipc/botDefaultProvisioning';
+import { resolveSafe } from '../../../cindy-media/blobStore';
 
 function testSha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -195,6 +249,7 @@ function createDb(filename = ':memory:'): void {
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
+      context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
@@ -365,6 +420,7 @@ function createDb(filename = ':memory:'): void {
       updated_at INTEGER NOT NULL
     );
   `);
+  sqlite.exec(readFileSync(resolve(__dirname, '../../../../../drizzle/0070_woozy_harpoon.sql'), 'utf8'));
   h.sqlite = sqlite;
   const rawDb = drizzle(sqlite, {
     schema: {
@@ -387,10 +443,42 @@ async function invoke(channel: string, body: unknown): Promise<any> {
   if (!handler) throw new Error(`${channel} handler not registered`);
   return handler({}, body);
 }
+const capabilityDeps = {
+  getMaker, getPluginRegistry, isBotToolsetAvailable,
+  resolveBotAgentKind: async (): Promise<AgentKind | null> => 'pi',
+  listMcpServers: async ({ agentKind, remoteHostId }: { agentKind: AgentKind; remoteHostId?: string }) => buildBotMcpCatalog({
+    agentKind, remoteHostId, providers: h.mcpProviders, builtinNames: getBuiltinMcpServerNames(),
+    customServers: h.customMcpConfigs.map((config) => ({ ...config, updatedAt: 1 })),
+  }),
+};
+const { list: findBotCapabilities, select: selectBotCapability } = createBotCapabilityService(capabilityDeps);
+
 beforeEach(async () => {
+  setModelVisibilityMirror({}, { fallback: true });
+  h.toolsetsAvailable = false;
+  h.validateCapabilityAdditions.mockReset().mockResolvedValue(undefined);
+  h.customMcpConfigs = [{ id: 'shared-docs', name: 'Shared Docs', transport: 'http', url: 'https://example.invalid/private', headers: { Authorization: 'FAKE_SECRET' } }];
+  h.mcpProviders = [
+    { name: 'cindy_helper', toClaudeSdkConfig: () => ({ type: 'sdk' }) },
+    new CustomMcpProvider(h.customMcpConfigs[0]!, () => null),
+  ];
+  resetCustomMcpRegistry();
+  registerCustomMcpArrays(h.mcpProviders);
   vi.clearAllMocks();
+  h.listProviders.mockReset().mockImplementation(async () => h.providers);
+  vi.mocked(provisionDefaultBot).mockReset();
+  h.remove.mockImplementation(async (...args) => {
+    const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await fs.rm(...args);
+  });
   h.handlers.clear();
   h.nextSession = 0;
+  h.providers = [{
+    id: 'xd', connected: true, source: 'builtin', agents: ['pi'], access: { kind: 'managed' },
+    routing: { pi: { upstream: 'https://example.invalid', authStrategy: 'gateway-key' } },
+    models: { pi: [{ id: 'z-ai/glm-5.3-flash', efforts: ['high'], defaultEffort: 'high',
+      newSessionDefault: ['pi'], supportsImageInput: true }] },
+  }] as ProviderView[];
   h.worktrees = [];
   h.isSessionAlive.mockReturnValue(false);
   h.ensureGit.mockResolvedValue(undefined);
@@ -398,6 +486,7 @@ beforeEach(async () => {
   h.getSession.mockReset();
   h.getSession.mockReturnValue(null);
   h.ownerScopeKey = 'owner-a:1';
+  setNewMakerDraftCache({ selectedRoute: { harness: 'pi', providerId: 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false }, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, h.ownerScopeKey);
   h.ownerBoundaryPending = false;
   h.searchConversations.mockResolvedValue({
     query: '',
@@ -413,11 +502,42 @@ beforeEach(async () => {
   await invoke('local-db:bots:create', {
     id: 'bot-1',
     name: 'Release Bot',
+    avatar: '🤖',
     capabilities: {
       harness: 'pi',
       model: 'grok-4.5',
       permissions: 'trusted',
     },
+  });
+});
+
+describe('Bot global model restore IPC', () => {
+  it('checks the sender before clearing settings', async () => {
+    const reset = vi.spyOn(modelSettings, 'resetBotModelChainSettings');
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementationOnce(() => { throw new Error('untrusted'); });
+    try {
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).rejects.toThrow('untrusted');
+      expect(reset).not.toHaveBeenCalled();
+    } finally { reset.mockRestore(); }
+  });
+
+  it('returns the resolved state and sanitizes filesystem failures', async () => {
+    const reset = vi.spyOn(modelSettings, 'resetBotModelChainSettings');
+    try {
+      reset.mockResolvedValueOnce({ value: { modelChain: [] }, defaults: { modelChain: [] }, isCustomized: false, customizedKeys: [] });
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).resolves.toEqual({ modelChain: [], isCustomized: false });
+      reset.mockRejectedValueOnce(new Error('/private/account/settings.json: denied'));
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).rejects.toThrow('Could not restore Bot model defaults');
+    } finally { reset.mockRestore(); }
+  });
+
+  it('rejects an account transition before clearing settings', async () => {
+    const reset = vi.spyOn(modelSettings, 'resetBotModelChainSettings');
+    try {
+      h.ownerBoundaryPending = true;
+      await expect(invoke('local-db:bots:model-chain-settings-reset', undefined)).rejects.toThrow('PRECONDITION_FAILED');
+      expect(reset).not.toHaveBeenCalled();
+    } finally { reset.mockRestore(); }
   });
 });
 
@@ -477,6 +597,24 @@ describe('Bot canonical Session lifecycle', () => {
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).not.toContain(created.id);
   });
 
+  it('creates the first canonical task on Codex when only its subscription is connected', async () => {
+    h.providers = [{
+      id: 'openai', source: 'builtin', connected: true, agents: ['codex'],
+      access: { kind: 'subscription', product: 'ChatGPT' },
+      routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
+      models: { codex: [{ id: 'gpt-5.6-sol', mode: 'chat', status: 'active', efforts: ['medium'], defaultEffort: 'medium' }] },
+    }] as ProviderView[];
+    setNewMakerDraftCache({ selectedRoute: { harness: 'codex', providerId: 'openai', model: 'gpt-5.6-sol', effort: 'medium', fastMode: false }, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, h.ownerScopeKey);
+    const created = await invoke('local-db:bots:create', { id: 'codex-only', name: 'Codex Bot' });
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: created.canonicalSessionId ?? null,
+      expectedProfileVersion: 1,
+    });
+    const row = h.sqlite!.prepare('SELECT agent_kind, model, provider_id, effort FROM sessions WHERE id = ?')
+      .get(canonical.session.id);
+    expect(row).toMatchObject({ agent_kind: 'codex', model: 'gpt-5.6-sol', provider_id: 'openai', effort: 'medium' });
+  });
+
   it('uses the official Bot defaults when created without renderer capabilities', async () => {
     await invoke('local-db:bots:create', {
       id: 'bot-defaults',
@@ -504,18 +642,15 @@ describe('Bot canonical Session lifecycle', () => {
     expect(capabilities.mcpServers).toEqual([]);
   });
 
-  it('persists the first greeting and canonical task in the main-owned create path', async () => {
+  it('accepts a legacy welcome request without forging an assistant message', async () => {
     const created = await invoke('local-db:bots:create', {
       id: 'bot-welcome',
       name: 'Welcome Bot',
       welcomeMessage: '你好，我已经准备好了。',
     });
-    const sessionId = created.canonicalSessionId as string;
-    expect(sessionId).toBeTruthy();
-    expect(
-      h.sqlite!.prepare('SELECT role, content FROM messages WHERE session_id = ? AND client_id = ?')
-        .get(sessionId, 'bot-welcome:bot-welcome'),
-    ).toEqual({ role: 'assistant', content: '你好，我已经准备好了。' });
+    expect(created.invitation).toBeDefined();
+    expect(h.sqlite!.prepare('SELECT content FROM messages WHERE client_id = ?')
+      .get('bot-welcome:bot-welcome')).toBeUndefined();
   });
 
   it('does not project a created profile across an owner switch during the database write', async () => {
@@ -533,11 +668,6 @@ describe('Bot canonical Session lifecycle', () => {
         templateId: 'cindy',
       }),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
-    expect(h.seedTemplateSkills).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'bot-owner-switch',
-      expect.anything(),
-    );
   });
 
   it.each(['profile', 'skills', 'avatar', 'welcome', 'failed'])('keeps initial invitation %s preparation from racing with profile edits', async (stage) => {
@@ -602,87 +732,57 @@ describe('Bot canonical Session lifecycle', () => {
       .toEqual({ count: 100 });
   });
 
-  it('persists a preset and retries its Skill install before the first task', async () => {
-    h.seedTemplateSkills.mockRejectedValueOnce(new Error('disk busy'));
-    await invoke('local-db:bots:create', {
-      id: 'bot-dash',
-      name: 'Dash',
-      templateId: 'dash',
+  it.each(['dash', 'lizi'])('accepts old %s creation payloads as ordinary teammates', async (templateId) => {
+    const identitySource = `User-edited ${templateId} identity`;
+    const created = await invoke('local-db:bots:create', {
+      id: `legacy-${templateId}`, name: templateId, templateId, identitySource,
+      avatar: `cindy://avatar/preset/${templateId}`,
       capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
     });
-
-    const row = h.sqlite!
-      .prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
-      .get('bot-dash') as { capabilities_json: string };
-    expect(JSON.parse(row.capabilities_json)).toMatchObject({
-      templateId: 'dash',
-      toolsets: ['docs'],
-    });
-
-    await invoke('local-db:bots:create-canonical-session', {
-      botId: 'bot-dash',
-      expectedCanonicalSessionId: null,
-      expectedProfileVersion: 1,
-    });
-    expect(h.seedTemplateSkills).toHaveBeenNthCalledWith(1, expect.any(String), 'bot-dash', 'dash');
-    expect(h.seedTemplateSkills).toHaveBeenNthCalledWith(2, expect.any(String), 'bot-dash', 'dash');
+    expect(created).toMatchObject({ identitySource, avatar: `cindy://avatar/preset/${templateId}` });
+    expect(created.templateId).toBeUndefined();
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ?')
+      .get(`legacy-${templateId}`) as { capabilities_json: string };
+    expect(JSON.parse(row.capabilities_json)).toMatchObject({ toolsets: ['docs'] });
+    expect(JSON.parse(row.capabilities_json).templateId).toBeUndefined();
   });
 
-  it('recovers Skills for an older built-in partner without a stored template id', async () => {
-    await invoke('local-db:bots:create', {
-      id: 'bot-legacy-cindy',
-      name: 'Cindy',
-      identitySource: BOT_TEMPLATE_PRESET_IDENTITIES.cindy,
-      capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
+  it.each(['dash', 'lizi'])('keeps an existing %s profile, home and canonical chat independent of its retired template', async (templateId) => {
+    const id = `existing-${templateId}`;
+    const identitySource = `My customized ${templateId} identity`;
+    await invoke('local-db:bots:create', { id, name: templateId, identitySource,
+      avatar: `cindy://avatar/preset/${templateId}` });
+    // Replay an old persisted profile; the removed template is only historical metadata.
+    const readConfig = () => JSON.parse((h.sqlite!.prepare(
+      'SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? ORDER BY version DESC LIMIT 1',
+    ).get(id) as { capabilities_json: string }).capabilities_json);
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
+      .run(JSON.stringify({ ...readConfig(), templateId }), id);
+    const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', id);
+    mkdirSync(join(home, 'skills', 'my-workflow'), { recursive: true });
+    writeFileSync(join(home, 'skills', 'my-workflow', 'SKILL.md'), 'My verified workflow');
+    writeFileSync(join(home, 'memories', 'user-preference.md'), 'My stable preference');
+    const soulBefore = readFileSync(join(home, 'SOUL.md'), 'utf8');
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });
-    expect(h.seedTemplateSkills).not.toHaveBeenCalledWith(
-      expect.any(String),
-      'bot-legacy-cindy',
-      'cindy',
-    );
-
     await invoke('local-db:bots:list', {});
-
-    expect(h.seedTemplateSkills).toHaveBeenCalledWith(
-      expect.any(String),
-      'bot-legacy-cindy',
-      'cindy',
-    );
+    const loaded = await invoke('local-db:bots:get', id);
+    expect(loaded).toMatchObject({ templateId, identitySource, currentVersion: 1,
+      avatar: `cindy://avatar/preset/${templateId}`, canonicalSessionId: canonical.canonicalSessionId });
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe(soulBefore);
+    expect(readFileSync(join(home, 'skills', 'my-workflow', 'SKILL.md'), 'utf8')).toBe('My verified workflow');
+    expect(readFileSync(join(home, 'memories', 'user-preference.md'), 'utf8')).toBe('My stable preference');
+    const edited = await invoke('local-db:bots:update', { id, name: `${templateId} renamed` });
+    expect(edited).toMatchObject({ templateId, identitySource, canonicalSessionId: canonical.canonicalSessionId });
+    expect(readConfig().templateId).toBe(templateId);
   });
 
-  it('does not infer a template after the partner identity was customized', async () => {
-    await invoke('local-db:bots:create', {
-      id: 'bot-customized-cindy',
-      name: 'Cindy',
-      identitySource: `${BOT_TEMPLATE_PRESET_IDENTITIES.cindy}\n\n# 我的补充`,
-    });
-
-    await invoke('local-db:bots:list', {});
-
-    expect(h.seedTemplateSkills).not.toHaveBeenCalledWith(
-      expect.any(String),
-      'bot-customized-cindy',
-      expect.anything(),
-    );
-  });
-
-  it('refreshes an existing runtime after a delayed preset Skill recovery', async () => {
-    h.seedTemplateSkills
-      .mockRejectedValueOnce(new Error('disk busy'))
-      .mockRejectedValueOnce(new Error('disk still busy'));
-    await invoke('local-db:bots:create', {
-      id: 'bot-lizi',
-      name: 'LiZi',
-      templateId: 'lizi',
-    });
-    const created = await invoke('local-db:bots:create-canonical-session', {
-      botId: 'bot-lizi',
-      expectedCanonicalSessionId: null,
-      expectedProfileVersion: 1,
-    });
-
-    await invoke('local-db:bots:get', 'bot-lizi');
-    expect(h.requestRuntimeRefresh).toHaveBeenCalledWith(created.canonicalSessionId, 'resource');
+  it('still recognizes an unchanged legacy Cindy without rewriting its identity', async () => {
+    await invoke('local-db:bots:create', { id: 'legacy-cindy', name: 'Cindy',
+      identitySource: BOT_TEMPLATE_PRESET_IDENTITIES.cindy });
+    const loaded = await invoke('local-db:bots:get', 'legacy-cindy');
+    expect(loaded).toMatchObject({ templateId: 'cindy', identitySource: BOT_TEMPLATE_PRESET_IDENTITIES.cindy, currentVersion: 1 });
   });
 
   it('rejects an unknown template before creating a profile', async () => {
@@ -696,6 +796,114 @@ describe('Bot canonical Session lifecycle', () => {
     expect(
       h.sqlite!.prepare('SELECT id FROM bot_profiles WHERE id = ?').get('bot-unknown-template'),
     ).toBeUndefined();
+  });
+
+  it('creates a real gallery portrait when the shared tool entry receives only a name', async () => {
+    const { createBotProfile } = await import('../bots');
+    const created = await createBotProfile({ name: 'Name only' });
+    expect(created.avatar).toMatch(/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.png$/);
+    const sharp = (await import('sharp')).default;
+    const stored = readFileSync(resolveSafe(created.avatar).absPath);
+    expect(await sharp(stored).metadata()).toMatchObject({ width: 256, height: 256 });
+    expect(h.sqlite!.prepare('SELECT hash, ref_kind FROM media_refs WHERE ref_id = ?').get(created.id))
+      .toEqual({ hash: createHash('sha256').update(stored).digest('hex'), ref_kind: 'bot-avatar' });
+    const next = await createBotProfile({ name: 'Another name' });
+    expect(next.avatar).not.toBe(created.avatar);
+    expect((await invoke('local-db:bots:get', created.id)).avatar).toBe(created.avatar);
+  });
+
+  it('retains copied image bytes through an independent media ref after the source is deleted', async () => {
+    const { createBotProfile } = await import('../bots');
+    const source = await createBotProfile({ name: 'Original portrait' });
+    const bytes = readFileSync(resolveSafe(source.avatar).absPath);
+    const copy = await createBotProfile({ name: 'Copied portrait', avatar: source.avatar,
+      avatarImageBase64: bytes.toString('base64') });
+    expect(copy.avatar).toBe(source.avatar);
+    expect(h.sqlite!.prepare('SELECT COUNT(*) AS n FROM media_refs WHERE hash = ?')
+      .get(createHash('sha256').update(bytes).digest('hex'))).toEqual({ n: 2 });
+    h.sqlite!.prepare("UPDATE bot_profiles SET status = 'archived' WHERE id = ?").run(source.id);
+    await h.tx!('bots.deleteProfile', { botId: source.id, sessionIds: [], keepTaskHistory: false, at: Date.now() });
+    expect((await invoke('local-db:bots:get', copy.id)).avatar).toBe(source.avatar);
+    expect(readFileSync(resolveSafe(copy.avatar).absPath)).toEqual(bytes);
+    expect(h.sqlite!.prepare('SELECT ref_id FROM media_refs WHERE hash = ?')
+      .all(createHash('sha256').update(bytes).digest('hex'))).toEqual([{ ref_id: copy.id }]);
+  });
+
+  it.each(['legacy IPC', 'resource registry'])('provides Cindy on first Mobile entry via %s and shares the receipt after deletion', async entry => {
+    const real = await vi.importActual<typeof import('../../../maker-ipc/botDefaultProvisioning')>(
+      '../../../maker-ipc/botDefaultProvisioning');
+    vi.mocked(provisionDefaultBot).mockImplementation(real.provisionDefaultBot);
+    h.sqlite!.prepare('DELETE FROM bot_profiles').run();
+    // A fresh owner has no receipt, roster or history. No desktop list has run.
+    h.ownerScopeKey = `mobile-first-${entry}:1`;
+    const legacyList = () => runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'mobile-first', channel: 'local-db:bots:list' },
+      () => invoke('local-db:bots:list', undefined),
+    );
+    const { registerBotRemoteResourceProvider } = await import('../botRemoteResourceProvider');
+    const { remoteResourceRegistry } = await import('../../../device-link/remoteResourceRegistry');
+    registerBotRemoteResourceProvider();
+    const mobileList = entry === 'legacy IPC' ? legacyList : async () => {
+      const result = await remoteResourceRegistry.list({ controllerDeviceId: 'mobile-first' }, {
+        client: { protocolVersion: 1, primitives: ['markdown'] }, collectionId: 'teammates',
+      });
+      return result.items.map(item => ({ id: item.ref.id, name: item.display.title }));
+    };
+    const first = await mobileList();
+    expect(first).toEqual([expect.objectContaining({ id: 'cindy-default', name: 'Cindy' })]);
+    expect(first[0]).not.toHaveProperty('identitySource');
+    await invoke('local-db:bots:list', undefined);
+    expect(h.sqlite!.prepare('SELECT COUNT(*) AS n FROM bot_profiles').get()).toEqual({ n: 1 });
+    // Removing even all history cannot undo the account's one-time receipt.
+    h.sqlite!.prepare('DELETE FROM bot_profiles').run();
+    await expect(mobileList()).resolves.toEqual([]);
+    await expect(invoke('local-db:bots:list', undefined)).resolves.toEqual([]);
+  });
+
+  it.each(['legacy IPC', 'resource registry'])('queues committed Cindy before a failed projection on first %s entry', async (entry) => {
+    const real = await vi.importActual<typeof import('../../../maker-ipc/botDefaultProvisioning')>(
+      '../../../maker-ipc/botDefaultProvisioning');
+    vi.mocked(provisionDefaultBot).mockImplementation(real.provisionDefaultBot);
+    h.sqlite!.prepare('DELETE FROM bot_profiles').run();
+    h.ownerScopeKey = `mobile-projection-failure-${entry}:1`;
+    const invitation = await import('../../../maker-ipc/botInvitation');
+    const queued = vi.spyOn(invitation, 'queueBotInvitation').mockImplementation(() => {});
+    let projectionFailed = false;
+    h.listProviders.mockImplementation(async () => {
+      if (!projectionFailed && h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE id = 'cindy-default'").get()) {
+        // A provider read after the create transaction, before the presentation
+        // can complete. The invitation must already be queued at this point.
+        expect(queued).toHaveBeenCalledWith('cindy-default', expect.any(Object), false);
+        projectionFailed = true;
+        throw new Error('Temporary provider projection failure');
+      }
+      return h.providers;
+    });
+    try {
+      const list: () => Promise<{ id: string }[]> = entry === 'legacy IPC' ? () => runDeviceLinkInvokeContext(
+        { controllerDeviceId: 'mobile-first', channel: 'local-db:bots:list' },
+        () => invoke('local-db:bots:list', undefined),
+      ) : listBotRemoteResourceSources;
+      expect((await list()).map(row => row.id)).toEqual(['cindy-default']);
+      expect(projectionFailed).toBe(true);
+      expect(queued).toHaveBeenCalledTimes(1);
+      const stored = h.sqlite!.prepare("SELECT capabilities_json AS config FROM bot_profile_versions WHERE bot_id = 'cindy-default'").get() as { config: string };
+      expect(JSON.parse(stored.config).invitation).toMatchObject({ stage: 'skills' });
+      // A second remote read only sees durable history. It must not be needed
+      // to repair the lost queue entry, or create a second default teammate.
+      expect((await list()).map(row => row.id)).toEqual(['cindy-default']);
+      expect(queued).toHaveBeenCalledTimes(1);
+    } finally {
+      queued.mockRestore();
+    }
+  });
+
+  it('rejects a remote list when its owner changes during provisioning', async () => {
+    vi.mocked(provisionDefaultBot).mockImplementationOnce(async () => { h.ownerScopeKey = 'other:2'; });
+    await expect(runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'mobile-first', channel: 'local-db:bots:list' },
+      () => invoke('local-db:bots:list', undefined),
+    )).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
   });
 
   it('allows device-link to read Bot projections without weakening local renderer trust', async () => {
@@ -824,7 +1032,7 @@ describe('Bot canonical Session lifecycle', () => {
     expect(reopened.session.permissionMode).toBe('ask');
   });
 
-  it('preserves an explicitly empty model when a Pi Bot has no selectable model', async () => {
+  it('keeps an unconfigured profile but rejects a model-less canonical task', async () => {
     await invoke('local-db:bots:create', {
       id: 'bot-pi-default',
       name: 'Pi Default Bot',
@@ -837,17 +1045,11 @@ describe('Bot canonical Session lifecycle', () => {
       },
     });
 
-    const created = await invoke('local-db:bots:create-canonical-session', {
+    await expect(invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-pi-default',
       expectedCanonicalSessionId: null,
       expectedProfileVersion: 1,
-    });
-
-    expect(created.session).toMatchObject({
-      agentKind: 'pi',
-      providerId: null,
-      model: '',
-    });
+    })).rejects.toThrow('请先连接模型供应商或选择伙伴模型');
   });
 
   it('repairs a physically missing canonical task using the persisted pointer as its CAS', async () => {
@@ -1212,7 +1414,12 @@ describe('Bot canonical Session lifecycle', () => {
     expect(snapshots).toEqual([]);
   });
 
-  it('resolves every remote capability catalog against the target host', async () => {
+  it.each([
+    { agentKind: 'codex' as const, helperEnabled: true },
+    { agentKind: 'claude-code' as const, helperEnabled: true },
+    { agentKind: 'codex' as const, helperEnabled: false },
+    { agentKind: 'claude-code' as const, helperEnabled: false },
+  ])('resolves remote capabilities and helper guidance from the same catalog ($agentKind, helper=$helperEnabled)', async ({ agentKind, helperEnabled }) => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
       expectedCanonicalSessionId: null,
@@ -1221,7 +1428,7 @@ describe('Bot canonical Session lifecycle', () => {
     const inputs: Array<{ kind: string; remoteHostId?: string }> = [];
     const opts: MakerSessionCreateOpts = {
       id: created.session.id,
-      agentKind: 'codex',
+      agentKind,
       workingDir: '/srv/cindy-bot',
       remoteHostId: 'remote-host-1',
       workspaceKind: 'project',
@@ -1240,7 +1447,10 @@ describe('Bot canonical Session lifecycle', () => {
       },
       listToolsets: async (input) => {
         inputs.push({ kind: 'toolsets', remoteHostId: input.remoteHostId });
-        return [];
+        return [{
+          id: 'xdt_helper', name: 'Helper', essential: true,
+          available: helperEnabled && isBotToolsetAvailableOnTarget({ ...input, toolsetId: 'xdt_helper' }),
+        }];
       },
     });
 
@@ -1249,6 +1459,43 @@ describe('Bot canonical Session lifecycle', () => {
       { kind: 'mcp', remoteHostId: 'remote-host-1' },
       { kind: 'toolsets', remoteHostId: 'remote-host-1' },
     ]);
+    const policy = opts.botRuntimeProfile!.toolsetPolicy;
+    const allowed = resolveBotAllowedBuiltinPluginIds(policy.catalog, policy.configured);
+    expect(allowed.includes('xdt_helper')).toBe(helperEnabled);
+    expect(opts.botProfileContextPrompt?.includes('`start_session_task`')).toBe(helperEnabled);
+    expect(opts.botProfileContextPrompt?.includes('`find_teammate_capabilities`')).toBe(helperEnabled);
+    // Remote Claude/Codex mount helper but not the cindy plugin gateway.
+    expect(opts.botProfileContextPrompt).not.toContain('ghost_list');
+    expect(opts.botProfileContextPrompt).not.toContain('ghost_call');
+  });
+
+  it('keeps plugin discovery guidance for remote Pi because cindy is tunneled', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: created.session.id,
+      agentKind: 'pi',
+      workingDir: '/srv/cindy-bot',
+      remoteHostId: 'remote-host-1',
+      workspaceKind: 'project',
+      model: 'grok-4.5',
+      permissionMode: 'ask',
+    };
+
+    await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [],
+      listMcpServers: async () => [],
+      listToolsets: async () => [{
+        id: 'xdt_helper', name: 'Helper', essential: true, available: true,
+      }],
+    });
+
+    expect(opts.botProfileContextPrompt).toContain('`find_teammate_capabilities`');
+    expect(opts.botProfileContextPrompt).toContain('ghost_list');
+    expect(opts.botProfileContextPrompt).toContain('ghost_call');
   });
 
   it('keeps ambient catalogs only as explicit disabled rows under legacy inherit', async () => {
@@ -1392,6 +1639,11 @@ describe('Bot canonical Session lifecycle', () => {
     await hydrateBotProfileRuntime(opts, {
       listSkills: async () => [],
       listOwnSkills: async ({ botId }) => ({
+        baseline: { pluginRoot: '/userdata/managed-teammate-skills/v1', skill: {
+          name: 'teammate-guide', description: 'Shared baseline',
+          path: '/userdata/managed-teammate-skills/v1/skills/teammate-guide',
+          filePath: '/userdata/managed-teammate-skills/v1/skills/teammate-guide/SKILL.md',
+        } },
         pluginRoot: `/userdata/bot-skills/${botId}`,
         skills: [{
           name: 'weekly-report',
@@ -1403,6 +1655,9 @@ describe('Bot canonical Session lifecycle', () => {
     }, { persistSnapshot: false });
 
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toEqual([
+      { name: 'teammate-guide', description: 'Shared baseline',
+        path: '/userdata/managed-teammate-skills/v1/skills/teammate-guide',
+        filePath: '/userdata/managed-teammate-skills/v1/skills/teammate-guide/SKILL.md' },
       {
         name: 'weekly-report',
         description: 'How I put the weekly report together',
@@ -1412,13 +1667,19 @@ describe('Bot canonical Session lifecycle', () => {
     ]);
     // Claude Code 只会开关它自己发现到的 Skill,所以还要给它一个本地 plugin 根。
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots).toEqual([
+      '/userdata/managed-teammate-skills/v1',
       '/userdata/bot-skills/bot-1',
     ]);
+    expect(opts.botProfileContextPrompt).toContain('Use `update_teammate_profile`');
+    expect(opts.botProfileContextPrompt).not.toContain('direct the user to the teammate’s model settings');
+    expect(opts.botProfileContextPrompt).toContain('login/configuration card is already in this chat');
+    expect(opts.botProfileContextPrompt).toContain('End the turn and wait for the Host authorization-completed notification');
+    expect(opts.botProfileContextPrompt).not.toContain('This remote runtime does not provide');
     // 用户配的 Skill 那一栏不受影响。
     expect(opts.botRuntimeProfile?.skillPolicy.catalog).toEqual([]);
   });
 
-  it('does not mount local learned Skills into a remote Bot task', async () => {
+  it.each(['pi', 'claude-code', 'codex'] as const)('does not advertise or mount local personal Skills on remote %s', async (agentKind) => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
       expectedCanonicalSessionId: null,
@@ -1426,7 +1687,7 @@ describe('Bot canonical Session lifecycle', () => {
     });
     const opts: MakerSessionCreateOpts = {
       id: created.session.id,
-      agentKind: 'pi',
+      agentKind,
       workingDir: created.session.workingDir,
       workspaceKind: 'dialogue',
       model: 'grok-4.5',
@@ -1436,6 +1697,7 @@ describe('Bot canonical Session lifecycle', () => {
 
     await hydrateBotProfileRuntime(opts, {
       listSkills: async () => [],
+      listToolsets: async () => [{ id: 'xdt_helper', name: 'Helper', available: true }],
       listOwnSkills: async () => ({
         pluginRoot: '/userdata/bot-skills/bot-1',
         skills: [{ name: 'weekly-report', description: '', path: '/userdata/bot-skills/bot-1/skills/weekly-report' }],
@@ -1445,6 +1707,52 @@ describe('Bot canonical Session lifecycle', () => {
     // 路径是本机的,远端 harness 打不开 —— 挂一串死路径比不挂更糟。
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots).toBeUndefined();
+    expect(opts.botProfileContextPrompt).not.toContain('`save_teammate_skill`');
+    expect(opts.botProfileContextPrompt).not.toContain('`list_teammate_skills`');
+    expect(opts.botProfileContextPrompt).not.toContain('then create or refine a useful personal Skill');
+    expect(opts.botProfileContextPrompt).toContain('Personal Skill storage and learning are unavailable');
+    expect(opts.botProfileContextPrompt).toContain('`create_teammate`');
+    expect(opts.botProfileContextPrompt).toContain('`start_session_task`');
+    expect(opts.botProfileContextPrompt).toContain('Respect the user’s memory switch');
+    expect(opts.botProfileContextPrompt).toContain('Use `update_teammate_profile`');
+    expect(opts.botProfileContextPrompt).not.toContain('direct the user to the teammate’s model settings');
+    expect(opts.botProfileContextPrompt).not.toContain('login/configuration card is already in this chat');
+    expect(opts.botProfileContextPrompt).not.toContain('End the turn and wait for the Host authorization-completed notification');
+    if (agentKind === 'pi') {
+      expect(opts.botProfileContextPrompt).toContain('`ghost_list`, `ghost_info`, `ghost_call`');
+      expect(opts.botProfileContextPrompt).toContain('This remote runtime does not provide plugin authorization cards');
+      expect(opts.botProfileContextPrompt).toContain('Plugins page on the trusted desktop');
+      expect(opts.botProfileContextPrompt).toContain('after the user confirms readiness');
+    } else {
+      expect(opts.botProfileContextPrompt).not.toContain('`ghost_call`');
+    }
+  });
+
+  it.each(['canonical', 'delegation'] as const)('rejects remote %s personal Skill access before local storage or refresh', async (role) => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const sessionId = created.session.id;
+    h.sqlite!.prepare('UPDATE sessions SET remote_host_id = ? WHERE id = ?').run('ssh-host', sessionId);
+    h.sqlite!.prepare('UPDATE bot_session_links SET role = ? WHERE session_id = ?').run(role, sessionId);
+    const userDataDir = join(h.userDataDir, `remote-skill-guard-${role}`);
+    const requestRefresh = vi.fn(async () => true);
+    const deps = { userDataDir, requestRefresh };
+    const input = { callerSessionId: sessionId, name: 'Verified workflow', description: 'A reusable method', body: 'A verified sequence of steps.' };
+    const rejected = { ok: false, errorCode: 'REMOTE_SKILLS_UNAVAILABLE' };
+    expect(await listBotSkillsForSession({ callerSessionId: sessionId }, deps)).toMatchObject(rejected);
+    expect(await saveBotSkillForSession(input, deps)).toMatchObject(rejected);
+    expect(existsSync(userDataDir)).toBe(false);
+    expect(requestRefresh).not.toHaveBeenCalled();
+
+    // Device-link control of a desktop runtime is still local: the execution
+    // target, not the caller's phone/transport, determines shelf availability.
+    h.sqlite!.prepare('UPDATE sessions SET remote_host_id = NULL WHERE id = ?').run(sessionId);
+    expect(await saveBotSkillForSession(input, deps)).toMatchObject({ ok: true, effective: 'next-turn' });
+    expect(await listBotSkillsForSession({ callerSessionId: sessionId }, deps)).toMatchObject({
+      ok: true, skills: [expect.objectContaining({ name: input.name })],
+    });
+    expect(requestRefresh).toHaveBeenCalledTimes(1);
   });
 
   it('does not promise or mount a local Bot Home into a remote task', async () => {
@@ -1496,10 +1804,12 @@ describe('Bot canonical Session lifecycle', () => {
       permissionMode: 'bypassPermissions',
     });
 
-    const first = await hydrateBotProfileRuntime(makeOpts(), {
+    const initial = makeOpts();
+    const first = await hydrateBotProfileRuntime(initial, {
       listSkills: async () => [],
       listOwnSkills: async () => ({ pluginRoot: '/userdata/bot-skills/bot-1', skills: [] }),
     });
+    expect(initial.botProfileContextPrompt).toContain('save_teammate_skill');
     await markBotProfileRuntimeApplied(first!);
 
     const resumed = makeOpts();
@@ -1585,6 +1895,483 @@ describe('Bot canonical Session lifecycle', () => {
         runtimeStatus: 'failed',
       })],
     });
+  });
+
+  it('discovers and joins existing capabilities without copying connection secrets or changing another Bot', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const callerSessionId = created.session.id;
+    const discovered = await findBotCapabilities({ callerSessionId, kind: 'mcp' });
+    expect(discovered).toMatchObject({ ok: true, capabilities: [{ id: 'shared-docs', joined: false, available: true }] });
+    expect(JSON.stringify(discovered)).not.toMatch(/FAKE_SECRET|example.invalid|Authorization/);
+    await expect(selectBotCapability({ callerSessionId, kind: 'mcp', id: 'shared-docs', joined: true })).resolves.toMatchObject({ ok: true, effective: 'next-turn' });
+    await expect(findBotCapabilities({ callerSessionId, kind: 'mcp' })).resolves.toMatchObject({ capabilities: [{ id: 'shared-docs', joined: true }] });
+    expect(h.requestRuntimeRefresh).toHaveBeenCalledWith(callerSessionId, 'profile');
+    await expect(selectBotCapability({ callerSessionId, kind: 'skill', id: 'release-check', joined: true })).resolves.toMatchObject({ ok: true });
+    await expect(findBotCapabilities({ callerSessionId, kind: 'skill' })).resolves.toMatchObject({ capabilities: [{ id: 'release-check', joined: true }] });
+    await expect(selectBotCapability({ callerSessionId, kind: 'mcp', id: 'shared-docs', joined: false })).resolves.toMatchObject({ ok: true, joined: false });
+    await expect(findBotCapabilities({ callerSessionId, kind: 'skill' })).resolves.toMatchObject({ capabilities: [{ id: 'release-check', joined: true }] });
+  });
+
+  it.each(['skill', 'toolset-global', 'toolset-provider', 'mcp'] as const)(
+    'revalidates newly added %s at the settings save boundary without blocking old references', async (scenario) => {
+      const created = await invoke('local-db:bots:create-canonical-session', {
+        botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      let available = true;
+      const kind = scenario.startsWith('toolset') ? 'toolset' as const : scenario as 'skill' | 'mcp';
+      const id = kind === 'skill' ? 'release-check' : kind === 'toolset' ? 'contacts' : 'shared-docs';
+      const field = kind === 'skill' ? 'skills' : kind === 'toolset' ? 'toolsets' : 'mcpServers';
+      const patch = (ids: string[]) => kind === 'skill' ? { skills: ids } : { capabilities: { [field]: ids } };
+      const listAgentSkills = vi.fn(async (_agentKind: AgentKind, opts: { forceReload?: boolean }) => ({
+        skills: available || !opts.forceReload
+          ? [{ kind: 'agent-skill' as const, source: 'user' as const, name: 'release-check', enabled: true }] : [],
+      }));
+      const resolveBotAgentKind = vi.fn(capabilityDeps.resolveBotAgentKind);
+      const service = createBotCapabilityService({
+        ...capabilityDeps, resolveBotAgentKind,
+        getMaker: () => ({ listAgentSkills }),
+        getPluginRegistry: () => ({
+          getPlugins: getPluginRegistry().getPlugins,
+          getEnableState: async (id, workingDir) => ({
+            ...await getPluginRegistry().getEnableState(id, workingDir),
+            effectiveEnabled: scenario !== 'toolset-global' || available,
+          }),
+        }),
+        isBotToolsetAvailable: () => scenario !== 'toolset-provider' || available,
+        listMcpServers: async (input) => available ? capabilityDeps.listMcpServers(input) : [],
+      });
+      h.validateCapabilityAdditions.mockImplementation(service.validateAdditions);
+      await expect(service.list({ callerSessionId: created.session.id, kind })).resolves.toMatchObject({
+        capabilities: expect.arrayContaining([expect.objectContaining({ id, available: true })]),
+      });
+      available = false;
+      await expect(service.select({ callerSessionId: created.session.id, kind, id, joined: true }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+      await expect(invoke('local-db:bots:update', { id: 'bot-1', name: 'Unsaved name', ...patch([id]), capabilityBaseline: { [field]: [] } }))
+        .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(h.sqlite!.prepare('SELECT current_version, display_name FROM bot_profiles WHERE id = ?').get('bot-1'))
+        .toEqual({ current_version: 1, display_name: 'Release Bot' });
+      if (kind === 'skill') expect(listAgentSkills).toHaveBeenLastCalledWith('pi', expect.objectContaining({ forceReload: true }));
+      available = true;
+      await expect(invoke('local-db:bots:update', { id: 'bot-1', ...patch([id]) })).resolves.toMatchObject({ currentVersion: 2 });
+      available = false;
+      resolveBotAgentKind.mockClear();
+      // Retaining a now-unavailable reference must not prevent an unrelated edit or removal.
+      await expect(invoke('local-db:bots:update', { id: 'bot-1', name: 'Saved name', ...patch([id]) })).resolves.toMatchObject({ name: 'Saved name' });
+      await expect(invoke('local-db:bots:update', { id: 'bot-1', ...patch([]) })).resolves.toBeTruthy();
+      expect(resolveBotAgentKind).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['skills', 'mcpServers', 'toolsets'] as const)('merges stale settings %s without losing concurrent joins or restoring external removals', async (field) => {
+    const patch = (ids: string[]) => field === 'skills' ? { skills: ids } : { capabilities: { [field]: ids } };
+    const selected = (profile: { skills: string[]; capabilities: { mcpServers: string[]; toolsets: string[] } }): string[] =>
+      field === 'skills' ? profile.skills : profile.capabilities[field];
+    // Model-side writes use the same mutation with their captured version. The
+    // renderer has not received this new snapshot when its request reaches Main.
+    await updateStoredBotProfile({ id: 'bot-1', ...patch(['external']) }, 1);
+    const saved = await invoke('local-db:bots:update', {
+      id: 'bot-1', ...patch(['local']), capabilityBaseline: { [field]: [] },
+    });
+    expect(selected(saved)).toEqual(['external', 'local']);
+    expect(h.validateCapabilityAdditions).toHaveBeenLastCalledWith(expect.objectContaining({
+      next: expect.objectContaining({ [field]: ['external', 'local'] }),
+    }));
+    expect(saved).not.toHaveProperty('capabilityBaseline');
+    // A trailing save can run before the merged response is rendered. Its local
+    // baseline still lacks external; removing local must leave external alone.
+    const trailing = await invoke('local-db:bots:update', {
+      id: 'bot-1', ...patch([]), capabilityBaseline: { [field]: ['local'] },
+    });
+    expect(selected(trailing)).toEqual(['external']);
+    await updateStoredBotProfile({ id: 'bot-1', ...patch([]) }, trailing.currentVersion);
+    const afterRemoval = await invoke('local-db:bots:update', {
+      id: 'bot-1', ...patch(['external', 'new-local']), capabilityBaseline: { [field]: ['external'] },
+    });
+    expect(selected(afterRemoval)).toEqual(['new-local']);
+    // Repeating the same local delta is idempotent.
+    const repeated = await invoke('local-db:bots:update', {
+      id: 'bot-1', ...patch(['external', 'new-local']), capabilityBaseline: { [field]: ['external'] },
+    });
+    expect(selected(repeated)).toEqual(['new-local']);
+    expect(repeated.currentVersion).toBe(afterRemoval.currentVersion);
+  });
+
+  it.each([null, [], { skills: [42] }, { toolsets: [] }])('rejects malformed or unmatched capability baselines: %j', async (capabilityBaseline) => {
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', skills: ['new'], capabilityBaseline }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get('bot-1')).toBe(1);
+  });
+
+  it('validates a settings grant against the model chain saved in the same update', async () => {
+    h.customMcpConfigs.push({ id: 'events', name: 'Events', transport: 'sse', url: 'https://example.invalid/sse', headers: {} });
+    await refreshCustomMcpProviders();
+    const chain: BotModelRoute[] = [{ harness: 'claude', model: 'claude-x', providerId: null, effort: '', fastMode: false }];
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChain: chain } });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    const apply = vi.fn();
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => h.ownerScopeKey,
+      read: async () => ({ chain, current: { agentKind: 'claude-code', model: 'claude-x', providerId: null, effort: null, fastMode: false }, hasRuntimeOverride: true }), apply });
+    const resolveBotAgentKind = vi.fn(async (id: string, draft?: BotModelRoute[]) => (await reconcile.preview(id, draft))?.agentKind ?? null);
+    const service = createBotCapabilityService({ ...capabilityDeps, resolveBotAgentKind });
+    h.validateCapabilityAdditions.mockImplementation(service.validateAdditions);
+    const next = [{ ...chain[0]!, harness: 'codex', model: 'codex-x' }];
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChain: next, mcpServers: ['events'] } }))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(resolveBotAgentKind).toHaveBeenLastCalledWith(created.session.id, next);
+    expect(h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get('bot-1')).toBe(2);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'version'])('does not commit a validated settings grant after an in-flight %s change', async (change) => {
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const service = createBotCapabilityService({ ...capabilityDeps,
+      listMcpServers: async (input) => {
+        if (change === 'owner') h.ownerScopeKey = 'another-owner';
+        else h.sqlite!.prepare('UPDATE bot_profiles SET current_version = current_version + 1 WHERE id = ?').run('bot-1');
+        return capabilityDeps.listMcpServers(input);
+      },
+    });
+    h.validateCapabilityAdditions.mockImplementation(service.validateAdditions);
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', capabilities: { mcpServers: ['shared-docs'] }, capabilityBaseline: { mcpServers: [] } })).rejects.toBeTruthy();
+    expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profile_versions WHERE bot_id = ?').pluck().get('bot-1')).toBe(1);
+  });
+
+  it('validates model-side grants against the next configured route while the old turn is running', async () => {
+    let chain: BotModelRoute[] = [{ harness: 'claude', model: 'claude-x', providerId: null, effort: '', fastMode: false }];
+    h.customMcpConfigs.push({ id: 'events', name: 'Events', transport: 'sse', url: 'https://example.invalid/sse', headers: {} });
+    await refreshCustomMcpProviders();
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChain: chain } });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    const current = { agentKind: 'claude-code' as const, model: 'claude-x', providerId: null, effort: null, fastMode: false };
+    const apply = vi.fn(async () => {});
+    const reconcile = createBotModelRouteReconciler({
+      ownerEpoch: () => h.ownerScopeKey,
+      read: async () => ({ chain, current, hasRuntimeOverride: true }),
+      apply,
+    });
+    await reconcile(created.session.id);
+    const listAgentSkills = vi.fn(async (agentKind: AgentKind) => ({
+      skills: [{ kind: 'agent-skill' as const, name: 'route-skill', source: 'user' as const, enabled: agentKind === 'claude-code' }],
+    }));
+    const toolsetAvailable = vi.fn((ctx: { agentKind: AgentKind }) => ctx.agentKind === 'claude-code');
+    const service = createBotCapabilityService({
+      ...capabilityDeps,
+      getMaker: () => ({ getSession: () => current, listAgentSkills }),
+      isBotToolsetAvailable: toolsetAvailable,
+      resolveBotAgentKind: async (id) => (await reconcile.preview(id))?.agentKind ?? null,
+    });
+    const input = { callerSessionId: created.session.id, kind: 'mcp' as const, id: 'events' };
+    await expect(service.list(input)).resolves.toMatchObject({ capabilities: expect.arrayContaining([
+      expect.objectContaining({ id: 'events', available: true }),
+    ]) });
+    // The profile changes during the current Claude turn; it has not applied a switch yet.
+    chain = [{ ...chain[0]!, harness: 'codex', model: 'codex-x' }];
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChain: chain } });
+    for (const [kind, id] of [['mcp', 'events'], ['skill', 'route-skill'], ['toolset', 'contacts']] as const) {
+      await expect(service.list({ ...input, kind })).resolves.toMatchObject({
+        capabilities: expect.arrayContaining([expect.objectContaining({ id, available: false })]),
+      });
+      await expect(service.select({ ...input, kind, id, joined: true })).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+    }
+    expect(listAgentSkills).toHaveBeenLastCalledWith('codex', expect.anything());
+    expect(toolsetAvailable).toHaveBeenLastCalledWith(expect.objectContaining({ agentKind: 'codex' }));
+    expect(apply).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get('bot-1')).toBe(3);
+    // Previewing a grant must not consume the pending route change for the next send.
+    await reconcile(created.session.id);
+    expect(apply).toHaveBeenCalledWith(created.session.id, expect.objectContaining({ agentKind: 'codex' }), current);
+  });
+
+  it.each(['missing', 'error', 'owner-change'])('does not use the current route when next-turn preview fails: %s', async (reason) => {
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { mcpServers: ['shared-docs'] } });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    const listMcpServers = vi.fn(capabilityDeps.listMcpServers);
+    const resolveBotAgentKind = vi.fn(async (): Promise<AgentKind | null> => {
+      if (reason === 'error') throw new Error('preview failed');
+      if (reason === 'owner-change') { h.ownerScopeKey = 'owner-b'; return 'claude-code'; }
+      return null;
+    });
+    const service = createBotCapabilityService({ ...capabilityDeps, listMcpServers, resolveBotAgentKind });
+    const input = { callerSessionId: created.session.id, kind: 'mcp' as const, id: 'shared-docs' };
+    await expect(service.select({ ...input, joined: true })).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_SELECTION_FAILED' });
+    expect(listMcpServers).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get('bot-1')).toBe(2);
+    h.ownerScopeKey = 'owner-a:1';
+    resolveBotAgentKind.mockClear();
+    await expect(service.select({ ...input, joined: false })).resolves.toMatchObject({ ok: true });
+    expect(resolveBotAgentKind).not.toHaveBeenCalled();
+  });
+
+  it.each(['cindy_helper', '__proto__', 'constructor', 'bad_header'])('rejects MCP %s quarantined by the actual registry while keeping its saved reference removable', async (id) => {
+    h.customMcpConfigs.push({
+      id, name: 'Legacy MCP', transport: 'http', url: 'https://example.invalid/legacy',
+      headers: id === 'bad_header' ? { 'X-Name': '中文' } : {},
+    });
+    await refreshCustomMcpProviders();
+    expect(h.mcpProviders.filter((provider) => provider instanceof CustomMcpProvider).map((provider) => provider.name)).toEqual(['shared-docs']);
+    await invoke('local-db:bots:update', {
+      id: 'bot-1', capabilities: { mcpServers: [id], mcpMode: 'allowlist' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    const input = { callerSessionId: created.session.id, kind: 'mcp' as const };
+    const discovered = await findBotCapabilities(input);
+    expect(discovered).toMatchObject({
+      ok: true, capabilities: expect.arrayContaining([
+        { id, name: 'Legacy MCP', description: 'http', available: false, joined: true },
+        { id: 'shared-docs', name: 'Shared Docs', description: 'http', available: true, joined: false },
+      ]),
+    });
+    expect(JSON.stringify(discovered)).not.toMatch(/FAKE_SECRET|example.invalid|Authorization/);
+    await expect(selectBotCapability({ ...input, id, joined: true })).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+    expect(h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get('bot-1')).toBe(2);
+    await expect(selectBotCapability({ ...input, id, joined: false })).resolves.toMatchObject({ ok: true, joined: false });
+    await expect(selectBotCapability({ ...input, id: 'shared-docs', joined: true })).resolves.toMatchObject({ ok: true, joined: true });
+  });
+
+  it.each([
+    { id: 'pi-sse', transport: 'sse' as const, url: 'https://example.invalid/mcp' },
+    { id: 'pi-public-http', transport: 'http' as const, url: 'http://example.invalid/mcp' },
+  ])('keeps Pi-incompatible $id discoverable but unjoinable and removable', async (config) => {
+    h.customMcpConfigs.push({ ...config, name: config.id, headers: {} });
+    await refreshCustomMcpProviders();
+    await invoke('local-db:bots:update', {
+      id: 'bot-1', capabilities: { mcpServers: [config.id], mcpMode: 'allowlist' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    expect(created.session.agentKind).toBe('pi');
+    const input = { callerSessionId: created.session.id, kind: 'mcp' as const, id: config.id };
+    await expect(findBotCapabilities(input)).resolves.toMatchObject({
+      capabilities: expect.arrayContaining([{ id: config.id, name: config.id,
+        description: config.transport, available: false, joined: true }]),
+    });
+    await expect(selectBotCapability({ ...input, joined: true })).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+    await expect(selectBotCapability({ ...input, joined: false })).resolves.toMatchObject({ ok: true, joined: false });
+  });
+
+  it('revalidates saved MCP transports on fallback and restores them when switching back', async () => {
+    const configs = [
+      { id: 'https', transport: 'http' as const, url: 'https://example.invalid/mcp' },
+      { id: 'sse', transport: 'sse' as const, url: 'https://example.invalid/sse' },
+      { id: 'public-http', transport: 'http' as const, url: 'http://example.invalid/mcp' },
+      { id: 'local-http', transport: 'http' as const, url: 'http://localhost:4321/mcp' },
+    ].map((config) => ({ ...config, name: config.id, headers: { Authorization: 'FAKE_SECRET' }, updatedAt: 1 }));
+    const configured = configs.map((config) => config.id);
+    const providers = configs.map((config) => new CustomMcpProvider(config, () => 'FAKE_TOKEN'));
+    await invoke('local-db:bots:update', {
+      id: 'bot-1', capabilities: { mcpServers: configured, mcpMode: 'allowlist' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    for (const agentKind of ['claude-code', 'codex', 'pi', 'claude-code'] as const) {
+      const opts: MakerSessionCreateOpts = {
+        id: created.session.id, agentKind, workingDir: created.session.workingDir,
+        workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto',
+      };
+      const snapshot = await hydrateBotProfileRuntime(opts, {
+        listMcpServers: async ({ agentKind: actualRoute, remoteHostId }) => {
+          const catalog = buildBotMcpCatalog({
+            agentKind: actualRoute, remoteHostId, providers, builtinNames: [], customServers: configs,
+          });
+          expect(JSON.stringify(catalog)).not.toMatch(/FAKE_SECRET|FAKE_TOKEN|example.invalid|Authorization/);
+          return catalog;
+        },
+      });
+      expect(snapshot).toMatchObject({
+        configuredMcpServers: configured,
+        resolvedMcpServers: agentKind === 'pi' ? ['https', 'local-http']
+          : agentKind === 'codex' ? ['https', 'public-http', 'local-http'] : configured,
+        unavailableMcpServers: agentKind === 'pi' ? ['sse', 'public-http']
+          : agentKind === 'codex' ? ['sse'] : [],
+      });
+      expect(opts.botRuntimeProfile?.mcpPolicy.catalog).toContainEqual(expect.objectContaining({
+        name: 'sse', available: agentKind === 'claude-code',
+      }));
+    }
+  });
+
+  it('rejects unforwarded custom MCPs on SSH Codex while preserving saved references and supported routes', async () => {
+    await invoke('local-db:bots:update', {
+      id: 'bot-1', capabilities: { mcpServers: ['shared-docs'], mcpMode: 'allowlist' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    h.sqlite!.prepare('UPDATE sessions SET remote_host_id = ? WHERE id = ?').run('ssh-host', created.session.id);
+    const input = { callerSessionId: created.session.id, kind: 'mcp' as const, id: 'shared-docs' };
+    for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+      const service = createBotCapabilityService({ ...capabilityDeps, resolveBotAgentKind: async () => agentKind });
+      await expect(service.list(input)).resolves.toMatchObject({
+        capabilities: [expect.objectContaining({ id: 'shared-docs', joined: true, available: agentKind !== 'codex' })],
+      });
+      const opts: MakerSessionCreateOpts = {
+        id: created.session.id, agentKind, workingDir: '/srv/bot', remoteHostId: 'ssh-host',
+        workspaceKind: 'project', model: 'test-model', permissionMode: 'auto',
+      };
+      const snapshot = await hydrateBotProfileRuntime(opts, { listMcpServers: capabilityDeps.listMcpServers });
+      expect(snapshot).toMatchObject({
+        configuredMcpServers: ['shared-docs'],
+        resolvedMcpServers: agentKind === 'codex' ? [] : ['shared-docs'],
+        unavailableMcpServers: agentKind === 'codex' ? ['shared-docs'] : [],
+      });
+    }
+    const service = createBotCapabilityService({ ...capabilityDeps, resolveBotAgentKind: async () => 'codex' });
+    h.validateCapabilityAdditions.mockImplementation(service.validateAdditions);
+    await expect(service.select({ ...input, joined: false })).resolves.toMatchObject({ ok: true, joined: false });
+    await expect(service.select({ ...input, joined: true })).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', capabilities: { mcpServers: ['shared-docs'] } }))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    h.sqlite!.prepare('UPDATE sessions SET remote_host_id = NULL WHERE id = ?').run(created.session.id);
+    await expect(service.select({ ...input, joined: true })).resolves.toMatchObject({ ok: true, joined: true });
+  });
+
+  it('rejects desktop-loopback custom MCPs on SSH Pi while keeping public HTTPS', async () => {
+    h.customMcpConfigs.push({
+      id: 'local-http', name: 'Local HTTP', transport: 'http',
+      url: 'http://127.0.0.1:4321/mcp', headers: {},
+    });
+    h.mcpProviders.push(new CustomMcpProvider(h.customMcpConfigs[1]!, () => null));
+    await invoke('local-db:bots:update', {
+      id: 'bot-1', capabilities: { mcpServers: ['shared-docs', 'local-http'], mcpMode: 'allowlist' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    h.sqlite!.prepare('UPDATE sessions SET remote_host_id = ? WHERE id = ?').run('ssh-host', created.session.id);
+    const service = createBotCapabilityService({ ...capabilityDeps, resolveBotAgentKind: async () => 'pi' });
+    const input = { callerSessionId: created.session.id, kind: 'mcp' as const };
+    await expect(service.list(input)).resolves.toMatchObject({
+      capabilities: expect.arrayContaining([
+        expect.objectContaining({ id: 'shared-docs', joined: true, available: true }),
+        expect.objectContaining({ id: 'local-http', joined: true, available: false }),
+      ]),
+    });
+    const snapshot = await hydrateBotProfileRuntime({
+      id: created.session.id, agentKind: 'pi', workingDir: '/srv/bot', remoteHostId: 'ssh-host',
+      workspaceKind: 'project', model: 'test-model', permissionMode: 'auto',
+    }, { listMcpServers: capabilityDeps.listMcpServers });
+    expect(snapshot).toMatchObject({
+      configuredMcpServers: ['shared-docs', 'local-http'],
+      resolvedMcpServers: ['shared-docs'],
+      unavailableMcpServers: ['local-http'],
+    });
+    await expect(service.select({ ...input, id: 'local-http', joined: true }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+    await expect(service.select({ ...input, id: 'local-http', joined: false }))
+      .resolves.toMatchObject({ ok: true, joined: false });
+  });
+
+  it.each(['contacts', 'lsp'])('rejects gated %s despite registry enablement and keeps joined references removable', async (id) => {
+    const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const input = { callerSessionId: created.session.id, kind: 'toolset' as const, id };
+    await expect(findBotCapabilities(input)).resolves.toMatchObject({
+      ok: true, capabilities: expect.arrayContaining([{ id, name: id, description: id, available: false, joined: false }]),
+    });
+    await expect(selectBotCapability({ ...input, joined: true })).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+    h.toolsetsAvailable = true;
+    await expect(selectBotCapability({ ...input, joined: true })).resolves.toMatchObject({ ok: true });
+    h.toolsetsAvailable = false;
+    await expect(selectBotCapability({ ...input, joined: false })).resolves.toMatchObject({ ok: true, joined: false });
+  });
+
+  it.each([false, true])('keeps fixed toolsets out of selection even with saved references: %s', async (savedReferences) => {
+    await invoke('local-db:bots:update', {
+      id: 'bot-1',
+      capabilities: { toolsets: savedReferences ? ['memory', 'xdt_helper', 'retired-toolset'] : [] },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2,
+    });
+    const input = { callerSessionId: created.session.id, kind: 'toolset' as const };
+    h.toolsetsAvailable = true;
+    const discovered = await findBotCapabilities(input);
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) throw new Error(discovered.message);
+    for (const id of ['memory', 'xdt_helper']) {
+      expect(discovered.capabilities.some((item) => item.id === id)).toBe(false);
+      for (const joined of [true, false]) {
+        await expect(selectBotCapability({ ...input, id, joined })).resolves.toMatchObject({
+          ok: false, errorCode: 'CAPABILITY_NOT_SELECTABLE',
+        });
+      }
+    }
+    expect(h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get('bot-1')).toBe(2);
+    if (savedReferences) {
+      expect(discovered.capabilities).toContainEqual({
+        id: 'retired-toolset', name: 'retired-toolset', description: '', available: false, joined: true,
+      });
+      await expect(selectBotCapability({ ...input, id: 'retired-toolset', joined: false })).resolves.toMatchObject({ ok: true });
+    }
+  });
+
+  it('refuses absent capabilities and callers without an active canonical Bot', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    await expect(selectBotCapability({ callerSessionId: created.session.id, kind: 'mcp', id: 'missing', joined: true })).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_UNAVAILABLE' });
+    await expect(selectBotCapability({ callerSessionId: 'unknown', kind: 'mcp', id: 'shared-docs', joined: true })).resolves.toMatchObject({ ok: false });
+    h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = 'bot-1'").run();
+    await expect(selectBotCapability({ callerSessionId: created.session.id, kind: 'mcp', id: 'shared-docs', joined: true })).resolves.toMatchObject({ ok: false });
+  });
+
+  it('allows trusted settings to add capabilities while the Bot is paused', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const current = { agentKind: 'pi' as const, model: 'grok-4.5', providerId: null, effort: null, fastMode: false };
+    const chain: BotModelRoute[] = [{ harness: 'pi', model: 'grok-4.5', providerId: null, effort: '', fastMode: false }];
+    const profileStatus = () => h.sqlite!.prepare("SELECT status FROM bot_profiles WHERE id = 'bot-1'").pluck().get() as string;
+    const apply = vi.fn();
+    const reconcile = createBotModelRouteReconciler({
+      ownerEpoch: () => h.ownerScopeKey,
+      read: async (_id, purpose) => {
+        const status = profileStatus();
+        if (purpose === 'preview') {
+          return ['active', 'paused'].includes(status) ? { chain, current, hasRuntimeOverride: false } : null;
+        }
+        return status === 'active' ? { chain, current, hasRuntimeOverride: false } : null;
+      },
+      apply,
+    });
+    const service = createBotCapabilityService({
+      ...capabilityDeps,
+      resolveBotAgentKind: async (id, draft) => (await reconcile.preview(id, draft))?.agentKind ?? null,
+    });
+    h.validateCapabilityAdditions.mockImplementation(service.validateAdditions);
+    h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = 'bot-1'").run();
+    await expect(selectBotCapability({
+      callerSessionId: created.session.id, kind: 'mcp', id: 'shared-docs', joined: true,
+    })).resolves.toMatchObject({ ok: false });
+    await expect(findBotCapabilities({ callerSessionId: created.session.id, kind: 'mcp' }))
+      .resolves.toMatchObject({ ok: false });
+    await expect(invoke('local-db:bots:update', {
+      id: 'bot-1', capabilities: { mcpServers: ['shared-docs'] },
+    })).resolves.toMatchObject({ currentVersion: 2 });
+    expect(await reconcile.preview(created.session.id)).toMatchObject({ agentKind: 'pi' });
+    await reconcile(created.session.id);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it.each([['browser', 'cindy_browser'], ['scheduler', 'cindy_scheduler'], ['contacts', 'cindy_contacts']])('mounts the selected %s toolset into the actual MCP policy', async (toolset, server) => {
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { toolsets: [toolset], toolsetMode: 'allowlist' } });
+    const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2 });
+    const opts: MakerSessionCreateOpts = { id: created.session.id, agentKind: 'codex', workingDir: created.session.workingDir, workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto' };
+    await hydrateBotProfileRuntime(opts, {
+      listMcpServers: async () => [{ name: server, source: 'builtin', available: true }],
+      listToolsets: async () => [{ id: toolset, name: toolset, essential: toolset === 'scheduler', available: true }],
+    });
+    expect(opts.botRuntimeProfile?.mcpPolicy.configured).toContain(server);
   });
 
   it('refreshes canonical MCP generations and Toolset versions in place', async () => {
@@ -1792,6 +2579,45 @@ describe('Bot canonical Session lifecycle', () => {
 
     expect(identity).toContain('You are Release Bot');
     expect(identity).toContain('intelligent AI assistant running as a Cindy Bot');
+  });
+
+  it.each([
+    { identitySource: undefined, description: '负责财务分析，使用用户提供的数据，不编造账目。' },
+    { identitySource: '   ', description: '负责财务分析，使用用户提供的数据，不编造账目。' },
+    { identitySource: undefined, description: '财'.repeat(12000) },
+    { identitySource: '只使用用户明确指定的独立身份。', description: '列表中的简短介绍' },
+  ])('preserves description-only roles through creation and runtime (identity=$identitySource)', async ({ identitySource, description }) => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'finance-role', name: 'Finance', avatar: '🤖', description, identitySource,
+    });
+    const expected = identitySource?.trim() || description;
+    expect(created.identitySource).toBe(expected);
+    const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8').trim()).toBe(expected);
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: canonical.session.id, agentKind: 'pi', workingDir: canonical.session.workingDir,
+      workspaceKind: 'dialogue', model: canonical.session.model, permissionMode: 'ask',
+    };
+    await hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false });
+    expect(opts.botProfilePrompt).toBe(expected);
+    // The derived identity must still be accepted by the same API, including
+    // maximum-length descriptions copied back by editing/duplication clients.
+    const copy = await invoke('local-db:bots:create', {
+      id: 'finance-role-copy', name: 'Finance copy', avatar: '🤖', description,
+      identitySource: created.identitySource,
+    });
+    expect(copy.identitySource).toBe(expected);
+  });
+
+  it('uses the current description when an identity is explicitly cleared', async () => {
+    const description = '负责核对财务数据和解释预算差异。';
+    const updated = await invoke('local-db:bots:update', {
+      id: 'bot-1', description, identitySource: '   ',
+    });
+    expect(updated.identitySource).toBe(description);
   });
 
   it('restores the persisted default SOUL when an identity is explicitly cleared', async () => {
@@ -2414,7 +3240,19 @@ describe('Bot Session task end-to-end runtime', () => {
   }
 
   function createDelegationRuntime(options: {
+    getWorktree?: Parameters<typeof createBotDelegationService>[0]['getWorktree'];
+    withTransferredWorktree?: Parameters<typeof createBotDelegationService>[0]['withTransferredWorktree'];
+    prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
+    taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
+    taskControl?: boolean;
+    queueSnapshots?: Map<string, AgentInputQueuedMessage[]>;
+    onNativeStarted?: (sessionId: string) => void;
+    appliedOnResume?: () => string[];
+    reconcileWorktree?: Parameters<typeof createBotDelegationService>[0]['reconcileWorktree'];
+    stopUnsupported?: boolean;
+    steerUnsupported?: boolean;
     readCallerRuntime?: Parameters<typeof createBotDelegationService>[0]['readCallerRuntime'];
+    readCallerPermission?: Parameters<typeof createBotDelegationService>[0]['readCallerPermission'];
     accountReady?: () => boolean;
     transientUnavailable?: () => boolean;
     replyFor?: (sessionId: string) => string;
@@ -2426,6 +3264,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const accountReady = options.accountReady ?? (() => true);
     const started: StartedTurn[] = [];
     const pendingTurns: Array<{ sessionId: string; queued: boolean }> = [];
+    const heldInputs = new Set<string>();
     const changed: Array<{ delegationId: string; status: string }> = [];
     let currentTime = options.startTime ?? 10_000;
     let seq = 0;
@@ -2469,8 +3308,9 @@ describe('Bot Session task end-to-end runtime', () => {
      * dispatchBotSessionMessage → sendToSessionInternal）。判据顺序刻意与真机一致：
      * 任何一条在真机上会挡住会话启动的门，这里也必须挡住。
      */
-    const dispatch = async (params: {
+    const dispatchDirect = vi.fn(async (params: {
       targetSessionId: string;
+      dispatcherSessionId?: string;
       message: string;
       persistedContent?: string;
       clientId?: string;
@@ -2541,6 +3381,8 @@ describe('Bot Session task end-to-end runtime', () => {
         'user',
         params.persistedContent ?? params.message,
       );
+      if (params.dispatcherSessionId) h.sqlite!.prepare('UPDATE messages SET agent_meta = ? WHERE session_id = ? AND client_id = ?')
+        .run(JSON.stringify({ origin: { kind: 'session', senderSessionId: params.dispatcherSessionId } }), params.targetSessionId, clientId);
       await params.onAccepted?.();
       h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = ? WHERE id = ?')
         .run(currentTime, params.targetSessionId);
@@ -2550,17 +3392,96 @@ describe('Bot Session task end-to-end runtime', () => {
         targetSessionId: params.targetSessionId,
         wakeKind: queuedBehindRunningTurn ? 'queued' as const : 'resumed' as const,
       };
-    };
+    });
 
-    const abortSession = vi.fn(async () => undefined);
+    // Use the production coordinator for resume durability tests. The normal
+    // dispatch fixture above deliberately models only the native send boundary.
+    const acceptedCallbacks = new Map<string, () => void | Promise<void>>();
+    const coordinator = options.queueSnapshots ? new AgentInputCoordinator({
+      isTurnRunning: id => pendingTurns.some(turn => turn.sessionId === id && !turn.queued),
+      hasPendingInteraction: () => false,
+      getAgentKind: () => 'pi',
+      getSdkSessionId: async () => undefined,
+      emitProjection: () => undefined,
+      steerToAgent: async () => undefined,
+      abortSession: async () => undefined,
+      persistQueueSnapshot: (id, items) => { options.queueSnapshots!.set(id, structuredClone(items)); },
+      loadQueueSnapshot: async id => options.queueSnapshots!.get(id) ?? [],
+      getPersistedClientIds: async (id, ids) => new Set(ids.filter(clientId => hasMessage(id, clientId))),
+      sendToAgent: async (id, _message, _opts, sendOpts) => {
+        const persisted = sendOpts.persistUserMessage;
+        if (!persisted) throw new Error('Missing coordinator user row');
+        writeMessage(id, persisted.clientId, 'user', persisted.content);
+        await persisted.onPersisted?.();
+        const row = readSession(id)!;
+        started.push({ sessionId: id, ...row });
+        h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = ? WHERE id = ?').run(currentTime, id);
+        pendingTurns.push({ sessionId: id, queued: false });
+        options.onNativeStarted?.(id);
+        return { kind: 'session-dispatch', source: 'fixture-native-turn', dispatched: true };
+      },
+      onAcceptedQueuedMessage: async (_id, item) => { await acceptedCallbacks.get(item.clientId)?.(); },
+    }) : undefined;
+    const dispatch = vi.fn(async (params: Parameters<typeof dispatchDirect>[0]) => {
+      if (coordinator) {
+        await coordinator.ensureQueueRestored(params.targetSessionId);
+        // Same admission decision as sendToSessionInternal, before any native
+        // send or persisted client-ID receipt exists.
+        if (coordinator.shouldQueueNewTurn(params.targetSessionId)) {
+          const clientId = params.clientId ?? `queued-${++seq}`;
+          if (params.onAccepted) acceptedCallbacks.set(clientId, params.onAccepted);
+          coordinator.enqueue(params.targetSessionId, {
+            clientId, text: params.message, persistedContent: params.persistedContent ?? params.message,
+            model: 'grok-4.5', effort: 'high', permissionMode: 'default', workingDir: h.userDataDir,
+            chatMessage: { clientId, role: 'user', content: params.message,
+              isStreaming: false, createdAt: new Date(currentTime).toISOString() },
+            createOpts: { agentKind: 'pi', workingDir: h.userDataDir, model: 'grok-4.5',
+              permissionMode: 'default', userPrompt: '', makerMemoryEnabled: false, displayReasoning: 'summarized' },
+          });
+          return { ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const };
+        }
+      }
+      return dispatchDirect(params);
+    });
+
+    const abortSession = vi.fn(async (id: string): Promise<void> => { coordinator?.stop(id); });
+    const steer = vi.fn<NonNullable<Parameters<typeof createBotDelegationService>[0]['taskControl']>['steer']>(async () => options.steerUnsupported
+      ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No same-turn steer' }
+      : { ok: true as const, queuedMessageId: 'steered-message' });
+    const stopTurn = vi.fn(async () => options.stopUnsupported
+      ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No graceful stop' }
+      : { ok: true as const, status: 'requested' as const });
+    const waitForInputBoundary = vi.fn(async () => undefined);
+    const preparePause = vi.fn(async () => undefined);
+    const flushInput = vi.fn(async (): Promise<void> => undefined);
     const delegation = createBotDelegationService({
+      prepareWorktree: options.prepareWorktree,
+      getWorktree: options.getWorktree,
+      reconcileWorktree: options.reconcileWorktree,
+      withTransferredWorktree: options.withTransferredWorktree,
+      taskQueue: options.taskQueue,
+      ...(options.taskControl ? { taskControl: {
+        steer, stop: stopTurn,
+        isActive: (id: string) => pendingTurns.some((turn) => turn.sessionId === id && !turn.queued),
+        holdInput: (id: string, held: boolean) => {
+          if (held) heldInputs.add(id); else heldInputs.delete(id);
+          coordinator?.setExecutionPaused(id, held);
+          return held ? [] : options.appliedOnResume?.() ?? [];
+        },
+        waitForInputBoundary,
+        preparePause,
+        restoreInput: async id => { await coordinator?.ensureQueueRestored(id); },
+        flushInput,
+        resumeInput: async id => { coordinator?.resume(id); },
+      } } : {}),
       readCallerRuntime: options.readCallerRuntime,
+      readCallerPermission: options.readCallerPermission,
       dispatch,
       abortSession,
       closeSession: vi.fn(async () => undefined),
       broadcastSessionCreated: vi.fn(),
       resolveInteraction: options.resolveInteraction,
-      hasPendingInput: (sessionId) => pendingTurns.some(
+      hasPendingInput: (sessionId) => coordinator?.hasPendingQueuedWork(sessionId) || pendingTurns.some(
         (turn) => turn.sessionId === sessionId && turn.queued,
       ),
       onChanged: (payload) => {
@@ -2599,6 +3520,7 @@ describe('Bot Session task end-to-end runtime', () => {
         `UPDATE sessions SET total_token_usage = total_token_usage + 100,
            last_turn_ended_at = ? WHERE id = ?`,
       ).run(currentTime, sessionId);
+      coordinator?.onTurnEvent(sessionId, 'done');
       await delegation.settleSession({
         childSessionId: sessionId,
         outcome: 'done',
@@ -2607,7 +3529,9 @@ describe('Bot Session task end-to-end runtime', () => {
     };
 
     return {
-      delegation,
+      delegation, coordinator,
+      heldInputs, steer, stopTurn, waitForInputBoundary, preparePause, flushInput,
+      dispatch,
       abortSession,
       started,
       changed,
@@ -2615,6 +3539,7 @@ describe('Bot Session task end-to-end runtime', () => {
       settleChild,
       dispose: () => {
         delegation.dispose();
+        if (coordinator) for (const id of options.queueSnapshots!.keys()) coordinator.setExecutionPaused(id, true);
       },
       advance: (ms: number) => {
         currentTime += ms;
@@ -2761,6 +3686,163 @@ describe('Bot Session task end-to-end runtime', () => {
     }
   });
 
+  it.each(['ask', 'auto', 'bypassPermissions'])('inherits the live %s permission in the child task', async (mode) => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ readCallerPermission: () => mode });
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Run the requested checks.' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.message);
+      expect(h.sqlite!.prepare('SELECT permission_mode FROM sessions WHERE id = ?').pluck().get(result.childSessionId)).toBe(mode);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it.each(['ask', 'auto', null])('uses stable permission after asynchronous workspace preparation: %s', async (settledMode) => {
+    await seedPair();
+    let permission: string | null = 'bypassPermissions';
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => { finishPreparation = resolve; });
+    h.ensureGit.mockImplementationOnce(async () => { await preparation; return undefined; });
+    const runtime = createDelegationRuntime({ readCallerPermission: () => permission });
+    const starting = runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Run the requested checks.' });
+    try {
+      await vi.waitFor(() => expect(h.ensureGit).toHaveBeenCalledWith(expect.objectContaining({ source: 'bot-delegation' })));
+      permission = settledMode;
+      finishPreparation();
+      const result = await starting;
+      if (settledMode === null) {
+        expect(result).toMatchObject({ ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE' });
+        expect(h.sqlite!.prepare('SELECT count(*) FROM bot_delegations').pluck().get()).toBe(0);
+        expect(h.sqlite!.prepare('SELECT count(*) FROM sessions WHERE parent_session_id = ?').pluck().get('session-1')).toBe(0);
+        expect(runtime.started).toEqual([]);
+      } else {
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error(result.message);
+        expect(h.sqlite!.prepare('SELECT permission_mode FROM sessions WHERE id = ?').pluck().get(result.childSessionId)).toBe(settledMode);
+        const snapshot = h.sqlite!.prepare('SELECT permission_snapshot_json FROM bot_delegations WHERE id = ?').pluck().get(result.delegationId) as string;
+        expect(JSON.parse(snapshot).permission).toMatchObject({ mode: settledMode, requesterMode: settledMode });
+      }
+    } finally {
+      finishPreparation();
+      await starting;
+      runtime.dispose();
+    }
+  });
+
+  it.each(['ask', 'auto', null])('aborts a child whose caller permission changed during persistence: %s', async (settledMode) => {
+    await seedPair();
+    let permission: string | null = 'bypassPermissions';
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const atBoundary = new Promise<void>((resolve) => { entered = resolve; });
+    const realTx = h.tx!;
+    h.tx = async (name, args) => {
+      if (name === 'bots.createDelegation') {
+        entered();
+        await barrier;
+      }
+      return realTx(name, args);
+    };
+    const runtime = createDelegationRuntime({ readCallerPermission: () => permission });
+    const starting = runtime.delegation.startSessionTask({
+      callerSessionId: 'session-1', objective: 'Run the requested checks.',
+    });
+    try {
+      await atBoundary;
+      permission = settledMode;
+      release();
+      const result = await starting;
+      expect(result).toMatchObject({ ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE' });
+      expect(runtime.started).toEqual([]);
+      expect(h.sqlite!.prepare('SELECT status FROM bot_delegations').pluck().get()).toBe('failed');
+    } finally {
+      release();
+      await starting.catch(() => undefined);
+      h.tx = realTx;
+      runtime.dispose();
+    }
+  });
+
+  it.each(['ask', 'bypassPermissions', null])('revalidates permission generation after asynchronous child creation: %s', async (mode) => {
+    await seedPair();
+    let permission: { mode: string; generation: number } | null = { mode: 'bypassPermissions', generation: 1 };
+    const originalTx = h.tx!;
+    let persisted = false;
+    let release!: () => void;
+    const pendingReply = new Promise<void>((resolve) => { release = resolve; });
+    h.tx = async (name, args) => {
+      const result = await originalTx(name, args);
+      if (name === 'bots.createDelegation') {
+        persisted = true;
+        await pendingReply;
+      }
+      return result;
+    };
+    const runtime = createDelegationRuntime({ readCallerPermission: () => permission });
+    const starting = runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Do not retain stale Full Access.' });
+    try {
+      await vi.waitFor(() => expect(persisted).toBe(true));
+      permission = mode === null ? null : { mode, generation: 2 };
+      release();
+      expect(await starting).toMatchObject({ ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE' });
+      expect(runtime.started).toEqual([]);
+      expect(h.sqlite!.prepare('SELECT permission_mode FROM sessions WHERE parent_session_id = ?').pluck().get('session-1')).toBe('ask');
+      expect(h.sqlite!.prepare('SELECT status FROM bot_delegations').pluck().get()).toBe('failed');
+    } finally {
+      release();
+      await starting;
+      h.tx = originalTx;
+      runtime.dispose();
+    }
+  });
+
+  it('rechecks permission after the asynchronous dispatch-plan reads', async () => {
+    await seedPair();
+    let permission = { mode: 'bypassPermissions', generation: 1 };
+    const realSelect = h.db!.select.bind(h.db!);
+    let crossedDispatchBoundary = false;
+    const select = vi.spyOn(h.db!, 'select').mockImplementation((fields) => {
+      const query = realSelect(fields);
+      // Keep the real SQLite query, but model a user change while the worker
+      // replies to validateDispatchPlan's final child-status read.
+      if (fields?.status === sessions.status && fields?.source === sessions.source) {
+        crossedDispatchBoundary = true;
+        queueMicrotask(() => { permission = { mode: 'ask', generation: 2 }; });
+      }
+      return query;
+    });
+    const runtime = createDelegationRuntime({ readCallerPermission: () => permission });
+    try {
+      const result = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: 'Run the requested checks.',
+      });
+      expect(crossedDispatchBoundary).toBe(true);
+      expect(result).toMatchObject({ status: 'failed' });
+      // Failure wakes the parent with the completion notice, never the child.
+      expect(runtime.started.map((turn) => turn.sessionId)).toEqual(['session-1']);
+      expect(h.sqlite!.prepare('SELECT permission_mode, status FROM sessions WHERE parent_session_id = ?')
+        .get('session-1')).toMatchObject({ permission_mode: 'ask', status: 'archived' });
+    } finally {
+      select.mockRestore();
+      runtime.dispose();
+    }
+  });
+
+  it('does not start a child with stale permissions during a live permission change', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ readCallerPermission: () => null });
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Run the requested checks.' });
+      expect(result).toMatchObject({ ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE' });
+      expect(runtime.started).toEqual([]);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
   it('starts the child task and lands the result back in the requesting conversation', async () => {
     await seedPair();
     const runtime = createDelegationRuntime({
@@ -2817,6 +3899,840 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally {
       runtime.dispose();
     }
+  });
+
+  it('binds a prepared worktree before first dispatch and rejects unavailable isolation', async () => {
+    await seedPair();
+    const workspace = join(h.userDataDir, 'task-project-worktree');
+    mkdirSync(workspace, { recursive: true });
+    const runtime = createDelegationRuntime({ prepareWorktree: async () => ({ ok: true, sessionId: 'worktree-session', workingDir: workspace }) });
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Edit this project.', workingDir: h.userDataDir, useWorktree: true });
+      expect(result).toMatchObject({ ok: true, childSessionId: 'worktree-session' });
+      if (!result.ok) throw new Error('missing task');
+      expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
+        .toMatchObject({ task: { working_dir: normalizeWorkingDirForStorage(workspace), workspace_kind: 'project' } });
+      expect(runtime.started[0].sessionId).toBe('worktree-session');
+      expect(h.sqlite!.prepare('SELECT worktree_path AS path FROM sessions WHERE id = ?').get('worktree-session')).toEqual({ path: workspace });
+    } finally { runtime.dispose(); }
+    const unavailable = createDelegationRuntime();
+    try {
+      expect(await unavailable.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Edit.', workingDir: workspace, useWorktree: true }))
+        .toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
+      expect(unavailable.started).toHaveLength(0);
+    } finally { unavailable.dispose(); }
+  });
+
+  it('commits the worktree snapshot for each continuation and leaves no child when that transaction fails', async () => {
+    await seedPair();
+    const workspace = join(h.userDataDir, 'continued-worktree');
+    mkdirSync(workspace, { recursive: true });
+    let owner = 'worktree-first';
+    const runtime = createDelegationRuntime({
+      prepareWorktree: async () => ({ ok: true, sessionId: owner, workingDir: workspace }),
+      getWorktree: id => id === owner ? { path: workspace } : null,
+      withTransferredWorktree: async (previous, next, worktreePath, commit) => {
+        expect(previous).toBe(owner);
+        expect(worktreePath).toBe(workspace);
+        const result = await commit();
+        if (result.reopened) owner = next;
+        return result;
+      },
+    });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Preserve files.', workingDir: h.userDataDir, useWorktree: true });
+      if (!task.ok) throw new Error('task failed');
+      await runtime.settleChild(owner, 'First result.');
+      // The manager remains authoritative even if the display snapshot is absent.
+      h.sqlite!.prepare('UPDATE sessions SET worktree_path = NULL WHERE id = ?').run(owner);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_reopen_binding BEFORE UPDATE OF worktree_path ON sessions BEGIN SELECT RAISE(FAIL, 'fixture transfer failure'); END");
+      const before = h.sqlite!.prepare('SELECT COUNT(*) AS count FROM sessions').get();
+      const startedBeforeFailure = runtime.started.length;
+      await expect(runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Continue.' })).rejects.toThrow('fixture transfer failure');
+      expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM sessions').get()).toEqual(before);
+      expect(runtime.started).toHaveLength(startedBeforeFailure);
+      expect(owner).toBe('worktree-first');
+      h.sqlite!.exec('DROP TRIGGER fail_reopen_binding');
+      for (let round = 0; round < 2; round++) {
+        const previous = owner;
+        const resumed = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Continue.' });
+        expect(resumed).toMatchObject({ ok: true, resumed: true });
+        expect(owner).not.toBe(previous);
+        expect(h.sqlite!.prepare('SELECT working_dir AS cwd, worktree_path AS path FROM sessions WHERE id = ?').get(owner))
+          .toEqual({ cwd: normalizeWorkingDirForStorage(workspace), path: workspace });
+        expect(runtime.started.at(-1)?.sessionId).toBe(owner);
+        await runtime.settleChild(owner, 'Next result.');
+      }
+    } finally {
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_reopen_binding');
+      runtime.dispose();
+    }
+  });
+
+  it('still publishes and dispatches a committed worktree task when its display snapshot fails', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ prepareWorktree: async () => ({ ok: true,
+      sessionId: 'snapshot-failure-session', workingDir: h.userDataDir }) });
+    h.sqlite!.exec("CREATE TEMP TRIGGER fail_worktree_snapshot BEFORE UPDATE OF worktree_path ON sessions BEGIN SELECT RAISE(FAIL, 'fixture snapshot unavailable'); END");
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1',
+        objective: 'Continue despite an unavailable display snapshot.', workingDir: h.userDataDir, useWorktree: true });
+      expect(result).toMatchObject({ ok: true, childSessionId: 'snapshot-failure-session' });
+      if (!result.ok) throw new Error('task failed');
+      expect(runtime.started.map(turn => turn.sessionId)).toEqual(['snapshot-failure-session']);
+      expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
+        .toMatchObject({ task: { status: 'running', working_dir: normalizeWorkingDirForStorage(h.userDataDir) } });
+      await runtime.settleChild(result.childSessionId, 'Finished.');
+      expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
+        .toMatchObject({ task: { status: 'completed' } });
+    } finally { h.sqlite!.exec('DROP TRIGGER fail_worktree_snapshot'); runtime.dispose(); }
+  });
+
+  it.each(['running', 'queued', 'paused'] as const)('preserves the %s input and timers when cancellation intent cannot be persisted', async (state) => {
+    await seedPair();
+    vi.useFakeTimers();
+    let unavailable = state === 'queued';
+    const runtime = createDelegationRuntime({ taskControl: true, transientUnavailable: () => unavailable });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.', timeoutMs: 10_000 });
+      if (!task.ok) throw new Error('task failed');
+      if (state === 'paused') await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      const before = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_cancel_intent BEFORE UPDATE OF permission_snapshot_json ON bot_delegations WHEN json_extract(NEW.permission_snapshot_json, '$.taskCancelRequested') = 1 BEGIN SELECT RAISE(FAIL, 'fixture cancel unavailable'); END");
+      await expect(runtime.delegation.stopSessionTask('session-1', task.delegationId)).rejects.toThrow();
+      h.sqlite!.exec('DROP TRIGGER fail_cancel_intent');
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(state === 'paused');
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toEqual(before);
+      if (state === 'queued') {
+        unavailable = false;
+        runtime.advance(1_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(runtime.started.map(turn => turn.sessionId)).toContain(task.childSessionId);
+      }
+      runtime.advance(10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: state === 'paused' ? 'waiting' : 'timed-out' } });
+    } finally {
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_cancel_intent');
+      runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['running', 'completed', 'failed'] as const)('retains %s status and receipts when queue restoration fails', async (state) => {
+    await seedPair();
+    const inspect = vi.fn(async () => { throw new Error('Task queue restoration is incomplete'); });
+    const runtime = createDelegationRuntime({ taskControl: true, taskQueue: {
+      inspect, update: vi.fn(), cancel: vi.fn(),
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      const sent = await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+        { kind: 'message', text: 'additional requirement', idempotencyKey: 'receipt' });
+      if (!sent.ok || !('queuedMessageId' in sent)) throw new Error('missing receipt');
+      if (state !== 'running') h.sqlite!.prepare('UPDATE bot_delegations SET status = ?, result_summary = ?, last_error = ? WHERE id = ?')
+        .run(state, 'Saved result', state === 'failed' ? 'FIXTURE: Saved error' : null, task.delegationId);
+      for (const messageId of [undefined, 'missing', sent.queuedMessageId]) {
+        const result = await runtime.delegation.getSessionTask('session-1', task.delegationId, messageId);
+        expect(result).toMatchObject({ ok: true, task: { status: state, queue: null, queue_error: 'QUEUE_UNAVAILABLE' } });
+        if (!result.ok) throw new Error('missing task');
+        if (state !== 'running') expect(result.task.result).toBe('Saved result');
+        if (state === 'failed') expect(result.task.error).toBe('Saved error');
+        expect(result.task.message_receipt).toEqual(messageId ? {
+          queued_message_id: messageId, state: messageId === sent.queuedMessageId ? 'dispatched' : 'unavailable',
+        } : undefined);
+      }
+    } finally { runtime.dispose(); }
+  });
+
+  it('keeps steer IDs stable and reuses persisted receipts after runtime replacement', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      const input = { kind: 'message' as const, text: 'urgent', mode: 'steer' as const, idempotencyKey: 'retry:完整/key' };
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, input);
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, input);
+      const calls = runtime.steer.mock.calls;
+      const id = calls[0][0].queuedMessageId;
+      if (!id) throw new Error('missing stable ID');
+      expect(id).toEqual(expect.stringMatching(/^bot-task-steer:[a-f0-9]{64}$/));
+      expect(calls[1][0].queuedMessageId).toBe(id);
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, { ...input, idempotencyKey: 'retry完整key' });
+      expect(calls[2][0].queuedMessageId).not.toBe(id);
+      h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at, agent_meta) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run('accepted-steer', id, task.childSessionId, 'user', input.text, 10_000,
+          JSON.stringify({ origin: { kind: 'session', senderSessionId: 'session-1' } }));
+      const restored = createDelegationRuntime({ taskControl: true });
+      try {
+        expect(await restored.delegation.messageSessionTask('session-1', task.delegationId, input))
+          .toMatchObject({ ok: true, delivery: 'same-turn', queuedMessageId: id });
+        expect(restored.steer).not.toHaveBeenCalled();
+        expect(restored.started).toHaveLength(0);
+        expect(await restored.delegation.messageSessionTask('session-2', task.delegationId, input))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      } finally { restored.dispose(); }
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['waitForInputBoundary', 'stopTurn', 'preparePause', 'flushInput'] as const)('retries an uncertain pause after %s fails', async (stage) => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      runtime[stage].mockRejectedValueOnce(new Error('transient fixture failure'));
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'PAUSE_UNCONFIRMED' });
+      const before = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      runtime.advance(1_000);
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause'))
+        .toMatchObject({ ok: true, control: { state: 'pausing' } });
+      expect(runtime[stage]).toHaveBeenCalledTimes(2);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+      await runtime.settleChild(task.childSessionId, 'Stopped.');
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true });
+      const after = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      if (!before.ok || !after.ok) throw new Error('missing task');
+      expect(after.task.deadline_at).toBe(before.task.deadline_at! + 1_000);
+    } finally { runtime.dispose(); }
+  });
+
+  it('does not acknowledge pause until the retained input snapshot has finished writing', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    let release!: () => void;
+    const persisted = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Retain the supplement.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'queued supplement' });
+      runtime.flushInput.mockImplementationOnce(() => persisted);
+      let acknowledged = false;
+      const paused = runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause')
+        .then(result => { acknowledged = true; return result; });
+      await vi.waitFor(() => expect(runtime.flushInput).toHaveBeenCalledWith(task.childSessionId));
+      expect(acknowledged).toBe(false);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+      release();
+      expect(await paused).toMatchObject({ ok: true });
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it.each(['bot', 'parent'] as const)('serializes %s lifecycle cancellation with the held resume commit', async (scope) => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    let release!: () => void;
+    const boundary = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Stopped.');
+      let atBoundary = false;
+      runtime.flushInput.mockImplementationOnce(async () => { atBoundary = true; await boundary; });
+      const resumed = runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' });
+      await vi.waitFor(() => expect(atBoundary).toBe(true));
+      let cancellationSettled = false;
+      const cancelled = (scope === 'bot'
+        ? runtime.delegation.cancelDelegationsForBot('bot-a')
+        : runtime.delegation.cancelDelegationsForParentSession('session-1'))
+        .then(result => { cancellationSettled = true; return result; });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(cancellationSettled).toBe(false);
+      expect(h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').get(task.delegationId))
+        .toEqual({ status: 'waiting' });
+      // An abort awaiting its terminal callback must not deadlock with the lock.
+      runtime.abortSession.mockImplementationOnce(async () => runtime.settleChild(task.childSessionId, 'Cancelled.'));
+      release();
+      expect(await resumed).toMatchObject({ ok: true });
+      expect(await cancelled).toBe(1);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(false);
+      const count = runtime.started.length;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'NOT_PAUSED' });
+      expect(runtime.started).toHaveLength(count);
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it('routes owned queue edits through the shared consuming and sender guards and reports dispatch receipts', async () => {
+    await seedPair();
+    const item = (clientId: string, sender: string): AgentInputQueuedMessage => ({
+      clientId, text: 'before', persistedContent: 'before', model: 'model', effort: 'medium', permissionMode: 'default', workingDir: h.userDataDir,
+      chatMessage: { clientId, role: 'user', content: 'before' },
+      createOpts: { agentKind: 'codex', workingDir: h.userDataDir, model: 'model', effort: 'medium', permissionMode: 'default' },
+      origin: { kind: 'session', senderSessionId: sender, displayText: 'before' },
+    });
+    let queue = [item('mine', 'session-1'), item('foreign', 'other-session')];
+    const consumingClientIds: string[] = [];
+    const shared = createSessionQueueControlService({
+      getSnapshot: async () => ({ pendingQueue: queue, consumingClientIds }),
+      replaceQueuedMessage: (_id, clientId, next) => {
+        const index = queue.findIndex(item => item.clientId === clientId);
+        if (index < 0) return false;
+        queue[index] = next; return true;
+      },
+      removeQueuedMessage: (_id, clientId) => { queue = queue.filter(item => item.clientId !== clientId); return true; },
+    });
+    const runtime = createDelegationRuntime({ taskControl: true, taskQueue: {
+      inspect: async (_id, caller) => queue.filter(item => authorizeSessionQueueItem(item, caller).ok)
+        .map(item => ({ queuedMessageId: item.clientId, consuming: consumingClientIds.includes(item.clientId), message: item.text })),
+      update: params => shared.update({ sessionId: params.targetSessionId, queuedMessageId: params.queuedMessageId, message: params.message,
+        authorize: item => authorizeSessionQueueItem(item, params.callerSessionId), rebuild: rebuildSessionQueueItem }),
+      cancel: params => shared.cancel({ sessionId: params.targetSessionId, queuedMessageId: params.queuedMessageId,
+        authorize: item => authorizeSessionQueueItem(item, params.callerSessionId) }),
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish the report.' });
+      if (!task.ok) throw new Error('missing task');
+      const edit = (id: string) => runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'edit', queuedMessageId: id, text: 'revised' });
+      expect(await edit('foreign')).toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
+      expect(await edit('mine')).toMatchObject({ ok: true, delivery: 'queued' });
+      expect(queue[0].persistedContent).toBe('revised');
+      consumingClientIds.push('mine');
+      expect(await edit('mine')).toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId, 'mine'))
+        .toMatchObject({ task: { queue: [{ queuedMessageId: 'mine', message: 'revised', consuming: true }], message_receipt: { state: 'consuming' } } });
+      consumingClientIds.length = 0;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'withdraw', queuedMessageId: 'mine' }))
+        .toMatchObject({ ok: true, delivery: 'withdrawn' });
+      expect(queue.map(item => item.clientId)).toEqual(['foreign']);
+      const message = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'additional requirements' });
+      if (!message.ok || !('queuedMessageId' in message)) throw new Error('missing receipt');
+      expect(message.queuedMessageId).toEqual(expect.any(String));
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId, message.queuedMessageId))
+        .toMatchObject({ task: { message_receipt: { state: 'dispatched' } } });
+    } finally { runtime.dispose(); }
+  });
+
+  it('holds a paused execution through terminal events and restart, then resumes the same Session once', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Perform a non-repeatable action, then summarize.' });
+      if (!started.ok) throw new Error('task did not start');
+      const taskId = started.delegationId;
+      const sessionId = started.childSessionId;
+      const before = await runtime.delegation.getSessionTask('session-1', taskId);
+      expect(await runtime.delegation.stopSessionTask('session-1', taskId, 'pause'))
+        .toMatchObject({ ok: true, control: { state: 'pausing', queue_held: true, stop_status: 'requested' } });
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(await runtime.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      expect(await runtime.delegation.messageSessionTask('session-1', taskId, { kind: 'message', text: 'new' }))
+        .toMatchObject({ ok: false, errorCode: 'TASK_PAUSED' });
+      // An interaction arriving after stop was requested must not retract that stop.
+      const lateRequest = { kind: 'permission' as const, requestId: 'late-approval', toolName: 'write_file', input: {} };
+      await runtime.delegation.handleInteractionStart(sessionId, lateRequest);
+      expect(await runtime.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.delegation.handleInteractionEnd(sessionId, lateRequest);
+      await runtime.settleChild(sessionId, 'Partial work already performed.');
+      expect(await runtime.delegation.getSessionTask('session-1', taskId))
+        .toMatchObject({ ok: true, task: { status: 'waiting', control: { state: 'paused' }, completed_at: null } });
+      expect(runtime.started.filter((turn) => turn.sessionId === 'session-1')).toHaveLength(0);
+      runtime.advance(120_000);
+      const startCount = runtime.started.length;
+      await runtime.delegation.restore();
+      expect(runtime.started).toHaveLength(startCount);
+      const restored = createDelegationRuntime({ taskControl: true, startTime: 130_000 });
+      try {
+        await restored.delegation.restore();
+        expect(restored.started).toHaveLength(0);
+        expect(restored.heldInputs.has(sessionId)).toBe(true);
+        const results = await Promise.all([
+          restored.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }),
+          restored.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }),
+        ]);
+        expect(results.filter((result) => result.ok)).toHaveLength(2); // Same resume receipt; only one dispatch.
+        expect(restored.started.map((turn) => turn.sessionId)).toEqual([sessionId]);
+        const after = await restored.delegation.getSessionTask('session-1', taskId);
+        if (!before.ok || !after.ok) throw new Error('missing task');
+        expect(after.task.deadline_at).toBe(before.task.deadline_at! + 120_000);
+        expect(after.task.session_id).toBe(sessionId);
+        const inputs = h.sqlite!.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid").all(sessionId) as Array<{ content: string }>;
+        expect(inputs).toHaveLength(2);
+        expect(inputs[1].content).toContain('do not replay the original request');
+        await restored.settleChild(sessionId, 'Final result.');
+        expect(await restored.delegation.getSessionTask('session-1', taskId))
+          .toMatchObject({ ok: true, task: { status: 'completed', result: 'Final result.' } });
+        expect(restored.started.filter((turn) => turn.sessionId === 'session-1')).toHaveLength(1);
+      } finally { restored.dispose(); }
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['claude', 'codex', 'pi'])('keeps owned %s task steer distinct from queue and preserves denial', async (harness) => {
+    await seedPair({ harness });
+    const runtime = createDelegationRuntime({ taskControl: true, steerUnsupported: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish a report.' });
+      if (!started.ok) throw new Error('task did not start');
+      const count = runtime.started.length;
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId,
+        { kind: 'message', text: 'urgent', mode: 'steer' }))
+        .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+      expect(runtime.started).toHaveLength(count);
+      expect(await runtime.delegation.stopSessionTask(started.childSessionId, started.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId,
+        { kind: 'message', text: 'next turn' }))
+        .toMatchObject({ ok: true, queued: true, delivery: 'queued' });
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([false, true])('preserves the permission input boundary after a failed pause write (already paused: %s)', async alreadyPaused => {
+    await seedPair();
+    const resolveInteraction = vi.fn(() => true);
+    const runtime = createDelegationRuntime({ taskControl: true, resolveInteraction });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Wait for approval.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.handleInteractionStart(task.childSessionId,
+        { kind: 'permission', requestId: 'pause-write-permission', toolName: 'write_file', input: {} });
+      if (alreadyPaused) await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      const before = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_pause_write BEFORE UPDATE OF permission_snapshot_json ON bot_delegations BEGIN SELECT RAISE(FAIL, 'fixture pause unavailable'); END");
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'PAUSE_UNCONFIRMED' });
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(alreadyPaused);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toEqual(before);
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      h.sqlite!.exec('DROP TRIGGER fail_pause_write');
+      if (alreadyPaused) expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true, delivery: 'awaiting-interaction' });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'approve' }))
+        .toMatchObject({ ok: true, delivery: 'interaction' });
+      expect(resolveInteraction).toHaveBeenCalledTimes(1);
+    } finally { h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_pause_write'); runtime.dispose(); }
+  });
+
+  it.each(['queued', 'completed'] as const)('keeps %s recovery retryable after an unavailable worktree readback', async status => {
+    await seedPair();
+    let blocked = true;
+    const reconcileWorktree = vi.fn(async () => { if (blocked) throw new Error('fixture reconciliation unavailable'); });
+    const runtime = createDelegationRuntime({ taskControl: true, reconcileWorktree });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Resume only after ownership readback.' });
+      if (!task.ok) throw new Error('missing task');
+      if (status === 'completed') h.sqlite!.prepare("UPDATE bot_delegations SET status = 'completed', result_summary = 'fixture finished' WHERE id = ?").run(task.delegationId);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status } });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'continue' }))
+        .toMatchObject({ ok: false, errorCode: 'WORKTREE_TRANSFER_PENDING' });
+      const { createBotRuntimeRestoreCoordinator } = await import('../../../maker-ipc/botRuntimeRestore');
+      const coordinator = createBotRuntimeRestoreCoordinator({
+        readDbIdentity: () => ({ userId: 'owner', clientEpoch: 1 }),
+        readServices: () => ({ directMessages: { restore: async () => undefined }, delegation: runtime.delegation }),
+        log: { warn: vi.fn() },
+      });
+      expect(await coordinator.restoreCurrentOwner()).toBe(false);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status } });
+      blocked = false;
+      expect(await coordinator.restoreCurrentOwner()).toBe(true);
+      expect(await coordinator.restoreCurrentOwner()).toBe(true);
+      // A new owner epoch performs a real recovery pass; durable receipts must
+      // also prevent duplicate delivery when coordinator caching cannot help.
+      await runtime.delegation.restore();
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: status === 'queued' ? 'running' : 'completed' } });
+      expect(runtime.dispatch.mock.calls.filter(([params]) => params.clientId === `bot-delegation-start:${task.delegationId}`)).toHaveLength(status === 'queued' ? 1 : 0);
+      if (status === 'completed') {
+        expect((h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?').get(task.delegationId) as { completion_delivered_at: number | null }).completion_delivered_at).not.toBeNull();
+        expect(runtime.dispatch.mock.calls.filter(([params]) => params.targetSessionId === 'session-1')).toHaveLength(1);
+      }
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([false, true])('retries the resume dispatch readback failure unless cancelled (%s)', async cancel => {
+    await seedPair();
+    vi.useFakeTimers();
+    let readbacks = 0;
+    let failReadback = false;
+    const runtime = createDelegationRuntime({ taskControl: true, reconcileWorktree: async () => {
+      if (failReadback && ++readbacks === 2) throw new Error('fixture second readback unavailable');
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Recover the interrupted turn.' });
+      if (!task.ok) throw new Error('missing task');
+      failReadback = true;
+      await runtime.delegation.restore();
+      const resumeCalls = () => runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.startsWith(`bot-delegation-resume:${task.delegationId}:`));
+      expect(resumeCalls()).toHaveLength(0);
+      if (cancel) {
+        await runtime.delegation.stopSessionTask('session-1', task.delegationId);
+        await runtime.settleChild(task.childSessionId, 'Cancelled.');
+      }
+      runtime.advance(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(resumeCalls()).toHaveLength(cancel ? 0 : 1);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ ok: true, task: { status: cancel ? 'cancelled' : 'running' } });
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it('preserves other recovery progress and never dispatches a task cancelled between failed passes', async () => {
+    await seedPair();
+    let blockedSession: string | null = null;
+    let unavailable = true;
+    const runtime = createDelegationRuntime({ taskControl: true,
+      transientUnavailable: () => unavailable,
+      reconcileWorktree: async sessionId => {
+        if (sessionId === blockedSession) throw new Error('fixture reconciliation unavailable');
+      },
+    });
+    try {
+      const blocked = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Cancel before recovery.' });
+      const unaffected = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Recover the independent result.' });
+      if (!blocked.ok || !unaffected.ok) throw new Error('missing tasks');
+      blockedSession = blocked.childSessionId;
+      h.sqlite!.prepare("UPDATE bot_delegations SET status = 'completed', result_summary = 'fixture finished' WHERE id = ?").run(unaffected.delegationId);
+      const { createBotRuntimeRestoreCoordinator } = await import('../../../maker-ipc/botRuntimeRestore');
+      const coordinator = createBotRuntimeRestoreCoordinator({
+        readDbIdentity: () => ({ userId: 'owner', clientEpoch: 1 }),
+        readServices: () => ({ directMessages: { restore: async () => undefined }, delegation: runtime.delegation }),
+        log: { warn: vi.fn() },
+      });
+      // Let parent result delivery succeed while ownership blocks child startup.
+      unavailable = false;
+      runtime.dispatch.mockClear();
+      expect(await coordinator.restoreCurrentOwner()).toBe(false);
+      expect(runtime.dispatch.mock.calls.filter(([params]) => params.targetSessionId === 'session-1')).toHaveLength(1);
+      expect(await runtime.delegation.stopSessionTask('session-1', blocked.delegationId, 'cancel')).toMatchObject({ ok: true });
+      expect(runtime.heldInputs.has(blocked.childSessionId)).toBe(false);
+      blockedSession = null;
+      expect(await coordinator.restoreCurrentOwner()).toBe(true);
+      await runtime.delegation.restore();
+      expect(await runtime.delegation.getSessionTask('session-1', blocked.delegationId)).toMatchObject({ ok: true, task: { status: 'cancelled' } });
+      expect(runtime.dispatch.mock.calls.some(([params]) => params.targetSessionId === blocked.childSessionId)).toBe(false);
+      expect(runtime.dispatch.mock.calls.filter(([params]) => params.targetSessionId === 'session-1')).toHaveLength(2);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([false, true])('only renotifies an unresolved interaction on resume (applied IM answer: %s)', async applied => {
+    await seedPair();
+    let decisionApplied = false;
+    const runtime = createDelegationRuntime({ taskControl: true,
+      appliedOnResume: () => decisionApplied ? ['im-answer'] : [] });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Wait for an IM answer.' });
+      if (!task.ok) throw new Error('missing task');
+      const request = { kind: 'permission' as const, requestId: 'im-answer', toolName: 'write_file', input: {} };
+      await runtime.delegation.handleInteractionStart(task.childSessionId, request);
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause')).toMatchObject({ ok: true });
+      runtime.dispatch.mockClear();
+      decisionApplied = applied;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true, delivery: applied ? 'interaction' : 'awaiting-interaction' });
+      const notifications = runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.includes('bot-delegation-interaction:'));
+      expect(notifications).toHaveLength(applied ? 0 : 1);
+      const row = h.sqlite!.prepare('SELECT status, pending_interaction_json FROM bot_delegations WHERE id = ?').get(task.delegationId) as { status: string; pending_interaction_json: string | null };
+      expect(row.status).toBe(applied ? 'running' : 'waiting');
+      if (applied) {
+        expect(row.pending_interaction_json).toBeNull();
+        // The delayed native callback is harmless after synchronous bookkeeping.
+        await runtime.delegation.handleInteractionEnd(task.childSessionId, request);
+        expect(runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.includes('bot-delegation-interaction:'))).toHaveLength(0);
+      }
+    } finally { runtime.dispose(); }
+  });
+
+  it('pauses an interaction without resolving it, and accounts for the wait only once', async () => {
+    await seedPair();
+    const resolveInteraction = vi.fn(() => true);
+    const runtime = createDelegationRuntime({ taskControl: true, resolveInteraction });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Write the report after approval.' });
+      if (!started.ok) throw new Error('task did not start');
+      const request = { kind: 'permission' as const, requestId: 'held-approval', toolName: 'write_file', input: {} };
+      const before = await runtime.delegation.getSessionTask('session-1', started.delegationId);
+      await runtime.delegation.handleInteractionStart(started.childSessionId, request);
+      runtime.advance(10_000);
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause')).toMatchObject({ ok: true });
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'approve' }))
+        .toMatchObject({ ok: false, errorCode: 'TASK_PAUSED' });
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      runtime.advance(20_000);
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true, delivery: 'awaiting-interaction' });
+      runtime.advance(5_000);
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'approve' }))
+        .toMatchObject({ ok: true, delivery: 'interaction' });
+      expect(resolveInteraction).toHaveBeenCalledTimes(1);
+      await runtime.delegation.handleInteractionEnd(started.childSessionId, request);
+      const after = await runtime.delegation.getSessionTask('session-1', started.delegationId);
+      if (!before.ok || !after.ok) throw new Error('missing task');
+      expect(after.task.deadline_at).toBe(before.task.deadline_at! + 35_000);
+      expect(after.task.pendingInteraction).toBeNull();
+      expect(runtime.started.filter((turn) => turn.sessionId === started.childSessionId)).toHaveLength(1);
+    } finally { runtime.dispose(); }
+  });
+
+  /** Commit the real SQLite update, then lose only its worker acknowledgement. */
+  function loseResumeCommitReceipt(readbackUnavailable: boolean) {
+    const update = h.db!.update.bind(h.db!);
+    return vi.spyOn(h.db!, 'update').mockImplementation(table => {
+      const builder = update(table);
+      const set = builder.set.bind(builder);
+      builder.set = values => {
+        const query = set(values);
+        if (table === botDelegations && JSON.stringify(values).includes('taskResume')) {
+          const returning = query.returning.bind(query);
+          query.returning = (fields?: Parameters<typeof returning>[0]) => {
+            const result = fields ? returning(fields) : returning();
+            result.all();
+            if (readbackUnavailable) vi.spyOn(h.db!, 'select').mockImplementationOnce(() => {
+              throw new Error('fixture readback unavailable');
+            });
+            throw new Error('fixture commit acknowledgement lost');
+          };
+        }
+        return query;
+      };
+      return builder;
+    });
+  }
+
+  const flushTaskQueue = async () => {
+    for (let i = 0; i < 30; i++) await new Promise<void>(resolve => setImmediate(resolve));
+  };
+
+  it.each(['retry', 'restart', 'cancel'] as const)('retains an idle resume behind the real queue barrier on DB failure, then handles %s', async recovery => {
+    await seedPair();
+    const queueSnapshots = new Map<string, AgentInputQueuedMessage[]>();
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Do each action once.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Stopped before continuing.');
+      runtime.advance(1_000);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_resume_commit BEFORE UPDATE OF permission_snapshot_json ON bot_delegations WHEN json_extract(NEW.permission_snapshot_json, '$.taskPause') IS NULL BEGIN SELECT RAISE(FAIL, 'fixture resume DB unavailable'); END");
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'RESUME_FAILED' });
+      await flushTaskQueue();
+      expect(runtime.started).toHaveLength(1);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+      expect(queueSnapshots.get(task.childSessionId)).toHaveLength(1);
+      const retainedId = queueSnapshots.get(task.childSessionId)![0].clientId;
+      expect(h.sqlite!.prepare('SELECT 1 FROM messages WHERE client_id = ?').get(retainedId)).toBeUndefined();
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { control: { state: 'paused' }, completed_at: null } });
+      h.sqlite!.exec('DROP TRIGGER fail_resume_commit');
+      if (recovery === 'cancel') {
+        expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true });
+        await flushTaskQueue();
+        expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(1);
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: false });
+        expect(queueSnapshots.get(task.childSessionId) ?? []).toHaveLength(0);
+        return;
+      }
+      if (recovery === 'restart') {
+        runtime.dispose();
+        const restored = createDelegationRuntime({ taskControl: true, queueSnapshots, startTime: 12_000 });
+        try {
+          await restored.delegation.restore();
+          await flushTaskQueue();
+          expect(restored.started).toHaveLength(0);
+          expect(await restored.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+          await flushTaskQueue();
+          expect(restored.started).toHaveLength(1);
+          await restored.settleChild(task.childSessionId, 'Restored continuation completed.');
+          expect(await restored.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'completed' } });
+        } finally { restored.dispose(); }
+        return;
+      }
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      await flushTaskQueue();
+      expect(runtime.started).toHaveLength(2);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(false);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      await flushTaskQueue();
+      expect(runtime.started).toHaveLength(2);
+      await runtime.settleChild(task.childSessionId, 'The resumed work is complete.');
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'completed', result: 'The resumed work is complete.' } });
+    } finally {
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_resume_commit');
+      runtime.dispose();
+    }
+  });
+
+  it('keeps a completion emitted immediately as the resume barrier opens', async () => {
+    await seedPair();
+    let childId = '';
+    let completion: Promise<void> | undefined;
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots: new Map(),
+      onNativeStarted: id => {
+        if (id === childId) completion = runtime.settleChild(id, 'Immediate resumed completion.');
+      },
+    });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish without duplication.' });
+      if (!task.ok) throw new Error('missing task');
+      childId = task.childSessionId;
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(childId, 'Stopped.');
+      runtime.advance(1_000);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      await flushTaskQueue();
+      expect(completion).toBeDefined();
+      await completion;
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'completed', result: 'Immediate resumed completion.' } });
+      expect(runtime.started.filter(turn => turn.sessionId === childId)).toHaveLength(2);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['readback', 'retry', 'restore', 'restart'] as const)('recovers a committed resume after receipt loss through %s without replaying work', async recovery => {
+    await seedPair();
+    const queueSnapshots = new Map<string, AgentInputQueuedMessage[]>();
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots });
+    let restored: ReturnType<typeof createDelegationRuntime> | undefined;
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Continue exactly once.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Stopped.');
+      runtime.advance(1_000);
+      const fault = loseResumeCommitReceipt(recovery !== 'readback');
+      const result = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' });
+      fault.mockRestore();
+      await flushTaskQueue();
+      expect(result).toMatchObject({ ok: recovery === 'readback' });
+      if (recovery !== 'readback') {
+        expect(runtime.started).toHaveLength(1);
+        expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+        expect(queueSnapshots.get(task.childSessionId)).toHaveLength(1);
+        expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+          .toMatchObject({ task: { control: { state: 'resuming', queue_held: true } } });
+      }
+      if (recovery === 'retry') {
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      } else if (recovery === 'restore') {
+        await runtime.delegation.restore();
+      } else if (recovery === 'restart') {
+        runtime.dispose();
+        restored = createDelegationRuntime({ taskControl: true, queueSnapshots, startTime: 11_000 });
+        await restored.delegation.restore();
+      }
+      await flushTaskQueue();
+      const active = restored ?? runtime;
+      expect(active.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(restored ? 1 : 2);
+      const dispatchCount = active.dispatch.mock.calls.length;
+      expect(await active.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume', text: 'Different input' }))
+        .toMatchObject({ ok: false, errorCode: 'RESUME_INPUT_CHANGED' });
+      expect(await active.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      expect(active.dispatch).toHaveBeenCalledTimes(dispatchCount);
+      await active.settleChild(task.childSessionId, 'One completed continuation.');
+      expect(await active.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'completed', result: 'One completed continuation.' } });
+      const afterCompletion = createDelegationRuntime({ taskControl: true, queueSnapshots, startTime: 12_000 });
+      try {
+        await afterCompletion.delegation.restore();
+        expect(afterCompletion.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(0);
+      } finally { afterCompletion.dispose(); }
+    } finally { vi.restoreAllMocks(); restored?.dispose(); runtime.dispose(); }
+  });
+
+  it('uses native steer and graceful stop without queueing or finishing the task', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish.' });
+      if (!started.ok) throw new Error('task did not start');
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId,
+        { kind: 'message', text: 'Correct the current direction.', mode: 'steer' }))
+        .toMatchObject({ ok: true, delivery: 'same-turn', queued: false });
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'request-stop'))
+        .toMatchObject({ ok: true, control: { state: 'requested', queue_held: false } });
+      expect(runtime.stopTurn).toHaveBeenCalledWith({ targetSessionId: started.childSessionId });
+      expect(runtime.started).toHaveLength(1);
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId))
+        .toMatchObject({ task: { status: 'running', completed_at: null,
+          control: { last_stop_request: { requested_at: 10_000, status: 'requested' }, stop_status: 'unconfirmed' } } });
+      const restored = createDelegationRuntime({ taskControl: true });
+      try {
+        expect(await restored.delegation.getSessionTask('session-1', started.delegationId))
+          .toMatchObject({ task: { control: { last_stop_request: { status: 'requested' }, stop_status: 'stopped' } } });
+        expect(restored.stopTurn).not.toHaveBeenCalled();
+      } finally { restored.dispose(); }
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([undefined, 'Use the revised requirements.'])('keeps a pre-dispatch pause durable with resume input %s, and cancel prevents resume', async (text) => {
+    await seedPair();
+    let transientUnavailable = true;
+    const runtime = createDelegationRuntime({ taskControl: true, transientUnavailable: () => transientUnavailable });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish when ready.' });
+      if (!started.ok) throw new Error('task did not start');
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause'))
+        .toMatchObject({ ok: true, control: { state: 'paused' } });
+      transientUnavailable = false;
+      // Paused time must not consume the initial dispatch deadline.
+      runtime.advance(24 * 60 * 60 * 1_000);
+      await runtime.delegation.restore();
+      expect(runtime.started).toHaveLength(0);
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume', text }))
+        .toMatchObject({ ok: true, childSessionId: started.childSessionId });
+      expect(runtime.started.map((turn) => turn.sessionId)).toEqual(text
+        ? [started.childSessionId, started.childSessionId] : [started.childSessionId]);
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId)).toMatchObject({ task: { status: 'running' } });
+      await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause');
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId))
+        .toMatchObject({ ok: true, control: { state: 'cancelling', stop_status: 'unconfirmed' } });
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.settleChild(started.childSessionId, 'Interrupted.');
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId))
+        .toMatchObject({ ok: true, task: { status: 'cancelled', control: { stop_status: 'stopped' } } });
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'NOT_PAUSED' });
+    } finally { runtime.dispose(); }
+  });
+
+  it('preserves cancellation across a late interaction end and host restore', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Wait for approval.' });
+      if (!task.ok) throw new Error('missing task');
+      const request = { kind: 'permission' as const, requestId: 'approval', toolName: 'write_file', input: {} };
+      await runtime.delegation.handleInteractionStart(task.childSessionId, request);
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId);
+      runtime.advance(1_000);
+      await runtime.delegation.handleInteractionEnd(task.childSessionId, request);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'must not run' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      const restored = createDelegationRuntime({ taskControl: true });
+      try {
+        await restored.delegation.restore();
+        expect(await restored.delegation.getSessionTask('session-1', task.delegationId))
+          .toMatchObject({ task: { status: 'cancelled', control: { stop_status: 'stopped' } } });
+        expect(restored.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(0);
+      } finally { restored.dispose(); }
+    } finally { runtime.dispose(); }
+  });
+
+  it('does not leave a durable hold when graceful stop is unsupported', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true, stopUnsupported: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish.' });
+      if (!started.ok) throw new Error('task did not start');
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+      expect(runtime.heldInputs.size).toBe(0);
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId))
+        .toMatchObject({ ok: true, task: { status: 'running', control: { queue_held: false } } });
+    } finally { runtime.dispose(); }
   });
 
   it('delivers every continued run once without reusing the previous completion receipt', async () => {
@@ -2886,13 +4802,36 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(started.ok).toBe(true);
       if (!started.ok) return;
 
+      const instruction = '补充：最后必须带风险清单。\n读取 /workspace/project/AGENTS.md 并核对执行授权。';
       await expect(
         runtime.delegation.messageSessionTask('session-1', started.delegationId, {
           kind: 'message',
-          text: '补充：最后必须带风险清单。',
+          text: instruction,
           idempotencyKey: 'follow-up-1',
         }),
       ).resolves.toMatchObject({ ok: true, queued: true, resumed: false });
+
+      const childClientId = `bot-delegation-interject:${started.delegationId}:follow-up-1`;
+      expect(runtime.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+        targetSessionId: started.childSessionId,
+        clientId: childClientId,
+        message: `[来自 发起方伙伴 的补充]\n\n${instruction}`,
+        persistedContent: `[来自 发起方伙伴 的补充]\n\n${instruction}`,
+      }));
+      const readMessage = (sessionId: string, clientId: string) => h.sqlite!.prepare(
+        'SELECT role, content, agent_meta AS agentMeta FROM messages WHERE session_id = ? AND client_id = ?',
+      ).get(sessionId, clientId) as { role: string; content: string; agentMeta: string };
+      expect(readMessage(started.childSessionId, childClientId).content).toContain(instruction);
+      const trace = readMessage('session-1', `bot-delegation-interject-mirror:${started.delegationId}:follow-up-1`);
+      expect(trace).toMatchObject({ role: 'assistant', content: '' });
+      expect(JSON.parse(trace.agentMeta).botCollaboration.role).toBe('interjection');
+      expect(readMessage('session-1', `bot-delegation-request:${started.delegationId}`).content).toBe('');
+      // Status queries return context to the caller without appending it to the timeline.
+      const timelineBeforeCheck = h.sqlite!.prepare("SELECT * FROM messages WHERE session_id = 'session-1'").all();
+      await expect(runtime.delegation.getSessionTask('session-1', started.delegationId)).resolves.toMatchObject({
+        ok: true, task: { status: 'running', objective: '先整理一版方案。' },
+      });
+      expect(h.sqlite!.prepare("SELECT * FROM messages WHERE session_id = 'session-1'").all()).toEqual(timelineBeforeCheck);
 
       await runtime.runPendingTurns();
       await expect(
@@ -2946,6 +4885,33 @@ describe('Bot Session task end-to-end runtime', () => {
           .get('session-1', `bot-delegation-completion:${delegated.ok ? delegated.delegationId : ''}`),
       ).toContain('三个版本都兼容。');
       expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('preserves an incomplete result in the failed task card and completion receipt', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    try {
+      const delegated = await runtime.delegation.startSessionTask({
+        callerSessionId: 'session-1', objective: '查一下版本兼容矩阵。',
+      });
+      expect(delegated.ok).toBe(true);
+      if (!delegated.ok) throw new Error('Session task did not start');
+      await runtime.delegation.settleSession({
+        childSessionId: delegated.childSessionId, outcome: 'error',
+        resultText: '已确认前两个版本兼容，第三个版本',
+        error: 'Pi reached the model output limit.',
+      });
+      await expect(runtime.delegation.getSessionTask('session-1', delegated.delegationId)).resolves.toMatchObject({
+        ok: true, task: { status: 'failed', result: '已确认前两个版本兼容，第三个版本' },
+      });
+      const receipt = h.sqlite!.prepare(
+        'SELECT content FROM messages WHERE session_id = ? AND client_id = ?',
+      ).pluck().get('session-1', `bot-delegation-completion:${delegated.delegationId}`);
+      expect(receipt).toContain('已确认前两个版本兼容，第三个版本');
+      expect(receipt).toContain('Pi reached the model output limit.');
     } finally {
       runtime.dispose();
     }
@@ -3530,6 +5496,100 @@ describe('Bot Session task end-to-end runtime', () => {
 });
 
 afterAll(() => {
+  resetCustomMcpRegistry();
   h.sqlite?.close();
   rmSync(h.userDataDir, { recursive: true, force: true });
+});
+
+
+describe('Bot self control uses the same profile authority as settings', () => {
+  it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const sessionId = canonical.session.id;
+    const service = createBotCapabilityService(capabilityDeps);
+    const initial = await service.inspect({ callerSessionId: sessionId });
+    expect(initial.ok).toBe(true);
+    if (!initial.ok) throw new Error('Expected current Bot');
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    expect(await service.updateProfile({ callerSessionId: sessionId,
+      expectedVersion: initial.state.profile.version, name: 'Renamed' })).toMatchObject({ ok: true, effective: 'next-turn' });
+    const after = await invoke('local-db:bots:get', 'bot-1');
+    expect(after.name).toBe('Renamed');
+    expect(after.capabilities).toEqual(before.capabilities);
+    expect(after.identitySource).toBe(before.identitySource);
+    expect(after.canonicalSessionId).toBe(before.canonicalSessionId);
+    expect(await service.updateProfile({ callerSessionId: sessionId,
+      expectedVersion: initial.state.profile.version, name: 'Stale' })).toMatchObject({ ok: false });
+    expect(await service.inspect({ callerSessionId: 'not-a-bot' })).toMatchObject({ ok: false });
+    expect((await invoke('local-db:bots:get', 'bot-1')).name).toBe('Renamed');
+  });
+});
+
+
+describe('Teammate model selection shares profile persistence and route reconciliation', () => {
+  async function setupModelControl() {
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const model = { ...h.providers[0]!.models.pi![0]!, id: 'enabled-alternate-model' };
+    h.providers[0]!.models.pi!.push(model);
+    model.efforts = ['low', 'high'];
+    model.defaultEnabled = true;
+    return { sessionId: canonical.session.id as string,
+      service: createBotCapabilityService(capabilityDeps),
+      id: JSON.stringify(['pi', 'xd', model.id]), model };
+  }
+
+  it('saves only its own explicit model chain, applies it through the send resolver, and resets to the live default', async () => {
+    const { service, sessionId, id } = await setupModelControl();
+    await invoke('local-db:bots:create', { id: 'bot-2', name: 'Other teammate', avatar: '🐈' });
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    const other = await invoke('local-db:bots:get', 'bot-2');
+    const appDefault = getSelectedNewMakerRoute(h.ownerScopeKey);
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
+      modelChain: [{ id, effort: 'low', fastMode: false }] })).toMatchObject({ ok: true, effective: 'next-turn' });
+    const after = await invoke('local-db:bots:get', 'bot-1');
+    const chain = await modelSettings.readEffectiveBotModelChain(after.capabilities);
+    expect(chain).toEqual([{ harness: 'pi', providerId: 'xd', model: 'enabled-alternate-model', effort: 'low', fastMode: false }]);
+    expect(after.identitySource).toBe(before.identitySource);
+    expect(after.canonicalSessionId).toBe(sessionId);
+    for (const key of ['skills', 'mcpServers', 'toolsets', 'memory', 'permissions'])
+      expect(after.capabilities[key]).toEqual(before.capabilities[key]);
+    expect(await invoke('local-db:bots:get', 'bot-2')).toEqual(other);
+    expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
+    const apply = vi.fn();
+    // A fresh reconciler models restart; the saved choice, not an ephemeral override, owns the next send.
+    await createBotModelRouteReconciler({ ownerEpoch: () => h.ownerScopeKey,
+      read: async () => ({ chain, current: { agentKind: 'pi', model: 'grok-4.5', providerId: null, effort: 'high', fastMode: false }, hasRuntimeOverride: false }), apply,
+    })(sessionId);
+    expect(apply).toHaveBeenCalledWith(sessionId, expect.objectContaining({ effort: 'low', model: 'enabled-alternate-model' }), expect.anything());
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1, modelChain: null })).toMatchObject({ ok: false });
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 2, modelChain: null })).toMatchObject({ ok: true });
+    const restored = await invoke('local-db:bots:get', 'bot-1');
+    expect(restored.capabilities.modelChainOverride).toBeNull();
+    expect(await modelSettings.readEffectiveBotModelChain(restored.capabilities)).toEqual([appDefault]);
+    const nextDefault = { ...appDefault!, effort: 'low' };
+    setNewMakerDraftCache({ selectedRoute: nextDefault, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, h.ownerScopeKey);
+    expect(await modelSettings.readEffectiveBotModelChain(restored.capabilities)).toEqual([nextDefault]);
+  });
+
+  it.each(['disabled', 'disconnected', 'effort', 'fast', 'duplicate', 'unknown', 'owner', 'foreign'] as const)(
+    'rejects %s selection without changing profile or app defaults', async (kind) => {
+      const { service, sessionId, id, model } = await setupModelControl();
+      const before = await invoke('local-db:bots:get', 'bot-1');
+      const appDefault = getSelectedNewMakerRoute(h.ownerScopeKey);
+      const choice = { id, effort: 'low', fastMode: false };
+      if (kind === 'disabled') model.defaultEnabled = false;
+      if (kind === 'disconnected') h.providers[0]!.connected = false;
+      if (kind === 'effort') choice.effort = 'ultra';
+      if (kind === 'fast') choice.fastMode = true;
+      if (kind === 'unknown') choice.id = 'not-a-route';
+      if (kind === 'owner') h.ownerBoundaryPending = true;
+      const result = await service.updateProfile({ callerSessionId: kind === 'foreign' ? 'ordinary-session' : sessionId,
+        expectedVersion: 1, modelChain: kind === 'duplicate' ? [choice, choice] : [choice] });
+      expect(result).toMatchObject({ ok: false });
+      h.ownerBoundaryPending = false;
+      expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(before);
+      expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
+    });
 });

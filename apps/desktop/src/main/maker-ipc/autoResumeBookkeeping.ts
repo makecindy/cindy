@@ -633,6 +633,37 @@ export class AutoResumeBookkeeping {
     return this.settleOutcome(sessionId, attemptToken, outcome);
   }
 
+  /**
+   * 已落库的隐藏 CONTINUE 无法确认 vendor 是否 accept。把这条续跑记成 failed，
+   * 丢掉原 suppressed error（不再补落、不再恢复 recovery），并回滚守卫 pendingResume。
+   * 终态错误由调用方自己表面；这里不得 requeue、不得把旧中断再弹出来。
+   */
+  abandonUnconfirmedPersistedResume(
+    sessionId: string,
+    attemptToken: number,
+    clientId: string,
+  ): boolean {
+    if (!this.isCurrentAttempt(sessionId, attemptToken)) return false;
+    const pending = this.pendingOutcomes.get(sessionId);
+    const entry = this.suppressedErrors.get(sessionId);
+    if (pending && (pending.clientId !== clientId || pending.attemptToken !== attemptToken)) {
+      return false;
+    }
+    if (entry?.retryOwnerClientId && entry.retryOwnerClientId !== clientId) return false;
+    if (!pending && entry?.retryOwnerClientId !== clientId) return false;
+    const orcaTerminal = entry?.orcaTerminal ?? null;
+    this.settleOutcomeForClient(sessionId, attemptToken, clientId, 'failed');
+    this.discardSuppressedErrorForRetry(sessionId, clientId);
+    this.discardSuppressedError(sessionId, attemptToken);
+    // The unconfirmed send is a product failure. Settle its captured Worker once
+    // without restoring the old error card or replaying the continuation.
+    this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, true);
+    this.deps.rollbackGuardPendingResume(sessionId, attemptToken);
+    this.deps.onAutoResumeFailed?.(sessionId, attemptToken);
+    this.releaseAttemptIfUnowned(sessionId, attemptToken);
+    return true;
+  }
+
   private releaseAttemptIfUnowned(sessionId: string, attemptToken: number): void {
     if (this.currentAttempts.get(sessionId) !== attemptToken) return;
     const pending = this.pendingOutcomes.get(sessionId);
@@ -781,12 +812,24 @@ export class AutoResumeBookkeeping {
   }
 
   /**
+   * Whether the exact attempt still owns a schedule: waiting timer **or**
+   * in-flight callback. Unexpected close during either phase must preserve the
+   * approved continuation-only retry.
+   */
+  hasLiveSchedule(sessionId: string, attemptToken: number): boolean {
+    const scheduled = this.schedules.get(sessionId);
+    return (
+      scheduled?.attemptToken === attemptToken &&
+      this.currentAttempts.get(sessionId) === attemptToken
+    );
+  }
+
+  /**
    * Whether the exact attempt is still waiting for its timer to fire.
    *
-   * `hasSchedule()` intentionally also returns true while the callback is
-   * awaiting DB/coordinator work. Session-close handoff must distinguish that
-   * execution phase from the pre-fire rebuild window; once the timer has fired,
-   * the old Session is no longer safe to preserve.
+   * `hasLiveSchedule()` / `hasSchedule()` also return true while the callback is
+   * awaiting DB/coordinator work. Tests use this narrower check to distinguish
+   * those phases; session-close handoff must not treat timer-fired as cancelled.
    */
   hasWaitingSchedule(sessionId: string, attemptToken: number): boolean {
     const scheduled = this.schedules.get(sessionId);

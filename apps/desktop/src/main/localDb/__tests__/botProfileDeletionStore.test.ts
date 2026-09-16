@@ -1,23 +1,39 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  owner: 'owner-a',
+  root: '',
+  pending: false,
   db: null as ReturnType<typeof drizzle> | null,
   tx: null as null | ((name: string, args: unknown) => Promise<unknown>),
 }));
 
 vi.mock('../client/current.js', () => ({
-  getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
+  getDbClient: () => h,
 }));
 
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => h.owner,
+  ownerScopedUserDataPath: () => path.join(h.root, h.owner),
+  isAppSessionBoundaryPending: () => h.pending,
+}));
+
+import { provisionDefaultBot, withDefaultBotProvisioningLock } from '../../maker-ipc/botDefaultProvisioning.js';
 import { commitBotProfileDeletion } from '../botProfileDeletionStore.js';
 import { tx as runWorkerTx } from '../worker/opHandlers/tx.js';
 
 describe('Bot profile deletion transaction', () => {
   let sqlite: Database.Database;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-deletion-'));
+    h.owner = 'owner-a';
+    h.pending = false;
     sqlite = new Database(':memory:');
     sqlite.exec(`
       PRAGMA foreign_keys = ON;
@@ -73,7 +89,64 @@ describe('Bot profile deletion transaction', () => {
     h.tx = async (name, args) => runWorkerTx(sqlite, { name: name as never, args } as never);
   });
 
-  afterEach(() => sqlite.close());
+  afterEach(async () => { sqlite.close(); await fs.rm(h.root, { recursive: true, force: true }); });
+
+  it('does not mark or delete for an account switched while waiting for the owner lock', async () => {
+    const deletion = { botId: 'bot-1', sessionIds: [], keepTaskHistory: false };
+    const tx = vi.fn(h.tx!);
+    h.tx = tx;
+    let attempt!: Promise<unknown>;
+    // Hold the real lock so the account switch occurs before deletion can write.
+    await withDefaultBotProvisioningLock(path.join(h.root, 'owner-a'), () => {}, async () => {
+      attempt = commitBotProfileDeletion(deletion);
+      h.owner = 'owner-b';
+    });
+    await expect(attempt).rejects.toThrow('Account changed');
+    expect(tx).not.toHaveBeenCalled();
+    for (const owner of ['owner-a', 'owner-b']) {
+      await expect(fs.access(path.join(h.root, owner, 'bots', '.initial-companion'))).rejects.toThrow();
+    }
+  });
+
+  it('keeps initialization from recreating the last teammate during deletion', async () => {
+    let releaseDelete!: () => void;
+    let enteredDelete!: () => void;
+    const deleting = new Promise<void>(resolve => { enteredDelete = resolve; });
+    const release = new Promise<void>(resolve => { releaseDelete = resolve; });
+    const tx = h.tx!;
+    h.tx = async (name, args) => { enteredDelete(); await release; return tx(name, args); };
+    const deletion = commitBotProfileDeletion({ botId: 'bot-1', sessionIds: [], keepTaskHistory: false });
+    await deleting;
+    const create = vi.fn();
+    const history = vi.fn(async () => false);
+    const provision = provisionDefaultBot({ ownerRoot: path.join(h.root, h.owner), assertOwner: () => {}, hasBotHistory: history, create });
+    releaseDelete();
+    await Promise.all([deletion, provision]);
+    expect(create).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+  });
+
+  it('waits for an initialization decision before deleting and never revives afterward', async () => {
+    let enterHistory!: () => void;
+    let releaseHistory!: () => void;
+    const entered = new Promise<void>(resolve => { enterHistory = resolve; });
+    const release = new Promise<void>(resolve => { releaseHistory = resolve; });
+    const create = vi.fn();
+    const input = { ownerRoot: path.join(h.root, h.owner), assertOwner: () => {},
+      hasBotHistory: async () => { enterHistory(); await release; return !!sqlite.prepare("SELECT id FROM bot_profiles WHERE id = 'bot-1'").get(); }, create };
+    const provisioning = provisionDefaultBot(input);
+    await entered;
+    const tx = vi.fn(h.tx!);
+    h.tx = tx;
+    const deletion = commitBotProfileDeletion({ botId: 'bot-1', sessionIds: [], keepTaskHistory: false });
+    // Let deletion reach the file lock while initialization is paused past fs.access.
+    await new Promise(resolve => setTimeout(resolve, 80));
+    expect(tx).not.toHaveBeenCalled();
+    releaseHistory();
+    await Promise.all([provisioning, deletion]);
+    await provisionDefaultBot({ ...input, hasBotHistory: async () => false });
+    expect(create).not.toHaveBeenCalled();
+  });
 
   function snapshot() {
     return Object.fromEntries([

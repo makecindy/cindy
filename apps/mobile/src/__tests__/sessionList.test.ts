@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import { i18n } from '@/i18n';
 import {
   buildSessionMessagePreviewIndex,
@@ -682,3 +683,28 @@ function createLargeSessionFixture(count: number): RemoteSession[] {
     });
   });
 }
+
+it('schedule unread follows desktop: failed/interrupted are urgent, aborted is read', () => {
+  const index = buildSessionScheduleIndex([schedule('auto')], new Map([['auto', [
+    run('failed', 'auto', { sessionId: 's1', status: 'failed' }),
+    run('interrupted', 'auto', { sessionId: 's2', status: 'interrupted' }),
+    run('aborted', 'auto', { sessionId: 's3', status: 'aborted' }),
+    run('seen', 'auto', { sessionId: 's4', status: 'failed', readAt: 1 }),
+  ]]]));
+  expect(index.get('s1')).toMatchObject({ unreadCount: 1, hasUnreadFailedRun: true });
+  expect(index.get('s2')).toMatchObject({ unreadCount: 1, hasUnreadFailedRun: true });
+  expect(index.get('s3')).toMatchObject({ unreadCount: 0, hasUnreadFailedRun: false });
+  expect(index.get('s4')).toMatchObject({ unreadCount: 0, hasUnreadFailedRun: false });
+});
+
+it('collapsed errors open the failed run; expanded headers mirror the latest running row', () => {
+  const older = toRemoteSessionListItem(session('older'));
+  older.liveActivity = { sessionId: 'older', phase: 'error', attention: true, compactDetail: '' };
+  const latest = toRemoteSessionListItem(session('latest', { updatedAt: '2026-01-02T00:00:00.000Z' }));
+  const group = { ...older, automationGroup: {
+    key: 'g', baseKey: 'g', title: 'g', sessionIds: ['older', 'latest'], sessionCount: 2,
+    primarySessionId: 'older', children: [], items: [older, latest],
+  } };
+  expect(resolveMobileSessionRowStatus(group, true)).toEqual({ status: 'error', target: older });
+  expect(resolveMobileSessionRowStatus(group, true, true)).toEqual({ status: 'running', target: latest });
+});

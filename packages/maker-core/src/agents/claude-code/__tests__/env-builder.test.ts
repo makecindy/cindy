@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import type { AuthAdapter, AuthAdapterOptions } from '../../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../../interfaces/runtime-config.js';
 import {
   EXPLORE_INHERIT_CAP_DISABLE_ENV,
@@ -38,6 +38,7 @@ describe('buildClaudeEnv', () => {
   const originalPsOutputRendering = process.env.PSStyle__OutputRendering;
   const originalSubagentModel = process.env.CLAUDE_CODE_SUBAGENT_MODEL;
   const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+  const originalCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
   const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
   const originalExploreInheritCap = process.env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
 
@@ -58,6 +59,7 @@ describe('buildClaudeEnv', () => {
     restore('PSStyle__OutputRendering', originalPsOutputRendering);
     restore('CLAUDE_CODE_SUBAGENT_MODEL', originalSubagentModel);
     restore('CLAUDE_CODE_MAX_CONTEXT_TOKENS', originalMaxContextTokens);
+    restore('CLAUDE_CODE_AUTO_COMPACT_WINDOW', originalCompactWindow);
     restore('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', originalCompactPctOverride);
     restore(EXPLORE_INHERIT_CAP_DISABLE_ENV, originalExploreInheritCap);
   });
@@ -105,6 +107,47 @@ describe('buildClaudeEnv', () => {
 
     expect(getAuthEnv).toHaveBeenCalledWith({ credentialMode: 'gateway-key' });
     expect(env.ANTHROPIC_API_KEY).toBe('key');
+  });
+
+  it.each(['local', 'remote'] as const)('passes the selected subscription account into %s auth', async (mode) => {
+    const getAuthEnv = vi.fn(async (options?: AuthAdapterOptions) => ({
+      CLAUDE_CODE_OAUTH_TOKEN: `test-token-${options?.providerId ?? 'wrong-account'}`,
+    }));
+    const auth = { ...createAuthAdapter(), getAuthEnv };
+    for (const providerId of ['anthropic-a', 'anthropic-b']) {
+      const env = await buildClaudeEnv(auth, {}, {
+        credentialMode: 'provider-oauth', sessionProviderId: providerId, mode,
+      });
+      expect(getAuthEnv).toHaveBeenLastCalledWith({ credentialMode: 'provider-oauth', providerId });
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`test-token-${providerId}`);
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    }
+  });
+
+  it('keeps a remote gateway fallback independent of the selected subscription account', async () => {
+    const getAuthEnv = vi.fn(async (options?: AuthAdapterOptions): Promise<Record<string, string>> =>
+      options?.providerId
+        ? { CLAUDE_CODE_OAUTH_TOKEN: 'test-token-must-not-reach-gateway' }
+        : { ANTHROPIC_API_KEY: 'test-gateway-key' },
+    );
+    const env = await buildClaudeEnv({ ...createAuthAdapter(), getAuthEnv }, {}, {
+      credentialMode: 'gateway-key', sessionProviderId: 'anthropic-a', mode: 'remote',
+    });
+    expect(getAuthEnv).toHaveBeenCalledWith({ credentialMode: 'gateway-key' });
+    expect(env.ANTHROPIC_API_KEY).toBe('test-gateway-key');
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  it('does not inherit another Claude account refresh identity from the parent process', async () => {
+    const previous = process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID;
+    process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID = 'anthropic-parent';
+    try {
+      const env = await buildClaudeEnv(createAuthAdapter({ CLAUDE_CODE_OAUTH_TOKEN: 'test-native-token' }), {});
+      expect(env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID;
+      else process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID = previous;
+    }
   });
 
   it('evaluates function-form behaviorFlags with the spawn route context', async () => {
@@ -329,7 +372,19 @@ describe('buildClaudeEnv', () => {
     });
 
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('372000');
     expect(env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+  });
+
+  it('sets the native working window for a known Claude model and clears inherited windows on reset', async () => {
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '123000';
+    const env = await buildClaudeEnv(createAuthAdapter(), {}, {
+      activeModel: 'claude-opus-4-6[1m]',
+      modelContextWindows: [{ id: 'claude-opus-4-6[1m]', contextWindow: 500_000 }],
+    });
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('500000');
+    const reset = await buildClaudeEnv(createAuthAdapter(), {}, { activeModel: 'unknown' });
+    expect(reset.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
   it('matches a catalog model when the active SDK wire id carries [1m]', async () => {

@@ -154,8 +154,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: ({ onSaved }: { onSaved: () => void }) =>
+vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
+  ProviderConnectionDialog: ({ onSaved }: { onSaved: () => void }) =>
     React.createElement(
       'button',
       { type: 'button', onClick: onSaved },
@@ -288,7 +288,7 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {
-  it('仅免费个人账号在 Cindy AI 模型数量后显示身份标签', async () => {
+  it('仅免费个人账号在 Cindy AI 名称后显示身份标签', async () => {
     modelAccessState.accountTier = 'free';
     renderSection();
 
@@ -296,7 +296,8 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(badge.textContent).toBe('settings.providers.xd.accountTier.free');
     const assetModule = screen.getByTestId('cindy-ai-asset-module');
     expect(assetModule.contains(badge)).toBe(false);
-    expect(badge.previousElementSibling?.textContent).toBe('settings.providers.models.modelCount');
+    expect(badge.previousElementSibling?.textContent).toBe('settings.providers.xd.title');
+    expect(screen.getByTestId('provider-detail-metadata').textContent).not.toContain('settings.providers.models.modelCount');
     expect(screen.getByTestId('provider-detail-metadata').contains(badge)).toBe(true);
 
     cleanup();
@@ -482,7 +483,12 @@ describe('ProvidersSection — 自定义供应商账户用量', () => {
     renderSection();
     await waitFor(() => expect(getProviderAccountUsage).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.editAria' }));
+    // 编辑入口是 DetailHeader 的 editAction，落在「···」菜单里；jsdom 没有 PointerEvent，
+    // 用键盘打开(与上面凭据菜单那条用例同一条路径)。
+    fireEvent.keyDown(await screen.findByLabelText('settings.providers.detail.moreActionsAria'), {
+      key: 'Enter',
+    });
+    fireEvent.click(await screen.findByText('settings.providers.custom.editAria'));
     fireEvent.click(await screen.findByRole('button', { name: 'custom-provider-dialog-save' }));
 
     await waitFor(() => expect(getProviderAccountUsage).toHaveBeenCalledTimes(2));

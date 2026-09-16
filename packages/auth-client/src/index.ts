@@ -7,6 +7,7 @@ export {
   storedAccountMetadataFromMembership,
 } from "./accountMetadata.js";
 export { discoverSsoOrgRealm } from "./orgRealmDiscovery.js";
+export { discoverEmailLogin, discoverPersonalLoginOrganization } from "./emailLoginDiscovery.js";
 export {
   MAX_SSO_ORG_HISTORY_ENTRIES,
   MAX_SSO_ORG_IDENTIFIER_LENGTH,
@@ -56,6 +57,7 @@ export {
   desktopAuthorizationPollSchema,
   loginMethodSchema,
   loginOutcomeSchema,
+  recognizeLoginMethods,
   meResponseSchema,
   membershipSchema,
   providerConfigSchema,

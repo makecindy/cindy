@@ -9,6 +9,14 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+it('auxiliary close overrides do not require the main-window behavior bridge', () => {
+  const close = vi.fn();
+  Object.defineProperty(window, 'electronAPI', { configurable:true, value:{platform:'win32'} });
+  render(<WindowControls onClose={close} />);
+  fireEvent.click(screen.getByRole('button', {name:'titleBar.close'}));
+  expect(close).toHaveBeenCalledOnce();
+});
+
 function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
   let closeBehaviorRequested: (() => void) | null = null;
   const getWindowsCloseBehavior = vi.fn(async () => closeBehavior);

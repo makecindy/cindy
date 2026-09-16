@@ -265,8 +265,41 @@ For device-link network symptoms, collect:
 
 ## Render Storm Forensics And Regression Measurement
 
-背景:2026-07 会话白屏/卡死排查确立的取证与回归测量体系(手机端无落盘日志,
-这套是唯一的量化通道)。触碰 `remoteSessionStore` 订阅链、首页/详情页列表派生
+Release 也可在设置 → 调试 / 开发者打开 Debug 日志，复现后导出。默认关闭；开启后记录
+手机连接恢复、网络变化、错误与堆栈、滚动与键盘几何、渲染计数/解析耗时、JS 停摆。
+不记录聊天正文、完整请求或凭证，不复制被控端任务日志，不捕捉任意 console 或原生日志。
+详细日志最多保留 7 天、8 MiB；每 2 秒及前后台切换时落盘，突然杀进程可能丢失最后一批。
+配置日志服务的构建还可手动上传筛选后的运行摘要（最近 7 天最多 500 条），成功自动复制编号。
+上传摘要不包含详细 Debug 文件，需要详细现场时用导出或开发设备容器读取。
+
+### 从开发版 iPhone 读取历史 Debug 文件
+
+手机与 Mac 配对、开启 Developer Mode 后，可通过 Xcode 设备管理窗口
+（Devices and Simulators）选择对应开发版 App，使用 Download Container。
+在下载的 `.xcappdata` 中查看 `AppData/Documents/cindy-debug/mobile-debug-*.ndjson`。
+记录时不需要连着 Xcode；配对设备通过同网 Wi-Fi 可用时，也可以无线读取。
+这不是任意互联网远程访问，实际权限取决于设备连接、开发签名与系统授权。
+
+也可只拷出日志目录（bundle ID 必须取当前安装的开发版，不猜区域或包名）：
+
+```sh
+xcrun devicectl device copy from \
+  --device '<paired-device-id>' \
+  --domain-type appDataContainer \
+  --domain-identifier '<installed-development-bundle-id>' \
+  --source Documents/cindy-debug \
+  --destination /tmp/cindy-mobile-debug
+```
+
+历史文件不会自动出现在 Xcode 实时 Console；该文件日志不是 Apple Unified Logging。
+日志随 App 容器保存（可能进入系统备份），卸载会删除。尚未开启记录或尚未落盘时目录可能不存在。
+Apple 参考：[配对设备](https://developer.apple.com/documentation/xcode/pairing-your-devices-with-your-mac)、
+[下载容器](https://developer.apple.com/documentation/metal/creating-binary-archives-from-device-built-pipeline-state-objects)。
+
+### 进一步测量
+
+背景:2026-07 会话白屏/卡死排查确立的取证与回归测量体系。
+触碰 `remoteSessionStore` 订阅链、首页/详情页列表派生
 (索引 useMemo、sections、行 memo)、或做相关重构时,改动前后各测一轮对比。
 
 三层信号,从粗到细:

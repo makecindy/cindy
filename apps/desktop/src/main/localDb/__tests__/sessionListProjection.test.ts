@@ -43,6 +43,41 @@ const extractSql = `SELECT ${LIST_PREVIEW_EXTRACT_SQL} AS preview, m.role AS rol
   LIMIT 1`;
 
 describe('session list SQL preview extract', () => {
+  it.each(['```\n# foo\n```', '`---`', '\\*literal\\*'])(
+    'keeps raw Markdown through cache backfill: %s',
+    (markdown) => {
+      const db = openPreviewDb();
+      try {
+        db.prepare('INSERT INTO sessions (id) VALUES (?)').run('s1');
+        db.prepare(
+          'INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+        ).run('m1', 's1', 'assistant', JSON.stringify(markdown), 1);
+        const cold = db.prepare(extractSql).get('s1') as { preview: string; role: string };
+        const display = finalizePlainPreview(cold.preview, cold.role);
+        db.prepare(SESSION_LIST_PROJECTION_BACKFILL_SQL).run(
+          JSON.stringify([{ id: 's1', preview: display }]),
+        );
+        const warm = db
+          .prepare(
+            'SELECT list_preview AS preview, list_preview_role AS role FROM sessions WHERE id = ?',
+          )
+          .get('s1') as { preview: string; role: string };
+        expect(warm.preview).toBe(markdown);
+        expect(finalizePlainPreview(warm.preview, warm.role)).toBe(display);
+        db.prepare(
+          'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
+        ).run('s1');
+        db.prepare(SESSION_LIST_PROJECTION_BACKFILL_SQL).run(JSON.stringify([{ id: 's1' }]));
+        const refreshed = db
+          .prepare('SELECT list_preview FROM sessions WHERE id = ?')
+          .get('s1') as { list_preview: string };
+        expect(refreshed.list_preview).toBe(markdown);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it('extracts user .text and assistant JSON strings without slicing JSON', () => {
     const db = openPreviewDb();
     db.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -224,12 +259,26 @@ describe('session list projection backfill SQL', () => {
     db.prepare(
       `INSERT INTO messages (id, session_id, role, content, created_at)
        VALUES (?, 's1', 'assistant', ?, 2), (?, 's1', 'user', ?, 1), (?, 's2', 'assistant', ?, 1)`,
-    ).run('m1', JSON.stringify('hello'), 'm0', JSON.stringify({ text: 'older' }), 'm2', JSON.stringify('stale'));
+    ).run(
+      'm1',
+      JSON.stringify('hello'),
+      'm0',
+      JSON.stringify({ text: 'older' }),
+      'm2',
+      JSON.stringify('stale'),
+    );
 
     db.prepare(SESSION_LIST_PROJECTION_BACKFILL_SQL).run(
       JSON.stringify([
         { id: 's1', preview: 'stale payload', role: 'user', count: 99, hasPreview: 1, hasCount: 1 },
-        { id: 's2', preview: 'overwrite?', role: 'assistant', count: 9, hasPreview: 1, hasCount: 1 },
+        {
+          id: 's2',
+          preview: 'overwrite?',
+          role: 'assistant',
+          count: 9,
+          hasPreview: 1,
+          hasCount: 1,
+        },
         { id: 's3', preview: 'new preview', role: 'user', count: 99, hasPreview: 1, hasCount: 1 },
       ]),
     );

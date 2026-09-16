@@ -15,6 +15,7 @@ import {
   findCatalogModel,
   isModelSelectableForNewRoute,
   isModelVisible,
+  isLocalOnlyProviderForAgent,
   providerOffersModel,
   providersForAgent,
   sessionModelSupportsFastMode,
@@ -149,18 +150,16 @@ export function isDeviceModelVisible(
   );
 }
 
-/** Whether a provider relies on the local Responses-to-Chat handler for Codex. */
-export function isChatBridgedCodexProvider(provider: ProviderView): boolean {
-  return provider.routing?.codex?.wireProtocol === 'openai-chat';
-}
+export { isLocalOnlyProviderForAgent } from '@cindy/model-providers';
 
+/** Legacy name: the SSH filter covers both local bridges and independent accounts. */
 export function filterChatBridgedCodexProviders(
   providers: ProviderView[],
   agent: AgentKind,
   exclude: boolean,
 ): ProviderView[] {
-  return exclude && agent === 'codex'
-    ? providers.filter((provider) => !isChatBridgedCodexProvider(provider))
+  return exclude
+    ? providers.filter((provider) => !isLocalOnlyProviderForAgent(provider, agent))
     : providers;
 }
 
@@ -260,12 +259,12 @@ export function selectVisibleModels(params: {
   // 普通 subscription-direct 行继续保留,准入由调用方按 isSubscriptionDirectModel
   // 打 disabled。Pi 的 `[1m]` profile 是仅本地可改写的 catalog identity,SSH 侧必须隐藏。
   const pass = (list: ModelDescriptor[]): ModelDescriptor[] => list;
-  const codexDeriveOpts = excludeChatBridgedCodex
-    ? { excludeProvider: isChatBridgedCodexProvider }
+  const deriveOpts = (agent: AgentKind) => excludeChatBridgedCodex
+    ? { excludeProvider: (provider: ProviderView) => isLocalOnlyProviderForAgent(provider, agent) }
     : undefined;
-  const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
-  const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
-  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'))
+  const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code', deriveOpts('claude-code')));
+  const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', deriveOpts('codex')));
+  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi', deriveOpts('pi')))
     .filter((model) => !(
       excludeSubscriptionDirect === true &&
       agentKind === 'pi' &&

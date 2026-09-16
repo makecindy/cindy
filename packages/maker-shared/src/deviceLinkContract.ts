@@ -224,6 +224,8 @@ export interface MobileCodexRateLimitResetOffer {
 
 /** Full read-only Codex quota view plus an optional manually redeemable reset offer. */
 export interface MobileCodexRateLimitsResult {
+  /** Echoed account scope; custom-account clients reject unscoped legacy responses. */
+  providerId?: string;
   account: MobileCodexRateLimitAccount;
   rateLimits: MobileCodexRateLimitSnapshot;
   rateLimitsByLimitId: Record<string, MobileCodexRateLimitSnapshot> | null;
@@ -236,6 +238,7 @@ export interface MobileCodexRateLimitsResult {
 
 /** Stable terminal result for one desktop-issued reset offer. */
 export interface MobileCodexRateLimitResetResult {
+  providerId?: string;
   outcome: 'reset' | 'nothingToReset' | 'noCredit' | 'alreadyRedeemed';
   /** Fresh snapshot when the post-consume read succeeded. */
   rateLimits: MobileCodexRateLimitsResult | null;
@@ -277,6 +280,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // 同一 handler;老被控端 CHANNEL_NOT_ALLOWED → 手机端展示失败提示,不阻塞手动改名)。
   'maker:regenerate-title',
   'local-db:messages:list',
+  'local-db:messages:view',
+  'local-db:messages:work-details',
+  'local-db:messages:view-intent',
   'local-db:messages:around',
   'local-db:messages:around-client-id',
   'maker:send',

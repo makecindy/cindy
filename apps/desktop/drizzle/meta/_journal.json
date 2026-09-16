@@ -729,6 +729,34 @@
       "when": 1788596996011,
       "tag": "0103_bot_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "6",
+      "when": 1788783797334,
+      "tag": "0104_schedule-model-harness",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "6",
+      "when": 1789033649781,
+      "tag": "0105_context_window_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "6",
+      "when": 1789194577226,
+      "tag": "0106_retain_all_recent_workdirs",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "6",
+      "when": 1789354447826,
+      "tag": "0107_sudden_ultron",
+      "breakpoints": true
     }
   ]
 }

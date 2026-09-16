@@ -36,6 +36,7 @@
  *   直到 finally — 那个体验更差, 没有借鉴。
  */
 
+import { CHAT_BODY_CLASS } from './chatChrome';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
@@ -320,7 +321,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           // 导致代码块溢出消息流右边界。加上 min-w-0 让 w-full 真正生效，
           // <pre> 的 overflow-x-auto 才能正常接管横向滚动。
           'w-full min-w-0',
-          'text-15 font-normal leading-[1.6]',
+          CHAT_BODY_CLASS,
           'text-[var(--msg-assistant-text)]',
         )}
       >

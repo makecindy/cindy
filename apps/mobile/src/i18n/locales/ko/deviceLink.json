@@ -1,4 +1,8 @@
 {
+  "cachedHistory": {
+    "title": "컴퓨터 연결 안 됨",
+    "hint": "저장된 내용을 볼 수 있습니다. 더 불러오려면 컴퓨터를 연결하세요."
+  },
   "recovery": {
     "syncing": "동기화 중…",
     "recovered": "복구됨",
@@ -33,7 +37,11 @@
   "unstableTitle": "연결이 반복적으로 끊깁니다",
   "unstableHint": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 앱을 다시 시작해 주세요.",
   "relay": {
-    "label": { "online": "Relay 연결됨", "connecting": "Relay 연결 중", "stopped": "Relay 연결 안 됨" },
+    "label": {
+      "online": "Relay 연결됨",
+      "connecting": "Relay 연결 중",
+      "stopped": "Relay 연결 안 됨"
+    },
     "hint": {
       "online": "원격 작업을 동기화할 수 있습니다.",
       "lastSynced": "마지막 동기화 {{time}}",
@@ -50,7 +58,7 @@
     "default": "{{agent}}을(를) 사용할 수 없습니다. 컴퓨터의 로그인 정보가 유효하지 않습니다. 컴퓨터의 {{appName}}에서 ‘설정 → 모델 제공자’를 열어 다시 로그인하세요. ({{reason}})"
   },
   "remoteError": {
-    "remoteDisabled": "제어 중인 컴퓨터에서 원격 제어를 껐습니다.",
+    "remoteDisabled": "원격 컴퓨터에서 원격 제어를 껐습니다.",
     "channelNotAllowed": "현재 데스크톱 버전은 이 원격 기능을 지원하지 않습니다.",
     "accessRevoked": "이 컴퓨터가 모바일 접근 권한을 취소했습니다.",
     "deviceUnresponsive": "컴퓨터가 응답하지 않습니다. 자동 재시도 중이니 잠시 후 다시 시도하세요.",
@@ -62,7 +70,7 @@
     "accountChanged": "Codex 계정 또는 작업 공간이 변경되었습니다. 할당량을 새로 고친 후 다시 확인하세요.",
     "offerExpired": "Codex 재설정 권한이 만료되었습니다. 할당량을 새로 고친 후 다시 확인하세요.",
     "preconditionFailed": "작업 조건이 변경되었습니다. 새로 고친 후 다시 확인하세요.",
-    "transient": "네트워크 또는 제어 중인 컴퓨터를 일시적으로 사용할 수 없습니다. 나중에 다시 동기화하세요.",
+    "transient": "네트워크 또는 원격 컴퓨터를 일시적으로 사용할 수 없습니다. 나중에 다시 동기화하세요.",
     "callFailed": "원격 호출에 실패했습니다. 나중에 다시 시도하세요. ({{error}})"
   }
 }

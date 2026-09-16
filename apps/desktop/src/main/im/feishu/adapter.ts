@@ -1,3 +1,4 @@
+import { captureImContext } from '../../../shared/imMessageSource';
 /**
  * main/im/feishu/adapter.ts
  * ---------------------------------------------------------------------------
@@ -21,6 +22,7 @@
  *     (飞书有拉历史 API, 不需要 telegram 那样的本地群消息池)。
  */
 
+import { resolveFeishuNotificationReply } from './notificationOrigin';
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
@@ -241,6 +243,12 @@ export function buildFeishuAdapter(
         : '[飞书·群] ';
   return {
     channel: 'feishu',
+    messageSourceIm: () => feishuIm.getService(),
+    resolveNotificationReply: (event) => resolveFeishuNotificationReply(feishuIm, event),
+    notificationReplyText: {
+      unavailable: '暂时无法继续这条通知对应的任务，请在 Cindy 中确认任务仍可用后重试。',
+      commands: '本话题用于继续通知对应的任务。停止请用 !stop；其他命令请在主聊天中操作。',
+    },
     im: feishuIm,
     output: { kind: 'rich-card', im: feishuIm },
     config,
@@ -361,8 +369,10 @@ export function buildFeishuAdapter(
               ...(event.replyContext.isBot ? { isBot: true } : {}),
             }
           : event.replyContext;
+        const replyPrefix = buildFeishuReplyContextBlock(safeReply);
         return {
-          agentText: `${buildFeishuReplyContextBlock(safeReply)}${event.text}`,
+          agentText: `${replyPrefix}${event.text}`,
+          contextSnapshot: captureImContext({ replyPrefix, replyMessageCount: 1 }),
         };
       }
       // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
@@ -393,6 +403,10 @@ export function buildFeishuAdapter(
       if (!built) return null;
       return {
         agentText: `${built.prefix}${event.text}`,
+        contextSnapshot: captureImContext({
+          groupPrefix: built.prefix,
+          groupMessageCount: built.messageCount,
+        }),
         ...(built.contextAttachments.length > 0
           ? { contextAttachments: built.contextAttachments }
           : {}),

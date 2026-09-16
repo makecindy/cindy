@@ -527,8 +527,11 @@ function resolveClaudeAssistantAnchor(
   return undefined;
 }
 
-function resolveCodexTurnAnchor(
-  rows: ForkTimelineMessage[],
+/** resolveCodexTurnAnchor / resolveCodexForkEventTimestamp 只读这几列;rewind 复用同一套边界判定(#4421)。 */
+export type CodexNativeBoundaryRow = Pick<ForkTimelineMessage, 'role' | 'content' | 'agentMeta' | 'createdAt'>;
+
+export function resolveCodexTurnAnchor(
+  rows: CodexNativeBoundaryRow[],
   sourceSdkSessionId: string,
 ): string | undefined {
   let timelineSdkSessionId: string | null = sourceSdkSessionId;
@@ -551,6 +554,21 @@ function resolveCodexTurnAnchor(
     // If that row predates anchors, belongs to a failed turn, or is malformed,
     // fall back for the whole fork instead of silently truncating at an older turn.
     return anchor?.sdkSessionId === sourceSdkSessionId ? anchor.turnId : undefined;
+  }
+  return undefined;
+}
+
+export function resolveCodexForkEventTimestamp(rows: CodexNativeBoundaryRow[]): number | undefined {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i]!;
+    // A new native segment has no event to anchor yet. Never borrow time from
+    // an earlier engine or the host's handoff marker.
+    if (row.role === 'agent_switch' || row.role === 'context_rebuild' || row.role === 'user') return undefined;
+    // Error rows can be backdated to user.createdAt + 1; user persistence may
+    // precede turn/start. Only actual model/tool output proves the turn began.
+    if (['assistant', 'tool_use', 'tool_result', 'thinking'].includes(row.role)) {
+      return row.createdAt;
+    }
   }
   return undefined;
 }
@@ -833,6 +851,7 @@ export async function forkSessionAtMessage(
   const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
   let assistantUuid: string | undefined;
   let lastTurnId: string | undefined;
+  let forkAtTimestampMs: number | undefined;
   let tailTurnsToDrop: number | undefined;
   let claudeAnchorIndex: ClaudeTranscriptAnchorIndex | null = null;
   const resetHandoffBoundaryClientId = findFirstUserAfterSwitchBoundary(
@@ -858,6 +877,7 @@ export async function forkSessionAtMessage(
   } else if (forkSource.reuseVendorSession && forkSource.sdkSessionId) {
     if (isCodex) {
       lastTurnId = resolveCodexTurnAnchor(sourceMessages, forkSource.sdkSessionId);
+      if (!lastTurnId) forkAtTimestampMs = resolveCodexForkEventTimestamp(sourceMessages);
     }
     tailTurnsToDrop = await countCodexTailTurns(
       sourceSessionId,
@@ -890,6 +910,7 @@ export async function forkSessionAtMessage(
         ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
         upToMessageId: assistantUuid,
         ...(lastTurnId ? { lastTurnId } : {}),
+        ...(forkAtTimestampMs !== undefined ? { forkAtTimestampMs } : {}),
         ...(tailTurnsToDrop !== undefined ? { tailTurnsToDrop } : {}),
         title: newTitle,
         workingDir: source.workingDir ?? undefined,
@@ -919,6 +940,8 @@ export async function forkSessionAtMessage(
   }
   const forkContextTokens = normalizePositiveInt(initialContextTokens);
   const forkContextWindow = needsHistoryRecovery ? 0 : normalizePositiveInt(source.contextWindow);
+  const sameContextRoute = forkSource.agentKind === normalizeDbAgentKind(source.agentKind) &&
+    forkSource.model === source.model && forkSource.providerId === source.providerId;
 
   // 5. SQLite 事务：insert 新 session + bulk copy messages
   const now = Date.now();
@@ -961,6 +984,8 @@ export async function forkSessionAtMessage(
         totalCostUsd: 0,
         contextTokens: forkContextTokens,
         contextWindow: forkContextWindow,
+        contextWindowRuntime: sameContextRoute && forkContextWindow > 0 && source.contextWindowRuntime === forkContextWindow
+          ? forkContextWindow : null,
         fastMode: forkSource.agentKind === source.agentKind ? source.fastMode : false,
         clearedAt: null,
         pinnedAt: null,

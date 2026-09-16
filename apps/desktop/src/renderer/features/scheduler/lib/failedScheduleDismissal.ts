@@ -1,15 +1,5 @@
-/** 与数据库最新失败查询一致的快照顺序；已读状态不参与比较。 */
-export interface FailedScheduleRunSnapshot {
-  runId: string;
-  firedAt: number;
-}
-
-export function compareFailedScheduleRuns(
-  a: FailedScheduleRunSnapshot,
-  b: FailedScheduleRunSnapshot,
-): number {
-  return a.firedAt - b.firedAt || (a.runId > b.runId ? 1 : a.runId < b.runId ? -1 : 0);
-}
+import { compareFailedScheduleRuns, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
+export { compareFailedScheduleRuns, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 
 export function failedScheduleDismissalPrefix(ownerId: string, sessionId: string): string {
   return `scheduleFailureDismissal:${JSON.stringify([ownerId, sessionId])}:`;

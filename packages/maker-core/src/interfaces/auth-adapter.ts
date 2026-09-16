@@ -9,7 +9,7 @@
 import type { AuthState } from '../types/common.js';
 
 export type AgentCredentialMode = 'gateway-key' | 'oauth-bearer' | 'provider-oauth';
-export type AgentLoginMode = 'browser' | 'device-code';
+export type AgentLoginMode = 'browser' | 'device-code' | 'local';
 
 export interface AuthLoginOptions {
   mode?: AgentLoginMode;
@@ -76,7 +76,7 @@ export interface AuthAdapter {
    *   实现侧凭它区分「凭证库早已换代(直接返回库值,不消耗刷新轮换)」与「库值就是
    *   失效的那枚(才真正刷新)」—— 防多个长会话对同一枚旧 token 群体 401 时连环旋转。
    */
-  getFreshSubscriptionToken?(staleToken?: string): Promise<string | null>;
+  getFreshSubscriptionToken?(staleToken?: string, providerId?: string): Promise<string | null>;
 
   /**
    * 取消正在进行的登录流程（可选）。
@@ -106,6 +106,7 @@ export interface AuthAdapter {
   invalidate?(
     reason: string,
     context?: {
+      providerId?: string;
       credentialGeneration?: string | null;
       /** The child reported auth failure, but the protocol did not identify its credential. */
       credentialAttribution?: 'unproven';

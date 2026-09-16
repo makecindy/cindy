@@ -60,6 +60,30 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(worktreeAllocation).toBeGreaterThan(validation);
   });
 
+  it.each([['openai', 'codex'], ['anthropic', 'claude']] as const)('marks %s accounts local-only for Pi before SSH worker creation', async (brand, native) => {
+    const builtin = BUNDLED_CATALOG.providers.find((provider) => provider.id === brand)!;
+    const account = { ...builtin, id: 'user-account', auth: { method: 'oauth' as const, native } };
+    const catalog = { ...BUNDLED_CATALOG, providers: [account, builtin] };
+    const routing = await readOrcaWorkerProviderRoutingContext({
+      providerService: {
+        listProviders: vi.fn(async () => buildRegistry(catalog, { [account.id]: true, [brand]: true })),
+      },
+      getCatalog: () => catalog,
+    });
+    expect(routing.availability.pi.find((provider) => provider.id === account.id)?.localOnlyForSsh).toBe(true);
+    const nativeAgent = brand === 'openai' ? 'codex' : 'claude-code';
+    expect(routing.availability[nativeAgent].find((provider) => provider.id === brand)?.localOnlyForSsh).toBe(false);
+  });
+
+  it('rejects SSH account switching before deferring or replacing the running route', () => {
+    const guard = registerSource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
+    expect(guard).toBeGreaterThan(-1);
+    expect(registerSource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
+    expect(registerSource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
+    expect(registerSource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
+    expect(registerSource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
+  });
+
   it('waits for the first Anthropic claim and routes the discovered model from the same full snapshot', async () => {
     const anthropic = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')!;
     const seed = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')!.models[

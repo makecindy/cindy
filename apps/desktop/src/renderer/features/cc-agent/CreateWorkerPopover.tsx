@@ -1,3 +1,4 @@
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -118,6 +119,7 @@ export function CreateWorkerPopover({
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
   const piCaps = useAgentCapabilities('pi', deviceId);
+  const pickerAgents = useModelPickerAgents(agent, deviceId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : localProviders.providers;
@@ -718,22 +720,15 @@ export function CreateWorkerPopover({
           )}
         </div>
 
-        <div className="mb-4 grid grid-cols-[220px_minmax(0,1fr)] gap-4">
-          <div className="min-w-0">
-            <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-              {t('orca.createWorker.agentLabel')}
-            </div>
-            {/* 应用标准 Agent 分段控件(替换此前手写的按钮组;与 New Maker / IM 目录偏好同款,
-                「不自建选择 UI」的组件复用原则)。 */}
+        <div className="mb-4 grid gap-4">
+          {deviceId && remoteProviders.unsupported && (
             <VendorSegmentedSwitcher
               value={vendorKey}
               width={220}
               ariaLabel={t('orca.createWorker.agentLabel')}
-              onChange={(next) =>
-                updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')
-              }
+              onChange={(next) => updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')}
             />
-          </div>
+          )}
 
           <div className="min-w-0">
             <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
@@ -750,6 +745,16 @@ export function CreateWorkerPopover({
                 <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
               )}
               <ModelSelector
+                fastModeConfigurable={['codex', 'pi']}
+                unifiedAgents={sshRemote ? (pickerAgents ?? ['claude-code', 'codex']).filter((kind) => kind !== 'pi') : pickerAgents}
+                onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
+                  const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
+                  updateAgent(nextAgent);
+                  setModel(selection.modelId);
+                  setProviderSource(selection.providerId);
+                  setEffort(selection.effort ?? '');
+                  setFast(selection.fast);
+                }}
                 modelId={model}
                 effort={effort}
                 onModelChange={updateModel}

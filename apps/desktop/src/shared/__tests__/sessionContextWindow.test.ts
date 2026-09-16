@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Catalog, CatalogModel, Provider } from '@cindy/model-providers';
-import { projectSessionContextWindow, resolveSessionContextWindow } from '../sessionContextWindow';
+import { projectSessionContextWindow, resolveSessionContextWindow, resolveVerifiedContextWindow } from '../sessionContextWindow';
+import { shouldRebuildForModelWindowSwitch } from '../../main/maker-ipc/contextOverflowRollover';
 
 const model: CatalogModel = {
   id: 'gpt-6-astra',
@@ -31,18 +32,65 @@ const session = {
 const catalog: Pick<Catalog, 'providers'> = { providers: [provider('openai')] };
 
 describe('session context read projection', () => {
-  it.each(['cc', 'claude-code'])(
-    'corrects %s history without mutating its stored snapshot',
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s history protection bounded when the budget exceeds capacity', (agent) => {
+    const routes = { providers: [provider('local', { ...model, contextWindow: 128_000 })] };
+    const target = resolveVerifiedContextWindow(routes, agent, 'local', model.id, 1_000_000);
+    expect(target).toBe(128_000);
+    expect(shouldRebuildForModelWindowSwitch({
+      contextTokens: 200_000, currentContextWindow: 272_000, targetContextWindow: target!,
+    })).toBe(true);
+    expect(resolveVerifiedContextWindow(routes, agent, 'local', model.id, 100_000)).toBe(100_000);
+    expect(resolveVerifiedContextWindow(routes, agent, 'local', model.id)).toBe(128_000);
+    expect(routes.providers[0].models[agent]?.[0].contextWindow).toBe(128_000);
+    expect(resolveVerifiedContextWindow(routes, agent, 'missing', model.id, 1_000_000)).toBeNull();
+    const unverified = { providers: [provider('local', { ...model, contextWindowVerified: false })] };
+    expect(resolveVerifiedContextWindow(unverified, agent, 'local', model.id, 1_000_000)).toBeNull();
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('allows %s explicit budgets above the default up to the verified maximum', (agent) => {
+    const routes = { providers: [provider('xd', { ...model, contextWindow: 272_000, contextWindowMax: 1_000_000 })] };
+    for (const budget of [100_000, 800_000, 1_000_000]) {
+      expect(resolveVerifiedContextWindow(routes, agent, 'xd', model.id, budget)).toBe(budget);
+    }
+    expect(resolveVerifiedContextWindow(routes, agent, 'xd', model.id, 2_000_000)).toBe(1_000_000);
+    const raised = resolveVerifiedContextWindow(routes, agent, 'xd', model.id, 1_000_000)!;
+    expect(shouldRebuildForModelWindowSwitch({
+      contextTokens: 700_000, currentContextWindow: 800_000, targetContextWindow: raised,
+    })).toBe(false);
+    const reset = resolveVerifiedContextWindow(routes, agent, 'xd', model.id, null)!;
+    expect(reset).toBe(272_000);
+    expect(shouldRebuildForModelWindowSwitch({
+      contextTokens: 700_000, currentContextWindow: raised, targetContextWindow: reset,
+    })).toBe(true);
+    const unverified = { providers: [provider('xd', { ...model, contextWindowMax: 1_000_000, contextWindowVerified: false })] };
+    expect(resolveVerifiedContextWindow(unverified, agent, 'xd', model.id, 1_000_000)).toBeNull();
+  });
+
+  it.each([undefined, 0, -1, NaN, Infinity])('falls back to the verified window for invalid maximum %s', (contextWindowMax) => {
+    const routes = { providers: [provider('xd', { ...model, contextWindowMax })] };
+    expect(resolveVerifiedContextWindow(routes, 'codex', 'xd', model.id, 1_000_000)).toBe(272_000);
+  });
+
+  it.each(['cc', 'claude-code', 'pi', 'codex'])(
+    'preserves the applied %s history budget when catalog or settings change',
     (agentKind) => {
-      const saved = { ...session, agentKind };
-      const result = projectSessionContextWindow(saved, (row) =>
-        resolveSessionContextWindow(catalog, row),
-      );
-      expect(result).toEqual({ ...saved, contextWindow: 272_000 });
-      expect(saved.contextWindow).toBe(1_050_000);
-      expect(Math.round((result.contextTokens / result.contextWindow) * 100)).toBe(52);
+      for (const contextWindow of [1_000, 32_000, 500_000, 1_050_000]) {
+        const saved = { ...session, agentKind, contextWindow, contextWindowRuntime: contextWindow };
+        expect(projectSessionContextWindow(saved, () => 272_000)).toBe(saved);
+      }
+      const unknown = { ...session, agentKind, contextWindow: 0 };
+      expect(projectSessionContextWindow(unknown, () => 32_000))
+        .toEqual({ ...unknown, contextWindow: 32_000 });
     },
   );
+
+  it.each([undefined, null, 500_000])('corrects unproven legacy windows with runtime marker %s', (contextWindowRuntime) => {
+    const legacy = { ...session, contextWindowRuntime };
+    expect(projectSessionContextWindow(legacy, (row) => resolveSessionContextWindow(catalog, row)))
+      .toEqual({ ...legacy, contextWindow: 272_000 });
+    expect(legacy.contextWindow).toBe(1_050_000);
+    expect(projectSessionContextWindow(legacy, () => null)).toBe(legacy);
+  });
 
   it('uses the actual provider, preserving explicit long-window overrides', () => {
     const routes = {

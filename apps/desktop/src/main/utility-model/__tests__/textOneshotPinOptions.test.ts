@@ -473,3 +473,14 @@ describe('resolveOneshotCatalogModel', () => {
     expect(resolveOneshotCatalogModel(catalog, undefined, 'gpt-retired')).toBeNull();
   });
 });
+
+it.each(['claude', 'xai', 'codex'] as const)('lists an independent %s account using its own pin identity', (native) => {
+  const p = provider({ id: `${native}-work`, source: 'user', agents: ['codex'],
+    auth: { method: 'oauth', native },
+    routing: { codex: { upstream: 'https://account.example/v1', authStrategy: 'provider-oauth-header' } },
+    models: { codex: [chat('gpt-5.5', { mode: 'chat' })] } });
+  expect(buildTextOneshotPinOptions(catalogOf(p), undefined)).toEqual([
+    expect.objectContaining({ providerId: p.id, id: encodeCatalogPin(p.id, 'codex', 'gpt-5.5') }),
+  ]);
+  expect(buildTextOneshotPinOptions(catalogOf({ ...p, routing: { codex: { ...p.routing.codex!, disabled: true } } }), undefined)).toEqual([]);
+});

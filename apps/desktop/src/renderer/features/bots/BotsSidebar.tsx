@@ -1,6 +1,8 @@
+import { botRosterLabel } from '../../../shared/botCreation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
   Bot,
   Copy,
   Eye,
@@ -9,7 +11,7 @@ import {
   Search,
   Trash2,
 } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
@@ -25,8 +27,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
+import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
+import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { useRemoteBots } from './useRemoteBots';
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
@@ -65,8 +69,10 @@ const UNREAD_BADGE_CLASS =
   'flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 font-medium tabular-nums leading-none text-[var(--bot-unread-fg)]';
 
 function BotsSidebarContent() {
+  const { navigateToView } = useActiveMainView();
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { botId, sessionId, deviceId } = useParams();
   const remoteBots = useRemoteBots();
   const bots = useBotProfiles();
@@ -247,14 +253,14 @@ function BotsSidebarContent() {
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-2 px-2 pt-3">
-        <button
-          type="button"
-          onClick={() => navigate('/bots')}
-          className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover"
-          aria-label={t('bots.title')}
-        >
-          <Bot size={16} />
-        </button>
+        {(pathname === '/bots' || pathname.startsWith('/bots/')) && (
+          <SidebarIconButton
+            icon={ArrowLeft}
+            label={t('sidebar.backToSessions')}
+            variant="rail"
+            onClick={() => navigateToView('cc-agent')}
+          />
+        )}
         <BotCreateMenu compact />
       </div>
     );
@@ -403,9 +409,9 @@ function BotsSidebarContent() {
                             'min-w-0 flex-1 truncate text-14 leading-5',
                             unread > 0 ? 'font-medium' : 'font-normal',
                           )}
-                          title={bot.name}
+                          title={botRosterLabel(bot, bots)}
                         >
-                          {bot.name}
+                          {botRosterLabel(bot, bots)}
                         </span>
                         {/* 权限模式仍不在聊天列表挂警告；这里仅显示 Hermes 风格、
                             已持久化且需要用户处理的运行失败。 */}
@@ -508,17 +514,21 @@ function BotsSidebarContent() {
                         <EyeOff size={14} className="mr-2" />
                         {t('bots.list.hide')}
                       </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onSelect={() => {
-                          void duplicateBotProfile(bot.id).then((copy) =>
-                            navigate(`/bots/${copy.id}`),
-                          );
-                        }}
-                      >
-                        <Copy size={14} className="mr-2" />
-                        {t('bots.list.duplicate')}
-                      </DropdownMenuItem>
+                      {bot.templateId !== 'cindy' && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              void duplicateBotProfile(bot.id).then((copy) =>
+                                navigate(`/bots/${copy.id}`),
+                              );
+                            }}
+                          >
+                            <Copy size={14} className="mr-2" />
+                            {t('bots.list.duplicate')}
+                          </DropdownMenuItem>
+                        </>
+                      )}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
@@ -556,7 +566,7 @@ function BotsSidebarContent() {
                         >
                           <BotAvatar bot={bot} size="sm" />
                           <span className="min-w-0 flex-1 truncate text-13 font-medium">
-                            {bot.name}
+                            {botRosterLabel(bot, bots)}
                           </span>
                         </button>
                         <button
@@ -606,9 +616,9 @@ function BotsSidebarContent() {
                         <BotAvatar bot={bot} size="sm" className="opacity-70" />
                         <span
                           className="min-w-0 flex-1 truncate text-13 font-medium"
-                          title={bot.name}
+                          title={botRosterLabel(bot, bots)}
                         >
-                          {bot.name}
+                          {botRosterLabel(bot, bots)}
                         </span>
                       </button>
                       <button

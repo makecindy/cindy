@@ -13,6 +13,7 @@ import {
   iconSize,
   iconStroke,
   spacing,
+  radius,
   typeScale,
 } from '@/theme/tokens';
 import type { DeviceManagementListProps } from './DeviceManagementList.types';
@@ -86,7 +87,7 @@ function DeviceRow({
         <Monitor
           size={iconSize.md}
           strokeWidth={iconStroke.regular}
-          color={row.device.online ? colors.statusReady : colors.textSecondary}
+          color={colors.textSecondary}
         />
         <View style={styles.labels}>
           <Text
@@ -102,9 +103,17 @@ function DeviceRow({
           >
             {row.device.name}
           </Text>
-          <Text style={{ color: colors.textSecondary }}>
-            {row.statusLabel} · {row.statusDetail}
-          </Text>
+          <View style={styles.status}>
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: row.device.online ? colors.statusReady : colors.textTertiary },
+              ]}
+            />
+            <Text style={{ color: colors.textSecondary, flexShrink: 1 }}>
+              {row.statusLabel} · {row.statusDetail}
+            </Text>
+          </View>
         </View>
       </Pressable>
     </ClassicSwipeable>
@@ -120,6 +129,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   labels: { flex: 1, gap: spacing.xs },
+  status: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  statusDot: { width: 6, height: 6, borderRadius: radius.pill, flexShrink: 0 },
   action: {
     minWidth: 88,
     minHeight: 44,

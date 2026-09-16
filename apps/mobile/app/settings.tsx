@@ -1,3 +1,5 @@
+import { diagnosticUploadConfigured, uploadMobileDiagnostics } from '@/debug/mobileDiagnosticUpload';
+import { clearDiagnostics, diagnosticsEnabled, exportDiagnostics, hydrateDiagnostics, setDiagnosticsEnabled } from '@/debug/localDiagnostics';
 import Constants from 'expo-constants';
 import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
@@ -19,7 +21,7 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronDown, ChevronRight, X } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, Ellipsis, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { DeviceView } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
@@ -139,6 +141,48 @@ export default function SettingsScreen() {
   const { lastPresenceSnapshot, status, invoke } = useDeviceLink();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [localLogsEnabled, setLocalLogsEnabled] = useState(false);
+  const [localLogsReady, setLocalLogsReady] = useState(false);
+  const [localLogsBusy, setLocalLogsBusy] = useState(false);
+  const [localLogsConsent, setLocalLogsConsent] = useState(false);
+  const [localLogUploadMessage, setLocalLogUploadMessage] = useState<string | null>(null);
+  const localLogsLock = useRef(false);
+  useEffect(() => {
+    let mounted = true;
+    void hydrateDiagnostics().then(() => {
+      if (mounted) {
+        setLocalLogsEnabled(diagnosticsEnabled());
+        setLocalLogsReady(true);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  const runLocalLogAction = async (action: () => Promise<void>) => {
+    if (localLogsLock.current) return;
+    localLogsLock.current = true;
+    setLocalLogsBusy(true);
+    try {
+      await action();
+    } catch {
+      Alert.alert(
+        t('settings.localLogs.title'),
+        t('settings.localLogs.failed'),
+      );
+    } finally {
+      setLocalLogsEnabled(diagnosticsEnabled());
+      setLocalLogsBusy(false);
+      localLogsLock.current = false;
+    }
+  };
+  const handleLocalLogOption = (id: string) => {
+    if (!localLogsReady || localLogsBusy) return;
+    if (id === 'clear') Alert.alert(t('settings.localLogs.clear'), t('settings.localLogs.clearHint'), [
+      { text: t('settings.localLogs.cancel'), style: 'cancel' },
+      { text: t('settings.localLogs.clear'), style: 'destructive', onPress: () => void runLocalLogAction(clearDiagnostics) },
+    ]);
+  };
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
@@ -673,6 +717,7 @@ export default function SettingsScreen() {
     const sync = () => {
       if (cancelled) return;
       const snapshot = getAnalyticsConsentState();
+      setLocalLogsConsent(snapshot.consent);
       setAnalyticsEnabledState(snapshot.enabled);
       setAnalyticsCustomized(snapshot.enabledCustomized);
     };
@@ -1128,6 +1173,82 @@ export default function SettingsScreen() {
           >
             {debugExpanded
               ? [
+                  <View
+                    key="local-logs-toggle"
+                    style={styles.switchRow}
+                    testID="settings.localLogs"
+                  >
+                    <View style={styles.switchTexts}>
+                      <Text style={styles.rowLabel}>
+                        {t('settings.localLogs.title')}
+                      </Text>
+                      <Text style={styles.hint}>
+                        {t('settings.localLogs.hint')}
+                      </Text>
+                    </View>
+                    <NativeSwitch
+                      accessibilityLabel={t('settings.localLogs.record')}
+                      disabled={!localLogsReady || localLogsBusy}
+                      value={localLogsEnabled}
+                      seedColor={colors.inputCaret}
+                      onValueChange={(value) =>
+                        void runLocalLogAction(() =>
+                          setDiagnosticsEnabled(value),
+                        )
+                      }
+                    />
+                    <NativePullDownMenu
+                      actions={[
+                        { id: 'clear', title: t('settings.localLogs.clear'), destructive: true, disabled: !localLogsReady || localLogsBusy },
+                      ]}
+                      onAction={handleLocalLogOption}
+                    >
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={t('settings.localLogs.options')}
+                        disabled={!localLogsReady || localLogsBusy}
+                        style={styles.localLogOptions}
+                        onPress={usesNativePullDownMenu() ? undefined : () => Alert.alert(t('settings.localLogs.options'), undefined, [
+                          { text: t('settings.localLogs.clear'), style: 'destructive', onPress: () => handleLocalLogOption('clear') },
+                          { text: t('settings.localLogs.cancel'), style: 'cancel' },
+                        ])}
+                      >
+                        <Ellipsis color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+                      </Pressable>
+                    </NativePullDownMenu>
+                  </View>,
+                  <ActionInfoRow
+                    key="local-logs-export"
+                    accessibilityLabel={t('settings.localLogs.export')}
+                    label={t('settings.localLogs.export')}
+                    detail={t('settings.localLogs.exportHint')}
+                    disabled={!localLogsReady || localLogsBusy}
+                    value={localLogsBusy ? t('settings.localLogs.busy') : ''}
+                    onPress={() => void runLocalLogAction(exportDiagnostics)}
+                  />,
+                  <ActionInfoRow
+                    key="local-logs-upload"
+                    accessibilityLabel={t('settings.localLogs.upload')}
+                    label={t('settings.localLogs.upload')}
+                    disabled={!localLogsReady || localLogsBusy || !diagnosticUploadConfigured() || !localLogsConsent}
+                    detail={!diagnosticUploadConfigured()
+                      ? t('settings.localLogs.uploadResult.unavailable')
+                      : !localLogsConsent ? t('settings.localLogs.uploadResult.consentRequired')
+                      : localLogUploadMessage ?? t('settings.localLogs.uploadHint')}
+                    value={
+                      localLogsBusy ? t('settings.localLogs.busy') : ''
+                    }
+                    onPress={() =>
+                      void runLocalLogAction(async () => {
+                        const result = await uploadMobileDiagnostics();
+                        if (result.kind === 'uploaded') {
+                          let copied = false;
+                          try { await Clipboard.setStringAsync(result.uploadCode); copied = true; } catch { /* upload already succeeded */ }
+                          setLocalLogUploadMessage(t(copied ? 'settings.localLogs.uploadCopied' : 'settings.localLogs.uploadSucceeded', { code: result.uploadCode }));
+                        } else setLocalLogUploadMessage(t(`settings.localLogs.uploadResult.${result.kind}`));
+                      })
+                    }
+                  />,
                 ...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED
                   ? [
                       <ActionInfoRow
@@ -1425,6 +1546,7 @@ function ActionInfoRow({
   accessibilityLabel,
   accessibilityRole = 'button',
   detail,
+  disabled = false,
   label,
   onPress,
   testID,
@@ -1433,6 +1555,7 @@ function ActionInfoRow({
   accessibilityLabel: string;
   accessibilityRole?: 'button' | 'link';
   detail?: string;
+  disabled?: boolean;
   label: string;
   onPress(): void;
   testID?: string;
@@ -1444,8 +1567,10 @@ function ActionInfoRow({
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={accessibilityRole}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.row, (pressed || disabled) && styles.pressed]}
       testID={testID}
     >
       <View style={styles.rowLine}>
@@ -1747,6 +1872,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   rowLabel: { color: colors.textSecondary, flexShrink: 0, fontSize: typeScale.code },
   rowValue: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code, textAlign: 'right' },
   rowDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  localLogOptions: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   switchRow: {
     alignItems: 'center',
     flexDirection: 'row',

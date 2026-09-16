@@ -29,10 +29,12 @@ function StatCell({
 }): React.JSX.Element {
   const cell = (
     <div className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg bg-[var(--surface-chip)] px-3 py-2">
-      <span className="truncate text-14 font-semibold leading-[1.429] tabular-nums text-[var(--text-primary)]">
+      <span className="break-words text-16 font-medium leading-[1.4] tabular-nums text-[var(--text-primary)]">
         {value}
       </span>
-      <span className="truncate text-11 leading-[1.273] text-[var(--text-tertiary)]">{label}</span>
+      <span className="mt-auto break-words text-12 leading-[1.5] text-[var(--text-secondary)]">
+        {label}
+      </span>
     </div>
   );
   return tip ? <Tip text={tip}>{cell}</Tip> : cell;

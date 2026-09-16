@@ -146,24 +146,34 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
 
   const passed = isPassingScanStatus(result.status);
   const pendingManualReview = isPendingManualReviewStatus(result.status);
+  const rejected = result.status === 'rejected';
+  const rejectionReason = rejected && typeof result.rejectionReason === 'string'
+    ? result.rejectionReason.trim()
+    : '';
   const failedGates = (result.gates ?? []).filter((g) => !isPassingScanStatus(g.status));
   const processingFailure =
     !passed && !pendingManualReview && isPublicationProcessingFailure(result.gates);
-  const title = passed
-    ? t('skillhub.scanResult.passedTitle')
-    : pendingManualReview
-      ? t('skillhub.scanResult.pendingTitle')
-      : processingFailure
-        ? t('skillhub.scanResult.processingFailedTitle')
-        : t('skillhub.scanResult.failedTitle', { status: result.status });
+  const title = rejected
+    ? t('skillhub.scanResult.rejectedTitle')
+    : passed
+      ? t('skillhub.scanResult.passedTitle')
+      : pendingManualReview
+        ? t('skillhub.scanResult.pendingTitle')
+        : processingFailure
+          ? t('skillhub.scanResult.processingFailedTitle')
+          : t('skillhub.scanResult.failedTitle', { status: result.status });
   const statusLabel = scanStatusLabel(result.status, t);
-  const description = passed
-    ? t('skillhub.scanResult.passedDesc')
-    : pendingManualReview
-      ? t('skillhub.scanResult.pendingDesc')
-      : processingFailure
-        ? t('skillhub.scanResult.processingFailedDesc')
-        : t('skillhub.scanResult.failedDesc', { status: statusLabel });
+  const description = rejected
+    ? t(rejectionReason
+      ? 'skillhub.scanResult.rejectedDesc'
+      : 'skillhub.scanResult.rejectionReasonUnavailable')
+    : passed
+      ? t('skillhub.scanResult.passedDesc')
+      : pendingManualReview
+        ? t('skillhub.scanResult.pendingDesc')
+        : processingFailure
+          ? t('skillhub.scanResult.processingFailedDesc')
+          : t('skillhub.scanResult.failedDesc', { status: statusLabel });
   const footerButtonBaseClass = cn(
     'inline-flex h-9 min-w-[104px] items-center justify-center gap-1.5 rounded-full px-5',
     'text-sm font-medium leading-none',
@@ -177,6 +187,9 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
       `${t('skillhub.scanResult.copyText.status')}: ${withRawCode(statusLabel, result?.status)}`,
       `${t('skillhub.scanResult.copyText.summary')}: ${description}`,
     ];
+    if (rejectionReason) {
+      lines.push('', t('skillhub.scanResult.rejectionReason'), rejectionReason);
+    }
 
     if (gatesToCopy.length > 0) {
       lines.push('', `${t('skillhub.scanResult.copyText.gates')}:`);
@@ -255,9 +268,19 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
             </p>
           </div>
 
-          {/* Gates list */}
-          {result.gates && result.gates.length > 0 && (
-            <div className="flex-1 overflow-y-auto px-6 pb-2">
+          {/* Review feedback stays scrollable, including long manual reasons with no failed scan gates. */}
+          {(rejectionReason || failedGates.length > 0) && (
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-2">
+              {rejectionReason && (
+                <section className="mb-3 select-text rounded-xl border border-[var(--error-border)] bg-[var(--error-bg)] p-3">
+                  <h3 className="text-sm font-medium text-[var(--text-primary)]">
+                    {t('skillhub.scanResult.rejectionReason')}
+                  </h3>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text-secondary)]">
+                    {rejectionReason}
+                  </p>
+                </section>
+              )}
               {/* Failed gates with details */}
               {failedGates.length > 0 && (
                 <div className="flex flex-col gap-2">

@@ -3,6 +3,7 @@ import type {
   CapabilityRoutingPolicy,
 } from '../../types/capability-routing.js';
 import type { BotRuntimeMcpPolicy, BotRuntimeSkillPolicy } from '../base-agent.js';
+import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 
 const CODEX_HARNESS_ID = 'codex';
 
@@ -74,16 +75,12 @@ export function buildCodexBotMcpConfigOverrides(
   transportServerNames: ReadonlySet<string>,
 ): Record<string, unknown> {
   if (!policy || policy.mode !== 'allowlist') return {};
-  const allowed = new Set(policy.configured.map((item) => item.trim()));
   const result: Record<string, unknown> = {};
-  const catalog = new Map(policy.catalog.map((item) => [item.name, item]));
   // Codex parses transport before enabled. Never synthesize disabled-only
   // entries for absent servers: even `enabled=false` makes thread/start fail.
   for (const name of transportServerNames) {
-    const essential = name === 'cindy_memory' || name === 'cindy_helper';
-    const broadGateway = ['cindy', 'cindy_group_history', 'cindy_orca'].includes(name);
-    const selected = catalog.get(name)?.available !== false && allowed.has(name);
-    if (!broadGateway && (essential || selected)) continue;
+    const restricted = ['cindy_group_history', 'cindy_orca'].includes(name);
+    if (!restricted && isBotMcpServerAllowed(policy, name)) continue;
     result[`mcp_servers.${renderThreadConfigKeySegment(name)}.enabled`] = false;
   }
   return result;

@@ -148,6 +148,30 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(result).toEqual({ status: 200, text: JSON.stringify({ ok: true }) });
   });
 
+  it('reports a refused loopback upstream as "nothing is listening" with a stable code (#4100)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    const port = Number(new URL(upstream.url).port);
+    // 上游先关掉:自定义供应商指向的本地代理 / SSH 隧道没起来,端口无监听。
+    await upstream.close();
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const result = await post(proxy.url, { model: 'test-model' });
+    expect(result.status).toBe(502);
+    const json = JSON.parse(result.text) as { error: { type: string; code?: string; message: string } };
+    expect(json.error.type).toBe('proxy_error');
+    expect(json.error.code).toBe('upstream_loopback_refused');
+    expect(json.error.message).toMatch(new RegExp(`connect ECONNREFUSED 127\\.0\\.0\\.1:${port}`));
+    expect(json.error.message).toMatch(/nothing is listening on that local port/);
+    expect(json.error.message).toMatch(/local proxy or an SSH tunnel/);
+  });
+
   it('pipes successful response bodies through a request-scoped transform', async () => {
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       const payload = '{"source":"upstream"}';

@@ -386,6 +386,15 @@ export function buildRouteDecision(
       };
       const decision: RoutingDecision = { headerOverride };
       if (routing.upstream) decision.upstreamOverride = routing.upstream;
+      // Copilot assigns personal/business/enterprise API hosts in its inference token.
+      // Follow that assignment only for the official preset and official Copilot hosts.
+      if (routing.upstream && oauthToken) {
+        const upstream = new URL(routing.upstream);
+        if (upstream.protocol === 'https:' && upstream.hostname === 'api.individual.githubcopilot.com') {
+          const host = oauthToken.match(/(?:^|;)proxy-ep=(proxy\.(?:individual|business|enterprise)\.githubcopilot\.com)(?:;|$)/)?.[1];
+          if (host) { upstream.hostname = host.replace(/^proxy\./, 'api.'); decision.upstreamOverride = upstream.toString().replace(/\/$/, ''); }
+        }
+      }
       // cc 子进程可能带 x-api-key（gateway-spawn 的网关 key）——发往 OAuth 上游必须抹掉，
       // 防泄漏 + 防按 x-api-key 优先鉴权的端点拿错钥匙。合并描述符自带的 headerDelete。
       const del = new Set(routing.headerDelete ?? []);
@@ -942,7 +951,7 @@ function implicitBridgeWire(
 function hasImplicitLocalBridgeCandidate(modelId: string, agent: AgentKind): boolean {
   return providersForModel(modelId, agent).some((provider) => {
     const wire = implicitBridgeWire(providerRoutingForModel(provider, agent, modelId), agent);
-    return wire === 'openai-chat' || wire === 'anthropic-messages';
+    return wire === 'openai-chat' || wire === 'anthropic-messages' || wire === 'google-generative-ai' || (agent === 'claude-code' && wire === 'openai-responses');
   });
 }
 
@@ -981,7 +990,7 @@ export async function resolveImplicitLocalBridgeRouteResolution(
   if (source.kind !== 'provider') return source;
   const routing = providerRoutingForModel(source.provider, agent, modelId);
   const wire = implicitBridgeWire(routing, agent);
-  if (wire !== 'openai-chat' && wire !== 'anthropic-messages') {
+  if (wire !== 'openai-chat' && wire !== 'anthropic-messages' && wire !== 'google-generative-ai' && !(agent === 'claude-code' && wire === 'openai-responses')) {
     return { kind: 'none' };
   }
   const route = await resolveProviderRouteById(source.provider.id, agent, modelId);
@@ -1227,6 +1236,8 @@ export function resolveVisionBackendRoute(
   // Claude/Codex 保留各自原生前门的历史缺省；Pi 是后来加入的自适应 runtime，
   // 缺声明不能猜成 Chat，否则视觉工具会把图片与凭证发往错误协议端点。
   if (agent === 'pi' && routing.wireProtocol === undefined) return null;
+  // This HTTP-only helper has no Google serializer; native Pi handles images itself.
+  if (routing.wireProtocol === 'google-generative-ai') return null;
   const wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat' =
     routing.wireProtocol ??
     (agent === 'claude-code'

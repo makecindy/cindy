@@ -189,7 +189,7 @@ export interface LocalSkillEntry {
   version: string | null;
   absolutePath: string;
   /** 该本地 skill 是否有 registry 记录（registryEntry !== null）。
-      false = 用户手写的本地 skill，从未与市场交互，不允许卸载。 */
+      false = 用户手写的本地 skill，从未与市场交互。卸载能力由本地扫描决定。 */
   hasRegistryEntry: boolean;
 }
 
@@ -699,7 +699,7 @@ export function useCategoryList(scope: SkillhubCatalogScope = 'market'): Categor
       new Map<SkillhubCatalogScope, Promise<CategoryListState>>();
     if (!inflightCategories.has(owner)) inflightCategories.set(owner, ownerInflight);
     const existing = ownerInflight.get(scope);
-    const inflight = existing ?? window.electronAPI.skillhub.listCategories({ scope })
+    const inflight = existing ?? window.electronAPI.skillhub.listCategories({ scope, includeEmpty: false })
       .then((res) => (res.success
         ? { categories: res.categories ?? [], totalCount: res.totalCount ?? 0, myTotalCount: res.myTotalCount ?? 0 }
         : EMPTY_CATEGORY_STATE))

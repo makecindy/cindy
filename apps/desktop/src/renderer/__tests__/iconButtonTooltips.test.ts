@@ -289,6 +289,13 @@ describe('icon-only button tooltip coverage', () => {
     expect(chromeActions).toContain('aria-label={sidebarToggleLabel}');
     expect(menuButton).toContain("import { Tip } from '@/components/ui/tooltip';");
     expect(menuButton).toContain("text={t('titleBar.menu')}");
+    expect(menuButton).toContain('const [menuOpen, setMenuOpen] = useState(false)');
+    expect(menuButton).toContain(
+      '<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>',
+    );
+    expect(menuButton).toContain(
+      '<Tip text={t(\'titleBar.menu\')} side="bottom" controlledOpen={menuOpen ? false : undefined}>',
+    );
   });
 
   it('keeps Windows system window controls accessible without visible tips', () => {

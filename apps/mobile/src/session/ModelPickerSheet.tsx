@@ -80,6 +80,8 @@ export interface ModelPickerSheetProps {
   flatOptions: readonly MobileModelOption[];
   /** A successfully loaded empty catalog must not revive cached capability rows. */
   providersReady?: boolean;
+  /** True only when the host explicitly lacks provider:list. */
+  providersUnsupported?: boolean;
   agentKind: AgentKind;
   /** 已建会话可选：先浏览 Agent，再选模型登记下一条消息的切换意图。 */
   agentSwitch?: {
@@ -131,6 +133,7 @@ export function ModelPickerSheet({
   modelVisibilityOverrides,
   flatOptions,
   providersReady = false,
+  providersUnsupported = false,
   agentKind,
   agentSwitch,
   capabilities,
@@ -236,7 +239,7 @@ export function ModelPickerSheet({
     && agentSwitch.browsingAgentKind !== agentSwitch.currentAgentKind;
   // Disconnected/disabled routes and an authoritative empty catalog must stay empty.
   // Only hosts without a provider catalog retain the capabilities fallback.
-  const allowFlatFallback = canUseFlatModelFallback({ providers, providersReady, browsingOtherAgent, loading });
+  const allowFlatFallback = canUseFlatModelFallback({ providers, providersReady, providersUnsupported, browsingOtherAgent, loading });
   const availableFlatOptions = allowFlatFallback ? flatOptions : EMPTY_FLAT_OPTIONS;
   const effectiveFlatOptions = allowFlatFallback ? filteredFlatOptions : EMPTY_FLAT_OPTIONS;
 

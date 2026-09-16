@@ -1,22 +1,23 @@
+import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
+import { isModelEnabled, getModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation';
 import { useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { effectiveSourceIdForModel, getModel } from '@cindy/model-providers';
-import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
+import { getModel } from '@cindy/model-providers';
+import { getDraft, getDraftForPreferenceSync, getPersistedVendorModel } from '@/state/newMakerDraft';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
-import { pickFirstConnectedModelForAgent } from '@/lib/draftModelCalibration';
+import { pickConnectedModelForAgent } from '@/lib/draftModelCalibration';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import { defaultBotModelChain } from '../../../shared/botDefaultModelChain';
+import { getCachedAvailableVendors } from '@/hooks/useAvailableAgents';
 import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import {
   NEW_BOT_DEFAULT_HARNESS,
-  NEW_BOT_DEFAULT_PI_EFFORT,
-  NEW_BOT_DEFAULT_PI_MODEL,
-  NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults';
 import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
 import type { BotGender } from '../../../shared/botGender';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
-import type { BotTemplatePresetId } from '../../../shared/botTemplatePreset';
+import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelection';
 import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
 import {
   BOT_MODEL_CHAIN_MAX,
@@ -151,6 +152,7 @@ export interface BotSessionProjection {
 }
 
 export interface BotProfile {
+  templateId?: string;
   invitation?: BotInvitationProgress;
   id: string;
   name: string;
@@ -206,70 +208,15 @@ export function canonicalBotSessionId(bot: BotProfile): string | undefined {
   return canonicalBotSession(bot)?.id;
 }
 
-/**
- * 伙伴该用哪个模型:用户真正选过的优先,没选过就跟系统默认。
- *
- * 新建伙伴与**设置页换 harness** 共用这一条 —— 换 harness 时原来直接读
- * `lastByVendor[vendor].model`,把种子快照当成用户的选择,与新建那边曾经的
- * bug 完全同形。同一个决定不留两份实现。
- *
- * 两条都必须走既有来源,这里只加一层有界首选:
- *  - `lastByVendor` 的整份快照会随任意 draft 写入落盘,里面的 model 即使用户从没碰过
- *    也带着种子默认 —— 直接读它,新建的每个伙伴都会撞上种子档,与用户自己选的无关
- *    (2026-08-21 用户实测投诉)。`modelChosenByVendor` 才是「真选过」的判据,
- *    `getPersistedVendorModel` 就是按它做的读取。
- *  - 新建 Pi Bot 优先 GLM-5.3-Flash,但只有它在当前**已连接来源**里真的可路由才选;
- *    否则取当前可选模型的第一项。一个可选模型都没有时 model 留空,让选择器展示空态。
- *    model / provider / effort 始终从同一个来源条目一起解析。
- *  - 其它 harness 仍直接取 `getDefaultModelForVendor()`,也就是模型选择器给新对话用的
- *    同一个默认值(服务端目录的 newSessionDefault)。
- */
+/** Manual harness changes use the ordinary client model picker calibration. */
 function defaultBotModelSettings(vendor: ReturnType<typeof vendorForHarness>): BotModelOverride {
-  if (vendor === 'pi') {
-    const providers = getCachedProvidersSnapshot()?.providers ?? [];
-    const preferredProviderId = effectiveSourceIdForModel(
-      providers,
-      null,
-      NEW_BOT_DEFAULT_PI_MODEL,
-      'pi',
-    );
-    if (preferredProviderId) {
-      const provider = providers.find((item) => item.id === preferredProviderId);
-      const preferred = provider ? getModel(provider, NEW_BOT_DEFAULT_PI_MODEL, 'pi') : undefined;
-      return {
-        model: NEW_BOT_DEFAULT_PI_MODEL,
-        providerId: preferredProviderId,
-        effort: preferred?.defaultEffort ?? '',
-        fastMode: false,
-      };
-    }
-    const fallback = pickFirstConnectedModelForAgent(providers, 'pi');
-    if (fallback) {
-      const provider = providers.find((item) => item.id === fallback.providerId);
-      const model = provider ? getModel(provider, fallback.model, 'pi') : undefined;
-      return {
-        model: fallback.model,
-        providerId: fallback.providerId,
-        effort: model?.defaultEffort ?? '',
-        fastMode: false,
-      };
-    }
-    // The Bot default is a durable product choice, not a transient projection
-    // of whether the provider catalog happened to finish loading first.
-    return {
-      model: NEW_BOT_DEFAULT_PI_MODEL,
-      providerId: NEW_BOT_DEFAULT_PI_PROVIDER,
-      effort: NEW_BOT_DEFAULT_PI_EFFORT,
-      fastMode: false,
-    };
-  }
-  const fallback = getDefaultModelForVendor(vendor);
-  return {
-    model: fallback.id,
-    providerId: null,
-    effort: fallback.defaultEffort ?? '',
-    fastMode: false,
-  };
+  const providers = getCachedProvidersSnapshot()?.providers ?? [];
+  const agent = vendor === 'cc' ? 'claude-code' : vendor;
+  const picked = pickConnectedModelForAgent(providers, agent, getDefaultModelForVendor(vendor).id);
+  const provider = providers.find((item) => item.id === picked?.providerId);
+  const model = provider && picked ? getModel(provider, picked.model, agent) : undefined;
+  return { model: picked?.model ?? '', providerId: picked?.providerId ?? null,
+    effort: model?.defaultEffort ?? '', fastMode: false };
 }
 
 export function defaultBotModel(vendor: ReturnType<typeof vendorForHarness>): string {
@@ -281,7 +228,42 @@ const BOT_GLOBAL_MODEL_KEY = 'cindy.bots.global-model-overrides.v1';
 const BOT_GLOBAL_MODEL_CHAIN_KEY = 'cindy.bots.global-model-chain.v2';
 type BotModelVendor = ReturnType<typeof vendorForHarness>;
 const botModelListeners = new Set<() => void>();
-let globalModelChainCache: BotModelRoute[] | null = null;
+function getDefaultModelInputs() {
+  const draft = getDraftForPreferenceSync();
+  return {
+    visibilityVersion: getModelVisibilityVersion(),
+    preference: JSON.stringify([draft.vendor, draft.lastByVendor[draft.vendor], draft.fastModeByModel]),
+    providers: getCachedProvidersSnapshot(),
+    availableAgents: getCachedAvailableVendors(),
+  };
+}
+
+let globalModelChainCache: {
+  modelChain: BotModelRoute[];
+  /** null means an explicit override; derived results are leased to their inputs. */
+  defaultInputs: ReturnType<typeof getDefaultModelInputs> | null;
+} | null = null;
+// Unknown until Main answers; a failed read must not hide the recovery action.
+let globalModelChainCustomized: boolean | null = null;
+// Serialize writes and legacy migration with settings reads. A late read must not
+// reapply an old override, and a migration must finish before a requested reset.
+let modelSettingsQueue: Promise<unknown> = Promise.resolve();
+
+function queueModelSettings<T>(operation: () => Promise<T>): Promise<T> {
+  ensureProfileOwner();
+  const owner = getDataOwnerGeneration();
+  const result = modelSettingsQueue.then(async () => {
+    assertCurrentOwner(owner);
+    return operation();
+  });
+  modelSettingsQueue = result.catch(() => undefined);
+  return result;
+}
+
+export function isBotGlobalModelChainCustomized(): boolean | null {
+  ensureProfileOwner();
+  return globalModelChainCustomized;
+}
 
 function readGlobalModelOverrides(): Partial<Record<BotModelVendor, BotModelOverride>> {
   if (typeof window === 'undefined') return {};
@@ -340,7 +322,15 @@ export function subscribeBotGlobalModel(listener: () => void): () => void {
 
 export function getBotGlobalModelChain(): BotModelRoute[] | null {
   ensureProfileOwner();
-  return globalModelChainCache;
+  if (!globalModelChainCache) return null;
+  const inputs = globalModelChainCache.defaultInputs;
+  if (inputs) {
+    const current = getDefaultModelInputs();
+    if (inputs.providers !== current.providers || inputs.availableAgents !== current.availableAgents
+      || inputs.visibilityVersion !== current.visibilityVersion || inputs.preference !== current.preference)
+      return null;
+  }
+  return globalModelChainCache.modelChain;
 }
 
 function readLegacyBotGlobalModelChain(): BotModelRoute[] | null {
@@ -360,33 +350,38 @@ export function getEffectiveBotModelChain(
 ): BotModelRoute[] {
   const stored = getBotGlobalModelChain();
   if (stored) return stored;
-  return [
-    {
-      harness: NEW_BOT_DEFAULT_HARNESS,
-      model: NEW_BOT_DEFAULT_PI_MODEL,
-      providerId: NEW_BOT_DEFAULT_PI_PROVIDER,
-      effort: NEW_BOT_DEFAULT_PI_EFFORT,
-      fastMode: false,
+  const providers = getCachedProvidersSnapshot();
+  const availableAgents = getCachedAvailableVendors();
+  const draft = getDraftForPreferenceSync();
+  const selected = draft.lastByVendor[draft.vendor];
+  return defaultBotModelChain({ providers: providers?.providers ?? [],
+    isModelEnabled,
+    preferredRoute: {
+      harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
+      providerId: selected.providerId ?? null, model: selected.model,
+      effort: selected.effort ?? '', fastMode: draft.fastModeByModel[selected.model] === true,
     },
-  ];
+    providersLoading: !providers, availableAgents: availableAgents ?? new Set(),
+    availableAgentsLoaded: availableAgents !== null });
 }
 
-export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
-  ensureProfileOwner();
-  const owner = getDataOwnerGeneration();
-  const api = botsApi();
-  if (!api || typeof api.setModelChainSettings !== 'function') {
-    throw new Error('Bot model settings are not ready');
-  }
-  const normalized = normalizeBotModelChain(chain);
-  if (normalized.length === 0) throw new Error('Choose at least one Bot model route');
-  const state = await api.setModelChainSettings({ modelChain: normalized });
-  assertCurrentOwner(owner);
+function applyGlobalModelChain(
+  state: { modelChain: BotModelRoute[]; isCustomized: boolean },
+  defaultInputs: ReturnType<typeof getDefaultModelInputs>,
+): void {
   const persisted = normalizeBotModelChain(state.modelChain);
-  if (persisted.length === 0) throw new Error('Bot model settings were not saved');
-  globalModelChainCache = persisted;
+  globalModelChainCache = { modelChain: persisted, defaultInputs: state.isCustomized ? null : defaultInputs };
+  globalModelChainCustomized = state.isCustomized;
   window.localStorage.removeItem(BOT_GLOBAL_MODEL_CHAIN_KEY);
-  const primary = persisted[0]!;
+  projectGlobalModelChain();
+  for (const listener of botModelListeners) listener();
+  emit();
+}
+
+function projectGlobalModelChain(): void {
+  if (!globalModelChainCache) return;
+  const chain = getEffectiveBotModelChain();
+  const primary = chain[0] ?? { model: '', providerId: null, effort: '', fastMode: false };
   profiles = profiles.map((bot) =>
     bot.capabilities.modelChainOverride === null
       ? {
@@ -395,14 +390,47 @@ export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<vo
             ...bot.capabilities,
             ...primary,
             modelOverride: null,
-            modelChain: persisted,
+            modelChain: chain,
             modelChainOverride: null,
           },
         }
       : bot,
   );
-  for (const listener of botModelListeners) listener();
-  emit();
+}
+
+export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
+  const normalized = normalizeBotModelChain(chain);
+  if (normalized.length === 0) throw new Error('Choose at least one Bot model route');
+  return queueModelSettings(async () => {
+    const owner = getDataOwnerGeneration();
+    const api = botsApi();
+    if (!api || typeof api.setModelChainSettings !== 'function') {
+      throw new Error('Bot model settings are not ready');
+    }
+    const defaultInputs = getDefaultModelInputs();
+    const state = await api.setModelChainSettings({ modelChain: normalized });
+    assertCurrentOwner(owner);
+    if (normalizeBotModelChain(state.modelChain).length === 0) {
+      throw new Error('Bot model settings were not saved');
+    }
+    applyGlobalModelChain(state, defaultInputs);
+  });
+}
+
+export function resetBotGlobalModelChain(): Promise<void> {
+  return queueModelSettings(async () => {
+    const owner = getDataOwnerGeneration();
+    const api = botsApi();
+    if (!api || typeof api.resetModelChainSettings !== 'function') {
+      throw new Error('Bot model settings are not ready');
+    }
+    const defaultInputs = getDefaultModelInputs();
+    const state = await api.resetModelChainSettings();
+    assertCurrentOwner(owner);
+    // A default resolver may return no available models. Do not turn that into
+    // a failed reset or save the derived chain as a new override.
+    applyGlobalModelChain(state, defaultInputs);
+  });
 }
 
 function defaultCapabilities(
@@ -410,10 +438,8 @@ function defaultCapabilities(
 ): BotCapabilities {
   const vendor = vendorForHarness(harness);
   const prefs = getDraft().lastByVendor[vendor];
-  const override = getBotGlobalModelOverride(vendor);
-  const resolved = getEffectiveBotModelSettings(vendor, override);
   const globalChain = getEffectiveBotModelChain(harness);
-  const primary = globalChain[0] ?? { harness, ...resolved };
+  const primary = globalChain[0] ?? { harness, model: '', providerId: null, effort: '', fastMode: false };
   const model = primary.model;
   return {
     model,
@@ -443,6 +469,7 @@ function defaultCapabilities(
 }
 
 export interface CreateBotProfileInput {
+  creationDraftToken?: string;
   prepareInvitation?: boolean;
   /** Unsaved image bytes, validated and ingested by main on creation only. */
   avatarImageBase64?: string;
@@ -462,8 +489,8 @@ export interface CreateBotProfileInput {
   avatarColor?: string;
   skills?: string[];
   capabilities?: Partial<BotCapabilities>;
-  /** 仅用于 main 按可信内置清单安装初始 Skill；自定义伙伴不传。 */
-  templateId?: BotTemplatePresetId;
+  /** Default Cindy identity marker; retired ids are accepted only for old-client compatibility. */
+  templateId?: string;
   /** Localized first message persisted by main together with the initial canonical task. */
   welcomeMessage?: string;
 }
@@ -472,6 +499,7 @@ export interface CreateBotProfileInput {
 let profiles: BotProfile[] = [];
 const listeners = new Set<() => void>();
 let hydrated = false;
+let profileListLoaded = false;
 let profileOwner = getDataOwnerGeneration();
 let hydrationGeneration = 0;
 const hydrationPromises = new Set<Promise<void>>();
@@ -483,8 +511,11 @@ function ensureProfileOwner(): void {
   if (isDataOwnerGenerationCurrent(profileOwner)) return;
   profileOwner = getDataOwnerGeneration();
   profiles = [];
+  profileListLoaded = false;
   unreadCounts = {};
   globalModelChainCache = null;
+  globalModelChainCustomized = null;
+  modelSettingsQueue = Promise.resolve();
   profileWriteGenerations.clear();
   hydrationPromises.clear();
   hydrationGeneration += 1;
@@ -531,9 +562,11 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
     rawCapabilities ?? {},
     harness,
   );
-  const resolvedModel =
-    modelOverride ?? getEffectiveBotModelSettings(vendorForHarness(harness), null);
-  const modelChain = normalizeBotModelChain(rawCapabilities?.modelChain, {
+  const followsDefault = rawCapabilities?.modelChainOverride === null || rawCapabilities?.modelOverride === null;
+  const resolvedModel = modelOverride ?? (followsDefault
+    ? { model: '', providerId: null, effort: '', fastMode: false }
+    : getEffectiveBotModelSettings(vendorForHarness(harness), null));
+  const modelChain = normalizeBotModelChain(rawCapabilities?.modelChain, followsDefault ? null : {
     harness,
     model: resolvedModel.model || rawCapabilities?.model,
     providerId: resolvedModel.providerId ?? rawCapabilities?.providerId,
@@ -557,6 +590,7 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
     userContextSource: typeof item.userContextSource === 'string' ? item.userContextSource : '',
     // 落库回读的性别。老档案没有 → 留空 → 界面按名字称呼(与升级前一致)。
     ...(item.gender === 'female' || item.gender === 'male' ? { gender: item.gender } : {}),
+    templateId: typeof item.templateId === 'string' ? item.templateId : undefined,
     avatar: typeof item.avatar === 'string' ? item.avatar : '🤖',
     avatarColor: typeof item.avatarColor === 'string' ? item.avatarColor : 'violet',
     enabled: item.enabled !== false,
@@ -702,19 +736,18 @@ async function hydrateFromDatabase(): Promise<void> {
   try {
     if (typeof api.getModelChainSettings === 'function') {
       try {
-        let state = await api.getModelChainSettings();
-        if (!isCurrent()) return;
-        const legacy = readLegacyBotGlobalModelChain();
-        if (!state.isCustomized && legacy && typeof api.setModelChainSettings === 'function') {
-          state = await api.setModelChainSettings({ modelChain: legacy });
+        await queueModelSettings(async () => {
           if (!isCurrent()) return;
-        }
-        const persisted = normalizeBotModelChain(state.modelChain);
-        if (persisted.length > 0) {
-          globalModelChainCache = persisted;
-          window.localStorage.removeItem(BOT_GLOBAL_MODEL_CHAIN_KEY);
-          for (const listener of botModelListeners) listener();
-        }
+          const defaultInputs = getDefaultModelInputs();
+          let state = await api.getModelChainSettings();
+          if (!isCurrent()) return;
+          const legacy = readLegacyBotGlobalModelChain();
+          if (!state.isCustomized && legacy && typeof api.setModelChainSettings === 'function') {
+            state = await api.setModelChainSettings({ modelChain: legacy });
+            if (!isCurrent()) return;
+          }
+          applyGlobalModelChain(state, defaultInputs);
+        });
       } catch {
         // Profile hydration remains usable if the settings file is temporarily
         // unavailable. A later explicit refresh retries the Main-owned source.
@@ -725,6 +758,8 @@ async function hydrateFromDatabase(): Promise<void> {
     if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
+    profileListLoaded = true;
+    projectGlobalModelChain();
     applyUnreadCounts(rows);
     // A Bot we have never tracked starts read: shipping unread badges must not
     // retroactively mark every existing conversation as unread. Pruning keeps
@@ -737,7 +772,7 @@ async function hydrateFromDatabase(): Promise<void> {
     // DB readiness can race the first renderer render during account/bootstrap.
     // The Bots layout explicitly calls refreshBotProfiles when entered, so do
     // not keep polling a signed-out renderer in the background.
-    if (isCurrent()) hydrated = false;
+    if (isCurrent()) { hydrated = false; profileListLoaded = true; emit(); }
   }
 }
 
@@ -791,6 +826,11 @@ export async function runBotLifecycleAction(
   return result;
 }
 
+export function hasLoadedBotProfiles(): boolean {
+  ensureProfileOwner();
+  return profileListLoaded;
+}
+
 export function getBotProfiles(): BotProfile[] {
   ensureProfileOwner();
   return profiles;
@@ -838,6 +878,7 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
   };
   const bot: BotProfile = {
     id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    templateId: input.templateId,
     name: input.name.trim() || 'New Bot',
     description: input.description.trim(),
     identitySource: input.identitySource?.trim() || undefined,
@@ -860,6 +901,8 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
   return bot;
 }
 
+export class BotModelSelectionRequiredError extends Error {}
+
 /** Create the local projection and wait until main/SQLite owns the profile. */
 export async function addBotProfileAndWait(input: CreateBotProfileInput): Promise<BotProfile> {
   const owner = getDataOwnerGeneration();
@@ -868,7 +911,22 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
   if (needsPiDefault && getCachedProvidersSnapshot() === null && typeof window !== 'undefined') {
     await refreshLocalCatalogSnapshot();
   }
+  const settingsApi = botsApi();
+  if (settingsApi?.getModelChainSettings) {
+    await queueModelSettings(async () => {
+      const defaultInputs = getDefaultModelInputs();
+      const state = await settingsApi.getModelChainSettings();
+      assertCurrentOwner(owner);
+      applyGlobalModelChain(state, defaultInputs);
+    });
+  }
   assertCurrentOwner(owner);
+  const requested = input.capabilities;
+  const explicit = normalizeBotModelChain(requested?.modelChainOverride, requested?.modelOverride
+    ? { harness: requested.harness, ...requested.modelOverride } : null);
+  if (!explicit.length && !getEffectiveBotModelChain().length) {
+    throw new BotModelSelectionRequiredError();
+  }
   const bot = addBotProfile(input);
   const api = botsApi();
   if (!api) return bot;
@@ -889,14 +947,16 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         // 阵容卡上明明写着「让她加入」,进去就变成「林律是谁」(2026-08-21 实机)。
         ...(bot.gender ? { gender: bot.gender } : {}),
         ...(input.templateId ? { templateId: input.templateId } : {}),
+        ...(input.creationDraftToken ? { creationDraftToken: input.creationDraftToken } : {}),
         ...(input.prepareInvitation ? { prepareInvitation: true } : {}),
         ...(input.welcomeMessage ? { welcomeMessage: input.welcomeMessage } : {}),
       }),
     );
     assertCurrentOwner(owner);
     if (!created) throw new Error('Bot profile create returned an invalid profile');
-    profiles = profiles.map((item) => (item.id === bot.id ? created : item));
+    profiles = [...profiles.filter((item) => item.id !== bot.id && item.id !== created.id), created];
     emit();
+    return created;
   } catch (error) {
     assertCurrentOwner(owner);
     // The renderer projection is optimistic, but a failed main/SQLite create
@@ -905,7 +965,6 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
     emit();
     throw error;
   }
-  return profiles.find((item) => item.id === bot.id) ?? bot;
 }
 
 export type BotProfileUpdatePatch = Partial<
@@ -919,17 +978,20 @@ export type BotProfileUpdatePatch = Partial<
     | 'avatarColor'
     | 'enabled'
     | 'skills'
-    | 'capabilities'
     | 'canonicalSessionId'
     | 'sessions'
   >
-> & { avatarUploadToken?: string };
+> & {
+  avatarUploadToken?: string;
+  capabilities?: Partial<BotCapabilities>;
+  capabilityBaseline?: BotCapabilityBaseline;
+};
 
 export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Promise<BotProfile> {
   ensureProfileOwner();
   const before = profiles.find((bot) => bot.id === id);
   if (!before) return Promise.reject(new Error('Bot not found'));
-  const { avatarUploadToken, ...profilePatch } = patch;
+  const { avatarUploadToken, capabilityBaseline, ...profilePatch } = patch;
   // 这一行的写入代际。回填与回滚都要求「我仍然是这一行最新的那次写」——
   // 落后的响应一律丢弃,不许覆盖更新的状态(见下面两处 isLatestWrite)。
   const generation = (profileWriteGenerations.get(id) ?? 0) + 1;
@@ -937,15 +999,20 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   const owner = getDataOwnerGeneration();
   const isLatestWrite = () => isDataOwnerGenerationCurrent(owner)
     && profileWriteGenerations.get(id) === generation;
-  profiles = profiles.map((bot) => (bot.id === id ? { ...bot, ...profilePatch } : bot));
+  const applyPatch = (bot: BotProfile): BotProfile => ({
+    ...bot, ...profilePatch,
+    capabilities: { ...bot.capabilities, ...profilePatch.capabilities },
+  });
+  profiles = profiles.map((bot) => (bot.id === id ? applyPatch(bot) : bot));
   emit();
-  const optimistic = profiles.find((bot) => bot.id === id) ?? { ...before, ...profilePatch };
+  const optimistic = profiles.find((bot) => bot.id === id) ?? applyPatch(before);
   const api = botsApi();
   if (!api) return Promise.resolve(optimistic);
   return api
     .update({
       id,
       ...profilePatch,
+      ...(capabilityBaseline ? { capabilityBaseline } : {}),
       ...(avatarUploadToken ? { avatarUploadToken } : {}),
       ...(profilePatch.avatar !== undefined || avatarUploadToken
         ? { expectedAvatar: before.avatar }
@@ -1027,6 +1094,14 @@ function duplicateBotName(sourceName: string): string {
 export async function duplicateBotProfile(id: string): Promise<BotProfile> {
   const source = profiles.find((bot) => bot.id === id);
   if (!source) throw new Error('Bot not found');
+  if (source.templateId === 'cindy') return source;
+  const owner = getDataOwnerGeneration();
+  // Copy validated bytes through the existing image ingress, never trust a raw media URL.
+  const avatarImage = isManagedBotAvatarUrl(source.avatar)
+    ? await window.electronAPI.readCachedImageAsBase64({ url: source.avatar })
+    : undefined;
+  assertCurrentOwner(owner);
+  if (avatarImage && !avatarImage.base64) throw new Error('Could not read teammate avatar');
   return addBotProfileAndWait({
     name: duplicateBotName(source.name),
     description: source.description,
@@ -1034,6 +1109,7 @@ export async function duplicateBotProfile(id: string): Promise<BotProfile> {
     userContextSource: source.userContextSource,
     ...(source.gender ? { gender: source.gender } : {}),
     avatar: source.avatar,
+    ...(avatarImage ? { avatarImageBase64: avatarImage.base64 } : {}),
     avatarColor: source.avatarColor,
     skills: [...source.skills],
     capabilities: {

@@ -252,15 +252,15 @@ export async function readSessionWritableDirsFromDb(id: string): Promise<string[
 }
 
 /** 当前 owner 可见、未删除的桌面会话(含 plugin 入口)。review 不注入 library 槽。 */
-export async function listVisibleActiveSessionIds(): Promise<string[]> {
+export async function listVisibleActiveSessionDirectoryGrants(): Promise<Array<{ id: string; extraDirs: string | null }>> {
   const db = getDbClient().drizzle;
   const rows = await db
-    .select({ id: sessions.id })
+    .select({ id: sessions.id, extraDirs: sessions.extraDirs })
     .from(sessions)
     .where(and(
       inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
       eq(sessions.status, 'active'),
       ne(sessions.source, 'review'),
     ));
-  return rows.map((row) => row.id);
+  return rows;
 }

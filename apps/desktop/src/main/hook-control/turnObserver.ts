@@ -105,6 +105,8 @@ export interface HookTurnObserverDeps {
 export interface HookTurnObserver {
   /** done(含后台任务定格)时 resolve; 终态错误 / silent-stop 耗尽时 reject。 */
   readonly finished: Promise<void>;
+  /** Stable reason from the terminal error; available after teardown. */
+  readonly errorReason: string | null;
   /** 摘监听 + 停止发射。幂等; 收口后自动调用过。 */
   stop(): void;
   /** 真正的新交互请求边界；等待提示的后续文案更新不得重复调用。 */
@@ -152,6 +154,7 @@ export function observeHookTurn(
     progressBodyMode,
   });
 
+  let errorReason: string | null = null;
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
     let turnTerminalNotified = false;
@@ -294,7 +297,12 @@ export function observeHookTurn(
           message?: string;
           errorStatus?: number;
           codexErrorInfo?: string;
+          reason?: unknown;
         } | null;
+        errorReason = typeof data?.reason === 'string' ? data.reason : null;
+        // Seal the already received text before teardown; trailing done is no
+        // longer observed once the terminal error rejects finished.
+        if (errorReason === 'output-limit') presenter.seal();
         const raw = data?.message ?? 'agent terminal error';
         // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
         // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,
@@ -314,6 +322,7 @@ export function observeHookTurn(
 
   return {
     finished,
+    get errorReason() { return errorReason; },
     stop(): void {
       stopListening?.();
       stopListening = undefined;

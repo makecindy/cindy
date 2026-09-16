@@ -1,3 +1,4 @@
+import { expandedRegistryEntries, providerMediaField } from '@cindy/model-providers';
 /**
  * modelPlanePolicy —— 内置供应商模型平面的**表驱动 policy**(纯逻辑,零 IO)。
  *
@@ -12,7 +13,8 @@
  *    硬约束最后收口。共享变换与拓扑都集中在本模块,目录装配和续跑描述符不得各写一套。
  *
  * Pi 不在 wire enum(protocol MODEL_ACCESS_AGENTS 只有 claude-code/codex)，也不从这两个
- * harness 复制。Pi 的成员与能力由客户端 Pi 原生目录和明确的 Pi 覆盖单独装配。
+ * harness 复制。本模块仅承担旧 Registry 根／桥接投影。Pi 消费 Server 的显式 models.pi，缺字段才
+ * 使用随包兜底；三个 Harness 的元数据仍经共同合并层处理。
  *  - openai:  codex root → claude-code bridge(membership 门控);
  *  - anthropic: claude-code root → codex bridge(membership 门控,fast=false);
  *  - xai:    claude-code/codex 双 root(perAgent 各自应用);
@@ -227,8 +229,8 @@ function effectiveRouteFields(
         ? candidateDefaultEffort !== undefined && VALID_EFFORTS.has(candidateDefaultEffort)
           ? (candidateDefaultEffort as Effort)
           : undefined
-        : (clampEffortToSupported(candidateDefaultEffort, validatedEfforts)
-          ?? defaultEffortForCapabilities(validatedEfforts)) as Effort | null;
+        : ((clampEffortToSupported(candidateDefaultEffort, validatedEfforts) ??
+            defaultEffortForCapabilities(validatedEfforts)) as Effort | null);
   return {
     name: entry.name,
     ...(entry.group !== undefined ? { group: entry.group } : {}),
@@ -257,7 +259,7 @@ function effectiveRouteFields(
  * 实体化门禁(protocol MODEL_REGISTRY.md 的 policy-based materialization 契约):
  *  - providerId ∈ allowlist,agent ∈ roots ∩ route.agents;
  *  - status 显式 ∈ {active, preview, deprecated}(缺失 = metadata-only,永不长实体);
- *  - 能力自洽完整:contextWindow>0、efforts 显式在场;efforts=[] ⇒ defaultEffort:=null
+ *  - 能力自洽完整:contextWindow>0；缺省 efforts 只在最终实体化时按 [] 处理；efforts=[] ⇒ defaultEffort:=null
  *    (确定性推导);非空 efforts 的默认值缺失时按共同策略从已声明档位选取，不合成新能力。
  *  - 不满足 ⇒ 该 route 单独跳过 + warning,不拖垮其余(隔离)。
  *
@@ -273,11 +275,13 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
   };
   if (!registry) return plan;
   const claimedRootRoutes = new Set<string>();
-  for (const entry of registry.models) {
+  for (const entry of expandedRegistryEntries(registry)) {
     const status = materializableStatus(entry.status);
     for (const route of entry.routes) {
       const policy = MODEL_PLANE_POLICIES.get(route.providerId);
       if (!policy) continue;
+      // V4 media routes belong to media projections, not the chat root plane.
+      if (route.agents.length === 0 && providerMediaField(entry.mode)) continue;
       const routeAgents = route.agents as readonly RootAgentKind[];
       const memberRoots = policy.roots.filter((agent) => routeAgents.includes(agent));
       const canonicalPrefix = `${route.providerId}/`;
@@ -516,13 +520,14 @@ function toMaterializedModel(
   if (fields.contextWindow === undefined || fields.contextWindow <= 0) {
     return 'materializable route has no positive contextWindow';
   }
-  if (fields.efforts === undefined) {
-    return 'materializable route has no explicit efforts';
-  }
-  const defaultEffort: Effort | null = fields.defaultEffort === null || fields.efforts.length === 0
-    ? null
-    : (clampEffortToSupported(fields.defaultEffort, fields.efforts)
-      ?? defaultEffortForCapabilities(fields.efforts)) as Effort | null;
+  // Preserve absence through inheritance so discovery can supply known levels.
+  // Only a new entity without that evidence uses no explicit effort.
+  const efforts = fields.efforts ?? [];
+  const defaultEffort: Effort | null =
+    fields.defaultEffort === null || efforts.length === 0
+      ? null
+      : ((clampEffortToSupported(fields.defaultEffort, efforts) ??
+          defaultEffortForCapabilities(efforts)) as Effort | null);
   return {
     id: modelId,
     name: fields.name,
@@ -533,7 +538,7 @@ function toMaterializedModel(
     contextWindowVerified: true,
     ...(fields.contextWindowMax !== undefined ? { contextWindowMax: fields.contextWindowMax } : {}),
     ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
-    efforts: fields.efforts,
+    efforts,
     defaultEffort,
     ...(fields.supportsFastMode !== undefined ? { supportsFastMode: fields.supportsFastMode } : {}),
     status,

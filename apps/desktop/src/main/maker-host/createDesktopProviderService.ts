@@ -1,3 +1,6 @@
+import { readProviderPresentation } from './provider-presentation-store.js';
+import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
+import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId, getValidClaudeAccountOAuth, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
 /**
  * createDesktopProviderService —— 桌面端目录加载落地 + provider-service 接线。
  *
@@ -38,6 +41,7 @@ import {
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
+import { codexAccountState } from './codex-account-auth.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import {
   filterEnabledGatewayMediaModels,
@@ -49,6 +53,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
   commitActiveCatalogSnapshot,
+  clearDiscoveredProviderModels,
   getActiveCatalog,
   getXdGatewayModels,
   getModelPlaneWarnings,
@@ -104,14 +109,23 @@ import {
   readCustomProviderHeaders,
   readCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
-import { hasClaudeAiOAuth, hasClaudeAiOAuthUnbound } from './claude-credentials-store.js';
+import {
+  hasClaudeAiOAuth,
+  hasClaudeAiOAuthUnbound,
+  readClaudeAiOAuth,
+} from './claude-credentials-store.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
+  grokAccountIdentity,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
+import {
+  notifyOpenAiMediaCredentialChanged,
+  refreshOpenAiMediaModels,
+} from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -119,6 +133,7 @@ import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   claimDetectedNativeProviderAuth,
+  getNativeProviderAuthSource,
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
@@ -407,20 +422,21 @@ let endpointReloadInflight: {
 
 async function readXaiProviderOAuthToken(
   options?: ProviderOAuthTokenReadOptions,
+  providerId = 'xai',
 ): Promise<string | null> {
-  if (!options?.forceRefresh) return getGrokAccessToken();
+  if (!options?.forceRefresh) return getGrokAccessToken(providerId);
 
   // A forced retry must stay bound to the exact bearer rejected upstream. Without that
   // baseline we cannot safely decide which account generation to refresh.
   const staleToken = options.staleToken;
   if (!staleToken) return null;
 
-  const outcome = await recoverGrokAuthAfterRejection(staleToken);
+  const outcome = await recoverGrokAuthAfterRejection(staleToken, providerId);
   if (outcome !== 'refreshed' && outcome !== 'superseded') return null;
 
   // `superseded` means another request/login already replaced the rejected credential.
   // Return that newer token, but never replay the bearer which caused the 401/403.
-  const token = await getGrokAccessToken();
+  const token = await getGrokAccessToken(providerId);
   return token !== staleToken ? token : null;
 }
 
@@ -428,8 +444,11 @@ async function readXaiProviderOAuthToken(
 function handleProviderSecretsCleared(): void {
   resetGenericOAuthMemoryCache();
   resetGrokOAuthMemoryCache();
+  resetSubscriptionAccountCaches();
+  clearDiscoveredProviderModels();
   clearXaiDiscoveredModels();
   clearXaiMediaModels();
+  notifyOpenAiMediaCredentialChanged();
 }
 
 /**
@@ -443,7 +462,10 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   setCustomProviderKeyReader(readCustomProviderKey);
   setCustomProviderHeaderReader(readCustomProviderHeaders);
   setProviderOAuthTokenReader((providerId, agent, options) => {
-    if (providerId === 'xai') return readXaiProviderOAuthToken(options);
+    if (isXaiSubscriptionProviderId(providerId)) return readXaiProviderOAuthToken(options, providerId);
+    if (subscriptionAccountKind(providerId) === 'claude') {
+      return getValidClaudeAccountOAuth(providerId, options).then(oauth => oauth?.accessToken ?? null);
+    }
     // Codex and Pi processes do not carry Claude Code's native OAuth credential.
     // Their Anthropic bridges read the host-owned Claude.ai token and allow the
     // existing refresher to rotate it when needed.
@@ -532,6 +554,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 无 LKG / 刷新失败时 active-catalog 才继续使用 server Catalog → bundled 救急。
         await loadXaiModelsFromDiskCache();
         void refreshXaiModelsFromHttp();
+        void refreshOpenAiMediaModels();
         activeLoaded = true;
         return catalog;
       })
@@ -949,7 +972,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(getActiveCatalog(), {
+  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
@@ -974,6 +997,7 @@ export function getDesktopProviderService(): ProviderService {
   }
   if (singleton) return singleton;
   singleton = createProviderService({
+    getProviderPresentation: readProviderPresentation,
     getCatalog: getDesktopSelectableCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
@@ -1022,6 +1046,35 @@ export function getDesktopProviderService(): ProviderService {
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
+    codexAccountConnected: (providerId) => codexAccountState(providerId).authenticated,
+    subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionAccountInfo: async (providerId) => {
+      if (providerId === 'anthropic') {
+        const oauth = readClaudeAiOAuth();
+        const source = getNativeProviderAuthSource('anthropic');
+        return {
+          source: source === 'native-harness-inherited' ? 'local'
+            : source === 'explicit-provider-oauth' ? 'oauth' : 'unknown',
+          identity: typeof oauth?.identity === 'string' ? oauth.identity : undefined,
+        };
+      }
+      if (providerId === 'xai') {
+        return {
+          source: 'oauth',
+          identity: hasGrokOAuthLogin() ? grokAccountIdentity('xai') : undefined,
+        };
+      }
+      return { source: 'oauth', identity: subscriptionAccountState(providerId).identity };
+    },
+    openAiAccountInfo: async (providerId) => {
+      const state = providerId === 'openai' ? await desktopCodexAuthAdapter.readAccountPresentationState() : codexAccountState(providerId);
+      return {
+        source: providerId !== 'openai' ? 'oauth' : state.credentialScope === 'system-shared'
+          ? 'local' : state.credentialScope === 'instance-isolated' ? 'oauth' : 'unknown',
+        ...(state.identity ? { identity: state.identity } : {}),
+        reconnectRequired: !state.authenticated && !!state.errorReason,
+      };
+    },
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
       providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,

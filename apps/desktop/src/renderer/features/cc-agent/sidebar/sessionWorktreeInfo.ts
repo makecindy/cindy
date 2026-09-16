@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react';
 
 import { groupingWorktreeBaseRepo } from '@cindy/maker-shared/worktree-paths';
 
-import { useWorktreeForSession } from '@/contexts/WorktreeContext';
+import { useReportWorktreeLiveness, useWorktreeForSession } from '@/contexts/WorktreeContext';
 import type { Session } from '@/lib/ccAgent.types';
 import type { GitContextDirSource } from '@/lib/gitContext.types';
 import type { DetectCwdResp, WorktreeMeta } from '@/lib/worktree.types';
@@ -100,19 +100,36 @@ export function useTaskInfoWorktree(
   enabled: boolean,
   opts?: { observeTelemetry?: boolean },
 ): SessionWorktreeInfo | null {
-  const official = useWorktreeForSession(session.id);
+  const observeTelemetry = Boolean(opts?.observeTelemetry);
+  // Keep the raw row so an invalid worktree can be re-probed, but seed the
+  // displayed liveness from the filtered snapshot. This prevents a remounted
+  // task from briefly showing a stale managed badge before its probe settles.
+  const liveOfficial = useWorktreeForSession(session.id);
+  const official = useWorktreeForSession(session.id, { includeInvalid: observeTelemetry });
+  const reportLiveness = useReportWorktreeLiveness();
   const managed = resolveManagedWorktree(official);
   const [observed, setObserved] = useState<SessionWorktreeInfo | null>(null);
-  const [officialStillLive, setOfficialStillLive] = useState(true);
+  const initialOfficialStillLive = !observeTelemetry || liveOfficial !== null;
+  const [liveness, setLiveness] = useState({ sessionId: session.id, official, live: initialOfficialStillLive });
+  const matchesSnapshot = liveness.sessionId === session.id && liveness.official === official;
+  if (!matchesSnapshot) {
+    // Route changes and same-path restoration both replace the snapshot that
+    // owns this result. Match Context's metadata identity guard so an old
+    // invalid result cannot override a new authoritative row while probing.
+    setLiveness({ sessionId: session.id, official, live: initialOfficialStillLive });
+  }
+  const displayedOfficialStillLive = matchesSnapshot
+    ? liveness.live
+    : initialOfficialStillLive;
   const officialPath = official?.path ?? null;
   const deviceId = session.deviceLinkDeviceId ?? null;
   const isRemote = Boolean(deviceId || session.remoteHostId);
-  const observeTelemetry = Boolean(opts?.observeTelemetry);
 
   useEffect(() => {
     setObserved(null);
     if (!enabled || isRemote || !observeTelemetry) {
-      setOfficialStillLive(!isRemote);
+      // Pausing probes says nothing about directory liveness. Preserve the last
+      // result until a resumed probe actually confirms deletion or restoration.
       return;
     }
     let cancelled = false;
@@ -124,13 +141,15 @@ export function useTaskInfoWorktree(
       if (officialPath) {
         const live = await probeIsInsideWorktree(officialPath, deviceId);
         if (cancelled || gen !== generation) return;
-        setOfficialStillLive(live);
+        if (live === null) return; // IPC 失败不代表目录已被删除，保留上次状态。
+        setLiveness({ sessionId: session.id, official, live });
+        if (official) reportLiveness(official, live);
         if (live) {
           setObserved(null);
           return;
         }
       } else if (gen === generation) {
-        setOfficialStillLive(false);
+        setLiveness({ sessionId: session.id, official, live: false });
       }
       if (isRemote) {
         if (!cancelled && gen === generation) setObserved(null);
@@ -167,7 +186,7 @@ export function useTaskInfoWorktree(
       unsubscribe?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [enabled, officialPath, deviceId, isRemote, observeTelemetry, session.id]);
+  }, [enabled, official, officialPath, deviceId, isRemote, observeTelemetry, session.id, reportLiveness]);
 
   if (isRemote) return null;
   if (!observeTelemetry) {
@@ -181,12 +200,12 @@ export function useTaskInfoWorktree(
   return selectDisplayedWorktree({
     enabled,
     managed,
-    officialStillLive,
+    officialStillLive: displayedOfficialStillLive,
     observed,
   });
 }
 
-async function probeIsInsideWorktree(cwd: string, deviceId: string | null): Promise<boolean> {
+async function probeIsInsideWorktree(cwd: string, deviceId: string | null): Promise<boolean | null> {
   try {
     const detect: DetectCwdResp = deviceId
       ? ((await window.electronAPI.deviceLink.invoke(deviceId, DETECT_CWD_CHANNEL, [
@@ -195,7 +214,7 @@ async function probeIsInsideWorktree(cwd: string, deviceId: string | null): Prom
       : await window.electronAPI.worktreeDetectCwd({ cwd });
     return Boolean(detect?.isInsideWorktree);
   } catch {
-    return false;
+    return null;
   }
 }
 

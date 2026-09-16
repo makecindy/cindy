@@ -78,11 +78,12 @@ function compareCandidates(a: SmartCandidate, b: SmartCandidate): number {
 
 export function selectCodexSmartSubagentCandidates(
   providerViews: readonly ProviderView[],
-  opts: { allowChatGptOAuth: boolean },
+  opts: { allowChatGptOAuth: boolean; oauthProviderId?: string },
 ): SmartCandidate[] {
   const connected = connectedProvidersForAgent([...providerViews], 'codex').filter(
     (provider) =>
-      opts.allowChatGptOAuth || provider.routing.codex?.authStrategy !== 'oauth-passthrough',
+      provider.routing.codex?.authStrategy !== 'oauth-passthrough' ||
+      (opts.allowChatGptOAuth && provider.id === (opts.oauthProviderId ?? 'openai')),
   );
   const ids = new Set<string>();
   for (const provider of connected) {
@@ -126,6 +127,7 @@ function reasoningLevels(model: CatalogModel, fallback: unknown): unknown {
 export function buildCodexSmartModelCatalog(
   rawCatalog: unknown,
   candidates: readonly SmartCandidate[],
+  oauthProviderId = 'openai',
 ): { models: CodexCatalogRecord[]; routes: CodexSubagentRouteSnapshot[] } | null {
   if (!rawCatalog || typeof rawCatalog !== 'object' || Array.isArray(rawCatalog)) return null;
   const rawModels = (rawCatalog as { models?: unknown }).models;
@@ -150,7 +152,7 @@ export function buildCodexSmartModelCatalog(
     if (!candidate) return record;
     // Native subscription models already carry their own multi-agent contract.
     // In particular, max_context_window can exceed the default context_window.
-    if (candidate.providerId === 'openai' && record.multi_agent_version === 'v2') return record;
+    if (candidate.providerId === oauthProviderId && record.multi_agent_version === 'v2') return record;
     return {
       ...record,
       display_name: candidate.model.name,
@@ -212,15 +214,17 @@ export function prepareCodexSmartSubagentConfig(args: {
   codexHome: string;
   providerViews: readonly ProviderView[];
   allowChatGptOAuth: boolean;
+  oauthProviderId?: string;
   catalogRevision: number;
 }): CodexSmartSubagentConfig | null {
   const candidates = selectCodexSmartSubagentCandidates(args.providerViews, {
     allowChatGptOAuth: args.allowChatGptOAuth,
+    oauthProviderId: args.oauthProviderId,
   });
   if (candidates.length === 0) return null;
   const sourcePath = path.join(args.codexHome, 'models_cache.json');
   const raw = JSON.parse(fs.readFileSync(sourcePath, 'utf8')) as unknown;
-  const built = buildCodexSmartModelCatalog(raw, candidates);
+  const built = buildCodexSmartModelCatalog(raw, candidates, args.oauthProviderId);
   if (!built || built.routes.length === 0) return null;
   const catalogPath = path.join(args.codexHome, SMART_CATALOG_FILE);
   atomicWriteFileSync(catalogPath, `${JSON.stringify({ models: built.models }, null, 2)}\n`);

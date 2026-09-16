@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resetSessionToDefaults: vi.fn(),
   listProviders: vi.fn(),
   getModelVisibilityOverride: vi.fn(),
+  waitForModelVisibilityMirror: vi.fn(async (): Promise<void> => undefined),
   getSessionProvider: vi.fn(),
   getMaker: vi.fn(),
   executeDetach: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('../../../maker-host/createDesktopProviderService', () => ({
 }));
 vi.mock('../../../maker-host/model-visibility-mirror', () => ({
   getModelVisibilityOverride: mocks.getModelVisibilityOverride,
+  waitForModelVisibilityMirror: mocks.waitForModelVisibilityMirror,
 }));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   getSessionProvider: mocks.getSessionProvider,
@@ -395,6 +397,18 @@ describe('IM slash commands', () => {
     expect(cards.buildModelPickerCard).not.toHaveBeenCalled();
     expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
+  });
+
+  it('waits for model preferences before constructing the IM picker', async () => {
+    let release!: () => void;
+    mocks.waitForModelVisibilityMirror.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const { handlers, cards } = makeHarness();
+    const pending = handlers.handleSlashCommand('/model', { botContextId: 'bot', userId: 'ou_user' });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect(cards.buildModelPickerCard).not.toHaveBeenCalled();
+    release();
+    await pending;
+    expect(cards.buildModelPickerCard).toHaveBeenCalledOnce();
   });
 
   it('does not send /permission picker when creating the target session would fail auth', async () => {

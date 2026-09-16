@@ -16,6 +16,8 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import {
@@ -62,34 +64,12 @@ function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
 
       <div className="flex shrink-0 items-center gap-2">
         <DefaultOverrideControls isCustomized={isCustomized} onReset={onReset} />
-        {/* 分段控件的 token 与外观分区「侧边栏卡片模式」完全同款(docs/design-rules/cindy-design-system.md 复用原则):
-            选中态 chip 底 + 正文字色,未选中态次级字色 + hover 项底。 */}
-        <div
-          role="radiogroup"
+        <SettingsSegmentedControl
           aria-label={t(`settings.linkOpen.${kind}.ariaLabel`)}
-          className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-        >
-          {OPTIONS.map((opt) => {
-            const active = preference === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => setPreference(opt.value)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs transition-colors',
-                  active
-                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                )}
-              >
-                {t(opt.labelKey)}
-              </button>
-            );
-          })}
-        </div>
+          value={preference}
+          onValueChange={setPreference}
+          options={OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
+        />
       </div>
     </div>
   );

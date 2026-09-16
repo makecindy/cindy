@@ -1,5 +1,6 @@
 import { Stack } from "expo-router";
-import { ChevronDown, Ellipsis, Menu } from "lucide-react-native";
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
+import { ChevronDown, Ellipsis, Menu, Monitor } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Text } from "@/components/AppText";
 import {
@@ -17,7 +18,7 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
-import { lineHeight, spacing } from "@/theme/tokens";
+import { lineHeight, radius, spacing } from "@/theme/tokens";
 
 /**
  * 首页 iOS 顶栏走系统 UINavigationBar。
@@ -31,9 +32,12 @@ export function HomeNativeStackHeader({
   onOpenDeviceMenu,
   onOpenDisplaySettings,
   onOpenMenu,
+  onOpenRemoteDesktop,
+  remoteDesktopA11y,
   onSelectScope,
   scopeActions,
   showRemoteGuide,
+  syncing = false,
   title,
   titleA11y,
 }: {
@@ -44,9 +48,12 @@ export function HomeNativeStackHeader({
   onOpenDeviceMenu(): void;
   onOpenDisplaySettings(): void;
   onOpenMenu(): void;
+  onOpenRemoteDesktop?: () => void;
+  remoteDesktopA11y: string;
   onSelectScope(id: string): void;
   scopeActions: readonly NativePullDownAction[];
   showRemoteGuide: boolean;
+  syncing?: boolean;
   title: string;
   titleA11y: string;
 }) {
@@ -81,6 +88,7 @@ export function HomeNativeStackHeader({
             size={iconSize.xs}
             strokeWidth={iconStroke.medium}
           />
+          <QuietSyncIndicator active={syncing} />
         </View>
       </Pressable>
     </NativePullDownMenu>
@@ -109,10 +117,10 @@ export function HomeNativeStackHeader({
       <Stack.Toolbar placement="left">
         <Stack.Toolbar.View>
           <Pressable
-            accessibilityLabel={menuA11y}
             accessibilityRole="button"
-            onPress={onOpenMenu}
             style={({ pressed }) => [styles.iconHit, pressed && styles.pressed]}
+            accessibilityLabel={menuA11y}
+            onPress={onOpenMenu}
             testID="home.chromeMenu"
           >
             <Menu
@@ -126,27 +134,49 @@ export function HomeNativeStackHeader({
       {showRemoteGuide ? null : (
         <Stack.Toolbar placement="right">
           <Stack.Toolbar.View>
-            <NativePullDownMenu
-              actions={displayActions}
-              onAction={onDisplayAction}
-            >
-              <Pressable
-                accessibilityLabel={displayA11y}
-                accessibilityRole="button"
-                onPress={nativeMenus ? () => undefined : onOpenDisplaySettings}
-                style={({ pressed }) => [
-                  styles.iconHit,
-                  pressed && styles.pressed,
-                ]}
-                testID="home.displaySettingsButton"
+            <View style={styles.trailingActions}>
+              {onOpenRemoteDesktop ? (
+                <Pressable
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.iconHit,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityLabel={remoteDesktopA11y}
+                  onPress={onOpenRemoteDesktop}
+                  testID="home.remoteDesktopButton"
+                >
+                  <Monitor
+                    color={colors.textPrimary}
+                    size={iconSize.xl}
+                    strokeWidth={iconStroke.regular}
+                  />
+                </Pressable>
+              ) : null}
+              <NativePullDownMenu
+                actions={displayActions}
+                onAction={onDisplayAction}
               >
-                <Ellipsis
-                  color={colors.textPrimary}
-                  size={iconSize.xl}
-                  strokeWidth={iconStroke.regular}
-                />
-              </Pressable>
-            </NativePullDownMenu>
+                <Pressable
+                  accessibilityRole="button"
+                  style={({ pressed }) => [
+                    styles.iconHit,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityLabel={displayA11y}
+                  onPress={
+                    nativeMenus ? () => undefined : onOpenDisplaySettings
+                  }
+                  testID="home.displaySettingsButton"
+                >
+                  <Ellipsis
+                    color={colors.textPrimary}
+                    size={iconSize.xl}
+                    strokeWidth={iconStroke.regular}
+                  />
+                </Pressable>
+              </NativePullDownMenu>
+            </View>
           </Stack.Toolbar.View>
         </Stack.Toolbar>
       )}
@@ -156,11 +186,16 @@ export function HomeNativeStackHeader({
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
+    trailingActions: {
+      flexDirection: "row",
+      alignItems: "center",
+    },
     iconHit: {
       alignItems: "center",
-      height: 44,
       justifyContent: "center",
+      height: 44,
       width: 44,
+      borderRadius: radius.pill,
     },
     pressed: { opacity: 0.72 },
     title: {
