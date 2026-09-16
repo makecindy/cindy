@@ -37,6 +37,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { insertFileMentionIntoComposer } from '@/lib/composerActionsBus';
+import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { Tip } from '@/components/ui/tooltip';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
@@ -138,6 +139,9 @@ function FileBrowserBodyWithWorkdir({
   );
   const remoteHostId = deviceId ? null : ctx.remoteHostId;
   const isRemote = Boolean(remoteHostId) || Boolean(deviceId);
+  // 独立侧栏没有 ChatInput,且动作总线只在当前 Renderer 内分发。
+  // 与浏览器评论入口一致,仅在带输入框的主窗/副窗口中提供此动作。
+  const addToChatSupported = !isSidebarWindow() && Boolean(ctx.sessionId);
   const tree = useFileTree({ workdir, hideMetaFiles: true, remoteHostId, deviceId });
   const fileContent = useFileContent(workdir, state.selectedFilePath, remoteHostId, deviceId);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
@@ -697,7 +701,7 @@ function FileBrowserBodyWithWorkdir({
                 onCopyFilePath={!isRemote ? handleCopyFilePath : undefined}
                 onRevealInFolder={!isRemote ? handleRevealInFolder : undefined}
                 onOpenInFileBrowser={ctx.sessionId ? handleOpenInFileBrowser : undefined}
-                onAddToChat={ctx.sessionId ? handleAddToChat : undefined}
+                onAddToChat={addToChatSupported ? handleAddToChat : undefined}
                 onOpenInSidebarBrowser={!isRemote && ctx.sessionId ? handleOpenInSidebarBrowser : undefined}
                 onOpenInBrowser={!isRemote ? handleOpenInBrowser : undefined}
               />
