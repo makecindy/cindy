@@ -95,3 +95,50 @@ export function insertPromptIntoEditor(
   if (!opts.isEmpty) chain.splitBlock();
   chain.insertContent(opts.text).run();
 }
+
+/**
+ * A request to insert one file mention chip into a composer. The composer
+ * only inserts and focuses; the user still decides whether to send.
+ * Mirrors the session-scoped prompt insert contract: returns true when at
+ * least one subscriber for the target session accepted the insert.
+ */
+export interface InsertFileMentionDetail {
+  targetSessionId: string;
+  type: 'file';
+  relPath: string;
+  name: string;
+}
+
+type FileMentionInsertHandler = (detail: InsertFileMentionDetail) => boolean;
+
+const fileMentionInsertHandlersBySession = new Map<string, Set<FileMentionInsertHandler>>();
+
+/**
+ * 请求把文件 mention chip 插入目标会话的输入框。返回 true = 有订阅方实际写入。
+ * 完全没人接住时返回 false,调用方据此决定提示与否,绝不静默缓存到全局待办。
+ */
+export function insertFileMentionIntoComposer(detail: InsertFileMentionDetail): boolean {
+  const handlers = fileMentionInsertHandlersBySession.get(detail.targetSessionId);
+  if (!handlers) return false;
+  let accepted = false;
+  for (const handler of handlers) {
+    if (handler(detail)) accepted = true;
+  }
+  return accepted;
+}
+
+export function subscribeFileMentionInsert(
+  sessionId: string,
+  handler: FileMentionInsertHandler,
+): () => void {
+  let handlers = fileMentionInsertHandlersBySession.get(sessionId);
+  if (!handlers) {
+    handlers = new Set();
+    fileMentionInsertHandlersBySession.set(sessionId, handlers);
+  }
+  handlers.add(handler);
+  return () => {
+    handlers.delete(handler);
+    if (handlers.size === 0) fileMentionInsertHandlersBySession.delete(sessionId);
+  };
+}

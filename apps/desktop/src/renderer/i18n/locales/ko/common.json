@@ -9915,7 +9915,8 @@
         "openInFileBrowser": "파일 브라우저에서 열기",
         "showInFolder": "폴더에서 보기",
         "copyFilePath": "파일 경로 복사",
-        "deleteFile": "파일 삭제"
+        "deleteFile": "파일 삭제",
+        "addToChatUnavailable": "입력창을 지금은 사용할 수 없습니다. 잠시 후 다시 시도해 주세요"
       },
       "searchPanel": {
         "headingSearch": "검색",

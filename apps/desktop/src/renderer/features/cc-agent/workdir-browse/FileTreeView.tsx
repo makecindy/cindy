@@ -53,6 +53,7 @@ import {
   FolderPlus,
   FolderTree,
   Eye,
+  MessageSquarePlus,
   PanelRight,
   Pencil,
   Trash2,
@@ -118,6 +119,8 @@ export interface FileTreeViewProps {
   onRevealInFolder?: (entry: DirEntry) => void;
   /** Right-click 文件 → 新开一个 RSB 文件浏览器 tab 并选中该文件。 */
   onOpenInFileBrowser?: (entry: DirEntry) => void;
+  /** Right-click 文件 → 把该文件作为 mention chip 插入当前任务输入框。 */
+  onAddToChat?: (entry: DirEntry) => void;
   /** Right-click HTML 文件 → 在当前会话的侧边栏浏览器新开页签。 */
   onOpenInSidebarBrowser?: (entry: DirEntry) => void;
   /** Right-click 浏览器可渲染文件 → 交给系统浏览器打开。 */
@@ -214,6 +217,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     onCopyFilePath,
     onRevealInFolder,
     onOpenInFileBrowser,
+    onAddToChat,
     onOpenInSidebarBrowser,
     onOpenInBrowser,
     onRename,
@@ -247,6 +251,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     }
     return Boolean(
       onOpenInFileBrowser ||
+        onAddToChat ||
         canOpenEntryInSidebarBrowser(entry) ||
         onCopyFilePath ||
         onRename ||
@@ -455,6 +460,19 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
             </>
           ) : menu ? (
             <>
+              {onAddToChat && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    const entry = menu.entry;
+                    close();
+                    onAddToChat(entry);
+                  }}
+                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                >
+                  <MessageSquarePlus className="mr-2 h-3.5 w-3.5 shrink-0" />
+                  <span className="relative top-px">{t('chat.quote.addToChat')}</span>
+                </DropdownMenuItem>
+              )}
               {onOpenInFileBrowser && (
                 <DropdownMenuItem
                   onClick={() => {
