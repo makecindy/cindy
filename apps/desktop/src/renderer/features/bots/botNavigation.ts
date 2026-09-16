@@ -8,7 +8,6 @@ export function botEntryTarget(bots: readonly BotProfile[], lastBotId?: string):
   if (remembered) return remembered;
   const byCreation = [...available].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   return byCreation.find(bot => bot.templateId === 'cindy')
-    ?? byCreation.find(bot => bot.status === 'active')
     ?? byCreation[0]
     ?? null;
 }

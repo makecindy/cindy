@@ -14,10 +14,11 @@ import {
 
 describe('botEntryTarget', () => {
   const profile = (id: string, extra: Partial<BotProfile> = {}) => ({ id, name: id, status: 'active', createdAt: 1, ...extra }) as BotProfile;
-  it('falls back from a deleted last ID to the oldest active teammate without reordering the roster', () => {
-    const bots = [profile('new', { createdAt: 20 }), profile('paused', { status: 'paused' }), profile('old', { createdAt: 10 })];
+  it.each(['active', 'paused', 'error'] as const)('falls back to the oldest available teammate (%s) without reordering the roster', (status) => {
+    const bots = [profile('new', { createdAt: 20 }), profile('old', { status, createdAt: 1 }), profile('middle', { createdAt: 10 })];
     expect(botEntryTarget(bots, 'deleted')?.id).toBe('old');
-    expect(bots.map(bot => bot.id)).toEqual(['new', 'paused', 'old']);
+    expect(botEntryTarget(bots)?.id).toBe('old');
+    expect(bots.map(bot => bot.id)).toEqual(['new', 'old', 'middle']);
   });
   it('uses an existing built-in Cindy only as a fallback, without matching names or avatars', () => {
     const bots = [profile('ordinary', { name: 'Cindy' }), profile('builtin', { templateId: 'cindy', name: 'Renamed' })];
