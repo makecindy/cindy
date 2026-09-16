@@ -1902,7 +1902,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         anthropicStreamBody('Hello.'));
         const requestStart = seenRequests.length;
         const done = collectTurn();
+        const welcomeStart = performance.now();
         await handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true });
+        const welcomeSendMs = performance.now() - welcomeStart;
         await done;
         const lastRequest = JSON.parse(seenRequests.at(-1)!.body);
         const results = lastRequest.messages.flatMap((message: { content: unknown }) =>
@@ -1916,9 +1918,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         scriptedResponses.push(anthropicToolUseBody('write', { path: target, content: 'test' }), anthropicStreamBody('Done.'));
         const normalDone = collectTurn();
+        const ordinaryStart = performance.now();
         await handle.send({ type: 'user', content: 'Now write the file.' });
+        const ordinarySendMs = performance.now() - ordinaryStart;
         await normalDone;
         expect(readFileSync(target, 'utf8')).toBe('test');
+        const welcomeRequest = JSON.parse(seenRequests[requestStart]!.body);
+        const ordinaryRequest = JSON.parse(seenRequests.at(-1)!.body);
+        expect(ordinaryRequest.system).toEqual(welcomeRequest.system);
+        expect(ordinaryRequest.tools).toEqual(welcomeRequest.tools);
+        expect(ordinaryRequest.model).toBe(welcomeRequest.model);
+        console.info('Pi text-only send timing', { permissionMode, welcomeSendMs, ordinarySendMs });
       } finally {
         await handle?.close();
         scriptedResponses.length = 0;

@@ -12,6 +12,7 @@
  */
 
 import {
+  promises as fs,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -439,6 +440,35 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ...directories,
     }) as Promise<PiTestSessionHandle>;
   }
+
+  it('toggles welcome policy without filesystem writes or extra prompt RPCs', async () => {
+    const handle = await start('bypassPermissions');
+    const write = vi.spyOn(fs, 'writeFile').mockRejectedValue(new Error('storage unavailable'));
+    const remove = vi.spyOn(fs, 'rm').mockRejectedValue(new Error('storage unavailable'));
+    const begin = captured.requests.length;
+    const query = (id: string) => {
+      captured.onEvent?.({ type: 'extension_ui_request', method: 'confirm', id, title: 'cindy:turn-tools-enabled' });
+      return captured.sent.find((frame) => frame.id === id)?.confirmed;
+    };
+    try {
+      await handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true });
+      expect(query('welcome')).toBe(false);
+      await expect(handle.send({ type: 'user', content: 'Too soon.' })).rejects.toThrow('tool policy');
+      expect(query('still-welcome')).toBe(false);
+      captured.onEvent?.({ type: 'agent_start' });
+      captured.onEvent?.({ type: 'agent_end', messages: [] });
+      captured.onEvent?.({ type: 'agent_settled' });
+      await handle.send({ type: 'user', content: 'Ordinary.' });
+      expect(query('ordinary')).toBe(true);
+      expect(captured.requests.slice(begin).map(frame => frame.type)).toEqual(['prompt', 'prompt']);
+      expect(write).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore(); remove.mockRestore();
+      await handle.close();
+    }
+    expect(query('closed')).toBeUndefined(); // Closed transports do not answer; the bridge denies on timeout.
+  });
 
   /**
    * 等某个权限请求的回帧落地。用「等信号 + 有界超时」而不是固定 flush ——

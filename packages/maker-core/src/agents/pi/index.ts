@@ -3212,9 +3212,7 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
     );
-    // Existence is the gate: unlike JSON, a concurrent permission write cannot
-    // expose a partially parsed text-only policy. Changed only at idle turn boundaries.
-    const toolsDisabledFile = `${permissionFile}.tools-disabled`;
+    // The preinstalled bridge queries this local state over its existing control channel.
     let activeToolsDisabled = false;
     // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
     // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
@@ -3233,7 +3231,6 @@ export class PiAgent extends BaseAgent {
       if (runtimeFilesCleaned) return;
       runtimeFilesCleaned = true;
       void rmPath(permissionFile);
-      void rmPath(toolsDisabledFile);
       void rmPath(subagentRuntimeFile);
     };
     // 权限档写入串行化 + 代际跳过。并发/连续切档(本地与远程控制端同时切,或用户快速连点)时,
@@ -5073,6 +5070,7 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
+        CINDY_PI_TURN_TOOL_POLICY: remote ? '' : '1',
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
@@ -5157,6 +5155,7 @@ export class PiAgent extends BaseAgent {
             this.handleExtensionUiRequest(event, proc, () => ({
               resolver: interactionResolver,
               permissionMode,
+              toolsDisabled: activeToolsDisabled,
               currentModelIds: [mutableModel, mutableWireModel],
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
@@ -6507,11 +6506,7 @@ export class PiAgent extends BaseAgent {
           if ((ctx.isStreaming || ctx.pendingHostTurnStartToken) && activeToolsDisabled !== nextToolsDisabled) {
             throw new Error('Cannot change the tool policy while a Pi turn is active.');
           }
-          if (activeToolsDisabled !== nextToolsDisabled) {
-            if (nextToolsDisabled) await writeFile(toolsDisabledFile, 'disabled\n');
-            else await rmPath(toolsDisabledFile, undefined, true);
-            activeToolsDisabled = nextToolsDisabled;
-          }
+          activeToolsDisabled = nextToolsDisabled;
           rejectIfCancelled(sendOpts, 'send');
           if (reviewMode) {
             await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
@@ -7658,6 +7653,7 @@ export class PiAgent extends BaseAgent {
     getPermissionCtx: () => {
       resolver: InteractionResolver | null;
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
+      toolsDisabled?: boolean;
       currentModelIds: readonly string[];
       workspaceRoots: string[];
       readRoots: string[];
@@ -7714,6 +7710,16 @@ export class PiAgent extends BaseAgent {
     const method = typeof event.method === 'string' ? event.method : '';
     const id = typeof event.id === 'string' ? event.id : undefined;
     if (!id) return;
+
+    if (method === 'confirm' && event.title === 'cindy:turn-tools-enabled') {
+      const context = getPermissionCtx();
+      if (context.isAccountBoundaryTornDown()) return;
+      proc.send({
+        type: 'extension_ui_response', id,
+        confirmed: !context.isPermissionContextClosed() && context.toolsDisabled === false,
+      });
+      return;
+    }
 
     if (getPiExtensionUiCapability(method)?.handling === 'notification') {
       const message = typeof event.message === 'string' ? event.message.trim() : '';

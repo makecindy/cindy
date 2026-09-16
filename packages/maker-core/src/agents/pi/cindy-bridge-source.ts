@@ -109,6 +109,7 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -1768,15 +1769,14 @@ function commandReadsProcessEnviron(command: unknown): boolean {
   return typeof command === 'string' && PROC_ENVIRON_READ_RE.test(command);
 }
 
-function toolsDisabledForTurn(): boolean {
-  const file = process.env.CINDY_PI_PERMISSION_FILE;
-  if (!file) return false;
+async function toolsDisabledForTurn(ctx: any): Promise<boolean> {
+  if (process.env.CINDY_PI_TURN_TOOL_POLICY !== '1') return false;
   try {
-    statSync(file + '.tools-disabled');
+    // Private control request: no user dialog, filesystem access, or model input.
+    // Missing/closed host and malformed responses cannot authorize a tool.
+    return await ctx.ui.confirm('cindy:turn-tools-enabled', '', { timeout: 5000 }) !== true;
+  } catch {
     return true;
-  } catch (error) {
-    // Only an absent marker authorizes the normal tool path.
-    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }
 }
 
@@ -3900,7 +3900,7 @@ export default async function cindyBridge(pi: any) {
 
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
-    if (toolsDisabledForTurn()) {
+    if (await toolsDisabledForTurn(ctx)) {
       return { block: true, reason: 'Tools are disabled for this host-owned text-only turn.' };
     }
     const permission = currentPermissionState();

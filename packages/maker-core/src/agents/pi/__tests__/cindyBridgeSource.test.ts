@@ -29,10 +29,8 @@ import {
 } from '../cindy-bridge-source.js';
 
 it('blocks every tool in text-only turns before permission shortcuts and restores normal turns', async () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'cindy-text-only-'));
-  const permissionFile = path.join(root, 'permission.json');
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-  const helperStart = source.indexOf('function toolsDisabledForTurn');
+  const helperStart = source.indexOf('async function toolsDisabledForTurn');
   const helperEnd = source.indexOf('function currentPermissionState', helperStart);
   const handlerStart = source.indexOf("  pi.on('tool_call'");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
@@ -43,22 +41,24 @@ it('blocks every tool in text-only turns before permission shortcuts and restore
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   runInNewContext(compiled, {
-    process: { env: { CINDY_PI_PERMISSION_FILE: permissionFile } }, statSync,
+    process: { env: { CINDY_PI_TURN_TOOL_POLICY: '1' } },
     currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
     pi: { on: (_event: string, callback: typeof handler) => { handler = callback; } },
   });
-  try {
-    writeFileSync(permissionFile + '.tools-disabled', '');
-    for (const toolName of ['read', 'bash', 'write', 'ask_user_question', 'cindy_mcp_call_tool', 'future_tool']) {
-      expect(await handler({ toolName }, {})).toMatchObject({ block: true });
-    }
-    expect(permissionReads).toBe(0);
-    unlinkSync(permissionFile + '.tools-disabled');
-    expect(await handler({ toolName: 'ask_user_question' }, {})).toBeUndefined();
-    expect(permissionReads).toBe(1);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  let enabled: unknown = false;
+  const ctx = { ui: { confirm: async () => enabled } };
+  for (const toolName of ['read', 'bash', 'write', 'ask_user_question', 'cindy_mcp_call_tool', 'future_tool']) {
+    expect(await handler({ toolName }, ctx)).toMatchObject({ block: true });
   }
+  expect(permissionReads).toBe(0);
+  for (const response of [undefined, 'true', null]) {
+    enabled = response;
+    expect(await handler({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  }
+  expect(await handler({ toolName: 'read' }, { ui: { confirm: async () => { throw new Error('closed'); } } })).toMatchObject({ block: true });
+  enabled = true;
+  expect(await handler({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  expect(permissionReads).toBe(1);
 });
 
 const canLinkFile = (() => {
