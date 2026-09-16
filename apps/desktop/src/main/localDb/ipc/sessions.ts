@@ -145,6 +145,16 @@ export interface RegisterSessionIpcOpts {
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
 }
 
+/**
+ * 非 IPC 调用方(MCP 会话操作工具)可注入的写入前复核:在会话路由锁 + 状态写锁内、紧邻
+ * writeSessionPatch 之前执行,返回非空字符串即以 PRECONDITION_FAILED 拒绝本次更新。用于把
+ * "运行中 / IM 接管中 / 已归档"这类守卫与写入放进同一串行区间:归档 / 删除等生命周期
+ * 写入走同一把状态写锁,因此复核通过后不会再被并发的终态写入插队。
+ */
+export interface UpdateSessionHooks {
+  beforeWrite?: () => Promise<string | null>;
+}
+
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
 let sessionWorktreeRecycle: SessionWorktreeRecycle | null = null;
@@ -1727,6 +1737,7 @@ export async function updateSessionInDb(
   sid: string,
   p: Record<string, unknown>,
   opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
+  hooks: UpdateSessionHooks = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
@@ -1859,10 +1870,16 @@ export async function updateSessionInDb(
       p.status,
       async () => {
         if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
+        // 写入前复核放在最靠近写库的位置:此时已持有路由锁与状态写锁,期间不再有其它 await。
+        if (hooks.beforeWrite) {
+          const reason = await hooks.beforeWrite();
+          if (reason) throwIpcError('PRECONDITION_FAILED', reason);
+        }
         await writeSessionPatch(db, sid, setObj, p.status);
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
       },
-      p.workingDir !== undefined,
+      // 带 beforeWrite 的调用在外层已持有路由锁(见下),不能再次获取这把不可重入的锁。
+      p.workingDir !== undefined || hooks.beforeWrite !== undefined,
     );
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
@@ -1991,7 +2008,11 @@ export async function updateSessionInDb(
     compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;
   };
-  if (p.workingDir === undefined) return update();
+  // 带写入前复核的调用即使不改 workingDir 也要进路由锁:复核与写入必须同一串行区间
+  // (复核本身在 update() 内的状态写锁里、紧邻 writeSessionPatch 执行)。
+  if (p.workingDir === undefined) {
+    return hooks.beforeWrite ? withSessionRouteLock(sid, update) : update();
+  }
   return withSessionRouteLock(sid, async () => {
     const [binding] = await db
       .select({ remoteHostId: sessions.remoteHostId })
