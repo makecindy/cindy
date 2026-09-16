@@ -517,6 +517,41 @@ describe('packGhostDir', () => {
     }
   });
 
+  it('does not keep a pack after the authorized parent is replaced during write', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {}',
+    });
+    const grantRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-write-swap-'));
+    try {
+      const grantedParent = path.join(grantRoot, 'granted');
+      const evilParent = path.join(grantRoot, 'evil');
+      const outsideDir = path.join(grantedParent, 'src');
+      await fs.promises.mkdir(grantedParent, { recursive: true });
+      await fs.promises.mkdir(evilParent, { recursive: true });
+      await fs.promises.cp(dir, outsideDir, { recursive: true });
+      await fs.promises.cp(dir, path.join(evilParent, 'src'), { recursive: true });
+      const grant = await hostAuthorizedOutside(outsideDir);
+      const originalWrite = fs.promises.writeFile.bind(fs.promises);
+      const writeSpy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (target, data, options) => {
+        const result = await originalWrite(target, data, options as never);
+        if (String(target).includes('.cindy.') && String(target).endsWith('.tmp')) {
+          await fs.promises.rm(grantedParent, { recursive: true, force: true });
+          await fs.promises.rename(evilParent, grantedParent);
+        }
+        return result;
+      });
+      await expect(packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        ...grant,
+      })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(fs.existsSync(path.join(outsideDir, 'demo-1.0.0.cindy'))).toBe(false);
+      writeSpy.mockRestore();
+    } finally {
+      await fs.promises.rm(grantRoot, { recursive: true, force: true });
+    }
+  });
+
   it('rejects Host-managed roots, descendants, case aliases, and junction aliases', async () => {
     const managedRoot = path.join(workDir, 'managed');
     const installedDir = path.join(managedRoot, 'demo');

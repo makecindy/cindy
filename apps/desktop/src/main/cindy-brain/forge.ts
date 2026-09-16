@@ -177,7 +177,33 @@ function shouldSkip(name: string): boolean {
  * `writeFile` 会穿过同名链接覆盖授权目录外的目标;这里先拒链接,再经同目录
  * 点文件临时名 + rename 发布,覆盖时删的也是链接自身而不是它的真实目标。
  */
-async function writeForgePackageWithoutFollowing(destPath: string, buf: Buffer): Promise<void> {
+function permissionDenied(message: string): Error {
+  return Object.assign(new Error(message), { code: 'EPERM' });
+}
+
+async function assertAuthorizedForgeParent(
+  destPath: string,
+  options?: ForgeOutsideGrantOptions,
+): Promise<void> {
+  if (!options?.allowOutsideWorkdir || !options.authorizedDir) return;
+  const stale = staleOutsideForgeGrant(options);
+  if (stale) throw permissionDenied(stale.message);
+  const identity = await staleOutsideForgeIdentity(options);
+  if (identity) throw permissionDenied(identity.message);
+  const parent = path.resolve(path.dirname(destPath));
+  const authorized = path.resolve(options.authorizedDir);
+  if (process.platform === 'win32'
+    ? parent.toLowerCase() !== authorized.toLowerCase()
+    : parent !== authorized) {
+    throw permissionDenied('打包产物不在已授权目录内');
+  }
+}
+
+async function writeForgePackageWithoutFollowing(
+  destPath: string,
+  buf: Buffer,
+  options?: ForgeOutsideGrantOptions,
+): Promise<void> {
   try {
     if ((await fs.promises.lstat(destPath)).isSymbolicLink()) {
       throw Object.assign(new Error('打包产物路径是符号链接，已停止写入'), { code: 'ELOOP' });
@@ -185,12 +211,15 @@ async function writeForgePackageWithoutFollowing(destPath: string, buf: Buffer):
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
+  await assertAuthorizedForgeParent(destPath, options);
   const tmpPath = path.join(
     path.dirname(destPath),
     `.${path.basename(destPath)}.${randomBytes(8).toString('hex')}.tmp`,
   );
-  await fs.promises.writeFile(tmpPath, buf, { flag: 'wx' });
+  let published = false;
   try {
+    await fs.promises.writeFile(tmpPath, buf, { flag: 'wx' });
+    await assertAuthorizedForgeParent(destPath, options);
     try {
       const listed = await fs.promises.lstat(destPath);
       if (listed.isSymbolicLink()) {
@@ -201,8 +230,11 @@ async function writeForgePackageWithoutFollowing(destPath: string, buf: Buffer):
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
     await fs.promises.rename(tmpPath, destPath);
+    published = true;
+    await assertAuthorizedForgeParent(destPath, options);
   } catch (err) {
     await fs.promises.unlink(tmpPath).catch(() => undefined);
+    if (published) await fs.promises.unlink(destPath).catch(() => undefined);
     throw err;
   }
 }
@@ -1528,11 +1560,12 @@ export async function packGhostDir(
   const identityBeforeWrite = await staleOutsideForgeIdentity(options);
   if (identityBeforeWrite) return identityBeforeWrite;
   try {
-    await writeForgePackageWithoutFollowing(cindyPath, built.buf);
+    await writeForgePackageWithoutFollowing(cindyPath, built.buf, options);
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
     return {
       ok: false,
-      errorCode: 'INTERNAL',
+      errorCode: code === 'EPERM' ? 'PERMISSION_DENIED' : 'INTERNAL',
       message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
     };
   }
