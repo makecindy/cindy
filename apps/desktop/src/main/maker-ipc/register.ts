@@ -12857,7 +12857,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 不会把「真中断」误报成在飞。
   ipcMain.handle(
     MAKER_INVOKE.SESSION_TURN_ACTIVE,
-    (_e, sessionId: unknown): { inTurn: boolean } => {
+    (event, sessionId: unknown): { inTurn: boolean } => {
+      assertTrustedAppRendererEvent(event);
       if (typeof sessionId !== 'string' || sessionId.length === 0) {
         throwIpcError('INVALID_PARAMS', 'sessionId required');
       }
