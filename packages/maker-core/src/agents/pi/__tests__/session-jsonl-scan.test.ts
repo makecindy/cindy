@@ -54,6 +54,19 @@ describe('scanPiSessionJsonl', () => {
     await expect(scanPiSessionJsonl(path.dirname(file))).resolves.toBeNull();
   });
 
+  it('reads plan-mode from the active leaf path, not a sibling branch', async () => {
+    const file = await sessionFile([
+      '{"type":"session","version":3,"id":"s1","leafId":"u2"}',
+      '{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}',
+      '{"type":"custom","id":"p1","parentId":"u1","customType":"plan-mode","data":{"enabled":true}}',
+      '{"type":"message","id":"u2","parentId":"u1","message":{"role":"user","content":[{"type":"text","text":"other branch"}]}}',
+    ]);
+    const scan = await scanPiSessionJsonl(file);
+    expect(scan).not.toBeNull();
+    expect([...scan!.userEntryIds].sort()).toEqual(['u1', 'u2']);
+    expect(scan!.lastPlanModeEnabled).toBeNull();
+  });
+
   it('returns null when the scan exceeds the byte budget', async () => {
     const file = await sessionFile([
       '{"type":"session","version":3,"id":"s1"}',

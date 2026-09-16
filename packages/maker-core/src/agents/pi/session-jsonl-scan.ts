@@ -29,6 +29,8 @@ function firstQuoted(field: string, prefix: string): string | undefined {
 function extractEntryMeta(line: string): {
   type?: string;
   id?: string;
+  parentId?: string;
+  leafId?: string;
   role?: string;
   customType?: string;
   planEnabled?: boolean;
@@ -43,6 +45,8 @@ function extractEntryMeta(line: string): {
       return {
         type: typeof entry.type === 'string' ? entry.type : undefined,
         id: typeof entry.id === 'string' ? entry.id : undefined,
+        parentId: typeof entry.parentId === 'string' ? entry.parentId : undefined,
+        leafId: typeof entry.leafId === 'string' ? entry.leafId : undefined,
         role: typeof message?.role === 'string' ? message.role : undefined,
         customType: typeof entry.customType === 'string' ? entry.customType : undefined,
         planEnabled: typeof data?.enabled === 'boolean' ? data.enabled : undefined,
@@ -54,20 +58,56 @@ function extractEntryMeta(line: string): {
   return {
     type: firstQuoted('type', prefix),
     id: firstQuoted('id', prefix),
+    parentId: firstQuoted('parentId', prefix),
+    leafId: firstQuoted('leafId', prefix),
     role: firstQuoted('role', prefix),
     customType: firstQuoted('customType', prefix),
   };
 }
 
-function applyEntry(scan: PiSessionJsonlScan, line: string): void {
+type PiSessionJsonlScanBuilder = {
+  userEntryIds: Set<string>;
+  parents: Map<string, string | null>;
+  planModes: Array<{ id: string; enabled: boolean }>;
+  leafId: string | null;
+  lastEntryId: string | null;
+};
+
+function resolveLastPlanModeOnActivePath(scan: PiSessionJsonlScanBuilder): boolean | null {
+  const leaf = scan.leafId ?? scan.lastEntryId;
+  if (!leaf) return null;
+  const active = new Set<string>();
+  const seen = new Set<string>();
+  let cursor: string | null = leaf;
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    active.add(cursor);
+    if (!scan.parents.has(cursor)) break;
+    cursor = scan.parents.get(cursor) ?? null;
+  }
+  let last: boolean | null = null;
+  for (const entry of scan.planModes) {
+    if (active.has(entry.id)) last = entry.enabled;
+  }
+  return last;
+}
+
+function applyEntry(scan: PiSessionJsonlScanBuilder, line: string): void {
   const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line;
   if (trimmed.length === 0) return;
   const meta = extractEntryMeta(trimmed);
+  if (meta.type === 'session' && meta.leafId) {
+    scan.leafId = meta.leafId;
+  }
+  if (meta.id && meta.type !== 'session') {
+    scan.parents.set(meta.id, meta.parentId ?? null);
+    scan.lastEntryId = meta.id;
+  }
   if (meta.type === 'message' && meta.role === 'user' && meta.id) {
     scan.userEntryIds.add(meta.id);
   }
-  if (meta.customType === 'plan-mode' && typeof meta.planEnabled === 'boolean') {
-    scan.lastPlanModeEnabled = meta.planEnabled;
+  if (meta.customType === 'plan-mode' && meta.id && typeof meta.planEnabled === 'boolean') {
+    scan.planModes.push({ id: meta.id, enabled: meta.planEnabled });
   }
 }
 
@@ -102,7 +142,7 @@ export async function resolveLocalPiSessionScanFile(
 }
 
 /**
- * 只扫 session JSONL 的元数据:user entry id 与最后一条 plan-mode。
+ * 只扫 session JSONL 的元数据:user entry id 与活动分支上最后一条 plan-mode。
  * 不经过 Pi RPC,也不把整段带图历史装进 16 Mi 字符的 JSONL 响应帧。
  * 普通文件仍有字节和时间预算，超限返回 null，由调用方回退 RPC。
  */
@@ -141,9 +181,12 @@ export async function scanPiSessionJsonl(
   const openedHandle = handle;
 
   return new Promise((resolve) => {
-    const scan: PiSessionJsonlScan = {
+    const scan: PiSessionJsonlScanBuilder = {
       userEntryIds: new Set<string>(),
-      lastPlanModeEnabled: null,
+      parents: new Map<string, string | null>(),
+      planModes: [],
+      leafId: null,
+      lastEntryId: null,
     };
     const stream = openedHandle.createReadStream({ autoClose: true });
     const decoder = new StringDecoder('utf8');
@@ -212,7 +255,10 @@ export async function scanPiSessionJsonl(
       emitCompleteLines();
       if (!skippingRestOfLine && buffer.length > 0) applyEntry(scan, buffer);
       else consumePrefixLine();
-      finish(scan);
+      finish({
+        userEntryIds: scan.userEntryIds,
+        lastPlanModeEnabled: resolveLastPlanModeOnActivePath(scan),
+      });
     });
   });
 }

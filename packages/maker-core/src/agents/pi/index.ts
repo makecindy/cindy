@@ -5826,7 +5826,7 @@ export class PiAgent extends BaseAgent {
       // plan 镜像与 pi 持久态对齐(resume 关键):pi 的 plan-mode 扩展在 session_start 会从
       // session entry 自恢复 planModeEnabled,但不发 notify。若镜像固定为 false 而 pi 实为 true,
       // 由于 /plan 是 toggle + setPlanMode 幂等短路,会导致方向反转或关不掉。故从本机 session
-      // JSONL(远端仍走 get_entries)读最后一条 plan-mode custom entry 的 enabled 校正镜像。
+      // JSONL(远端仍走 get_entries)读活动分支上最后一条 plan-mode custom entry 的 enabled 校正镜像。
       if (planModeExtAvailable) {
         try {
           planModeActive = await readPersistedPlanMode();
