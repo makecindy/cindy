@@ -269,10 +269,11 @@ export interface ForgeScaffoldWriteRequest {
     ino: bigint;
   };
   files: Array<{ path: string; base64: string }>;
+  isCurrent?: () => boolean;
 }
 
 export type ForgeScaffoldWriteResult =
-  { ok: true } | { ok: false; errorCode: 'TARGET_EXISTS' | 'INTERNAL'; message: string };
+  { ok: true } | { ok: false; errorCode: 'TARGET_EXISTS' | 'INTERNAL' | 'PERMISSION_DENIED'; message: string };
 
 export type ForgeScaffoldWriter = (
   request: ForgeScaffoldWriteRequest,
@@ -821,6 +822,8 @@ export async function scaffoldGhostDir(
   if (staleBeforeWrite) return staleBeforeWrite;
   const identityBeforeWrite = await staleOutsideForgeIdentity(options);
   if (identityBeforeWrite) return identityBeforeWrite;
+  const staleAfterIdentity = staleOutsideForgeGrant(options);
+  if (staleAfterIdentity) return staleAfterIdentity;
   const writeResult = await options.writeScaffold({
     parentDir,
     targetName: path.basename(targetDir),
@@ -831,6 +834,7 @@ export async function scaffoldGhostDir(
         'base64',
       ),
     })),
+    ...(options?.isCurrent ? { isCurrent: options.isCurrent } : {}),
   });
   if (!writeResult.ok) {
     return { ok: false, errorCode: writeResult.errorCode, message: writeResult.message };

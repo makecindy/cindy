@@ -66,6 +66,14 @@ export function writeForgeScaffoldWithStableParent(
         (message as { type?: unknown }).type === 'ready'
       ) {
         ready = true;
+        if (request.isCurrent?.() === false) {
+          finish({
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: 'Task or Plan permissions changed; retry with the current scope.',
+          });
+          return;
+        }
         child.postMessage({ type: 'scaffold', request: {
           expectedParent: request.expectedParent,
           targetName: request.targetName,

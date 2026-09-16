@@ -1339,6 +1339,41 @@ describe('路径边界与覆盖语义', () => {
     expect(await unzip(forced.path as string, 'word/document.xml')).toContain('第二版');
   });
 
+  it('打开外部输入前授权代次失效则拒绝读取', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-open-'));
+    created.push(outsideDir);
+    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
+    await fs.writeFile(granted, 'granted-bytes');
+    const isCurrent = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true, isCurrent },
+    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+
+  it('读完外部输入后授权代次失效则不返回字节', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-return-'));
+    created.push(outsideDir);
+    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
+    await fs.writeFile(granted, 'granted-bytes');
+    const isCurrent = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true, isCurrent },
+    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+
   it('获批的外部输入被换成符号链接后不再跟读', async () => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-read-'));
     created.push(outsideDir);

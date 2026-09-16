@@ -362,6 +362,7 @@ export async function readInputFileWithinLimit(
     if (err instanceof PathBoundaryError) toPathError(err, abs);
     throw changedInputPath(abs);
   }
+  assertDocsGrantCurrent(options?.isCurrent);
   const expectedStat = await fs.stat(canonicalPath, { bigint: true });
   const handle = await fs.open(
     canonicalPath,
@@ -422,6 +423,7 @@ export async function readInputFileWithinLimit(
     } else {
       await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, after);
     }
+    assertDocsGrantCurrent(options?.isCurrent);
     return data;
   } finally {
     await handle.close();

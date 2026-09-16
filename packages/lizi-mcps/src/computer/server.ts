@@ -336,6 +336,16 @@ function reboundOutsideGrantResult(tool: string, arg: string) {
   );
 }
 
+function staleAuthorizedOutsideGrant(
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
+  tool: string,
+): ComputerMcpTextResult | null {
+  for (const [key, authorized] of authorizedOutsidePaths) {
+    if (outsideGrantExpired(authorized)) return staleOutsideGrantResult(tool, key);
+  }
+  return null;
+}
+
 async function replayDirGrantStillBound(
   workingDir: string,
   authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
@@ -346,6 +356,7 @@ async function replayDirGrantStillBound(
   if (!await authorizedPathStillBound(workingDir, dirGrant)) {
     return reboundOutsideGrantResult('replay_trajectory', 'dir');
   }
+  if (outsideGrantExpired(dirGrant)) return staleOutsideGrantResult('replay_trajectory', 'dir');
   return null;
 }
 
@@ -517,6 +528,8 @@ export function createComputerMcpServer(
         );
       }
     }
+    const staleAfterBind = staleAuthorizedOutsideGrant(authorizedOutsidePaths, name);
+    if (staleAfterBind) return staleAfterBind;
 
     const parsedArgs = withSessionArg(
       name as ComputerMcpToolName,

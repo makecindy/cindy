@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setSessionPathAuthorizer } from '../session-path-auth.js';
+import * as sessionPathAuth from '../session-path-auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from './server.js';
@@ -1040,6 +1041,53 @@ describe('createComputerMcpServer', () => {
     expect(payload.ok).toBe(false);
     expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
     expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('does not dispatch after the live grant expires during path rebind', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = path.join(await fs.realpath(path.resolve(root, '..')), 'rebind-stale.png');
+    let current = true;
+    setSessionPathAuthorizer(async () => ({
+      allowed: true,
+      isCurrent: () => current,
+    }));
+    const originalBound = sessionPathAuth.authorizedSessionPathStillBound;
+    const bindSpy = vi.spyOn(sessionPathAuth, 'authorizedSessionPathStillBound').mockImplementation(
+      async (workingDir, authorized) => {
+        current = false;
+        return originalBound(workingDir, authorized);
+      },
+    );
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-rebind-stale',
+      }),
+    });
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: outside,
+        },
+      },
+    })) as { ok: boolean; errorCode?: string };
+
+    expect(payload.ok).toBe(false);
+    expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect(deps.callTool).not.toHaveBeenCalled();
+    bindSpy.mockRestore();
     await h.cleanup();
     await fs.rm(root, { recursive: true, force: true });
   });

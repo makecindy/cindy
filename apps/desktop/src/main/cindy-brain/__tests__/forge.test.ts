@@ -1699,6 +1699,28 @@ describe('scaffoldGhostDir', () => {
       ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       expect(writeScaffold).not.toHaveBeenCalled();
       expect(fs.existsSync(staleDir)).toBe(false);
+
+      const expiredAfterIdentity = path.join(outsideRoot, 'expired-after-identity');
+      const lateWriter = vi.fn(testScaffoldWriter);
+      let remaining = 1;
+      await expect(
+        scaffoldGhostDirRaw(
+          {
+            dir: expiredAfterIdentity,
+            template: 'plain',
+            id: 'expired-after-identity',
+            name: 'Expired after identity',
+            minCindyVersion: '1.2.3',
+          },
+          {
+            sessionWorkdir: workDir,
+            ...(await hostAuthorizedOutside(expiredAfterIdentity, () => remaining-- > 0)),
+            writeScaffold: lateWriter,
+          },
+        ),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(lateWriter).not.toHaveBeenCalled();
+      expect(fs.existsSync(expiredAfterIdentity)).toBe(false);
     } finally {
       await fs.promises.rm(outsideRoot, { recursive: true, force: true });
     }
