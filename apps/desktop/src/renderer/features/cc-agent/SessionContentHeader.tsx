@@ -77,6 +77,7 @@ import {
 } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import { crossesWorktreeBoundary } from './lib/sessionMoveGuard';
+import { useWorktreeForSession } from '@/contexts/WorktreeContext';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
@@ -149,6 +150,9 @@ export function SessionContentHeader({
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
   const { runningSessionIds } = useSessionRunningStatus(session.id);
+  // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
+  // 或存量半移动行的会话，不能靠 cwd 猜归属。
+  const worktreeBinding = useWorktreeForSession(session.id, { includeInvalid: true });
   const { confirm: confirmDialog } = useConfirmDialog();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
@@ -356,8 +360,9 @@ export function SessionContentHeader({
 
       // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
       // (半移动)。同样放在目标目录确定之后,同一 worktree 根内的目录调整仍放行,
+      // 归属取活绑定;
       // 「移到对话」不改目录、不经过这里。
-      if (targetWorkingDir && crossesWorktreeBoundary(session.workingDir, targetWorkingDir)) {
+      if (targetWorkingDir && crossesWorktreeBoundary(worktreeBinding?.path ?? null, targetWorkingDir)) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
         return;
       }

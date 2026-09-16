@@ -61,20 +61,25 @@ export function managedWorktreeRootOf(value: string | null | undefined): string 
 }
 
 /**
- * 该会话改到某个**已解析出的项目目录**时,是否跨出了它的 worktree 归属。
+ * 该会话改到某个**已解析出的项目目录**时，是否跨出了它的 worktree 归属。
  *
- * 只对具体目录比较,不看 target 种类——调用方必须在目标目录确定之后调用
- * (browseProject 要等选完目录);目标目录为空的情形(尤其是「移到对话」)
- * 根本不改 workingDir,不要拿到这里。
+ * 第一个参数是会话**当前活着的 worktree 绑定路径**（renderer 侧取自
+ * WorktreeContext 的 store 镜像，与 main 的 worktreeStore 同源），不是当前 cwd ——
+ * worktree 已被回收的会话会留着历史 worktree 路径，拿 cwd 当归属会把它永久拦死；
+ * 存量半移动行则相反（cwd 在普通项目、绑定仍在旧 worktree），必须按绑定拦。
+ *
+ * 只对具体目录比较，不看 target 种类——调用方必须在目标目录确定之后调用
+ * (browseProject 要等选完目录)；目标目录为空的情形(尤其是「移到对话」)
+ * 根本不改 workingDir，不要拿到这里。
  */
 export function crossesWorktreeBoundary(
-  currentWorkingDir: string | null | undefined,
+  boundWorktreePath: string | null | undefined,
   targetWorkingDir: string,
 ): boolean {
-  const currentRoot = managedWorktreeRootOf(currentWorkingDir);
-  if (currentRoot === null) return false;
+  const ownedRoot = managedWorktreeRootOf(boundWorktreePath);
+  if (ownedRoot === null) return false;
   const targetRoot = managedWorktreeRootOf(targetWorkingDir);
   // 比的是同一物理目录:分隔符风格(目录选择器给 `\`、库里存 `/`)与 Windows 盘符/
   // UNC 大小写差异都不算跨根,比较口径与 Main 的守卫一致。
-  return targetRoot === null || !workingDirEquals(currentRoot, targetRoot, { windows: isWindowsHost() });
+  return targetRoot === null || !workingDirEquals(ownedRoot, targetRoot, { windows: isWindowsHost() });
 }

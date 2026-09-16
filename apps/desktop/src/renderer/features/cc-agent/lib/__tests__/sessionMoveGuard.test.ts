@@ -44,12 +44,15 @@ describe('crossesWorktreeBoundary', () => {
   it('allows targets inside the same worktree root', () => {
     expect(crossesWorktreeBoundary(worktree, worktree)).toBe(false);
     expect(crossesWorktreeBoundary(worktree, `${worktree}/src`)).toBe(false);
+    // 归属是绑定路径,同根内换目录(绑定根相同)照样放行。
     expect(crossesWorktreeBoundary(`${worktree}/src`, `${worktree}/tests`)).toBe(false);
   });
 
-  it('never blocks sessions that are not bound to a managed worktree', () => {
-    expect(crossesWorktreeBoundary('/repo', '/elsewhere')).toBe(false);
+  it('never blocks sessions without a live worktree binding', () => {
+    // 没有绑定(普通任务,或 store 里已回收掉登记的会话)一律放行——归属真源是
+    // worktreeStore,cwd 只是历史路径,不能反过来把它拦死。
     expect(crossesWorktreeBoundary(null, '/elsewhere')).toBe(false);
+    expect(crossesWorktreeBoundary(undefined, '/elsewhere')).toBe(false);
     expect(crossesWorktreeBoundary('/repo/.worktrees/user-made', '/elsewhere')).toBe(false);
   });
 
