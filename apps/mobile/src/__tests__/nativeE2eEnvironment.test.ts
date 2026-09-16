@@ -1,9 +1,100 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
 
 describe('native e2e environment', () => {
+  it.each([
+    [undefined, 'providers:email-only', 'providers:email-only'],
+    ['', 'providers:email-only', ''],
+    ['   ', 'providers:email-only', ''],
+    ['providers:email-only', 'another-scenario', 'providers:email-only'],
+    [undefined, undefined, ''],
+  ])('records shell scenario %j over dotenv scenario %j as %j', (shell, dotenv, expected) => {
+    const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
+    const declaration = source.match(/const loginScenario = [\s\S]*?;/)?.[0];
+    expect(declaration).toBeDefined();
+    const env = shell === undefined ? {} : { EXPO_PUBLIC_LOGIN_SCENARIO: shell };
+    expect(runInNewContext(`${declaration}\nloginScenario`, {
+      process: { env }, projectEnv: { env: { EXPO_PUBLIC_LOGIN_SCENARIO: dotenv } },
+    })).toBe(expected);
+  });
+
+  it.each([false, true])('preserves custom-port ownership when occupied=%s', async (occupied) => {
+    const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
+    const start = source.indexOf("const args = ['exec', 'expo', 'start'");
+    expect(start).toBeGreaterThan(0);
+    const exitCallbacks: Array<() => void> = [];
+    const child = {
+      pid: 4242,
+      once: (event: string, callback: () => void) => { if (event === 'exit') exitCallbacks.push(callback); },
+      on: vi.fn(),
+    };
+    const spawn = vi.fn(() => child);
+    const writeMetroOwner = vi.fn();
+    const clearMetroOwner = vi.fn();
+    const portInUse = vi.fn(async () => occupied);
+    const error = vi.fn();
+    const execution = runInNewContext(`(async () => { ${source.slice(start)} })()`, {
+      DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: [] }, portInUse,
+      ensureAndroidTarget: vi.fn(), spawn, writeMetroOwner, clearMetroOwner,
+      console: { log: vi.fn(), error },
+      process: { env: {}, exit: (code: number) => { throw new Error(`exit:${code}`); } },
+      resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
+      usablePnpmExecPath: () => undefined, existsSync: () => false,
+      mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', buildEnv: {}, region: 'global',
+      branch: 'test', commit: 'test', sourceIdentity: 'test@123',
+      loginScenario: 'providers:email-only', envFingerprint: 'fixture',
+    });
+    if (occupied) {
+      await expect(execution).rejects.toThrow('exit:1');
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('8082 is already in use'));
+      expect(spawn).not.toHaveBeenCalled();
+      expect(writeMetroOwner).not.toHaveBeenCalled();
+      expect(clearMetroOwner).not.toHaveBeenCalled();
+    } else {
+      await execution;
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242 }));
+      for (const callback of exitCallbacks) callback();
+      expect(clearMetroOwner).toHaveBeenCalledWith(8082, 4242);
+    }
+    expect(portInUse).toHaveBeenCalledWith(8082);
+  });
+
+  it('waits for the plain-text preview in both file-browser flows', () => {
+    for (const name of ['file_browser.yaml', 'visual_files.yaml']) {
+      const flow = readFileSync(resolve(process.cwd(), 'e2e/maestro', name), 'utf8').replace(/\r\n/g, '\n');
+      expect(flow).toContain('id: "files.row.about.txt"');
+      expect(flow).toMatch(/- extendedWaitUntil:\s+visible:\s+id: "filePreview.sourceReady"\s+timeout: 10000/);
+      expect(flow).not.toContain('filePreview.markdownRendered');
+      // The app defaults to a grid; select list view before looking for rows.
+      const listView = flow.indexOf('id: "files.menu.view.list"');
+      expect(listView).toBeGreaterThan(flow.indexOf('id: "files.titleMenuButton"'));
+      expect(listView).toBeLessThan(flow.indexOf('id: "files.row.about.txt"'));
+    }
+  });
+
+  it('captures file screenshots only after listing and preview readiness', () => {
+    const flow = readFileSync(resolve(process.cwd(), 'e2e/maestro/visual_files.yaml'), 'utf8').replace(/\r\n/g, '\n');
+    const listReady = flow.search(/- extendedWaitUntil:\s+visible:\s+id: "files.row.about.txt"/);
+    const previewReady = flow.search(/- extendedWaitUntil:\s+visible:\s+id: "filePreview.sourceReady"/);
+    expect(listReady).toBeGreaterThanOrEqual(0);
+    expect(listReady).toBeLessThan(flow.indexOf('path: visual-files\n'));
+    expect(previewReady).toBeGreaterThanOrEqual(0);
+    expect(previewReady).toBeLessThan(flow.indexOf('path: visual-files-preview'));
+  });
+
+  it('opens usage details from inside the visible menu modal', () => {
+    const flow = readFileSync(resolve(process.cwd(), 'e2e/maestro/visual_session_controls_usage.yaml'), 'utf8');
+    expect(flow).toContain('id: "session.menuUsageRow"');
+    expect(flow.indexOf('id: "session.menuUsageRow"')).toBeGreaterThan(flow.indexOf('id: "session.menuSheet"'));
+    expect(flow).not.toContain('id: "session.usageButton"');
+    const menu = readFileSync(resolve(process.cwd(), 'src/session/SessionMenuSheet.tsx'), 'utf8');
+    expect(menu).toMatch(/<SessionUsageSummary[^>]+onPress=\{openInfo\}/);
+  });
+
   it('uses a Java 17 runtime for Maestro without requiring global shell changes', () => {
     const helper = readFileSync(resolve(process.cwd(), 'scripts/java-runtime-env.mjs'), 'utf8');
     const doctor = readFileSync(resolve(process.cwd(), 'scripts/native-e2e-doctor.mjs'), 'utf8');
@@ -22,6 +113,15 @@ describe('native e2e environment', () => {
     expect(runner).toContain("import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';");
     expect(runner).toContain('const toolEnv = resolveJavaRuntimeEnv(process.env);');
     expect(runner).toContain('...toolEnv');
+    const simStart = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
+    expect(simStart).toContain("import { parseProjectEnv } from '@expo/env';");
+    expect(simStart).toContain('projectEnv.env.EXPO_PUBLIC_LOGIN_SCENARIO');
+    expect(simStart).toContain('const loginScenario = process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()');
+    expect(simStart).toContain('writeMetroOwner(portArgs.port, {');
+    expect(simStart).toContain("child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));");
+    expect(simStart).not.toContain('writeMetroOwner(DEFAULT_PORT,');
+    expect(simStart).not.toContain('clearMetroOwner(DEFAULT_PORT,');
+    expect(runner).toContain("/(^|[\\\\/])login_mock(?:_no_clear)?\\.yaml$/");
     expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_LAUNCH_DELAY_MS ?? '20000'");
     expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_TERMINATE_BEFORE_OPEN ?? 'true'");
     expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST ?? 'true'");
@@ -192,6 +292,17 @@ describe('native e2e environment', () => {
     });
     expect(missingCredentials.status).toBe(2);
     expect(missingCredentials.stderr).toContain('isolated test environment');
+  });
+
+  it('keeps Maestro dry runs independent of Metro ownership', () => {
+    const script = resolve(process.cwd(), 'scripts/maestro-e2e.mjs');
+    const result = spawnSync(process.execPath, [script, '--dry-run', '--flow', 'login_mock_no_clear.yaml'], {
+      cwd: process.cwd(), encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, EXPO_PUBLIC_LOGIN_SCENARIO: '' },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('maestro dry run: APP_ID=');
+    expect(result.stderr).not.toContain('Active Metro');
   });
 
   it('keeps cloud voice preflight opt-in and secret-redacted with the credential relay removed', () => {

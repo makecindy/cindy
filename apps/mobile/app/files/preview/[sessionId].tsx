@@ -1173,6 +1173,7 @@ function TextPreviewPage({
           }, 220);
         }}
         ref={codeListRef}
+        testID={visible ? 'filePreview.sourceReady' : undefined}
         renderItem={({ item: line, index }) => (
           <View style={[styles.codeLine, index === targetIndex && styles.codeLineHit]}>
             <Text style={styles.codeLineNum}>{String(index + 1).padStart(lineNumWidth, ' ')}</Text>
