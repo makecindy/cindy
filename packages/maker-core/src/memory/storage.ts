@@ -27,7 +27,9 @@ import matter from 'gray-matter';
 import {
   CURATED_MEMORY_TYPES,
   DEFAULT_MEMORY_CONFIG,
+  MEMORY_TYPES,
   isMemoryType,
+  isMemorySignificance,
   MemoryError,
   type MemoryConfig,
   type MemoryFrontmatter,
@@ -42,6 +44,25 @@ const INDEX_FILENAME = 'MEMORY.md';
 const META_FILENAME = 'meta.json';
 const SHARD_EXT = '.md';
 const SLUG_REGEX = /^[a-z0-9_-]+$/;
+
+/** MEMORY.md 落盘用的 MCP 检索工具名。索引跨 harness 共享,不能按会话写死 Pi 名。 */
+export const MEMORY_INDEX_SEARCH_HINT_MCP = 'memory_search';
+/** Pi Bot facade 实际暴露的检索调用。仅在 prompt 注入时替换,不写回磁盘。 */
+export const MEMORY_INDEX_SEARCH_HINT_PI = 'bot_memory(action:"search")';
+
+/**
+ * 把 MEMORY.md 里的 MCP 检索提示改成当前 harness 实际暴露的工具。
+ * 磁盘仍写 memory_search; Pi 会话注入时替换,避免模型去调被隐藏的 cindy_memory。
+ */
+export function adaptMemoryIndexForHarness(
+  index: string,
+  harness: 'pi' | 'mcp' | string | undefined,
+): string {
+  if (harness !== 'pi') return index;
+  const mcpHint = `更早的内容用 ${MEMORY_INDEX_SEARCH_HINT_MCP} 检索`;
+  const piHint = `更早的内容用 ${MEMORY_INDEX_SEARCH_HINT_PI} 检索`;
+  return index.split(mcpHint).join(piHint);
+}
 
 /**
  * 把 workdir 绝对路径转成 sanitize 后的目录名 (Claude Code 风格)。
@@ -223,6 +244,13 @@ export class MemoryStorage {
      * owner 根后报成功。由 store 透传 manager 注入的 scopeCheck。
      */
     private readonly beforeFileWrite?: () => void,
+    /**
+     * 索引渲染选项。momentMaxEntries 存在 = 该 scope 允许在 MEMORY.md 渲染 moment
+     * 分区 (仅 bot scope; 由 store 透传 manager 注入的 botScope 派生)。undefined =
+     * 全局 scope: moment 分片即使落盘也不进索引 (与 digest 同样的「不进全局索引」
+     * 语义, 对齐 cindy-bots-runtime.md 的 Bot Memory 隔离红线)。
+     */
+    private readonly indexOptions?: { momentMaxEntries?: number },
   ) {}
 
   /** mkdir -p + 写 meta.json (如缺失). 幂等。 */
@@ -307,6 +335,7 @@ export class MemoryStorage {
     let nextBody = opts.body;
     let nextFrontmatter: MemoryFrontmatter;
     const mode = opts.mode ?? 'create';
+    const now = new Date().toISOString();
 
     const existing = await this.tryReadRaw(fullPath);
     if (mode === 'create') {
@@ -320,7 +349,8 @@ export class MemoryStorage {
         title: opts.title,
         description: opts.description,
         type: opts.type,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
+        ...buildMomentFrontmatterFields(opts, undefined, now),
       };
     } else {
       if (!existing) {
@@ -334,7 +364,8 @@ export class MemoryStorage {
         title: opts.title || parsed.frontmatter.title,
         description: opts.description || parsed.frontmatter.description,
         type: opts.type,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
+        ...buildMomentFrontmatterFields(opts, parsed.frontmatter, now),
       };
     }
 
@@ -487,6 +518,30 @@ export class MemoryStorage {
         }
         lines.push('');
       }
+      // moment 分区: 仅 bot scope 渲染 (indexOptions.momentMaxEntries 存在), 按
+      // occurredAt 降序取最近 N 条; 更早的仍可检索, 不丢历史。磁盘提示写 MCP 工具名
+      // memory_search; Pi 注入时由 adaptMemoryIndexForHarness 改写成 bot_memory。
+      // 全局 scope 永不渲染 moment —— 这是 Bot Memory 与全局 Maker Memory 的索引隔离
+      // (cindy-bots-runtime.md 红线; #4124 maintainer 建议的「有限最近 + 检索提示」)。
+      const momentMaxEntries = this.indexOptions?.momentMaxEntries;
+      if (momentMaxEntries != null) {
+        const maxEntries = momentMaxEntries;
+        const momentRecords = grouped.get('moment') ?? [];
+        if (momentRecords.length > 0) {
+          const momentTs = (r: MemoryRecord): number =>
+            Date.parse(r.frontmatter.occurredAt ?? r.frontmatter.updatedAt) || 0;
+          const sortedMoments = [...momentRecords].sort((a, b) => momentTs(b) - momentTs(a));
+          lines.push('## moment');
+          for (const r of sortedMoments.slice(0, maxEntries)) {
+            const day = (r.frontmatter.occurredAt ?? r.frontmatter.updatedAt).slice(0, 10);
+            lines.push(`- [${r.filename}] ${r.frontmatter.title} — ${r.frontmatter.description}（${day}）`);
+          }
+          if (sortedMoments.length > maxEntries) {
+            lines.push(`_(仅显示最近 ${maxEntries} 条时刻; 更早的内容用 ${MEMORY_INDEX_SEARCH_HINT_MCP} 检索)_`);
+          }
+          lines.push('');
+        }
+      }
     }
     const content = lines.join('\n');
     // 索引写盘前复核 (review #2388 Codex 13th P1): rebuildIndex 自身有多次
@@ -506,7 +561,7 @@ export class MemoryStorage {
 
   private validateOpts(opts: WriteOptions): void {
     if (!isMemoryType(opts.type)) {
-      throw new MemoryError('invalid-type', `type 必须是 user/feedback/project/reference, 收到 "${opts.type}"`);
+      throw new MemoryError('invalid-type', `type 必须是 ${MEMORY_TYPES.join('/')}, 收到 "${opts.type}"`);
     }
     validateSlug(opts.name, this.config.maxSlugLen);
     if (!opts.title || opts.title.length === 0) {
@@ -526,6 +581,33 @@ export class MemoryStorage {
     }
     if (/\r|\n/.test(opts.description)) {
       throw new MemoryError('description-has-newline', 'description 必须是一行 (无换行)');
+    }
+    // moment 可选字段做确定性校验 (maintainer #4124): 避免把任意文本扩散进索引逻辑。
+    if (opts.occurredAt !== undefined) {
+      const v = opts.occurredAt;
+      const isoShape = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+      if (typeof v !== 'string' || v.length === 0 || v.length > 40 || !isoShape.test(v) || Number.isNaN(Date.parse(v))) {
+        throw new MemoryError('invalid-frontmatter', 'occurredAt 必须是 ISO 8601 日期 (e.g. 2026-09-08 或 2026-09-08T12:00:00Z)');
+      }
+      // JS Date.parse 会把 2026-02-30 归一化到 3 月; 再按 UTC 日历拒绝月内溢出日。
+      const [yearText, monthText, dayText] = v.slice(0, 10).split('-');
+      const year = Number(yearText);
+      const month = Number(monthText);
+      const day = Number(dayText);
+      if (day > new Date(Date.UTC(year, month, 0)).getUTCDate()) {
+        throw new MemoryError('invalid-frontmatter', 'occurredAt 必须是 ISO 8601 日期 (e.g. 2026-09-08 或 2026-09-08T12:00:00Z)');
+      }
+    }
+    if (opts.significance !== undefined && !isMemorySignificance(opts.significance)) {
+      throw new MemoryError('invalid-frontmatter', 'significance 必须是 normal/high');
+    }
+    if (opts.sourceSession !== undefined) {
+      if (/\r|\n/.test(opts.sourceSession)) {
+        throw new MemoryError('invalid-frontmatter', 'sourceSession 必须是一行 (无换行)');
+      }
+      if (opts.sourceSession.length > this.config.maxSourceSessionLen) {
+        throw new MemoryError('invalid-frontmatter', 'sourceSession 长度超过上限');
+      }
     }
     if (!opts.body || opts.body.length === 0) {
       throw new MemoryError('invalid-frontmatter', 'body 必填');
@@ -611,6 +693,27 @@ interface ParsedShard {
   body: string;
 }
 
+/**
+ * moment 分片的可选 frontmatter: create 时 occurredAt 缺省回填写入时刻 (「刚刚发生」
+ * 的默认语义), update 时缺省保留旧值; significance / sourceSession 缺省同样保留。
+ * 非 moment 类型返回空对象 —— 可选字段不泄漏到其他类型的分片上。
+ */
+function buildMomentFrontmatterFields(
+  opts: WriteOptions,
+  previous: MemoryFrontmatter | undefined,
+  fallbackNow: string,
+): Pick<MemoryFrontmatter, 'occurredAt' | 'significance' | 'sourceSession'> {
+  if (opts.type !== 'moment') return {};
+  const fields: Pick<MemoryFrontmatter, 'occurredAt' | 'significance' | 'sourceSession'> = {
+    occurredAt: opts.occurredAt ?? previous?.occurredAt ?? fallbackNow,
+  };
+  const significance = opts.significance ?? previous?.significance;
+  if (significance) fields.significance = significance;
+  const sourceSession = opts.sourceSession ?? previous?.sourceSession;
+  if (sourceSession) fields.sourceSession = sourceSession;
+  return fields;
+}
+
 function parseRawShard(raw: string, filenameForErr: string): ParsedShard {
   const parsed = matter(raw);
   const data = parsed.data as Partial<MemoryFrontmatter>;
@@ -626,6 +729,9 @@ function parseRawShard(raw: string, filenameForErr: string): ParsedShard {
       description: data.description,
       type: data.type,
       updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
+      ...(typeof data.occurredAt === 'string' && data.occurredAt ? { occurredAt: data.occurredAt } : {}),
+      ...(isMemorySignificance(data.significance) ? { significance: data.significance } : {}),
+      ...(typeof data.sourceSession === 'string' && data.sourceSession ? { sourceSession: data.sourceSession } : {}),
     },
     body: parsed.content.trim(),
   };

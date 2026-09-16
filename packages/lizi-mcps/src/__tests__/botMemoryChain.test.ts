@@ -38,6 +38,7 @@ import {
   buildBotMemoryScopeKey,
   buildMemoryScopeKey,
   memoryScopeDirName,
+  parseBotMemoryScopeKey,
   type Logger,
   type MemoryRecord,
 } from '@cindy/maker-core';
@@ -85,6 +86,8 @@ function createManager(): MakerMemoryManager {
       databases.push(database);
       return database;
     },
+    // 与桌面宿主一致: bot: scope 是独立记忆, 不受全局 Maker Memory 开关影响。
+    isIndependentScope: (scopeKey) => parseBotMemoryScopeKey(scopeKey) !== null,
     agents: {},
     logger: noopLogger,
   });
@@ -146,7 +149,17 @@ function parseEnvelope(result: unknown): Envelope {
 /** 「假模型回合」:模型经二级分派写一条记忆。 */
 async function modelWritesMemory(
   client: Client,
-  args: { type: string; name: string; title: string; description: string; body: string },
+  args: {
+    type: string;
+    name: string;
+    title: string;
+    description: string;
+    body: string;
+    mode?: 'create' | 'update' | 'append';
+    occurredAt?: string;
+    significance?: string;
+    sourceSession?: string;
+  },
 ): Promise<Envelope> {
   return parseEnvelope(
     await client.callTool({
@@ -471,5 +484,468 @@ describe('Cindy Bot 记忆全链(形成 → 存 → 取 → 用 → 删)', () =>
       await back.cleanup();
     }
     expect((await botMemoryList(BOT_ID)).map((r) => r.slug)).toEqual(['signed-in']);
+  });
+});
+
+describe('moment 类型严格限定伙伴作用域 (#4124)', () => {
+  it('伙伴会话写 moment 成功, frontmatter 保留 occurredAt/significance, 索引出现 moment 分区', async () => {
+    const session = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-1',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      const written = await modelWritesMemory(session.client, {
+        type: 'moment',
+        name: 'first-deep-dive',
+        title: '第一次深聊记忆系统',
+        description: '用户提出伙伴要记住重要时刻',
+        body: '用户说:伙伴应该记住我们之间的重要时刻。',
+        occurredAt: '2026-09-08',
+        significance: 'high',
+      });
+      expect(written.ok).toBe(true);
+    } finally {
+      await session.cleanup();
+    }
+
+    const moment = (await botMemoryList(BOT_ID)).find((r) => r.slug === 'first-deep-dive');
+    expect(moment?.frontmatter.type).toBe('moment');
+    expect(moment?.frontmatter.occurredAt).toBe('2026-09-08');
+    expect(moment?.frontmatter.significance).toBe('high');
+    expect(moment?.frontmatter.sourceSession).toBe('session-moment-1');
+
+    // 可: 下一次会话注入的 MEMORY.md 快照里有独立的 moment 分区。
+    const index = await readMemoryIndex(buildBotMemoryScopeKey(BOT_ID));
+    expect(index).toContain('## moment');
+    expect(index).toContain('first-deep-dive');
+    expect(index).toContain('2026-09-08');
+  });
+
+  it('全局关闭 Maker Memory 时 bot scope 的 moment 读写仍成功', async () => {
+    memoryEnabled = false;
+    const session = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-disabled-global',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      const written = await modelWritesMemory(session.client, {
+        type: 'moment',
+        name: 'disabled-global-moment',
+        title: '全局关闭时仍记下',
+        description: '关闭全局 Memory 不得挡住伙伴时刻',
+        body: '这条必须落在 bot scope, 不能被 MAKER_MEMORY_NOT_READY 拦下。',
+        occurredAt: '2026-09-09',
+        significance: 'high',
+      });
+      expect(written.ok).toBe(true);
+
+      const searched = parseEnvelope(
+        await session.client.callTool({
+          name: 'call_tool',
+          arguments: { name: 'memory_search', args: { query: '伙伴时刻' } },
+        }),
+      );
+      expect(searched.ok).toBe(true);
+      expect(JSON.stringify((searched as { data: unknown }).data)).toContain('disabled-global-moment');
+    } finally {
+      await session.cleanup();
+    }
+
+    const project = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-project-disabled-global',
+    });
+    try {
+      const blocked = await modelWritesMemory(project.client, {
+        type: 'user',
+        name: 'should-block',
+        title: '项目记忆应被挡',
+        description: '非 bot scope 仍走全局开关',
+        body: '这条必须失败。',
+      });
+      expect(blocked.ok).toBe(false);
+      expect((blocked as { code: string }).code).toBe('MAKER_MEMORY_NOT_READY');
+    } finally {
+      await project.cleanup();
+    }
+  });
+
+  it('memory_write 从 session ctx 注入 sourceSession, 模型伪造字段被 schema 拒绝', async () => {
+    const session = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-auth',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      const forged = await session.client.callTool({
+        name: 'call_tool',
+        arguments: {
+          name: 'memory_write',
+          args: {
+            type: 'moment',
+            name: 'forged-source',
+            title: '伪造来源',
+            description: '模型试图指定 sourceSession',
+            body: '这条必须被 schema 拒绝。',
+            sourceSession: 'forged-session-id',
+          },
+        },
+      });
+      const forgedText = (forged as { content: Array<{ type: string; text: string }> }).content.find(
+        (block) => block.type === 'text',
+      )?.text;
+      expect(forgedText).toBeTruthy();
+      const forgedEnvelope = JSON.parse(forgedText!) as { ok: boolean; errorCode?: string };
+      expect(forgedEnvelope.ok).toBe(false);
+      expect(forgedEnvelope.errorCode).toBe('INVALID_ARGS');
+
+      const written = await modelWritesMemory(session.client, {
+        type: 'moment',
+        name: 'injected-source',
+        title: '注入来源',
+        description: '系统注入 sourceSession',
+        body: '这条应带上当前 session。',
+      });
+      expect(written.ok).toBe(true);
+    } finally {
+      await session.cleanup();
+    }
+
+    const records = await botMemoryList(BOT_ID);
+    expect(records.map((record) => record.slug)).not.toContain('forged-source');
+    expect(records.find((record) => record.slug === 'injected-source')?.frontmatter.sourceSession).toBe(
+      'session-moment-auth',
+    );
+  });
+
+  it('session ctx 没有 sessionId 时 moment 不写 sourceSession', async () => {
+    const session = await connectBotSession({
+      agentKind: 'claude-code',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      expect(
+        (
+          await modelWritesMemory(session.client, {
+            type: 'moment',
+            name: 'no-session-id',
+            title: '没有 session',
+            description: '缺 ctx sessionId 时不落 sourceSession',
+            body: '这条不应带 sourceSession。',
+          })
+        ).ok,
+      ).toBe(true);
+    } finally {
+      await session.cleanup();
+    }
+    const moment = (await botMemoryList(BOT_ID)).find((record) => record.slug === 'no-session-id');
+    expect(moment?.frontmatter.sourceSession).toBeUndefined();
+  });
+
+  it('create 缺省与显式 create 都注入当前 session; update 不覆盖原 sourceSession', async () => {
+    const creator = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-create',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      expect(
+        (
+          await modelWritesMemory(creator.client, {
+            type: 'moment',
+            name: 'keep-origin',
+            title: '首次记下',
+            description: '缺省 create 应注入当前 session',
+            body: '原始时刻。',
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await modelWritesMemory(creator.client, {
+            type: 'moment',
+            name: 'explicit-create',
+            title: '显式新建',
+            description: 'mode create 也应注入当前 session',
+            body: '另一条原始时刻。',
+            mode: 'create',
+          })
+        ).ok,
+      ).toBe(true);
+    } finally {
+      await creator.cleanup();
+    }
+
+    const editor = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-update',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      expect(
+        (
+          await modelWritesMemory(editor.client, {
+            type: 'moment',
+            name: 'keep-origin',
+            title: '修订后的时刻',
+            description: 'update 不得改写原始溯源',
+            body: '编辑后的时刻。',
+            mode: 'update',
+          })
+        ).ok,
+      ).toBe(true);
+    } finally {
+      await editor.cleanup();
+    }
+
+    const records = await botMemoryList(BOT_ID);
+    expect(records.find((record) => record.slug === 'keep-origin')?.frontmatter.sourceSession).toBe(
+      'session-moment-create',
+    );
+    expect(records.find((record) => record.slug === 'explicit-create')?.frontmatter.sourceSession).toBe(
+      'session-moment-create',
+    );
+  });
+
+  it('伙伴会话可将三条 moment 合并成一条 moment, 旧分片从存储中删除', async () => {
+    const session = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-consolidate',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    const sourceNames = ['moment-fragment-a', 'moment-fragment-b', 'moment-fragment-c'];
+    try {
+      for (const [name, date] of sourceNames.map((name, index) => [name, `2026-09-0${index + 1}`] as const)) {
+        expect(
+          (
+            await modelWritesMemory(session.client, {
+              type: 'moment',
+              name,
+              title: `时刻片段 ${name}`,
+              description: '待合并的时刻片段',
+              body: `时刻片段 ${name} 的内容。`,
+              occurredAt: date,
+            })
+          ).ok,
+        ).toBe(true);
+      }
+
+      const forged = await session.client.callTool({
+        name: 'call_tool',
+        arguments: {
+          name: 'memory_consolidate',
+          args: {
+            sources: sourceNames.map((name) => `moment_${name}.md`),
+            target: {
+              type: 'moment',
+              name: 'forged-consolidate',
+              title: '伪造来源',
+              description: '模型试图指定 sourceSession',
+              body: '这条必须被 schema 拒绝。',
+              sourceSession: 'forged-session-id',
+            },
+          },
+        },
+      });
+      const forgedText = (forged as { content: Array<{ type: string; text: string }> }).content.find(
+        (block) => block.type === 'text',
+      )?.text;
+      expect(forgedText).toBeTruthy();
+      const forgedEnvelope = JSON.parse(forgedText!) as { ok: boolean; errorCode?: string };
+      expect(forgedEnvelope.ok).toBe(false);
+      expect(forgedEnvelope.errorCode).toBe('INVALID_ARGS');
+
+      const consolidated = parseEnvelope(
+        await session.client.callTool({
+          name: 'call_tool',
+          arguments: {
+            name: 'memory_consolidate',
+            args: {
+              sources: sourceNames.map((name) => `moment_${name}.md`),
+              target: {
+                type: 'moment',
+                name: 'moment-chapter',
+                title: '合并后的时刻章节',
+                description: '三条旧时刻的归纳',
+                body: '三条旧时刻已合并为一条章节记忆。',
+                occurredAt: '2026-09-08',
+                significance: 'high',
+              },
+            },
+          },
+        }),
+      );
+      expect(consolidated.ok).toBe(true);
+      const data = (consolidated as { data: { filename: string; deletedSources: string[] } }).data;
+      expect(data.filename).toBe('moment_moment-chapter.md');
+      expect(data.deletedSources).toEqual(
+        expect.arrayContaining(sourceNames.map((name) => `moment_${name}.md`)),
+      );
+    } finally {
+      await session.cleanup();
+    }
+
+    const records = await botMemoryList(BOT_ID);
+    expect(records.map((record) => record.filename)).toEqual(['moment_moment-chapter.md']);
+    const target = records[0]!;
+    expect(target.frontmatter.occurredAt).toBe('2026-09-08');
+    expect(target.frontmatter.significance).toBe('high');
+    expect(target.frontmatter.sourceSession).toBe('session-moment-consolidate');
+  });
+
+  it('consolidate 更新已存在的 target 时保留原 sourceSession', async () => {
+    const creator = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-target-origin',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      expect(
+        (
+          await modelWritesMemory(creator.client, {
+            type: 'moment',
+            name: 'moment-chapter',
+            title: '已有章节',
+            description: 'consolidate 将覆盖这条 target',
+            body: '原始章节。',
+            occurredAt: '2026-09-01',
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await modelWritesMemory(creator.client, {
+            type: 'moment',
+            name: 'moment-extra',
+            title: '待并入的片段',
+            description: '合并进已有章节',
+            body: '额外片段。',
+            occurredAt: '2026-09-02',
+          })
+        ).ok,
+      ).toBe(true);
+    } finally {
+      await creator.cleanup();
+    }
+
+    const editor = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-target-update',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      const consolidated = parseEnvelope(
+        await editor.client.callTool({
+          name: 'call_tool',
+          arguments: {
+            name: 'memory_consolidate',
+            args: {
+              sources: ['moment_moment-extra.md'],
+              target: {
+                type: 'moment',
+                name: 'moment-chapter',
+                title: '合并后的已有章节',
+                description: '覆盖已存在的 target',
+                body: '原始章节加上额外片段。',
+                occurredAt: '2026-09-08',
+                significance: 'high',
+              },
+            },
+          },
+        }),
+      );
+      expect(consolidated.ok).toBe(true);
+    } finally {
+      await editor.cleanup();
+    }
+
+    const records = await botMemoryList(BOT_ID);
+    expect(records.map((record) => record.filename)).toEqual(['moment_moment-chapter.md']);
+    expect(records[0]?.frontmatter.sourceSession).toBe('session-moment-target-origin');
+  });
+
+  it('项目会话的 moment consolidate 被 MCP 边界拒绝为 INVALID_PARAMS', async () => {
+    const session = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-consolidate-project',
+    });
+    try {
+      const consolidated = parseEnvelope(
+        await session.client.callTool({
+          name: 'call_tool',
+          arguments: {
+            name: 'memory_consolidate',
+            args: {
+              sources: ['project_old.md'],
+              target: {
+                type: 'moment',
+                name: 'moment-project-target',
+                title: '不属于项目记忆',
+                description: '全局 workdir 不允许 moment',
+                body: '这条必须被拒绝。',
+                occurredAt: '2026-09-08',
+              },
+            },
+          },
+        }),
+      );
+      expect(consolidated.ok).toBe(false);
+      expect((consolidated as { code: string }).code).toBe('INVALID_PARAMS');
+    } finally {
+      await session.cleanup();
+    }
+    const projectStore = await manager.getStore(buildMemoryScopeKey(PROJECT_DIR));
+    expect(await projectStore.list()).toEqual([]);
+  });
+
+  it('项目会话 (workdir scope) 写 moment 被确定性拒绝为 INVALID_PARAMS, 分片不落盘', async () => {
+    const session = await connectBotSession({
+      agentKind: 'claude-code',
+      sessionId: 'session-moment-2',
+    });
+    try {
+      const written = await modelWritesMemory(session.client, {
+        type: 'moment',
+        name: 'should-be-rejected',
+        title: '不属于项目记忆',
+        description: '全局 workdir 不允许 moment',
+        body: '这条必须被拒绝。',
+      });
+      expect(written.ok).toBe(false);
+      expect((written as { code: string }).code).toBe('INVALID_PARAMS');
+    } finally {
+      await session.cleanup();
+    }
+    const projectStore = await manager.getStore(buildMemoryScopeKey(PROJECT_DIR));
+    expect(await projectStore.list()).toEqual([]);
+  });
+
+  it('隔离: 伙伴有 moment 分片时, 项目 scope 的索引也绝不出现 moment 分区', async () => {
+    const session = await connectBotSession({
+      agentKind: 'pi',
+      sessionId: 'session-moment-3',
+      memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+    });
+    try {
+      expect(
+        (
+          await modelWritesMemory(session.client, {
+            type: 'moment',
+            name: 'bot-only-moment',
+            title: '伙伴的时刻',
+            description: '只属于伙伴',
+            body: '只属于伙伴的时刻内容。',
+          })
+        ).ok,
+      ).toBe(true);
+    } finally {
+      await session.cleanup();
+    }
+
+    const projectIndex = await readMemoryIndex(buildMemoryScopeKey(PROJECT_DIR));
+    expect(projectIndex).not.toContain('## moment');
+    expect(projectIndex).not.toContain('bot-only-moment');
   });
 });

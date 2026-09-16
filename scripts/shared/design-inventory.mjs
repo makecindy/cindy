@@ -553,6 +553,7 @@ export function catalogSurfaces() {
         'BotModelChainEditor',
         'BotLifecycleSettings',
         'BotCollaborationCard',
+        'BotCommunicationStyleFields',
       ],
       styleRoots: ['apps/desktop/src/renderer/features/bots'],
       // 伙伴任务复用简化后的主聊天视图与消息组件；本 surface 只补它自己的覆盖层。

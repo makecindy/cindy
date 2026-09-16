@@ -8,21 +8,27 @@ export function SettingsSegmentedControl<T extends string>({
   options,
   onValueChange,
   disabled = false,
+  id,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
 }: {
   value: T | null;
   options: readonly { value: T; label: ReactNode }[];
   onValueChange: (value: T) => void;
   disabled?: boolean;
+  id?: string;
   'aria-label': string;
+  'aria-describedby'?: string;
 }) {
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.findIndex((option) => option.value === value);
 
   return (
     <div
+      id={id}
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       aria-disabled={disabled || undefined}
       className="flex h-8 w-fit shrink-0 items-center gap-0.5 rounded-full bg-[var(--surface-chip)] p-[3px]"
     >

@@ -103,14 +103,36 @@ describe('角色性别随档案存活', () => {
     });
     expect(next.gender).toBe('male');
   });
+
+  it('distinguishes model selections from identity and capability-only refreshes', () => {
+    const route = { harness: 'codex', model: 'model-a', providerId: 'openai', effort: 'medium', fastMode: false };
+    const previous = { modelChain: [route], modelChainOverride: [route], skills: [] };
+    expect(botProfileModelSelectionChanged(previous, { ...previous, skills: ['writing'] })).toBe(false);
+    expect(botProfileModelSelectionChanged(previous, { ...previous, modelChainOverride: null })).toBe(true);
+    for (const patch of [{ harness: 'pi' }, { model: 'model-b' }, { providerId: 'xd' }, { effort: 'high' }, { fastMode: true }]) {
+      expect(botProfileModelSelectionChanged(previous, { ...previous, modelChain: [{ ...route, ...patch }] })).toBe(true);
+    }
+  });
 });
 
-it('distinguishes model selections from identity and capability-only refreshes', () => {
-  const route = { harness: 'codex', model: 'model-a', providerId: 'openai', effort: 'medium', fastMode: false };
-  const previous = { modelChain: [route], modelChainOverride: [route], skills: [] };
-  expect(botProfileModelSelectionChanged(previous, { ...previous, skills: ['writing'] })).toBe(false);
-  expect(botProfileModelSelectionChanged(previous, { ...previous, modelChainOverride: null })).toBe(true);
-  for (const patch of [{ harness: 'pi' }, { model: 'model-b' }, { providerId: 'xd' }, { effort: 'high' }, { fastMode: true }]) {
-    expect(botProfileModelSelectionChanged(previous, { ...previous, modelChain: [{ ...route, ...patch }] })).toBe(true);
-  }
+describe('沟通风格随档案存活', () => {
+  it('更新能力时保留已有风格', () => {
+    const next = mergeBotProfileCapabilities({
+      previous: { style: { tone: 'warm', selfName: '小满' }, skills: ['contract'] },
+      capabilities: { model: 'x', harness: 'claude' },
+      hasSkills: false,
+    });
+    expect(next.style).toEqual({ tone: 'warm', selfName: '小满' });
+  });
+
+  it('style 写进 capabilitiesJson 会升版本', () => {
+    expect(
+      botProfileContentChanged({
+        previousCapabilities: { style: { tone: 'warm' } },
+        nextCapabilities: { style: { tone: 'concise' } },
+        previousIdentitySource: 'A helpful cook',
+        nextIdentitySource: 'A helpful cook',
+      }),
+    ).toBe(true);
+  });
 });

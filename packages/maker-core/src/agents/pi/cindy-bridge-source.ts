@@ -2892,6 +2892,8 @@ class CindyMcpGateway {
       const description = stringValue('description');
       const body = stringValue('body');
       if (!type || !memoryName || !title || !description || !body) return null;
+      const occurredAt = stringValue('occurredAt');
+      const significance = stringValue('significance');
       name = 'memory_write';
       args = {
         type,
@@ -2900,6 +2902,8 @@ class CindyMcpGateway {
         description,
         body,
         ...(typeof record.mode === 'string' ? { mode: record.mode } : {}),
+        ...(occurredAt ? { occurredAt } : {}),
+        ...(significance ? { significance } : {}),
       };
     } else if (action === 'consolidate') {
       const type = stringValue('type');
@@ -2915,6 +2919,8 @@ class CindyMcpGateway {
       if (!type || !memoryName || !title || !description || !body || sources.length === 0) {
         return null;
       }
+      const occurredAt = stringValue('occurredAt');
+      const significance = stringValue('significance');
       name = 'memory_consolidate';
       args = {
         sources,
@@ -2924,6 +2930,8 @@ class CindyMcpGateway {
           title,
           description,
           body,
+          ...(occurredAt ? { occurredAt } : {}),
+          ...(significance ? { significance } : {}),
         },
       };
     } else {
@@ -3150,7 +3158,9 @@ class CindyMcpGateway {
             action: { type: 'string', enum: ['list', 'read', 'search', 'write', 'delete', 'review', 'consolidate'] },
             filename: { type: 'string', description: 'Required for read or delete.' },
             query: { type: 'string', description: 'Required for search.' },
-            type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'] },
+            type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference', 'moment'] },
+            occurredAt: { type: 'string', description: 'Optional ISO 8601 time for moment write/consolidate.' },
+            significance: { type: 'string', enum: ['normal', 'high'], description: 'Optional importance for moment write/consolidate.' },
             limit: { type: 'integer', minimum: 1, maximum: 50 },
             name: { type: 'string', pattern: '^[a-z0-9_-]{1,64}$', description: 'Filename slug required for write.' },
             title: { type: 'string', description: 'Required for write.' },

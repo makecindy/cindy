@@ -37,6 +37,8 @@ import {
   REMOTE_ALLOWED_SERVER_NAMES,
   REMOTE_COLLAB_SERVER_NAMES,
   REMOTE_BOT_HELPER_SERVER_NAME,
+  REMOTE_MEMORY_SERVER_NAME,
+  REMOTE_CODEX_PREMOUNTED_SERVER_NAMES,
   withMcpRouteIdentity,
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
@@ -48,8 +50,9 @@ const log = createLogger('codex-remote-mcp');
 const TOKEN_ENV = 'LIZI_MCP_TOKEN';
 // 远端注入白名单的唯一真源在 codexHttpBridge.ts (bridge 鉴权层按
 // REMOTE_ALLOWED_SERVER_NAMES = 协同 + cindy_memory scope persistent token)。
-// 这里取协同别名保持本文件既有引用点不变;cindy_memory 独立走 Maker Memory
-// 全局开关 (daemon config 是 per-host 共享的, 没有 per-session 粒度)。
+// 这里取协同别名保持本文件既有引用点不变。cindy_memory 在远端 Codex daemon
+// 上与 cindy_helper 一样预挂 disabled transport;是否真正暴露由 per-thread
+// overlay / Bot policy 决定, 不能只看全局 Maker Memory 开关。
 const CODEX_REMOTE_MCP_SERVER_NAMES = REMOTE_COLLAB_SERVER_NAMES;
 const MANAGED_BEGIN = '# >>> cindy-remote-mcp (managed, do not edit) >>>';
 const MANAGED_END = '# <<< cindy-remote-mcp <<<';
@@ -201,9 +204,10 @@ export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
   });
 }
 
-/** Bind the remote daemon's disabled helper transport to one concrete Session.
+/** Bind the remote daemon's disabled helper / memory transports to one Session.
  * Read the port at use time: SSH forwarding is established after host construction.
- * Only Bot MCP policy enables this transport; ordinary remote threads keep it disabled.
+ * Ordinary remote threads keep both disabled; Bot MCP policy / session memory
+ * flags enable them after the daemon table already has transport.
  */
 export function buildRemoteCodexSessionMcpConfig(
   hostId: string,
@@ -222,23 +226,34 @@ export function buildRemoteCodexSessionMcpConfig(
     collabEnabled: opts.collabEnabled,
     memoryEnabled: opts.makerMemoryEnabled,
     botHelperEnabled: true,
+    memoryPremounted: true,
   });
   // A written config is not proof that a busy daemon has loaded this generation.
   // Never combine a new route with its old token or pre-helper server config.
-  if (!serverNames.includes(REMOTE_BOT_HELPER_SERVER_NAME) || prefs.appliedFingerprint !== computeRemoteMcpFingerprint({
+  if (prefs.appliedFingerprint !== computeRemoteMcpFingerprint({
     token,
     bridgeInstanceId: opts.bridgeInstanceId,
     remotePort: prefs.remotePort,
     serverNames,
   })) return {};
-  return {
-    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.url`]: withMcpRouteIdentity(
+  const overlay: Record<string, unknown> = {};
+  if (serverNames.includes(REMOTE_BOT_HELPER_SERVER_NAME)) {
+    overlay[`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.url`] = withMcpRouteIdentity(
       `http://127.0.0.1:${prefs.remotePort}/mcp/${REMOTE_BOT_HELPER_SERVER_NAME}`,
       { sessionInstanceId },
-    ),
-    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.bearer_token_env_var`]: TOKEN_ENV,
-    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.enabled`]: false,
-  };
+    );
+    overlay[`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.bearer_token_env_var`] = TOKEN_ENV;
+    overlay[`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.enabled`] = false;
+  }
+  if (serverNames.includes(REMOTE_MEMORY_SERVER_NAME)) {
+    overlay[`mcp_servers.${REMOTE_MEMORY_SERVER_NAME}.url`] = withMcpRouteIdentity(
+      `http://127.0.0.1:${prefs.remotePort}/mcp/${REMOTE_MEMORY_SERVER_NAME}`,
+      { sessionInstanceId },
+    );
+    overlay[`mcp_servers.${REMOTE_MEMORY_SERVER_NAME}.bearer_token_env_var`] = TOKEN_ENV;
+    overlay[`mcp_servers.${REMOTE_MEMORY_SERVER_NAME}.enabled`] = false;
+  }
+  return overlay;
 }
 
 // ── 远端 config.toml 管理段 (纯函数, 便于单测) ──────────────────────────────
@@ -260,7 +275,7 @@ export function renderManagedMcpBlock(opts: {
       `[mcp_servers.${name}]`,
       `url = "http://127.0.0.1:${opts.remotePort}/mcp/${name}"`,
       `bearer_token_env_var = "${TOKEN_ENV}"`,
-      ...(name === REMOTE_BOT_HELPER_SERVER_NAME ? ['enabled = false'] : []),
+      ...(REMOTE_CODEX_PREMOUNTED_SERVER_NAMES.has(name) ? ['enabled = false'] : []),
       'startup_timeout_sec = 600',
       'tool_timeout_sec = 600',
       '',
@@ -308,7 +323,7 @@ function isManagedResidueLine(line: string): boolean {
   if (t.startsWith(TOKEN_FINGERPRINT_PREFIX)) return true;
   const header = parseTableHeaderKey(t);
   if (header && header[0] === 'mcp_servers') return true;
-  return /^(url|bearer_token_env_var|startup_timeout_sec|tool_timeout_sec)\s*=/.test(t);
+  return /^(url|bearer_token_env_var|enabled|startup_timeout_sec|tool_timeout_sec)\s*=/.test(t);
 }
 
 /**
@@ -711,17 +726,25 @@ export function hasPendingRemoteMcpDrift(
   opts: {
     collabEnabled: boolean;
     /**
-     * Maker Memory 全局开关 (manager.isEnabled)。开着时 desired server 列表
-     * 含 cindy_memory — 与 ensure 内的注入集合同源, 开关翻转构成漂移。
+     * Per-session Maker Memory flag. Remote Codex still premounts cindy_memory
+     * on the shared daemon, so flipping this no longer changes the desired
+     * server set; thread overlays decide `enabled`.
      */
     makerMemoryEnabled: boolean;
     botHelperAvailable?: boolean;
+    /** Live Codex HTTP bridge currently exposes cindy_memory. */
+    memoryAvailable?: boolean;
     token: string | null;
     bridgeInstanceId: string | null;
   },
 ): boolean {
   const applied = readPortPrefs()[hostId]?.appliedFingerprint ?? null;
-  if ((!opts.collabEnabled && !opts.makerMemoryEnabled && !opts.botHelperAvailable) || !opts.token) {
+  const keepManaged =
+    opts.collabEnabled
+    || opts.makerMemoryEnabled
+    || opts.botHelperAvailable
+    || opts.memoryAvailable;
+  if (!keepManaged || !opts.token) {
     // 清理语义:applied 存在 = 待清理 (strip / 清理路径未跑过)。
     return applied !== null;
   }
@@ -740,6 +763,7 @@ export function hasPendingRemoteMcpDrift(
       collabEnabled: opts.collabEnabled,
       memoryEnabled: opts.makerMemoryEnabled,
       botHelperEnabled: opts.botHelperAvailable,
+      memoryPremounted: opts.memoryAvailable === true,
     }),
   });
   return desired !== applied;
@@ -773,11 +797,9 @@ export function ensureRemoteCodexMcpBridge(
      */
     isCollabEnabled?: () => boolean;
     /**
-     * Maker Memory 全局开关 (manager.isEnabled)。开着时把 cindy_memory 一并
-     * 写进远端 daemon config (daemon 是 per-host 共享的, 无 per-session
-     * 粒度; per-session prompt 注入仍由 maker-core 按 session flag 决定,
-     * withStore 在 manager 禁用时返回 MAKER_MEMORY_NOT_READY 兜底)。缺省
-     * 视为关闭 — 未接线的调用方不改变既有行为。
+     * Per-session Maker Memory flag used by callers that still need the
+     * global/session snapshot. Remote Codex daemon injection always premounts
+     * cindy_memory (disabled) so Bot-scoped memory can enable it per thread.
      */
     isMakerMemoryEnabled?: () => boolean;
   },
@@ -814,6 +836,7 @@ async function doEnsureRemoteCodexMcpBridge(
       const collabEnabled = deps.isCollabEnabled?.() ?? true;
       const memoryEnabled = deps.isMakerMemoryEnabled?.() ?? false;
       const token = getRemoteMcpBridgeToken();
+      // Premounted cindy_memory is not itself a reason to keep a dead bridge.
       if (applied || (!collabEnabled && !memoryEnabled) || !token) {
         log.warn('bridge unavailable — running cleanup-only strip on remote host', {
           host: host.id,
@@ -829,18 +852,20 @@ async function doEnsureRemoteCodexMcpBridge(
       log.warn('remote MCP injection skipped: http bridge unavailable', { host: host.id });
       return { ok: false, reason: 'bridge-unavailable' };
     }
-    // 只注入白名单 server (协同 + 开着 Maker Memory 时的 cindy_memory):
+    // 只注入白名单 server (协同 + 预挂的 cindy_helper / cindy_memory):
     // bridge 上还挂着其他 in-process provider (cindy_ssh 等), 全量写进远端
     // daemon config 会让远端 session 获得本机 MCP 能力, 越出边界。合成规则
     // 唯一真源在 selectRemoteInjectableServerNames (codexHttpBridge.ts, 与
-    // cc 侧 / drift 判定共用)。
+    // cc 侧 / drift 判定共用)。cindy_memory 预挂为 disabled transport, 由
+    // per-thread overlay 打开 Bot / session memory。
     const token = getRemoteMcpBridgeToken();
     const collabEnabled = deps.isCollabEnabled?.() ?? true;
     let serverNames = selectRemoteInjectableServerNames(bridge.serverNames, {
       collabEnabled,
       memoryEnabled: deps.isMakerMemoryEnabled?.() ?? false,
-      // Shared transport stays disabled; the Bot policy enables it per thread.
+      // Shared transports stay disabled; Bot / session policy enables them per thread.
       botHelperEnabled: true,
+      memoryPremounted: true,
     });
     if (
       !collabEnabled &&
