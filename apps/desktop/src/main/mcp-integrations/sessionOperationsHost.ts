@@ -1,0 +1,210 @@
+/**
+ * mcp-integrations/sessionOperationsHost.ts —— sessionOperations 业务体的真实依赖装配。
+ *
+ * 把 localDb、IM binding 等 main 专属
+ * 依赖收拢在这一个文件里注入给 sessionOperations.ts;运行中判断由 maker-host 注入
+ * (mcp-providers 不能反向 import maker-host/index,会成环)。
+ */
+
+import { realpath, stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
+import { and, eq, inArray, sql } from 'drizzle-orm';
+
+import { joinChatQuoteTextSegments, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
+import type { ForkSessionResult, MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
+
+import { bindingStore } from '../im/binding.js';
+import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
+import { updateSessionInDb } from '../localDb/ipc/sessions.js';
+import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
+import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { forkSessionAtMessage } from '../maker-orchestration/fork.js';
+import {
+  forkSession,
+  moveSessions,
+  type SessionOperationsDeps,
+  type SessionOpsRow,
+} from './sessionOperations.js';
+
+const ROW_COLUMNS = {
+  id: sessions.id,
+  title: sessions.title,
+  workingDir: sessions.workingDir,
+  workspaceKind: sessions.workspaceKind,
+  status: sessions.status,
+  source: sessions.source,
+  remoteHostId: sessions.remoteHostId,
+  orcaRole: sessions.orcaRole,
+  parentSessionId: sessions.parentSessionId,
+  forkedAtMessageId: sessions.forkedAtMessageId,
+  createdAt: sessions.createdAt,
+  messageCount: sql<number>`(select count(*) from messages where messages.session_id = ${sessions.id})`,
+};
+
+function toRow(row: {
+  id: string;
+  title: string | null;
+  workingDir: string | null;
+  workspaceKind: string | null;
+  status: string;
+  source: string | null;
+  remoteHostId: string | null;
+  orcaRole: string | null;
+  parentSessionId: string | null;
+  forkedAtMessageId: string | null;
+  createdAt: number;
+  messageCount: number;
+}): SessionOpsRow {
+  return {
+    ...row,
+    workspaceKind: row.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
+    status: row.status as SessionOpsRow['status'],
+    orcaRole: row.orcaRole as SessionOpsRow['orcaRole'],
+    messageCount: Number(row.messageCount ?? 0),
+  };
+}
+
+/**
+ * 消息正文在 DB 里是 JSON 编码的(user 消息形如 `'"hello"'`,见 main/__tests__/fork.test.ts),
+ * 直接回传会把引号一并带给作曲器。先解码再按块取文本;解不出 JSON 的按纯文本原样返回。
+ */
+export function messageTextForDraft(content: unknown): string {
+  if (typeof content !== 'string') return '';
+  const trimmed = content.trim();
+  if (!trimmed) return '';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return content;
+  }
+  return draftBlocksToText(parsed);
+}
+
+/**
+ * 取文本的口径与 maker-ipc/sessionReferenceResolver 的 contentToText 一致;
+ * 带 `quotesEncoded` 的 envelope 额外按 autoReviewUserIntent 的同款投影剥掉引用私有标记,
+ * 否则标记会原样进入 draft_text 被模型读到。
+ */
+function draftBlocksToText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(draftBlocksToText).filter(Boolean).join('\n');
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === 'string') {
+      return record.quotesEncoded === true
+        ? joinChatQuoteTextSegments(parseChatQuoteSegments(record.text))
+        : record.text;
+    }
+    if (typeof record.content === 'string') return record.content;
+  }
+  return '';
+}
+
+export function createSessionOperationsDeps(
+  isTurnRunning: (sessionId: string) => boolean,
+): SessionOperationsDeps {
+  return {
+    loadSessions: async (ids) => {
+      if (ids.length === 0) return [];
+      const rows = await getDbClient()
+        .drizzle.select(ROW_COLUMNS)
+        .from(sessions)
+        .where(inArray(sessions.id, ids));
+      return rows.map(toRow);
+    },
+    loadChildren: async (parentIds) => {
+      if (parentIds.length === 0) return [];
+      const rows = await getDbClient()
+        .drizzle.select(ROW_COLUMNS)
+        .from(sessions)
+        .where(inArray(sessions.parentSessionId, parentIds));
+      return rows.map(toRow);
+    },
+    // Worker 归属记录在 orca_teams → orca_workers(sessions.parent_session_id 只表示
+    // fork 派生关系,创建 worker 时不会写它),与协同面板 / effectiveRunningSessionIds 同源。
+    listWorkerSessionIds: async (leadSessionId) => {
+      const rows = await getDbClient()
+        .drizzle.select({ id: orcaWorkers.sessionId })
+        .from(orcaWorkers)
+        .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
+        .where(and(eq(orcaTeams.leadSessionId, leadSessionId), eq(orcaTeams.status, 'active')));
+      return rows.map((row) => row.id);
+    },
+    isTurnRunning,
+    isImAttached: (sessionId) => bindingStore.findByTarget(sessionId) !== null,
+    resolveDirectory: async (path) => {
+      if (!isAbsolute(path)) return null;
+      try {
+        // realpath 解 symlink/junction:批准、落库与日后恢复必须是同一个真实目录。
+        const canonical = await realpath(path);
+        return (await stat(canonical)).isDirectory() ? canonical : null;
+      } catch {
+        return null;
+      }
+    },
+    // 带写入前复核的更新在 IM binding 的串行队列里执行:复核里的 isImAttached 与随后的
+    // 写库之间不可能再有 attach 落地(attach 的持久化 + 内存索引更新在同一队列里排在后面)。
+    // 队列内不得再等待 attach / detach;updateSessionInDb 只取路由锁与状态写锁,
+    // 而 IM 侧没有任何路径在持有这两把锁时等待 binding 变更,不会形成锁序环。
+    withSessionLock: (sessionId, task) => withSessionRouteLock(sessionId, task),
+    updateSession: (sessionId, patch, hooks) =>
+      hooks?.beforeWrite
+        ? bindingStore.runExclusive(() => updateSessionInDb(sessionId, patch, undefined, hooks))
+        : updateSessionInDb(sessionId, patch, undefined, hooks),
+    resolveMessageClientId: async (sessionId, messageId) => {
+      const [row] = await getDbClient()
+        .drizzle.select({
+          clientId: messages.clientId,
+          role: messages.role,
+          content: messages.content,
+          rewindAt: messages.rewindAt,
+        })
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.id, messageId)))
+        .limit(1);
+      if (!row) return null;
+      return {
+        clientId: row.clientId,
+        role: row.role,
+        text: messageTextForDraft(row.content),
+        // get_chat_history(include_rewound=true) 能取到已 Rewind 的消息 id,但
+        // forkSessionAtMessage 复制历史时会过滤 rewindAt 非空的行(fork.ts 的
+        // isNull(messages.rewindAt)),放行会分叉出不含该消息、锚点更早的新任务。
+        rewound: row.rewindAt != null,
+      };
+    },
+    forkAtMessage: async (sessionId, messageClientId) => {
+      const session = await forkSessionAtMessage(sessionId, messageClientId);
+      // 与 maker-ipc/fork.ts 的 IPC handler 同款广播,侧栏与 device-link 控制端即时看到新会话。
+      emitSessionCreated(session.id);
+      return { id: session.id };
+    },
+  };
+}
+
+/**
+ * cindy_helper `sessionOps` 回调组:localDb 未就绪统一返回 HOST_NOT_READY;
+ * 预检阶段(loadSessions / Orca 关系表查询等)抛出的异常映射为 INTERNAL,
+ * 不让异常穿透到 MCP 层变成无结构的失败。
+ */
+export function createSessionOpsCallbacks(isTurnRunning: (sessionId: string) => boolean) {
+  const deps = createSessionOperationsDeps(isTurnRunning);
+  const hostFailure = (errorCode: 'HOST_NOT_READY' | 'INTERNAL', message: string) =>
+    ({ ok: false as const, errorCode, message });
+  type HostFailure = ReturnType<typeof hostFailure>;
+  const notReady = hostFailure('HOST_NOT_READY', 'localDb not ready');
+  const guarded = <T>(run: () => Promise<T>): Promise<T | HostFailure> =>
+    tryGetDbClient()
+      ? run().catch((error) =>
+          hostFailure('INTERNAL', error instanceof Error ? error.message : String(error)),
+        )
+      : Promise.resolve(notReady);
+  return {
+    moveSessions: (params: { sessionIds: string[]; target: SessionMoveTarget }): Promise<MoveSessionsResult> =>
+      guarded(() => moveSessions(deps, params)),
+    forkSession: (params: { sessionId: string; messageId: string }): Promise<ForkSessionResult> =>
+      guarded(() => forkSession(deps, params)),
+  };
+}
