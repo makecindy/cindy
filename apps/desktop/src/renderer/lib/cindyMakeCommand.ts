@@ -121,7 +121,7 @@ export async function tryStartCindyMakeCommand(
       isCurrent,
     });
     if (!sessionId || !isCurrent()) return { kind: 'stale' };
-    return startMakeDoctorInStream(sessionId, match.invocation, undefined, { modalOnly: true })
+    return startMakeDoctorInStream(sessionId, match.invocation)
       ? { kind: 'started', sessionId }
       : { kind: 'failed' };
   } catch {

@@ -20,8 +20,8 @@ describe('Ghost account-boundary teardown ordering', () => {
     const end = bootstrap.indexOf('\n}\n', start);
     const body = bootstrap.slice(start, end);
 
-    const interrupt = body.indexOf('interruptGhostCallsForAccountBoundary));');
-    const wait = body.indexOf('waitForGhostMutations));');
+    const interrupt = body.search(/withAuthBoundaryTimeout\('interrupt Ghost calls',\s*interruptGhostCallsForAccountBoundary\),?\s*\);/);
+    const wait = body.search(/withAuthBoundaryTimeout\('wait for Ghost mutations',\s*waitForGhostMutations\),?\s*\);/);
     const suspend = body.indexOf('suspendAllGhosts);');
 
     expect(interrupt).toBeGreaterThan(-1);

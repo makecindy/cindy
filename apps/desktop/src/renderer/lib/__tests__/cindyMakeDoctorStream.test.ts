@@ -59,6 +59,7 @@ vi.mock('@/lib/makerTransport', () => ({
 
 import { buildCreateOptsForCurrentSession, makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
+import { tryStartCindyMakeCommand } from '../cindyMakeCommand';
 import {
   chooseMakeUpstream,
   ensureMakeTask,
@@ -182,6 +183,45 @@ afterEach(async () => {
 });
 
 describe('doctor cards in the message stream', () => {
+  it.each(['home', 'existing-task'])(
+    'persists the native Make command from %s as a visible card without starting an Agent',
+    async (entry) => {
+      const sessionId = sid();
+      const created = { id: sessionId, agentKind: 'codex', title: 'fix scrolling' };
+      h.create.mockResolvedValue(created);
+      h.update.mockResolvedValue(created);
+      const result = await tryStartCindyMakeCommand({
+        text: '/cindy-make fix scrolling',
+        commands: [{ name: 'cindy-make', kind: 'desktop', description: 'Make' }],
+        sessionId: entry === 'home' ? undefined : sessionId,
+        deviceId: null,
+        hasUnsupportedContent: false,
+        isCurrent: () => true,
+        createOptions: { workspaceKind: 'dialogue', agentKind: 'codex' },
+      });
+      expect(result).toEqual({ kind: 'started', sessionId });
+      const card = messages(sessionId)[0];
+      expect(card.systemCardType).toBe('cindy-make');
+      expect(card.systemCardData?.request).toBe('fix scrolling');
+      expect(card.systemCardData?.modalOnly).toBeUndefined();
+      await vi.waitFor(() => expect(messageService.create).toHaveBeenCalledOnce());
+      expect(messageService.create).toHaveBeenCalledWith(
+        sessionId,
+        expect.objectContaining({
+          content: {
+            __cindyMakeCard: {
+              type: 'cindy-make',
+              data: expect.objectContaining({ request: 'fix scrolling' }),
+            },
+          },
+        }),
+      );
+      expect(h.create).toHaveBeenCalledTimes(entry === 'home' ? 1 : 0);
+      expect(makerChatStore.sendMessage).not.toHaveBeenCalled();
+      expect(h.prepareWorkspace).not.toHaveBeenCalled();
+    },
+  );
+
   it('restores a persisted Make card from the task history', () => {
     const [restored] = makerChatStore.__mapServerMessagesForTest([
       {
@@ -485,6 +525,30 @@ describe('doctor task placement', () => {
     expect(h.prepend).toHaveBeenCalledWith(titled);
     expect(id).toBe(created.id);
   });
+
+  it.each(['success', 'failure'])(
+    'does not publish an old-account task after title update %s',
+    async (outcome) => {
+      const created = { id: sid(), ...createOptions };
+      const pending = deferred<void>();
+      h.create.mockResolvedValue(created);
+      h.update.mockImplementation(async () => {
+        await pending.promise;
+        if (outcome === 'failure') throw new Error('title update failed');
+        return { ...created, title: 'fix scrolling' };
+      });
+      const result = ensureMakeTask({
+        createOptions,
+        title: 'fix scrolling',
+        isCurrent: () => true,
+      });
+      await vi.waitFor(() => expect(h.update).toHaveBeenCalledTimes(1));
+      setDataOwnerGeneration('different-owner');
+      pending.resolve();
+      expect(await result).toBeNull();
+      expect(h.prepend).not.toHaveBeenCalled();
+    },
+  );
 
   it('creates a code task in the prepared source directory and sends the original request', async () => {
     const origin = sid();

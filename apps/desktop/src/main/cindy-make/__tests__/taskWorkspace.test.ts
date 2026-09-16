@@ -46,7 +46,7 @@ describe('prepareCindyMakeWorkspace', () => {
     );
     expect(pnpm).toHaveBeenCalledWith(
       expect.anything(),
-      ['install', '--prefer-offline'],
+      ['install', '--frozen-lockfile', '--prefer-offline', '--prod=false'],
       worktreePath,
       expect.anything(),
     );

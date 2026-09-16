@@ -5652,6 +5652,16 @@
       "permissionModeDisabled": "遠端 IM 使用 Cindy 桌面端確認策略，因此該權限模式不可用。"
     },
     "cindyMake": {
+      "create": {
+        "title": "建立個人版本",
+        "cancel": "取消",
+        "description": "說說你想讓 Cindy 做哪些改變。接下來會開啟製作任務，使用統一流程檢查環境、準備原始碼，再繼續製作。",
+        "requestLabel": "你想做哪些改變？",
+        "requestHint": "最多 {{max}} 字。提交後可在任務中繼續查看進度，離開設定頁不會停止準備。",
+        "placeholder": "例如：在任務清單增加一個只看未完成任務的篩選按鈕。",
+        "continue": "開始製作",
+        "failed": "無法開始製作，需求已保留，請重試。"
+      },
       "title": "Cindy Make",
       "openToolsDir": "打開工具目錄",
       "source": {
@@ -5662,10 +5672,6 @@
         "update": "更新原始碼",
         "preparingAction": "正在準備原始碼",
         "path": "路徑",
-        "channel": "渠道",
-        "version": "版本",
-        "ref": "Ref",
-        "commit": "Commit",
         "status": {
           "missing": "尚未準備個人版原始碼",
           "pending": "正在準備原始碼",
@@ -5680,8 +5686,6 @@
           "confirm": "清理原始碼",
           "cancel": "取消"
         },
-        "branch": "個人版分支",
-        "baseCommit": "基線",
         "description": "Cindy 個人版的原始碼副本。製作個人版時會從個人版分支建立獨立的開發目錄，修改經測試後合併回來；這個目錄本身不用來改程式碼。",
         "stop": "停止"
       },
@@ -12521,20 +12525,22 @@
       "needRequest": "填寫要修改的功能名稱或具體錯誤，查詢相關上游內容。",
       "placeholder": "例如：修復訊息串流閃爍",
       "search": "查詢上游",
-      "searching": "正在查詢上游 Issue 和 PR…",
-      "found": "找到可能相關的上游內容",
-      "notFound": "沒有找到符合的上游內容",
+      "searching": "正在查詢相關上游 PR…",
+      "found": "找到可能相關的 PR",
+      "notFound": "未找到其他相符的 PR",
       "failed": "上游查詢失敗",
       "cancelled": "上游查詢已停止",
       "terms": "查詢關鍵字：{{terms}}",
       "author": "作者：{{author}}",
       "updated": "更新於 {{date}}",
-      "notFoundHint": "沒有找到符合這些關鍵字的公開 Issue 或 PR，換一種描述可能會有其他結果。",
-      "resultHint": "請開啟連結判斷是否相關。這裡只顯示目前開放的 Issue 與 PR。",
+      "expand": "查看查詢結果",
+      "collapse": "收起查詢結果",
+      "notFoundHint": "本次關鍵字查詢未發現其他候選，換一種描述可能會找到更多 PR。",
+      "resultHint": "包含未合併及已合併 PR，已確認包含在目前執行版本中的結果會被排除。請開啟連結判斷是否相關；已合併不等於已發布。",
       "wait": "等待上游",
       "personal": "繼續製作個人版",
       "retry": "重新檢查並查詢",
-      "count": "找到 {{count}} 筆可能相關的開放 Issue 或 PR",
+      "count": "{{count}} 個可能相關的 PR 待查看",
       "kind": {
         "issue": "Issue",
         "pr": "PR"
@@ -12558,6 +12564,22 @@
         "rateLimit": "GitHub 查詢次數受限，請稍後重試。",
         "timeout": "上游查詢逾時，請重試。",
         "invalidResponse": "GitHub 回傳的結果不完整或無法識別，請重試。"
+      },
+      "runtimeUnknown": "無法準確確認目前執行的原始碼（例如有本機修改的 Dev 版），候選 PR 保留供判斷。",
+      "excludedIncluded": "已排除目前執行版本包含的 {{count}} 個 PR。",
+      "limitedHint": "本次只核對了部分搜尋結果，可細化需求以縮小範圍。",
+      "runtimeVersion": "目前執行：{{channel}} {{version}} · {{commit}}",
+      "unknownCommit": "提交未知",
+      "draft": "草稿",
+      "channel": {
+        "dev": "Dev",
+        "beta": "Beta",
+        "release": "發布版"
+      },
+      "inclusion": {
+        "included": "目前執行版本已包含",
+        "notIncluded": "目前執行版本未包含",
+        "unknown": "是否包含尚未確認"
       }
     },
     "title": "Cindy Make",
@@ -12571,8 +12593,10 @@
         "cloning": "正在下載原始碼",
         "fetching": "正在更新儲存庫",
         "checkingOut": "正在切換版本",
-        "preparingBranch": "正在準備個人版分支"
+        "preparingBranch": "正在準備個人版分支",
+        "installing": "正在安裝相依套件"
       },
+      "pending": "等待準備原始碼",
       "ready": "原始碼已準備好",
       "failed": "原始碼準備失敗",
       "cancelled": "原始碼準備已停止",
@@ -12596,8 +12620,15 @@
         "checkingOut": "正在更新檔案"
       },
       "missing": "尚未準備原始碼",
-      "personalBranch": "個人版分支 {{branch}}",
-      "baseCommit": "基於 {{ref}} {{commit}}"
+      "details": {
+        "branch": "個人版分支",
+        "baseRef": "基於 {{ref}}",
+        "baseCommit": "來源版本",
+        "mainCommit": "main 版本",
+        "currentBranch": "目前專案分支",
+        "detached": "不在分支上（固定提交）",
+        "unknown": "更新原始碼後查看"
+      }
     },
     "code": {
       "starting": "正在開啟個人版任務",

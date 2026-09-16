@@ -1,5 +1,11 @@
 import type { MakeToolId } from '../../shared/cindyMakeDoctor.js';
-import { checkMakeToolVersion, type MakeDoctorEnvironment } from './doctor.js';
+import path from 'node:path';
+import {
+  checkMakeToolVersion,
+  makePythonProbeCandidates,
+  untilAborted,
+  type MakeDoctorEnvironment,
+} from './doctor.js';
 import {
   createMakeDoctorEnvironment,
   makeToolProcessEnvironment,
@@ -20,6 +26,33 @@ export interface MakeToolchainEnvironment extends MakeDoctorEnvironment {
   validateTool: (id: MakeToolId, executable: string, signal: AbortSignal) => Promise<boolean>;
   /** Available to subsequent source/build steps, without process.env mutation. */
   processEnvironment: () => NodeJS.ProcessEnv;
+}
+
+export async function resolveMakeToolEnvironment(
+  env: MakeToolchainEnvironment,
+  tools: readonly MakeToolId[],
+  signal: AbortSignal,
+): Promise<NodeJS.ProcessEnv> {
+  for (const tool of tools) {
+    signal.throwIfAborted();
+    const candidates =
+      tool === 'python' ? makePythonProbeCandidates(env.platform) : [makeToolProbe[tool]];
+    let ready = false;
+    for (const [command, args] of candidates) {
+      signal.throwIfAborted();
+      const probe = await untilAborted(env.probe(command, args, signal), signal);
+      if (checkMakeToolVersion(tool, probe, env.platform).status === 'passed') {
+        ready = true;
+        break;
+      }
+    }
+    if (!ready) {
+      const code = tool === 'git' ? 'gitUnavailable' : 'environmentNotReady';
+      throw Object.assign(new Error(code), { code });
+    }
+  }
+  signal.throwIfAborted();
+  return env.processEnvironment();
 }
 
 /** Prefer working system tools, then reuse an already installed managed tool. This is read-only. */
@@ -60,6 +93,23 @@ export function selectMakeToolchainEnvironment(
         // `git lfs version` may resolve through Git's exec-path, and py is a launcher.
         // Do not mistake their executable paths for standalone LFS/Python interpreters.
         if (result.path && id !== 'gitLfs' && command !== 'py') selected[id] = result.path;
+        if (id === 'python' && command === 'py' && !selected.python) {
+          const interpreter = await factory(selected).probe(
+            'py',
+            ['-3', '-c', 'import sys; print(sys.executable)'],
+            signal,
+          );
+          const executable = interpreter.stdout.trim();
+          const paths = base.platform === 'win32' ? path.win32 : path.posix;
+          if (
+            interpreter.status === 'ok' &&
+            paths.isAbsolute(executable) &&
+            !/[\r\n]/.test(executable)
+          ) {
+            selected.python = executable;
+            return { ...result, path: executable, source: 'system' };
+          }
+        }
         return { ...result, source: managed.has(id) ? 'managed' : 'system' };
       }
       const cached = installed[id];

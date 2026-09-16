@@ -22,6 +22,7 @@ import { toast } from '@/lib/toast';
 import {
   isMakeEnvironmentReady,
   type MakeDoctorReport,
+  type MakeRuntimeVersion,
   type MakeUpstreamDecision,
   type MakeUpstreamItem,
 } from '../../../shared/cindyMakeDoctor';
@@ -298,7 +299,7 @@ export function MakeDoctorReportCard({
           : 'text-[var(--text-secondary)]';
   return (
     <section
-      className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      className="min-w-0 w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
       aria-label={t(title)}
     >
       <div className="flex items-center gap-2 px-4 py-3">
@@ -452,44 +453,37 @@ export function MakeDoctorReportCard({
               </p>
               {source && (
                 <>
-                  {(source.phase || source.ref) && (
+                  {source.status !== 'preparing' && (
                     <p className="text-[var(--text-secondary)]">
-                      {source.phase ? t(`cindyMake.source.phase.${source.phase}`) : null}
-                      {source.phase && source.ref ? ' · ' : ''}
-                      {source.ref ?? null}
+                      {t(`cindyMake.source.${source.status}`)}
                     </p>
                   )}
-                  {source.progress && (
+                  {source.status === 'preparing' && source.phase && !source.progress && (
+                    <p className="text-[var(--text-secondary)]">
+                      {t(`cindyMake.source.phase.${source.phase}`)}
+                    </p>
+                  )}
+                  {source.status === 'preparing' && source.progress && (
                     <div
-                      className="flex items-center gap-2 text-12 text-[var(--text-secondary)]"
+                      className="space-y-1 text-12 text-[var(--text-secondary)]"
                       aria-live="polite"
                     >
-                      <Spinner size={14} />
-                      <span>{t(`cindyMake.source.gitProgress.${source.progress.stage}`)}</span>
+                      <div className="flex items-center gap-2">
+                        <Spinner size={14} />
+                        <span>{t(`cindyMake.source.gitProgress.${source.progress.stage}`)}</span>
+                        <span className="text-[var(--text-tertiary)]">
+                          ({source.progress.percent}%)
+                        </span>
+                      </div>
+                      {source.progress.message && (
+                        <p
+                          className="truncate pl-5 font-mono text-11 text-[var(--text-tertiary)]"
+                          title={source.progress.message}
+                        >
+                          {source.progress.message}
+                        </p>
+                      )}
                     </div>
-                  )}
-                  {source.path && (
-                    <p className="break-all font-mono text-12 text-[var(--text-secondary)]">
-                      {source.path}
-                    </p>
-                  )}
-                  {source.branch ? (
-                    <p className="text-12 text-[var(--text-secondary)]">
-                      {t('cindyMake.source.personalBranch', { branch: source.branch })}
-                      {source.commit ? ` · ${source.commit.slice(0, 12)}` : ''}
-                      {source.baseCommit
-                        ? ` · ${t('cindyMake.source.baseCommit', {
-                            ref: source.ref ?? '',
-                            commit: source.baseCommit.slice(0, 12),
-                          })}`
-                        : ''}
-                    </p>
-                  ) : (
-                    source.commit && (
-                      <p className="break-all font-mono text-12 text-[var(--text-secondary)]">
-                        {source.commit}
-                      </p>
-                    )
                   )}
                   {source.error && (
                     <p className="text-[var(--status-danger)]">
@@ -517,36 +511,32 @@ export function MakeDoctorReportCard({
               {preparing && upstream.status !== 'pending' && upstream.status !== 'needsRequest' && (
                 <div className="space-y-2 text-13">
                   {upstream.status === 'found' && (
-                    <p className="font-medium">
-                      {t('cindyMake.upstream.count', { count: upstream.items.length })}
-                    </p>
-                  )}
-                  {upstream.terms?.length ? (
-                    <p className="text-12 text-[var(--text-secondary)]">
-                      {t('cindyMake.upstream.terms', { terms: upstream.terms.join(', ') })}
-                    </p>
-                  ) : null}
-                  {upstream.status === 'found' && (
-                    <ul
-                      // 列表区是弹窗里唯一的滚动区:高度封顶为 5 条收起的行(每行 44px),
-                      // 展开详情或条目更多时在列表内部滚动,弹窗本身不长出滚动条。
-                      className="max-h-[228px] overflow-y-auto overscroll-contain divide-y divide-[var(--border-default)]"
-                    >
-                      {upstream.items.map((item) => (
-                        <MakeUpstreamResult
-                          key={`${report.runId}-${item.kind}-${item.number}`}
-                          item={item}
-                        />
-                      ))}
-                    </ul>
+                    <MakeUpstreamResults
+                      key={report.runId}
+                      items={upstream.items}
+                      terms={upstream.terms}
+                      runtime={upstream.runtime}
+                    />
                   )}
                   {upstream.status === 'failed' && (
                     <p>{t(`cindyMake.upstream.failure.${upstream.failure ?? 'network'}`)}</p>
                   )}
                   {upstream.status === 'notFound' && <p>{t('cindyMake.upstream.notFoundHint')}</p>}
-                  {upstream.status === 'found' && (
+                  {upstream.runtime?.confidence === 'unknown' && (
                     <p className="text-[var(--text-secondary)]">
-                      {t('cindyMake.upstream.resultHint')}
+                      {t('cindyMake.upstream.runtimeUnknown')}
+                    </p>
+                  )}
+                  {!!upstream.excludedIncluded && (
+                    <p className="text-[var(--text-secondary)]">
+                      {t('cindyMake.upstream.excludedIncluded', {
+                        count: upstream.excludedIncluded,
+                      })}
+                    </p>
+                  )}
+                  {upstream.hasMore && (
+                    <p className="text-[var(--text-secondary)]">
+                      {t('cindyMake.upstream.limitedHint')}
                     </p>
                   )}
                 </div>
@@ -634,7 +624,64 @@ export function MakeDoctorReportCard({
   );
 }
 
-/** Each result keeps its own disclosure state; titles remain visible for scanning. */
+function MakeUpstreamResults({
+  items,
+  terms,
+  runtime,
+}: {
+  items: MakeUpstreamItem[];
+  terms?: string[];
+  runtime?: MakeRuntimeVersion;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p>{t('cindyMake.upstream.count', { count: items.length })}</p>
+        <Button
+          variant="secondary"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? (
+            <ChevronDown size={14} aria-hidden />
+          ) : (
+            <ChevronRight size={14} aria-hidden />
+          )}
+          {t(expanded ? 'cindyMake.upstream.collapse' : 'cindyMake.upstream.expand')}
+        </Button>
+      </div>
+      <Collapse open={expanded} id={detailsId} inert={!expanded}>
+        <div className="space-y-2">
+          {runtime && (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('cindyMake.upstream.runtimeVersion', {
+                channel: t(`cindyMake.upstream.channel.${runtime.channel}`),
+                version: runtime.version,
+                commit: runtime.commit?.slice(0, 12) ?? t('cindyMake.upstream.unknownCommit'),
+              })}
+            </p>
+          )}
+          {terms?.length ? (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('cindyMake.upstream.terms', { terms: terms.join(', ') })}
+            </p>
+          ) : null}
+          <ul className="divide-y divide-[var(--border-default)]">
+            {items.map((item) => (
+              <MakeUpstreamResult key={item.kind + '-' + item.number} item={item} />
+            ))}
+          </ul>
+          <p className="text-[var(--text-secondary)]">{t('cindyMake.upstream.resultHint')}</p>
+        </div>
+      </Collapse>
+    </div>
+  );
+}
+
 function MakeUpstreamResult({ item }: { item: MakeUpstreamItem }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -655,6 +702,15 @@ function MakeUpstreamResult({ item }: { item: MakeUpstreamItem }) {
         )}
         <span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">
           {t(`cindyMake.upstream.kind.${item.kind}`)} #{item.number} · {item.title}
+          {item.inclusion && (
+            <span className="mt-1 block text-12 font-normal text-[var(--text-secondary)]">
+              {t(
+                item.draft ? 'cindyMake.upstream.draft' : `cindyMake.upstream.state.${item.state}`,
+              )}
+              {' · '}
+              {t(`cindyMake.upstream.inclusion.${item.inclusion}`)}
+            </span>
+          )}
         </span>
       </button>
       <Collapse open={expanded} id={detailId} inert={!expanded}>

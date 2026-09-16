@@ -136,6 +136,7 @@ export async function ensureMakeTask(input: {
       // The task still exists if the best-effort title write loses a race.
     }
   }
+  if (!isDataOwnerGenerationCurrent(owner)) return null;
   sessionsStore.prependCreated(session);
   return input.isCurrent() ? session.id : null;
 }

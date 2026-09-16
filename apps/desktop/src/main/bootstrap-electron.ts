@@ -1,8 +1,15 @@
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
 import { codexAccountState } from './maker-host/codex-account-auth.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
-import { clearSubscriptionAccountDiscoveredModels, setSubscriptionAccountInvalidatedHandler } from './maker-host/subscription-account-auth.js';
-import { startWorktreeRecycleMaintenance, stopWorktreeRecycleMaintenance, auditRegisteredWorktrees } from './worktree/recycleMaintenance';
+import {
+  clearSubscriptionAccountDiscoveredModels,
+  setSubscriptionAccountInvalidatedHandler,
+} from './maker-host/subscription-account-auth.js';
+import {
+  startWorktreeRecycleMaintenance,
+  stopWorktreeRecycleMaintenance,
+  auditRegisteredWorktrees,
+} from './worktree/recycleMaintenance';
 import { requestWorktreeRecycle } from './worktree/managedRecycle';
 import { recycleSessionWorktreeForStatusChange } from './localDb/ipc/sessions';
 import { tryGetDbClient } from './localDb/client/current';
@@ -28,10 +35,7 @@ import {
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { getSessionThinkingSnapshots, getHistoryToolName } from './messagePersistBroadcaster';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
-import {
-  rememberResolvedAppTheme,
-  resolveAppThemeIsDark,
-} from './resolved-app-theme';
+import { rememberResolvedAppTheme, resolveAppThemeIsDark } from './resolved-app-theme';
 import {
   parseWindowThemeVibrancyPayload,
   readWindowThemeSnapshot,
@@ -295,10 +299,7 @@ import {
   stageLocalFileToCache,
 } from './file-browser/remote-file-cache';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
-import {
-  BRAND_IDENTITY,
-  legacyDialogueUserDataDirNames,
-} from '@cindy/maker-shared/brand-identity';
+import { BRAND_IDENTITY, legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import * as videoCacheStore from './videoCacheStore';
 import { imageSchemePrivilege, registerImageProtocolHandler } from './imageProtocol';
 import { videoSchemePrivilege, registerVideoProtocolHandler } from './videoProtocol';
@@ -318,9 +319,14 @@ import {
   subscribeCindySourceStatus,
 } from './cindy-make/sourcePreparation.js';
 import { broadcastCindyMakeSourceStatus } from './cindy-make/sourceStatusBroadcast.js';
+import { cindyMakeManager } from './cindy-make/manager.js';
+import { broadcastCindyMakeState } from './cindy-make/stateBroadcast.js';
 import { CINDY_MAKE_RUN_ID_PATTERN } from './cindy-make/sourcePaths.js';
 import { prepareCindyMakeWorkspace } from './cindy-make/taskWorkspace.js';
-import { createMakeToolchainEnvironment } from './cindy-make/toolchainEnvironment.js';
+import {
+  createMakeToolchainEnvironment,
+  resolveMakeToolEnvironment,
+} from './cindy-make/toolchainEnvironment.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   collectDatabaseSizeWarningStatus,
@@ -353,10 +359,7 @@ import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './p
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
-import {
-  getSessionRowSnapshot,
-  resumeDeletedPiSubagentCleanup,
-} from './localDb/ipc/sessions';
+import { getSessionRowSnapshot, resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
 import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
@@ -715,7 +718,10 @@ import {
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
 import { hasClaudeAiOAuth } from './maker-host/claude-credentials-store.js';
-import { disconnectClaudeAiOAuth, reconnectClaudeAiOAuth } from './maker-host/claude-oauth-refresh.js';
+import {
+  disconnectClaudeAiOAuth,
+  reconnectClaudeAiOAuth,
+} from './maker-host/claude-oauth-refresh.js';
 import { beginClaudeLocalLogin, cancelClaudeOAuthLogin } from './maker-host/claude-oauth-login.js';
 import {
   runGrokOAuthLogin,
@@ -1016,7 +1022,12 @@ import {
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
 import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
-import { startGoalController, getGoalController, resetGoalController, getGoalTeardownGeneration } from './goal-host/index.js';
+import {
+  startGoalController,
+  getGoalController,
+  resetGoalController,
+  getGoalTeardownGeneration,
+} from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
@@ -1059,7 +1070,11 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
 }
 
 // Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
-configureRoutineHost({ getBot: getBotRemoteResourceSource, getScheduler: getSchedulerIfInitialized, getScheduleStorage });
+configureRoutineHost({
+  getBot: getBotRemoteResourceSource,
+  getScheduler: getSchedulerIfInitialized,
+  getScheduleStorage,
+});
 
 /**
  * Phase 4: 不再用 `_schedulerStarted` flag —— `startScheduler()` 内部以 `_scheduler`
@@ -1138,7 +1153,9 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     // the boundary check immediately before listener publication as a second
     // guard so a stale generation can never make readiness visible.
     if (getGoalTeardownGeneration() !== goalGenBefore) {
-      console.log('[bootstrap-electron] attemptStartScheduler: teardown raced scheduler start, aborting stale scheduler attach');
+      console.log(
+        '[bootstrap-electron] attemptStartScheduler: teardown raced scheduler start, aborting stale scheduler attach',
+      );
       await resetScheduler();
       return;
     }
@@ -1160,7 +1177,9 @@ async function attemptStartSchedulerOnce(): Promise<void> {
   // keep the old post-await fence as well so it cannot continue into
   // GoalController/learn-host startup with the stale maker.
   if (getGoalTeardownGeneration() !== goalGenBefore) {
-    console.log('[bootstrap-electron] attemptStartScheduler: teardown raced scheduler start, aborting stale account startup');
+    console.log(
+      '[bootstrap-electron] attemptStartScheduler: teardown raced scheduler start, aborting stale account startup',
+    );
     return;
   }
   // GoalController 与 scheduler 同就绪点启动(maker + localDb 均 ready):内部幂等
@@ -1263,10 +1282,7 @@ function assertCompactionMutationOwner(raw: unknown): void {
       isAppSessionBoundaryPending(),
     )
   ) {
-    throwIpcError(
-      'PRECONDITION_FAILED',
-      'Compaction setting belongs to a stale account session.',
-    );
+    throwIpcError('PRECONDITION_FAILED', 'Compaction setting belongs to a stale account session.');
   }
 }
 
@@ -1391,9 +1407,7 @@ const chatEmbeddingSettingsWatcher = createChatEmbeddingSettingsWatcher(() => {
 });
 
 function rebindChatEmbeddingSettingsWatcher(): void {
-  chatEmbeddingSettingsWatcher.rebind(
-    ownerScopedUserDataPath('chat-embedding-settings.json'),
-  );
+  chatEmbeddingSettingsWatcher.rebind(ownerScopedUserDataPath('chat-embedding-settings.json'));
 }
 
 app.once('will-quit', () => chatEmbeddingSettingsWatcher.dispose());
@@ -1504,8 +1518,12 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
     }
   };
 
-  await run('interruptGhostCallsForAccountBoundary', () => withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
-  await run('waitForGhostMutations', () => withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
+  await run('interruptGhostCallsForAccountBoundary', () =>
+    withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary),
+  );
+  await run('waitForGhostMutations', () =>
+    withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations),
+  );
   await run('suspendAllGhosts', suspendAllGhosts);
 
   if (failures.length > 0) {
@@ -1525,8 +1543,8 @@ class PiSubagentAccountBoundaryError extends Error {
     detail = 'PI Subagent runners could not be confirmed stopped',
   ) {
     super(
-      `${detail} on ${reason}; `
-      + 'account switch aborted so the outgoing account\'s credentials are not left in use',
+      `${detail} on ${reason}; ` +
+        "account switch aborted so the outgoing account's credentials are not left in use",
     );
     this.name = 'PiSubagentAccountBoundaryError';
   }
@@ -1667,7 +1685,10 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     // The boundary is already marked pending by every caller. New actions now
     // fail closed; drain an action that crossed the boundary before closing its DB.
     try {
-      await withAuthBoundaryTimeout('wait for turn change-set actions', waitForTurnChangeSetActions);
+      await withAuthBoundaryTimeout(
+        'wait for turn change-set actions',
+        waitForTurnChangeSetActions,
+      );
     } catch (error) {
       blockingFailures.push(error);
       authBoundaryLog.error(`waitForTurnChangeSetActions on ${reason} failed`, error);
@@ -1819,136 +1840,137 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       } catch (err) {
         authBoundaryLog.error(`resetGoalController on ${reason} failed (non-fatal):`, err);
       }
-    // Same fence, same ordering argument, as quit and the update relaunch: raised
-    // before `maker.shutdown` so it covers the shutdown *and* the sweep below.
-    // `Maker.shutdown` reports per-session detach failures rather than throwing,
-    // so a parent Pi can survive it — and a survivor could publish a fresh run
-    // after the one-shot sweep had already scanned, handing the next owner a
-    // runner holding the previous account's credentials.
-    //
-    // Unlike quit, this must come down on *every* path. An account boundary swaps
-    // the owner inside a live process: a fence left standing would refuse the
-    // incoming owner's own durable launches for the rest of this process's life.
-    // Raised inside the suppression `try` so that finally releases both.
-        // Did the Maker singleton get poisoned, and is it still holding anything?
+      // Same fence, same ordering argument, as quit and the update relaunch: raised
+      // before `maker.shutdown` so it covers the shutdown *and* the sweep below.
+      // `Maker.shutdown` reports per-session detach failures rather than throwing,
+      // so a parent Pi can survive it — and a survivor could publish a fresh run
+      // after the one-shot sweep had already scanned, handing the next owner a
+      // runner holding the previous account's credentials.
+      //
+      // Unlike quit, this must come down on *every* path. An account boundary swaps
+      // the owner inside a live process: a fence left standing would refuse the
+      // incoming owner's own durable launches for the rest of this process's life.
+      // Raised inside the suppression `try` so that finally releases both.
+      // Did the Maker singleton get poisoned, and is it still holding anything?
+      //
+      // `Maker.shutdown` sets `shutdownStarted` on entry and never clears it, so
+      // once it has run every later `createSession` is refused with "Maker is
+      // shutting down". That is fine when the handover completes — the Maker is
+      // replaced — but an aborted handover leaves the user on the old account
+      // with a singleton that can no longer start a task until the app restarts.
+      let shutdownRan = false;
+      let retainedPiSessions = 0;
+      try {
+        const maker = getMakerIfReady();
+        // Logout / account switch: the owner DbClient is disposed a few lines
+        // below and the gateway credentials behind every proxy token are being
+        // replaced. Adapters that keep parent-independent children alive across an
+        // ordinary close (PI durable Subagents) must stop them here instead.
+        // Marked before the await: `shutdownStarted` is set on entry, so the
+        // singleton is poisoned even if this rejects.
+        if (maker) shutdownRan = true;
+        const shutdownReport = maker
+          ? await maker.shutdown({ reason: 'account-boundary' })
+          : undefined;
+        // A PI session whose detach threw may still have a live process, and that
+        // process owns durable children holding BYOM credentials this account
+        // cannot revoke. Recorded now, acted on after the sweep — the sweep is
+        // still worth running, but it cannot make this failure disappear.
         //
-        // `Maker.shutdown` sets `shutdownStarted` on entry and never clears it, so
-        // once it has run every later `createSession` is refused with "Maker is
-        // shutting down". That is fine when the handover completes — the Maker is
-        // replaced — but an aborted handover leaves the user on the old account
-        // with a singleton that can no longer start a task until the app restarts.
-        let shutdownRan = false;
-        let retainedPiSessions = 0;
-        try {
-          const maker = getMakerIfReady();
-          // Logout / account switch: the owner DbClient is disposed a few lines
-          // below and the gateway credentials behind every proxy token are being
-          // replaced. Adapters that keep parent-independent children alive across an
-          // ordinary close (PI durable Subagents) must stop them here instead.
-          // Marked before the await: `shutdownStarted` is set on entry, so the
-          // singleton is poisoned even if this rejects.
-          if (maker) shutdownRan = true;
-          const shutdownReport = maker
-            ? await maker.shutdown({ reason: 'account-boundary' })
-            : undefined;
-          // A PI session whose detach threw may still have a live process, and that
-          // process owns durable children holding BYOM credentials this account
-          // cannot revoke. Recorded now, acted on after the sweep — the sweep is
-          // still worth running, but it cannot make this failure disappear.
-          //
-          // Only PI is escalated. Other agents' detach failures stay logged and
-          // non-fatal exactly as before: their children die with the parent, so a
-          // failed teardown does not leave revocation-proof credentials in use.
-          const piSessionFailures = (shutdownReport?.sessionFailures ?? [])
-            .filter((failure) => failure.agentKind === 'pi');
-          // A session whose detach failed is *kept*: `Session.detach` leaves it in
-          // `error`, not `closed`, so the Maker keeps its status listener and its
-          // active-session slot deliberately, and a later `shutdown()` retries it.
-          // That makes this Maker the only remaining supervision surface for a PI
-          // process that may still be alive — which decides whether the abort path
-          // below may discard it.
-          retainedPiSessions = piSessionFailures.length;
-          for (const failure of piSessionFailures) {
-            authBoundaryLog.error(
-              `PI session ${failure.sessionId} failed to detach on ${reason}:`,
-              failure.error,
-            );
-          }
-          // maker.shutdown only reaches tasks that still have a live handle. A
-          // detached PI Subagent whose parent task was closed earlier has no handle
-          // left, but it is still holding a transferred proxy lease and still
-          // writing the workspace — sweep the whole agent home so no child of the
-          // outgoing owner survives into the next one. Same call the quit path uses;
-          // idempotent with the per-handle stop above.
-          // This one is *not* non-fatal. Everything below hands the runtime to the
-          // next owner: the Maker is discarded, the outgoing database is disposed
-          // and the app session is committed to a new account. A runner we could
-          // not confirm as stopped keeps running against direct BYOM credentials
-          // from the outgoing account — credentials no token revocation can reach —
-          // so completing the handover would leave the previous account paying for,
-          // and the previous workspace being edited by, a process nobody is left to
-          // supervise. Abort instead and let the logout / switch fail and be
-          // retried. Scope is unchanged: only runs attributable to this runtime are
-          // waited on or killed, so another instance's runners never block us.
-          const stopped = await stopAllPiSubagentRunsForExit(
-            path.join(app.getPath('userData'), 'pi-agent-home'),
-            undefined,
-            // A runner that never consumes its mailbox still holds direct BYOM
-            // credentials from the outgoing account, and those cannot be revoked
-            // the way the proxy token can. Escalate to a verified kill rather than
-            // logging and handing the account over.
-            { hostPid: process.pid, killUnresponsiveRunners: true },
-          ).catch((err: unknown) => {
-            throw new PiSubagentAccountBoundaryError(reason, err);
-          });
-          if (!stopped) throw new PiSubagentAccountBoundaryError(reason);
-          if (piSessionFailures.length > 0) {
-            throw new PiSubagentAccountBoundaryError(
-              reason,
-              piSessionFailures[0]?.error,
-              `${piSessionFailures.length} PI session(s) could not be torn down`,
-            );
-          }
-          resetMaker();
-        } catch (err) {
-          // The abort above must not be laundered into "non-fatal": it is the one
-          // failure in this block that has to stop the handover.
-          if (err instanceof PiSubagentAccountBoundaryError) {
-            authBoundaryLog.error(`${err.message} (cause:`, err.cause, ')');
-            // The handover is aborted and the user stays on the old account — with
-            // a Maker that has already been shut down and now refuses every new
-            // task. Replace it, exactly as the non-fatal path below does, so the
-            // account the user is still on remains usable and a retried logout
-            // starts from a clean instance.
-            //
-            // Only when nothing is still attached to it. Survivors of a *sweep*
-            // failure are detached runners: their ownership lives in durable files,
-            // their pid, and the `runtimeOwnerId` stamped into their status — none
-            // of it on this object, and the retried logout sweeps the whole agent
-            // home again. A session whose *detach* failed is the opposite: the
-            // Maker is holding its handle on purpose so the next `shutdown()` can
-            // retry it, and discarding the instance would orphan a live PI process
-            // still spending this account's credentials. Staying poisoned is the
-            // lesser harm there, and the log above is what says so.
-            if (shutdownRan && retainedPiSessions === 0) resetMaker();
-            markAccountBoundaryAbortedMidTeardown(reason);
-            throw err;
-          }
-          authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
-          resetMaker();
-        }
-        // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
-        // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
-        // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
-        try {
-          await releaseDeviceLinkOwnershipBeforeLogout();
-        } catch (err) {
+        // Only PI is escalated. Other agents' detach failures stay logged and
+        // non-fatal exactly as before: their children die with the parent, so a
+        // failed teardown does not leave revocation-proof credentials in use.
+        const piSessionFailures = (shutdownReport?.sessionFailures ?? []).filter(
+          (failure) => failure.agentKind === 'pi',
+        );
+        // A session whose detach failed is *kept*: `Session.detach` leaves it in
+        // `error`, not `closed`, so the Maker keeps its status listener and its
+        // active-session slot deliberately, and a later `shutdown()` retries it.
+        // That makes this Maker the only remaining supervision surface for a PI
+        // process that may still be alive — which decides whether the abort path
+        // below may discard it.
+        retainedPiSessions = piSessionFailures.length;
+        for (const failure of piSessionFailures) {
           authBoundaryLog.error(
-            `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
-            err,
+            `PI session ${failure.sessionId} failed to detach on ${reason}:`,
+            failure.error,
           );
         }
-        await lifecycleDbClientManager.dispose(reason);
+        // maker.shutdown only reaches tasks that still have a live handle. A
+        // detached PI Subagent whose parent task was closed earlier has no handle
+        // left, but it is still holding a transferred proxy lease and still
+        // writing the workspace — sweep the whole agent home so no child of the
+        // outgoing owner survives into the next one. Same call the quit path uses;
+        // idempotent with the per-handle stop above.
+        // This one is *not* non-fatal. Everything below hands the runtime to the
+        // next owner: the Maker is discarded, the outgoing database is disposed
+        // and the app session is committed to a new account. A runner we could
+        // not confirm as stopped keeps running against direct BYOM credentials
+        // from the outgoing account — credentials no token revocation can reach —
+        // so completing the handover would leave the previous account paying for,
+        // and the previous workspace being edited by, a process nobody is left to
+        // supervise. Abort instead and let the logout / switch fail and be
+        // retried. Scope is unchanged: only runs attributable to this runtime are
+        // waited on or killed, so another instance's runners never block us.
+        const stopped = await stopAllPiSubagentRunsForExit(
+          path.join(app.getPath('userData'), 'pi-agent-home'),
+          undefined,
+          // A runner that never consumes its mailbox still holds direct BYOM
+          // credentials from the outgoing account, and those cannot be revoked
+          // the way the proxy token can. Escalate to a verified kill rather than
+          // logging and handing the account over.
+          { hostPid: process.pid, killUnresponsiveRunners: true },
+        ).catch((err: unknown) => {
+          throw new PiSubagentAccountBoundaryError(reason, err);
+        });
+        if (!stopped) throw new PiSubagentAccountBoundaryError(reason);
+        if (piSessionFailures.length > 0) {
+          throw new PiSubagentAccountBoundaryError(
+            reason,
+            piSessionFailures[0]?.error,
+            `${piSessionFailures.length} PI session(s) could not be torn down`,
+          );
+        }
+        resetMaker();
+      } catch (err) {
+        // The abort above must not be laundered into "non-fatal": it is the one
+        // failure in this block that has to stop the handover.
+        if (err instanceof PiSubagentAccountBoundaryError) {
+          authBoundaryLog.error(`${err.message} (cause:`, err.cause, ')');
+          // The handover is aborted and the user stays on the old account — with
+          // a Maker that has already been shut down and now refuses every new
+          // task. Replace it, exactly as the non-fatal path below does, so the
+          // account the user is still on remains usable and a retried logout
+          // starts from a clean instance.
+          //
+          // Only when nothing is still attached to it. Survivors of a *sweep*
+          // failure are detached runners: their ownership lives in durable files,
+          // their pid, and the `runtimeOwnerId` stamped into their status — none
+          // of it on this object, and the retried logout sweeps the whole agent
+          // home again. A session whose *detach* failed is the opposite: the
+          // Maker is holding its handle on purpose so the next `shutdown()` can
+          // retry it, and discarding the instance would orphan a live PI process
+          // still spending this account's credentials. Staying poisoned is the
+          // lesser harm there, and the log above is what says so.
+          if (shutdownRan && retainedPiSessions === 0) resetMaker();
+          markAccountBoundaryAbortedMidTeardown(reason);
+          throw err;
+        }
+        authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
+        resetMaker();
+      }
+      // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
+      // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
+      // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
+      try {
+        await releaseDeviceLinkOwnershipBeforeLogout();
+      } catch (err) {
+        authBoundaryLog.error(
+          `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
+          err,
+        );
+      }
+      await lifecycleDbClientManager.dispose(reason);
     } finally {
       releaseEndedSuppression();
     }
@@ -2008,7 +2030,8 @@ authManager.setProjectionRepairTeardown(teardownGhostProjectionBoundary);
 void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agent-home'))
   .catch((err: unknown) => {
     piSubagentLog.warn('stale Subagent launch fence cleanup failed (non-fatal):', err);
-  });
+  },
+);
 
 try {
   reapClaudeOrphansSync();
@@ -2353,8 +2376,13 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
-const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(sender =>
-  isResourceUsageOpenSender({ sender, mainWindow: mainWindowRef, senderWindow: BrowserWindow.fromWebContents(sender), isSecondaryAppWindow }),
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
+  isResourceUsageOpenSender({
+    sender,
+    mainWindow: mainWindowRef,
+    senderWindow: BrowserWindow.fromWebContents(sender),
+    isSecondaryAppWindow,
+  }),
 );
 remoteDesktopViewerWindows.register();
 
@@ -2403,9 +2431,7 @@ registerTabOpResultHandler({
 // an automation tab-op pop the sidebar window first when the user prefers
 // detached mode but has the window closed.
 setMainWindowAccessorForBackend(() => rsbWindowController.getHostWebContents());
-setEnsureHostForBackend((sessionId) =>
-  rsbWindowController.ensureOpenForAutomation({ sessionId }),
-);
+setEnsureHostForBackend((sessionId) => rsbWindowController.ensureOpenForAutomation({ sessionId }));
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
   try {
@@ -2576,7 +2602,7 @@ if (started) {
   // 孤儿心跳兜底:如果持有者 PID 已死、心跳却持续刷新锁(更新脚本被
   // 单独 kill、心跳子进程还活着),不能无限等。心跳每次 5s 刷新,连续
   // 3 个心跳周期都看到「PID 死 + mtime 新」就判定为孤儿,清锁继续启动。
-  const orphanGraceMs = (staleAfterMs * 2) + 5_000;
+  const orphanGraceMs = staleAfterMs * 2 + 5_000;
   let deadButFreshSinceMs: number | null = null;
   // 记录是否在锁上等过,供等锁实例醒来后 exec 自己(见循环下方)。
   let waitedForUpdateLock = false;
@@ -3448,9 +3474,7 @@ if (process.platform === 'darwin') {
 function applyMainWindowBackgroundThrottling(): void {
   const win = mainWindowRef;
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-  win.webContents.setBackgroundThrottling(
-    mainWindowBackgroundThrottlingAllowed,
-  );
+  win.webContents.setBackgroundThrottling(mainWindowBackgroundThrottlingAllowed);
 }
 
 function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void {
@@ -3684,12 +3708,12 @@ const createWindow = () => {
   // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
   const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
   const isDark = process.platform === 'win32'
-    ? resolveAppThemeIsDark(
-        nativeTheme.shouldUseDarkColors,
-        persistedTheme?.mode,
-        persistedTheme?.resolvedIsDark,
-      )
-    : nativeTheme.shouldUseDarkColors;
+      ? resolveAppThemeIsDark(
+          nativeTheme.shouldUseDarkColors,
+          persistedTheme?.mode,
+          persistedTheme?.resolvedIsDark,
+        )
+      : nativeTheme.shouldUseDarkColors;
   const bgColor =
     process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
@@ -3908,7 +3932,9 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
-      remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale ?? getPreferredApplicationLocale());
+      remoteDesktopViewerWindows.setLocale(
+        currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
+      );
       remoteDesktopViewerWindows.prewarm();
       // 右侧栏子窗口预热:复刻资源用量窗口模式,主窗口可见后后台创建
       // 隐藏 BrowserWindow 并加载轻量 renderer,后续 detach 点击仅 show+focus。
@@ -4377,10 +4403,7 @@ const registerIpcHandlers = () => {
     }
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);
-      win.webContents.send(
-        WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
-        config.backgroundMaterial,
-      );
+      win.webContents.send(WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL, config.backgroundMaterial);
     }
     win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);
@@ -4389,22 +4412,21 @@ const registerIpcHandlers = () => {
   ipcMain.on(
     'theme:apply-vibrancy',
     (event, rawPayload: unknown) => {
-      assertTrustedAppRendererEvent(event);
-      const payload = parseWindowThemeVibrancyPayload(rawPayload);
-      if (!payload) return;
-      if (payload.mode === undefined || payload.systemModeFollowsSystem === undefined) return;
-      if (process.platform === 'win32') {
-        writeWindowThemeSnapshot(
-          payload.mode,
-          payload.isDark,
-          payload.familyId,
-          payload.systemModeFollowsSystem,
-        );
-      }
-      rememberResolvedAppTheme(payload.isDark);
-      applyWindowVibrancy(payload.familyId, payload.isDark);
-    },
-  );
+    assertTrustedAppRendererEvent(event);
+    const payload = parseWindowThemeVibrancyPayload(rawPayload);
+    if (!payload) return;
+    if (payload.mode === undefined || payload.systemModeFollowsSystem === undefined) return;
+    if (process.platform === 'win32') {
+      writeWindowThemeSnapshot(
+        payload.mode,
+        payload.isDark,
+        payload.familyId,
+        payload.systemModeFollowsSystem,
+      );
+    }
+    rememberResolvedAppTheme(payload.isDark);
+    applyWindowVibrancy(payload.familyId, payload.isDark);
+  });
 
   ipcMain.on('get-app-version', (event) => {
     event.returnValue = app.getVersion();
@@ -4649,14 +4671,15 @@ const registerIpcHandlers = () => {
     return compactionWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (typeof pct !== 'number' || !Number.isFinite(pct)) {
-      throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
-    }
-    assertCompactionMutationOwner(owner);
-    writeCompactionPct(pct);
-    return compactionWire();
-  });
+      assertTrustedAppRendererEvent(event);
+      if (typeof pct !== 'number' || !Number.isFinite(pct)) {
+        throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
+      }
+      assertCompactionMutationOwner(owner);
+      writeCompactionPct(pct);
+      return compactionWire();
+    },
+  );
 
   ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT, async (event) => {
     assertTrustedAppRendererEvent(event);
@@ -4673,14 +4696,15 @@ const registerIpcHandlers = () => {
     return piCompactionWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (typeof pct !== 'number' || !Number.isFinite(pct)) {
-      throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
-    }
-    assertCompactionMutationOwner(owner);
-    writePiCompactionPct(pct);
-    return piCompactionWire();
-  });
+      assertTrustedAppRendererEvent(event);
+      if (typeof pct !== 'number' || !Number.isFinite(pct)) {
+        throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
+      }
+      assertCompactionMutationOwner(owner);
+      writePiCompactionPct(pct);
+      return piCompactionWire();
+    },
+  );
 
   // Window behavior —— swallowActivationClick 保持 renderer 运行时事实标准;
   // Windows / Linux close behavior 由 main 读写并执行。
@@ -4796,23 +4820,22 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET,
     async (_e, owner: unknown) => {
-      assertChatEmbeddingMutationOwner(owner);
-      try {
-        await resetChatEmbeddingSettings(chatEmbeddingDefaultContext());
-      } catch (error) {
-        await scheduleChatEmbeddingRuntimeReconcile();
-        if (!isIpcError(error)) {
-          createSchedulerLogger('chat-embedding-settings').error(
-            'Failed to reset chat embedding settings',
-            { error: error instanceof Error ? error.message : String(error) },
-          );
-        }
-        rethrowChatEmbeddingPersistError(error, 'Failed to reset chat embedding settings');
-      }
+    assertChatEmbeddingMutationOwner(owner);
+    try {
+      await resetChatEmbeddingSettings(chatEmbeddingDefaultContext());
+    } catch (error) {
       await scheduleChatEmbeddingRuntimeReconcile();
-      return chatEmbeddingWire();
-    },
-  );
+      if (!isIpcError(error)) {
+        createSchedulerLogger('chat-embedding-settings').error(
+          'Failed to reset chat embedding settings',
+          { error: error instanceof Error ? error.message : String(error) },
+        );
+      }
+      rethrowChatEmbeddingPersistError(error, 'Failed to reset chat embedding settings');
+    }
+    await scheduleChatEmbeddingRuntimeReconcile();
+    return chatEmbeddingWire();
+  });
 
   // Git safety settings IPC —— store 独立于 Maker 单例,提前注册以便 renderer
   // 启动时同步本地镜像。SET 只影响之后的 turn 边界,已运行 turn 不追溯。
@@ -4886,32 +4909,33 @@ const registerIpcHandlers = () => {
     return { ok: true, authorized: hasClaudeAiOAuth() };
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
-    assertTrustedAppRendererEvent(event);
-    const active = getActiveAppSession();
-    const owner = activeOwnerScopeKey();
+      assertTrustedAppRendererEvent(event);
+      const active = getActiveAppSession();
+      const owner = activeOwnerScopeKey();
     if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
-      throwIpcError('INVALID_PARAMS', 'Provider owner changed');
-    }
-    // Cancel pending Cindy login/refresh before revoking the binding; keep native credentials.
-    try {
-      cancelClaudeOAuthLogin();
-      await disconnectClaudeAiOAuth();
+        throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+      }
+      // Cancel pending Cindy login/refresh before revoking the binding; keep native credentials.
+      try {
+        cancelClaudeOAuthLogin();
+        await disconnectClaudeAiOAuth();
       if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
-      resetProviderModelAutoRefreshCooldowns('anthropic');
-    } catch (err) {
-      throwIpcError(
-        'INTERNAL',
-        `claude oauth logout failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    await broadcastClaudeAuthStateChanged();
+        resetProviderModelAutoRefreshCooldowns('anthropic');
+      } catch (err) {
+        throwIpcError(
+          'INTERNAL',
+          `claude oauth logout failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      await broadcastClaudeAuthStateChanged();
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
-    // Binding revoked: read() clears the Cindy quota snapshot and broadcasts null.
-    syncClaudeSubscriptionUsageForAuthChange();
-    // 模型清单动态发现:登出完成前清空清单 + 删磁盘缓存,并等待旧 SDK 写盘收尾。
-    await clearAnthropicDiscoveredModels();
-    return { authorized: hasClaudeAiOAuth() };
-  });
+      // Binding revoked: read() clears the Cindy quota snapshot and broadcasts null.
+      syncClaudeSubscriptionUsageForAuthChange();
+      // 模型清单动态发现:登出完成前清空清单 + 删磁盘缓存,并等待旧 SDK 写盘收尾。
+      await clearAnthropicDiscoveredModels();
+      return { authorized: hasClaudeAiOAuth() };
+    },
+  );
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async (event, loginKey?: string) => {
     assertTrustedAppRendererEvent(event);
     cancelClaudeOAuthLogin(loginKey);
@@ -4932,7 +4956,10 @@ const registerIpcHandlers = () => {
   setXaiAuthInvalidatedHandler((providerId) => {
     if (providerId !== 'xai') {
       void clearSubscriptionAccountDiscoveredModels(providerId);
-      void syncSubscriptionAccountUsage(providerId).then(broadcastXaiAuthStateChanged, broadcastXaiAuthStateChanged);
+      void syncSubscriptionAccountUsage(providerId).then(
+        broadcastXaiAuthStateChanged,
+        broadcastXaiAuthStateChanged,
+      );
       return;
     }
     resetProviderModelAutoRefreshCooldowns('xai');
@@ -4961,7 +4988,7 @@ const registerIpcHandlers = () => {
       // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
       // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
       await clearXaiSubscriptionUsageSnapshot();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
       // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
       clearXaiDiscoveredModels();
@@ -4988,36 +5015,37 @@ const registerIpcHandlers = () => {
     return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
   });
   ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
-    assertTrustedAppRendererEvent(event);
-    const active = getActiveAppSession();
-    const owner = activeOwnerScopeKey();
+      assertTrustedAppRendererEvent(event);
+      const active = getActiveAppSession();
+      const owner = activeOwnerScopeKey();
     if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
-      throwIpcError('INVALID_PARAMS', 'Provider owner changed');
-    }
-    try {
-      cancelGrokOAuthLogin();
-      logoutGrok();
-      const presentation = retainProviderPresentationAfterAuthChange('xai');
-      resetProviderModelAutoRefreshCooldowns('xai');
-      await clearXaiSubscriptionUsageSnapshot();
-      await presentation;
+        throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+      }
+      try {
+        cancelGrokOAuthLogin();
+        logoutGrok();
+        const presentation = retainProviderPresentationAfterAuthChange('xai');
+        resetProviderModelAutoRefreshCooldowns('xai');
+        await clearXaiSubscriptionUsageSnapshot();
+        await presentation;
       if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
-      clearXaiDiscoveredModels();
-      clearXaiMediaModels();
-    } catch (err) {
-      throwIpcError(
-        'INTERNAL',
-        `xai oauth logout failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    // 登出后同步广播给其它窗口,让已挂载的 useProviders 立刻重拉连接态;
-    // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
-    clearXaiRateLimitSnapshot();
-    await syncXaiSubscriptionUsageForAuthChange();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
-    broadcastXaiAuthStateChanged();
-    return { authorized: hasGrokOAuthLogin() };
-  });
+        clearXaiDiscoveredModels();
+        clearXaiMediaModels();
+      } catch (err) {
+        throwIpcError(
+          'INTERNAL',
+          `xai oauth logout failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // 登出后同步广播给其它窗口,让已挂载的 useProviders 立刻重拉连接态;
+      // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
+      clearXaiRateLimitSnapshot();
+      await syncXaiSubscriptionUsageForAuthChange();
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      broadcastXaiAuthStateChanged();
+      return { authorized: hasGrokOAuthLogin() };
+    },
+  );
   ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_CANCEL, async () => {
     cancelGrokOAuthLogin();
     return { authorized: hasGrokOAuthLogin() };
@@ -5611,18 +5639,26 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
-      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
+      await retainProviderPresentationAfterAuthChange(
+        builtinApiKeyPresentationId(providerId as string),
+      );
     },
   );
 
   ipcMain.handle(
     'builtin-api-key-remove',
-    async (event: Electron.IpcMainInvokeEvent, providerId: unknown, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<void> => {
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      providerId: unknown,
+      ownerScope?: { dataOwnerId: string | null; ownerGeneration: number },
+    ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       const active = getActiveAppSession();
       if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
-      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
+      await retainProviderPresentationAfterAuthChange(
+        builtinApiKeyPresentationId(providerId as string),
+      );
     },
   );
 
@@ -5920,10 +5956,10 @@ const registerIpcHandlers = () => {
         // Scope to this process: `pi-agent-home` is shared with a concurrent
         // dev/packaged/`--passive` instance, and its running Subagents are not
         // a reason to hold up *our* quit.
-        anyPiSubagentRunning: () => hasActivePiSubagentRunsSync(
-          path.join(app.getPath('userData'), 'pi-agent-home'),
-          { hostPid: process.pid },
-        ),
+        anyPiSubagentRunning: () =>
+          hasActivePiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
+            hostPid: process.pid,
+          }),
         // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
         anySchedulerRunRunning: () =>
           readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
@@ -6066,7 +6102,10 @@ const registerIpcHandlers = () => {
     startReadyWorktreeMaintenance();
     // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
     void reconcilePendingSafeDirectoryCleanups().catch((err) => {
-      console.error('[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):', err);
+      console.error(
+        '[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):',
+        err,
+      );
     });
     // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
     // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
@@ -6273,8 +6312,10 @@ const registerIpcHandlers = () => {
         // Mail links are restricted to the fixed billing inbox. Renderer content may
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
-        const isBillingMailto =
-          isAllowedBillingMailtoRequest(url, isTrustedAppRendererEvent(event));
+        const isBillingMailto = isAllowedBillingMailtoRequest(
+          url,
+          isTrustedAppRendererEvent(event),
+        );
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
@@ -7341,19 +7382,30 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     'app:open-cindy-make-tools-dir',
     async (event): Promise<{ success: boolean }> => {
-      assertTrustedAppRendererEvent(event);
-      return openMakeToolsDirectory(app.getPath('userData'), {
-        openPath: (directory) => shell.openPath(directory),
-      });
-    },
-  );
+    assertTrustedAppRendererEvent(event);
+    return openMakeToolsDirectory(app.getPath('userData'), {
+      openPath: (directory) => shell.openPath(directory),
+    });
+  });
 
   ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
     assertTrustedAppRendererEvent(event);
-    return readCurrentCindySourceStatus(makeSourceRoot(app.getPath('userData')));
+    const userData = app.getPath('userData');
+    let env;
+    try {
+      env = await createMakeToolchainEnvironment(userData);
+    } catch {
+      // The persisted status remains usable when tool discovery is unavailable.
+    }
+    return readCurrentCindySourceStatus(makeSourceRoot(userData), env);
   });
   // 源码准备是全局单例:进度广播给所有窗口,任意窗口都能停止它。
   subscribeCindySourceStatus(broadcastCindyMakeSourceStatus);
+  cindyMakeManager.subscribe(broadcastCindyMakeState);
+  ipcMain.handle('app:get-cindy-make-state', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return cindyMakeManager.getState();
+  });
   ipcMain.handle('app:cancel-cindy-make-source', async (event): Promise<{ success: boolean }> => {
     assertTrustedAppRendererEvent(event);
     return { success: cancelCindySourcePreparation() };
@@ -7362,12 +7414,11 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     'app:open-cindy-make-source-dir',
     async (event): Promise<{ success: boolean }> => {
-      assertTrustedAppRendererEvent(event);
-      return openMakeSourceDirectory(app.getPath('userData'), {
-        openPath: (directory) => shell.openPath(directory),
-      });
-    },
-  );
+    assertTrustedAppRendererEvent(event);
+    return openMakeSourceDirectory(app.getPath('userData'), {
+      openPath: (directory) => shell.openPath(directory),
+    });
+  });
 
   // 个人版制作任务的独立开发目录:从个人版基线建任务分支 + worktree 并安装依赖。
   // 只认 runId 形状;路径全部由 main 从 userData 派生,renderer 只拿回结果。
@@ -7379,8 +7430,14 @@ const registerIpcHandlers = () => {
     const userData = app.getPath('userData');
     const env = await createMakeToolchainEnvironment(userData);
     try {
-      return await prepareCindyMakeWorkspace(userData, rawRunId, AbortSignal.timeout(20 * 60_000), {
-        processEnvironment: env.processEnvironment(),
+      const signal = AbortSignal.timeout(20 * 60_000);
+      const processEnvironment = await resolveMakeToolEnvironment(
+        env,
+        ['git', 'node', 'pnpm', 'python'],
+        signal,
+      );
+      return await prepareCindyMakeWorkspace(userData, rawRunId, signal, {
+        processEnvironment,
       });
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
@@ -7967,9 +8024,9 @@ const registerIpcHandlers = () => {
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
         const result = ownerWindow && !ownerWindow.isDestroyed()
-          ? await dialog.showOpenDialog(ownerWindow, options)
-          : await dialog.showOpenDialog(options);
-        return result.canceled ? null : result.filePaths[0] ?? null;
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
       },
       confirmActiveTaskCleanup: async ({ backupEnabled }) => {
         const activeTaskWarning = t(
@@ -7995,8 +8052,8 @@ const registerIpcHandlers = () => {
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
         const result = ownerWindow && !ownerWindow.isDestroyed()
-          ? await dialog.showMessageBox(ownerWindow, options)
-          : await dialog.showMessageBox(options);
+            ? await dialog.showMessageBox(ownerWindow, options)
+            : await dialog.showMessageBox(options);
         return result.response === 0;
       },
       confirmWithoutBackup: async () => {
@@ -8015,8 +8072,8 @@ const registerIpcHandlers = () => {
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
         const result = ownerWindow && !ownerWindow.isDestroyed()
-          ? await dialog.showMessageBox(ownerWindow, options)
-          : await dialog.showMessageBox(options);
+            ? await dialog.showMessageBox(ownerWindow, options)
+            : await dialog.showMessageBox(options);
         return result.response === 0;
       },
       revealFile: async (filePath) => {
@@ -8965,7 +9022,11 @@ app.on('ready', async () => {
         attemptStartScheduler();
         attemptStartEmbeddingHost();
       });
-      accountProviderReadinessArm.publish(userId, startProviderReadiness, resumeIncompleteDiscovery);
+      accountProviderReadinessArm.publish(
+        userId,
+        startProviderReadiness,
+        resumeIncompleteDiscovery,
+      );
       if (makerProviderRefreshConfigured) startProviderReadiness();
       else
         startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
@@ -9835,8 +9896,12 @@ function startReadyWorktreeMaintenance(): void {
   const db = tryGetDbClient();
   if (worktreeRuntimeCloseReady && getMakerIfReady() && db && db !== lastWorktreeMaintenanceDb) {
     lastWorktreeMaintenanceDb = db;
-    void auditRegisteredWorktrees().catch((error) => dbClientLog.warn('worktree audit postponed', error));
-    void WorktreePool.recoverPool().catch((error) => dbClientLog.warn('worktree pool recovery postponed', error));
+    void auditRegisteredWorktrees().catch((error) =>
+      dbClientLog.warn('worktree audit postponed', error),
+    );
+    void WorktreePool.recoverPool().catch((error) =>
+      dbClientLog.warn('worktree pool recovery postponed', error),
+    );
   }
 }
 

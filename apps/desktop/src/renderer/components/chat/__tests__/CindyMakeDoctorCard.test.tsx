@@ -318,7 +318,7 @@ describe('Make upstream step', () => {
       ],
     },
   };
-  it('lists all titles and choices immediately, with independent, initially collapsed details', async () => {
+  it('shows choices immediately and reveals results only on request, without nested scrolling', async () => {
     const choose = vi.fn();
     const openExternal = vi.fn(async () => ({ success: true }));
     vi.stubGlobal('electronAPI', { openExternal });
@@ -330,6 +330,15 @@ describe('Make upstream step', () => {
         onChoose={choose}
       />,
     );
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    expect(screen.queryByRole('list')).toBeNull();
+    expect(screen.getByText('cindyMake.upstream.count')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.wait' })).toBeTruthy();
+    const disclosure = screen.getByRole('button', { name: 'cindyMake.upstream.expand' });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(disclosure);
+    expect(screen.getByRole('list').className).not.toMatch(/overflow-y|max-h/);
     const first = screen.getByRole('button', { name: /#12/ });
     const second = screen.getByRole('button', { name: /#13/ });
     expect(first.querySelector('b')).toBeNull();
@@ -368,6 +377,10 @@ describe('Make upstream step', () => {
     expect(screen.queryByText('<script>literal</script>')).toBeNull();
     expect(screen.getByText('Second result details')).toBeTruthy();
     expect(second.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.collapse' }));
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
   });
   it('renders upstream results directly under the upstream step', () => {
     render(
@@ -383,6 +396,58 @@ describe('Make upstream step', () => {
     expect(step.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(count.compareDocumentPosition(step) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy();
   });
+  it('shows PR state and runtime inclusion separately while leaving source details collapsed', () => {
+    render(
+      <MakeDoctorReportCard
+        report={{
+          ...found,
+          upstream: {
+            ...found.upstream!,
+            runtime: {
+              channel: 'dev',
+              version: '0.0.0',
+              commit: 'a'.repeat(40),
+              confidence: 'unknown',
+            },
+            items: [{ ...found.upstream!.items[0], state: 'merged', inclusion: 'unknown' }],
+            excludedIncluded: 2,
+            hasMore: true,
+          },
+        }}
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+        onChoose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('cindyMake.upstream.runtimeUnknown')).toBeTruthy();
+    expect(screen.getByText('cindyMake.upstream.excludedIncluded')).toBeTruthy();
+    expect(screen.getByText('cindyMake.upstream.limitedHint')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.upstream.runtimeVersion')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
+    expect(screen.getByText('cindyMake.upstream.runtimeVersion')).toBeTruthy();
+    const row = screen.getByRole('button', { name: /#12/ });
+    expect(row.textContent).toContain('cindyMake.upstream.state.merged');
+    expect(row.textContent).toContain('cindyMake.upstream.inclusion.unknown');
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
+  });
+  it('explains an empty filtered result without claiming the search was exhaustive', () => {
+    render(
+      <MakeDoctorReportCard
+        report={{
+          ...found,
+          upstream: { status: 'notFound', items: [], excludedIncluded: 5, hasMore: true },
+        }}
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+        onChoose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('cindyMake.upstream.excludedIncluded')).toBeTruthy();
+    expect(screen.getByText('cindyMake.upstream.limitedHint')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'cindyMake.upstream.expand' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
+  });
   it('shows a completed source status after choosing a personal build', () => {
     render(
       <MakeDoctorReportCard
@@ -395,8 +460,43 @@ describe('Make upstream step', () => {
         onRecheck={vi.fn()}
       />,
     );
-    expect(screen.getAllByText('cindyMake.source.ready')).toHaveLength(1);
+    expect(screen.getAllByText('cindyMake.source.ready')).toHaveLength(2);
     expect(screen.getByRole('status').textContent).toContain('cindyMake.source.ready');
+  });
+  it('keeps source readiness visible without repository details or paths in the workflow card', () => {
+    render(
+      <MakeDoctorReportCard
+        report={{
+          ...found,
+          source: {
+            status: 'ready',
+            path: 'managed-source',
+            ref: 'main',
+            branch: 'cindy-personal',
+            currentBranch: 'feature/current',
+            commit: 'a'.repeat(40),
+            baseCommit: 'b'.repeat(40),
+            mainCommit: 'c'.repeat(40),
+            mainRemoteCommit: 'd'.repeat(40),
+            mainBehind: 5,
+            mainAhead: 2,
+          },
+        }}
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('cindyMake.source.ready')).toBeTruthy();
+    expect(screen.queryByText('cindy-personal')).toBeNull();
+    expect(screen.queryByText('managed-source')).toBeNull();
+    for (const prefix of ['b', 'c']) {
+      expect(screen.queryByText(prefix.repeat(12))).toBeNull();
+    }
+    expect(screen.queryByText('feature/current')).toBeNull();
+    expect(screen.queryByText('main')).toBeNull();
+    expect(screen.queryByText('a'.repeat(12))).toBeNull();
+    expect(screen.queryByText('a'.repeat(40))).toBeNull();
+    expect(screen.queryByText('d'.repeat(12))).toBeNull();
   });
   it('uses a spinner instead of a transient progress bar while preparing source', () => {
     render(
@@ -426,6 +526,7 @@ describe('Make upstream step', () => {
     expect(screen.getByRole('status').textContent).toContain('cindyMake.upstream.choice.personal');
     expect(screen.queryByText('cindyMake.upstream.decisionHint.personal')).toBeNull();
     expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
     fireEvent.click(screen.getByRole('button', { name: /#12/ }));
     view.rerender(
       <MakeDoctorReportCard
@@ -434,10 +535,45 @@ describe('Make upstream step', () => {
       />,
     );
     view.rerender(<MakeDoctorReportCard {...props} report={found} />);
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
     expect(screen.getByRole('button', { name: /#12/ }).getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(screen.getByRole('button', { name: /#12/ }));
     view.rerender(<MakeDoctorReportCard {...props} report={{ ...found, runId: 'next-run' }} />);
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
     expect(screen.getByRole('button', { name: /#12/ }).getAttribute('aria-expanded')).toBe('false');
+  });
+  it('shows the live Git line compactly and clears stale progress once source is ready', () => {
+    const source: NonNullable<MakeDoctorReport['source']> = {
+      status: 'preparing',
+      path: 'managed-source',
+      phase: 'fetching',
+      progress: {
+        stage: 'receiving',
+        percent: 43,
+        message: 'Receiving objects: 43% (43/100), 1.00 MiB | 1.00 MiB/s',
+      },
+    };
+    const props = { onStop: vi.fn(), onRecheck: vi.fn() };
+    const view = render(
+      <MakeDoctorReportCard {...props} report={{ ...found, status: 'running', source }} />,
+    );
+    const progressLine = screen.getByText(source.progress!.message!);
+    expect(progressLine.className).toContain('truncate');
+    expect(progressLine.getAttribute('title')).toBe(source.progress!.message);
+    expect(screen.getByText('(43%)')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.source.phase.fetching')).toBeNull();
+    view.rerender(
+      <MakeDoctorReportCard
+        {...props}
+        report={{ ...found, source: { ...source, status: 'ready' } }}
+      />,
+    );
+    expect(screen.getByText('cindyMake.source.ready')).toBeTruthy();
+    expect(screen.queryByText(source.progress!.message!)).toBeNull();
+    expect(screen.queryByText('cindyMake.source.gitProgress.receiving')).toBeNull();
+    expect(screen.queryByText('cindyMake.source.phase.fetching')).toBeNull();
   });
 });
 const report: MakeDoctorReport = {

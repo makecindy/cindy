@@ -103,7 +103,13 @@ export async function prepareCindyMakeWorkspace(
     }
   }
   onPhase('installing');
-  await pnpm(env, ['install', '--prefer-offline'], worktreePath, signal);
+  await pnpm(
+    env,
+    ['install', '--frozen-lockfile', '--prefer-offline', '--prod=false'],
+    worktreePath,
+    signal,
+  );
+  signal.throwIfAborted();
   return { path: worktreePath, branch, baseCommit: baseCommit.trim() };
 }
 

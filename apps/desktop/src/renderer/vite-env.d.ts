@@ -2994,7 +2994,11 @@ interface ElectronAPI {
   /** Open Cindy's managed Make tools directory (`<userData>/cindy-make/tools`). */
   openCindyMakeToolsDir: () => Promise<{ success: boolean }>;
   getCindyMakeSourceStatus: () => Promise<import('../shared/cindyMakeDoctor').MakeSourceStatus>;
+  getCindyMakeState: () => Promise<import('../shared/cindyMakeDoctor').CindyMakeGlobalState>;
   openCindyMakeSourceDir: () => Promise<{ success: boolean }>;
+  onCindyMakeState: (
+    listener: (state: import('../shared/cindyMakeDoctor').CindyMakeGlobalState) => void,
+  ) => () => void;
   /** Live global source status (Settings and the workflow share one operation). */
   onCindyMakeSourceStatus: (
     listener: (status: import('../shared/cindyMakeDoctor').MakeSourceStatus) => void,

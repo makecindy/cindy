@@ -5656,6 +5656,16 @@
       "permissionModeDisabled": "リモート IM は Cindy Desktop の確認ポリシーを使用するため、この権限モードは利用できません。"
     },
     "cindyMake": {
+      "create": {
+        "title": "個人版を作成",
+        "cancel": "キャンセル",
+        "description": "Cindy をどのように変えたいか教えてください。制作タスクを開き、共通のフローで環境の確認、ソースコードの準備を行ってから制作を進めます。",
+        "requestLabel": "どのように変えたいですか？",
+        "requestHint": "最大 {{max}} 文字。送信後はタスクで進捗を確認できます。設定を離れても準備は止まりません。",
+        "placeholder": "例：タスクリストに未完了のタスクだけを表示するフィルターボタンを追加したい。",
+        "continue": "制作を開始",
+        "failed": "制作を開始できませんでした。入力内容は保持されています。もう一度お試しください。"
+      },
       "title": "Cindy Make",
       "openToolsDir": "ツールフォルダを開く",
       "source": {
@@ -5666,10 +5676,6 @@
         "update": "ソースを更新",
         "preparingAction": "ソースを準備中",
         "path": "パス",
-        "channel": "チャンネル",
-        "version": "バージョン",
-        "ref": "Ref",
-        "commit": "コミット",
         "status": {
           "missing": "個人版のソースコードは未準備です",
           "pending": "ソースを準備中",
@@ -5684,8 +5690,6 @@
           "confirm": "ソースを削除",
           "cancel": "キャンセル"
         },
-        "branch": "個人版ブランチ",
-        "baseCommit": "ベースライン",
         "description": "個人版 Cindy のソースコピーです。個人版を作るたびに個人版ブランチから独立した作業ディレクトリを作成し、テスト済みの変更をここへマージします。このディレクトリ自体を直接編集することはありません。",
         "stop": "停止"
       },
@@ -12525,20 +12529,22 @@
       "needRequest": "変更したい機能名や具体的なエラーを入力して、関連する上流の内容を検索します。",
       "placeholder": "例：メッセージ表示のちらつきを修正",
       "search": "上流を検索",
-      "searching": "上流の Issue と PR を検索中…",
-      "found": "関連する可能性のある上流の内容が見つかりました",
-      "notFound": "一致する上流の内容は見つかりませんでした",
+      "searching": "関連する上流 PR を検索中…",
+      "found": "関連する可能性のある PR が見つかりました",
+      "notFound": "ほかに一致する PR は見つかりませんでした",
       "failed": "上流の検索に失敗しました",
       "cancelled": "上流の検索を停止しました",
       "terms": "検索語：{{terms}}",
       "author": "作成者：{{author}}",
       "updated": "更新日：{{date}}",
-      "notFoundHint": "これらの検索語に一致する公開 Issue や PR はありませんでした。表現を変えると別の結果が見つかる場合があります。",
-      "resultHint": "リンクを開いて関連性を確認してください。現在オープン中の Issue と PR のみ表示しています。",
+      "expand": "検索結果を表示",
+      "collapse": "検索結果を隠す",
+      "notFoundHint": "今回のキーワード検索では追加の候補が見つかりませんでした。別の表現で検索すると、ほかの PR が見つかる場合があります。",
+      "resultHint": "未マージとマージ済みの PR を対象に、実行中のバージョンに含まれると確認できたものは除外します。関連性はリンク先で確認してください。マージ済みでも公開済みとは限りません。",
       "wait": "上流を待つ",
       "personal": "個人版の作成を続ける",
       "retry": "環境を再確認して検索",
-      "count": "関連する可能性のあるオープン Issue／PR が {{count}} 件見つかりました",
+      "count": "関連する可能性のある PR {{count}} 件",
       "kind": {
         "issue": "Issue",
         "pr": "PR"
@@ -12562,6 +12568,22 @@
         "rateLimit": "GitHub のリクエスト制限に達しました。しばらくしてから再試行してください。",
         "timeout": "検索がタイムアウトしました。再試行してください。",
         "invalidResponse": "GitHub の結果が不完全か読み取れません。再試行してください。"
+      },
+      "runtimeUnknown": "実行中のソースを正確に確認できません（ローカル変更のある Dev 版など）。候補の PR は確認用に残します。",
+      "excludedIncluded": "実行中のバージョンに含まれる PR {{count}} 件を除外しました。",
+      "limitedHint": "検索結果の一部のみを確認しました。要望を具体的にすると検索範囲を絞れます。",
+      "runtimeVersion": "実行中：{{channel}} {{version}} · {{commit}}",
+      "unknownCommit": "コミット不明",
+      "draft": "ドラフト",
+      "channel": {
+        "dev": "Dev",
+        "beta": "Beta",
+        "release": "リリース版"
+      },
+      "inclusion": {
+        "included": "実行中のバージョンに含まれます",
+        "notIncluded": "実行中のバージョンには含まれません",
+        "unknown": "実行中のバージョンに含まれるか未確認"
       }
     },
     "title": "Cindy Make",
@@ -12575,8 +12597,10 @@
         "cloning": "ソースをダウンロード中",
         "fetching": "リポジトリを更新中",
         "checkingOut": "バージョンを切替中",
-        "preparingBranch": "個人版ブランチを準備中"
+        "preparingBranch": "個人版ブランチを準備中",
+        "installing": "依存関係をインストール中"
       },
+      "pending": "ソースの準備を待っています",
       "ready": "ソースの準備が完了しました",
       "failed": "ソースの準備に失敗しました",
       "cancelled": "ソースの準備を停止しました",
@@ -12600,8 +12624,15 @@
         "checkingOut": "ファイルを更新中"
       },
       "missing": "ソースはまだ準備されていません",
-      "personalBranch": "個人版ブランチ {{branch}}",
-      "baseCommit": "{{ref}} {{commit}} を基準"
+      "details": {
+        "branch": "個人版ブランチ",
+        "baseRef": "{{ref}} を基準",
+        "baseCommit": "基準バージョン",
+        "mainCommit": "main のバージョン",
+        "currentBranch": "プロジェクトの現在のブランチ",
+        "detached": "ブランチなし（固定コミット）",
+        "unknown": "ソースを更新して確認"
+      }
     },
     "code": {
       "starting": "個人版タスクを開いています",

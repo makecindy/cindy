@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, GitBranch, Wrench } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, GitBranch, Plus, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
@@ -7,15 +7,24 @@ import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { MakeDoctorReportCard } from '@/components/chat/CindyMakeDoctorCard';
+import { CindyMakeSourceDetails } from '@/components/cindy-make/CindyMakeSourceDetails';
+import { CindyMakeCreateDialog } from '@/components/cindy-make/CindyMakeCreateDialog';
 import { cancelMakeDoctor, startMakeDoctor } from '@/lib/cindyMakeDoctor';
 import { useCindyMakeSettings } from '@/lib/cindyMakeSettings';
 import { toast } from '@/lib/toast';
-import type { MakeDoctorReport, MakeSourceStatus } from '../../../shared/cindyMakeDoctor';
+import type {
+  CindyMakeGlobalState,
+  MakeDoctorReport,
+  MakeSourceStatus,
+} from '../../../shared/cindyMakeDoctor';
 
 export function CindyMakeSection() {
   const { t } = useTranslation();
   const { forceManagedTools, setForceManagedTools } = useCindyMakeSettings();
+  const [createOpen, setCreateOpen] = useState(false);
   const [report, setReport] = useState<MakeDoctorReport>();
+  const [backgroundPreparation, setBackgroundPreparation] = useState<MakeDoctorReport>();
+  const environmentSelection = useRef(0);
   const [checkVersion, setCheckVersion] = useState(0);
   const [runMode, setRunMode] = useState<'check' | 'prepare'>('check');
   const [runVersion, setRunVersion] = useState(0);
@@ -29,6 +38,41 @@ export function CindyMakeSection() {
   const [sourceStatus, setSourceStatus] = useState<MakeSourceStatus>();
   const [sourceRunPending, setSourceRunPending] = useState(false);
   const { confirm } = useConfirmDialog();
+  useEffect(() => {
+    let active = true;
+    let latestPush: CindyMakeGlobalState | undefined;
+    const selection = environmentSelection.current;
+    setBackgroundPreparation(undefined);
+    const applyState = (state: CindyMakeGlobalState, restoreCompletion = false) => {
+      if (!active) return;
+      const snapshot = state.environmentPrepare;
+      if (!snapshot || (snapshot.report.forceManagedTools === true) !== forceManagedTools) return;
+      setBackgroundPreparation((current) =>
+        snapshot.active || restoreCompletion || current?.runId === snapshot.report.runId
+          ? snapshot.report
+          : current,
+      );
+    };
+    const unsubscribe = window.electronAPI.onCindyMakeState?.((state) => {
+      latestPush = state;
+      applyState(state);
+    });
+    Promise.resolve(window.electronAPI.getCindyMakeState?.())
+      .then((state) => {
+        if (!state || selection !== environmentSelection.current) return;
+        if (!latestPush) applyState(state);
+        else if (
+          state.environmentPrepare?.active &&
+          latestPush.environmentPrepare?.report.runId === state.environmentPrepare.report.runId
+        )
+          applyState(latestPush, true);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [forceManagedTools]);
   useEffect(() => {
     let active = true;
     const unsubscribe =
@@ -88,6 +132,7 @@ export function CindyMakeSection() {
     return () => controller.abort();
   }, [forceManagedTools, checkVersion, runMode, runVersion]);
   const sourceBusy = sourceRunPending || sourceStatus?.status === 'preparing';
+  const displayReport = backgroundPreparation ?? report;
 
   return (
     <div className="flex flex-col gap-[18px]">
@@ -99,7 +144,12 @@ export function CindyMakeSection() {
         <p className="mt-2 text-13 leading-[1.45] text-[var(--settings-section-desc)]">
           {t('settings.cindyMake.description')}
         </p>
+        <Button className="mt-3" onClick={() => setCreateOpen(true)}>
+          <Plus size={14} aria-hidden="true" />
+          {t('settings.cindyMake.create.title')}
+        </Button>
       </div>
+      {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
 
       {import.meta.env.DEV && (
         <div className="flex flex-col gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
@@ -133,13 +183,15 @@ export function CindyMakeSection() {
         </div>
       )}
 
-      {report ? (
+      {displayReport ? (
         <MakeDoctorReportCard
-          report={report}
+          report={displayReport}
           showSource={false}
           showSteps={false}
           alwaysAllowRecheck
           onPrepare={() => {
+            environmentSelection.current += 1;
+            setBackgroundPreparation(undefined);
             setRunMode('prepare');
             setRunVersion((version) => version + 1);
           }}
@@ -152,11 +204,13 @@ export function CindyMakeSection() {
               .catch(() => toast.error(t('cindyMakeDoctor.failed')));
           }}
           onStop={() => {
-            void cancelMakeDoctor(report.runId, report.mode).catch(() =>
+            void cancelMakeDoctor(displayReport.runId, displayReport.mode).catch(() =>
               toast.error(t('cindyMakeDoctor.failed')),
             );
           }}
           onRecheck={() => {
+            environmentSelection.current += 1;
+            setBackgroundPreparation(undefined);
             setRunMode('check');
             setCheckVersion((version) => version + 1);
           }}
@@ -255,52 +309,14 @@ function CindyMakeSourceStatusCard({
           <p className="text-13 text-[var(--text-secondary)]">
             {t('settings.cindyMake.source.description')}
           </p>
-          <dl className="grid gap-1 text-12 text-[var(--text-secondary)]">
+          {(status.branch || status.commit || status.status === 'ready') && (
+            <CindyMakeSourceDetails source={status} />
+          )}
+          <dl className="grid gap-1 text-12 text-[var(--text-tertiary)]">
             <div>
               <dt className="inline font-medium">{t('settings.cindyMake.source.path')}: </dt>
               <dd className="inline break-all font-mono">{status.path}</dd>
             </div>
-            {status.channel && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.channel')}: </dt>
-                <dd className="inline">{status.channel}</dd>
-              </div>
-            )}
-            {status.version && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.version')}: </dt>
-                <dd className="inline">{status.version}</dd>
-              </div>
-            )}
-            {status.ref && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.ref')}: </dt>
-                <dd className="inline">{status.ref}</dd>
-              </div>
-            )}
-            {status.branch && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.branch')}: </dt>
-                <dd className="inline font-mono">{status.branch}</dd>
-              </div>
-            )}
-            {status.commit && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.commit')}: </dt>
-                <dd className="inline break-all font-mono">{status.commit}</dd>
-              </div>
-            )}
-            {status.baseCommit && (
-              <div>
-                <dt className="inline font-medium">
-                  {t('settings.cindyMake.source.baseCommit')}:{' '}
-                </dt>
-                <dd className="inline break-all font-mono">
-                  {status.ref ? `${status.ref} ` : ''}
-                  {status.baseCommit}
-                </dd>
-              </div>
-            )}
             {status.error && (
               <div className="text-[var(--status-danger)]">
                 {t(`cindyMake.source.errors.${status.error}`)}
@@ -308,12 +324,17 @@ function CindyMakeSourceStatusCard({
             )}
           </dl>
           {preparing && status.progress && (
-            <div
-              className="flex items-center gap-2 text-12 text-[var(--text-secondary)]"
-              aria-live="polite"
-            >
-              <Spinner size={14} />
-              <span>{t(`cindyMake.source.gitProgress.${status.progress.stage}`)}</span>
+            <div className="space-y-1 text-12 text-[var(--text-secondary)]" aria-live="polite">
+              <div className="flex items-center gap-2">
+                <Spinner size={14} />
+                <span>{t(`cindyMake.source.gitProgress.${status.progress.stage}`)}</span>
+                <span className="text-[var(--text-tertiary)]">({status.progress.percent}%)</span>
+              </div>
+              {status.progress.message && (
+                <p className="break-all pl-5 font-mono text-11 text-[var(--text-tertiary)]">
+                  {status.progress.message}
+                </p>
+              )}
             </div>
           )}
         </div>

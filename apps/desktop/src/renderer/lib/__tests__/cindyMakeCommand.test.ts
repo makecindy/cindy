@@ -161,16 +161,11 @@ describe('native environment-check entry', () => {
       expect(h.ensureTask).toHaveBeenCalledWith(
         expect.objectContaining({ sessionId: 'source-task' }),
       );
-      expect(h.start).toHaveBeenCalledExactlyOnceWith(
-        'source-task',
-        invocation,
-        undefined,
-        { modalOnly: true },
-      );
+      expect(h.start).toHaveBeenCalledExactlyOnceWith('source-task', invocation);
     },
   );
 
-  it('passes home preferences only to task creation and returns its modal target', async () => {
+  it('passes home preferences only to task creation and starts a persistent timeline card', async () => {
     h.ensureTask.mockResolvedValue('home-task');
     const createOptions = {
       workspaceKind: 'dialogue',
@@ -192,12 +187,10 @@ describe('native environment-check entry', () => {
       title: 'fix scrolling',
       isCurrent: expect.any(Function),
     });
-    expect(h.start).toHaveBeenCalledWith(
-      'home-task',
-      { command: 'cindy-make', request: 'fix scrolling' },
-      undefined,
-      { modalOnly: true },
-    );
+    expect(h.start).toHaveBeenCalledWith('home-task', {
+      command: 'cindy-make',
+      request: 'fix scrolling',
+    });
   });
 
   it.each(['cindy-make', 'cindy-make-doctor'])(
