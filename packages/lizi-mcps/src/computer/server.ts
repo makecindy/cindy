@@ -5,9 +5,12 @@ import { z } from 'zod';
 import { jsonObjectArg } from '../json-object-arg.js';
 import { resolvePathInsideRoot, PathBoundaryError } from '../shared/assertInsidePath.js';
 import {
-  authorizeSessionPathOutsideWorkdir,
+  authorizeSessionPathWithPinnedAncestors,
   authorizedSessionPathStillBound,
+  captureSessionPathAncestors,
+  grantedSessionPathAncestorsStillMatch,
   resolveCanonicalSessionPath,
+  type SessionPathAncestorIdentity,
 } from '../session-path-auth.js';
 import type {
   ComputerMcpCallContext,
@@ -287,6 +290,7 @@ function isInsideDir(parent: string, child: string): boolean {
 type AuthorizedOutsidePath = {
   path: string;
   isCurrent?: () => boolean;
+  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 };
 
 function authorizedDirPath(
@@ -317,9 +321,19 @@ function staleOutsideGrantResult(tool: string, arg: string) {
 
 async function authorizedPathStillBound(
   workingDir: string,
-  authorized: string,
+  authorized: AuthorizedOutsidePath,
 ): Promise<boolean> {
-  return authorizedSessionPathStillBound(workingDir, authorized);
+  if (!await authorizedSessionPathStillBound(workingDir, authorized.path)) return false;
+  if (!authorized.authorizedAncestors) return true;
+  const current = await captureSessionPathAncestors(authorized.path);
+  return Boolean(
+    current
+    && grantedSessionPathAncestorsStillMatch(
+      authorized.authorizedAncestors,
+      current,
+      authorized.path,
+    ),
+  );
 }
 
 async function resolveReplayBoundPath(
@@ -458,7 +472,7 @@ export function createComputerMcpServer(
       if (outsideGrantExpired(authorized)) {
         return staleOutsideGrantResult(name, key);
       }
-      if (!workingDir || !await authorizedPathStillBound(workingDir, authorized.path)) {
+      if (!workingDir || !await authorizedPathStillBound(workingDir, authorized)) {
         return textResult(
           {
             ok: false,
@@ -651,9 +665,26 @@ export function createComputerMcpServer(
       // is not rejected by a lexical alias mismatch.
       trajectoryRoot = await fs.realpath(directory);
       const authorizedRoot = authorizedDirPath(authorizedOutsidePaths);
+      const dirGrant = authorizedOutsidePaths.get('dir');
       if (authorizedRoot) {
-        if (outsideGrantExpired(authorizedOutsidePaths.get('dir'))) {
+        if (outsideGrantExpired(dirGrant)) {
           return { error: staleOutsideGrantResult('replay_trajectory', 'dir') };
+        }
+        if (dirGrant && !await authorizedPathStillBound(workingDir, dirGrant)) {
+          return {
+            error: textResult(
+              {
+                ok: false,
+                errorCode: 'PATH_NOT_ALLOWED',
+                data: {
+                  tool: 'replay_trajectory',
+                  arg: 'dir',
+                  message: '已授权路径在回放前发生变化，已停止读取。请用当前任务权限重试。',
+                },
+              },
+              true,
+            ),
+          };
         }
         if (!isInsideDir(authorizedRoot, trajectoryRoot)) {
           throw new PathBoundaryError('回放目录不再匹配已授权路径');
@@ -1053,7 +1084,7 @@ export function createComputerMcpServer(
         if (e instanceof PathBoundaryError) {
           const sessionContext = options.getSessionContext?.();
           const abs = await resolveCanonicalSessionPath(workingDir, value);
-          const auth = await authorizeSessionPathOutsideWorkdir({
+          const auth = await authorizeSessionPathWithPinnedAncestors({
             sessionId: sessionContext?.sessionId,
             sessionInstanceId: sessionContext?.sessionInstanceId,
             workingDir,
@@ -1063,23 +1094,10 @@ export function createComputerMcpServer(
             operation: name === 'replay_trajectory' ? 'read' : 'write',
           });
           if (auth.allowed) {
-            if (auth.isCurrent?.() === false) {
-              return textResult(
-                {
-                  ok: false,
-                  errorCode: 'PATH_NOT_ALLOWED',
-                  data: {
-                    tool: name,
-                    arg: key,
-                    message: '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。',
-                  },
-                },
-                true,
-              );
-            }
             parsedData[key] = abs;
             authorizedOutsidePaths.set(key, {
               path: abs,
+              authorizedAncestors: auth.authorizedAncestors,
               ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
             });
             continue;

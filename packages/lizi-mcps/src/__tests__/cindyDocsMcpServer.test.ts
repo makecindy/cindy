@@ -1270,6 +1270,29 @@ describe('路径边界与覆盖语义', () => {
     await expect(fs.stat(outside)).rejects.toThrow();
   });
 
+  it('确认期间外部父目录被换成另一个普通目录则不再写入', async () => {
+    const grantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-swap-during-'));
+    created.push(grantRoot);
+    const grantedDir = path.join(await fs.realpath(grantRoot), 'granted');
+    const evilDir = path.join(await fs.realpath(grantRoot), 'evil');
+    await fs.mkdir(grantedDir);
+    await fs.mkdir(evilDir);
+    const outPath = path.join(grantedDir, 'out.docx');
+    setSessionPathAuthorizer(async () => {
+      await fs.rm(grantedDir, { recursive: true, force: true });
+      await fs.rename(evilDir, grantedDir);
+      return { allowed: true, isCurrent: () => true };
+    });
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# swapped',
+      outPath,
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect((result.data as Record<string, string>).hint).toContain('确认期间');
+    await expect(fs.stat(outPath)).rejects.toThrow();
+  });
+
   it('授权后权限失效则不再落盘', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-grant-'));
     created.push(outside);

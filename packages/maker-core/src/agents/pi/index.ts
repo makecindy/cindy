@@ -30,7 +30,7 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
-import { scanPiSessionJsonl } from './session-jsonl-scan.js';
+import { resolveLocalPiSessionScanFile, scanPiSessionJsonl } from './session-jsonl-scan.js';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -3072,6 +3072,9 @@ export class PiAgent extends BaseAgent {
     await mkdirp(bashPackageHome);
     const sessionDir = joinRemotePosixPath(agentHome, 'sessions');
     await mkdirp(sessionDir);
+    const pinnedRealSessionDir = remote
+      ? null
+      : await fs.realpath(sessionDir).catch(() => null);
 
     // cindy-bridge extension:每次 startSession 覆写,保证桥代码与本版本一致。
     // 远端 launch identity 另含 CINDY_PI_EXTENSION_BUNDLE_HASH(源码字节指纹),
@@ -5383,22 +5386,25 @@ export class PiAgent extends BaseAgent {
 
     const readLocalSessionScan = async () => {
       // 远端 sessionFile 不在本机;带图长任务的 get_entries 会撑破 16 Mi 字符 JSONL 帧。
-      if (remote || typeof sdkSessionId !== 'string' || !path.isAbsolute(sdkSessionId)) return null;
+      // 本机只扫这次 --session-dir 里的普通文件，并带字节/时间预算。
+      if (remote || typeof sdkSessionId !== 'string' || !pinnedRealSessionDir) return null;
+      const sessionFile = await resolveLocalPiSessionScanFile(pinnedRealSessionDir, sdkSessionId);
+      if (!sessionFile) return null;
       try {
-        const stat = await fs.lstat(sdkSessionId);
+        const stat = await fs.lstat(sessionFile);
         if (!stat.isFile() || stat.isSymbolicLink()) return null;
         if (
           localSessionScanCache
-          && localSessionScanCache.file === sdkSessionId
+          && localSessionScanCache.file === sessionFile
           && localSessionScanCache.mtimeMs === stat.mtimeMs
           && localSessionScanCache.size === stat.size
         ) {
           return localSessionScanCache.scan;
         }
-        const scan = await scanPiSessionJsonl(sdkSessionId);
+        const scan = await scanPiSessionJsonl(sessionFile);
         if (scan) {
           localSessionScanCache = {
-            file: sdkSessionId,
+            file: sessionFile,
             mtimeMs: stat.mtimeMs,
             size: stat.size,
             scan,

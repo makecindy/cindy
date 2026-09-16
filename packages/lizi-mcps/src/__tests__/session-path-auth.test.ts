@@ -5,16 +5,20 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  authorizeSessionPathWithPinnedAncestors,
   authorizedSessionPathStillBound,
   captureSessionPathAncestors,
+  grantedSessionPathAncestorsStillMatch,
   resolveCanonicalSessionPath,
   sameSessionPathAncestors,
+  setSessionPathAuthorizer,
 } from '../session-path-auth.js';
 
 const created: string[] = [];
 const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 afterEach(async () => {
+  setSessionPathAuthorizer(undefined);
   await Promise.all(created.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -61,5 +65,85 @@ describe('authorized session path ancestors', () => {
     const after = await captureSessionPathAncestors(granted);
     expect(after).toBeNull();
     expect(sameSessionPathAncestors(before ?? [], after ?? [])).toBe(false);
+  });
+
+  it('sameSessionPathAncestors requires the same path and inode identity', async () => {
+    const root = await makeTempDir('cindy-path-auth-same-');
+    const file = path.join(root, 'leaf.txt');
+    await fs.writeFile(file, 'ok');
+    const first = await captureSessionPathAncestors(file);
+    const second = await captureSessionPathAncestors(file);
+    expect(first).not.toBeNull();
+    expect(sameSessionPathAncestors(first ?? [], second ?? [])).toBe(true);
+    expect(sameSessionPathAncestors(first ?? [], [])).toBe(false);
+    expect(sameSessionPathAncestors([], first ?? [])).toBe(false);
+    expect(sameSessionPathAncestors(first ?? [], [{
+      path: file,
+      dev: 0n,
+      ino: 0n,
+    }, ...(first?.slice(1) ?? [])])).toBe(false);
+  });
+
+  it('rejects a regular file swapped in while the confirm card is up', async () => {
+    const root = await makeTempDir('cindy-path-auth-during-');
+    const file = path.join(root, 'input.txt');
+    await fs.writeFile(file, 'granted');
+    setSessionPathAuthorizer(async () => {
+      await fs.rm(file);
+      await fs.writeFile(file, 'evil');
+      return { allowed: true, isCurrent: () => true };
+    });
+    const result = await authorizeSessionPathWithPinnedAncestors({
+      workingDir: root,
+      path: file,
+      toolName: 'cindy-docs',
+      operation: 'read',
+    });
+    expect(result).toMatchObject({ allowed: false });
+    if (!result.allowed) expect(result.reason).toContain('确认期间');
+  });
+
+  it('rejects a parent directory replaced by another regular directory during authorization', async () => {
+    const root = await makeTempDir('cindy-path-auth-parent-');
+    const grantedDir = path.join(root, 'granted');
+    const evilDir = path.join(root, 'evil');
+    await fs.mkdir(grantedDir);
+    await fs.mkdir(evilDir);
+    const file = path.join(grantedDir, 'input.txt');
+    await fs.writeFile(file, 'granted');
+    await fs.writeFile(path.join(evilDir, 'input.txt'), 'evil');
+    setSessionPathAuthorizer(async () => {
+      await fs.rm(grantedDir, { recursive: true, force: true });
+      await fs.rename(evilDir, grantedDir);
+      return { allowed: true, isCurrent: () => true };
+    });
+    const result = await authorizeSessionPathWithPinnedAncestors({
+      workingDir: root,
+      path: file,
+      toolName: 'cindy-docs',
+      operation: 'read',
+    });
+    expect(result.allowed).toBe(false);
+  });
+
+  it('allows a write target that appears under the same granted parents', async () => {
+    const root = await makeTempDir('cindy-path-auth-write-');
+    const file = path.join(root, 'new.txt');
+    const before = await captureSessionPathAncestors(file);
+    expect(before?.[0]?.path).toBe(root);
+    setSessionPathAuthorizer(async () => {
+      await fs.writeFile(file, 'now-exists');
+      return { allowed: true, isCurrent: () => true };
+    });
+    const result = await authorizeSessionPathWithPinnedAncestors({
+      workingDir: root,
+      path: file,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    });
+    expect(result.allowed).toBe(true);
+    if (result.allowed) {
+      expect(grantedSessionPathAncestorsStillMatch(before ?? [], result.authorizedAncestors, file)).toBe(true);
+    }
   });
 });

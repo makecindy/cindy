@@ -114,6 +114,65 @@ export function sameSessionPathAncestors(
   });
 }
 
+export const SESSION_PATH_IDENTITY_UNPINNABLE_REASON =
+  '路径在确认时无法钉住已授权身份。请确认文件仍是普通路径后重试。';
+export const SESSION_PATH_IDENTITY_CHANGED_REASON =
+  '路径在确认期间发生了变化，这次越界路径授权已失效。请确认目标仍是当时看到的文件后重试。';
+
+/**
+ * Grant-time ancestors must still be present after the confirm card returns.
+ * A write target may appear as a new leaf; any other identity change is a swap.
+ */
+export function grantedSessionPathAncestorsStillMatch(
+  granted: readonly SessionPathAncestorIdentity[],
+  current: readonly SessionPathAncestorIdentity[],
+  target: string,
+): boolean {
+  const resolved = path.resolve(target);
+  if (granted.length === 0 || current.length === 0) return false;
+  if (granted[0]?.path === resolved) {
+    return sameSessionPathAncestors(granted, current);
+  }
+  if (current[0]?.path === resolved && current.length === granted.length + 1) {
+    return sameSessionPathAncestors(granted, current.slice(1));
+  }
+  return sameSessionPathAncestors(granted, current);
+}
+
+/**
+ * Pin the path identity before the Host confirm card, then require the same
+ * ancestors after the wait. A regular file/dir swap during the prompt must
+ * not inherit the allow.
+ */
+export async function authorizeSessionPathWithPinnedAncestors(
+  request: SessionPathAuthorizationRequest,
+): Promise<
+  | { allowed: true; isCurrent?: () => boolean; authorizedAncestors: SessionPathAncestorIdentity[] }
+  | { allowed: false; reason: string }
+> {
+  const granted = await captureSessionPathAncestors(request.path);
+  if (!granted) {
+    return { allowed: false, reason: SESSION_PATH_IDENTITY_UNPINNABLE_REASON };
+  }
+  const auth = await authorizeSessionPathOutsideWorkdir(request);
+  if (!auth.allowed) return auth;
+  if (auth.isCurrent?.() === false) {
+    return {
+      allowed: false,
+      reason: '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。',
+    };
+  }
+  const current = await captureSessionPathAncestors(request.path);
+  if (!current || !grantedSessionPathAncestorsStillMatch(granted, current, request.path)) {
+    return { allowed: false, reason: SESSION_PATH_IDENTITY_CHANGED_REASON };
+  }
+  return {
+    allowed: true,
+    authorizedAncestors: current,
+    ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
+  };
+}
+
 /**
  * Re-resolve the granted path and reject any symlink in the remaining
  * ancestor chain. Missing leaf/parent is allowed so write targets can be

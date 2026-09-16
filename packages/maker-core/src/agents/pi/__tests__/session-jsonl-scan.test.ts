@@ -1,9 +1,12 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { scanPiSessionJsonl } from '../session-jsonl-scan.js';
+import {
+  resolveLocalPiSessionScanFile,
+  scanPiSessionJsonl,
+} from '../session-jsonl-scan.js';
 
 const dirs: string[] = [];
 
@@ -49,5 +52,50 @@ describe('scanPiSessionJsonl', () => {
     await symlink(file, link);
     await expect(scanPiSessionJsonl(link)).resolves.toBeNull();
     await expect(scanPiSessionJsonl(path.dirname(file))).resolves.toBeNull();
+  });
+
+  it('returns null when the scan exceeds the byte budget', async () => {
+    const file = await sessionFile([
+      '{"type":"session","version":3,"id":"s1"}',
+      '{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}',
+    ]);
+    await expect(scanPiSessionJsonl(file, { maxBytes: 16 })).resolves.toBeNull();
+  });
+});
+
+describe('resolveLocalPiSessionScanFile', () => {
+  it('accepts a regular file inside the pinned session dir and rejects anything else', async () => {
+    const sessionDir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pi-session-dir-')));
+    dirs.push(sessionDir);
+    const inside = path.join(sessionDir, 'session.jsonl');
+    await writeFile(inside, '{"type":"session","id":"s1"}\n');
+    const realInside = await realpath(inside);
+    await expect(resolveLocalPiSessionScanFile(sessionDir, inside)).resolves.toBe(realInside);
+    await expect(resolveLocalPiSessionScanFile(sessionDir, 'session.jsonl')).resolves.toBe(realInside);
+
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), 'pi-session-outside-'));
+    dirs.push(outsideDir);
+    const outside = path.join(outsideDir, 'session.jsonl');
+    await writeFile(outside, '{"type":"session","id":"s1"}\n');
+    await expect(resolveLocalPiSessionScanFile(sessionDir, outside)).resolves.toBeNull();
+    await expect(resolveLocalPiSessionScanFile(sessionDir, sessionDir)).resolves.toBeNull();
+  });
+
+  it('rejects a session file whose directory was replaced with an outside symlink', async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pi-session-swap-')));
+    dirs.push(root);
+    const sessionDir = path.join(root, 'sessions');
+    const evilDir = path.join(root, 'evil');
+    await mkdir(sessionDir);
+    await mkdir(evilDir);
+    const pinned = await realpath(sessionDir);
+    const inside = path.join(sessionDir, 'session.jsonl');
+    await writeFile(inside, '{"type":"session","id":"granted"}\n');
+    await writeFile(path.join(evilDir, 'session.jsonl'), '{"type":"session","id":"evil"}\n');
+    await expect(resolveLocalPiSessionScanFile(pinned, inside)).resolves.not.toBeNull();
+
+    await rm(sessionDir, { recursive: true, force: true });
+    await symlink(evilDir, sessionDir, process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(resolveLocalPiSessionScanFile(pinned, inside)).resolves.toBeNull();
   });
 });

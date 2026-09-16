@@ -40,7 +40,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   不得再因「不在会话工作目录内」悄悄硬断，把 Agent 晾在空转里。  cindy-docs 与电脑截图 /
   录制路径同样走这条会话权限，不得在工具层再静默 PATH_NOT_ALLOWED。  授权卡片与后续
   I/O 绑定已解析的规范路径，工作目录里的 symlink 不能把越界目标藏成相对路径；
-  外部输入还要钉住授权祖先身份，Forge 的授权代次要跟到最终写入和安装。电脑
+  越界确认前钉住祖先身份，确认后必须对上；Forge 的授权代次要跟到最终写入和安装。电脑
   驱动契约只丢掉 Cindy 后加的兼容字段（目前是 `delivery_mode`），其它未知参数仍拒。Setup、OAuth、Secret 的信息
   输入与安装／更新策略保持原边界。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
   注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
@@ -66,7 +66,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
-  时从本机 session JSONL 校正；远端仍走 `get_entries`。
+  时从本机 session JSONL 校正（只打开启动时 `--session-dir` 真身内的普通文件，
+  并有字节/时间预算，超限回退 RPC）；远端仍走 `get_entries`。
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
