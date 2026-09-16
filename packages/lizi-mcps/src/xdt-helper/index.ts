@@ -38,6 +38,10 @@ export {
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,
 } from './archive_sessions.js';
+export { SESSION_OPS_MAX_BATCH, type SessionOpErrorCode, type SessionOpItem, type SessionOpResult } from './_session_ops.js';
+export { registerMoveSessionsTool, type MoveSessionsDeps, type MoveSessionsResult, type SessionMoveTarget } from './move_sessions.js';
+export { registerOpenSessionInNewWindowTool, type OpenSessionInNewWindowDeps, type OpenSessionInNewWindowResult } from './open_session_in_new_window.js';
+export { registerGetSessionBranchesTool, type GetSessionBranchesDeps, type GetSessionBranchesResult, type SessionBranchItem } from './get_session_branches.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,
