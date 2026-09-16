@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  pinLocalPiSessionDir,
   resolveLocalPiSessionScanFile,
   scanPiSessionJsonl,
 } from '../session-jsonl-scan.js';
@@ -80,18 +81,20 @@ describe('resolveLocalPiSessionScanFile', () => {
   it('accepts a regular file inside the pinned session dir and rejects anything else', async () => {
     const sessionDir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pi-session-dir-')));
     dirs.push(sessionDir);
+    const pinned = await pinLocalPiSessionDir(sessionDir);
+    expect(pinned).not.toBeNull();
     const inside = path.join(sessionDir, 'session.jsonl');
     await writeFile(inside, '{"type":"session","id":"s1"}\n');
     const realInside = await realpath(inside);
-    await expect(resolveLocalPiSessionScanFile(sessionDir, inside)).resolves.toBe(realInside);
-    await expect(resolveLocalPiSessionScanFile(sessionDir, 'session.jsonl')).resolves.toBe(realInside);
+    await expect(resolveLocalPiSessionScanFile(pinned!, inside)).resolves.toBe(realInside);
+    await expect(resolveLocalPiSessionScanFile(pinned!, 'session.jsonl')).resolves.toBe(realInside);
 
     const outsideDir = await mkdtemp(path.join(os.tmpdir(), 'pi-session-outside-'));
     dirs.push(outsideDir);
     const outside = path.join(outsideDir, 'session.jsonl');
     await writeFile(outside, '{"type":"session","id":"s1"}\n');
-    await expect(resolveLocalPiSessionScanFile(sessionDir, outside)).resolves.toBeNull();
-    await expect(resolveLocalPiSessionScanFile(sessionDir, sessionDir)).resolves.toBeNull();
+    await expect(resolveLocalPiSessionScanFile(pinned!, outside)).resolves.toBeNull();
+    await expect(resolveLocalPiSessionScanFile(pinned!, sessionDir)).resolves.toBeNull();
   });
 
   it('rejects a session file whose directory was replaced with an outside symlink', async () => {
@@ -101,14 +104,32 @@ describe('resolveLocalPiSessionScanFile', () => {
     const evilDir = path.join(root, 'evil');
     await mkdir(sessionDir);
     await mkdir(evilDir);
-    const pinned = await realpath(sessionDir);
+    const pinned = await pinLocalPiSessionDir(sessionDir);
+    expect(pinned).not.toBeNull();
     const inside = path.join(sessionDir, 'session.jsonl');
     await writeFile(inside, '{"type":"session","id":"granted"}\n');
     await writeFile(path.join(evilDir, 'session.jsonl'), '{"type":"session","id":"evil"}\n');
-    await expect(resolveLocalPiSessionScanFile(pinned, inside)).resolves.not.toBeNull();
+    await expect(resolveLocalPiSessionScanFile(pinned!, inside)).resolves.not.toBeNull();
 
     await rm(sessionDir, { recursive: true, force: true });
     await symlink(evilDir, sessionDir, process.platform === 'win32' ? 'junction' : 'dir');
-    await expect(resolveLocalPiSessionScanFile(pinned, inside)).resolves.toBeNull();
+    await expect(resolveLocalPiSessionScanFile(pinned!, inside)).resolves.toBeNull();
+  });
+
+  it('rejects a session file whose directory was replaced by a new ordinary directory', async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pi-session-replace-')));
+    dirs.push(root);
+    const sessionDir = path.join(root, 'sessions');
+    await mkdir(sessionDir);
+    const pinned = await pinLocalPiSessionDir(sessionDir);
+    expect(pinned).not.toBeNull();
+    const inside = path.join(sessionDir, 'session.jsonl');
+    await writeFile(inside, '{"type":"session","id":"granted"}\n');
+    await expect(resolveLocalPiSessionScanFile(pinned!, inside)).resolves.not.toBeNull();
+
+    await rm(sessionDir, { recursive: true, force: true });
+    await mkdir(sessionDir);
+    await writeFile(inside, '{"type":"session","id":"evil"}\n');
+    await expect(resolveLocalPiSessionScanFile(pinned!, inside)).resolves.toBeNull();
   });
 });

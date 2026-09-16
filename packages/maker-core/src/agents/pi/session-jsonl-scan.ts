@@ -116,16 +116,69 @@ function isInsideDir(dir: string, candidate: string): boolean {
   return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
+export type PinnedPiSessionDir = {
+  realPath: string;
+  dev: bigint;
+  ino: bigint;
+};
+
+/**
+ * 启动时钉住 --session-dir 的目录身份。只记路径名的话，原目录被挪走、
+ * 同路径再放一个普通目录时，后续 JSONL 扫描会读到替换文件。
+ * 目录身份只用 dev/ino：往里面写 JSONL 会改 ctime，不能拿世代当钉。
+ */
+export async function pinLocalPiSessionDir(sessionDir: string): Promise<PinnedPiSessionDir | null> {
+  if (!sessionDir) return null;
+  try {
+    const listed = await fs.lstat(sessionDir, { bigint: true });
+    if (!listed.isDirectory() || listed.isSymbolicLink() || listed.dev === 0n || listed.ino === 0n) {
+      return null;
+    }
+    const realPath = await fs.realpath(sessionDir);
+    const realListed = await fs.lstat(realPath, { bigint: true });
+    if (
+      !realListed.isDirectory()
+      || realListed.isSymbolicLink()
+      || realListed.dev !== listed.dev
+      || realListed.ino !== listed.ino
+    ) {
+      return null;
+    }
+    return {
+      realPath,
+      dev: listed.dev,
+      ino: listed.ino,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function pinnedSessionDirStillBound(pin: PinnedPiSessionDir): Promise<boolean> {
+  try {
+    const listed = await fs.lstat(pin.realPath, { bigint: true });
+    return (
+      listed.isDirectory()
+      && !listed.isSymbolicLink()
+      && listed.dev === pin.dev
+      && listed.ino === pin.ino
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * get_state.sessionFile 必须落在启动时钉住的 --session-dir 真身里。
- * 用启动时的 realpath，不跟随后来被换成界外链接的 session-dir。
+ * 用启动时的目录身份，不跟随后来被换成链接或同名新目录的 session-dir。
  */
 export async function resolveLocalPiSessionScanFile(
-  pinnedRealSessionDir: string,
+  pinnedSessionDir: PinnedPiSessionDir,
   sessionFile: string,
 ): Promise<string | null> {
-  if (!pinnedRealSessionDir || !sessionFile) return null;
-  const resolvedSessionDir = path.resolve(pinnedRealSessionDir);
+  if (!pinnedSessionDir.realPath || !sessionFile) return null;
+  if (!await pinnedSessionDirStillBound(pinnedSessionDir)) return null;
+  const resolvedSessionDir = pinnedSessionDir.realPath;
   const resolvedFile = path.isAbsolute(sessionFile)
     ? path.resolve(sessionFile)
     : path.resolve(resolvedSessionDir, sessionFile);
@@ -135,6 +188,7 @@ export async function resolveLocalPiSessionScanFile(
     if (!listed.isFile() || listed.isSymbolicLink()) return null;
     const realFile = await fs.realpath(resolvedFile);
     if (!isInsideDir(resolvedSessionDir, realFile)) return null;
+    if (!await pinnedSessionDirStillBound(pinnedSessionDir)) return null;
     return realFile;
   } catch {
     return null;

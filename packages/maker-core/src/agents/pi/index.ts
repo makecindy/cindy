@@ -30,7 +30,7 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
-import { resolveLocalPiSessionScanFile, scanPiSessionJsonl } from './session-jsonl-scan.js';
+import { pinLocalPiSessionDir, resolveLocalPiSessionScanFile, scanPiSessionJsonl } from './session-jsonl-scan.js';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -3074,7 +3074,7 @@ export class PiAgent extends BaseAgent {
     await mkdirp(sessionDir);
     const pinnedRealSessionDir = remote
       ? null
-      : await fs.realpath(sessionDir).catch(() => null);
+      : await pinLocalPiSessionDir(sessionDir);
 
     // cindy-bridge extension:每次 startSession 覆写,保证桥代码与本版本一致。
     // 远端 launch identity 另含 CINDY_PI_EXTENSION_BUNDLE_HASH(源码字节指纹),
