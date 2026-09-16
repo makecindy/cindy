@@ -95,6 +95,13 @@ function throwResultError(
 }
 
 export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
+  if (input.authorizedOutsideWorkdir && input.isCurrent?.() === false) {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      '任务权限已变化，这次越界路径授权已失效。',
+      '请用当前任务权限重试。',
+    );
+  }
   const parentDir = path.dirname(input.path);
   const lexicalParent = path.resolve(parentDir);
   const parentRelativePath = relativeOutputParentPath(input.root, lexicalParent);

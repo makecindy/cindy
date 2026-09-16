@@ -40,6 +40,7 @@ export interface PiTransportCloseInfo {
 
 export type PiLineHandler = (line: string) => void;
 export type PiCloseHandler = (info: PiTransportCloseInfo) => void;
+export type PiOversizedFrameHandler = () => void;
 
 /**
  * 双向 transport。一个实例只服务一个 PiRpcProcess (1:1)。
@@ -56,6 +57,12 @@ export interface PiTransport {
 
   /** 注册关闭回调。触发后此 transport 不再可用, writeLine 一律 reject。 */
   onClose(handler: PiCloseHandler): () => void;
+
+  /**
+   * (可选) 丢掉超限 JSONL 帧时通知协议层。合法 get_entries 带图历史可以超过
+   * 16 MiB；transport 必须保持存活，但对应 pending RPC 不能再空等超时。
+   */
+  onOversizedFrame?(handler: PiOversizedFrameHandler): () => void;
 
   /** 主动关闭。幂等; resolve 后内部资源已释放。 */
   close(reason?: string): Promise<void>;
@@ -132,6 +139,7 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   }
 
   const lineHandlers = new Set<PiLineHandler>();
+  const oversizedHandlers = new Set<PiOversizedFrameHandler>();
   const closeHandlers = new Set<PiCloseHandler>();
   const stderrHandlers = new Set<(line: string) => void>();
   const stderrBuffer: string[] = [];
@@ -174,6 +182,9 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   attachJsonlReader(child.stdout, (line) => {
     if (closed) return;
     for (const handler of lineHandlers) handler(line);
+  }, () => {
+    if (closed) return;
+    for (const handler of oversizedHandlers) handler();
   });
   attachJsonlReader(child.stderr, (line) => {
     if (line.trim().length === 0) return;
@@ -304,6 +315,11 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
       return () => { closeHandlers.delete(handler); };
     },
 
+    onOversizedFrame(handler: PiOversizedFrameHandler): () => void {
+      oversizedHandlers.add(handler);
+      return () => { oversizedHandlers.delete(handler); };
+    },
+
     close(reason = 'pi transport close()'): Promise<void> {
       if (closed) return Promise.resolve();
       if (closeAttempt) return closeAttempt;
@@ -356,6 +372,7 @@ export const MAX_JSONL_BUFFER_CHARS = 16 * 1024 * 1024;
 export function attachJsonlReader(
   stream: NodeJS.ReadableStream,
   onLine: (line: string) => void,
+  onOversizedFrame?: () => void,
 ): void {
   let decoder = new StringDecoder('utf8');
   let buffer = '';
@@ -392,6 +409,7 @@ export function attachJsonlReader(
             `[pi] JSONL line buffer exceeded ${MAX_JSONL_BUFFER_CHARS} chars without newline — discarding until next newline`,
           );
           skippingOversizedLine = true;
+          onOversizedFrame?.();
           dropThroughNewline();
         }
         return;
@@ -400,6 +418,7 @@ export function attachJsonlReader(
         console.warn(
           `[pi] JSONL line exceeded ${MAX_JSONL_BUFFER_CHARS} chars — discarding oversized frame`,
         );
+        onOversizedFrame?.();
         buffer = buffer.slice(newlineIndex + 1);
         continue;
       }

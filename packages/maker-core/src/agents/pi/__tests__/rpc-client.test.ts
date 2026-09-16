@@ -9,17 +9,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  PI_RPC_OVERSIZED_FRAME_ERROR,
   PiRpcProcess,
   PiRpcRequestTimeoutError,
   type PiRpcSpawnOptions,
 } from '../rpc-client.js';
-import type { PiTransport, PiLineHandler, PiCloseHandler } from '../transport.js';
+import type { PiTransport, PiLineHandler, PiCloseHandler, PiOversizedFrameHandler } from '../transport.js';
 
 // ── Fake transport:捕获 writeLine,手动触发 onLine/onClose ─────────────
 function makeFakeTransport() {
   const written: Array<{ line: string; resolve: () => void; reject: (e: Error) => void }> = [];
   let lineHandler: PiLineHandler | undefined;
   let closeHandler: PiCloseHandler | undefined;
+  let oversizedHandler: PiOversizedFrameHandler | undefined;
   const transport = {
     writeLine: vi.fn((line: string) => {
       return new Promise<void>((resolve, reject) => {
@@ -28,16 +30,18 @@ function makeFakeTransport() {
     }),
     onLine: vi.fn((h: PiLineHandler) => { lineHandler = h; return () => { lineHandler = undefined; }; }),
     onClose: vi.fn((h: PiCloseHandler) => { closeHandler = h; return () => { closeHandler = undefined; }; }),
+    onOversizedFrame: vi.fn((h: PiOversizedFrameHandler) => { oversizedHandler = h; return () => { oversizedHandler = undefined; }; }),
     onStderr: vi.fn(() => () => undefined),
     close: vi.fn(async () => { closeHandler?.({ code: 0, signal: null, reason: 'test close' }); }),
     isClosed: vi.fn(() => false),
     get pid() { return 1234; },
   } satisfies PiTransport;
   const emitLine = (line: string) => lineHandler?.(line);
+  const emitOversized = () => oversizedHandler?.();
   const drain = () => {
     for (const w of written.splice(0)) w.resolve();
   };
-  return { transport, emitLine, drain, written };
+  return { transport, emitLine, emitOversized, drain, written };
 }
 
 function makeProc(overrides: Partial<PiRpcSpawnOptions> = {}) {
@@ -238,5 +242,18 @@ describe('PiRpcProcess close semantics (bridge-disconnect vs explicit close)', (
     await expect(proc.close()).resolves.toBeUndefined();
 
     expect(killRemoteSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails a pending get_entries immediately when the transport drops an oversized frame', async () => {
+    const { transport, emitOversized, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.request({ type: 'get_entries' });
+    drain();
+    emitOversized();
+    await expect(pending).resolves.toMatchObject({
+      success: false,
+      command: 'get_entries',
+      error: PI_RPC_OVERSIZED_FRAME_ERROR,
+    });
   });
 });

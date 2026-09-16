@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
   assertOutputExtension,
+  commitDocsOutput,
   describeOutput,
   DocsPathError,
   prepareOutputPath,
@@ -102,13 +103,7 @@ export function registerMakeDocxTool(
           ...(trimmedTitle.length > 0 ? { title: trimmedTitle } : {}),
           ...(subtitle ? { subtitle } : {}),
         });
-        await writeDocsOutput({
-          root,
-          path: abs,
-          data: buffer,
-          overwrite,
-          authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
-        });
+        await commitDocsOutput(writeDocsOutput, root, prepared, buffer, overwrite);
         return okPayload({
           ...describeOutput(root, abs, buffer.byteLength),
           format: 'docx',

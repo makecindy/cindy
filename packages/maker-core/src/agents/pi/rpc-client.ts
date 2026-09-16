@@ -19,7 +19,7 @@ import type { PiTransport } from './transport.js';
 
 export { attachJsonlReader } from './transport.js';
 export { createPiStdioTransport } from './transport.js';
-export type { PiTransport, PiTransportCloseInfo, PiLineHandler, PiCloseHandler } from './transport.js';
+export type { PiTransport, PiTransportCloseInfo, PiLineHandler, PiCloseHandler, PiOversizedFrameHandler } from './transport.js';
 
 /** pi RPC 响应帧。 */
 export interface PiRpcResponse {
@@ -36,6 +36,9 @@ export interface PiRpcEvent {
   type: string;
   [key: string]: unknown;
 }
+
+export const PI_RPC_OVERSIZED_FRAME_ERROR =
+  'RPC response exceeded 16 MiB and was discarded.';
 
 export class PiRpcRequestTimeoutError extends Error {
   readonly code = 'PI_RPC_TIMEOUT';
@@ -142,6 +145,7 @@ export class PiRpcProcess {
       this.failAllPending(new Error(`pi process exited (code=${info.code}, signal=${info.signal})`));
       opts.onExit({ code: info.code, signal: info.signal });
     });
+    this.transport.onOversizedFrame?.(() => this.failOversizedPending());
   }
 
   get pid(): number | undefined {
@@ -375,6 +379,26 @@ export class PiRpcProcess {
         frames: Object.fromEntries(this.eventFrameCounts),
       });
       this.eventFrameCounts.clear();
+    }
+  }
+
+  private failOversizedPending(): void {
+    const victims = [...this.pending.entries()].filter(([, entry]) => entry.commandType === 'get_entries');
+    const targets = victims.length > 0 ? victims : this.pending.size === 1 ? [...this.pending.entries()] : [];
+    if (targets.length === 0) {
+      this.logger.warn('pi rpc: discarded oversized JSONL frame with no matching pending request');
+      return;
+    }
+    for (const [id, entry] of targets) {
+      clearTimeout(entry.timer);
+      this.pending.delete(id);
+      entry.resolve({
+        type: 'response',
+        id,
+        command: entry.commandType,
+        success: false,
+        error: PI_RPC_OVERSIZED_FRAME_ERROR,
+      });
     }
   }
 

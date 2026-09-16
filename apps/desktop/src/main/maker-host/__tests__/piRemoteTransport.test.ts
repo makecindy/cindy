@@ -355,7 +355,9 @@ describe('SSH stdout buffer overflow guard', () => {
       logger: fakeLogger() as never,
     });
     const lines: string[] = [];
+    const oversized: unknown[] = [];
     transport.onLine((line) => lines.push(line));
+    transport.onOversizedFrame?.(() => oversized.push(true));
     const closed: PiTransportCloseInfo[] = [];
     transport.onClose((info) => closed.push(info));
 
@@ -367,6 +369,7 @@ describe('SSH stdout buffer overflow guard', () => {
 
     expect(closed).toHaveLength(0);
     expect(handle.kill).not.toHaveBeenCalled();
+    expect(oversized).toHaveLength(1);
     expect(lines).toEqual(['{"ok":1}']);
     await expect(transport.writeLine('{"type":"request"}')).resolves.toBeUndefined();
   });

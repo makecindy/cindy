@@ -1224,7 +1224,7 @@ describe('路径边界与覆盖语义', () => {
     setSessionPathAuthorizer(async (request) => {
       expect(request.path).toBe(outPath);
       expect(request.operation).toBe('write');
-      return { allowed: true };
+      return { allowed: true, isCurrent: () => true };
     });
     const client = await connect();
     const result = await callTool(client, 'make_docx', {
@@ -1246,7 +1246,7 @@ describe('路径边界与覆盖语义', () => {
     const canonical = path.join(await fs.realpath(outside), 'escaped.docx');
     setSessionPathAuthorizer(async (request) => {
       expect(request.path).toBe(canonical);
-      return { allowed: true };
+      return { allowed: true, isCurrent: () => true };
     });
     const client = await connect();
     const result = await callTool(client, 'make_docx', {
@@ -1268,6 +1268,24 @@ describe('路径边界与覆盖语义', () => {
     expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
     expect((result.data as Record<string, string>).hint).toContain('审阅拒绝');
     await expect(fs.stat(outside)).rejects.toThrow();
+  });
+
+  it('授权后权限失效则不再落盘', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-grant-'));
+    created.push(outside);
+    const outPath = path.join(await fs.realpath(outside), 'stale.docx');
+    const isCurrent = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    setSessionPathAuthorizer(async () => ({ allowed: true, isCurrent }));
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# stale',
+      outPath,
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect((result.data as Record<string, string>).hint).toContain('当前任务权限');
+    await expect(fs.stat(outPath)).rejects.toThrow();
   });
 
   it('同名文件默认不覆盖,overwrite:true 才覆盖', async () => {

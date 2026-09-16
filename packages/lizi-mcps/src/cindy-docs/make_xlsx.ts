@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
   assertOutputExtension,
+  commitDocsOutput,
   describeOutput,
   DocsPathError,
   prepareOutputPath,
@@ -455,13 +456,13 @@ export function registerMakeXlsxTool(
         }
 
         const arrayBuffer = await workbook.xlsx.writeBuffer();
-        await writeDocsOutput({
+        await commitDocsOutput(
+          writeDocsOutput,
           root,
-          path: abs,
-          data: Buffer.from(arrayBuffer as ArrayBuffer),
+          prepared,
+          Buffer.from(arrayBuffer as ArrayBuffer),
           overwrite,
-          authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
-        });
+        );
         return okPayload({
           ...describeOutput(root, abs, arrayBuffer.byteLength),
           format: 'xlsx',

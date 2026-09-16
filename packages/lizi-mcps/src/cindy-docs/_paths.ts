@@ -21,12 +21,51 @@ import {
   resolveCanonicalSessionPath,
 } from '../session-path-auth.js';
 import { PathBoundaryError, resolvePathInsideRoot } from '../shared/assertInsidePath.js';
-import type { DocsMcpSessionCtx } from './types.js';
+import type { DocsMcpSessionCtx, WriteDocsOutputFn } from './types.js';
 
 export type PreparedDocsPath = {
   abs: string;
   authorizedOutsideWorkdir: boolean;
+  isCurrent?: () => boolean;
 };
+
+export function assertDocsGrantCurrent(isCurrent?: () => boolean): void {
+  if (isCurrent?.() === false) {
+    throw new DocsPathError(
+      'PATH_NOT_ALLOWED',
+      '任务权限已变化，这次越界路径授权已失效。',
+      '请用当前任务权限重试。',
+    );
+  }
+}
+
+export function docsReadOptions(prepared: PreparedDocsPath): {
+  allowOutsideRoot?: boolean;
+  isCurrent?: () => boolean;
+} {
+  return {
+    allowOutsideRoot: prepared.authorizedOutsideWorkdir,
+    ...(prepared.isCurrent ? { isCurrent: prepared.isCurrent } : {}),
+  };
+}
+
+export async function commitDocsOutput(
+  writeDocsOutput: WriteDocsOutputFn,
+  root: string,
+  prepared: PreparedDocsPath,
+  data: Uint8Array,
+  overwrite: boolean,
+): Promise<void> {
+  assertDocsGrantCurrent(prepared.isCurrent);
+  await writeDocsOutput({
+    root,
+    path: prepared.abs,
+    data,
+    overwrite,
+    authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
+    ...(prepared.isCurrent ? { isCurrent: prepared.isCurrent } : {}),
+  });
+}
 
 /** 工具层可识别的路径类失败。code 直接进 payload 的 errorCode。 */
 export class DocsPathError extends Error {
@@ -119,7 +158,11 @@ async function resolveDocsPath(
     if (auth.isCurrent?.() === false) {
       toPathError(err, inputPath, '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。');
     }
-    return { abs, authorizedOutsideWorkdir: true };
+    return {
+      abs,
+      authorizedOutsideWorkdir: true,
+      ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
+    };
   }
 }
 
@@ -254,8 +297,9 @@ export async function readInputFileWithinLimit(
   abs: string,
   maxBytes: number,
   tooLarge: (bytes: number) => DocsPathError,
-  options?: { allowOutsideRoot?: boolean },
+  options?: { allowOutsideRoot?: boolean; isCurrent?: () => boolean },
 ): Promise<Buffer> {
+  assertDocsGrantCurrent(options?.isCurrent);
   // 校验与读取绑定到同一个已打开文件身份，封住路径检查后父目录被换成根外
   // symlink 的窗口；身份不可用的网络盘 fail closed，不拿 0 === 0 放行。
   let canonicalPath: string;

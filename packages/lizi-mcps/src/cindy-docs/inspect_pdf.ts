@@ -21,6 +21,7 @@ import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
+  docsReadOptions,
   DocsPathError,
   prepareInputPath,
   readInputFileWithinLimit,
@@ -168,7 +169,7 @@ export function registerInspectPdfTool(
               `PDF 过大: ${bytes} 字节`,
               `PDF 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出检查上限(64 MB)。请先压缩或拆分 PDF。`,
             ),
-          { allowOutsideRoot: prepared.authorizedOutsideWorkdir },
+          docsReadOptions(prepared),
         );
         if (data.byteLength === 0) {
           return errorPayload(

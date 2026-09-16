@@ -36,6 +36,7 @@ import type {
   PiTransportCloseInfo,
   PiLineHandler,
   PiCloseHandler,
+  PiOversizedFrameHandler,
   PiRemoteFileOps,
 } from '@cindy/maker-core';
 
@@ -521,6 +522,7 @@ function createSshPiChannelTransport(
   let envWritten = false;
 
   const lineHandlers = new Set<PiLineHandler>();
+  const oversizedHandlers = new Set<PiOversizedFrameHandler>();
   const closeHandlers = new Set<PiCloseHandler>();
   const stderrHandlers = new Set<(line: string) => void>();
   const pendingWrites: Array<{ line: string; resolve: () => void; reject: (err: Error) => void }> = [];
@@ -566,6 +568,12 @@ function createSshPiChannelTransport(
 
   const fireLine = (line: string): void => {
     for (const handler of lineHandlers) handler(line);
+  };
+
+  const fireOversizedFrame = (): void => {
+    for (const handler of oversizedHandlers) {
+      try { handler(); } catch { /* handler should not throw */ }
+    }
   };
 
   const fireStderr = (line: string): void => {
@@ -728,6 +736,7 @@ function createSshPiChannelTransport(
                 bytes: stdoutBuffer.length,
               });
               skippingOversizedLine = true;
+              fireOversizedFrame();
               stdoutBuffer = '';
               stdoutDecoder = new StringDecoder('utf8');
             }
@@ -738,6 +747,7 @@ function createSshPiChannelTransport(
               hostId: opts.remoteHost.id,
               bytes: newlineIndex,
             });
+            fireOversizedFrame();
             stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
             continue;
           }
@@ -855,6 +865,11 @@ function createSshPiChannelTransport(
     onClose(handler: PiCloseHandler): () => void {
       closeHandlers.add(handler);
       return () => { closeHandlers.delete(handler); };
+    },
+
+    onOversizedFrame(handler: PiOversizedFrameHandler): () => void {
+      oversizedHandlers.add(handler);
+      return () => { oversizedHandlers.delete(handler); };
     },
 
     async close(reason = 'pi ssh transport close()'): Promise<void> {

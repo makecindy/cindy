@@ -17,7 +17,9 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
   assertOutputExtension,
+  commitDocsOutput,
   describeOutput,
+  docsReadOptions,
   DocsPathError,
   prepareInputPath,
   prepareOutputPath,
@@ -519,7 +521,7 @@ export function registerMakePptxTool(
                   `第 ${index + 1} 页的图片过大: ${size} 字节`,
                   `图片 "${slide.imagePath}" 有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单张图片上限(12 MB)。请先压缩或缩小图片。`,
                 ),
-              { allowOutsideRoot: imagePrepared.authorizedOutsideWorkdir },
+              docsReadOptions(imagePrepared),
             );
             const mime = detectPptxImageMime(bytes);
             if (!mime || !(await validateDecodablePptxImage(bytes))) {
@@ -846,13 +848,7 @@ export function registerMakePptxTool(
         const buffer = (await pptx.write({
           outputType: 'nodebuffer',
         })) as Buffer;
-        await writeDocsOutput({
-          root,
-          path: abs,
-          data: buffer,
-          overwrite,
-          authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
-        });
+        await commitDocsOutput(writeDocsOutput, root, prepared, buffer, overwrite);
         return okPayload({
           ...describeOutput(root, abs, buffer.byteLength),
           format: 'pptx',

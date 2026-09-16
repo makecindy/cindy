@@ -336,13 +336,15 @@ describe('attachJsonlReader', () => {
   it('discards an oversized unterminated line through its newline, then resumes (round 21 H-3)', () => {
     const stream = makeStream();
     const lines: string[] = [];
+    const oversized = vi.fn();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    attachJsonlReader(stream, (l) => lines.push(l));
+    attachJsonlReader(stream, (l) => lines.push(l), oversized);
     // 超 16MB 无换行的流仍是同一行,不能把后续残余当新帧。
     const big = 'a'.repeat(16 * 1024 * 1024 + 100);
     stream.emit('data', big);
     stream.emit('data', 'residual-base64-fragment\n{"ok":1}\n');
     expect(lines).toEqual(['{"ok":1}']);
+    expect(oversized).toHaveBeenCalledOnce();
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });

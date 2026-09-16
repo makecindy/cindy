@@ -324,13 +324,14 @@ async function readXlsx(
   startColumn: number,
   maxColumns: number,
   allowOutsideRoot = false,
+  isCurrent?: () => boolean,
 ): Promise<SheetRead> {
   const archive = await readInputFileWithinLimit(
     root,
     absPath,
     MAX_XLSX_BYTES,
     xlsxTooLarge,
-    { allowOutsideRoot },
+    { allowOutsideRoot, isCurrent },
   );
   return readXlsxInWorker(archive, sheetSelector, startRow, maxRows, startColumn, maxColumns);
 }
@@ -344,6 +345,7 @@ async function readTextTable(
   startColumn: number,
   maxColumns: number,
   allowOutsideRoot = false,
+  isCurrent?: () => boolean,
 ): Promise<SheetRead> {
   const bytes = await readInputFileWithinLimit(
     root,
@@ -355,7 +357,7 @@ async function readTextTable(
         `文本表格过大: ${size} 字节`,
         `这个文件有 ${(size / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先让用户拆分文件,或改用命令行工具处理。`,
       ),
-    { allowOutsideRoot },
+    { allowOutsideRoot, isCurrent },
   );
   const text = decodeUnicodeText(bytes, '文本表格');
   const parsed = parseDelimitedWindow(text, {
@@ -433,11 +435,13 @@ export function registerReadSheetTool(
           result = await readXlsx(
             root, abs, sheet, startRow, maxRows, startColumn, maxColumns,
             prepared.authorizedOutsideWorkdir,
+            prepared.isCurrent,
           );
         } else if (ext === '.csv' || ext === '.tsv' || ext === '.tab' || ext === '.txt') {
           result = await readTextTable(
             root, abs, ext, startRow, maxRows, startColumn, maxColumns,
             prepared.authorizedOutsideWorkdir,
+            prepared.isCurrent,
           );
         } else if (ext === '.xls') {
           return errorPayload(

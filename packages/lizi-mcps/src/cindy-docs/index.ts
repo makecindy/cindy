@@ -42,7 +42,10 @@ export {
 } from './csv.js';
 export {
   DocsPathError,
+  assertDocsGrantCurrent,
+  commitDocsOutput,
   describeOutput,
+  docsReadOptions,
   prepareInputPath,
   prepareOutputPath,
   readInputFileWithinLimit,

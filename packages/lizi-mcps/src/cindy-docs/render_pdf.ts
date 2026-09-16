@@ -19,7 +19,9 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
   assertOutputExtension,
+  commitDocsOutput,
   describeOutput,
+  docsReadOptions,
   DocsPathError,
   prepareInputPath,
   prepareOutputPath,
@@ -825,7 +827,7 @@ async function snapshotLocalResource(
         `本地资源过大: ${preparedPath}`,
         `这份本地资源有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单个资源上限(8 MB)。请压缩或改成更小的 data URI。`,
       ),
-    { allowOutsideRoot: prepared.authorizedOutsideWorkdir },
+    docsReadOptions(prepared),
   );
   const afterDirectory = await captureDirectorySnapshot(resourceDirectory);
   if (!sameDirectorySnapshot(beforeDirectory, afterDirectory)) {
@@ -1117,7 +1119,7 @@ export function registerRenderPdfTool(
                   `HTML 过大: ${bytes} 字节`,
                   `这份 HTML 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出 PDF 渲染上限(16 MB)。请压缩内联图片/字体或拆分文档后重试。`,
                 ),
-              { allowOutsideRoot: sourcePrepared?.authorizedOutsideWorkdir === true },
+              sourcePrepared ? docsReadOptions(sourcePrepared) : undefined,
             )
           : undefined;
         const sourceHtml = sourceBytes ? decodeUnicodeText(sourceBytes, 'HTML') : html!;
@@ -1183,13 +1185,7 @@ export function registerRenderPdfTool(
             {},
           );
         }
-        await writeDocsOutput({
-          root,
-          path: abs,
-          data: buffer,
-          overwrite,
-          authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
-        });
+        await commitDocsOutput(writeDocsOutput, root, prepared, buffer, overwrite);
 
         const described = describeOutput(root, abs, buffer.byteLength);
         const warnings: string[] = [];
