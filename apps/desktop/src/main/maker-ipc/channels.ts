@@ -25,6 +25,8 @@ export const MAKER_INVOKE = {
    */
   SESSION_ENABLE_ORCA: 'maker:session:enable-orca',
   SESSION_DISABLE_ORCA: 'maker:session:disable-orca',
+  /** renderer 回填「该会话是否真的在 turn 中」的权威运行态(#4513 中断横幅假阳性)。 */
+  SESSION_TURN_ACTIVE: 'maker:session:turn-active',
   CLOSE_SESSION: 'maker:close-session',
   /**
    * 单条 user / assistant 消息本地内容删除。保留后续可见消息，但清当前原生

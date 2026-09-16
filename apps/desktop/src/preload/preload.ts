@@ -6392,6 +6392,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<import('@cindy/maker-core').ContextUsageData> =>
       ipcRenderer.invoke('maker:get-context-usage', sessionId, createOpts),
 
+    getSessionTurnActive: (sessionId: string): Promise<{ inTurn: boolean }> =>
+      ipcRenderer.invoke('maker:session:turn-active', sessionId),
+
     abortSession: (sessionId: string): Promise<void> =>
       ipcRenderer.invoke('maker:abort-session', sessionId),
 

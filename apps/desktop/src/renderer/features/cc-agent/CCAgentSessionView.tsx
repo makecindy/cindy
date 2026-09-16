@@ -134,6 +134,7 @@ import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
+import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
@@ -2129,29 +2130,60 @@ export function CCAgentSessionView({
       setSessionInterruptAcked(false);
     }
   }, [syntheticContinuationPending, sessionInterruptAcked]);
+  // main 真值回填(#4513):双时间戳候选对任何在飞 turn 都成立,而运行态抑制依赖的
+  // status(isRunning) 事件在协同 worker 会话上可能缺失/迟到(消息流与状态流是两条通道,
+  // 实测「流式输出中误显中断横幅」)。候选出现(activeTurnStartedAt 变化)时向 main 查一次
+  // 权威运行态;null=未确认,在真值回来前不把候选当中断证据(决策见 sessionInterruptBannerModel.ts)。
+  const [mainTurnActive, setMainTurnActive] = useState<boolean | null>(null);
+  const activeTurnStartedAt = session?.activeTurnStartedAt ?? null;
+  useEffect(() => {
+    if (!sessionId || activeTurnStartedAt == null) {
+      setMainTurnActive(null);
+      return;
+    }
+    let cancelled = false;
+    setMainTurnActive(null);
+    window.electronAPI.maker
+      .getSessionTurnActive(sessionId)
+      .then((result) => {
+        if (!cancelled) setMainTurnActive(result?.inTurn === true);
+      })
+      .catch(() => {
+        // 查询失败按未确认处理:宁可漏显横幅,不把在飞 turn 误判成中断。
+        if (!cancelled) setMainTurnActive(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, activeTurnStartedAt]);
   // sessionId 必须在 deps 里:running→running 切会话时 isRunning 布尔值不变(true→true),
   // 只依赖它会漏掉新会话的"跑起来即熄灭"锁存——上面的 reset effect 把 acked 清成 false 后
   // 没人再置回。此时切入时拉的 session 快照天然 startedAt > endedAt(turn 在飞,ended 未写),
   // 用户点 stop 的瞬间 isRunning 落 false、ended 落库广播还没到,双时间戳判定短暂成立,
   // 「应用退出中断」横幅会闪现一帧(假阳性)。带上 sessionId 让每次切换后按新会话当前
-  // isRunning 重新锁存。
+  // isRunning 重新锁存。mainTurnActive === true 同样锁存(main 真值回填,见上)。
   useEffect(() => {
-    if (agentStatus.isRunning || remoteTurnActive) setSessionInterruptAcked(true);
-  }, [sessionId, agentStatus.isRunning, remoteTurnActive]);
-  const interruptedFromSession = useMemo(() => {
-    if (sessionInterruptAcked || remoteTurnActive) return false;
-    const started = session?.activeTurnStartedAt ?? null;
-    if (!started) return false;
-    const ended = session?.lastTurnEndedAt ?? 0;
-    const cleared = session?.clearedAt ? Date.parse(session.clearedAt) : 0;
-    return started > ended && started > cleared;
-  }, [
-    session?.activeTurnStartedAt,
-    session?.lastTurnEndedAt,
-    session?.clearedAt,
-    sessionInterruptAcked,
-    remoteTurnActive,
-  ]);
+    if (agentStatus.isRunning || remoteTurnActive || mainTurnActive === true) setSessionInterruptAcked(true);
+  }, [sessionId, agentStatus.isRunning, remoteTurnActive, mainTurnActive]);
+  const interruptedFromSession = useMemo(
+    () =>
+      resolveSessionInterruptCandidate({
+        acked: sessionInterruptAcked,
+        remoteTurnActive,
+        mainTurnActive,
+        activeTurnStartedAt,
+        lastTurnEndedAt: session?.lastTurnEndedAt ?? null,
+        clearedAtMs: session?.clearedAt ? Date.parse(session.clearedAt) : null,
+      }),
+    [
+      activeTurnStartedAt,
+      session?.lastTurnEndedAt,
+      session?.clearedAt,
+      sessionInterruptAcked,
+      remoteTurnActive,
+      mainTurnActive,
+    ],
+  );
   // 打开会话且中断判定不成立(peer 已忽略 / 续跑已完成 / 用户已操作)时重算告警:
   // 红点是 pending-alerts 的派生,这里只触发重查,由差分决定清不清 —— 不直接清点,
   // 否则会抹掉同一会话上仍未处理的错误尾行告警。
