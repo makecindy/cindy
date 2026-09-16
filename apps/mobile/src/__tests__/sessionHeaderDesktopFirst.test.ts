@@ -159,7 +159,9 @@ describe('mobile session header desktop-first surface', () => {
     expect(boundary).toContain('setAttachments([]);');
     expect(boundary).toContain('setAttachmentPreviews({});');
     expect(boundary).toContain('setMediaAssetAttachments({});');
-    expect(boundary).toContain('setPendingMediaAssets([]);');
+    // Thumbnail selections are committed immediately; task switches clear the
+    // canonical attachment collection instead of a separate pending-media list.
+    expect(boundary).toContain('attachmentsRef.current = [];');
     expect(boundary).toContain('setComposerPreviewAttachmentId(null);');
     expect(boundary).toContain('composerAnnotationsRef.current?.forgetAllAttachments();');
     expect(boundary).toContain('discardMobileUploadedAttachment(attachment');

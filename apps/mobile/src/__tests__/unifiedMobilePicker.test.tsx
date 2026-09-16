@@ -3,6 +3,7 @@ import { createElement, act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerSheet } from '@/session/UnifiedModelPickerSheet';
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-uuid' }));
 const test = vi.hoisted(() => ({ view: null as any, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[] }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
 vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0})}));
@@ -97,7 +98,7 @@ it('silences background favorite sync failures',async()=>{
 });
 
 it('puts only a compact countdown and remaining percentage in the model quota line',async()=>{
-  test.quotas={account:{remaining:40,resetsAt:273600}};
+  test.quotas={account:{remaining:40,resetsAt:273600,source:'claude',raw:{sevenDay:{utilization:60,resetsAt:273600}}}};
   await mount();
   const row=test.view.groups[0].rows[0];
   expect(row.quotaLabel).toBe('4models.unified.timeUnit.day · 40%');
