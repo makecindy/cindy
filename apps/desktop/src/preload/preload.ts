@@ -2117,6 +2117,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ownerOpenId: string | null;
       error?: string;
       lifecycleAnnouncement: boolean;
+      allowStrangerChats: boolean;
       service: 'feishu' | 'lark';
     }> => ipcRenderer.invoke('feishuBot:get-state'),
     save: (payload: {
@@ -2131,6 +2132,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clear: (): Promise<{ ok: true }> => ipcRenderer.invoke('feishuBot:clear'),
     setLifecycleAnnouncement: (enabled: boolean): Promise<{ ok: true }> =>
       ipcRenderer.invoke('feishuBot:set-lifecycle-announcement', { enabled }),
+    setAllowStrangerChats: (enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('feishuBot:set-allow-stranger-chats', { enabled }),
     registrationBegin: (
       service: 'feishu' | 'lark',
     ): Promise<{
@@ -2236,15 +2239,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       emojiReactions: 'off' | 'minimal' | 'expressive';
       replyQuoteGroup: 'off' | 'first' | 'all';
       replyQuoteDm: 'off' | 'first';
+      allowNonOwnerMessages?: boolean;
     }> => ipcRenderer.invoke('telegramBot:get-behavior'),
     setBehavior: (patch: {
       emojiReactions?: 'off' | 'minimal' | 'expressive';
       replyQuoteGroup?: 'off' | 'first' | 'all';
       replyQuoteDm?: 'off' | 'first';
+      allowNonOwnerMessages?: boolean;
     }): Promise<{
       emojiReactions: 'off' | 'minimal' | 'expressive';
       replyQuoteGroup: 'off' | 'first' | 'all';
       replyQuoteDm: 'off' | 'first';
+      allowNonOwnerMessages?: boolean;
     }> => ipcRenderer.invoke('telegramBot:set-behavior', patch),
     // 人格(soul + 名字); syncProfile=true 时顺带 setMyName 同步资料页。
     getPersona: (): Promise<{ botName: string; soul: string }> =>

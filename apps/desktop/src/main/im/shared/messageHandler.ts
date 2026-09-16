@@ -389,6 +389,9 @@ export function createMessageHandler(
         ...(event.protectedContent === true ? { protectedContent: true } : {}),
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
+        // 访客(非 owner)触发的轮次: 私聊 lane 的交互卡没有第二个点击人, 由
+        // turnRunner 改投 owner 私聊(见 handleInteractionFor 的 guestDmRedirect)。
+        ...(event.speaker?.isOwner === false ? { guestTurn: true } : {}),
         ...(handedOverAck !== undefined ? { ackReactionIdPromise: handedOverAck } : {}),
         // 早期拒绝终态(missing_auth / credential busy): 本条消息自己开了话题
         // 时, 用终态文案收口开场白卡 — 否则「思考中」卡残留且下一条误认领。

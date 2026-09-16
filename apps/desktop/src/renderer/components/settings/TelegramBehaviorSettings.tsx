@@ -17,7 +17,7 @@ import type {
   TelegramHookKnownGroup,
 } from '../../../shared/hookControlIpc';
 
-type Behavior = TelegramHookBehavior;
+type Behavior = TelegramHookBehavior & { allowNonOwnerMessages?: boolean };
 type SettingsSource = 'personal' | 'official';
 
 function i18nRoot(source: SettingsSource): string {
@@ -27,6 +27,7 @@ function i18nRoot(source: SettingsSource): string {
 const EMOJI_OPTIONS: Behavior['emojiReactions'][] = ['off', 'minimal', 'expressive'];
 const GROUP_QUOTE_OPTIONS: Behavior['replyQuoteGroup'][] = ['off', 'first', 'all'];
 const DM_QUOTE_OPTIONS: Behavior['replyQuoteDm'][] = ['off', 'first'];
+const ACCESS_OPTIONS = ['off', 'on'] as const;
 
 function mergeOfficialGroupActivation(
   groups: readonly TelegramHookKnownGroup[],
@@ -307,6 +308,20 @@ export function TelegramBehaviorSettings({
         optionLabel={(o) => t(`${root}.behavior.quoteOption.${o}`)}
         onChange={(replyQuoteDm) => patch({ replyQuoteDm })}
       />
+      {source === 'personal' && (
+        <SegmentedRow
+          label={t(root + '.behavior.accessLabel')}
+          hint={t(
+            `settings.telegramBot.behavior.accessHint.${
+              behavior.allowNonOwnerMessages ? 'on' : 'off'
+            }`,
+          )}
+          options={ACCESS_OPTIONS}
+          value={behavior.allowNonOwnerMessages ? 'on' : 'off'}
+          optionLabel={(option) => t(`settings.telegramBot.behavior.accessOption.${option}`)}
+          onChange={(option) => patch({ allowNonOwnerMessages: option === 'on' })}
+        />
+      )}
     </div>
   );
 }

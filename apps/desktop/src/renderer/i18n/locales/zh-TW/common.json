@@ -2385,6 +2385,8 @@
     "feishuBot": {
       "title": "飛書 / Lark 機器人",
       "description": "透過飛書或 Lark 機器人隨時隨地連線 {{appName}} 進行工作。",
+      "cardActionHint": "掃碼創建的機器人需在飛書開放平台手動添加 card.action.trigger 事件訂閱才能使用卡片按鈕",
+      "cardActionHintAction": "開啟開放平台 ↗",
       "statusAria": "飛書 / Lark 機器人狀態：{{status}}",
       "serviceLabel": "服務",
       "serviceAria": "選擇 IM 服務",
@@ -2408,7 +2410,8 @@
         "ownerLabel": "主人",
         "ownerWaiting": "等待首次私聊繫結",
         "reconnect": "重新連線 {{service}} 機器人",
-        "clear": "解綁"
+        "clear": "解綁",
+        "noteStrangersAllowed": "已繫結當前掃碼使用者；其他人可私聊發起普通對話，控制命令仍僅主人可用。"
       },
       "saved": {
         "heading": "{{service}} 機器人已繫結",
@@ -2438,11 +2441,30 @@
         "cellLabel": "訊息通知",
         "hint": "上下線時向 Bot 傳送通知訊息"
       },
+      "strangerChats": {
+        "label": "其他人對話",
+        "cellLabel": "允許其他人對話",
+        "hint": "開啟後，其他人可私聊或 @ Bot 發起普通對話；控制命令仍僅主人可用。"
+      },
       "sessionNotification": {
         "label": "任務完成通知",
         "cellLabel": "任務完成或需要回復時傳送飛書 / Lark 訊息",
         "hint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先配置 Bot 並向它傳送一條訊息以完成繫結。"
+      },
+      "qr": {
+        "title": "掃碼建立 Agent",
+        "description": "使用飛書 / Lark App 掃碼，授權 Cindy 自動建立並繫結機器人。",
+        "qrAlt": "飛書 / Lark 授權 QR Code",
+        "userCode": "授權碼",
+        "expiresInSeconds": "{{seconds}} 秒內有效",
+        "expiresInMinutes": "{{minutes}} 分 {{seconds}} 秒內有效",
+        "qrPlaceholder": "QR Code 尚未產生",
+        "generate": "產生授權 QR Code",
+        "regenerate": "重新產生 QR Code",
+        "generating": "正在產生…",
+        "connecting": "正在連線…",
+        "cancel": "取消授權"
       },
       "bind": "繫結"
     },
@@ -2789,6 +2811,15 @@
         "dmQuoteHint": {
           "off": "私聊回答不引用你的訊息（預設，更清爽）。",
           "first": "第一條回答引用你發的那條訊息。"
+        },
+        "accessLabel": "其他人對話",
+        "accessOption": {
+          "off": "僅主人",
+          "on": "允許"
+        },
+        "accessHint": {
+          "off": "私聊僅允許主人對話。",
+          "on": "其他人可私聊發起普通對話；控制命令仍僅主人可用。"
         },
         "error": {
           "load": "未能讀取 Telegram 行為設定，請檢查連線後重試。",
