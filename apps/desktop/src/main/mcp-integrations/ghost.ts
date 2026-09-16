@@ -239,6 +239,10 @@ function assertForgeGrantCurrent(access: Extract<ForgeOutsideAccess, { ok: true 
   return access;
 }
 
+function denyOutsideSessionPath(reason: string): SessionPathAuthorization {
+  return { allowed: false, reason };
+}
+
 export async function authorizeDesktopSessionPath(
   request: SessionPathAuthorizationRequest,
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'],
@@ -248,6 +252,16 @@ export async function authorizeDesktopSessionPath(
       allowed: false,
       reason: '远程会话不能授权控制端本机路径。请改用当前任务工作目录内的路径，或在本机会话中重试。',
     };
+  }
+  if (!request.sessionId || !request.sessionInstanceId || !getLiveSessionGrantState) {
+    return denyOutsideSessionPath('当前调用无法确认任务实例，不能读写工作目录外的路径。请在本机已打开的任务里重试。');
+  }
+  try {
+    if (!getLiveSessionGrantState(request.sessionId, request.sessionInstanceId)) {
+      return denyOutsideSessionPath('当前任务实例已失效，不能读写工作目录外的路径。请用当前任务重试。');
+    }
+  } catch {
+    return denyOutsideSessionPath('当前任务权限状态读不到，不能读写工作目录外的路径。请用当前任务重试。');
   }
   let size = 0;
   let isDirectory = false;
@@ -260,8 +274,8 @@ export async function authorizeDesktopSessionPath(
   }
   const granted = await requestGrantConfirm({
     ghostId: CINDY_SESSION_FS_GRANT_ID,
-    sessionId: request.sessionId ?? null,
-    sessionInstanceId: request.sessionInstanceId ?? null,
+    sessionId: request.sessionId,
+    sessionInstanceId: request.sessionInstanceId,
     lane: 'outside_workdir',
     items: [{
       name: path.basename(request.path) || request.path,
@@ -273,13 +287,14 @@ export async function authorizeDesktopSessionPath(
     operation: request.operation,
     getLiveSessionGrantState,
   });
-  if (!granted.ok) return { allowed: false, reason: granted.message };
-  if (granted.isCurrent?.() === false) {
+  if (!granted.ok) return denyOutsideSessionPath(granted.message);
+  if (!granted.isCurrent) {
+    return denyOutsideSessionPath('当前任务实例已失效，不能读写工作目录外的路径。请用当前任务重试。');
+  }
+  if (granted.isCurrent() === false) {
     return { allowed: false, reason: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   }
-  return granted.isCurrent
-    ? { allowed: true, isCurrent: granted.isCurrent }
-    : { allowed: true };
+  return { allowed: true, isCurrent: granted.isCurrent };
 }
 
 /** pack 与显式 install 共用同一套可选 AI 图标叠加，避免二次打包丢失图标。 */

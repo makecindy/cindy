@@ -912,9 +912,11 @@ describe('session path authorization for docs/computer', () => {
   const outsidePath = path.join(outsideDir, 'report.docx');
 
   it('Full Access allows a local outside path without a confirm card', async () => {
+    const isCurrent = () => true;
     liveGrantStateMock.mockReturnValue({
       permissionMode: 'bypassPermissions',
       remoteHostId: null,
+      isCurrent,
     });
     await expect(authorizeDesktopSessionPath({
       sessionId: 's1',
@@ -923,11 +925,12 @@ describe('session path authorization for docs/computer', () => {
       path: outsidePath,
       toolName: 'cindy-docs',
       operation: 'write',
-    }, liveGrantStateMock)).resolves.toEqual({ allowed: true });
+    }, liveGrantStateMock)).resolves.toEqual({ allowed: true, isCurrent });
     expect(confirmRequestMock).not.toHaveBeenCalled();
   });
 
   it('Auto review can allow or block an outside path', async () => {
+    const isCurrent = () => true;
     const reviewAction = vi.fn(async (_action: { description?: string }): Promise<{ verdict: 'allow' | 'block'; reason?: string }> => ({
       verdict: 'allow',
     }));
@@ -935,6 +938,7 @@ describe('session path authorization for docs/computer', () => {
       permissionMode: 'auto',
       remoteHostId: null,
       reviewAction,
+      isCurrent,
     });
     await expect(authorizeDesktopSessionPath({
       sessionId: 's1',
@@ -943,7 +947,7 @@ describe('session path authorization for docs/computer', () => {
       path: outsidePath,
       toolName: 'cindy-docs',
       operation: 'write',
-    }, liveGrantStateMock)).resolves.toEqual({ allowed: true });
+    }, liveGrantStateMock)).resolves.toEqual({ allowed: true, isCurrent });
     expect(reviewAction).toHaveBeenCalledOnce();
     const reviewed = reviewAction.mock.calls[0]?.[0];
     expect(reviewed?.description).toContain('cindy-docs');
@@ -962,7 +966,12 @@ describe('session path authorization for docs/computer', () => {
   });
 
   it('Ask shows a confirm card and remote sessions stay closed', async () => {
-    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    const isCurrent = () => true;
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'ask',
+      remoteHostId: null,
+      isCurrent,
+    });
     await expect(authorizeDesktopSessionPath({
       sessionId: 's1',
       sessionInstanceId: 's1-instance',
@@ -970,7 +979,7 @@ describe('session path authorization for docs/computer', () => {
       path: outsidePath,
       toolName: 'cindy-docs',
       operation: 'write',
-    }, liveGrantStateMock)).resolves.toEqual({ allowed: true });
+    }, liveGrantStateMock)).resolves.toEqual({ allowed: true, isCurrent });
     expect(confirmRequestMock).toHaveBeenCalledOnce();
 
     await expect(authorizeDesktopSessionPath({
@@ -982,6 +991,45 @@ describe('session path authorization for docs/computer', () => {
       toolName: 'cindy-docs',
       operation: 'write',
     }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('denies outside paths when the session instance is missing or dead', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+    });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+
+    liveGrantStateMock.mockReturnValue(null);
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 'dead-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-computer:get_window_state',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+
+    liveGrantStateMock.mockImplementation(() => {
+      throw new Error('runtime registry unavailable');
+    });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
   });
 });
 

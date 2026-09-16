@@ -283,6 +283,25 @@ function isInsideDir(parent: string, child: string): boolean {
   return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+async function authorizedPathStillBound(
+  workingDir: string,
+  authorized: string,
+): Promise<boolean> {
+  const rebound = await resolveCanonicalSessionPath(workingDir, authorized);
+  if (rebound !== authorized) return false;
+  try {
+    if ((await fs.lstat(authorized)).isSymbolicLink()) return false;
+  } catch {
+    const parent = path.dirname(authorized);
+    try {
+      if ((await fs.lstat(parent)).isSymbolicLink()) return false;
+    } catch {
+      /* target and parent may not exist yet; canonical ancestor already matched */
+    }
+  }
+  return true;
+}
+
 async function resolveReplayBoundPath(
   workingRoot: string,
   inputPath: string,
@@ -411,6 +430,26 @@ export function createComputerMcpServer(
       snapshotTracker.invalidate(sessionId, parsedData.pid as number, parsedData.window_id as number);
     }
     if (signal?.aborted) return replayCancelledResult();
+
+    const workingDir = dispatchOptions?.pathWorkingDirOverride
+      ?? options.getSessionContext?.().workingDir
+      ?? '';
+    for (const [key, authorized] of authorizedOutsidePaths) {
+      if (!workingDir || !await authorizedPathStillBound(workingDir, authorized)) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: 'PATH_NOT_ALLOWED',
+            data: {
+              tool: name,
+              arg: key,
+              message: '已授权路径在派发前发生变化，已停止写入。请用当前任务权限重试。',
+            },
+          },
+          true,
+        );
+      }
+    }
 
     const parsedArgs = withSessionArg(
       name as ComputerMcpToolName,
