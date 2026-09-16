@@ -20,9 +20,9 @@ describe('Ghost account-boundary teardown ordering', () => {
     const end = bootstrap.indexOf('\n}\n', start);
     const body = bootstrap.slice(start, end);
 
-    const interrupt = body.indexOf('interruptGhostCallsForAccountBoundary));');
-    const wait = body.indexOf('waitForGhostMutations));');
-    const suspend = body.indexOf('suspendAllGhosts);');
+    const interrupt = body.indexOf("await run('interruptGhostCallsForAccountBoundary'");
+    const wait = body.indexOf("await run('waitForGhostMutations'");
+    const suspend = body.indexOf("await run('suspendAllGhosts'");
 
     expect(interrupt).toBeGreaterThan(-1);
     expect(interrupt).toBeLessThan(wait);
