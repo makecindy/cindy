@@ -1,7 +1,7 @@
 import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
 import { nativeModelAgents } from './modelProtocol.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
-import { providerEndpointBindings, bindProviderPresetRuntime } from './providerEndpointTemplate.js';
+import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime } from './providerEndpointTemplate.js';
 import { PI_MODEL_APIS } from "./types.js";
 import { providerModelRecord, providerPresetModelRecord, providerModelMetadata } from "./providerModelCatalog.js";
 import { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
@@ -471,11 +471,15 @@ export function buildUserProvider(
       (preset) => preset.id === rt.catalogPresetId,
     );
     const presetRuntimeSource = preset?.runtimes[agent];
-    const presetRuntime = presetRuntimeSource && providerEndpointBindings(presetRuntimeSource.baseUrl, rt.baseUrl)
+    const presetBindings = presetRuntimeSource
+      ? providerEndpointBindings(presetRuntimeSource.baseUrl, rt.baseUrl) : null;
+    const presetRuntime = presetRuntimeSource && presetBindings
       ? bindProviderPresetRuntime(presetRuntimeSource, rt.baseUrl) : presetRuntimeSource;
     const followsPreset =
       presetRuntime &&
-      withoutTrailingSlashes(rt.baseUrl) ===
+      withoutTrailingSlashes(presetBindings
+        ? bindProviderEndpoint(presetRuntimeSource!.baseUrl, presetBindings, rt.baseUrl)
+        : rt.baseUrl) ===
         withoutTrailingSlashes(presetRuntime.baseUrl) &&
       (rt.wireProtocol ?? defaultWireProtocol(agent)) ===
         (presetRuntime.wireProtocol ?? defaultWireProtocol(agent)) &&

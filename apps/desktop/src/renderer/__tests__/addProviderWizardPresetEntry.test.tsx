@@ -634,6 +634,40 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getAllByDisplayValue('https://myres.openai.azure.com/openai/v1')).toHaveLength(2);
   });
 
+  it('accepts the official Vertex global host and rejects an unrelated host on the Vertex template', async () => {
+    const preset = {
+      id: 'google-vertex',
+      name: 'Google Vertex AI',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://{location}-aiplatform.googleapis.com',
+          baseUrlEditable: true,
+          wireProtocol: 'google-generative-ai' as const,
+          models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }],
+        },
+        codex: {
+          baseUrl: 'https://{location}-aiplatform.googleapis.com',
+          baseUrlEditable: true,
+          wireProtocol: 'google-generative-ai' as const,
+          models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }],
+        },
+      },
+    };
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [preset] });
+    renderWizard('google-vertex');
+    const inputs = await screen.findAllByDisplayValue('https://{location}-aiplatform.googleapis.com');
+    const next = screen.getByText('settings.providers.wizard.next').closest('button') as HTMLButtonElement;
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'vertex-key' } });
+    expect(next.disabled).toBe(true);
+
+    fireEvent.change(inputs[0], { target: { value: 'https://attacker.example' } });
+    expect(next.disabled).toBe(true);
+
+    fireEvent.change(inputs[0], { target: { value: 'https://aiplatform.googleapis.com' } });
+    expect(screen.getAllByDisplayValue('https://aiplatform.googleapis.com')).toHaveLength(2);
+    expect(next.disabled).toBe(false);
+  });
+
   it('LiteLLM:模型发现失败时可手填模型 ID，并以 none 鉴权保存', async () => {
     renderWizard('litellm');
 
