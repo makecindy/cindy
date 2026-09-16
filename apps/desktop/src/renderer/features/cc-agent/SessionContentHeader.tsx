@@ -76,8 +76,7 @@ import {
   MENU_SUB_CONTENT_CLASS,
 } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
-import { crossesWorktreeBoundary, shouldBlockWorktreeMove } from './lib/sessionMoveGuard';
-import { useRefreshWorktreeForSession, useWorktreeForSession } from '@/contexts/WorktreeContext';
+import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
@@ -152,8 +151,6 @@ export function SessionContentHeader({
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
   // 或存量半移动行的会话，不能靠 cwd 猜归属。
-  const worktreeBinding = useWorktreeForSession(session.id, { includeInvalid: true });
-  const refreshWorktreeBinding = useRefreshWorktreeForSession();
   const { confirm: confirmDialog } = useConfirmDialog();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
@@ -360,21 +357,10 @@ export function SessionContentHeader({
       }
 
       // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
-      // (半移动)。同样放在目标目录确定之后,同一 worktree 根内的目录调整仍放行,
-      // 归属取活绑定;缓存判定要拦时再向 main 复核一次(回收事件落地有间隙)。
-      // 「移到对话」不改目录、不经过这里。
-      if (
-        targetWorkingDir &&
-        (await shouldBlockWorktreeMove(
-          worktreeBinding?.path ?? null,
-          targetWorkingDir,
-          async () => (await refreshWorktreeBinding(session.id))?.path ?? null,
-        ))
-      ) {
-        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
-        return;
-      }
-
+      // (半移动)。判定不在这里做:归属只有共享写路径一处权威,renderer 的缓存/复核都是
+      // 异步镜像,任何「先查询再决定」都会有「查询通过后、写入前恰好回收」的窗口,把
+      // 主进程本会放行的移动挡在请求之前;这里照常发请求,被守卫拒绝时在下面映射成
+      // 同一条 toast。「移到对话」不改目录,不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
         workspaceKind: session.workspaceKind,
@@ -400,13 +386,12 @@ export function SessionContentHeader({
       } catch (err) {
         log.error('[session move]', err);
         patchLocal(session.id, oldPatch);
-        toast.error(
-          t(
-            target.kind === 'dialogue'
-              ? 'ccAgent.sidebar.sessionMenu.moveToDialogueFailed'
-              : 'ccAgent.sidebar.sessionMenu.moveToProjectFailed',
-          ),
-        );
+        // 归属守卫在主进程唯一权威地拒绝跨根移动(在关 runtime / 写库 / 转录迁移之前,
+        // 不留部分写入);被它拒绝时给产品既定的「暂不支持移出 worktree」说明,其它失败
+        // 照旧用通用报错文案。
+        const feedback = sessionMoveFailureFeedback(target.kind, err);
+        if (feedback.level === 'warning') toast.warning(t(feedback.key));
+        else toast.error(t(feedback.key));
       }
     },
     [patchLocal, runningSessionIds, session, t],

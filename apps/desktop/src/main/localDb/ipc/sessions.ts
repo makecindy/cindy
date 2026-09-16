@@ -67,6 +67,10 @@ import {
   isRetainableProjectSessionSource,
 } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage, workingDirEquals } from '../../../shared/workingDir.js';
+import {
+  WORKTREE_MOVE_BLOCKED_CODE,
+  WORKTREE_MOVE_BLOCKED_MESSAGE,
+} from '../../../shared/worktreeMoveGuardError.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
@@ -1853,10 +1857,9 @@ export async function updateSessionInDb(
         ? managedWorktreeRoot(requestedWorkingDir)
         : null;
       if (ownedWorktreeRoot && !workingDirEquals(ownedWorktreeRoot, targetWorktreeRoot)) {
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'A worktree session cannot be moved outside its worktree; worktree handoff is required',
-        );
+        // 错误码与文案是跨进程契约:renderer 按它把这次拒绝映射成同一条 toast
+        // (shared/worktreeMoveGuardError.ts),两侧共用常量避免文案漂移。
+        throwIpcError(WORKTREE_MOVE_BLOCKED_CODE, WORKTREE_MOVE_BLOCKED_MESSAGE);
       }
     }
     const movingLocalNonClaudeSession =

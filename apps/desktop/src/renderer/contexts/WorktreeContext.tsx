@@ -35,11 +35,8 @@ interface WorktreeContextValue {
   /** 保留失效目录的登记信息，供打开中的任务在聚焦/恢复时重新探测。 */
   rawMetas: Record<string, WorktreeMeta>;
   reportLiveness: (meta: WorktreeMeta, live: boolean) => void;
-  /**
-   * 从 main 查询并更新单个 session 的 worktree 缓存，并返回本次查询结果 ——
-   * 调用方（如移动前的归属复核）可以直接用它判定，不必等缓存重渲染。
-   */
-  refreshSession: (sessionId: string) => Promise<WorktreeMeta | null>;
+  /** 从 main 查询并更新单个 session 的 worktree 缓存。 */
+  refreshSession: (sessionId: string) => Promise<void>;
 }
 
 const WorktreeContext = createContext<WorktreeContextValue | null>(null);
@@ -80,9 +77,9 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const refreshSession = useCallback(async (sessionId: string): Promise<WorktreeMeta | null> => {
+  const refreshSession = useCallback(async (sessionId: string) => {
     const getForSession = window.electronAPI?.worktreeGetForSession;
-    if (!getForSession) return null;
+    if (!getForSession) return;
     const generation = ++eventGenerationRef.current;
     sessionEventGenerationsRef.current.set(sessionId, generation);
     const fullRefreshGenerationAtStart = fullRefreshGenerationRef.current;
@@ -91,10 +88,10 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
       fullRefreshGenerationRef.current === fullRefreshGenerationAtStart;
     try {
       const meta = await getForSession(sessionId);
+      if (!isCurrent()) return;
       const next =
         meta?.sessionId === sessionId && meta.path ? meta : null;
-      // 代次已被更新的请求取代时不再回写缓存，但本次查询结果依旧新鲜，照常返回。
-      if (!isCurrent()) return next;
+      if (!isCurrent()) return;
       setSnapshot((current) => {
         if (!isCurrent()) return current;
         const metas = { ...current.metas };
@@ -104,10 +101,8 @@ export function WorktreeProvider({ children }: { children: ReactNode }) {
         invalid.delete(sessionId);
         return { metas, invalid };
       });
-      return next;
     } catch (err) {
       log.warn('session refresh failed:', { sessionId, err });
-      return null;
     }
   }, []);
 
@@ -196,16 +191,7 @@ export function useReportWorktreeLiveness(): WorktreeContextValue['reportLivenes
   return useCtx().reportLiveness;
 }
 
-/**
- * store 原样的绑定表（含失效目录）。判「这条任务是否还持有 worktree」用它 ——
- * 与 main 的 worktreeStore 同口径：只要还登记着就是持有，目录是否失效是另一
- * 个问题（那由徽标的 liveness 口径处理）。
- */
-export function useRawWorktrees(): Record<string, WorktreeMeta> {
-  return useCtx().rawMetas;
-}
-
 /** 让创建/恢复等明确知道 sessionId 的调用方只刷新对应 worktree。 */
-export function useRefreshWorktreeForSession(): (sessionId: string) => Promise<WorktreeMeta | null> {
+export function useRefreshWorktreeForSession(): (sessionId: string) => Promise<void> {
   return useCtx().refreshSession;
 }

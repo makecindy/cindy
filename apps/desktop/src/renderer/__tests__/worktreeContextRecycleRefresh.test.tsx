@@ -13,7 +13,6 @@ import {
   useWorktreeForSession,
 } from '@/contexts/WorktreeContext';
 import { useTaskInfoWorktree } from '@/features/cc-agent/sidebar/sessionWorktreeInfo';
-import type { WorktreeMeta } from '@/lib/worktree.types';
 import { emitRefresh } from '@/lib/sessionsBus';
 
 vi.mock('@/lib/logger', () => ({
@@ -126,7 +125,7 @@ describe('WorktreeContext recycle refresh', () => {
     const meta = { sessionId: 'open', path: '/tmp/wt/open' };
     mocks.worktreeListAll.mockResolvedValue([meta]);
     mocks.worktreeDetectCwd.mockResolvedValue({ isInsideWorktree: false });
-    let refresh!: (sessionId: string) => Promise<WorktreeMeta | null>;
+    let refresh!: (sessionId: string) => Promise<void>;
     function Actions() {
       refresh = useRefreshWorktreeForSession();
       return <><Probe /><ActiveProbe /></>;
@@ -161,7 +160,7 @@ describe('WorktreeContext recycle refresh', () => {
       const meta = { sessionId: 'open', path: '/tmp/wt/open' };
       mocks.worktreeListAll.mockResolvedValue([meta]);
       mocks.worktreeDetectCwd.mockResolvedValue({ isInsideWorktree: false });
-      let refresh!: (sessionId: string) => Promise<WorktreeMeta | null>;
+      let refresh!: (sessionId: string) => Promise<void>;
       function Actions() {
         refresh = useRefreshWorktreeForSession();
         return <><Probe /><ActiveProbe /></>;
@@ -205,7 +204,7 @@ describe('WorktreeContext recycle refresh', () => {
     mocks.worktreeListAll.mockResolvedValue([meta]);
     let report!: ReturnType<typeof useReportWorktreeLiveness>;
     let original!: NonNullable<ReturnType<typeof useWorktreeForSession>>;
-    let refresh!: (sessionId: string) => Promise<WorktreeMeta | null>;
+    let refresh!: (sessionId: string) => Promise<void>;
     function Actions() {
       report = useReportWorktreeLiveness();
       original = useWorktreeForSession('open') ?? original;
@@ -393,7 +392,7 @@ describe('WorktreeContext recycle refresh', () => {
 
   it('refreshes explicit creation, recycling and restoration repeatedly without a full scan', async () => {
     mocks.worktreeListAll.mockResolvedValue([]);
-    let refresh!: (sessionId: string) => Promise<WorktreeMeta | null>;
+    let refresh!: (sessionId: string) => Promise<void>;
     function Actions() {
       refresh = useRefreshWorktreeForSession();
       return <Probe />;

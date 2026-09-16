@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
+import { isWorktreeMoveBlockedError } from '../../../../shared/worktreeMoveGuardError';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
@@ -1164,8 +1165,13 @@ describe('local-db:sessions:update handler wiring', () => {
 
     // MCP 的 move_sessions 等非 IPC 调用方直接走 updateSessionInDb:守卫必须同样生效,
     // 且让调用方看到「需要 handoff」而不是笼统的移动失败。
-    await expect(updateSessionInDb('codex-local', { workingDir: '/new/dir' }))
-      .rejects.toThrow(/worktree handoff is required/i);
+    const rejected = await updateSessionInDb('codex-local', { workingDir: '/new/dir' })
+      .then(() => null, (err: unknown) => err);
+    expect(rejected).toBeInstanceOf(Error);
+    expect(rejected).toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect((rejected as Error).message).toMatch(/worktree handoff is required/i);
+    // renderer 按共享契约识别这次拒绝(同一常量,两侧不手写漂移)。
+    expect(isWorktreeMoveBlockedError(rejected)).toBe(true);
 
     expect(h.closeIdleSessionForMove).not.toHaveBeenCalled();
     expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'))
