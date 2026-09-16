@@ -786,6 +786,7 @@ describe('Forge workdir-out permission path', () => {
     liveGrantStateMock.mockReturnValue({
       permissionMode: 'bypassPermissions',
       remoteHostId: null,
+      isCurrent: () => true,
     });
     packGhostDirMock.mockResolvedValueOnce(packedOk());
     const result = await makeDeps('pi', 'forge-bypass').forgePack({ dir: sourceDir });
@@ -807,6 +808,7 @@ describe('Forge workdir-out permission path', () => {
       permissionMode: 'auto',
       remoteHostId: null,
       reviewAction,
+      isCurrent: () => true,
     });
     packGhostDirMock.mockResolvedValueOnce(packedOk());
     const result = await makeDeps('pi', 'forge-auto').forgePack({ dir: sourceDir });
@@ -834,6 +836,7 @@ describe('Forge workdir-out permission path', () => {
       permissionMode: 'auto',
       remoteHostId: null,
       reviewAction,
+      isCurrent: () => true,
     });
     const result = await makeDeps('pi', 'forge-auto-block').forgePack({ dir: sourceDir });
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
@@ -842,7 +845,11 @@ describe('Forge workdir-out permission path', () => {
   });
 
   it('Ask shows a forge_source confirm card then packs', async () => {
-    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'ask',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
     packGhostDirMock.mockResolvedValueOnce(packedOk());
     const result = await makeDeps('pi', 'forge-ask').forgePack({ dir: sourceDir });
     expect(result).toMatchObject({ ok: true });
@@ -864,7 +871,11 @@ describe('Forge workdir-out permission path', () => {
   });
 
   it('Ask deny does not pack', async () => {
-    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'ask',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
     confirmRequestMock.mockResolvedValueOnce({ confirmed: false, allowDirs: false });
     const result = await makeDeps('pi', 'forge-ask-deny').forgePack({ dir: sourceDir });
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
@@ -875,6 +886,7 @@ describe('Forge workdir-out permission path', () => {
     liveGrantStateMock.mockReturnValue({
       permissionMode: 'bypassPermissions',
       remoteHostId: null,
+      isCurrent: () => true,
     });
     const dir = path.join(outsideRoot, 'new-plugin');
     await expect(
@@ -904,6 +916,26 @@ describe('Forge workdir-out permission path', () => {
     });
     const result = await makeDeps('pi', 'forge-expired').forgePack({ dir: sourceDir });
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+  });
+
+  it('denies an outside pack when the session instance is missing or dead', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
+    await expect(
+      makeDeps('pi', 'forge-no-instance', null).forgePack({ dir: sourceDir }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+
+    liveGrantStateMock.mockReturnValue(null);
+    await expect(
+      makeDeps('pi', 'forge-dead-instance').forgePack({ dir: sourceDir }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
     expect(packGhostDirMock).not.toHaveBeenCalled();
   });
 });

@@ -192,6 +192,33 @@ function forgeOutsidePackFlags(access: Extract<ForgeOutsideAccess, { ok: true }>
     : {};
 }
 
+function requireLiveSessionInstance(
+  sessionId: string | undefined,
+  sessionInstanceId: string | undefined,
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'],
+): { ok: true; sessionId: string; sessionInstanceId: string } | { ok: false; message: string } {
+  if (!sessionId || !sessionInstanceId || !getLiveSessionGrantState) {
+    return {
+      ok: false,
+      message: '当前调用无法确认任务实例，不能读写工作目录外的路径。请在本机已打开的任务里重试。',
+    };
+  }
+  try {
+    if (!getLiveSessionGrantState(sessionId, sessionInstanceId)) {
+      return {
+        ok: false,
+        message: '当前任务实例已失效，不能读写工作目录外的路径。请用当前任务重试。',
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      message: '当前任务权限状态读不到，不能读写工作目录外的路径。请用当前任务重试。',
+    };
+  }
+  return { ok: true, sessionId, sessionInstanceId };
+}
+
 async function authorizeForgeOutsideWorkdir(params: {
   dir: string;
   sessionWorkdir: string;
@@ -200,6 +227,14 @@ async function authorizeForgeOutsideWorkdir(params: {
 }): Promise<ForgeOutsideAccess> {
   const location = classifyForgeSourceRelativeToWorkdir(params.dir, params.sessionWorkdir);
   if (location !== 'outside') return { ok: true, allowOutsideWorkdir: false };
+  const live = requireLiveSessionInstance(
+    params.sessionContext?.sessionId,
+    params.sessionContext?.sessionInstanceId,
+    params.getLiveSessionGrantState,
+  );
+  if (!live.ok) {
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: live.message };
+  }
   const authorizedDir = resolveCanonicalForgeDir(params.dir);
   let size = 0;
   let isDirectory = true;
@@ -212,8 +247,8 @@ async function authorizeForgeOutsideWorkdir(params: {
   }
   const granted = await requestGrantConfirm({
     ghostId: CINDY_FORGE_GRANT_ID,
-    sessionId: params.sessionContext?.sessionId ?? null,
-    sessionInstanceId: params.sessionContext?.sessionInstanceId ?? null,
+    sessionId: live.sessionId,
+    sessionInstanceId: live.sessionInstanceId,
     lane: 'forge_source',
     items: [{
       name: path.basename(authorizedDir) || authorizedDir,
@@ -226,14 +261,21 @@ async function authorizeForgeOutsideWorkdir(params: {
   if (!granted.ok) {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: granted.message };
   }
-  if (granted.isCurrent?.() === false) {
+  if (!granted.isCurrent) {
+    return {
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: '当前任务实例已失效，不能读写工作目录外的路径。请用当前任务重试。',
+    };
+  }
+  if (granted.isCurrent() === false) {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   }
   return { ok: true, allowOutsideWorkdir: true, authorizedDir, isCurrent: granted.isCurrent };
 }
 
 function assertForgeGrantCurrent(access: Extract<ForgeOutsideAccess, { ok: true }>): ForgeOutsideAccess {
-  if (access.allowOutsideWorkdir && access.isCurrent?.() === false) {
+  if (access.allowOutsideWorkdir && access.isCurrent?.() !== true) {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   }
   return access;
@@ -253,16 +295,8 @@ export async function authorizeDesktopSessionPath(
       reason: '远程会话不能授权控制端本机路径。请改用当前任务工作目录内的路径，或在本机会话中重试。',
     };
   }
-  if (!request.sessionId || !request.sessionInstanceId || !getLiveSessionGrantState) {
-    return denyOutsideSessionPath('当前调用无法确认任务实例，不能读写工作目录外的路径。请在本机已打开的任务里重试。');
-  }
-  try {
-    if (!getLiveSessionGrantState(request.sessionId, request.sessionInstanceId)) {
-      return denyOutsideSessionPath('当前任务实例已失效，不能读写工作目录外的路径。请用当前任务重试。');
-    }
-  } catch {
-    return denyOutsideSessionPath('当前任务权限状态读不到，不能读写工作目录外的路径。请用当前任务重试。');
-  }
+  const live = requireLiveSessionInstance(request.sessionId, request.sessionInstanceId, getLiveSessionGrantState);
+  if (!live.ok) return denyOutsideSessionPath(live.message);
   let size = 0;
   let isDirectory = false;
   try {
@@ -274,8 +308,8 @@ export async function authorizeDesktopSessionPath(
   }
   const granted = await requestGrantConfirm({
     ghostId: CINDY_SESSION_FS_GRANT_ID,
-    sessionId: request.sessionId,
-    sessionInstanceId: request.sessionInstanceId,
+    sessionId: live.sessionId,
+    sessionInstanceId: live.sessionInstanceId,
     lane: 'outside_workdir',
     items: [{
       name: path.basename(request.path) || request.path,
