@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import {
   formatQuotaResetCountdown,
   formatQuotaResetAt,
@@ -47,6 +48,8 @@ export interface QuotaHoverCardSessionUsage {
 export interface QuotaHoverCardProps {
   /** Embedded settings surface shares content without a second card frame. */
   variant?: 'popover' | 'embedded';
+  /** The settings identity row already names this subscription and plan. */
+  hideIdentity?: boolean;
   account: UsageCardAccount;
   sessionUsage?: QuotaHoverCardSessionUsage | null;
   turnUsage?: QuotaHoverCardTurnUsage | null;
@@ -118,6 +121,8 @@ function WindowBlock({
   detail,
   breakdown,
   showAbsoluteReset = false,
+  compact = false,
+  expanded = false,
   nowMs,
   paceNowMs,
   locale,
@@ -130,6 +135,8 @@ function WindowBlock({
   detail?: string;
   breakdown?: UsageCardWindow['breakdown'];
   showAbsoluteReset?: boolean;
+  compact?: boolean;
+  expanded?: boolean;
   nowMs: number;
   paceNowMs: number | null;
   locale: string | undefined;
@@ -167,60 +174,80 @@ function WindowBlock({
 
   return (
     <section data-testid="quota-window" className="px-4 pb-1 pt-2">
-      <div
-        id={titleId}
-        data-severity={severity}
-        className={cn(
-          'mb-2 text-14 font-medium tracking-[-0.005em]',
-          severity === 'crit' ? 'text-[var(--quota-bar-crit)]' : 'text-[var(--text-primary)]',
-        )}
-      >
-        {title}
-        {severityAnnouncement !== null ? (
-          // 告警不能只依赖颜色；标题与进度条共用对应级别的屏幕阅读器文案。
-          <span className="sr-only">，{severityAnnouncement}</span>
-        ) : null}
-      </div>
-      <QuotaBar
-        usedPercent={window.utilization}
-        showRemaining={showRemaining}
-        severity={severity}
-        aria-labelledby={titleId}
-        aria-valuetext={percentText}
-      />
-      <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
-        <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
-        {resetCountdown !== null ? (
-          <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
-            <span>{resetCountdown}</span>
-            {showAbsoluteReset && resetAt !== null && (
-              <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
-            )}
-          </span>
-        ) : null}
-      </div>
-      {detail ? <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div> : null}
-      {breakdown?.length ? (
-        <dl
-          data-testid="quota-window-breakdown"
-          className="mt-2 space-y-1 text-12 text-[var(--text-secondary)]"
-        >
-          {breakdown.map(({ label, value }, index) => (
-            <div key={index} className="flex items-baseline justify-between gap-3">
-              <dt className="min-w-0 break-words">{label}</dt>
-              <dd className="shrink-0 tabular-nums">{value}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-      {paceLine !== null ? (
+      <div className={compact ? 'flex flex-wrap items-center gap-x-3 gap-y-1' : undefined}>
         <div
-          data-testid="quota-pace"
-          className="mt-[3px] text-12 tabular-nums text-[var(--text-secondary)]"
+          id={titleId}
+          data-severity={severity}
+          className={cn(
+            'font-medium tracking-[-0.005em]',
+            compact ? 'text-13' : 'mb-2 text-14',
+            severity === 'crit' ? 'text-[var(--quota-bar-crit)]' : 'text-[var(--text-primary)]',
+          )}
         >
-          {paceLine}
+          {title}
+          {severityAnnouncement !== null ? (
+            // 告警不能只依赖颜色；标题与进度条共用对应级别的屏幕阅读器文案。
+            <span className="sr-only">，{severityAnnouncement}</span>
+          ) : null}
         </div>
-      ) : null}
+        <QuotaBar
+          className={compact ? 'w-28 shrink-0' : undefined}
+          usedPercent={window.utilization}
+          showRemaining={showRemaining}
+          severity={severity}
+          aria-labelledby={titleId}
+          aria-valuetext={percentText}
+        />
+        <div
+          className={cn(
+            'flex items-baseline justify-between gap-3 tabular-nums',
+            !compact && 'mt-[7px]',
+          )}
+        >
+          <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
+          {resetCountdown !== null ? (
+            <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
+              <span>{resetCountdown}</span>
+              {!compact && showAbsoluteReset && resetAt !== null && (
+                <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
+              )}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      {(!compact || expanded) && (
+        <>
+          {compact && resetAt !== null && (
+            <div className="mt-1 text-12 text-[var(--text-secondary)]">
+              {t('quotaCard.resetAt', { at: resetAt })}
+            </div>
+          )}
+          {detail ? (
+            <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div>
+          ) : null}
+          {breakdown?.length ? (
+            <dl
+              data-testid="quota-window-breakdown"
+              className="mt-2 space-y-1 text-12 text-[var(--text-secondary)]"
+            >
+              {breakdown.map(({ label, value }, index) => (
+                <div key={index} className="flex items-baseline justify-between gap-3">
+                  <dt className="min-w-0 break-words">{label}</dt>
+                  <dd className="shrink-0 tabular-nums">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {paceLine !== null ? (
+            <div
+              data-testid="quota-pace"
+              className="mt-[3px] text-12 tabular-nums text-[var(--text-secondary)]"
+            >
+              {paceLine}
+            </div>
+          ) : null}
+        </>
+      )}
     </section>
   );
 }
@@ -401,6 +428,7 @@ function SessionUsageSection({
 /** 套餐、配额、任务合计与本轮明细按同一信息层级渲染；供应商差异只来自 account。 */
 export function QuotaHoverCard({
   variant = 'popover',
+  hideIdentity = false,
   account,
   sessionUsage = null,
   turnUsage = null,
@@ -410,9 +438,19 @@ export function QuotaHoverCard({
   nowMs = Date.now(),
 }: QuotaHoverCardProps) {
   const { t, i18n } = useTranslation();
+  const [expanded, setExpanded] = React.useState(false);
+  const embedded = variant === 'embedded';
+  const detailsId = React.useId();
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const { title, planLabel, windows, details = [], notices = [], emptyText, updatedAt } = account;
+  // Pace also requires a valid reset time; balances and notices are always visible.
+  const hasWindowDetails = windows.some(
+    ({ window, detail, breakdown }) =>
+      formatQuotaResetAt(window.resetsAt, nowMs, locale) !== null ||
+      Boolean(detail) ||
+      Boolean(breakdown?.length),
+  );
   // Use observation time for pace so a stale snapshot cannot drift as the card renders.
   const paceNowMs = typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : null;
   const staleMinutes =
@@ -435,10 +473,14 @@ export function QuotaHoverCard({
         data-testid="quota-hover-card-scroll-content"
         role="region"
         aria-label={t('quotaCard.windowsRegionLabel')}
-        tabIndex={0}
-        className="min-h-0 overflow-y-auto pt-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
+        tabIndex={embedded ? undefined : 0}
+        className={cn(
+          'min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
+          !embedded && 'overflow-y-auto pt-[6px]',
+        )}
+        id={detailsId}
       >
-        {title ? (
+        {title && (!embedded || !hideIdentity) ? (
           <>
             <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-12 text-[var(--text-secondary)]">
               <span className="min-w-0 break-words font-medium">{title}</span>
@@ -453,12 +495,13 @@ export function QuotaHoverCard({
             </div>
           </>
         ) : null}
-        {title && (windows.length > 0 || emptyText) ? <CardDivider /> : null}
+        {!embedded && title && (windows.length > 0 || emptyText) ? <CardDivider /> : null}
         {windows.map(({ key, ...displayWindow }) => (
           <WindowBlock
             key={key}
             {...displayWindow}
-            showAbsoluteReset={variant === 'embedded'}
+            compact={embedded}
+            expanded={expanded}
             nowMs={nowMs}
             paceNowMs={paceNowMs}
             locale={locale}
@@ -486,8 +529,13 @@ export function QuotaHoverCard({
         ))}
         {details.length ? (
           <>
-            <CardDivider />
-            <section className="space-y-1 px-4 py-2 text-12 tabular-nums text-[var(--text-secondary)]">
+            {!embedded && <CardDivider />}
+            <section
+              className={cn(
+                'px-4 py-2 text-12 tabular-nums text-[var(--text-secondary)]',
+                embedded ? 'flex flex-wrap gap-x-3 gap-y-1' : 'space-y-1',
+              )}
+            >
               {details.map((detail, index) => (
                 <div key={index}>{detail}</div>
               ))}
@@ -510,6 +558,19 @@ export function QuotaHoverCard({
         ) : null}
       </div>
 
+      {embedded && hasWindowDetails && (
+        <Button
+          variant="secondary"
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={() => setExpanded((value) => !value)}
+          className="mx-4 w-fit gap-1"
+        >
+          <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+          {t('quotaCard.usageTitle')}
+        </Button>
+      )}
       {dashboardLabel ? (
         <>
           <CardDivider />

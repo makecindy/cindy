@@ -13,6 +13,11 @@ import {
   type MakeUpstreamQuery,
 } from '../../shared/cindyMakeDoctor.js';
 import { searchCindyUpstream } from './upstreamQuery.js';
+import {
+  cindyMakeManager,
+  type CindyMakeOperationHandle,
+  type CindyMakeOperationKey,
+} from './manager.js';
 
 export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
   name?: 'cindy-make-doctor' | 'cindy-make';
@@ -35,10 +40,6 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
     options?: { clearOnly?: boolean },
   ) => Promise<MakeDoctorReport>;
 }): DesktopCommandDefinition {
-  const active = new Map<
-    string,
-    { sender: number; controller: AbortController; source: boolean }
-  >();
   const name = deps.name ?? 'cindy-make-doctor';
   return {
     name,
@@ -81,37 +82,33 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
         throwIpcError('INVALID_PARAMS', 'Invalid doctor run id');
       if (ctx.doctorAction !== undefined) {
         if (ctx.doctorAction !== 'cancel') throwIpcError('INVALID_PARAMS', 'Invalid doctor action');
-        const run = active.get(runId);
-        // Source operations are global (Settings and the workflow share one job), so
-        // any trusted window may stop them; diagnostics stay private to their window.
-        if (run && !run.source && run.sender !== ctx.senderWebContentsId)
+        const cancelled = cindyMakeManager.cancel(runId, ctx.senderWebContentsId!);
+        if (cancelled === 'forbidden')
           throwIpcError('INVALID_PARAMS', 'Doctor run belongs to another window');
-        run?.controller.abort();
         return { success: true };
       }
-      const sourceRun = ctx.makeAction !== undefined;
-      // Tool provisioning must not run twice at once. Source-only runs may start
-      // alongside it: sourcePreparation attaches them to one shared job.
-      const toolRuns = [...active.values()].filter((run) => !run.source).length;
-      if (
-        active.has(runId) ||
-        active.size >= 4 ||
-        (name === 'cindy-make' && !sourceRun && toolRuns >= 1)
-      )
-        throwIpcError('DEVICE_BUSY', 'Doctor is already running');
-      const controller = new AbortController();
+      const startedAt = Date.now();
+      const timeoutMs = name === 'cindy-make' ? 20 * 60_000 : 60_000;
       // Presence (including empty text) distinguishes the chat workflow from Settings preparation.
       const workflow = name === 'cindy-make' && ctx.makeRequest !== undefined && !ctx.makeAction;
-      // Includes executable discovery/filesystem reads, not just child processes.
-      const timeout = setTimeout(
-        () => controller.abort('timeout'),
-        name === 'cindy-make' ? 20 * 60_000 : 60_000,
-      );
-      active.set(runId, { sender: ctx.senderWebContentsId!, controller, source: sourceRun });
-      let latest: MakeDoctorReport = {
+      const operationKey: CindyMakeOperationKey = ctx.makeAction
+        ? {
+            resource: 'source',
+            mode: ctx.makeAction === 'prepare-source' ? 'prepare' : 'clear',
+            forceManagedTools: ctx.forceManagedTools === true,
+          }
+        : {
+            resource: 'environment',
+            mode: name === 'cindy-make' ? 'prepare' : 'check',
+            forceManagedTools: ctx.forceManagedTools === true,
+          };
+      const initialReport: MakeDoctorReport = {
         ...initialDoctorReport(runId, '', ''),
         mode: name === 'cindy-make' ? 'prepare' : 'check',
         ...(ctx.makeAction ? { checks: [] } : {}),
+      };
+      let latest: MakeDoctorReport = {
+        ...initialReport,
         ...(workflow ? { upstream: { status: 'pending', items: [] } as MakeUpstreamQuery } : {}),
       };
       let finished = false;
@@ -119,47 +116,91 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
         if (finished) return;
         latest = {
           ...report,
+          runId,
+          mode: initialReport.mode,
           ...(workflow ? { upstream: report.upstream ?? latest.upstream } : {}),
           ...(ctx.forceManagedTools ? { forceManagedTools: true } : {}),
         };
         deps.publish(ctx, latest);
       };
+      let managerOperation: CindyMakeOperationHandle<T>;
       try {
-        publish(latest);
-        const env = await untilAborted(Promise.resolve(deps.environment(ctx)), controller.signal);
-        if (ctx.makeAction === 'prepare-source' || ctx.makeAction === 'clear-source') {
-          if (!deps.prepareSource)
-            throwIpcError('UNSUPPORTED_CAPABILITY', 'Source preparation is unavailable');
-          if (ctx.makeAction === 'clear-source') {
-            const cleared = await deps.prepareSource(runId, env, controller.signal, publish, {
-              clearOnly: true,
-            });
-            publish({ ...cleared, upstream: latest.upstream });
+        managerOperation = cindyMakeManager.claim<T>(
+          operationKey,
+          runId,
+          ctx.senderWebContentsId!,
+          (report) =>
+            publish(
+              workflow && report.status === 'completed' && isMakeEnvironmentReady(report)
+                ? { ...report, status: 'running' }
+                : report,
+            ),
+        );
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'busy')
+          throwIpcError('DEVICE_BUSY', 'A Cindy Make operation is already running');
+        throw error;
+      }
+      let controller = managerOperation.controller;
+      // Includes executable discovery/filesystem reads, not just child processes.
+      let timeout = managerOperation.attached
+        ? undefined
+        : setTimeout(() => managerOperation.controller.abort('timeout'), timeoutMs);
+      let workflowOperation: ReturnType<typeof cindyMakeManager.startWorkflow> | undefined;
+      let sharedCompleted = false;
+      let sharedLatest = initialReport;
+      const publishShared = (report: MakeDoctorReport) => {
+        sharedLatest = {
+          ...report,
+          runId,
+          mode: initialReport.mode,
+          ...(ctx.forceManagedTools ? { forceManagedTools: true } : {}),
+        };
+        managerOperation.publish(sharedLatest);
+      };
+      try {
+        if (!managerOperation.attached) {
+          publishShared(initialReport);
+          const env = await untilAborted(Promise.resolve(deps.environment(ctx)), controller.signal);
+          if (ctx.makeAction === 'prepare-source' || ctx.makeAction === 'clear-source') {
+            if (!deps.prepareSource)
+              throwIpcError('UNSUPPORTED_CAPABILITY', 'Source preparation is unavailable');
+            const prepared = await deps.prepareSource(
+              runId,
+              env,
+              controller.signal,
+              publishShared,
+              ctx.makeAction === 'clear-source' ? { clearOnly: true } : undefined,
+            );
+            publishShared(prepared);
           } else {
-            // Source operations select/check Git themselves; build prerequisites
-            // must not block a checkout or rerun the environment doctor.
-            const prepared = await deps.prepareSource(runId, env, controller.signal, publish);
-            publish(prepared);
+            const run = name === 'cindy-make' ? deps.prepare : checkCindyMakeEnvironment;
+            if (!run) throwIpcError('UNSUPPORTED_CAPABILITY', 'Tool preparation is unavailable');
+            const checked = await run(runId, env, controller.signal, (report) => {
+              if (!controller.signal.aborted) publishShared(report);
+            });
+            controller.signal.throwIfAborted();
+            publishShared(checked);
           }
-          return { success: true, doctorReport: latest };
+          managerOperation.complete(sharedLatest, env);
         }
-        const run = name === 'cindy-make' ? deps.prepare : checkCindyMakeEnvironment;
-        if (!run) throwIpcError('UNSUPPORTED_CAPABILITY', 'Tool preparation is unavailable');
-        const doctorReport = await run(runId, env, controller.signal, (report) => {
-          if (controller.signal.aborted) return;
-          // The workflow remains running until source preparation and search both finish.
-          publish(
-            workflow && report.status === 'completed' && isMakeEnvironmentReady(report)
-              ? { ...report, status: 'running' }
-              : report,
-          );
-        });
-        controller.signal.throwIfAborted();
+        const doctorReport = await managerOperation.promise;
+        sharedCompleted = true;
+        clearTimeout(timeout);
+        managerOperation.unsubscribe();
         if (
           workflow &&
           doctorReport.status === 'completed' &&
           isMakeEnvironmentReady(doctorReport)
         ) {
+          workflowOperation = cindyMakeManager.startWorkflow(runId, ctx.senderWebContentsId!);
+          controller = workflowOperation.controller;
+          timeout = setTimeout(
+            () => controller.abort('timeout'),
+            Math.max(0, startedAt + timeoutMs - Date.now()),
+          );
+          const env = managerOperation.context;
+          if (!env) throwIpcError('INTERNAL', 'Prepared environment is unavailable');
           if (!ctx.makeRequest?.trim()) {
             publish({ ...doctorReport, upstream: { status: 'needsRequest', items: [] } });
           } else {
@@ -231,25 +272,26 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
         }
         return { success: true, doctorReport: latest };
       } catch {
+        const failureBase = !managerOperation.attached && !sharedCompleted ? sharedLatest : latest;
         const timedOut = controller.signal.reason === 'timeout';
         const cancelled = controller.signal.aborted && !timedOut;
         const doctorReport: MakeDoctorReport = {
-          ...latest,
+          ...failureBase,
           status: cancelled ? 'cancelled' : 'failed',
-          ...(latest.source?.status === 'preparing'
+          ...(failureBase.source?.status === 'preparing'
             ? {
                 source: {
-                  ...latest.source,
+                  ...failureBase.source,
                   status: cancelled ? ('cancelled' as const) : ('failed' as const),
                   error: cancelled ? ('cancelled' as const) : ('gitFailed' as const),
                   progress: undefined,
                 },
               }
             : {}),
-          ...(latest.upstream?.status === 'searching'
+          ...(failureBase.upstream?.status === 'searching'
             ? {
                 upstream: {
-                  ...latest.upstream,
+                  ...failureBase.upstream,
                   status: cancelled ? ('cancelled' as const) : ('failed' as const),
                   ...(cancelled
                     ? {}
@@ -257,7 +299,7 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
                 },
               }
             : {}),
-          checks: latest.checks.map((check) =>
+          checks: failureBase.checks.map((check) =>
             ['pending', 'checking', 'downloading', 'installing'].includes(check.status)
               ? {
                   ...check,
@@ -268,12 +310,18 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
               : check,
           ),
         };
-        publish(doctorReport);
+        if (!managerOperation.attached && !sharedCompleted) {
+          publishShared(doctorReport);
+          managerOperation.complete(sharedLatest);
+        } else {
+          publish(doctorReport);
+        }
         return { success: true, doctorReport: latest };
       } finally {
         finished = true;
         clearTimeout(timeout);
-        active.delete(runId);
+        managerOperation.unsubscribe();
+        workflowOperation?.complete();
       }
     },
   };

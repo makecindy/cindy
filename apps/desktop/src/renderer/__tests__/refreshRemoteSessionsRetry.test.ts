@@ -289,7 +289,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
     await refreshRemoteDeviceSessions(d);
 
-    expect(getRemoteSessionActivity(bot.id)?.phase).toBe('running');
+    expect(getRemoteSessionActivity(bot.id, d)?.phase).toBe('running');
     expect(remoteProjectsStore.getDeviceSessions(d)[0]).toMatchObject({ runtimeEffective });
     remoteProjectsStore.applyPatch(d, bot.id, { effort: 'high', listPreview: 'reply received' });
     expect(remoteProjectsStore.getDeviceSessions(d)[0]).toMatchObject({
@@ -320,7 +320,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(remoteProjectsStore.getDeviceSessions(d)[0]?.model).toBe('gpt-6-astra');
-    expect(getRemoteSessionActivity(bot.id)?.phase).toBe('running');
+    expect(getRemoteSessionActivity(bot.id, d)?.phase).toBe('running');
     expect(remoteProjectsStore.getDeviceSessions(other)[0]?.deviceLinkConnectionStatus).toBe(
       'connected',
     );
@@ -346,7 +346,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
       await refreshRemoteDeviceSessions(d, 'MacBook', { snapshotMode: 'replace' });
 
-      expect(getRemoteSessionActivity(bot.id)).toBeUndefined();
+      expect(getRemoteSessionActivity(bot.id, d)).toBeUndefined();
       expect(remoteProjectsStore.getDeviceSessions(d, 'active')).toHaveLength(0);
       expect(remoteProjectsStore.getDeviceSessions(d)).toHaveLength(
         terminal === 'archived' ? 1 : 0,
@@ -743,7 +743,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     });
 
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
-    expect(getRemoteSessionActivity('stale-archived')).toBeUndefined();
+    expect(getRemoteSessionActivity('stale-archived', d)).toBeUndefined();
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
@@ -772,7 +772,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getDeviceSessions(d, 'archived')).toEqual([
       expect.objectContaining({ id: 'stale-archived', status: 'archived' }),
     ]);
-    expect(getRemoteSessionActivity('stale-archived')).toBeUndefined();
+    expect(getRemoteSessionActivity('stale-archived', d)).toBeUndefined();
   });
 
   it('周期满窗口补查 active 行时回填窗口外会话的权威元数据', async () => {

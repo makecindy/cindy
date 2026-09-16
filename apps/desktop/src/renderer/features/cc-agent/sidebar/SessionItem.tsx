@@ -401,17 +401,17 @@ export const SessionItem = memo(function SessionItem({
   // device-link 远程会话行:本地 attention/running 链路对被控端后台会话是盲区,状态改由
   // 被控端灵动岛 relay 的活动镜像驱动(remoteSessionActivityStore,按行精准订阅;本地
   // 会话恒 undefined 零开销)。镜像只保留活跃态与未读终态,映射与本地五档同一张色表。
-  const remoteActivity = useRemoteSessionActivity(session.id);
+  const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
-    liveActivity: remoteActivity ?? islandActivity,
+    liveActivity: session.deviceLinkDeviceId ? remoteActivity : islandActivity,
     attentionKind,
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
-    isRunning,
+    isRunning: session.deviceLinkDeviceId ? remoteActivity?.phase === 'running' : isRunning,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;

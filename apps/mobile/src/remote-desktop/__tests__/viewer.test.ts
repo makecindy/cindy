@@ -149,6 +149,37 @@ function viewer() {
 }
 
 describe("remote desktop viewport", () => {
+  it("measures the usable picture and fits updated geometry above the toolbar", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    v.send({ type: "mouseButtons", bottomInset: 100 });
+    v.send({ type: "measureViewport" });
+    expect(v.messages.find((m) => m.type === "viewportSize")).toMatchObject({
+      width: 400,
+      height: 500,
+    });
+    v.send({ type: "videoSettings", width: 800, height: 1000, audio: false });
+    expect(v.elements.video.style).toMatchObject({
+      width: "400px",
+      height: "500px",
+      left: "0px",
+      top: "0px",
+    });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.pointer("pointerdown", 1, 200, 250);
+    v.pointer("pointerup", 1, 200, 250);
+    v.ack();
+    v.flush();
+    expect(
+      v.messages
+        .flatMap((m) => m.events ?? [])
+        .filter((e) => e.kind === "button"),
+    ).toEqual([
+      { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
+      { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
+    ]);
+  });
   it.each([
     ["left", 0],
     ["right", 2],
@@ -238,8 +269,8 @@ describe("remote desktop viewport", () => {
     v.frame(100);
     v.mouse("wheel", "pointerup", 100);
     expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
-      { kind: "button", button: 1, down: true, x: .5, y: .5 },
-      { kind: "button", button: 1, down: false, x: .5, y: .5 },
+      { kind: "button", button: 1, down: true, x: 0.5, y: 0.5 },
+      { kind: "button", button: 1, down: false, x: 0.5, y: 0.5 },
     ]);
   });
   it("keeps scrolling while held, reverses direction and stops on release", () => {
@@ -248,10 +279,13 @@ describe("remote desktop viewport", () => {
     v.send({ type: "mouseButtons", enabled: true });
     v.mouse("wheel", "pointerdown", 100);
     v.mouse("wheel", "pointermove", 90);
-    v.flush(); v.ack();
-    v.flush(); v.ack(); // No new movement: still scrolls.
+    v.flush();
+    v.ack();
+    v.flush();
+    v.ack(); // No new movement: still scrolls.
     v.mouse("wheel", "pointermove", 124);
-    v.flush(); v.ack();
+    v.flush();
+    v.ack();
     v.mouse("wheel", "pointermove", 100);
     v.flush(); // Center dead zone stops scrolling.
     v.mouse("wheel", "pointerup", 100);
@@ -261,7 +295,9 @@ describe("remote desktop viewport", () => {
       { kind: "scroll", dx: 0, dy: -9 },
       { kind: "scroll", dx: 0, dy: 30 },
     ]);
-    expect(v.elements["mouse-wheel-grip"].style.transform).toBe("translateY(0px)");
+    expect(v.elements["mouse-wheel-grip"].style.transform).toBe(
+      "translateY(0px)",
+    );
   });
   it("does not accumulate held wheel ticks while awaiting acknowledgement", () => {
     const v = viewer();
@@ -274,7 +310,9 @@ describe("remote desktop viewport", () => {
       v.mouse("wheel", "pointermove", y);
       v.flush();
     }
-    expect(v.messages.some((message) => message.type === "inputOverflow")).toBe(false);
+    expect(v.messages.some((message) => message.type === "inputOverflow")).toBe(
+      false,
+    );
     v.ack();
     v.flush();
     expect(v.messages.flatMap((message) => message.events ?? [])).toEqual([
@@ -307,51 +345,106 @@ describe("remote desktop viewport", () => {
     expect(parseFloat(v.elements.image.style.top)).toBeGreaterThan(0);
   });
   it.each([
-    [1, .1], [1, .5], [1, .9], [2, .1], [2, .5], [2, .9],
-  ])("keeps landscape scale %sx with minimal horizontal movement for cursor %s", (scale, cursorX) => {
-    const v = viewer();
-    v.elements.stage.clientWidth = 800;
-    v.elements.stage.clientHeight = 400;
-    v.send({ type: "init", epoch: "keyboard", width: 1920, height: 1080, fillHeight: true });
-    if (scale === 2) {
-      v.pointer("pointerdown", 1, 200, 200);
-      v.pointer("pointerdown", 2, 400, 200);
-      v.pointer("pointermove", 1, 100, 200);
-      v.pointer("pointermove", 2, 500, 200);
-      v.frame();
-      v.frame(40);
-      v.pointer("pointerup", 1, 100, 200);
-      v.pointer("pointerup", 2, 500, 200);
-    }
-    v.send({ type: "frame", jpeg: "", cursor: {
-      x: cursorX, y: .85, width: 18, height: 18, hotX: 9, hotY: 9,
-      visible: true, png: "iVBORw0KGgo=",
-    } });
-    v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
-    for (let i = 0; i < 30; i++) v.frame();
-    const width = v.elements.image.style.width;
-    expect(parseFloat(v.elements.image.style.height)).toBeCloseTo(400 * scale);
-    // Removing the toolbar before the keyboard has a measured height must not shift the image.
-    const originalLeft = v.elements.image.style.left;
-    v.send({ type: "mouseButtons", keyboardOpen: true, bottomInset: 0, leftInset: 50, rightInset: 0 });
-    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(parseFloat(originalLeft));
-    // Header, computer keyboard, phone keyboard, and closing the keyboard.
-    for (const bottomInset of [60, 260, 300, 0]) {
-      const previousLeft = parseFloat(v.elements.image.style.left);
-      const previousCursorX = previousLeft + cursorX * parseFloat(width);
-      const rightInset = bottomInset > 0 ? 0 : 80;
-      const expectedCursorX = Math.max(67, Math.min(800 - rightInset - 17, previousCursorX));
-      v.send({ type: "mouseButtons", keyboardOpen: bottomInset > 0, bottomInset, leftInset: 50, rightInset });
-      v.blur();
+    [1, 0.1],
+    [1, 0.5],
+    [1, 0.9],
+    [2, 0.1],
+    [2, 0.5],
+    [2, 0.9],
+  ])(
+    "keeps landscape scale %sx with minimal horizontal movement for cursor %s",
+    (scale, cursorX) => {
+      const v = viewer();
+      v.elements.stage.clientWidth = 800;
+      v.elements.stage.clientHeight = 400;
+      v.send({
+        type: "init",
+        epoch: "keyboard",
+        width: 1920,
+        height: 1080,
+        fillHeight: true,
+      });
+      if (scale === 2) {
+        v.pointer("pointerdown", 1, 200, 200);
+        v.pointer("pointerdown", 2, 400, 200);
+        v.pointer("pointermove", 1, 100, 200);
+        v.pointer("pointermove", 2, 500, 200);
+        v.frame();
+        v.frame(40);
+        v.pointer("pointerup", 1, 100, 200);
+        v.pointer("pointerup", 2, 500, 200);
+      }
+      v.send({
+        type: "frame",
+        jpeg: "",
+        cursor: {
+          x: cursorX,
+          y: 0.85,
+          width: 18,
+          height: 18,
+          hotX: 9,
+          hotY: 9,
+          visible: true,
+          png: "iVBORw0KGgo=",
+        },
+      });
+      v.send({
+        type: "mouseButtons",
+        keyboardOpen: false,
+        bottomInset: 0,
+        leftInset: 50,
+        rightInset: 80,
+      });
       for (let i = 0; i < 30; i++) v.frame();
-      const image = v.elements.image.style;
-      expect(image.width).toBe(width);
-      expect(parseFloat(image.height)).toBeCloseTo(400 * scale);
-      expect(parseFloat(image.left) + cursorX * parseFloat(image.width)).toBeCloseTo(expectedCursorX);
-      expect(parseFloat(image.left)).toBeCloseTo(previousLeft + expectedCursorX - previousCursorX);
-      expect(parseFloat(image.top) + .85 * parseFloat(image.height)).toBeCloseTo((400 - bottomInset) / 2);
-    }
-  });
+      const width = v.elements.image.style.width;
+      expect(parseFloat(v.elements.image.style.height)).toBeCloseTo(
+        400 * scale,
+      );
+      // Removing the toolbar before the keyboard has a measured height must not shift the image.
+      const originalLeft = v.elements.image.style.left;
+      v.send({
+        type: "mouseButtons",
+        keyboardOpen: true,
+        bottomInset: 0,
+        leftInset: 50,
+        rightInset: 0,
+      });
+      expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(
+        parseFloat(originalLeft),
+      );
+      // Header, computer keyboard, phone keyboard, and closing the keyboard.
+      for (const bottomInset of [60, 260, 300, 0]) {
+        const previousLeft = parseFloat(v.elements.image.style.left);
+        const previousCursorX = previousLeft + cursorX * parseFloat(width);
+        const rightInset = bottomInset > 0 ? 0 : 80;
+        const expectedCursorX = Math.max(
+          67,
+          Math.min(800 - rightInset - 17, previousCursorX),
+        );
+        v.send({
+          type: "mouseButtons",
+          keyboardOpen: bottomInset > 0,
+          bottomInset,
+          leftInset: 50,
+          rightInset,
+        });
+        v.blur();
+        for (let i = 0; i < 30; i++) v.frame();
+        const image = v.elements.image.style;
+        expect(image.width).toBe(width);
+        expect(parseFloat(image.height)).toBeCloseTo(400 * scale);
+        expect(
+          parseFloat(image.left) + cursorX * parseFloat(image.width),
+        ).toBeCloseTo(expectedCursorX);
+        expect(parseFloat(image.left)).toBeCloseTo(
+          previousLeft + expectedCursorX - previousCursorX,
+        );
+        expect(
+          parseFloat(image.top) + 0.85 * parseFloat(image.height),
+        ).toBeCloseTo((400 - bottomInset) / 2);
+      }
+    },
+  );
   it("does not recenter portrait content for a keyboard overlay message", () => {
     const v = viewer();
     const before = { ...v.elements.image.style };
@@ -362,12 +455,36 @@ describe("remote desktop viewport", () => {
     const v = viewer();
     v.elements.stage.clientWidth = 800;
     v.elements.stage.clientHeight = 400;
-    v.send({ type: "init", epoch: "quick-keyboard", width: 1920, height: 1080, fillHeight: true });
-    v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
+    v.send({
+      type: "init",
+      epoch: "quick-keyboard",
+      width: 1920,
+      height: 1080,
+      fillHeight: true,
+    });
+    v.send({
+      type: "mouseButtons",
+      keyboardOpen: false,
+      bottomInset: 0,
+      leftInset: 50,
+      rightInset: 80,
+    });
     const before = { ...v.elements.image.style };
     for (let i = 0; i < 2; i++) {
-      v.send({ type: "mouseButtons", keyboardOpen: true, bottomInset: 0, leftInset: 50, rightInset: 0 });
-      v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
+      v.send({
+        type: "mouseButtons",
+        keyboardOpen: true,
+        bottomInset: 0,
+        leftInset: 50,
+        rightInset: 0,
+      });
+      v.send({
+        type: "mouseButtons",
+        keyboardOpen: false,
+        bottomInset: 0,
+        leftInset: 50,
+        rightInset: 80,
+      });
       expect(v.elements.image.style).toEqual(before);
       v.blur();
       for (let j = 0; j < 30; j++) v.frame();

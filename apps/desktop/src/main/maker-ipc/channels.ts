@@ -909,6 +909,8 @@ export const MAKER_PUSH = {
    * 分支处理; payload 还带 ctx (sessionId / workingDir / args) 让 renderer 知道在哪触发的。
    */
   DESKTOP_COMMAND_TRIGGERED: 'maker:desktop-command-triggered',
+  /** Main-owned Cindy Make operation snapshots, broadcast to every trusted renderer. */
+  CINDY_MAKE_STATE_CHANGED: 'maker:cindy-make:state-changed',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
   /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */

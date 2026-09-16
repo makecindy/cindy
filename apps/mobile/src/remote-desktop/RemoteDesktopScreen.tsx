@@ -40,6 +40,7 @@ import { useTranslation } from "react-i18next";
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import {
   RemoteDesktopViewerSession,
+  viewerDisplaySize,
   RemoteDesktopViewerMedia,
   remoteDesktopFailureKey,
   REMOTE_DESKTOP_CHANNEL,
@@ -235,6 +236,23 @@ export default function RemoteDesktopScreen() {
   const unlockFrame = useRef<((presented: boolean) => void) | null>(null);
   const inputBusy = useRef<string | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
+  const [viewerDisplayApplied, setViewerDisplayApplied] = useState(false);
+  const [viewerViewport, setViewerViewport] = useState({ width: 0, height: 0 });
+  const viewportGeneration = useRef(0);
+  const matchesViewer = (
+    display: { width: number; height: number },
+    width: number,
+    height: number,
+  ) =>
+    width > 0 &&
+    height > 0 &&
+    Math.abs(display.width / display.height - width / height) < 0.003;
+  const viewerDisplayMatched = Boolean(
+    viewerDisplayApplied &&
+    caps?.viewerDisplayRestore &&
+    lease &&
+    matchesViewer(lease.display, viewerViewport.width, viewerViewport.height),
+  );
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
   const [status, setStatus] = useState("connecting");
@@ -491,6 +509,7 @@ export default function RemoteDesktopScreen() {
       send({ type: "stop", preserveFrame });
       if (alive.current) {
         setLease(null);
+        setViewerDisplayApplied(false);
         setFrameReady(false);
         setControlReady(false);
         setCanPip(false);
@@ -625,8 +644,10 @@ export default function RemoteDesktopScreen() {
           setKeyboard(false);
         }
       }
-      if (alive.current) setLease({ ...current });
     }
+    // The shared session may already have mutated this lease before returning.
+    // Always publish the confirmation to React's separate snapshot as well.
+    if (alive.current) setLease({ ...current });
     send({ type: "control", enabled: controlling });
   };
   const requestHostControl = (
@@ -688,7 +709,9 @@ export default function RemoteDesktopScreen() {
             displayId: displayId ?? recovery.current.displayId,
             resume: resuming,
             takeover,
-            onStart: () => { recovery.current.resuming = true; },
+            onStart: () => {
+              recovery.current.resuming = true;
+            },
             isCurrent: () => current === generation.current && alive.current,
             onCapabilities: (result) => {
               mark("capabilities");
@@ -769,20 +792,20 @@ export default function RemoteDesktopScreen() {
       } finally {
         if (current === generation.current) connecting.current = false;
       }
-      },
-      [
-        deviceId,
-        fail,
-        landscape,
-        mode,
-        request,
-        resolveControlFailure,
-        send,
-        stop,
-        t,
-        videoPreferencesLoaded,
-        viewerSession,
-      ],
+    },
+    [
+      deviceId,
+      fail,
+      landscape,
+      mode,
+      request,
+      resolveControlFailure,
+      send,
+      stop,
+      t,
+      videoPreferencesLoaded,
+      viewerSession,
+    ],
   );
   const connectRef = useRef(connect);
   connectRef.current = connect;
@@ -1121,6 +1144,32 @@ export default function RemoteDesktopScreen() {
       return;
     }
     switch (message.type) {
+      case "viewportChanged":
+        if (
+          typeof message.width === "number" &&
+          typeof message.height === "number" &&
+          Number.isFinite(message.width) &&
+          Number.isFinite(message.height)
+        ) {
+          viewportGeneration.current += 1;
+          setViewerViewport((previous) =>
+            previous.width === message.width &&
+            previous.height === message.height
+              ? previous
+              : {
+                  width: message.width as number,
+                  height: message.height as number,
+                },
+          );
+        }
+        break;
+      case "viewportSize":
+        if (
+          typeof message.width === "number" &&
+          typeof message.height === "number"
+        )
+          void fitViewerDisplay(message.width, message.height);
+        break;
       case "reconnecting":
         if (message.attemptId === mediaAttempt.current)
           setStatus("reconnecting");
@@ -1436,6 +1485,26 @@ export default function RemoteDesktopScreen() {
   const changeResolution = async (modeId: string) => {
     const current = active.current;
     if (!current?.controlling || settingInFlight.current) return;
+    if (caps?.viewerDisplay && caps.viewerDisplayRestore) {
+      try {
+        const modes = await request<
+          import("@cindy/device-link").RemoteDesktopDisplayMode[]
+        >({ op: "displayModes", lease: current.lease });
+        if (active.current !== current) return;
+        const mode = modes.find((item) => item.id === modeId);
+        if (!mode) throw new Error("DESKTOP_DISPLAY_MODE_MISSING");
+        if (
+          [mode.width, mode.height].every((size) => size >= 320 && size <= 2560)
+        ) {
+          await fitViewerDisplay(mode.width, mode.height, true);
+          return;
+        }
+      } catch {
+        if (active.current === current)
+          setSettingNotice(t("remoteDesktop.settingFailed"));
+        return;
+      }
+    }
     settingInFlight.current = true;
     setSettingBusy(true);
     setSettingNotice(null);
@@ -1450,6 +1519,83 @@ export default function RemoteDesktopScreen() {
       // Geometry changes may end the old lease before its reply reaches us.
       if (active.current === current)
         setSettingNotice(t("remoteDesktop.settingFailed"));
+    } finally {
+      settingInFlight.current = false;
+      setSettingBusy(false);
+    }
+  };
+  const fitViewerDisplay = async (
+    width: number,
+    height: number,
+    exactResolution = false,
+  ) => {
+    const current = active.current;
+    if (
+      exactResolution &&
+      ![width, height].every(
+        (value) => Number.isInteger(value) && value >= 320 && value <= 2560,
+      )
+    ) {
+      setSettingNotice(t("remoteDesktop.settingUnsupported"));
+      return;
+    }
+    const size = exactResolution
+      ? { width, height }
+      : viewerDisplaySize(width, height);
+    if (
+      !current?.controlling ||
+      !caps?.viewerDisplay ||
+      !size ||
+      settingInFlight.current ||
+      settingBusy ||
+      controlInFlight.current
+    )
+      return;
+    settingInFlight.current = true;
+    setSettingBusy(true);
+    setSettingNotice(null);
+    const sourceDisplayId = recovery.current.displayId || current.display.id;
+    send({ type: "control", enabled: false });
+    try {
+      viewerMedia.reset();
+      const restore = Boolean(
+        !exactResolution &&
+        viewerDisplayApplied &&
+        caps.viewerDisplayRestore &&
+        matchesViewer(current.display, width, height),
+      );
+      const requestGeneration = viewportGeneration.current;
+      const next = await viewerSession.current.fitDisplay(
+        size.width,
+        size.height,
+        restore,
+      );
+      if (active.current !== current) return;
+      // Reconnect the physical source display after the temporary mirror ends.
+      recovery.current.displayId = sourceDisplayId;
+      if (!exactResolution && viewportGeneration.current === requestGeneration)
+        setViewerViewport({ width, height });
+      setViewerDisplayApplied(!restore);
+      setLease({ ...next });
+      streaming.current = false;
+      setCanPip(false);
+      send({
+        type: "videoSettings",
+        width: next.display.width,
+        height: next.display.height,
+        restore,
+        audio: Boolean(caps.systemAudio && videoSettingsRef.current.audio),
+      });
+      const control = await viewerSession.current.control(true);
+      if (active.current === current)
+        applyConfirmedControl(current, control.controlling);
+    } catch (cause) {
+      if (active.current === current) {
+        setSettingNotice(t("remoteDesktop.settingFailed"));
+        if ((cause as { code?: string })?.code === "INVOKE_TIMEOUT")
+          fail(cause);
+        else resolveControlFailure(cause);
+      }
     } finally {
       settingInFlight.current = false;
       setSettingBusy(false);
@@ -1784,6 +1930,12 @@ export default function RemoteDesktopScreen() {
                     settings: videoSettings,
                     busy: settingBusy,
                     modesSupported: Boolean(caps?.displayModes),
+                    displayGeometry: lease
+                      ? `${lease.display.id}:${lease.display.width}:${lease.display.height}`
+                      : undefined,
+                    viewerDisplaySupported: caps?.viewerDisplay === true,
+                    viewerDisplayMatched,
+                    onFitDisplay: () => send({ type: "measureViewport" }),
                     notice: audioUnavailable.current
                       ? t("remoteDesktop.audioUnavailable")
                       : settingNotice,
@@ -1801,7 +1953,7 @@ export default function RemoteDesktopScreen() {
                   }}
                   inputMode={inputMode}
                   displays={caps?.displays ?? []}
-                  displayId={lease?.display.id}
+                  displayId={recovery.current.displayId ?? lease?.display.id}
                   onViewOnly={() => void toggleControl()}
                   onInputMode={(value) => {
                     setInputMode(value);

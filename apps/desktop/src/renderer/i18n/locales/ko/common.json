@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "원격 데스크톱 연결이 종료됩니다. 컴퓨터의 앱은 계속 실행됩니다.",
       "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
       "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 컴퓨터 간에 텍스트를 복사하고 붙여넣으세요. 이미지와 파일은 아직 지원하지 않습니다.",
+      "fitViewerDisplay": "현재 화면 비율에 맞추기",
+      "fitViewerDisplayHint": "데스크톱 내용을 유지하면서 컴퓨터 화면 비율을 일시적으로 변경합니다. 연결을 종료하면 원래 해상도로 돌아갑니다.",
       "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
     }
   },
@@ -5654,6 +5656,16 @@
       "permissionModeDisabled": "원격 IM은 Cindy Desktop의 확인 정책을 사용하므로 이 권한 모드를 사용할 수 없습니다."
     },
     "cindyMake": {
+      "create": {
+        "title": "개인 버전 만들기",
+        "cancel": "취소",
+        "description": "Cindy에서 바꾸고 싶은 내용을 알려주세요. 제작 작업을 열고 기존 공통 흐름에 따라 환경 확인과 소스 코드 준비를 거쳐 제작을 진행합니다.",
+        "requestLabel": "무엇을 바꾸고 싶으신가요?",
+        "requestHint": "최대 {{max}}자. 제출 후 작업에서 진행 상황을 확인할 수 있습니다. 설정을 나가도 준비는 멈추지 않습니다.",
+        "placeholder": "예: 작업 목록에서 미완료 작업만 보여주는 필터 버튼을 추가하고 싶어요.",
+        "continue": "제작 시작",
+        "failed": "제작을 시작하지 못했습니다. 입력 내용은 그대로 있으니 다시 시도해 주세요."
+      },
       "title": "Cindy Make",
       "openToolsDir": "도구 폴더 열기",
       "source": {
@@ -5664,10 +5676,6 @@
         "update": "소스 업데이트",
         "preparingAction": "소스 준비 중",
         "path": "경로",
-        "channel": "채널",
-        "version": "버전",
-        "ref": "Ref",
-        "commit": "커밋",
         "status": {
           "missing": "개인 소스가 아직 준비되지 않았습니다",
           "pending": "소스 준비 중",
@@ -5682,8 +5690,6 @@
           "confirm": "소스 정리",
           "cancel": "취소"
         },
-        "branch": "개인 버전 브랜치",
-        "baseCommit": "기준선",
         "description": "개인 버전 Cindy의 소스 사본입니다. 개인 버전을 만들 때마다 개인 버전 브랜치에서 독립 작업 디렉터리를 만들고, 테스트를 통과한 변경을 여기로 병합합니다. 이 디렉터리 자체를 직접 수정하지는 않습니다.",
         "stop": "중지"
       },
@@ -12525,20 +12531,22 @@
       "needRequest": "변경할 기능 이름이나 구체적인 오류를 입력해 관련 업스트림 작업을 검색하세요.",
       "placeholder": "예: 메시지 스트림 깜박임 수정",
       "search": "업스트림 검색",
-      "searching": "업스트림 이슈와 PR 검색 중…",
-      "found": "관련 가능성이 있는 업스트림 작업을 찾았습니다",
-      "notFound": "일치하는 업스트림 작업을 찾지 못했습니다",
+      "searching": "관련 업스트림 PR 검색 중…",
+      "found": "관련 가능성이 있는 PR을 찾았습니다",
+      "notFound": "추가로 일치하는 PR을 찾지 못했습니다",
       "failed": "업스트림 검색 실패",
       "cancelled": "업스트림 검색 중지됨",
       "terms": "검색어: {{terms}}",
       "author": "작성자: {{author}}",
       "updated": "업데이트: {{date}}",
-      "notFoundHint": "이 검색어와 일치하는 공개 이슈 또는 PR이 없습니다. 다른 표현으로 검색하면 다른 결과가 나올 수 있습니다.",
-      "resultHint": "링크를 열어 관련성을 확인하세요. 현재 열린 Issue와 PR만 표시됩니다.",
+      "expand": "검색 결과 보기",
+      "collapse": "검색 결과 접기",
+      "notFoundHint": "이번 키워드 검색에서는 추가 후보를 찾지 못했습니다. 다른 표현으로 검색하면 더 많은 PR을 찾을 수 있습니다.",
+      "resultHint": "미병합 및 병합된 PR을 검색하며 실행 중인 버전에 포함된 것으로 확인된 PR은 제외합니다. 링크에서 관련성을 확인하세요. 병합되었다고 출시된 것은 아닙니다.",
       "wait": "업스트림 기다리기",
       "personal": "개인 버전 제작 계속",
       "retry": "환경 재확인 및 검색",
-      "count": "관련 가능성이 있는 열린 Issue 또는 PR {{count}}개를 찾았습니다",
+      "count": "확인할 관련 가능성이 있는 PR {{count}}개",
       "kind": {
         "issue": "이슈",
         "pr": "PR"
@@ -12562,6 +12570,22 @@
         "rateLimit": "GitHub 요청 제한에 도달했습니다. 잠시 후 다시 시도하세요.",
         "timeout": "검색 시간이 초과되었습니다. 다시 시도하세요.",
         "invalidResponse": "GitHub 결과가 불완전하거나 읽을 수 없습니다. 다시 시도하세요."
+      },
+      "runtimeUnknown": "실행 중인 소스 버전을 정확히 확인할 수 없습니다(예: 로컬 변경이 있는 Dev 버전). 후보 PR을 확인용으로 유지합니다.",
+      "excludedIncluded": "실행 중인 버전에 포함된 PR {{count}}개를 제외했습니다.",
+      "limitedHint": "검색 결과의 일부만 확인했습니다. 요청을 구체화하면 검색 범위를 좁힐 수 있습니다.",
+      "runtimeVersion": "실행 중: {{channel}} {{version}} · {{commit}}",
+      "unknownCommit": "커밋 알 수 없음",
+      "draft": "초안",
+      "channel": {
+        "dev": "Dev",
+        "beta": "Beta",
+        "release": "정식 버전"
+      },
+      "inclusion": {
+        "included": "실행 중인 버전에 포함됨",
+        "notIncluded": "실행 중인 버전에 포함되지 않음",
+        "unknown": "실행 중인 버전의 포함 여부 미확인"
       }
     },
     "title": "Cindy Make",
@@ -12575,8 +12599,10 @@
         "cloning": "소스 다운로드 중",
         "fetching": "저장소 새로 고침 중",
         "checkingOut": "버전 전환 중",
-        "preparingBranch": "개인 버전 브랜치 준비 중"
+        "preparingBranch": "개인 버전 브랜치 준비 중",
+        "installing": "의존성 설치 중"
       },
+      "pending": "소스 준비 대기 중",
       "ready": "소스가 준비되었습니다",
       "failed": "소스 준비 실패",
       "cancelled": "소스 준비가 중지됨",
@@ -12600,8 +12626,15 @@
         "checkingOut": "파일 업데이트 중"
       },
       "missing": "아직 소스가 준비되지 않았습니다",
-      "personalBranch": "개인 버전 브랜치 {{branch}}",
-      "baseCommit": "{{ref}} {{commit}} 기준"
+      "details": {
+        "branch": "개인 버전 브랜치",
+        "baseRef": "{{ref}} 기준",
+        "baseCommit": "기준 버전",
+        "mainCommit": "main 버전",
+        "currentBranch": "프로젝트의 현재 브랜치",
+        "detached": "브랜치 없음 (고정 커밋)",
+        "unknown": "소스를 업데이트해 확인하세요"
+      }
     },
     "code": {
       "starting": "개인 버전 작업을 여는 중",

@@ -58,6 +58,20 @@ const mkAssistant = (id: string, content = 'ok'): ChatMessage => ({
   content,
 });
 
+it('keeps persistent Cindy Make progress visible in the message timeline', () => {
+  const built = buildRenderItems([
+    mkUser('u1', '之前的消息'),
+    {
+      ...mkAssistant('make-card'),
+      systemCardType: 'cindy-make',
+      systemCardData: { request: 'fix scrolling', report: { runId: 'run-1' } },
+    },
+  ]).items;
+  expect(
+    built.some((item) => item.type === 'message' && item.message.clientId === 'make-card'),
+  ).toBe(true);
+});
+
 it('keeps modal-only Cindy Make cards out of the message timeline', () => {
   const built = buildRenderItems([
     mkUser('u1', '之前的消息'),

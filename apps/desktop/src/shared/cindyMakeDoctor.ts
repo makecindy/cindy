@@ -57,6 +57,19 @@ export interface MakeDoctorReport {
   source?: MakeSourcePreparation;
 }
 
+/** Main-owned snapshots for all Cindy Make resources. Renderer only subscribes. */
+export interface CindyMakeOperationSnapshot {
+  active: boolean;
+  report: MakeDoctorReport;
+}
+
+export interface CindyMakeGlobalState {
+  environmentCheck?: CindyMakeOperationSnapshot;
+  environmentPrepare?: CindyMakeOperationSnapshot;
+  sourcePrepare?: CindyMakeOperationSnapshot;
+  sourceClear?: CindyMakeOperationSnapshot;
+}
+
 export interface MakeSourcePreparation {
   status: 'pending' | 'preparing' | 'missing' | 'ready' | 'failed' | 'cancelled';
   path: string;
@@ -68,8 +81,13 @@ export interface MakeSourcePreparation {
   commit?: string;
   /** Local branch holding the user's verified personal changes; every task branches from it. */
   branch?: string;
+  currentBranch?: string | null;
   /** Commit of the upstream baseline ref the personal branch was created from or last updated to. */
   baseCommit?: string;
+  mainCommit?: string;
+  mainRemoteCommit?: string;
+  mainBehind?: number;
+  mainAhead?: number;
   error?:
     | 'unsupportedVersion'
     | 'tagNotFound'
@@ -81,7 +99,7 @@ export interface MakeSourcePreparation {
     | 'installFailed'
     | 'locked'
     | 'cancelled';
-  phase?: 'checking' | 'cloning' | 'fetching' | 'checkingOut' | 'preparingBranch';
+  phase?: 'checking' | 'cloning' | 'fetching' | 'checkingOut' | 'preparingBranch' | 'installing';
   progress?: MakeSourceGitProgress;
 }
 
@@ -97,6 +115,8 @@ export interface MakeTaskWorkspace {
 export interface MakeSourceGitProgress {
   stage: 'counting' | 'compressing' | 'receiving' | 'resolving' | 'checkingOut';
   percent: number;
+  /** Latest sanitized Git progress line for user-visible activity feedback. */
+  message?: string;
 }
 
 /** Persisted summary of the managed Cindy source checkout. */
@@ -108,7 +128,12 @@ export interface MakeSourceStatus {
   ref?: string;
   commit?: string;
   branch?: string;
+  currentBranch?: string | null;
   baseCommit?: string;
+  mainCommit?: string;
+  mainRemoteCommit?: string;
+  mainBehind?: number;
+  mainAhead?: number;
   error?: MakeSourcePreparation['error'];
   phase?: MakeSourcePreparation['phase'];
   progress?: MakeSourceGitProgress;
@@ -117,18 +142,32 @@ export interface MakeSourceStatus {
 export interface MakeUpstreamItem {
   number: number;
   title: string;
-  state: 'open';
+  state: 'open' | 'merged' | 'closed' | 'unknown';
   kind: 'issue' | 'pr';
   htmlUrl: string;
   author?: string;
   updatedAt?: string;
   summary?: string;
+  inclusion?: MakeUpstreamInclusion;
+  draft?: boolean;
+}
+
+export type MakeUpstreamInclusion = 'included' | 'notIncluded' | 'unknown';
+
+export interface MakeRuntimeVersion {
+  channel: 'dev' | 'beta' | 'release';
+  version: string;
+  commit?: string;
+  confidence: 'exact' | 'unknown';
 }
 
 export interface MakeUpstreamQuery {
   status: 'pending' | 'needsRequest' | 'searching' | 'notFound' | 'found' | 'failed' | 'cancelled';
   items: MakeUpstreamItem[];
   terms?: string[];
+  runtime?: MakeRuntimeVersion;
+  excludedIncluded?: number;
+  hasMore?: boolean;
   failure?: 'network' | 'rateLimit' | 'timeout' | 'invalidResponse';
 }
 

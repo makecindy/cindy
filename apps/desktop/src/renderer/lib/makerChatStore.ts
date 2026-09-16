@@ -8687,7 +8687,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
               // controller while this renderer still owns an offline outbox.
               // Retire it at the authoritative push boundary so reconnect
               // cannot dispatch into a task that no longer exists.
-              removeRemoteSessionActivityEntry(p.sessionId);
+              removeRemoteSessionActivityEntry(p.sessionId, push.deviceId);
               _purgeSession(p.sessionId);
               break;
             }
@@ -8695,7 +8695,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             mirrorSessionFields(p.sessionId, p.patch);
             // 会话在被控端被删除 / 归档 → 同步清掉活动镜像,避免孤儿状态点。
             if (terminal) {
-              removeRemoteSessionActivityEntry(p.sessionId);
+              removeRemoteSessionActivityEntry(p.sessionId, push.deviceId);
             }
           }
           break;

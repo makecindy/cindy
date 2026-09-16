@@ -33,6 +33,13 @@ pnpm install
 新 worktree 不共享 `node_modules`。确认 checkout 已完成且根 `package.json` 存在后，
 在该 worktree 内重新运行 `pnpm install`。
 
+Cindy Make 在准备受管源码时，先切到 `cindy-personal`，按锁文件安装包含开发依赖的完整
+依赖，成功后才标记仓库就绪。后续开发分支的 worktree 使用已选定的系统或 Cindy 管理
+工具（含原生依赖构建所需的 Python），并通过
+`pnpm install --frozen-lockfile --prefer-offline --prod=false` 优先复用
+准备阶段填充的 pnpm store 缓存；各 worktree 仍保留独立的 `node_modules`，不复制或
+链接个人分支的依赖目录。安装失败或取消可在现有 checkout 上重试，不重置个人分支。
+
 ## Linux：Electron SUID sandbox 权限
 
 较新的 Ubuntu（23.10+ 默认用 AppArmor 限制非特权 user namespace）上，Electron 会退回
