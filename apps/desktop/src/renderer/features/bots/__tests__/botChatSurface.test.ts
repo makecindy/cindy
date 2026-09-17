@@ -94,20 +94,15 @@ describe('伙伴设置包含独立能力选择入口', () => {
 });
 
 describe('伙伴消息流收起内部工作过程', () => {
-  it('只对伙伴过滤工作卡，正文流式出现后让单一思考状态退场', () => {
+  it('只对伙伴过滤工作卡，状态由真实生命周期驱动', () => {
     expect(sessionView).toContain('simplifiedBotConversation={Boolean(botChatIdentity)}');
     expect(messageStream).toContain('simplifyBotRenderItems(grouped, isSessionStreaming)');
     expect(messageStream).toContain("item.message.role === 'assistant'");
     expect(messageStream).toContain('item.message.content.trim().length > 0');
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
-    expect(sessionView).toContain('data-testid="bot-thinking-indicator"');
-    expect(sessionView).toContain("t('ccAgent.agentStatus.thinking')");
-    expect(sessionView).toContain('botChatIdentity ? (');
-    expect(sessionView).toContain(
-      'Boolean(botChatIdentity) && hasBotAssistantOutputInCurrentTurn(messages)',
-    );
-    expect(sessionView).toContain('composerRuntimeVisible && !botAssistantOutputStarted');
-    expect(sessionView).toContain('botThinkingVisible ? (');
+    expect(sessionView).toContain('<BotWorkingStatus');
+    expect(sessionView).toContain('visible={composerRuntimeVisible}');
+    expect(sessionView).not.toContain('botAssistantOutputStarted');
   });
 
   it('时间戳只挂在伙伴消息分组上', () => {

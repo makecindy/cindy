@@ -538,35 +538,6 @@ export function simplifyBotRenderItems(
   });
 }
 
-/**
- * 当前可见用户 turn 是否已经产出正文。Bot composer 用它把「正在思考」限制在
- * 首字到来之前；子代理内部行、系统卡、空 assistant 和合成续跑行都不参与判断。
- */
-export function hasBotAssistantOutputInCurrentTurn(messages: readonly ChatMessage[]): boolean {
-  let currentTurnStart = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (isSubagentInternalMessage(message)) continue;
-    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) {
-      currentTurnStart = index;
-      break;
-    }
-  }
-  if (currentTurnStart < 0) return false;
-  for (let index = currentTurnStart + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (isSubagentInternalMessage(message)) continue;
-    if (
-      message.role === 'assistant' &&
-      !message.systemCardType &&
-      message.content.trim().length > 0
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
   return item?.type === 'fork_origin' || (item?.type === 'message' && item.message.role === 'user');
 }

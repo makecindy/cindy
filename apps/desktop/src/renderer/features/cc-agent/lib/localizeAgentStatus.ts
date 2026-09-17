@@ -1,4 +1,6 @@
 import type { TFunction } from 'i18next';
+import type { ChatMessage as Message } from '@/lib/makerChatStore';
+import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 
 const STATUS_KEYS = new Map<string, string>([
   ['thinking', 'ccAgent.agentStatus.thinking'],
@@ -35,6 +37,45 @@ function normalizeStaticStatus(status: string): string {
     .replace(/(?:\.{3}|…)$/, '')
     .trim()
     .toLowerCase();
+}
+
+/** Plain composer copy uses the same runtime status as the task status bar.
+ * Pi reports Working for both text and reasoning, so prefer its live blocks.
+ * Completed text is never evidence that the product turn has finished.
+ */
+export function localizePlainAgentStatus(
+  status: string,
+  messages: readonly Message[],
+  startedAt: number | null,
+  t: TFunction,
+): string {
+  const normalized = normalizeStaticStatus(status);
+  if (normalized === 'waiting on approval' || normalized === 'waiting on input') {
+    return localizeAgentStatus(status, t);
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.systemCardType || (
+      message.parentToolUseId && isSubagentParentToolUseId(message.parentToolUseId)
+    )) continue;
+    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) break;
+    if (startedAt !== null && message.createdAt && Date.parse(message.createdAt) < startedAt) continue;
+    if (message.role === 'thinking' && message.isStreaming) {
+      return localizeAgentStatus('Thinking', t);
+    }
+    if (message.role === 'assistant' && message.isStreaming && message.content.trim()) {
+      return t('ccAgent.agentStatus.replying');
+    }
+    // A tool boundary seals prior text; don't rediscover that text behind it.
+    if (message.role === 'tool_use' || message.role === 'tool_result') {
+      return t('ccAgent.agentStatus.processing');
+    }
+    if (message.role === 'assistant') break;
+  }
+  if (normalized === 'thinking') return localizeAgentStatus(status, t);
+  // Generating can also be a translator's between-items fallback. Only a live
+  // text block above justifies claiming a reply is currently being written.
+  return t('ccAgent.agentStatus.processing');
 }
 
 /**

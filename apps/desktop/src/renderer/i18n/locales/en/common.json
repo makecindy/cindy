@@ -9387,6 +9387,8 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "replying": "Replying…",
+      "processing": "Working…",
       "thinking": "Thinking…",
       "generating": "Generating…",
       "editingFiles": "Editing files…",

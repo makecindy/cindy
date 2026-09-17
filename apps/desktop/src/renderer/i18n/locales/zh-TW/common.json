@@ -9372,6 +9372,8 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "replying": "正在回覆…",
+      "processing": "正在處理…",
       "thinking": "正在思考…",
       "generating": "正在生成…",
       "editingFiles": "正在編輯檔案…",

@@ -9372,6 +9372,8 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "replying": "返信中…",
+      "processing": "処理中…",
       "thinking": "考え中…",
       "generating": "生成中…",
       "editingFiles": "ファイルを編集中…",
