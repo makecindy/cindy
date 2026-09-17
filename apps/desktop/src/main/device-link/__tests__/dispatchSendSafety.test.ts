@@ -950,7 +950,7 @@ describe('remote companion Session visibility at the device-link boundary', () =
 
 
 describe('background database admission covers the complete remote list lifecycle', () => {
-  it.each(['local-db:sessions:list', 'local-db:bots:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'maker:remote-resources:list'])(
+  it.each(['local-db:sessions:list', 'local-db:sessions:get-many', 'local-db:bots:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'maker:remote-resources:list'])(
     'keeps %s handler and visibility checks in background admission', async (channel) => {
       const admissions: string[] = [];
       setRemoteBotSessionLookup(async () => {
@@ -1128,4 +1128,14 @@ it('isolates an unresponsive peer with an overloaded mutation replay from anothe
   expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
   expect(handler).toHaveBeenCalledTimes(1);
   expect(client.closeLink).not.toHaveBeenCalled();
+});
+
+it('lets a controller fall back to individual reads when a detail batch exceeds the frame budget', () => {
+  const client = mkClient();
+  client.sendInvokeResult.mockImplementationOnce(() => { throw tooLarge(); });
+  expect(__testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'batch',
+    { ok: true, result: [{ id: 'large' }] }, 'local-db:sessions:get-many')).toBe(true);
+  expect(client.sendInvokeResult).toHaveBeenLastCalledWith('ctrl-1', 'batch', {
+    ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] REMOTE_SESSION_BATCH_TOO_LARGE' },
+  });
 });

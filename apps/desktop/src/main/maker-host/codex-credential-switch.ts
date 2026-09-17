@@ -74,7 +74,7 @@ interface LocalAgentSession {
 
 interface LocalCredentialModeSwitchMaker {
   listActiveSessions: () => LocalAgentSession[];
-  closeSession: (sessionId: string) => Promise<void>;
+  closeSession: (sessionId: string, reason?: 'runtime-refresh') => Promise<void>;
 }
 
 export interface PrepareLocalCodexCredentialModeSwitchInput {
@@ -388,7 +388,7 @@ export async function prepareLocalSessionCredentialModeSwitch(
 
   await withRehydrateCloseSuppressed(session.id, async () => {
     throwIfCredentialSwitchAborted(input.signal);
-    await input.maker.closeSession(session.id);
+    await input.maker.closeSession(session.id, 'runtime-refresh');
   });
   return { closedSessionIds: [session.id] };
 }
@@ -423,7 +423,7 @@ export async function prepareLocalCodexCredentialModeSwitch(
     throwIfCredentialSwitchAborted(input.signal);
     await withRehydrateCloseSuppressed(session.id, async () => {
       throwIfCredentialSwitchAborted(input.signal);
-      await input.maker.closeSession(session.id);
+      await input.maker.closeSession(session.id, 'runtime-refresh');
     });
     closedSessionIds.push(session.id);
   }

@@ -723,7 +723,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('testID="home.remoteAccessGuide"');
     // 引导态没有可筛选的对话:表头退化为纯品牌标题(无下拉菜单),新建 FAB 不渲染。
     expect(source).toContain('{showRemoteGuide ? (');
-    expect(source).toContain("{showRemoteGuide || taskSuggestionsMode === 'empty' ? null : (");
+    expect(source).toContain("{showRemoteGuide || taskSuggestionsPending || taskSuggestionsMode === 'empty' ? null : (");
 
     const guideSource = readSource('src/components/RemoteAccessGuide.tsx');
     // 文案已 i18n 化,断言改查 zh-CN catalog(单一事实源);源码只保留结构/交互契约。

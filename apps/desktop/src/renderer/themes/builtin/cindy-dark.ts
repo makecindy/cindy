@@ -100,7 +100,7 @@ const GENERATED_OVERRIDES = {
   "secondary": "0 0% 11.4%", // hover -> HSL
   "settings-btn-primary-text": "#151515", // 反相深字(浅钮上)
   "settings-btn-secondary-hover-bg": "#1D1D1D", // hover/chip
-  "text-placeholder": "#525252", // 独立占位文字色，与正文/三级信息区分（用户修正，2026-09-16）
+  "text-placeholder": "#C1C1C1", // 三级转中性(等亮度,2026-08-13)
   "settings-integration-avatar-bg": "#1D1D1D", // hover/chip
   "settings-logout-bg": "#1F1F1F", // 卡片/输入框
   "settings-menu-bg-hover": "#282828", // 菜单 hover/提问卡纸片档

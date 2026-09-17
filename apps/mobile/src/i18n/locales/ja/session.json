@@ -360,6 +360,7 @@
     "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。"
   },
   "menu": {
+    "details": "セッションの詳細",
     "chipPinned": "ピン留め済み",
     "chipArchived": "アーカイブ済み",
     "chipReadOnly": "読み取り専用",
@@ -422,7 +423,6 @@
       "today": "今日の使用額",
       "unavailable": "未取得",
       "quotaUnavailable": "アカウントのクォータを取得できません",
-      "accountOnly": "ChatGPT アカウントのクォータ。このタスクがこのプランを使うかは未確認です",
       "lastUpdated": "最終更新 {{time}}",
       "taskUsage": "タスクの使用量",
       "taskValue": "タスクの価値",

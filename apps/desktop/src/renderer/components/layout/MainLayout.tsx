@@ -97,6 +97,7 @@ import {
 } from '@/features/right-sidebar/lib/sidebarCommands';
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
+import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { getBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession } from '@/features/bots/botSessionOwners';
@@ -1035,7 +1036,9 @@ export function MainLayout() {
           return;
         }
         applicationMenuLog.info('new-maker shortcut invoked, navigating to /cc-agent/new');
-        navigate('/cc-agent/new');
+        navigate('/cc-agent/new', {
+          state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),
+        });
       })
       .catch((err: unknown) => {
         applicationMenuLog.warn('new-maker shortcut routing failed', err);
@@ -1076,11 +1079,11 @@ export function MainLayout() {
           navigate('/issues');
           break;
         case 'new-maker':
-          // 等价于 CCAgentSidebarUpper.handleNewCCS (sidebar 顶部 "+ New Maker" 按钮):
-          // 单步 navigate 到 /cc-agent/new, draft 状态由 NewMakerDraftRoute 自己读取。
-          // 不重置 workingDir —— sidebar 按钮也不重置, 保留用户上次的目录上下文。
+          // 与侧栏同口径：继承当前任务电脑，同机保留草稿项目。
           applicationMenuLog.info('new-maker invoked, navigating to /cc-agent/new');
-          navigate('/cc-agent/new');
+          navigate('/cc-agent/new', {
+            state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),
+          });
           break;
         case 'new-maker-shortcut':
           handleNewMakerShortcut();
@@ -1187,7 +1190,9 @@ export function MainLayout() {
       if (action.type !== 'command') return false;
       switch (action.commandId) {
         case 'newTask':
-          navigate('/cc-agent/new');
+          navigate('/cc-agent/new', {
+            state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),
+          });
           return true;
         case 'settings':
           navigate('/settings?tab=shortcuts');

@@ -56,6 +56,7 @@
   "connect": "Connect",
   "connecting": "Connecting…",
   "reconnecting": "Reconnecting…",
+  "connectionTimeout": "Connection timed out. Check your network and that the computer is online, then reconnect.",
   "lockingOnExit": "Locking computer…",
   "disconnected": "Disconnected",
   "compatibility": "Compatibility mode · lower frame rate",

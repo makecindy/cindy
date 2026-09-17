@@ -49,7 +49,7 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
 }
 
 export async function projectRemoteSessionResult(channel: string, value: unknown): Promise<unknown> {
-  if (!lookup || !['local-db:sessions:get', 'local-db:sessions:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'local-db:bots:get', 'local-db:bots:list', 'maker:remote-resources:get', 'maker:remote-resources:list'].includes(channel)) return value;
+  if (!lookup || !['local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'local-db:bots:get', 'local-db:bots:list', 'maker:remote-resources:get', 'maker:remote-resources:list'].includes(channel)) return value;
   const activeLookup = lookup;
   const activeBatchLookup = batchLookup;
   const identity = (item: unknown) => {

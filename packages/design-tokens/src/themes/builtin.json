@@ -873,7 +873,7 @@
       "text-placeholder": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-placeholder}",
-        "$description": "独立占位文字色，与正文/三级信息区分（用户修正，2026-09-16）"
+        "$description": "三级转中性(等亮度,2026-08-13)"
       },
       "settings-integration-avatar-bg": {
         "$type": "color",
@@ -1710,7 +1710,7 @@
       "text-placeholder": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-placeholder}",
-        "$description": "独立占位文字色，与正文/三级信息区分（用户修正，2026-09-16）"
+        "$description": "三级: 等亮度暖化"
       },
       "settings-integration-avatar-bg": {
         "$type": "color",

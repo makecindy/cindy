@@ -345,6 +345,7 @@ export interface MakerSendTransactionDeps {
     opts?: { suppressMissingBroadcast?: boolean },
   ): Promise<boolean>;
   resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
+  isPersistedWorktreeFallback?(workingDir: string): boolean;
   /**
    * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create /
    * rehydrate 在 caller 传入的 workingDir 校验失败时用它兜底——输入队列崩溃
@@ -660,6 +661,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       });
       return null;
     });
+    // A queued runtime cwd may be a recovery directory from a previous process.
+    // Start from the durable binding so the new process retries Git restoration
+    // and, if still unavailable, supplies a fresh recovery note. In-process
+    // recovery.resolve continues to preserve the already selected fallback.
+    if (!createOpts.remoteHostId && createOpts.workingDir &&
+      deps.isPersistedWorktreeFallback?.(createOpts.workingDir)) {
+      if (!dbDir) return false;
+      createOpts.workingDir = dbDir;
+    }
     const fallbackDir = dbDir && dbDir !== createOpts.workingDir ? dbDir : null;
     if (fallbackDir) deps.workdirDiagnostics?.info('workdir DB fallback candidate', {
       ...workdirDiagnosticContext(sessionId, createOpts.workingDir), source: 'bootstrap',

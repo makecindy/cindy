@@ -161,6 +161,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedInvalidation?: number,
         expectedOwnerToken?: string,
         expectedAccountCounter?: number,
+        historyView?: string,
       ): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_MESSAGES, {
           deviceId,
@@ -169,6 +170,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           expectedInvalidation,
           expectedOwnerToken,
           expectedAccountCounter,
+          historyView,
         }),
       getSessionList: (): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST),
@@ -420,6 +422,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // shared makerChatStore. Do not expose the primary window's full DB API.
     sessions: {
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),
+      getMany: (ids: string[]): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get-many', ids),
       list: (limit?: number, status?: string, options?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:list', limit, status, options),
       resolveReferences: (sessionIds: string[]): Promise<unknown> =>

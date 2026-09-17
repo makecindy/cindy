@@ -35,7 +35,11 @@ const noSleep = async () => {};
 
 beforeEach(() => {
   invoke.mockReset();
-  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  // Existing cases exercise compatibility with hosts predating batch reconciliation.
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: (...args: unknown[]) => {
+    if (args[1] === 'local-db:sessions:get-many') return Promise.reject(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old host'));
+    return invoke(...args);
+  } } } });
 });
 
 afterEach(() => {
@@ -1062,4 +1066,73 @@ it('does not publish unchanged schedule snapshots or swallow revocation', async 
   off();
   invoke.mockResolvedValueOnce([session('s')]).mockRejectedValueOnce(new Error('DEVICE_LINK_ACCESS_REVOKED'));
   expect(await refreshRemoteDeviceSessions(device, undefined, { scope: 'both' })).toBe('revoked');
+});
+
+describe('batch reconciliation', () => {
+  it('uses one batch for eight missing rows and retains metadata and removal semantics', async () => {
+    const d = did();
+    const recent = Array.from({ length: 200 }, (_, i) => session(`recent-${i}`));
+    const outside = Array.from({ length: 8 }, (_, i) => session(`outside-${i}`));
+    remoteProjectsStore.setDeviceSessions(d, 'Mac', outside);
+    const batchInvoke = vi.fn(async (_device: string, channel: string) => {
+      if (channel === 'local-db:sessions:list') return recent;
+      if (channel === 'local-db:sessions:get-many') return outside.slice(1).map((s) => ({ ...s, title: 'updated', model: 'new-model', pinnedAt: '2026-09-12T00:00:00.000Z' }));
+      throw new Error('unexpected individual read');
+    });
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: batchInvoke } } });
+    await refreshRemoteDeviceSessions(d, 'Mac', { maxAttempts: 1, snapshotMode: 'merge' });
+    expect(batchInvoke).toHaveBeenCalledTimes(2);
+    expect(batchInvoke).toHaveBeenLastCalledWith(d, 'local-db:sessions:get-many', [outside.map((s) => s.id)]);
+    const result = remoteProjectsStore.getDeviceSessions(d);
+    expect(result.find((s) => s.id === 'outside-0')).toBeUndefined();
+    expect(result.find((s) => s.id === 'outside-1')).toMatchObject({ title: 'updated', model: 'new-model', pinnedAt: '2026-09-12T00:00:00.000Z' });
+  });
+
+  it.each(['timeout', 'malformed', 'revoked'])('does not multiply a %s batch failure into GET retries or erase cached rows', async (failure) => {
+    const d = did();
+    const outside = session('outside');
+    remoteProjectsStore.setDeviceSessions(d, 'Mac', [outside]);
+    const batchInvoke = vi.fn(async (_device: string, channel: string) => {
+      if (channel === 'local-db:sessions:list') return Array.from({ length: 200 }, (_, i) => session(`recent-${i}`));
+      if (failure === 'malformed') return [{ id: 'not-requested', status: 'active' }];
+      throw new Error(failure === 'timeout' ? '[DEVICE_LINK_TIMEOUT] slow' : '[DEVICE_LINK_ACCESS_REVOKED] revoked');
+    });
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: batchInvoke } } });
+    await refreshRemoteDeviceSessions(d, 'Mac', { maxAttempts: 1, snapshotMode: 'merge' });
+    expect(batchInvoke).toHaveBeenCalledTimes(2);
+    expect(remoteProjectsStore.getDeviceSessions(d).find((s) => s.id === 'outside')).toMatchObject({ title: 'outside' });
+  });
+
+  it('keeps newer pushes when a batch response arrives late', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac', [session('outside')]);
+    const response = deferred<Session[]>();
+    const started = deferred<void>();
+    const batchInvoke = vi.fn(async (_device: string, channel: string) => {
+      if (channel === 'local-db:sessions:list') return Array.from({ length: 200 }, (_, i) => session(`recent-${i}`));
+      started.resolve();
+      return response.promise;
+    });
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: batchInvoke } } });
+    const pending = refreshRemoteDeviceSessions(d, 'Mac', { maxAttempts: 1, snapshotMode: 'merge' });
+    await started.promise;
+    remoteProjectsStore.applyPatch(d, 'outside', { title: 'newer push' });
+    response.resolve([session('outside', { title: 'old response' })]);
+    await pending;
+    expect(remoteProjectsStore.getDeviceSessions(d).find((s) => s.id === 'outside')?.title).toBe('newer push');
+  });
+});
+
+it('falls back to bounded GETs for oversized batches', async () => {
+  const d = did();
+  remoteProjectsStore.setDeviceSessions(d, 'Mac', [session('outside')]);
+  const calls = vi.fn(async (_device: string, channel: string) => {
+    if (channel === 'local-db:sessions:list') return Array.from({ length: 200 }, (_, i) => session(`recent-${i}`));
+    if (channel === 'local-db:sessions:get-many') throw new Error('[PRECONDITION_FAILED] REMOTE_SESSION_BATCH_TOO_LARGE');
+    return session('outside', { title: 'updated' });
+  });
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: calls } } });
+  await refreshRemoteDeviceSessions(d, 'Mac', { maxAttempts: 1, snapshotMode: 'merge' });
+  expect(calls).toHaveBeenCalledTimes(3);
+  expect(remoteProjectsStore.getDeviceSessions(d).find((s) => s.id === 'outside')?.title).toBe('updated');
 });

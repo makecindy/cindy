@@ -40,15 +40,21 @@ const h = vi.hoisted(() => ({
   }>,
   summarizeSession: vi.fn(async () => undefined),
   stopAndRemovePiSubagentRuns: vi.fn(async (_root: string) => true),
-  writePiSubagentDeletedTombstone: vi.fn(async (_agentHome: string, _sessionId: string) => undefined),
-  clearPiSubagentDeletedTombstone: vi.fn(async (_agentHome: string, _sessionId: string) => undefined),
-  getMakerIfReady: vi.fn((): {
-    isSessionAlive: (id: string) => boolean;
-    closeSession: (id: string) => Promise<void>;
-  } | null => null),
+  writePiSubagentDeletedTombstone: vi.fn(
+    async (_agentHome: string, _sessionId: string) => undefined,
+  ),
+  clearPiSubagentDeletedTombstone: vi.fn(
+    async (_agentHome: string, _sessionId: string) => undefined,
+  ),
+  getMakerIfReady: vi.fn(
+    (): {
+      isSessionAlive: (id: string) => boolean;
+      closeSession: (id: string) => Promise<void>;
+    } | null => null,
+  ),
   closeIdleSessionForMove: vi.fn(async (_sessionId: string) => true),
-  withRehydrateCloseSuppressed: vi.fn(
-    async (_sessionId: string, task: () => Promise<void>) => task(),
+  withRehydrateCloseSuppressed: vi.fn(async (_sessionId: string, task: () => Promise<void>) =>
+    task(),
   ),
   setPinnedSectionCardMode: vi.fn(),
   upsertRecentWorkdir: vi.fn(
@@ -151,6 +157,7 @@ import {
   setSessionRuntimeCleanup,
   setSessionWorktreeRecycle,
   updateSessionInDb,
+  touchUserSendInDb,
 } from '../sessions';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
@@ -349,22 +356,27 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('rejects new SSH writable roots because the picker is not on the remote filesystem', async () => {
-    await expect(invokeCreate({
-      id: 'ssh-forged',
-      agentKind: 'codex',
-      workingDir: '/remote/repo',
-      remoteHostId: 'host-1',
-      writableDirs: ['/remote/outside'],
-    })).rejects.toThrow(/can only be revoked/i);
-    expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('ssh-forged'))
-      .toBeUndefined();
+    await expect(
+      invokeCreate({
+        id: 'ssh-forged',
+        agentKind: 'codex',
+        workingDir: '/remote/repo',
+        remoteHostId: 'host-1',
+        writableDirs: ['/remote/outside'],
+      }),
+    ).rejects.toThrow(/can only be revoked/i);
+    expect(
+      h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('ssh-forged'),
+    ).toBeUndefined();
   });
 
   it('rejects renderer-side directory grant writes outside the atomic maker handlers', async () => {
-    await expect(invokeUpdate('cc-local', { writableDirs: ['/forged'] }))
-      .rejects.toThrow(/maker:set-\*-dirs/i);
-    await expect(invokeUpdate('cc-local', { extraDirs: ['/forged-read'] }))
-      .rejects.toThrow(/maker:set-\*-dirs/i);
+    await expect(invokeUpdate('cc-local', { writableDirs: ['/forged'] })).rejects.toThrow(
+      /maker:set-\*-dirs/i,
+    );
+    await expect(invokeUpdate('cc-local', { extraDirs: ['/forged-read'] })).rejects.toThrow(
+      /maker:set-\*-dirs/i,
+    );
   });
 
   it('recovers cleanup only for deleted parent tasks after restart', async () => {
@@ -399,7 +411,10 @@ describe('local-db:sessions:update handler wiring', () => {
     const userData = h.userDataDir!;
     const agentHome = path.join(userData, 'pi-agent-home');
     h.writePiSubagentDeletedTombstone.mockImplementation(
-      async () => new Promise((resolve) => { setTimeout(resolve, 40); }),
+      async () =>
+        new Promise((resolve) => {
+          setTimeout(resolve, 40);
+        }),
     );
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('pi-local');
 
@@ -484,7 +499,11 @@ describe('local-db:sessions:update handler wiring', () => {
     // reporting success and its retry timer thrown away.
     const userData = h.userDataDir!;
     const runRoot = path.join(
-      userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
+      userData,
+      'pi-agent-home',
+      'runtime',
+      'pi-subagent-runs',
+      'codex-local',
     );
     await mkdir(runRoot, { recursive: true });
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
@@ -500,7 +519,9 @@ describe('local-db:sessions:update handler wiring', () => {
     // the backoff retry re-enters the same body, and a parent that was alive
     // when one attempt gave up is exactly the case the later ones must recheck.
     await vi.waitFor(
-      () => { expect(closeSession.mock.calls.length).toBeGreaterThanOrEqual(2); },
+      () => {
+        expect(closeSession.mock.calls.length).toBeGreaterThanOrEqual(2);
+      },
       { timeout: 5_000 },
     );
     expect(closeSession).toHaveBeenCalledWith('codex-local');
@@ -511,7 +532,9 @@ describe('local-db:sessions:update handler wiring', () => {
     // The parent finally goes away; the backoff retry re-runs the same gate.
     alive = false;
     await vi.waitFor(
-      () => { expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(runRoot); },
+      () => {
+        expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(runRoot);
+      },
       { timeout: 5_000 },
     );
   }, 20_000);
@@ -521,7 +544,11 @@ describe('local-db:sessions:update handler wiring', () => {
     // time, and a launch entering the moment the scan declares the root empty.
     const userData = h.userDataDir!;
     const runRoot = path.join(
-      userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
+      userData,
+      'pi-agent-home',
+      'runtime',
+      'pi-subagent-runs',
+      'codex-local',
     );
     await mkdir(runRoot, { recursive: true });
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
@@ -548,7 +575,9 @@ describe('local-db:sessions:update handler wiring', () => {
     });
 
     await resumeDeletedPiSubagentCleanup();
-    await vi.waitFor(() => { expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalled(); });
+    await vi.waitFor(() => {
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalled();
+    });
 
     // Cleanup reported success, so nothing will look at this task again: the
     // root has to be genuinely gone, with no orphan inside it.
@@ -661,66 +690,44 @@ describe('local-db:sessions:update handler wiring', () => {
     );
   });
 
-  it('touches a retained local project when the generic writer archives it', async () => {
-    h.sqlite!
-      .prepare("UPDATE sessions SET workspace_kind = 'project', source = 'plugin' WHERE id = ?")
-      .run('codex-local');
-    h.windows = [
-      { isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() } },
-    ];
-    const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_050_000);
-
-    try {
-      await invokeUpdate('codex-local', { status: 'archived' });
-    } finally {
-      now.mockRestore();
-    }
-
-    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
-      '/old/dir',
-      1_786_500_050_000,
-      process.platform,
-      h.client,
+  it.each([
+    ['generic', 'archived'],
+    ['generic', 'deleted'],
+    ['patch-meta', 'archived'],
+    ['patch-meta', 'deleted'],
+  ] as const)('preserves project activity through %s %s', async (writer, status) => {
+    h.sqlite!.prepare(
+      "UPDATE sessions SET workspace_kind = 'project', source = 'desktop' WHERE id = ?",
+    ).run('codex-local');
+    // Exercise the real upsert against this test's isolated SQLite database.
+    const real = await vi.importActual<typeof import('../recentWorkdirs')>('../recentWorkdirs');
+    h.upsertRecentWorkdir.mockImplementation(async (dir, atMs, platform) =>
+      real.upsertRecentWorkdir(dir, atMs, platform),
     );
-    expect(h.windows[0]?.webContents.send).toHaveBeenCalledWith(
-      'local-db:recent-workdirs:changed',
-      { path: '/old/dir' },
-    );
-  });
+    const sentAt = 1_786_500_050_000;
+    await touchUserSendInDb('codex-local', sentAt);
+    h.upsertRecentWorkdir.mockClear();
 
-  it('touches a retained local project when patch-meta archives it', async () => {
-    h.sqlite!
-      .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
-      .run('codex-local');
-    h.windows = [
-      { isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() } },
-    ];
-    const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_150_000);
+    if (writer === 'generic') await invokeUpdate('codex-local', { status });
+    else await invokePatchMeta('codex-local', { status });
 
-    try {
-      await invokePatchMeta('codex-local', { status: 'archived' });
-    } finally {
-      now.mockRestore();
-    }
-
-    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
-      '/old/dir',
-      1_786_500_150_000,
-      process.platform,
-      h.client,
-    );
-    expect(h.windows[0]?.webContents.send).toHaveBeenCalledWith(
-      'local-db:recent-workdirs:changed',
-      { path: '/old/dir' },
-    );
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT * FROM recent_workdirs').all()).toEqual([
+      { path: '/old/dir', last_used_at: sentAt },
+    ]);
+    // Even physically removing the last task must leave the project's timestamp intact.
+    h.sqlite!.prepare('DELETE FROM sessions WHERE id = ?').run('codex-local');
+    expect(h.sqlite!.prepare('SELECT * FROM recent_workdirs').all()).toEqual([
+      { path: '/old/dir', last_used_at: sentAt },
+    ]);
   });
 
   it.each(['archived', 'deleted'] as const)(
     'does not retain scheduler projects when the generic writer marks them %s',
     async (status) => {
-      h.sqlite!
-        .prepare("UPDATE sessions SET workspace_kind = 'project', source = 'scheduler' WHERE id = ?")
-        .run('codex-local');
+      h.sqlite!.prepare(
+        "UPDATE sessions SET workspace_kind = 'project', source = 'scheduler' WHERE id = ?",
+      ).run('codex-local');
 
       await invokeUpdate('codex-local', { status });
 
@@ -729,20 +736,18 @@ describe('local-db:sessions:update handler wiring', () => {
   );
 
   it('suppresses the recent-project refresh after an owner switch', async () => {
-    h.sqlite!
-      .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
-      .run('codex-local');
+    h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?").run(
+      'codex-local',
+    );
     h.captureOwnerScope = true;
-    h.windows = [
-      { isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() } },
-    ];
+    h.windows = [{ isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() } }];
     h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
       const result = await task();
       h.ownerCurrent = false;
       return result;
     });
 
-    await invokeUpdate('codex-local', { status: 'archived' });
+    await invokeUpdate('codex-local', { workspaceKind: 'project' });
 
     expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
       '/old/dir',
@@ -1029,9 +1034,9 @@ describe('local-db:sessions:update handler wiring', () => {
   it('rejects moving a local Pi/Codex session whose turn became active', async () => {
     h.closeIdleSessionForMove.mockResolvedValueOnce(false);
 
-    await expect(
-      invokeUpdate('codex-local', { workingDir: '/new/dir' }),
-    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    await expect(invokeUpdate('codex-local', { workingDir: '/new/dir' })).rejects.toThrow(
+      '[PRECONDITION_FAILED]',
+    );
 
     expect(
       h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),

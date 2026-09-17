@@ -703,7 +703,7 @@ describe('model:pick 持久化失败', () => {
 
     await pressModelPick(im, 'provider-b');
 
-    expect(closeSession).toHaveBeenCalledWith('sess-target');
+    expect(closeSession).toHaveBeenCalledWith('sess-target', 'runtime-refresh');
     expect(live.setModel).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', 'provider-b');
     expect(im.updateInteractiveCard).toHaveBeenCalledWith(

@@ -14,6 +14,7 @@ import {
   buildMainListEntries,
   getMainListEntrySessions,
   holdViewedPriorityRank,
+  sessionPriorityRecencyMs,
   sessionPriorityRank,
   splitEntriesByDevice,
   type MainListEntry,
@@ -710,6 +711,22 @@ describe('buildMainListEntries — 排序口径', () => {
       },
     });
     expect(labels(entries)).toEqual(['s:needs-input', 's:just-read', 's:older-rest']);
+  });
+
+  it('does not apply an earlier visit time while the unread rank is still held', () => {
+    const viewed = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'viewed' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map([[viewed.id, Date.parse('2026-08-01T00:00:00Z')]]),
+    };
+    const unread = { ...NO_PRIORITY, attentionSessionIds: new Set([viewed.id]) };
+    holdViewedPriorityRank(hold, viewed.id, unread);
+    const beforeRead = sessionPriorityRecencyMs(viewed, { ...unread, ...hold });
+    advanceViewedPriorityHold(hold, viewed.id, NO_PRIORITY, 1_000);
+    expect(sessionPriorityRecencyMs(viewed, { ...NO_PRIORITY, ...hold })).toBe(beforeRead);
+    const leaveAt = Date.parse('2026-09-01T00:00:00Z');
+    advanceViewedPriorityHold(hold, undefined, NO_PRIORITY, leaveAt);
+    expect(sessionPriorityRecencyMs(viewed, { ...NO_PRIORITY, ...hold })).toBe(leaveAt);
   });
 
   it('does not let leave time promote a still-waiting or running task', () => {

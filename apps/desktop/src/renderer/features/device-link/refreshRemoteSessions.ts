@@ -20,8 +20,7 @@ import type { ScheduleSidebarIndexSnapshot } from '../scheduler/lib/scheduleSide
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
-import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
-import type { RemoteSessionListSessionLike } from '@cindy/maker-shared/session-list';
+import { readSessionBatch, isSessionListRow as isRemoteSessionListSession } from '@/lib/sessionBatchRead';
 import { remoteProjectsStore, type RemoteSessionStatus } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
 import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
@@ -99,86 +98,6 @@ const TRANSIENT_MARKERS = [
 export function isTransientRemoteError(message: string): boolean {
   if (PERMANENT_MARKERS.some((m) => message.includes(m))) return false;
   return TRANSIENT_MARKERS.some((m) => message.includes(m));
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === 'string';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasOptionalNullableString(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === undefined || isNullableString(record[key]);
-}
-
-function hasOptionalBoolean(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === undefined || typeof record[key] === 'boolean';
-}
-
-function hasOptionalFiniteNumber(record: Record<string, unknown>, key: string): boolean {
-  const value = record[key];
-  return (
-    value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value))
-  );
-}
-
-function isRemoteSessionListSession(
-  value: unknown,
-  expectedStatus: RemoteSessionStatus,
-): value is RemoteSessionListSessionLike {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const session = value as Record<string, unknown>;
-  const count = session._count;
-  return (
-    typeof session.id === 'string' &&
-    session.id.length > 0 &&
-    typeof session.title === 'string' &&
-    isNullableString(session.workingDir) &&
-    typeof session.model === 'string' &&
-    session.status === expectedStatus &&
-    typeof session.agentKind === 'string' &&
-    typeof session.createdAt === 'string' &&
-    typeof session.updatedAt === 'string' &&
-    (session.userId === undefined || typeof session.userId === 'string') &&
-    hasOptionalNullableString(session, 'workspaceKind') &&
-    hasOptionalNullableString(session, 'effort') &&
-    hasOptionalNullableString(session, 'permissionMode') &&
-    hasOptionalNullableString(session, 'sdkSessionId') &&
-    hasOptionalNullableString(session, 'clearedAt') &&
-    hasOptionalNullableString(session, 'pinnedAt') &&
-    hasOptionalNullableString(session, 'userSendAt') &&
-    hasOptionalNullableString(session, 'source') &&
-    hasOptionalNullableString(session, 'orcaRole') &&
-    hasOptionalNullableString(session, 'providerId') &&
-    hasOptionalNullableString(session, 'parentSessionId') &&
-    hasOptionalNullableString(session, 'forkedAtMessageId') &&
-    hasOptionalNullableString(session, 'worktreePath') &&
-    hasOptionalNullableString(session, 'remoteHostId') &&
-    hasOptionalNullableString(session, 'preview') &&
-    hasOptionalNullableString(session, 'summary') &&
-    hasOptionalBoolean(session, 'fastMode') &&
-    hasOptionalBoolean(session, 'planModeEnabled') &&
-    hasOptionalBoolean(session, 'usedProjectContext') &&
-    hasOptionalFiniteNumber(session, 'totalTokenUsage') &&
-    hasOptionalFiniteNumber(session, 'totalCostUsd') &&
-    hasOptionalFiniteNumber(session, 'contextTokens') &&
-    hasOptionalFiniteNumber(session, 'contextWindow') &&
-    hasOptionalFiniteNumber(session, 'activeTurnStartedAt') &&
-    hasOptionalFiniteNumber(session, 'lastTurnEndedAt') &&
-    (session.extraDirs === undefined ||
-      (Array.isArray(session.extraDirs) &&
-        session.extraDirs.every((dir) => typeof dir === 'string'))) &&
-    (session.writableDirs === undefined ||
-      (Array.isArray(session.writableDirs) &&
-        session.writableDirs.every((dir) => typeof dir === 'string'))) &&
-    (count === undefined ||
-      count === null ||
-      (isRecord(count) &&
-        (count.messages === undefined ||
-          (typeof count.messages === 'number' && Number.isFinite(count.messages)))))
-  );
 }
 
 function parseRemoteSessionList(value: unknown, expectedStatus: RemoteSessionStatus): Session[] {
@@ -342,20 +261,7 @@ async function probeMissingSessionStatuses(
   const snapshots = new Map(
     remoteProjectsStore.getDeviceSessions(deviceId).map((session) => [session.id, session]),
   );
-  const results = await Promise.all(
-    candidates.map(async (sessionId) => {
-      try {
-        const value = await window.electronAPI.deviceLink.invoke(
-          deviceId,
-          'local-db:sessions:get',
-          [sessionId, DEVICE_LINK_RECONCILIATION_PROBE_MARKER],
-        );
-        return { sessionId, value };
-      } catch (error) {
-        return { sessionId, errorCode: extractIpcError(error)?.code };
-      }
-    }),
-  );
+  const results = await readSessionBatch(candidates, deviceId);
   // 更强的 refresh / remove / disconnect 已使本轮失效时，不应用迟到的补查结果。
   if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return;
   const terminalIds = new Set<string>();

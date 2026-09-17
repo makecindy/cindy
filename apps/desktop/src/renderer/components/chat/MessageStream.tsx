@@ -29,7 +29,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { HistoryViewHandoff, renderHistoryView, historyPrefetchThreshold } from '@cindy/maker-shared/message-window';
+import { HistoryViewHandoff, renderHistoryView, historyPrefetchThreshold, historyViewLeaves } from '@cindy/maker-shared/message-window';
 import { getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
@@ -74,6 +74,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { BrandLoadingMark } from '@/components/branding/BrandLoadingMark';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
+import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
 import { useTurnChangeSets } from './useTurnChangeSets';
@@ -536,35 +537,6 @@ export function simplifyBotRenderItems(
       item.message.content.trim().length > 0
     );
   });
-}
-
-/**
- * 当前可见用户 turn 是否已经产出正文。Bot composer 用它把「正在思考」限制在
- * 首字到来之前；子代理内部行、系统卡、空 assistant 和合成续跑行都不参与判断。
- */
-export function hasBotAssistantOutputInCurrentTurn(messages: readonly ChatMessage[]): boolean {
-  let currentTurnStart = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (isSubagentInternalMessage(message)) continue;
-    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) {
-      currentTurnStart = index;
-      break;
-    }
-  }
-  if (currentTurnStart < 0) return false;
-  for (let index = currentTurnStart + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (isSubagentInternalMessage(message)) continue;
-    if (
-      message.role === 'assistant' &&
-      !message.systemCardType &&
-      message.content.trim().length > 0
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
@@ -2549,14 +2521,23 @@ export function MessageStream({
     historyView?.getSnapshot ?? (() => null),
     historyView?.getSnapshot ?? (() => null),
   );
+  const displayMessages = useMemo(() => {
+    if (!historySnapshot) return messages;
+    const historyIds = new Set(historyViewLeaves(historySnapshot.items).flatMap((item) =>
+      item.type === 'messages' ? item.messages.map((row) => row.clientId) : []));
+    for (const detail of historySnapshot.details.values()) {
+      for (const row of detail.messages) historyIds.add(row.clientId);
+    }
+    return projectRemoteUsers(messages, historyIds);
+  }, [historySnapshot, messages]);
   const historyHandoff = useMemo(() => new HistoryViewHandoff<HistoryChatMessage>(
     (row) => row.isStreaming === true,
   ), [historyView]);
   // Observe live rows before the first history page too: a stream can finish
   // while that page is in flight. Local tasks retain their existing path.
-  const historyLiveMessages = useMemo(() => historyView ? messages.map((row) => ({
+  const historyLiveMessages = useMemo(() => historyView ? displayMessages.map((row) => ({
     ...row, id: row.id ?? row.clientId, createdAt: row.createdAt ?? '',
-  })) : [], [historyView, messages]);
+  })) : [], [historyView, displayMessages]);
   const handoff = useMemo(() => historySnapshot
     ? historyHandoff.reconcile(historySnapshot, historyLiveMessages) : null,
   [historyHandoff, historySnapshot, historyLiveMessages]);
@@ -2751,7 +2732,7 @@ export function MessageStream({
   // 入口与运行态标记(review: codex P2;同族的 isSyntheticTrigger 坑见
   // findLastUserMessageClientId 注释)。按子代理归属反查的派生(buildSubagentModelMap)
   // 仍吃原始 messages —— 它要的正是这些被隐藏的行。
-  const visibleMessages = useMemo(() => selectVisibleMessages(messages), [messages]);
+  const visibleMessages = useMemo(() => selectVisibleMessages(displayMessages), [displayMessages]);
 
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
@@ -2765,7 +2746,7 @@ export function MessageStream({
   // parsed image targets without retaining state beyond the session mount.
   const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
-    const built = buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+    const built = buildRenderItems(displayMessages, taskUpdates, ghostCardSnapshot, {
       historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
       turnChangeSets,
       workingDir,
@@ -2778,7 +2759,7 @@ export function MessageStream({
         view: historyView, snapshot: historySnapshot, liveMessages: historyLiveMessages, streaming: isSessionStreaming,
         isLive: (row) => row.isStreaming === true,
         pendingHandoff: handoff?.pending,
-        isLocalUser: (row) => row.role === 'user' && (row.isPendingPersist === true || !!row.blockedByGhost),
+        isLocalUser: (row) => row.role === 'user' && (row.isPendingPersist === true || !!row.blockedByGhost || !!row.localSendPrecedingClientIds),
         build: (rows) => {
           const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
             historyWindowIncomplete: true, workingDir,
@@ -2812,7 +2793,7 @@ export function MessageStream({
       singleResultMap: built.singleResultMap,
     };
   }, [
-    messages,
+    displayMessages,
     historyView,
     historySnapshot,
     historyLiveMessages,
@@ -2897,9 +2878,9 @@ export function MessageStream({
   const latestInlinePlanBelongsToActiveTurn = useMemo(
     () =>
       latestInlinePlan
-        ? planSessionBelongsToLatestUserTurn(messages, latestInlinePlan.sourceClientIds)
+        ? planSessionBelongsToLatestUserTurn(displayMessages, latestInlinePlan.sourceClientIds)
         : false,
-    [latestInlinePlan, messages],
+    [latestInlinePlan, displayMessages],
   );
 
   /**
@@ -5516,8 +5497,8 @@ export function MessageStream({
   // 切片,还有老页未加载(hasMoreMessages)时不能把切片首条误判为对话首条
   // (判定逻辑与陷阱见 findFirstUserMessageClientId 注释)。
   const firstUserMessageClientId = useMemo(
-    () => findFirstUserMessageClientId(messages, Boolean(hasMoreMessages)),
-    [messages, hasMoreMessages],
+    () => findFirstUserMessageClientId(displayMessages, Boolean(hasMoreMessages)),
+    [displayMessages, hasMoreMessages],
   );
 
   // edit-last-message: 最后一条 user 消息才显示编辑入口(编辑 = rewind 到该条
@@ -5538,12 +5519,12 @@ export function MessageStream({
     [visibleMessages],
   );
 
-  // 刻意吃**原始** messages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
+  // 使用未过滤子代理的 displayMessages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
   // 真实花费,过滤掉等于把子代理的账从用量里抹掉(成本失真,比显示问题更糟)。
   // 归属键 turnFinalAssistantClientIds 已按可见序列算出,聚合区间仍落在正确的 turn 内。
   const userTurnUsageDetailsByAssistantId = useMemo(() => {
-    return collectAssistantTurnUsageDetails(messages, turnFinalAssistantClientIds);
-  }, [messages, turnFinalAssistantClientIds]);
+    return collectAssistantTurnUsageDetails(displayMessages, turnFinalAssistantClientIds);
+  }, [displayMessages, turnFinalAssistantClientIds]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,

@@ -1,5 +1,6 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   workdirDiagnosticContext, workdirDiagnosticErrorCode, workdirDiagnosticId,
   type WorkdirDiagnosticLogger,
@@ -10,12 +11,20 @@ export function isUnavailableFilesystemError(error: unknown): boolean {
     .includes((error as NodeJS.ErrnoException | null)?.code ?? '');
 }
 
-/** Ordinary local directories only; managed Git worktrees keep their own restore path. */
+/** Reuse recovery artifacts when Git restoration still fails after a restart.
+ * Its identity includes the original binding; changing projects cannot reuse it.
+ */
+export function worktreeConversationFallbackDir(dialoguesRoot: string, sessionId: string, workingDir: string): string {
+  const key = createHash('sha256').update(JSON.stringify([sessionId, path.resolve(workingDir)])).digest('hex');
+  return path.join(dialoguesRoot, 'worktree-recovery', key);
+}
+
+/** Local directory recovery; failed Git restores may explicitly request conversation fallback. */
 export function createWorkingDirectoryRecovery(io: {
   stat(dir: string): Promise<{ isDirectory(): boolean; dev?: number }>;
   mkdir(dir: string, opts: { recursive: true }): Promise<unknown>;
   realpath?(dir: string): Promise<string>;
-} = fsp, allocateFallback?: (sessionId: string) => Promise<string>, log?: WorkdirDiagnosticLogger) {
+} = fsp, allocateFallback?: (sessionId: string, workingDir: string, mode: 'ordinary' | 'unrestored-worktree') => Promise<string>, log?: WorkdirDiagnosticLogger) {
   const pending = new Map<string, { workingDir: string; note: string | null; device?: number; fallback?: string }>();
   function entryFor(sessionId: string, dir: string) {
     const entry = pending.get(sessionId);
@@ -88,7 +97,7 @@ export function createWorkingDirectoryRecovery(io: {
     isFallback(sessionId: string, workingDir: string): boolean {
       return !!entryFor(sessionId, workingDir)?.fallback;
     },
-    async recover(sessionId: string, workingDir: string, similarPath?: string | null | (() => Promise<string | null>), candidates: { id: string; workingDir: string }[] = []): Promise<boolean> {
+    async recover(sessionId: string, workingDir: string, similarPath?: string | null | (() => Promise<string | null>), candidates: { id: string; workingDir: string }[] = [], mode: 'ordinary' | 'unrestored-worktree' = 'ordinary'): Promise<boolean> {
       entryFor(sessionId, workingDir);
       const sessions = new Map(candidates.map((session) => [session.id, session.workingDir]));
       sessions.set(sessionId, workingDir);
@@ -115,13 +124,19 @@ export function createWorkingDirectoryRecovery(io: {
           });
           return false;
         }
-        const fallback = path.resolve(await allocateFallback(sessionId));
+        const fallback = path.resolve(await allocateFallback(sessionId, workingDir, mode));
         if (pending.get(sessionId) !== own) return false;
         pending.set(sessionId, { ...own, fallback, note: [
           '[Working directory recovery]',
-          `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
-          'The original directory and files have not been restored or copied. Do not create a substitute directory at the original mount location. Files written here stay here when the disk reconnects; do not move them or switch back without discussing it with the user.',
-          'Continue responding. If the task needs the original files, investigate the disconnected disk or network share, or ask the user in this conversation. No folder-selection interface is required.',
+          ...(mode === 'unrestored-worktree' ? [
+            `Cindy could not restore the task worktree at ${JSON.stringify(workingDir)}. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace; the task remains associated with its original project and worktree.`,
+            'The original code, branch and uncommitted changes have not been restored or copied. Do not create an empty replacement at the original path or continue editing in the project root as if it were the original worktree. Investigate the original branch and snapshots before resuming project edits.',
+            'Continue responding to the user and explain the unavailable worktree. Files created in this conversation workspace remain here; do not move them or switch workspaces without discussing it with the user. No folder-selection interface is required just to continue the conversation.',
+          ] : [
+            `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
+            'The original directory and files have not been restored or copied. Do not create a substitute directory at the original mount location. Files written here stay here when the disk reconnects; do not move them or switch back without discussing it with the user.',
+            'Continue responding. If the task needs the original files, investigate the disconnected disk or network share, or ask the user in this conversation. No folder-selection interface is required.',
+          ]),
         ].join('\n') });
         log?.info('workdir recovery completed', {
           ...context, action: 'fallback-selected', fallbackRef: workdirDiagnosticId(fallback),
@@ -155,6 +170,9 @@ export function createWorkingDirectoryRecovery(io: {
           });
           return true;
         }
+        // Git restoration already failed. Never probe/mkdir the original path as
+        // an ordinary directory: an empty folder is not a restored worktree.
+        if (mode === 'unrestored-worktree') return await useFallback();
         if (own && allocateFallback && await mountUnavailable(workingDir, own, (details) => {
           log?.warn('workdir recovery unavailable', { ...context, ...details });
         })) {
