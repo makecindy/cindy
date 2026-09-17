@@ -266,6 +266,8 @@ export interface ProviderHandlerDeps {
   getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean): Record<string, boolean> | Promise<Record<string, boolean>>;
   /** CRUD 成功后重算 active-catalog（生产 = refreshCustomProvidersIntoCatalog）。 */
   refreshCatalog(): Promise<void>;
+  /** Committed, secret-free model projection; remains available if catalog refresh fails. */
+  projectCustomProviderModels?(config: CustomProviderConfig): ProviderView['models'];
   /**
    * 配置、secret 与 active catalog 切换期间暂停该 provider 的新请求；返回幂等 release。
    * 生产 = beginProviderRouteMutation。
@@ -2067,7 +2069,8 @@ export function registerProviderHandlers(
           codexHostChangeRequired ? commitRouteMutation : undefined,
         );
         assertProviderMutationOwner(ownerAtIngress);
-        return { ok: true };
+        const models = deps.projectCustomProviderModels?.(updated);
+        return { ok: true, ...(models ? { models } : {}) };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
         if (generation !== null) finishOAuthMutation(config.id, generation);

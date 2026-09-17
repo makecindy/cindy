@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
-import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+import type { CatalogModel, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({
   setLimit: vi.fn(async () => {}),
@@ -100,6 +100,174 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
+  it.each([undefined, true, false])('persists a Pi image override from %s without changing other models or engines', async (supportsImageInput) => {
+    const update = vi.fn(async (...args: unknown[]) => ({ ok: true, models: buildUserProvider(args[0] as CustomProviderConfig).models }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const config: CustomProviderConfig = {
+      id: 'deepseek-custom', name: 'DeepSeek API', runtimes: {
+        pi: { baseUrl: 'https://api.deepseek.com/v1', wireProtocol: 'openai-chat', models: [
+          { id: 'deepseek-flash', name: 'DeepSeek Flash', ...(supportsImageInput !== undefined ? { supportsImageInput } : {}) },
+          { id: 'text-only', name: 'Text only', supportsImageInput: false },
+        ] },
+        codex: { baseUrl: 'https://api.deepseek.com/v1', wireProtocol: 'openai-chat', models: [
+          { id: 'deepseek-flash', name: 'DeepSeek Flash', supportsImageInput: false },
+        ] },
+      },
+    };
+    const view = (saved: CustomProviderConfig) => {
+      const source = { ...buildUserProvider(saved), connected: true } as ProviderView;
+      const primary = source.models.pi![0];
+      return <ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+    };
+    try {
+      const rendered = render(view(config));
+      const label = 'Pi · settings.providers.custom.fields.modelSupportsImageInput';
+      expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe(String(supportsImageInput === true));
+      expect(update).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('switch', { name: label }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      const saved = update.mock.calls[0]![0] as CustomProviderConfig;
+      expect(saved.runtimes.pi!.models[0]).toEqual({ ...config.runtimes.pi!.models[0], supportsImageInput: supportsImageInput !== true });
+      expect(saved.runtimes.pi!.models[1]).toEqual(config.runtimes.pi!.models[1]);
+      expect(saved.runtimes.codex).toEqual(config.runtimes.codex);
+      rendered.rerender(view(saved));
+      expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe(String(supportsImageInput !== true));
+      await waitFor(() => expect(screen.getByRole('switch', { name: label }).hasAttribute('disabled')).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+      const restored = update.mock.calls[1]![0] as CustomProviderConfig;
+      expect(restored.runtimes.pi!.models[0]).not.toHaveProperty('supportsImageInput');
+      rendered.rerender(view(restored));
+      expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe('false');
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('waits for the saved protocol snapshot before allowing image edits', async () => {
+    const update = vi.fn(async (...args: unknown[]) => ({ ok: true, models: buildUserProvider(args[0] as CustomProviderConfig).models }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const initial: CustomProviderConfig = { id: 'fixture', name: 'Fixture', runtimes: {
+      pi: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'custom-model', name: 'Custom model' }] },
+    } };
+    const view = (config: CustomProviderConfig) => {
+      const source = { ...buildUserProvider(config), connected: true } as ProviderView;
+      const primary = source.models.pi![0];
+      return <ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+    };
+    try {
+      const rendered = render(view(initial));
+      const image = () => screen.getByRole('switch', { name: 'Pi · settings.providers.custom.fields.modelSupportsImageInput' });
+      const protocol = () => screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' });
+      fireEvent.keyDown(protocol(), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Responses' }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      // Even a fresh object carrying the stale snapshot must not unlock saves.
+      rendered.rerender(view(initial));
+      expect(image().hasAttribute('disabled')).toBe(true);
+      fireEvent.click(image());
+      expect(update).toHaveBeenCalledTimes(1);
+      const protocolConfig = update.mock.calls[0]![0] as CustomProviderConfig;
+      rendered.rerender(view(protocolConfig));
+      await waitFor(() => expect(image().hasAttribute('disabled')).toBe(false));
+      fireEvent.click(image());
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+      const imageConfig = update.mock.calls[1]![0] as CustomProviderConfig;
+      expect(imageConfig.runtimes.pi!.models[0]).toMatchObject({ api: 'openai-responses', piApi: 'openai-responses', supportsImageInput: true });
+      expect(protocol().hasAttribute('disabled')).toBe(true);
+      rendered.rerender(view(imageConfig));
+      await waitFor(() => expect(protocol().hasAttribute('disabled')).toBe(false));
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('allows retry after a missing snapshot without discarding the acknowledged protocol', async () => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      const committed = structuredClone(args[0] as CustomProviderConfig);
+      // Main invalidates the old route's discovered price on the first save.
+      if (update.mock.calls.length === 1) delete committed.runtimes.pi!.models[0].discoveredCost;
+      return { ok: true, models: buildUserProvider(committed).models };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const initial: CustomProviderConfig = { id: 'fixture', name: 'Fixture', runtimes: {
+      pi: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'custom-model', name: 'Custom model', discoveredCost: { input: 1, output: 2 } }] },
+    } };
+    const view = (config: CustomProviderConfig) => {
+      const source = { ...buildUserProvider(config), connected: true } as ProviderView;
+      const primary = source.models.pi![0];
+      return <ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+    };
+    try {
+      const rendered = render(view(initial));
+      const image = () => screen.getByRole('switch', { name: 'Pi · settings.providers.custom.fields.modelSupportsImageInput' });
+      const protocol = () => screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' });
+      fireEvent.keyDown(protocol(), { key: 'ArrowDown' });
+      const option = await screen.findByRole('menuitemradio', { name: 'Responses' });
+      vi.useFakeTimers();
+      await act(async () => { fireEvent.click(option); });
+      expect(update).toHaveBeenCalledTimes(1);
+      expect((update.mock.calls[0]![0] as CustomProviderConfig).runtimes.pi!.models[0].discoveredCost).toEqual({ input: 1, output: 2 });
+      // Even a fresh object carrying the stale snapshot must not unlock saves.
+      rendered.rerender(view(initial));
+      expect(image().hasAttribute('disabled')).toBe(true);
+      fireEvent.click(image());
+      expect(update).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(image().hasAttribute('disabled')).toBe(false);
+      await act(async () => { fireEvent.click(image()); });
+      expect(update).toHaveBeenCalledTimes(2);
+      const imageConfig = update.mock.calls[1]![0] as CustomProviderConfig;
+      expect(imageConfig.runtimes.pi!.models[0]).not.toHaveProperty('discoveredCost');
+      expect(imageConfig.runtimes.pi!.models[0]).toMatchObject({ api: 'openai-responses', piApi: 'openai-responses', supportsImageInput: true });
+      expect(protocol().hasAttribute('disabled')).toBe(true);
+      const partial = structuredClone(initial);
+      partial.runtimes.pi!.models[0].supportsImageInput = true;
+      rendered.rerender(view(partial));
+      expect(protocol().hasAttribute('disabled')).toBe(true);
+      rendered.rerender(view(imageConfig));
+      expect(protocol().hasAttribute('disabled')).toBe(false);
+    } finally { vi.useRealTimers(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('restores inherited image support after a missing catalog snapshot', async () => {
+    const presets = [{ id: 'supplier', name: 'Supplier', runtimes: { pi: {
+      baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'live-model', name: 'Live model', supportsImageInput: true }],
+    } } }];
+    const initial: CustomProviderConfig = { id: 'fixture', name: 'Fixture', runtimes: { pi: {
+      catalogPresetId: 'supplier', baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'live-model', name: 'Live model', supportsImageInput: false }],
+    } } };
+    const project = (config: CustomProviderConfig) => buildUserProvider(config, { presets });
+    const update = vi.fn(async (...args: unknown[]) => ({ ok: true, models: project(args[0] as CustomProviderConfig).models }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    try {
+      const source = { ...project(initial), connected: true } as ProviderView;
+      const primary = source.models.pi![0];
+      render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      const image = () => screen.getByRole('switch', { name: 'Pi · settings.providers.custom.fields.modelSupportsImageInput' });
+      expect(image().getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByText('settings.providers.models.advanced.vision.no-vision')).toBeTruthy();
+      vi.useFakeTimers();
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' })); });
+      expect((update.mock.calls[0]![0] as CustomProviderConfig).runtimes.pi!.models[0]).not.toHaveProperty('supportsImageInput');
+      expect(screen.getByText('settings.providers.models.advanced.vision.vision')).toBeTruthy();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(image().hasAttribute('disabled')).toBe(false);
+      expect(image().getAttribute('aria-checked')).toBe('true');
+      expect(screen.queryByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' })).toBeNull();
+      // The next deliberate toggle disables the inherited capability; it does not turn it on again.
+      await act(async () => { fireEvent.click(image()); });
+      expect((update.mock.calls[1]![0] as CustomProviderConfig).runtimes.pi!.models[0].supportsImageInput).toBe(false);
+    } finally { vi.useRealTimers(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('keeps built-in capability metadata read-only', () => {
+    draw();
+    expect(screen.queryByRole('switch', { name: /modelSupportsImageInput/ })).toBeNull();
+  });
+
   it('shows the imported API as a label rather than offering unrelated supplier transports', () => {
     const source = { ...buildUserProvider({ id: 'nous-test', name: 'Hermes', runtimes: {
       pi: { catalogPresetId: 'nous', baseUrl: 'https://inference-api.nousresearch.com/v1', wireProtocol: 'openai-chat', models: [{ id: 'gpt-6', name: 'GPT-6' }] },
@@ -111,7 +279,7 @@ describe('model advanced editor', () => {
   });
 
   it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
-    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const update = vi.fn(async (...args: unknown[]) => ({ ok: true, models: buildUserProvider(args[0] as CustomProviderConfig).models }));
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
@@ -133,7 +301,7 @@ describe('model advanced editor', () => {
   });
 
   it('saves Google selection with its matching wire and official endpoint', async () => {
-    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const update = vi.fn(async (...args: unknown[]) => ({ ok: true, models: buildUserProvider(args[0] as CustomProviderConfig).models }));
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {

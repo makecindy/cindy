@@ -691,7 +691,7 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
 /**
  * 官方目录标记只适用于用户尚未改写的预设快照。所有写入口都在 main 再比一次旧值，
  * 避免非当前设置页（移动端、旧 renderer、异步发现）改了路由或模型后仍保留 marker，
- * 继而在 Pi 启动时用官方模型整条覆盖用户显式配置。
+ * 图片输入例外：目录投影和 Pi 序列化按字段尊重此 override，恢复默认仍需保留目录身份。
  */
 function invalidateEditedProviderMetadata(
   previous: CustomProviderConfig,

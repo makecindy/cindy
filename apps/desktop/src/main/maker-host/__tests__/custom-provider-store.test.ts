@@ -798,6 +798,26 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ).toBe(false);
   });
 
+  it('keeps the Pi catalog binding when image input is overridden and restored', async () => {
+    mountDb();
+    let config = await createCustomProvider({
+      id: 'official-pi-image', name: 'Official Pi', runtimes: {
+        pi: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', piCatalogProviderId: 'deepseek',
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] },
+      },
+    });
+    for (const value of [true, false, undefined]) {
+      const model = { ...config.runtimes.pi!.models[0]! };
+      if (value === undefined) delete model.supportsImageInput;
+      else model.supportsImageInput = value;
+      config = (await updateCustomProvider(config.id, {
+        ...config, runtimes: { ...config.runtimes, pi: { ...config.runtimes.pi!, models: [model] } },
+      }))!;
+      expect(config.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+      expect(config.runtimes.pi?.models[0]?.supportsImageInput).toBe(value);
+    }
+  });
+
   it('clears the Pi catalog marker when any write path changes saved model metadata', async () => {
     mountDb();
     const original = await createCustomProvider({

@@ -75,7 +75,6 @@ function projectedPiCatalogFields(model: ProviderRuntimeModelConfig): object {
   return {
     name: model.name,
     contextWindow: model.contextWindow,
-    supportsImageInput: model.supportsImageInput,
     reasoning: model.reasoning,
     reasoningEfforts: model.reasoningEfforts,
     reasoningDefaultEffort: model.reasoningDefaultEffort,
@@ -85,6 +84,8 @@ function projectedPiCatalogFields(model: ProviderRuntimeModelConfig): object {
 /**
  * Whether an edited model list still represents the same catalog-backed models.
  *
+ * Image-input overrides are merged field-by-field by the catalog and Pi serializer;
+ * toggling or deleting this override must not detach the other catalog defaults.
  * New models and presentation-only edits may coexist with the catalog snapshot, but every
  * previously saved model must still exist with the same catalog-projected fields. First-wins
  * duplicate handling mirrors custom-provider persistence normalization, so a duplicate row cannot

@@ -40,7 +40,7 @@ interface PiCatalogRouteDraft {
   models?: readonly ProviderRuntimeModelConfig[];
 }
 
-/** The catalog marker is valid while the route and every existing model's capability fields stay unchanged. */
+/** Image-input overrides retain catalog defaults; route and other catalog-field edits detach them. */
 export function piCatalogProviderIdAfterRouteEdit(
   agent: AgentKind,
   previous: PiCatalogRouteDraft,
