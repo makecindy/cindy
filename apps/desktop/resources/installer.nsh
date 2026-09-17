@@ -7,21 +7,30 @@
 ; 接受);dev 仍独立名,dev 安装器绝不误伤同机并存的正式安装。注册表键名
 ; Windows 大小写不敏感,shell 键 "Cindy" 与历史写入的 "cindy" 是同一个键,
 ; 行为零变化。
-!macro customInit
-  ; Check if the app is already running
+; 安装与卸载都必须在改动安装目录前停掉正在运行的 app。尤其是卸载:
+; 如果先删 resources 再让存量窗口处理关闭事件,托盘图标创建会失败,主窗口也会
+; 因「收起到托盘」语义而保持打开。两个入口共用这段循环,避免以后只修一侧。
+!macro stopRunningProduct CONFIRM_MESSAGE
   check_running:
     nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
     Pop $R0
     ${If} $R0 == 0
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-        "${PRODUCT_FILENAME} 正在运行，请先关闭后再继续安装。$\n$\n点击「确定」将在关闭后继续。" \
+        "${CONFIRM_MESSAGE}" \
+        /SD IDOK \
         IDOK kill_app
       Abort
       kill_app:
         nsProcess::_KillProcess "${APP_EXECUTABLE_FILENAME}"
+        Pop $R0
         Sleep 1000
         Goto check_running
     ${EndIf}
+!macroend
+
+!macro customInit
+  !insertmacro stopRunningProduct \
+    "${PRODUCT_FILENAME} 正在运行，请先关闭后再继续安装。$\n$\n点击「确定」将在关闭后继续。"
 
   ; 删旧快捷方式：老 .lnk 里 IconLocation 仍指向上一版 exe 的资源索引，
   ; 新版 .ico 内多尺寸顺序/数量变化后那个索引会落到另一张图。
@@ -34,6 +43,11 @@
 
   ; 同步清掉 PinnedTaskbar 里的副本（任务栏固定项也会缓存图标）
   Delete "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\${SHORTCUT_NAME}.lnk"
+!macroend
+
+!macro customUnInit
+  !insertmacro stopRunningProduct \
+    "${PRODUCT_FILENAME} 正在运行，需要先关闭才能卸载。$\n$\n点击「确定」将关闭 ${PRODUCT_FILENAME} 并继续卸载。"
 !macroend
 
 !macro customInstall
