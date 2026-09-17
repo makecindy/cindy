@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import CindyRemoteCredentials
 
@@ -48,5 +49,15 @@ final class InstallationMarkerTests: XCTestCase {
     try Data(id.uuidString.lowercased().utf8).write(to: target)
     try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
     XCTAssertThrowsError(try InstallationMarker.loadOrCreate(directory: directory))
+  }
+
+  func testLinkRefusalUsesExclusiveCreateOrExistingMarker() {
+    XCTAssertEqual(InstallationPublish.decide(errno: EEXIST), .adoptedExisting)
+    XCTAssertEqual(InstallationPublish.decide(errno: EACCES), .createExclusive)
+    XCTAssertEqual(InstallationPublish.decide(errno: EPERM), .createExclusive)
+    XCTAssertEqual(InstallationPublish.decide(errno: EXDEV), .createExclusive)
+    XCTAssertEqual(InstallationPublish.decide(errno: ENOSYS), .createExclusive)
+    XCTAssertEqual(InstallationPublish.decide(errno: ENOTSUP), .createExclusive)
+    XCTAssertEqual(InstallationPublish.decide(errno: EIO), .unavailable)
   }
 }

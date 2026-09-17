@@ -196,7 +196,8 @@ internal class MobileCredentialClient(context: Context, activity: () -> Fragment
   fun close(handle: String) { if (session?.handle == handle) close() }
   fun close() {
     val state = session; epoch++; session = null; state?.close(); monitor?.cancel(); monitor = null
-    vault.cancel(); if (state != null) invalidated(state.handle)
+    cancelInitializedVault(::vault.isInitialized) { vault.cancel() }
+    if (state != null) invalidated(state.handle)
   }
   fun reset() { close(); owner = null; token = ""; key = null; identity = null }
   fun destroy() { reset(); scope.cancel() }

@@ -23,7 +23,15 @@ public enum InstallationMarker {
         guard bytes.withUnsafeBytes({ write(descriptor, $0.baseAddress, $0.count) }) == bytes.count,
           fsync(descriptor) == 0 else { throw CredentialError.unavailable }
         if link(temporary.path, file.path) == 0 { return id }
-        guard errno == EEXIST else { throw CredentialError.unavailable }
+        let rejected = errno
+        switch InstallationPublish.decide(errno: rejected) {
+        case .adoptedExisting:
+          break
+        case .createExclusive:
+          if try publishExclusiveMarker(file, bytes: bytes) { return id }
+        case .unavailable:
+          throw CredentialError.unavailable
+        }
       }
       let existing = open(file.path, O_RDONLY | O_NOFOLLOW)
       guard existing >= 0 else { throw CredentialError.unavailable }
@@ -37,5 +45,21 @@ public enum InstallationMarker {
         let id = UUID(uuidString: text), id.uuidString.lowercased() == text else { throw CredentialError.unavailable }
       return id
     } catch { throw CredentialError.unavailable }
+  }
+
+  /// Exclusive create of a complete marker. Returns false when another writer won.
+  private static func publishExclusiveMarker(_ file: URL, bytes: [UInt8]) throws -> Bool {
+    let published = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+    if published >= 0 {
+      defer { close(published) }
+      guard bytes.withUnsafeBytes({ write(published, $0.baseAddress, $0.count) }) == bytes.count,
+        fsync(published) == 0 else {
+        unlink(file.path)
+        throw CredentialError.unavailable
+      }
+      return true
+    }
+    guard errno == EEXIST else { throw CredentialError.unavailable }
+    return false
   }
 }

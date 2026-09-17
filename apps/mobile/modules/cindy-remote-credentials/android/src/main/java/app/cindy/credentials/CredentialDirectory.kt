@@ -34,11 +34,17 @@ internal class CredentialInstallation(context: Context) {
       val temporary = File.createTempFile("installation-", ".tmp", root)
       try {
         FileOutputStream(temporary).use { it.write(uuid().toByteArray()); it.fd.sync() }
-        try { Os.link(temporary.path, marker.path) }
-        catch (error: ErrnoException) { if (error.errno != OsConstants.EEXIST) throw error }
-      } finally { temporary.delete() }
+        publishMarkerAtomically(
+          publishHardLink = { Os.link(temporary.path, marker.path) },
+          publishExclusive = { publishExclusiveMarker(temporary, marker) },
+          errnoOf = { (it as? ErrnoException)?.errno },
+        )
+      } catch (error: CredentialFailure) { throw error }
+        catch (_: Exception) { throw CredentialFailure("CREDENTIAL_UNAVAILABLE") }
+      finally { temporary.delete() }
     }
-    val attributes = Os.lstat(marker.path)
+    val attributes = try { Os.lstat(marker.path) }
+      catch (_: ErrnoException) { throw CredentialFailure("CREDENTIAL_UNAVAILABLE") }
     requireCredential(OsConstants.S_ISREG(attributes.st_mode) && attributes.st_uid == android.os.Process.myUid() &&
       attributes.st_size == 36L, "CREDENTIAL_INVALID_IDENTITY")
     id = marker.readText(); requireCredential(validId(id), "CREDENTIAL_INVALID_IDENTITY")
@@ -54,6 +60,26 @@ internal class CredentialInstallation(context: Context) {
       }.generateKeyPair()
     }
     return KeyPair(store.getCertificate(alias).publicKey, store.getKey(alias, null) as PrivateKey)
+  }
+}
+
+private fun publishExclusiveMarker(temporary: File, marker: File) {
+  val fd = Os.open(
+    marker.path,
+    OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
+    384,
+  )
+  try {
+    val bytes = temporary.readBytes()
+    val written = Os.write(fd, bytes, 0, bytes.size)
+    if (written != bytes.size) throw CredentialFailure("CREDENTIAL_UNAVAILABLE")
+    Os.fsync(fd)
+  } catch (error: Exception) {
+    try { marker.delete() } catch (_: Exception) {}
+    if (error is ErrnoException) throw error
+    throw CredentialFailure("CREDENTIAL_UNAVAILABLE")
+  } finally {
+    try { Os.close(fd) } catch (_: Exception) {}
   }
 }
 
