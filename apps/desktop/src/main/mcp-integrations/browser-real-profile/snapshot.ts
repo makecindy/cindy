@@ -7,7 +7,11 @@ import {
   MANAGED_PROFILE,
   REAL_MANAGED_PROFILE,
 } from '../browser-managed-config.js';
-import { REAL_PROFILE_READ_DENIED } from '../../../shared/browserBackend.js';
+import {
+  OPTIONAL_BROWSER_PROFILE_DATABASES,
+  REAL_PROFILE_READ_DENIED,
+  type BrowserProfileCopyWarning,
+} from '../../../shared/browserBackend.js';
 import { resolveSourceBrowserFromOs } from './source.js';
 import {
   isRealProfileError,
@@ -22,9 +26,7 @@ const COMPLETE_MARKER = '.cindy-real-profile-complete';
 const AUTH_DB_RELATIVE_PATHS = [
   'Cookies',
   path.join('Network', 'Cookies'),
-  'Login Data',
-  'Login Data For Account',
-  'Web Data',
+  ...OPTIONAL_BROWSER_PROFILE_DATABASES,
 ] as const;
 
 const PLAIN_PROFILE_FILES = ['Preferences'] as const;
@@ -211,6 +213,25 @@ function isPermissionDenied(err: unknown): boolean {
   return code === 'EPERM' || code === 'EACCES';
 }
 
+function isDatabaseLocked(err: unknown): boolean {
+  const error = err as { code?: string; errcode?: number } | null;
+  // node:sqlite reports ERR_SQLITE_ERROR plus SQLite's numeric (possibly extended) code.
+  const primary = typeof error?.errcode === 'number' ? error.errcode & 0xff : undefined;
+  return (
+    primary === 5 ||
+    primary === 6 ||
+    error?.code === 'SQLITE_BUSY' ||
+    error?.code === 'SQLITE_LOCKED' ||
+    error?.code === 'EBUSY'
+  );
+}
+
+function copyWarningReason(err: unknown): BrowserProfileCopyWarning['reason'] {
+  if (isDatabaseLocked(err)) return 'locked';
+  if (isPermissionDenied(err)) return 'permission-denied';
+  return 'copy-failed';
+}
+
 function tryOpenRead(filePath: string): 'ok' | 'missing' | 'denied' {
   try {
     const fd = fs.openSync(filePath, 'r');
@@ -262,7 +283,8 @@ export function probeSourceProfileReadAccess(source: InstalledChromium): { reada
   const profileDir = tryOpenDir(sourceProfileDir);
   if (profileDir === 'denied') return { readable: false };
 
-  for (const relative of AUTH_DB_RELATIVE_PATHS) {
+  // Optional password/autofill access must not prevent cookie reuse.
+  for (const relative of COOKIE_DB_CANDIDATES) {
     const result = tryOpenRead(path.join(sourceProfileDir, relative));
     if (result === 'denied') return { readable: false };
   }
@@ -351,14 +373,22 @@ function publishStagedSnapshot(options: {
   fs.rmSync(stagingDir, { recursive: true, force: true });
 }
 
-async function copySqliteDatabase(src: string, dest: string): Promise<void> {
+async function copySqliteDatabase(src: string, dest: string, optional: boolean): Promise<void> {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   removeSqliteAndSidecars(dest);
   if (typeof backup !== 'function') {
     throw new Error('sqlite backup API unavailable');
   }
-  const source = new DatabaseSync(src, { readOnly: true, timeout: 5000 });
+  // Keep OS permission errors distinguishable from SQLite's generic CANTOPEN.
+  const fd = fs.openSync(src, 'r');
+  fs.closeSync(fd);
+  const source = new DatabaseSync(src, { readOnly: true, timeout: optional ? 0 : 5000 });
   try {
+    // Acquire a read snapshot before async backup: an exclusive Chrome password
+    // lock should fail promptly, not leave backup retrying SQLITE_BUSY indefinitely.
+    // Holding this read transaction also prevents a lock race before backup starts.
+    source.exec('BEGIN');
+    source.prepare('PRAGMA schema_version').get();
     // Node 24 / Electron 41: backup is module-level `backup(sourceDb, dest)`.
     // DatabaseSync#backup does not exist; copyFile + WAL sidecars is not a
     // consistent snapshot while the source Chrome is open.
@@ -366,15 +396,6 @@ async function copySqliteDatabase(src: string, dest: string): Promise<void> {
   } finally {
     source.close();
   }
-}
-
-async function copyAuthFile(src: string, dest: string, isSqlite: boolean): Promise<void> {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  if (isSqlite) {
-    await copySqliteDatabase(src, dest);
-    return;
-  }
-  await fs.promises.copyFile(src, dest);
 }
 
 export async function snapshotRealProfile(options: {
@@ -432,7 +453,7 @@ export async function snapshotRealProfile(options: {
     } catch (err) {
       if (isRealProfileError(err)) throw err;
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+      if (isDatabaseLocked(err) || code === 'EPERM' || code === 'EACCES') {
         throw new RealProfileError(
           'PROFILE_LOCKED',
           'Chrome is locking its cookie database. Quit Chrome completely and try again.',
@@ -456,6 +477,7 @@ export async function snapshotRealProfile(options: {
     secureDir(path.join(stagingProfileDir, 'Network'));
 
     const filesCopied: string[] = [];
+    const warnings: BrowserProfileCopyWarning[] = [];
     const copiedRelative = new Set<string>();
     let authDbCopied = 0;
 
@@ -470,15 +492,24 @@ export async function snapshotRealProfile(options: {
       const src = path.join(sourceProfileDir, relative);
       if (!fs.existsSync(src)) continue;
       const dest = path.join(stagingProfileDir, relative);
+      const optionalDatabase = OPTIONAL_BROWSER_PROFILE_DATABASES.find((name) => name === relative);
       try {
-        await copyAuthFile(src, dest, true);
+        await copySqliteDatabase(src, dest, optionalDatabase !== undefined);
         filesCopied.push(path.join('Default', relative));
         copiedRelative.add(relative);
         authDbCopied += 1;
       } catch (err) {
+        if (optionalDatabase) {
+          removeSqliteAndSidecars(dest);
+          warnings.push({ database: optionalDatabase, reason: copyWarningReason(err) });
+          continue;
+        }
         const code = (err as NodeJS.ErrnoException).code;
         if (isPermissionDenied(err) && platform !== 'win32') throwReadDenied();
-        if (platform === 'win32' && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
+        if (
+          isDatabaseLocked(err) ||
+          (platform === 'win32' && (code === 'EPERM' || code === 'EACCES'))
+        ) {
           throw new RealProfileError(
             'PROFILE_LOCKED',
             'Chrome is locking its cookie database. Quit Chrome completely and try again.',
@@ -522,6 +553,7 @@ export async function snapshotRealProfile(options: {
       sourceKind: options.source.kind,
       sourceProfile,
       filesCopied,
+      ...(warnings.length ? { warnings } : {}),
     };
   } catch (err) {
     if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });

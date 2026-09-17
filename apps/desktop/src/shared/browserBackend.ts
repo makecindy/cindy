@@ -1,5 +1,31 @@
 export type BrowserBackendKind = 'external' | 'rsb-webview';
 
+/** Optional profile stores; warning payloads never carry paths or native errors. */
+export const OPTIONAL_BROWSER_PROFILE_DATABASES = [
+  'Login Data',
+  'Login Data For Account',
+  'Web Data',
+] as const;
+
+export interface BrowserProfileCopyWarning {
+  database: (typeof OPTIONAL_BROWSER_PROFILE_DATABASES)[number];
+  reason: 'locked' | 'permission-denied' | 'copy-failed';
+}
+
+/** Only known, non-sensitive fields may cross the runtime / IPC boundary. */
+export function browserProfileCopyWarningsFromData(data: unknown): BrowserProfileCopyWarning[] {
+  const raw = (data as { realProfile?: { warnings?: unknown } } | null)?.realProfile?.warnings;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const { database, reason } = entry;
+    if (!(OPTIONAL_BROWSER_PROFILE_DATABASES as readonly unknown[]).includes(database)) return [];
+    if (reason !== 'locked' && reason !== 'permission-denied' && reason !== 'copy-failed')
+      return [];
+    return [{ database, reason } as BrowserProfileCopyWarning];
+  });
+}
+
 /** Thrown when start/open would attach to another Cindy instance's Chrome on CDP 18800. */
 export const FOREIGN_AGENT_BROWSER_ERROR = 'FOREIGN_AGENT_BROWSER';
 
@@ -18,8 +44,7 @@ export const BROWSER_OPEN_FOR_LOGIN_ERROR_CODES = [
   'APP_BOUND_ENCRYPTION_UNSUPPORTED',
 ] as const;
 
-export type BrowserOpenForLoginErrorCode =
-  (typeof BROWSER_OPEN_FOR_LOGIN_ERROR_CODES)[number];
+export type BrowserOpenForLoginErrorCode = (typeof BROWSER_OPEN_FOR_LOGIN_ERROR_CODES)[number];
 
 export function isBrowserOpenForLoginErrorCode(
   value: unknown,
@@ -51,11 +76,7 @@ export function browserOpenForLoginErrorCodeFromData(
 }
 
 export type BrowserBackendHealthReason =
-  | 'disposing'
-  | 'host-unavailable'
-  | 'start-failed'
-  | 'status-failed'
-  | 'recovery-failed';
+  'disposing' | 'host-unavailable' | 'start-failed' | 'status-failed' | 'recovery-failed';
 
 export interface BrowserBackendHealth {
   active: BrowserBackendKind;

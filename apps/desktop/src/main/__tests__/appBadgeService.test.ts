@@ -36,6 +36,13 @@ function publish(
 }
 
 vi.mock('../windowsBadgeIcon', () => ({ createWindowsBadgeIcon }));
+vi.mock('../windowsTaskbarBadge', () => ({
+  setWindowsTaskbarBadge: (
+    win: { setOverlayIcon: typeof setOverlayIcon },
+    count: number,
+    description: string,
+  ) => win.setOverlayIcon(createWindowsBadgeIcon(count), description),
+}));
 vi.mock('../i18n', () => ({ t: () => badgeDescription }));
 
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent }));

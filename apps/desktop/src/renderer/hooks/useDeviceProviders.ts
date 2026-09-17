@@ -16,6 +16,8 @@ import { useEffect, useState } from 'react';
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { defaultEffortForCapabilities } from '@cindy/model-providers';
+import { isTransientRemoteError, isDeviceUnresponsiveRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -279,9 +281,23 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       return;
     }
     let cancelled = false;
+    let retryOwner = getDataOwnerGeneration();
+    let retryGeneration: number | undefined;
+    const retryCurrent = () => !cancelled && isDataOwnerGenerationCurrent(retryOwner)
+      && retryGeneration !== undefined && retryGeneration === (deviceGen.get(deviceId) ?? 0);
+    // Recover on foreground entry only. Periodic per-hook retries would bypass
+    // shared peer recovery scheduling and multiply across renderer windows.
+    // Reconnect and provider-change refreshes retain their existing owners.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && retryCurrent()) {
+        void fetchDeviceProviders(deviceId).catch(() => undefined);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     const unsubscribe = subscribeDeviceProviders(deviceId, (event) => {
       if (cancelled) return;
       if (event.status === 'loading') {
+        retryGeneration = undefined;
         // 保留上一份完整列表避免视觉跳变，但让模型选择逻辑等待同轮新快照。
         setOwnerDeviceId(deviceId);
         setLoading(true);
@@ -290,6 +306,11 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
         return;
       }
       if (event.status === 'error') {
+        retryOwner = getDataOwnerGeneration();
+        retryGeneration = !event.unsupported && (
+          isTransientRemoteError(event.error) || isDeviceUnresponsiveRemoteError(event.error)
+          || extractIpcError(new Error(event.error))?.code === 'MODEL_VISIBILITY_NOT_READY'
+        ) ? (deviceGen.get(deviceId) ?? 0) : undefined;
         setOwnerDeviceId(deviceId);
         if (event.unsupported) setPayload(EMPTY_PAYLOAD);
         setLoading(false);
@@ -297,6 +318,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
         setUnsupported(event.unsupported);
         return;
       }
+      retryGeneration = undefined;
       setOwnerDeviceId(deviceId);
       setPayload({
         providers: event.providers,
@@ -308,6 +330,11 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setUnsupported(false);
       setLoading(false);
     });
+    const cleanup = () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibility);
+      unsubscribe();
+    };
     const cached = cache.get(deviceId);
     if (cached) {
       setOwnerDeviceId(deviceId);
@@ -315,7 +342,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setError(null);
       setUnsupported(false);
       setLoading(false);
-      return unsubscribe;
+      return cleanup;
     }
     // cache miss:先清空,避免 fetch 解析前(失败则永远)残留上一设备的供应商。
     setOwnerDeviceId(deviceId);
@@ -337,10 +364,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
         if (cancelled || (deviceGen.get(deviceId) ?? 0) !== remoteGeneration) return;
         setLoading(false);
       });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
+    return cleanup;
   }, [deviceId]);
 
   const ownsSelectedDevice = ownerDeviceId === (deviceId ?? null);
@@ -378,9 +402,14 @@ export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPaylo
   return cache.get(deviceId) ?? null;
 }
 
-export function evictDeviceProviders(deviceId: string): void {
+export function isDeviceProvidersGenerationCurrent(deviceId: string, generation: number): boolean {
+  return (deviceGen.get(deviceId) ?? 0) === generation;
+}
+
+export function evictDeviceProviders(deviceId: string): number {
   cache.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   notifyDeviceProviders(deviceId, { status: 'loading' });
+  return deviceGen.get(deviceId)!;
 }

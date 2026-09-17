@@ -279,6 +279,40 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   Auto，也不得用固定 wait 提示覆盖原请求的能力选择或审查意图。
   Claude wake continuation 与 Codex yield continuation 先分账，不抽公共模块。
 
+### Auto 模式的同范围自动跟进
+
+用户授权完成一项工作时，可以通过定时任务在原目标与操作范围内继续跟进；延后执行、
+周期运行和向本人报告必要进展本身不构成新的授权请求。跟进必须保留用户限制、完成和
+取消条件；不得借调度扩大目标、收件人或部署／合并等未授权操作。工具元数据发现属于
+只读辅助步骤。流程细节继续由 Skill 决定，Core 不内置特定仓库的发布流程。
+
+宿主审批从 owning session 已保存的用户原话恢复范围。直发与排队均通过 Session 的
+`resolveAutoReviewUserIntent` 在 accepted 回调和视觉准备结束后、vendor dispatch 前读取，
+覆盖上游旧快照；读取后仍检查本轮取消，保留后续叫停与限制。
+自动执行消息使用受保护的 `autoReviewUserText.kind=scheduled-continuation` 标记，
+不作为新授权，也不占用授权历史的行数预算；普通 `origin` 可被展示层修改，不能作为
+信任依据。没有可信记录的旧消息仍会中断授权恢复，不按旧心跳 prompt 补造用户同意。
+既有的清空、回退、附件歧义和完整消息预算继续生效。
+用户原话按时间平铺为历史与唯一当前消息，不把历史包装成一律持续有效的限制。局部练习
+的限制不延伸到新任务；同任务限制、撤权与明确长期限制仍须保留。预算不足时整体省略
+旧历史并标记缺失，不能只留下旧授权、丢掉后续限制。宿主实际拒绝的动作可作为下一条
+同一身份用户补充的指代线索；动作参数与助手解释都不是用户授权。相关行为回归见
+`agents/shared/auto-review-decision.test.ts` 与 `scripts/eval-auto-approval.mts`。
+绑定原任务的心跳必须保留其权限与计划模式，包括冷启动恢复与撞忙排队；队列接受边界
+复用既有权限与计划模式稳定快照核验；任一模式切换中或运行时与落盘值不一致时顺延，
+不按旧模式派发。不得把原任务的 Auto／Ask
+落盘改为完全访问。无法恢复权限时不能套用独立调度的完全访问默认值。
+
+Cindy reviewer 与 Codex native reviewer 使用同一份范围语义，但接入不同。Codex 的主
+Agent developer 指令不会进入原生审批摘要，因此通过线程级 `auto_review.policy` 内联
+Markdown 接入；在创建或恢复线程时预装，不依赖初始权限模式，后续切到 Auto 即可使用。
+不修改用户配置文件，不改 sandbox／审批者，不覆盖用户或项目自定义策略，
+管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0 与打包运行时 0.153.4，并分别完整保留其默认租户
+策略；未知版本保留原生策略，不能拿旧版本策略覆盖新默认。原生行为验证见
+`agents/codex/native-auto-review-policy.native.test.ts`（`packages/maker-core/src/` 下），
+需显式指定 `CINDY_CODEX_TEST_BINARY`；它使用假模型与假 MCP 验证配置传递和默认策略
+完整性，不代表真实模型判定已通过。Cindy 审批模型案例见 `scripts/eval-auto-approval.mts`。
+
 ## 3. 守住四项核心数据指标
 
 `maker-core` 的每一行改动都可能拖垮线上指标，而这类回退**不会被 typecheck／lint／单测

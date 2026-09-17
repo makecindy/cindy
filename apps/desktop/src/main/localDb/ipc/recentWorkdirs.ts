@@ -11,9 +11,9 @@
  *    session 会经 upsertRecentWorkdir 重新入列,已迁移的死路径则一去不返。
  *    recent 只影响项目列表展示,不再充当 device-link remote-workdir-guard
  *    的放行依据；远程入口始终实时探测目录当前是否可访问。
- *  - upsert 不暴露 IPC —— 由 main 内部在 session 创建和本地项目归档/删除路径上调用,
- *    避免 renderer 私自污染该表。生命周期与 session 解耦:归档 / 删除不会移除目录；
- *    两者都会刷新最后活动时间，确保清空会话后的项目仍服从同一活动筛选语义。
+ *  - upsert 不暴露 IPC —— 由 main 内部在 session 创建、项目归属变更和发送消息时调用,
+ *    避免 renderer 私自污染该表。生命周期与 session 解耦:归档 / 删除既不移除目录，
+ *    也不刷新最后活动时间；清空会话后仍按项目独立保存的时间筛选。
  *  - upsert 失败仅日志,不抛 —— 这是"用户体验增强"数据,不该挡住 session 创建主流程。
  */
 
@@ -136,10 +136,7 @@ async function dirExists(path: string): Promise<boolean> {
   }
 }
 
-function recentWorkdirProjectIdentity(
-  path: string,
-  localPlatform: NodeJS.Platform,
-): string | null {
+function recentWorkdirProjectIdentity(path: string, localPlatform: NodeJS.Platform): string | null {
   const grouped = normalizeWorkingDirForGrouping(path);
   if (!grouped) return null;
   return isCaseInsensitiveWindowsPath(grouped, localPlatform) ? grouped.toLowerCase() : grouped;
@@ -180,9 +177,7 @@ export function registerRecentWorkdirsIpc(): void {
         path: r.path,
         lastUsedAt: new Date(r.lastUsedAt).toISOString(),
         exists: exists[i],
-        knownAgentKinds: Array.from(
-          (identity && knownKindsByPath.get(identity)) ?? [],
-        ).sort(),
+        knownAgentKinds: Array.from((identity && knownKindsByPath.get(identity)) ?? []).sort(),
       };
     });
   });

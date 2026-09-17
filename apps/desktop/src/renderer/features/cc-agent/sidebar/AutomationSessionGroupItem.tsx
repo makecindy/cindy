@@ -164,7 +164,7 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
   );
   const groupAttentionKinds = useSessionsAttentionKindMap(groupSessionIds);
   const groupUrgentSessionIds = useSessionsAttentionUrgencyIdSet(groupSessionIds);
-  const groupRemotePhases = useRemoteSessionsPhaseMap(groupSessionIds);
+  const groupRemotePhases = useRemoteSessionsPhaseMap(group.sessions);
   const collapsedAttention = useMemo(
     () =>
       resolveCollapsedAttention({
@@ -223,8 +223,13 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
   const latestUrgentFromSchedule = useSessionAttentionUrgency(latestSessionId ?? '');
   const latestChatKind = useSessionAttentionKind(latestSessionId ?? '');
   const latestLocalActivity = useAgentIslandActivity(latestSessionId ?? '');
-  const latestRemoteActivity = useRemoteSessionActivity(latestSessionId ?? '');
-  const latestLiveActivity = latestRemoteActivity ?? latestLocalActivity;
+  const latestRemoteActivity = useRemoteSessionActivity(
+    latestSessionId ?? '',
+    latestSession?.deviceLinkDeviceId,
+  );
+  const latestLiveActivity = latestSession?.deviceLinkDeviceId
+    ? latestRemoteActivity
+    : latestLocalActivity;
   const scheduleId = group.scheduleId;
   // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
   // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
@@ -233,7 +238,9 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
   const hasVisibleChildren = visibleSessions.length > 0;
   // running / loading 也只看最新那条:组头 vendor mark 呼吸 + Timer chip 呼吸 + 右侧
   // spinner 都据此,与最新 session 子行一致(需求:「loading 状态和最新的 session 保持一致」)。
-  const isRunning = latestSessionId != null && runningSessionIds.has(latestSessionId);
+  const isRunning = latestSessionId != null && latestSession?.deviceLinkDeviceId
+    ? latestRemoteActivity?.phase === 'running'
+    : latestSessionId != null && runningSessionIds.has(latestSessionId);
   const primaryActivityIso = latestSession?.updatedAt;
   const hasActiveHidden =
     activeSessionId != null &&

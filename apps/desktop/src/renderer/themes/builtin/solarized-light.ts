@@ -125,6 +125,7 @@ const GENERATED_OVERRIDES = {
   "tooltip-text": "#fdf6e3",
   "update-btn-border": "#859900",
   "update-btn-text": "#859900",
+  "form-field-hint": "#686868",
 } as const;
 // END GENERATED DS-8: theme
 

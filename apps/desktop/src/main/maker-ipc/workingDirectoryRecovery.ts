@@ -1,17 +1,30 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import {
+  workdirDiagnosticContext, workdirDiagnosticErrorCode, workdirDiagnosticId,
+  type WorkdirDiagnosticLogger,
+} from '../workdirDiagnostics';
 
 export function isUnavailableFilesystemError(error: unknown): boolean {
   return ['EIO', 'ENOTCONN', 'ENODEV', 'ESTALE', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'WORKDIR_PROBE_TIMEOUT']
     .includes((error as NodeJS.ErrnoException | null)?.code ?? '');
 }
 
-/** Ordinary local directories only; managed Git worktrees keep their own restore path. */
+/** Reuse recovery artifacts when Git restoration still fails after a restart.
+ * Its identity includes the original binding; changing projects cannot reuse it.
+ */
+export function worktreeConversationFallbackDir(dialoguesRoot: string, sessionId: string, workingDir: string): string {
+  const key = createHash('sha256').update(JSON.stringify([sessionId, path.resolve(workingDir)])).digest('hex');
+  return path.join(dialoguesRoot, 'worktree-recovery', key);
+}
+
+/** Local directory recovery; failed Git restores may explicitly request conversation fallback. */
 export function createWorkingDirectoryRecovery(io: {
   stat(dir: string): Promise<{ isDirectory(): boolean; dev?: number }>;
   mkdir(dir: string, opts: { recursive: true }): Promise<unknown>;
   realpath?(dir: string): Promise<string>;
-} = fsp, allocateFallback?: (sessionId: string) => Promise<string>) {
+} = fsp, allocateFallback?: (sessionId: string, workingDir: string, mode: 'ordinary' | 'unrestored-worktree') => Promise<string>, log?: WorkdirDiagnosticLogger) {
   const pending = new Map<string, { workingDir: string; note: string | null; device?: number; fallback?: string }>();
   function entryFor(sessionId: string, dir: string) {
     const entry = pending.get(sessionId);
@@ -21,7 +34,7 @@ export function createWorkingDirectoryRecovery(io: {
     }
     return entry;
   }
-  async function mountUnavailable(dir: string, entry: { device?: number }) {
+  async function mountUnavailable(dir: string, entry: { device?: number }, report: (details: Record<string, unknown>) => void) {
     const canonical = path.resolve(dir);
     if (process.platform === 'darwin' && canonical.startsWith('/Volumes/')) {
       const volume = canonical.split('/').slice(0, 3).join('/');
@@ -30,9 +43,15 @@ export function createWorkingDirectoryRecovery(io: {
         // A bare mount-point directory is on the parent filesystem. Exclude
         // aliases such as /Volumes/Macintosh HD -> / before classifying it.
         if (mounted.dev !== undefined && mounted.dev === parent.dev &&
-          await io.realpath?.(volume).catch(() => null) === volume) return true;
+          await io.realpath?.(volume).catch(() => null) === volume) {
+          report({ reason: 'bare-mount-point', probedDirectoryRef: workdirDiagnosticId(volume) });
+          return true;
+        }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT' || isUnavailableFilesystemError(error)) return true;
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT' || isUnavailableFilesystemError(error)) {
+          report({ reason: 'mount-probe-failed', code: workdirDiagnosticErrorCode(error), probedDirectoryRef: workdirDiagnosticId(volume) });
+          return true;
+        }
         throw error;
       }
     }
@@ -40,13 +59,24 @@ export function createWorkingDirectoryRecovery(io: {
     while (true) {
       try {
         const current = await io.stat(ancestor);
-        return entry.device !== undefined && current.dev !== undefined && current.dev !== entry.device;
+        const changed = entry.device !== undefined && current.dev !== undefined && current.dev !== entry.device;
+        if (changed) report({
+          reason: 'device-changed', expectedDevice: entry.device, actualDevice: current.dev,
+          probedDirectoryRef: workdirDiagnosticId(ancestor),
+        });
+        return changed;
       } catch (error) {
-        if (isUnavailableFilesystemError(error)) return true;
+        if (isUnavailableFilesystemError(error)) {
+          report({ reason: 'ancestor-probe-failed', code: workdirDiagnosticErrorCode(error), probedDirectoryRef: workdirDiagnosticId(ancestor) });
+          return true;
+        }
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
       const parent = path.dirname(ancestor);
-      if (parent === ancestor) return true; // An unavailable drive/share root cannot be recreated.
+      if (parent === ancestor) {
+        report({ reason: 'root-missing', code: 'ENOENT', probedDirectoryRef: workdirDiagnosticId(ancestor) });
+        return true;
+      }
       ancestor = parent;
     }
   }
@@ -67,7 +97,7 @@ export function createWorkingDirectoryRecovery(io: {
     isFallback(sessionId: string, workingDir: string): boolean {
       return !!entryFor(sessionId, workingDir)?.fallback;
     },
-    async recover(sessionId: string, workingDir: string, similarPath?: string | null | (() => Promise<string | null>), candidates: { id: string; workingDir: string }[] = []): Promise<boolean> {
+    async recover(sessionId: string, workingDir: string, similarPath?: string | null | (() => Promise<string | null>), candidates: { id: string; workingDir: string }[] = [], mode: 'ordinary' | 'unrestored-worktree' = 'ordinary'): Promise<boolean> {
       entryFor(sessionId, workingDir);
       const sessions = new Map(candidates.map((session) => [session.id, session.workingDir]));
       sessions.set(sessionId, workingDir);
@@ -79,44 +109,95 @@ export function createWorkingDirectoryRecovery(io: {
         return { id, dir, entry };
       });
       const own = entryFor(sessionId, workingDir);
+      const startedAt = Date.now();
+      const context = workdirDiagnosticContext(sessionId, workingDir);
+      let stage = 'mount-check';
+      const reportFailure = (error: unknown) => log?.warn('workdir recovery attempt failed', {
+        ...context, stage, code: workdirDiagnosticErrorCode(error),
+        usingFallback: !!own?.fallback, elapsedMs: Date.now() - startedAt,
+      });
       const useFallback = async (): Promise<boolean> => {
-        if (!own || !allocateFallback || pending.get(sessionId) !== own) return false;
-        const fallback = path.resolve(await allocateFallback(sessionId));
+        stage = 'fallback-allocation';
+        if (!own || !allocateFallback || pending.get(sessionId) !== own) {
+          log?.warn('workdir recovery fallback skipped', {
+            ...context, reason: !allocateFallback ? 'allocator-missing' : 'stale-recovery',
+          });
+          return false;
+        }
+        const fallback = path.resolve(await allocateFallback(sessionId, workingDir, mode));
         if (pending.get(sessionId) !== own) return false;
         pending.set(sessionId, { ...own, fallback, note: [
           '[Working directory recovery]',
-          `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
-          'The original directory and files have not been restored or copied. Do not create a substitute directory at the original mount location. Files written here stay here when the disk reconnects; do not move them or switch back without discussing it with the user.',
-          'Continue responding. If the task needs the original files, investigate the disconnected disk or network share, or ask the user in this conversation. No folder-selection interface is required.',
+          ...(mode === 'unrestored-worktree' ? [
+            `Cindy could not restore the task worktree at ${JSON.stringify(workingDir)}. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace; the task remains associated with its original project and worktree.`,
+            'The original code, branch and uncommitted changes have not been restored or copied. Do not create an empty replacement at the original path or continue editing in the project root as if it were the original worktree. Investigate the original branch and snapshots before resuming project edits.',
+            'Continue responding to the user and explain the unavailable worktree. Files created in this conversation workspace remain here; do not move them or switch workspaces without discussing it with the user. No folder-selection interface is required just to continue the conversation.',
+          ] : [
+            `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
+            'The original directory and files have not been restored or copied. Do not create a substitute directory at the original mount location. Files written here stay here when the disk reconnects; do not move them or switch back without discussing it with the user.',
+            'Continue responding. If the task needs the original files, investigate the disconnected disk or network share, or ask the user in this conversation. No folder-selection interface is required.',
+          ]),
         ].join('\n') });
+        log?.info('workdir recovery completed', {
+          ...context, action: 'fallback-selected', fallbackRef: workdirDiagnosticId(fallback),
+          sameDirectory: path.resolve(workingDir) === fallback, elapsedMs: Date.now() - startedAt,
+        });
         return true;
       };
       try {
         if (own?.fallback) {
-          try { return (await io.stat(own.fallback)).isDirectory(); } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+          stage = 'fallback-stat';
+          try {
+            const valid = (await io.stat(own.fallback)).isDirectory();
+            if (!valid) log?.warn('workdir recovery rejected', { ...context, stage, reason: 'not-directory' });
+            return valid;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+              reportFailure(error);
+              return false;
+            }
           }
+          stage = 'fallback-mkdir';
           await io.mkdir(own.fallback, { recursive: true });
           if (pending.get(sessionId) !== own) return false;
           pending.set(sessionId, { ...own, note: [
             own.note ?? '[Working directory recovery]',
             `The temporary conversation directory ${JSON.stringify(own.fallback)} was also missing and has been recreated. Its previous files have not been recovered. The original workspace remains ${JSON.stringify(own.workingDir)}; do not create a substitute at that location.`,
           ].join('\n') });
+          log?.info('workdir recovery completed', {
+            ...context, action: 'fallback-recreated', code: 'ENOENT',
+            fallbackRef: workdirDiagnosticId(own.fallback), elapsedMs: Date.now() - startedAt,
+          });
           return true;
         }
-        if (own && allocateFallback && await mountUnavailable(workingDir, own)) {
+        // Git restoration already failed. Never probe/mkdir the original path as
+        // an ordinary directory: an empty folder is not a restored worktree.
+        if (mode === 'unrestored-worktree') return await useFallback();
+        if (own && allocateFallback && await mountUnavailable(workingDir, own, (details) => {
+          log?.warn('workdir recovery unavailable', { ...context, ...details });
+        })) {
           return await useFallback();
         }
         // A stale probe must not mistake a file, permission error, or a directory
         // restored by someone else for a missing directory.
+        stage = 'original-stat';
         try {
           const stat = await io.stat(workingDir);
-          return stat.isDirectory();
+          const valid = stat.isDirectory();
+          if (!valid) log?.warn('workdir recovery rejected', { ...context, stage, reason: 'not-directory' });
+          return valid;
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
+        stage = 'similar-path';
         const similar = typeof similarPath === 'function' ? await similarPath() : similarPath;
+        stage = 'original-mkdir';
         await io.mkdir(workingDir, { recursive: true });
+        log?.info('workdir recovery directory created', {
+          ...context, action: 'directory-recreated', code: 'ENOENT',
+          similarPathFound: !!similar, elapsedMs: Date.now() - startedAt,
+        });
+        stage = 'alias-resolution';
         const canonical = await io.realpath?.(workingDir).catch(() => null);
         // Cleanup may have removed this entry while filesystem IO was pending.
         // Do not repopulate it after a clear, archive, delete, or owner change.
@@ -138,10 +219,14 @@ export function createWorkingDirectoryRecovery(io: {
         }));
         return true;
       } catch (error) {
+        reportFailure(error);
         // The share may disappear after stat, including during mkdir. Reuse the
         // same fallback transition; never retry a timed-out write on the share.
         if (!own?.fallback && isUnavailableFilesystemError(error)) {
-          return useFallback().catch(() => false);
+          return useFallback().catch((fallbackError) => {
+            reportFailure(fallbackError);
+            return false;
+          });
         }
         return false;
       }

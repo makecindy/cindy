@@ -22,6 +22,7 @@ import { createMakeDoctorCommand } from '../cindy-make/doctorCommand.js';
 import { createMakeToolchainEnvironment } from '../cindy-make/toolchainEnvironment.js';
 import { prepareCindyMakeEnvironment } from '../cindy-make/prepare.js';
 import { searchCindyUpstream } from '../cindy-make/upstreamQuery.js';
+import { resolveMakeRuntime } from '../cindy-make/runtimeVersion.js';
 import { makeToolRoot } from '../cindy-make/toolInstaller.js';
 import { makeSourceRoot, prepareCindySource } from '../cindy-make/sourcePreparation.js';
 import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
@@ -391,7 +392,11 @@ export function registerBuiltinDesktopCommands(
         allowInstallTest: () => !app.isPackaged,
         searchUpstream: async (request, signal) => {
           const { outboundFetch } = await import('../maker-host/outbound-fetch.js');
-          return searchCindyUpstream(request, signal, { fetch: outboundFetch });
+          const runtime = await resolveMakeRuntime(
+            { packaged: app.isPackaged, version: app.getVersion() },
+            signal,
+          );
+          return searchCindyUpstream(request, signal, { fetch: outboundFetch, ...runtime });
         },
         prepare: (runId, env, signal, publish) =>
           prepareCindyMakeEnvironment(
@@ -428,19 +433,23 @@ export function registerBuiltinDesktopCommands(
                 checks: [],
                 source: {
                   status:
-                    options?.clearOnly && progress.status === 'ready'
-                      ? 'missing'
-                      : progress.status,
+                    options?.clearOnly && progress.status === 'ready' ? 'missing' : progress.status,
                   path: progress.path,
                   channel: progress.target.channel,
                   version: progress.target.version,
                   ref: progress.target.ref,
                   commit: progress.commit,
                   branch: progress.branch,
+                  currentBranch: progress.currentBranch,
                   baseCommit: progress.baseCommit,
+                  mainCommit: progress.mainCommit,
+                  mainRemoteCommit: progress.mainRemoteCommit,
+                  mainBehind: progress.mainBehind,
+                  mainAhead: progress.mainAhead,
                   error: progress.error,
                   phase: progress.phase,
                   progress: progress.progress,
+                  dependencies: progress.dependencies,
                 },
               });
             },
@@ -461,7 +470,12 @@ export function registerBuiltinDesktopCommands(
               ref: result.target.ref,
               commit: result.commit,
               branch: result.branch,
+              currentBranch: result.currentBranch,
               baseCommit: result.baseCommit,
+              mainCommit: result.mainCommit,
+              mainRemoteCommit: result.mainRemoteCommit,
+              mainBehind: result.mainBehind,
+              mainAhead: result.mainAhead,
               error: result.error,
             },
           };

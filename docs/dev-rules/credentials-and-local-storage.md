@@ -35,6 +35,20 @@
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
   Electron userData 或系统凭证目录。
 
+## Linux Hyprland / Omarchy 凭证后端
+
+- Desktop 在 Electron `ready` 之前为 Hyprland 默认选择 `gnome-libsecret`，避免桌面
+  自动识别失败导致登录回调收到令牌后无法加密保存。桌面身份依次取非空的
+  `XDG_CURRENT_DESKTOP`、`XDG_SESSION_DESKTOP`、`DESKTOP_SESSION`；其他桌面保持
+  Electron 原有选择。实现见
+  [linuxPasswordStore.ts](../../apps/desktop/src/main/linuxPasswordStore.ts)，回归见
+  [linuxPasswordStore.test.ts](../../apps/desktop/src/main/__tests__/linuxPasswordStore.test.ts)。
+- 显式 `--password-store` 优先于此默认值。系统仍需提供可用且已解锁的 Secret Service
+  （例如 GNOME Keyring）；此修复不安装或解锁钥匙串，也不新增明文降级。现有仅限开发版的
+  `XDT_DEV_SAFE_STORAGE_BASIC=1` 调试行为保持不变。
+- 旧版临时处理：完全退出 Cindy 后运行 `cindy --password-store=gnome-libsecret`。
+  实机验收需覆盖登录、退出应用后正常启动仍保持登录，以及 `cindy://` 回调启动路径。
+
 ## macOS safeStorage 钥匙串条目
 
 - macOS 上 Electron `safeStorage` 的钥匙串条目名由 `app.name` 派生

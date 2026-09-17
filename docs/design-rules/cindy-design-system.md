@@ -8,9 +8,11 @@ DS-6 已随 [#4135](https://github.com/makecindy/cindy/pull/4135) 合入（head 
 
 DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)。入口：[规则范围与回退](./design-governance.md#8-治理接线纪律)、[固定历史回放、注入和接线证据](../design-evidence/2026-09-10/ds7-guards.md)。新增颜色可用 `pnpm check:design-colors --base-ref <基线> --worktree` 检查；只报告用 `pnpm report:design-colors`。main 已启用该接线；历史采证版本与最终合并事实见治理 §8。
 
-> 2026-09-11：DS-8 已合并 [#4268](https://github.com/makecindy/cindy/pull/4268)，Desktop 静态数值已接 DTCG→Terrazzo。DS-9 已合并 [#4300](https://github.com/makecindy/cindy/pull/4300)，DS-10 已完成报告与维护的本地提交候选，最终验收缺项仍单列；Mobile 留待独立阶段。工程、人工与平台验收分别记录。
+> 2026-09-11：DS-8 已合并 [#4268](https://github.com/makecindy/cindy/pull/4268)，Desktop 静态数值已接 DTCG→Terrazzo。DS-9 已合并 [#4300](https://github.com/makecindy/cindy/pull/4300)，DS-10 已随 [#4427](https://github.com/makecindy/cindy/pull/4427) 合入（`2afecd89e5`），最终验收缺项仍单列；Mobile 留待独立阶段。工程、人工与平台验收分别记录。
 
 DS-10 的报告分类、历史回放、真实运行和未验收项见 [结果索引](../design-evidence/2026-09-13/ds10-desktop-guards.md)。维护操作复用下面入口，独立贡献者试用与工程检查分别记录。
+
+DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验收项见 [DS-11 结果索引](../design-evidence/2026-09-15/ds11-review-fixes.md)。原生目检与用户最终视觉批准另记。
 
 ## 文档索引
 
@@ -19,6 +21,7 @@ DS-10 的报告分类、历史回放、真实运行和未验收项见 [结果索
 | [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 机器事实（稳定 ID / 入口 / 组件 / 样式来源 / Token 与裸值统计）+ 人工迁移状态 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`） |
+| [`ios-native-design.md`](./ios-native-design.md) | iOS 导航、原生面板与分组、玻璃材质、任务详情、紧凑搜索及触控验收；附当前迁移审查 | 平台补充（由 DESIGN Mobile 节授权） |
 | [Token README](../../packages/design-tokens/README.md) | Desktop DTCG 生产生成、维护/回退、实际接管与保留项，Mobile 待新方案共同确认 | **Token 合同入口**（构建期接管 Desktop，运行时只读生成子集） |
 | [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave6 读取记录 | 权威（登录域逐参数） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
@@ -51,7 +54,7 @@ DS-10 的报告分类、历史回放、真实运行和未验收项见 [结果索
 
 - **2026-09-07（圆角改按可见层与登记分配）**：`DESIGN.md §5` 重写为两步判定树——Step 1 已登记形状（keycap / data mark）优先，Step 2 普通控件三档；判定对象从 DOM 标签改为「可见层」，§5 成为半径唯一权威（§§1/4/7/9 与组件条目只引用不另立）。新增 data mark 类目（0px 或 2px、按成员钉死），首批四个成员四角 2px：`usage-heatmap-day`、`usage-token-bar`、`workflow-status-cell`、`system-category-square`；07-28「status micro-cells（2px）」窄例外被后两个成员吸收——数值与组件不变，依据从「≤8px 非交互」改为图元角色，解除 non-interactive 限定、尺寸不再作归类边界。`every button` /「唯一豁免」等绝对化措辞改为「未命中 Step 1 的普通控件框」。命中尺寸采用 Equivalent 路径：用量历史同页补足产生相同单日筛选的合规日期选择控件；原定与密度恢复同 PR 交付的时序已被 #4064 先行恢复密度超越，控件单独交付，交付前密集目标为 §5 登记在案的过渡不合规。`REVIEW.md` 审查入口与 `design-governance.md §13` 同步；`UsageHeatmap` / `UsageTokenBars` 的生产差异登记为待迁移项。裁决全文与两处范围变更见 [`design-decision-log.md`](./design-decision-log.md)「09-07」条。**本条取代 08-29 条的「按钮一律胶囊／裸文字按钮唯一豁免」绝对化表述与 07-28 条的微格尺寸判据（三档数值本身不变）。**
 
-- **2026-09-08（用量历史图表配色与交互登记，#4076）**：`DESIGN.md §2` 登记 Usage History 图表类别色（五个模型色相与热力图对进程蓝的引用）；§5 data mark 成员 `usage-heatmap-day` / `usage-token-bar` 之上登记悬停/焦点/选中有限放大、柱图选中淡化与热力格中性描边（Interaction constraints 内的组件交互登记）；§14.4 登记图表强调响应。移除草稿日期表单后的命中尺寸方案仍待裁决，见 `usage-history-charts.md`。
+- **2026-09-08（用量历史图表配色与交互登记，#4076）**：`DESIGN.md §2` 登记 Usage History 图表类别色（五个模型色相与热力图对进程蓝的引用）；§5 data mark 成员 `usage-heatmap-day` / `usage-token-bar` 之上登记悬停/焦点/选中有限放大、柱图选中淡化与热力格中性描边（Interaction constraints 内的组件交互登记）；§14.4 登记图表强调响应。移除草稿日期表单后的命中尺寸方案曾待裁决；DS-11 已补回 36px 带标签的原生日期输入作为等价入口（真实平台与用户验收待记录），现状见 `usage-history-charts.md`。
 
 - **2026-09-07（设置分段选项与用量数据图形）**：`DESIGN.md §4` 补设置分段单选逐态与键盘合同，统一复用 `SettingsSegmentedControl`；§4/§5 明确用量热力方格、细柱与点击承载的 2px 数据图形例外，保留灰度色阶和日期筛选，避免普通按钮胶囊规则改变图表形状。
 

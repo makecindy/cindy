@@ -138,6 +138,9 @@ import {
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   appendAutoReviewUserIntent,
+  normalizeAutoReviewUserIntent,
+  createAutoReviewActionContext,
+  type AutoReviewUserIntent,
   isAutoReviewUnavailableMetadata,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
@@ -1706,6 +1709,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     // Keep the policy across Claude task_notification auto-continue turns,
     // which do not call handle.send again. The next explicit send replaces it.
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    let activeToolsDisabled = false;
+    const denyTextOnlyTool = () => ({
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse' as const,
+        permissionDecision: 'deny' as const,
+        permissionDecisionReason: 'Tools are disabled for this host-owned text-only turn.',
+      },
+    });
     let activeCapabilitySelectionText = '';
     const appendActiveCapabilitySelectionText = (text: string | undefined): void => {
       if (!text) return;
@@ -1714,6 +1726,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         .join('\n');
     };
     const turnChangeCaptureHook: HookCallback = async (input) => {
+      if (input.hook_event_name === 'PreToolUse' && activeToolsDisabled) return denyTextOnlyTool();
       const captureCwd = opts.workingDir;
       const captureSessionId = opts.sessionId;
       if (!this.deps.turnChangeCapture || !captureCwd || !captureSessionId) {
@@ -1764,6 +1777,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const reviewReadOnlyHook: HookCallback = async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+      if (activeToolsDisabled) return denyTextOnlyTool();
       const pre = input as PreToolUseHookInput;
       const toolName = pre.tool_name;
       const updatedInput = isReadOnlyClaudeTool(toolName)
@@ -2456,7 +2470,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableProviderId = opts.providerId ?? null;
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
-    let currentAutoReviewIntent = '';
+    let currentAutoReviewIntent: AutoReviewUserIntent = '';
+    const autoReviewActionContext = createAutoReviewActionContext();
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
       ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
         ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
@@ -2479,8 +2494,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       // bypasses canUseTool. Use the scope frozen into the active Query: after revoke,
       // that Query still carries its broader directory allowlist.
       && !activeQueryHasDirectoryGrants;
-    const setAutoReviewIntent = (content: UserMessage['content'], source = { authority: currentAutoReviewAuthority }): void => {
-      currentAutoReviewIntent = extractAutoReviewUserIntent(content);
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+      autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       currentAutoReviewAuthority = source.authority && { ...source.authority };
       autoReviewDecisionCache.clear();
     // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
@@ -2528,6 +2544,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         providerId: mutableProviderId,
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
+        precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots,
@@ -2541,7 +2558,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           this.deps.reviewAutoPermissionAction,
         );
       if (!cached) autoReviewDecisionCache.set(key, pending);
-      return pending.then((decision) => (
+      return pending.then<AutoReviewDecision>((decision) => (
         autoReviewDecisionCache.get(key) !== pending
           ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
           : directoryGeneration === autoReviewDirectoryGeneration
@@ -2550,7 +2567,12 @@ export class ClaudeCodeAgent extends BaseAgent {
               verdict: 'block',
               reason: 'Directory permissions changed; retry with the current scope.',
             }
-      ));
+      )).then((decision) => {
+        if (autoReviewDecisionCache.get(key) === pending && directoryGeneration === autoReviewDirectoryGeneration) {
+          autoReviewActionContext.record(action, decision);
+        }
+        return decision;
+      });
     };
     // guard 桶常驻(每 turn 清空):适用性不再是会话级一票制,而是每个 scope 单独判。
     const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
@@ -5676,6 +5698,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       get model() { return mutableModel; },
 
       validateSendOptions(sendOpts: SendOptions) {
+        if (sendOpts.toolsDisabled && opts.remoteHostId) {
+          throw new Error('Host text-only turns require a local Claude runtime with execution hooks.');
+        }
         if (
           sendOpts.turnPermissionPolicy &&
           (mutablePermissionMode === 'acceptEdits' ||
@@ -5733,7 +5758,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         ) {
           bridgeCompactQueued = await rebuildCancelledContinuationQuery(sendOpts?.signal);
         }
+        const nextToolsDisabled = sendOpts?.toolsDisabled === true;
+        if (turnInFlight && activeToolsDisabled !== nextToolsDisabled) {
+          throw new Error('Cannot change the tool policy while a Claude turn is active.');
+        }
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeToolsDisabled = nextToolsDisabled;
         // 仅用于诊断日志: 调用方每次 send 都可以带 logTitle (取自 storage 的最新值);
         // 缺省时保留上一次的值 (没传不等于"清空")。
         if (sendOpts?.logTitle !== undefined) lastSendTitle = sendOpts.logTitle;

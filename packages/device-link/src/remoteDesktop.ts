@@ -131,6 +131,11 @@ export interface RemoteDesktopCapabilities {
   trickleIce?: boolean;
   systemAudio?: boolean;
   displayModes?: boolean;
+  /** System mode changes can keep the lease and restore on disconnect. */
+  resolutionRestore?: boolean;
+  /** Can temporarily lay out the desktop at the viewer's requested dimensions. */
+  viewerDisplay?: boolean;
+  viewerDisplayRestore?: boolean;
   backgroundViewing?: boolean;
   cursorOverlay?: boolean;
   clipboardText?: boolean;
@@ -180,7 +185,9 @@ export type RemoteDesktopRequest =
   | { op: "clipboard"; lease: string; action: "copy" }
   | { op: "clipboard"; lease: string; action: "paste"; text: string }
   | { op: "displayModes"; lease: string }
-  | { op: "resolution"; lease: string; modeId: string };
+  | { op: "viewerDisplay"; lease: string; width: number; height: number }
+  | { op: "restoreViewerDisplay"; lease: string }
+  | { op: "resolution"; lease: string; modeId: string; temporary?: boolean };
 
 export function parseRemoteDesktopRequest(
   value: unknown,
@@ -198,8 +205,10 @@ export function parseRemoteDesktopRequest(
   ) {
     if (v.resume !== undefined && typeof v.resume !== "boolean")
       throw new Error("INVALID_REQUEST");
-    if (v.takeover !== undefined && typeof v.takeover !== "boolean") throw new Error("INVALID_REQUEST");
-    if (v.takeover === true && v.resume === true) throw new Error("INVALID_REQUEST");
+    if (v.takeover !== undefined && typeof v.takeover !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    if (v.takeover === true && v.resume === true)
+      throw new Error("INVALID_REQUEST");
     return {
       op: v.op,
       displayId: v.displayId,
@@ -225,32 +234,73 @@ export function parseRemoteDesktopRequest(
     return parseClipboardContentRequest(v, lease);
   if (v.op === "clipboard") {
     if (v.action === "copy") return { op: v.op, lease, action: "copy" };
-    if (v.action === "paste" && typeof v.text === "string" && v.text.length > 0 && v.text.length <= REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS)
+    if (
+      v.action === "paste" &&
+      typeof v.text === "string" &&
+      v.text.length > 0 &&
+      v.text.length <= REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS
+    )
       return { op: v.op, lease, action: "paste", text: v.text };
     throw new Error("INVALID_REQUEST");
   }
   if (v.op === "frame") {
-    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean") throw new Error("INVALID_REQUEST");
-    return { op: v.op, lease, ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}) };
+    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}),
+    };
   }
   if (v.op === "stop") {
-    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean") throw new Error("INVALID_REQUEST");
-    return { op: v.op, lease, ...(v.lockScreen === true ? { lockScreen: true } : {}) };
+    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.lockScreen === true ? { lockScreen: true } : {}),
+    };
   }
-  if (v.op === "heartbeat")
-    return { op: v.op, lease };
+  if (v.op === "heartbeat") return { op: v.op, lease };
   if (
     (v.op === "control" || v.op === "presentation") &&
     typeof v.enabled === "boolean"
   )
     return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "restoreViewerDisplay") return { op: v.op, lease };
   if (v.op === "displayModes") return { op: v.op, lease };
+  if (v.op === "viewerDisplay") {
+    if (
+      ![v.width, v.height].every(
+        (size) =>
+          typeof size === "number" &&
+          Number.isInteger(size) &&
+          size >= 320 &&
+          size <= 2560,
+      )
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      width: v.width as number,
+      height: v.height as number,
+    };
+  }
   if (
     v.op === "resolution" &&
     typeof v.modeId === "string" &&
     /^[0-9]{1,10}$/.test(v.modeId)
-  )
-    return { op: v.op, lease, modeId: v.modeId };
+  ) {
+    if (v.temporary !== undefined && typeof v.temporary !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      modeId: v.modeId,
+      ...(v.temporary === true ? { temporary: true } : {}),
+    };
+  }
   if (v.op === "offer" && typeof v.sdp === "string" && v.sdp.length <= 64_000) {
     if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
       throw new Error("INVALID_REQUEST");

@@ -30,12 +30,11 @@ import type {
 } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
-import { AutomationTimerIcon } from './AutomationTimerIcon';
+import { AutomationSessionButton } from './AutomationSessionButton';
 import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -85,18 +84,13 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProjectsStore';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
-import {
-  useSessionBoundSchedules,
-  scheduleFocusPath,
-} from '@/features/scheduler/lib/scheduleSessionBinding';
-import {
-  findLatestSidebarIndexRunForSession,
-  loadScheduleSidebarIndexRuns,
-} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
   isSplitGroupDragSource,
@@ -161,7 +155,7 @@ export const SessionCard = memo(function SessionCard({
   hideBottomDivider = false,
 }: SessionCardProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const cindyMakePreparing = useCindyMakePreparing(session);
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
@@ -171,17 +165,19 @@ export const SessionCard = memo(function SessionCard({
   // 本地 attention 链路，与 SessionItem 完全一致。
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
-  const remoteActivity = useRemoteSessionActivity(session.id);
+  const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
-    liveActivity: remoteActivity ?? islandActivity,
+    liveActivity: session.deviceLinkDeviceId ? remoteActivity : islandActivity,
     attentionKind,
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
-    isRunning,
+    isRunning: session.deviceLinkDeviceId
+      ? remoteActivity?.phase === 'running'
+      : isRunning || cindyMakePreparing != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
@@ -202,7 +198,14 @@ export const SessionCard = memo(function SessionCard({
   const boundSchedules = useSessionBoundSchedules(session.id);
   const showScheduleBindingBadge = boundSchedules.length > 0;
   const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated;
-  const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+  const displayTitle = getSessionDisplayTitle(
+    session,
+    t(
+      session.source === CINDY_MAKE_SESSION_SOURCE
+        ? 'cindyMake.code.taskName'
+        : 'ccAgent.common.unnamedSession',
+    ),
+  );
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
@@ -239,8 +242,11 @@ export const SessionCard = memo(function SessionCard({
     islandActivity?.phase === 'running' && islandActivity.compactDetail
       ? islandActivity.compactDetail
       : null;
-  const listPreview = awaitingText ?? runningDetail ?? bodyPreview;
-  const cardPreview = awaitingText ?? bodyPreview;
+  const preparationText = cindyMakePreparing
+    ? t('cindyMake.code.phases.' + cindyMakePreparing)
+    : null;
+  const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview;
+  const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
   const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
   const cardPreviewLineClamp = usesPinnedCardSummary
     ? 3
@@ -493,20 +499,6 @@ export const SessionCard = memo(function SessionCard({
     setShareExportOpen(true);
   }, []);
 
-  const handleAutomationIconClick = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      try {
-        const runs = await loadScheduleSidebarIndexRuns();
-        const hit = findLatestSidebarIndexRunForSession(runs, session.id);
-        navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
-      } catch {
-        navigate('/cc-agent/scheduled');
-      }
-    },
-    [session.id, navigate],
-  );
-
   // 远程会话把归属设备冻进 `?device=`:发送时的引用解析不再依赖被控端此刻在线。
   const handleCopyDeepLinkSelect = useCallback(async () => {
     const link = buildSessionDeepLink(session.id, { deviceId: session.deviceLinkDeviceId });
@@ -593,18 +585,12 @@ export const SessionCard = memo(function SessionCard({
         activeForeground={isActive}
       />
     ) : showAutomationTimer ? (
-      <Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}>
-        <button
-          type="button"
-          className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
-          aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-          onClick={(e) => void handleAutomationIconClick(e)}
-          onKeyDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
-        </button>
-      </Tip>
+      <AutomationSessionButton
+        sessionId={session.id}
+        size={iconSize}
+        activeForeground={isActive}
+        centered
+      />
     ) : null;
 
   // list 变体标题前缀:状态图标 + 自动化徽章 + 间隔(保持 main 既有行为不变)。

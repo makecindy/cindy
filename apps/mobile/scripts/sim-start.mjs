@@ -26,7 +26,8 @@
 //   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readSimEnvironment } from './lib/sim-environment.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
@@ -57,7 +58,6 @@ import {
   clearMetroOwner,
   gitSourceIdentity,
   isMetroPid,
-  metroEnvironmentFingerprint,
   portInUse,
   probeMetroOwnership,
   terminateMetro,
@@ -85,13 +85,7 @@ const buildEnv = withLocalMobileRegionConfig(
 const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: buildEnv });
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
-const envFingerprint = metroEnvironmentFingerprint({
-  env: buildEnv,
-  files: {
-    '.env': readFileSync(envResult.envPath, 'utf8'),
-    'scripts/self-host-regions.json': readFileSync(localConfigResult.configPath, 'utf8'),
-  },
-});
+const { loginScenario, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
 
 function git(args) {
   try {
@@ -131,8 +125,8 @@ if (portArgs.port === DEFAULT_PORT) {
       envChanged,
       currentSource: sourceIdentity,
       runningSource,
-      currentRegion: process.platform === 'win32' ? region : undefined,
-      runningRegion: process.platform === 'win32' ? ownership?.region : undefined,
+      currentRegion: region,
+      runningRegion: ownership?.region,
       currentEnvFingerprint: envFingerprint,
       runningEnvFingerprint: ownership?.envFingerprint,
       listener,
@@ -168,6 +162,10 @@ if (portArgs.port === DEFAULT_PORT) {
       console.log(`✓ 已接管其他 Cindy worktree 的 Metro(pid=${pid}, cwd=${cwd})。`);
     }
   }
+} else if (await portInUse(portArgs.port)) {
+  // Do not let a failed second launcher overwrite (then clear) the live owner.
+  console.error(`✗ Metro port ${portArgs.port} is already in use; stop its owner or choose another --port.`);
+  process.exit(1);
 }
 await ensureAndroidTarget();
 // 统一规范化成 Expo 明确支持的 `--port <n>`，避免 `--port=<n>` 被本工具识别、
@@ -199,16 +197,17 @@ const child = spawn(invocation.command, invocation.args, {
   windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 });
 
-if (portArgs.port === DEFAULT_PORT && Number.isInteger(child.pid)) {
-  writeMetroOwner(DEFAULT_PORT, {
+if (Number.isInteger(child.pid)) {
+  writeMetroOwner(portArgs.port, {
     pid: child.pid,
     launcherPid: child.pid,
     source: sourceIdentity,
     region,
+    loginScenario,
     envFingerprint,
     worktreeRoot,
   });
-  child.once('exit', () => clearMetroOwner(DEFAULT_PORT, child.pid));
+  child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));
 }
 
 child.once('error', (error) => {

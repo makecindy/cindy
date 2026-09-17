@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d1b8875e-0aac-4d4b-8c03-767ffbb40d1e",
+  "id": "5544cfca-1047-4d10-bc84-38a31ab3381d",
   "prevId": "2b3f067d-99f9-4f3c-b8cc-c4fed9500a71",
   "tables": {
     "account_usage_snapshots": {
@@ -468,34 +468,7 @@
           "isUnique": false
         }
       },
-      "foreignKeys": {
-        "bot_direct_message_threads_bot_a_id_bot_profiles_id_fk": {
-          "name": "bot_direct_message_threads_bot_a_id_bot_profiles_id_fk",
-          "tableFrom": "bot_direct_message_threads",
-          "tableTo": "bot_profiles",
-          "columnsFrom": [
-            "bot_a_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "bot_direct_message_threads_bot_b_id_bot_profiles_id_fk": {
-          "name": "bot_direct_message_threads_bot_b_id_bot_profiles_id_fk",
-          "tableFrom": "bot_direct_message_threads",
-          "tableTo": "bot_profiles",
-          "columnsFrom": [
-            "bot_b_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -560,6 +533,20 @@
           "autoincrement": false,
           "default": "'pending'"
         },
+        "sender_name": {
+          "name": "sender_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "recipient_name": {
+          "name": "recipient_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "content": {
           "name": "content",
           "type": "text",
@@ -600,32 +587,6 @@
           "tableTo": "bot_direct_message_threads",
           "columnsFrom": [
             "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "bot_direct_messages_sender_bot_id_bot_profiles_id_fk": {
-          "name": "bot_direct_messages_sender_bot_id_bot_profiles_id_fk",
-          "tableFrom": "bot_direct_messages",
-          "tableTo": "bot_profiles",
-          "columnsFrom": [
-            "sender_bot_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "bot_direct_messages_recipient_bot_id_bot_profiles_id_fk": {
-          "name": "bot_direct_messages_recipient_bot_id_bot_profiles_id_fk",
-          "tableFrom": "bot_direct_messages",
-          "tableTo": "bot_profiles",
-          "columnsFrom": [
-            "recipient_bot_id"
           ],
           "columnsTo": [
             "id"
@@ -4269,13 +4230,6 @@
         "provider_id": {
           "name": "provider_id",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "context_window_budget": {
-          "name": "context_window_budget",
-          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

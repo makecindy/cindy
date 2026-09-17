@@ -10,7 +10,7 @@ import { createLogger } from '../logger.js';
 import { WorkdirProbeHostClient } from './WorkdirProbeHostClient.js';
 import type { WorkdirProbeRequest } from './protocol.js';
 
-const log = createLogger('workdir-probe-host');
+const log = createLogger('workdir-diagnostics');
 
 function forkProbeHost(): ReturnType<typeof utilityProcess.fork> {
   const env: NodeJS.ProcessEnv = {};

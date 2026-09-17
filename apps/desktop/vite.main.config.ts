@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import { desktopClientBuildEnv } from '../../scripts/shared/client-endpoint-build-env.mjs';
+import { cindyRuntimeSourcePlugin } from './cindy-runtime-source';
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 // 登录 scenario fixtures 的生产空 stub(implementation-plan Step 0 WHAT4 生产排除
@@ -33,6 +34,7 @@ export default defineConfig(({ mode }) => {
       ? (process.env[key] ?? '')
       : (allEnv[key] ?? '');
   return {
+    plugins: [cindyRuntimeSourcePlugin(path.resolve(configDir, '../..'), mode === 'development')],
     resolve: {
       // 仅 fixtures 生产排除条件(v6.17 允许范围):production 构建把
       // '@cindy/auth-client/fixtures' 整模块替换为空 stub,dev 构建保留真模块。

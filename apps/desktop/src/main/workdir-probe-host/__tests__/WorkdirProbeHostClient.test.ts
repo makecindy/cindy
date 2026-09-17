@@ -30,16 +30,17 @@ class FakeChild extends EventEmitter implements WorkdirProbeChildLike {
 
 function createHarness(options: { maxWorkers?: number; maxQueued?: number } = {}) {
   const children: FakeChild[] = [];
+  const log = { info: vi.fn(), warn: vi.fn() };
   const client = new WorkdirProbeHostClient({
     fork: () => {
       const child = new FakeChild();
       children.push(child);
       return child;
     },
-    log: { warn: vi.fn() },
+    log,
     ...options,
   });
-  return { client, children };
+  return { client, children, log };
 }
 
 afterEach(() => {
@@ -47,6 +48,82 @@ afterEach(() => {
 });
 
 describe('WorkdirProbeHostClient', () => {
+  it('identifies queue timeout before any request reaches the worker', async () => {
+    vi.useFakeTimers();
+    const { client, children, log } = createHarness({ maxWorkers: 1 });
+    const blocked = client.probe('/private/blocker', '/private/blocker', 1000).catch((error) => error);
+    const queued = client.probe('/private/queued', '/private/queued', 50).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await queued).toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT' });
+    expect(children[0].posted).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalledWith('workdir probe failed', expect.objectContaining({
+      reason: 'queue-timeout', phase: 'before-dispatch', requestId: 2,
+      timeoutMs: 50, elapsedMs: 50, queueWaitMs: 50, responseWaitMs: null,
+      activeWorkers: 1, terminatingWorkers: 0,
+    }));
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain('private');
+    client.dispose();
+    await blocked;
+  });
+
+  it('reports queue and response wait separately and confirms worker exit', async () => {
+    vi.useFakeTimers();
+    const { client, children, log } = createHarness({ maxWorkers: 1 });
+    const blocked = client.probe('/private/blocker', '/private/blocker', 100).catch((error) => error);
+    const queued = client.probe('/private/queued', '/private/queued', 150).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(100);
+    children[0].emit('exit', 9);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await queued).toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT' });
+    expect(log.warn).toHaveBeenCalledWith('workdir probe failed', expect.objectContaining({
+      reason: 'response-timeout', phase: 'waiting-result', requestId: 2, workerId: 2,
+      elapsedMs: 150, queueWaitMs: 100, responseWaitMs: 50,
+    }));
+    expect(log.info).toHaveBeenCalledWith('workdir probe worker exited', expect.objectContaining({
+      workerId: 1, requestId: 1, exitCode: 9, terminationRequested: true,
+    }));
+    client.dispose();
+    await blocked;
+  });
+
+  it.each(['host-exited', 'host-error', 'dispatch-failed'] as const)('reports a process failure without filesystem or error contents: %s', async (reason) => {
+    const { client, children, log } = createHarness({ maxWorkers: 1 });
+    const first = client.probe('/private/first', '/private/first', 1000);
+    children[0].respond();
+    await first;
+    if (reason === 'dispatch-failed') vi.spyOn(children[0], 'postMessage').mockImplementation(() => { throw new Error('private credentials'); });
+    const failure = client.probe('/private/second', '/private/second', 1000).catch((error) => error);
+    if (reason === 'host-exited') children[0].emit('exit', 1);
+    if (reason === 'host-error') children[0].emit('error', 'private-type', 'private-location', 'private-report');
+    expect(await failure).toMatchObject({ code: 'WORKDIR_PROBE_UNAVAILABLE' });
+    expect(log.warn).toHaveBeenCalledWith('workdir probe failed', expect.objectContaining({ reason, requestId: 2 }));
+    expect(JSON.stringify([...log.warn.mock.calls, ...log.info.mock.calls])).not.toContain('private');
+    client.dispose();
+  });
+
+  it('reports a spawn failure without logging its raw exception', async () => {
+    const log = { warn: vi.fn() };
+    const client = new WorkdirProbeHostClient({
+      fork: () => { throw new Error('private executable path'); }, log,
+    });
+    await expect(client.probe('/private/dir', '/private/dir', 100)).rejects.toMatchObject({ code: 'WORKDIR_PROBE_UNAVAILABLE' });
+    expect(log.warn).toHaveBeenCalledWith('workdir probe failed', expect.objectContaining({ reason: 'host-start-failed', phase: 'before-dispatch' }));
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain('private');
+    client.dispose();
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EIO', 'PRIVATE_CREDENTIAL'])('distinguishes a returned filesystem error from probe failures: %s', async (code) => {
+    const { client, children, log } = createHarness();
+    const result = client.probe('/private/dir', '/private/dir', 1000);
+    children[0].emit('message', { kind: 'result', id: 1, result: { ok: false, code } });
+    await expect(result).resolves.toEqual({ ok: false, code });
+    expect(log.warn).toHaveBeenCalledWith('workdir probe filesystem result', expect.objectContaining({
+      reason: 'filesystem-error', code: code === 'PRIVATE_CREDENTIAL' ? 'UNKNOWN' : code, requestId: 1,
+    }));
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain('PRIVATE_CREDENTIAL');
+    client.dispose();
+  });
+
   it.each(['mkdir', 'realpath', 'similar'] as const)('isolates %s from stat and ignores its late timeout response', async (kind) => {
     vi.useFakeTimers();
     const { client, children } = createHarness({ maxWorkers: 1 });

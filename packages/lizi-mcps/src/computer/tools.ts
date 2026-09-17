@@ -24,7 +24,65 @@ const ELEMENT_TOKEN_ARG = z.string().min(1).optional().describe(
   'Opaque element_token from the latest get_window_state. Prefer this over element_index; never invent or reuse it after another observation.',
 );
 
-export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
+const POSTCONDITION = z
+  .array(
+    z
+      .object({
+        element: z
+          .object({
+            selector: z
+              .object({
+                role: z.string().min(1).optional(),
+                label_contains: z.string().min(1).optional(),
+              })
+              .strict(),
+            exists: z.literal(true).optional(),
+            enabled: z.boolean().optional(),
+            selected: z.boolean().optional(),
+            value_equals: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        window: z
+          .object({
+            exists: z.boolean().optional(),
+            bounds: z
+              .object({
+                x: z.number(),
+                y: z.number(),
+                width: z.number(),
+                height: z.number(),
+                tolerance_px: z.number().min(0).max(100).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .refine(
+        (value) => Boolean(value.element) !== Boolean(value.window),
+        "Specify one element or window predicate",
+      ),
+  )
+  .min(1)
+  .max(8);
+
+/** These input actions may be followed by one read-only postcondition check. */
+export const POSTCHECK_ACTION_TOOLS = new Set<ComputerMcpToolName>([
+  "click",
+  "double_click",
+  "right_click",
+  "drag",
+  "type_text",
+  "set_value",
+  "press_key",
+  "hotkey",
+  "scroll",
+]);
+
+const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'status',
     description: 'Check whether the local computer-use driver is installed and callable.',
@@ -50,7 +108,7 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
   {
     name: 'launch_app',
     description:
-      'Launch or locate an application without stealing focus. Prefer this over shell open/Start-Process for GUI apps. If an already-running app such as Simulator is not discoverable here, use list_windows with {"process_name":"Simulator"}.',
+      'Launch or locate an application without stealing focus. Prefer bundle_id when known. On an explicit name-resolution failure, Cindy tries a unique exact-name bundle from list_apps once; for a plain name it can also locate a unique running process through list_windows (e.g. {"process_name":"Simulator"}). Located is not newly launched; URL, launch-option and new-instance requests are never replaced by locating.',
     inputShape: {
       name: z.string().optional(),
       bundle_id: z.string().optional(),
@@ -104,25 +162,13 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative(),
-      expect: z.array(z.object({
-        element: z.object({
-          selector: z.object({ role: z.string().min(1).optional(), label_contains: z.string().min(1).optional() }).strict(),
-          exists: z.literal(true).optional(),
-          enabled: z.boolean().optional(),
-          selected: z.boolean().optional(),
-          value_equals: z.string().optional(),
-        }).strict().optional(),
-        window: z.object({
-          exists: z.boolean().optional(),
-          bounds: z.object({
-            x: z.number(), y: z.number(), width: z.number(), height: z.number(),
-            tolerance_px: z.number().min(0).max(100).optional(),
-          }).strict().optional(),
-        }).strict().optional(),
-      }).strict().refine((value) => Boolean(value.element) !== Boolean(value.window), 'Specify one element or window predicate')).min(1).max(8),
+      expect: POSTCONDITION,
       stable_samples: z.number().int().min(1).max(5).optional(),
       timeout_ms: z.number().int().min(0).max(10000).optional(),
-      include_screenshot: z.literal(false).optional().describe('Use get_window_state for a host-managed screenshot.'),
+      include_screenshot: z
+        .literal(false)
+        .optional()
+        .describe("Use get_window_state for a host-managed screenshot."),
     },
   },
   {
@@ -180,8 +226,9 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
     },
   },
   {
-    name: 'drag',
-    description: 'Drag from one window-local coordinate to another. Use after get_window_state or zoom.',
+    name: "drag",
+    description:
+      "Drag from one window-local coordinate to another. Use after get_window_state or zoom. On macOS, omitted delivery_mode defaults to foreground and may bring the target forward; explicit background is never escalated or retried.",
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative().optional(),
@@ -342,6 +389,35 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
     },
   },
 ];
+
+/** Name the whole computer-use objective once; the host owns stable routing. */
+export const COMPUTER_TOOLS: readonly ComputerToolDef[] =
+  COMPUTER_TOOL_DEFINITIONS.map((tool) => ({
+    ...tool,
+    inputShape: !["status", "check_permissions", "replay_trajectory"].includes(
+      tool.name,
+    )
+      ? {
+          ...tool.inputShape,
+          ...(POSTCHECK_ACTION_TOOLS.has(tool.name)
+            ? {
+                postcondition: POSTCONDITION.optional().describe(
+                  "Optional expected final state, using verify_state predicates. Cindy checks it once after delivery (requires an exact window). Without it, unknown delivery gets one fresh observation but is never declared successful. Actions are never replayed automatically.",
+                ),
+              }
+            : {}),
+          session_goal: z
+            .string()
+            .trim()
+            .min(1)
+            .max(80)
+            .optional()
+            .describe(
+              'On your FIRST computer-use call, provide a short English name for the overall goal of this run (e.g. "Submit expense report" or "Configure notifications"), not the current click or typing step. Use English because the native cursor font does not support CJK text. The host sets the driver session name once and keeps it for the run; omit this field on later calls. Never include credentials or internal IDs.',
+            ),
+        }
+      : tool.inputShape,
+  }));
 
 export const COMPUTER_TOOL_NAMES = COMPUTER_TOOLS.map((tool) => tool.name) as [
   ComputerMcpToolName,

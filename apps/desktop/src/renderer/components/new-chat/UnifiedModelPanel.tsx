@@ -1,3 +1,4 @@
+import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
 import { matchesModelName } from '@/lib/modelDisplayNames';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
@@ -136,6 +137,7 @@ export interface UnifiedModelPanelProps {
    * 始终使用目录为该模型给出的官方推荐引擎与默认配置。
    */
   selectionPolicy?: 'personalized' | 'official';
+  deviceId?: string;
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
    *   - 默认展示全部，已有任务把当前模型和同引擎模型提升到「推荐」;
@@ -283,6 +285,7 @@ export function UnifiedModelPanel({
   onPaymentRequired,
   configurationEnabled = true,
   selectionPolicy = 'personalized',
+  deviceId,
   isRouteDisabled,
   sessionEngineFilter,
   followSession,
@@ -297,7 +300,8 @@ export function UnifiedModelPanel({
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
   const storedFavorites = useModelFavorites();
-  const favorites = selectionPolicy === 'official' ? NO_FAVORITES : storedFavorites;
+  const remoteFavorites = useRemoteModelFavorites(deviceId);
+  const favorites = selectionPolicy === 'official' ? NO_FAVORITES : deviceId ? remoteFavorites.items : storedFavorites;
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。
   const enginePrefsVersion = useModelEnginePrefsVersion();
@@ -765,6 +769,7 @@ export function UnifiedModelPanel({
     pending: actionPending,
     runExternal,
   } = useUnifiedRowActions({
+    favoriteStore: deviceId ? remoteFavorites.store : undefined,
     interactionDisabled,
     isLiveRow,
     // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值,以及收藏 live 判定
@@ -1006,7 +1011,7 @@ export function UnifiedModelPanel({
                 aria-selected={followSession.active}
                 data-follow-session-row
                 className={cn(
-                  'flex w-full items-center justify-between rounded-[10px] px-2.5 py-2 transition-colors',
+                  'flex w-full items-center justify-between rounded-lg px-3 py-2 transition-colors',
                   'hover:bg-[var(--model-item-hover)]',
                   followSession.active && 'bg-[var(--model-item-hover)]',
                   interactionDisabled && 'cursor-not-allowed opacity-50',
@@ -1044,6 +1049,7 @@ export function UnifiedModelPanel({
               </span>
             </div>
           )}
+          {deviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t('newChat.modelSelector.unified.favoritesSyncFailed')}</div> : null}
           {!hasRows ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {/* ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;★ 常驻后必经)。 */}

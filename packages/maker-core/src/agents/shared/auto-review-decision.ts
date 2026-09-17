@@ -230,13 +230,15 @@ export function annotatePermissionRequestForUnavailableReview<
   };
 }
 
-/** 交给 host 侧轻量 reviewer 的最小上下文；不含历史、工具结果、Skill 或 Memory。 */
+/** 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。 */
 export interface AutoReviewRequest {
   sessionId?: string;
   agentKind: AgentKind;
   providerId?: string | null;
   model: string;
-  userIntent: string;
+  userIntent: AutoReviewUserIntent;
+  /** Actual blocked calls preceding the latest user input; reference evidence, never consent. */
+  precedingBlockedActions?: readonly ReviewableAction[];
   /** Host-verified requester authority, separate from model-visible/quoted text. */
   authorizationContext?: {
     requesterAuthority: 'owner' | 'guest' | 'unknown';
@@ -503,6 +505,14 @@ export async function resolveAutoReviewDecision(
   };
 }
 
+/** Structured only by the Host. User text is never parsed as an authorization envelope. */
+export type AutoReviewUserIntent = string | {
+  readonly earlierUserMessages: readonly string[];
+  readonly currentUserMessage: string;
+  /** Omitted history may contain standing restrictions; never silently treat it as unrestricted. */
+  readonly historyOmitted?: true;
+};
+
 const MAX_USER_INTENT_CHARS = 2_000;
 const OMITTED_USER_INTENT = 'User message omitted because it exceeds the review budget; it cannot establish authorization.';
 
@@ -526,31 +536,55 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
   return compactCurrentUserIntent(userIntentText(content));
 }
 
-/** Preserve bounded user authorization across follow-ups; later restrictions take precedence. */
-export function appendAutoReviewUserIntent(previous: string, content: UserMessage['content'], sendOpts?: SendOptions): string {
-  // A restored snapshot already includes the current input and its preceding restrictions.
-  // Re-appending live adapter state would duplicate history or resurrect an older grant.
+/** Enforce the budget without interpreting strings as Host-generated structure. */
+export function normalizeAutoReviewUserIntent(intent: AutoReviewUserIntent): AutoReviewUserIntent {
+  if (typeof intent === 'string') return compactCurrentUserIntent(intent);
+  const currentUserMessage = compactCurrentUserIntent(intent.currentUserMessage);
+  const candidate = { earlierUserMessages: [...intent.earlierUserMessages], currentUserMessage,
+    ...(intent.historyOmitted ? { historyOmitted: true as const } : {}) };
+  if (currentUserMessage !== OMITTED_USER_INTENT && JSON.stringify(candidate).length <= MAX_USER_INTENT_CHARS) return candidate;
+  // Drop all earlier grants together, flag the missing restrictions, and never sample the latest text.
+  const omitted = { earlierUserMessages: [], currentUserMessage, historyOmitted: true as const };
+  return JSON.stringify(omitted).length <= MAX_USER_INTENT_CHARS ? omitted
+    : { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+}
+
+/** Preserve chronological user messages; scope is assessed, never assumed permanent. */
+export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
+  // The authenticated Host snapshot already includes this input; never append it twice.
   if (sendOpts?.[AUTO_REVIEW_USER_INTENT] !== undefined) {
-    return extractAutoReviewUserIntent(sendOpts[AUTO_REVIEW_USER_INTENT]);
+    return normalizeAutoReviewUserIntent(sendOpts[AUTO_REVIEW_USER_INTENT]);
   }
-  // Only Main's Symbol carries authenticated channel text. Decorated replies and
-  // group history remain model context, never evidence of the requester's consent.
   const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? content;
+  // Only Main's Symbol carries authenticated channel text, never decorated assistant replies.
   const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
-  // A new resource can change what an earlier "send this" refers to. Keep only
-  // the current user's text; generated image descriptions cannot renew consent.
+  // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
   const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
-  if (!previous.trim() || !latest || hasAttachments) return compactCurrentUserIntent(latest);
-  const prefix = 'Earlier user messages (still apply unless explicitly changed below):\n';
-  const separator = '\n\nLatest user message:\n';
-  const priorBudget = MAX_USER_INTENT_CHARS - prefix.length - separator.length - latest.length;
-  // History is atomic: keeping an early approval while sampling away an
-  // intervening revocation would manufacture authorization. On overflow, drop
-  // the entire prior context, including its approvals, rather than sampling it.
-  if (previous.trim().length > priorBudget) {
-    return compactCurrentUserIntent(latest);
-  }
-  return prefix + previous.trim() + separator + latest;
+  if (!latest || hasAttachments || previous === '') return compactCurrentUserIntent(latest);
+  const earlierUserMessages = typeof previous === 'string'
+    ? [previous] : [...previous.earlierUserMessages, previous.currentUserMessage];
+  return normalizeAutoReviewUserIntent({ earlierUserMessages, currentUserMessage: latest,
+    ...(typeof previous !== 'string' && previous.historyOmitted ? { historyOmitted: true as const } : {}) });
+}
+
+/** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */
+export function createAutoReviewActionContext() {
+  let blocked: ReviewableAction[] = [];
+  let preceding: readonly ReviewableAction[] = [];
+  return {
+    advance(sameAuthority: boolean): void {
+      preceding = sameAuthority ? blocked : [];
+      blocked = [];
+    },
+    record(action: ReviewableAction, decision: AutoReviewDecision): void {
+      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return;
+      const snapshot = JSON.parse(JSON.stringify(action)) as ReviewableAction;
+      const key = JSON.stringify(snapshot);
+      blocked = [...blocked.filter((item) => JSON.stringify(item) !== key), snapshot].slice(-3);
+      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) blocked.shift();
+    },
+    get precedingBlockedActions(): readonly ReviewableAction[] { return preceding; },
+  };
 }
 
 /**
@@ -559,11 +593,11 @@ export function appendAutoReviewUserIntent(previous: string, content: UserMessag
  * lightweight reviewer beyond its existing intent budget.
  */
 export function composeAutoReviewIntentWithApprovedPlan(
-  currentUserIntent: string,
+  currentUserIntent: AutoReviewUserIntent,
   approvedPlan: string,
-): string {
+): AutoReviewUserIntent {
   const plan = approvedPlan.trim();
-  if (!plan) return compactCurrentUserIntent(currentUserIntent);
+  if (!plan) return normalizeAutoReviewUserIntent(currentUserIntent);
   return appendAutoReviewUserIntent(currentUserIntent, `Approved plan:\n${plan}`);
 }
 
@@ -573,9 +607,9 @@ export function composeAutoReviewIntentWithApprovedPlan(
  * 有界 intent,不扩大轻量 reviewer 的输入预算。
  */
 export function composeAutoReviewIntentWithClarification(
-  currentUserIntent: string,
+  currentUserIntent: AutoReviewUserIntent,
   clarifications: readonly { question?: string; answer?: string }[],
-): string {
+): AutoReviewUserIntent {
   const lines = clarifications
     .map(({ question, answer }) => {
       const q = (question ?? '').trim();
@@ -584,6 +618,6 @@ export function composeAutoReviewIntentWithClarification(
       return q ? `- ${q} → ${a}` : `- ${a}`;
     })
     .filter(Boolean);
-  if (lines.length === 0) return compactCurrentUserIntent(currentUserIntent);
+  if (lines.length === 0) return normalizeAutoReviewUserIntent(currentUserIntent);
   return appendAutoReviewUserIntent(currentUserIntent, `Clarifications:\n${lines.join('\n')}`);
 }

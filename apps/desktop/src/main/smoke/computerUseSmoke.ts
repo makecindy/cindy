@@ -13,8 +13,11 @@ import { createLogger } from '../logger.js';
 
 const logger = createLogger('computer-use-smoke');
 let started = false;
+const cursorGoalDemo = process.env.CINDY_CUA_SMOKE === 'cursor-goal';
 const requested =
-  !app.isPackaged && process.env.XDT_ISOLATED === '1' && process.env.CINDY_CUA_SMOKE === '1';
+  !app.isPackaged &&
+  process.env.XDT_ISOLATED === '1' &&
+  (process.env.CINDY_CUA_SMOKE === '1' || cursorGoalDemo);
 
 /** Explicit, isolated, real-driver smoke. It operates only on its own disposable window. */
 export async function runComputerUseSmokeIfRequested(): Promise<void> {
@@ -100,7 +103,46 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
       if (name === 'verify_state') report.verification = payload.data;
       return payload;
     };
-    const catalog = await call('list_windows', { pid: process.pid });
+    if (cursorGoalDemo) {
+      // Exercise the real MCP -> host -> native driver path, without clicks or typing.
+      // Closing the disposable fixture ends the demo; otherwise it lasts two minutes.
+      let previousSession: unknown;
+      for (let step = 0; step < 12 && !window.isDestroyed(); step += 1) {
+        const bounds = window.getContentBounds();
+        const moved = await call('move_cursor', {
+          x: bounds.x + 160 + (step % 3) * 140,
+          y: bounds.y + 220,
+          ...(step === 0 ? { session_goal: 'Test cursor goal' } : {}),
+        });
+        check(moved.ok, `cursor demo move ${step + 1} succeeded`);
+        const state = await call('get_agent_cursor_state', {});
+        check(state.ok, `cursor demo state ${step + 1} available`);
+        report.cursorState = state.data;
+        if (step === 0) {
+          previousSession = state.data?.session;
+          check(
+            typeof previousSession === 'string' && previousSession.startsWith('Test cursor goal'),
+            'native cursor session starts with the run goal',
+          );
+        } else check(state.data?.session === previousSession, 'cursor session remains stable');
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            window?.removeListener('closed', done);
+            resolve();
+          };
+          const timer = setTimeout(done, 10_000);
+          window!.once('closed', done);
+          if (window!.isDestroyed()) done();
+        });
+      }
+      report.ok = true;
+      return;
+    }
+    const catalog = await call('list_windows', {
+      pid: process.pid,
+      session_goal: 'Test computer controls',
+    });
     const target = catalog.data?.windows?.find(
       (item: { title?: string }) => item.title === 'Cindy Computer Use Smoke',
     );
@@ -144,22 +186,37 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     const input = elements?.find(
       (item) => item.role === 'AXTextArea' && item.label === 'Smoke message',
     );
-    const button = elements?.find(
+    let button = elements?.find(
       (item) => item.role === 'AXButton' && item.label === 'Increment smoke count',
     );
     check(input?.element_token && button?.element_token, 'opaque element tokens available');
-    const value = 'Cindy smoke 中文 123';
+    const value = 'Cindy smoke 中文🙂\n第二行 123\n'.repeat(30);
     const set = await call('set_value', {
       ...targetArgs,
       element_token: input!.element_token,
       value,
     });
     check(set.ok, 'set_value dispatched successfully');
+    if (set.outcome?.status === 'unknown') {
+      check(
+        set.postcheck?.tool === 'get_window_state',
+        'unknown input receives one state postcheck',
+      );
+      check(set.postcheck?.reusable_snapshot === false, 'automatic observation is evidence only');
+    }
     check(
       (await window.webContents.executeJavaScript('document.getElementById("message").value')) ===
         value,
       'independent DOM confirms exact input',
     );
+    // An unknown input now triggers a bounded observation and invalidates the
+    // previous credentials. Obtain an explicit fresh snapshot before clicking.
+    state = await call('get_window_state', { ...targetArgs, include_screenshot: false });
+    button = state.data?.elements?.find(
+      (item: { role?: string; label?: string }) =>
+        item.role === 'AXButton' && item.label === 'Increment smoke count',
+    );
+    check(state.ok && button?.element_token, 'fresh button token obtained after input');
     const click = await call('click', {
       ...targetArgs,
       element_token: button!.element_token,
@@ -231,6 +288,105 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
       )) === '1',
       'cancelled action leaves fixture unchanged',
     );
+    await window.webContents.executeJavaScript('document.getElementById("message").value = ""');
+    state = await call('get_window_state', { ...targetArgs, include_screenshot: false });
+    const freshInput = state.data?.elements?.find(
+      (item: { role?: string; label?: string }) =>
+        item.role === 'AXTextArea' && item.label === 'Smoke message',
+    );
+    check(freshInput?.element_token, 'fresh input token available for native typing');
+    const typedValue = '原生输入测试🙂\n第二行内容';
+    const typed = await call('type_text', {
+      ...targetArgs,
+      element_token: freshInput.element_token,
+      text: typedValue,
+      delivery_mode: 'foreground',
+      postcondition: [
+        {
+          element: {
+            selector: { role: 'AXTextArea', label_contains: 'Smoke message' },
+            value_equals: typedValue,
+          },
+        },
+      ],
+    });
+    const actualTypedValue = await window.webContents.executeJavaScript(
+      'document.getElementById("message").value',
+    );
+    const nativeTypingPassed =
+      typed.postcheck?.tool === 'verify_state' &&
+      typed.outcome?.status === 'unknown' &&
+      actualTypedValue === typedValue;
+    report.nativeTyping = {
+      errorCode: typed.errorCode,
+      message: typed.data?.message,
+      expected: typedValue,
+      actual: actualTypedValue,
+      passed: nativeTypingPassed,
+      postcheckTool: typed.postcheck?.tool,
+      outcomeUnknown: typed.data?.outcome_unknown,
+    };
+    // Retain the failed input verdict while completing independent recovery cases.
+    if (nativeTypingPassed)
+      checks.push('bounded postcheck and independent DOM confirm multilingual native typing');
+    let dragPassed = true;
+    if (process.platform === 'darwin') {
+      // Fixture setup only; the selection itself must be produced by real drag.
+      const rect = await window.webContents.executeJavaScript(
+        '(()=>{const e=document.getElementById("message");e.value="abcdefghijklmno";e.setSelectionRange(0,0);const r=e.getBoundingClientRect();return {x:r.x,y:r.y}})()',
+      );
+      await call('get_window_state', { ...targetArgs, include_screenshot: false });
+      const bounds = window.getBounds();
+      const content = window.getContentBounds();
+      const fromX = content.x - bounds.x + rect.x + 4;
+      const fromY = content.y - bounds.y + rect.y + 10;
+      const drag = await call('drag', {
+        ...targetArgs,
+        from_x: fromX,
+        from_y: fromY,
+        to_x: fromX + 70,
+        to_y: fromY,
+        duration_ms: 400,
+      });
+      check(
+        drag.ok && drag.data?.effect !== 'refused',
+        'macOS default drag is not refused as background input',
+      );
+      dragPassed = await window.webContents.executeJavaScript(
+        '(()=>{const e=document.getElementById("message");return e.selectionEnd>e.selectionStart})()',
+      );
+      report.drag = { passed: dragPassed, effect: drag.data?.effect, outcome: drag.outcome };
+      if (dragPassed) checks.push('independent DOM confirms drag selection');
+    }
+    // Exercise safe, real driver failure recovery without launching an unrelated app.
+    const missingApp = await call('launch_app', { name: `Cindy Smoke Missing ${sessionId}` });
+    check(
+      !missingApp.ok && missingApp.errorCode === 'APP_NOT_INSTALLED',
+      'original app resolution error preserved',
+    );
+    check(
+      missingApp.recovery?.target_selected === false,
+      'unresolved app discovery never selects another app',
+    );
+    check(
+      missingApp.recovery?.installed_discovery?.tool === 'list_apps',
+      'failed app name receives installed-app discovery',
+    );
+    window.destroy();
+    const missingWindow = await call('get_window_state', {
+      ...targetArgs,
+      include_screenshot: false,
+    });
+    check(
+      !missingWindow.ok && missingWindow.recovery?.target_selected === false,
+      'closed window is not silently retargeted',
+    );
+    check(
+      missingWindow.recovery?.discovery?.tool === 'list_windows',
+      'closed window receives fresh discovery',
+    );
+    check(nativeTypingPassed, 'native typing must pass before accepting the smoke');
+    check(dragPassed, 'drag selection must pass before accepting the smoke');
     report.ok = true;
     delete report.lastResult;
     delete report.observation;

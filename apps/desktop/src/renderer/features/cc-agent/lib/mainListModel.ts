@@ -174,7 +174,7 @@ export function holdViewedPriorityRank(
 }
 
 export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriorityContext): number {
-  if (sessionNaturalPriorityRank(session, ctx) !== LIVE_TASK_PRIORITY.rest) {
+  if (sessionPriorityRank(session, ctx) !== LIVE_TASK_PRIORITY.rest) {
     return sessionActivityMs(session);
   }
   const viewedAt = ctx.recentlyViewedAtMs?.get(session.id) ?? 0;

@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { MessageStream } from '@/components/chat/MessageStream';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { startMakeDoctorInStream } from '@/lib/cindyMakeDoctorStream';
+import { CindyMakePreflightDialog } from '@/components/cindy-make/CindyMakePreflightDialog';
 import type { TabKindBodyProps } from '../../types';
 import type { CindyMakeState } from './index';
 
@@ -19,6 +19,7 @@ function useCindyMakeChat(sessionId: string) {
 export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState('');
+  const [request, setRequest] = useState<string | null>(null);
   const chat = useCindyMakeChat(ctx.sessionId);
 
   useEffect(() => {
@@ -28,7 +29,7 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
   const send = useCallback(() => {
     const request = draft.trim();
     if (!request || !ctx.workdir || chat.isStreaming) return;
-    startMakeDoctorInStream(ctx.sessionId, { command: 'cindy-make', request });
+    setRequest(request);
     setDraft('');
   }, [chat.isStreaming, ctx.sessionId, ctx.workdir, draft]);
 
@@ -39,6 +40,14 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--surface-base)]">
+      {request && (
+        <CindyMakePreflightDialog
+          key={ctx.sessionId}
+          request={request}
+          sessionId={ctx.sessionId}
+          onOpenChange={(open) => !open && setRequest(null)}
+        />
+      )}
       <div className="min-h-0 flex-1">
         {chat.messages.length === 0 && (
           <div className="border-b border-[var(--border-default)] px-4 py-3 text-13 text-[var(--text-secondary)]">

@@ -161,6 +161,9 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 
 ## 分层验证
 
+工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，
+按探测阶段、恢复结果与匿名关联标识区分原因，不要仅凭超时推断掉盘。
+
 本节指导**开发过程中的增量验证**；提交（commit／PR）前的强制门禁以
 `development-workflow.md` 的「提交前测试门禁」为准（仓库根 `pnpm test:unit:related` 与相关
 package 的 typecheck 全部通过；CI 仍跑完整 `pnpm test:unit`）。开发过程中根据实际改动选择最小但充分的检查：
@@ -183,3 +186,31 @@ pnpm test:unit
 - 数据库 migration、协议、更新器、权限与用户数据另有高风险专项规则；命中时先读取
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
+
+## Windows 安装目录与授权
+
+NSIS 安装器保留当前用户／所有用户两种范围。普通用户可写的目录无需提权；选择受保护的
+目录时，在替换文件和卸载旧版之前探测写权限，仅遇到 Windows `ACCESS_DENIED` 才通过
+现有 UAC broker 请求授权。取消授权保留目录选择；文件占用、无效路径等错误提示换目录
+或处理占用，不反复申请管理员权限。静默安装同样在卸载旧版之前检查目录。
+
+同账号提权保留原目录和安装范围。当前用户安装若通过另一个管理员账号授权，则停止该次
+提权安装，提示选择当前账号可写的目录，或返回选择为所有用户安装；不得把当前用户安装
+悄悄登记到管理员账号名下。此改动不调整 Cindy 运行时的权限、用户数据目录或更新器。
+
+实现使用 `resources/installer-directory.nsh` 的目录页和预检查，
+`forge.config.ts` 因此关闭上游自带目录页，由 `customPageAfterChangeDir` 插入同款原生页。
+不要单独打开上游 `allowToChangeInstallationDirectory`，否则会重复插入页面。
+
+在 Windows 显式运行原生验证（临时目录内编译，不安装 Cindy）：
+
+```bash
+node apps/desktop/scripts/check-windows-installer.mjs
+pnpm --filter desktop exec vitest run scripts/installer-directory-messages.test.mjs
+```
+
+前者编译真实安装器／卸载器，并实跑 Win32 文件访问与账号 SID 探测；UAC 返回值由测试
+替身提供，覆盖取消、子进程退出和账号／范围恢复。它不能代替真实 UAC 交互验收。发布前
+还需在普通权限 Windows 环境走查：默认目录、自定义受保护目录、允许／取消授权、使用
+另一管理员账号、旧版覆盖安装，以及静默安装失败时旧版仍在。原生对话框的 Light／Dark
+外观由 Windows 提供，自动测试不代表两种模式已完成目检。

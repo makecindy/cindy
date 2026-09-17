@@ -1,5 +1,8 @@
+import { createDrizzleProxy } from '../../client/drizzleProxy';
+import type { DbTransport } from '../../client/DbTransport';
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
 import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
+import { setMainLocale } from '../../../i18n';
 import Database from 'better-sqlite3';
 import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
@@ -81,6 +84,7 @@ const h = await vi.hoisted(async () => {
   listProviders: vi.fn(async (): Promise<ProviderView[]> => h.providers),
   ownerScopeKey: 'owner-a:1',
   ownerBoundaryPending: false,
+  showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })),
 });
 });
 
@@ -109,7 +113,9 @@ vi.mock('electron', () => ({
   },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
+    fromWebContents: vi.fn(() => null),
   },
+  dialog: { showOpenDialog: h.showOpenDialog },
 }));
 vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
@@ -389,6 +395,9 @@ function createDb(filename = ':memory:'): void {
       sender_session_id TEXT,
       recipient_session_id TEXT,
       delivery_status TEXT NOT NULL DEFAULT 'pending',
+      sender_name TEXT,
+      recipient_name TEXT,
+      bridge_session_id TEXT,
       content TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       UNIQUE(thread_id, sequence)
@@ -643,6 +652,59 @@ describe('Bot canonical Session lifecycle', () => {
     expect(capabilities.mcpServers).toEqual([]);
   });
 
+  it('persists only bounded welcome hints, not caller-supplied progress or profile identity', async () => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'bot-context', name: 'Context Bot', prepareInvitation: true,
+      welcomeContext: { projects: ['Puzzle Studio'], tasks: ['Build a game editor'], automations: [], extra: 'discard' },
+      capabilities: { invitation: { stage: 'ready', welcomeContext: { projects: ['injected'] } } },
+    });
+    const row = h.sqlite!.prepare('SELECT identity_source, capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('bot-context') as { identity_source: string; capabilities_json: string };
+    const config = JSON.parse(row.capabilities_json);
+    expect(config.invitation).toMatchObject({ stage: 'skills', welcomeContext: { projects: ['Puzzle Studio'], tasks: ['Build a game editor'], automations: [] } });
+    expect(config.invitation.welcomeContext.extra).toBeUndefined();
+    expect(row.identity_source).not.toContain('Puzzle Studio');
+    expect(created.invitation.welcomeContext).toBeUndefined();
+  });
+
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])(
+    'persists explicit %s for default provisioning before Main locale synchronization',
+    async (locale) => {
+      setMainLocale('en');
+      vi.mocked(provisionDefaultBot).mockImplementationOnce(async input => { await input.create(); });
+      await invoke('local-db:bots:list', { locale });
+      const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('cindy-default') as { capabilities_json: string };
+      expect(JSON.parse(row.capabilities_json).invitation.locale).toBe(locale);
+    },
+  );
+
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])(
+    'persists explicit %s for manual creation before Main locale synchronization',
+    async (locale) => {
+      setMainLocale('en');
+      await invoke('local-db:bots:create', { id: 'locale-bot', name: 'Locale test', prepareInvitation: true, locale });
+      const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('locale-bot') as { capabilities_json: string };
+      expect(JSON.parse(row.capabilities_json).invitation.locale).toBe(locale);
+    },
+  );
+
+  it.each([undefined, 'unsupported', 'system', { locale: 'ja' }])(
+    'keeps legacy or invalid locale requests on the Main fallback: %j',
+    async (locale) => {
+      setMainLocale('en');
+      await invoke('local-db:bots:create', { id: 'locale-bot', name: 'Locale test', prepareInvitation: true, locale });
+      const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('locale-bot') as { capabilities_json: string };
+      expect(JSON.parse(row.capabilities_json).invitation.locale).toBe('en');
+    },
+  );
+
+  it('passes the cached background into first-time default Cindy provisioning', async () => {
+    vi.mocked(provisionDefaultBot).mockImplementationOnce(async input => { await input.create(); });
+    const welcomeContext = { projects: ['Puzzle Studio'], tasks: [], automations: ['Daily issue triage'] };
+    await invoke('local-db:bots:list', { welcomeContext });
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('cindy-default') as { capabilities_json: string };
+    expect(JSON.parse(row.capabilities_json).invitation.welcomeContext).toEqual(welcomeContext);
+  });
+
   it('accepts a legacy welcome request without forging an assistant message', async () => {
     const created = await invoke('local-db:bots:create', {
       id: 'bot-welcome',
@@ -811,6 +873,57 @@ describe('Bot canonical Session lifecycle', () => {
     const next = await createBotProfile({ name: 'Another name' });
     expect(next.avatar).not.toBe(created.avatar);
     expect((await invoke('local-db:bots:get', created.id)).avatar).toBe(created.avatar);
+  });
+
+  it('allows creating and renaming an ordinary Cindy after the old Cindy is deleted', async () => {
+    await invoke('local-db:bots:create', { id: 'removed-cindy', name: 'Cindy', templateId: 'cindy' });
+    h.sqlite!.prepare("UPDATE bot_profiles SET status = 'archived' WHERE id = 'removed-cindy'").run();
+    await h.tx!('bots.deleteProfile', { botId: 'removed-cindy', sessionIds: [], keepTaskHistory: true, at: Date.now() });
+    const bytes = readFileSync(resolve(__dirname, '../../../../renderer/assets/bot-presets/cindy.png'));
+    const created = await invoke('local-db:bots:create', {
+      id: 'new-cindy', name: 'Cindy', avatarImageBase64: bytes.toString('base64'),
+    });
+    expect(created.id).toBe('new-cindy');
+    expect(created.templateId).toBeUndefined();
+    await invoke('local-db:bots:update', { id: 'new-cindy', name: 'Another name' });
+    const renamed = await invoke('local-db:bots:update', { id: 'bot-1', name: ' cindy ' });
+    expect(renamed.name.trim()).toBe('cindy');
+    expect(renamed.templateId).toBeUndefined();
+  });
+
+  it('saves a chosen Cindy portrait without changing the existing identity or canonical chat', async () => {
+    h.showOpenDialog.mockClear();
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    const bytes = readFileSync(resolve(__dirname, '../../../../renderer/assets/bot-presets/cindy.png'));
+    const result = await invoke('local-db:bots:choose-avatar', {
+      botId: 'bot-1', avatarImageBase64: bytes.toString('base64'),
+    });
+    expect(result.canceled).toBe(false);
+    expect(result.profile).toMatchObject({ name: before.name, identitySource: before.identitySource,
+      canonicalSessionId: canonical.canonicalSessionId, capabilities: before.capabilities });
+    expect(result.profile.templateId).toBe(before.templateId);
+    expect(readFileSync(resolveSafe(result.profile.avatar).absPath)).toEqual(bytes);
+    expect(h.showOpenDialog).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare("SELECT ref_id, ref_kind FROM media_refs WHERE ref_id = 'bot-1'").all())
+      .toEqual([{ ref_id: 'bot-1', ref_kind: 'bot-avatar' }]);
+  });
+
+  it.each(['not base64', Buffer.from('not an image').toString('base64'), ''])('rejects invalid avatar bytes %j without a native dialog or profile change', async avatarImageBase64 => {
+    h.showOpenDialog.mockClear();
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    await expect(invoke('local-db:bots:choose-avatar', { botId: 'bot-1', avatarImageBase64 }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(before);
+    expect(h.showOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it('retains the old host file chooser when no gallery bytes are supplied', async () => {
+    h.showOpenDialog.mockClear();
+    await expect(invoke('local-db:bots:choose-avatar', { botId: 'bot-1' })).resolves.toEqual({ canceled: true });
+    expect(h.showOpenDialog).toHaveBeenCalledOnce();
   });
 
   it('retains copied image bytes through an independent media ref after the source is deleted', async () => {
@@ -5593,4 +5706,66 @@ describe('Teammate model selection shares profile persistence and route reconcil
       expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(before);
       expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
     });
+});
+
+
+/** Delay real SQL replies to expose fan-out hidden by the synchronous fixture. */
+function observeBotReadConcurrency() {
+  let active = 0;
+  let peak = 0;
+  const transport: DbTransport = {
+    async send<R>(op: string, args: unknown): Promise<R> {
+      if (op !== 'rawAll') throw new Error(`unexpected read operation: ${op}`);
+      const { sql, params } = args as { sql: string; params: unknown[] };
+      peak = Math.max(peak, ++active);
+      try {
+        const rows = h.sqlite!.prepare(sql).raw().all(...params);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        return rows as R;
+      } finally { active--; }
+    },
+    on() {}, onTerminated() {}, async close() {},
+  };
+  h.db = createDrizzleProxy(transport);
+  return () => peak;
+}
+
+it.each(['local', 'remote', 'resources'])('bounds %s companion roster reads without dropping profiles', async (entry) => {
+  const [profile] = await h.db!.select().from(botProfiles);
+  const [version] = await h.db!.select().from(botProfileVersions);
+  for (let i = 2; i <= 20; i++) {
+    const id = `roster-${i}`;
+    await h.db!.insert(botProfiles).values({ ...profile, id, displayName: id });
+    await h.db!.insert(botProfileVersions).values({ ...version, id: `${id}-version`, botId: id });
+  }
+  const peak = observeBotReadConcurrency();
+  const rows = entry === 'resources' ? await listBotRemoteResourceSources()
+    : entry === 'remote' ? await runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'mobile-roster', channel: 'local-db:bots:list' },
+      () => invoke('local-db:bots:list', undefined),
+    ) : await invoke('local-db:bots:list', undefined);
+  expect(rows).toHaveLength(20);
+  expect(new Set(rows.map((row: { id: string }) => row.id)).size).toBe(20);
+  expect(peak()).toBe(1);
+});
+
+it('reads long companion history snapshots sequentially and keeps every latest snapshot', async () => {
+  const created = await invoke('local-db:bots:create-canonical-session', {
+    botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+  });
+  const [session] = await h.db!.select().from(sessions);
+  for (let i = 1; i <= 40; i++) {
+    const id = `history-${i}`;
+    await h.db!.insert(sessions).values({ ...session, id });
+    await h.db!.insert(botSessionLinks).values({ id, botId: 'bot-1', sessionId: id, role: 'history', profileVersion: 1, createdAt: i });
+    h.sqlite!.prepare(`INSERT INTO bot_runtime_snapshots
+      (id, bot_id, session_id, profile_version, agent_kind, working_dir, status, prepared_at, configured_json)
+      VALUES (?, 'bot-1', ?, 1, 'pi', '/workspace', 'prepared', ?, '{}')`).run(id, id, i);
+  }
+  const peak = observeBotReadConcurrency();
+  const profile = await invoke('local-db:bots:get', 'bot-1');
+  expect(profile.sessions).toHaveLength(41);
+  expect(profile.sessions.filter((row: { runtimeSnapshot?: unknown }) => row.runtimeSnapshot)).toHaveLength(40);
+  expect(profile.sessions.some((row: { id: string }) => row.id === created.session.id)).toBe(true);
+  expect(peak()).toBe(1);
 });

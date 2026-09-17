@@ -304,6 +304,8 @@ fn main() {
         if FAILED.load(std::sync::atomic::Ordering::SeqCst) {
             break;
         }
+        println!("ok");
+        io::stdout().flush().ok();
     }
     release(&mut keys, &mut buttons);
 }

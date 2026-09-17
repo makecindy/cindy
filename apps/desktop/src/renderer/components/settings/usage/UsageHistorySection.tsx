@@ -25,6 +25,7 @@ import * as Select from '@radix-ui/react-select';
 import { Check, ChevronDown, RefreshCw } from 'lucide-react';
 
 import { Spinner } from '@/components/ui/spinner';
+import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUsageHistory } from '@/hooks/useUsageHistory';
 import { UsageHeatmap } from '@/components/new-chat/UsageHeatmap';
@@ -146,10 +147,11 @@ export function UsageHistorySection(): React.JSX.Element {
         {t('usageHistory.description')}
       </p>
 
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <span className="text-13 font-medium text-[var(--text-secondary)]">
           {t('usageHistory.range.label')}
         </span>
+        <div className="ml-auto flex min-w-0 flex-wrap items-center gap-2">
         <Select.Root value={range} onValueChange={handleRangeChange}>
           <Select.Trigger
             aria-label={t('usageHistory.range.ariaLabel')}
@@ -196,6 +198,26 @@ export function UsageHistorySection(): React.JSX.Element {
             </Select.Content>
           </Select.Portal>
         </Select.Root>
+        <label className="flex min-w-0 items-center gap-2 text-13 text-[var(--text-secondary-mid)]">
+          {t('usageHistory.range.date')}
+          <Input
+            type="date"
+            size="md"
+            className="w-[180px] max-w-full"
+            value={selectedDay ?? ''}
+            max={history?.todayKey}
+            disabled={!history?.todayKey}
+            onChange={(day) => {
+              if (!history?.todayKey) return;
+              if (/^\d{4}-\d{2}-\d{2}$/.test(day) && day <= history.todayKey) {
+                handleDayClick(day);
+              } else if (!day) {
+                setRange('30d');
+              }
+            }}
+          />
+        </label>
+        </div>
       </div>
 
       {loading ? (

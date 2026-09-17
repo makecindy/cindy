@@ -53,6 +53,16 @@ implementations. Protocol bridges remain bridges; they are not replaced with Ope
 configuration files, or account manager. Cindy's collision-safe `exec` conversion is retained ahead
 of upstream's generic conversion, with reverse transforms applied in reverse order.
 
+## Responses initial item repair
+
+The existing uncompressed SSE passthrough repair also fills absent initialization fields on
+`response.output_item.added`: reasoning `summary` / message `content` become empty arrays,
+message `output_text.text` and function/custom tool argument buffers become empty strings.
+Later deltas still carry the actual content. Existing values, types, IDs and call IDs are retained.
+Missing fields on terminal items are not filled, and no `done` events or tool calls are invented.
+This addresses item registration failures from #4509, not the separate missing-terminal-event,
+wrong-tool-type or upstream multi-turn 502 failures. Existing null-array repairs remain unchanged.
+
 ## Imported provider policy
 
 `src/upstream-profiles.json` contains compatibility declarations extracted statically from all
@@ -134,3 +144,7 @@ Run package conformance tests and all affected bridge/host tests, package typech
 repository's `pnpm test:unit:related` gate before delivery. Original Bun tests are transpiled to
 JavaScript with only their runner/import paths changed; their assertions are retained. Live-account
 checks are separate and must be reported separately from deterministic request/stream tests.
+
+When a frame requires repair, only its data payload is rewritten. SSE event IDs, retry hints,
+comments, extension fields and original line endings are retained; subsequent data lines
+remain empty (trailing JSON whitespace). Frames requiring no repair remain byte-identical.

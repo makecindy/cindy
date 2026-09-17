@@ -82,6 +82,25 @@ function history(): UsageHistoryPayload {
 }
 
 describe('Usage history selection behavior', () => {
+  it('waits for the history date anchor before accepting a day, then rejects future dates', () => {
+    state.history = null;
+    const view = render(<UsageHistorySection />);
+    const date = view.getByLabelText('usageHistory.range.date') as HTMLInputElement;
+    expect(date.disabled).toBe(true);
+    fireEvent.change(date, { target: { value: '2099-12-31' } });
+    expect(state.taskRange).toBe('30d');
+
+    state.history = history();
+    view.rerender(<UsageHistorySection />);
+    expect(date.disabled).toBe(false);
+    expect(date.max).toBe(state.history.todayKey);
+    expect(date.value).toBe('');
+    fireEvent.change(date, { target: { value: '2099-12-31' } });
+    expect(state.taskRange).toBe('30d');
+    fireEvent.change(date, { target: { value: '2026-08-21' } });
+    expect(state.taskRange).toBe('day:2026-08-21');
+  });
+
   it('registers every historical model even when absent from the 30-day chart window', () => {
     state.history = history();
     state.history.models.push(
@@ -119,12 +138,23 @@ describe('Usage history selection behavior', () => {
       ['summary', 'agents', 'models'].map((id) => view.getByTestId(id).textContent);
     expect(state.taskRange).toBe('30d');
     expect(view.container.querySelector('[aria-pressed="true"]')).toBeNull();
-    expect(view.container.querySelector('input[type="date"]')).toBeNull();
+    const date = view.getByLabelText('usageHistory.range.date') as HTMLInputElement;
+    expect(date.type).toBe('date');
+    expect(date.max).toBe(state.history.todayKey);
     const dayTargets = () => view.getAllByRole('button', { name: /Aug 21, 2026/ });
     expect(dayTargets()).toHaveLength(2);
     fireEvent.click(dayTargets()[0]);
     expect(state.taskRange).toBe('day:2026-08-21');
     const heatmapResult = snapshot();
+    expect(date.value).toBe('2026-08-21');
+    fireEvent.change(date, { target: { value: '2026-08-20' } });
+    expect(state.taskRange).toBe('day:2026-08-20');
+    fireEvent.change(date, { target: { value: '2026-08-21' } });
+    expect(snapshot()).toEqual(heatmapResult);
+    fireEvent.change(date, { target: { value: '' } });
+    expect(state.taskRange).toBe('30d');
+    fireEvent.change(date, { target: { value: '2026-08-23' } });
+    expect(state.taskRange).toBe('30d');
     fireEvent.click(view.getAllByRole('button', { name: /Aug 20, 2026/ })[0]);
     fireEvent.click(dayTargets()[1]);
     expect(snapshot()).toEqual(heatmapResult);
@@ -138,6 +168,7 @@ describe('Usage history selection behavior', () => {
     fireEvent.click(oldestTarget);
     expect(state.taskRange).toMatch(/^day:/);
     expect(oldestTarget.getAttribute('aria-pressed')).toBe('true');
+    expect(date.value).toBe(state.taskRange.slice(4));
     expect(marks()).toEqual(initialMarks);
   });
 });

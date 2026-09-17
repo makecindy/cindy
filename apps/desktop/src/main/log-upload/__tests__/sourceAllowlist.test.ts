@@ -11,6 +11,15 @@ import { describe, expect, it } from 'vitest';
 
 import { isAllowedScope, __testing } from '../sourceAllowlist';
 
+describe('working directory diagnostics scope', () => {
+  it('allows only the path-free exact scope, not content-bearing roots or future children', () => {
+    expect(isAllowedScope('workdir-diagnostics')).toBe(true);
+    for (const scope of ['workdir-diagnostics/paths', 'workdir-diagnostics:paths', 'r:workdir-diagnostics', 'maker-ipc', 'workdir-probe-host']) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
 describe('放行：基础设施来源', () => {
   it.each([
     ['lifecycle', '退出编排与 render-process-gone'],

@@ -1,0 +1,16 @@
+[package]
+name = "cindy-windows-gamepad-helper"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+serde_json = "1"
+windows = { version = "0.61", features = ["Gaming_Input", "Win32_System_WinRT", "Win32_UI_Input_XboxController"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
