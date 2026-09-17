@@ -94,6 +94,20 @@ describe('Vertex official endpoint family', () => {
       .toBe('https://europe-west1-aiplatform.googleapis.com');
   });
 
+  it('rewrites a stored Vertex alias onto the official host in live routing', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(preset => preset.id === 'google-vertex')!;
+    const runtimes = Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+      ...bindProviderPresetRuntime(runtime!, 'https://global-aiplatform.googleapis.com'),
+      catalogPresetId: preset.id,
+      baseUrl: 'https://global-aiplatform.googleapis.com',
+    }]));
+    const provider = buildUserProvider({ id: 'legacy-vertex', name: 'Vertex', runtimes }, { presets: BUNDLED_CATALOG.presets });
+    expect(provider.routing.pi?.upstream).toBe('https://aiplatform.googleapis.com');
+    expect(provider.routing.codex?.upstream).toBe('https://aiplatform.googleapis.com');
+    expect(provider.models.pi?.find(row => row.id === 'gemini-3.8-flash')?.api
+      ?? provider.models.pi?.find(row => row.id === 'gemini-3.8-flash')?.piApi).toBe('google-vertex');
+  });
+
   it('keeps Vertex catalog metadata when the user saved a global official host', () => {
     const preset = BUNDLED_CATALOG.presets!.find(preset => preset.id === 'google-vertex')!;
     const runtimes = Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
