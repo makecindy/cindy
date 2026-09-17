@@ -1847,6 +1847,17 @@ export const agentInputQueueSnapshots = sqliteTable('agent_input_queue_snapshots
   updatedAt: integer('updated_at').notNull(),
 });
 
+/** Delivery identities survive transcript slimming, without retaining message bodies. */
+export const botExistingSessionReceipts = sqliteTable('bot_existing_session_receipts', {
+  clientId: text('client_id').primaryKey(),
+  callerSessionId: text('caller_session_id').notNull()
+    .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+  targetSessionId: text('target_session_id').notNull()
+    .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+  messageSha256: text('message_sha256').notNull(),
+  state: text('state', { enum: ['pending', 'accepted'] }).notNull(),
+});
+
 /**
  * device-link 同机多实例单持有者仲裁(single-owner arbitration)。
  *

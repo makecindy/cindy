@@ -1,3 +1,5 @@
+import { createDesktopBotExistingSessionDelivery } from './botExistingSessionDeliveryHost.js';
+import { isExistingSessionDeliverySendOptions, type ExistingSessionDeliveryInput, type ExistingSessionDeliveryResult } from './botExistingSessionDelivery.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { configureAppDefaultModelSelection } from './appDefaultModelControl.js';
 import type { BuiltinApiKeyBridgeDeps } from '../secrets/builtinApiKeyBridge.js';
@@ -1842,6 +1844,7 @@ interface OrcaCollabService {
         message: string;
       }
   >;
+  sendToExistingSession: (input: ExistingSessionDeliveryInput) => Promise<ExistingSessionDeliveryResult>;
   sendToSession: (params: {
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
@@ -11741,6 +11744,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
   });
 
+  const botExistingSessionDelivery = createDesktopBotExistingSessionDelivery({
+    getLiveSession: id => maker.getSession(id),
+    withTargetLock: withSendToSessionLock,
+    restoreQueue: async id => {
+      await inputCoordinator.ensureQueueRestored(id);
+      if (!inputCoordinator.isQueueRestored(id)) throw new Error('Queue restoration is incomplete');
+    },
+    getInputGeneration: id => inputCoordinator.getGeneration(id),
+    assertInputCurrent: (id, generation) => {
+      assertRemoteInputClearNotInFlight(id, true);
+      if (rewindInputSessions.has(id) || !inputCoordinator.isGenerationCurrent(id, generation))
+        throw new Error('Target input boundary changed');
+    },
+    findQueued: (id, clientId) => {
+      const item = inputCoordinator.getQueueInspection(id).find(row => row.queuedMessageId === clientId);
+      return item ? { message: item.content } : null;
+    },
+    hasKnownInput: (id, clientId) => inputCoordinator.hasKnownClientId(id, clientId),
+    prepare: async (input, clientId) => {
+      await assertReviewExternalInputAllowed(input.targetSessionId);
+      const meta = await maker.getSessionMeta(input.targetSessionId);
+      if (!meta) throw new Error('Target Session is unavailable');
+      const queued = await buildSessionControlInputItem({
+        targetSessionId: input.targetSessionId, message: input.message,
+        persistedContent: input.message, clientId, meta, inheritTargetPlanMode: true,
+        origin: sessionQueueOriginForDispatcher({ dispatcherSessionId: input.callerSessionId, message: input.message }),
+      });
+      // Always use the durable coordinator, even when idle. No lazy-resume permission override,
+      // replacement factory, automatic unarchive, or resume of a user-paused queue is allowed.
+      return () => { inputCoordinator.enqueue(input.targetSessionId, queued); };
+    },
+    flush: awaitAgentInputQueueSnapshotPersistence,
+  });
+
   // ─── 把 internal 业务函数发布到 module-level holder ────────────────────
   // mcp-providers.ts 的 cindy_helper control deps 通过
   // tryGetOrcaCollabService() 拿到这些函数引用, 让 MCP tool
@@ -11793,6 +11830,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionRuntime: (params) => sessionControlService.getSessionRuntime(params),
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: sendToSessionInternal,
+    sendToExistingSession: input => botExistingSessionDelivery.send(input),
     enableOrca: enableOrcaInternal,
     disableOrca: disableOrcaInternal,
     // MCP worker 派活必须经 OrcaTeamService，确保 running、resume idle、广播和
@@ -12293,6 +12331,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const [botInput] = await getDbClient()
         .drizzle.select({
           source: sessions.source,
+          status: sessions.status,
           role: botSessionLinks.role,
           workingDir: sessions.workingDir,
           remoteHostId: sessions.remoteHostId,
@@ -12304,6 +12343,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
         .where(eq(sessions.id, sessionId))
         .limit(1);
+      // A queued existing-target delivery must never recreate a removed row on lazy resume.
+      // The queue preserves this Host-generated clientId across process restarts.
+      if (isExistingSessionDeliverySendOptions(args[3]) &&
+          (!botInput || botInput.status !== 'active' || botInput.source === 'bot')) {
+        throwIpcError('NOT_FOUND', 'The authorized target is no longer an active Session');
+      }
       const blocked = botSessionInputBlockReason(botInput ?? null);
       if (botInput?.source === CINDY_MAKE_SESSION_SOURCE && (args[3] as Record<PropertyKey, unknown> | undefined)?.[CINDY_MAKE_TASK_DISPATCH] !== true) {
         await assertCindyMakeTaskReady(sessionId);

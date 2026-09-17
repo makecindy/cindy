@@ -810,6 +810,10 @@ function interactionPositionLabel(index: number, localizer?: PresentationLocaliz
 
 export function formatPermissionInput(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
+    case 'cindy.send_to_existing_session':
+      // Approval covers the exact body and target permissions, including fields
+      // after a long message. The permission card supplies its own scroll area.
+      return stringifyCompact(input);
     case 'Bash':
       return typeof input.command === 'string' ? input.command : stringifyCompact(input);
     case 'Read':

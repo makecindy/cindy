@@ -51,6 +51,9 @@ function firstString(input: Record<string, unknown>, keys: string[]): string | u
 // 按语义分组(命令 / 文件 / 模式)归一化,任一命名命中就抽出清爽正文,否则回退 JSON。
 export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
   const name = toolName.toLowerCase();
+  // The authorization applies to the exact message and target configuration.
+  // Keep every field available in the existing scrollable, escaped text block.
+  if (name === 'cindy.send_to_existing_session') return JSON.stringify(input, null, 2);
   if (name === 'cindy.media.download' && typeof input.source === 'string') return input.source;
   const fallback = () => {
     const text = JSON.stringify(input, null, 2);

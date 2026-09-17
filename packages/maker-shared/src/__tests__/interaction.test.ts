@@ -158,6 +158,16 @@ describe('interaction shared model', () => {
     );
   });
 
+  it('keeps the full existing-task delivery body and trailing permissions in mobile evidence', () => {
+    const input = { session_id: 'target', message: 'Safe prefix '.repeat(300) + 'FINAL INSTRUCTION',
+      permission_mode: 'full-access', remote_host_id: 'remote-target', working_directory: '/project' };
+    const presentation = buildPermissionReviewPresentation({ kind: 'permission', requestId: 'delivery',
+      toolName: 'cindy.send_to_existing_session', input });
+    expect(JSON.parse(presentation.code)).toEqual(input);
+    expect(presentation.code).toContain('FINAL INSTRUCTION');
+    expect(presentation.code).toContain('full-access');
+  });
+
   it('builds compact permission review evidence for mobile approval cards', () => {
     const presentation = buildPermissionReviewPresentation({
       kind: 'permission',

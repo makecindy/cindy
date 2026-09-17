@@ -1,4 +1,10 @@
 {
+  "botExistingSessionDelivery": {
+    "title": "기존 세션에 메시지 보내기",
+    "description": "아래 메시지를 지정한 세션에 보냅니다. 보내기 전에 실행 위치, 모델 및 권한을 확인하세요.",
+    "localTarget": "현재 컴퓨터",
+    "remoteTarget": "원격 호스트: {{hostId}}"
+  },
   "appBadge": {
     "attentionCount": "확인이 필요한 세션: {{count}}"
   },
