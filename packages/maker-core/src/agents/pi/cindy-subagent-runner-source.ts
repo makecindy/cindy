@@ -757,6 +757,10 @@ function main() {
         CINDY_PI_PERMISSION_FILE: config.permissionFile,
         PI_CODING_AGENT_DIR: config.childConfigHome,
       });
+      const childRg = path.join(config.childConfigHome, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');
+      try {
+        if (fs.statSync(childRg).isFile()) childEnv.CINDY_PI_MANAGED_RG_PATH = childRg;
+      } catch (_) { /* parent may not have staged ripgrep */ }
       let routeProxySessionToken = '';
       try {
         routeProxySessionToken = deriveRouteProxySessionToken(task);
@@ -784,6 +788,8 @@ function main() {
       // into the durable run are blocked, and bash receives an env with the key
       // removed by SECRET_ENV_NAMES.
       childEnv.CINDY_PI_SUBAGENT_RUN_DIR = config.runDir;
+      // Independent child turns do not share the parent welcome policy channel.
+      delete childEnv.CINDY_PI_TURN_TOOL_POLICY;
       delete childEnv.CINDY_PI_MCP_BRIDGE;
       for (const key of Object.keys(childEnv)) {
         if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];

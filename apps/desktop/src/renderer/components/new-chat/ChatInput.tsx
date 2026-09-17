@@ -20,7 +20,6 @@ import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projec
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
-import { CindyMakeCommandDialog } from '@/components/chat/CindyMakeCommandDialog';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { FullAccessConfirmContent } from './FullAccessConfirmContent';
@@ -243,6 +242,10 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { classifyCindyMakeCommand, tryStartCindyMakeCommand } from '@/lib/cindyMakeCommand';
+import {
+  CindyMakePreflightDialog,
+  type CindyMakePreflightProps,
+} from '@/components/cindy-make/CindyMakePreflightDialog';
 import { getModelById } from '@/lib/modelDefinitions';
 import {
   beginSlashCommandRosterLoad,
@@ -1154,7 +1157,6 @@ export function ChatInput({
   const deviceLinkDeviceId = _deviceLinkDeviceId;
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [makeDialogSessionId, setMakeDialogSessionId] = useState<string | null>(null);
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
@@ -1653,7 +1655,10 @@ export function ChatInput({
     setRemoteSwitchInFlight(false);
   }, [sessionId]);
 
-  // initialModel/initialEffort 缺失的瞬态(会话快照未加载)兜底:读本地草稿 lastByVendor
+  // Only a new draft inherits application defaults. A missing existing-task
+  // snapshot must never become an implicit model switch on the next send.
+  const sessionModelLoading = Boolean(sessionId && !initialModel && !runtimeEffective?.model);
+  // 新草稿的缺省模型/档位:读本地草稿 lastByVendor
   // (localStorage,按 agent 分槽、sanitize 恒有种子值)。默认模型/档位偏好已全量本地化,
   // 不再依赖服务端 UserPreferences(登录态失效/离线时模型与档位选择必须照常工作)。
   const localVendorDefaults =
@@ -1669,7 +1674,7 @@ export function ChatInput({
   const composerSelection = resolveComposerModelSelection({
     current: {
       agentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey) ?? 'claude-code',
-      model: initialModel ?? localVendorDefaults.model,
+      model: initialModel ?? (sessionId ? '' : localVendorDefaults.model),
       providerId: initialProviderId ?? null,
       effort: initialEffort ?? localVendorDefaults.effort,
       fastMode: fastMode === true,
@@ -1688,6 +1693,10 @@ export function ChatInput({
   // 这里用本地乐观态承接即时反馈:seed 自 initialProviderId,选择时乐观更新;
   // initialProviderId 变化(将来 session 回流)时跟随。null = 跟随默认路由。
   const currentSessionIdRef = useRef(sessionId);
+  const [makePreflight, setMakePreflight] = useState<
+    Omit<CindyMakePreflightProps, 'onOpenChange'> | null
+  >(null);
+  useEffect(() => setMakePreflight(null), [sessionId]);
   currentSessionIdRef.current = sessionId;
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     initialProviderId ?? null,
@@ -5005,7 +5014,7 @@ export function ChatInput({
   const dispatchSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
-      if (disabled) return;
+      if (disabled || sessionModelLoading) return;
       // React 的 disabled 状态可能尚未完成下一帧渲染；同步读协调器兜住点击、快捷键、
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
       if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
@@ -5201,13 +5210,38 @@ export function ChatInput({
             toast.error(t('cindyMakeDoctor.failed'));
             return;
           }
-          if (makeResult.kind === 'started') {
+          if (makeResult.kind === 'started' || makeResult.kind === 'preflight') {
             editor.commands.clearContent(true);
             historyIndexRef.current = -1;
             hydratedHistoryDocumentRef.current = null;
             draftRef.current = null;
             if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
-            setMakeDialogSessionId(makeResult.sessionId);
+            if (makeResult.kind === 'preflight') {
+              const {
+                agentKind,
+                model,
+                effort,
+                permissionMode,
+                providerId,
+                fastMode,
+                planModeEnabled,
+              } = makeResult.createOptions ?? {};
+              setMakePreflight({
+                request: makeResult.request,
+                sessionId: sourceSessionId,
+                createOptions: {
+                  agentKind,
+                  model,
+                  effort,
+                  permissionMode,
+                  providerId,
+                  fastMode,
+                  planModeEnabled,
+                },
+              });
+            } else if (makeResult.sessionId !== sourceSessionId) {
+              navigate('/cc-agent/' + makeResult.sessionId);
+            }
             return;
           }
         }
@@ -5826,6 +5860,7 @@ export function ChatInput({
     [
       editor,
       disabled,
+      sessionModelLoading,
       sessionId,
       onSend,
       activeModel,
@@ -8075,7 +8110,7 @@ export function ChatInput({
     ).kind === 'start';
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   const sendButtonDisabled = Boolean(
-    disabled ||
+    disabled || sessionModelLoading ||
     // 空態:当前 agent 无已连接来源 → Send 禁用(设计 Q7NYAD「send 置灰」),引导用户先去连接来源。
     (!makeNeedsNoModel && noConnectedSource) ||
     // 会话显式选中的来源已断开 → Send 禁用(trigger 同步显示「已断开」错误态说明原因)。
@@ -8154,13 +8189,12 @@ export function ChatInput({
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
-      <CindyMakeCommandDialog
-        sessionId={makeDialogSessionId}
-        open={makeDialogSessionId !== null}
-        onOpenChange={(open) => {
-          if (!open) setMakeDialogSessionId(null);
-        }}
-      />
+      {makePreflight && makePreflight.sessionId === sessionId && (
+        <CindyMakePreflightDialog
+          {...makePreflight}
+          onOpenChange={(open) => !open && setMakePreflight(null)}
+        />
+      )}
       {/* 计划模式激活态 chip(输入框上方,与 GoalIndicator 同形)。-mb-2 抵一部分
           root gap-4,让 chip 与输入框间距接近 GoalIndicator 的节奏。 */}
       {planModeEntry && planModeEnabled && (
@@ -8729,8 +8763,21 @@ export function ChatInput({
                 {/* 伙伴的模型链在设置中统一管理，并由宿主自动 fallback。对话输入框不再
                     暴露单次任务的模型切换，避免会话态覆盖伙伴长期配置。 */}
                 {!hideRuntimeControls ? (
-                <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
-                  <ModelSelector
+                <div
+                  data-session-model-slot={sessionId ? '' : undefined}
+                  // Reserve space while the model is unknown, keeping the toolbar height and
+                  // right-aligned actions stable. Once ready, wide toolbars hug the model label;
+                  // only narrow toolbars retain the fixed-width, truncating slot.
+                  className={sessionId
+                    ? cn('h-[30px] shrink',
+                        useUltraCompactToolbar
+                          ? 'w-[64px] min-w-[64px]'
+                          : useNarrowToolbar || sessionModelLoading
+                            ? 'w-[148px] min-w-[72px]'
+                            : 'min-w-0')
+                    : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
+                >
+                  {!sessionModelLoading && <ModelSelector
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
                     // 会让"当前选中的那一行"在合并行上错位,也会把归一化 id 顺着
@@ -8891,7 +8938,7 @@ export function ChatInput({
                     // settings/CreateWorker 不传该 prop → Radix 回退,不 morph。
                     useMorphPopover
                     restoreFocusTarget={composerSuggestionFocusTarget}
-                  />
+                  />}
                 </div>
                 ) : null}
                 <div

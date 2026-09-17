@@ -13,6 +13,7 @@ import {
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
+import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
@@ -2491,24 +2492,31 @@ async function dispatch(op, args) {
 setDatabase(workerData || {});
 
 parentPort.on('message', async (req) => {
+  const startedAt = performance.timeOrigin + performance.now();
+  const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     const result = await dispatch(req.op, req.args);
-    parentPort.postMessage({ id: req.id, ok: true, result });
+    parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
-    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err) });
+    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
 `;
 
 interface PendingRpc {
+  op: string;
+  enqueuedAt: number;
+  dispatchedAt: number;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   /** 当前预算窗口的起点(挂钟)。跨睡眠重武装时会重置,见 evaluateRpcTimeout。 */
   sentAtMs: number;
+  background: boolean;
 }
 
 interface QueuedRpc {
+  enqueuedAt: number;
   req: RpcRequest;
   transferList: unknown[];
   resolve: (value: unknown) => void;
@@ -2516,6 +2524,7 @@ interface QueuedRpc {
   /** RPC 总预算从进入 transport 开始计,而不是等 dispatch 后才开始。 */
   budgetStartedAtMs: number;
   queueTimeout?: ReturnType<typeof setTimeout>;
+  background: boolean;
 }
 
 /**
@@ -2569,12 +2578,19 @@ export interface WorkerThreadTransportOptions {
   maxQueuedRpcs?: number;
   /** 单个 RPC 从入队到完成的总预算；生产默认 30s，测试可缩短。 */
   rpcTimeoutMs?: number;
+  /** 后台读（侧栏/对账）在途上限；写入和发消息走主配额。 */
+  maxBackgroundInFlightRpcs?: number;
+  /** 后台读排队上限；超出只拒后台读，不挡写入。 */
+  maxBackgroundQueuedRpcs?: number;
 }
 
 export class WorkerThreadTransport implements DbTransport {
   private static readonly RPC_TIMEOUT_MS = 30_000;
   private static readonly DEFAULT_MAX_IN_FLIGHT_RPCS = 128;
   private static readonly DEFAULT_MAX_QUEUED_RPCS = 512;
+  /** 一次侧栏索引大约 4 路 rawAll；16 够几路对账并行，占不满 128。 */
+  private static readonly DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS = 16;
+  private static readonly DEFAULT_MAX_BACKGROUND_QUEUED_RPCS = 32;
 
   private worker: Worker;
   private nextId = 1;
@@ -2600,24 +2616,29 @@ export class WorkerThreadTransport implements DbTransport {
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
+    const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
       const queued: QueuedRpc = {
+        enqueuedAt: performance.timeOrigin + performance.now(),
         req,
         transferList: transferList ?? [],
         resolve: resolve as (value: unknown) => void,
         reject,
         budgetStartedAtMs: Date.now(),
+        background,
       };
-      if (this.pending.size < this.maxInFlightRpcs) {
+      if (this.canDispatchImmediately(queued)) {
         this.dispatch(queued);
         return;
       }
-      if (this.queued.length >= this.maxQueuedRpcs) {
+      if (!this.canEnqueue(queued)) {
         reject(
           createDbTransportError(
             DB_TRANSPORT_NOT_SENT,
             `db worker RPC queue overloaded: op="${op}" inFlight=${this.pending.size}` +
-              ` queued=${this.queued.length}`,
+              ` queued=${this.queued.length}` +
+              ` backgroundInFlight=${this.backgroundPendingCount()}` +
+              ` backgroundQueued=${this.backgroundQueuedCount()}`,
           ),
         );
         return;
@@ -2683,6 +2704,52 @@ export class WorkerThreadTransport implements DbTransport {
     return this.opts.rpcTimeoutMs ?? WorkerThreadTransport.RPC_TIMEOUT_MS;
   }
 
+  private get maxBackgroundInFlightRpcs(): number {
+    return Math.min(
+      this.maxInFlightRpcs,
+      this.opts.maxBackgroundInFlightRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS,
+    );
+  }
+
+  private get maxBackgroundQueuedRpcs(): number {
+    return Math.min(
+      this.maxQueuedRpcs,
+      this.opts.maxBackgroundQueuedRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_QUEUED_RPCS,
+    );
+  }
+
+  private backgroundPendingCount(): number {
+    let count = 0;
+    for (const pending of this.pending.values()) {
+      if (pending.background) count += 1;
+    }
+    return count;
+  }
+
+  private backgroundQueuedCount(): number {
+    let count = 0;
+    for (const item of this.queued) {
+      if (item.background) count += 1;
+    }
+    return count;
+  }
+
+  private canDispatchImmediately(item: QueuedRpc): boolean {
+    if (this.pending.size >= this.maxInFlightRpcs) return false;
+    if (item.background && this.backgroundPendingCount() >= this.maxBackgroundInFlightRpcs) {
+      return false;
+    }
+    return true;
+  }
+
+  private canEnqueue(item: QueuedRpc): boolean {
+    if (this.queued.length >= this.maxQueuedRpcs) return false;
+    if (item.background && this.backgroundQueuedCount() >= this.maxBackgroundQueuedRpcs) {
+      return false;
+    }
+    return true;
+  }
+
   private armQueuedTimeout(item: QueuedRpc): void {
     const onTimeout = (): void => {
       const index = this.queued.indexOf(item);
@@ -2738,10 +2805,14 @@ export class WorkerThreadTransport implements DbTransport {
     const remainingBudgetMs = Math.max(1, this.rpcTimeoutMs - budgetElapsedMs);
     const timeout = setTimeout(onTimeout, remainingBudgetMs);
     this.pending.set(id, {
+      op,
+      enqueuedAt: item.enqueuedAt,
+      dispatchedAt: performance.timeOrigin + performance.now(),
       resolve: item.resolve,
       reject: item.reject,
       timeout,
       sentAtMs: item.budgetStartedAtMs,
+      background: item.background,
     });
     try {
       this.worker.postMessage(item.req, item.transferList as never);
@@ -2753,9 +2824,25 @@ export class WorkerThreadTransport implements DbTransport {
     }
   }
 
+  private takeNextQueued(): QueuedRpc | undefined {
+    const interactiveIndex = this.queued.findIndex((item) => !item.background);
+    if (interactiveIndex >= 0) {
+      const next = this.queued[interactiveIndex];
+      if (!this.canDispatchImmediately(next)) return undefined;
+      this.queued.splice(interactiveIndex, 1);
+      return next;
+    }
+    const backgroundIndex = this.queued.findIndex((item) => item.background);
+    if (backgroundIndex < 0) return undefined;
+    const next = this.queued[backgroundIndex];
+    if (!this.canDispatchImmediately(next)) return undefined;
+    this.queued.splice(backgroundIndex, 1);
+    return next;
+  }
+
   private drainQueue(): void {
     while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
-      const next = this.queued.shift();
+      const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
     }
@@ -2821,6 +2908,29 @@ export class WorkerThreadTransport implements DbTransport {
       if (!pending) return;
       this.pending.delete(msg.id);
       clearTimeout(pending.timeout);
+      const receivedAt = performance.timeOrigin + performance.now();
+      const totalMs = receivedAt - pending.enqueuedAt;
+      if (totalMs >= 250) {
+        // Local debug only: operation class and durations, never query/args/results.
+        // Delivery includes result transfer and main event-loop scheduling; execution
+        // includes a whole worker operation (possibly a transaction), not only SQL.
+        const ms = (value: number) => Math.round(Math.max(0, value));
+        try {
+          this.emitClientLog('debug', {
+            event: 'rpc.slow', id: msg.id, totalMs: ms(totalMs),
+            op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(pending.op) ? pending.op : 'other',
+            queueMs: ms(pending.dispatchedAt - pending.enqueuedAt),
+            ...(msg.timing ? {
+              workerWaitMs: ms(msg.timing.startedAt - pending.dispatchedAt),
+              workerExecutionMs: ms(msg.timing.finishedAt - msg.timing.startedAt),
+              deliveryMs: ms(receivedAt - msg.timing.finishedAt),
+            } : {}),
+            inFlight: this.pending.size, queued: this.queued.length, ok: msg.ok,
+          });
+        } catch {
+          // Debug sinks must not prevent settling the RPC or draining the queue.
+        }
+      }
       if (msg.ok) {
         pending.resolve(msg.result);
       } else {

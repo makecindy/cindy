@@ -28,6 +28,61 @@ import {
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
 
+it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const helperStart = source.indexOf('let textOnlyTurnActive = false');
+  const helperEnd = source.indexOf('function currentPermissionState', helperStart);
+  const handlerStart = source.indexOf("  pi.on('tool_call'");
+  const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  let permissionReads = 0;
+  const compiled = ts.transpileModule(
+    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(handlerStart, handlerEnd),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  runInNewContext(compiled, {
+    process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
+    currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
+    pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
+  });
+  const ctx = { ui: { confirm: () => { throw new Error('UI unavailable'); } }, isIdle: () => true };
+  const tool = handlers.get('tool_call')!;
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  const prefix = '[CINDY_TEXT_ONLY_INPUT]:runtime-token\n';
+  expect(handlers.get('input')!({ source: 'rpc', text: '[CINDY_TEXT_ONLY_INPUT]:forged\nHello' }, ctx)).toBeUndefined();
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  const images = [{ type: 'image', data: 'fixture' }];
+  expect(handlers.get('input')!({ source: 'rpc', text: prefix + 'Hello', images }, ctx))
+    .toEqual({ action: 'transform', text: 'Hello', images });
+  const readsBefore = permissionReads;
+  for (const toolName of ['read', 'bash', 'write', 'ask_user_question', 'cindy_mcp_call_tool', 'future_tool']) {
+    expect(await tool({ toolName }, ctx)).toMatchObject({ block: true });
+  }
+  expect(permissionReads).toBe(readsBefore);
+  expect(handlers.has('agent_end')).toBe(false); // Intermediate retry/compaction boundaries retain the policy.
+  handlers.get('agent_settled')!({}, { ...ctx, isIdle: () => false });
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  // A failed/aborted welcome can omit agent_settled entirely.
+  const input = handlers.get('input')!;
+  for (const event of [
+    { source: 'extension', text: 'Continue.' },
+    { source: 'rpc', text: 'Continue.', streamingBehavior: 'steer' },
+    { source: 'rpc', text: 'Continue.', streamingBehavior: 'followUp' },
+  ]) {
+    input(event, ctx);
+    expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  }
+  input({ source: 'rpc', text: 'Continue.' }, { ...ctx, isIdle: () => false });
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  expect(input({ source: 'rpc', text: 'New ordinary request.' }, ctx)).toBeUndefined();
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  // A subsequent welcome still arms the policy; normal settlement still clears it.
+  input({ source: 'rpc', text: prefix + 'Hello again.' }, ctx);
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  handlers.get('agent_settled')!({}, ctx);
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+});
+
 const canLinkFile = (() => {
   const root = mkdtempSync(path.join(tmpdir(), 'cindy-bridge-file-link-probe-'));
   try {
@@ -621,7 +676,9 @@ describe('cindy-bridge extension source', () => {
       expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(
         "if (credentialRead && permission.mode === 'bypassPermissions')",
       );
-      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("if (permission.mode === 'bypassPermissions') return;");
+      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+        "if (permission.mode === 'bypassPermissions' && !controlPlaneWrite) return;",
+      );
       expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('await ctx.ui.input(');
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -1720,21 +1777,18 @@ describe('cindy-bridge extension source', () => {
       "if (event.toolName === 'cindy_pi_extension' || event.toolName === 'cindy_pi_command') return;",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "if (permission.mode === 'bypassPermissions') return;",
+      "if (permission.mode === 'bypassPermissions' && !controlPlaneWrite) return;",
     );
   });
 
-  it('hard-blocks writes only in read-only reference roots, not external writable roots', () => {
+  it('bubbles Extra Dirs writes and forces confirmation for agent-home writes', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    const readOnlyGate = source.indexOf('permission.readOnlyRoots.some((root) =>');
-    const credentialGate = source.indexOf('const environRead = isCindyShellTool(event.toolName)', readOnlyGate);
-    expect(readOnlyGate).toBeGreaterThan(-1);
-    expect(credentialGate).toBeGreaterThan(readOnlyGate);
-    expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
+    expect(source).not.toContain('Cindy extra reference directories are read-only.');
+    expect(source).not.toContain('Cindy agent runtime directory is read-only.');
     expect(source).not.toContain('Cindy blocks reading credential or key paths, even with Full access.');
     expect(source).not.toContain('Cindy blocks reading process environment (/proc/*/environ), even with Full access.');
-    expect(source).toContain('const writeInsideAnyGrantedRoot = (roots: readonly string[])');
-    expect(source).toContain('&& !writeInsideWritableRoot');
+    expect(source).toContain('const controlPlaneWrite = Boolean(');
+    expect(source).toContain('...(controlPlaneWrite ? { controlPlaneWrite: true } : {})');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
     expect(source).toContain(
       'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',

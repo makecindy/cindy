@@ -51,6 +51,12 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   单条；未命中或需要全量实时回查时用 `ghost_list`。两者都返回完整 `CindyGhostInfo`
   （id/name/command/recall/setup/tools/manual），不存在 `ghost_list → ghost_info` 的
   固定补查链。
+- **Manual-only 插件也可被发现。** 非空 `manual.items` 不依赖 `tools`；这类插件的
+  `tools` 返回空数组，通过 `ghost_manual` 按需读取，不启动插件运行时，也不因此取得
+  `ghost_call` 能力。读取仍按插件存在、账号可用、工作目录停用、启用状态依次检查；
+  未声明手册时返回 `GHOST_NOT_FOUND`。无工具且无手册的插件仍隐藏。
+  实现与回归见 [ghost.ts](../apps/desktop/src/main/mcp-integrations/ghost.ts) 和
+  [ghostWorkdirGate.test.ts](../apps/desktop/src/main/mcp-integrations/__tests__/ghostWorkdirGate.test.ts)。
 - **取得完整 info 后有两条并行路径。** `ghost_manual` 展开根索引、`MANUAL.md` 和任意
   深度 Markdown；二级分派插件则通过
   `ghost_call({ ghost_id, tool: "list_tools", args: { category } })` 调用自己声明的顶层
@@ -73,7 +79,7 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 序列化前逐字段折叠空白（`replace(/\s+/g, " ")` + trim）并防御截断
   （name ≤ 64、command ≤ 32、recall ≤ 300）；条目按 id 排序；最多 16 条、
   总预算 8000 字符。
-- 进入花名册的过滤条件：已启用 + 账号可用 + 有工具 + 当前工作目录未停用
+- 进入花名册的过滤条件：已启用的 chip 插件 + 账号可用 +（有工具或非空 `manual.items`）+ 当前工作目录未停用
   （`visibleChipGhosts`，`apps/desktop/src/main/mcp-integrations/ghost.ts`）。
 
 ### 3.2 注入位置（vendor-neutral，一份 formatter 两处消费）

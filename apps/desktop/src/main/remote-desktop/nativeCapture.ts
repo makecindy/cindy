@@ -1,11 +1,12 @@
 import { isRemoteDesktopCursor, type RemoteDesktopCursorFrame, type RemoteDesktopVideoSettings } from '@cindy/device-link';
-import { app, screen } from 'electron';
+import { app, nativeImage, screen } from 'electron';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { openWindowsDesktopConnection, type WindowsDesktopConnection } from './windowsHost';
+import { decodeWindowsCursorFrame } from './windowsCursorFrame';
 
 const exec = promisify(execFile);
 const name = 'cindy-macos-desktop-capture';
@@ -84,7 +85,8 @@ export class NativeDesktopCapture {
   async frame(display: string, overlay = false, settings?: RemoteDesktopVideoSettings): Promise<string | RemoteDesktopCursorFrame | null> {
     if (process.platform === 'win32') {
       if (this.busy) return null;
-      if (this.display && this.display !== display) this.stop();
+      const config = overlay ? 'overlay:' + (settings?.bitrate ?? 0) : '';
+      if (this.windows && (this.display !== display || this.config !== config)) this.stop();
       const selected = screen.getAllDisplays().find((item) => String(item.id) === display);
       if (!selected) return null;
       this.busy = true;
@@ -95,6 +97,7 @@ export class NativeDesktopCapture {
           const connection = await openWindowsDesktopConnection({
             mode: 'capture',
             rect: [bounds.x, bounds.y, bounds.width, bounds.height],
+            ...(overlay ? { cursorOverlay: true, bitrate: settings?.bitrate ?? 0 } : {}),
           });
           if (generation !== this.generation) {
             connection.close();
@@ -102,8 +105,14 @@ export class NativeDesktopCapture {
           }
           this.windows = connection;
           this.display = display;
+          this.config = config;
         }
         const jpeg = (await this.windows.request('f')).trim();
+        if (generation !== this.generation) return null;
+        if (overlay) {
+          return decodeWindowsCursorFrame(jpeg, selected.scaleFactor,
+            (pixels, size) => nativeImage.createFromBitmap(pixels, size).toPNG());
+        }
         return generation === this.generation &&
           jpeg.length <= 240000 &&
           /^[A-Za-z0-9+/]+={0,2}$/.test(jpeg)

@@ -391,7 +391,8 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(memo).toContain('locallyRemovedClientIds: locallyRemovedQueueClientIds,');
     // 依赖 ⊇ 输入。
     const deps = memo.slice(memo.indexOf('}),') + 3);
-    for (const dep of ['settlingBaseline', 'locallyRemovedQueueClientIds', 'queueHiddenClientIds']) {
+    expect(memo).toContain('hiddenClientIds: confirmedUserClientIds,');
+    for (const dep of ['settlingBaseline', 'locallyRemovedQueueClientIds', 'confirmedUserClientIds']) {
       expect(deps).toContain(dep);
     }
     // 自激防护:基线已是本帧 projection 时 layout effect 直接返回,否则 setState 会让

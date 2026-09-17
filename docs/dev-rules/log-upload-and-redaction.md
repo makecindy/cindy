@@ -115,8 +115,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 | 3 正则红线 | 抹除敏感片段 | `redact.ts`（宁可多抹，不可漏） |
 | 4 字段白名单 + 截断 | 带出哪些字段 | 只有 `ts` / `level` / `src` / `scope` / `msg` 五个字段离开本机 |
 
-`agent-<date>.ndjson` 只在崩溃路径附带，且**只取 `source === 'proxy'` 且 scope 落在 proxy 根下
-的记录**（双闸）。同一文件里还有 `maker` 源的日志，那些可能带 agent 提示词与用户内容。
+`agent-<date>.ndjson` **默认只在崩溃路径附带**。普通手动日志上传（设置页点「上传日志」）
+不打开这条流。唯一例外是 `/issue` 反馈：只有调用方把 `CollectRequest.includeAgentLogs`
+显式设为 `true` 时才打开——这条开关只由用户明确同意公开诊断信息的 `/issue` 路径传入
+（`include_related_logs=true` → `includeRelatedLogs` → `includeAgentLogs`），普通手动
+上传不得设。无论哪条路径打开这条流，读侧都**只取 `source === 'proxy'` 且 scope 落在
+proxy 根下的记录**（双闸）。同一文件里还有 `maker` 源的日志，那些可能带 agent 提示词
+与用户内容。issue 路径复用同一条窄出口与字段重建，不得为了反馈放宽。
 
 ⚠️ **proxy 记录不能原样搬 `msg`，必须逐字段重建**（2026-08-04 review P1）。proxy 自己会把
 请求体与上游错误体写进日志上下文：

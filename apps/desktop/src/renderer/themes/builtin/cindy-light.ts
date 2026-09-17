@@ -25,7 +25,9 @@ const GENERATED_OVERRIDES = {
   "surface-hover-hsl": "60.0 12.8% 92.4%", // hover -> HSL
   "surface-on-card": "#FFFFFF", // 裁决: 中性反相前景,不作红 CTA 专用
   "switch-track-off": "#888888", // 关闭态轨道:值与依据见决策表(用户调参 2026-08-05)
-  "switch-track-on": "#4A4D51", // 开启态轨道:值与依据见决策表(用户调参 2026-08-05)
+  "switch-track-on": "#417CDD", // 开启态轨道:蓝色 #417CDD(用户裁决 2026-09-15)
+  "switch-thumb-on": "hsl(var(--background))", // Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名
+  "switch-thumb-off": "var(--surface-on-card)", // Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名
   "status-badge-fg": "#1F1F1F", // §7 必炸点:值经队列震荡后按 HEAD 冻结(#1F1F1F,5.61:1 × #FF6600 ≥4.5),批准依据:用户亲批方案 2026-07-17
   "border-default": "#E4E4DF", // 直映: 边框(冷转暖)
   "border-default-hsl": "60.0 8.5% 88.4%", // 边框 -> HSL

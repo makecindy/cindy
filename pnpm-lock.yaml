@@ -38,7 +38,7 @@ patchedDependencies:
     hash: 9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d
     path: dependency-patches/react-native@0.85.3.patch
   rollup@4.62.2:
-    hash: 6d3d17b477e7f051a92906a213d0dfafe6a1f32abd24e526ddfb29603b925037
+    hash: 7ef53ca5a7e44d41cdbc0e10ea0475c928bddf13ad769cf15628579d0c4bfc98
     path: dependency-patches/rollup@4.62.2.patch
 
 importers:
@@ -21697,7 +21697,7 @@ snapshots:
       '@rolldown/binding-win32-arm64-msvc': 1.2.8
       '@rolldown/binding-win32-x64-msvc': 1.2.8
 
-  rollup@4.62.2(patch_hash=6d3d17b477e7f051a92906a213d0dfafe6a1f32abd24e526ddfb29603b925037):
+  rollup@4.62.2(patch_hash=7ef53ca5a7e44d41cdbc0e10ea0475c928bddf13ad769cf15628579d0c4bfc98):
     dependencies:
       '@types/estree': 1.0.9
     optionalDependencies:
@@ -22738,7 +22738,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.5)
       picomatch: 4.0.5
       postcss: 8.5.19
-      rollup: 4.62.2(patch_hash=6d3d17b477e7f051a92906a213d0dfafe6a1f32abd24e526ddfb29603b925037)
+      rollup: 4.62.2(patch_hash=7ef53ca5a7e44d41cdbc0e10ea0475c928bddf13ad769cf15628579d0c4bfc98)
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 25.9.5
@@ -22755,7 +22755,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.5)
       picomatch: 4.0.5
       postcss: 8.5.19
-      rollup: 4.62.2(patch_hash=6d3d17b477e7f051a92906a213d0dfafe6a1f32abd24e526ddfb29603b925037)
+      rollup: 4.62.2(patch_hash=7ef53ca5a7e44d41cdbc0e10ea0475c928bddf13ad769cf15628579d0c4bfc98)
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 25.9.5

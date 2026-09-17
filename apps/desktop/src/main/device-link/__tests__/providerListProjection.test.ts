@@ -372,3 +372,56 @@ describe('active runtime summary projection', () => {
     },
   );
 });
+
+describe('schedule sidebar index tunnel cap', () => {
+  it('coalesces the schedule index channel with other listing reads', () => {
+    expect(__testing.canCoalesceRemoteListing({ channel: 'maker:schedule:list-sidebar-index-runs', args: [] })).toBe(true);
+    expect(__testing.canCoalesceRemoteListing({ channel: 'local-db:sessions:list', args: [] })).toBe(true);
+  });
+
+  it('keeps the newest mapping when the snapshot exceeds the tunnel budget', () => {
+    const padding = 'x'.repeat(80_000);
+    const runs = Array.from({ length: 80 }, (_, i) => ({
+      runId: `run-${i}`,
+      scheduleId: `sched-${i}`,
+      scheduleName: padding,
+      sessionId: `session-${i}`,
+      status: 'failed',
+      firedAt: i,
+    }));
+    const result = { runs, extra: true };
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:schedule:list-sidebar-index-runs',
+      result,
+    ) as { runs: Array<{ runId: string }>; extra: boolean };
+    expect(projected.extra).toBe(true);
+    expect(projected.runs.length).toBeGreaterThan(0);
+    expect(projected.runs.length).toBeLessThan(runs.length);
+    expect(projected.runs.at(-1)?.runId).toBe('run-79');
+    expect(JSON.stringify(projected).length).toBeLessThanOrEqual(
+      __testing.remoteScheduleIndexMaxBytes,
+    );
+  });
+
+  it('returns the original snapshot when it already fits', () => {
+    const result = { runs: [{ runId: 'run-1', status: 'success' }] };
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:schedule:list-sidebar-index-runs',
+      result,
+    )).toBe(result);
+  });
+
+  it('returns an empty snapshot when a single run still exceeds the tunnel budget', () => {
+    const result = {
+      runs: [{
+        runId: 'run-fat',
+        scheduleName: 'x'.repeat(__testing.remoteScheduleIndexMaxBytes),
+        status: 'failed',
+      }],
+    };
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:schedule:list-sidebar-index-runs',
+      result,
+    )).toEqual({ runs: [] });
+  });
+});

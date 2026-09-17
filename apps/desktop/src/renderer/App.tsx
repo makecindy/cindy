@@ -6,7 +6,6 @@ import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
-import { useDisableTab } from '@/hooks/useDisableTab';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider } from '@/hooks/useLocale';
@@ -213,7 +212,6 @@ function OwnerScopedRouter() {
 
 export function App() {
   useDisableContextMenu();
-  useDisableTab();
   // mac ⌘W 根级兜底: splash / env check / 登录 / 迁移等壳外阶段关(隐藏)本窗口;
   // MainLayout / SidebarWindowLayout 挂载期间声明所有权, 本兜底让路给壳层的
   // 焦点分派消费点 (右侧栏 tab 优先)。见 useCloseWindowShortcut.ts。

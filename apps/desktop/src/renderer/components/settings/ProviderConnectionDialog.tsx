@@ -1,4 +1,4 @@
-import { providerEndpointBindings, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
+import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
@@ -1690,8 +1690,13 @@ export function ProviderConnectionDialog({
         rf.wireProtocol,
         defaultProtocol,
       );
+      const endpointTemplate = presets.find(preset => preset.id === rf.catalogPresetId)?.runtimes[a]?.baseUrl;
+      const typedBaseUrl = rf.baseUrl.trim();
+      const baseUrl = endpointTemplate?.includes('{')
+        ? canonicalProviderEndpoint(endpointTemplate, typedBaseUrl) ?? typedBaseUrl
+        : typedBaseUrl;
       runtimes[a] = {
-        baseUrl: rf.baseUrl.trim(),
+        baseUrl,
         ...(rf.catalogPresetId ? { catalogPresetId: rf.catalogPresetId } : {}),
         ...(requestPath ? { requestPath } : {}),
         ...(savedWireProtocol ? { wireProtocol: savedWireProtocol } : {}),

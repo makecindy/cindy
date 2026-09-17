@@ -63,6 +63,10 @@ vi.mock('../../../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportu
 
 import { registerSessionIpc } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
+import { getDbClient } from '../../client/current';
+import { selectSessionsByIds, selectSessionWithCount, selectSessionListRows, flattenSessionReadRow } from '../../sessionQueries';
+import { createDrizzleProxy } from '../../client/drizzleProxy';
+import type { DbTransport } from '../../client/DbTransport';
 
 type ExpectedIdentity = {
   workingDir: string | null;
@@ -302,5 +306,84 @@ describe('local-db:sessions:restore-if-archived', () => {
     await expect(restore()).rejects.toThrow(/Bot task lifecycle/);
     expect(readStatus()).toBe('archived');
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+});
+
+describe('bounded reconciliation read', () => {
+  it.each(['native', 'worker-proxy'])('correlates uncached projections to the outer session through %s', async (mode) => {
+    h.sqlite!.exec(`
+      CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
+      INSERT INTO sessions (id, created_at, updated_at) VALUES ('other', 1, 1), ('empty', 1, 1);
+      UPDATE sessions SET cleared_at = 2 WHERE id = 'target';
+      INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES
+        ('old', 'old', 'target', 'user', '{"text":"cleared"}', NULL, 1, NULL),
+        ('user', 'user', 'target', 'user', '{"text":"question"}', NULL, 3, NULL),
+        ('answer', 'answer', 'target', 'assistant', '"answer"', NULL, 4, NULL),
+        ('resume', 'resume', 'target', 'user', '{"text":"continue"}', '{"autoResume":true}', 5, NULL),
+        ('rewound', 'rewound', 'target', 'assistant', '"rewound"', NULL, 6, 7),
+        ('other', 'other', 'other', 'assistant', '"another session"', NULL, 8, NULL);
+    `);
+    const plans: string[] = [];
+    const transport = {
+      async send(_op: string, args: { sql: string; params: unknown[] }) {
+        plans.push(...(h.sqlite!.prepare(`EXPLAIN QUERY PLAN ${args.sql}`).all(...args.params) as { detail: string }[])
+          .map((row) => row.detail));
+        return h.sqlite!.prepare(args.sql).raw().all(...args.params);
+      },
+    } as unknown as DbTransport;
+    const db = mode === 'native' ? getDbClient().drizzle : createDrizzleProxy(transport);
+    const single = await selectSessionWithCount(db, 'target');
+    expect(single).toMatchObject({ messageCount: 5, latestMessageExtract: 'answer', latestMessageRole: 'assistant' });
+    const batch = await selectSessionsByIds(db, ['target', 'empty']);
+    expect(batch[0]).toEqual(single);
+    expect(batch[1]).toMatchObject({ messageCount: 0, latestMessageExtract: null, latestMessageRole: null });
+    const list = (await selectSessionListRows(db, undefined, 20)).map(flattenSessionReadRow);
+    expect(list.find((row) => row.id === 'target')).toEqual(single);
+    if (mode === 'worker-proxy') {
+      expect(plans.some((plan) => /SEARCH m USING (?:COVERING )?INDEX idx_messages_session_created/.test(plan))).toBe(true);
+      expect(plans.some((plan) => /SCAN m\b/.test(plan))).toBe(false);
+    }
+    h.sqlite!.prepare("UPDATE sessions SET cleared_at = 10 WHERE id = 'target'").run();
+    expect(await selectSessionWithCount(db, 'target')).toMatchObject({ messageCount: 5, latestMessageExtract: null, latestMessageRole: null });
+  });
+
+  it('shares exact database projection across single, batch and list reads without retaining stale results', async () => {
+    const db = getDbClient().drizzle;
+    const select = vi.spyOn(db, 'select');
+    const batch = await selectSessionsByIds(db, ['target', 'missing', 'target']);
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(batch).toHaveLength(1);
+    expect(await selectSessionWithCount(db, 'target')).toEqual(batch[0]);
+    expect((await selectSessionListRows(db, undefined, 20)).map(flattenSessionReadRow)).toEqual(batch);
+    h.sqlite!.prepare("UPDATE sessions SET title = 'fresh title' WHERE id = 'target'").run();
+    expect((await selectSessionsByIds(db, ['target']))[0].title).toBe('fresh title');
+    select.mockRestore();
+  });
+
+  it('does not query for empty input and bounds larger internal reads', async () => {
+    const db = getDbClient().drizzle;
+    const select = vi.spyOn(db, 'select');
+    expect(await selectSessionsByIds(db, [])).toEqual([]);
+    expect(select).not.toHaveBeenCalled();
+    expect(await selectSessionsByIds(db, Array.from({ length: 600 }, (_, i) => `missing-${i}`))).toEqual([]);
+    expect(select).toHaveBeenCalledTimes(3);
+    select.mockRestore();
+  });
+
+  it('returns the same projection as GET, deduplicates ids and omits missing rows', async () => {
+    const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
+    const get = h.handlers.get('local-db:sessions:get')!;
+    const batch = h.handlers.get('local-db:sessions:get-many')!;
+    const expected = await get({}, 'target');
+    const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
+      () => batch({}, ['target', 'missing', 'target']));
+    expect(result).toEqual([expected]);
+  });
+  it('rejects untrusted local callers and oversized remote batches before querying', async () => {
+    const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
+    const batch = h.handlers.get('local-db:sessions:get-many')!;
+    await expect(batch({}, ['target'])).rejects.toThrow();
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
+      () => batch({}, Array.from({ length: 33 }, () => 'target')))).rejects.toThrow('INVALID_PARAMS');
   });
 });

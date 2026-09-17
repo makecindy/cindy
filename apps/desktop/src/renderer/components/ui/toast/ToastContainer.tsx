@@ -29,7 +29,7 @@ function ToastFadeWrapper({
   const isVisible = mounted && !item.exiting;
 
   return (
-    <div data-toast-id={toastId} data-exiting={item.exiting ? 'true' : undefined}>
+    <div className="max-w-[calc(100%_-_32px)]" data-toast-id={toastId} data-exiting={item.exiting ? 'true' : undefined}>
       <div
         className={cn(
           'transition-opacity duration-300 ease-out',

@@ -88,6 +88,10 @@ export interface CcMeta {
    * user bubble was sent as a normal next-turn message or as same-turn 插话.
    */
   delivery?: 'turn' | 'steer';
+  /** Host-owned authorization evidence; IPC callers cannot mint or replace it. */
+  autoReviewUserText?: string
+    | { text: string; acceptedAt: number }
+    | { kind: 'scheduled-continuation' };
 
   /**
    * Host-side origin marker（与 delivery 同类，非 SDK 字段）。

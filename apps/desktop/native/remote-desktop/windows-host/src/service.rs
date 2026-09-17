@@ -533,7 +533,7 @@ fn serve(mut client: Pipe) -> Result<()> {
             }
         }
         worker.write(&request)?;
-        let response = worker.line(240001)?;
+        let response = worker.line(crate::capture_protocol::response_limit(&parsed))?;
         if session != unsafe { WTSGetActiveConsoleSessionId() } || STOP.load(Ordering::SeqCst) {
             return denied();
         }
@@ -546,7 +546,7 @@ fn serve(mut client: Pipe) -> Result<()> {
                 return denied();
             }
         }
-        client.write(&response)?;
+        client.write_response(&response, &parsed)?;
     }
 }
 struct Worker {
@@ -604,13 +604,13 @@ pub fn worker(name: &str) -> Result<()> {
     }
     let init: serde_json::Value = serde_json::from_slice(&pipe.line(1024)?)?;
     if init["mode"] == "capture" {
-        let mut capture = crate::capture::Capture::new(&init["rect"])?;
+        let mut capture = crate::capture::Capture::new(&init)?;
         pipe.write(b"ready\n")?;
         loop {
             if pipe.line(16)? != b"f\n" {
                 return denied();
             }
-            pipe.write(&capture.frame()?)?;
+            pipe.write_response(&capture.frame()?, &init)?;
         }
     }
     if init["mode"] != "input" {
@@ -633,24 +633,20 @@ pub fn worker(name: &str) -> Result<()> {
         return denied();
     }
     pipe.write(b"ready\n")?;
-    // Observe input failure without blocking normal per-batch replies.
-    let failed = std::sync::Arc::new(AtomicBool::new(false));
-    let output = failed.clone();
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        let _ = reader.read_line(&mut line);
-        output.store(true, Ordering::SeqCst);
-    });
     loop {
         let line = pipe.line(32768)?;
-        if failed.load(Ordering::SeqCst) {
-            return denied();
-        }
         let events: Vec<serde_json::Value> = serde_json::from_slice(&line)?;
         if events.len() > 64 {
             return denied();
         }
         child.0.stdin.as_mut().ok_or_else(error)?.write_all(&line)?;
+        // A pipe write is not input completion. Do not let Agent input overlap
+        // a remote text batch still being applied by the worker.
+        let mut acknowledgement = String::new();
+        reader.read_line(&mut acknowledgement)?;
+        if acknowledgement != "ok\n" {
+            return denied();
+        }
         pipe.write(b"ok\n")?;
     }
 }

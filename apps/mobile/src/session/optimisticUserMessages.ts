@@ -1,5 +1,16 @@
 import type { QueuedRemoteMessage, RemoteMessage } from './types';
+import { historyViewLeaves, isHistoryViewUnavailable, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
 import { pendingSendBubbleText } from './pendingSendItems';
+
+/** A raw push is not a handoff: the first history page may still predate it. */
+export function confirmedHistoryUserClientIds(
+  snapshot: HistoryViewSnapshot<RemoteMessage>, rawMessages: readonly RemoteMessage[],
+): ReadonlySet<string> {
+  const authoritative = isHistoryViewUnavailable(snapshot.error) ? rawMessages
+    : snapshot.ready ? historyViewLeaves(snapshot.items)
+      .flatMap((item) => item.type === 'messages' ? item.messages : []) : [];
+  return new Set(authoritative.filter((message) => message.role === 'user').map((message) => message.clientId));
+}
 
 /** Page-local transcript slots, never persisted or sent over device-link. */
 export interface OptimisticUserMessage {
@@ -59,8 +70,12 @@ export function reconcileOptimisticUserMessages(
   confirmedClientIds: ReadonlySet<string>,
 ): readonly OptimisticUserMessage[] {
   if (current.length === 0) return current;
-  const echoed = new Set(messages.map((message) => message.clientId));
+  const echoed = new Map(messages.map((message) => [message.clientId, message]));
   const remaining = current.filter(({ message }) => !confirmedClientIds.has(message.clientId)
-    && (activeClientIds.has(message.clientId) || echoed.has(message.clientId)));
-  return remaining.length === current.length ? current : remaining;
+    && (activeClientIds.has(message.clientId) || echoed.has(message.clientId))).map((entry) => {
+      const echo = echoed.get(entry.message.clientId);
+      return echo && echo !== entry.message ? { ...entry, message: echo } : entry;
+    });
+  return remaining.length === current.length && remaining.every((entry, index) => entry === current[index])
+    ? current : remaining;
 }

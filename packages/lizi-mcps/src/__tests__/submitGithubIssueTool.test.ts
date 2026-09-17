@@ -150,6 +150,15 @@ describe('submit_github_issue tool', () => {
     });
   });
 
+  it('用户同意后透传 include_related_logs', async () => {
+    const { registry, submit } = setup();
+    await registry.call('submit_github_issue', { ...VALID_ARGS, include_related_logs: true });
+
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({ includeRelatedLogs: true }),
+    );
+  });
+
   it('host 错误码透传, isError=true', async () => {
     for (const errorCode of ['USER_CANCELLED', 'CONFIRM_TIMEOUT', 'NETWORK_ERROR'] as const) {
       const { registry } = setup({

@@ -378,9 +378,14 @@ export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPaylo
   return cache.get(deviceId) ?? null;
 }
 
-export function evictDeviceProviders(deviceId: string): void {
+export function isDeviceProvidersGenerationCurrent(deviceId: string, generation: number): boolean {
+  return (deviceGen.get(deviceId) ?? 0) === generation;
+}
+
+export function evictDeviceProviders(deviceId: string): number {
   cache.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   notifyDeviceProviders(deviceId, { status: 'loading' });
+  return deviceGen.get(deviceId)!;
 }

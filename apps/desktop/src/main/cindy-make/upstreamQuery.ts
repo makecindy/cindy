@@ -1,8 +1,9 @@
 import type { MakeUpstreamItem, MakeUpstreamQuery } from '../../shared/cindyMakeDoctor.js';
 import { untilAborted } from './doctor.js';
+import { filterUpstreamCandidates, type UpstreamRuntimeDeps } from './upstreamInclusion.js';
 
 const REPOSITORY = 'makecindy/cindy';
-const MAX_ITEMS = 5;
+const SEARCH_PAGE_SIZE = 10;
 const TIMEOUT_MS = 25_000;
 const FILLER = new Set(
   (
@@ -11,7 +12,7 @@ const FILLER = new Set(
   ).split(' '),
 );
 
-export interface UpstreamQueryDeps {
+export interface UpstreamQueryDeps extends UpstreamRuntimeDeps {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
@@ -71,25 +72,33 @@ export async function searchCindyUpstream(
     // Separate literal searches work with REST search grammar without imposing an AND
     // across every word of a natural-language request. Rank repeated hits first.
     const pages = await Promise.all(
-      terms.map(async (term) => {
-        const url = new URL('https://api.github.com/search/issues');
-        url.searchParams.set('q', `repo:${REPOSITORY} is:open in:title,body "${term}"`);
-        url.searchParams.set('per_page', String(MAX_ITEMS));
-        const body = await read(url.toString());
-        if (
-          !Array.isArray(body.items) ||
-          body.incomplete_results !== false ||
-          typeof body.total_count !== 'number' ||
-          body.total_count < 0 ||
-          (body.total_count > 0 && body.items.length === 0)
-        )
-          throw new QueryFailure('invalidResponse');
-        return body.items.slice(0, MAX_ITEMS).map(parseItem);
-      }),
+      terms.flatMap((term) =>
+        ['is:open', 'is:merged'].map(async (scope) => {
+          const url = new URL('https://api.github.com/search/issues');
+          url.searchParams.set('q', `repo:${REPOSITORY} is:pr ${scope} in:title,body "${term}"`);
+          url.searchParams.set('per_page', String(SEARCH_PAGE_SIZE));
+          url.searchParams.set('sort', 'updated');
+          url.searchParams.set('order', 'desc');
+          const body = await read(url.toString());
+          if (
+            !Array.isArray(body.items) ||
+            body.incomplete_results !== false ||
+            typeof body.total_count !== 'number' ||
+            !Number.isSafeInteger(body.total_count) ||
+            (body.total_count as number) < body.items.length ||
+            (body.total_count > 0 && body.items.length === 0)
+          )
+            throw new QueryFailure('invalidResponse');
+          return {
+            items: body.items.slice(0, SEARCH_PAGE_SIZE).map(parseItem),
+            hasMore: (body.total_count as number) > Math.min(body.items.length, SEARCH_PAGE_SIZE),
+          };
+        }),
+      ),
     );
     const hits = new Map<number, { item: MakeUpstreamItem; count: number; rank: number }>();
     for (const page of pages)
-      page.forEach((item, rank) => {
+      page.items.forEach((item, rank) => {
         const previous = hits.get(item.number);
         hits.set(item.number, {
           item,
@@ -97,12 +106,17 @@ export async function searchCindyUpstream(
           rank: Math.min(previous?.rank ?? rank, rank),
         });
       });
-    const items = [...hits.values()]
+    const candidates = [...hits.values()]
       .sort((a, b) => b.count - a.count || a.rank - b.rank)
-      .slice(0, MAX_ITEMS)
       .map((hit) => hit.item);
+    const filtered = await filterUpstreamCandidates(candidates, read, controller.signal, deps);
     controller.signal.throwIfAborted();
-    return { status: items.length ? 'found' : 'notFound', items, terms };
+    return {
+      ...filtered,
+      status: filtered.items.length ? 'found' : 'notFound',
+      terms,
+      hasMore: filtered.hasMore || pages.some((page) => page.hasMore),
+    };
   } catch (error) {
     return {
       status: signal.aborted ? 'cancelled' : 'failed',
@@ -126,15 +140,17 @@ function parseItem(value: unknown): MakeUpstreamItem {
   if (!value || typeof value !== 'object') throw new QueryFailure('invalidResponse');
   const row = value as Record<string, unknown>;
   const number = row.number;
-  const kind = row.pull_request && typeof row.pull_request === 'object' ? 'pr' : 'issue';
-  const htmlUrl = `https://github.com/${REPOSITORY}/${kind === 'pr' ? 'pull' : 'issues'}/${number}`;
+  const htmlUrl = `https://github.com/${REPOSITORY}/pull/${number}`;
   if (
     !Number.isSafeInteger(number) ||
     (number as number) <= 0 ||
     typeof row.title !== 'string' ||
     !row.title.trim() ||
     row.html_url !== htmlUrl ||
-    row.state !== 'open'
+    !row.pull_request ||
+    typeof row.pull_request !== 'object' ||
+    Array.isArray(row.pull_request) ||
+    (row.state !== 'open' && row.state !== 'closed')
   )
     throw new QueryFailure('invalidResponse');
   const author =
@@ -145,8 +161,8 @@ function parseItem(value: unknown): MakeUpstreamItem {
     number: number as number,
     title: row.title.slice(0, 300),
     htmlUrl,
-    kind,
-    state: 'open',
+    kind: 'pr',
+    state: row.state === 'open' ? 'open' : 'unknown',
     author: typeof author === 'string' ? author.slice(0, 80) : undefined,
     updatedAt:
       typeof row.updated_at === 'string' && Number.isFinite(Date.parse(row.updated_at))

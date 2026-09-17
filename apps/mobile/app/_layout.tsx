@@ -1,3 +1,5 @@
+import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
+import { PeerFileTransport } from '@/device-link/peerFileTransport';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import {
   DarkTheme as NavigationDarkTheme,
@@ -73,6 +75,7 @@ import {
   isPrecreatedWorktreeRegistrationInFlight,
   recoverPendingPrecreatedWorktrees,
 } from '@/session/precreatedWorktreeRecovery';
+import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 
 function NavigationGate() {
   const auth = useAuth();
@@ -139,6 +142,7 @@ function NavigationGate() {
 
   return (
     <NavigationThemeProvider value={navigationTheme}>
+      <IncomingShareBridge />
       {/* Android 专用:splash 覆盖层仍在时状态栏保持浅色;淡出开始后切回主题样式 */}
       {Platform.OS === 'android' ? (
         <StatusBar
@@ -331,6 +335,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
+        <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
         <NavigationGate />
       </DeviceLinkProvider>
@@ -428,6 +433,7 @@ function RootLayout() {
                 hidden={endpointGate.status === 'error' || forcedUpdate !== null}
               >
                 <ConnectionNoticeProvider>{body}</ConnectionNoticeProvider>
+                <AndroidUpdateSheet />
               </StartupSplashOverlay>
             </MobileLoginHandoffProvider>
           </LocaleProvider>

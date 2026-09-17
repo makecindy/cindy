@@ -42,11 +42,15 @@ export {
 } from './csv.js';
 export {
   DocsPathError,
+  assertDocsGrantCurrent,
+  commitDocsOutput,
   describeOutput,
+  docsReadOptions,
   prepareInputPath,
   prepareOutputPath,
   readInputFileWithinLimit,
   resolveSessionRoot,
+  type PreparedDocsPath,
 } from './_paths.js';
 export { okPayload, errorPayload, type DocsPayloadResult } from './_payload.js';
 

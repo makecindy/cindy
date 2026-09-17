@@ -25,6 +25,7 @@ import {
   createLucideIcon,
   GripVertical,
   Layers,
+  ListChecks,
   ListOrdered,
   MessageSquare,
   Monitor,
@@ -671,7 +672,7 @@ export function SidebarFilterPopover({
           <MenuSubRow
             label={t('ccAgent.sidebar.taskStatusHeading')}
             value={statusValue}
-            Icon={CircleDot}
+            Icon={ListChecks}
           >
             {STATUS_OPTIONS.map((option) => (
               <SelectMenuItem

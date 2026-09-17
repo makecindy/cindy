@@ -1,3 +1,5 @@
+import { FILE_PEER_CHANNEL } from '@cindy/device-link';
+import { requestFilePeer, stopFilePeers } from './filePeer';
 /**
  * dispatch —— device-link 被控端隧道层。
  *
@@ -19,8 +21,11 @@
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
+import { RemoteInvokeTiming } from './remoteInvokeTiming.js';
 import {
   computeAllowlistHash,
+  canCoalesceRemoteListing,
+  isCompletedInvokeRetryableReadChannel,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
@@ -84,6 +89,7 @@ import {
 } from './remoteBotSessionBoundary.js';
 import { getControllerPlatform } from './controllerPlatform';
 import { runDeviceLinkInvokeContext } from './invoke-context';
+import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
@@ -158,6 +164,7 @@ const REMOTE_INVOKE_FRAME_SAFETY_BYTES = 1024;
 // interactive activity would refresh the updater quiet period forever for sessions-only viewers.
 const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
+  'local-db:sessions:get-many',
 ]);
 const textEncoder = new TextEncoder();
 const offlinePushQueue = createOfflinePushQueue();
@@ -497,6 +504,34 @@ function projectModelsForController(models: unknown): unknown {
  * 模型显示 override 快照同样属于非敏感展示状态，需随目录投影给控制端。
  * 其它通道原样返回。
  */
+/** 侧栏索引过胖时裁掉最旧 run，避免 4MB 传输上限导致算完发不出去再重打 DB。 */
+function capScheduleSidebarIndexForTunnel(result: unknown): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const record = result as { runs?: unknown };
+  if (!Array.isArray(record.runs) || record.runs.length === 0) return result;
+  const pack = (runs: unknown[]) => ({ ...record, runs });
+  const fits = (runs: unknown[]): boolean => {
+    const serialized = safeJsonStringify(pack(runs));
+    return serialized != null && encodedByteLength(serialized) <= REMOTE_SCHEDULE_INDEX_MAX_BYTES;
+  };
+  if (fits(record.runs)) return result;
+  // 存储层把未读旧 run 放前面、最新映射放最后。超限时保尾部，侧栏归属仍在。
+  let lo = 1;
+  let hi = record.runs.length;
+  let keep = 0;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (fits(record.runs.slice(record.runs.length - mid))) {
+      keep = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  if (keep === 0) return pack([]);
+  return pack(record.runs.slice(record.runs.length - keep));
+}
+
 function projectInvokeResultForTunnel(
   channel: string,
   result: unknown,
@@ -514,6 +549,9 @@ function projectInvokeResultForTunnel(
       const row = item as Record<string, unknown>;
       return { sessionId: row.sessionId, isTurnRunning: row.isTurnRunning };
     });
+  }
+  if (channel === 'maker:schedule:list-sidebar-index-runs') {
+    return capScheduleSidebarIndexForTunnel(result);
   }
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown };
@@ -606,19 +644,25 @@ type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
 let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
 let inFlightRemoteInvokeCount = 0;
 const REMOTE_INVOKE_IN_FLIGHT_LIMIT = 64;
-/**
- * 控制端周期对账 / 熔断探测会用新 requestId 连打相同 listing。按 requestId 去重
- * 拦不住，16 条并发 sessions:list 会把单线程 DB worker 打到 128/512 硬顶。
- * 同一控制端、同一 channel+args 的只读 listing 合并成一次执行。
- */
-const COALESCE_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+/** Host DB admission is independent of whether a read can share an in-flight snapshot. */
+const BACKGROUND_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
-  // sessions:get 是写后权威回读（mobile 设置失败恢复会复用同一参数），
-  // 不能并进仍停在投影 await 的写前查询。
+  'local-db:sessions:get-many',
+  'local-db:sessions:interrupted-pending',
+  'maker:list-active',
+  'local-db:bots:list',
+  'maker:remote-resources:list',
   'maker:get-capabilities',
   'maker:provider:list',
   'maker:git-safety:get',
+  'maker:schedule:list-sidebar-index-runs',
 ]);
+/** Include pre/post authorization and cached delivery, not only the IPC handler. */
+function withRemoteDbAdmission<T>(channel: string | undefined, fn: () => T): T {
+  return channel && BACKGROUND_REMOTE_INVOKE_CHANNELS.has(channel) ? runAsBackgroundDbRpc(fn) : fn();
+}
+/** 隧道回包必须低于 4MB 传输上限与 per-controller 4MB 准入；2MB 给 envelope 留余量。 */
+const REMOTE_SCHEDULE_INDEX_MAX_BYTES = 2 * 1024 * 1024;
 /**
  * Keep one slow controller from consuming the entire target-device budget.
  * The global limit still protects the host, while this per-controller slice
@@ -2001,6 +2045,7 @@ export function dropAllControllers(
   client: DeviceLinkClient,
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
+  stopFilePeers();
   remoteDesktop.stop();
   void remoteCredentialHost.closeAll().catch(() => remoteCredentialHost.dispose());
   const controllerIds = new Set([
@@ -2061,6 +2106,7 @@ function deactivateControllerState(
   }
   let changed = false;
   changed = acceptedLinkControllers.delete(deviceId) || changed;
+  stopFilePeers(deviceId);
   remoteDesktop.stop(deviceId);
   void remoteCredentialHost.close(deviceId).catch(() => remoteCredentialHost.dispose());
   changed = controllerConnectionEpochByDevice.delete(deviceId) || changed;
@@ -2103,6 +2149,7 @@ export function deactivateController(
 
 /** Relay 连接离开 online：清本连接代所有 active controller，但保留恢复意图。 */
 export function deactivateAllControllers(reason: string): void {
+  stopFilePeers();
   remoteDesktop.stop();
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
@@ -2142,6 +2189,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 
 /** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
 export function purgeRevokedController(deviceId: string): void {
+  stopFilePeers(deviceId);
   remoteDesktop.stop(deviceId);
   const changed = deactivateControllerState(deviceId);
   topicSubscriptionControllers.delete(deviceId);
@@ -2191,6 +2239,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
         return;
       }
       clearRemoteInvokeStateFor(src);
+      stopFilePeers(src);
       remoteDesktop.stop(src);
       void remoteCredentialHost.close(src).catch(() => remoteCredentialHost.dispose());
       offlinePushQueue.clear(src);
@@ -2519,9 +2568,10 @@ async function handleInvoke(
   const releaseBusyLease = shouldAcquireRemoteInvokeBusyLease(src, payload)
     ? acquireRemoteInvokeBusyLease()
     : () => undefined;
-  const handlerStartedAt = Date.now();
+  const handlerStartedAt = performance.now();
+  const timing = new RemoteInvokeTiming();
   const executionPromise = Promise.resolve()
-    .then(() => executeInvoke(src, payload))
+    .then(() => executeInvoke(src, payload, timing))
     .catch((err): InvokeResultPayload => {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`remote invoke escaped execution boundary from ${shortId(src)}: ${message}`);
@@ -2553,11 +2603,11 @@ async function handleInvoke(
   let result: InvokeResultPayload;
   try {
     result = normalizeInvokeResultForWire(await resultPromise);
-    const executionWaitMs = Date.now() - handlerStartedAt;
+    const executionWaitMs = Math.round(performance.now() - handlerStartedAt);
     if (executionWaitMs >= 1_000) {
       log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
         + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
-        + ` executionWaitMs=${executionWaitMs} ok=${result.ok}`);
+        + ` executionWaitMs=${executionWaitMs} ok=${result.ok} stagesMs=${JSON.stringify(timing.stages)}`);
     }
     if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
   } finally {
@@ -2587,8 +2637,9 @@ async function handleInvoke(
 async function executeInvoke(
   src: string,
   payload: InvokePayload | undefined,
+  timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
-  return await runInvoke(src, payload);
+  return await runInvoke(src, payload, timing);
 }
 
 function settleRemoteInvokeWithOrphanDeadline(
@@ -2630,19 +2681,6 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
   return null;
-}
-
-function isFreshSessionListInvoke(payload: InvokePayload): boolean {
-  if (payload.channel !== 'local-db:sessions:list') return false;
-  const options = payload.args?.[2];
-  return !!(options && typeof options === 'object' && !Array.isArray(options)
-    && (options as { fresh?: unknown }).fresh === true);
-}
-
-function canCoalesceRemoteListing(payload: InvokePayload | undefined): payload is InvokePayload {
-  return !!payload
-    && COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
-    && !isFreshSessionListInvoke(payload);
 }
 
 function remoteListingFlightKey(src: string, payload: InvokePayload): string {
@@ -2800,13 +2838,19 @@ function sanitizeMessageInvokeResult(
 async function authorizeRemoteBotResult(
   channel: string | undefined, args: unknown[] | undefined, result: InvokeResultPayload,
 ): Promise<InvokeResultPayload> {
-  if (!result.ok) return result;
-  try {
-    await assertRemoteBotInvocationAllowed(args ?? [], channel);
-    return { ok: true, result: await projectRemoteSessionResult(channel ?? '', result.result) };
-  } catch {
-    return { ok: false, error: { code: 'IPC_ERROR', message: '[NOT_FOUND] Session does not exist' } };
-  }
+  return withRemoteDbAdmission(channel, async () => {
+    if (!result.ok) return result;
+    try {
+      await assertRemoteBotInvocationAllowed(args ?? [], channel);
+      return { ok: true, result: await projectRemoteSessionResult(channel ?? '', result.result) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isDbWorkerOverloadedError(message) && isCompletedInvokeRetryableReadChannel(channel)) {
+        return { ok: false, error: { code: 'BACKPRESSURE', message } };
+      }
+      return { ok: false, error: { code: 'IPC_ERROR', message: '[NOT_FOUND] Session does not exist' } };
+    }
+  });
 }
 
 /** Revalidate cached/replayed replies without executing a mutation twice. */
@@ -2907,7 +2951,9 @@ function trySendInvokeResult(
           }
         }
       }
-      candidate = { ok: false, error: { code, message } };
+      candidate = channel === 'local-db:sessions:get-many'
+        ? { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] REMOTE_SESSION_BATCH_TOO_LARGE' } }
+        : { ok: false, error: { code, message } };
       try {
         client.sendInvokeResult(src, requestId, candidate);
         return { sent: true, result: candidate };
@@ -3484,7 +3530,12 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
 export async function runInvoke(
   src: string,
   payload: InvokePayload | undefined,
+  timing = new RemoteInvokeTiming(),
 ): Promise<InvokeResultPayload> {
+  return withRemoteDbAdmission(payload?.channel, () => executeRemoteInvoke(src, payload, timing));
+}
+
+async function executeRemoteInvoke(src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming): Promise<InvokeResultPayload> {
   if (!payload || typeof payload.channel !== 'string') {
     return { ok: false, error: { code: 'INTERNAL', message: 'malformed invoke payload' } };
   }
@@ -3506,6 +3557,10 @@ export async function runInvoke(
     };
   }
 
+  if (payload.channel === FILE_PEER_CHANNEL) {
+    try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0]) }; }
+    catch { return { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } }; }
+  }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
     try { return { ok: true, result: await requestRemoteDesktop(src, payload.args?.[0]) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
@@ -3673,16 +3728,17 @@ export async function runInvoke(
     }
   }
 
+  let handlerCompleted = false;
   try {
     const args = payload.args ?? [];
     const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
     const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
       && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
-    if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
+    if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
       : [];
-    const result = await runDeviceLinkInvokeContext(
+    const result = await timing.measure('handler', () => runDeviceLinkInvokeContext(
       {
         controllerDeviceId: src,
         channel: payload.channel,
@@ -3696,15 +3752,14 @@ export async function runInvoke(
         payload.channel,
         payload.channel === 'maker:provider:list' ? [] : args,
       ),
-    );
-    if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
+    ));
+    handlerCompleted = true;
+    if (hasRemoteBotSessionLookup()) await timing.measure('authorizeAfter', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
     // 镜像收敛到被控端真相(取代控制端乐观覆盖)。本机会话不走这条(走 renderer update)。
-    await persistRemoteSetting(payload.channel, payload.args ?? [], result);
-    return {
-      ok: true,
-      result: projectInvokeResultForTunnel(
+    await timing.measure('persist', () => persistRemoteSetting(payload.channel, payload.args ?? [], result));
+    const projected = await timing.measure('project', async () => projectInvokeResultForTunnel(
         payload.channel,
         await projectRemoteSessionResult(payload.channel, result),
         subscriptions.controllerSupports(
@@ -3713,13 +3768,14 @@ export async function runInvoke(
         )
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
         args,
-      ),
-    };
+      ));
+    if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
+    return { ok: true, result: projected };
   } catch (err) {
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
     const message = err instanceof Error ? err.message : String(err);
-    if (isDbWorkerOverloadedError(message)) {
+    if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
     }
     return { ok: false, error: { code: 'IPC_ERROR', message } };
@@ -3834,6 +3890,9 @@ export const __testing = {
   optionalControllerCapabilities,
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
+  capScheduleSidebarIndexForTunnel,
+  remoteScheduleIndexMaxBytes: REMOTE_SCHEDULE_INDEX_MAX_BYTES,
+  canCoalesceRemoteListing,
   remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
   remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,

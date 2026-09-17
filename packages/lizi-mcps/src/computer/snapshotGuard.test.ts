@@ -122,60 +122,208 @@ describe('WindowSnapshotTracker', () => {
   });
 });
 
-describe('opaque element credentials', () => {
-  it('disambiguates repeated tokens with an explicit fresh observation without reviving old references', async () => {
-    let index = 3;
-    const dispatch = vi.fn(async (name: string) => name === 'get_window_state'
-      ? { snapshot_id: 'stable-window', elements: [{ element_index: index, element_token: 'reused-token' }] }
-      : { effect: 'confirmed' });
-    const h = await makeHarness({ getStatus: vi.fn(), callTool: dispatch }, { sessionId: 'reused' });
-    try {
-      const first = await h.call('get_window_state', { pid: 1, window_id: 2 });
-      index = 4;
-      const second = await h.call('get_window_state', { pid: 1, window_id: 2 });
-      const args = { pid: 1, window_id: 2, element_token: 'reused-token' };
-      for (const snapshot_id of [undefined, first.snapshot_id, 'stable-window', 'unknown']) {
-        expect(await h.call('click', { ...args, snapshot_id })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+describe("opaque element credentials", () => {
+  it.each(["window_id_not_found", "ax_window_unresolved"])(
+    "invalidates stale window credentials after a driver %s error without replay",
+    async (code) => {
+      let failNextAction = true;
+      const dispatch = vi.fn(async (name: string) => {
+        if (name === "get_window_state")
+          return { snapshot_id: "native-id", elements: [] };
+        if (name === "list_windows") return { windows: [] };
+        if (failNextAction) {
+          failNextAction = false;
+          throw Object.assign(new Error(code), { code });
+        }
+        return { effect: "confirmed" };
+      });
+      const h = await makeHarness(
+        { getStatus: vi.fn(), callTool: dispatch },
+        { sessionId: "window-gone" },
+      );
+      try {
+        const state = await h.call("get_window_state", {
+          pid: 1,
+          window_id: 2,
+        });
+        const other = await h.call("get_window_state", {
+          pid: 1,
+          window_id: 3,
+        });
+        const args = {
+          pid: 1,
+          element_index: 0,
+          snapshot_id: state.snapshot_id,
+        };
+        expect(await h.call("click", args)).toMatchObject({
+          ok: false,
+          errorCode: code,
+          data: { next_step: "list_windows" },
+        });
+        expect(await h.call("click", args)).toMatchObject({
+          errorCode: "STALE_SNAPSHOT",
+        });
+        expect(dispatch).toHaveBeenCalledTimes(4);
+        expect(dispatch.mock.calls.map(([name]) => name)).toEqual([
+          "get_window_state",
+          "get_window_state",
+          "click",
+          "list_windows",
+        ]);
+        expect(
+          await h.call("click", { ...args, snapshot_id: other.snapshot_id }),
+        ).toMatchObject({ ok: true });
+        const fresh = await h.call("get_window_state", {
+          pid: 1,
+          window_id: 2,
+        });
+        expect(
+          await h.call("click", { ...args, snapshot_id: fresh.snapshot_id }),
+        ).toMatchObject({ ok: true });
+      } finally {
+        await h.cleanup();
       }
-      expect(await h.call('click', { ...args, snapshot_id: second.snapshot_id, element_index: 3 })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+    },
+  );
+  it("disambiguates repeated tokens with an explicit fresh observation without reviving old references", async () => {
+    let index = 3;
+    const dispatch = vi.fn(async (name: string) =>
+      name === "get_window_state"
+        ? {
+            snapshot_id: "stable-window",
+            elements: [{ element_index: index, element_token: "reused-token" }],
+          }
+        : { effect: "confirmed" },
+    );
+    const h = await makeHarness(
+      { getStatus: vi.fn(), callTool: dispatch },
+      { sessionId: "reused" },
+    );
+    try {
+      const first = await h.call("get_window_state", { pid: 1, window_id: 2 });
+      index = 4;
+      const second = await h.call("get_window_state", { pid: 1, window_id: 2 });
+      const args = { pid: 1, window_id: 2, element_token: "reused-token" };
+      for (const snapshot_id of [
+        undefined,
+        first.snapshot_id,
+        "stable-window",
+        "unknown",
+      ]) {
+        expect(await h.call("click", { ...args, snapshot_id })).toMatchObject({
+          errorCode: "STALE_SNAPSHOT",
+        });
+      }
+      expect(
+        await h.call("click", {
+          ...args,
+          snapshot_id: second.snapshot_id,
+          element_index: 3,
+        }),
+      ).toMatchObject({ errorCode: "STALE_SNAPSHOT" });
       expect(dispatch).toHaveBeenCalledTimes(2);
-      expect(await h.call('click', { ...args, snapshot_id: second.snapshot_id, element_index: 4 })).toMatchObject({ ok: true });
-      expect(dispatch).toHaveBeenLastCalledWith('click', expect.objectContaining({ snapshot_id: 'stable-window', element_token: 'reused-token', element_index: 4 }), expect.anything());
-    } finally { await h.cleanup(); }
+      expect(
+        await h.call("click", {
+          ...args,
+          snapshot_id: second.snapshot_id,
+          element_index: 4,
+        }),
+      ).toMatchObject({ ok: true });
+      expect(dispatch).toHaveBeenLastCalledWith(
+        "click",
+        expect.objectContaining({
+          snapshot_id: "stable-window",
+          element_token: "reused-token",
+          element_index: 4,
+        }),
+        expect.anything(),
+      );
+    } finally {
+      await h.cleanup();
+    }
   });
-  it('invalidates an interrupted index action even when window_id was omitted', async () => {
+  it("invalidates an interrupted index action even when window_id was omitted", async () => {
     const dispatch = vi.fn(async (name: string) => {
-      if (name === 'get_window_state') return { snapshot_id: 'native-id', elements: [] };
-      throw Object.assign(new Error('connection closed'), { outcomeUnknown: true });
+      if (name === "get_window_state")
+        return { snapshot_id: "native-id", elements: [] };
+      throw Object.assign(new Error("connection closed"), {
+        outcomeUnknown: true,
+      });
     });
-    const h = await makeHarness({ getStatus: vi.fn(), callTool: dispatch }, { sessionId: 'interrupted' });
+    const h = await makeHarness(
+      { getStatus: vi.fn(), callTool: dispatch },
+      { sessionId: "interrupted" },
+    );
     try {
-      const state = await h.call('get_window_state', { pid: 1, window_id: 2 });
+      const state = await h.call("get_window_state", { pid: 1, window_id: 2 });
       const args = { pid: 1, element_index: 0, snapshot_id: state.snapshot_id };
-      expect(await h.call('click', args)).toMatchObject({ ok: false, data: { outcome_unknown: true } });
-      expect(dispatch).toHaveBeenLastCalledWith('click', expect.objectContaining({ window_id: 2 }), expect.anything());
-      expect(await h.call('click', args)).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
-      expect(dispatch).toHaveBeenCalledTimes(2);
-    } finally { await h.cleanup(); }
-  });
-  it('forwards exact tokens and native ids, rejects conflicts and invalidates on failed observation', async () => {
-    let observation: unknown = { snapshot_id: 's01234567', elements: [{ element_index: 3, element_token: 'opaque-token' }] };
-    const dispatch = vi.fn(async (name: string) => name === 'get_window_state' ? observation : { effect: 'confirmed' });
-    const h = await makeHarness({ getStatus: vi.fn(), callTool: dispatch }, { sessionId: 'tokens' });
-    try {
-      const state = await h.call('get_window_state', { pid: 1, window_id: 2 });
-      const action = { pid: 1, window_id: 2, element_token: 'opaque-token' };
-      expect(await h.call('click', { ...action, snapshot_id: 'unknown' })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
-      expect(await h.call('click', { ...action, element_index: 4 })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
-      expect(await h.call('click', { ...action, pid: 9 })).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(await h.call('click', { ...action, snapshot_id: state.snapshot_id })).toMatchObject({ ok: true });
-      expect(dispatch).toHaveBeenLastCalledWith('click', { ...action, snapshot_id: 's01234567', session: 'tokens' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
-      observation = { isError: true };
-      expect(await h.call('get_window_state', { pid: 1, window_id: 2 })).toMatchObject({ ok: false });
-      expect(await h.call('click', action)).toMatchObject({ errorCode: 'STALE_SNAPSHOT' });
+      expect(await h.call("click", args)).toMatchObject({
+        ok: false,
+        data: { outcome_unknown: true },
+      });
+      expect(dispatch).toHaveBeenNthCalledWith(
+        2,
+        "click",
+        expect.objectContaining({ window_id: 2 }),
+        expect.anything(),
+      );
+      expect(dispatch).toHaveBeenLastCalledWith(
+        "get_window_state",
+        expect.objectContaining({ window_id: 2 }),
+        expect.anything(),
+      );
+      expect(await h.call("click", args)).toMatchObject({
+        errorCode: "STALE_SNAPSHOT",
+      });
       expect(dispatch).toHaveBeenCalledTimes(3);
-    } finally { await h.cleanup(); }
+    } finally {
+      await h.cleanup();
+    }
+  });
+  it("forwards exact tokens and native ids, rejects conflicts and invalidates on failed observation", async () => {
+    let observation: unknown = {
+      snapshot_id: "s01234567",
+      elements: [{ element_index: 3, element_token: "opaque-token" }],
+    };
+    const dispatch = vi.fn(async (name: string) =>
+      name === "get_window_state" ? observation : { effect: "confirmed" },
+    );
+    const h = await makeHarness(
+      { getStatus: vi.fn(), callTool: dispatch },
+      { sessionId: "tokens" },
+    );
+    try {
+      const state = await h.call("get_window_state", { pid: 1, window_id: 2 });
+      const action = { pid: 1, window_id: 2, element_token: "opaque-token" };
+      expect(
+        await h.call("click", { ...action, snapshot_id: "unknown" }),
+      ).toMatchObject({ errorCode: "STALE_SNAPSHOT" });
+      expect(
+        await h.call("click", { ...action, element_index: 4 }),
+      ).toMatchObject({ errorCode: "STALE_SNAPSHOT" });
+      expect(await h.call("click", { ...action, pid: 9 })).toMatchObject({
+        errorCode: "STALE_SNAPSHOT",
+      });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(
+        await h.call("click", { ...action, snapshot_id: state.snapshot_id }),
+      ).toMatchObject({ ok: true });
+      expect(dispatch).toHaveBeenLastCalledWith(
+        "click",
+        { ...action, snapshot_id: "s01234567", session: "tokens" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      observation = { isError: true };
+      expect(
+        await h.call("get_window_state", { pid: 1, window_id: 2 }),
+      ).toMatchObject({ ok: false });
+      expect(await h.call("click", action)).toMatchObject({
+        errorCode: "STALE_SNAPSHOT",
+      });
+      expect(dispatch).toHaveBeenCalledTimes(3);
+    } finally {
+      await h.cleanup();
+    }
   });
 });
 
@@ -529,14 +677,22 @@ describe('computer snapshot guard', () => {
     },
     { mode: undefined, state: { elements: [] }, ok: true },
   ])(
-    'respects requested observation mode: $mode / ok=$ok',
+    "respects requested observation mode: $mode / ok=$ok",
     async ({ mode, args, state, ok }) => {
-      const callTool = vi.fn(async () => state);
-      const h = await makeHarness({ getStatus: vi.fn(), callTool }, {
-        getSessionContext: () => ({ workingDir: process.cwd(), agentKind: 'test' }),
-      });
+      const callTool = vi.fn(async (name: string) =>
+        name === "list_windows" ? { windows: [] } : state,
+      );
+      const h = await makeHarness(
+        { getStatus: vi.fn(), callTool },
+        {
+          getSessionContext: () => ({
+            workingDir: process.cwd(),
+            agentKind: "test",
+          }),
+        },
+      );
       try {
-        const observed = await h.call('get_window_state', {
+        const observed = await h.call("get_window_state", {
           pid: 100,
           window_id: 1,
           capture_mode: mode,
@@ -545,8 +701,17 @@ describe('computer snapshot guard', () => {
         expect(observed.ok).toBe(ok);
         expect(Boolean(observed.snapshot_id)).toBe(ok);
         expect(observed.data).toEqual(state);
-        // A failed observation is reported once; the wrapper never replays it or restarts the driver.
-        expect(callTool).toHaveBeenCalledTimes(1);
+        // A failed AX observation may discover windows once, but never replays
+        // the observation, switches the target, or restarts the driver.
+        const rediscovered =
+          !ok &&
+          "degraded_reason" in state &&
+          state.degraded_reason === "ax_window_unresolved";
+        expect(callTool.mock.calls.map(([name]) => name)).toEqual(
+          rediscovered
+            ? ["get_window_state", "list_windows"]
+            : ["get_window_state"],
+        );
       } finally {
         await h.cleanup();
       }

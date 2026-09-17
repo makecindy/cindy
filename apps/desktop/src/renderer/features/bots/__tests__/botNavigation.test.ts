@@ -2,13 +2,37 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { BotProfile } from '../botStore';
 import {
+  botEntryTarget,
   BotCanonicalSessionCreateTimeoutError,
   createBotCanonicalSessionWithRetry,
   isRetryableBotCanonicalSessionCreateError,
   shouldDeferCanonicalBotSessionNavigation,
   withBotCanonicalSessionReadTimeout,
 } from '../botNavigation';
+
+describe('botEntryTarget', () => {
+  const profile = (id: string, extra: Partial<BotProfile> = {}) => ({ id, name: id, status: 'active', createdAt: 1, ...extra }) as BotProfile;
+  it.each(['active', 'paused', 'error'] as const)('falls back to the oldest available teammate (%s) without reordering the roster', (status) => {
+    const bots = [profile('new', { createdAt: 20 }), profile('old', { status, createdAt: 1 }), profile('middle', { createdAt: 10 })];
+    expect(botEntryTarget(bots, 'deleted')?.id).toBe('old');
+    expect(botEntryTarget(bots)?.id).toBe('old');
+    expect(bots.map(bot => bot.id)).toEqual(['new', 'old', 'middle']);
+  });
+  it('uses an existing built-in Cindy only as a fallback, without matching names or avatars', () => {
+    const bots = [profile('ordinary', { name: 'Cindy' }), profile('builtin', { templateId: 'cindy', name: 'Renamed' })];
+    expect(botEntryTarget(bots)?.id).toBe('builtin');
+    expect(botEntryTarget(bots, 'ordinary')?.id).toBe('ordinary');
+  });
+  it('keeps a remembered paused teammate available for recovery', () => {
+    expect(botEntryTarget([profile('active'), profile('paused', { status: 'paused' })], 'paused')?.id).toBe('paused');
+  });
+  it('excludes archived and deleting teammates even if remembered or built-in', () => {
+    expect(botEntryTarget([profile('archived', { status: 'archived' }), profile('cindy', { status: 'deleting', templateId: 'cindy' })], 'cindy')).toBeNull();
+    expect(botEntryTarget([])).toBeNull();
+  });
+});
 
 describe('shouldDeferCanonicalBotSessionNavigation', () => {
   it.each([

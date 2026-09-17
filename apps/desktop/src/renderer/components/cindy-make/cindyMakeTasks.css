@@ -1,0 +1,19 @@
+.cindy-make-tasks {
+  container-type: inline-size;
+}
+
+@container (min-width: 560px) {
+  .cindy-make-tasks-search {
+    width: 224px;
+  }
+
+  .cindy-make-tasks-layout {
+    grid-template-columns: minmax(180px, 2fr) minmax(0, 3fr);
+  }
+
+  .cindy-make-tasks-list {
+    max-height: 420px;
+    border-bottom-width: 0;
+    border-right-width: 1px;
+  }
+}

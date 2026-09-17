@@ -154,10 +154,13 @@ function windowsOwnerOwnsListener(owner, listener, processes) {
 }
 
 /** Probe a Metro listener with a worktree/source identity on every host OS. */
+/** @typedef {{ pid: string|number, launcherPid?: string|number, cwd: string|null, source: string|null, region?: string|null, loginScenario?: string, envFingerprint?: string|null }} MetroOwnership */
+/** @returns {MetroOwnership|null} */
 export function probeMetroOwnership(port, options = {}) {
   const pid = (options.listenerPid ?? listenerPid)(port);
   if (!pid) return null;
   if ((options.platform ?? process.platform) !== 'win32') {
+    if (!(options.isMetroPid ?? isMetroPid)(pid)) return { pid, cwd: null, source: null };
     const cwd = cwdOfPid(pid);
     const source = gitSourceOfPid(pid);
     const owner = (options.readOwner ?? readMetroOwner)(port);
@@ -167,6 +170,12 @@ export function probeMetroOwnership(port, options = {}) {
       pid,
       cwd,
       source,
+      ...(ownerRoot && ownerRoot === worktreeRoot && owner?.source === source
+        && owner && Object.hasOwn(owner, 'loginScenario')
+        ? { loginScenario: owner.loginScenario }
+        : {}),
+      region: ownerRoot && ownerRoot === worktreeRoot && owner?.source === source
+        ? owner.region ?? null : null,
       envFingerprint: ownerRoot && ownerRoot === worktreeRoot && owner?.source === source
         ? owner.envFingerprint ?? null
         : null,
@@ -183,6 +192,7 @@ export function probeMetroOwnership(port, options = {}) {
     cwd: owner.worktreeRoot ? join(owner.worktreeRoot, 'apps/mobile') : null,
     source: owner.source ?? null,
     region: owner.region ?? null,
+    ...(Object.hasOwn(owner, 'loginScenario') ? { loginScenario: owner.loginScenario } : {}),
     envFingerprint: owner.envFingerprint ?? null,
   };
 }

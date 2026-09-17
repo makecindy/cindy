@@ -9,6 +9,8 @@ const STATUS_KEYS = new Map<string, string>([
   ['compacting', 'ccAgent.agentStatus.compacting'],
   ['spawning agent', 'ccAgent.agentStatus.spawningAgent'],
   ['done', 'ccAgent.agentStatus.done'],
+  ['waiting on approval', 'ccAgent.sidebar.card.awaitingPermission'],
+  ['waiting on input', 'ccAgent.sidebar.card.awaitingQuestion'],
   ['just wait', 'ccAgent.agentStatus.waiting'],
   ['working', 'ccAgent.agentStatus.working'],
   ['running', 'ccAgent.agentStatus.running'],

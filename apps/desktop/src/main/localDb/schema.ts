@@ -893,6 +893,21 @@ export const accountUsageSnapshots = sqliteTable('account_usage_snapshots', {
   updatedAt: integer('updated_at').notNull(),
 });
 
+/** Provider notification receipts. Retain the source id after session deletion to reject stale replies. */
+export const imNotificationOrigins = sqliteTable(
+  'im_notification_origins',
+  {
+    channel: text('channel').notNull(),
+    botContextId: text('bot_context_id').notNull(),
+    userId: text('user_id').notNull(),
+    messageId: text('message_id').notNull(),
+    chatId: text('chat_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.botContextId, t.userId, t.messageId] }) }),
+);
+
 /**
  * IM 身份 → desktop session 的接管绑定表 (feishu /ctr 流程产物)。
  *

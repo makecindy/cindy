@@ -332,8 +332,27 @@ one extra dialog as proof of local human consent.
 The native helper holds actual down/up state and releases it on EOF/stop, with a
 watchdog for an unresponsive parent. Input batches and queues are bounded; a
 backpressure failure stops control rather than silently dropping key-up events.
-CUA Agent actions and human input share a process-local ownership guard. Other
-applications and separate Cindy processes are outside that guard.
+CUA Agent actions yield to actual remote input, rather than to an open control
+connection. Queued native batches, held mouse buttons/keys, and a 300 ms quiet
+interval after native completion exclude new Agent actions. An already-dispatched
+Agent primitive finishes before remote input is delivered; further Agent text
+chunks yield. Agent actions are never automatically replayed. After remote input,
+the Agent must successfully observe the target window again with input idle at
+both the start and end of the read and no input revision change during the read
+before acting on it, including the first action of a new or cleaned-up driver
+session. Actions without a window ID accept an observation of the same process;
+an explicit window ID still requires that exact window. Automatic recovery reads
+are text-only evidence, do not capture screenshots, and do not restore input permission. Failed or cancelled explicit
+reads revoke prior permission, and older concurrent reads cannot restore it.
+Empty connection
+heartbeats do not claim input ownership.
+
+The native macOS/Windows helper acknowledges a batch only after posting all its
+events; the Windows service forwards that acknowledgement. Main retains ownership
+through native shutdown when stopping held input. The guard coordinates only
+remote input and CUA calls in this Cindy process: physical keyboard/mouse input,
+other applications, and separate Cindy processes are outside it. Native event
+posting is not proof that an application has finished handling those events.
 
 ## Platform and verification limits
 
@@ -567,13 +586,49 @@ Validation: mobile/desktop TypeScript checks, iOS device compilation, macOS
 helper typecheck and Windows cross-compilation check. No actual clipboard content
 was read and no physical-device or Windows application paste was exercised.
 
-### macOS local cursor overlay
+### macOS and Windows local cursor overlay
 
 Optional `cursorOverlay` on capabilities, offer and compatibility-frame requests
 negotiates cursor-free capture; omitted flags retain the original protocol.
 The macOS helper reads the global NSCursor image/hotspot and the public legacy
 CGCursorIsVisible symbol, with normalized position within the selected display.
 No cursor-hiding call is applied to the user's physical desktop.
+
+Windows advertises the same capability only when its installed native service is
+ready. Negotiated capture omits DrawIconEx from the picture and reads the cursor
+image, hotspot, visibility and monitor-relative position separately. The existing
+viewer moves that raster locally before the next input batch is sent; delayed
+host positions do not replace it during active movement. Omitted/false flags
+retain the legacy screenshot/video path, including its embedded cursor.
+
+The Windows worker sends bounded premultiplied BGRA only through its authenticated
+local broker pipe. Main validates geometry and byte length, converts the raster
+to PNG using Electron, and converts physical cursor dimensions/hotspot to desktop
+points using the selected monitor's DPI. Only negotiated capture gets the larger
+1.75 MB local response budget; the existing remote PNG/frame limits and all input,
+owner, console-session and lease checks remain unchanged. Older helpers returning
+plain JPEG still work. No new dependencies, persisted pixels, IPC channels, device-link
+messages or Mobile native changes are needed.
+
+Legacy Windows AND/XOR cursors are rendered against black and white to recover
+transparency. Pixels that invert the background cannot be represented exactly by
+a PNG; they use a solid silhouette with a contrasting outline (including I-beams).
+Other cursor colors/alpha are retained. Missing or invalid cursor data does not
+stop video. Windows overlay capture supports up to 4096px, the requested video
+quality and existing 30/60 fps caps; the old compatibility path stays at 1280px.
+Highly detailed overlay frames lower JPEG quality/resolution to keep the 1 MB
+native JPEG bound, and the capture connection keeps that reduced quality or the
+1280px fallback for later frames. This is not a guarantee of the delivered frame rate.
+
+Windows regression coverage: [cursor raster tests](../apps/desktop/native/remote-desktop/windows-host/src/cursor.rs),
+[large-frame pipe transfer](../apps/desktop/native/remote-desktop/windows-host/src/pipe.rs),
+[capture lifecycle](../apps/desktop/src/main/remote-desktop/__tests__/nativeCapture.test.ts),
+[DPI and bounds](../apps/desktop/src/main/remote-desktop/__tests__/windowsCursorFrame.test.ts),
+and [immediate viewer movement](../apps/desktop/src/renderer/features/remote-desktop/__tests__/viewerInput.test.ts).
+Native cursor tests use system shapes without moving the pointer; compiling these
+tests needs cargo feature windows-sys/Win32_UI_Input_KeyboardAndMouse for the
+existing input-desktop test module. Actual two-device control, lock/UAC transitions,
+Light/Dark viewing and sustained video performance require manual validation.
 
 Current Electron does not advertise the cursor media constraint. The negotiated
 path therefore uses native cursor-free video (up to 4096 pixels on the long edge,

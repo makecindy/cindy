@@ -1,3 +1,4 @@
+import { isPeerResetRetryableReadChannel } from './invokePolicy.js';
 import { CongestionSendBudget } from './congestionSendBudget.js';
 import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import {
@@ -471,6 +472,8 @@ export function classifyConnectionIssue(
 export type InboundFrameHandler = (env: Envelope) => unknown | Promise<unknown>;
 
 interface PendingRequest {
+  /** Diagnostics only: first successful socket write, not a delivery receipt. */
+  noteFirstWrite?: () => void;
   resolve(env: Envelope): void;
   reject(err: DeviceLinkError): void;
   timer: ReturnType<typeof setTimeout>;
@@ -486,32 +489,11 @@ interface PendingRequest {
   retryAfterPeerReset?: () => void;
 }
 
-const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
-  'local-db:sessions:list',
-  'local-db:sessions:get',
-  'local-db:conversations:search',
-  'local-db:history:messages',
-  'local-db:messages:list',
-  'local-db:messages:view',
-  'local-db:messages:work-details',
-  'local-db:messages:around',
-  'local-db:messages:around-client-id',
-  'local-db:messages:estimatedSessionValue',
-  'local-db:recent-workdirs:list',
-  'local-db:subagent-runs:list',
-  'local-db:subagent-runs:detail',
-  'local-db:subagent-runs:transcript',
-  'local-db:bots:list',
-  'local-db:bots:get',
-  'local-db:orca-workflows:get-by-lead',
-  'local-db:orca-workflows:get-by-worker-session',
-  'local-db:orca-workflows:list-workers-by-lead',
-]);
 
 function isPeerResetRetryableRead(env: Omit<Envelope, 'id'>): boolean {
   if (env.kind !== 'invoke') return false;
   const channel = (env.payload as InvokePayload | undefined)?.channel;
-  return typeof channel === 'string' && PEER_RESET_RETRYABLE_READ_CHANNELS.has(channel);
+  return typeof channel === 'string' && isPeerResetRetryableReadChannel(channel);
 }
 
 interface PendingReliableMessage {
@@ -637,6 +619,8 @@ interface PendingInboundLinkOffer {
 }
 
 interface ReceiveAssembly {
+  /** Local monotonic time of the first fragment; diagnostics only. */
+  receivedAt: number;
   kind: Envelope['kind'];
   id?: string;
   src?: string;
@@ -652,7 +636,7 @@ interface ReceiveStreamState {
   requestedBaseSeq: number;
   deliveringSeq: number | null;
   assemblies: Map<number, ReceiveAssembly>;
-  ready: Map<number, { env: Envelope; json: string }>;
+  ready: Map<number, { env: Envelope; json: string; receivedAt: number; readyAt: number }>;
   bufferedBytes: number;
   drain: Promise<void> | null;
   /** drain 已在途时又有新帧入队；当前轮结束前必须再检查一次队头。 */
@@ -1479,24 +1463,29 @@ export class DeviceLinkClient {
     const id = createRequestId();
     const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
     const startedAt = Date.now();
+    const startedMonotonicAt = this.monotonicNow();
+    let firstWriteAt: number | undefined;
     const requestDescription = `${this.describeRequest(env, expectKind)} request=${id.slice(0, 8)}`;
 
     const logFinished = (outcome: 'ok' | 'timeout' | 'error', err?: DeviceLinkError): void => {
       const elapsedMs = Date.now() - startedAt;
+      const stages = firstWriteAt === undefined ? ' firstWrite=none'
+        : ` firstWriteWaitMs=${Math.round(firstWriteAt - startedMonotonicAt)}`
+          + ` afterFirstWriteMs=${Math.round(this.monotonicNow() - firstWriteAt)}`;
       if (outcome === 'timeout') {
-        this.log.warn(`device-link request timeout ${requestDescription} elapsed=${elapsedMs}ms`);
+        this.log.warn(`device-link request timeout ${requestDescription} elapsed=${elapsedMs}ms${stages}`);
         return;
       }
       if (outcome === 'error') {
         if (err?.code !== 'NOT_CONNECTED' || elapsedMs >= SLOW_REQUEST_WARN_MS) {
           this.log.debug(
-            `device-link request failed ${requestDescription} code=${err?.code ?? 'UNKNOWN'} elapsed=${elapsedMs}ms`,
+            `device-link request failed ${requestDescription} code=${err?.code ?? 'UNKNOWN'} elapsed=${elapsedMs}ms${stages}`,
           );
         }
         return;
       }
       if (elapsedMs >= SLOW_REQUEST_WARN_MS) {
-        this.log.debug(`device-link request slow ${requestDescription} elapsed=${elapsedMs}ms`);
+        this.log.debug(`device-link request slow ${requestDescription} elapsed=${elapsedMs}ms${stages}`);
       }
     };
 
@@ -1510,6 +1499,7 @@ export class DeviceLinkClient {
       }, timeout);
 
       const pendingRequest: PendingRequest = {
+        noteFirstWrite: () => { firstWriteAt ??= this.monotonicNow(); },
         resolve: (frame) => {
           clearTimeout(timer);
           logFinished('ok');
@@ -2570,7 +2560,8 @@ export class DeviceLinkClient {
         this.log.warn(`dropping invalid reliable payload seq=${meta.seq}`);
         return { handled: true };
       }
-      stream.ready.set(meta.seq, { env, json: parsed.data });
+      const receivedAt = this.monotonicNow();
+      stream.ready.set(meta.seq, { env, json: parsed.data, receivedAt, readyAt: receivedAt });
       stream.bufferedBytes += bytes;
     } else {
       if (segment.totalBytes > MAX_TRANSPORT_REASSEMBLY_BYTES) {
@@ -2579,6 +2570,7 @@ export class DeviceLinkClient {
       }
       const current = stream.assemblies.get(meta.seq);
       const assembly = current ?? {
+        receivedAt: this.monotonicNow(),
         kind: env.kind,
         id: env.id,
         src: env.src,
@@ -2630,7 +2622,7 @@ export class DeviceLinkClient {
           this.sendTransportAck(env.src, meta.streamId, stream.lastDeliveredSeq);
           return { handled: true };
         }
-        stream.ready.set(meta.seq, { env, json });
+        stream.ready.set(meta.seq, { env, json, receivedAt: assembly.receivedAt, readyAt: this.monotonicNow() });
       }
     }
 
@@ -2669,6 +2661,14 @@ export class DeviceLinkClient {
           }
 
           stream.deliveringSeq = nextSeq;
+          const assemblyMs = Math.round(ready.readyAt - ready.receivedAt);
+          const orderedWaitMs = Math.round(this.monotonicNow() - ready.readyAt);
+          if ((logical.kind === 'invoke' || logical.kind === 'invoke-result')
+            && (assemblyMs >= 250 || orderedWaitMs >= 250)) {
+            this.log.debug(`device-link receive timing kind=${logical.kind} request=${logical.id?.slice(0, 8) ?? 'none'}`
+              + ` src=${src.slice(0, 8)} seq=${nextSeq}`
+              + ` assemblyMs=${assemblyMs} orderedWaitMs=${orderedWaitMs}`);
+          }
           let handled: boolean;
           try {
             handled = isTransportSkipPayload(logical.payload)
@@ -3001,6 +3001,15 @@ export class DeviceLinkClient {
     } finally {
       congestionBudget?.refund(pending.envelope.dst!, frames.length - sent);
       if (sent > 0) {
+        const ageMs = Math.round(this.monotonicNow() - pending.enqueuedAt);
+        if ((pending.envelope.kind === 'invoke' || pending.envelope.kind === 'invoke-result')
+          && (ageMs >= 250 || pending.attempts > 0)) {
+          this.log.debug(`device-link send timing kind=${pending.envelope.kind} request=${pending.envelope.id?.slice(0, 8) ?? 'none'}`
+            + ` dst=${pending.envelope.dst!.slice(0, 8)} seq=${pending.seq}`
+            + ` ${pending.attempts === 0 ? 'queueMs' : 'ageMs'}=${ageMs}`
+            + ` attempt=${pending.attempts + 1} frames=${sent} bytes=${pending.bytes}`
+            + ` pending=${peer.pending.size} congestion=${this.congestionCloseStreak}`);
+        }
         pending.sent = true;
         pending.attempts++;
         pending.lastSentAt = Date.now();
@@ -3084,6 +3093,7 @@ export class DeviceLinkClient {
     this.rememberOutboundRouteGeneration(routed.id!, env.dst, generation);
     try {
       this.sendEnvelope(routed);
+      this.pending.get(routed.id!)?.noteFirstWrite?.();
     } catch (err) {
       this.rollbackOutboundRouteGeneration(routed.id!, env.dst, generation);
       throw err;

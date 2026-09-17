@@ -9,7 +9,7 @@ import type {
   DesktopPermissionStatus,
   RemoteDesktopDisplayMode,
 } from '@cindy/device-link';
-import { acquireHumanDesktopInput } from './inputOwnership';
+import { HumanDesktopInput } from './inputOwnership';
 import {
   openWindowsDesktopConnection,
   readWindowsDesktopSupport,
@@ -187,7 +187,8 @@ export class DesktopInputHost {
   private queuedBytes = 0;
   private writing = Promise.resolve();
   private child: ChildProcessWithoutNullStreams | null = null;
-  private releaseOwnership: (() => void) | null = null;
+  private activity: HumanDesktopInput | null = null;
+  private acknowledge: ((error?: Error) => void) | null = null;
   private displayId = '';
   private generation = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -210,8 +211,7 @@ export class DesktopInputHost {
     const generation = this.generation;
     await this.stopping;
     if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
-    const release = acquireHumanDesktopInput();
-    this.releaseOwnership = release;
+    this.activity = new HumanDesktopInput();
     try {
       if (
         platform === 'win32' &&
@@ -261,8 +261,20 @@ export class DesktopInputHost {
         child.once('exit', () => finish(new Error('DESKTOP_INPUT_UNAVAILABLE')));
       });
       if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
+      let output = '';
       child.stdout.on('data', (data: Buffer) => {
-        if (data.toString().includes('error') && this.child === child) this.onFailure();
+        if (this.child !== child) return;
+        output += data.toString();
+        while (output.includes('\n')) {
+          const end = output.indexOf('\n');
+          const line = output.slice(0, end).trim();
+          output = output.slice(end + 1);
+          if (line === 'ok') this.acknowledge?.();
+          else {
+            this.acknowledge?.(new Error('DESKTOP_INPUT_UNAVAILABLE'));
+            this.onFailure();
+          }
+        }
       });
       this.heartbeat = setInterval(() => this.write([]), 2000);
     } catch (error) {
@@ -273,6 +285,8 @@ export class DesktopInputHost {
   input(events: DesktopInput[]): void {
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
     if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    if (events.length === 0) return;
+    const batch = this.activity!.begin(events);
     this.write(
       events.map((event) => {
         if (event.kind !== 'move' && event.kind !== 'button') return event;
@@ -283,43 +297,55 @@ export class DesktopInputHost {
         const native = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
         return { ...event, ...native };
       }),
+      batch,
     );
   }
-  private write(events: unknown[]): void {
+  private write(events: unknown[], batch?: { ready: Promise<void>; complete: () => void }): void {
     const child = this.child;
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
-    if (connection) {
-      const bytes = Buffer.byteLength(line);
-      if (this.queuedBytes + bytes > 32_768) {
-        this.onFailure();
-        return;
-      }
-      this.queuedBytes += bytes;
-      const generation = this.generation;
-      this.writing = this.writing
-        .then(async () => {
-          if (this.windows !== connection) return;
-          if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
-            throw new Error('DESKTOP_INPUT_UNAVAILABLE');
-        })
-        .catch(() => {
-          if (this.windows === connection) this.onFailure();
-        })
-        .finally(() => {
-          if (generation === this.generation) this.queuedBytes -= bytes;
-        });
-      return;
-    }
-    if (
-      !child ||
-      child.stdin.destroyed ||
-      child.stdin.writableLength + Buffer.byteLength(line) > 32_768
-    ) {
+    const bytes = Buffer.byteLength(line);
+    if (this.queuedBytes + bytes > 32_768 || (!connection && (!child || child.stdin.destroyed))) {
       this.onFailure();
       return;
     }
-    child.stdin.write(line);
+    this.queuedBytes += bytes;
+    const generation = this.generation;
+    const send = async () => {
+      if (generation !== this.generation) return;
+      this.writing = this.writing.then(async () => {
+        if (generation !== this.generation) return;
+        if (connection) {
+          if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
+            throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+        } else {
+          // stdin.write completion only proves bytes were queued. Hold ownership
+          // until the helper has finished posting the entire native batch.
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => finish(new Error('DESKTOP_INPUT_TIMEOUT')), 10_000);
+            const finish = (error?: Error) => {
+              clearTimeout(timer);
+              if (this.acknowledge === finish) this.acknowledge = null;
+              error ? reject(error) : resolve();
+            };
+            this.acknowledge = finish;
+            child!.stdin.write(line, (error) => {
+              if (error) finish(error);
+            });
+          });
+        }
+      });
+      await this.writing;
+    };
+    // Waiting for an Agent primitive must not hold up empty native heartbeats.
+    void (batch ? batch.ready.then(send) : send())
+      .catch(() => {
+        if (generation === this.generation) this.onFailure();
+      })
+      .finally(() => {
+        batch?.complete();
+        if (generation === this.generation) this.queuedBytes -= bytes;
+      });
   }
   async release(): Promise<void> {
     this.stop();
@@ -327,8 +353,9 @@ export class DesktopInputHost {
   }
   stop(): void {
     this.generation++;
+    this.acknowledge?.(new Error('DESKTOP_LEASE_EXPIRED'));
     const windows = this.windows;
-    windows?.close();
+    const writing = this.writing;
     this.windows = null;
     this.queuedBytes = 0;
     this.writing = Promise.resolve();
@@ -336,8 +363,10 @@ export class DesktopInputHost {
     this.heartbeat = null;
     const child = this.child;
     this.child = null;
-    const release = this.releaseOwnership;
-    this.releaseOwnership = null;
+    const activity = this.activity;
+    activity?.holdUntilExit();
+    const release = () => activity?.release();
+    this.activity = null;
     if (child) {
       this.stopping = new Promise<void>((resolve) => {
         const finish = () => {
@@ -355,13 +384,21 @@ export class DesktopInputHost {
       timer.unref();
       child.once('exit', () => clearTimeout(timer));
     } else if (windows) {
-      // The service closes its worker gracefully before the job-kill deadline.
-      this.stopping = new Promise<void>((resolve) =>
-        setTimeout(() => {
-          release?.();
-          resolve();
-        }, 1500),
-      );
+      this.stopping = (async () => {
+        try {
+          await writing;
+          if ((await windows.request('[{"kind":"release"}]')) !== 'ok\n')
+            throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+        } catch {
+          windows.close();
+          // Failed completion: allow the service's 5 s pipe deadline plus
+          // 1.2 s worker job-kill deadline before relinquishing ownership.
+          await new Promise<void>((resolve) => setTimeout(resolve, 6500));
+        } finally {
+          windows.close();
+          release();
+        }
+      })();
     } else release?.();
   }
 }
@@ -400,12 +437,24 @@ export async function setDesktopDisplayMode(
   displayId: string,
   modeId: string,
   beforeChange: () => void,
+  restoringOriginal = false,
 ): Promise<void> {
   if (changingResolution) throw new Error('DESKTOP_DISPLAY_BUSY');
   changingResolution = true;
   try {
-    const modes = await readDesktopDisplayModes(displayId);
-    if (!modes.some((mode) => mode.id === modeId)) throw new Error('DESKTOP_DISPLAY_MODE_MISSING');
+    if (
+      process.platform !== 'darwin' ||
+      !/^[0-9]{1,10}$/.test(displayId) ||
+      !/^[0-9]{1,10}$/.test(modeId)
+    )
+      throw new Error('DESKTOP_DISPLAY_MODE_MISSING');
+    // The UI list deduplicates equal-size modes; the saved original may no
+    // longer be its preferred entry. Native still validates against ALL modes.
+    if (!restoringOriginal) {
+      const modes = await readDesktopDisplayModes(displayId);
+      if (!modes.some((mode) => mode.id === modeId))
+        throw new Error('DESKTOP_DISPLAY_MODE_MISSING');
+    }
     const binary = await resolveBinary();
     // Build/enumeration can finish after disconnect, revocation or view-only.
     beforeChange();

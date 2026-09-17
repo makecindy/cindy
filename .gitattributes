@@ -48,3 +48,6 @@ apps/desktop/src/shared/generated/appearance-tokens.ts text eol=lf
 apps/desktop/src/shared/windowBackdrop.ts text eol=lf
 apps/desktop/tailwind.config.ts text eol=lf
 docs/design-rules/DESIGN.md text eol=lf
+
+# Generated WebRTC source is compared byte-for-byte on every platform.
+packages/device-link/src/filePeerRuntimeSource.ts text eol=lf

@@ -93,6 +93,8 @@ export interface FeishuBotSendMessageResult {
   ok: boolean;
   /** Feishu message id on success. */
   messageId?: string;
+  /** False means delivery succeeded but replies cannot resume the originating session. */
+  sessionLinked?: boolean;
   /** Short reason on failure (e.g. 'SEND_FAIL', 'EMPTY_TEXT'). */
   reason?: string;
 }
@@ -114,6 +116,8 @@ export interface FeishuBotMcpHostDeps {
   sendMessage(
     chatId: string,
     markdown: string,
+    /** Trusted calling session, only for notifications to the bot owner. */
+    notificationSessionId?: string,
   ): Promise<FeishuBotSendMessageResult>;
   /**
    * Return the bot's TOFU-recorded owner openId — i.e. the person who first
@@ -628,6 +632,8 @@ export interface ComputerDriverPermissionState {
 
 export interface ComputerMcpCallContext {
   sessionId?: string;
+  /** Host-only observation origin; automatic reads must not authorize resumed input. */
+  observationPurpose?: 'recovery';
   /** Request cancellation stays on the host side; never serialized to the driver. */
   signal?: AbortSignal;
   /** Identifies the agent runtime whose MCP server dispatched this call. */

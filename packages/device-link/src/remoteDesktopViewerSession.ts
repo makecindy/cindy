@@ -159,6 +159,53 @@ export class RemoteDesktopViewerSession {
     return { controlling: lease.controlling };
   }
 
+  /** Keep the lease and input sequence, replacing only its display geometry. */
+  async fitDisplay(
+    width: number,
+    height: number,
+    restore = false,
+    modeId?: string,
+  ): Promise<RemoteDesktopLease> {
+    const lease = this.active;
+    if (!lease?.controlling) throw new Error("DESKTOP_VIEW_ONLY");
+    if (this.controlPending) throw new Error("DESKTOP_INPUT_BUSY");
+    this.controlGeneration++;
+    const check = () => {
+      if (this.active !== lease) throw new Error("DESKTOP_LEASE_EXPIRED");
+    };
+    const operation = this.request<RemoteDesktopLease>(
+      modeId
+        ? { op: "resolution", lease: lease.lease, modeId, temporary: true }
+        : restore
+          ? { op: "restoreViewerDisplay", lease: lease.lease }
+          : { op: "viewerDisplay", lease: lease.lease, width, height },
+      check,
+    );
+    this.controlPending = operation;
+    try {
+      const result = await operation;
+      check();
+      if (
+        result.lease !== lease.lease ||
+        typeof result.display?.id !== "string" ||
+        (!restore &&
+          (result.display.width !== width ||
+            result.display.height !== height)) ||
+        !Number.isFinite(result.display.width) ||
+        result.display.width <= 0 ||
+        !Number.isFinite(result.display.height) ||
+        result.display.height <= 0 ||
+        result.controlling !== false
+      )
+        throw new Error("INVALID_RESPONSE");
+      lease.display = result.display;
+      lease.controlling = false;
+      return lease;
+    } finally {
+      if (this.controlPending === operation) this.controlPending = null;
+    }
+  }
+
   stop(lockScreen = false): Promise<unknown> {
     this.generation++;
     const lease = this.active;
@@ -176,6 +223,26 @@ export class RemoteDesktopViewerSession {
         : Promise.resolve(),
     );
   }
+}
+
+/** Layout points determine the ratio; cap the long edge instead of sending phone DPR pixels. */
+export function viewerDisplaySize(
+  width: number,
+  height: number,
+): { width: number; height: number } | null {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  )
+    return null;
+  const scale = 1920 / Math.max(width, height);
+  const result = {
+    width: Math.round((width * scale) / 2) * 2,
+    height: Math.round((height * scale) / 2) * 2,
+  };
+  return Math.min(result.width, result.height) >= 320 ? result : null;
 }
 
 /** Only transient connection errors may restart a viewer. Explicit stop wins. */
