@@ -234,11 +234,43 @@ const reconciler = createStorageReconciler<RecentModelsState, RecentModelsOp>({
 });
 
 /**
+ * 两份状态取并集:同一副本身份取 max(usedAt),按时间倒序并裁到 KEEP 条。
+ * 只增不减(本 store 没有删除类 op)—— 把「本窗已记但没落盘」的条目并回写基底。
+ * 没有新身份 / 时间没前进时**返回入参对象本身**,调用方据此判断要不要落盘。
+ */
+function mergeState(base: RecentModelsState, extra: RecentModelsState | null): RecentModelsState {
+  if (!extra || extra.items.length === 0) return base;
+  const byKey = new Map(base.items.map((item) => [modelConfigCopyIdentity(item), item]));
+  let changed = false;
+  for (const item of extra.items) {
+    const key = modelConfigCopyIdentity(item);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, item);
+      changed = true;
+      continue;
+    }
+    if (item.usedAt > existing.usedAt) {
+      byKey.set(key, item);
+      changed = true;
+    }
+  }
+  if (!changed) return base;
+  return {
+    items: [...byKey.values()].sort((a, b) => b.usedAt - a.usedAt).slice(0, RECENT_MODELS_KEEP),
+  };
+}
+
+/**
  * 一次写入 = **同步乐观写**(热更强退不丢)+ 把 op 记进**当时那个 key** 的会话 op-log 并调度
  * 一次锁内调和。owner 随后被切走也不放弃调和 —— 调和按捕获的 key 自洽运行。
+ *
+ * 写基底 = **磁盘真相 ∪ 本窗内存态**(2026-09-16 review P2):上一次写若失败(配额 / 私密
+ * 窗口),那条记录只活在本窗内存里,而 `freshState()` 只按 key 读回磁盘 —— 拿它当基底再写一次
+ * 会把「刚记下但没落盘」的那条顺手抹掉(磁盘上有旧快照时尤其明显)。并集只增不减,重复写无害。
  */
 function commitOp(op: RecentModelsOp): void {
-  const base = freshState();
+  const base = mergeState(freshState(), cache);
   const next = applyOp(base, op);
   if (next !== base) persist(next);
   const key = storageKey();
@@ -358,6 +390,14 @@ export function setRecentModelsOwner(ownerId: string | null): void {
   activeDataOwnerId = normalized;
   cache = null;
   emit();
+}
+
+/**
+ * 当前分区归属(可能为 null = 未登录 / 本地模式)。调用方在**发起异步选择时**捕获它,回调落地
+ * 前再比一次 —— 归属变了就不能把记录写进新分区(`xdt:recentModels:v1:<dataOwnerId>`)。
+ */
+export function getRecentModelsOwner(): string | null {
+  return activeDataOwnerId;
 }
 
 /** 测试用 —— 重置缓存 / owner / 订阅者 / op-log + 清 localStorage(其它代码不应调用)。 */

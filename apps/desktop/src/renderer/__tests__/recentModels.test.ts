@@ -68,6 +68,29 @@ function installStorageBus(): void {
   };
 }
 
+/** `navigator.locks` 的最小串行队列 polyfill(node env 没有 Web Locks;同 modelEnginePrefs.test)。 */
+function installLocks(): void {
+  const tails = new Map<string, Promise<unknown>>();
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: (name: string, callback: () => unknown) => {
+        const previous = tails.get(name) ?? Promise.resolve();
+        const run = previous.then(() => callback());
+        tails.set(
+          name,
+          run.catch(() => undefined),
+        );
+        return run;
+      },
+    },
+  });
+}
+
+/** 等锁内调和跑完(microtask + 事件队列各让几轮)。 */
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 async function loadModule() {
   return await import('@/state/recentModels');
 }
@@ -189,6 +212,98 @@ describe('recentModels store', () => {
       { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc', usedAt: 300 },
       { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc', effort: 'high', usedAt: 200 },
     ]);
+  });
+
+  it('写失败后再写成功:磁盘旧快照不能把只存在内存里的那条顶掉', async () => {
+    const m = await loadModule();
+    m.recordRecentModel(OPUS, 1000);
+    // 配额满:B 没落盘,只活在内存里(缓存仍更新)。
+    vi.spyOn(memStorage, 'setItem').mockImplementationOnce(() => {
+      throw new Error('quota');
+    });
+    m.recordRecentModel(SOL, 2000);
+    expect(m.listRecentModels().map((item) => item.modelId)).toEqual([
+      'gpt-5.6-sol',
+      'claude-opus-5',
+    ]);
+    // 下一次成功写入的基底 = 磁盘真相 ∪ 内存态,不能只看磁盘(否则 B 被抹掉)。
+    m.recordRecentModel({ providerId: 'anthropic', modelId: 'claude-sonnet-5', agent: 'cc' }, 3000);
+    expect(
+      m
+        .listRecentModels()
+        .map((item) => item.modelId)
+        .sort(),
+    ).toEqual(['claude-opus-5', 'claude-sonnet-5', 'gpt-5.6-sol']);
+    const persisted = JSON.parse(memStorage.getItem(m.__STORAGE_KEY) as string) as {
+      items: Array<{ modelId: string }>;
+    };
+    expect(persisted.items.map((item) => item.modelId).sort()).toEqual([
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'gpt-5.6-sol',
+    ]);
+  });
+
+  it('跨窗口迟到覆盖:锁内重放 op-log 把本窗的记录重新断言(两份都留;重复调和幂等)', async () => {
+    installLocks();
+    installStorageBus();
+    const m = await loadModule();
+    m.recordRecentModel(OPUS, 1000);
+    // 别窗拿旧基底做的整表覆盖:磁盘上只剩对方那一条。
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        items: [{ providerId: 'openai', modelId: 'gpt-5.6-sol', agent: 'codex', usedAt: 2000 }],
+      }),
+    );
+    await flushAsync();
+    // 本窗的 op 被重新断言:A 回来了(按 usedAt 排在 B 后面)。
+    expect(m.listRecentModels().map((item) => item.modelId)).toEqual([
+      'gpt-5.6-sol',
+      'claude-opus-5',
+    ]);
+    // 再广播一次:无差异不写,状态收敛(不活锁)。
+    const diskBefore = memStorage.getItem(m.__STORAGE_KEY);
+    memStorage.setItem(
+      m.__STORAGE_KEY,
+      JSON.stringify({
+        items: [
+          { providerId: 'openai', modelId: 'gpt-5.6-sol', agent: 'codex', usedAt: 2000 },
+          { providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc', usedAt: 1000 },
+        ],
+      }),
+    );
+    await flushAsync();
+    expect(memStorage.getItem(m.__STORAGE_KEY)).toBe(diskBefore);
+    expect(m.listRecentModels()).toHaveLength(2);
+  });
+
+  it('切换 owner 后旧分区仍按原 key 调和,不写进新分区', async () => {
+    installLocks();
+    installStorageBus();
+    const m = await loadModule();
+    m.setRecentModelsOwner('user-a');
+    const keyA = `${m.__STORAGE_KEY}:user-a`;
+    m.recordRecentModel(OPUS, 1000);
+    m.setRecentModelsOwner('user-b');
+    // 别窗迟到覆盖 A 分区。
+    memStorage.setItem(
+      keyA,
+      JSON.stringify({
+        items: [{ providerId: 'openai', modelId: 'gpt-5.6-sol', agent: 'codex', usedAt: 2000 }],
+      }),
+    );
+    await flushAsync();
+    const persistedA = JSON.parse(memStorage.getItem(keyA) as string) as {
+      items: Array<{ modelId: string }>;
+    };
+    expect(persistedA.items.map((item) => item.modelId).sort()).toEqual([
+      'claude-opus-5',
+      'gpt-5.6-sol',
+    ]);
+    // B 分区不受影响,当前视图也不串数据。
+    expect(memStorage.getItem(`${m.__STORAGE_KEY}:user-b`)).toBeNull();
+    expect(m.listRecentModels()).toEqual([]);
   });
 
   it('storage 事件重读真相,且不采信迟到的旧事件', async () => {

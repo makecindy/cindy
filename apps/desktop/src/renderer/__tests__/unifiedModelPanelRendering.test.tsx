@@ -215,6 +215,7 @@ import {
   __resetForTest as resetRecentModels,
   listRecentModels,
   recordRecentModel,
+  setRecentModelsOwner,
 } from '@/state/recentModels';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 
@@ -4099,6 +4100,56 @@ describe('统一面板 · 最近使用记录与陈列', () => {
       fireEvent.click(favRow as HTMLElement);
     });
     expect(listRecentModels().map((item) => item.modelId)).toEqual(['gpt-5.6']);
+  });
+
+  it('选择在途时切换归属:不把记录写进新分区(2026-09-17 review P1 跨账号串写)', async () => {
+    let settle: ((applied: boolean) => void) | null = null;
+    const pending = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
+    renderPanel({
+      recordRecentUsage: true,
+      onProviderChange: vi.fn(() => pending),
+      currentProviderId: 'openai',
+      modelId: 'gpt-5.5',
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.6'));
+    });
+    // 选择还在飞:用户登出 / 切到本地模式(另一个分区)。
+    await act(async () => {
+      setRecentModelsOwner('user-b');
+    });
+    await act(async () => {
+      settle?.(true);
+      await pending;
+    });
+    // 异步链条(选模回调 → 记录判定)还要再让一拍,避免 act 警告。
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // 旧 Promise 落地时归属已变 → 整条丢弃,新分区看不到这条记录。
+    expect(listRecentModels()).toEqual([]);
+  });
+
+  it('设置类入口(configurationEnabled=false)不渲染无响应的自定义按钮 / 不宣告 ←', async () => {
+    renderPanel({ configurationEnabled: false });
+    const row = rowFor('GPT-5.5');
+    // 之前只靠面板层 noop 中和,按钮与快捷键仍宣告存在(点了没反应)。
+    expect(row.querySelector('[data-row-customize]')).toBeNull();
+    expect(row.getAttribute('aria-keyshortcuts')).toBeNull();
+    const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    row.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(false);
+    await act(async () => {
+      fireEvent.keyDown(row, { key: 'ArrowLeft' });
+    });
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+    // 选模型本身不受影响。
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high', false);
   });
 
   it('rail 的「最近」格在收藏之上,点击后只留最近区', async () => {
