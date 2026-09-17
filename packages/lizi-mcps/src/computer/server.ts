@@ -5,12 +5,9 @@ import { z } from 'zod';
 import { jsonObjectArg } from '../json-object-arg.js';
 import { resolvePathInsideRoot, PathBoundaryError } from '../shared/assertInsidePath.js';
 import {
-  authorizeSessionPathWithPinnedAncestors,
+  authorizeSessionPathOutsideWorkdir,
   authorizedSessionPathStillBound,
-  captureSessionPathAncestors,
-  grantedSessionPathAncestorsStillMatch,
   resolveCanonicalSessionPath,
-  type SessionPathAncestorIdentity,
 } from '../session-path-auth.js';
 import type {
   ComputerMcpCallContext,
@@ -292,7 +289,6 @@ function isInsideDir(parent: string, child: string): boolean {
 type AuthorizedOutsidePath = {
   path: string;
   isCurrent?: () => boolean;
-  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 };
 
 function authorizedDirPath(
@@ -364,17 +360,7 @@ async function authorizedPathStillBound(
   workingDir: string,
   authorized: AuthorizedOutsidePath,
 ): Promise<boolean> {
-  if (!await authorizedSessionPathStillBound(workingDir, authorized.path)) return false;
-  if (!authorized.authorizedAncestors?.length) return false;
-  const current = await captureSessionPathAncestors(authorized.path);
-  return Boolean(
-    current
-    && grantedSessionPathAncestorsStillMatch(
-      authorized.authorizedAncestors,
-      current,
-      authorized.path,
-    ),
-  );
+  return authorizedSessionPathStillBound(workingDir, authorized.path);
 }
 
 async function resolveReplayBoundPath(
@@ -1122,7 +1108,7 @@ export function createComputerMcpServer(
             parsedData[key] = abs;
             continue;
           }
-          const auth = await authorizeSessionPathWithPinnedAncestors({
+          const auth = await authorizeSessionPathOutsideWorkdir({
             sessionId: sessionContext?.sessionId,
             sessionInstanceId: sessionContext?.sessionInstanceId,
             workingDir,
@@ -1135,7 +1121,6 @@ export function createComputerMcpServer(
             parsedData[key] = abs;
             authorizedOutsidePaths.set(key, {
               path: abs,
-              authorizedAncestors: auth.authorizedAncestors,
               ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
             });
             continue;

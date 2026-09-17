@@ -64,26 +64,6 @@ describe('writeForgeScaffoldWithStableParent', () => {
     expect(child.kill).toHaveBeenCalledOnce();
   });
 
-  it('does not post the scaffold after the grant expires while the worker starts', async () => {
-    const child = new FakeUtilityProcess();
-    mocks.fork.mockReturnValue(child);
-    let current = true;
-    const result = writeForgeScaffoldWithStableParent({
-      ...request,
-      isCurrent: () => current,
-    });
-    current = false;
-    child.emit('message', { type: 'ready' });
-
-    await expect(result).resolves.toEqual({
-      ok: false,
-      errorCode: 'PERMISSION_DENIED',
-      message: 'Task or Plan permissions changed; retry with the current scope.',
-    });
-    expect(child.postMessage).not.toHaveBeenCalled();
-    expect(child.kill).toHaveBeenCalledOnce();
-  });
-
   it('keeps worker stderr bounded when one chunk exceeds the limit', async () => {
     const child = new FakeUtilityProcess();
     mocks.fork.mockReturnValue(child);

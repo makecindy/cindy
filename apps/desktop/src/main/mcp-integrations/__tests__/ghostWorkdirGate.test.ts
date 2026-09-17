@@ -136,22 +136,6 @@ vi.mock('../../logger.js', () => ({
 // Claude 走建线闭包 ctx；Codex / Pi 用此 mock 模拟 HTTP bridge 的 ALS 恢复。
 vi.mock('@cindy/mcps', () => ({
   getLiziMcpSessionContext: () => alsSessionContextMock(),
-  captureSessionPathAncestors: async (target: string) => (
-    target
-      ? [{
-        path: target,
-        dev: 1n,
-        ino: 1n,
-        kind: 'directory' as const,
-        size: 0n,
-        mtimeNs: 1n,
-        ctimeNs: 1n,
-      }]
-      : null
-  ),
-  grantedSessionPathAncestorsStillMatch: () => true,
-  SESSION_PATH_IDENTITY_CHANGED_REASON: '路径在确认期间发生了变化，这次越界路径授权已失效。请确认目标仍是当时看到的文件后重试。',
-  SESSION_PATH_IDENTITY_UNPINNABLE_REASON: '路径在确认时无法钉住已授权身份。请确认文件仍是普通路径后重试。',
 }));
 
 const isAuthorizationSessionMock = vi.fn(async () => false);
@@ -819,17 +803,7 @@ describe('Forge workdir-out permission path', () => {
       }),
     );
     expect(packGhostDirMock.mock.calls[0]?.[1]?.isCurrent?.()).toBe(true);
-    expect(packGhostDirMock.mock.calls[0]?.[1]?.authorizedAncestors).toEqual([
-      {
-        path: fs.realpathSync.native(sourceDir),
-        dev: 1n,
-        ino: 1n,
-        kind: 'directory',
-        size: 0n,
-        mtimeNs: 1n,
-        ctimeNs: 1n,
-      },
-    ]);
+    expect(packGhostDirMock.mock.calls[0]?.[1]?.authorizedAncestors).toBeUndefined();
   });
 
   it('Auto-review allow packs an outside source', async () => {

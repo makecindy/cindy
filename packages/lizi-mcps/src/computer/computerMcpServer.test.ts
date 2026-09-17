@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import fsSync, { type Dir, type Dirent } from 'node:fs';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -1141,50 +1141,6 @@ describe('createComputerMcpServer', () => {
     await fs.rm(grantedParent, { recursive: true, force: true });
   });
 
-  it('does not dispatch an authorized screenshot after the parent is replaced by another directory', async () => {
-    const deps: ComputerMcpDeps = {
-      getStatus: vi.fn(),
-      callTool: vi.fn(async () => ({ ok: true })),
-    };
-    const root = await makeWorkingDir();
-    const grantedParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-shot-dir-')));
-    const evilParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-shot-dir-evil-')));
-    const granted = path.join(grantedParent, 'out.png');
-    await fs.writeFile(path.join(evilParent, 'out.png'), 'evil');
-    setSessionPathAuthorizer(async () => {
-      await fs.rm(grantedParent, { recursive: true, force: true });
-      await fs.rename(evilParent, grantedParent);
-      return { allowed: true };
-    });
-    const h = await makeHarness(deps, {
-      getSessionContext: () => ({
-        agentKind: 'claude-code',
-        workingDir: root,
-        sessionId: 'screenshot-dir-swapped',
-      }),
-    });
-
-    const payload = textPayload(await h.client.callTool({
-      name: 'call_tool',
-      arguments: {
-        name: 'get_window_state',
-        args: {
-          pid: 123,
-          window_id: 7,
-          capture_mode: 'vision',
-          screenshot_out_file: granted,
-        },
-      },
-    })) as { ok: boolean; errorCode?: string };
-
-    expect(payload.ok).toBe(false);
-    expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
-    expect(deps.callTool).not.toHaveBeenCalled();
-    await h.cleanup();
-    await fs.rm(root, { recursive: true, force: true });
-    await fs.rm(grantedParent, { recursive: true, force: true });
-  });
-
   it('authorizes a workdir symlink screenshot path as the real target', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),
@@ -1398,63 +1354,6 @@ describe('createComputerMcpServer', () => {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(grantedParent, { recursive: true, force: true });
     await fs.rm(evilParent, { recursive: true, force: true });
-  });
-
-  it('does not read turn files after the granted replay directory is replaced', async () => {
-    const deps: ComputerMcpDeps = {
-      getStatus: vi.fn(),
-      callTool: vi.fn(async () => ({ ok: true })),
-    };
-    const root = await makeWorkingDir();
-    const grantedParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-replace-')));
-    const evilParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-replace-evil-')));
-    const grantedDir = await writeTrajectory(grantedParent, [
-      { tool: 'click', arguments: { pid: 123, window_id: 7, x: 1, y: 1 } },
-      { tool: 'click', arguments: { pid: 123, window_id: 7, x: 2, y: 2 } },
-    ]);
-    const evilDir = await writeTrajectory(evilParent, [
-      { tool: 'click', arguments: { pid: 999, window_id: 9, x: 9, y: 9 } },
-      { tool: 'click', arguments: { pid: 999, window_id: 9, x: 8, y: 8 } },
-    ]);
-    setSessionPathAuthorizer(async () => ({ allowed: true, isCurrent: () => true }));
-    const originalOpendir = fs.opendir.bind(fs);
-    const opendirSpy = vi.spyOn(fs, 'opendir').mockImplementation(async (target, options) => {
-      const dir = await originalOpendir(target, options);
-      if (path.resolve(String(target)) !== path.resolve(grantedDir)) return dir;
-      const entries: Dirent[] = [];
-      for await (const entry of dir) entries.push(entry);
-      await fs.rm(grantedDir, { recursive: true, force: true });
-      await fs.rename(evilDir, grantedDir);
-      return {
-        async *[Symbol.asyncIterator]() {
-          yield* entries;
-        },
-        close: async () => {},
-      } as Dir;
-    });
-    const h = await makeHarness(deps, {
-      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
-    });
-
-    try {
-      const payload = textPayload(await h.client.callTool({
-        name: 'call_tool',
-        arguments: {
-          name: 'replay_trajectory',
-          args: { dir: grantedDir, delay_ms: 0, stop_on_error: false },
-        },
-      })) as { ok: boolean; errorCode?: string };
-
-      expect(payload.ok).toBe(false);
-      expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
-      expect(deps.callTool).not.toHaveBeenCalled();
-    } finally {
-      opendirSpy.mockRestore();
-      await h.cleanup();
-      await fs.rm(root, { recursive: true, force: true });
-      await fs.rm(grantedParent, { recursive: true, force: true });
-      await fs.rm(evilParent, { recursive: true, force: true });
-    }
   });
 
   it('suggests omitting screenshot_out_file when the session has no workingDir', async () => {

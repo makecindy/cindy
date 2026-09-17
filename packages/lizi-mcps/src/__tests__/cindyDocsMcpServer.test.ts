@@ -27,7 +27,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
-import { captureSessionPathAncestors, setSessionPathAuthorizer } from '../session-path-auth.js';
+import { setSessionPathAuthorizer } from '../session-path-auth.js';
 import {
   DOCX_MAX_MARKDOWN_BYTES,
   DOCX_MAX_SUBTITLE_BYTES,
@@ -1271,29 +1271,6 @@ describe('路径边界与覆盖语义', () => {
     await expect(fs.stat(outside)).rejects.toThrow();
   });
 
-  it('确认期间外部父目录被换成另一个普通目录则不再写入', async () => {
-    const grantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-swap-during-'));
-    created.push(grantRoot);
-    const grantedDir = path.join(await fs.realpath(grantRoot), 'granted');
-    const evilDir = path.join(await fs.realpath(grantRoot), 'evil');
-    await fs.mkdir(grantedDir);
-    await fs.mkdir(evilDir);
-    const outPath = path.join(grantedDir, 'out.docx');
-    setSessionPathAuthorizer(async () => {
-      await fs.rm(grantedDir, { recursive: true, force: true });
-      await fs.rename(evilDir, grantedDir);
-      return { allowed: true, isCurrent: () => true };
-    });
-    const client = await connect();
-    const result = await callTool(client, 'make_docx', {
-      markdown: '# swapped',
-      outPath,
-    });
-    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
-    expect((result.data as Record<string, string>).hint).toContain('确认期间');
-    await expect(fs.stat(outPath)).rejects.toThrow();
-  });
-
   it('授权后权限失效则不再落盘', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-grant-'));
     created.push(outside);
@@ -1344,33 +1321,12 @@ describe('路径边界与覆盖语义', () => {
     created.push(outsideDir);
     const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
     await fs.writeFile(granted, 'granted-bytes');
-    const isCurrent = vi.fn()
-      .mockReturnValueOnce(true)
-      .mockReturnValue(false);
     await expect(readInputFileWithinLimit(
       workdir,
       granted,
       1024,
       (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
-      { allowOutsideRoot: true, isCurrent },
-    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
-  });
-
-  it('读完外部输入后授权代次失效则不返回字节', async () => {
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-return-'));
-    created.push(outsideDir);
-    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
-    await fs.writeFile(granted, 'granted-bytes');
-    const isCurrent = vi.fn()
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(true)
-      .mockReturnValue(false);
-    await expect(readInputFileWithinLimit(
-      workdir,
-      granted,
-      1024,
-      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
-      { allowOutsideRoot: true, isCurrent },
+      { allowOutsideRoot: true, isCurrent: () => false },
     )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
   });
 
@@ -1391,87 +1347,6 @@ describe('路径边界与覆盖语义', () => {
 
     await fs.rm(granted);
     await fs.symlink(other, granted);
-    await expect(readInputFileWithinLimit(
-      workdir,
-      granted,
-      1024,
-      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
-      { allowOutsideRoot: true },
-    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
-  });
-
-  it('获批的外部输入在父目录被换成符号链接后不再跟读', async () => {
-    const grantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-ancestor-'));
-    created.push(grantRoot);
-    const grantedDir = path.join(await fs.realpath(grantRoot), 'granted');
-    const evilDir = path.join(await fs.realpath(grantRoot), 'evil');
-    await fs.mkdir(grantedDir);
-    await fs.mkdir(evilDir);
-    const granted = path.join(grantedDir, 'input.txt');
-    await fs.writeFile(granted, 'granted-bytes');
-    await fs.writeFile(path.join(evilDir, 'input.txt'), 'evil-bytes');
-    const ancestors = await captureSessionPathAncestors(granted);
-    expect(ancestors).not.toBeNull();
-
-    await expect(readInputFileWithinLimit(
-      workdir,
-      granted,
-      1024,
-      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
-      { allowOutsideRoot: true, authorizedAncestors: ancestors ?? undefined },
-    )).resolves.toEqual(Buffer.from('granted-bytes'));
-
-    await fs.rm(grantedDir, { recursive: true, force: true });
-    await fs.symlink(evilDir, grantedDir, process.platform === 'win32' ? 'junction' : 'dir');
-    await expect(readInputFileWithinLimit(
-      workdir,
-      granted,
-      1024,
-      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
-      { allowOutsideRoot: true, authorizedAncestors: ancestors ?? undefined },
-    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
-  });
-
-  it('获批的外部输入在父目录被换成另一个普通目录后不再跟读', async () => {
-    const grantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-parent-dir-'));
-    created.push(grantRoot);
-    const grantedDir = path.join(await fs.realpath(grantRoot), 'granted');
-    const evilDir = path.join(await fs.realpath(grantRoot), 'evil');
-    await fs.mkdir(grantedDir);
-    await fs.mkdir(evilDir);
-    const granted = path.join(grantedDir, 'input.txt');
-    await fs.writeFile(granted, 'granted-bytes');
-    await fs.writeFile(path.join(evilDir, 'input.txt'), 'evil-bytes');
-    const ancestors = await captureSessionPathAncestors(granted);
-    expect(ancestors).not.toBeNull();
-
-    await fs.rm(grantedDir, { recursive: true, force: true });
-    await fs.rename(evilDir, grantedDir);
-    await expect(readInputFileWithinLimit(
-      workdir,
-      granted,
-      1024,
-      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
-      { allowOutsideRoot: true, authorizedAncestors: ancestors ?? undefined },
-    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
-  });
-
-  it('校验后父目录被替换则打开的不是确认过的身份', async () => {
-    const grantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-open-swap-'));
-    created.push(grantRoot);
-    const grantedDir = path.join(await fs.realpath(grantRoot), 'granted');
-    const evilDir = path.join(await fs.realpath(grantRoot), 'evil');
-    await fs.mkdir(grantedDir);
-    await fs.mkdir(evilDir);
-    const granted = path.join(grantedDir, 'input.txt');
-    await fs.writeFile(granted, 'granted-bytes');
-    await fs.writeFile(path.join(evilDir, 'input.txt'), 'evil-bytes');
-    const originalOpen = fs.open.bind(fs);
-    vi.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
-      await fs.rm(grantedDir, { recursive: true, force: true });
-      await fs.symlink(evilDir, grantedDir, process.platform === 'win32' ? 'junction' : 'dir');
-      return originalOpen(...args);
-    });
     await expect(readInputFileWithinLimit(
       workdir,
       granted,

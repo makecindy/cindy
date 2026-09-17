@@ -14,7 +14,6 @@
  * 同一套清单/真实包校验；安装动作本身不另设能力确认弹窗。
  */
 
-import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -22,13 +21,6 @@ import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
 
-import {
-  captureSessionPathAncestors,
-  grantedSessionPathAncestorsStillMatch,
-  SESSION_PATH_IDENTITY_CHANGED_REASON,
-  SESSION_PATH_IDENTITY_UNPINNABLE_REASON,
-  type SessionPathAncestorIdentity,
-} from '@cindy/mcps';
 import {
   PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES,
   PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES,
@@ -172,73 +164,6 @@ function shouldSkip(name: string): boolean {
   return false;
 }
 
-/**
- * 把 .cindy 写进规范源码目录,且绝不跟随已有产物符号链接。
- * `writeFile` 会穿过同名链接覆盖授权目录外的目标;这里先拒链接,再经同目录
- * 点文件临时名 + rename 发布,覆盖时删的也是链接自身而不是它的真实目标。
- */
-function permissionDenied(message: string): Error {
-  return Object.assign(new Error(message), { code: 'EPERM' });
-}
-
-async function assertAuthorizedForgeParent(
-  destPath: string,
-  options?: ForgeOutsideGrantOptions,
-): Promise<void> {
-  if (!options?.allowOutsideWorkdir || !options.authorizedDir) return;
-  const stale = staleOutsideForgeGrant(options);
-  if (stale) throw permissionDenied(stale.message);
-  const identity = await staleOutsideForgeIdentity(options);
-  if (identity) throw permissionDenied(identity.message);
-  const parent = path.resolve(path.dirname(destPath));
-  const authorized = path.resolve(options.authorizedDir);
-  if (process.platform === 'win32'
-    ? parent.toLowerCase() !== authorized.toLowerCase()
-    : parent !== authorized) {
-    throw permissionDenied('打包产物不在已授权目录内');
-  }
-}
-
-async function writeForgePackageWithoutFollowing(
-  destPath: string,
-  buf: Buffer,
-  options?: ForgeOutsideGrantOptions,
-): Promise<void> {
-  try {
-    if ((await fs.promises.lstat(destPath)).isSymbolicLink()) {
-      throw Object.assign(new Error('打包产物路径是符号链接，已停止写入'), { code: 'ELOOP' });
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
-  await assertAuthorizedForgeParent(destPath, options);
-  const tmpPath = path.join(
-    path.dirname(destPath),
-    `.${path.basename(destPath)}.${randomBytes(8).toString('hex')}.tmp`,
-  );
-  let published = false;
-  try {
-    await fs.promises.writeFile(tmpPath, buf, { flag: 'wx' });
-    await assertAuthorizedForgeParent(destPath, options);
-    try {
-      const listed = await fs.promises.lstat(destPath);
-      if (listed.isSymbolicLink()) {
-        throw Object.assign(new Error('打包产物路径是符号链接，已停止写入'), { code: 'ELOOP' });
-      }
-      await fs.promises.unlink(destPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    }
-    await fs.promises.rename(tmpPath, destPath);
-    published = true;
-    await assertAuthorizedForgeParent(destPath, options);
-  } catch (err) {
-    await fs.promises.unlink(tmpPath).catch(() => undefined);
-    if (published) await fs.promises.unlink(destPath).catch(() => undefined);
-    throw err;
-  }
-}
-
 export type ForgePackResult =
   | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer }
   | {
@@ -301,7 +226,6 @@ export interface ForgeScaffoldWriteRequest {
     ino: bigint;
   };
   files: Array<{ path: string; base64: string }>;
-  isCurrent?: () => boolean;
 }
 
 export type ForgeScaffoldWriteResult =
@@ -318,7 +242,6 @@ type ForgeOutsideGrantOptions = {
   allowOutsideWorkdir?: boolean;
   authorizedDir?: string;
   isCurrent?: () => boolean;
-  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 };
 
 function staleOutsideForgeGrant(
@@ -327,23 +250,6 @@ function staleOutsideForgeGrant(
   if (!options?.allowOutsideWorkdir || !options.authorizedDir) return null;
   if (options.isCurrent?.() === true) return null;
   return { ok: false, errorCode: 'PERMISSION_DENIED', message: FORGE_OUTSIDE_GRANT_STALE_MESSAGE };
-}
-
-async function staleOutsideForgeIdentity(
-  options?: ForgeOutsideGrantOptions,
-): Promise<{ ok: false; errorCode: 'PERMISSION_DENIED'; message: string } | null> {
-  if (!options?.allowOutsideWorkdir || !options.authorizedDir) return null;
-  if (!options.authorizedAncestors?.length) {
-    return { ok: false, errorCode: 'PERMISSION_DENIED', message: SESSION_PATH_IDENTITY_UNPINNABLE_REASON };
-  }
-  const current = await captureSessionPathAncestors(options.authorizedDir);
-  if (
-    !current
-    || !grantedSessionPathAncestorsStillMatch(options.authorizedAncestors, current, options.authorizedDir)
-  ) {
-    return { ok: false, errorCode: 'PERMISSION_DENIED', message: SESSION_PATH_IDENTITY_CHANGED_REASON };
-  }
-  return null;
 }
 
 /** 生成插件清单；先走正式校验，再允许任何文件落盘。 */
@@ -673,7 +579,6 @@ export async function scaffoldGhostDir(
     allowOutsideWorkdir?: boolean;
     authorizedDir?: string;
     isCurrent?: () => boolean;
-    authorizedAncestors?: readonly SessionPathAncestorIdentity[];
   },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
@@ -732,8 +637,6 @@ export async function scaffoldGhostDir(
     ) {
       return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
     }
-    const identity = await staleOutsideForgeIdentity(options);
-    if (identity) return identity;
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     let resolvedForbiddenRoot: string;
@@ -852,10 +755,6 @@ export async function scaffoldGhostDir(
   }
   const staleBeforeWrite = staleOutsideForgeGrant(options);
   if (staleBeforeWrite) return staleBeforeWrite;
-  const identityBeforeWrite = await staleOutsideForgeIdentity(options);
-  if (identityBeforeWrite) return identityBeforeWrite;
-  const staleAfterIdentity = staleOutsideForgeGrant(options);
-  if (staleAfterIdentity) return staleAfterIdentity;
   const writeResult = await options.writeScaffold({
     parentDir,
     targetName: path.basename(targetDir),
@@ -866,7 +765,6 @@ export async function scaffoldGhostDir(
         'base64',
       ),
     })),
-    ...(options?.isCurrent ? { isCurrent: options.isCurrent } : {}),
   });
   if (!writeResult.ok) {
     return { ok: false, errorCode: writeResult.errorCode, message: writeResult.message };
@@ -1470,8 +1368,6 @@ export async function packGhostDir(
      * long pack and immediately before the `.cindy` write.
      */
     isCurrent?: () => boolean;
-    /** Grant-time ancestor identity; rechecked before read and write. */
-    authorizedAncestors?: readonly SessionPathAncestorIdentity[];
   },
 ): Promise<ForgePackResult> {
   // Forge 打包出口专属安全门(C-4 + #7):source 默认必须在会话 workdir 内;Host 已按
@@ -1517,8 +1413,6 @@ export async function packGhostDir(
         message: 'Forge source must be inside the current session workdir',
       };
     }
-    const identity = await staleOutsideForgeIdentity(options);
-    if (identity) return identity;
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
@@ -1557,15 +1451,12 @@ export async function packGhostDir(
   );
   const staleBeforeWrite = staleOutsideForgeGrant(options);
   if (staleBeforeWrite) return staleBeforeWrite;
-  const identityBeforeWrite = await staleOutsideForgeIdentity(options);
-  if (identityBeforeWrite) return identityBeforeWrite;
   try {
-    await writeForgePackageWithoutFollowing(cindyPath, built.buf, options);
+    await fs.promises.writeFile(cindyPath, built.buf);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
     return {
       ok: false,
-      errorCode: code === 'EPERM' ? 'PERMISSION_DENIED' : 'INTERNAL',
+      errorCode: 'INTERNAL',
       message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
     };
   }

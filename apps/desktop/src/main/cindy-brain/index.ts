@@ -5780,6 +5780,9 @@ async function updateLocalGhostPackageLocked(
   installOrigin?: 'agent-forge',
   isCurrent?: () => boolean,
 ): Promise<InstalledGhost> {
+  if (isCurrent?.() === false) {
+    throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
+  }
   const runtime = getGhostRuntime();
   const marketLedger = getPluginMarketLedger().bind(
     ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
@@ -5789,10 +5792,6 @@ async function updateLocalGhostPackageLocked(
   // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
   // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
   await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
-  if (isCurrent?.() === false) {
-    if (previousGhost) spawnIfResident(previousGhost);
-    throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
-  }
   let marketRecord: PluginMarketInstallationRecord | null;
   try {
     marketRecord = marketLedger.installationForGhost(inspected.manifest.id);
@@ -5838,11 +5837,6 @@ async function updateLocalGhostPackageLocked(
   }
   getGhostAgentSlot().clearGhost(inspected.manifest.id);
   getGhostErrandSlot().clearGhost(inspected.manifest.id);
-  if (isCurrent?.() === false) {
-    restoreMarketRecord();
-    if (previousGhost) spawnIfResident(previousGhost);
-    throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
-  }
   let result: Awaited<ReturnType<typeof manager.update>>;
   let packagePlaced = false;
   try {

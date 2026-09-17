@@ -5,12 +5,7 @@ import path from 'node:path';
 import { utilityProcess } from 'electron';
 
 import {
-  captureSessionPathAncestors,
   DocsPathError,
-  grantedSessionPathAncestorsStillPresent,
-  SESSION_PATH_IDENTITY_CHANGED_REASON,
-  SESSION_PATH_IDENTITY_UNPINNABLE_REASON,
-  type SessionPathAncestorIdentity,
   type WriteDocsOutputFn,
 } from '@cindy/mcps';
 
@@ -112,32 +107,8 @@ function assertDocsOutputGrantCurrent(input: { isCurrent?: () => boolean }): voi
   }
 }
 
-async function assertDocsOutputIdentity(input: {
-  path: string;
-  authorizedOutsideWorkdir?: boolean;
-  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
-}): Promise<void> {
-  if (!input.authorizedOutsideWorkdir) return;
-  if (!input.authorizedAncestors?.length) {
-    throw new DocsPathError(
-      'PATH_NOT_ALLOWED',
-      SESSION_PATH_IDENTITY_UNPINNABLE_REASON,
-      '请确认目标仍是当时看到的文件后重试。',
-    );
-  }
-  const current = await captureSessionPathAncestors(input.path);
-  if (!current || !grantedSessionPathAncestorsStillPresent(input.authorizedAncestors, current)) {
-    throw new DocsPathError(
-      'PATH_NOT_ALLOWED',
-      SESSION_PATH_IDENTITY_CHANGED_REASON,
-      '请确认目标仍是当时看到的文件后重试。',
-    );
-  }
-}
-
 export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
   assertDocsOutputGrantCurrent(input);
-  await assertDocsOutputIdentity(input);
   const parentDir = path.dirname(input.path);
   const lexicalParent = path.resolve(parentDir);
   const parentRelativePath = relativeOutputParentPath(input.root, lexicalParent);
@@ -158,7 +129,6 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
         '请改用任务工作目录内的输出路径，或确认外部目录在授权后没有被替换。',
       );
     }
-    await assertDocsOutputIdentity(input);
     const realParent = await fs.realpath(lexicalParent);
     return writeDocsOutput({
       ...input,
@@ -250,7 +220,6 @@ export const writeDocsOutput: WriteDocsOutputFn = async (input) => {
         void (async () => {
           try {
             assertDocsOutputGrantCurrent(input);
-            await assertDocsOutputIdentity(input);
             child.postMessage({ type: 'write', request });
           } catch (error) {
             finish(error);

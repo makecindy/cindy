@@ -39,8 +39,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   同样沿用会话权限；MCP 逐次审批标记不得覆盖 Full Access。Host 已按当前档位放行后，
   不得再因「不在会话工作目录内」悄悄硬断，把 Agent 晾在空转里。  cindy-docs 与电脑截图 /
   录制路径同样走这条会话权限，不得在工具层再静默 PATH_NOT_ALLOWED。  授权卡片与后续
-  I/O 绑定已解析的规范路径，工作目录里的 symlink 不能把越界目标藏成相对路径；
-  越界确认前钉住祖先身份，确认后必须对上；Forge 的授权代次要跟到最终写入和安装。电脑
+  I/O 绑定已解析的规范路径，工作目录里的 symlink 不能把越界目标藏成相对路径。电脑
   驱动契约只丢掉 Cindy 后加的兼容字段（目前是 `delivery_mode`），其它未知参数仍拒。Setup、OAuth、Secret 的信息
   输入与安装／更新策略保持原边界。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
   注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏

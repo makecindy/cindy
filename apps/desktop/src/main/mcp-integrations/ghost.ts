@@ -39,13 +39,8 @@ import type {
 } from 'cindy-tools';
 import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
 import {
-  captureSessionPathAncestors,
   getLiziMcpSessionContext,
-  grantedSessionPathAncestorsStillMatch,
-  SESSION_PATH_IDENTITY_CHANGED_REASON,
-  SESSION_PATH_IDENTITY_UNPINNABLE_REASON,
   type LiziMcpSessionContext,
-  type SessionPathAncestorIdentity,
   type SessionPathAuthorization,
   type SessionPathAuthorizationRequest,
 } from '@cindy/mcps';
@@ -190,7 +185,6 @@ type ForgeOutsideAccess =
       allowOutsideWorkdir: true;
       authorizedDir: string;
       isCurrent?: () => boolean;
-      authorizedAncestors: SessionPathAncestorIdentity[];
     }
   | { ok: false; errorCode: 'PERMISSION_DENIED'; message: string };
 
@@ -198,13 +192,11 @@ function forgeOutsidePackFlags(access: Extract<ForgeOutsideAccess, { ok: true }>
   allowOutsideWorkdir?: boolean;
   authorizedDir?: string;
   isCurrent?: () => boolean;
-  authorizedAncestors?: SessionPathAncestorIdentity[];
 } {
   return access.allowOutsideWorkdir
     ? {
         allowOutsideWorkdir: true,
         authorizedDir: access.authorizedDir,
-        authorizedAncestors: access.authorizedAncestors,
         ...(access.isCurrent ? { isCurrent: access.isCurrent } : {}),
       }
     : {};
@@ -256,10 +248,6 @@ async function authorizeForgeOutsideWorkdir(params: {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: live.message };
   }
   const authorizedDir = resolveCanonicalForgeDir(params.dir);
-  const grantedIdentity = await captureSessionPathAncestors(authorizedDir);
-  if (!grantedIdentity) {
-    return { ok: false, errorCode: 'PERMISSION_DENIED', message: SESSION_PATH_IDENTITY_UNPINNABLE_REASON };
-  }
   let size = 0;
   let isDirectory = true;
   try {
@@ -297,18 +285,10 @@ async function authorizeForgeOutsideWorkdir(params: {
   if (granted.isCurrent() === false) {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   }
-  const currentIdentity = await captureSessionPathAncestors(authorizedDir);
-  if (
-    !currentIdentity
-    || !grantedSessionPathAncestorsStillMatch(grantedIdentity, currentIdentity, authorizedDir)
-  ) {
-    return { ok: false, errorCode: 'PERMISSION_DENIED', message: SESSION_PATH_IDENTITY_CHANGED_REASON };
-  }
   return {
     ok: true,
     allowOutsideWorkdir: true,
     authorizedDir,
-    authorizedAncestors: currentIdentity,
     isCurrent: granted.isCurrent,
   };
 }
@@ -336,8 +316,6 @@ export async function authorizeDesktopSessionPath(
   }
   const live = requireLiveSessionInstance(request.sessionId, request.sessionInstanceId, getLiveSessionGrantState);
   if (!live.ok) return denyOutsideSessionPath(live.message);
-  const grantedIdentity = await captureSessionPathAncestors(request.path);
-  if (!grantedIdentity) return denyOutsideSessionPath(SESSION_PATH_IDENTITY_UNPINNABLE_REASON);
   let size = 0;
   let isDirectory = false;
   try {
@@ -369,13 +347,6 @@ export async function authorizeDesktopSessionPath(
   if (granted.isCurrent() === false) {
     return { allowed: false, reason: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   }
-  const currentIdentity = await captureSessionPathAncestors(request.path);
-  if (
-    !currentIdentity
-    || !grantedSessionPathAncestorsStillMatch(grantedIdentity, currentIdentity, request.path)
-  ) {
-    return denyOutsideSessionPath(SESSION_PATH_IDENTITY_CHANGED_REASON);
-  }
   return { allowed: true, isCurrent: granted.isCurrent };
 }
 
@@ -388,7 +359,6 @@ async function packForgeSource(
     allowOutsideWorkdir?: boolean;
     authorizedDir?: string;
     isCurrent?: () => boolean;
-    authorizedAncestors?: SessionPathAncestorIdentity[];
   } = {},
 ) {
   let iconPng: Buffer | undefined;
@@ -426,7 +396,6 @@ async function packForgeSource(
       ? {
           allowOutsideWorkdir: true,
           authorizedDir: packFlags.authorizedDir,
-          authorizedAncestors: packFlags.authorizedAncestors,
           ...(packFlags.isCurrent ? { isCurrent: packFlags.isCurrent } : {}),
         }
       : {}),

@@ -17,12 +17,8 @@ import path from 'node:path';
 
 import { resolveLiziMcpSessionContext, getLiziMcpSessionContext } from '../session-context.js';
 import {
-  authorizeSessionPathWithPinnedAncestors,
-  authorizedSessionPathStillBound,
-  captureSessionPathAncestors,
+  authorizeSessionPathOutsideWorkdir,
   resolveCanonicalSessionPath,
-  sameSessionPathAncestors,
-  type SessionPathAncestorIdentity,
 } from '../session-path-auth.js';
 import { PathBoundaryError, resolvePathInsideRoot } from '../shared/assertInsidePath.js';
 import type { DocsMcpSessionCtx, WriteDocsOutputFn } from './types.js';
@@ -31,7 +27,6 @@ export type PreparedDocsPath = {
   abs: string;
   authorizedOutsideWorkdir: boolean;
   isCurrent?: () => boolean;
-  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 };
 
 export function assertDocsGrantCurrent(isCurrent?: () => boolean): void {
@@ -47,12 +42,10 @@ export function assertDocsGrantCurrent(isCurrent?: () => boolean): void {
 export function docsReadOptions(prepared: PreparedDocsPath): {
   allowOutsideRoot?: boolean;
   isCurrent?: () => boolean;
-  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 } {
   return {
     allowOutsideRoot: prepared.authorizedOutsideWorkdir,
     ...(prepared.isCurrent ? { isCurrent: prepared.isCurrent } : {}),
-    ...(prepared.authorizedAncestors ? { authorizedAncestors: prepared.authorizedAncestors } : {}),
   };
 }
 
@@ -71,7 +64,6 @@ export async function commitDocsOutput(
     overwrite,
     authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
     ...(prepared.isCurrent ? { isCurrent: prepared.isCurrent } : {}),
-    ...(prepared.authorizedAncestors ? { authorizedAncestors: prepared.authorizedAncestors } : {}),
   });
 }
 
@@ -154,7 +146,7 @@ async function resolveDocsPath(
       ? resolveLiziMcpSessionContext(sessionCtx)
       : getLiziMcpSessionContext();
     const abs = await resolveCanonicalSessionPath(root, inputPath);
-    const auth = await authorizeSessionPathWithPinnedAncestors({
+    const auth = await authorizeSessionPathOutsideWorkdir({
       sessionId: ctx?.sessionId,
       sessionInstanceId: ctx?.sessionInstanceId,
       workingDir: root,
@@ -164,10 +156,12 @@ async function resolveDocsPath(
       operation,
     });
     if (!auth.allowed) toPathError(err, inputPath, auth.reason);
+    if (auth.isCurrent?.() === false) {
+      toPathError(err, inputPath, '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。');
+    }
     return {
       abs,
       authorizedOutsideWorkdir: true,
-      authorizedAncestors: auth.authorizedAncestors,
       ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
     };
   }
@@ -301,54 +295,22 @@ async function verifyOpenedInputStillInsideRoot(
   }
 }
 
-async function pinAuthorizedOutsideInput(
-  root: string,
-  abs: string,
-  expectedAncestors?: readonly SessionPathAncestorIdentity[],
-): Promise<SessionPathAncestorIdentity[]> {
-  if (!await authorizedSessionPathStillBound(root, abs)) throw changedInputPath(abs);
-  const ancestors = await captureSessionPathAncestors(abs);
-  if (!ancestors || ancestors[0]?.path !== path.resolve(abs)) throw changedInputPath(abs);
-  if (expectedAncestors && !sameSessionPathAncestors(expectedAncestors, ancestors)) {
-    throw changedInputPath(abs);
-  }
-  const listed = await fs.lstat(abs, { bigint: true });
-  const leaf = ancestors[0]!;
-  if (
-    !listed.isFile()
-    || listed.isSymbolicLink()
-    || leaf.kind !== 'file'
-    || listed.dev !== leaf.dev
-    || listed.ino !== leaf.ino
-    || listed.size !== leaf.size
-    || listed.mtimeNs !== leaf.mtimeNs
-    || listed.ctimeNs !== leaf.ctimeNs
-  ) {
-    throw changedInputPath(abs);
-  }
-  return ancestors;
-}
-
 export async function readInputFileWithinLimit(
   root: string,
   abs: string,
   maxBytes: number,
   tooLarge: (bytes: number) => DocsPathError,
-  options?: {
-    allowOutsideRoot?: boolean;
-    isCurrent?: () => boolean;
-    authorizedAncestors?: readonly SessionPathAncestorIdentity[];
-  },
+  options?: { allowOutsideRoot?: boolean; isCurrent?: () => boolean },
 ): Promise<Buffer> {
   assertDocsGrantCurrent(options?.isCurrent);
   // 校验与读取绑定到同一个已打开文件身份，封住路径检查后父目录被换成根外
   // symlink 的窗口；身份不可用的网络盘 fail closed，不拿 0 === 0 放行。
   let canonicalPath: string;
   let realRoot: string;
-  let outsideAncestors: SessionPathAncestorIdentity[] | undefined;
   try {
     if (options?.allowOutsideRoot) {
-      outsideAncestors = await pinAuthorizedOutsideInput(root, abs, options.authorizedAncestors);
+      const listed = await fs.lstat(abs, { bigint: true });
+      if (!listed.isFile() || listed.isSymbolicLink()) throw changedInputPath(abs);
       canonicalPath = abs;
       realRoot = abs;
     } else {
@@ -362,7 +324,6 @@ export async function readInputFileWithinLimit(
     if (err instanceof PathBoundaryError) toPathError(err, abs);
     throw changedInputPath(abs);
   }
-  assertDocsGrantCurrent(options?.isCurrent);
   const expectedStat = await fs.stat(canonicalPath, { bigint: true });
   const handle = await fs.open(
     canonicalPath,
@@ -373,20 +334,7 @@ export async function readInputFileWithinLimit(
     if (!stat.isFile() || !sameFileIdentity(expectedStat, stat)) {
       throw changedInputPath(canonicalPath);
     }
-    if (outsideAncestors) {
-      await pinAuthorizedOutsideInput(root, abs, outsideAncestors);
-      const leaf = outsideAncestors[0]!;
-      if (
-        leaf.kind !== 'file'
-        || stat.dev !== leaf.dev
-        || stat.ino !== leaf.ino
-        || stat.size !== leaf.size
-        || stat.mtimeNs !== leaf.mtimeNs
-        || stat.ctimeNs !== leaf.ctimeNs
-      ) {
-        throw changedInputPath(canonicalPath);
-      }
-    } else {
+    if (!options?.allowOutsideRoot) {
       await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, stat);
     }
     if (stat.size > BigInt(maxBytes)) throw tooLarge(Number(stat.size));
@@ -407,23 +355,9 @@ export async function readInputFileWithinLimit(
     if (offset !== data.length || !sameFileVersion(stat, after)) {
       throw changedInputPath(canonicalPath);
     }
-    if (outsideAncestors) {
-      await pinAuthorizedOutsideInput(root, abs, outsideAncestors);
-      const leaf = outsideAncestors[0]!;
-      if (
-        leaf.kind !== 'file'
-        || after.dev !== leaf.dev
-        || after.ino !== leaf.ino
-        || after.size !== leaf.size
-        || after.mtimeNs !== leaf.mtimeNs
-        || after.ctimeNs !== leaf.ctimeNs
-      ) {
-        throw changedInputPath(canonicalPath);
-      }
-    } else {
+    if (!options?.allowOutsideRoot) {
       await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, after);
     }
-    assertDocsGrantCurrent(options?.isCurrent);
     return data;
   } finally {
     await handle.close();
