@@ -192,6 +192,31 @@ function isHtmlPath(filePath: string): boolean {
   return /\.(html?|xhtml)$/i.test(filePath);
 }
 
+/**
+ * 把 `data-relpath` 对应的行在横轴上对齐到容器可见区（#4436 契约：行宽由内容
+ * 决定，深层缩进 + 长名字会撑出横向滚动区）。
+ *
+ * 非虚拟化版靠 `scrollIntoView` 默认的 `inline: 'nearest'` 一并处理横轴；虚拟化下
+ * 目标行常常是 `scrollToIndex` 之后才被渲染出来，且行绝对定位在宽 100% 的层里、
+ * 自身 `min-w-max` —— 直接量行的矩形更干净。只动横轴、不动纵轴，不跟虚拟器的
+ * 纵向居中打架；行还没渲染（虚拟器还没把它带进视口）时静默跳过。
+ */
+function alignRowHorizontally(container: HTMLElement | null, relPath: string): void {
+  if (!container) return;
+  // 按 dataset.relpath 精确比对，不走属性选择器：relPath 自带 `.` / `/` / `[]`
+  // 等字符，选择器得先转义（且 jsdom 下没有 CSS.escape）；渲染中的行数有界（视口 +
+  // overscan），逐行比对代价可忽略。
+  const el = Array.from(container.querySelectorAll<HTMLElement>('[data-relpath]')).find(
+    (node) => node.dataset.relpath === relPath,
+  );
+  if (!el) return;
+  const row = el.getBoundingClientRect();
+  const box = container.getBoundingClientRect();
+  const delta =
+    row.right > box.right ? row.right - box.right : row.left < box.left ? row.left - box.left : 0;
+  if (delta !== 0) container.scrollLeft += delta;
+}
+
 export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(function FileTreeView(
   {
     tree,
@@ -352,6 +377,13 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
         );
         if (index < 0) return; // 行不在当前树里（父目录未展开 / 文件不存在），静默 no-op
         virtualizerRef.current?.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
+        // 横轴：目标行可能仍停在视口右侧之外（深层缩进 + 长名字把行撑宽），
+        // 纵向到位后把该行横向也拉进可见区。行是由虚拟器按需渲染的，所以
+        // 现在、下一帧、smooth 纵向滚动结束后各试一次（见 helper 注释）。
+        const container = containerRef.current;
+        alignRowHorizontally(container, relPath);
+        requestAnimationFrame(() => alignRowHorizontally(container, relPath));
+        window.setTimeout(() => alignRowHorizontally(container, relPath), 320);
       },
     }),
     [],
