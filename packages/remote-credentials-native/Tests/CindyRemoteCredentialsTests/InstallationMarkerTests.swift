@@ -60,4 +60,21 @@ final class InstallationMarkerTests: XCTestCase {
     XCTAssertEqual(InstallationPublish.decide(errno: ENOTSUP), .createExclusive)
     XCTAssertEqual(InstallationPublish.decide(errno: EIO), .unavailable)
   }
+
+  func testExclusiveRenamePublishesACompleteFileAndDoesNotReplaceAWinner() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("cindy-rename-excl-" + UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let dest = directory.appendingPathComponent("installation-id")
+    let first = directory.appendingPathComponent("first")
+    let second = directory.appendingPathComponent("second")
+    let winner = Data(UUID().uuidString.lowercased().utf8)
+    try winner.write(to: first)
+    try Data(UUID().uuidString.lowercased().utf8).write(to: second)
+    XCTAssertEqual(renamex_np(first.path, dest.path, UInt32(RENAME_EXCL)), 0)
+    XCTAssertEqual(try Data(contentsOf: dest), winner)
+    XCTAssertNotEqual(renamex_np(second.path, dest.path, UInt32(RENAME_EXCL)), 0)
+    XCTAssertEqual(errno, EEXIST)
+    XCTAssertEqual(try Data(contentsOf: dest), winner)
+  }
 }

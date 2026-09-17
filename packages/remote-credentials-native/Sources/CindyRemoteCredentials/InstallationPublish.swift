@@ -3,6 +3,7 @@ import Darwin
 enum InstallationPublish {
   enum Decision {
     case adoptedExisting
+    /// Exclusive rename of a complete temporary file onto the marker path.
     case createExclusive
     case unavailable
   }

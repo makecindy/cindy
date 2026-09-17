@@ -195,12 +195,15 @@ internal class MobileCredentialClient(context: Context, activity: () -> Fragment
   }
   fun close(handle: String) { if (session?.handle == handle) close() }
   fun close() {
-    val state = session; epoch++; session = null; state?.close(); monitor?.cancel(); monitor = null
-    cancelInitializedVault(::vault.isInitialized) { vault.cancel() }
-    if (state != null) invalidated(state.handle)
+    val state = session; epoch++; session = null
+    runIsolated { state?.close() }
+    runIsolated { monitor?.cancel() }
+    monitor = null
+    runIsolated { cancelInitializedVault(::vault.isInitialized) { vault.cancel() } }
+    if (state != null) runIsolated { invalidated(state.handle) }
   }
-  fun reset() { close(); owner = null; token = ""; key = null; identity = null }
-  fun destroy() { reset(); scope.cancel() }
+  fun reset() { try { close() } finally { owner = null; token = ""; key = null; identity = null } }
+  fun destroy() { try { reset() } finally { scope.cancel() } }
   private fun current(handle: String): Session {
     val state = session
     requireCredential(state != null && state.handle == handle, "CREDENTIAL_INVALID_IDENTITY")

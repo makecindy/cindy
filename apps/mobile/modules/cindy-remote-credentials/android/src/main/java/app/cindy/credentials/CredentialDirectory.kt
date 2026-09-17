@@ -63,24 +63,29 @@ internal class CredentialInstallation(context: Context) {
   }
 }
 
+/** Appear the already-complete temp as `marker` or adopt a winner. Never create an empty dest. */
 private fun publishExclusiveMarker(temporary: File, marker: File) {
-  val fd = Os.open(
-    marker.path,
-    OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
-    384,
-  )
-  try {
-    val bytes = temporary.readBytes()
-    val written = Os.write(fd, bytes, 0, bytes.size)
-    if (written != bytes.size) throw CredentialFailure("CREDENTIAL_UNAVAILABLE")
-    Os.fsync(fd)
-  } catch (error: Exception) {
-    try { marker.delete() } catch (_: Exception) {}
-    if (error is ErrnoException) throw error
+  val lock = File(requireNotNull(marker.parentFile), ".installation.publish")
+  if (!acquireExclusivePublishLock(lock, marker)) {
+    if (marker.exists()) return
     throw CredentialFailure("CREDENTIAL_UNAVAILABLE")
-  } finally {
-    try { Os.close(fd) } catch (_: Exception) {}
   }
+  try {
+    if (marker.exists()) return
+    Os.rename(temporary.path, marker.path)
+  } catch (error: ErrnoException) {
+    if (error.errno == OsConstants.EEXIST || marker.exists()) return
+    throw error
+  } finally {
+    lock.delete()
+  }
+}
+
+private fun acquireExclusivePublishLock(lock: File, marker: File): Boolean {
+  if (lock.mkdir()) return true
+  if (marker.exists()) return false
+  if (System.currentTimeMillis() - lock.lastModified() < 10_000L || !lock.delete()) return false
+  return lock.mkdir()
 }
 
 internal class CredentialDirectory(private val realm: String, private val member: String) {

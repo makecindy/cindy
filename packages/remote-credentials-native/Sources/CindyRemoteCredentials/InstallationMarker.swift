@@ -28,7 +28,7 @@ public enum InstallationMarker {
         case .adoptedExisting:
           break
         case .createExclusive:
-          if try publishExclusiveMarker(file, bytes: bytes) { return id }
+          if try publishExclusiveMarker(from: temporary, to: file) { return id }
         case .unavailable:
           throw CredentialError.unavailable
         }
@@ -47,18 +47,9 @@ public enum InstallationMarker {
     } catch { throw CredentialError.unavailable }
   }
 
-  /// Exclusive create of a complete marker. Returns false when another writer won.
-  private static func publishExclusiveMarker(_ file: URL, bytes: [UInt8]) throws -> Bool {
-    let published = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-    if published >= 0 {
-      defer { close(published) }
-      guard bytes.withUnsafeBytes({ write(published, $0.baseAddress, $0.count) }) == bytes.count,
-        fsync(published) == 0 else {
-        unlink(file.path)
-        throw CredentialError.unavailable
-      }
-      return true
-    }
+  /// Exclusive rename of the already-complete temporary file. Returns false when another writer won.
+  private static func publishExclusiveMarker(from temporary: URL, to file: URL) throws -> Bool {
+    if renamex_np(temporary.path, file.path, UInt32(RENAME_EXCL)) == 0 { return true }
     guard errno == EEXIST else { throw CredentialError.unavailable }
     return false
   }

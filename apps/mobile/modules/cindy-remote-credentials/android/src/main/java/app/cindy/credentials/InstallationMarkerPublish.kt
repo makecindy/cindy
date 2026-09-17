@@ -20,8 +20,9 @@ private val linkFallbackErrnos = setOf(
 
 /**
  * Publish a fully written marker. Prefer an exclusive hard link; if the
- * filesystem refuses the link, fall back to exclusive create. Any other
- * failure becomes CREDENTIAL_UNAVAILABLE so teardown cannot abort the process.
+ * filesystem refuses the link, fall back to exclusive rename of that complete
+ * file. Any other failure becomes CREDENTIAL_UNAVAILABLE so teardown cannot
+ * abort the process.
  */
 internal fun publishMarkerAtomically(
   publishHardLink: () -> Unit,
@@ -46,6 +47,13 @@ internal fun publishMarkerAtomically(
 
 internal fun cancelInitializedVault(initialized: Boolean, cancel: () -> Unit) {
   if (initialized) cancel()
+}
+
+internal fun runIsolated(action: () -> Unit) {
+  try {
+    action()
+  } catch (_: Exception) {
+  }
 }
 
 internal fun runCredentialTeardown(action: () -> Unit) {

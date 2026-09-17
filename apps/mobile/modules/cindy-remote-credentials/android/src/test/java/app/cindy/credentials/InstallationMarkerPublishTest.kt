@@ -80,4 +80,12 @@ class InstallationMarkerPublishTest {
   fun teardownSwallowsInitializationFailure() {
     runCredentialTeardown { throw CredentialFailure("CREDENTIAL_UNAVAILABLE") }
   }
+
+  @Test
+  fun isolatedCleanupContinuesAfterAStepFails() {
+    var second = false
+    runIsolated { throw CredentialFailure("CREDENTIAL_UNAVAILABLE") }
+    runIsolated { second = true }
+    assertTrue(second)
+  }
 }
