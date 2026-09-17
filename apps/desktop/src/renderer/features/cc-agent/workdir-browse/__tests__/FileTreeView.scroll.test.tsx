@@ -25,7 +25,12 @@ import {
   makeTreeScrollScope,
   saveTreeScrollAnchor,
 } from '../lib/treeScrollStore';
-import { installTreeViewportStub, resetTestViewportSize, setTestViewportSize } from './treeViewportStub';
+import {
+  flushTreeVirtualizerScrollReset,
+  installTreeViewportStub,
+  resetTestViewportSize,
+  setTestViewportSize,
+} from './treeViewportStub';
 
 beforeAll(installTreeViewportStub);
 
@@ -33,7 +38,9 @@ beforeEach(() => {
   _resetTreeScrollAnchorsForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // 先排干 react-virtual 的 150ms「滚动结束」debounce，再卸载（见 treeViewportStub 注释）。
+  await flushTreeVirtualizerScrollReset();
   cleanup();
   resetTestViewportSize();
 });

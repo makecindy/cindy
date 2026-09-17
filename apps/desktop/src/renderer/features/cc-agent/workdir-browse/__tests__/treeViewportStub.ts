@@ -9,8 +9,31 @@
  *     驱动 useTreeScrollRestore 的可见性恢复分支（配合用例里的假 ResizeObserver）。
  */
 
+import { act } from '@testing-library/react';
+
 let viewportHeight = 600;
 let viewportWidth = 400;
+
+/** react-virtual「滚动结束」回退的默认 debounce 时长（`isScrollingResetDelay` 默认 150ms）。 */
+const VIRTUALIZER_SCROLL_RESET_MS = 150;
+
+/**
+ * 排干 @tanstack/react-virtual 的「滚动结束」回退定时器。
+ *
+ * virtual-core 的 `observeElementOffset` 在没有 scrollend 的环境（jsdom）里用一个
+ * `isScrollingResetDelay`（默认 150ms）debounce 去通知 React。dispatch 过 scroll 的
+ * 用例若不等它落定就结束，这个定时器会在 jsdom 环境被拆掉之后触发一次 React 更新 ——
+ * `ReferenceError: window is not defined`，vitest 记成「未捕获异常」，整轮单测直接
+ * 判失败（2026-09-17 CI 上就踩到这条）。在 afterEach 里 await 一次：环境还活着时
+ * 它已落定，之后没有挂起的定时器。包 `act` 是为了让这次更新不报 "not wrapped in act"。
+ */
+export async function flushTreeVirtualizerScrollReset(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) =>
+      setTimeout(resolve, VIRTUALIZER_SCROLL_RESET_MS + 50),
+    );
+  });
+}
 
 export function setTestViewportSize(height: number, width = viewportWidth): void {
   viewportHeight = height;

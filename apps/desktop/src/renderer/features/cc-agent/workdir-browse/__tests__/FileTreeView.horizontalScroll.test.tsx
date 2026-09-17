@@ -31,6 +31,7 @@ vi.mock('react-i18next', () => ({
 import { FileTreeView, type FileTreeViewHandle } from '../FileTreeView';
 import type { DirEntry, UseFileTreeReturn } from '../hooks/useFileTree';
 import {
+  flushTreeVirtualizerScrollReset,
   installTreeViewportStub,
   resetTestViewportSize,
   setTestViewportSize,
@@ -115,7 +116,10 @@ function makeTree(): UseFileTreeReturn {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // 先排干 react-virtual 的 150ms「滚动结束」debounce，再卸载：否则它会在 jsdom
+  // 环境被拆掉之后触发 React 更新（见 treeViewportStub 注释）。
+  await flushTreeVirtualizerScrollReset();
   cleanup();
   resetTestViewportSize();
 });
