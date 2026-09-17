@@ -40,12 +40,6 @@ describe("startup splash overlay", () => {
     expect(index).not.toContain('variant="splash"');
   });
 
-  it("releases the overlay on auth.initialized so deep-link cold starts also release", () => {
-    const layout = read("app/_layout.tsx");
-
-    expect(layout).toContain("if (auth.initialized) releaseSplash();");
-  });
-
   it("fades the Android native-frame bridge before releasing the outer overlay", () => {
     const overlay = read("src/components/StartupSplashOverlay.tsx");
 

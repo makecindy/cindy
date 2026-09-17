@@ -118,6 +118,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/bots/:botId/direct/:threadId BotDirectMessageView',
     '/bots/:botId/history/:sessionId BotHistorySessionView',
     '/bots/:botId/session/:sessionId BotSessionView',
+    '/bots/list BotsListView',
     '/bots/remote/:deviceId/:botId RemoteBotSessionView',
     '/bots/roster BotRosterView',
     '/cc-agent/:sessionId CCAgentSessionView',
@@ -141,7 +142,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
   ]);
 
   assert.deepEqual(redirects.map((row) => `${row.path} -> ${row.to}`), [
-    '/ -> /cc-agent',
+    '/ -> (runtime home entry redirect)',
     '/billing -> /settings?tab=billing',
     '/cc-agent -> (runtime session redirect)',
     '/cc-agent/new-dialogue -> /cc-agent/new',
