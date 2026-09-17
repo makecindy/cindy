@@ -35,7 +35,7 @@ import {
   type ModelFavoriteConfig,
   type ModelFavoriteItem,
 } from '@/state/modelFavorites';
-import { recordRecentModel } from '@/state/recentModels';
+import { getRecentModelsOwner, recordRecentModel } from '@/state/recentModels';
 
 import type { ModelMemoryAccessors } from './ModelSelector';
 import type { UnifiedSelectedRow } from './UnifiedModelPanel';

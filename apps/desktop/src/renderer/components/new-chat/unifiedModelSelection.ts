@@ -595,8 +595,8 @@ export function buildUnifiedListSections(args: {
   // ── 最近视图 ── **只服务侧栏的「最近」格**(2026-09-16 实测裁决:各供应商 / 全部视图
   // 不再陈列最近区 —— 它与收藏上下叠放会产生「这两区到底有什么不同」的视觉歧义)。
   // 因此这里不把最近并入常规列表,而是单独成页:白名单是 store 里最近的 UNIFIED_RECENT_MODELS_LIMIT
-  // 条可路由模型,行身份就是模型本体(点击等价于点供应商组里那一行,生效配置由既有合成规则
-  // 重新解析,见 recentModels 文件头)。
+  // 条可路由模型;每行拿的是记录时的**配置副本**(模型 + 引擎 + 深度 + Fast),行身份就是
+  // 这份副本(同一模型不同配置各占一行,锚点 key 即副本身份,见 recentModels 文件头)。
   if (rail.kind === 'recent') {
     const recentRows: UnifiedListRow[] = [];
     for (const item of args.recentModels ?? []) {

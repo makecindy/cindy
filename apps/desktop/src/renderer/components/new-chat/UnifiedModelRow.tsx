@@ -95,7 +95,7 @@ export function UnifiedModelRow({
   const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
   const openConfig = (element: HTMLElement, toggle = false) => {
-    if (paymentRequired || !customizeEnabled) return;
+    if (paymentRequired || !customizeEnabled || !configurationEnabled) return;
     onReveal(anchor, element, toggle);
   };
   const tripleTitle = `${engineOption.label}${
@@ -116,16 +116,17 @@ export function UnifiedModelRow({
     'aria-disabled': interactionDisabled ? true : undefined,
     'aria-label': paymentRequiredActionLabel,
     // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
-    // 最近行是只读配置副本(customizeEnabled=false):既没有浮层入口,就不能再宣告这个快捷键,
-    // 否则读屏用户按过去什么都不到。
-    'aria-keyshortcuts': paymentRequired || !customizeEnabled ? undefined : 'ArrowLeft',
+    // 没有浮层入口的行不再宣告这个快捷键:最近行是只读配置副本(customizeEnabled=false),
+    // 设置类入口不出配置浮层(configurationEnabled=false)—— 两者按过去都什么都不发生。
+    'aria-keyshortcuts':
+      paymentRequired || !customizeEnabled || !configurationEnabled ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
     'data-unified-anchor': anchorKey(anchor),
     onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
-      // 没有配置入口的行(付费行 / 最近行)**不抢**右键:不 preventDefault,把原生菜单留给用户,
-      // 否则右键变成「什么都不发生、原生菜单也被吃掉」(2026-09-16 review P1)。
-      if (!customizeEnabled || interactionDisabled || paymentRequired) return;
+      // 没有配置入口的行(付费行 / 最近行 / 设置类入口)**不抢**右键:不 preventDefault,
+      // 把原生菜单留给用户,否则右键变成「什么都不发生、原生菜单也被吃掉」(2026-09-16 review P1)。
+      if (!customizeEnabled || !configurationEnabled || interactionDisabled || paymentRequired) return;
       event.preventDefault();
       openConfig(event.currentTarget);
     },
@@ -144,7 +145,7 @@ export function UnifiedModelRow({
         return;
       }
       if (event.key === 'ArrowLeft') {
-        if (!customizeEnabled) return;
+        if (!customizeEnabled || !configurationEnabled) return;
         event.preventDefault();
         onRevealForKeyboard(anchor, event.currentTarget);
         return;
@@ -275,7 +276,7 @@ export function UnifiedModelRow({
           />
         )}
         {starButton}
-        {customizeEnabled && customizeButton}
+        {configurationEnabled && customizeEnabled && customizeButton}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
