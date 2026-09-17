@@ -416,6 +416,15 @@ describe('maker SEND transaction', () => {
       .toBeUndefined();
   });
 
+  it('passes the host text-only restriction to the runtime without leaking it into ordinary sends', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', 'Say hello.', undefined, { toolsDisabled: true });
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]).toMatchObject({ toolsDisabled: true });
+    await transaction.sendToAgentAccepted('session-1', 'Normal user request.');
+    expect(vi.mocked(session.send).mock.calls[1]?.[1]?.toolsDisabled).toBeUndefined();
+  });
+
   it('does not preserve Desktop package authority across queued attachments', async () => {
     const { deps, session } = createDeps();
     const transaction = createMakerSendTransaction(deps);

@@ -138,6 +138,14 @@ describe('getPendingQueueRowPresentation', () => {
       .toBe('> quoted\n\nrevised reply');
   });
 
+  it('masks a serialized pending welcome and offers no edit or steer', () => {
+    const text = '[UI_ACTION_TRIGGER]Say hello using cached project/task hints.';
+    const restored = JSON.parse(JSON.stringify(queuedMessage({ text, persistedContent: text })));
+    expect(getPendingQueueRowPresentation(restored)).toMatchObject({
+      isSyntheticTrigger: true, syntheticKind: 'generic', canEdit: false, canSteer: false,
+    });
+  });
+
   it('flags synthetic [UI_ACTION_TRIGGER] rows and locks edit/steer', () => {
     // error-tail-banner:coordinator 续跑分支入队的合成指令,面板按此标记显示
     // i18n 遮蔽标签,禁编辑/steer(改了指令就不是规范化续跑了)。

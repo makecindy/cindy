@@ -113,6 +113,25 @@ export function isPeerResetRetryableReadChannel(channel: string): boolean {
   return PEER_RESET_RETRYABLE_READ_CHANNELS.has(channel);
 }
 
+/**
+ * A completed invocation whose result authorization failed is a separate retry
+ * boundary from peer reset, snapshot coalescing, and Host DB admission. Keep
+ * this list explicit: list/get names do not prove the handler is read-only.
+ * Bot and remote-resource reads can provision, migrate, or reconcile data.
+ * The session list's derived backfills are guarded/idempotent; the other
+ * entries only read stored session state or the active runtime snapshot.
+ */
+const COMPLETED_INVOKE_RETRYABLE_READ_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:sessions:list',
+  'local-db:sessions:get',
+  'local-db:sessions:interrupted-pending',
+  'maker:list-active',
+]);
+
+export function isCompletedInvokeRetryableReadChannel(channel: string | undefined): boolean {
+  return channel !== undefined && COMPLETED_INVOKE_RETRYABLE_READ_CHANNELS.has(channel);
+}
+
 const COALESCIBLE_LISTING_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
   'maker:get-capabilities',

@@ -1,10 +1,10 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 542,
+  "snapshotCount": 543,
   "categories": {
     "literal": 265,
-    "alias": 241,
+    "alias": 242,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 30
   },
@@ -626,6 +626,18 @@
       "aliasOf": {
         "light": "surface-on-card",
         "dark": "surface-on-card"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "switch-thumb-on",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "background",
+        "dark": "background"
       },
       "modeledAsSemantic": false
     },

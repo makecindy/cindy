@@ -40,6 +40,8 @@ export const CINDY_REQUIRED_COLOR_IDS = [
   'text-disabled',
   'text-disabled-tertiary',
   'switch-track-off', // 用户裁决 2026-08-05 入表(见 CINDY_EXPECTED_VALUES 同名条目)
+  'switch-thumb-on', // 用户批准 2026-09-16 HTML 效果
+  'switch-thumb-off', // 用户批准 2026-09-16 HTML 效果
   'switch-track-on', // 用户裁决 2026-08-05 入表(见 CINDY_EXPECTED_VALUES 同名条目)
   'caret-accent',
   'accent-cta-bg',
@@ -221,7 +223,9 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'text-disabled': { light: '#6B6B67', dark: '#C1C1C1' },
   'text-disabled-tertiary': { light: '#6B6B67', dark: '#C1C1C1' },
   'switch-track-off': { light: '#888888', dark: '#787878' }, // 用户调参 2026-08-05:两端都顶到 3:1 底线内的极值拉开开/关差距——light 最亮档 #888888(×surface 3.03),dark 最深档 #787878(×elevated 3.01,等效白 36% 透明)
-  'switch-track-on': { light: '#4A4D51', dark: '#EEEEEE' }, // 用户调参 2026-08-05:light 自 primary #3C3F43 提亮一档;dark 维持 E1D 中性浅灰现状值(因 light 入表,dark 显式同冻)
+  'switch-track-on': { light: '#417CDD', dark: '#417CDD' }, // 用户裁决 2026-09-15:两模式开启轨道改为蓝色,替代 2026-08-05 中性开启态;亮色滑块后续裁决见下
+  'switch-thumb-on': { light: 'hsl(var(--background))', dark: '#FCFCFC' }, // 用户批准 2026-09-16:暗色亮滑块,浅色保留别名
+  'switch-thumb-off': { light: 'var(--surface-on-card)', dark: '#FCFCFC' }, // 用户批准 2026-09-16:开关两态统一亮滑块
   'caret-accent': { light: '#417CDD', dark: '#417CDD' }, // 用户改稿 2026-07-18:光标撤红改回蓝
   'accent-cta-bg': { light: '#3C3F43', dark: '#EEEEEE' }, // E1D
   'accent-cta-bg-pure': { light: '#3C3F43', dark: '#EEEEEE' }, // E1D

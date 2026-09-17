@@ -248,6 +248,10 @@
       "light": "component.defaults.switch-thumb-off.light",
       "dark": "component.defaults.switch-thumb-off.dark"
     },
+    "switch-thumb-on": {
+      "light": "component.defaults.switch-thumb-on.light",
+      "dark": "component.defaults.switch-thumb-on.dark"
+    },
     "switch-disabled-opacity": {
       "light": "semantic.defaults.switch-disabled-opacity.light",
       "dark": "semantic.defaults.switch-disabled-opacity.dark"
@@ -2244,6 +2248,8 @@
         "surface-on-card": "themes.cindy-dark.surface-on-card",
         "switch-track-off": "themes.cindy-dark.switch-track-off",
         "switch-track-on": "themes.cindy-dark.switch-track-on",
+        "switch-thumb-on": "themes.cindy-dark.switch-thumb-on",
+        "switch-thumb-off": "themes.cindy-dark.switch-thumb-off",
         "status-badge-fg": "themes.cindy-dark.status-badge-fg",
         "border-default": "themes.cindy-dark.border-default",
         "border-default-hsl": "themes.cindy-dark.border-default-hsl",
@@ -2417,6 +2423,8 @@
         "surface-on-card": "themes.cindy-light.surface-on-card",
         "switch-track-off": "themes.cindy-light.switch-track-off",
         "switch-track-on": "themes.cindy-light.switch-track-on",
+        "switch-thumb-on": "themes.cindy-light.switch-thumb-on",
+        "switch-thumb-off": "themes.cindy-light.switch-thumb-off",
         "status-badge-fg": "themes.cindy-light.status-badge-fg",
         "border-default": "themes.cindy-light.border-default",
         "border-default-hsl": "themes.cindy-light.border-default-hsl",

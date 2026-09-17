@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
+import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
 import type { CustomMcpListContext, CustomMcpListResult } from '../../../../shared/customMcp';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '@/lib/providersSnapshotStore';
 
@@ -33,6 +34,7 @@ const mocks = vi.hoisted(() => {
   listAgentSkills: vi.fn(),
   listToolsets: vi.fn(),
   profiles: [] as BotProfile[],
+  profilesLoaded: true,
   params: {} as { botId?: string },
   availableVendors: new Set(['cc', 'codex', 'pi']),
   defaultModelChain: [] as BotModelRoute[],
@@ -80,6 +82,7 @@ vi.mock('../botStore', () => ({
   chooseBotAvatar: mocks.chooseBotAvatar,
   setCanonicalBotSession: vi.fn(),
   useBotProfiles: () => mocks.profiles,
+  hasLoadedBotProfiles: () => mocks.profilesLoaded,
   canonicalBotSessionId: (bot: BotProfile) => bot.canonicalSessionId,
   getEffectiveBotModelChain: () => mocks.defaultModelChain,
   subscribeBotGlobalModel: (listener: () => void) => {
@@ -206,6 +209,7 @@ beforeEach(() => {
   mocks.openPath.mockResolvedValue({ success: true });
   mocks.initialSearch = '';
   mocks.profiles = [];
+  mocks.profilesLoaded = true;
   mocks.params = {};
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
   mocks.defaultModelChain = [];
@@ -243,6 +247,49 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+});
+
+describe('Bot entry after deletion', () => {
+  it('opens an ordinary teammate when Cindy is absent without flashing creation', () => {
+    mocks.profiles = [bot()];
+    render(<BotsHomeView />);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1', { replace: true });
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('prefers the last viewed ID over Cindy, independent of renamed profiles', () => {
+    mocks.profiles = [bot({ id: 'cindy', name: 'Renamed', templateId: 'cindy' }), bot()];
+    const history = { current: { lastMatchedKey: 'bots', paths: {}, lastBotId: 'bot-1' } as MainViewHistory };
+    render(<MainViewHistoryContext.Provider value={history}><BotsHomeView /></MainViewHistoryContext.Provider>);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1', { replace: true });
+  });
+
+  it('waits for hydration before recovering a stale deep link', () => {
+    mocks.profilesLoaded = false;
+    mocks.params = { botId: 'deleted' };
+    const view = render(<BotsHomeView />);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    mocks.profiles = [bot()];
+    mocks.profilesLoaded = true;
+    view.rerender(<BotsHomeView />);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1', { replace: true });
+  });
+
+  it('skips a deleting current profile and opens recovery settings for the remaining paused one', () => {
+    mocks.params = { botId: 'deleted' };
+    mocks.profiles = [bot({ id: 'deleted', status: 'deleting' }), bot({ status: 'paused' })];
+    render(<BotsHomeView />);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1?settings=1', { replace: true });
+    expect(mocks.readSession).not.toHaveBeenCalled();
+  });
+
+  it('only shows creation once the loaded roster is empty', () => {
+    mocks.params = { botId: 'deleted' };
+    render(<BotsHomeView />);
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots', { replace: true });
+  });
 });
 
 describe('Bot settings profile consolidation', () => {
@@ -552,10 +599,31 @@ describe('Bot settings unified autosave', () => {
     });
   });
 
-  it('changes the avatar through the host-owned image picker', async () => {
+  it('saves Cindy from the settings gallery without changing the name or persona', async () => {
+    vi.stubGlobal('Image', class { src = ''; width = 256; height = 256; decode = async () => {}; });
+    const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    const output = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,cG9ydHJhaXQ=');
+    try {
+      renderSettings();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cindy' }));
+      await waitFor(() => expect(mocks.chooseBotAvatar).toHaveBeenCalledWith('bot-1', 'cG9ydHJhaXQ='));
+      expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+      expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe('PR steward');
+    } finally {
+      context.mockRestore();
+      output.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the current avatar until uploading through the shared gallery', async () => {
     vi.useFakeTimers();
     renderSettings();
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.changeAvatar' }));
+    expect(screen.getByRole('button', { name: 'Cindy' })).toBeTruthy();
+    expect(mocks.chooseBotAvatar).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.upload' }));
     await act(async () => {
       await vi.runAllTimersAsync();
     });

@@ -52,6 +52,9 @@ const SENSITIVE_CREDENTIAL_SELECTOR_GLOBS = [...new Set(
 )];
 
 export const CINDY_BRIDGE_EXTENSION_FILENAME = "cindy-bridge.ts";
+export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
+export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
+export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 
 /** Cindy-enforced bash bound when the model omits timeout or passes a non-positive number. */
 export const CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS = 300;
@@ -109,6 +112,7 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -1766,6 +1770,36 @@ function resolvedCredentialEvidenceForHost(
 const PROC_ENVIRON_READ_RE = /\/proc\/[^\s'"]*\/environ\b/i;
 function commandReadsProcessEnviron(command: unknown): boolean {
   return typeof command === 'string' && PROC_ENVIRON_READ_RE.test(command);
+}
+
+let textOnlyTurnActive = false;
+function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
+
+function installTextOnlyTurnPolicy(pi: any): void {
+  const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
+  if (!token) return;
+  const prefix = ${JSON.stringify(CINDY_PI_TEXT_ONLY_INPUT_PREFIX)} + token + '\n';
+  pi.on('input', (event: any, ctx: any) => {
+    if (event.source !== 'rpc' || typeof event.text !== 'string') return;
+    if (!event.text.startsWith(prefix)) {
+      // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
+      // resets their latch; steer, follow-ups and extension continuations retain it.
+      if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
+      return;
+    }
+    textOnlyTurnActive = true;
+    return { action: 'transform', text: event.text.slice(prefix.length), images: event.images };
+  });
+  // agent_end is too early: native retries, compaction and follow-ups retain the policy.
+  pi.on('agent_settled', (_event: any, ctx: any) => {
+    if (ctx.isIdle()) textOnlyTurnActive = false;
+  });
+  pi.on('session_start', (_event: any, ctx: any) => {
+    ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_READY_PREFIX)} + token, 'info');
+  });
+  pi.on('session_shutdown', (_event: any, ctx: any) => {
+    ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_CLOSED_PREFIX)} + token, 'info');
+  });
 }
 
 function currentPermissionState(): {
@@ -3566,6 +3600,7 @@ function astraResponsesPayload(payload, model) {
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 export default async function cindyBridge(pi: any) {
+  installTextOnlyTurnPolicy(pi);
   await registerCindyNativeProviderAdapters(pi);
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
@@ -3888,6 +3923,9 @@ export default async function cindyBridge(pi: any) {
 
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
+    if (toolsDisabledForTurn()) {
+      return { block: true, reason: 'Tools are disabled for this host-owned text-only turn.' };
+    }
     const permission = currentPermissionState();
     if (permission.reviewOnly) {
       if (

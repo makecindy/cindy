@@ -28,6 +28,61 @@ import {
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
 
+it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const helperStart = source.indexOf('let textOnlyTurnActive = false');
+  const helperEnd = source.indexOf('function currentPermissionState', helperStart);
+  const handlerStart = source.indexOf("  pi.on('tool_call'");
+  const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
+  let permissionReads = 0;
+  const compiled = ts.transpileModule(
+    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(handlerStart, handlerEnd),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  runInNewContext(compiled, {
+    process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
+    currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
+    pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
+  });
+  const ctx = { ui: { confirm: () => { throw new Error('UI unavailable'); } }, isIdle: () => true };
+  const tool = handlers.get('tool_call')!;
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  const prefix = '[CINDY_TEXT_ONLY_INPUT]:runtime-token\n';
+  expect(handlers.get('input')!({ source: 'rpc', text: '[CINDY_TEXT_ONLY_INPUT]:forged\nHello' }, ctx)).toBeUndefined();
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  const images = [{ type: 'image', data: 'fixture' }];
+  expect(handlers.get('input')!({ source: 'rpc', text: prefix + 'Hello', images }, ctx))
+    .toEqual({ action: 'transform', text: 'Hello', images });
+  const readsBefore = permissionReads;
+  for (const toolName of ['read', 'bash', 'write', 'ask_user_question', 'cindy_mcp_call_tool', 'future_tool']) {
+    expect(await tool({ toolName }, ctx)).toMatchObject({ block: true });
+  }
+  expect(permissionReads).toBe(readsBefore);
+  expect(handlers.has('agent_end')).toBe(false); // Intermediate retry/compaction boundaries retain the policy.
+  handlers.get('agent_settled')!({}, { ...ctx, isIdle: () => false });
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  // A failed/aborted welcome can omit agent_settled entirely.
+  const input = handlers.get('input')!;
+  for (const event of [
+    { source: 'extension', text: 'Continue.' },
+    { source: 'rpc', text: 'Continue.', streamingBehavior: 'steer' },
+    { source: 'rpc', text: 'Continue.', streamingBehavior: 'followUp' },
+  ]) {
+    input(event, ctx);
+    expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  }
+  input({ source: 'rpc', text: 'Continue.' }, { ...ctx, isIdle: () => false });
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  expect(input({ source: 'rpc', text: 'New ordinary request.' }, ctx)).toBeUndefined();
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  // A subsequent welcome still arms the policy; normal settlement still clears it.
+  input({ source: 'rpc', text: prefix + 'Hello again.' }, ctx);
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  handlers.get('agent_settled')!({}, ctx);
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+});
+
 const canLinkFile = (() => {
   const root = mkdtempSync(path.join(tmpdir(), 'cindy-bridge-file-link-probe-'));
   try {

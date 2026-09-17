@@ -763,9 +763,27 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
+              0.254902,
+              0.486275,
+              0.866667
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-switch-thumb-light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.988235,
+              0.988235,
+              0.988235
             ]
           },
           "$extensions": {
@@ -3824,9 +3842,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.290196,
-              0.301961,
-              0.317647
+              0.254902,
+              0.486275,
+              0.866667
             ]
           },
           "$extensions": {

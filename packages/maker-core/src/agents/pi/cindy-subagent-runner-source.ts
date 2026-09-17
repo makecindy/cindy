@@ -788,6 +788,8 @@ function main() {
       // into the durable run are blocked, and bash receives an env with the key
       // removed by SECRET_ENV_NAMES.
       childEnv.CINDY_PI_SUBAGENT_RUN_DIR = config.runDir;
+      // Independent child turns do not share the parent welcome policy channel.
+      delete childEnv.CINDY_PI_TURN_TOOL_POLICY;
       delete childEnv.CINDY_PI_MCP_BRIDGE;
       for (const key of Object.keys(childEnv)) {
         if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];

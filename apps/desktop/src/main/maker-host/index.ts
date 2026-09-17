@@ -1,3 +1,4 @@
+import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { cindyMakeManager } from '../cindy-make/manager.js';
 import { makeSourceRoot } from '../cindy-make/sourcePaths.js';
@@ -1865,6 +1866,7 @@ export function getMaker(): Maker {
       },
       withCodexMcpDiscoveryContext: (ctx, run) =>
         withCodexMcpDiscoveryContext({ ...ctx, agentKind: 'codex' }, run),
+      registerCodexTextOnlyPolicy,
       registerCodexMcpThreadContext: ({
         threadId,
         sessionId,

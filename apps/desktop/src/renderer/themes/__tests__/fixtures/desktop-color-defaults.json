@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 542,
+  "count": 543,
   "colors": [
     {
       "id": "surface",
@@ -351,6 +351,11 @@
       "id": "switch-thumb-off",
       "light": "var(--surface-on-card)",
       "dark": "var(--surface-on-card)"
+    },
+    {
+      "id": "switch-thumb-on",
+      "light": "hsl(var(--background))",
+      "dark": "hsl(var(--background))"
     },
     {
       "id": "switch-disabled-opacity",

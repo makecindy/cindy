@@ -206,6 +206,7 @@ describe('WorkerThreadTransport', () => {
           total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
           context_tokens INTEGER NOT NULL,
           context_window INTEGER NOT NULL,
+          context_window_runtime INTEGER,
           fast_mode INTEGER NOT NULL,
           cleared_at INTEGER,
           pinned_at INTEGER,
