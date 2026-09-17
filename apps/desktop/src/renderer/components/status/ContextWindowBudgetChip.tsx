@@ -25,8 +25,7 @@ import {
   STATUS_CARD_HOVER_CLOSE_GRACE_MS,
   STATUS_CARD_HOVER_OPEN_DELAY_MS,
   registerStatusBarCard,
-  releaseStatusBarCard,
-  requestStatusBarCard,
+  type StatusBarCardHandle,
 } from '@/lib/statusBarCards';
 
 import { cn } from '@/lib/utils';
@@ -116,7 +115,6 @@ export function ContextWindowBudgetChip({
   // 卡片开合：**指针悬浮**展开（与货币 chip 的「用量明细」卡同一节奏：延迟 300ms 开、离开宽限
   // 200ms 关），键盘仍走 Radix 自己的 Enter/Space 开、Esc 关。
   const [cardOpen, setCardOpen] = useState(false);
-  const [cardPointerInside, setCardPointerInside] = useState(false);
   const cardOpenTimerRef = useRef<number | null>(null);
   const cardCloseTimerRef = useRef<number | null>(null);
   // 指针打开时 Radix 关闭后会把焦点还给触发器，Chrome 会把这次程序化聚焦判成 `:focus-visible`
@@ -127,6 +125,11 @@ export function ContextWindowBudgetChip({
   const cardPointerInsideRef = useRef(false);
   // 悬浮打开时不要把焦点抢进卡片（键盘打开才需要）。指针是否在卡片区域内决定"要不要抢焦点"。
   const cardOpenSourceRef = useRef<'hover' | 'focus'>('hover');
+  // 互斥协调器的本实例句柄（分屏可能同时挂载两个 chip，认实例而不是认种类）。
+  const cardHandleRef = useRef<StatusBarCardHandle | null>(null);
+  // 档位行的 Tab 停靠点（roving tabindex）：单选组只占一个 Tab 位，方向键在组内移动焦点。
+  const tierRowRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [tierTabStopIndex, setTierTabStopIndex] = useState(0);
   const clearCardTimers = useCallback(() => {
     if (cardOpenTimerRef.current !== null) {
       window.clearTimeout(cardOpenTimerRef.current);
@@ -141,13 +144,14 @@ export function ContextWindowBudgetChip({
   const openCard = useCallback((source: 'hover' | 'focus') => {
     clearCardTimers();
     cardOpenSourceRef.current = source;
-    // 两卡互斥：自己展开时，用量卡立刻收起（用户要求"该窗体为唯一窗体"）。
-    requestStatusBarCard('context-window');
+    // 两卡互斥：自己展开时，用量卡立刻收起（用户要求"该窗体为唯一窗体"）；
+    // 分屏下同种类的另一张 chip 也在这条路径上被关掉。
+    cardHandleRef.current?.request();
     setCardOpen(true);
   }, [clearCardTimers]);
   const closeCard = useCallback(() => {
     clearCardTimers();
-    releaseStatusBarCard('context-window');
+    cardHandleRef.current?.release();
     setCardOpen(false);
   }, [clearCardTimers]);
   const scheduleCardOpen = useCallback(() => {
@@ -170,14 +174,18 @@ export function ContextWindowBudgetChip({
       cardCloseTimerRef.current = null;
     }
   }, []);
-  // 另一张卡（用量卡）展开时由协调器回调过来 → 立刻收起。
-  useEffect(
-    () => registerStatusBarCard('context-window', () => {
+  // 另一张卡（用量卡或分屏里同种类的另一份）展开时由协调器回调过来 → 立刻收起。
+  useEffect(() => {
+    const handle = registerStatusBarCard('context-window', () => {
       clearCardTimers();
       setCardOpen(false);
-    }),
-    [clearCardTimers],
-  );
+    });
+    cardHandleRef.current = handle;
+    return () => {
+      cardHandleRef.current = null;
+      handle.unregister();
+    };
+  }, [clearCardTimers]);
   // 在飞期间菜单项是 disabled（见 isDisabled）——用户看得见的禁用，而不是静默丢弃；
   // 跨窗口并发（两个 chip 实例各有自己的 state）由 main 侧的会话锁 + 终值比对负责收敛。
   // 分档计费模型的档位就是价带：把每条档位的输入单价摆在选项里，用户选的是成本。
@@ -285,17 +293,48 @@ export function ContextWindowBudgetChip({
     }
   }, [budget, options.length]);
 
-  if (effectiveDefaultWindow === null || options.length === 0) return null;
+  // 当前档位的绝对值（早退之前就算出：Tab 停靠点的 effect 是 hook，必须在早退之前）。
+  const selectedTokens = storedBudget === null
+    ? effectiveDefaultWindow
+    : ceiling === null ? storedBudget : Math.min(storedBudget, ceiling);
+  // 单选组的 Tab 停靠点跟着选中档走（首次打开落在当前档上，而不是永远落在第一行）。
+  useEffect(() => {
+    const checkedIndex = options.findIndex((option) => option.tokens === selectedTokens);
+    if (checkedIndex >= 0) setTierTabStopIndex(checkedIndex);
+  }, [options, selectedTokens]);
+
+  if (effectiveDefaultWindow === null || options.length === 0 || selectedTokens === null) return null;
 
   const agent = agentKind === 'cc' ? 'claude-code' : agentKind;
   const quote = getModelPriceQuote(gatewayPricing, providerId, model, agent)
     ?? getModelPriceQuote(referencePricing, providerId, model, agent);
 
-  const selectedTokens = storedBudget === null
-    ? effectiveDefaultWindow
-    : ceiling === null ? storedBudget : Math.min(storedBudget, ceiling);
   // 当前档位占基准的百分比：与卡片行同一口径（默认档 = 100%）。
   const selectedPercent = contextWindowBudgetTierPercent(selectedTokens, tierBase);
+  /**
+   * 方向键在单选组内移动**焦点**（不提交）：`role="radio"` 语义下方向键必须能动，
+   * 而每次提交都会落库并可能触发活实例重建 —— 扫过一遍档位不该连写好几次库。
+   * 选中仍由 Enter / Space / 点击完成（与之前 Radix 菜单的键盘行为一致）。
+   * 焦点可能落在行上（键盘打开 + Tab）或浮层容器上（Radix 默认聚焦内容）：
+   * 两种情况都按“当前行 → 选中行 → 停靠点”的顺序推出起点。
+   */
+  const handleTierKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const rows = tierRowRefs.current.filter((row): row is HTMLButtonElement => row !== null);
+    if (rows.length === 0) return;
+    const activeIndex = rows.findIndex((row) => row === document.activeElement);
+    const checkedIndex = options.findIndex((option) => option.tokens === selectedTokens);
+    const base = activeIndex >= 0 ? activeIndex : checkedIndex >= 0 ? checkedIndex : tierTabStopIndex;
+    let next: number | null = null;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = base + 1;
+    else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = base - 1;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = rows.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    const wrapped = ((next % rows.length) + rows.length) % rows.length;
+    setTierTabStopIndex(wrapped);
+    rows[wrapped].focus();
+  };
   const shrinkWarning = selectedTokens < contextTokens && contextTokens > 0;
 
   const commit = async (tokens: number): Promise<void> => {
@@ -347,7 +386,7 @@ export function ContextWindowBudgetChip({
           // 键盘/点击打开（指针不在触发器上）与悬浮打开走同一个开卡入口。
           if (!cardPointerInsideRef.current) cardOpenSourceRef.current = 'focus';
           refreshBoundsIfStale();
-          requestStatusBarCard('context-window');
+          cardHandleRef.current?.request();
           setCardOpen(true);
           return;
         }
@@ -421,6 +460,9 @@ export function ContextWindowBudgetChip({
           cardPointerInsideRef.current = false;
           scheduleCardClose();
         }}
+        // 键盘导航挂在浮层上（而不是只挂在单选组上）：Radix 打开时把焦点给浮层容器，
+        // 按键会落在容器而不是行上，挂在组上会收不到。
+        onKeyDown={handleTierKeyDown}
       >
         <div className="px-2 pb-1.5 pt-1">
           <p className="text-12 font-medium text-[var(--text-primary)]">
@@ -442,7 +484,7 @@ export function ContextWindowBudgetChip({
           )}
         </div>
         <div role="radiogroup" aria-label={t('ccAgent.contextWindowBudget.menuTitle')}>
-          {options.map((option) => {
+          {options.map((option, index) => {
             const price = inputPriceAtTokens(quote, option.tokens);
             return (
               <TierRow
@@ -451,6 +493,12 @@ export function ContextWindowBudgetChip({
                 checked={option.tokens === selectedTokens}
                 disabled={isDisabled}
                 onSelect={() => void commit(option.tokens)}
+                // roving tabindex：单选组只占一个 Tab 位，其余行用方向键抵达。
+                tabIndex={index === tierTabStopIndex ? 0 : -1}
+                buttonRef={(node) => {
+                  tierRowRefs.current[index] = node;
+                }}
+                onFocus={() => setTierTabStopIndex(index)}
               >
                 {(() => {
                   // 形态统一：`百分比 · 绝对值`（默认档 = 100% · 模型默认窗口）；百分比与绝对值
@@ -501,12 +549,19 @@ function TierRow({
   checked,
   disabled,
   onSelect,
+  tabIndex,
+  buttonRef,
+  onFocus,
   children,
 }: {
   tokens: number;
   checked: boolean;
   disabled: boolean;
   onSelect: () => void;
+  /** roving tabindex：只有停靠点为 0，组内其余行为 −1。 */
+  tabIndex: number;
+  buttonRef: (node: HTMLButtonElement | null) => void;
+  onFocus: () => void;
   children: React.ReactNode;
 }) {
   return (
@@ -516,6 +571,9 @@ function TierRow({
       aria-checked={checked}
       disabled={disabled}
       data-token={tokens}
+      ref={buttonRef}
+      tabIndex={tabIndex}
+      onFocus={onFocus}
       onClick={onSelect}
       className={cn(
         'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-left text-13 font-medium',

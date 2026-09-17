@@ -641,6 +641,52 @@ describe('ContextWindowBudgetChip', () => {
     });
   });
 
+  it('gives the radio group a single tab stop, starting on the checked tier', async () => {
+    renderChip({ budget: 500_000 });
+    const options = await openTierCard();
+    const stops = options.filter((row) => row.getAttribute('tabindex') === '0');
+    expect(stops).toHaveLength(1);
+    expect(stops[0]?.getAttribute('data-token')).toBe('500000');
+  });
+
+  it('moves focus with arrow keys without committing a new tier', async () => {
+    renderChip();
+    const options = await openTierCard();
+    const [first, second] = options;
+    first.focus();
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    await waitFor(() => { expect(document.activeElement).toBe(second); });
+    // 焦点移动不是选择：扫过一遍档位不该连写好几次库。
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(second.getAttribute('tabindex')).toBe('0');
+    expect(first.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('wraps around at both ends and honours Home / End', async () => {
+    renderChip();
+    const options = await openTierCard();
+    const first = options[0];
+    const last = options[options.length - 1];
+    last.focus();
+    fireEvent.keyDown(last, { key: 'ArrowDown' });
+    await waitFor(() => { expect(document.activeElement).toBe(first); });
+    fireEvent.keyDown(first, { key: 'ArrowUp' });
+    await waitFor(() => { expect(document.activeElement).toBe(last); });
+    fireEvent.keyDown(last, { key: 'Home' });
+    await waitFor(() => { expect(document.activeElement).toBe(first); });
+    fireEvent.keyDown(first, { key: 'End' });
+    await waitFor(() => { expect(document.activeElement).toBe(last); });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still commits with click / Enter on a focused row', async () => {
+    renderChip();
+    const options = await openTierCard();
+    const target = options[options.length - 2];
+    fireEvent.click(target);
+    await waitFor(() => { expect(mockUpdate).toHaveBeenCalledTimes(1); });
+  });
+
   it('rekeys the bounds cache when only the provider changes', async () => {
     // 同一模型跨来源的上限可能不同：缓存键少了 providerId 会把 A 来源的边界当成 B 来源的权威值。
     const getBounds = vi.fn(async (_sessionId: string, route?: { providerId?: string | null }) =>
