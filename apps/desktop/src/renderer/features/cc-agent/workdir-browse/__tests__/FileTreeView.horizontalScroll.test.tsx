@@ -21,7 +21,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRef } from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -30,7 +30,11 @@ vi.mock('react-i18next', () => ({
 
 import { FileTreeView, type FileTreeViewHandle } from '../FileTreeView';
 import type { DirEntry, UseFileTreeReturn } from '../hooks/useFileTree';
-import { installTreeViewportStub, resetTestViewportSize } from './treeViewportStub';
+import {
+  installTreeViewportStub,
+  resetTestViewportSize,
+  setTestViewportSize,
+} from './treeViewportStub';
 
 // jsdom 无布局：不装视口替身的话虚拟器产出 0 行（见 treeViewportStub 注释）。
 beforeAll(installTreeViewportStub);
@@ -75,6 +79,21 @@ afterEach(() => {
   cleanup();
   resetTestViewportSize();
 });
+
+/** jsdom 无布局：行/容器的矩形手工摆（left/right 足以驱动横轴计算）。 */
+function rect(left: number, right: number): DOMRect {
+  return {
+    left,
+    right,
+    top: 0,
+    bottom: 28,
+    width: right - left,
+    height: 28,
+    x: left,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
 
 describe('FileTreeView 横向滚动契约', () => {
   it('滚动容器承接横向溢出，并挂常显横条样式钩子（tree-hscroll）', () => {
@@ -139,24 +158,70 @@ describe('FileTreeView 横向滚动契约', () => {
     expect(row).toBeTruthy();
 
     // jsdom 无布局：手工摆出「容器 200px，目标行 40→320」的几何（行比容器宽 120px）。
-    const rect = (left: number, right: number): DOMRect =>
-      ({
-        left,
-        right,
-        top: 0,
-        bottom: 28,
-        width: right - left,
-        height: 28,
-        x: left,
-        y: 0,
-        toJSON: () => ({}),
-      }) as DOMRect;
     scroll.getBoundingClientRect = () => rect(0, 200);
     row!.getBoundingClientRect = () => rect(40, 320);
 
     ref.current?.scrollToPath('deep/l2/l3');
 
     // 修复前（只滚纵向）这里恒为 0：行名一直停在视口右侧外面。
+    expect(scroll.scrollLeft).toBe(120);
+  });
+
+  it('目标行还没进虚拟窗口时，挂载后仍会把横轴对齐（不依赖固定时刻的尝试）', async () => {
+    setTestViewportSize(300);
+    // 目标行排在 120 个文件之后（行号 122），远超 300px 视口（约 10 行 +
+    // overscan），初始根本不在 DOM 里 —— 「调一次 / 下一帧 / 固定 320ms」这类
+    // 固定时刻的尝试会全部跑在挂载之前。
+    const many: DirEntry[] = Array.from({ length: 120 }, (_, i) => ({
+      name: `f${i}.ts`,
+      relPath: `f${i}.ts`,
+      type: 'file',
+      size: 1,
+      mtimeMs: 0,
+    }));
+    const ref = createRef<FileTreeViewHandle>();
+    const { container } = render(
+      <FileTreeView
+        ref={ref}
+        tree={{
+          entries: new Map([
+            ['', [...many, rootEntries[1]]],
+            ['deep', deepEntries],
+            ['deep/l2', deeperEntries],
+          ]),
+          expanded: new Set(['', 'deep', 'deep/l2']),
+          loadingPaths: new Set(),
+          initialLoading: false,
+          loadError: null,
+          showIgnoredDirsSupported: true,
+          storeKey: 'test-store',
+          toggleFolder: vi.fn(),
+          collapseAll: vi.fn(),
+          refresh: vi.fn(async () => undefined),
+          expandToPath: vi.fn(async () => undefined),
+        }}
+        scrollScope="test-tab"
+        selectedPath={null}
+        onSelectFile={vi.fn()}
+      />,
+    );
+    const scroll = container.firstElementChild as HTMLElement;
+    expect(scroll.querySelector('[data-relpath="deep/l2/l3"]')).toBeNull();
+
+    ref.current?.scrollToPath('deep/l2/l3');
+
+    // 模拟虚拟器把目标行带进视口（真实里由 smooth 纵向滚动触发）。
+    scroll.scrollTop = 122 * 29;
+    fireEvent.scroll(scroll);
+    const row = scroll.querySelector<HTMLElement>('[data-relpath="deep/l2/l3"]');
+    expect(row).toBeTruthy();
+
+    // 行挂载后才摆几何：容器 200px、行 40→320。
+    scroll.getBoundingClientRect = () => rect(0, 200);
+    row!.getBoundingClientRect = () => rect(40, 320);
+
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
     expect(scroll.scrollLeft).toBe(120);
   });
 });

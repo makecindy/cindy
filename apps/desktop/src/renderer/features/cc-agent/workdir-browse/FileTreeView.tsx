@@ -194,27 +194,52 @@ function isHtmlPath(filePath: string): boolean {
 
 /**
  * 把 `data-relpath` 对应的行在横轴上对齐到容器可见区（#4436 契约：行宽由内容
- * 决定，深层缩进 + 长名字会撑出横向滚动区）。
+ * 决定，深层缩进 + 长名字会撑出横向滚动区）。返回该行当前是否已在 DOM 里。
  *
  * 非虚拟化版靠 `scrollIntoView` 默认的 `inline: 'nearest'` 一并处理横轴；虚拟化下
  * 目标行常常是 `scrollToIndex` 之后才被渲染出来，且行绝对定位在宽 100% 的层里、
  * 自身 `min-w-max` —— 直接量行的矩形更干净。只动横轴、不动纵轴，不跟虚拟器的
- * 纵向居中打架；行还没渲染（虚拟器还没把它带进视口）时静默跳过。
+ * 纵向居中打架。
  */
-function alignRowHorizontally(container: HTMLElement | null, relPath: string): void {
-  if (!container) return;
+function alignRowHorizontally(container: HTMLElement | null, relPath: string): boolean {
+  if (!container) return false;
   // 按 dataset.relpath 精确比对，不走属性选择器：relPath 自带 `.` / `/` / `[]`
   // 等字符，选择器得先转义（且 jsdom 下没有 CSS.escape）；渲染中的行数有界（视口 +
   // overscan），逐行比对代价可忽略。
   const el = Array.from(container.querySelectorAll<HTMLElement>('[data-relpath]')).find(
     (node) => node.dataset.relpath === relPath,
   );
-  if (!el) return;
+  if (!el) return false;
   const row = el.getBoundingClientRect();
   const box = container.getBoundingClientRect();
   const delta =
     row.right > box.right ? row.right - box.right : row.left < box.left ? row.left - box.left : 0;
   if (delta !== 0) container.scrollLeft += delta;
+  return true;
+}
+
+/** 逐帧重试的上限（≈2s）。smooth 纵向滚动通常在几百毫秒内结束，这个窗口足够
+ *  覆盖长跳跃；超过仍找不到行说明目标已不在树里（或视口从未测量），放弃。 */
+const HORIZONTAL_ALIGN_MAX_FRAMES = 120;
+
+/**
+ * 逐帧重试，直到目标行进入 DOM 后再对齐横轴。
+ *
+ * 目标行离当前虚拟窗口较远时，要等 smooth 纵向滚动把它带进 overscan 才会挂载 ——
+ * 「调一次 / 等下一帧 / 等固定 320ms」这种固定时刻的尝试可能全部跑在挂载之前，
+ * 结果是纵向跳到位、深层长路径仍留在横向视口之外。这里改成挂载驱动：每帧试一次，
+ * 行一出现就对齐；上限见上（不常驻，不给热路径留后台任务）。
+ */
+function alignRowHorizontallyWhenMounted(container: HTMLElement | null, relPath: string): void {
+  if (!container) return;
+  let frames = 0;
+  const attempt = (): void => {
+    if (alignRowHorizontally(container, relPath)) return;
+    if (frames >= HORIZONTAL_ALIGN_MAX_FRAMES || !container.isConnected) return;
+    frames += 1;
+    requestAnimationFrame(attempt);
+  };
+  attempt();
 }
 
 export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(function FileTreeView(
@@ -378,12 +403,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
         if (index < 0) return; // 行不在当前树里（父目录未展开 / 文件不存在），静默 no-op
         virtualizerRef.current?.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
         // 横轴：目标行可能仍停在视口右侧之外（深层缩进 + 长名字把行撑宽），
-        // 纵向到位后把该行横向也拉进可见区。行是由虚拟器按需渲染的，所以
-        // 现在、下一帧、smooth 纵向滚动结束后各试一次（见 helper 注释）。
-        const container = containerRef.current;
-        alignRowHorizontally(container, relPath);
-        requestAnimationFrame(() => alignRowHorizontally(container, relPath));
-        window.setTimeout(() => alignRowHorizontally(container, relPath), 320);
+        // 纵向到位后把该行横向也拉进可见区。行是虚拟器按需挂载的（远距离跳跃时
+        // 要等 smooth 滚动把它带进 overscan），所以逐帧等到它出现再对齐。
+        alignRowHorizontallyWhenMounted(containerRef.current, relPath);
       },
     }),
     [],
