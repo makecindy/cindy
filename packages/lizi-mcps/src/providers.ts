@@ -268,9 +268,15 @@ export function createLiziMcpProviders(
         name: 'cindy_feishu_bot',
         instance: createFeishuBotMcpServer({
           getChatId: () =>
-            readFeishuChatId(ctx) ?? opts.feishuBot!.getOwnerOpenId() ?? null,
+            readFeishuChatId(resolveLiziMcpSessionContext(ctx)) ?? opts.feishuBot!.getOwnerOpenId() ?? null,
           sendFile: opts.feishuBot!.sendFile,
-          sendMessage: opts.feishuBot!.sendMessage,
+          sendMessage: (chatId, text) => {
+            // Codex's shared bridge only has the calling session at tool-call time.
+            const current = resolveLiziMcpSessionContext(ctx);
+            return opts.feishuBot!.sendMessage(
+              chatId, text, readFeishuChatId(current) ? undefined : current.sessionId,
+            );
+          },
           // slack-hook 会话里按来源在构建期注入渠道路由提示,
           // 把「发给我」的默认通道钉死在会话自身渠道(规则 9)。
           sessionSource: readSessionSource(ctx),

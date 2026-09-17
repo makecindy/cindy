@@ -251,7 +251,8 @@
         "tooltip-bg": "#757575",
         "tooltip-text": "#fdf6e3",
         "update-btn-border": "#859900",
-        "update-btn-text": "#859900"
+        "update-btn-text": "#859900",
+        "form-field-hint": "#686868"
       }
     },
     "cindy-light": {
@@ -271,7 +272,9 @@
         "surface-hover-hsl": "60.0 12.8% 92.4%",
         "surface-on-card": "#FFFFFF",
         "switch-track-off": "#888888",
-        "switch-track-on": "#4A4D51",
+        "switch-track-on": "#417CDD",
+        "switch-thumb-on": "hsl(var(--background))",
+        "switch-thumb-off": "var(--surface-on-card)",
         "status-badge-fg": "#1F1F1F",
         "border-default": "#E4E4DF",
         "border-default-hsl": "60.0 8.5% 88.4%",
@@ -341,7 +344,7 @@
         "secondary": "60.0 12.8% 92.4%",
         "settings-btn-primary-text": "#FCFCFC",
         "settings-btn-secondary-hover-bg": "#F6F6F1",
-        "text-placeholder": "#6B6B67",
+        "text-placeholder": "#C4C4C4",
         "settings-integration-avatar-bg": "#FDFDF8",
         "settings-logout-bg": "#FDFDF8",
         "settings-menu-bg-hover": "#E8E8E3",
@@ -444,7 +447,9 @@
         "surface-hover-hsl": "0 0% 11.4%",
         "surface-on-card": "#181818",
         "switch-track-off": "#787878",
-        "switch-track-on": "#EEEEEE",
+        "switch-track-on": "#417CDD",
+        "switch-thumb-on": "#FCFCFC",
+        "switch-thumb-off": "#FCFCFC",
         "status-badge-fg": "#121212",
         "border-default": "#313131",
         "border-default-hsl": "0 0% 19.2%",
@@ -517,7 +522,7 @@
         "secondary": "0 0% 11.4%",
         "settings-btn-primary-text": "#151515",
         "settings-btn-secondary-hover-bg": "#1D1D1D",
-        "text-placeholder": "#C1C1C1",
+        "text-placeholder": "#525252",
         "settings-integration-avatar-bg": "#1D1D1D",
         "settings-logout-bg": "#1F1F1F",
         "settings-menu-bg-hover": "#282828",
@@ -835,7 +840,8 @@
         "tooltip-bg": "#282c34",
         "tooltip-text": "#abb2bf",
         "update-btn-border": "#61afef",
-        "update-btn-text": "#61afef"
+        "update-btn-text": "#61afef",
+        "form-field-hint": "#8b909a"
       }
     },
     "github-dark": {

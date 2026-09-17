@@ -134,6 +134,21 @@ export type PiPackageCommandRuntimeStatus =
   | 'failed'
   | 'unknown';
 
+export function listPiRuntimePaletteCommands(
+  commands: ReadonlyArray<{ name: string; description?: string | null }>,
+  authorizedNames: readonly string[] | undefined,
+): Array<{ name: string; description: string }> {
+  const names = new Set(authorizedNames ?? []);
+  return commands.flatMap((command) =>
+    names.has(command.name) && !command.name.startsWith('skill:')
+      ? [{
+          name: command.name,
+          description: command.description ?? `Pi extension command: ${command.name}`,
+        }]
+      : [],
+  );
+}
+
 /** Runtime-confirmed Pi package commands belong only to the Pi command palette. */
 export function mergePiPackageCommands(
   agentKind: 'claude-code' | 'codex' | 'pi',

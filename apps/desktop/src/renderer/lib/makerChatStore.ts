@@ -850,9 +850,13 @@ export interface PendingGhostGrantConfirm {
    * 往目录里存文件;reveal_path = 允许当前 Agent 获得单个媒体仓本机路径;
    * fs_write = 意识申请写工作目录文件(会话 permission 为
    * 逐条确认档时逐次弹,同目录本会话批一次);workspace = 意识申请以该目录
-   * 为工作区在侧边栏创建/复用会话入口(不过户字节)。
+   * 为工作区在侧边栏创建/复用会话入口(不过户字节);
+   * forge_source = Forge 打包/骨架/安装的源码目录在工作目录外;
+   * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
-  lane: 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace';
+  lane: 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
+  sourceTool?: string;
+  operation?: 'read' | 'write';
   items: Array<{
     name: string;
     absPath: string;
@@ -2399,6 +2403,8 @@ export interface SessionChatState {
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
   isStreaming: boolean;
   agentStatus: AgentStatus;
+  /** A task with an explicit product title must not be auto-renamed from its first message. */
+  autoTitleDisabled?: boolean;
   error: string | null;
   /** 当前 terminal error 是否为可恢复的账号用量限制，以及可识别的重置时刻。 */
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
@@ -8685,7 +8691,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
               // controller while this renderer still owns an offline outbox.
               // Retire it at the authoritative push boundary so reconnect
               // cannot dispatch into a task that no longer exists.
-              removeRemoteSessionActivityEntry(p.sessionId);
+              removeRemoteSessionActivityEntry(p.sessionId, push.deviceId);
               _purgeSession(p.sessionId);
               break;
             }
@@ -8693,7 +8699,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             mirrorSessionFields(p.sessionId, p.patch);
             // 会话在被控端被删除 / 归档 → 同步清掉活动镜像,避免孤儿状态点。
             if (terminal) {
-              removeRemoteSessionActivityEntry(p.sessionId);
+              removeRemoteSessionActivityEntry(p.sessionId, push.deviceId);
             }
           }
           break;
@@ -9502,7 +9508,10 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     // (远程会话豁免,见 hasBackgroundAgentWork 注释。)
     const bgTaskRunning = hasBackgroundAgentWork(id, state);
 
-    if (state.agentStatus.isRunning || bgTaskRunning) {
+    // Recovery is still unfinished work. Keep the existing running edge alive
+    // so a dispatch failure can settle as error without another vendor turn.
+    const recoveryPending = !state.error && hasSessionRecoveryPending(id);
+    if (state.agentStatus.isRunning || bgTaskRunning || recoveryPending) {
       // Currently running — always include.
       next.set(id, {
         isRunning: true,
@@ -9620,6 +9629,18 @@ function hasSessionTerminalError(sessionId: string): boolean {
   // side-task 结束保留的旧 error 不算「本次 run 的终态失败」(与 transition
   // snapshot 的豁免同口径, 见 lastStopWasSideTask)。
   return !!s?.error && !s.lastStopWasSideTask;
+}
+
+/** Non-creating read: recovery can outlive the one-generation stop snapshot. */
+function hasSessionRecoveryPending(sessionId: string): boolean {
+  const state = sessions.get(sessionId);
+  return !!state && (
+    state.messages.some((message) =>
+      message.clientId === AUTO_RESUME_PENDING_CLIENT_ID ||
+      message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID,
+    ) ||
+    (!state.queuePaused && state.pendingQueue.some((item) => item.autoResume === true))
+  );
 }
 
 // 远程回执 error 免疫的兜底探针:活动镜像缺条目(推送丢失 / 未达)时,
@@ -13428,6 +13449,7 @@ function maybeAutoNameUnnamedSession(
   agentKind: 'claude-code' | 'codex' | 'pi',
 ): void {
   if (!seed?.isUserText) return;
+  if (sessions.get(sessionId)?.autoTitleDisabled === true) return;
   scheduleAutoName(sessionId, seed.text, agentKind, true);
 }
 
@@ -15450,7 +15472,9 @@ function parseGhostGrantConfirmRequest(request: {
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&
     lane !== 'fs_write' &&
-    lane !== 'workspace'
+    lane !== 'workspace' &&
+    lane !== 'forge_source' &&
+    lane !== 'outside_workdir'
   )
     return null;
   if (typeof request.ghostId !== 'string' || typeof request.ghostName !== 'string') return null;
@@ -15482,6 +15506,10 @@ function parseGhostGrantConfirmRequest(request: {
     ghostId: request.ghostId,
     ghostName: request.ghostName,
     lane,
+    ...(typeof request.sourceTool === 'string' ? { sourceTool: request.sourceTool } : {}),
+    ...(request.operation === 'read' || request.operation === 'write'
+      ? { operation: request.operation }
+      : {}),
     items,
   };
 }
@@ -16140,6 +16168,8 @@ function setSessionRuntime(
     planModeEnabled?: boolean;
     /** Seed before SessionView hydrates the DB row; sendMessage reads this for SSH routing. */
     remoteHostId?: string | null;
+    /** Disable automatic first-message renaming for product-owned titled sessions. */
+    autoTitleDisabled?: boolean;
   },
 ): void {
   if (!sessionId) return;
@@ -16150,11 +16180,13 @@ function setSessionRuntime(
     const nextRemoteHostId = Object.hasOwn(opts, 'remoteHostId')
       ? (opts.remoteHostId ?? null)
       : s.remoteHostId;
+    const nextAutoTitleDisabled = opts.autoTitleDisabled ?? s.autoTitleDisabled;
     if (
       s.agentKind === nextAgentKind &&
       s.fastMode === nextFastMode &&
       s.planModeEnabled === nextPlanMode &&
-      s.remoteHostId === nextRemoteHostId
+      s.remoteHostId === nextRemoteHostId &&
+      s.autoTitleDisabled === nextAutoTitleDisabled
     )
       return s;
     return {
@@ -16163,6 +16195,7 @@ function setSessionRuntime(
       fastMode: nextFastMode,
       planModeEnabled: nextPlanMode,
       remoteHostId: nextRemoteHostId,
+      autoTitleDisabled: nextAutoTitleDisabled,
       ...(s.planModeEnabled !== nextPlanMode ? { planModeRev: s.planModeRev + 1 } : {}),
     };
   });
@@ -16308,6 +16341,7 @@ export const makerChatStore = {
   getRunningSnapshot,
   /** F-SB-7: Authoritative terminal-error read, immune to snapshot-generation races. */
   hasSessionTerminalError,
+  hasSessionRecoveryPending,
   wasLastStopSideTask,
   wasLastStopPrivateReply: (sessionId: string): boolean =>
     sessions.get(sessionId)?.lastStopWasPrivateReply === true,

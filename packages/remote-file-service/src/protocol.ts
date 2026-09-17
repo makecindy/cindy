@@ -33,7 +33,7 @@ import type {
 } from '@cindy/file-browser-core';
 
 /** 协议兼容版本:client 与 daemon 严格相等才可用。改动任何请求/响应形状时 +1。 */
-export const FILE_SERVICE_SCHEMA_VERSION = 2;
+export const FILE_SERVICE_SCHEMA_VERSION = 3;
 
 /** 人读 bundle 版本(probe / 日志用),行为变化时手动 bump。 */
 export const FILE_SERVICE_BUNDLE_VERSION = '0.2.5';
@@ -137,6 +137,13 @@ export interface FsRpcMethods {
       relPath?: string;
       hideMetaFiles?: boolean;
       docMode?: boolean;
+      /**
+       * 完全绕过展示过滤(手机 HTML 快照枚举用)。可选 / append-only:老 daemon
+       * 忽略未知字段 → 维持隐藏语义(拿不到全量,但不会报错)。
+       */
+      includeIgnored?: boolean;
+      /** 条目上限;超出时 daemon 返回 DIRECTORY_TOO_LARGE。 */
+      maxEntries?: number;
       /**
        * 控制端「显示被忽略的目录」开关。可选 / append-only:老 daemon 忽略未知
        * 字段 → 维持隐藏语义(拿不到放行,但不会报错)。

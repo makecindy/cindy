@@ -8,6 +8,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   createLiziMcpProviders,
   resolveLiziMcpSessionContext,
+  setSessionPathAuthorizer,
   type IOSSimulatorMcpAccessDecision,
   type LiziMcpProvider,
   type LiziMcpSessionContext,
@@ -18,6 +19,7 @@ import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
+  authorizeDesktopSessionPath,
   getCindyGhostsMcpDeps,
   type GhostGrantLiveSessionState,
   type CindyGhostsHostDeps,
@@ -32,6 +34,7 @@ import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
 import { feishuIm, wechatIm } from '../im';
+import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { getScheduler } from '../scheduler-host/index.js';
@@ -114,6 +117,9 @@ export interface DesktopMcpProvidersDeps {
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
+  setSessionPathAuthorizer((request) =>
+    authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
+  );
   const { pluginRegistry } = deps;
   let redactSshText: ((snapshot: SshHostSnapshotLike, text: string) => string) | undefined;
   const loadRemoteSsh = async () => {
@@ -192,8 +198,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // branch-free. Feishu returns 400 with structured `response.data.code/msg`
       // for business errors (rate-limit, invalid text, …); those get folded
       // into `reason` for logging without leaking axios internals to the tool.
-      sendMessage: async (chatId, markdown) => {
+      sendMessage: async (chatId, markdown, notificationSessionId) => {
         try {
+          if (notificationSessionId && chatId === feishuIm.getOwnerOpenId()) {
+            const { messageId, sessionLinked } = await sendFeishuSessionNotification(
+              feishuIm, notificationSessionId, markdown,
+            );
+            return { ok: true, messageId, sessionLinked };
+          }
           const { messageId } = await feishuIm.sendMarkdownText(chatId, markdown);
           return { ok: true, messageId };
         } catch (err) {

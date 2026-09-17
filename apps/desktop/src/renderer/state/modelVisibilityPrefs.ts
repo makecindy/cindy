@@ -337,6 +337,12 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
         migrationPending: false,
       };
     }
+    if (!claim.canInitialize && window.localStorage.getItem(LEGACY_STORAGE_KEY) === null) {
+      // A fresh renderer origin (for example a parallel dev port) has no legacy
+      // preferences to import. Publish its owner-scoped catalog without claiming
+      // migration completion; another window may still create the legacy key.
+      return { readyForWrites: true, migrationPending: false };
+    }
     if (claim.claimed !== true) {
       // A missing/blocked legacy marker only defers importing the pre-account snapshot. The
       // stable current owner can still write its isolated key; a later import merges scoped
@@ -378,7 +384,9 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
 
 function ensureActiveOwnerReadyForWrites(): boolean {
   if (!activeOwnerId) return false;
-  if (activeOwnerReadyForWrites && !activeOwnerMigrationPending) return true;
+  if (activeOwnerReadyForWrites && !activeOwnerMigrationPending
+    && (window.localStorage.getItem(ownerMigrationCompleteKey(activeOwnerId)) === '1'
+      || window.localStorage.getItem(LEGACY_STORAGE_KEY) === null)) return true;
   if (activeOwnerMode === 'signed-out') return false;
   const migration = migrateLegacyVisibility(activeOwnerId, activeOwnerGeneration);
   activeOwnerReadyForWrites = migration.readyForWrites;
@@ -534,10 +542,13 @@ export async function setModelVisibilityOwner(
       readOwnerState(ownerId);
     } catch { /* Storage unavailable: never infer permission to initialize an existing profile. */ }
   }
-  mirrorToMain(cache ?? {});
   version += 1;
   for (const listener of listeners) listener();
   await withOwnerLock(ownerId, ownerGeneration, ensureActiveOwnerReadyForWrites);
+  // Reloading a renderer is not evidence that the current owner's valid Main
+  // mirror became stale. Publish pending only after checking under the owner lock.
+  if (activeOwnerId === ownerId && activeOwnerGeneration === ownerGeneration
+    && activeOwnerMode === mode) mirrorToMain(cache ?? {});
 }
 
 /**
@@ -768,7 +779,6 @@ const removeStorageListener = (() => {
     if (!activeOwnerId) return false;
     if (key === LEGACY_STORAGE_KEY) {
       return activeOwnerMode !== 'signed-out'
-        && activeOwnerMigrationPending
         && window.localStorage.getItem(ownerMigrationCompleteKey(activeOwnerId)) !== '1';
     }
     if (activeOwnerMode !== 'cloud' || activeOwnerId === LOCAL_OWNER_ID) return false;

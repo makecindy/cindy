@@ -99,3 +99,5 @@ export type {
   RoutingDecision,
   RoutingTransform,
 } from './types.js';
+
+export { createWebSocketMessageTransform } from './websocket-message-transform.js';

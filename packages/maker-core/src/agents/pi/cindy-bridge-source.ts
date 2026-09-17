@@ -52,6 +52,9 @@ const SENSITIVE_CREDENTIAL_SELECTOR_GLOBS = [...new Set(
 )];
 
 export const CINDY_BRIDGE_EXTENSION_FILENAME = "cindy-bridge.ts";
+export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
+export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
+export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 
 /** Cindy-enforced bash bound when the model omits timeout or passes a non-positive number. */
 export const CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS = 300;
@@ -109,6 +112,7 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -1766,6 +1770,36 @@ function resolvedCredentialEvidenceForHost(
 const PROC_ENVIRON_READ_RE = /\/proc\/[^\s'"]*\/environ\b/i;
 function commandReadsProcessEnviron(command: unknown): boolean {
   return typeof command === 'string' && PROC_ENVIRON_READ_RE.test(command);
+}
+
+let textOnlyTurnActive = false;
+function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
+
+function installTextOnlyTurnPolicy(pi: any): void {
+  const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
+  if (!token) return;
+  const prefix = ${JSON.stringify(CINDY_PI_TEXT_ONLY_INPUT_PREFIX)} + token + '\n';
+  pi.on('input', (event: any, ctx: any) => {
+    if (event.source !== 'rpc' || typeof event.text !== 'string') return;
+    if (!event.text.startsWith(prefix)) {
+      // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
+      // resets their latch; steer, follow-ups and extension continuations retain it.
+      if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
+      return;
+    }
+    textOnlyTurnActive = true;
+    return { action: 'transform', text: event.text.slice(prefix.length), images: event.images };
+  });
+  // agent_end is too early: native retries, compaction and follow-ups retain the policy.
+  pi.on('agent_settled', (_event: any, ctx: any) => {
+    if (ctx.isIdle()) textOnlyTurnActive = false;
+  });
+  pi.on('session_start', (_event: any, ctx: any) => {
+    ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_READY_PREFIX)} + token, 'info');
+  });
+  pi.on('session_shutdown', (_event: any, ctx: any) => {
+    ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_CLOSED_PREFIX)} + token, 'info');
+  });
 }
 
 function currentPermissionState(): {
@@ -3566,6 +3600,7 @@ function astraResponsesPayload(payload, model) {
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 export default async function cindyBridge(pi: any) {
+  installTextOnlyTurnPolicy(pi);
   await registerCindyNativeProviderAdapters(pi);
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
@@ -3888,6 +3923,9 @@ export default async function cindyBridge(pi: any) {
 
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
+    if (toolsDisabledForTurn()) {
+      return { block: true, reason: 'Tools are disabled for this host-owned text-only turn.' };
+    }
     const permission = currentPermissionState();
     if (permission.reviewOnly) {
       if (
@@ -3921,15 +3959,15 @@ export default async function cindyBridge(pi: any) {
         // Best-effort capture; the permission boundary below remains authoritative.
       }
     }
-    // Extra Dirs 的结构化写工具永远禁止，即使 Full access 也不能把“只读引用”静默
-    // 升级成写目录。bash 仍由 Cindy 审批/模型指令约束（Pi 暂无 OS sandbox API）。
+    // Extra Dirs 的结构化写不再在 bridge 里静默硬拦:Full Access 与原生 Pi 一样放行,
+    // Auto 交 Host 审阅,Ask 弹确认。bash 仍由 Cindy 审批/模型指令约束(Pi 暂无 OS
+    // sandbox API)。
     const targetPath = typeof event.input?.path === 'string' ? event.input.path : '';
     // agent 运行时目录(configHome:models.json/权限档/subagent 快照/bridge 扩展)
     // 是控制面:模型改写 models.json 的 baseUrl/apiKey 可把后续请求全部 MITM 到
-    // 攻击者 endpoint, 会话内容随之外泄(R5 安全审计 H-4)。host 侧写入不经此门
-    // (直连远端 fs / 本地 fs, 不走 pi 工具);模型的结构化写一律硬拦,含 Full access
-    // —— 与 permission file 同等级防护(CINDY_PI_PERMISSION_FILE 已在 SECRET_ENV_NAMES
-    // 剥离, models.json 走这条统一路径拦截)。
+    // 攻击者 endpoint。Host 侧写入不经此门;模型的结构化写不再静默硬拦,而是冒泡
+    // 并强制用户确认(含 Full Access)。CINDY_PI_PERMISSION_FILE 已在 SECRET_ENV_NAMES
+    // 剥离,models.json 走这条统一确认路径。
     const agentHomeDir = process.env.PI_CODING_AGENT_DIR;
     const subagentRunDir = process.env[SUBAGENT_RUN_DIR_ENV];
     // 轮 40-w4-t12 HIGH-2 + 轮 40-w4-t13 HIGH:写目标 symlink 绕过 —— isInsideRoot
@@ -3956,39 +3994,11 @@ export default async function cindyBridge(pi: any) {
         isInsideRoot(targetPath, subagentRunDir)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, subagentRunDir))
       );
-    const writeInsideAnyGrantedRoot = (roots: readonly string[]) => targetPath
-      && roots.some((root) => {
-        let resolvedRoot: string | null = null;
-        try {
-          resolvedRoot = realpathSync(root);
-        } catch {
-          resolvedRoot = null;
-        }
-        return (
-          isInsideRoot(targetPath, root)
-          && writeTargetResolved !== null
-          && resolvedRoot !== null
-          && isInsideRoot(writeTargetResolved, resolvedRoot)
-        );
-      });
-    const writeInsideWritableRoot = writeInsideAnyGrantedRoot(permission.writableRoots);
-    if (
+    const controlPlaneWrite = Boolean(
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
       && (writeInsideAgentHome || writeInsideSubagentRun)
-    ) {
-      return { block: true, reason: 'Cindy agent runtime directory is read-only.' };
-    }
-    if (
-      targetPath
-      && FILE_WRITE_BUILTINS.has(event.toolName)
-      && !writeInsideWritableRoot
-      && permission.readOnlyRoots.some((root) =>
-        isInsideRoot(targetPath, root)
-        || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, root)))
-    ) {
-      return { block: true, reason: 'Cindy extra reference directories are read-only.' };
-    }
+    );
     // 凭证/密钥路径的内置只读工具与 bash 输入重定向都必须携带 canonical
     // 证据,供 Ask/Auto 升级审批。Full access 不在这里硬拦 — 原生 Pi 没有这道门,
     // 文本拦截也不是安全边界(可被变形绕过)。
@@ -4024,7 +4034,7 @@ export default async function cindyBridge(pi: any) {
     // runtime capability and applies the current general permission policy before it
     // issues a one-shot store grant. Let it reach that boundary in every mode.
     if (event.toolName === 'cindy_pi_extension' || event.toolName === 'cindy_pi_command') return;
-    if (permission.mode === 'bypassPermissions') return;
+    if (permission.mode === 'bypassPermissions' && !controlPlaneWrite) return;
     // MCP discovery/one-tool schema inspection only returns metadata already
     // supplied by connected servers. It is the read-only half of the gateway
     // and never executes a capability, so Ask/Auto should not interrupt the user.
@@ -4073,6 +4083,7 @@ export default async function cindyBridge(pi: any) {
             ? {
                 resolvedWritePath: writeTargetResolved,
                 resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots),
+                ...(controlPlaneWrite ? { controlPlaneWrite: true } : {}),
               }
             : {}),
         }),

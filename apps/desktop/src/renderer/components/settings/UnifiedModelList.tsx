@@ -278,7 +278,9 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
 
 function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): boolean {
   if (!isCapabilityRow(row, userProvider)) return true;
-  return managementKindsOfRow(row, userProvider).some((kind) => kind === 'image' || kind === 'video');
+  return managementKindsOfRow(row, userProvider).some(
+    (kind) => kind === 'image' || kind === 'video',
+  );
 }
 
 /** Image/video switches follow media readiness, not the chat OAuth connection. */
@@ -294,13 +296,15 @@ export function canWriteModelVisibility(options: {
 }
 
 /** 该行在指定 agent 下的可见性(不可用 → null)。 */
-function rowEnabled(providerId: string, row: UnionModelRow, agent: AgentKind, userProvider: boolean): boolean | null {
+function rowEnabled(
+  providerId: string,
+  row: UnionModelRow,
+  agent: AgentKind,
+  userProvider: boolean,
+): boolean | null {
   const m = row.byAgent[agent];
   if (!m) return null;
-  if (
-    isAgentSelectableModel(m, { userProvider }) ||
-    rowHasVisibilitySwitch(row, userProvider)
-  ) {
+  if (isAgentSelectableModel(m, { userProvider }) || rowHasVisibilitySwitch(row, userProvider)) {
     return isModelEnabled(agent, providerId, m);
   }
   return null;
@@ -327,10 +331,13 @@ export function hasPaymentRequiredDisabledRow(
  *  `userProvider` = 行来自用户自定义供应商 —— 自定义对话模型的未知 group 不吃 id
  *  启发式(`gpt-4o-audio-preview` 是合法对话模型,见 isAgentSelectableModel 注释)。 */
 export function isCapabilityRow(row: UnionModelRow, userProvider: boolean): boolean {
-  return row.avail.length > 0 && row.avail.every((agent) => {
-    const model = row.byAgent[agent];
-    return !model || !isAgentSelectableModel(model, { userProvider });
-  });
+  return (
+    row.avail.length > 0 &&
+    row.avail.every((agent) => {
+      const model = row.byAgent[agent];
+      return !model || !isAgentSelectableModel(model, { userProvider });
+    })
+  );
 }
 
 /** A normal list toggle enables native engines; compatibility engines remain opt-in. */
@@ -349,7 +356,9 @@ export function modelVisibilityTargets(
   if (!enabled)
     return row.avail.flatMap((agent) => {
       const model = row.byAgent[agent];
-      return model && isAgentSelectableModel(model, { userProvider }) ? [{ agent, modelId: model.id }] : [];
+      return model && isAgentSelectableModel(model, { userProvider })
+        ? [{ agent, modelId: model.id }]
+        : [];
     });
   // A model-level enable activates every native engine, not only the recommended one.
   // Compatibility engines are untouched; an explicit enable may fall back if none are native.
@@ -363,8 +372,8 @@ export function modelVisibilityTargets(
       model.availability !== 'requires_payment'
     );
   });
-  const native = nativeModelAgents(provider, row.byAgent).filter(agent => usable.includes(agent));
-  if (native.length) return native.map(agent => ({ agent, modelId: row.byAgent[agent]!.id }));
+  const native = nativeModelAgents(provider, row.byAgent).filter((agent) => usable.includes(agent));
+  if (native.length) return native.map((agent) => ({ agent, modelId: row.byAgent[agent]!.id }));
   const defaults = usable.filter((agent) => row.byAgent[agent]?.defaultEnabled !== false);
   const agent = pickRecommendedAgent(provider, row.id, defaults.length ? defaults : usable);
   const model = agent ? row.byAgent[agent] : undefined;
@@ -398,8 +407,13 @@ export function managementKindsOfRow(row: UnionModelRow, userProvider: boolean):
     const model = row.byAgent[agent];
     if (!model) continue;
     const category = classifyModel(model);
-    kinds.add(isAgentSelectableModel(model, { userProvider }) ? 'chat'
-      : CAPABILITY_CATEGORIES.has(category) ? category as ManagementKind : 'other');
+    kinds.add(
+      isAgentSelectableModel(model, { userProvider })
+        ? 'chat'
+        : CAPABILITY_CATEGORIES.has(category)
+          ? (category as ManagementKind)
+          : 'other',
+    );
   }
   return MANAGEMENT_KIND_ORDER.filter((kind) => kinds.has(kind));
 }
@@ -706,7 +720,8 @@ export function UnifiedModelList({
     const present = new Set<ModelCategory | 'chat'>();
     for (const row of unionRows) {
       const rep = row.byAgent[row.avail[0]];
-      if (rep) for (const kind of managementKindsOfRow(row, provider.source === 'user')) present.add(kind);
+      if (rep)
+        for (const kind of managementKindsOfRow(row, provider.source === 'user')) present.add(kind);
     }
     return MANAGEMENT_KIND_ORDER.filter((kind) => present.has(kind));
   }, [kindOf, unionRows, provider.source]);
@@ -716,12 +731,14 @@ export function UnifiedModelList({
   // 分组沿用现有口径:用每行第一个可用 agent 的目录条目作代表参与分组。
   const { groups, hiddenRows, disabledRows } = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const searched = q
-      ? unionRows.filter((r) => matchesModelName(r, q, t))
-      : unionRows;
+    const searched = q ? unionRows.filter((r) => matchesModelName(r, q, t)) : unionRows;
     const matched =
       showKindFilter && kindFilter !== 'all'
-        ? searched.filter((r) => managementKindsOfRow(r, provider.source === 'user').includes(kindFilter as ManagementKind))
+        ? searched.filter((r) =>
+            managementKindsOfRow(r, provider.source === 'user').includes(
+              kindFilter as ManagementKind,
+            ),
+          )
         : searched;
     const active = matched.filter((r) => !rowDisabledEffective(r));
     const disabled = matched.filter((r) => rowDisabledEffective(r));
@@ -749,7 +766,9 @@ export function UnifiedModelList({
     }
     return {
       groups: groupModelsForManagement(reps, managementView, (model) =>
-        showKindFilter && kindFilter !== 'all' ? kindFilter as ManagementKind : kindOf(repByRow.get(model.id)!),
+        showKindFilter && kindFilter !== 'all'
+          ? (kindFilter as ManagementKind)
+          : kindOf(repByRow.get(model.id)!),
       ).map((g) => ({
         key: g.key,
         kind: g.kind,
@@ -830,7 +849,7 @@ export function UnifiedModelList({
       }
       const next = !rowAnyEnabled(provider.id, row, userProvider);
       const targets = modelVisibilityTargets(provider, row, next);
-      if (await setModelVisibilities(provider.id, targets, next) === false) {
+      if ((await setModelVisibilities(provider.id, targets, next)) === false) {
         showVisibilityWriteFailure();
       }
     },
@@ -940,7 +959,10 @@ export function UnifiedModelList({
         <span
           className="min-w-0 truncate text-14 font-medium"
           style={{
-            color: state.ready && (capability || anyOn) ? 'var(--settings-section-title)' : 'var(--text-tertiary)',
+            color:
+              state.ready && (capability || anyOn)
+                ? 'var(--settings-section-title)'
+                : 'var(--text-tertiary)',
           }}
         >
           {localizedModelName(rep.name, t)}
@@ -1025,11 +1047,14 @@ export function UnifiedModelList({
   const compactList = Boolean(compact) || compactEmpty;
 
   return (
-    <div className={cn('flex min-h-0 flex-col', compactList ? 'shrink-0' : 'flex-1')}>
+    <div className={'flex flex-col'}>
       {/* 第一行说明模型选择与管理，第二行仅筛选当前列表。排列和批量配置在菜单里
           明确分组，任何筛选或排列操作都不写入模型开关。 */}
       {!compactEmpty && (
-        <div className="flex flex-col gap-2 px-5 pb-2 pt-2.5">
+        <div
+          data-testid="provider-model-toolbar"
+          className="sticky top-0 z-10 flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
+        >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-2">
@@ -1186,12 +1211,9 @@ export function UnifiedModelList({
         </div>
       )}
 
-      {/* 分组 + 模型行 + 底部「已停用」分区:唯一滚动区,与上方固定工具行以
+      {/* 分组 + 模型行 + 底部「已停用」分区随供应商详情滚动，与吸顶工具行以
           1px 细线分隔。视觉左右边距 20px = 容器 px-3 + 行 px-2(行悬停底色要包住内容)。 */}
-      <div
-        className={cn('min-h-0 overflow-y-auto border-t', compactList ? 'shrink-0' : 'flex-1')}
-        style={{ borderColor: 'var(--settings-theme-card-border)' }}
-      >
+      <div className={'border-t'} style={{ borderColor: 'var(--settings-theme-card-border)' }}>
         <div className={cn('flex flex-col gap-4 px-3 pt-1.5', compactList ? 'pb-2' : 'pb-4')}>
           {groups.length === 0 && hiddenRows.length === 0 && disabledRows.length === 0 ? (
             <div
@@ -1372,7 +1394,9 @@ export function UnifiedModelList({
                             className="shrink-0 text-12"
                             style={{ color: 'var(--text-tertiary)' }}
                           >
-                            {modelBrand(rep) ? localizedBrandName(modelBrand(rep)!, t) : t(CATEGORY_LABEL_KEY[rowCategory(row)])}
+                            {modelBrand(rep)
+                              ? localizedBrandName(modelBrand(rep)!, t)
+                              : t(CATEGORY_LABEL_KEY[rowCategory(row)])}
                           </span>
                           <span className="min-w-0 flex-1" />
                           {paymentRequired && (

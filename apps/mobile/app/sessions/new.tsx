@@ -1,6 +1,7 @@
+import { isRemoteTaskSuggestionId } from '@/session/remoteTaskSuggestionsModel';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { formatMobileBuildLabel, normalizeBuildInfo } from '@/config/buildInfo';
@@ -88,9 +89,16 @@ import {
 } from '@/session/attachments';
 import { useAuth } from '@/auth/AuthContext';
 import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUpload';
+import { discardNewSessionUploadedAttachments } from '@/session/newSessionAttachmentCleanup';
 import { goBackGuarded } from '@/utils/backGuard';
 import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
+import {
+  consumeIncomingShareBatch,
+  deleteIncomingSharedFiles,
+  selectIncomingShareUploadCandidates,
+  useIncomingShareBatch,
+} from '@/session/incomingShare';
 import {
   AT_RESOURCE_QUERY_DEBOUNCE_MS,
   buildComposerPaletteCacheKey,
@@ -173,6 +181,7 @@ import { i18n } from '@/i18n';
 import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
+  subscribeMobileAuthOwner,
 } from '@/auth/authOwnerGeneration';
 import { useTranslation } from 'react-i18next';
 import {
@@ -416,6 +425,7 @@ export default function NewRemoteSessionScreen() {
     deviceExplicit?: string;
     visualFocusComposer?: string;
     visualDraft?: string;
+    suggestion?: string;
   }>();
   const routeDeviceId = String(params.deviceId ?? '');
   const routeDeviceName = String(params.deviceName ?? routeDeviceId);
@@ -489,7 +499,9 @@ export default function NewRemoteSessionScreen() {
   );
   const [draft, setDraft] = useState<NewSessionDraft>({
     ...DEFAULT_NEW_SESSION_DRAFT,
-    firstMessage: visualInitialDraft ?? DEFAULT_NEW_SESSION_DRAFT.firstMessage,
+    firstMessage: visualInitialDraft ?? (isRemoteTaskSuggestionId(params.suggestion)
+      ? t(`devices.list.taskSuggestions.items.${params.suggestion}.prompt`)
+      : DEFAULT_NEW_SESSION_DRAFT.firstMessage),
     // 无记忆时默认对话；偏好加载后恢复上次选择，显式项目入口优先。
     workspaceKind: initialWorkingDir ? 'project' : 'dialogue',
     workingDir: initialWorkingDir ?? '',
@@ -672,6 +684,61 @@ export default function NewRemoteSessionScreen() {
     onError: setAttachmentError,
     onPicked: () => setContextSheetOpen(false),
   });
+  useEffect(() => subscribeMobileAuthOwner(() => {
+    // Switching accounts invalidates both queued uploads and already received
+    // attachments, synchronously, before a new account can send this draft.
+    discardNewSessionUploadedAttachments(attachmentsRef.current, auth.getAccessToken);
+    discardAllPendingUploads();
+    attachmentsRef.current = [];
+    setAttachments([]);
+    setAttachmentPreviews({});
+    setMediaAssetAttachments({});
+    setAttachmentError(null);
+  }), [auth.getAccessToken, discardAllPendingUploads]);
+  const incomingShareBatch = useIncomingShareBatch();
+  const isShareTargetFocused = useIsFocused();
+  useEffect(() => {
+    if (!isShareTargetFocused || !auth.isAuthenticated || !incomingShareBatch
+      || getMobileAuthOwner().accountId !== auth.user?.id
+      || !consumeIncomingShareBatch(incomingShareBatch.id)) return;
+    const selection = selectIncomingShareUploadCandidates(incomingShareBatch.payloads);
+    const remainingSlots = Math.max(
+      0,
+      MOBILE_MAX_ATTACHMENTS
+        - attachmentsRef.current.length
+        - getPendingUploadCount(),
+    );
+    const accepted = selection.candidates.slice(0, remainingSlots);
+    const dropped = selection.candidates.slice(remainingSlots);
+    const cleanupUris = [
+      ...selection.rejectedUris,
+      ...dropped.map((candidate) => candidate.uri),
+    ];
+    if (cleanupUris.length > 0) {
+      void deleteIncomingSharedFiles(cleanupUris).catch(() => undefined);
+    }
+    if (accepted.length > 0) {
+      enqueueUploads(accepted.map((candidate) => ({
+        ...candidate,
+        cleanupLocalUris: deleteIncomingSharedFiles,
+      })), { token: auth.getAccessToken() });
+    }
+    if (dropped.length > 0) {
+      setAttachmentError(i18n.t('composer.upload.maxAttachments', {
+        count: MOBILE_MAX_ATTACHMENTS,
+      }));
+    } else if (selection.rejectedUris.length > 0) {
+      setAttachmentError(i18n.t('composer.upload.fileTypeUnsupported'));
+    } else {
+      setAttachmentError(null);
+    }
+  }, [
+    auth,
+    enqueueUploads,
+    getPendingUploadCount,
+    incomingShareBatch,
+    isShareTargetFocused,
+  ]);
   const [slashCommands, setSlashCommands] = useState<MobileSlashCommand[]>([]);
   const [slashPaletteLoading, setSlashPaletteLoading] = useState(false);
   const [slashPaletteError, setSlashPaletteError] = useState<string | null>(null);

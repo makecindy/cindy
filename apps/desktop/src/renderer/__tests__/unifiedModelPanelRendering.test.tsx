@@ -208,7 +208,6 @@ import {
   updateModelFavorite,
 } from '@/state/modelFavorites';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
-import { PRICE_TIER_COLORS } from '@/themes/effortTierColors';
 
 const onProviderChange = vi.fn();
 
@@ -3311,17 +3310,60 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('本地简介单行截断并挂 title，不透出上游英文描述，模型名同理', () => {
+  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
-    const desc = within(row).getByText('用于编写代码、排查错误与改进程序。');
+    expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
+    expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
     expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
     expect(name.getAttribute('title')).toBe('GPT-5.6');
     expect(name.className).toContain('truncate');
+  });
+
+  it.each([
+    { providerId: 'openai', modelName: 'GPT-5.6', accountField: 'openAiAccount', named: false },
+    { providerId: 'openai', modelName: 'GPT-5.6', accountField: 'openAiAccount', named: true },
+    { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: false },
+    { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: true },
+  ])('全部和收藏显示识别出的账号，不重复已有账号名：$providerId / $named', ({ providerId, modelName, accountField, named }) => {
+    const original = providersRef.providers;
+    const identity = 'recognized@example.test';
+    providersRef.providers = original.map((value) => {
+      const provider = value as Record<string, unknown>;
+      return provider.id === providerId ? {
+        ...provider,
+        name: named ? `工作账号 · ${identity}` : '工作账号',
+        [accountField]: { source: 'oauth', identity },
+      } : provider;
+    });
+    try {
+      renderPanel();
+      expect(rowFor(modelName).querySelector('[data-model-source-details]')?.textContent).toBe(`工作账号 · ${identity}`);
+      fireEvent.click(within(rowFor(modelName)).getByRole('button', { name: '存为收藏' }));
+      fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+      expect(rowFor(modelName).querySelector('[data-model-source-details]')?.textContent).toBe(`工作账号 · ${identity}`);
+    } finally {
+      providersRef.providers = original;
+    }
+  });
+
+  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
+    renderPanel();
+    fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
+    fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+    expect(rowFor('GPT-5.6').querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
+    fireEvent.click(document.querySelector('[data-rail-item="provider:openai"]')!);
+    const providerRows = within(screen.getByRole('listbox')).getAllByText('GPT-5.6');
+    for (const name of providerRows) {
+      const row = name.closest('[data-unified-anchor]') as HTMLElement;
+      expect(row.querySelector('[data-model-source-details]')).toBeNull();
+      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
+    }
   });
 
   it('没有折扣的行不渲染折扣徽标', () => {
@@ -3410,11 +3452,7 @@ describe('统一面板 · 行内折扣徽标', () => {
     expect(tierNode.innerHTML).toContain('inset(0 50% 0 0)');
     withBadge.unmount();
 
-    // 颜色只由点亮格数决定:亮 1 格绿 / 2 格黄 / 3 格红,与模型档位无关。
-    // jsdom 把 hex 序列化成 rgb —— 按常量换算后断言,不写死魔法数字。
-    const hexToRgb = (hex: string) =>
-      `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`;
-    // $$$ 六折(实付 60%)→ round(1.8)=2 格亮 → 黄(t2),裁掉右侧 1/3。
+    // 折扣档串也保持中性色。
     const solLike = render(
       React.createElement(UnifiedModelRow, {
         ...common,
@@ -3428,11 +3466,10 @@ describe('统一面板 · 行内折扣徽标', () => {
       }),
     );
     const solNode = solLike.container.querySelector('[data-price-tier]') as HTMLElement;
-    expect(solNode.innerHTML).toContain(hexToRgb(PRICE_TIER_COLORS.t2));
-    expect(solNode.innerHTML).not.toContain(hexToRgb(PRICE_TIER_COLORS.t3));
+    expect(solNode.innerHTML).toContain('color: var(--text-secondary)');
     solLike.unmount();
 
-    // $$$ 一折(实付 10%)→ 至少 1 格亮 → 绿(t1)。
+    // $$$ 一折(实付 10%)→ 至少 1 格亮，仍用中性色。
     const deepDiscount = render(
       React.createElement(UnifiedModelRow, {
         ...common,
@@ -3447,11 +3484,10 @@ describe('统一面板 · 行内折扣徽标', () => {
     );
     const deepNode = deepDiscount.container.querySelector('[data-price-tier]') as HTMLElement;
     expect(deepNode.textContent).toContain('$$$');
-    expect(deepNode.innerHTML).toContain(hexToRgb(PRICE_TIER_COLORS.t1));
-    expect(deepNode.innerHTML).not.toContain(hexToRgb(PRICE_TIER_COLORS.t3));
+    expect(deepNode.innerHTML).toContain('color: var(--text-secondary)');
     deepDiscount.unmount();
 
-    // 无折扣付费行:$ 串按档位色渲染,无 ↓ 徽标。
+    // 无折扣付费行:$ 串用中性色渲染,无 ↓ 徽标。
     const plain = render(
       React.createElement(UnifiedModelRow, {
         ...common,

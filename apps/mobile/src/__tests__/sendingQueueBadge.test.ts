@@ -44,7 +44,7 @@ describe('mobile sending queue badge', () => {
     // Only enqueue reserves a slot; queue recovery must not infer a boundary
     // from either current messages or a previous committed render.
     expect(source.match(/appendOptimisticUserMessage\(/g)).toHaveLength(1);
-    expect(source.match(/clearQueueItemSending\(queued\.clientId\);/g)).toHaveLength(2);
+    expect(source.match(/clearQueueItemSending\(queued, enqueueAccepted, projectionBeforeSend\);/g)).toHaveLength(2);
     expect(source).toContain('} finally {\n        // 成功、对账认定已入队、回滚 throw 三条路径都算「不再在途」');
     // 新建会话乐观管线在跑时,首条消息同样是「已上屏未确认」。
     expect(source).toContain("creationTask?.status === 'running'");

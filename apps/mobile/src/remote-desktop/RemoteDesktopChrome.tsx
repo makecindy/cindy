@@ -126,9 +126,11 @@ export function RemoteDesktopPanel({
   page,
   children,
   footer,
+  visible = true,
 }: {
   landscape: boolean;
   topInset: number;
+  toolbarOnLeft?: boolean;
   title: string;
   caption: string;
   onClose(): void;
@@ -136,10 +138,12 @@ export function RemoteDesktopPanel({
   page?: string;
   children: ReactNode;
   footer?: ReactNode;
+  visible?: boolean;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  if (!visible) return null;
   return (
     <View
       style={StyleSheet.absoluteFill}
@@ -178,10 +182,7 @@ export function RemoteDesktopPanel({
               {caption}
             </Text>
           </View>
-          <RemoteDesktopPanelButton
-            label={t("remoteDesktop.close")}
-            onPress={onClose}
-          />
+          <View style={styles.close} />
         </View>
         <ScrollView
           key={page}

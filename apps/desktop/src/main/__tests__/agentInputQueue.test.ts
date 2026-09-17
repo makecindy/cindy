@@ -42,6 +42,24 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
+  it.each([false, true])('keeps synthetic text on disk and strips only host text-only model input (%s)', (toolsDisabled) => {
+    const text = '[UI_ACTION_TRIGGER]Say hello with cached usage hints.';
+    const queued = {
+      ...queuedMessage([]), text, persistedContent: text, toolsDisabled,
+    };
+    const restored = JSON.parse(JSON.stringify(sanitizeQueuedMessageForPersistence(queued)));
+    expect(restored.text).toBe(text);
+    expect(restored.persistedContent).toBe(text);
+    expect(getAgentFacingText(restored)).toBe(toolsDisabled ? 'Say hello with cached usage hints.' : text);
+    expect(buildMakerUserMessage(restored)).toEqual({
+      type: 'user', content: toolsDisabled ? 'Say hello with cached usage hints.' : text,
+    });
+    const rewritten = updateQueuedMessageText(restored, 'Updated welcome.');
+    expect(rewritten.text).toBe(toolsDisabled ? '[UI_ACTION_TRIGGER]Updated welcome.' : 'Updated welcome.');
+    expect(rewritten.persistedContent).toBe(rewritten.text);
+    expect(getAgentFacingText(rewritten)).toBe('Updated welcome.');
+  });
+
   it('sends queued GIF attachments as file blocks', () => {
     expect(
       buildMakerUserMessage(

@@ -97,6 +97,8 @@ import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './side
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
   isSplitGroupDragSource,
@@ -162,6 +164,7 @@ export const SessionCard = memo(function SessionCard({
 }: SessionCardProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const cindyMakePreparing = useCindyMakePreparing(session);
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
@@ -171,17 +174,19 @@ export const SessionCard = memo(function SessionCard({
   // 本地 attention 链路，与 SessionItem 完全一致。
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
-  const remoteActivity = useRemoteSessionActivity(session.id);
+  const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
-    liveActivity: remoteActivity ?? islandActivity,
+    liveActivity: session.deviceLinkDeviceId ? remoteActivity : islandActivity,
     attentionKind,
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
-    isRunning,
+    isRunning: session.deviceLinkDeviceId
+      ? remoteActivity?.phase === 'running'
+      : isRunning || cindyMakePreparing != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
@@ -202,7 +207,14 @@ export const SessionCard = memo(function SessionCard({
   const boundSchedules = useSessionBoundSchedules(session.id);
   const showScheduleBindingBadge = boundSchedules.length > 0;
   const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated;
-  const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+  const displayTitle = getSessionDisplayTitle(
+    session,
+    t(
+      session.source === CINDY_MAKE_SESSION_SOURCE
+        ? 'cindyMake.code.taskName'
+        : 'ccAgent.common.unnamedSession',
+    ),
+  );
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
@@ -239,8 +251,11 @@ export const SessionCard = memo(function SessionCard({
     islandActivity?.phase === 'running' && islandActivity.compactDetail
       ? islandActivity.compactDetail
       : null;
-  const listPreview = awaitingText ?? runningDetail ?? bodyPreview;
-  const cardPreview = awaitingText ?? bodyPreview;
+  const preparationText = cindyMakePreparing
+    ? t('cindyMake.code.phases.' + cindyMakePreparing)
+    : null;
+  const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview;
+  const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
   const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
   const cardPreviewLineClamp = usesPinnedCardSummary
     ? 3

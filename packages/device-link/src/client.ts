@@ -1,3 +1,4 @@
+import { isPeerResetRetryableReadChannel } from './invokePolicy.js';
 import { CongestionSendBudget } from './congestionSendBudget.js';
 import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import {
@@ -486,32 +487,11 @@ interface PendingRequest {
   retryAfterPeerReset?: () => void;
 }
 
-const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
-  'local-db:sessions:list',
-  'local-db:sessions:get',
-  'local-db:conversations:search',
-  'local-db:history:messages',
-  'local-db:messages:list',
-  'local-db:messages:view',
-  'local-db:messages:work-details',
-  'local-db:messages:around',
-  'local-db:messages:around-client-id',
-  'local-db:messages:estimatedSessionValue',
-  'local-db:recent-workdirs:list',
-  'local-db:subagent-runs:list',
-  'local-db:subagent-runs:detail',
-  'local-db:subagent-runs:transcript',
-  'local-db:bots:list',
-  'local-db:bots:get',
-  'local-db:orca-workflows:get-by-lead',
-  'local-db:orca-workflows:get-by-worker-session',
-  'local-db:orca-workflows:list-workers-by-lead',
-]);
 
 function isPeerResetRetryableRead(env: Omit<Envelope, 'id'>): boolean {
   if (env.kind !== 'invoke') return false;
   const channel = (env.payload as InvokePayload | undefined)?.channel;
-  return typeof channel === 'string' && PEER_RESET_RETRYABLE_READ_CHANNELS.has(channel);
+  return typeof channel === 'string' && isPeerResetRetryableReadChannel(channel);
 }
 
 interface PendingReliableMessage {

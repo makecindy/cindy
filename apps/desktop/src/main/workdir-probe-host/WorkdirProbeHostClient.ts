@@ -13,6 +13,7 @@ import type {
   WorkdirProbeResponse,
   WorkdirProbeResult,
 } from './protocol';
+import { workdirDiagnosticErrorCode, workdirDiagnosticId } from '../workdirDiagnostics';
 
 export interface WorkdirProbeChildLike {
   postMessage(message: unknown): void;
@@ -26,6 +27,7 @@ export interface WorkdirProbeChildLike {
 }
 
 export interface WorkdirProbeLoggerLike {
+  info?(...args: unknown[]): void;
   warn(...args: unknown[]): void;
 }
 
@@ -56,6 +58,9 @@ interface ProbeEntry {
   dir: string;
   key: string;
   deadline: number;
+  enqueuedAt: number;
+  startedAt?: number;
+  workerId?: number;
   resolve: (result: WorkdirProbeResult) => void;
   reject: (error: Error) => void;
   queueTimer?: ReturnType<typeof setTimeout>;
@@ -63,9 +68,12 @@ interface ProbeEntry {
 }
 
 interface ProbeWorker {
+  id: number;
   child: WorkdirProbeChildLike;
   active?: ProbeEntry;
   terminating?: boolean;
+  terminationRequestedAt?: number;
+  lastRequestId?: number;
 }
 
 const DEFAULT_MAX_WORKERS = 2;
@@ -78,6 +86,7 @@ export class WorkdirProbeHostClient {
   private readonly queue: ProbeEntry[] = [];
   private readonly inFlightByPath = new Map<string, Promise<WorkdirProbeResult>>();
   private nextId = 1;
+  private nextWorkerId = 1;
   private disposed = false;
 
   constructor(private readonly deps: WorkdirProbeHostClientDeps) {
@@ -88,6 +97,10 @@ export class WorkdirProbeHostClient {
   probe(dir: string, key: string, timeoutMs: number, kind: WorkdirProbeRequest['kind'] = 'probe'): Promise<WorkdirProbeResult> {
     key = `${kind}:${key}`;
     if (this.disposed) {
+      this.deps.log.warn('workdir probe rejected', {
+        reason: 'disposed', code: 'WORKDIR_PROBE_UNAVAILABLE',
+        operation: kind, directoryRef: workdirDiagnosticId(dir), ...this.poolDiagnostics(),
+      });
       return Promise.reject(
         new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe host is disposed'),
       );
@@ -95,6 +108,10 @@ export class WorkdirProbeHostClient {
     const existing = this.inFlightByPath.get(key);
     if (existing) return existing;
     if (this.queue.length >= this.maxQueued) {
+      this.deps.log.warn('workdir probe rejected', {
+        reason: 'queue-full', code: 'WORKDIR_PROBE_UNAVAILABLE',
+        operation: kind, directoryRef: workdirDiagnosticId(dir), ...this.poolDiagnostics(),
+      });
       return Promise.reject(
         new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe queue is full'),
       );
@@ -102,12 +119,14 @@ export class WorkdirProbeHostClient {
 
     let entry!: ProbeEntry;
     const probe = new Promise<WorkdirProbeResult>((resolve, reject) => {
+      const enqueuedAt = Date.now();
       entry = {
         kind,
         id: this.nextId++,
         dir,
         key,
-        deadline: Date.now() + timeoutMs,
+        deadline: enqueuedAt + timeoutMs,
+        enqueuedAt,
         resolve,
         reject,
       };
@@ -130,11 +149,11 @@ export class WorkdirProbeHostClient {
     );
     for (const queued of this.queue.splice(0)) {
       if (queued.queueTimer) clearTimeout(queued.queueTimer);
-      queued.reject(error);
+      this.rejectProbe(queued, error, 'disposed');
     }
     for (const worker of this.workers.splice(0)) {
       if (worker.active?.probeTimer) clearTimeout(worker.active.probeTimer);
-      worker.active?.reject(error);
+      if (worker.active) this.rejectProbe(worker.active, error, 'disposed');
       worker.active = undefined;
       try {
         worker.child.kill();
@@ -154,11 +173,13 @@ export class WorkdirProbeHostClient {
       try {
         this.startProbe(this.createWorker(), entry);
       } catch (error) {
-        entry.reject(
+        this.rejectProbe(entry,
           new WorkdirProbeClientError(
             'WORKDIR_PROBE_UNAVAILABLE',
             `failed to start probe host: ${String(error)}`,
           ),
+          'host-start-failed',
+          error,
         );
       }
       return;
@@ -170,11 +191,12 @@ export class WorkdirProbeHostClient {
       const index = this.queue.indexOf(entry);
       if (index < 0) return;
       this.queue.splice(index, 1);
-      entry.reject(
+      this.rejectProbe(entry,
         new WorkdirProbeClientError(
           'WORKDIR_PROBE_TIMEOUT',
           'timed out waiting for a probe slot',
         ),
+        'queue-timeout',
       );
     }, remainingMs);
     entry.queueTimer.unref?.();
@@ -182,19 +204,20 @@ export class WorkdirProbeHostClient {
 
   private createWorker(): ProbeWorker {
     const child = this.deps.fork();
-    const worker: ProbeWorker = { child };
+    const worker: ProbeWorker = { child, id: this.nextWorkerId++ };
     this.workers.push(worker);
+    this.deps.log.info?.('workdir probe worker created', { workerId: worker.id, ...this.poolDiagnostics() });
     child.on('message', (message) => {
       this.handleMessage(worker, message);
     });
-    child.on('exit', () => {
-      this.handleWorkerExit(worker);
+    child.on('exit', (code) => {
+      this.handleWorkerExit(worker, code);
     });
-    child.on('error', (type, location) => {
-      this.deps.log.warn('workdir probe host error', { type, location });
+    child.on('error', () => {
       this.beginWorkerTermination(
         worker,
         new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe host failed'),
+        'host-error',
       );
     });
     return worker;
@@ -207,18 +230,23 @@ export class WorkdirProbeHostClient {
     }
     const remainingMs = this.remainingMs(entry);
     if (remainingMs <= 0) {
-      entry.reject(
+      this.rejectProbe(entry,
         new WorkdirProbeClientError('WORKDIR_PROBE_TIMEOUT', 'directory probe deadline elapsed'),
+        'deadline-before-dispatch',
       );
       this.drainQueue();
       return;
     }
     worker.active = entry;
+    entry.startedAt = Date.now();
+    entry.workerId = worker.id;
+    worker.lastRequestId = entry.id;
     entry.probeTimer = setTimeout(() => {
       if (worker.active !== entry) return;
       this.beginWorkerTermination(
         worker,
         new WorkdirProbeClientError('WORKDIR_PROBE_TIMEOUT', 'directory probe timed out'),
+        'response-timeout',
       );
     }, remainingMs);
     entry.probeTimer.unref?.();
@@ -237,6 +265,7 @@ export class WorkdirProbeHostClient {
           'WORKDIR_PROBE_UNAVAILABLE',
           `probe host postMessage failed: ${String(error)}`,
         ),
+        'dispatch-failed',
       );
     }
   }
@@ -246,24 +275,41 @@ export class WorkdirProbeHostClient {
     if (!entry || !isProbeResponse(message) || message.id !== entry.id) return;
     if (entry.probeTimer) clearTimeout(entry.probeTimer);
     worker.active = undefined;
+    if (!message.result.ok) {
+      this.deps.log.warn('workdir probe filesystem result', {
+        ...this.probeDiagnostics(entry), code: workdirDiagnosticErrorCode(message.result),
+        reason: 'filesystem-error',
+      });
+    } else if (entry.kind === 'probe' && !message.result.isDirectory) {
+      this.deps.log.warn('workdir probe filesystem result', {
+        ...this.probeDiagnostics(entry), reason: 'not-directory',
+      });
+    }
     entry.resolve(message.result);
     this.drainQueue();
   }
 
-  private beginWorkerTermination(worker: ProbeWorker, error: WorkdirProbeClientError): void {
+  private beginWorkerTermination(worker: ProbeWorker, error: WorkdirProbeClientError, reason: string): void {
     if (worker.terminating) return;
     worker.terminating = true;
+    worker.terminationRequestedAt = Date.now();
     const entry = worker.active;
     worker.active = undefined;
     if (entry?.probeTimer) clearTimeout(entry.probeTimer);
-    entry?.reject(error);
+    if (entry) this.rejectProbe(entry, error, reason);
+    this.deps.log.warn('workdir probe worker termination requested', {
+      workerId: worker.id, requestId: worker.lastRequestId, reason, ...this.poolDiagnostics(),
+    });
     try {
       if (!worker.child.kill()) {
-        this.deps.log.warn('workdir probe host kill was not acknowledged; waiting for exit');
+        this.deps.log.warn('workdir probe host kill was not acknowledged; waiting for exit', {
+          workerId: worker.id, requestId: worker.lastRequestId, ...this.poolDiagnostics(),
+        });
       }
     } catch (killError) {
       this.deps.log.warn('failed to request workdir probe host termination; waiting for exit', {
-        error: String(killError),
+        workerId: worker.id, requestId: worker.lastRequestId,
+        code: workdirDiagnosticErrorCode(killError), ...this.poolDiagnostics(),
       });
     }
     // The worker remains in this.workers and therefore counts against
@@ -271,15 +317,54 @@ export class WorkdirProbeHostClient {
     // that refuses to exit can reduce availability, but cannot multiply.
   }
 
-  private handleWorkerExit(worker: ProbeWorker): void {
+  private handleWorkerExit(worker: ProbeWorker, code: number): void {
     if (!this.removeWorker(worker)) return;
     const entry = worker.active;
     worker.active = undefined;
     if (entry?.probeTimer) clearTimeout(entry.probeTimer);
-    entry?.reject(
-      new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe host exited'),
+    if (entry) this.rejectProbe(entry,
+      new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe host exited'), 'host-exited',
     );
+    this.deps.log.info?.('workdir probe worker exited', {
+      workerId: worker.id, requestId: worker.lastRequestId, exitCode: code,
+      terminationRequested: worker.terminating === true,
+      terminationWaitMs: worker.terminationRequestedAt === undefined ? null : Date.now() - worker.terminationRequestedAt,
+      ...this.poolDiagnostics(),
+    });
     this.drainQueue();
+  }
+
+  private poolDiagnostics() {
+    return {
+      workers: this.workers.length,
+      activeWorkers: this.workers.filter((worker) => worker.active).length,
+      terminatingWorkers: this.workers.filter((worker) => worker.terminating).length,
+      queued: this.queue.length,
+      maxWorkers: this.maxWorkers,
+      maxQueued: this.maxQueued,
+    };
+  }
+
+  private probeDiagnostics(entry: ProbeEntry) {
+    const now = Date.now();
+    return {
+      requestId: entry.id, workerId: entry.workerId, operation: entry.kind,
+      directoryRef: workdirDiagnosticId(entry.dir),
+      phase: entry.startedAt === undefined ? 'before-dispatch' : 'waiting-result',
+      timeoutMs: entry.deadline - entry.enqueuedAt,
+      elapsedMs: now - entry.enqueuedAt,
+      queueWaitMs: (entry.startedAt ?? now) - entry.enqueuedAt,
+      responseWaitMs: entry.startedAt === undefined ? null : now - entry.startedAt,
+      ...this.poolDiagnostics(),
+    };
+  }
+
+  private rejectProbe(entry: ProbeEntry, error: WorkdirProbeClientError, reason: string, cause?: unknown): void {
+    this.deps.log.warn('workdir probe failed', {
+      ...this.probeDiagnostics(entry), reason, code: workdirDiagnosticErrorCode(error),
+      ...(cause === undefined ? {} : { causeCode: workdirDiagnosticErrorCode(cause) }),
+    });
+    entry.reject(error);
   }
 
   private removeWorker(worker: ProbeWorker): boolean {
@@ -307,11 +392,13 @@ export class WorkdirProbeHostClient {
         this.startProbe(this.createWorker(), entry);
       } catch (error) {
         if (entry.queueTimer) clearTimeout(entry.queueTimer);
-        entry.reject(
+        this.rejectProbe(entry,
           new WorkdirProbeClientError(
             'WORKDIR_PROBE_UNAVAILABLE',
             `failed to restart probe host: ${String(error)}`,
           ),
+          'host-restart-failed',
+          error,
         );
       }
     }

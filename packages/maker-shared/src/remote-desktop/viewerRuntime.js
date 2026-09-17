@@ -105,8 +105,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     image = find("image"),
     video = find("video"),
     cursor = find("cursor");
+  // Ambient three-segment backdrop (mobile markup only; desktop keeps its
+  // solid surface because its stage has no #bg subtree, so every entry may
+  // be missing and all backdrop work below must tolerate that).
+  const bg = find("bg") || null,
+    bgCanvas = find("bg-canvas") || null,
+    bgContext = bgCanvas ? bgCanvas.getContext("2d") : null;
   let dw = 1920,
     dh = 1080,
+    viewerSized = false,
     zoom = 1,
     fx = 0.5,
     fy = 0.5,
@@ -143,6 +150,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   const mouseButtons = find("mouse-buttons"),
     wheel = find("mouse-wheel"),
     wheelGrip = find("mouse-wheel-grip");
+  let nativeMouseControls = false;
+  const mouseControlHandlers = new Map();
+  function listenMouse(el, type, handler) {
+    listen(el, type, handler);
+    mouseControlHandlers.set(el.id + ":" + type, handler);
+  }
   const keyboardInput = find("keyboard-input");
   let keyboardEnabled = false,
     composing = false;
@@ -224,7 +237,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     viewportRightInset = 0,
     viewportLeftInset = 0,
     viewportBottomInset = 0,
-    keyboardViewportInset = 0;
+    viewportTopInset = 0,
+    keyboardViewportInset = 0,
+    portraitKeyboardTopInset = 0;
   let keyboardViewportOpen = false;
   let cursorNeedsEntry = true,
     manualViewMoved = false,
@@ -232,6 +247,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   // Insets guide centering and pan limits without clipping the full-screen
   // video surface or adding an opaque strip beside the Dynamic Island.
   const viewportLeft = () => (fillHeight ? viewportLeftInset : 0);
+  const usableHeight = () =>
+    Math.max(1, stage.clientHeight - viewportTopInset - viewportBottomInset);
+  const viewportHeight = () =>
+    viewerSized ? usableHeight() : Math.max(1, stage.clientHeight);
   const viewportWidth = () =>
     Math.max(
       1,
@@ -239,26 +258,228 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         viewportLeft() -
         (fillHeight ? viewportRightInset : 0),
     );
+  // Center between the measured top controls and the keyboard edge (stage bottom).
+  // The usable center is (topInset + stageHeight) / 2, so shift by topInset / 2.
+  // Keep the fitted size and cap the shift when the desktop is too tall to fit.
+  const verticalOffset = (height) =>
+    (viewerSized ? viewportTopInset : 0) +
+    (fillHeight
+      ? 0
+      : Math.min(
+          Math.max(
+            0,
+            portraitKeyboardTopInset - (viewerSized ? viewportTopInset : 0),
+          ) / 2,
+          Math.max(0, (viewportHeight() - height) / 2),
+        ));
   const layout = () => {
     const r = transform(
       viewportWidth(),
-      stage.clientHeight,
+      viewportHeight(),
       dw,
       dh,
       zoom,
       fx,
       fy,
-      fillHeight,
+      fillHeight && !viewerSized,
     );
     return {
       ...r,
       x: viewportLeft() + viewportWidth() / 2 - fx * r.width,
-      y: stage.clientHeight / 2 - fy * r.height,
+      y: viewportHeight() / 2 + verticalOffset(r.height) - fy * r.height,
     };
   };
+  // The backdrop uses 5% / 90% / 5% source segments. The middle 90%
+  // keeps the fitted picture's scale; each outer 5% stretches uniformly
+  // to fill the remaining space, horizontally or vertically as needed.
+  // Zoom and pan never move the backdrop: where the picture covers it, the
+  // opaque picture simply occludes it, so input mapping stays uniform. Returns
+  // null when the fitted picture already covers the stage (nothing to fill).
+  const bgEdgeFraction = 0.05;
+  const bgCenterFraction = 1 - 2 * bgEdgeFraction;
+  function backgroundSegments(vw, vh, dw, dh, fill) {
+    if (!(vw > 0 && vh > 0 && dw > 0 && dh > 0)) return null;
+    const s = fill
+      ? vh / Math.max(1, dh)
+      : Math.min(vw / dw, vh / Math.max(1, dh));
+    const w = dw * s,
+      h = dh * s;
+    if (w < vw) {
+      const centerW = w * bgCenterFraction,
+        centerX = vw / 2 - centerW / 2,
+        sideW = centerX,
+        top = (vh - h) / 2;
+      return { axis: "x", s, w, h, top, centerW, centerX, sideW };
+    }
+    if (h < vh) {
+      const centerH = h * bgCenterFraction,
+        centerY = vh / 2 - centerH / 2,
+        sideH = centerY,
+        left = (vw - w) / 2;
+      return { axis: "y", s, w, h, left, centerH, centerY, sideH };
+    }
+    return null;
+  }
+  function paintBackground() {
+    if (!bg || !bgCanvas || !bgContext) return;
+    const vw = stage.clientWidth,
+      vh = stage.clientHeight;
+    const seg = backgroundSegments(vw, vh, dw, dh, fillHeight);
+    if (!seg) {
+      bg.style.display = "none";
+      bgRects = null;
+      stopBackgroundLoop();
+      return;
+    }
+    bg.style.display = "block";
+    bgAxis = seg.axis;
+    // The ambient layer also fills the notch and the area beneath native
+    // controls. Only the interactive picture respects viewport insets.
+    const originX = 0;
+    // Source segments are resolved at draw time from the live source dimensions;
+    // these dest rects only encode where each segment lands on the stage.
+    bgRects =
+      seg.axis === "x"
+        ? [
+            {
+              x: originX,
+              y: seg.top,
+              w: seg.sideW,
+              h: seg.h,
+            },
+            {
+              x: originX + seg.centerX,
+              y: seg.top,
+              w: seg.centerW,
+              h: seg.h,
+            },
+            {
+              x: originX + seg.centerX + seg.centerW,
+              y: seg.top,
+              w: seg.sideW,
+              h: seg.h,
+            },
+          ]
+        : [
+            {
+              x: seg.left,
+              y: 0,
+              w: seg.w,
+              h: seg.sideH,
+            },
+            {
+              x: seg.left,
+              y: seg.centerY,
+              w: seg.w,
+              h: seg.centerH,
+            },
+            {
+              x: seg.left,
+              y: seg.centerY + seg.centerH,
+              w: seg.w,
+              h: seg.sideH,
+            },
+          ];
+    // Keep the backing store at stage resolution (capped) so the stretched
+    // edges stay crisp without oversized allocations.
+    bgDpr = Math.min(2, window.devicePixelRatio || 1);
+    const bw = Math.round(stage.clientWidth * bgDpr),
+      bh = Math.round(vh * bgDpr);
+    if (bgCanvas.width !== bw || bgCanvas.height !== bh) {
+      bgCanvas.width = bw;
+      bgCanvas.height = bh;
+    }
+    scheduleBackgroundDraw();
+    startBackgroundLoop();
+  }
+  // One canvas, three draws: each source segment stretches into whatever bar
+  // the picture leaves open. The live video feeds it once presented; until
+  // then the decoded JPEG frame does, so the backdrop always matches the
+  // picture's own pixels and scale in the center segment.
+  let bgRects = null,
+    bgAxis = "x",
+    bgDpr = 1,
+    bgDrawFrame = null,
+    bgLoopFrame = null;
+  function drawBackground() {
+    if (!bgContext || !bgRects) return;
+    bgContext.setTransform(bgDpr, 0, 0, bgDpr, 0, 0);
+    bgContext.clearRect(0, 0, stage.clientWidth, stage.clientHeight);
+    const useVideo =
+      videoPresented && video.videoWidth > 0 && video.videoHeight > 0;
+    const src = useVideo ? video : image;
+    // drawImage source rects live in the source's own pixel space, which can
+    // differ from dw/dh; fractions of the real bitmap keep every segment lined
+    // up with what the picture element actually shows.
+    const sw = useVideo ? video.videoWidth : image.naturalWidth;
+    const sh = useVideo ? video.videoHeight : image.naturalHeight;
+    if (!(sw > 0 && sh > 0)) return;
+    const horizontal = bgAxis === "x";
+    const sourceLength = horizontal ? sw : sh;
+    const cuts = [0, bgEdgeFraction, 1 - bgEdgeFraction, 1];
+    for (let i = 0; i < bgRects.length; i++) {
+      const rect = bgRects[i];
+      const origin = cuts[i] * sourceLength;
+      const length = (cuts[i + 1] - cuts[i]) * sourceLength;
+      bgContext.drawImage(
+        src,
+        horizontal ? origin : 0,
+        horizontal ? 0 : origin,
+        horizontal ? length : sw,
+        horizontal ? sh : length,
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+      );
+    }
+  }
+  function scheduleBackgroundDraw() {
+    if (bgDrawFrame !== null || !bgRects || !bgContext) return;
+    bgDrawFrame = requestAnimationFrame(() => {
+      bgDrawFrame = null;
+      drawBackground();
+    });
+  }
+  function startBackgroundLoop() {
+    if (
+      bgLoopFrame !== null ||
+      !bgContext ||
+      !bgRects ||
+      !videoPresented ||
+      typeof video.requestVideoFrameCallback !== "function"
+    )
+      return;
+    const frame = video.requestVideoFrameCallback(() => {
+      if (bgLoopFrame !== frame) return;
+      bgLoopFrame = null;
+      drawBackground();
+      startBackgroundLoop();
+    });
+    bgLoopFrame = frame;
+  }
+  // Only the streaming loop stops here; a pending one-shot draw is harmless
+  // (it re-paints the preserved frame) and must survive reconnects.
+  function stopBackgroundLoop() {
+    if (bgLoopFrame !== null) video.cancelVideoFrameCallback?.(bgLoopFrame);
+    bgLoopFrame = null;
+  }
+  function clearBackground() {
+    stopBackgroundLoop();
+    bgRects = null;
+    // Resizing a canvas resets its bitmap; same-value assignment still clears.
+    if (bgCanvas) bgCanvas.width = bgCanvas.width;
+  }
+  listen(image, "load", () => scheduleBackgroundDraw());
+  // Older WebViews update the ambient layer on media progress, never with an
+  // idle display-refresh loop. Geometry changes still get a one-shot repaint.
+  listen(video, "timeupdate", () => {
+    if (videoPresented && typeof video.requestVideoFrameCallback !== "function")
+      scheduleBackgroundDraw();
+  });
   function panBounds(r) {
     const vw = viewportWidth(),
-      vh = stage.clientHeight;
+      vh = viewportHeight();
     // Grow extra resting travel continuously from zero at fit to 180 screen
     // points at maximum zoom. Never count the unused space of a fitting axis.
     const clearance = (180 * (Math.max(1, Math.min(5, zoom)) - 1)) / 4;
@@ -274,14 +495,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     const bounds = {
       minX: viewportLeft() + x.min,
       maxX: viewportLeft() + x.max,
-      minY: y.min,
-      maxY: y.max,
+      minY: y.min + verticalOffset(r.height),
+      maxY: y.max + verticalOffset(r.height),
     };
     // A camera position required to expose the cursor is a valid resting point,
     // not elastic overshoot. Preserve it across the next pan/pinch handoff.
     if (followRest) {
       const restX = viewportLeft() + vw / 2 - followRest.fx * r.width,
-        restY = vh / 2 - followRest.fy * r.height;
+        restY = vh / 2 + verticalOffset(r.height) - followRest.fy * r.height;
       const weight =
         followRest.zoom > 1 ? clamp((zoom - 1) / (followRest.zoom - 1)) : 1;
       bounds.minX += Math.min(0, restX - bounds.minX) * weight;
@@ -308,7 +529,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }
   function place(x, y, r) {
     fx = (viewportLeft() + viewportWidth() / 2 - x) / r.width;
-    fy = (stage.clientHeight / 2 - y) / r.height;
+    fy = (viewportHeight() / 2 + verticalOffset(r.height) - y) / r.height;
   }
   function cursorViewport() {
     const hotX = remoteCursor?.hotX ?? 9,
@@ -320,7 +541,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       bottom = Math.max(1, stage.clientHeight - viewportBottomInset);
     // Keep the entire cursor, including its hotspot offset, clear of chrome.
     const minX = Math.min(right - 1, left + 8 + hotX),
-      minY = Math.min(bottom - 1, 8 + hotY);
+      minY = Math.min(
+        bottom - 1,
+        (viewerSized ? viewportTopInset : 0) + 8 + hotY,
+      );
     return {
       minX,
       maxX: Math.max(minX, right - 8 - (w - hotX)),
@@ -400,6 +624,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       el.style.left = r.x + "px";
       el.style.top = r.y + "px";
     }
+    paintBackground();
     if (remoteCursor) {
       cursor.style.width = remoteCursor.width + "px";
       cursor.style.height = remoteCursor.height + "px";
@@ -429,7 +654,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       cursor.style.left = r.x + cursorX * r.width + "px";
       cursor.style.top = r.y + cursorY * r.height + "px";
       cursor.style.display =
-        !config.desktop && control && (mode === "pointer" || mode === "touch") ? "block" : "none";
+        !config.desktop && control && (mode === "pointer" || mode === "touch")
+          ? "block"
+          : "none";
     }
     if (config.desktop) stage.style.cursor = control ? "none" : "default";
   }
@@ -565,7 +792,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     multi = null;
   }
   function updateMouseButtons() {
-    mouseButtons.style.display = showMouseButtons && control ? "block" : "none";
+    mouseButtons.style.display =
+      showMouseButtons && control && !nativeMouseControls ? "block" : "none";
     for (const [name, button] of [
       ["left", 0],
       ["right", 2],
@@ -580,11 +808,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     ["right", 2],
   ]) {
     const el = find("mouse-" + name);
-    listen(el, "pointerdown", (e) => {
+    listenMouse(el, "pointerdown", (e) => {
       e.preventDefault();
       if (!control || !showMouseButtons || heldMouse.has(button)) return;
       clearTimeout(hold);
-      el.setPointerCapture(e.pointerId);
+      if (!e.nativeInput) el.setPointerCapture(e.pointerId);
       heldMouse.set(button, e.pointerId);
       queue({ kind: "button", button, down: true, x: cx, y: cy });
       flush();
@@ -598,10 +826,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       flush();
       updateMouseButtons();
     };
-    listen(el, "pointerup", up);
-    listen(el, "pointercancel", up);
-    listen(el, "lostpointercapture", up);
-    listen(el, "click", (e) => {
+    listenMouse(el, "pointerup", up);
+    listenMouse(el, "pointercancel", up);
+    listenMouse(el, "lostpointercapture", up);
+    listenMouse(el, "click", (e) => {
       if (e.detail === 0 && control && showMouseButtons) {
         click(button);
         flush();
@@ -613,14 +841,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       queue({ kind: "scroll", dx: 0, dy: Math.max(-2000, Math.min(2000, dy)) });
     }
   };
-  listen(wheel, "pointerdown", (e) => {
+  listenMouse(wheel, "pointerdown", (e) => {
     e.preventDefault();
     if (!control || !showMouseButtons || wheelY) return;
-    wheel.setPointerCapture(e.pointerId);
+    if (!e.nativeInput) wheel.setPointerCapture(e.pointerId);
     wheelY = { id: e.pointerId, y: e.clientY, start: e.clientY, moved: false };
   });
   // A small dead zone preserves middle clicks; displacement drives the timer.
-  listen(wheel, "pointermove", (e) => {
+  listenMouse(wheel, "pointermove", (e) => {
     if (!wheelY || wheelY.id !== e.pointerId) return;
     e.preventDefault();
     wheelGrip.style.transform =
@@ -630,7 +858,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     wheelY.y = e.clientY;
     if (Math.abs(e.clientY - wheelY.start) > 4) wheelY.moved = true;
   });
-  listen(wheel, "pointerup", (e) => {
+  listenMouse(wheel, "pointerup", (e) => {
     if (!wheelY || wheelY.id !== e.pointerId) return;
     e.preventDefault();
     if (!wheelY.moved && control && showMouseButtons) {
@@ -642,15 +870,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   const cancelWheel = (e) => {
     if (wheelY?.id === e.pointerId) resetWheel();
   };
-  listen(wheel, "pointercancel", cancelWheel);
-  listen(wheel, "lostpointercapture", cancelWheel);
-  listen(wheel, "click", (e) => {
+  listenMouse(wheel, "pointercancel", cancelWheel);
+  listenMouse(wheel, "lostpointercapture", cancelWheel);
+  listenMouse(wheel, "click", (e) => {
     if (e.detail === 0 && control && showMouseButtons) {
       click(1);
       flush();
     }
   });
-  listen(wheel, "keydown", (e) => {
+  listenMouse(wheel, "keydown", (e) => {
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       scrollMouse(e.key === "ArrowUp" ? -120 : 120);
@@ -770,7 +998,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       fx =
         multi.anchor.x +
         (viewportLeft() + viewportWidth() / 2 - next.x) / r.width;
-      fy = multi.anchor.y + (stage.clientHeight / 2 - next.y) / r.height;
+      fy =
+        multi.anchor.y +
+        (viewportHeight() / 2 + verticalOffset(r.height) - next.y) / r.height;
       const moved = layout(),
         b = panBounds(moved);
       place(
@@ -994,7 +1224,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       if (
         control &&
         clipboardShortcuts &&
-        normalizedKey(e.code) === (clipboardModifier === "meta" ? "MetaLeft" : "ControlLeft")
+        normalizedKey(e.code) ===
+          (clipboardModifier === "meta" ? "MetaLeft" : "ControlLeft")
       ) {
         e.preventDefault();
         if (!hardwareKeys.has(normalizedKey(e.code)))
@@ -1004,7 +1235,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       if (
         control &&
         clipboardShortcuts &&
-        (clipboardModifier === "meta" ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) &&
+        (clipboardModifier === "meta"
+          ? e.metaKey && !e.ctrlKey
+          : e.ctrlKey && !e.metaKey) &&
         !e.altKey &&
         !e.shiftKey &&
         (e.code === "KeyC" || e.code === "KeyV")
@@ -1013,7 +1246,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         if (!e.repeat) {
           release();
           hardwareKeys.clear();
-          post({ type: "clipboard", action: e.code === "KeyC" ? "copy" : "paste" });
+          post({
+            type: "clipboard",
+            action: e.code === "KeyC" ? "copy" : "paste",
+          });
         }
         return;
       }
@@ -1052,7 +1288,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     release();
     settlePan();
   });
+  function reportViewport() {
+    post({
+      type: "viewportChanged",
+      width: viewportWidth(),
+      height: usableHeight(),
+    });
+  }
   const observer = new ResizeObserver(() => {
+    reportViewport();
     release();
     settlePan();
     render();
@@ -1061,6 +1305,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   cleanups.push(
     () => observer.disconnect(),
     () => stopPanAnimation(),
+    () => stopBackgroundLoop(),
     () => clearTimeout(touchCursorTimer),
   );
   // Keep one bounded frame in this document only; never persist desktop pixels.
@@ -1121,6 +1366,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         videoPaintCallback = null;
         videoPresented = true;
         video.style.zIndex = "2";
+        if (typeof startBackgroundLoop === "function") startBackgroundLoop();
         post({ type: "streaming", attemptId });
         post({
           type: "pipCapability",
@@ -1204,7 +1450,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     video.style.display = "none";
     video.style.zIndex = "0";
     image.style.display = "block";
-    if (!preserveFrame) image.removeAttribute("src");
+    if (typeof stopBackgroundLoop === "function") stopBackgroundLoop();
+    if (!preserveFrame) {
+      image.removeAttribute("src");
+      if (typeof clearBackground === "function") clearBackground();
+    }
   }
   function failRtc(reason, canRetry = true) {
     const failedAttempt = attemptId;
@@ -1415,6 +1665,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           return;
         video.style.display = "block";
         render();
+        if (typeof scheduleBackgroundDraw === "function")
+          scheduleBackgroundDraw();
         if (typeof video.requestVideoFrameCallback === "function") {
           videoFrameCallback = video.requestVideoFrameCallback(() => {
             if (g !== generation) return;
@@ -1493,6 +1745,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     }
     switch (message.type) {
+      case "measureViewport":
+        post({
+          type: "viewportSize",
+          width: viewportWidth(),
+          height: usableHeight(),
+        });
+        break;
       case "presentation":
         try {
           if (message.enabled) {
@@ -1514,6 +1773,24 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         }
         break;
       case "videoSettings":
+        if (
+          Number.isInteger(message.width) &&
+          Number.isInteger(message.height) &&
+          message.width >= 320 &&
+          message.height >= 320 &&
+          (message.restore === true ||
+            (message.width <= 2560 && message.height <= 2560))
+        ) {
+          release();
+          stopPanAnimation();
+          viewerSized = message.restore !== true;
+          zoom = 1;
+          fx = fy = 0.5;
+          followRest = null;
+          dw = message.width;
+          dh = message.height;
+          render();
+        }
         video.muted = !message.audio;
         retries = 0;
         connect();
@@ -1544,13 +1821,71 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           );
         }
         break;
+      case "networkStatus": {
+        const status = document.getElementById("network-status");
+        if (!status) break;
+        status.textContent =
+          typeof message.text === "string" ? message.text : "";
+        status.style.display = status.textContent ? "block" : "none";
+        for (const key of ["top", "right", "fontSize"]) {
+          if (Number.isFinite(message[key]) && message[key] >= 0)
+            status.style[key] = message[key] + "px";
+        }
+        if (/^#[0-9a-f]{3,8}$/i.test(message.color))
+          status.style.color = message.color;
+        break;
+      }
+      case "nativeMouse": {
+        if (
+          !nativeMouseControls ||
+          !["left", "right", "wheel"].includes(message.control)
+        )
+          break;
+        if (
+          ![
+            "pointerdown",
+            "pointermove",
+            "pointerup",
+            "pointercancel",
+            "click",
+          ].includes(message.event)
+        )
+          break;
+        if (!Number.isFinite(message.id) || !Number.isFinite(message.y)) break;
+        mouseControlHandlers.get(
+          "mouse-" + message.control + ":" + message.event,
+        )?.({
+          pointerId: message.id,
+          clientY: message.y,
+          detail: 0,
+          nativeInput: true,
+          preventDefault() {},
+        });
+        break;
+      }
       case "mouseButtons": {
+        nativeMouseControls = message.native === true;
         const before = layout(),
+          previousTopInset = viewportTopInset,
+          previousBottomInset = viewportBottomInset,
           keyboardOpen = fillHeight && message.keyboardOpen === true;
-        const keepHorizontal = fillHeight && (keyboardOpen || keyboardViewportOpen);
+        const keepHorizontal =
+          fillHeight && (keyboardOpen || keyboardViewportOpen);
         // Opening is observable before the native keyboard has a measured height.
         keyboardViewportOpen = keyboardOpen;
+        const previousOffset = portraitKeyboardTopInset;
+        if (Number.isFinite(message.portraitKeyboardTopInset))
+          portraitKeyboardTopInset = Math.max(
+            0,
+            message.portraitKeyboardTopInset,
+          );
+        const offsetChanged = previousOffset !== portraitKeyboardTopInset;
         let sideInsetsChanged = false;
+        if (Number.isFinite(message.topInset))
+          viewportTopInset = Math.max(
+            0,
+            Math.min(stage.clientHeight - 1, message.topInset),
+          );
         if (Number.isFinite(message.bottomInset))
           viewportBottomInset = Math.max(
             0,
@@ -1601,10 +1936,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           }
           followRest = { fx, fy, zoom };
           render();
-        } else if (sideInsetsChanged) {
+        } else if (
+          sideInsetsChanged ||
+          offsetChanged ||
+          (viewerSized && previousTopInset !== viewportTopInset) ||
+          (viewerSized && previousBottomInset !== viewportBottomInset)
+        ) {
           settlePan();
           render();
         }
+        reportViewport();
         if (!message.enabled) {
           for (const button of heldMouse.keys())
             queue({ kind: "button", button, down: false, x: cx, y: cy });
@@ -1621,11 +1962,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         showMouseButtons = message.enabled === true;
         for (const name of ["left", "right", "wheel"])
           if (typeof message.labels?.[name] === "string")
-            find("mouse-" + name).setAttribute("aria-label", message.labels[name]);
+            find("mouse-" + name).setAttribute(
+              "aria-label",
+              message.labels[name],
+            );
         updateMouseButtons();
         break;
       }
       case "init":
+        viewerSized = false;
         followRest = null;
         cursorNeedsEntry = true;
         stopPanAnimation();
@@ -1636,8 +1981,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         sending = false;
         seq = 0;
         epoch = message.epoch;
-        clipboardShortcuts = config.desktop && message.clipboardShortcuts === true;
-        clipboardModifier = message.clipboardModifier === "meta" ? "meta" : "control";
+        clipboardShortcuts =
+          config.desktop && message.clipboardShortcuts === true;
+        clipboardModifier =
+          message.clipboardModifier === "meta" ? "meta" : "control";
         dw = message.width;
         dh = message.height;
         fillHeight = message.fillHeight === true;
@@ -1670,7 +2017,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         else resetCursor();
         const frameEpoch = epoch;
         image.onload = () => {
-          if (epoch === frameEpoch) post({ type: "framePresented" });
+          if (epoch === frameEpoch) {
+            scheduleBackgroundDraw();
+            post({ type: "framePresented" });
+          }
         };
         image.src = "data:image/jpeg;base64," + message.jpeg;
         break;
@@ -1726,7 +2076,20 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         break;
     }
   }
+  // iOS can report equal left/right safe areas in both landscape directions.
+  // Its interface angle distinguishes the notch side even on a 180-degree turn.
+  const reportOrientation = () => {
+    const angle =
+      typeof window.orientation === "number"
+        ? window.orientation
+        : window.screen?.orientation?.angle;
+    if (Number.isFinite(angle)) post({ type: "orientation", angle });
+  };
+  listen(window, "orientationchange", reportOrientation);
+  if (window.screen?.orientation?.addEventListener)
+    listen(window.screen.orientation, "change", reportOrientation);
   render();
+  reportOrientation();
   post({ type: "ready" });
   return {
     receive: (message) => receive({ data: JSON.stringify(message) }),
@@ -1734,6 +2097,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       release();
       epoch = null;
       closeRtc(false);
+      if (bgDrawFrame !== null) cancelAnimationFrame(bgDrawFrame);
+      bgDrawFrame = null;
       for (const cleanup of cleanups) cleanup();
     },
   };

@@ -1,11 +1,14 @@
 import { Host } from "@expo/ui";
-import { Button, RNHostView, VStack } from "@expo/ui/swift-ui";
+import type { ComponentProps } from "react";
+import { Button, Label, RNHostView, VStack } from "@expo/ui/swift-ui";
 import {
   accessibilityAddTraits,
   accessibilityElement,
   accessibilityIdentifier,
   accessibilityLabel,
   buttonStyle,
+  buttonBorderShape,
+  controlSize,
   contentShape,
   disabled,
   frame,
@@ -13,12 +16,14 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet, View } from "react-native";
 import { useTheme } from "@/theme";
+import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
 import type { RemoteDesktopActionButtonProps } from "./RemoteDesktopActionButton";
 
 export function RemoteDesktopActionButton(
   props: RemoteDesktopActionButtonProps,
 ) {
-  const { mode } = useTheme();
+  const { mode, colors } = useTheme();
+  const liquidGlass = useLiquidGlassAvailable();
   const state = { pressed: false };
   const style = StyleSheet.flatten(
     typeof props.style === "function" ? props.style(state) : props.style,
@@ -27,6 +32,41 @@ export function RemoteDesktopActionButton(
     typeof props.children === "function"
       ? props.children(state)
       : props.children;
+  if (props.variant === "glass") {
+    // SwiftUI measures its label and glass padding together, without a second
+    // padded RNHostView squeezing the text inside a fixed-height button.
+    return (
+      <Host
+        colorScheme={mode}
+        seedColor={colors.textPrimary}
+        ignoreSafeArea="all"
+        matchContents={{ vertical: true }}
+        style={{ alignSelf: "stretch", minHeight: 44 }}
+      >
+        <Button
+          onPress={() => {
+            if (!props.disabled) props.onPress();
+          }}
+          modifiers={[
+            buttonStyle(liquidGlass ? "glass" : "bordered"),
+            buttonBorderShape("capsule"),
+            controlSize("large"),
+            frame({ maxWidth: Infinity, minHeight: 44 }),
+            disabled(Boolean(props.disabled)),
+            accessibilityIdentifier(props.testID ?? ""),
+          ]}
+        >
+          <Label
+            title={props.accessibilityLabel ?? ""}
+            systemImage={
+              props.systemImage as ComponentProps<typeof Label>["systemImage"]
+            }
+            modifiers={[frame({ maxWidth: Infinity, minHeight: 24 })]}
+          />
+        </Button>
+      </Host>
+    );
+  }
   return (
     <View style={style}>
       {/* Preserve intrinsic text height in Yoga, including larger text and translations. */}

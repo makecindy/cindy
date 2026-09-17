@@ -91,6 +91,44 @@ function weeklyAtProgress(utilization: number, progress: number) {
 }
 
 describe('QuotaHoverCard', () => {
+  it.each([undefined, null, 0, NaN, Infinity, 1e20])(
+    'omits the disclosure when windows have no displayable details (reset=%s)',
+    (resetsAt) => {
+      render(<UsageCard variant="embedded" nowMs={NOW_MS} account={{
+        windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20, resetsAt }, breakdown: [] }],
+        details: ['Balance available'],
+      }} />);
+      expect(screen.getByRole('progressbar')).toBeTruthy();
+      expect(screen.getByText('Balance available')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'quotaCard.usageTitle' })).toBeNull();
+    },
+  );
+
+  it.each(['detail', 'breakdown'] as const)('discloses %s without a reset date', (kind) => {
+    render(<UsageCard variant="embedded" account={{ windows: [
+      { key: 'plain', title: 'Plain', window: { utilization: 10 } },
+      { key: 'detailed', title: 'Detailed', window: { utilization: 20 },
+        ...(kind === 'detail' ? { detail: 'Extra usage' } : { breakdown: [{ label: 'Extra usage', value: '10' }] }),
+      },
+    ] }} />);
+    expect(screen.queryByText('Extra usage')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'quotaCard.usageTitle' }));
+    expect(screen.getByText('Extra usage')).toBeTruthy();
+  });
+
+  it('hides duplicate identity without windows and only makes the popover region focusable', () => {
+    const account = { title: 'ChatGPT', planLabel: 'Pro', windows: [], emptyText: 'Waiting for usage' };
+    const { rerender } = render(<UsageCard variant="embedded" hideIdentity account={account} />);
+    expect(screen.queryByText('ChatGPT')).toBeNull();
+    expect(screen.queryByText('Pro')).toBeNull();
+    expect(screen.getByText('Waiting for usage')).toBeTruthy();
+    expect(screen.getByRole('region').hasAttribute('tabindex')).toBe(false);
+    rerender(<UsageCard hideIdentity account={account} />);
+    expect(screen.getByText('ChatGPT')).toBeTruthy();
+    expect(screen.getByText('Pro')).toBeTruthy();
+    expect(screen.getByRole('region').tabIndex).toBe(0);
+  });
+
   it('keeps the provider header while waiting for quota data', () => {
     render(<QuotaHoverCard snapshot={null} nowMs={NOW_MS} />);
 
@@ -150,10 +188,52 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('剩余 100%')).toBeTruthy();
     expect(screen.getByText('剩余 24%')).toBeTruthy();
     expect(screen.getByText('7小时 5分钟后重置')).toBeTruthy();
+    expect(screen.queryByText('17:05 重置')).toBeNull();
+    const detailsButton = screen.getByRole('button', { name: 'quotaCard.usageTitle' });
+    expect(detailsButton.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(detailsButton);
+    expect(detailsButton.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('17:05 重置')).toBeTruthy();
     expect(screen.getByText('8月7日 00:00 重置')).toBeTruthy();
     expect(screen.getByText('8月6日 23:59 重置')).toBeTruthy();
     expect(screen.getByText('18:30 重置')).toBeTruthy();
+  });
+
+  it('keeps balances, alerts and stale data visible while embedded details are collapsed', () => {
+    render(
+      <UsageCard
+        variant="embedded"
+        hideIdentity
+        nowMs={NOW_MS}
+        account={{
+          title: 'ChatGPT',
+          planLabel: 'Pro',
+          updatedAt: NOW_MS - 10 * 60_000,
+          windows: [
+            {
+              key: 'weekly',
+              title: 'Weekly',
+              window: weeklyAtProgress(92, 0.5),
+              paceWindowMinutes: 10_080,
+            },
+          ],
+          details: ['0.00 credits', 'Balance depleted'],
+          notices: [{ text: 'Limit reached', tone: 'crit' }],
+        }}
+      />,
+    );
+    expect(screen.queryByText('ChatGPT')).toBeNull();
+    expect(screen.getByText('0.00 credits')).toBeTruthy();
+    expect(screen.getByText('Balance depleted')).toBeTruthy();
+    expect(screen.getByText('Limit reached')).toBeTruthy();
+    expect(screen.getByText('quotaCard.staleData:10')).toBeTruthy();
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('8');
+    const button = screen.getByRole('button', { name: 'quotaCard.usageTitle' });
+    fireEvent.click(button);
+    expect(screen.getByTestId('quota-pace')).toBeTruthy();
+    fireEvent.click(button);
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
   });
 
   it('prioritizes countdown in compact cards and updates to pending after reset', () => {

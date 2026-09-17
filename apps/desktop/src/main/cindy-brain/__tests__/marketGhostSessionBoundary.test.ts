@@ -188,6 +188,8 @@ describe('market Ghost session boundary', () => {
     // 只有确认旧进程退出，才切断旧市场的自动更新路由；等待失败时保留原路由，
     // 也不会尝试恢复第二份 resident 进程。
     expect(detachIndex).toBeGreaterThan(stopAndWaitIndex);
+    expect(helperBody.indexOf('if (isCurrent?.() === false)')).toBeGreaterThan(-1);
+    expect(helperBody.indexOf('if (isCurrent?.() === false)')).toBeLessThan(stopAndWaitIndex);
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');

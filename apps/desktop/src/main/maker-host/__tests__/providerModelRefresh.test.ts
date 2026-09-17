@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   refreshBuiltinProviderModels,
+  refreshModelsWithCatalog,
   type BuiltinProviderModelRefreshDeps,
 } from '../provider-model-refresh.js';
 
@@ -81,5 +82,47 @@ describe('refreshBuiltinProviderModels', () => {
     await expect(
       refreshBuiltinProviderModels('xai', deps({ refreshXaiMedia: async () => false })),
     ).rejects.toThrow(/xAI media model discovery/);
+  });
+});
+
+describe('refreshModelsWithCatalog', () => {
+  it('updates the catalog before the selected account discovery and preserves its result', async () => {
+    const steps: string[] = [];
+    const result = await refreshModelsWithCatalog({
+      refreshCatalog: async () => { steps.push('catalog'); },
+      refreshModels: async () => { steps.push('selected-account'); return false; },
+      getScopeKey: () => 1,
+    });
+    expect(steps).toEqual(['catalog', 'selected-account']);
+    expect(result).toBe(false);
+  });
+
+  it('does not discover accounts after a failed catalog refresh', async () => {
+    const refreshModels = vi.fn(async () => true);
+    await expect(refreshModelsWithCatalog({
+      refreshCatalog: async () => { throw new Error('offline'); },
+      refreshModels,
+      getScopeKey: () => 1,
+    })).rejects.toThrow('offline');
+    expect(refreshModels).not.toHaveBeenCalled();
+  });
+
+  it.each(['catalog', 'discovery'] as const)('rejects an owner switch during %s', async (stage) => {
+    let scope = 1;
+    const refreshModels = vi.fn(async () => { scope++; return true; });
+    await expect(refreshModelsWithCatalog({
+      refreshCatalog: async () => { if (stage === 'catalog') scope++; },
+      refreshModels,
+      getScopeKey: () => scope,
+    })).rejects.toThrow('Account changed');
+    expect(refreshModels).toHaveBeenCalledTimes(stage === 'catalog' ? 0 : 1);
+  });
+
+  it('preserves a discovery failure after the public catalog succeeds', async () => {
+    await expect(refreshModelsWithCatalog({
+      refreshCatalog: async () => undefined,
+      refreshModels: async () => { throw new Error('discovery failed'); },
+      getScopeKey: () => 1,
+    })).rejects.toThrow('discovery failed');
   });
 });

@@ -13,11 +13,12 @@
  *      详见 dispose() 内注释。
  */
 
+import { installResponseGuard } from './response-guard.js';
 import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { Socket, TcpSocketConnectOpts } from 'node:net';
-import type { Transform } from 'node:stream';
+import { PassThrough, type Transform } from 'node:stream';
 import { URL } from 'node:url';
 import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib';
 
@@ -2064,6 +2065,19 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
+    let requestGuard: ReturnType<NonNullable<ProxyOptions['requestGuard']>>;
+    try {
+      requestGuard = opts.requestGuard?.(requestCtx) ?? null;
+      if (requestGuard) {
+        headers['accept-encoding'] = 'identity';
+        installResponseGuard(res, () => res.statusCode >= 400
+          ? new PassThrough() // Native clients treat HTTP failures as errors, never executable output.
+          : requestGuard!.response(res.getHeaders()));
+      }
+    } catch {
+      res.writeHead(403); res.end(); req.resume(); return;
+    }
+
     // The compactor only understands JSON request histories.  Keep the normal
     // hard limit for other media types so enabling it cannot accidentally make
     // binary/form uploads consume the larger ingress window.
@@ -2211,6 +2225,11 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       res.writeHead(400);
       res.end();
       return;
+    }
+
+    if (requestGuard) {
+      try { rawBody = requestGuard.transformBody(rawBody); headers['content-length'] = String(rawBody.length); }
+      catch { res.destroy(); return; }
     }
 
     // 路由决策: 基于**原始** body(transform 链改写前)判路由 —— 能看到上游看不到的原始字段
@@ -2419,7 +2438,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
     transformsCompleted = true;
     notifyTransformSettlement();
-    const outBody = transformed ?? bodyForTransforms;
+    let outBody = transformed ?? bodyForTransforms;
+    if (requestGuard) {
+      // Compatibility transforms may reintroduce provider-hosted tools. Apply
+      // the same frozen policy at the final outbound boundary as well.
+      try { outBody = requestGuard.transformBody(outBody); }
+      catch { res.destroy(); return; }
+    }
     if (outBody.length > maxBodyBytes) {
       respondRequestTooLarge({
         req, res, logger, reqId, method, url, headers,
@@ -2613,6 +2638,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       writeUpgradeFailure(clientSocket, 426, 'Upgrade Required');
       return;
     }
+    if (opts.webSocketTransforms) delete headers['sec-websocket-extensions'];
     const resolvedWebSocketUpstream = upstreamUrl;
 
     let target: UpstreamTarget;
@@ -2849,6 +2875,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           return;
         }
 
+        if (opts.webSocketTransforms && upstreamRes.headers['sec-websocket-extensions']) {
+          settle('unexpected-websocket-extension'); upstreamSocket.destroy(); clientSocket.destroy(); return;
+        }
         established = true;
         connection.upstreamSocket = upstreamSocket;
         if (opts.retryProvenWebSocketUpgrades) {
@@ -2884,13 +2913,23 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         clientSocket.on('error', abort('client-error'));
         upstreamSocket.on('error', abort('upstream-error'));
 
+        let guarded: ReturnType<NonNullable<ProxyOptions['webSocketTransforms']>> | undefined;
+        try { guarded = opts.webSocketTransforms?.({ url, headers }); }
+        catch { abort('websocket-guard-failed')(); return; }
+        if (guarded) {
+          guarded.outbound.on('error', abort('websocket-outbound-rejected'));
+          guarded.inbound.on('error', abort('websocket-inbound-rejected'));
+          clientSocket.once('close', () => { guarded?.outbound.destroy(); guarded?.inbound.destroy(); });
+          guarded.outbound.pipe(upstreamSocket);
+          guarded.inbound.pipe(clientSocket);
+        }
         try {
           if (!locallyAcceptedForReconnect) {
             clientSocket.write(serializeResponseHead(upstreamRes));
           }
           // 双向把握手时已缓冲的首包补上, 再对接。
-          if (upstreamHead?.length) clientSocket.write(upstreamHead);
-          if (head?.length) upstreamSocket.write(head);
+          if (upstreamHead?.length) (guarded?.inbound ?? clientSocket).write(upstreamHead);
+          if (head?.length) (guarded?.outbound ?? upstreamSocket).write(head);
 
           clientSocket.setNoDelay(true);
           upstreamSocket.setNoDelay(true);
@@ -2901,8 +2940,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           return;
         }
 
-        upstreamSocket.pipe(clientSocket);
-        clientSocket.pipe(upstreamSocket);
+        upstreamSocket.pipe(guarded?.inbound ?? clientSocket);
+        clientSocket.pipe(guarded?.outbound ?? upstreamSocket);
         if (locallyAcceptedForReconnect) clientSocket.resume();
         logger.info?.('◀ websocket established', {
           reqId, status: upstreamRes.statusCode, live: liveWebSockets,

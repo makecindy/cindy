@@ -98,6 +98,7 @@ describe('feishu streaming text', () => {
     expect(mocks.sendText).toHaveBeenCalledWith(
       'ou_owner',
       messages.streaming.deliveryFailed,
+      undefined,
     );
   });
 

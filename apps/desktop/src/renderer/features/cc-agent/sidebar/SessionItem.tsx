@@ -106,6 +106,8 @@ import {
   startSessionDrag,
 } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
+import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -337,6 +339,7 @@ export const SessionItem = memo(function SessionItem({
   insideAutomationGroup = false,
 }: SessionItemProps) {
   const { t } = useTranslation();
+  const cindyMakePreparing = useCindyMakePreparing(session);
   const prRefs = usePrRefsForSession(session.id);
   // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
@@ -401,17 +404,19 @@ export const SessionItem = memo(function SessionItem({
   // device-link 远程会话行:本地 attention/running 链路对被控端后台会话是盲区,状态改由
   // 被控端灵动岛 relay 的活动镜像驱动(remoteSessionActivityStore,按行精准订阅;本地
   // 会话恒 undefined 零开销)。镜像只保留活跃态与未读终态,映射与本地五档同一张色表。
-  const remoteActivity = useRemoteSessionActivity(session.id);
+  const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
-    liveActivity: remoteActivity ?? islandActivity,
+    liveActivity: session.deviceLinkDeviceId ? remoteActivity : islandActivity,
     attentionKind,
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
-    isRunning,
+    isRunning: session.deviceLinkDeviceId
+      ? remoteActivity?.phase === 'running'
+      : isRunning || cindyMakePreparing != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
@@ -499,7 +504,14 @@ export const SessionItem = memo(function SessionItem({
       );
     }
   }, [effectiveScheduleId, t]);
-  const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+  const displayTitle = getSessionDisplayTitle(
+    session,
+    t(
+      session.source === CINDY_MAKE_SESSION_SOURCE
+        ? 'cindyMake.code.taskName'
+        : 'ccAgent.common.unnamedSession',
+    ),
+  );
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   const titleContent =
     matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
@@ -1105,7 +1117,18 @@ export const SessionItem = memo(function SessionItem({
                 ordinalBadgeLabel != null && 'opacity-0',
               )}
             >
-              {showRightStatus ? (
+              {cindyMakePreparing && rightStatusKind === 'running' ? (
+                <span
+                  className={cn(
+                    'max-w-[9rem] truncate text-xs font-normal',
+                    isActive
+                      ? 'text-sidebar-item-active-foreground/80'
+                      : 'text-[var(--cmd-palette-item-meta)]',
+                  )}
+                >
+                  {t('cindyMake.code.phases.' + cindyMakePreparing)}
+                </span>
+              ) : showRightStatus ? (
                 <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
               ) : (
                 // 任务信息复选:按用户勾选拼装 pr / worktree / tokens / cost / time;默认仅

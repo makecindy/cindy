@@ -149,6 +149,67 @@ describe('refreshLocalCatalogSnapshot', () => {
     expect(mocks.commitCapabilities).not.toHaveBeenCalled();
   });
 
+  it.each(['new', 'existing'] as const)('publishes a shared %s profile with no legacy preferences and preserves scoped choices', async (profileOrigin) => {
+    const legacyKey = 'xdt:modelVisibilityPrefs:v1';
+    const mapKey = `${legacyKey}.owner.owner-a`;
+    const saved = new Map<string, string>([[mapKey, JSON.stringify({ 'pi:xd:hidden': false })]]);
+    const storage = {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => { saved.set(key, value); },
+      removeItem: (key: string) => { saved.delete(key); },
+    };
+    const sync = vi.fn(async () => undefined);
+    const listeners = new Set<(event: StorageEvent) => void>();
+    vi.stubGlobal('navigator', { locks: { request: async (_key: string, run: () => boolean) => run() } });
+    vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      addEventListener: (_type: string, listener: (event: StorageEvent) => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: (event: StorageEvent) => void) => listeners.delete(listener),
+      electronAPI: { maker: {
+        syncModelVisibility: sync,
+        claimLegacyModelVisibilityOwner: () => ({
+          dataOwnerId: 'owner-a', ownerGeneration: 1, canWriteOwnerScoped: true,
+          claimed: true, claimedByOtherOwner: false, canInitialize: false, profileOrigin,
+        }),
+      } },
+    });
+    vi.resetModules();
+    const prefs = await vi.importActual<typeof import('@/state/modelVisibilityPrefs')>('@/state/modelVisibilityPrefs');
+    prefs.__resetForTest();
+    // The reset clears preference keys; restore the existing scoped choice.
+    storage.setItem(mapKey, JSON.stringify({ 'pi:xd:hidden': false }));
+    try {
+      await prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+      const provider = { id: 'xd', agents: ['pi'], routing: {}, models: { pi: [
+        { id: 'recommended', defaultEnabled: true }, { id: 'hidden', defaultEnabled: true },
+      ] } } as unknown as ProviderView;
+      const snapshot = { dataOwnerId: 'owner-a', ownerGeneration: 1, providers: [provider], providerOrder: ['xd'] };
+      mocks.loadProviders.mockResolvedValue(snapshot);
+      mocks.loadCapabilities.mockResolvedValue([]);
+      mocks.initializeVisibility.mockImplementation(prefs.migrateModelVisibilityDefaults);
+      await expect(refreshLocalCatalogSnapshot()).resolves.toBe(true);
+      expect(mocks.commitProviders).toHaveBeenCalledWith(expect.anything(), snapshot);
+      expect(prefs.isModelEnabled('pi', 'xd', { id: 'recommended', defaultEnabled: true })).toBe(true);
+      expect(prefs.isModelEnabled('pi', 'xd', { id: 'hidden', defaultEnabled: true })).toBe(false);
+      expect(saved.get(`${legacyKey}.migration-complete.owner.owner-a`)).toBeUndefined();
+      expect(sync).toHaveBeenLastCalledWith('owner-a', 1, { 'pi:xd:hidden': false },
+        expect.not.objectContaining({ pending: true }));
+
+      // A concurrent old window can create legacy data later: do not lose its
+      // choices or continue presenting uninitialized defaults as ready.
+      storage.setItem(legacyKey, JSON.stringify({ 'pi:xd:recommended': false }));
+      for (const listener of listeners) listener({ key: legacyKey, storageArea: storage } as unknown as StorageEvent);
+      await vi.waitFor(() => expect(sync).toHaveBeenLastCalledWith('owner-a', 1,
+        { 'pi:xd:hidden': false }, expect.objectContaining({ pending: true })));
+      expect(prefs.isModelEnabled('pi', 'xd', { id: 'recommended', defaultEnabled: true })).toBe(false);
+      await expect(refreshLocalCatalogSnapshot()).resolves.toBe(false);
+      expect(storage.getItem(legacyKey)).toBe(JSON.stringify({ 'pi:xd:recommended': false }));
+    } finally {
+      prefs.__resetForTest();
+    }
+  });
+
   it.each([
     ['storage', true], ['lock', true], ['storage', false], ['lock', false],
   ] as const)('propagates real %s initialization failures through preload (recovers: %s)', async (failure, recovers) => {

@@ -356,6 +356,11 @@ module.exports = (context = {}) => {
       ...next,
       android: {
         ...next.android,
+        // Only APK self-distribution requests permission to install updates.
+        permissions: [...new Set([
+          ...(next.android.permissions || []),
+          'android.permission.REQUEST_INSTALL_PACKAGES',
+        ])],
         ...(Number.isInteger(versionCode) && versionCode > 0 ? { versionCode } : {}),
       },
       updates: {

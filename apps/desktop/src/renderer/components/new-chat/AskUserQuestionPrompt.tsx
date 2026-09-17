@@ -258,7 +258,7 @@ function AskUserQuestionForm({
       <>
         {currentIndex > 0 && (
           <div className={skipClass}>
-            <span className="flex items-center gap-[6px]">
+            <span className="flex items-center gap-1.5">
               <span>&#8592;</span>
               <span>{t('chat.askUserQuestion.back')}</span>
             </span>
@@ -472,7 +472,7 @@ function AskUserQuestionForm({
     : 'translate-x-0 opacity-100';
 
   const footerActions = (
-    <div className="flex gap-[10px]">
+    <div className="flex gap-2.5">
       {isAnimating ? (
         buttonsSnapshotRef.current
       ) : (
@@ -486,7 +486,7 @@ function AskUserQuestionForm({
                 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
               )}
             >
-              <span className="flex items-center gap-[6px]">
+              <span className="flex items-center gap-1.5">
                 <span>&#8592;</span>
                 <span>{t('chat.askUserQuestion.back')}</span>
               </span>
@@ -563,12 +563,12 @@ function AskUserQuestionForm({
       {/* Content area — participates in slide animation */}
       <div
         className={cn(
-          'flex flex-col gap-[16px] transition-all duration-200 ease-in-out',
+          'flex flex-col gap-4 transition-[opacity,transform] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]',
           slideClass,
         )}
       >
         {/* Question Row (header chip moved to top header bar above) */}
-        <div className="flex flex-col gap-[8px]">
+        <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="text-15 font-medium text-[var(--ask-header-text)]">
               {currentQ?.question}

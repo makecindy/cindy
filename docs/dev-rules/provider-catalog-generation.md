@@ -98,6 +98,11 @@ OpenAI / Anthropic / xAI API 与订阅入口分开，另加 Nous Research（Herm
 
 - Azure 资源名、Vertex location、Cloudflare account/gateway 使用可编辑的声明模板；
   绑定后同一连接的三个 runtime、发现地址与模型独立地址同步替换，不按模型名猜地址。
+  Vertex 的官方 host 不是一条 `{location}-` 正则：`global` 用无前缀
+  `aiplatform.googleapis.com`，`us`/`eu` 用 `aiplatform.{us|eu}.rep.googleapis.com`，
+  区域才用 `{region}-aiplatform.googleapis.com`。匹配只认这一族官方形态并规范化别名，
+  不把占位符放宽成任意 host。Azure OpenAI 同样认 `openai.azure.com` 与
+  `cognitiveservices.azure.com` 的 `/openai[/v1]`，保存时保留用户用的那个官方 host。
 - Bedrock 不同区域分开预设，避免把别区模型错误地借给当前 endpoint。
 - 账号模板绑定后仍按 preset ID + 精确模型 ID/API 查标准资料；普通改写地址不继承原渠道承诺。
 - 模型详情可逐引擎选八种原生 API；同处调整默认思考档位和工作上下文，上游窗口与最大输出另行展示。

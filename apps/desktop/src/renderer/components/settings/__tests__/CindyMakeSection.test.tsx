@@ -1,12 +1,25 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { CindyMakeSection } from '../CindyMakeSection';
 import { startMakeDoctor } from '@/lib/cindyMakeDoctor';
 import { setCindyMakeForceManagedTools } from '@/lib/cindyMakeSettings';
-import type { MakeDoctorReport, MakeSourceStatus } from '../../../../shared/cindyMakeDoctor';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import type {
+  CindyMakeGlobalState,
+  MakeDoctorReport,
+  MakeSourceStatus,
+} from '../../../../shared/cindyMakeDoctor';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, values?: { resolved: number; reused: number; downloaded: number }) =>
+      key === 'cindyMake.source.cacheProgress' && values
+        ? `${key} ${values.resolved} / ${values.reused} / ${values.downloaded}`
+        : key,
+  }),
+}));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({
@@ -21,8 +34,20 @@ type Result = Awaited<ReturnType<NonNullable<Api>['executeDesktopCommand']>>;
 function harness() {
   const listeners = new Set<Listener>();
   const sourceListeners = new Set<(status: MakeSourceStatus) => void>();
+  const stateListeners = new Set<(state: CindyMakeGlobalState) => void>();
+  let globalState: CindyMakeGlobalState = {};
   const runs = new Map<string, (result: Result) => void>();
   const api = {
+    getCindyMakeState: vi.fn(async (): Promise<CindyMakeGlobalState> => ({
+      ...globalState,
+      source: globalState.source ?? (await api.getCindyMakeSourceStatus()),
+    })),
+    onCindyMakeState: (listener: (state: CindyMakeGlobalState) => void) => {
+      stateListeners.add(listener);
+      return () => {
+        stateListeners.delete(listener);
+      };
+    },
     openCindyMakeToolsDir: vi.fn(async () => ({ success: true })),
     getCindyMakeSourceStatus: vi.fn(async () => undefined as MakeSourceStatus | undefined),
     openCindyMakeSourceDir: vi.fn(async () => ({ success: true })),
@@ -48,8 +73,17 @@ function harness() {
   };
   vi.stubGlobal('electronAPI', {
     maker: api,
+    getCindyMakeState: api.getCindyMakeState,
+    onCindyMakeState: api.onCindyMakeState,
     openCindyMakeToolsDir: api.openCindyMakeToolsDir,
-    getCindyMakeSourceStatus: api.getCindyMakeSourceStatus,
+    getCindyMakeSourceStatus: async () => {
+      const source = await api.getCindyMakeSourceStatus();
+      if (source) {
+        globalState = { ...globalState, source };
+        for (const listener of stateListeners) listener(globalState);
+      }
+      return source;
+    },
     openCindyMakeSourceDir: api.openCindyMakeSourceDir,
     onCindyMakeSourceStatus: api.onCindyMakeSourceStatus,
     cancelCindyMakeSource: api.cancelCindyMakeSource,
@@ -59,6 +93,8 @@ function harness() {
   const pushSource = async (status: MakeSourceStatus) => {
     await act(async () => {
       for (const listener of sourceListeners) listener(status);
+      globalState = { ...globalState, source: status };
+      for (const listener of stateListeners) listener(globalState);
     });
   };
   const complete = async (
@@ -77,10 +113,17 @@ function harness() {
       runs.get(runId)!({ success: true, doctorReport: report });
     });
   };
-  return { api, starts, complete, listeners, pushSource };
+  const pushState = async (state: CindyMakeGlobalState) => {
+    await act(async () => {
+      globalState = state;
+      for (const listener of stateListeners) listener(state);
+    });
+  };
+  return { api, starts, complete, listeners, pushSource, pushState, stateListeners };
 }
 
 beforeEach(() => {
+  setDataOwnerGeneration('settings-make-test-owner');
   vi.stubEnv('DEV', true);
   setCindyMakeForceManagedTools(false);
 });
@@ -92,6 +135,237 @@ afterEach(() => {
 });
 
 describe('Settings > Cindy Make', () => {
+  it.each(['missing', 'passed'] as const)(
+    'shows the new %s check instead of a completed preparation from before entry',
+    async (status) => {
+      const environment = harness();
+      const preparation: MakeDoctorReport = {
+        runId: 'historical-preparation',
+        mode: 'prepare',
+        platform: 'win32',
+        arch: 'x64',
+        status: status === 'missing' ? 'completed' : 'failed',
+        checks: [{ id: 'node', status: status === 'missing' ? 'passed' : 'missing' }],
+      };
+      await environment.pushState({ environmentPrepare: { active: false, report: preparation } });
+      render(<CindyMakeSection />);
+      const runId = environment.starts()[0][1].doctorRunId!;
+      await environment.complete(runId, '', [{ id: 'node', status }]);
+      await environment.pushState({
+        environmentPrepare: { active: false, report: preparation },
+        environmentCheck: {
+          active: false,
+          report: {
+            ...preparation,
+            runId,
+            mode: 'check',
+            status: 'completed',
+            checks: [{ id: 'node', status }],
+          },
+        },
+      });
+      expect(screen.getByRole('status').textContent).toContain(
+        status === 'missing' ? 'cindyMakeDoctor.needsAttention' : 'cindyMakeDoctor.passed',
+      );
+      expect(screen.queryByText('cindyMake.prepare.passed')).toBeNull();
+      expect(screen.queryByText('cindyMake.prepare.failed')).toBeNull();
+    },
+  );
+
+  it('restores a background installation after reentry, keeps completion, and stops the real run', async () => {
+    const environment = harness();
+    const first = render(<CindyMakeSection />);
+    await environment.complete(environment.starts()[0][1].doctorRunId!, '', [
+      { id: 'node', status: 'missing' },
+    ]);
+    fireEvent.click(screen.getByText('cindyMake.prepare.install'));
+    const preparationId = environment.starts()[1][1].doctorRunId!;
+    const preparation: MakeDoctorReport = {
+      runId: preparationId,
+      mode: 'prepare',
+      platform: 'win32',
+      arch: 'x64',
+      status: 'running',
+      checks: [
+        { id: 'node', status: 'downloading', progress: { loaded: 42, total: 100, percent: 42 } },
+      ],
+    };
+    await environment.pushState({ environmentPrepare: { active: true, report: preparation } });
+    first.unmount();
+    expect(environment.stateListeners.size).toBe(0);
+    const second = render(<CindyMakeSection />);
+    await screen.findByText('cindyMake.prepare.stop');
+    const reentryCheckId = environment.starts()[2][1].doctorRunId!;
+    await environment.complete(reentryCheckId, '', [{ id: 'node', status: 'missing' }]);
+    expect(screen.queryByText('cindyMake.prepare.install')).toBeNull();
+    fireEvent.click(screen.getByText('cindyMakeDoctor.details'));
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('42');
+    expect(environment.stateListeners.size).toBe(1);
+    expect(
+      environment.api.executeDesktopCommand.mock.calls.some(
+        ([, ctx]) => ctx.doctorAction === 'cancel',
+      ),
+    ).toBe(false);
+    fireEvent.click(screen.getByText('cindyMake.prepare.stop'));
+    expect(environment.api.executeDesktopCommand).toHaveBeenLastCalledWith('cindy-make', {
+      doctorRunId: preparationId,
+      doctorAction: 'cancel',
+    });
+    await environment.pushState({
+      environmentPrepare: {
+        active: false,
+        report: {
+          ...preparation,
+          status: 'completed',
+          checks: [{ id: 'node', status: 'passed', version: '24.16.0' }],
+        },
+      },
+    });
+    expect(screen.getByRole('status').textContent).toContain('cindyMake.prepare.passed');
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    fireEvent.click(screen.getByText('cindyMake.prepare.retry'));
+    await environment.complete(environment.starts()[3][1].doctorRunId!, '', [
+      { id: 'node', status: 'missing' },
+    ]);
+    expect(screen.getByText('cindyMake.prepare.install')).toBeTruthy();
+    expect(environment.starts().filter(([command]) => command === 'cindy-make')).toHaveLength(1);
+    second.unmount();
+    expect(environment.stateListeners.size).toBe(0);
+    await environment.complete(preparationId, '24.16.0');
+  });
+
+  it('ignores a stale initial snapshot after newer preparation progress arrives', async () => {
+    const environment = harness();
+    let resolveSnapshot!: (state: CindyMakeGlobalState) => void;
+    environment.api.getCindyMakeState.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    render(<CindyMakeSection />);
+    const preparation: MakeDoctorReport = {
+      runId: 'new-preparation',
+      mode: 'prepare',
+      platform: 'win32',
+      arch: 'x64',
+      status: 'running',
+      checks: [{ id: 'node', status: 'installing' }],
+    };
+    await environment.pushState({ environmentPrepare: { active: true, report: preparation } });
+    await act(async () =>
+      resolveSnapshot({
+        environmentPrepare: {
+          active: true,
+          report: { ...preparation, runId: 'old-preparation' },
+        },
+      }),
+    );
+    fireEvent.click(screen.getByText('cindyMake.prepare.stop'));
+    expect(environment.api.executeDesktopCommand).toHaveBeenLastCalledWith('cindy-make', {
+      doctorRunId: 'new-preparation',
+      doctorAction: 'cancel',
+    });
+  });
+
+  it('keeps the fresh check when an unobserved preparation completes before a stale active snapshot', async () => {
+    const environment = harness();
+    let resolveSnapshot!: (state: CindyMakeGlobalState) => void;
+    environment.api.getCindyMakeState.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    render(<CindyMakeSection />);
+    const preparation: MakeDoctorReport = {
+      runId: 'finishing-preparation',
+      mode: 'prepare',
+      platform: 'win32',
+      arch: 'x64',
+      status: 'completed',
+      checks: [{ id: 'node', status: 'passed', version: '24.16.0' }],
+    };
+    await environment.pushState({ environmentPrepare: { active: false, report: preparation } });
+    await environment.complete(environment.starts()[0][1].doctorRunId!, '', [
+      { id: 'node', status: 'missing' },
+    ]);
+    await act(async () =>
+      resolveSnapshot({
+        environmentPrepare: {
+          active: true,
+          report: {
+            ...preparation,
+            status: 'running',
+            checks: [{ id: 'node', status: 'installing' }],
+          },
+        },
+      }),
+    );
+    expect(screen.getByRole('status').textContent).toContain('cindyMakeDoctor.needsAttention');
+    expect(screen.getByText('cindyMake.prepare.install')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.prepare.stop')).toBeNull();
+  });
+
+  it('does not let a delayed initial snapshot undo an explicit recheck', async () => {
+    const environment = harness();
+    let resolveSnapshot!: (state: CindyMakeGlobalState) => void;
+    environment.api.getCindyMakeState.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
+    render(<CindyMakeSection />);
+    const preparation: MakeDoctorReport = {
+      runId: 'completed-preparation',
+      mode: 'prepare',
+      platform: 'win32',
+      arch: 'x64',
+      status: 'running',
+      checks: [{ id: 'node', status: 'installing' }],
+    };
+    await environment.pushState({ environmentPrepare: { active: true, report: preparation } });
+    await environment.pushState({
+      environmentPrepare: {
+        active: false,
+        report: {
+          ...preparation,
+          status: 'completed',
+          checks: [{ id: 'node', status: 'passed' }],
+        },
+      },
+    });
+    fireEvent.click(screen.getByText('cindyMake.prepare.retry'));
+    await act(async () =>
+      resolveSnapshot({ environmentPrepare: { active: true, report: preparation } }),
+    );
+    await environment.complete(environment.starts()[1][1].doctorRunId!, '', [
+      { id: 'node', status: 'missing' },
+    ]);
+    expect(screen.getByText('cindyMake.prepare.install')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.prepare.retry')).toBeNull();
+  });
+
+  it('offers an explicit creation form without starting preparation on open or cancel', async () => {
+    const environment = harness();
+    render(
+      <MemoryRouter>
+        <CindyMakeSection />
+      </MemoryRouter>,
+    );
+    const entry = screen.getByRole('button', { name: 'settings.cindyMake.create.title' });
+    entry.focus();
+    fireEvent.click(entry);
+    expect(screen.getByRole('dialog', { name: 'settings.cindyMake.create.title' })).toBeTruthy();
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.cindyMake.create.cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(entry));
+    expect(environment.starts()).toHaveLength(1);
+    expect(environment.starts()[0][0]).toBe('cindy-make-doctor');
+  });
+
   it('checks on each entry without creating a task or starting preparation, and allows recheck after all passed', async () => {
     const h = harness();
     const first = render(<CindyMakeSection />);
@@ -133,11 +407,20 @@ describe('Settings > Cindy Make', () => {
       version: '0.0.0-dev',
       ref: 'main',
       commit: '0123456789abcdef',
+      branch: 'cindy-personal',
+      currentBranch: 'main',
+      baseCommit: 'b'.repeat(40),
+      mainCommit: 'c'.repeat(40),
+      mainRemoteCommit: 'd'.repeat(40),
+      mainBehind: 3,
+      mainAhead: 0,
     };
     h.api.getCindyMakeSourceStatus = vi.fn(async () => source);
     h.api.openCindyMakeSourceDir = vi.fn(async () => ({ success: true }));
     vi.stubGlobal('electronAPI', {
       maker: h.api,
+      getCindyMakeState: h.api.getCindyMakeState,
+      onCindyMakeState: h.api.onCindyMakeState,
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
@@ -145,8 +428,22 @@ describe('Settings > Cindy Make', () => {
       cancelCindyMakeSource: h.api.cancelCindyMakeSource,
     });
     render(<CindyMakeSection />);
-    await waitFor(() => expect(screen.getByText('0123456789abcdef')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('c'.repeat(12))).toBeTruthy());
     const sourceCard = screen.getByRole('region', { name: 'settings.cindyMake.source.title' });
+    expect(within(sourceCard).getByText('cindy-personal')).toBeTruthy();
+    for (const hash of [source.baseCommit, source.mainCommit]) {
+      expect(within(sourceCard).getByText(hash!.slice(0, 12))).toBeTruthy();
+    }
+    expect(within(sourceCard).getByText('main')).toBeTruthy();
+    expect(within(sourceCard).queryByText('settings.cindyMake.source.ref')).toBeNull();
+    expect(within(sourceCard).queryByText('0123456789abcdef')).toBeNull();
+    await h.pushSource({
+      ...source,
+      currentBranch: 'feature/next',
+      mainCommit: 'e'.repeat(40),
+    });
+    expect(within(sourceCard).getByText('feature/next')).toBeTruthy();
+    expect(within(sourceCard).getByText('e'.repeat(12))).toBeTruthy();
     const statusLine = within(sourceCard).getByRole('status');
     const footer = statusLine.parentElement!;
     const openButton = within(sourceCard).getByText('settings.cindyMake.source.openDir');
@@ -160,7 +457,7 @@ describe('Settings > Cindy Make', () => {
     fireEvent.click(
       within(sourceCard).getByRole('button', { name: 'settings.cindyMake.source.title' }),
     );
-    expect(within(sourceCard).queryByText('0123456789abcdef')).toBeNull();
+    expect(within(sourceCard).queryByText('e'.repeat(12))).toBeNull();
     expect(within(sourceCard).getByRole('status')).toBeTruthy();
     expect(within(sourceCard).getByText('settings.cindyMake.source.openDir')).toBeTruthy();
 
@@ -168,29 +465,79 @@ describe('Settings > Cindy Make', () => {
     expect(h.api.openCindyMakeSourceDir).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a source job started elsewhere and stops it from Settings', async () => {
-    const h = harness();
-    h.api.getCindyMakeSourceStatus.mockResolvedValue({
-      status: 'preparing',
-      path: 'C:\\managed\\source',
-      ref: 'main',
-      phase: 'cloning',
-    });
-    render(<CindyMakeSection />);
-    const sourceCard = await screen.findByRole('region', {
-      name: 'settings.cindyMake.source.title',
-    });
-    expect(within(sourceCard).getByText(/cindyMake.source.phase.cloning/)).toBeTruthy();
-    expect(within(sourceCard).queryByText('settings.cindyMake.source.prepare')).toBeNull();
-    expect(within(sourceCard).queryByText('settings.cindyMake.source.reset')).toBeNull();
-    fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.stop'));
-    expect(h.api.cancelCindyMakeSource).toHaveBeenCalledTimes(1);
-    // Settings itself never started a doctor run for this job.
-    expect(h.starts().filter(([name]) => name === 'cindy-make')).toHaveLength(0);
-    await h.pushSource({ status: 'cancelled', path: 'C:\\managed\\source', error: 'cancelled' });
-    expect(within(sourceCard).getByText('settings.cindyMake.source.prepare')).toBeTruthy();
-    expect(within(sourceCard).getByText('settings.cindyMake.source.reset')).toBeTruthy();
-  });
+  it.each(['waiting', 'checkingRemote', 'checkingLocal', 'cloning', 'installing'] as const)(
+    'shows a source job %s elsewhere and stops it from Settings',
+    async (phase) => {
+      const h = harness();
+      h.api.getCindyMakeSourceStatus.mockResolvedValue({
+        status: 'preparing',
+        path: 'C:\\managed\\source',
+        ref: 'main',
+        phase,
+      });
+      render(<CindyMakeSection />);
+      const sourceCard = await screen.findByRole('region', {
+        name: 'settings.cindyMake.source.title',
+      });
+      expect(
+        within(sourceCard).getByText(new RegExp('cindyMake.source.phase.' + phase)),
+      ).toBeTruthy();
+      expect(within(sourceCard).queryByText('settings.cindyMake.source.prepare')).toBeNull();
+      expect(within(sourceCard).queryByText('settings.cindyMake.source.reset')).toBeNull();
+      fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.stop'));
+      expect(h.api.cancelCindyMakeSource).toHaveBeenCalledTimes(1);
+      // Settings itself never started a doctor run for this job.
+      expect(h.starts().filter(([name]) => name === 'cindy-make')).toHaveLength(0);
+      await h.pushSource({ status: 'cancelled', path: 'C:\\managed\\source', error: 'cancelled' });
+      expect(within(sourceCard).getByText('settings.cindyMake.source.retry')).toBeTruthy();
+      expect(within(sourceCard).getByText('settings.cindyMake.source.reset')).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ['failed', 'installFailed'],
+    ['cancelled', 'cancelled'],
+  ] as const)(
+    'keeps a restored %s result visible when collapsed, until retry starts',
+    async (status, error) => {
+      const h = harness();
+      const source: MakeSourceStatus = {
+        status,
+        error,
+        path: '/managed/source',
+        phase: 'caching',
+        dependencies: { resolved: 21, reused: 12, downloaded: 9, added: 0 },
+      };
+      h.api.getCindyMakeSourceStatus.mockResolvedValue(source);
+      render(<CindyMakeSection />);
+      const sourceCard = await screen.findByRole('region', {
+        name: 'settings.cindyMake.source.title',
+      });
+      fireEvent.click(
+        within(sourceCard).getByRole('button', { name: 'settings.cindyMake.source.title' }),
+      );
+      expect(within(sourceCard).getByRole('status').textContent).toContain(
+        'settings.cindyMake.source.status.' + status,
+      );
+      expect(within(sourceCard).getByRole('status').textContent).toContain(
+        'cindyMake.source.errors.' + error,
+      );
+      fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.retry'));
+      expect(within(sourceCard).getByRole('status').textContent).toBe(
+        'settings.cindyMake.source.status.preparing',
+      );
+      await h.pushSource({ status: 'preparing', path: source.path, phase: 'checkingRemote' });
+      expect(within(sourceCard).getByRole('status').textContent).toContain(
+        'cindyMake.source.phase.checkingRemote',
+      );
+      expect(within(sourceCard).queryByText('cindyMake.source.errors.' + error)).toBeNull();
+      await h.pushSource({ status: 'ready', path: source.path });
+      expect(within(sourceCard).getByRole('status').textContent).toBe(
+        'settings.cindyMake.source.status.ready',
+      );
+      expect(within(sourceCard).getByText('settings.cindyMake.source.update')).toBeTruthy();
+    },
+  );
 
   it('keeps the clear action for a failed checkout so a dirty tree has a way out', async () => {
     const h = harness();
@@ -205,6 +552,8 @@ describe('Settings > Cindy Make', () => {
     h.api.getCindyMakeSourceStatus = vi.fn(async () => source);
     vi.stubGlobal('electronAPI', {
       maker: h.api,
+      getCindyMakeState: h.api.getCindyMakeState,
+      onCindyMakeState: h.api.onCindyMakeState,
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: vi.fn(async () => ({ success: true })),
@@ -226,6 +575,8 @@ describe('Settings > Cindy Make', () => {
     h.api.getCindyMakeSourceStatus = vi.fn(async () => source);
     vi.stubGlobal('electronAPI', {
       maker: h.api,
+      getCindyMakeState: h.api.getCindyMakeState,
+      onCindyMakeState: h.api.onCindyMakeState,
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
@@ -245,6 +596,8 @@ describe('Settings > Cindy Make', () => {
     h.api.getCindyMakeSourceStatus = vi.fn(async () => ready);
     vi.stubGlobal('electronAPI', {
       maker: h.api,
+      getCindyMakeState: h.api.getCindyMakeState,
+      onCindyMakeState: h.api.onCindyMakeState,
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
@@ -271,6 +624,8 @@ describe('Settings > Cindy Make', () => {
     h.api.getCindyMakeSourceStatus = vi.fn(async () => source);
     vi.stubGlobal('electronAPI', {
       maker: h.api,
+      getCindyMakeState: h.api.getCindyMakeState,
+      onCindyMakeState: h.api.onCindyMakeState,
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
@@ -298,6 +653,10 @@ describe('Settings > Cindy Make', () => {
     const previousEnvironment = environmentCard.textContent;
     const sourceCard = screen.getByRole('region', { name: 'settings.cindyMake.source.title' });
     fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.update'));
+    fireEvent.click(
+      within(sourceCard).getByRole('button', { name: 'settings.cindyMake.source.title' }),
+    );
+    expect(within(sourceCard).queryByText('settings.cindyMake.source.path')).toBeNull();
     expect(environmentCard.textContent).toBe(previousEnvironment);
     await h.pushSource({
       ...source,
@@ -308,12 +667,28 @@ describe('Settings > Cindy Make', () => {
     expect(within(sourceCard).queryByRole('progressbar')).toBeNull();
     expect(within(sourceCard).getByText('cindyMake.source.gitProgress.receiving')).toBeTruthy();
     expect(within(sourceCard).getByText(/cindyMake.source.phase.fetching/)).toBeTruthy();
+    expect(within(sourceCard).getByRole('status').textContent).toContain('(43%)');
+    await h.pushSource({
+      ...source,
+      status: 'preparing',
+      phase: 'caching',
+      dependencies: { resolved: 21, reused: 12, downloaded: 9, added: 0 },
+    });
+    expect(within(sourceCard).getByRole('status').textContent).toContain(
+      'cindyMake.source.phase.caching',
+    );
+    expect(within(sourceCard).getByRole('status').textContent).toContain(
+      'cindyMake.source.cacheProgress 21 / 12 / 9',
+    );
+    expect(within(sourceCard).queryByText('(43%)')).toBeNull();
+    expect(within(sourceCard).queryByText('cindyMake.code.dependencyActivity.packages')).toBeNull();
     expect(environmentCard.textContent).toBe(previousEnvironment);
     await h.pushSource({ ...source, status: 'failed', error: 'gitUnavailable' });
     expect(within(sourceCard).getByText('cindyMake.source.errors.gitUnavailable')).toBeTruthy();
     expect(within(sourceCard).queryByRole('progressbar')).toBeNull();
     expect(environmentCard.textContent).toBe(previousEnvironment);
-    fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.prepare'));
+    fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.retry'));
+    expect(within(sourceCard).queryByText('cindyMake.source.errors.gitUnavailable')).toBeNull();
     expect(h.starts()).toHaveLength(3);
     expect(
       h
@@ -352,15 +727,44 @@ describe('Settings > Cindy Make', () => {
     ).toBe(false);
   });
 
-  it('changing the switch cancels the old check, ignores late results, and carries the option into the chat command', async () => {
+  it('does not restore a previously tracked completion after switching check modes back', async () => {
+    const environment = harness();
+    render(<CindyMakeSection />);
+    await environment.complete(environment.starts()[0][1].doctorRunId!, '');
+    const preparation: MakeDoctorReport = {
+      runId: 'tracked-preparation',
+      mode: 'prepare',
+      platform: 'win32',
+      arch: 'x64',
+      status: 'running',
+      checks: [{ id: 'node', status: 'installing' }],
+    };
+    await environment.pushState({ environmentPrepare: { active: true, report: preparation } });
+    await environment.pushState({
+      environmentPrepare: {
+        active: false,
+        report: { ...preparation, status: 'completed', checks: [{ id: 'node', status: 'passed' }] },
+      },
+    });
+    expect(screen.getByRole('status').textContent).toContain('cindyMake.prepare.passed');
+    fireEvent.click(screen.getByRole('switch'));
+    await environment.complete(environment.starts()[1][1].doctorRunId!, '');
+    fireEvent.click(screen.getByRole('switch'));
+    await environment.complete(environment.starts()[2][1].doctorRunId!, '', [
+      { id: 'node', status: 'missing' },
+    ]);
+    expect(screen.getByRole('status').textContent).toContain('cindyMakeDoctor.needsAttention');
+    expect(screen.getByText('cindyMake.prepare.install')).toBeTruthy();
+  });
+
+  it('changing the switch leaves the old check running, ignores late results, and carries the option into the chat command', async () => {
     const h = harness();
     const view = render(<CindyMakeSection />);
     const oldRun = h.starts()[0][1].doctorRunId!;
     fireEvent.click(screen.getByRole('switch'));
-    expect(h.api.executeDesktopCommand).toHaveBeenCalledWith('cindy-make-doctor', {
-      doctorRunId: oldRun,
-      doctorAction: 'cancel',
-    });
+    expect(
+      h.api.executeDesktopCommand.mock.calls.some(([, ctx]) => ctx.doctorAction === 'cancel'),
+    ).toBe(false);
     const latest = h.starts()[1][1];
     expect(latest.forceManagedTools).toBe(true);
     await h.complete(latest.doctorRunId!, '22.23.2', [
@@ -391,14 +795,14 @@ describe('Settings > Cindy Make', () => {
     await h.complete(normalRun, '24.1.0');
   });
 
-  it('leaving the page cancels only its own check and removes the progress subscription immediately', () => {
+  it('leaving the page only removes its progress subscription and does not cancel the check', () => {
     const h = harness();
     const view = render(<CindyMakeSection />);
     const runId = h.starts()[0][1].doctorRunId;
     expect(h.listeners.size).toBe(1);
     view.unmount();
     expect(h.listeners.size).toBe(0);
-    expect(h.api.executeDesktopCommand).toHaveBeenLastCalledWith('cindy-make-doctor', {
+    expect(h.api.executeDesktopCommand).not.toHaveBeenCalledWith('cindy-make-doctor', {
       doctorRunId: runId,
       doctorAction: 'cancel',
     });

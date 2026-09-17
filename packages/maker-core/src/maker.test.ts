@@ -2290,6 +2290,60 @@ describe('Maker Pi runtime skill status', () => {
     expect(wrongProject.skills.every((skill) => skill.runtimeStatus === 'discovered')).toBe(true);
   });
 
+  it('marks Windows project-scope --skill loaded when frontmatter name differs from the folder', async () => {
+    const agent = createAgent(async (opts) => {
+      const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+      handle.getRuntimeCapabilities = () => ({
+        sessionId: opts.sessionId,
+        capturedAt: '2026-09-14T00:00:00.000Z',
+        generation: 1,
+        status: 'loaded',
+        source: 'pi:get_commands',
+        commands: [{
+          name: 'skill:frontmatter-alias',
+          source: 'skill',
+          sourceInfo: {
+            source: 'local',
+            scope: 'project',
+            baseDir: '/repo/.pi/skills/folder-name',
+            path: '/repo/.pi/skills/folder-name/SKILL.md',
+          },
+        }],
+      });
+      return handle;
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({
+      skills: [{
+        kind: 'agent-skill' as const,
+        name: 'folder-name',
+        source: 'skill' as const,
+        scope: 'repo' as const,
+        path: '/repo/.pi/skills/folder-name/SKILL.md',
+        runtimeStatus: 'discovered' as const,
+      }],
+    }));
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'win-alias',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'm',
+    });
+    const listed = await maker.listAgentSkills('pi', {
+      workingDir: '/repo',
+      sessionId: 'win-alias',
+    });
+    expect(listed.skills[0]).toMatchObject({
+      name: 'folder-name',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:frontmatter-alias',
+    });
+  });
+
   it('keeps a project skill discovered when its source no longer matches the launch snapshot', async () => {
     const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-skill-source-')));
     const repoRoot = path.join(root, 'repo');

@@ -116,7 +116,7 @@ import { shouldClearOperationErrorAfterSync, type SessionOperationError } from '
 import { createTransientTopicSubscriptionCoordinator } from '@/device-link/transientTopicSubscription';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { findRemoteHistoryView, useRemoteHistoryView } from '@/session/remoteHistoryView';
-import { HistoryViewHandoff, historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { HistoryViewHandoff, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { buildMobileHistoryRenderItems } from '@/session/mobileHistoryRender';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -342,6 +342,7 @@ import {
 } from '@/session/pendingSendItems';
 import {
   appendOptimisticUserMessage,
+  confirmedHistoryUserClientIds,
   projectOptimisticUserMessages,
   reconcileOptimisticUserMessages,
   type OptimisticUserMessage,
@@ -616,7 +617,7 @@ import {
   shouldFallbackToLegacyCodexUsage,
 } from '@/session/sessionControls';
 import { buildSessionOperationLayout, composerDisabledReasonI18nKey } from '@/session/sessionOperationLayout';
-import { computeVanishedQueueItems, mergeSettlingItems } from '@/session/queueSettling';
+import { computeVanishedQueueItems, mergeSettlingItems, settleEnqueueResult } from '@/session/queueSettling';
 import {
   summarizeSessionOverview,
   type SessionActionStripActionId,
@@ -1520,6 +1521,12 @@ export default function SessionScreen() {
   }
   const markQueueItemSending = useCallback((queued: QueuedRemoteMessage) => {
     const clientId = queued.clientId;
+    setLocallyRemovedQueueClientIds((current) => {
+      if (!current.has(clientId)) return current;
+      const next = new Set(current);
+      next.delete(clientId);
+      return next;
+    });
     const projection = remoteSessionStore.getInputProjection(sessionId);
     const source = remoteSessionStore.getMessages(sessionId);
     // Match Desktop's idle-send placement. Busy follow-ups retain the existing
@@ -1538,14 +1545,38 @@ export default function SessionScreen() {
       return next;
     });
   }, [sessionId]);
-  const clearQueueItemSending = useCallback((clientId: string) => {
+  const clearQueueItemSending = useCallback((queued: QueuedRemoteMessage, accepted: boolean, before: InputProjection) => {
+    const clientId = queued.clientId;
     setSendingQueueClientIds((current) => {
       if (!current.has(clientId)) return current;
       const next = new Set(current);
       next.delete(clientId);
       return next;
     });
-  }, []);
+    if (outboxSessionAliveRef.current !== sessionId) return;
+    const projection = remoteSessionStore.getInputProjection(sessionId);
+    const completed = settleEnqueueResult([], queued, accepted, {
+      previous: [...before.pendingQueue, queued],
+      current: projection.pendingQueue,
+      previousSteeringClientIds: new Set(before.steeringQueueClientIds),
+      currentSteeringClientIds: new Set(projection.steeringQueueClientIds),
+      hiddenClientIds: confirmedHistoryUserClientIds(historyView.view.getSnapshot(), remoteSessionStore.getMessages(sessionId)),
+      // Local cancellation is filtered by settlingRetired on the current render;
+      // do not capture its pre-enqueue state across the asynchronous RPC.
+      locallyRemovedClientIds: new Set(),
+    });
+    // The enqueue RPC can finish after drain but before any queued frame commits.
+    // Transfer ownership in the same completion callback, including reconciled ACK loss.
+    if (completed.length > 0) {
+      if (!settlingAddedAtRef.current.has(clientId)) settlingAddedAtRef.current.set(clientId, Date.now());
+    }
+    if (!accepted) {
+      settlingAddedAtRef.current.delete(clientId);
+      setLocallyRemovedQueueClientIds((current) => new Set([...current, clientId]));
+    }
+    setSettlingQueueItems((current) => accepted ? mergeSettlingItems(current, completed)
+      : current.filter((item) => item.clientId !== clientId));
+  }, [sessionId, setSettlingQueueItems, historyView.view]);
   /**
    * 落定判定的基线:上一帧的 pendingQueue 与插队标记。
    *
@@ -4048,15 +4079,17 @@ export default function SessionScreen() {
     ),
     [currentSession?.createdAt, currentSession?.forkedAtMessageId, currentSession?.parentSessionId],
   );
+  const confirmedUserClientIds = useMemo(() => confirmedHistoryUserClientIds(historyView.snapshot, rawMessages),
+    [historyView.snapshot, rawMessages]);
   // inline 排队区去重集:已回流进消息流的 clientId 不再渲染排队气泡(排队气泡消失的
   // 同帧正式气泡已在流里,视觉上原位变实心,无跳变)。
   const queueHiddenClientIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const message of latestMessagesRef.current) {
+    for (const message of messages) {
       if (message.clientId) ids.add(message.clientId);
     }
     return ids;
-  }, [messageStructureToken]);
+  }, [messages]);
   // 落定中条目跟踪(见 settlingQueueItems 声明处注释):
   // 1) pendingQueue diff——只把「像被派发」的消失当作落定中:drain 恒从队首连续
   //    消费,steer 按 steeringQueueClientIds 标记;两者都不沾的中段消失是远端删除
@@ -4091,7 +4124,7 @@ export default function SessionScreen() {
       current: inputProjection.pendingQueue,
       previousSteeringClientIds: previousSteering,
       currentSteeringClientIds: currentSteering,
-      hiddenClientIds: queueHiddenClientIds,
+      hiddenClientIds: confirmedUserClientIds,
       locallyRemovedClientIds: locallyRemovedQueueClientIds,
     });
     const now = Date.now();
@@ -4111,19 +4144,19 @@ export default function SessionScreen() {
     inputProjection.pendingQueue,
     inputProjection.steeringQueueClientIds,
     locallyRemovedQueueClientIds,
-    queueHiddenClientIds,
+    confirmedUserClientIds,
     sessionId,
     setSettlingQueueItems,
     settlingBaseline,
   ]);
-  // 「这一条不该再画落定气泡」的唯一判据:已回流(正式消息进流里)或用户本地删除。
-  // render 过滤与 effect 摘除共用它,不再各写一份。
+  // 永久释放等待状态必须等历史接管；实时回流只通过 queueHiddenClientIds 隐藏本帧
+  // 气泡，否则首个旧历史页接管时，实时消息和已清理的气泡会同时缺席。
   const settlingRetired = useCallback(
-    (clientId: string) => queueHiddenClientIds.has(clientId)
+    (clientId: string) => confirmedUserClientIds.has(clientId)
       || locallyRemovedQueueClientIds.has(clientId),
-    [locallyRemovedQueueClientIds, queueHiddenClientIds],
+    [locallyRemovedQueueClientIds, confirmedUserClientIds],
   );
-  // 2) 回流 / 本地删除即移除(排队气泡消失的同帧正式气泡已在流里,原位变实);
+  // 2) 历史接管 / 本地删除即移除;
   //    同样用 layout effect:跨帧会让「落定转圈气泡 + 已回流正式消息」双显一帧
   //    (实测日志里的 msgs=1 settling=1 那帧),视觉上是同一句话闪成两条。
   //    本地删除也在这里摘:删除标记与队列出队现在都是 state,谁先落地不确定,标记晚
@@ -4150,14 +4183,14 @@ export default function SessionScreen() {
       current: inputProjection.pendingQueue,
       previousSteeringClientIds: settlingBaseline.steeringClientIds,
       currentSteeringClientIds: new Set(inputProjection.steeringQueueClientIds),
-      hiddenClientIds: queueHiddenClientIds,
+      hiddenClientIds: confirmedUserClientIds,
       locallyRemovedClientIds: locallyRemovedQueueClientIds,
     }),
     [
       inputProjection.pendingQueue,
       inputProjection.steeringQueueClientIds,
       locallyRemovedQueueClientIds,
-      queueHiddenClientIds,
+      confirmedUserClientIds,
       settlingBaseline,
     ],
   );
@@ -4228,14 +4261,9 @@ export default function SessionScreen() {
     items: readonly MobileMessageRenderItem[];
     prefix: MobileStreamingRenderPrefixCache | null;
   } | null>(null);
-  const confirmedUserClientIds = useMemo(() => new Set(
-    (historyView.snapshot.ready
-      ? historyViewLeaves(historyView.snapshot.items).flatMap((item) => item.type === 'messages' ? item.messages : [])
-      : messages).filter((message) => message.role === 'user').map((message) => message.clientId),
-  ), [historyView.snapshot, messages]);
   const optimisticUsers = useMemo(() => {
     const activeIds = new Set([
-      ...inputProjection.pendingQueue.filter((item) => sendingQueueClientIds.has(item.clientId)).map((item) => item.clientId),
+      ...sendingQueueClientIds,
       ...settlingItemsForRender.map((item) => item.clientId),
     ]);
     // Only the enqueue path can reserve a transcript position. A vanished
@@ -4243,9 +4271,9 @@ export default function SessionScreen() {
     // can arrive in either order, across any number of committed renders.
     return reconcileOptimisticUserMessages(
       optimisticUserState.sessionId === sessionId ? optimisticUserState.items : [],
-      messages, activeIds, confirmedUserClientIds,
+      rawMessages, activeIds, confirmedUserClientIds,
     );
-  }, [optimisticUserState, sessionId, messages, inputProjection.pendingQueue,
+  }, [optimisticUserState, sessionId, rawMessages,
     sendingQueueClientIds, settlingItemsForRender, confirmedUserClientIds]);
   if (optimisticUserState.sessionId === sessionId && optimisticUsers !== optimisticUserState.items) {
     setOptimisticUserState({ sessionId, items: optimisticUsers });
@@ -5549,6 +5577,7 @@ export default function SessionScreen() {
       remoteSessionStore.captureInputProjectionRemoteEpoch(item.sessionId);
     const projectionEpochAtRequestStart =
       remoteSessionStore.captureInputProjectionAuthorityEpoch(item.sessionId);
+    let enqueueAccepted = false;
     try {
       // 弱网重试与写序边界同 send() 原路径(仅明确可安全重发的瞬时传输错误)。
       let projection: InputProjection | undefined;
@@ -5572,12 +5601,14 @@ export default function SessionScreen() {
         projectionRemoteEpochAtRequestStart,
         queued.clientId,
       );
+      enqueueAccepted = true;
     } catch (err) {
       // 与原路径同口径:先对账分辨「确实没应用」vs「已应用但响应丢了」。
       const safeToRetry = isSafelyUnsentOutboxEnqueueError(err);
       const accepted = await readAuthoritativeEnqueueAcceptance(
         item.sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
       );
+      enqueueAccepted = accepted;
       if (!accepted) {
         const current = remoteSessionStore.getInputProjection(item.sessionId);
         remoteSessionStore.setInputProjectionOptimistically(item.sessionId, {
@@ -5593,7 +5624,7 @@ export default function SessionScreen() {
     } finally {
       // 入队确认、回 outbox / 失败，或转交 optimistic projection 等待权威同步后，
       // 都不再是当前 RPC 在途；收掉 sending 标记，避免后续同 id 气泡悬空转圈。
-      clearQueueItemSending(queued.clientId);
+      clearQueueItemSending(queued, enqueueAccepted, projectionBeforeSend);
     }
     // enqueue / 对账期间离场时，成功路径无需恢复草稿，但旧 pump 也绝不能接着
     // 消费新任务的 outbox；失败路径已由 failItem / waitForConnection 按 A 收口。
@@ -6546,6 +6577,7 @@ export default function SessionScreen() {
       requestMessageListFollowLatest();
       const projectionEpochAtRequestStart =
         remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
+      let enqueueAccepted = false;
       try {
         // 弱网重试:切基站 / 短暂断连时自动补发,不让用户为一次抖动手动重发。
         // 写序边界(codex review P1 + auto-review P1):只有「保证未发出」的
@@ -6572,6 +6604,7 @@ export default function SessionScreen() {
           projectionRemoteEpochAtRequestStart,
           queued.clientId,
         );
+        enqueueAccepted = true;
       } catch (err) {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:优先 refetch 权威
         // projection 判断。只有权威证据能保留乐观气泡；证据不可用时回到现有
@@ -6579,6 +6612,7 @@ export default function SessionScreen() {
         const accepted = await readAuthoritativeEnqueueAcceptance(
           sessionId, queued.clientId, projectionRemoteEpochAtRequestStart,
         );
+        enqueueAccepted = accepted;
         if (!accepted) {
           // 回滚:按 clientId 精确摘除乐观气泡(期间 projection 可能已被其他事件更新,
           // 不能整体还原快照),并恢复草稿与附件托盘。
@@ -6603,7 +6637,7 @@ export default function SessionScreen() {
       } finally {
         // 成功、对账认定已入队、回滚 throw 三条路径都算「不再在途」:转圈必须收掉,
         // 否则回滚后集合残留、同 clientId 重发时首帧仍是转圈。
-        clearQueueItemSending(queued.clientId);
+        clearQueueItemSending(queued, enqueueAccepted, projectionBeforeSend);
       }
       // 消息已由 A 路径落定；若等待期间切到 B，只停止旧 continuation，不能再用
       // A 的附件 id / plan 状态去清理 B 的 composer UI。
@@ -8399,7 +8433,7 @@ export default function SessionScreen() {
       let url: string;
       if (target.relPath === null) {
         url = await fetchRemoteAbsFileToUrl(
-          { maker, deviceId, openLink, presignGet },
+          { maker, deviceId, openLink, presignGet, stream: false },
           target.absPath,
         );
       } else {
