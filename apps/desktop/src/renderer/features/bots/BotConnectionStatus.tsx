@@ -4,12 +4,23 @@ import { cn } from '@/lib/utils';
 export function BotConnectionStatus({
   online = true,
   deviceName,
+  inline = false,
+  className,
 }: {
   online?: boolean;
   deviceName?: string;
+  inline?: boolean;
+  className?: string;
 }) {
   const { t } = useTranslation();
-  const label = `${t(online ? 'bots.remote.online' : 'bots.remote.offline')} · ${deviceName || t('bots.remote.thisDevice')}`;
+  const label = `${t(online ? 'bots.remote.online' : 'bots.remote.offline')} · ${deviceName?.trim() || t('bots.remote.thisDevice')}`;
+  if (inline) {
+    return (
+      <span title={label} className={cn('min-w-0 truncate text-11 leading-normal', className)}>
+        {label}
+      </span>
+    );
+  }
   return (
     <span
       role="img"

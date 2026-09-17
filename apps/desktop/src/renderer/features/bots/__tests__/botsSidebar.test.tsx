@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { cloneElement, type ReactElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/hooks/useProviderOnboarding', () => ({
@@ -20,6 +20,8 @@ vi.mock('react-i18next', () => ({
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   profiles: [] as unknown[],
+  remoteBots: [] as import('../remoteBotRoster').RemoteBot[],
+  devices: [] as Array<{ deviceId: string; name: string; isSelf: boolean }>,
   health: new Map<string, string>(),
   unread: {} as Record<string, number>,
   groupMessages: new Map<string, unknown[]>(),
@@ -34,7 +36,10 @@ const mocks = vi.hoisted(() => ({
   islandActivity: new Map<string, { sessionId: string; phase: string }>(),
 }));
 
-vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => mocks.devices,
+}));
 
 vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivityMap: () => mocks.islandActivity,
@@ -132,6 +137,8 @@ beforeEach(() => {
   mocks.pathname = '/bots';
   mocks.collapsed = false;
   mocks.profiles = [];
+  mocks.remoteBots = [];
+  mocks.devices = [];
   mocks.registered.node = null;
   mocks.islandActivity = new Map();
   Object.defineProperty(window, 'electronAPI', {
@@ -156,6 +163,37 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+describe('teammate host labels', () => {
+  it('shows device names for same-name local and remote teammates and preserves remote routing', async () => {
+    mocks.profiles = [bot({ id: 'local-bot', name: 'Cindy', lastMessagePreview: 'Local preview' })];
+    mocks.devices = [{ deviceId: 'local-device', name: 'MBP-M5', isSelf: true }];
+    mocks.remoteBots = [{ id: 'remote-bot', deviceId: 'remote-device', deviceName: 'Mac-Studio',
+      name: 'Cindy', avatar: '🤖', avatarColor: 'violet', description: '', preview: 'Remote preview',
+      activityAt: 1, sessionId: 'remote-session', online: true }];
+    const view = await renderSidebar();
+    expect(screen.getByText('bots.remote.online · MBP-M5')).toBeTruthy();
+    expect(screen.getByText('bots.remote.online · Mac-Studio')).toBeTruthy();
+    expect(screen.getByText('Local preview')).toBeTruthy();
+    const remoteRow = screen.getByText('Remote preview').closest('button')!;
+    fireEvent.click(remoteRow);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/remote-device/remote-bot');
+
+    mocks.remoteBots = mocks.remoteBots.map((bot) => ({ ...bot, online: false, deviceName: ' ' }));
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.getByText('bots.remote.offline · remote-device')).toBeTruthy();
+    expect(screen.queryByText('bots.remote.offline · bots.remote.thisDevice')).toBeNull();
+  });
+
+  it('falls back to this device locally and updates when the device directory arrives', async () => {
+    mocks.profiles = [bot({ id: 'local-bot', name: 'Cindy' })];
+    const view = await renderSidebar();
+    expect(screen.getByText('bots.remote.online · bots.remote.thisDevice')).toBeTruthy();
+    mocks.devices = [{ deviceId: 'local-device', name: 'Renamed Mac', isSelf: true }];
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(screen.getByText('bots.remote.online · Renamed Mac')).toBeTruthy();
+  });
 });
 
 describe('BotsSidebar rail return', () => {

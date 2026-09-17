@@ -32,6 +32,7 @@ import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { useRemoteBots } from './useRemoteBots';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
 import { BotAvatar } from './BotAvatar';
@@ -44,7 +45,7 @@ import {
   formatBotUnreadBadge,
 } from './botListDisplay';
 import { subscribeBotReadState } from './botReadState';
-import { partitionBotRoster } from './botRosterDisplay';
+import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
 import {
   canonicalBotSessionId,
   duplicateBotProfile,
@@ -75,6 +76,15 @@ function BotsSidebarContent() {
   const { pathname } = useLocation();
   const { botId, sessionId, deviceId } = useParams();
   const remoteBots = useRemoteBots();
+  const devices = useDeviceLinkDeviceList();
+  const self = devices?.find((device) => device.isSelf);
+  const rosterDevices = [
+    ...(self ? [self] : []),
+    ...remoteBots.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName })),
+  ];
+  const localDeviceName = self?.name.trim()
+    ? botDeviceLabel(self, rosterDevices)
+    : t('bots.remote.thisDevice');
   const bots = useBotProfiles();
   const unreadByBotId = useBotUnreadCounts();
   const rosterBots = bots.filter((bot) => bot.status !== 'archived');
@@ -320,13 +330,15 @@ function BotsSidebarContent() {
               }).map((bot) => {
               if ('deviceId' in bot) {
                 const selected = bot.id === botId && bot.deviceId === deviceId;
+                const deviceName = botDeviceLabel({ deviceId: bot.deviceId, name: bot.deviceName }, rosterDevices);
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
                     className={cn('flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.online} deviceName={bot.deviceName} /></span>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.online} deviceName={deviceName} /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-14 leading-5">{bot.name}</span>
+                      <BotConnectionStatus inline online={bot.online} deviceName={deviceName} className={selected ? 'opacity-70' : 'text-[var(--text-secondary)]'} />
                       <span className="truncate text-12 leading-4 text-[var(--sidebar-list-muted)]">{bot.preview || bot.description || t('bots.list.startChat')}</span>
                     </span>
                     {!selected && isRemoteBotUnread(bot) ? <span aria-label={t('bots.list.unread', { count: 1 })} className="size-[7px] shrink-0 rounded-full bg-[var(--bot-unread-bg)]" /> : null}
@@ -392,9 +404,8 @@ function BotsSidebarContent() {
                     }}
                     className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
-                    {/* 40px。28px 会让两行式行高塌成一行的观感——头像撑不住两行文字,
-                        整行读起来像一条被拉高的单行列表。 */}
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus /></span>
+                    {/* Keep the existing avatar size alongside identity, host and message preview. */}
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus deviceName={localDeviceName} /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         {bot.pinnedAt ? (
@@ -423,6 +434,7 @@ function BotsSidebarContent() {
                           />
                         ) : null}
                       </span>
+                      <BotConnectionStatus inline deviceName={localDeviceName} className={selected ? 'opacity-70' : 'text-[var(--text-secondary)]'} />
                       <span className="flex min-w-0 items-center gap-2">
                         {/* 未读只强调名字与数字，预览保持次级，避免整行同时争抢注意力。 */}
                         <span
