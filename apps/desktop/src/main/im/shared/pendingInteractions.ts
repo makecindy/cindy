@@ -13,6 +13,7 @@
 import type { AskUserQuestionItem, InteractionDecision } from '@cindy/maker-core';
 
 import {
+  buildAskAnswerDecision,
   buildAskNoAnswerDecision,
   buildPermissionDenyDecision,
   buildPlanDenyDecision,
@@ -25,6 +26,8 @@ interface PendingEntry {
   messageId: string;
   /** For sanity / log: which kind we're awaiting. */
   kind: InteractionDecision['kind'];
+  /** Owning IM session, used to accept a plain-text answer to a single-question ask. */
+  sessionId?: string;
   /**
    * Original toolName from the InteractionRequest (only set when kind ===
    * 'permission'). Needed to construct `permissionUpdates` for "always
@@ -38,11 +41,7 @@ interface PendingEntry {
    * 一句「✅ 已允许」。
    */
   permissionCard?: { title: string; body: string };
-  /**
-   * 多题/多选打勾卡的原始问题(仅 kind === 'ask_user_question' 且
-   * needsAskMultiCard 时登记)。ask:multi 按键要按问题下标改写勾选态并
-   * 重建卡片, cardActionHandler 拿不到原始请求, 与 toolName 同理登记在此。
-   */
+  /** ask 的原始问题。单问供普通文本答复定位；多题/多选还供卡片重建。 */
   askQuestions?: AskUserQuestionItem[];
   /**
    * 打勾卡的勾选态: 问题下标 -> 已选选项下标集合。注册时置空 Map,
@@ -59,6 +58,7 @@ export function registerPending(
   kind: InteractionDecision['kind'],
   messageId: string,
   extras?: {
+    sessionId?: string;
     toolName?: string;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
@@ -89,6 +89,7 @@ export function registerPendingExternal(
   resolve: (decision: InteractionDecision) => void,
   reject: (err: Error) => void,
   extras?: {
+    sessionId?: string;
     toolName?: string;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
@@ -103,11 +104,33 @@ export function registerPendingExternal(
     reject,
     messageId,
     kind,
+    sessionId: extras?.sessionId,
     toolName: extras?.toolName,
     permissionCard: extras?.permissionCard,
     askQuestions: extras?.askQuestions,
     askSelections: extras?.askSelections,
   });
+}
+
+/** Resolve exactly one pending single-question ask from a normal IM text reply. */
+export function resolvePendingAskBySession(
+  sessionId: string,
+  answerText: string,
+): { messageId: string; decision: InteractionDecision } | null {
+  const answer = answerText.trim();
+  if (!answer) return null;
+  const matches = [...pending.entries()].filter(
+    ([, entry]) => entry.kind === 'ask_user_question' && entry.sessionId === sessionId,
+  );
+  // A single free-form message cannot safely answer multiple questions/cards.
+  if (matches.length !== 1) return null;
+  const [requestId, entry] = matches[0];
+  if (entry.askQuestions?.length !== 1 || entry.askQuestions[0].multiSelect) return null;
+  const question = entry.askQuestions[0];
+  const decision = buildAskAnswerDecision(question.question, answer);
+  pending.delete(requestId);
+  entry.resolve(decision);
+  return { messageId: entry.messageId, decision };
 }
 
 export function lookupPending(requestId: string): PendingEntry | null {

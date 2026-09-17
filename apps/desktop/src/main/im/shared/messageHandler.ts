@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { IMAttachment, IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
+import type { IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -284,6 +284,22 @@ export function createMessageHandler(
           }
         }
       }
+      return;
+    }
+
+    // A pending ask blocks this turn. Consume the next ordinary private-chat
+    // text as its answer instead of queueing it behind the blocked turn.
+    if (
+      pureTextCommandInput &&
+      !event.speaker &&
+      !notificationSessionId &&
+      (await turnRunner.answerPendingQuestion?.({
+        botContextId: event.contextId,
+        userId: event.senderId,
+        scopeKey: threadScoped ? event.scopeKey : undefined,
+        text: event.text,
+      }))
+    ) {
       return;
     }
 

@@ -7,13 +7,14 @@
  * 照旧可点。用户点下去不会有任何反应, 群里也不会动。
  */
 import { isSystemPermissionDenialReason } from '@cindy/maker-core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cancelPending,
   getPendingCount,
   registerPendingExternal,
   rejectAllPending,
+  resolvePendingAskBySession,
   resolvePending,
 } from '../pendingInteractions';
 
@@ -51,7 +52,7 @@ describe('cancelPending 交还卡片地址', () => {
   });
 
   it('permission: 登记原始卡片正文, resolve 时交还供收口卡保留决策正文', () => {
-    const { resolve } = register('req-perm', 'permission', 'chat|555');
+    register('req-perm', 'permission', 'chat|555');
     // register 走了默认 extras; 这里补登记带 permissionCard 的版本(新 requestId)。
     const resolve2 = vi.fn();
     registerPendingExternal('req-perm2', 'permission', 'chat|666', resolve2, vi.fn(), {
@@ -117,5 +118,79 @@ describe('rejectAllPending', () => {
     expect(isSystemPermissionDenialReason('session_disposed')).toBe(true);
     expect(isSystemPermissionDenialReason('session disposed')).toBe(true);
     expect(getPendingCount()).toBe(0);
+  });
+});
+
+describe('resolvePendingAskBySession', () => {
+  afterEach(() => rejectAllPending('test_cleanup'));
+  it('uses plain text to resolve one single-question ask', () => {
+    const resolve = vi.fn();
+    registerPendingExternal('req-text', 'ask_user_question', 'chat|700', resolve, vi.fn(), {
+      sessionId: 'session-1',
+      askQuestions: [{ question: '发给谁？' }],
+    });
+    expect(resolvePendingAskBySession('session-1', ' Alex ')).toEqual({
+      messageId: 'chat|700',
+      decision: { kind: 'ask_user_question', answers: { '发给谁？': 'Alex' } },
+    });
+    expect(resolve).toHaveBeenCalledWith({
+      kind: 'ask_user_question',
+      answers: { '发给谁？': 'Alex' },
+    });
+    expect(resolvePendingAskBySession('session-1', 'another answer')).toBeNull();
+    expect(resolvePending('req-text', { kind: 'ask_user_question', answers: {} })).toBeNull();
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a multi-question ask', () => {
+    registerPendingExternal('req-multi', 'ask_user_question', 'chat|701', vi.fn(), vi.fn(), {
+      sessionId: 'session-multi',
+      askQuestions: [{ question: '发给谁？' }, { question: '建什么任务？' }],
+    });
+    expect(resolvePendingAskBySession('session-multi', 'Alex')).toBeNull();
+    cancelPending('req-multi', 'cleanup');
+  });
+
+  it('leaves blank replies and other sessions untouched', () => {
+    const resolve = vi.fn();
+    registerPendingExternal('req-text', 'ask_user_question', 'chat|700', resolve, vi.fn(), {
+      sessionId: 'session-1', askQuestions: [{ question: 'Who?' }],
+    });
+    expect(resolvePendingAskBySession('session-1', '  ')).toBeNull();
+    expect(resolvePendingAskBySession('session-2', 'Alex')).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(getPendingCount()).toBe(1);
+  });
+
+  it.each(['permission', 'plan_review'] as const)('never approves a %s from plain text', (kind) => {
+    const resolve = vi.fn();
+    registerPendingExternal('req-other', kind, 'chat|700', resolve, vi.fn(), {
+      sessionId: 'session-1',
+    });
+    expect(resolvePendingAskBySession('session-1', 'yes')).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('leaves a single multi-select question for the card UI', () => {
+    const resolve = vi.fn();
+    registerPendingExternal('req-text', 'ask_user_question', 'chat|700', resolve, vi.fn(), {
+      sessionId: 'session-1', askQuestions: [{ question: 'Which?', multiSelect: true }],
+    });
+    expect(resolvePendingAskBySession('session-1', 'A, B')).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2])('refuses an ambiguous session with another %i-question card', (count) => {
+    const resolve = vi.fn();
+    registerPendingExternal('req-text', 'ask_user_question', 'chat|700', resolve, vi.fn(), {
+      sessionId: 'session-1', askQuestions: [{ question: 'Who?' }],
+    });
+    registerPendingExternal('req-second', 'ask_user_question', 'chat|701', vi.fn(), vi.fn(), {
+      sessionId: 'session-1',
+      askQuestions: Array.from({ length: count }, (_, i) => ({ question: `Question ${i}` })),
+    });
+    expect(resolvePendingAskBySession('session-1', 'Alex')).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(getPendingCount()).toBe(2);
   });
 });

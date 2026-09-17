@@ -122,6 +122,7 @@ import {
   registerPending,
   registerPendingExternal,
   rejectAllPending,
+  resolvePendingAskBySession,
 } from './pendingInteractions';
 import { checkChannelDestructiveToolCall } from './channelToolPolicy';
 import { readXdGatewayApiKey } from './apiKey';
@@ -168,13 +169,16 @@ import { enqueueAskCardPatch } from './askCardPatchQueue';
 import { needsAskMultiCard } from './interactionCardModel';
 
 /**
- * ask 多题/多选打勾卡的登记附加项: 原始问题 + 空勾选态。cardActionHandler 的
- * ask:multi 按键按问题下标改写勾选态并原地重建卡片, 提交时据此合成 answers。
- * v1 单问卡不登记(卡上没有 ask:multi 按钮, 附加项无人消费)。
+ * ask 登记附加项: session + 原始问题供普通文字答复定位；多题/多选卡再加
+ * 空勾选态，供 cardActionHandler 原地重建卡片并合成 answers。
  */
-function askMultiExtras(req: InteractionRequest) {
-  if (req.kind !== 'ask_user_question' || !needsAskMultiCard(req)) return undefined;
-  return { askQuestions: req.questions, askSelections: new Map<number, Set<number>>() };
+function interactionExtras(req: InteractionRequest, sessionId: string) {
+  if (req.kind !== 'ask_user_question') return undefined;
+  return {
+    sessionId,
+    askQuestions: req.questions,
+    ...(needsAskMultiCard(req) ? { askSelections: new Map<number, Set<number>>() } : {}),
+  };
 }
 
 const PRE_DISPATCH_ACK_CLEANUP_TIMEOUT_MS = 1500;
@@ -478,6 +482,13 @@ export type ImTurnDispatch =
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
 export interface ImTurnRunner {
   runAgentTurn(args: ImRunAgentTurnArgs): Promise<void>;
+  /** Resolve a pending one-question ask with an ordinary private-chat text reply. */
+  answerPendingQuestion?(args: {
+    botContextId: string;
+    userId: string;
+    scopeKey?: string;
+    text: string;
+  }): Promise<boolean>;
   /**
    * 把渠道用户消息**提前**写进本地 messages 表 —— 只给「dispatch 之前还有重活」
    * 的渠道用(群上下文拼装: 回翻群历史 + 轻量模型扫描, 实测 15~60s)。
@@ -1918,7 +1929,7 @@ export function createTurnRunner(
               toolName: req.toolName,
               permissionCard: { title: spec.title ?? '', body: spec.body },
             }
-          : askMultiExtras(req),
+          : interactionExtras(req, localSessionId),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -3390,7 +3401,7 @@ export function createTurnRunner(
                 toolName: req.toolName,
                 permissionCard: { title: spec.title ?? '', body: spec.body },
               }
-            : askMultiExtras(req),
+            : interactionExtras(req, localSessionId),
         );
         return decision;
       } catch (err) {
@@ -3648,6 +3659,31 @@ export function createTurnRunner(
     return { stopped: true, droppedQueued };
   }
 
+  async function answerPendingQuestion(args: {
+    botContextId: string;
+    userId: string;
+    scopeKey?: string;
+    text: string;
+  }): Promise<boolean> {
+    const target = await resolveExistingRouteTarget(args.botContextId, args.userId, args.scopeKey);
+    if (!target) return false;
+    const resolved = resolvePendingAskBySession(target.row.id, args.text);
+    if (!resolved) return false;
+    if (richIm) {
+      try {
+        await richIm.updateInteractiveCard(
+          resolved.messageId,
+          cards.buildResolvedCard(ui.cards.ask.resolved(args.text.trim())),
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`plain-text ask card patch failed (non-fatal): ${msg}`);
+      }
+    }
+    log.info(`resolved pending ask from plain text for session=...${target.row.id.slice(-8)}`);
+    return true;
+  }
+
   /**
    * Dispose one session by id (used by `/new` slash command — wipes the
    * in-process Maker session so the next message creates a fresh SDK
@@ -3696,6 +3732,7 @@ export function createTurnRunner(
 
   return {
     runAgentTurn,
+    answerPendingQuestion,
     persistInboundUserMessageEarly,
     dispatchAgentTurn,
     resolveRouteTarget,

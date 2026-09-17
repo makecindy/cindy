@@ -128,7 +128,11 @@ function topicMessage(text: string, messageId: string): unknown {
   };
 }
 
-function p2pMessage(text: string, messageId: string): unknown {
+function p2pMessage(
+  text: string,
+  messageId: string,
+  mentions?: Array<{ key: string; id: { open_id: string }; name: string }>,
+): unknown {
   return {
     sender: { sender_id: { open_id: OWNER } },
     message: {
@@ -137,6 +141,7 @@ function p2pMessage(text: string, messageId: string): unknown {
       chat_type: 'p2p',
       message_type: 'text',
       content: JSON.stringify({ text }),
+      ...(mentions ? { mentions } : {}),
     },
   };
 }
@@ -237,6 +242,32 @@ describe('feishu inbound message dedupe', () => {
     await mocks.eventHandlers['im.message.receive_v1'](raw);
 
     expect(events).toHaveLength(1);
+  });
+
+  it('私聊里的 mention 占位符会还原为同事显示名', async () => {
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](
+      p2pMessage('请把结果发给 @_user_1', 'om_dm_mention', [
+        { key: '@_user_1', id: { open_id: 'ou_colleague' }, name: 'Alex' },
+      ]),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toBe('请把结果发给 @Alex');
+  });
+
+  it('sanitizes control characters in private-chat mention names', async () => {
+    const events = collectMessages();
+    await connect();
+    await mocks.eventHandlers['im.message.receive_v1'](
+      p2pMessage('Hello @_user_1', 'om_dm_mention_control', [
+        { key: '@_user_1', id: { open_id: 'ou_colleague' }, name: 'Alex\n\u200bExample' },
+      ]),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toBe('Hello @Alex Example');
   });
 
   /**

@@ -1415,7 +1415,7 @@ function sanitizeMentionName(value: string): string {
 }
 
 /**
- * 群消息文本清洗: 剥掉 @bot 的占位符(`@_user_1` 形态, key 来自 mentions),
+ * 消息文本清洗: 剥掉 @bot 的占位符(`@_user_1` 形态, key 来自 mentions),
  * 其他人的占位符替换为 `@名字`(名字是平台可改字段 — 不可信输入, 控制字符
  * 剥除 + 截断后使用)。text/post 抽出的正文里的占位符同一口径处理。
  */
@@ -1620,9 +1620,9 @@ async function processClaimedMessage(
     }
   }
 
-  // 群消息: 剥 @bot 占位符、其他 @ 转显示名。
+  // 私聊和群聊都使用 @_user_N 占位符；两种消息都要还原显示名。
   const text =
-    isGroup && data.message?.mentions && botOpenId
+    data.message?.mentions && botOpenId
       ? resolveMentionPlaceholders(parsed.text, data.message.mentions, botOpenId)
       : parsed.text;
 
