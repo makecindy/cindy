@@ -733,6 +733,7 @@ export function CCAgentSidebarUpper() {
             >
               <ExpandedView
                 sessionsHook={sessionsHook}
+                allSessionsForProjectUniverse={allSessionsForAttention}
                 navigate={navigate}
                 activeSessionId={activeSessionId}
                 // 兜底直接用路由参数而非 filesSession?.id:filesSession 只从本地
@@ -782,6 +783,7 @@ type SessionsHook = ReturnType<typeof useCCSessions>;
 
 interface ExpandedProps {
   sessionsHook: SessionsHook;
+  allSessionsForProjectUniverse: Session[];
   navigate: ReturnType<typeof useNavigate>;
   activeSessionId: string | undefined;
   /** 「正在被用户注视」的会话 —— 供 attention 语义(running-status 通知豁免 /
@@ -818,6 +820,7 @@ const CONFIRM_INITIAL: ConfirmState = {
 
 function ExpandedView({
   sessionsHook,
+  allSessionsForProjectUniverse,
   navigate,
   activeSessionId,
   viewedSessionId,
@@ -1426,8 +1429,11 @@ function ExpandedView({
   // 并非不存在;codex)。collapse 仍用机器过滤后的 activeWorkingDirs(collapseAll / isAllCollapsed
   // 针对当前可见项目),渲染也仍走机器过滤后的 allGroups / groups。
   const unfilteredProjectSessions = useMemo(
-    () => [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
-    [sessions, remoteProjectSessions, passesOrcaAndStatus],
+    () =>
+      [...allSessionsForProjectUniverse, ...remoteProjectSessions].filter(
+        (session) => !isOrcaWorkerSession(session),
+      ),
+    [allSessionsForProjectUniverse, remoteProjectSessions],
   );
   const projectUniverse = useProjectGroups(
     unfilteredProjectSessions,

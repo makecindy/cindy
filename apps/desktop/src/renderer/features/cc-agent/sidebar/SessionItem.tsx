@@ -290,6 +290,7 @@ export interface SessionItemProps {
    * 自己行上展示立即运行入口。
    */
   insideAutomationGroup?: boolean;
+  sessionOrderHandle?: boolean;
 }
 
 export interface SessionClickModifiers {
@@ -335,6 +336,7 @@ export const SessionItem = memo(function SessionItem({
   matchIndices,
   sourceLabel,
   insideAutomationGroup = false,
+  sessionOrderHandle = false,
 }: SessionItemProps) {
   const { t } = useTranslation();
   const cindyMakePreparing = useCindyMakePreparing(session);
@@ -613,6 +615,7 @@ export const SessionItem = memo(function SessionItem({
     inSortableContainer: true,
     sortableDragBlocked: false,
     nativeSortable: false,
+    projectSessionOrder: false,
   });
   useEffect(() => {
     const row = rowRef.current;
@@ -620,6 +623,7 @@ export const SessionItem = memo(function SessionItem({
       inSortableContainer: Boolean(row?.closest('[data-sortable-id]')),
       sortableDragBlocked: Boolean(row?.closest('[data-no-drag]')),
       nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]')),
+      projectSessionOrder: Boolean(row?.closest('[data-sortable-session-order]')),
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
@@ -887,6 +891,7 @@ export const SessionItem = memo(function SessionItem({
       ref={rowRef}
       data-session-id={session.id}
       data-sidebar-session-row="true"
+      data-sidebar-session-order-handle={sessionOrderHandle ? 'true' : undefined}
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"

@@ -119,6 +119,9 @@ export interface ProjectNodeProps {
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
   onArchiveAll: (project: ProjectNodeData) => void;
+  manualSessionOrder?: readonly string[];
+  initialSessionOrder?: readonly string[];
+  onSessionReorder?: (orderedIds: string[]) => void;
 }
 
 export const ProjectNode = memo(function ProjectNode({
@@ -156,6 +159,9 @@ export const ProjectNode = memo(function ProjectNode({
   linkingCodexProject,
   onBrowseFiles,
   onArchiveAll,
+  manualSessionOrder,
+  initialSessionOrder,
+  onSessionReorder,
 }: ProjectNodeProps) {
   const { t } = useTranslation();
   // remote 项目复用本地专属入口（在文件管理器打开 / 复制深链 / 同步 Codex）会按本机
@@ -581,15 +587,11 @@ export const ProjectNode = memo(function ProjectNode({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Project Sessions（容器只负责 gap + 顶部 padding；左缩进由 SessionItem 自身承担）
-          展开/收起走 SectionCollapse 高度动画；「显示全部」在收起动画结束后复位。
-          data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
-          被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
-          SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
-      <SectionCollapse collapsed={isCollapsed} data-no-drag>
+      <SectionCollapse collapsed={isCollapsed}>
         {/* pb-1.5:展开块与下一个项目标题之间的间距(4px 树 gap + 6px = 10px),
             大于会话行间距(gap-0.5),让项目块之间有分组呼吸(参考 Codex,2026-07 定稿)。 */}
         <div
+          data-no-drag={onSessionReorder ? undefined : 'true'}
           className={cn(
             'flex flex-col gap-0.5 pt-0.5 pb-1.5 pr-0',
             sessionVariant === 'list' ? 'pl-3' : 'pl-0',
@@ -616,6 +618,9 @@ export const ProjectNode = memo(function ProjectNode({
             onScheduleAction={onScheduleAction}
             indented
             sessionVariant={sessionVariant}
+            manualOrder={manualSessionOrder}
+            initialOrder={initialSessionOrder}
+            onReorder={onSessionReorder}
           />
         </div>
       </SectionCollapse>

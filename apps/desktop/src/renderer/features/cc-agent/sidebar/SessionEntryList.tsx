@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -21,6 +21,13 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
 import { SessionCard } from './SessionCard';
+import { SortableList } from '@/components/sidebar/SortableList';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import {
+  mergeVisibleSessionReorder,
+  orderManualSidebarEntries,
+  sessionIdsForSidebarEntry,
+} from './sessionOrder';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
@@ -76,6 +83,13 @@ export interface SessionEntryListProps {
    * 场景传 false 关掉顶线;真正的列表首行(置顶段 / 项目内会话)保持默认。
    */
   showFirstDivider?: boolean;
+  /** Project-local manual ordering. When set, automation grouping is bypassed so every session is draggable. */
+  manualOrder?: readonly string[];
+  /** Initial full order used to merge the first drag before a manual order exists. */
+  initialOrder?: readonly string[];
+  /** Marks the row/header that owns project-session sorting. */
+  sessionOrderHandle?: boolean;
+  onReorder?: (orderedIds: string[]) => void;
 }
 
 export interface SessionEntryRowsProps extends Omit<
@@ -106,6 +120,7 @@ export function SessionEntryRows({
   sourceLabelMap,
   sessionVariant = 'text',
   showFirstDivider = true,
+  sessionOrderHandle = false,
   automationGroupCollapsed,
   onAutomationGroupCollapsedChange,
 }: SessionEntryRowsProps) {
@@ -143,12 +158,14 @@ export function SessionEntryRows({
               isFirst={showFirstDivider && index === 0}
               hideBottomDivider={nextHighlighted}
               sourceLabel={sourceLabelMap?.get(entry.session.id)}
+              sessionOrderHandle={sessionOrderHandle}
             />
           ) : (
             <SessionItem
               key={entry.session.id}
               {...commonProps}
               sourceLabel={sourceLabelMap?.get(entry.session.id)}
+              sessionOrderHandle={sessionOrderHandle}
             />
           );
         }
@@ -179,6 +196,7 @@ export function SessionEntryRows({
             matchMap={matchMap}
             sourceLabelMap={sourceLabelMap}
             sessionVariant={sessionVariant}
+            sessionOrderHandle={sessionOrderHandle}
           />
         );
       })}
@@ -194,18 +212,28 @@ export function SessionEntryList({
   collapseLimit,
   disableCollapse = false,
   sectionCollapsed = false,
+  manualOrder,
+  initialOrder,
+  onReorder,
   ...props
 }: SessionEntryListProps) {
   const { t } = useTranslation();
+  const reducedMotion = useReducedMotion();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
-  const entries = useMemo(
-    () => groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
-    [notifications, scheduleSessionIndex, sessions],
-  );
+  const [dragSnapshot, setDragSnapshot] = useState<{
+    sortableEntries: readonly SidebarSessionEntry[];
+    entries: readonly SidebarSessionEntry[];
+    baseOrder: readonly string[];
+  } | null>(null);
+  const entries = useMemo(() => {
+    const groupedEntries = groupAutomationSidebarEntries(sessions, {
+      notifications,
+      scheduleSessionIndex,
+    });
+    if (!manualOrder?.length) return groupedEntries;
 
-  if (!collapsible) {
-    return <SessionEntryRows entries={entries} notifications={notifications} {...props} />;
-  }
+    return orderManualSidebarEntries(groupedEntries, manualOrder);
+  }, [manualOrder, notifications, scheduleSessionIndex, sessions]);
 
   // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
   // 需关注 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
@@ -221,9 +249,83 @@ export function SessionEntryList({
     hasAttentionEntry: (entry) => entryHasAttention(entry, notifications),
   });
 
+  const displayEntries = collapsible ? visibleEntries : entries;
+  const rows = <SessionEntryRows entries={displayEntries} notifications={notifications} {...props} />;
+  if (onReorder) {
+    const currentBaseOrder = manualOrder?.length
+      ? manualOrder
+      : initialOrder?.length
+        ? initialOrder
+        : entries.flatMap(sessionIdsForSidebarEntry);
+    const sortableEntries = dragSnapshot?.sortableEntries ?? displayEntries;
+    const reorderEntries = dragSnapshot?.entries ?? entries;
+    const baseOrder = dragSnapshot?.baseOrder ?? currentBaseOrder;
+    const entryById = new Map(
+      reorderEntries.map((entry) => [
+        entry.kind === 'session' ? entry.session.id : 'automation-group:' + entry.group.id,
+        entry,
+      ]),
+    );
+    return (
+      <>
+        <SortableList
+          items={sortableEntries}
+          getId={(entry) =>
+            entry.kind === 'session' ? entry.session.id : 'automation-group:' + entry.group.id
+          }
+          onReorder={(orderedIds) => {
+            const visibleOrder = orderedIds.flatMap((id) => {
+              const entry = entryById.get(id);
+              return entry ? sessionIdsForSidebarEntry(entry) : [];
+            });
+            onReorder(mergeVisibleSessionReorder(baseOrder, visibleOrder));
+          }}
+          reducedMotion={reducedMotion}
+          onDragActiveChange={(active) => {
+            setDragSnapshot(
+              active
+                ? { sortableEntries: displayEntries, entries, baseOrder: currentBaseOrder }
+                : null,
+            );
+          }}
+          handle="[data-sidebar-session-order-handle]"
+          dragClass="cc-agent-session-sortable-drag"
+          fallbackOnBody={false}
+          constrainToBounds
+          filter="button, input, textarea, select, a, [data-no-drag]"
+          className="flex flex-col gap-0.5 session-order"
+          rowClassName="cc-agent-session-sortable-row"
+          renderItem={(entry) => (
+            <SessionEntryRows
+              entries={[entry]}
+              notifications={notifications}
+              sessionOrderHandle
+              {...props}
+            />
+          )}
+        />
+        {isOverflowing && (
+          <button
+            type="button"
+            className={cn(
+              'flex h-6 w-full items-center justify-center rounded-full px-2 text-xs font-normal',
+              'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
+              'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+            )}
+            onClick={() => setShowAll(true)}
+          >
+            {t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
+          </button>
+        )}
+      </>
+    );
+  }
+
+  if (!collapsible) return rows;
+
   return (
     <>
-      <SessionEntryRows entries={visibleEntries} notifications={notifications} {...props} />
+      {rows}
       {isOverflowing && (
         <button
           type="button"
