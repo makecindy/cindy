@@ -171,6 +171,45 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party' })).toBe('prompt');
   });
 
+  // cindy_helper 会话操作:改写工作目录 / 真删 / 导出落盘等同于委派文件系统访问,
+  // 不能因 server 可信而静默;只读与不触发副作用的调用保持静默。
+  it('prompts for cindy_helper session operations that rebind, delete or export', () => {
+    const call = (name: string, args?: unknown) =>
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_helper',
+        toolName: 'call_tool',
+        toolParams: { name, args },
+      });
+    expect(call('move_sessions', { session_ids: ['a'], target_kind: 'project', working_dir: '/p' })).toBe(
+      'prompt-each-time',
+    );
+    expect(call('move_sessions', { session_ids: ['a'], target_kind: 'dialogue' })).toBe('auto-approve');
+    expect(call('move_sessions')).toBe('prompt-each-time');
+    expect(call('delete_sessions', { session_ids: ['a'], dry_run: true })).toBe('auto-approve');
+    expect(call('delete_sessions', { session_ids: ['a'] })).toBe('auto-approve');
+    expect(call('delete_sessions', { session_ids: ['a'], dry_run: false, confirmation_token: 't' })).toBe(
+      'prompt-each-time',
+    );
+    expect(call('export_session', { session_id: 'a', target_path: '/tmp/x' })).toBe('prompt-each-time');
+    expect(call('fork_session', { session_id: 'a', message_id: 'm' })).toBe('prompt-each-time');
+    expect(call('list_sessions', {})).toBe('auto-approve');
+    // Claude in-process bridge 会把嵌套 payload 字符串化:按 Host 实际拿到的值判定。
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_helper',
+        toolName: 'call_tool',
+        toolParams: { name: 'move_sessions', args: JSON.stringify({ target_kind: 'project' }) },
+      }),
+    ).toBe('prompt-each-time');
+    // Codex 省略 toolName 时仍按内层动作判定。
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_helper',
+        toolParams: { name: 'export_session', args: {} },
+      }),
+    ).toBe('prompt-each-time');
+  });
+
   it('prompts for simulator setup actions while device-gated actions stay trusted', () => {
     expect(
       getDesktopMcpToolApprovalPolicy({
