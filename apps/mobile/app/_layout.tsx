@@ -76,9 +76,11 @@ import {
   recoverPendingPrecreatedWorktrees,
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
+import { HomeEntryProvider, useHomeEntry } from '@/session/HomeEntryProvider';
 
 function NavigationGate() {
   const auth = useAuth();
+  const homeEntry = useHomeEntry();
   const router = useRouter();
   const segments = useSegments();
   const { mode, colors } = useTheme();
@@ -103,11 +105,11 @@ function NavigationGate() {
     [mode, colors],
   );
 
-  // auth 恢复是启动闸门链的最后一道门:这里统一释放根部常驻 splash。
-  // 放在 NavigationGate 而不是具体页面,是为了深链冷启动(首屏不是 index)也能释放。
+  // 登录与本机首页偏好就绪、默认入口重定向完成后再释放常驻 splash。
+  // 深链不经过 index；同样在这里释放，避免先露出任务再跳回伙伴。
   useEffect(() => {
-    if (auth.initialized) releaseSplash();
-  }, [auth.initialized, releaseSplash]);
+    if (auth.initialized && homeEntry.ready && !homeEntry.href) releaseSplash();
+  }, [auth.initialized, homeEntry.ready, homeEntry.href, releaseSplash]);
 
   // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
   // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
@@ -337,7 +339,9 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       <DeviceLinkProvider>
         <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
-        <NavigationGate />
+        <HomeEntryProvider>
+          <NavigationGate />
+        </HomeEntryProvider>
       </DeviceLinkProvider>
     </AuthProvider>
   );
