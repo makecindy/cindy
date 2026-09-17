@@ -31,7 +31,8 @@ internal class MobileCredentialClient(context: Context, activity: () -> Fragment
     fun close() { toSave?.ciphertext?.fill(0); toSave = null; attempt = null; commands.clear(); abandoned.clear(); channel.close() }
   }
   private val installation by lazy { CredentialInstallation(context) }
-  private val vault by lazy { CredentialVault(context, installation, activity) }
+  private val vaultHolder = lazy { CredentialVault(context, installation, activity) }
+  private val vault by vaultHolder
   private val configureLock = Mutex()
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var owner: Owner? = null
@@ -199,7 +200,7 @@ internal class MobileCredentialClient(context: Context, activity: () -> Fragment
     runIsolated { state?.close() }
     runIsolated { monitor?.cancel() }
     monitor = null
-    runIsolated { cancelInitializedVault(::vault.isInitialized) { vault.cancel() } }
+    runIsolated { cancelInitializedVault(vaultHolder.isInitialized()) { vault.cancel() } }
     if (state != null) runIsolated { invalidated(state.handle) }
   }
   fun reset() { try { close() } finally { owner = null; token = ""; key = null; identity = null } }

@@ -77,6 +77,14 @@ class InstallationMarkerPublishTest {
   }
 
   @Test
+  fun lazyHolderReportsUninitializedWithoutRunningTheInitializer() {
+    val holder = lazy { throw AssertionError("vault must stay uninitialized") }
+    val unused by holder
+    cancelInitializedVault(holder.isInitialized()) { unused.toString() }
+    assertFalse(holder.isInitialized())
+  }
+
+  @Test
   fun teardownSwallowsInitializationFailure() {
     runCredentialTeardown { throw CredentialFailure("CREDENTIAL_UNAVAILABLE") }
   }
