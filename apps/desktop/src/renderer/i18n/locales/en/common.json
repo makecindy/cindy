@@ -1539,6 +1539,15 @@
       }
     },
     "providers": {
+      "catalogRecovery": {
+        "pending": "Model settings are not ready yet. Wait a moment, then reload the models.",
+        "legacy": "Previous model settings are temporarily unavailable. Close other Cindy instances, then reload the models.",
+        "corrupt": "Saved model settings could not be read. Your settings have been kept. Contact support for help recovering them.",
+        "quota": "Model settings could not be saved because local storage has reached its limit. Contact support for help, then reload the models.",
+        "storage": "Local model settings could not be read or saved. Reload the models; if this continues, contact support.",
+        "catalog": "The model list could not be updated. Reload the models to try again.",
+        "retry": "Reload Models"
+      },
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
       "import": {

@@ -42,6 +42,46 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ModelVisibilityPrefs');
 
+export type ModelVisibilityInitializationFailure =
+  | 'owner-pending'
+  | 'profile-pending'
+  | 'legacy-owner-unavailable'
+  | 'legacy-busy'
+  | 'preferences-corrupt'
+  | 'storage-quota'
+  | 'storage-unavailable'
+  | 'lock-unavailable';
+
+let initializationFailure: ModelVisibilityInitializationFailure | null = null;
+
+/** Keep diagnostics owner-scoped and never log preference contents or storage error messages. */
+function recordInitializationFailure(reason: ModelVisibilityInitializationFailure): void {
+  if (initializationFailure !== reason) {
+    log.warn('model visibility initialization blocked', { reason });
+  }
+  initializationFailure = reason;
+}
+
+/** Startup profile classification is pending, rather than a storage or lock failure. */
+class ProfilePendingError extends Error {}
+
+function initializationErrorReason(
+  error: unknown,
+  fallback: ModelVisibilityInitializationFailure = 'storage-unavailable',
+): ModelVisibilityInitializationFailure {
+  if (error instanceof ProfilePendingError) return 'profile-pending';
+  return error && typeof error === 'object' && 'name' in error && error.name === 'QuotaExceededError'
+    ? 'storage-quota' : fallback;
+}
+
+export function getModelVisibilityInitializationFailure(
+  ownerId: string | null,
+  ownerGeneration: number,
+): ModelVisibilityInitializationFailure | null {
+  return ownerId === activeOwnerId && ownerGeneration === activeOwnerGeneration
+    ? initializationFailure : null;
+}
+
 const LEGACY_STORAGE_KEY = 'xdt:modelVisibilityPrefs:v1';
 const STORAGE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.owner`;
 const INITIALIZATION_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.initialization.owner`;
@@ -118,7 +158,7 @@ function saveInitialization(next: InitializationState): boolean {
     mayInitializeDefaults = next.eligibleForDefaults;
     return true;
   } catch (error) {
-    log.warn('model visibility initialization write failed', error);
+    recordInitializationFailure(initializationErrorReason(error));
     return false;
   }
 }
@@ -131,7 +171,7 @@ function adoptLocalModelVisibility(ownerId: string): void {
   const claim = window.electronAPI?.maker?.claimLegacyModelVisibilityOwner?.();
   if (claim?.dataOwnerId !== ownerId || claim.ownerGeneration !== activeOwnerGeneration
     || !claim.canWriteOwnerScoped) return;
-  if (claim.profileOrigin === 'pending') throw new Error('Local profile adoption is not ready');
+  if (claim.profileOrigin === 'pending') throw new ProfilePendingError('Local profile adoption is not ready');
   if (claim.profileOrigin !== 'adopted-local') return;
 
   const source = readInitialization(LOCAL_OWNER_ID) ?? emptyInitialization();
@@ -184,7 +224,7 @@ function readOwnerState(ownerId: string): void {
     if (claim?.dataOwnerId === ownerId && claim.ownerGeneration === activeOwnerGeneration) {
       // Auth can precede DB creation. Do not consume eligibility by writing migration
       // artifacts until Main has classified this profile. Old Main versions fail closed.
-      if (claim.profileOrigin === 'pending') throw new Error('Model defaults profile is not ready');
+      if (claim.profileOrigin === 'pending') throw new ProfilePendingError('Model defaults profile is not ready');
       newProfile = claim.profileOrigin === 'new';
     }
   }
@@ -210,6 +250,7 @@ async function withOwnerLock(
   operation: () => boolean,
 ): Promise<boolean> {
   if (!ownerId) return false;
+  let operationFailed = false;
   const run = (): boolean => {
     if (ownerId !== activeOwnerId || ownerGeneration !== activeOwnerGeneration
       || activeOwnerMode === 'signed-out') return false;
@@ -224,8 +265,10 @@ async function withOwnerLock(
       completed = operation();
       return completed;
     } catch (error) {
+      operationFailed = true;
       activeOwnerReadyForWrites = false;
       activeOwnerMigrationPending = true;
+      recordInitializationFailure(initializationErrorReason(error));
       throw error;
     } finally {
       // A no-op catalog/owner refresh must still deliver the effective table:
@@ -248,7 +291,11 @@ async function withOwnerLock(
       return needsLocalLock ? locks.request(initializationKey(LOCAL_OWNER_ID), run) : run();
     }) : run();
   } catch (error) {
-    log.warn('model visibility update failed', error);
+    // Errors from the operation were classified above; a rejected Web Lock has
+    // no storage operation and must remain distinguishable from disk/quota errors.
+    if (!operationFailed && ownerId === activeOwnerId && ownerGeneration === activeOwnerGeneration) {
+      recordInitializationFailure(initializationErrorReason(error, 'lock-unavailable'));
+    }
     return false;
   }
 }
@@ -312,6 +359,7 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
       || claim.ownerGeneration !== ownerGeneration
       || claim.canWriteOwnerScoped !== true
     ) {
+      recordInitializationFailure('owner-pending');
       return BLOCKED_MIGRATION;
     }
     // Preserve first-run eligibility before writing any migration artifacts or allowing
@@ -347,10 +395,12 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
       // A missing/blocked legacy marker only defers importing the pre-account snapshot. The
       // stable current owner can still write its isolated key; a later import merges scoped
       // values last, so these new settings win without mutating the legacy input.
+      recordInitializationFailure('legacy-owner-unavailable');
       return { readyForWrites: true, migrationPending: true };
     }
     if (claim.canInitialize !== true) {
       // 归属已经明确时，新设置可以安全写进 owner namespace；只把旧全局快照的导入推迟到独占时。
+      recordInitializationFailure('legacy-busy');
       return { readyForWrites: true, migrationPending: true };
     }
 
@@ -358,12 +408,14 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
     const scopedParsed = parseStoredMap(window.localStorage.getItem(scopedKey));
     if (scopedParsed.corrupt) {
       mapCorrupt = true;
+      recordInitializationFailure('preferences-corrupt');
       return BLOCKED_MIGRATION;
     }
     if (legacyParsed.corrupt) {
       // Don't import a broken snapshot as empty, and don't mark complete just because
       // the scoped key already has incremental writes from the deferred-import window.
       mapCorrupt = true;
+      recordInitializationFailure('preferences-corrupt');
       return { readyForWrites: true, migrationPending: true };
     }
     const legacy = legacyParsed.map;
@@ -376,8 +428,9 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
       readyForWrites: window.localStorage.getItem(migrationCompleteKey) === '1',
       migrationPending: false,
     };
-  } catch {
+  } catch (error) {
     // localStorage / 同步 owner 仲裁不可用时 fail closed：不读取未归属的旧数据。
+    recordInitializationFailure(initializationErrorReason(error));
     return BLOCKED_MIGRATION;
   }
 }
@@ -482,12 +535,15 @@ function persist(map: VisibilityMap, context: VisibilityWriteContext): boolean {
   try {
     window.localStorage.setItem(ownerStorageKey(activeOwnerId), JSON.stringify(map));
   } catch (error) {
+    const storageReason = initializationErrorReason(error);
+    recordInitializationFailure(storageReason);
     log.warn('model visibility write failed', {
       reason: 'storage-write-failed',
+      storageReason,
       ...context,
       ownerGeneration: activeOwnerGeneration,
       mode: activeOwnerMode,
-    }, error);
+    });
     return false;
   }
   // 先确认落盘成功，再更新受控开关状态，避免界面显示成功但重启后设置丢失。
@@ -528,6 +584,7 @@ export async function setModelVisibilityOwner(
     && activeOwnerMode === mode
   ) return;
   activeOwnerId = ownerId;
+  initializationFailure = null;
   activeOwnerGeneration = ownerGeneration;
   activeOwnerMode = mode;
   activeOwnerReadyForWrites = false;
@@ -564,8 +621,12 @@ export async function migrateModelVisibilityDefaults(
 ): Promise<boolean> {
   // Signed-out catalogs have no owner preferences to initialize.
   if (!ownerId) return true;
-  return withOwnerLock(ownerId, ownerGeneration, () => {
+  const initialized = await withOwnerLock(ownerId, ownerGeneration, () => {
     if (!isCurrent() || !ensureActiveOwnerReadyForWrites() || activeOwnerMigrationPending) return false;
+    if (mapCorrupt) {
+      recordInitializationFailure('preferences-corrupt');
+      return false;
+    }
     try {
       const stored = readInitialization(ownerId);
       // Re-read other windows' completed scopes and overrides before adding anything.
@@ -605,10 +666,14 @@ export async function migrateModelVisibilityDefaults(
       cache = aliases;
       return true;
     } catch (error) {
-      log.warn('model visibility initialization deferred', error);
+      recordInitializationFailure(initializationErrorReason(error));
       return false;
     }
   });
+  if (initialized && activeOwnerId === ownerId && activeOwnerGeneration === ownerGeneration) {
+    initializationFailure = null;
+  }
+  return initialized;
 }
 
 /**
@@ -816,6 +881,7 @@ export function useModelVisibilityVersion(): number {
 
 /** 测试用 —— 重置缓存 + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
+  initializationFailure = null;
   mirrorRevision += 1;
   clearTimeout(mirrorRetryTimer);
   const currentScopedKey = activeOwnerId ? ownerStorageKey(activeOwnerId) : null;
