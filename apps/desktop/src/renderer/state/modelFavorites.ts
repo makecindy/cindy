@@ -67,28 +67,23 @@ import { parseModelFavoriteMutation, sameModelFavorite, type ModelFavoriteMutati
 
 import { useSyncExternalStore } from 'react';
 
-import { EFFORT_VALUES } from '@cindy/model-providers';
-
 import { isSelectableVendor } from '@/lib/agentVendors';
 import type { Effort } from '@/lib/userPreferences.types';
 
+import {
+  isCanonicalModelEffort,
+  modelConfigCopyIdentity,
+  normalizeModelConfigCopy,
+  type ModelConfigCopy,
+} from './modelConfigCopy';
 import type { ModelEngine } from './modelEnginePrefs';
-import { MODEL_PRESET_SLOT_ID } from './providerModelMemory';
 import { createStorageReconciler } from './storageOpReplay';
 
 let requireDurableWrite = false;
 const STORAGE_KEY = 'xdt:modelFavorites:v1';
 
-/** 一条收藏所描述的完整配置(不含锚点)。 */
-export interface ModelFavoriteConfig {
-  providerId: string;
-  modelId: string;
-  agent: ModelEngine;
-  /** 思考深度**档位 key**('low' | 'high' | …);缺省 = 跟随该 (模型, 引擎) 的推荐档。 */
-  effort?: Effort;
-  /** Fast(插队加速)。**只在开启时存 true**,关闭即缺省 —— 不落「等于默认」的快照。 */
-  fast?: true;
-}
+/** 一条收藏所描述的完整配置(不含锚点)。归一化 / 身份规则与最近使用共用(见 modelConfigCopy)。 */
+export type ModelFavoriteConfig = ModelConfigCopy;
 
 /** 落盘 / 消费的收藏条目:配置 + 独立锚点 uid。 */
 export interface ModelFavoriteItem extends ModelFavoriteConfig {
@@ -138,59 +133,10 @@ function seqOfUid(uid: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-function isCanonicalEffort(value: unknown): value is Effort {
-  return typeof value === 'string' && (EFFORT_VALUES as readonly string[]).includes(value);
-}
-
-/**
- * `'*'` 是 providerModelMemory v2 的保留来源 id(跨来源模型预设槽)。收藏条目的 providerId
- * 必须是真实来源,撞上保留位直接丢条目(规格 §4「偏好/记忆」的防撞要求)。
- */
-function isUsableProviderId(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value !== MODEL_PRESET_SLOT_ID;
-}
-
-/** 归一化配置字段(供 add / update / sanitize 共用);模型身份或引擎不合法 → null。 */
-function normalizeConfig(raw: {
-  providerId?: unknown;
-  modelId?: unknown;
-  agent?: unknown;
-  effort?: unknown;
-  fast?: unknown;
-}): ModelFavoriteConfig | null {
-  const providerId = typeof raw.providerId === 'string' ? raw.providerId.trim() : '';
-  const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim() : '';
-  if (!isUsableProviderId(providerId) || !modelId) return null;
-  // agent 非法 → **丢整条**:收藏是「配置副本」,引擎是副本的必要组成部分,缺了它这条
-  // 记录无法表达任何配置(与 effort 不同 —— effort 缺省有明确语义「跟随推荐档」)。
-  if (!isSelectableVendor(raw.agent)) return null;
-  const config: ModelFavoriteConfig = { providerId, modelId, agent: raw.agent };
-  // effort 非法(显示文案 / 过期档名 / 非字符串)→ 只丢这个字段,条目保留,调用层回落推荐档。
-  if (isCanonicalEffort(raw.effort)) config.effort = raw.effort;
-  if (raw.fast === true) config.fast = true;
-  return config;
-}
-
-/**
- * 去重身份:providerId + modelId + agent + effort + fast(缺省字段参与,与「跟随推荐」区分)。
- * 分隔符用空格而不是 NUL:源码里嵌一个裸 `\0` 会让整个文件被 git / rg / grep 判成二进制
- * (diff 显示 `Bin`、搜不到任何符号),代价远大于它能防的那点分隔符冲突 —— provider id 与
- * model id 都是 slug 形态,不含空格(与 unifiedSelection.entryKey 同一取舍)。
- */
-function identityOf(config: ModelFavoriteConfig): string {
-  return [
-    config.providerId,
-    config.modelId,
-    config.agent,
-    config.effort ?? '',
-    config.fast === true ? '1' : '0',
-  ].join(' ');
-}
-
 /**
  * 严格校验 + 锚点补齐。老版本 / 手改 localStorage 损坏时静默回退空表,不抛。
  *   - 形状非法的条目(非对象 / 缺模型身份 / 引擎不认识 / providerId 撞 `'*'`)整条丢弃;
- *   - effort 非法只丢字段(见 normalizeConfig);
+ *   - effort 非法只丢字段(规则与「最近使用」共用,见 modelConfigCopy.normalizeModelConfigCopy);
  *   - uid 缺失 / 非字符串 / 与前面的条目重复 → 就地补一个新 uid(收藏靠 uid 做锚点,
  *     重复 uid 会让 hover / 删除 / 选中打到错误的条目);
  *   - uidSeq 非正整数,或小于已见 uid 的序号 + 1 → 抬到安全值,保证后续新 uid 不撞已有锚点。
@@ -206,7 +152,7 @@ function sanitize(raw: unknown): FavoritesState {
   const parsed: Array<{ config: ModelFavoriteConfig; uid: string | null }> = [];
   for (const entry of rawItems) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-    const config = normalizeConfig(entry as Record<string, unknown>);
+    const config = normalizeModelConfigCopy(entry as Record<string, unknown>);
     if (!config) continue;
     const rawUid = (entry as { uid?: unknown }).uid;
     const uid = typeof rawUid === 'string' && rawUid.length > 0 && !seenUids.has(rawUid)
@@ -309,7 +255,7 @@ function sameState(a: FavoritesState, b: FavoritesState): boolean {
     && a.items.every((item, i) => {
       const other = b.items[i];
       return (
-        other !== undefined && item.uid === other.uid && identityOf(item) === identityOf(other)
+        other !== undefined && item.uid === other.uid && modelConfigCopyIdentity(item) === modelConfigCopyIdentity(other)
       );
     })
   );
@@ -333,10 +279,10 @@ function appendFavorite(
   config: ModelFavoriteConfig,
   preferredUid: string,
 ): FavoritesState {
-  const identity = identityOf(config);
+  const identity = modelConfigCopyIdentity(config);
   // 幂等的关键一半:同配置已在表里(可能是本次同步写留下的,也可能是另一窗口存过的)
   // → 原样返回,重放不会堆出第二条。
-  if (state.items.some((item) => identityOf(item) === identity)) return state;
+  if (state.items.some((item) => modelConfigCopyIdentity(item) === identity)) return state;
   const taken = new Set(state.items.map((item) => item.uid));
   let uid = preferredUid;
   if (!uid || taken.has(uid)) {
@@ -388,7 +334,7 @@ function patchConfig(
   }
   if ('effort' in patch) {
     // null = 显式清除(回落推荐档);非法值同样按清除处理(不写脏档名)。
-    if (isCanonicalEffort(patch.effort)) next.effort = patch.effort;
+    if (isCanonicalModelEffort(patch.effort)) next.effort = patch.effort;
     else delete next.effort;
   }
   if (patch.fast !== undefined) {
@@ -423,7 +369,7 @@ function applyOp(state: FavoritesState, op: FavoritesOp): FavoritesState {
       const patched = patchConfig(configOf(current), op.patch);
       if (!patched) return state;
       const next: ModelFavoriteItem = { uid: current.uid, ...patched };
-      if (identityOf(next) === identityOf(current)) return state;
+      if (modelConfigCopyIdentity(next) === modelConfigCopyIdentity(current)) return state;
       const items = [...state.items];
       items[index] = next;
       return { ...state, items };
@@ -619,13 +565,13 @@ export function getModelFavorite(uid: string): ModelFavoriteItem | undefined {
  * effort 非法只丢该字段(条目仍建,回落推荐档)。
  */
 export function addModelFavorite(config: ModelFavoriteConfig): string {
-  const normalized = normalizeConfig(config);
+  const normalized = normalizeModelConfigCopy(config);
   if (!normalized) return '';
   // 基底取**重读后的**持久化快照(见 freshState):另一窗口刚加的条目要一起带上,
-  // 否则本次整表写回会把它抹掉。uidSeq 的单调性、identityOf 去重都在这份新鲜基底上判。
+  // 否则本次整表写回会把它抹掉。uidSeq 的单调性、modelConfigCopyIdentity 去重都在这份新鲜基底上判。
   const state = freshState();
-  const identity = identityOf(normalized);
-  const existing = state.items.find((item) => identityOf(item) === identity);
+  const identity = modelConfigCopyIdentity(normalized);
+  const existing = state.items.find((item) => modelConfigCopyIdentity(item) === identity);
   if (existing) return existing.uid;
   const uid = uidOfSeq(state.uidSeq);
   // uid 必须**当场**返回(调用方要拿它当选中锚点),所以先在这份基底上定下首选锚点;
@@ -643,7 +589,7 @@ export function addModelFavorite(config: ModelFavoriteConfig): string {
  *   - 只投放一次:`seeded` 标记持久化,取消后不复种(取消即显式否决推荐);
  *   - 只对**从未收藏过**的用户投放:已有收藏说明用户在整理自己的列表,不打扰,
  *     但同样落下标记(这一版的推荐对 TA 已经「见过即弃权」);
- *   - 配置字段与普通收藏同一套校验(normalizeConfig),effort / fast 缺省跟随推荐档。
+ *   - 配置字段与普通收藏同一套校验(normalizeModelConfigCopy),effort / fast 缺省跟随推荐档。
  */
 export function seedDefaultFavorite(config: ModelFavoriteConfig): void {
   // 同 addModelFavorite:基底必须新鲜 —— 另一窗口若已投放过种子,这里读到的 seeded
@@ -651,7 +597,7 @@ export function seedDefaultFavorite(config: ModelFavoriteConfig): void {
   const state = freshState();
   if (state.seeded) return;
   // 非法配置不落标记:下次给出合法推荐时仍要能投放。
-  const normalized = normalizeConfig(config);
+  const normalized = normalizeModelConfigCopy(config);
   if (!normalized) return;
   commitOp({ kind: 'seed', config: normalized, preferredUid: uidOfSeq(state.uidSeq) }, state);
 }
@@ -740,9 +686,9 @@ export function accessHostModelFavorites(ownerId: string | null, mutation?: Mode
   requireDurableWrite = true;
   try {
     if (op.kind === 'add') {
-      const config = normalizeConfig(op.item);
+      const config = normalizeModelConfigCopy(op.item);
       if (!config) throw new Error('Invalid favorite');
-      if (base.items.length >= 4096 && !base.items.some(item => identityOf(item) === identityOf(config))) throw new Error('Favorites limit reached');
+      if (base.items.length >= 4096 && !base.items.some(item => modelConfigCopyIdentity(item) === modelConfigCopyIdentity(config))) throw new Error('Favorites limit reached');
       commitOp({kind:'add',config,preferredUid:uidOfSeq(base.uidSeq)},base);
     } else if (op.kind === 'remove') commitOp({kind:'remove',uid:op.expected.uid},base);
     else commitOp({kind:'update',uid:op.expected.uid,patch:{agent:op.item.agent, effort:(op.item.effort as Effort | undefined) ?? null, fast:!!op.item.fast}},base);
