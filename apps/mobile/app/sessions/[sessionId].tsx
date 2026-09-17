@@ -180,7 +180,7 @@ import {
 } from '@/session/SessionMenuSheet';
 import type { SessionMenuView } from '@/session/sessionMenu';
 import { SessionSearchNative } from '@/session/SessionSearchNative';
-import { isHostManagedSession } from '@/session/hostManagedSession';
+import { useHostManagedSession } from '@/session/hostManagedSession';
 import {
   interactionKind,
   isPendingInteractionCollapsed,
@@ -2029,7 +2029,10 @@ export default function SessionScreen() {
     () => sessions.find((item) => item.id === sessionId) ?? null,
     [sessionId, sessions],
   );
-  const sessionManagedByHost = isHostManagedSession(currentSession);
+  const sessionManagedByHost = useHostManagedSession(
+    JSON.stringify([auth.accountGeneration, deviceId, sessionId]),
+    currentSession,
+  );
   const composerDeviceProviders = useDeviceProviders(deviceId || undefined, modelSheetOpen);
   const accountProvider = composerDeviceProviders.ready
     ? composerDeviceProviders.providers.find((provider) => provider.id === currentSession?.providerId)

@@ -145,6 +145,12 @@ interface SessionTaskCallbacks {
 }
 
 interface BotMessagingCallbacks {
+  checkMessage?(params: { callerSessionId: string; messageId: string }): Promise<
+    { ok: true } | { ok: false; errorCode: string; message: string }>;
+  listAgents?(params: { callerSessionId: string }): Promise<
+    { ok: true; agents: unknown[]; unavailableDevices: unknown[] }
+    | { ok: false; errorCode: string; message: string }>;
+
   messageAgent(params: {
     callerSessionId: string;
     targetBotId: string;
@@ -155,13 +161,17 @@ interface BotMessagingCallbacks {
         targetBotId: string;
         targetBotName: string;
         targetSessionId: string;
-        wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
+        wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' | 'unknown';
+        messageId?: string;
+        delivered?: boolean;
+        transport?: 'remote-conversation';
       }
     | {
         ok: false;
         errorCode: string;
         message: string;
         availableBots?: Array<{ id: string; name: string }>;
+        messageId?: string;
       }
   >;
 }
@@ -346,6 +356,28 @@ function registerSendToAgentEntry(
   sessionCtx: XdtHelperMcpSessionCtx,
 ): void {
   if (!deps.botMessaging) return;
+  if (deps.botMessaging.checkMessage) registry.register({
+    name: 'check_agent_message', category: 'bots',
+    description: 'Check your own remote message: read native acceptance receipts or ordinary replies from an older teammate conversation. Use the message_id returned by send_to_agent when its transport is remote-conversation, or after uncertain delivery. This does not send or retry. It returns native acceptance or persisted ordinary reply text, not proof of engine delivery, a remote tool call, or a completed turn. Check when following up; do not poll.',
+    inputShape: { message_id: z.string().min(1).max(80) },
+    handler: async ({ message_id }) => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
+      const result = await deps.botMessaging!.checkMessage!({ callerSessionId, messageId: message_id });
+      return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.botMessaging.listAgents) registry.register({
+    name: 'list_agents', category: 'bots',
+    description: 'Discover teammates on this device and other authorized devices. Use the exact returned id with send_to_agent; device names distinguish namesakes. unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
+    inputShape: {},
+    handler: async () => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
+      const result = await deps.botMessaging!.listAgents!({ callerSessionId });
+      return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+    },
+  });
   registry.register({
     name: 'send_to_agent',
     category: 'bots',
@@ -354,10 +386,11 @@ function registerSendToAgentEntry(
       'Use it for a brief question, discussion, or information transfer. It does not create a task, status, progress, cancellation, or a completion contract.',
       "The message remains visible in both teammates' timelines. The recipient may answer in a later turn. Do not poll or send acknowledgement-only replies.",
       'For independently tracked development or deliverable work, use start_session_task instead.',
-      'When a structured @Bot reference is present, use its Bot ID directly. Do not list the roster first.',
+      'Use the exact stable id from list_agents (deviceId::botId for a remote teammate) or a structured @Bot reference. Never route by name.',
     ].join('\n'),
     inputShape: {
-      target_id: z.string().min(1).max(128),
+      // deviceId (80) + separator (2) + existing Bot profile ID (128).
+      target_id: z.string().min(1).max(210),
       message: z.string().min(1).max(12_000),
     },
     handler: async ({ target_id, message }) => {
@@ -372,6 +405,7 @@ function registerSendToAgentEntry(
       });
       if (!result.ok) {
         return errorPayload(result.errorCode, result.message, {
+          ...(result.messageId ? { message_id: result.messageId } : {}),
           ...(result.availableBots
             ? { available_agents: result.availableBots }
             : {}),
@@ -379,12 +413,18 @@ function registerSendToAgentEntry(
       }
       return okPayload({
         action: 'send_to_agent',
-        delivered: true,
+        accepted: true,
+        delivered: result.delivered ?? result.wakeKind !== 'queued',
+        replied: false,
+        ...(result.transport ? { transport: result.transport } : {}),
+        ...(result.messageId ? { message_id: result.messageId } : {}),
         target_id: result.targetBotId,
         target_name: result.targetBotName,
         wake_kind: result.wakeKind,
         guidance:
-          'Delivery is confirmed. End this turn without polling; a useful reply may arrive in a later turn.',
+          result.transport === 'remote-conversation'
+            ? 'The older host accepted a clearly attributed message in its ordinary conversation. Use check_agent_message with message_id to read its reply on follow-up; do not resend or poll. The older teammate does not actively send cross-device replies.'
+            : 'The host accepted this message. Queued acceptance is not delivery or a reply. End this turn; only an actual incoming message proves a reply.',
       });
     },
   });

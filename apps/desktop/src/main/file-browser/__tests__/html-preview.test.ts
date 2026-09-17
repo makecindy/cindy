@@ -54,10 +54,23 @@ describe('directory HTML preview', () => {
     await expect(copyPreviewFile(source, path.join(dir, 'short.html'), size - 1)).rejects.toThrow(
       'PREVIEW_CHANGED',
     );
-    await fs.symlink(source, path.join(dir, 'link.html'));
-    await expect(
-      copyPreviewFile(path.join(dir, 'link.html'), path.join(dir, 'linked.html'), size),
-    ).rejects.toThrow();
+    // Windows junctions need no file-symlink privilege. Both are rejected by
+    // lstat before opening the target; POSIX keeps the file-symlink coverage.
+    const link = path.join(dir, 'link.html');
+    await fs.symlink(
+      process.platform === 'win32' ? path.join(dir, 'dist') : source,
+      link,
+      process.platform === 'win32' ? 'junction' : 'file',
+    );
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    const open = vi.spyOn(fs, 'open');
+    try {
+      await expect(copyPreviewFile(link, path.join(dir, 'linked.html'), size))
+        .rejects.toThrow('PREVIEW_CHANGED');
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
   });
   it('serves requested resources and root-relative module assets through authenticated HTTP', async () => {
     const { dir, source, args } = await fixture();

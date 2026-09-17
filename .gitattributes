@@ -1,4 +1,6 @@
 *.sh text eol=lf
+# Published teammate compatibility fixtures retain the exact source bytes for SHA-256 verification.
+apps/desktop/src/main/maker-ipc/__tests__/fixtures/released-teammate-host/*.ts.txt text eol=lf
 # .mjs 脚本大多带 #!/usr/bin/env node shebang:Windows autocrlf 检出成 CRLF 后,
 # vitest(vite 转换链)加载「CRLF + shebang」组合会直接 SyntaxError,unix 下直接执行也会坏,
 # 与 *.sh 同理固定 LF 检出。

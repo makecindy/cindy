@@ -39,7 +39,7 @@ import {
   type RenderItem,
 } from '../components/chat/MessageStream';
 import { shouldHandleNavigationKey } from '../components/chat/useNavigationKeyListener';
-import type { ChatMessage } from '@/lib/makerChatStore';
+import { handleStreamEvent, EMPTY_SESSION_STATE, type ChatMessage } from '@/lib/makerChatStore';
 import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
 
 // ── 工厂 / 用例构造工具 ────────────────────────────────────────────────────
@@ -86,7 +86,42 @@ it('keeps modal-only Cindy Make cards out of the message timeline', () => {
 });
 
 describe('Bot 流式正文呈现', () => {
-  it('运行中隐藏工作卡，但从首字开始保留 assistant 正文', () => {
+  it('preserves consecutive Claude final text blocks only after the turn seal', () => {
+    let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
+    const visibleProse = () => simplifyBotRenderItems(
+      groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
+    ).flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
+      ? [item.message.content] : []);
+    const emitText = (id: string, text: string) => {
+      state = handleStreamEvent(state, {
+        sessionId: 'claude-multi-block', type: 'text', persistId: id,
+        data: { text, isFinal: true },
+      });
+    };
+    emitText('progress', '我查一下：');
+    state = handleStreamEvent(state, {
+      sessionId: 'claude-multi-block', type: 'tool_use', persistId: 'tool',
+      data: { id: 'tool', name: 'Bash', input: { command: 'echo ok' } },
+    });
+    state = handleStreamEvent(state, {
+      sessionId: 'claude-multi-block', type: 'tool_result', persistId: 'result',
+      data: { toolUseId: 'tool', result: 'ok' },
+    });
+    emitText('first', 'first');
+    expect(visibleProse()).toEqual([]);
+    emitText('second', 'second');
+    expect(visibleProse()).toEqual([]);
+    state = handleStreamEvent(state, {
+      sessionId: 'claude-multi-block', type: 'text', persistId: 'second',
+      data: { text: 'second', isFinal: true, isFullText: true },
+      agentMeta: { turnCompleted: true },
+    });
+    expect(visibleProse()).toEqual(['first', 'second']);
+    state = { ...state, isStreaming: false };
+    expect(visibleProse()).toEqual(['first', 'second']);
+  });
+
+  it('运行中从首字收拢未封口正文与工具，保留可展开过程', () => {
     const messages = [
       mkUser('u1'),
       mkTool('t1', 'Bash'),
@@ -98,9 +133,60 @@ describe('Bot 流式正文呈现', () => {
 
     expect(
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
-    ).toEqual(['u1', 'a1']);
-    expect(visible.some((item) => item.type === 'work_group')).toBe(false);
+    ).toEqual(['u1']);
+    expect(visible.some((item) => item.type === 'work_group')).toBe(true);
   });
+
+  // Contracts: claude-code/translator assistant text blocks; pi/translator
+  // message_end authoritative full text; codex/translator agentMessage completed.
+  // All three close text messages before tools, independently of the turn seal.
+  it.each(['claude-code', 'pi', 'codex'] as const)(
+    '%s: hides intermediate text at every frame and releases only the sealed answer', (source) => {
+      let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
+      const project = () => simplifyBotRenderItems(
+        groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
+      );
+      const visibleProse = () => project().flatMap((item) =>
+        item.type === 'message' && item.message.role === 'assistant' ? [item.message.content] : []);
+      for (const [index, text] of ['我查一下：', '已找到线索，继续核实', '这是最终答复'].entries()) {
+        const persistId = `answer-${index}`;
+        state = handleStreamEvent(state, {
+          sessionId: 'bot-event-fixture', type: 'text', persistId,
+          data: { text, isFinal: false, ...(source === 'codex' ? { agentMessageId: persistId } : {}) },
+        });
+        expect(visibleProse()).toEqual([]);
+        state = handleStreamEvent(state, {
+          sessionId: 'bot-event-fixture', type: 'text', persistId,
+          data: { text, isFinal: true,
+            ...(source !== 'claude-code' ? { isFullText: true } : {}),
+            ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
+          },
+        });
+        expect(visibleProse()).toEqual([]);
+        if (index < 2) {
+          state = handleStreamEvent(state, {
+            sessionId: 'bot-event-fixture', type: 'tool_use', persistId: `tool-${index}`,
+            data: { id: `tool-${index}`, name: 'Bash', input: { command: 'echo ok' } },
+          });
+          state = handleStreamEvent(state, {
+            sessionId: 'bot-event-fixture', type: 'tool_result', persistId: `result-${index}`,
+            data: { toolUseId: `tool-${index}`, result: 'ok' },
+          });
+          expect(visibleProse()).toEqual([]);
+        }
+      }
+      // Main stamps the last assistant at done; the renderer projects that meta.
+      state = handleStreamEvent(state, {
+        sessionId: 'bot-event-fixture', type: 'text', persistId: 'answer-2',
+        data: { text: '这是最终答复', isFinal: true, isFullText: true },
+        agentMeta: { turnCompleted: true },
+      });
+      expect(visibleProse()).toEqual(['这是最终答复']);
+      expect(project().filter((item) => item.type === 'work_group')).toHaveLength(1);
+      expect(state.messages.filter((message) => message.role === 'assistant').map((message) => message.content))
+        .toEqual(['我查一下：', '已找到线索，继续核实', '这是最终答复']);
+    },
+  );
 
   it('伙伴私聊往返期间持续保留双方消息戳', () => {
     const directMessageStamp = (id: string, direction: 'sent' | 'received'): ChatMessage => ({
@@ -132,7 +218,7 @@ describe('Bot 流式正文呈现', () => {
 
     expect(
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
-    ).toEqual(['u1', 'dm-sent', 'dm-received', 'a1']);
+    ).toEqual(['u1', 'dm-sent', 'dm-received']);
   });
 });
 
@@ -2167,7 +2253,7 @@ it('places the same Bot task card after its introduction and keeps it through st
   const project = (streaming: boolean) => simplifyBotRenderItems(
     buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot' }).items, streaming,
   ).flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
-  expect(project(true)).toEqual(['start', 'intro', 'task-card', 'done']);
+  expect(project(true)).toEqual(['start', 'intro', 'task-card']);
   expect(project(false).filter((id) => id !== 'finished-trigger')).toEqual(['start', 'intro', 'task-card', 'done']);
 });
 

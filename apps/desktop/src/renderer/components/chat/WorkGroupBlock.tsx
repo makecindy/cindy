@@ -106,6 +106,8 @@ export function collectLiveWorkActivities(
 }
 
 export interface WorkGroupBlockProps {
+  /** Teammates keep public execution details collapsed, including while running. */
+  compact?: boolean;
   deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
   /** Stable persistence key:动作段 `work:<clientId>`,外层 `work:summary-<clientId>`. */
   blockId: string;
@@ -242,9 +244,11 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
 function ExpandedWorkGroupChild({
   child,
   toolActivities,
+  compact,
 }: {
   child: WorkGroupChild;
   toolActivities?: ProjectedToolActivity[];
+  compact?: boolean;
 }) {
   if (child.kind === 'tools') {
     return (
@@ -261,6 +265,7 @@ function ExpandedWorkGroupChild({
   if (child.kind === 'group') {
     return (
       <WorkGroupBlock
+        compact={compact}
         blockId={child.blockId}
         durationMs={child.durationMs}
         isStreaming={child.isStreaming}
@@ -274,6 +279,7 @@ function ExpandedWorkGroupChild({
 }
 
 export function WorkGroupBlock({
+  compact = false,
   deferred,
   blockId,
   durationMs,
@@ -288,24 +294,24 @@ export function WorkGroupBlock({
   deferredRef.current = deferred;
   useEffect(() => {
     const current = deferredRef.current;
-    current?.setVisible?.(expanded, isStreaming);
+    current?.setVisible?.(expanded, !compact && isStreaming);
     return () => current?.setVisible?.(false, false);
-  }, [deferred?.owner, deferred?.key, expanded, isStreaming]);
+  }, [deferred?.owner, deferred?.key, expanded, isStreaming, compact]);
   const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
-    if (!isStreaming || startedAtMs === undefined) return;
+    if (compact || !isStreaming || startedAtMs === undefined) return;
     setElapsedMs(Math.max(0, Date.now() - startedAtMs));
     const id = window.setInterval(() => {
       setElapsedMs(Math.max(0, Date.now() - startedAtMs));
     }, 500);
     return () => window.clearInterval(id);
-  }, [isStreaming, startedAtMs]);
+  }, [isStreaming, startedAtMs, compact]);
 
   // 多取一条即可判断展开是否能露出更多活动，显示仍只取最近 5 条。
   const recentActivities = useMemo(
-    () => projectRecentWorkActivities(childItems, isStreaming, MAX_LIVE_WORK_ACTIVITIES + 1),
-    [childItems, isStreaming],
+    () => compact ? [] : projectRecentWorkActivities(childItems, isStreaming, MAX_LIVE_WORK_ACTIVITIES + 1),
+    [childItems, isStreaming, compact],
   );
   const liveActivities = useMemo(
     () => recentActivities.slice(-MAX_LIVE_WORK_ACTIVITIES),
@@ -325,20 +331,20 @@ export function WorkGroupBlock({
   );
   // 运行中预览已经等于全部内容时，折叠/展开是视觉空操作 — 组头不提供交互。
   const canToggle =
-    (!!deferred && !deferred.previewComplete) || !isStreaming
+    compact || (!!deferred && !deferred.previewComplete) || !isStreaming
     || hasBeyondPreviewChild
     || recentActivities.length > MAX_LIVE_WORK_ACTIVITIES;
   const effectiveExpanded = expanded && canToggle;
   const isLivePreviewVisible =
-    isStreaming && !effectiveExpanded && liveActivities.length > 0;
+    !compact && isStreaming && !effectiveExpanded && liveActivities.length > 0;
   // 完成态只计算一次完整摘要；运行态保持折叠时走上面的反向 latest-five
   // 热路径，用户主动展开后才投影全部历史。
   const activityProjection = useMemo(
     () =>
-      effectiveExpanded || !isStreaming
+      effectiveExpanded || (!compact && !isStreaming)
         ? projectWorkActivities(childItems, isStreaming)
         : null,
-    [childItems, effectiveExpanded, isStreaming],
+    [childItems, effectiveExpanded, isStreaming, compact],
   );
 
   // 外层完成态组展开成文字 + 内层动作组;内层动作组与运行态组复用本组件,
@@ -352,12 +358,14 @@ export function WorkGroupBlock({
 
   // durationMs === 0(同毫秒时间戳的极短 run)也显示时长 — formatDuration
   // 自带最小 1s 钳制;只有时间戳缺失(undefined)才退化为无时长文案。
-  const baseSummaryText = isStreaming
+  const baseSummaryText = compact
+    ? t('chat.workGroup.workDetails')
+    : isStreaming
     ? t('chat.workGroup.working')
     : durationMs !== undefined
       ? t('chat.workGroup.worked', { duration: formatDuration(durationMs) })
       : t('chat.workGroup.workDetails');
-  const explorationSummary = activityProjection?.isPureExploration
+  const explorationSummary = !compact && activityProjection?.isPureExploration
     ? [
         activityProjection.explorationCounts.read > 0
           ? t('chat.workGroup.exploration.read', {
@@ -391,6 +399,7 @@ export function WorkGroupBlock({
           className={cn(
             'flex w-full items-center gap-1.5 py-[2px]',
             'select-none',
+            compact && 'min-h-8 rounded-full px-2 focus-ring hover:bg-[var(--surface-hover)]',
             'text-left',
             canToggle && 'cursor-pointer hover:opacity-80 transition-opacity',
             !canToggle && 'cursor-default',
@@ -410,7 +419,7 @@ export function WorkGroupBlock({
             {summaryText}
           </span>
           <div className="flex-1" />
-          {isStreaming && startedAtMs !== undefined && (
+          {!compact && isStreaming && startedAtMs !== undefined && (
             <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
               {formatDuration(elapsedMs)}
             </span>
@@ -457,6 +466,7 @@ export function WorkGroupBlock({
               <Fragment key={child.key}>
                 <ExpandedWorkGroupChild
                   child={child}
+                  compact={compact}
                   toolActivities={
                     child.kind === 'tools'
                       ? activityProjection?.toolActivitiesByChildKey.get(child.key)

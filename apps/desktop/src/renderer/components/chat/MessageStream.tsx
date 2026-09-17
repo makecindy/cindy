@@ -1,3 +1,5 @@
+import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
 /**
  * MessageStream
@@ -289,6 +291,7 @@ import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
 import { TurnChangesCard } from './TurnChangesCard';
+import { useBotGeneratedFileDeliveries } from '@/features/bots/useBotGeneratedFileDeliveries';
 import { GeneratedFilesCard, generatedFilesCheckKey } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
@@ -485,60 +488,6 @@ export interface InlinePlanVisibility {
 // ---------------------------------------------------------------------------
 
 // Item types and pure work grouping live in messageWorkGroups; window/DOM behavior stays here.
-function isBotInternalActivity(item: RenderItem): boolean {
-  if (
-    item.type === 'tool_segment' ||
-    item.type === 'agent_task' ||
-    item.type === 'work_group' ||
-    item.type === 'agent_plan' ||
-    item.type === 'turn_changes'
-  ) {
-    return true;
-  }
-  return item.type === 'message' && item.message.role === 'thinking';
-}
-
-export function simplifyBotRenderItems(
-  items: readonly RenderItem[],
-  isStreaming: boolean,
-): RenderItem[] {
-  const visible = items.filter((item) => !isBotInternalActivity(item));
-  if (!isStreaming) return visible;
-
-  // 当前回合的普通 assistant 正文从首字开始流式展示；工具媒体、交付卡等容易
-  // 改变布局的结果仍等回合完成后出现。这样既不泄露内部工作过程，也不会把整段
-  // 答案藏到 done 后才突然闪现。
-  let currentTurnStart = -1;
-  for (let index = visible.length - 1; index >= 0; index -= 1) {
-    const item = visible[index];
-    if (
-      item.type === 'message' &&
-      item.message.role === 'user' &&
-      item.message.delivery !== 'steer' &&
-      !item.message.isSyntheticTrigger
-    ) {
-      currentTurnStart = index;
-      break;
-    }
-  }
-  if (currentTurnStart < 0) return visible;
-  return visible.filter((item, index) => {
-    if (index <= currentTurnStart) return true;
-    if (item.type !== 'message') return false;
-    if (item.message.role === 'user') return !item.message.isSyntheticTrigger;
-    // A direct-message stamp is the durable entry into the Bot-to-Bot conversation,
-    // not an expanding work/result card. The reverse delivery starts another hidden
-    // canonical turn; hiding system cards during that turn used to make the already
-    // persisted "sent" stamp flash and disappear until streaming finished.
-    if (item.message.systemCardType === 'bot-direct-message' || item.message.systemCardType === 'bot-session-task') return true;
-    return (
-      item.message.role === 'assistant' &&
-      !item.message.systemCardType &&
-      item.message.content.trim().length > 0
-    );
-  });
-}
-
 function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
   return item?.type === 'fork_origin' || (item?.type === 'message' && item.message.role === 'user');
 }
@@ -2825,15 +2774,18 @@ export function MessageStream({
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。
   // isSessionStreaming 翻转(每 turn 一次)与 items 变化时重算,O(n) 单扫描。
+  const { visibleGeneratedFileKeys, onGeneratedFilesVisibilityChange } = useBotGeneratedFileDeliveries(
+    ungroupedRenderItems, sessionFileValue,
+  );
   const allRenderItems = useMemo(() => {
     const grouped = insertForkOriginItem(
       historySnapshot?.ready ? ungroupedRenderItems : groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
       forkOrigin,
   );
     return simplifiedBotConversation
-      ? simplifyBotRenderItems(grouped, isSessionStreaming)
+      ? simplifyBotRenderItems(grouped, isSessionStreaming, visibleGeneratedFileKeys)
       : grouped;
-  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation, historySnapshot?.ready]);
+  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation, historySnapshot?.ready, visibleGeneratedFileKeys]);
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -5754,6 +5706,7 @@ export function MessageStream({
                           turnEndMs={item.turnEndMs}
                           turnSealed={item.turnSealed === true}
                           botArtifacts={simplifiedBotConversation}
+                          onVisibilityChange={simplifiedBotConversation ? onGeneratedFilesVisibilityChange : undefined}
                         />
                       );
                     }
@@ -5863,6 +5816,7 @@ export function MessageStream({
                             isStreaming={item.isStreaming}
                             startedAtMs={item.startedAtMs}
                             childItems={childItems}
+                            compact={simplifiedBotConversation}
                             deferred={item.deferred}
                           />
                         </div>

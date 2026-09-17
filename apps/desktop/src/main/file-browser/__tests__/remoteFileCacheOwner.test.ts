@@ -70,6 +70,7 @@ it('cancels the shared executor only after the last consumer releases it', async
     transferSignal = signal!;
     await fs.writeFile(dest, 'old');
     await pause;
+    if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
   });
   const first = fetchRemoteFileToCache(id, executor, vi.fn(), firstController.signal);
   await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
@@ -80,8 +81,14 @@ it('cancels the shared executor only after the last consumer releases it', async
   secondController.abort();
   await expect(second).rejects.toThrow('FILE_PEER_CANCELLED');
   expect(transferSignal.aborted).toBe(true);
+  // Aborted consumers settle before the transfer's finally cleans staging.
+  // Join the still-paused transfer without a signal to await that cleanup too.
+  const drained = expect(fetchRemoteFileToCache(id, executor, vi.fn()))
+    .rejects.toThrow('FILE_PEER_CANCELLED');
   release();
-  await expect(Promise.allSettled([first, second])).resolves.toHaveLength(2);
+  await drained;
+  expect(executor).toHaveBeenCalledOnce();
+  expect(await fs.readdir(getRemoteFileCacheRoot())).toEqual([]);
 });
 
 it('does not return a cache hit or report progress when ownership changes during touch', async () => {

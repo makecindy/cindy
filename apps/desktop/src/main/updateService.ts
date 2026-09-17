@@ -40,6 +40,8 @@ import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
 import { compareAppUpdateVersions } from './updateVersionPolicy';
+import { CURRENT_APP_ID } from '../shared/brandRegion';
+import { syncWindowsVersionAfterUpdate, windowsInstallKey } from './windowsInstallationVersion';
 import { writeStartupBinaryUpdateMarker } from './agent-binaries/startup-update';
 
 import { createLogger, maskPath } from './logger';
@@ -1509,6 +1511,9 @@ function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
     detached: true,
     stdio: 'ignore',
     windowsHide: false,
+    // Optional metadata, not a new CLI flag: older updater binaries ignore it
+    // instead of rejecting the entire update. New updaters forward it on elevation.
+    env: { ...process.env, CINDY_VERSION_SYNC_KEY: windowsInstallKey(CURRENT_APP_ID) },
   });
 
   const spawnTimeout = setTimeout(() => {
@@ -2001,6 +2006,20 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export function initUpdateService(): void {
+  // Observe the successful old-updater receipt before existing cleanup removes
+  // it. Async and metadata-only; no effect on download/apply/rollback decisions.
+  if (process.platform === 'win32' && app.isPackaged && !isDev()) {
+    void syncWindowsVersionAfterUpdate({
+      platform: process.platform,
+      packaged: true,
+      version: app.getVersion(),
+      appId: CURRENT_APP_ID,
+      exePath: app.getPath('exe'),
+      resourcesPath: process.resourcesPath,
+      patchInfoPath: path.join(getUpdatesDir(), PATCH_INFO_FILE),
+      warn: (message) => log.warn(message),
+    });
+  }
   // Best-effort cleanup of >7-day-old `cindy-update*`/`xdt-update*` leftovers in %TEMP%.
   // Counterpart to the Rust updater's own sweep — covers the case where the
   // user stays on the latest version and never triggers another updater run.

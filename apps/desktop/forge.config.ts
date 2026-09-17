@@ -829,6 +829,7 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   if (windowsUpdaterRuntimeResource) {
     base.unshift(
       `resources/${UPDATER_EXE}`,
+      'resources/windows-installation-version.ps1',
       windowsUpdaterRuntimeResource,
     );
   }

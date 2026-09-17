@@ -4,7 +4,7 @@
  * 这三处判定都长在超大组件里(CCAgentSessionView 5k 行 / MessageStream 5.8k 行 /
  * ChatInput 8k 行),在 jsdom 里整棵挂起来既慢又脆。真正要锁死的是**判定条件本身**:
  * 头像与收控件只能对 Bot 会话生效,普通任务的渲染必须一字不改。所以这里锁源码契约,
- * 纯逻辑部分(占位符选词、欢迎语幂等)另有真实单测。
+ * 归属与状态稳定性由 botSessionPresentation / botChatPresentation 的行为测试覆盖。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -20,12 +20,6 @@ const chatInput = read('components/new-chat/ChatInput.tsx');
 const botSettings = read('features/bots/BotsHomeView.tsx');
 
 describe('Bot 对话的判定条件', () => {
-  it('「这是跟伙伴的对话」需要路由身份与 session.source 同时成立', () => {
-    // URL 只是导航投影。少了 source 这一半,任何 /bots/... 链接都能把普通任务
-    // 伪装成伙伴对话。
-    expect(sessionView).toContain("botIdentity && session?.source === 'bot' ? botIdentity : null");
-  });
-
   it('气泡头像只在 Bot 对话下传给消息流', () => {
     expect(sessionView).toContain('assistantAvatar={botAssistantAvatar}');
     expect(sessionView).toContain('<BotAvatar bot={botChatIdentity} size="sm" />');
@@ -94,11 +88,12 @@ describe('伙伴设置包含独立能力选择入口', () => {
 });
 
 describe('伙伴消息流收起内部工作过程', () => {
-  it('只对伙伴过滤工作卡，状态由真实生命周期驱动', () => {
+  it('只对伙伴收拢过程，运行期间保留单一状态出口', () => {
     expect(sessionView).toContain('simplifiedBotConversation={Boolean(botChatIdentity)}');
-    expect(messageStream).toContain('simplifyBotRenderItems(grouped, isSessionStreaming)');
-    expect(messageStream).toContain("item.message.role === 'assistant'");
-    expect(messageStream).toContain('item.message.content.trim().length > 0');
+    expect(messageStream).toContain('simplifyBotRenderItems(grouped, isSessionStreaming, visibleGeneratedFileKeys)');
+    // Text/tool grouping is covered by botConversationPresentation behavioral tests.
+    expect(messageStream).toContain("from '@/features/bots/botConversationPresentation'");
+    expect(messageStream).toContain('compact={simplifiedBotConversation}');
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
     expect(sessionView).toContain('<BotWorkingStatus');
     expect(sessionView).toContain('visible={composerRuntimeVisible}');

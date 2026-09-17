@@ -1,5 +1,6 @@
 mod args;
 mod installer;
+mod installation_version;
 pub(crate) mod logger;
 mod pid_wait;
 

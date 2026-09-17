@@ -1,0 +1,50 @@
+{
+  "release": "v0.1.85-beta",
+  "commit": "40162c508ff10b0f5d3398fd4af5db82dd39f319",
+  "files": {
+    "makerSendTransaction.ts.txt": {
+      "path": "apps/desktop/src/main/maker-ipc/makerSendTransaction.ts",
+      "sha256": "0b2bba63ecaeb332896a8debbcfee558dca5f56baf3195c4002e155131849f38"
+    },
+    "sessionSendHandler.ts.txt": {
+      "path": "apps/desktop/src/main/maker-ipc/sessionSendHandler.ts",
+      "sha256": "db6f4d1c48ea5c866d0ccff130d7c5e1aaf2de823453f47137d7432177a87030"
+    },
+    "mobileClientPromptNote.ts.txt": {
+      "path": "apps/desktop/src/main/maker-ipc/mobileClientPromptNote.ts",
+      "sha256": "11f06b4420e680ce49bf119a973fa90b671b7db7c4e9473a9cd332ade09a97af"
+    },
+    "botRemoteResourceProvider.ts.txt": {
+      "path": "apps/desktop/src/main/localDb/ipc/botRemoteResourceProvider.ts",
+      "sha256": "4d7d96bcfc449264bdf2c4e6d963bc927862bdc1892cf7e2457f90c6f3016e13"
+    },
+    "botRemoteResourceProjection.ts.txt": {
+      "path": "apps/desktop/src/main/localDb/ipc/botRemoteResourceProjection.ts",
+      "sha256": "d66176b635cb7322ea9aa9676b08c5c2d354e46caf9d6148f27996ad6af7d5eb"
+    },
+    "send-outcome.ts.txt": {
+      "path": "apps/desktop/src/main/maker-host/send-outcome.ts",
+      "sha256": "7d29fc634a88f18b372b33f429c229f284c4179c770eb5765ad0c689ffbb14cc"
+    },
+    "messages-around-client-id.ts.txt": {
+      "path": "apps/desktop/src/main/localDb/ipc/messages.ts",
+      "section": "ipcMain.handle('local-db:messages:around-client-id')",
+      "sha256": "8a067110f7ee2214e8584f77b2eac8659dc52105f03b14c5774ee430a8ea83a5"
+    },
+    "sendToAgentAccepted.ts.txt": {
+      "path": "apps/desktop/src/main/maker-ipc/register.ts",
+      "section": "sendToAgentAccepted",
+      "sha256": "b1e3acc63d7ba72f326f1e8edf8bddca26ecb4c80c38d25f889b21421bcde2f1"
+    },
+    "history-validators.ts.txt": {
+      "path": "apps/desktop/src/main/localDb/ipc/messages.ts",
+      "section": "function clampAroundRadius",
+      "sha256": "b0c25ffa3d088d9e5624e2f89875fc6c471267e1379158a5ddffa466291ced96"
+    },
+    "history-content-cap.ts.txt": {
+      "path": "apps/desktop/src/main/localDb/ipc/history.ts",
+      "section": "contentPreview through capReferenceMessageRows",
+      "sha256": "c2e3e844d27c3785cd40af35fed9ac756c1fd3ed72a0f6a600adf4ff3fb3b590"
+    }
+  }
+}
