@@ -6,7 +6,7 @@
  */
 
 import { MemoryError, type MakerMemoryManager } from '@cindy/maker-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { classifyMemoryError } from '../memory/errors.js';
 import { withStore } from '../memory/_shared.js';
@@ -18,10 +18,14 @@ const mockStore = {
   delete: async () => ({ ok: true as const }),
 };
 
-function depsWithManager(manager: Partial<MakerMemoryManager>): MemoryMcpDeps {
+function depsWithManager(
+  manager: Partial<MakerMemoryManager>,
+  extra?: Partial<MemoryMcpDeps>,
+): MemoryMcpDeps {
   return {
     getManager: () => manager as MakerMemoryManager,
     workdir: '/work',
+    ...extra,
   };
 }
 
@@ -99,5 +103,37 @@ describe('withStore · 操作后 scope 复核 (review #2388 Codex 4th P1)', () =
     const result = await withStore(depsWithManager(manager), async (s) => s.list());
     expect(result.isError).toBeUndefined();
     expect((result.content[0] as { text?: string }).text ?? "").toContain('"ok": true');
+  });
+});
+
+describe('withStore · resolver await 期间 owner 竞态 (Codex #2519 3971991054)', () => {
+  it('外层 resolveMemoryScopeKey await 期间切账号 → fail-closed, 不调用 getStore', async () => {
+    let scope = 'cloud:old:1';
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const getStore = vi.fn(async () => mockStore as never);
+    const manager: Partial<MakerMemoryManager> = {
+      isEnabled: () => true,
+      getStore,
+      currentOwnerScopeKey: () => scope,
+    };
+    const pending = withStore(
+      depsWithManager(manager, {
+        resolveMemoryScopeKey: async (wd) => {
+          await gate;
+          return wd;
+        },
+      }),
+      async (s) => s.list(),
+    );
+    scope = 'cloud:new:2';
+    release();
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text?: string }).text ?? '').toContain('MAKER_MEMORY_NOT_READY');
+    expect((result.content[0] as { text?: string }).text ?? '').toContain('scope resolve');
+    expect(getStore).not.toHaveBeenCalled();
   });
 });

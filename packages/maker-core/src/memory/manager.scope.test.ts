@@ -270,6 +270,41 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
 
   // ── 异步竞态 (review #2388 P1) ──────────────────────────────────────────
 
+  it('resolver await 期间 ownerScopeKey 变化 → 拒绑/not-ready (Codex #2519 3971002568)', async () => {
+    let currentRoot = rootA;
+    let currentScope = 'cloud:old:1';
+    const sqlite = trackingSqlite();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => currentRoot,
+      ownerScopeKey: () => currentScope,
+      resolveScopeKey: async (wd) => {
+        await gate;
+        return wd;
+      },
+      sqliteFactory: sqlite.factory,
+      agents: {},
+      logger: noopLogger,
+    });
+
+    const pending = manager.getStore(WORKDIR);
+    currentRoot = rootB;
+    currentScope = 'cloud:new:2';
+    release();
+    await expect(pending).rejects.toThrow(/memory:not-ready/);
+    expect(existsSync(memoryDirFor(rootA))).toBe(false);
+    expect(existsSync(memoryDirFor(rootB))).toBe(false);
+
+    const store = await manager.getStore(WORKDIR);
+    expect(store).toBeDefined();
+    expect(existsSync(memoryDirFor(rootB))).toBe(true);
+    manager.dispose();
+  });
+
   it('getStore 异步 init 期间 owner 切换 → 抛 not-ready 且旧 store 不入池', async () => {
     let currentRoot = rootA;
     let currentScope = 'cloud:old:1';
