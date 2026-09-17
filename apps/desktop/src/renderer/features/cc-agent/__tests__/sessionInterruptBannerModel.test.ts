@@ -33,6 +33,21 @@ describe('resolveSessionInterruptCandidate — main 真值回填(#4513)', () => 
   it('main 明确回答不在 turn 中(started > ended)才显示', () => {
     expect(resolveSessionInterruptCandidate({ ...baseInput })).toBe(true);
   });
+
+  it('切会话时旧会话的真值不得带到新会话:调用方按 sessionId 过滤(P1)', () => {
+    // 视图侧 mainTurnActiveForSession 只认归属当前 sessionId 的查询结果;
+    // 这里锁定过滤语义:旧会话残留 { sessionId: A, inTurn: true } 在会话 B 下
+    // 必须折成 null(未确认),不得以 true 锁存 B 的 ack、也不得直接当 B 的证据。
+    const staleForB = (truth: { sessionId: string; inTurn: boolean } | null, sessionId: string) =>
+      truth?.sessionId === sessionId ? truth.inTurn : null;
+    expect(staleForB({ sessionId: 'sess-a', inTurn: true }, 'sess-b')).toBe(null);
+    expect(
+      resolveSessionInterruptCandidate({ ...baseInput, mainTurnActive: staleForB({ sessionId: 'sess-a', inTurn: true }, 'sess-b') }),
+    ).toBe(false);
+    // 同会话真值保持原语义:true 压住横幅,false 放行双时间戳候选。
+    expect(staleForB({ sessionId: 'sess-b', inTurn: true }, 'sess-b')).toBe(true);
+    expect(staleForB({ sessionId: 'sess-b', inTurn: false }, 'sess-b')).toBe(false);
+  });
 });
 
 describe('resolveSessionInterruptCandidate — 双时间戳语义保持不变', () => {

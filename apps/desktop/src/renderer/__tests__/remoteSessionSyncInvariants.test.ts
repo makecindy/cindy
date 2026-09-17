@@ -172,8 +172,10 @@ describe('CCAgentSessionView 接线不变式', () => {
     // 视图侧:候选出现(activeTurnStartedAt 变化)时向 main 回填一次权威运行态,
     // main 说在飞则与 isRunning/remoteTurnActive 同样锁存 ack。
     expect(sessionViewSrc).toContain('getSessionTurnActive(sessionId)');
+    // 真值绑定所属会话:路由复用切会话时旧 true 不得锁存新会话的 ack(P1)。
+    expect(sessionViewSrc).toContain('mainTurnActiveForSession');
     expect(sessionViewSrc).toContain(
-      'if (agentStatus.isRunning || remoteTurnActive || mainTurnActive === true) setSessionInterruptAcked(true);',
+      'if (agentStatus.isRunning || remoteTurnActive || mainTurnActiveForSession === true) setSessionInterruptAcked(true);',
     );
     // 决策侧:null=未确认(查询在途/失败/不适用),不得把候选当中断证据;
     // 只有 main 明确回答「不在 turn 中」才允许双时间戳候选渲染。
