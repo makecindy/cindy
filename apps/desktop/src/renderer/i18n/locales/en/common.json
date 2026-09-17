@@ -8774,6 +8774,7 @@
     },
     "media": {
       "clickToZoom": "Click to zoom",
+      "audioProgress": "Playback position",
       "audioPlay": "Play audio",
       "audioPause": "Pause audio",
       "modelPreviewAlt": "3D model preview",

@@ -8768,6 +8768,7 @@
     },
     "media": {
       "clickToZoom": "クリックして拡大",
+      "audioProgress": "再生位置",
       "audioPlay": "音声を再生",
       "audioPause": "音声を一時停止",
       "modelPreviewAlt": "3D モデルのプレビュー",

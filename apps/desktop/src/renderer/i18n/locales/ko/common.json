@@ -8768,6 +8768,7 @@
     },
     "media": {
       "clickToZoom": "클릭하여 확대",
+      "audioProgress": "재생 위치",
       "audioPlay": "오디오 재생",
       "audioPause": "오디오 일시 정지",
       "modelPreviewAlt": "3D 모델 미리보기",

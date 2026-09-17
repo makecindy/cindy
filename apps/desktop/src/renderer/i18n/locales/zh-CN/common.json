@@ -8768,6 +8768,7 @@
     },
     "media": {
       "clickToZoom": "点击放大",
+      "audioProgress": "播放进度",
       "audioPlay": "播放音频",
       "audioPause": "暂停音频",
       "modelPreviewAlt": "3D 模型预览",

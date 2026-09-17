@@ -8767,6 +8767,7 @@
     },
     "media": {
       "clickToZoom": "點擊放大",
+      "audioProgress": "播放進度",
       "audioPlay": "播放音訊",
       "audioPause": "暫停音訊",
       "modelPreviewAlt": "3D 模型預覽",

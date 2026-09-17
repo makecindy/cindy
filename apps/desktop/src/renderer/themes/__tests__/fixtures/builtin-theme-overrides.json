@@ -427,7 +427,10 @@
         "completion-badge-fg": "#1f1f1e",
         "create-agent-control-bg-hover": "var(--surface-hover)",
         "create-agent-control-bg-pressed": "var(--surface-hover-soft)",
-        "create-agent-send-icon": "#FCFCFC"
+        "create-agent-send-icon": "#FCFCFC",
+        "slider-track": "#A3A39E",
+        "slider-fill": "#3C3F43",
+        "slider-thumb": "#FDFDF8"
       }
     },
     "cindy-dark": {
@@ -602,7 +605,10 @@
         "sidebar-nav-text": "#D4D4D4",
         "sidebar-user-card-bg-hover": "rgba(255, 255, 255, 0.10)",
         "sidebar-user-card-border": "rgba(255, 255, 255, 0.13)",
-        "sidebar-user-card-text": "#D4D4D4"
+        "sidebar-user-card-text": "#D4D4D4",
+        "slider-track": "#626262",
+        "slider-fill": "#EEEEEE",
+        "slider-thumb": "#FCFCFC"
       }
     },
     "default-dark": {
