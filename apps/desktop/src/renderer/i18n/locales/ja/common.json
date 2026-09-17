@@ -9374,6 +9374,8 @@
     "agentStatus": {
       "readingMemory": "記憶を読んでいます…",
       "savingMemory": "記憶を保存しています…",
+      "deletingMemory": "記憶を削除しています…",
+      "organizingMemory": "記憶を整理しています…",
       "readingFile": "ファイルを読んでいます…",
       "savingFile": "ファイルを更新しています…",
       "readingWeb": "ウェブページを読んでいます…",

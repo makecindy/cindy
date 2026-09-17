@@ -4,6 +4,7 @@ import type { SupportedLocale } from './locale.js';
 /** Public execution facts only. Never send targets, arguments or reasoning to a model. */
 export const WORKING_PHASES = [
   'thinking', 'replying', 'processing', 'reading-memory', 'saving-memory',
+  'deleting-memory', 'organizing-memory',
   'reading-file', 'saving-file', 'searching', 'reading-web', 'searching-files',
   'testing', 'checking', 'reviewing-memory', 'reviewing-files', 'reviewing-sources',
   'reviewing-checks',
@@ -19,9 +20,13 @@ export function publicToolPhase(toolName: unknown, input: unknown): WorkingPhase
     ? parsed.tool === 'call_tool' ? args.name : parsed.tool : undefined;
   const action = toolName === 'bot_memory' ? args.action
     : typeof memoryTool === 'string'
-      ? ({ memory_read: 'read', memory_search: 'search', memory_list: 'list', memory_write: 'write' } as Record<string, string>)[memoryTool]
+      ? ({ memory_read: 'read', memory_search: 'search', memory_list: 'list', memory_write: 'write',
+        memory_delete: 'delete', memory_review: 'review', memory_consolidate: 'consolidate' } as Record<string, string>)[memoryTool]
       : undefined;
   if (action === 'write') return 'saving-memory';
+  if (action === 'delete') return 'deleting-memory';
+  if (action === 'review') return 'reviewing-memory';
+  if (action === 'consolidate') return 'organizing-memory';
   if (action === 'read' || action === 'search' || action === 'list') return 'reading-memory';
   // Reuse the existing deterministic command classifier, including its guards
   // against redirections, executable substitutions and mixed-action commands.
@@ -49,7 +54,8 @@ export function publicToolPhase(toolName: unknown, input: unknown): WorkingPhase
  */
 export function publicToolResultPhase(phase: WorkingPhase): WorkingPhase {
   switch (phase) {
-    case 'reading-memory': case 'saving-memory': return 'reviewing-memory';
+    case 'reading-memory': case 'saving-memory': case 'deleting-memory':
+    case 'organizing-memory': case 'reviewing-memory': return 'reviewing-memory';
     case 'reading-file': case 'saving-file': case 'searching-files': return 'reviewing-files';
     case 'reading-web': case 'searching': return 'reviewing-sources';
     case 'testing': case 'checking': return 'reviewing-checks';
@@ -66,6 +72,7 @@ export const WORKING_PHASE_KEYS: Record<WorkingPhase, string> = {
   thinking: 'ccAgent.agentStatus.thinking', replying: 'ccAgent.agentStatus.replying',
   processing: 'ccAgent.agentStatus.processing',
   'reading-memory': 'ccAgent.agentStatus.readingMemory', 'saving-memory': 'ccAgent.agentStatus.savingMemory',
+  'deleting-memory': 'ccAgent.agentStatus.deletingMemory', 'organizing-memory': 'ccAgent.agentStatus.organizingMemory',
   'reading-file': 'ccAgent.agentStatus.readingFile', 'saving-file': 'ccAgent.agentStatus.savingFile',
   searching: 'ccAgent.agentStatus.searchingWeb', 'reading-web': 'ccAgent.agentStatus.readingWeb',
   'searching-files': 'ccAgent.agentStatus.searchingFiles', testing: 'ccAgent.agentStatus.testing',

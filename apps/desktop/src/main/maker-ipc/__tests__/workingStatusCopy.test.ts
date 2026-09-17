@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { publicToolPhase } from '../../../shared/workingStatus.js';
+import { publicToolPhase, publicToolResultPhase } from '../../../shared/workingStatus.js';
 import { WorkingStatusCopy, validateWorkingStatusCopy, workingStatusPrompt } from '../workingStatusCopy.js';
 
 const deferred = () => {
@@ -100,4 +100,31 @@ it('rejects a generic model caption that erases the concrete action', () => {
   expect(validateWorkingStatusCopy('Working through it now.', 'reading-web')).toBeNull();
   expect(validateWorkingStatusCopy('Working through it now.', 'processing')).toBeNull();
   expect(validateWorkingStatusCopy('Reading the web page…', 'reading-web')).toBeTruthy();
+});
+
+it.each([
+  ['delete', 'deleting-memory', 'Deleting memory…'],
+  ['review', 'reviewing-memory', 'Checking memory…'],
+  ['consolidate', 'organizing-memory', 'Organizing memory…'],
+] as const)('recognizes memory %s across direct and MCP tools without leaking arguments', (action, expected, caption) => {
+  const privateArgs = { filename: '/private/SECRET', body: 'SECRET', sources: ['SECRET'] };
+  const calls = [
+    ['bot_memory', { action, ...privateArgs }],
+    ['mcp__cindy_memory__call_tool', { name: `memory_${action}`, args: privateArgs }],
+    [`mcp__cindy_memory__memory_${action}`, privateArgs],
+  ] as const;
+  for (const [tool, input] of calls) {
+    const phase = publicToolPhase(tool, input);
+    expect(phase).toBe(expected);
+    expect(publicToolResultPhase(phase)).toBe('reviewing-memory');
+    const prompt = workingStatusPrompt(phase, 'en', null);
+    expect(prompt).not.toMatch(/SECRET|private|filename|sources|bot_memory|mcp__/);
+    expect(prompt).toContain('long-term memory');
+    expect(validateWorkingStatusCopy(caption, phase)).toBe(caption);
+    expect(validateWorkingStatusCopy('Working on it…', phase)).toBeNull();
+  }
+});
+
+it.each(['Deleted the memory', 'Consolidated memory', 'Organized memory', '已删除记忆', '記憶已合併', '记忆整理好了'])('rejects memory maintenance completion claims: %s', (text) => {
+  expect(validateWorkingStatusCopy(text)).toBeNull();
 });

@@ -15,7 +15,7 @@ vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => h.locale }));
 import { registerWorkingStatusIpc } from '../workingStatus.js';
 let listeners: Set<(event: AgentEvent) => void>;
 const invoke = (phase = 'reading-memory') => h.handler!({}, { sessionId: 'test', phase, locale: 'zh-CN' });
-const emit = (type: AgentEvent['type'], data: unknown = {}) => { for (const listener of [...listeners]) listener({ type, data }); };
+const emit = (type: AgentEvent['type'], data: unknown = {}, metadata: Partial<AgentEvent> = {}) => { for (const listener of [...listeners]) listener({ type, data, ...metadata }); };
 beforeEach(() => {
   vi.clearAllMocks();
   h.owner = 'owner'; h.chain = 'chain'; h.locale = 'zh-CN'; h.boundary = false;
@@ -93,4 +93,42 @@ it('preserves the memory matter after tool result and subsequent reasoning', asy
 it('keeps generic fallback without spending a model call', async () => {
   for (const phase of ['processing', 'thinking', 'replying']) expect(await invoke(phase)).toEqual({ text: null });
   expect(h.request).not.toHaveBeenCalled();
+});
+
+it('preserves in-flight copy and the product-turn cache across claimed SDK boundaries', async () => {
+  let resolve!: (value: unknown) => void;
+  h.request.mockReturnValue(new Promise((r) => { resolve = r; }));
+  const pending = invoke();
+  await Promise.resolve();
+  const opts = h.request.mock.calls[0][2];
+  emit('status', { isRunning: false, status: 'Done' }, { turnContinuationId: 0 });
+  emit('done', {}, { turnContinuationId: 0 });
+  expect(opts.signal.aborted).toBe(false);
+  expect(listeners.size).toBe(1);
+  resolve({ ok: true, text: '翻翻之前记下的事…' });
+  expect(await pending).toEqual({ text: '翻翻之前记下的事…' });
+  emit('status', { isRunning: true, status: 'Working' });
+  emit('tool_use', { toolName: 'bot_memory', input: { action: 'read' } });
+  expect(await invoke()).toEqual({ text: '翻翻之前记下的事…' });
+  expect(h.request).toHaveBeenCalledTimes(1);
+  emit('done');
+  expect(listeners.size).toBe(0);
+  h.session.getTurnGeneration = () => 2;
+  expect(await invoke()).toEqual({ text: '翻翻之前记下的事…' });
+  expect(h.request).toHaveBeenCalledTimes(2);
+});
+
+it.each(['done', 'error', 'status'] as const)('still cancels at product %s after an SDK continuation boundary', async (type) => {
+  let resolve!: (value: unknown) => void;
+  h.request.mockReturnValue(new Promise((r) => { resolve = r; }));
+  const pending = invoke();
+  await Promise.resolve();
+  emit('done', {}, { turnContinuationId: 1 });
+  const opts = h.request.mock.calls[0][2];
+  expect(opts.signal.aborted).toBe(false);
+  emit(type, type === 'status' ? { isRunning: false, status: 'Stopped' } : {});
+  expect(opts.signal.aborted).toBe(true);
+  expect(listeners.size).toBe(0);
+  resolve({ ok: true, text: '翻翻之前记下的事…' });
+  expect(await pending).toEqual({ text: null });
 });

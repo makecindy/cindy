@@ -4789,7 +4789,8 @@ export function CCAgentSessionView({
                   }
                   messages={messages}
                   startedAt={agentStatus.startedAt}
-                  processingOnly={
+                  foregroundRunning={agentStatus.isRunning || isStreaming}
+                  backgroundWorkActive={
                     backgroundTasksActive || runningWorkflow !== null || Boolean(agentStatus.sideTaskRunning)
                   }
                   avatar={botAssistantAvatar}

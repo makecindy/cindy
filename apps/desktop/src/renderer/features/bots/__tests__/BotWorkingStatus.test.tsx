@@ -14,7 +14,7 @@ const startedAt = Date.parse('2026-09-17T00:00:00Z');
 const message = (role: Message['role'], fields: Partial<Message> = {}): Message => ({
   clientId: role, role, content: '', createdAt: new Date(startedAt + 10).toISOString(), ...fields,
 });
-const props = { visible: true, status: 'Working…', messages: [] as Message[], startedAt, processingOnly: false, avatar: null };
+const props = { visible: true, status: 'Working…', messages: [] as Message[], startedAt, foregroundRunning: true, backgroundWorkActive: false, avatar: null };
 const advance = (ms: number) => act(() => { vi.advanceTimersByTime(ms); });
 
 beforeEach(async () => {
@@ -89,7 +89,7 @@ describe('Bot working lifecycle', () => {
   it('preserves pending-input semantics and background work after the turn', () => {
     expect(localizePlainAgentStatus('Waiting on input', [], startedAt, i18n.t))
       .toBe(i18n.t('ccAgent.sidebar.card.awaitingQuestion'));
-    render(<BotWorkingStatus {...props} status="Done" processingOnly />);
+    render(<BotWorkingStatus {...props} status="Done" foregroundRunning={false} backgroundWorkActive />);
     expect(screen.getByRole('status').textContent).toBe('正在处理…');
   });
 });

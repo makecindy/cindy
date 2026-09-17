@@ -9374,6 +9374,8 @@
     "agentStatus": {
       "readingMemory": "正在讀取記憶…",
       "savingMemory": "正在儲存記憶…",
+      "deletingMemory": "正在刪除記憶…",
+      "organizingMemory": "正在整理記憶…",
       "readingFile": "正在讀取檔案…",
       "savingFile": "正在更新檔案…",
       "readingWeb": "正在讀取網頁…",

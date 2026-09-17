@@ -7,6 +7,8 @@ const ACTIONS: Record<WorkingPhase, string> = {
   processing: 'Work is still in progress. The specific action is unknown.',
   'reading-memory': 'Reading or searching saved long-term memory. Its content is unknown.',
   'saving-memory': 'Writing long-term memory. Its content is unknown; success is not yet confirmed.',
+  'deleting-memory': 'Deleting long-term memory. Its content is unknown; success is not yet confirmed.',
+  'organizing-memory': 'Consolidating long-term memory entries. Their contents are unknown; success is not yet confirmed.',
   'reading-file': 'Reading a file. Its name and content are unknown.',
   'saving-file': 'Writing or editing a file. Its name and content are unknown; success is not yet confirmed.',
   searching: 'Searching the web for information. The query and sources are unknown.',
@@ -14,7 +16,7 @@ const ACTIONS: Record<WorkingPhase, string> = {
   'searching-files': 'Searching or listing files. Names, paths and search terms are unknown.',
   testing: 'Running tests. Test names and results are unknown.',
   checking: 'Running code checks. Results are unknown.',
-  'reviewing-memory': 'A long-term memory operation has returned. Reviewing its feedback; success is unknown.',
+  'reviewing-memory': 'Checking long-term memory. Its content and the outcome of any preceding memory action are unknown.',
   'reviewing-files': 'A file operation has returned. Reviewing its feedback; file names, contents and success are unknown.',
   'reviewing-sources': 'A web lookup has returned. Reviewing its feedback; sources, contents and success are unknown.',
   'reviewing-checks': 'Tests or code checks have returned. Reviewing their feedback; pass or fail is unknown.',
@@ -44,6 +46,7 @@ export function validateWorkingStatusCopy(raw: string, phase?: WorkingPhase): st
   if (!text || /[<>`/\\\n\r\p{Cc}\p{Cf}]|https?:|mcp__|\b(?:tool|function|API)\b/iu.test(text)) return null;
   // Definite completion/progress claims are never appropriate in busy chrome.
   if (/\d|已(?:经|完成|保存|找到|写入|記|记)|完成了|记住了|記住了|保存好了|搞定|成功|马上就好|\b(?:done|completed|finished|saved|stored|remembered|found|updated|successfully|percent)\b/iu.test(text)) return null;
+  if (/已(?:删除|刪除|合并|合併|整理)|删除了|刪除了|合并了|合併了|整理好了|\b(?:deleted|removed|consolidated|organized|organised)\b/iu.test(text)) return null;
   if (phase && !hasPublicWorkingSubject(phase)) return null;
   const subject = phase && SUBJECTS[phase];
   if (subject && !subject.test(text)) return null;
@@ -54,6 +57,8 @@ export function validateWorkingStatusCopy(raw: string, phase?: WorkingPhase): st
 const SUBJECTS: Partial<Record<WorkingPhase, RegExp>> = {
   'reading-memory': /memor|remember|记|記|憶|覚|기억/iu,
   'saving-memory': /memor|remember|记|記|憶|覚|기억/iu,
+  'deleting-memory': /memor|remember|记|記|憶|覚|기억/iu,
+  'organizing-memory': /memor|remember|记|記|憶|覚|기억/iu,
   'reviewing-memory': /memor|remember|记|記|憶|覚|기억/iu,
   'reading-file': /file|code|文件|档案|檔案|代码|代碼|ファイル|コード|파일|코드/iu,
   'saving-file': /file|code|文件|档案|檔案|代码|代碼|ファイル|コード|파일|코드/iu,

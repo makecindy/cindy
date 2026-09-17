@@ -5,6 +5,7 @@ import { ipcMain } from 'electron';
 import { z } from 'zod';
 import type { Session } from '@cindy/maker-core';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
+import { isProductTurnDoneEvent, isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { WORKING_PHASES, hasPublicWorkingSubject, publicToolPhase, publicToolResultPhase, type WorkingPhase } from '../../shared/workingStatus.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { SUPPORTED_LOCALES } from '../../shared/locale.js';
@@ -70,8 +71,8 @@ export function registerWorkingStatusIpc(): void {
           || (e.sessionTurnGeneration !== undefined && e.sessionTurnGeneration !== generation)) return;
         const data = e.data && typeof e.data === 'object' ? e.data as Record<string, unknown> : {};
         if (typeof data.parentToolUseId === 'string' && isSubagentParentToolUseId(data.parentToolUseId)) return;
-        if (e.type === 'done' || isTerminalTurnErrorEvent(e)
-          || (e.type === 'status' && data.isRunning === false)) { dispose(); return; }
+        if (isProductTurnDoneEvent(e) || isTerminalTurnErrorEvent(e)
+          || (e.type === 'status' && data.isRunning === false && !isTurnContinuationBoundaryEvent(e))) { dispose(); return; }
         if (e.type === 'interaction_request') copy.observe(null);
         else if (e.type === 'text' && typeof data.text === 'string' && data.text.length > 0) { feedbackPhase = null; copy.observe('replying'); }
         else if (e.type === 'thinking') copy.observe(feedbackPhase && feedbackPhase !== 'processing' ? feedbackPhase : 'thinking');

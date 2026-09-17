@@ -7,18 +7,22 @@ import { localizePlainAgentStatus, resolvePlainAgentPhase } from '@/features/cc-
 import { WorkingStatusText } from '@/features/cc-agent/WorkingStatusText';
 
 export function BotWorkingStatus({
-  visible, status, messages, startedAt, processingOnly, avatar, inputWidth, sessionId,
+  visible, status, messages, startedAt, foregroundRunning, backgroundWorkActive, avatar, inputWidth, sessionId,
 }: {
   sessionId?: string;
   visible: boolean;
   status: string;
   messages: readonly Message[];
   startedAt: number | null;
-  processingOnly: boolean;
+  foregroundRunning: boolean;
+  backgroundWorkActive: boolean;
   avatar: ReactNode;
   inputWidth?: CSSProperties['width'];
 }) {
   const { t } = useTranslation();
+  // A Workflow can run alongside the foreground turn. Only background-only
+  // work lacks reliable foreground events for a more specific caption.
+  const processingOnly = backgroundWorkActive && !foregroundRunning;
   const phase = processingOnly ? 'processing' : resolvePlainAgentPhase(status, messages, startedAt);
   const polished = useWorkingStatusCopy(sessionId, startedAt, phase, visible && !processingOnly);
   // Terminal events bypass cadence and opacity: never linger with working copy.
