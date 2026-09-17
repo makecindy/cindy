@@ -50,6 +50,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import {
@@ -81,6 +82,10 @@ import {
 import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
+import {
+  ProviderAccountUsageModule,
+  type ProviderAccountUsageRuntimeView,
+} from './ProviderAccountUsageModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
@@ -1736,17 +1741,47 @@ function OllamaHeader({
 function CustomProviderHeader({
   children,
   provider,
+  accountUsageMutationRevision,
   onEdit,
   onDelete,
   onChanged,
 }: {
   children?: ReactNode;
   provider: ProviderView;
+  accountUsageMutationRevision: number;
   onEdit: () => void;
   onDelete: () => void;
   onChanged: () => void;
 }) {
   const { t } = useTranslation();
+  const accountUsageAgents = provider.agents.filter(
+    (agent) => provider.routing[agent]?.accountUsage !== undefined,
+  );
+  // 稳定字符串而非整个 ProviderView：目录每次重建都会换对象引用，但账户查询身份
+  // 只跟 provider、连接态、编辑代次和各 runtime 的非敏感端点配置走（PR #3472 review）。
+  const accountUsageRevision = [
+    provider.id,
+    provider.connected ? '1' : '0',
+    accountUsageMutationRevision,
+    ...accountUsageAgents.flatMap((agent) => [
+      agent,
+      provider.routing[agent]?.upstream ?? '',
+      provider.routing[agent]?.accountUsage?.integrationId ?? '',
+    ]),
+  ].join('\0');
+  const accountUsage = useProviderAccountUsage(
+    provider.id,
+    accountUsageAgents,
+    accountUsageRevision,
+  );
+  const accountUsageRuntimes = accountUsageAgents.map((agent) => {
+    const state = accountUsage.states[agent];
+    return {
+      agent,
+      result: state?.result ?? null,
+      refreshing: state?.refreshing ?? true,
+    } satisfies ProviderAccountUsageRuntimeView;
+  });
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
   const [disconnecting, setDisconnecting] = useState(false);
@@ -1818,6 +1853,14 @@ function CustomProviderHeader({
       badge={
         isLocalRuntimeBetaProviderId(provider.id) ? (
           <BetaTag label={t('settings.providers.local.beta')} />
+        ) : undefined
+      }
+      assetModule={
+        accountUsageRuntimes.length > 0 ? (
+          <ProviderAccountUsageModule
+            runtimes={accountUsageRuntimes}
+            onRefresh={accountUsage.refresh}
+          />
         ) : undefined
       }
     />
@@ -2112,6 +2155,7 @@ export function ProvidersSection() {
         focusAgent?: AgentKind;
       }
   >(null);
+  const [accountUsageMutationRevision, setAccountUsageMutationRevision] = useState(0);
   const [focusedModel, setFocusedModel] = useState<{
     providerId: string;
     modelId: string;
@@ -2630,6 +2674,7 @@ export function ProvidersSection() {
         children={children}
         key={p.id}
         provider={p}
+        accountUsageMutationRevision={accountUsageMutationRevision}
         onChanged={refetch}
         onEdit={() => setDialog({ mode: 'edit', config: providerViewToCustomProviderConfig(p) })}
         onDelete={() => void handleDelete(p)}
@@ -3000,6 +3045,9 @@ export function ProvidersSection() {
           returnFocusRef={dialog.mode === 'create' ? addProviderButtonRef : undefined}
           onClose={() => setDialog(null)}
           onSaved={() => {
+            if (dialog.mode === 'edit') {
+              setAccountUsageMutationRevision((revision) => revision + 1);
+            }
             setDialog(null);
             refetch();
           }}

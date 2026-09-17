@@ -5916,6 +5916,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { releaseOwner?: boolean; ownerId?: string },
     ): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
+    getProviderAccountUsage: (
+      input: import('../shared/providerAccountUsage').ProviderAccountUsageRequest,
+    ): Promise<import('../shared/providerAccountUsage').ProviderAccountUsageResult> =>
+      ipcRenderer.invoke('maker:provider:account-usage:get', input),
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,

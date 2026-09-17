@@ -799,6 +799,22 @@ describe("buildUserProvider (per-runtime)", () => {
     ).toBeUndefined();
   });
 
+  it("carries the versioned account-usage integration into routing", () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: {
+          ...codexOnly.runtimes.codex!,
+          accountUsage: { integrationId: "openrouter-key-usage-v1" },
+        },
+      },
+    });
+
+    expect(p.routing.codex?.accountUsage).toEqual({
+      integrationId: "openrouter-key-usage-v1",
+    });
+  });
+
   it("does not infer subscription access from a generic OAuth login method", () => {
     const p = buildUserProvider({
       ...codexOnly,

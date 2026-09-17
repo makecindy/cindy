@@ -95,6 +95,7 @@ import {
 import type {
   AgentKind,
   CustomProviderConfig,
+  ProviderAccountUsageCapability,
   ProviderPreset,
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
@@ -195,6 +196,8 @@ interface RuntimeFields extends RuntimeFillDraft {
   modelsUrl: string;
   /** 隐藏字段：从 Pi 官方目录生成该 runtime；编辑保存必须无损保留。 */
   piCatalogProviderId?: string;
+  /** Hidden versioned capability from an official preset; never contains a URL or credential. */
+  accountUsage?: ProviderAccountUsageCapability;
   catalogPresetId?: string;
   /** Codex Responses runtime 级原生图片生成能力。 */
   supportsImageGeneration: boolean;
@@ -244,6 +247,7 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
     piCatalogProviderId: undefined,
+    accountUsage: undefined,
     supportsImageGeneration: false,
   };
 }
@@ -270,6 +274,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
             : [{ name: '', value: '' }],
         modelsUrl: rc.modelsUrl ?? '',
         piCatalogProviderId: rc.piCatalogProviderId,
+        accountUsage: rc.accountUsage,
         catalogPresetId: rc.catalogPresetId,
         supportsImageGeneration: a === 'codex' && rc.supportsImageGeneration === true,
         headersState: rc.headersState,
@@ -869,6 +874,7 @@ export function ProviderConnectionDialog({
                 : [{ name: '', value: '' }],
             modelsUrl: rc.modelsUrl ?? '',
             piCatalogProviderId: rc.piCatalogProviderId,
+            accountUsage: rc.accountUsage,
             catalogPresetId: p.id,
             supportsImageGeneration: a === 'codex' && rc.supportsImageGeneration === true,
           };
@@ -1704,6 +1710,7 @@ export function ProviderConnectionDialog({
         ...(a === 'pi' && rf.piCatalogProviderId
           ? { piCatalogProviderId: rf.piCatalogProviderId }
           : {}),
+        ...(rf.accountUsage ? { accountUsage: { ...rf.accountUsage } } : {}),
       };
       if (a === 'pi' && initial?.runtimes.pi?.piCatalogProviderId) {
         const savedPiCatalogProviderId = piCatalogProviderIdAfterRouteEdit(

@@ -30,5 +30,6 @@ export function presetConnectionRuntime(
     ...(rt.headers ? { headers: rt.headers } : {}),
     ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
     ...(rt.piCatalogProviderId ? { piCatalogProviderId: rt.piCatalogProviderId } : {}),
+    ...(rt.accountUsage ? { accountUsage: { ...rt.accountUsage } } : {}),
   };
 }

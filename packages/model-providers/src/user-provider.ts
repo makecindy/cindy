@@ -39,6 +39,7 @@ import type {
   CustomProviderConfig,
   Effort,
   Provider,
+  ProviderAccountUsageCapability,
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
   RoutingDescriptor,
@@ -392,6 +393,7 @@ function toRouting(
   wireProtocol?: ProviderWireProtocol,
   piCatalogProviderId?: string,
   supportsImageGeneration?: boolean,
+  accountUsage?: ProviderAccountUsageCapability,
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
@@ -423,6 +425,7 @@ function toRouting(
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
   if (piCatalogProviderId) r.piCatalogProviderId = piCatalogProviderId;
+  if (accountUsage) r.accountUsage = { ...accountUsage };
   return r;
 }
 
@@ -466,6 +469,7 @@ export function buildUserProvider(
       rt.wireProtocol,
       rt.piCatalogProviderId,
       rt.supportsImageGeneration,
+      rt.accountUsage,
     );
     const preset = options.presets?.find(
       (preset) => preset.id === rt.catalogPresetId,

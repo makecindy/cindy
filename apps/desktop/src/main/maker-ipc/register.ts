@@ -830,8 +830,12 @@ import { refreshOpenAiMediaModels } from '../maker-host/model-discovery/openai-m
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels, fetchSavedOAuthProviderModels } from '../maker-host/provider-model-fetch.js';
+import { createProviderAccountUsageService } from '../maker-host/provider-account-usage.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
   beginProviderRouteMutation,
+  getProviderRouteMutationGeneration,
+  isProviderRouteMutationInProgress,
   setPendingCredentialSwitchReader,
 } from '../maker-host/provider-route.js';
 import {
@@ -865,12 +869,14 @@ import {
 } from '../maker-host/custom-provider-store.js';
 import {
   readCustomProviderHeadersForMutation,
+  readCustomProviderKey,
   readCustomProviderKeyForMutation,
   removeCustomProviderHeaders,
   removeCustomProviderKey,
   storeCustomProviderHeaders,
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
+import { getDeviceId } from '../authManager.js';
 import {
   getSessionEffort,
   getSessionFastMode,
@@ -5447,6 +5453,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     userDataDir: app.getPath('userData'),
   });
 
+  const providerAccountUsage = createProviderAccountUsageService({
+    getConfig: (providerId) => getCustomProvider(providerId),
+    readKey: (providerId, agent) => readCustomProviderKey(providerId, agent),
+    getOwnerStamp: () => {
+      const owner = getActiveAppSession();
+      return { dataOwnerId: owner.dataOwnerId, generation: owner.generation };
+    },
+    getDeviceId,
+    getRouteMutationGeneration: getProviderRouteMutationGeneration,
+    isRouteMutationInProgress: isProviderRouteMutationInProgress,
+    fetchImpl: outboundFetch,
+    now: () => Date.now(),
+  });
+
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: async (providers, trusted) => {
@@ -5478,6 +5498,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getProviderOrder: () => readProviderOrder(),
     listPresets: () => getActiveCatalog().presets ?? [],
     testConnection: (input) => testProviderConnection(input),
+    readAccountUsage: (input) => providerAccountUsage.read(input),
     fetchModels: async (spec) => {
       if (spec.savedProviderId && subscriptionAccountKind(spec.savedProviderId)) {
         return { ok: await refreshSubscriptionAccountModels(spec.savedProviderId), models: [] };
