@@ -8728,12 +8728,16 @@ export function ChatInput({
                 {!hideRuntimeControls ? (
                 <div
                   data-session-model-slot={sessionId ? '' : undefined}
-                  // A cold session has no trustworthy label yet. Keep the same geometry before
-                  // and after hydration without mounting an interactive default-model control.
+                  // Reserve space while the model is unknown, keeping the toolbar height and
+                  // right-aligned actions stable. Once ready, wide toolbars hug the model label;
+                  // only narrow toolbars retain the fixed-width, truncating slot.
                   className={sessionId
-                    ? cn('h-[30px] shrink', useUltraCompactToolbar
-                        ? 'w-[64px] min-w-[64px]'
-                        : 'w-[148px] min-w-[72px]')
+                    ? cn('h-[30px] shrink',
+                        useUltraCompactToolbar
+                          ? 'w-[64px] min-w-[64px]'
+                          : useNarrowToolbar || sessionModelLoading
+                            ? 'w-[148px] min-w-[72px]'
+                            : 'min-w-0')
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector

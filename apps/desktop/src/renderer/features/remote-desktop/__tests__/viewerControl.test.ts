@@ -29,12 +29,19 @@ afterEach(() => {
   controller?.dispose();
   vi.useRealTimers();
 });
-async function fixture(firstControl?: Promise<{ controlling: boolean }>) {
+async function fixture(
+  firstControl?: Promise<{ controlling: boolean }>,
+  resolutionRestore = false,
+) {
   const control = vi.fn(async (enabled: boolean) => ({ controlling: enabled }));
   if (firstControl) control.mockImplementationOnce(() => firstControl);
   const heartbeat = vi.fn(async () => ({ controlling: true }));
   const clipboard = vi.fn(async () => {});
-  const resolution = vi.fn(async (_modeId: string) => ({}));
+  const resolution = vi.fn(async (_modeId: string) => ({
+    lease: 'lease',
+    controlling: false,
+    display: { id: 'one', width: 3840, height: 2160 },
+  }));
   const api = {
     state: async () => ({
       generation: 1,
@@ -60,6 +67,7 @@ async function fixture(firstControl?: Promise<{ controlling: boolean }>) {
             canControl: true,
             viewerDisplay: true,
             viewerDisplayRestore: true,
+            resolutionRestore,
             clipboardText: true,
             automaticReconnect: true,
             displays: [{ id: 'one', name: 'Display', width: 1280, height: 720 }],
@@ -105,12 +113,21 @@ const inputEnabled = () =>
   runtime.receive.mock.calls.filter(([message]) => message.type === 'control').at(-1)?.[0]
     .enabled ?? false;
 
-it('preserves high-resolution system modes through the legacy mode-ID path', async () => {
-  const f = await fixture();
+it('keeps high-resolution system modes on a restorable lease', async () => {
+  const f = await fixture(undefined, true);
   present();
   await controller.resolution('4k');
   expect(f.resolution).toHaveBeenCalledWith('4k');
-  expect(runtime.receive.mock.calls.some(([m]) => m.type === 'videoSettings')).toBe(false);
+  expect(
+    runtime.receive.mock.calls.some(([m]) => m.type === 'videoSettings' && m.width === 3840),
+  ).toBe(true);
+});
+
+it('does not silently make a persistent resolution change on an older host', async () => {
+  const f = await fixture();
+  present();
+  await expect(controller.resolution('4k')).rejects.toThrow('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+  expect(f.resolution).not.toHaveBeenCalled();
 });
 
 it('matches the viewer ratio without replacing the lease or resetting input sequence', async () => {

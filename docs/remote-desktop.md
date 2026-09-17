@@ -332,8 +332,24 @@ one extra dialog as proof of local human consent.
 The native helper holds actual down/up state and releases it on EOF/stop, with a
 watchdog for an unresponsive parent. Input batches and queues are bounded; a
 backpressure failure stops control rather than silently dropping key-up events.
-CUA Agent actions and human input share a process-local ownership guard. Other
-applications and separate Cindy processes are outside that guard.
+CUA Agent actions yield to actual remote input, rather than to an open control
+connection. Queued native batches, held mouse buttons/keys, and a 300 ms quiet
+interval after native completion exclude new Agent actions. An already-dispatched
+Agent primitive finishes before remote input is delivered; further Agent text
+chunks yield. Agent actions are never automatically replayed. After remote input,
+the Agent must successfully observe the target window again with input idle at
+both the start and end of the read and no input revision change during the read
+before acting on it, including the first action of a new or cleaned-up driver
+session. Actions without a window ID accept an observation of the same process;
+an explicit window ID still requires that exact window. Empty connection
+heartbeats do not claim input ownership.
+
+The native macOS/Windows helper acknowledges a batch only after posting all its
+events; the Windows service forwards that acknowledgement. Main retains ownership
+through native shutdown when stopping held input. The guard coordinates only
+remote input and CUA calls in this Cindy process: physical keyboard/mouse input,
+other applications, and separate Cindy processes are outside it. Native event
+posting is not proof that an application has finished handling those events.
 
 ## Platform and verification limits
 

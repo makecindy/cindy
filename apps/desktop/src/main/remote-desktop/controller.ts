@@ -49,7 +49,20 @@ export interface DesktopControllerDeps {
   ): Promise<string>;
   ice?(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceReply>;
   displayModes?(displayId: string): Promise<RemoteDesktopDisplayMode[]>;
-  resolution?(displayId: string, modeId: string, beforeChange: () => void): Promise<void>;
+  /** Local hardware presence; must not hide displays when remote access is revoked. */
+  displayPresent?(displayId: string): boolean;
+  resolution?(
+    displayId: string,
+    modeId: string,
+    beforeChange: () => void,
+    expected?: { width: number; height: number },
+  ): Promise<void>;
+  restoreResolution?(
+    displayId: string,
+    modeId: string,
+    beforeChange: () => void,
+    expected: { width: number; height: number },
+  ): Promise<void>;
   createViewerDisplay?(
     displayId: string,
     isCurrent: () => boolean,
@@ -84,6 +97,13 @@ export class RemoteDesktopController {
   private starting = false;
   private viewerDisplay: ViewerDisplayHandle | null = null;
   private displayRestoring: Promise<void> | null = null;
+  private originalResolution: {
+    displayId: string;
+    modeId: string;
+    width: number;
+    height: number;
+  } | null = null;
+  private resolutionWrite: Promise<void> | null = null;
   private displayChanging = false;
   private viewerGeometryManaged = false;
   private locking = false;
@@ -169,17 +189,103 @@ export class RemoteDesktopController {
     // Retain the handle until restoration completes (or can be retried after failure).
     // EOF releases it asynchronously; a new lease must not bind stale geometry.
     if (!this.viewerDisplay?.restore) this.viewerDisplay = null;
-    if (this.viewerDisplay) void this.restoreStoppedDisplay().catch(() => {});
+    if (this.viewerDisplay || this.originalResolution)
+      void this.restoreStoppedDisplay().catch(() => {});
     this.viewerGeometryManaged = false;
     this.deps.changed();
   }
+  private async temporaryResolution(
+    peer: string,
+    active: NonNullable<RemoteDesktopController['active']>,
+    modeId: string,
+  ): Promise<RemoteDesktopLease> {
+    if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+    if (!this.deps.resolution || !this.deps.displayModes)
+      throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+    if (this.inputStarting || this.clipboardPending || this.locking || this.starting)
+      throw new Error('DESKTOP_DISPLAY_BUSY');
+    const generation = this.controlGeneration;
+    const current = () => {
+      this.tick();
+      return this.active === active && active.controlling && this.controlGeneration === generation;
+    };
+    const requireCurrent = () => {
+      if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+    };
+    this.displayChanging = true;
+    try {
+      this.deps.stopInput();
+      this.deps.stopVideo();
+      await this.deps.releaseInput?.();
+      requireCurrent();
+      // Remove the temporary mirror before enumerating the physical monitor.
+      if (this.viewerDisplay) {
+        if (!this.viewerDisplay.restore) throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+        await this.viewerDisplay.restore(current);
+        requireCurrent();
+        this.viewerDisplay = null;
+      }
+      const modes = await this.deps.displayModes(active.sourceDisplayId);
+      requireCurrent();
+      const original = modes.find((mode) => mode.current);
+      const selected = modes.find((mode) => mode.id === modeId);
+      if (!original || !selected) throw new Error('DESKTOP_DISPLAY_MODE_MISSING');
+      this.originalResolution ??= {
+        displayId: active.sourceDisplayId,
+        modeId: original.id,
+        width: original.width,
+        height: original.height,
+      };
+      this.resolutionWrite = this.deps.resolution(
+        active.sourceDisplayId,
+        modeId,
+        requireCurrent,
+        selected,
+      );
+      await this.resolutionWrite;
+      requireCurrent();
+      active.display = {
+        id: active.sourceDisplayId,
+        name: active.display.name,
+        width: selected.width,
+        height: selected.height,
+      };
+      this.viewerGeometryManaged = true;
+      active.controlling = false;
+      this.controlGeneration++;
+      this.deps.changed();
+      return { lease: active.lease, display: active.display, controlling: false };
+    } catch (error) {
+      if (this.active === active) this.stop(peer);
+      throw error;
+    } finally {
+      this.resolutionWrite = null;
+      this.displayChanging = false;
+    }
+  }
   private restoreStoppedDisplay(): Promise<void> {
     if (this.displayRestoring) return this.displayRestoring;
-    if (this.active || !this.viewerDisplay) return Promise.resolve();
+    if (this.active || (!this.viewerDisplay && !this.originalResolution)) return Promise.resolve();
     const handle = this.viewerDisplay;
     const pending = (async () => {
-      await handle.restore?.(() => !this.active && this.viewerDisplay === handle);
+      // A disconnect can arrive while the native write is still in flight.
+      if (this.resolutionWrite) await this.resolutionWrite.catch(() => {});
+      await handle?.restore?.(() => !this.active && this.viewerDisplay === handle);
       if (this.viewerDisplay === handle) this.viewerDisplay = null;
+      const original = this.originalResolution;
+      if (original) {
+        if (this.deps.displayPresent?.(original.displayId) !== false)
+          await (this.deps.restoreResolution ?? this.deps.resolution)!(
+            original.displayId,
+            original.modeId,
+            () => {
+              if (this.active || this.originalResolution !== original)
+                throw new Error('DESKTOP_LEASE_EXPIRED');
+            },
+            original,
+          );
+        if (this.originalResolution === original) this.originalResolution = null;
+      }
     })();
     this.displayRestoring = pending;
     void pending
@@ -188,6 +294,11 @@ export class RemoteDesktopController {
       })
       .catch(() => {});
     return pending;
+  }
+  /** Join the same restoration used by disconnects before the process exits. */
+  async stopAndRestore(): Promise<void> {
+    this.stop();
+    await this.restoreStoppedDisplay();
   }
   /**
    * Input injection failed while the lease is still valid. Input belongs to the
@@ -268,6 +379,9 @@ export class RemoteDesktopController {
         displays: publicDisplays,
         automaticReconnect: true,
         connectionTakeover: true,
+        resolutionRestore: Boolean(
+          caps.displayModes && this.deps.resolution && this.deps.displayModes,
+        ),
       };
     }
     if (!this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
@@ -297,7 +411,8 @@ export class RemoteDesktopController {
       this.startingPeer = peer;
       const generation = this.controlGeneration;
       try {
-        if (!this.active && this.viewerDisplay) await this.restoreStoppedDisplay();
+        if (!this.active && (this.viewerDisplay || this.originalResolution))
+          await this.restoreStoppedDisplay();
         const caps = await this.deps.capabilities();
         if (!this.authenticationCurrent(peer, authenticationSession))
           throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
@@ -316,7 +431,7 @@ export class RemoteDesktopController {
         // A lost start reply can leave our own lease alive. Rotate it using the
         // existing cleanup so the new viewer can restart its input sequence at 0.
         else if (resumesActive) this.stop(peer);
-        if (this.viewerDisplay) {
+        if (this.viewerDisplay || this.originalResolution) {
           const restorationGeneration = this.controlGeneration;
           await this.restoreStoppedDisplay();
           const restored = await this.deps.capabilities();
@@ -383,7 +498,7 @@ export class RemoteDesktopController {
             }
             this.viewerDisplay = handle;
           }
-          const display =
+          let display =
             request.op === 'restoreViewerDisplay'
               ? await this.viewerDisplay.restore!(current)
               : await this.viewerDisplay.resize(request.width, request.height, current);
@@ -394,7 +509,24 @@ export class RemoteDesktopController {
             )
           )
             throw new Error('DESKTOP_DISPLAY_MISSING');
-          if (request.op === 'restoreViewerDisplay') this.viewerDisplay = null;
+          if (request.op === 'restoreViewerDisplay') {
+            this.viewerDisplay = null;
+            const original = this.originalResolution;
+            if (original) {
+              this.resolutionWrite = (this.deps.restoreResolution ?? this.deps.resolution)!(
+                original.displayId,
+                original.modeId,
+                () => {
+                  if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+                },
+                original,
+              );
+              await this.resolutionWrite;
+              if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+              this.originalResolution = null;
+              display = { ...display, width: original.width, height: original.height };
+            }
+          }
           if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
           this.viewerGeometryManaged = true;
           active.display = display;
@@ -406,6 +538,7 @@ export class RemoteDesktopController {
           if (this.active === active) this.stop(peer);
           throw error;
         } finally {
+          this.resolutionWrite = null;
           this.displayChanging = false;
         }
       }
@@ -552,6 +685,7 @@ export class RemoteDesktopController {
         return modes;
       }
       case 'resolution': {
+        if (request.temporary) return this.temporaryResolution(peer, active, request.modeId);
         if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
         if (!this.deps.resolution) throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
         if (this.inputStarting || this.clipboardPending || this.locking || this.starting)

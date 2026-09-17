@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Webhook 移除失敗"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "登入電腦後自動啟動 Cindy",
+        "hint": "登入系統後自動開啟 Cindy，預設關閉",
+        "requiresApproval": "請在 macOS 系統設定的登入項目中允許 Cindy，完成後此設定才會生效",
+        "loading": "正在讀取系統設定…",
+        "loadFailed": "無法讀取啟動設定，請重新開啟此設定頁重試",
+        "saveFailed": "無法儲存啟動設定，請重試或檢查系統啟動項目",
+        "notApplied": "系統未套用此設定，請檢查系統啟動項目後重試"
+      },
       "title": "應用行為",
       "closeBehavior": {
         "label": "關閉主視窗時",
@@ -6157,6 +6166,7 @@
     "loadFailed": "無法載入用量歷史。請重新開啟設定後再試一次。",
     "range": {
       "label": "時間範圍",
+      "date": "日期",
       "ariaLabel": "篩選用量時間範圍",
       "all": "所有時間",
       "30d": "最近 30 天",
@@ -8571,8 +8581,15 @@
       }
     },
     "runningStatus": {
+      "currentRate": "最近速度",
+      "waitingSample": "取樣中",
+      "averageRate": "本輪平均",
+      "rateHistory": "生成速度歷史",
+      "outputTotal": "累計輸出",
+      "observedPeak": "峰值",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "本輪主 Agent 的平均生成速度，含思考，排除工具執行與審批等待。隨用量回報更新；旁邊顯示本輪總耗時。",
+      "tokenRateUnit": "tok/s",
+      "tokenRateDescription": "最近一段生成速度，不含工具執行與等待。",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8796,6 +8813,11 @@
       "closeHint": "或點選背景關閉"
     },
     "remoteFile": {
+      "previewFailed": "無法準備網頁預覽，請檢查目錄和連線後重試",
+      "previewNotFound": "找不到 HTML 檔案，請確認檔案仍然存在",
+      "previewFetching": "正在準備網頁預覽…",
+      "previewTooLarge": "正在準備的預覽過多，請稍後重試",
+      "previewUnsupported": "遠端裝置暫不支援目錄預覽，請更新該裝置上的 Cindy 後重試",
       "fetching": "正在從遠端獲取檔案…",
       "fetchFailed": "從遠端獲取檔案失敗",
       "notFound": "遠端檔案不存在",

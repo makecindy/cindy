@@ -5799,6 +5799,30 @@
             }
           }
         }
+      },
+      "form-field-hint": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.text-secondary-mid.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "text-secondary-mid",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.text-secondary-mid.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "text-secondary-mid",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
       }
     }
   }

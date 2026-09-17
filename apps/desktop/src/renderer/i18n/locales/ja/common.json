@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Webhook を削除できませんでした"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "ログイン時に Cindy を自動起動",
+        "hint": "パソコンへのログイン時に Cindy を自動的に開きます。初期設定ではオフです。",
+        "requiresApproval": "自動起動を有効にするには、macOS のシステム設定のログイン項目で Cindy を許可してください。",
+        "loading": "システム設定を読み込み中…",
+        "loadFailed": "起動設定を読み込めませんでした。この設定ページを開き直して再試行してください。",
+        "saveFailed": "起動設定を保存できませんでした。再試行するか、システムの起動項目を確認してください。",
+        "notApplied": "システムに設定が反映されませんでした。システムの起動項目を確認して再試行してください。"
+      },
       "title": "アプリの動作",
       "closeBehavior": {
         "label": "メインウィンドウを閉じるとき",
@@ -6161,6 +6170,7 @@
     "loadFailed": "使用履歴を読み込めませんでした。設定を開き直して、もう一度お試しください。",
     "range": {
       "label": "期間",
+      "date": "日付",
       "ariaLabel": "使用量の期間を絞り込む",
       "all": "全期間",
       "30d": "直近 30 日",
@@ -8576,8 +8586,15 @@
       }
     },
     "runningStatus": {
+      "currentRate": "直近の速度",
+      "waitingSample": "計測中",
+      "averageRate": "このターンの平均",
+      "rateHistory": "生成速度の推移",
+      "outputTotal": "累計出力",
+      "observedPeak": "ピーク",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "このターンのメイン Agent の平均生成速度です。思考を含み、ツール実行と承認待ちは除きます。使用量の報告に合わせて更新され、隣にはターン全体の経過時間が表示されます。",
+      "tokenRateUnit": "tok/s",
+      "tokenRateDescription": "直近の生成区間の速度。ツール実行と待機は除きます。",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8801,6 +8818,11 @@
       "closeHint": "または背景をクリックして閉じる"
     },
     "remoteFile": {
+      "previewFailed": "Web プレビューを準備できませんでした。ディレクトリと接続を確認して再試行してください。",
+      "previewNotFound": "HTML ファイルが見つかりません。ファイルが存在するか確認してください。",
+      "previewFetching": "Web プレビューを準備しています…",
+      "previewTooLarge": "準備中のプレビューが多すぎます。しばらくしてから再試行してください。",
+      "previewUnsupported": "ディレクトリをプレビューするには、リモート端末の Cindy を更新してください。",
       "fetching": "リモートからファイルを取得しています…",
       "fetchFailed": "リモートからのファイル取得に失敗しました",
       "notFound": "リモートにファイルが見つかりません",

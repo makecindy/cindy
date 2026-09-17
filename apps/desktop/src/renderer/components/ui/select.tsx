@@ -1,6 +1,7 @@
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { AriaAttributes } from 'react';
 import { Button } from './button';
 
 export interface SelectProps {
@@ -13,6 +14,9 @@ export interface SelectProps {
   disabled?: boolean;
   className?: string;
   'aria-describedby'?: string;
+  'aria-invalid'?: AriaAttributes['aria-invalid'];
+  'aria-required'?: AriaAttributes['aria-required'];
+  error?: boolean;
 }
 
 /** Desktop single-value field (DESIGN.md §4): standard secondary Button,
@@ -29,6 +33,9 @@ export function Select({
   disabled,
   className,
   'aria-describedby': describedBy,
+  'aria-invalid': invalid,
+  'aria-required': required,
+  error = false,
 }: SelectProps) {
   return (
     <SelectPrimitive.Root
@@ -44,10 +51,14 @@ export function Select({
           size="lg"
           aria-label={label}
           aria-describedby={describedBy}
+          aria-invalid={error ? true : invalid}
+          aria-required={required}
           title={options.find((option) => option.value === value)?.label}
           className={cn(
             'min-w-0 max-w-full justify-between gap-2 px-3 font-normal [-webkit-app-region:no-drag]',
             className,
+            (error || (invalid !== undefined && invalid !== false && invalid !== 'false')) &&
+              'border-[var(--error-border)] focus-visible:border-[var(--error-fg)] focus-visible:ring-[var(--error-fg)]',
           )}
         >
           <span className="min-w-0 truncate text-left">

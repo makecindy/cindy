@@ -4586,7 +4586,7 @@ SECTION 2: npm packages (902 packages)
 - zwitch@2.0.4 — MIT — https://github.com/wooorm/zwitch
 
 ==============================================================================
-SECTION 3: cargo packages (292 packages)
+SECTION 3: cargo packages (293 packages)
 ==============================================================================
 
 - adler2@2.0.1 — 0BSD OR MIT OR Apache-2.0 — https://github.com/oyvindln/adler2
@@ -4606,6 +4606,7 @@ SECTION 3: cargo packages (292 packages)
 - bitflags@1.3.2 — MIT OR Apache-2.0 — https://github.com/bitflags/bitflags
 - bitflags@2.13.0 — MIT OR Apache-2.0 — https://github.com/bitflags/bitflags
 - bitflags@2.13.1 — MIT OR Apache-2.0 — https://github.com/bitflags/bitflags
+- bitflags@2.13.2 — MIT OR Apache-2.0 — https://github.com/bitflags/bitflags
 - block-buffer@0.10.4 — MIT OR Apache-2.0 — https://github.com/RustCrypto/utils
 - brotli@8.0.4 — BSD-3-Clause AND MIT — https://github.com/dropbox/rust-brotli
 - brotli-decompressor@5.0.3 — BSD-3-Clause OR MIT — https://github.com/dropbox/rust-brotli-decompressor
@@ -6089,7 +6090,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[8] Applies to: cargo:bitflags@1.3.2, cargo:bitflags@2.13.0, cargo:bitflags@2.13.1, cargo:glob@0.3.3, cargo:log@0.4.33, cargo:num-traits@0.2.19, cargo:regex@1.13.0, cargo:regex@1.13.1, cargo:regex-automata@0.4.15, cargo:regex-automata@0.4.18, cargo:regex-syntax@0.8.11
+[8] Applies to: cargo:bitflags@1.3.2, cargo:bitflags@2.13.0, cargo:bitflags@2.13.1, cargo:bitflags@2.13.2, cargo:glob@0.3.3, cargo:log@0.4.33, cargo:num-traits@0.2.19, cargo:regex@1.13.0, cargo:regex@1.13.1, cargo:regex-automata@0.4.15, cargo:regex-automata@0.4.18, cargo:regex-syntax@0.8.11
 ------------------------------------------------------------------------------
 Apache License
                         Version 2.0, January 2004

@@ -35,6 +35,7 @@ import { controlFailureAction, remoteDesktopErrorCode } from "./controlFailure";
 import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
+import { RemoteDesktopMouseControls } from "./RemoteDesktopMouseControls";
 import { RemoteDesktopPanelButton } from "./RemoteDesktopPanelButton";
 import { useTranslation } from "react-i18next";
 import SegmentedControl from "@expo/ui/community/segmented-control";
@@ -200,6 +201,12 @@ export default function RemoteDesktopScreen() {
   });
   const screenSize = Dimensions.get("screen");
   const landscape = screenSize.width > screenSize.height;
+  const [interfaceAngle, setInterfaceAngle] = useState<number | null>(null);
+  const toolbarOnLeft =
+    Platform.OS === "ios" &&
+    landscape &&
+    (interfaceAngle === 270 ||
+      (interfaceAngle === null && insets.right > insets.left));
   const webview = useRef<ComponentRef<typeof WebView>>(null);
   const html = useRef(
     remoteDesktopViewerHtml(colors.surface, colors.textPrimary),
@@ -302,6 +309,7 @@ export default function RemoteDesktopScreen() {
   const [nativeKeyboard, setNativeKeyboard] = useState(false);
   const [nativeKeyboardHeight, setNativeKeyboardHeight] = useState(0);
   const [keyboardPanelHeight, setKeyboardPanelHeight] = useState(0);
+  const [backControlHeight, setBackControlHeight] = useState(44);
   // Android's system keyboard already resizes the window. Keep its existing
   // flow layout; only iOS needs an offset above the native keyboard.
   const landscapeKeyboardOverlay =
@@ -1079,6 +1087,7 @@ export default function RemoteDesktopScreen() {
   useEffect(() => {
     send({
       type: "mouseButtons",
+      native: Platform.OS === "ios",
       bottomInset:
         keyboard && landscapeKeyboardOverlay
           ? keyboardPanelHeight + keyboardBottom
@@ -1086,8 +1095,20 @@ export default function RemoteDesktopScreen() {
             ? toolbarSize.height
             : 0,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
-      rightInset: !keyboard && landscape ? toolbarSize.width : 0,
-      leftInset: landscape ? insets.left : 0,
+      portraitKeyboardTopInset:
+        keyboard && !landscape
+          ? edgePadding.paddingTop + spacing.xs + backControlHeight + spacing.sm
+          : 0,
+      rightInset: landscape
+        ? !keyboard && !toolbarOnLeft
+          ? toolbarSize.width
+          : insets.right
+        : 0,
+      leftInset: landscape
+        ? !keyboard && toolbarOnLeft
+          ? toolbarSize.width
+          : insets.left
+        : 0,
       enabled:
         showMouseButtons &&
         focused &&
@@ -1102,7 +1123,11 @@ export default function RemoteDesktopScreen() {
     });
   }, [
     showMouseButtons,
+    edgePadding.paddingTop,
+    backControlHeight,
     insets.left,
+    insets.right,
+    toolbarOnLeft,
     toolbarSize,
     keyboardPanelHeight,
     landscapeKeyboardOverlay,
@@ -1130,6 +1155,15 @@ export default function RemoteDesktopScreen() {
       return;
     }
     if (!message || typeof message !== "object") return;
+    if (
+      message.type === "orientation" &&
+      typeof message.angle === "number" &&
+      Number.isFinite(message.angle)
+    ) {
+      const angle = ((message.angle % 360) + 360) % 360;
+      if ([0, 90, 180, 270].includes(angle)) setInterfaceAngle(angle);
+      return;
+    }
     if (message.type === "ready") {
       ready.current = true;
       void connectRef.current();
@@ -1485,7 +1519,10 @@ export default function RemoteDesktopScreen() {
   const changeResolution = async (modeId: string) => {
     const current = active.current;
     if (!current?.controlling || settingInFlight.current) return;
-    if (caps?.viewerDisplay && caps.viewerDisplayRestore) {
+    if (
+      caps?.resolutionRestore ||
+      (caps?.viewerDisplay && caps.viewerDisplayRestore)
+    ) {
       try {
         const modes = await request<
           import("@cindy/device-link").RemoteDesktopDisplayMode[]
@@ -1494,9 +1531,15 @@ export default function RemoteDesktopScreen() {
         const mode = modes.find((item) => item.id === modeId);
         if (!mode) throw new Error("DESKTOP_DISPLAY_MODE_MISSING");
         if (
+          caps?.resolutionRestore ||
           [mode.width, mode.height].every((size) => size >= 320 && size <= 2560)
         ) {
-          await fitViewerDisplay(mode.width, mode.height, true);
+          await fitViewerDisplay(
+            mode.width,
+            mode.height,
+            true,
+            caps?.resolutionRestore ? mode.id : undefined,
+          );
           return;
         }
       } catch {
@@ -1505,33 +1548,18 @@ export default function RemoteDesktopScreen() {
         return;
       }
     }
-    settingInFlight.current = true;
-    setSettingBusy(true);
-    setSettingNotice(null);
-    try {
-      await request({ op: "resolution", lease: current.lease, modeId });
-      if (active.current === current) {
-        stop(true);
-        recovery.current.at = Date.now() + 500;
-        setStatus("reconnecting");
-      }
-    } catch (cause) {
-      // Geometry changes may end the old lease before its reply reaches us.
-      if (active.current === current)
-        setSettingNotice(t("remoteDesktop.settingFailed"));
-    } finally {
-      settingInFlight.current = false;
-      setSettingBusy(false);
-    }
+    setSettingNotice(t("remoteDesktop.settingUnsupported"));
   };
   const fitViewerDisplay = async (
     width: number,
     height: number,
     exactResolution = false,
+    modeId?: string,
   ) => {
     const current = active.current;
     if (
       exactResolution &&
+      !modeId &&
       ![width, height].every(
         (value) => Number.isInteger(value) && value >= 320 && value <= 2560,
       )
@@ -1544,7 +1572,7 @@ export default function RemoteDesktopScreen() {
       : viewerDisplaySize(width, height);
     if (
       !current?.controlling ||
-      !caps?.viewerDisplay ||
+      !(modeId ? caps?.resolutionRestore : caps?.viewerDisplay) ||
       !size ||
       settingInFlight.current ||
       settingBusy ||
@@ -1561,7 +1589,7 @@ export default function RemoteDesktopScreen() {
       const restore = Boolean(
         !exactResolution &&
         viewerDisplayApplied &&
-        caps.viewerDisplayRestore &&
+        caps?.viewerDisplayRestore &&
         matchesViewer(current.display, width, height),
       );
       const requestGeneration = viewportGeneration.current;
@@ -1569,13 +1597,14 @@ export default function RemoteDesktopScreen() {
         size.width,
         size.height,
         restore,
+        modeId,
       );
       if (active.current !== current) return;
       // Reconnect the physical source display after the temporary mirror ends.
       recovery.current.displayId = sourceDisplayId;
       if (!exactResolution && viewportGeneration.current === requestGeneration)
         setViewerViewport({ width, height });
-      setViewerDisplayApplied(!restore);
+      setViewerDisplayApplied(!modeId && !restore);
       setLease({ ...next });
       streaming.current = false;
       setCanPip(false);
@@ -1583,8 +1612,8 @@ export default function RemoteDesktopScreen() {
         type: "videoSettings",
         width: next.display.width,
         height: next.display.height,
-        restore,
-        audio: Boolean(caps.systemAudio && videoSettingsRef.current.audio),
+        restore: restore || Boolean(modeId),
+        audio: Boolean(caps?.systemAudio && videoSettingsRef.current.audio),
       });
       const control = await viewerSession.current.control(true);
       if (active.current === current)
@@ -1766,6 +1795,7 @@ export default function RemoteDesktopScreen() {
             mediaPlaybackRequiresUserAction={false}
             allowsPictureInPictureMediaPlayback
             scrollEnabled={false}
+            contentInsetAdjustmentBehavior="never"
             bounces={false}
             allowFileAccess={false}
             allowUniversalAccessFromFileURLs={false}
@@ -1776,6 +1806,30 @@ export default function RemoteDesktopScreen() {
             style={styles.webview}
             testID="remoteDesktop.viewer"
           />
+          {Platform.OS === "ios" &&
+            showMouseButtons &&
+            focused &&
+            !operations &&
+            !keyboard &&
+            lease?.controlling && (
+              <RemoteDesktopMouseControls
+                send={send}
+                bottom={landscape ? 0 : toolbarSize.height}
+                right={
+                  landscape
+                    ? !toolbarOnLeft
+                      ? toolbarSize.width
+                      : insets.right
+                    : 0
+                }
+                compact={screenSize.height <= 400}
+                labels={{
+                  left: t("remoteDesktop.leftClick"),
+                  right: t("remoteDesktop.rightClick"),
+                  wheel: t("remoteDesktop.mouseWheel"),
+                }}
+              />
+            )}
           {(showConnectionStatus ||
             showExitLockStatus ||
             (!lease && error)) && (
@@ -1859,23 +1913,32 @@ export default function RemoteDesktopScreen() {
             )}
           {lease && !showConnectionStatus && !operations && !landscape && (
             <RemoteDesktopNetworkStatus
+              send={send}
               stats={network}
               video={status === "live"}
               top={edgePadding.paddingTop + spacing.sm}
             />
           )}
-          {operations && (
+          {(operations || Platform.OS === "ios") && (
             <View
               pointerEvents="box-none"
               style={[
                 StyleSheet.absoluteFill,
                 {
-                  bottom: landscape ? 0 : toolbarSize.height,
-                  right: landscape ? toolbarSize.width : 0,
+                  bottom:
+                    Platform.OS === "ios" || landscape ? 0 : toolbarSize.height,
+                  right:
+                    Platform.OS === "ios"
+                      ? 0
+                      : landscape
+                        ? toolbarSize.width
+                        : 0,
                 },
               ]}
             >
               <RemoteDesktopPanel
+                toolbarOnLeft={toolbarOnLeft}
+                visible={operations && focused}
                 landscape={landscape}
                 topInset={edgePadding.paddingTop}
                 title={t(
@@ -1972,6 +2035,9 @@ export default function RemoteDesktopScreen() {
         </View>
         {!keyboard && (
           <View
+            key={landscape ? "landscape-toolbar" : "portrait-toolbar"}
+            testID="remoteDesktop.toolbarPosition"
+            pointerEvents="box-none"
             onLayout={({ nativeEvent: { layout } }) => {
               setToolbarSize((previous) =>
                 previous.width === layout.width &&
@@ -1987,6 +2053,31 @@ export default function RemoteDesktopScreen() {
                 paddingRight: landscape ? spacing.xs : edgePadding.paddingRight,
                 paddingLeft: landscape ? 0 : edgePadding.paddingLeft,
                 paddingBottom: keyboard || nativeKeyboard ? 0 : insets.bottom,
+              },
+              Platform.OS === "ios" && {
+                backgroundColor: "transparent",
+                ...(landscape
+                  ? {
+                      top: insets.top,
+                      bottom: insets.bottom,
+                      left: toolbarOnLeft ? 0 : undefined,
+                      right: toolbarOnLeft ? undefined : 0,
+                      justifyContent: "center",
+                      paddingLeft: toolbarOnLeft ? spacing.lg : 0,
+                      paddingRight: toolbarOnLeft ? 0 : spacing.lg,
+                      paddingBottom: 0,
+                    }
+                  : {
+                      left: 0,
+                      right: 0,
+                      top: undefined,
+                      bottom: 0,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingLeft: 0,
+                      paddingRight: 0,
+                      paddingBottom: Math.max(spacing.sm, insets.bottom),
+                    }),
               },
             ]}
           >
@@ -2025,22 +2116,33 @@ export default function RemoteDesktopScreen() {
           </View>
         )}
       </View>
-      {!landscape && (
-        <View
-          style={[
-            styles.back,
-            {
-              top: edgePadding.paddingTop + spacing.xs,
-              left: edgePadding.paddingLeft + spacing.lg,
-            },
-          ]}
-        >
-          <RemoteDesktopBackButton
-            label={t("remoteDesktop.back")}
-            onPress={leave}
-          />
-        </View>
-      )}
+      <View
+        testID="remoteDesktop.backPosition"
+        pointerEvents="auto"
+        onLayout={({ nativeEvent: { layout } }) =>
+          setBackControlHeight(layout.height)
+        }
+        style={[
+          styles.back,
+          {
+            top: landscape
+              ? insets.top + spacing.lg
+              : edgePadding.paddingTop + spacing.xs,
+            // Keep the 44pt control out of the island: follow the rail when it
+            // is on the left, otherwise start after the left safe inset.
+            left: landscape
+              ? (toolbarOnLeft ? 0 : insets.left) +
+                spacing.lg +
+                (Platform.OS === "ios" ? spacing.xs : 0)
+              : edgePadding.paddingLeft + spacing.lg,
+          },
+        ]}
+      >
+        <RemoteDesktopBackButton
+          label={t("remoteDesktop.back")}
+          onPress={leave}
+        />
+      </View>
       {keyboard && (
         <View
           testID="remoteDesktop.keyboardPanel"

@@ -1026,7 +1026,7 @@ export function createComputerMcpServer(
 }
 
 /** Only explicit driver failure signals override legacy/partial observation success. */
-function isUnavailableWindowObservation(
+export function isUnavailableWindowObservation(
   data: unknown,
   args: Record<string, unknown>,
 ): boolean {

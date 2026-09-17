@@ -131,7 +131,14 @@ it.each([320, 480, 800])('preserves the model slot across hydration (width=%s)',
   expect(screen.queryByTestId('model-selector')).toBeNull();
   view.rerender(<ChatInput {...inputProps} initialModel="gpt-6-astra" />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);
-  expect(slot.className).toBe(geometry);
+  if (narrowToolbar) {
+    expect(slot.className).toBe(geometry);
+  } else {
+    // Loaded wide toolbars must not inherit the loading placeholder's width.
+    expect(slot.classList.contains('w-[148px]')).toBe(false);
+    expect(slot.classList.contains('h-[30px]')).toBe(true);
+    expect(slot.classList.contains('min-w-0')).toBe(true);
+  }
   expect(slot.contains(screen.getByTestId('model-selector'))).toBe(true);
   view.rerender(<ChatInput {...inputProps} />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);

@@ -1901,6 +1901,8 @@ interface ElectronAPI {
   };
 
   windowBehavior: {
+    getLoginItem: () => Promise<import('../shared/loginItem').LoginItemState>;
+    setLoginItem: (enabled: boolean) => Promise<import('../shared/loginItem').LoginItemState>;
     setSwallowActivationClick: (enabled: boolean) => Promise<{ ok: true }>;
     getWindowsCloseBehavior: () => Promise<'quit' | 'tray' | null>;
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
@@ -2531,6 +2533,8 @@ interface ElectronAPI {
   onAppUpdateProgress: (callback: (payload: AppUpdateProgressPayload) => void) => () => void;
   fileBrowser: {
     listDir: (params: {
+      /** Return all ordinary entries without presentation filtering. */
+      includeIgnored?: boolean;
       /** 非空 = SSH remote 会话,操作经远端 file-service 执行(main 侧路由)。 */
       remoteHostId?: string | null;
       workdir: string;
@@ -2683,6 +2687,14 @@ interface ElectronAPI {
       }) => void,
     ) => () => void;
     /** 聊天流文件取回:远端绝对路径 → 本地缓存副本(进度经 onTransferProgress,relPath 键 = absPath)。 */
+    previewHtml: (params: {
+      origin:
+        | { kind: 'local' }
+        | { kind: 'device'; deviceId: string }
+        | { kind: 'ssh'; remoteHostId: string };
+      workdir: string;
+      absPath: string;
+    }) => Promise<{ ok: true; url: string }>;
     chatFetch: (params: {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
       workdir: string;
@@ -3019,6 +3031,11 @@ interface ElectronAPI {
     url?: string;
     filePath?: string;
   }) => Promise<{ success: boolean; error?: string }>;
+
+  /** Copy an in-memory PNG export to the local native clipboard. */
+  copyPngToClipboard: (
+    params: import('../shared/pngClipboard').CopyPngToClipboardParams,
+  ) => Promise<void>;
 
   /**
    * Copy an image or video (resolved from `xdt-image://` / `xdt-video://`
@@ -5750,6 +5767,9 @@ interface ElectronAPI {
         resumeSessionId?: string;
       },
     ) => Promise<import('@cindy/maker-core').ContextUsageData>;
+
+    /** main 侧权威运行态回填(#4513):该会话是否真的在 turn 中(tracker + live isTurnRunning)。 */
+    getSessionTurnActive: (sessionId: string) => Promise<{ inTurn: boolean }>;
 
     abortSession: (sessionId: string) => Promise<void>;
     closeSession: (sessionId: string, opts?: { preserveWorkspace?: boolean }) => Promise<void>;

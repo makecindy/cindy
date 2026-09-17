@@ -41,6 +41,36 @@ function fixture() {
 }
 
 describe('viewer-sized desktop ownership', () => {
+  it.each(['stop', 'restoreViewerDisplay'] as const)(
+    'restores the original system mode after switching from a system mode to fit on %s',
+    async (ending) => {
+      const f = fixture();
+      let modeId = '10';
+      f.deps.displayModes = async () => [
+        { id: '10', width: 1920, height: 1080, current: modeId === '10' },
+        { id: '20', width: 3840, height: 2160, current: modeId === '20' },
+      ];
+      f.deps.resolution = vi.fn(async (_display, mode, before) => {
+        before();
+        modeId = mode;
+      });
+      vi.mocked(f.handle.restore!).mockResolvedValue({
+        id: '1',
+        name: 'Main',
+        width: 3840,
+        height: 2160,
+      });
+      const { lease } = await f.start();
+      await f.host.request('phone', { op: 'resolution', lease, modeId: '20', temporary: true });
+      await f.host.request('phone', { op: 'control', lease, enabled: true });
+      await f.host.request('phone', { op: 'viewerDisplay', lease, width: 900, height: 1600 });
+      await f.host.request('phone', { op: 'control', lease, enabled: true });
+      const result = await f.host.request('phone', { op: ending, lease });
+      if (ending === 'stop') await f.start();
+      else expect(result).toMatchObject({ display: { width: 1920, height: 1080 } });
+      expect(modeId).toBe('10');
+    },
+  );
   it('hides the helper display during and across stopped-lease restoration', async () => {
     const f = fixture();
     const lease = await f.start();

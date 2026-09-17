@@ -79,6 +79,35 @@ export interface ViewerDisplayHandle {
   dispose(): void;
 }
 
+/** CoreGraphics completion precedes Electron's display projection. */
+export async function waitForDisplayRestore(
+  displayId: string,
+  expected: { width: number; height: number } | undefined,
+  requireCurrent: () => void,
+  released: (displays: Electron.Display[]) => boolean = () => true,
+): Promise<RemoteDesktopDisplay> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    requireCurrent();
+    const displays = screen.getAllDisplays();
+    const display = displays.find((item) => String(item.id) === displayId);
+    // An unplugged source has no remaining geometry to restore.
+    if (
+      released(displays) &&
+      (!display ||
+        !expected ||
+        (display.size.width === expected.width && display.size.height === expected.height))
+    )
+      return {
+        id: displayId,
+        name: display?.label || 'Display',
+        width: display?.size.width || expected?.width || 0,
+        height: display?.size.height || expected?.height || 0,
+      };
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+}
+
 /** The helper owns one temporary mirror, never a global persistent display preference. */
 export async function createViewerDisplay(
   sourceDisplayId: string,
@@ -162,30 +191,14 @@ export async function createViewerDisplay(
     },
     async restore(this: ViewerDisplayHandle, current) {
       this.dispose();
-      for (let attempt = 0; attempt < 100; attempt++) {
-        if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
-        const displays = screen.getAllDisplays();
-        const display = displays.find((item) => String(item.id) === sourceDisplayId);
-        if (
-          exited &&
-          !displays.some((item) => item.id === virtualDisplayId) &&
-          // If the source was unplugged, virtual-display cleanup is the only
-          // restoration that remains possible; retire the handle so another
-          // monitor can be selected on the next lease.
-          (!display ||
-            !original ||
-            (display.size.width === original.size.width &&
-              display.size.height === original.size.height))
-        )
-          return {
-            id: sourceDisplayId,
-            name: display?.label || original?.label || 'Display',
-            width: display?.size.width || original?.size.width || 0,
-            height: display?.size.height || original?.size.height || 0,
-          };
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+      return waitForDisplayRestore(
+        sourceDisplayId,
+        original?.size,
+        () => {
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        },
+        (displays) => exited && !displays.some((item) => item.id === virtualDisplayId),
+      );
     },
     dispose() {
       if (closed) return;

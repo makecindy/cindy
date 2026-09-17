@@ -18312,9 +18312,9 @@
       },
       {
         "id": "kimi-for-coding",
-        "name": "Kimi K2.7 Code",
+        "name": "Kimi K2.8 Preview",
         "upstream": "https://api.kimi.com/coding",
-        "contextWindow": 262144,
+        "contextWindow": 1048576,
         "maxOutput": 32768,
         "modalities": {
           "input": [
@@ -18328,21 +18328,23 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
-          "medium",
-          "high"
+          "high",
+          "max"
         ],
-        "defaultEffort": "medium",
-        "cost": {
-          "input": 0.95,
-          "output": 4,
-          "cacheRead": 0.19,
-          "cacheWrite": 0
-        },
+        "defaultEffort": "max",
         "execution": {
           "pi": {
             "api": "anthropic-messages",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": null,
+              "max": "max"
+            },
             "compat": {
               "allowEmptySignature": true,
               "forceAdaptiveThinking": true

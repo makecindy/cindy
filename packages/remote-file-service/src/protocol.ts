@@ -33,10 +33,10 @@ import type {
 } from '@cindy/file-browser-core';
 
 /** 协议兼容版本:client 与 daemon 严格相等才可用。改动任何请求/响应形状时 +1。 */
-export const FILE_SERVICE_SCHEMA_VERSION = 2;
+export const FILE_SERVICE_SCHEMA_VERSION = 3;
 
 /** 人读 bundle 版本(probe / 日志用),行为变化时手动 bump。 */
-export const FILE_SERVICE_BUNDLE_VERSION = '0.2.4';
+export const FILE_SERVICE_BUNDLE_VERSION = '0.2.5';
 
 /* ============================== 帧 ============================== */
 
@@ -132,7 +132,7 @@ export interface FsRpcMethods {
     };
   };
   listDir: {
-    params: { workdir: string; relPath?: string; hideMetaFiles?: boolean; docMode?: boolean };
+    params: { workdir: string; relPath?: string; hideMetaFiles?: boolean; docMode?: boolean; includeIgnored?: boolean; maxEntries?: number };
     result: { entries: DirEntry[] };
   };
   readFile: {

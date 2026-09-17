@@ -1006,7 +1006,7 @@ export function UnifiedModelPanel({
                 aria-selected={followSession.active}
                 data-follow-session-row
                 className={cn(
-                  'flex w-full items-center justify-between rounded-[10px] px-2.5 py-2 transition-colors',
+                  'flex w-full items-center justify-between rounded-lg px-3 py-2 transition-colors',
                   'hover:bg-[var(--model-item-hover)]',
                   followSession.active && 'bg-[var(--model-item-hover)]',
                   interactionDisabled && 'cursor-not-allowed opacity-50',

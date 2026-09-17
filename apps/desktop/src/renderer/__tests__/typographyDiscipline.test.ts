@@ -145,6 +145,12 @@ interface Exemption {
 
 const EXEMPTIONS: Exemption[] = [
   {
+    file: 'src/renderer/components/chat/MarkdownRenderer.tsx',
+    rule: 'tw-weight',
+    reason: 'DESIGN §3: content strong is absolute 700, including nested strong; ordinary UI weights remain capped at 600.',
+    signatures: [{ match: 'font-bold', expected: 1 }],
+  },
+  {
     file: 'src/main/windowsBadgeIcon.ts',
     rule: 'inline-size',
     reason: 'DESIGN.md §2 Windows taskbar attention badge: 16px 系统图标内的 8–12px 拟合数字',

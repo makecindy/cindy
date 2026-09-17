@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "로그인 시 Cindy 자동 시작",
+        "hint": "컴퓨터에 로그인하면 Cindy를 자동으로 엽니다. 기본값은 꺼짐입니다.",
+        "requiresApproval": "자동 시작을 켜려면 macOS 시스템 설정의 로그인 항목에서 Cindy를 허용하세요.",
+        "loading": "시스템 설정을 읽는 중…",
+        "loadFailed": "시작 설정을 읽지 못했습니다. 이 설정 페이지를 다시 열어 재시도하세요.",
+        "saveFailed": "시작 설정을 저장하지 못했습니다. 다시 시도하거나 시스템 시작 항목을 확인하세요.",
+        "notApplied": "시스템에 설정이 적용되지 않았습니다. 시스템 시작 항목을 확인한 후 다시 시도하세요."
+      },
       "title": "앱 동작",
       "closeBehavior": {
         "label": "기본 창을 닫을 때",
@@ -6161,6 +6170,7 @@
     "loadFailed": "사용량 기록을 불러오지 못했습니다. 설정을 다시 열어 재시도해 주세요.",
     "range": {
       "label": "기간",
+      "date": "날짜",
       "ariaLabel": "사용량 기간 필터",
       "all": "전체 기간",
       "30d": "최근 30일",
@@ -8576,8 +8586,15 @@
       }
     },
     "runningStatus": {
+      "currentRate": "최근 속도",
+      "waitingSample": "측정 중",
+      "averageRate": "이번 턴 평균",
+      "rateHistory": "생성 속도 추이",
+      "outputTotal": "누적 출력",
+      "observedPeak": "최고",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "이번 턴에서 메인 Agent의 평균 생성 속도입니다. 사고 과정을 포함하며 도구 실행과 승인 대기 시간은 제외합니다. 사용량 보고에 따라 갱신되며, 옆에는 턴의 전체 경과 시간이 표시됩니다.",
+      "tokenRateUnit": "tok/s",
+      "tokenRateDescription": "최근 생성 구간의 속도. 도구 실행과 대기는 제외합니다.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8801,6 +8818,11 @@
       "closeHint": "또는 배경을 클릭해 닫기"
     },
     "remoteFile": {
+      "previewFailed": "웹 미리보기를 준비하지 못했습니다. 디렉터리와 연결을 확인한 후 다시 시도하세요.",
+      "previewNotFound": "HTML 파일을 찾을 수 없습니다. 파일이 존재하는지 확인하세요.",
+      "previewFetching": "웹 미리보기 준비 중…",
+      "previewTooLarge": "준비 중인 미리보기가 너무 많습니다. 잠시 후 다시 시도하세요.",
+      "previewUnsupported": "디렉터리를 미리 보려면 원격 기기의 Cindy를 업데이트하세요.",
       "fetching": "원격에서 파일을 가져오는 중…",
       "fetchFailed": "원격에서 파일을 가져오지 못했습니다",
       "notFound": "원격에 파일이 없습니다",

@@ -134,6 +134,7 @@ import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
+import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
@@ -234,7 +235,12 @@ import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
-import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
+import {
+  formatRecentOutputTokenRate,
+  formatRunningTokenCount,
+  resolveRunningUsageMeta,
+} from './lib/runningTokenUsage';
+import { RunningTokenRatePopover, useRunningTokenRateHistory } from './RunningTokenRatePopover';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -2129,29 +2135,72 @@ export function CCAgentSessionView({
       setSessionInterruptAcked(false);
     }
   }, [syntheticContinuationPending, sessionInterruptAcked]);
+  // main 真值回填(#4513):双时间戳候选对任何在飞 turn 都成立,而运行态抑制依赖的
+  // status(isRunning) 事件在协同 worker 会话上可能缺失/迟到(消息流与状态流是两条通道,
+  // 实测「流式输出中误显中断横幅」)。候选出现(activeTurnStartedAt 变化)时向 main 查一次
+  // 权威运行态;null=未确认,在真值回来前不把候选当中断证据(决策见 sessionInterruptBannerModel.ts)。
+  // 真值必须绑定所属会话:路由复用本组件(无 key 的 :sessionId 路由),A(在飞)→B(真中断)
+  // 切会话时旧 true 若直接锁存 ack,会把 B 的横幅永久抑制(P1)。查询 effect 切会话先置
+  // null,但锁存 effect 同批次仍能读到旧快照 —— 因此锁存与判定都只认同会话的真值。
+  const [mainTurnActive, setMainTurnActive] = useState<{
+    sessionId: string;
+    inTurn: boolean;
+  } | null>(null);
+  const activeTurnStartedAt = session?.activeTurnStartedAt ?? null;
+  useEffect(() => {
+    if (!sessionId || activeTurnStartedAt == null) {
+      setMainTurnActive(null);
+      return;
+    }
+    let cancelled = false;
+    setMainTurnActive(null);
+    window.electronAPI.maker
+      .getSessionTurnActive(sessionId)
+      .then((result) => {
+        if (!cancelled) setMainTurnActive({ sessionId, inTurn: result?.inTurn === true });
+      })
+      .catch(() => {
+        // 查询失败按未确认处理:宁可漏显横幅,不把在飞 turn 误判成中断。
+        if (!cancelled) setMainTurnActive(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, activeTurnStartedAt]);
+  // 同会话真值:只认归属当前 sessionId 的查询结果,旧会话残留的 true 不得锁存
+  // 新会话的 ack(路由复用切会话 P1)。sessionId 变化时查询 effect 先置 null,
+  // 但同批次的锁存 effect 仍能读到旧快照 —— 这里按 sessionId 过滤兜底。
+  const mainTurnActiveForSession = mainTurnActive && mainTurnActive.sessionId === sessionId
+    ? mainTurnActive.inTurn
+    : null;
   // sessionId 必须在 deps 里:running→running 切会话时 isRunning 布尔值不变(true→true),
   // 只依赖它会漏掉新会话的"跑起来即熄灭"锁存——上面的 reset effect 把 acked 清成 false 后
   // 没人再置回。此时切入时拉的 session 快照天然 startedAt > endedAt(turn 在飞,ended 未写),
   // 用户点 stop 的瞬间 isRunning 落 false、ended 落库广播还没到,双时间戳判定短暂成立,
   // 「应用退出中断」横幅会闪现一帧(假阳性)。带上 sessionId 让每次切换后按新会话当前
-  // isRunning 重新锁存。
+  // isRunning 重新锁存。mainTurnActiveForSession === true 同样锁存(同会话真值回填,见上)。
   useEffect(() => {
-    if (agentStatus.isRunning || remoteTurnActive) setSessionInterruptAcked(true);
-  }, [sessionId, agentStatus.isRunning, remoteTurnActive]);
-  const interruptedFromSession = useMemo(() => {
-    if (sessionInterruptAcked || remoteTurnActive) return false;
-    const started = session?.activeTurnStartedAt ?? null;
-    if (!started) return false;
-    const ended = session?.lastTurnEndedAt ?? 0;
-    const cleared = session?.clearedAt ? Date.parse(session.clearedAt) : 0;
-    return started > ended && started > cleared;
-  }, [
-    session?.activeTurnStartedAt,
-    session?.lastTurnEndedAt,
-    session?.clearedAt,
-    sessionInterruptAcked,
-    remoteTurnActive,
-  ]);
+    if (agentStatus.isRunning || remoteTurnActive || mainTurnActiveForSession === true) setSessionInterruptAcked(true);
+  }, [sessionId, agentStatus.isRunning, remoteTurnActive, mainTurnActiveForSession]);
+  const interruptedFromSession = useMemo(
+    () =>
+      resolveSessionInterruptCandidate({
+        acked: sessionInterruptAcked,
+        remoteTurnActive,
+        mainTurnActive: mainTurnActiveForSession,
+        activeTurnStartedAt,
+        lastTurnEndedAt: session?.lastTurnEndedAt ?? null,
+        clearedAtMs: session?.clearedAt ? Date.parse(session.clearedAt) : null,
+      }),
+    [
+      activeTurnStartedAt,
+      session?.lastTurnEndedAt,
+      session?.clearedAt,
+      sessionInterruptAcked,
+      remoteTurnActive,
+      mainTurnActiveForSession,
+    ],
+  );
   // 打开会话且中断判定不成立(peer 已忽略 / 续跑已完成 / 用户已操作)时重算告警:
   // 红点是 pending-alerts 的派生,这里只触发重查,由差分决定清不清 —— 不直接清点,
   // 否则会抹掉同一会话上仍未处理的错误尾行告警。
@@ -4724,6 +4773,7 @@ export function CCAgentSessionView({
               ) : !pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (
                 <RunningStatusBar
                   key={sessionId}
+                  sessionKey={sessionId ?? null}
                   status={composerStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
@@ -5565,6 +5615,7 @@ function RunningStatusBar({
   onStopBackgroundTasks,
   rightLeadingSlot = null,
   suppressContent = false,
+  sessionKey = null,
   className,
 }: {
   status: string;
@@ -5605,6 +5656,8 @@ function RunningStatusBar({
   rightLeadingSlot?: ReactNode;
   /** 交互卡接管 composer 时立即隐藏旧运行文案/token，只保留折叠呼吸灯。 */
   suppressContent?: boolean;
+  /** 会话身份：速度历史按它做进程内缓存，切任务再切回图表不清零。 */
+  sessionKey?: string | null;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -5614,6 +5667,7 @@ function RunningStatusBar({
   // component returns null below so the composer does not retain an empty line.
   const [showContent, setShowContent] = useState(visible);
   const [fading, setFading] = useState(false);
+  const [ratePanelPinned, setRatePanelPinned] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -5635,7 +5689,7 @@ function RunningStatusBar({
   // Local timer (F-SDK-3: render-side setInterval)
   useEffect(() => {
     if (!startedAt) {
-      setElapsed(0);
+      // Keep the last completed turn duration visible while a pinned panel lingers.
       return;
     }
 
@@ -5721,24 +5775,35 @@ function RunningStatusBar({
   // incrementing number. Rate does not use this: locally ticking the
   // denominator would make a paused model look like decaying speed.
   const animatedTokens = useAnimatedNumber(tokenUsage, 400);
+  const tokenCountText = t('chat.runningStatus.tokenCount', {
+    tokens: formatRunningTokenCount(animatedTokens),
+  });
+  const rateHistory = useRunningTokenRateHistory({
+    sessionKey,
+    startedAt,
+    outputTokens,
+    generationDurationMs,
+    generationReliable:
+      generationReliable &&
+      !sideTaskRunning &&
+      !backgroundTasksRunning &&
+      !workflowWaiting,
+  });
+  const latestRate = rateHistory.latestRate;
   const usageMeta = resolveRunningUsageMeta({
     outputTokens,
     generationDurationMs,
     generationReliable,
     tokenUsage,
+    latestRate,
   });
-  const tokenCountText = t('chat.runningStatus.tokenCount', {
-    tokens: formatRunningTokenCount(animatedTokens),
-  });
-  const tokenCountTipText = t('chat.messageActionBar.turnTokens', {
-    tokens: formatRunningTokenCount(animatedTokens),
-  });
+  const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
   const rateText =
-    usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
-  const rateTipText = [
-    t('chat.runningStatus.tokenRateDescription'),
-    ...(tokenUsage > 0 ? [tokenCountTipText] : []),
-  ].join('\n');
+    !isHidden && usageMeta.kind === 'rate'
+      ? latestRateText !== null
+        ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
+        : t('chat.runningStatus.waitingSample')
+      : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -5749,9 +5814,17 @@ function RunningStatusBar({
     transition: isHidden ? 'none' : `opacity ${STATUS_BAR_FADE_MS}ms ease-out`,
     pointerEvents: isHidden ? 'none' : 'auto',
   };
+  const showRatePanel =
+    ratePanelPinned ||
+    (!workflowWaiting &&
+      !sideTaskRunning &&
+      !backgroundTasksRunning &&
+      Boolean(rateText) &&
+      usageMeta.kind === 'rate');
+  // A pinned panel keeps its anchor mounted through idle and subsequent turns.
   // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (isHidden && !rightLeadingSlot) return null;
+  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
@@ -5810,13 +5883,31 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {!isHidden && (
+        {(!suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"
-            style={fadeStyle}
-            aria-hidden={isHidden}
+            style={ratePanelPinned ? undefined : fadeStyle}
+            aria-hidden={isHidden && !ratePanelPinned}
           >
+            {showRatePanel && (
+              <RunningTokenRatePopover
+                elapsedText={elapsedText}
+                rate={latestRateText}
+                rateText={
+                  workflowWaiting || sideTaskRunning || backgroundTasksRunning
+                    ? null
+                    : usageMeta.kind === 'tokens'
+                      ? tokenCountText
+                      : rateText
+                }
+                isTokenCount={usageMeta.kind === 'tokens'}
+                averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
+                outputTokens={outputTokens}
+                history={rateHistory}
+                onPinnedChange={setRatePanelPinned}
+              />
+            )}
             {backgroundTasksRunning ? (
               // 后台子任务模式:elapsed 是上一轮 turn 的残留计时、tokens 是残留计数,
               // 都不成立 —— 整段换成「全部停止」入口(原横幅唯一操作,横幅已删)。
@@ -5840,7 +5931,7 @@ function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : workflowWaiting ? null : (
+            ) : workflowWaiting || showRatePanel ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}
@@ -5850,20 +5941,10 @@ function RunningStatusBar({
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       &middot;
                     </span>
-                    {rateText ? (
-                      <Tip text={rateTipText} side="top" contentClassName="whitespace-pre-line">
-                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                          {rateText}
-                        </span>
-                      </Tip>
-                    ) : (
-                      <>
-                        <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
-                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                          {tokenCountText}
-                        </span>
-                      </>
-                    )}
+                    <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
+                    <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                      {tokenCountText}
+                    </span>
                   </>
                 )}
               </>

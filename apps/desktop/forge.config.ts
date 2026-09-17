@@ -1127,6 +1127,27 @@ function buildWindowsGamepadHelper(platform: ForgePlatform, arch: ForgeArch): vo
   buildWindowsInputHelper('micro', platform, arch);
 }
 
+function buildWindowsTaskbarAddon(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'win32' || platform !== 'win32') return;
+  const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : arch === 'x64' ? 'x86_64-pc-windows-msvc' : null;
+  if (!target) throw new Error(`[forge] Unsupported Windows taskbar architecture: ${arch}`);
+  const source = path.join(__dirname, 'native', 'windows-taskbar');
+  const build = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-taskbar-build-'));
+  try {
+    const userCargo = path.join(os.homedir(), '.cargo', 'bin', 'cargo.exe');
+    const result = spawnSync(fs.existsSync(userCargo) ? userCargo : 'cargo', [
+      'build', '--release', '--locked', '--target', target,
+      '--manifest-path', path.join(source, 'Cargo.toml'), '--target-dir', build,
+    ], { stdio: 'inherit', windowsHide: true });
+    if (result.error || result.status !== 0) throw new Error(`[forge] Windows taskbar build failed: ${result.error?.message ?? result.status}`);
+    const dest = path.join(__dirname, 'resources', 'tools', 'windows-taskbar');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.copyFileSync(path.join(build, target, 'release', 'cindy_windows_taskbar.dll'), path.join(dest, 'cindy-windows-taskbar.node'));
+  } finally {
+    fs.rmSync(build, { recursive: true, force: true });
+  }
+}
+
 function buildWindowsInputHelper(kind: 'gamepad' | 'micro', platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'win32' || platform !== 'win32') return;
   const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : arch === 'x64' ? 'x86_64-pc-windows-msvc' : null;
@@ -1670,6 +1691,7 @@ const config: ForgeConfig = {
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacXboxGamepadHelper(platform, arch);
       buildWindowsGamepadHelper(platform, arch);
+      buildWindowsTaskbarAddon(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);

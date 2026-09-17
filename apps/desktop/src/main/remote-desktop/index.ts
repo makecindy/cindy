@@ -1,5 +1,4 @@
 import {
-  app,
   desktopCapturer,
   ipcMain,
   nativeImage,
@@ -35,7 +34,12 @@ import { denyAppDesktopCapture } from './capturePermissions';
 import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/settings-store';
 import { throwIpcError } from '../utils/ipcValidate';
 import { RemoteDesktopController } from './controller';
-import { createViewerDisplay, viewerDisplaySupported } from './viewerDisplay';
+import { onQuit } from '../lifecycle';
+import {
+  createViewerDisplay,
+  viewerDisplaySupported,
+  waitForDisplayRestore,
+} from './viewerDisplay';
 import { desktopCaptureSource, enumerateDesktopSources } from './captureSource';
 import { encodeDesktopFrame, encodeNativeRelayFrame } from './frame';
 import { transferDesktopClipboard, transferDesktopClipboardContent } from './clipboard';
@@ -398,7 +402,21 @@ export const remoteDesktop = new RemoteDesktopController({
   clipboardContent: (action, content, isCurrent) =>
     transferDesktopClipboardContent(action, content, isCurrent, (events) => input.input(events)),
   displayModes: readDesktopDisplayModes,
-  resolution: setDesktopDisplayMode,
+  displayPresent: (displayId) =>
+    screen.getAllDisplays().some((display) => String(display.id) === displayId),
+  resolution: async (displayId, modeId, beforeChange, expected) => {
+    await setDesktopDisplayMode(displayId, modeId, beforeChange);
+    if (expected)
+      await waitForDisplayRestore(displayId, expected, beforeChange, (displays) =>
+        // Restoration may retire an unplugged monitor; selection must not
+        // publish usable geometry for a monitor that no longer exists.
+        displays.some((display) => String(display.id) === displayId),
+      );
+  },
+  restoreResolution: async (displayId, modeId, beforeChange, expected) => {
+    await setDesktopDisplayMode(displayId, modeId, beforeChange, true);
+    await waitForDisplayRestore(displayId, expected, beforeChange);
+  },
   createViewerDisplay,
   startInput: (displayId) => input.start(displayId),
   input: (events) => {
@@ -444,23 +462,27 @@ export function registerRemoteDesktopIpc(
   denyAppDesktopCapture(session.defaultSession, isVoiceInputOwner);
   const timer = setInterval(() => remoteDesktop.tick(), 1000);
   timer.unref();
-  app.on('before-quit', () => {
+  onQuit('remote-desktop-stop', () => {
     clearInterval(timer);
     permissions.dismiss();
     remoteDesktop.stop();
   });
+  onQuit('remote-desktop-restore', () => remoteDesktop.stopAndRestore(), 'async');
   screen.on('display-removed', (_event, display) => {
     if (remoteDesktop.changingDisplay) return;
     if (String(display.id) === remoteDesktop.displayId) remoteDesktop.stop();
   });
   screen.on('display-metrics-changed', (_event, display, metrics) => {
     if (remoteDesktop.changingDisplay) return;
-    // Work-area changes (lock screen, Dock/menu bar, display wake) do not
-    // change whole-screen input coordinates and must not terminate the lease.
+    // Managed resolution changes can deliver scaleFactor after preparation
+    // finishes. Matching logical geometry keeps input coordinates valid;
+    // rotation still invalidates the lease, even for an unchanged size.
     if (
       String(display.id) === remoteDesktop.displayId &&
       !(
-        metrics.every((metric) => metric === 'bounds' || metric === 'workArea') &&
+        metrics.every(
+          (metric) => metric === 'bounds' || metric === 'workArea' || metric === 'scaleFactor',
+        ) &&
         remoteDesktop.displayGeometryMatches(
           String(display.id),
           display.size.width,

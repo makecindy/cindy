@@ -131,6 +131,8 @@ export interface RemoteDesktopCapabilities {
   trickleIce?: boolean;
   systemAudio?: boolean;
   displayModes?: boolean;
+  /** System mode changes can keep the lease and restore on disconnect. */
+  resolutionRestore?: boolean;
   /** Can temporarily lay out the desktop at the viewer's requested dimensions. */
   viewerDisplay?: boolean;
   viewerDisplayRestore?: boolean;
@@ -185,7 +187,7 @@ export type RemoteDesktopRequest =
   | { op: "displayModes"; lease: string }
   | { op: "viewerDisplay"; lease: string; width: number; height: number }
   | { op: "restoreViewerDisplay"; lease: string }
-  | { op: "resolution"; lease: string; modeId: string };
+  | { op: "resolution"; lease: string; modeId: string; temporary?: boolean };
 
 export function parseRemoteDesktopRequest(
   value: unknown,
@@ -289,8 +291,16 @@ export function parseRemoteDesktopRequest(
     v.op === "resolution" &&
     typeof v.modeId === "string" &&
     /^[0-9]{1,10}$/.test(v.modeId)
-  )
-    return { op: v.op, lease, modeId: v.modeId };
+  ) {
+    if (v.temporary !== undefined && typeof v.temporary !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      modeId: v.modeId,
+      ...(v.temporary === true ? { temporary: true } : {}),
+    };
+  }
   if (v.op === "offer" && typeof v.sdp === "string" && v.sdp.length <= 64_000) {
     if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
       throw new Error("INVALID_REQUEST");
