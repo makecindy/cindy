@@ -189,6 +189,39 @@ const CINDY_ART_MEDIA_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * cindy_helper control 类里会改写另一个会话的工作区、软删除会话或向 agent 指定路径
+ * 落盘的内层工具:这些动作在 GUI 里都经用户亲手选择,工具侧必须逐次经用户确认。
+ */
+const SESSION_OPS_REQUIRING_APPROVAL: ReadonlySet<string> = new Set([
+  'move_sessions',
+  'delete_sessions',
+  'export_session',
+  // fork 会复制源会话的 workingDir 与权限档:在另一个项目根下派生新会话同样是委派访问。
+  'fork_session',
+]);
+
+/**
+ * 取 cindy_helper progressive 调用的内层动作,并判断这次调用是否真的触发受管副作用:
+ * move_sessions 只有 target_kind=project(改写目录)才需要;delete_sessions 只有
+ * dry_run=false(真删)才需要;export_session / fork_session 一律需要。args 读不出形状时按需要审批处理。
+ */
+function readCindyHelperInnerCall(
+  toolParams: unknown,
+): { name: string; needsApproval: boolean } | undefined {
+  const params = readJsonObject(toolParams);
+  const name = typeof params?.name === 'string' ? params.name.trim() : '';
+  if (!name) return undefined;
+  const args = readJsonObject(params?.args);
+  if (name === 'move_sessions') {
+    return { name, needsApproval: !args || args.target_kind !== 'dialogue' };
+  }
+  if (name === 'delete_sessions') {
+    return { name, needsApproval: !args || args.dry_run === false };
+  }
+  return { name, needsApproval: true };
+}
+
+/**
  * ghost_call 是聚合入口，默认逐次确认。Cindy Art 的作图/改图/视频是第一方媒体
  * 能力，用户发「画一张」即构成授权；Auto-review 下再弹卡会把常规作图变成手动授权。
  * 读不出 ghost_id / tool 时 fail closed，其它插件不受影响。
@@ -251,6 +284,14 @@ export function getDesktopMcpToolApprovalPolicy(
         const spec = readJsonObject(worker);
         return !spec || Object.hasOwn(spec, 'working_dir');
       })) return 'prompt-each-time';
+    }
+  }
+  // cindy_helper 是渐进披露聚合入口。会话操作里"改写另一个会话的工作目录 / 软删除 /
+  // 向 agent 指定路径落盘"等同于委派文件系统访问,不能因 server 可信而静默。
+  if (serverName === 'cindy_helper' && (toolName === 'call_tool' || toolName === undefined)) {
+    const inner = readCindyHelperInnerCall(toolParams);
+    if (inner && SESSION_OPS_REQUIRING_APPROVAL.has(inner.name) && inner.needsApproval) {
+      return 'prompt-each-time';
     }
   }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
