@@ -2846,6 +2846,7 @@ function ModelSelectorContentView({
             />
           </div>
           <UnifiedModelPanel
+            deviceId={deviceId}
             localProviderUsage={!deviceId && !providersOverride}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}

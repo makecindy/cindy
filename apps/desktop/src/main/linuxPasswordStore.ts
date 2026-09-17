@@ -1,3 +1,9 @@
+/** Preserve only the storage selector, not URLs or transient task arguments. */
+export function linuxPasswordStoreRelaunchArgs(value: string): string[] {
+  return ['gnome-libsecret', 'kwallet', 'kwallet5', 'kwallet6', 'basic'].includes(value)
+    ? [`--password-store=${value}`] : [];
+}
+
 /** Configure before Electron's ready event, without probing or opening the keyring. */
 export function configureLinuxPasswordStore({
   platform,

@@ -17,12 +17,16 @@
 import { execFileSync, execSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractMobileDevRegionArgs } from "./lib/mobile-dev-region.mjs";
+import { mobileClientBundleEnv } from "../../../scripts/shared/client-endpoint-build-env.mjs";
+import { readSimEnvironment } from "./lib/sim-environment.mjs";
+import { withLocalMobileRegionConfig, extractMobileDevRegionArgs } from "./lib/mobile-dev-region.mjs";
 import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
 } from "./lib/mobile-local-config.mjs";
 import {
+  classifySimMetroListener,
+  validateSimMetroIdentity,
   bootedSimulatorLinesForTarget,
   extractSimMetroPortArgs,
   extractSimWhoamiUdidArgs,
@@ -30,10 +34,8 @@ import {
   resolveMobileSimulatorBundleId,
 } from "./lib/sim-whoami.mjs";
 import {
-  cwdOfPid,
   gitSourceIdentity,
-  gitSourceOfPid,
-  isInside,
+  probeMetroOwnership,
 } from "./sim-metro.mjs";
 
 const PORTS = [8081, 8082, 8083, 8084, 8085, 8086];
@@ -115,13 +117,13 @@ if (booted.length === 0) {
   if (!jsonOutput) console.log("  (没有 booted 模拟器)");
   healthy = false;
 } else if (!jsonOutput) booted.forEach((l) => console.log("  " + l.trim()));
-if (simulatorUdid && targetBooted.length === 0) {
-  if (!jsonOutput) console.log(`  (目标模拟器 ${simulatorUdid} 未启动)`);
+if (targetBooted.length !== 1) {
+  if (!jsonOutput) console.log(`  (需要唯一的已启动目标模拟器；多设备时传 --udid)`);
   healthy = false;
 }
 
 if (!jsonOutput) console.log(`\n==== 模拟器里装的 ${bundleId}(native 安装包版本)====`);
-const container = getSimulatorAppContainer(shFile, simulatorUdid, bundleId);
+const container = targetBooted.length === 1 ? getSimulatorAppContainer(shFile, simulatorUdid, bundleId) : "";
 let installed = null;
 if (!container) {
   if (!jsonOutput) {
@@ -153,36 +155,26 @@ if (!jsonOutput) console.log("\n==== Metro 端口归属(哪个端口 = 哪个 wo
 let anyMetro = false;
 let currentSourceOnExpectedPort = false;
 const metros = [];
+const { envFingerprint } = readSimEnvironment(mobileDir,
+  withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })));
 for (const port of ports) {
-  const pids = sh(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`)
-    .split("\n")
-    .filter(Boolean);
-  for (const pid of pids) {
-    const cwd = cwdOfPid(pid);
-    const worktree = cwd ? cwd.replace(/\/apps\/mobile$/, "") : null;
-    const isMetro = /expo|metro/i.test(sh(`ps -p ${pid} -o command=`));
-    const runningSource = isMetro ? gitSourceOfPid(pid) : null;
-    if (isMetro) anyMetro = true;
-    metros.push({
-      port,
-      pid: Number(pid),
-      cwd: cwd ?? null,
-      worktree,
-      isMetro,
-      source: runningSource,
-    });
-    if (!jsonOutput) {
-      console.log(
-        `  :${port}  pid ${pid}  →  ${worktree || "(无法读取进程 cwd)"}${runningSource ? `  source=${runningSource}` : isMetro ? "  source=(未注入)" : "  (非 Metro?)"}`,
-      );
-    }
-    if (port === expectedPort && isMetro) {
-      currentSourceOnExpectedPort ||= Boolean(
-        cwd && isInside(worktreeRoot, cwd) && runningSource === expectedSource,
-      );
-    }
-  }
+  const ownership = probeMetroOwnership(port);
+  if (!ownership) continue;
+  const listener = classifySimMetroListener({
+    cwd: ownership.cwd, source: ownership.source, targetWorktree: worktreeRoot,
+  });
+  const verdict = validateSimMetroIdentity({
+    listener, currentSource: expectedSource, runningSource: ownership.source,
+    currentRegion: region, runningRegion: ownership.region,
+    currentEnvFingerprint: envFingerprint, runningEnvFingerprint: ownership.envFingerprint,
+  });
+  anyMetro ||= listener.confirmed;
+  metros.push({ port, ...ownership, pid: Number(ownership.pid), worktree: listener.worktree,
+    isMetro: listener.confirmed, identity: verdict });
+  if (!jsonOutput) console.log(`  :${port} pid ${ownership.pid} → ${listener.worktree || '(unknown)'}: ${verdict.code}`);
+  if (port === expectedPort) currentSourceOnExpectedPort = verdict.healthy;
 }
+
 if (!anyMetro && !jsonOutput)
   console.log(
     `  (检查的端口上没发现 Metro;用 \`pnpm mobile:sim:start -- --port ${expectedPort}\` 启一个)`,
@@ -196,7 +188,7 @@ if (!jsonOutput) {
   );
   if (healthy) {
     console.log(
-      `✓ PASS:booted dev client、${expectedPort} Metro 归属和源码指纹一致。`,
+      `✓ PASS:安装包存在、${expectedPort} Metro 身份一致；尚未验证 App 加载 bundle 或显示页面。`,
     );
   } else {
     console.error(
@@ -207,6 +199,7 @@ if (!jsonOutput) {
   console.log(
     JSON.stringify({
       healthy,
+      pageVerified: false,
       region,
       bundleId,
       worktree: worktreeRoot,

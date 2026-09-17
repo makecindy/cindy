@@ -11,6 +11,7 @@
  */
 
 import os from 'node:os';
+import { deviceName, initializeDeviceName } from './deviceName';
 import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
@@ -589,12 +590,6 @@ function recoverFromRelayAuthFailure(): void {
     });
 }
 
-/** Windows 历史主机名可能带尾部空白/全大写,统一 trim;空值兜底 'Unknown Device' */
-function deviceName(): string {
-  const name = os.hostname().trim();
-  return name || 'Unknown Device';
-}
-
 function buildDeviceInfo(): DeviceInfo {
   const info: DeviceInfo = {};
   const cpuLabel = normalizeDeviceInfoText(os.cpus()[0]?.model);
@@ -643,6 +638,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     return;
   }
 
+  const deviceNameReady = initializeDeviceName();
   remoteCredentialHost.currentToken = () => {
     const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
     return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
@@ -650,6 +646,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   client = new DeviceLinkClient({
     getWsUrl: wsUrl,
     getToken: async () => {
+      // Prepare the name before the first hello without blocking Electron's main thread.
+      await deviceNameReady;
       const token = authManager.getAccessToken();
       if (token) return token;
       // 无现值(冷启动竞态/过期被清):尝试 refresh 一次,失败则跳过本轮重连

@@ -221,27 +221,27 @@ function findBrokenDeps(deps = CRITICAL_DEPS) {
   return broken;
 }
 
+// Simulator entrypoints are diagnostics/startup, never an implicit dependency repair.
+export function checkWorkspaceDependencies(root = ROOT) {
+  const missing = WORKSPACE_CRITICAL_DEPS.filter(({ checkPath }) =>
+    !fs.existsSync(path.join(root, checkPath))).map(({ name }) => name);
+  for (const name of ['expo', '@expo/env', 'react-native']) {
+    if (![path.join(root, 'apps/mobile/node_modules', name, 'package.json'),
+      path.join(root, 'node_modules', name, 'package.json')].some((file) => fs.existsSync(file))) missing.push(name);
+  }
+  return missing;
+}
+
 function ensureWorkspaceOnlyDependencies() {
-  const broken = findBrokenDeps(WORKSPACE_CRITICAL_DEPS);
+  const missing = checkWorkspaceDependencies();
   const lockIssue = reasonLockfileOutOfSync();
-  if (broken.length === 0 && !lockIssue) {
-    log('workspace 依赖已同步，跳过');
+  if (missing.length || lockIssue) {
+    err(`依赖检查失败: ${missing.join(', ') || lockIssue}`);
+    err('保留现有 node_modules，未安装或删除依赖。请在当前 worktree 显式运行 pnpm install --frozen-lockfile。');
+    process.exitCode = 1;
     return;
   }
-
-  if (broken.length > 0) {
-    warn(`workspace 依赖缺失：${broken.map((item) => item.name).join(', ')}`);
-    removeBrokenDirs(broken);
-  }
-  if (lockIssue) log(lockIssue);
-  runInstall(['install']);
-
-  const still = findBrokenDeps(WORKSPACE_CRITICAL_DEPS);
-  if (still.length > 0) {
-    err(`pnpm install 后 workspace 依赖仍缺失：${still.map((item) => item.name).join(', ')}`);
-    process.exit(1);
-  }
-  log('workspace 依赖已同步');
+  log('workspace 依赖检查通过（只读）');
 }
 
 function runInstall(args = ['install']) {

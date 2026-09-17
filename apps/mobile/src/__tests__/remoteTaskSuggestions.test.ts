@@ -109,7 +109,8 @@ describe("home recommendation connection readiness", () => {
     const source = readTextLf(resolve(process.cwd(), "app/devices/index.tsx"), "utf8");
     const expression = source.match(/ready: ([\s\S]*?),\n  \}\);\n  const newSessionDeviceOptions/)?.[1];
     expect(expression).toBeTruthy();
-    const evaluateReady = new Function("status", "activeConnectionIssue", "homeRecoveringDeviceIds", "selectedDeviceId", `
+    const evaluateReady = new Function("status", "activeConnectionIssue", "recoveringDeviceIds", "selectedDeviceId", `
+      const unresponsiveDevices = new Set(), rawDeviceConnectionStates = {};
       const initialHomeLoading = false, initialHomeError = null, connectionError = null;
       const indexedSearch = { status: 'idle' }, newSessionDisabled = false;
       const deviceModels = [{ deviceId: 'computer', canOpen: true }];

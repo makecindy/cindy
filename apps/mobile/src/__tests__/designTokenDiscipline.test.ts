@@ -35,6 +35,8 @@ const COLOR_EXEMPT = [/Html\.ts$/i, /src\/session\/ImageLightbox\.tsx$/];
 
 /** 组件几何 / 特殊语义的登记豁免:file 后缀匹配 + 行内容包含 snippet 即放行。 */
 const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
+  { file: 'src/session/ComposerFrame.ios.tsx', snippet: 'borderRadius: 30', reason: 'Native glass shares the existing composer geometry' },
+  { file: 'src/session/MobileComposerInputRow.tsx', snippet: 'borderRadius: 0', reason: 'Unframed child delegates its contour to native glass' },
   {
     file: 'src/session/MobileComposerInputRow.tsx',
     snippet: 'borderRadius: 30',

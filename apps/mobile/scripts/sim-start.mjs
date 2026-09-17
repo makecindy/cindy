@@ -26,8 +26,8 @@
 //   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { parseProjectEnv } from '@expo/env';
+import { existsSync } from 'node:fs';
+import { readSimEnvironment } from './lib/sim-environment.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
@@ -58,7 +58,6 @@ import {
   clearMetroOwner,
   gitSourceIdentity,
   isMetroPid,
-  metroEnvironmentFingerprint,
   portInUse,
   probeMetroOwnership,
   terminateMetro,
@@ -86,24 +85,7 @@ const buildEnv = withLocalMobileRegionConfig(
 const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: buildEnv });
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
-const projectEnv = parseProjectEnv(mobileDir, {
-  mode: process.env.NODE_ENV ?? 'development',
-  silent: true,
-  systemEnv: { ...process.env },
-});
-const loginScenario = process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()
-  ?? projectEnv.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()
-  ?? '';
-const envFingerprint = metroEnvironmentFingerprint({
-  env: {
-    ...buildEnv,
-    EXPO_PUBLIC_LOGIN_SCENARIO: loginScenario,
-  },
-  files: {
-    '.env': readFileSync(envResult.envPath, 'utf8'),
-    'scripts/self-host-regions.json': readFileSync(localConfigResult.configPath, 'utf8'),
-  },
-});
+const { loginScenario, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
 
 function git(args) {
   try {
@@ -143,8 +125,8 @@ if (portArgs.port === DEFAULT_PORT) {
       envChanged,
       currentSource: sourceIdentity,
       runningSource,
-      currentRegion: process.platform === 'win32' ? region : undefined,
-      runningRegion: process.platform === 'win32' ? ownership?.region : undefined,
+      currentRegion: region,
+      runningRegion: ownership?.region,
       currentEnvFingerprint: envFingerprint,
       runningEnvFingerprint: ownership?.envFingerprint,
       listener,

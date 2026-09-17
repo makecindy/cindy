@@ -29,11 +29,9 @@ import {
   useRemoteBootstrapLoadingDeviceIds,
   useRemoteProjectSessions,
 } from '@/features/device-link/remoteProjectsStore';
-import { ApiError } from '@/lib/httpClient';
-import { getSessionFor } from '@/lib/makerTransport';
+import { readSessionBatchFor } from '@/lib/sessionBatchRead';
 import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { toast } from '@/lib/toast';
-import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { mergeSessionSources } from './lib/mergeSessionSources';
@@ -230,19 +228,13 @@ function SplitGroupActive({
 
     // The merged catalog is eventually consistent while local refreshes and
     // device-link mirrors rebuild. Only prune after the session's owning side
-    // confirms the pane is no longer active or is absent; getSessionFor
+    // confirms the pane is no longer active or is absent; readSessionBatchFor
     // preserves remote routing.
-    void Promise.all(
-      missingSessionIds.map(async (sessionId) => {
-        try {
-          const session = await getSessionFor(sessionId);
-          return session.status === 'archived' || session.status === 'deleted' ? sessionId : null;
-        } catch (error) {
-          const errorCode = error instanceof ApiError ? error.code : extractIpcError(error)?.code;
-          return errorCode === 'NOT_FOUND' ? sessionId : null;
-        }
-      }),
-    ).then((staleSessionIds) => {
+    void readSessionBatchFor(missingSessionIds).then((results) => {
+      const staleSessionIds = results.map(({ sessionId, value, errorCode }) =>
+        errorCode === 'NOT_FOUND' || value?.status === 'archived' || value?.status === 'deleted'
+          ? sessionId : null,
+      );
       if (cancelled) return;
       const confirmedStaleSessionIds = staleSessionIds.filter((sessionId): sessionId is string =>
         Boolean(sessionId && !sessionsById.has(sessionId)),

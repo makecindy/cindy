@@ -39,6 +39,7 @@ const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
+    providerOrder?: string[];
   };
 const projectForCurrentController = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
@@ -371,6 +372,13 @@ describe('active runtime summary projection', () => {
         .toBe(rows);
     },
   );
+});
+
+it('preserves host display order without changing catalog order', () => {
+  const result = project({ providers: [{ id: 'a' }, { id: 'b' }], providerOrder: ['b', 'a', 'b', null, 42] });
+  expect(result.providerOrder).toEqual(['b', 'a']);
+  expect(result.providers.map(p => p.id)).toEqual(['a', 'b']);
+  expect(project({ providers: [] }).providerOrder).toBeUndefined();
 });
 
 describe('schedule sidebar index tunnel cap', () => {

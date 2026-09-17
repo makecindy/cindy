@@ -36,6 +36,7 @@ export {
 export { reconcilePendingSafeDirectoryCleanups } from './WorktreeManager';
 export {
   getWorktreeRestoreStatus,
+  getManagedWorktreeReadinessForSession,
   restoreMissingManagedWorktreeForSession,
   restoreWorktreeForSession,
   type WorktreeRestoreStatus,

@@ -24,7 +24,6 @@ import {
   collectDeleteAnchorClientIds,
   collectStableLocalFileRefs,
   collectTurnFinalAssistantClientIds,
-  hasBotAssistantOutputInCurrentTurn,
   isGeneratedFilesTurnSealed,
   findRestorableViewportItemIdx,
   renderItemContainsClientId,
@@ -101,28 +100,6 @@ describe('Bot 流式正文呈现', () => {
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
     ).toEqual(['u1', 'a1']);
     expect(visible.some((item) => item.type === 'work_group')).toBe(false);
-  });
-
-  it('正文开始前显示思考，正文出现后立即让位，隐藏行不误触发', () => {
-    const user = mkUser('u1');
-    const hiddenSubagent = {
-      ...mkAssistant('sub', '内部结果'),
-      parentToolUseId: 'toolu_01J00000000000000000000000',
-    };
-    const systemCard = { ...mkAssistant('card', '系统状态'), systemCardType: 'status' as const };
-
-    expect(hasBotAssistantOutputInCurrentTurn([user, hiddenSubagent, systemCard])).toBe(false);
-    expect(
-      hasBotAssistantOutputInCurrentTurn([
-        user,
-        hiddenSubagent,
-        systemCard,
-        mkAssistant('a1', '首字'),
-      ]),
-    ).toBe(true);
-    expect(
-      hasBotAssistantOutputInCurrentTurn([user, mkAssistant('a1', '上一轮正文'), mkUser('u2')]),
-    ).toBe(false);
   });
 
   it('伙伴私聊往返期间持续保留双方消息戳', () => {

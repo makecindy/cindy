@@ -43,3 +43,14 @@ it('fails closed for incomplete batch results, rejects hidden gets and clears a 
   expect(await projectRemoteSessionResult('maker:list-active', [{ sessionId: 's1' }])).toEqual([{ sessionId: 's1' }]);
   expect(batch).toHaveBeenCalledTimes(1);
 });
+
+
+it('filters batch detail reads using the shared fresh visibility lookup', async () => {
+  let hidden = false;
+  const batch = vi.fn(async () => new Map([['s', hidden ? 'hidden' as const : 'visible' as const]]));
+  setRemoteBotSessionLookup(async () => 'visible', batch);
+  expect(await projectRemoteSessionResult('local-db:sessions:get-many', [{ id: 's' }])).toEqual([{ id: 's' }]);
+  hidden = true;
+  expect(await projectRemoteSessionResult('local-db:sessions:get-many', [{ id: 's' }])).toEqual([]);
+  expect(batch).toHaveBeenCalledTimes(2);
+});

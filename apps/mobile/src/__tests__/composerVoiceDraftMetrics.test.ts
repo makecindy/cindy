@@ -128,10 +128,10 @@ describe('composer voice draft text metrics', () => {
 
   /**
    * 听写期间「点输入区停止听写」的命中层盖在 inputFrame 上,单行时只有 28pt;
-   * 触控目标要 ≥44pt(mobile-design-guide),且只能靠父容器撑起——RN 的 hitSlop
-   * 不会越过父视图边界。两个页面都要撑,否则各自的听写停止都点不准。
+   * Android 覆盖层继续由父容器保证 44pt；iOS 的常驻麦克风提供停止入口，
+   * 录音状态不能抬高已展开的输入区。
    */
-  it('raises the input frame to the touch target while dictating', () => {
+  it('keeps iOS dictation height stable and preserves the Android overlay touch target', () => {
     const row = read(COMPOSER_ROW);
     expect(row).toContain('export const MOBILE_COMPOSER_MIN_TOUCH_TARGET = 44;');
     // 显式 height 会压过 minHeight(manual 定高时 frameHeight 可能小于触控目标),
@@ -139,8 +139,8 @@ describe('composer voice draft text metrics', () => {
     expect(row).toContain('Math.max(inputFrameHeight, inputFrameMinHeight)');
     expect(row).toContain('resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight }');
     for (const rel of COMPOSER_PAGES) {
-      expect(read(rel), `${rel} 听写期间必须把输入区撑到触控目标`)
-        .toContain('inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}');
+      expect(read(rel), `${rel} 仅 Android 听写覆盖层需要额外的最小高度`)
+        .toContain("inputFrameMinHeight={Platform.OS !== 'ios' && voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}");
     }
   });
 

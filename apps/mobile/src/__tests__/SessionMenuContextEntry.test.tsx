@@ -21,6 +21,7 @@ vi.mock("react-native", async () => {
   }) =>
     createElement("div", { onClick: onPress, "data-testid": testID }, children);
   return {
+    Platform: { OS: 'android' },
     View: view,
     Pressable: view,
     Text: view,
@@ -49,12 +50,15 @@ vi.mock("lucide-react-native", () =>
       "ArchiveRestore",
       "ChevronRight",
       "Copy",
+      "Folder",
       "GitBranch",
       "Link2",
+      "Monitor",
       "Pencil",
       "Pin",
       "PinOff",
       "RefreshCw",
+      "Search",
       "Sparkles",
       "Trash2",
     ].map((name) => [name, () => null]),
@@ -100,6 +104,7 @@ it("reopening the primary menu after info does not initialize an engine, but ent
     usageReader: reader,
     onContextError: vi.fn(),
     onRefreshAccountUsage: vi.fn(),
+    onOpenSearch: vi.fn(),
     session: {
       id: "a",
       model: "custom",
@@ -126,9 +131,18 @@ it("reopening the primary menu after info does not initialize an engine, but ent
     );
     expect(reader.getContextUsage).toHaveBeenCalledOnce();
     // Both surfaces stay mounted. The primary card is the first summary entry.
+    const search = host.querySelector('[data-testid="session.detailsSearch"]');
+    expect(search).not.toBeNull();
+    await act(async () => (search as HTMLElement).click());
+    expect(props.onOpenSearch).toHaveBeenCalledOnce();
     const summary = host.querySelector('[data-testid="session.menuUsageRow"]');
     expect(summary).not.toBeNull();
     await act(async () => (summary as HTMLElement).click());
+    expect(reader.getContextUsage).toHaveBeenCalledTimes(2);
+    await act(async () => root.render(<SessionMenuSheet {...props} messageOnly initialView="menu" />));
+    expect(host.querySelector('[data-testid="session.detailsSearch"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="session.menuUsageRow"]')).toBeNull();
+    expect(host.querySelector('[data-testid="session.infoLayer"]')).toBeNull();
     expect(reader.getContextUsage).toHaveBeenCalledTimes(2);
   } finally {
     act(() => root.unmount());

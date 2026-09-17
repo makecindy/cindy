@@ -11,6 +11,7 @@ import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-nati
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeArch, ForgeConfig, ForgePlatform } from '@electron-forge/shared-types';
+import { stageLinuxBuildInfo } from './forge-linux';
 import {
   BRAND_IDENTITY,
   allDeepLinkSchemes,
@@ -844,6 +845,7 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   if (targetPlatform === 'darwin') {
     base.push('resources/cli');
   }
+  if (targetPlatform === 'linux') base.push('resources/linux');
 
   return base;
 }
@@ -1707,6 +1709,8 @@ const config: ForgeConfig = {
     postPackage: async (_forgeConfig, opts) => {
       try {
         for (const buildPath of opts.outputPaths) {
+          stageLinuxBuildInfo(buildPath, opts.platform, opts.arch,
+            process.env.APP_VERSION || DESKTOP_PACKAGE_VERSION, CINDY_REGION);
           const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);

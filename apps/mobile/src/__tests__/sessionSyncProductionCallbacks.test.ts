@@ -374,7 +374,14 @@ describe('destructive remote history pushes', () => {
   // Delete (including initial-page races) is exercised through the real store in remoteHistoryReentry.test.ts.
   it.each(['clear', 'archive'])('retires old pages on %s without an unrelated activity event', async (operation) => {
     const context = readFileSync(resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'), 'utf8');
-    const body = context.slice(context.indexOf('  const historySessionId ='), context.indexOf('/** provider revision')).trim().slice(0, -1);
+    const parsed = ts.createSourceFile('context.tsx', context, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const routeFunction = parsed.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'routeFrame');
+    if (!routeFunction?.body) throw new Error('Missing production routeFrame body');
+    const routeBody = routeFunction.body.getText(parsed).slice(1, -1);
+    const historyStart = routeBody.indexOf('  const historySessionId =');
+    if (historyStart < 0) throw new Error('Missing production history routing');
+    const body = routeBody.slice(historyStart);
     const stale = { id: 'old', clientId: 'old', role: 'user', content: 'old', createdAt: '2026-09-08T00:00:00Z' };
     const oldPage = { version: 1 as const, items: projectHistoryView([stale], false), hasMore: false, nextCursor: null };
     let reads = 0;

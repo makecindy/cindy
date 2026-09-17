@@ -41,6 +41,7 @@ import { useTranslation } from "react-i18next";
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import {
   RemoteDesktopViewerSession,
+  REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS,
   viewerDisplaySize,
   RemoteDesktopViewerMedia,
   remoteDesktopFailureKey,
@@ -263,6 +264,7 @@ export default function RemoteDesktopScreen() {
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
   const [status, setStatus] = useState("connecting");
+  const [appState, setAppState] = useState(AppState.currentState);
   const [error, setError] = useState<string | null>(null);
   const takeoverPromptOpen = useRef(false);
   const takeoverAction = useRef<() => void>(() => {});
@@ -818,6 +820,20 @@ export default function RemoteDesktopScreen() {
   const connectRef = useRef(connect);
   connectRef.current = connect;
   useEffect(() => {
+    if (!focused || appState !== "active" || !showConnectionStatus) return;
+    // One deadline spans link setup, automatic retries and first presentation.
+    // Background/navigation pauses it; a manual retry starts a fresh budget.
+    const timer = setTimeout(() => {
+      if (
+        alive.current &&
+        focusedRef.current &&
+        AppState.currentState === "active"
+      )
+        fail(new Error("DESKTOP_CONNECTION_TIMEOUT"));
+    }, REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [focused, appState, showConnectionStatus, fail]);
+  useEffect(() => {
     // Authentication preparation is already running; only the native prompt
     // waits for a frame from this lease. stop() releases cancelled waiters.
     if (
@@ -888,6 +904,7 @@ export default function RemoteDesktopScreen() {
   useEffect(() => {
     alive.current = true;
     const subscription = AppState.addEventListener("change", (state) => {
+      setAppState(state);
       // iOS enters inactive during an interrupted Home gesture or a system
       // overlay. Release held input, but keep this viewer's lease and stream.
       if (state === "inactive") {
@@ -2129,10 +2146,13 @@ export default function RemoteDesktopScreen() {
             top: landscape
               ? insets.top + spacing.lg
               : edgePadding.paddingTop + spacing.xs,
-            // Keep the 44pt control out of the island: follow the rail when it
-            // is on the left, otherwise start after the left safe inset.
+            // iOS landscape: Island/notch sits mid-edge, so the top-left
+            // corner stays clear even when insets.left is large. Skip that
+            // inset unless the top edge is also unsafe — a physical cutout
+            // occupying the corner, not a centered island. Android left
+            // insets are an unsafe strip (cutout/curve), not an island.
             left: landscape
-              ? (toolbarOnLeft ? 0 : insets.left) +
+              ? (Platform.OS === "ios" && insets.top === 0 ? 0 : insets.left) +
                 spacing.lg +
                 (Platform.OS === "ios" ? spacing.xs : 0)
               : edgePadding.paddingLeft + spacing.lg,

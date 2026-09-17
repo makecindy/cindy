@@ -297,7 +297,6 @@ input/text
 - **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 radius scale; single rule, no nesting condition). Implementation: `components/ui/input.tsx` `Textarea`.
 - **Existing settings inputs retain their local theme contract** through `SettingsTextInput`, a thin wrapper over `ui/input`. It supplies the historical `settings-input-text`, `settings-input-border`, `settings-input-border-focus`, and `settings-input-placeholder` aliases via `inputClassName`. Their defaults still resolve to Tier-1; explicit local overrides stay local. Generic `Input` keeps the Tier-1 defaults above. Standard error-state border/ring takes precedence over wrapper styles. Do not promote these legacy overrides into global semantic slots or rewrite user theme files. Existing placeholder load-time normalization remains unchanged.
 - Placeholders must **read as clearly empty** — Silver (`#a3a3a3`) is too prominent against either Card surface (≈5:1 Dark / ≈2.6:1 Light) and reads as real input; forbidden. **Every input surface's placeholder (chat / ask / settings / plan-action-fb) resolves to `--text-placeholder`** (2026-06 G3, archived in `design-decision-log.md`); non-default themes express their own placeholder color by overriding `text-placeholder`.
-  CINDY Light/Dark also use the empty-input hierarchy after the user's 2026-09-16 correction; their placeholder overrides no longer reuse tertiary text colors. See [the decision record](./design-decision-log.md#2026-09-16--settings-placeholder-and-cindy-make-task-list).
 
 **DS-6 form usage (approved 2026-09-08)**: use `FormField` for a real field's label, hint and inline validation error; pass its render-function props to `Input` / `SettingsTextInput`. `required` supplies assistive semantics only, never adds browser validation or changes the business rules. Reserve feedback space on fields that can fail and focus/scroll to the first invalid field; dynamic rows keep stable IDs when siblings are added or removed. Service failures remain Toasts. No new Textarea consumer is required.
 
@@ -528,7 +527,7 @@ Cindy Desktop is an Electron app: layout responds to window resizing, not page b
 
 ### Mobile
 
-Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait / pad landscape). The surfaces specified so far are documented in §15.13 (cross-platform skin rules) and §16 (login); mobile layout beyond those surfaces follows `apps/mobile` as implemented.
+Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait / pad landscape). Cross-platform skins and login follow §15.13 and §16. iOS navigation, sheets, materials and controls follow the platform supplement [iOS native design](./ios-native-design.md); implementation guidance remains in [Mobile design guide](../../apps/mobile/docs/mobile-design-guide.md). Real system-owned components retain system geometry, typography and material; this does not exempt custom content from Mobile tokens. Existing implementations are migration evidence, not the specification for new surfaces.
 
 ## 9. Agent Prompt Guide
 

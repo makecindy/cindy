@@ -27,10 +27,9 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import { selectSessionListRows, selectSessionWithCount, selectSessionsByIds, flattenSessionReadRow, projectSessionReadResult, type SessionListRow } from '../sessionQueries';
 import { commitBotProfileDeletion } from '../botProfileDeletionStore.js';
 import {
-  LIST_PREVIEW_EXTRACT_SQL,
-  LATEST_VISIBLE_PREVIEW_FILTER_SQL,
   persistSessionListProjectionBatch,
   type SessionListProjectionBackfillItem,
 } from '../sessionListProjection';
@@ -51,7 +50,6 @@ import {
   persistableSessionEffort,
   normalizeRemoteHostId,
   finalizePlainPreview,
-  type SessionRowWithCount,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
@@ -66,7 +64,10 @@ import {
   DESKTOP_VISIBLE_SESSION_SOURCES,
   isRetainableProjectSessionSource,
 } from '../../../shared/sessionSource.js';
-import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import {
+  normalizeWorkingDirForProjectSettings,
+  normalizeWorkingDirForStorage,
+} from '../../../shared/workingDir.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
@@ -82,6 +83,8 @@ import {
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
 import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
+import { SESSION_READ_BATCH_LIMIT } from '../../../shared/sessionRead';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
@@ -732,64 +735,6 @@ export async function persistSessionFields(
 const MAX_LIMIT = 1000;
 
 /**
- * list / get / update 共用的 messageCount：标量子查询。口径是该会话的全部 messages 行数，
- * 不过滤 role / rewind_at / cleared_at（口径要动就得连手机端卡片上的「N 条消息」一起想，
- * 见 maker-shared/sessionList 的 messageCountLabel）。
- *
- * 标量子查询没有 LEFT JOIN 补的那一行空行，无匹配时聚合返回 0，所以这里用 `count(*)` 是
- * 安全的。仍然只扫 idx_messages_session_created（session_id 是首列），不回表。
- *
- * 旧的一段式 LEFT JOIN + GROUP BY 不能图快改用 `count(*)`：LEFT JOIN 会给空会话补一行，
- * 数出 1 而非 0，打歪 sidebar 的「单空 New Maker 草稿」判定。list 已改成两段式；get/update
- * 也走同一条标量子查询，避免切任务时把几万行 join 进单行快照。
- *
- * 由 sessionListMessageCount 回归测试守护。
- *
- * list_message_count 已回填时走缓存列，跳过 messages 扫描。未回填时 count(*) 精确总数
- * （侧栏文案仍用 messageCountLabel 把 ≥1001 显示成 1000+；wire `_count.messages` 保持精确）。
- * 非 NULL 即信任：绕过 createMessage 的 messages 增删必须同步投影。
- * import / treeRehydrate 置空三列；turn/review 租约、context.rebuild、createMessage 只置空计数。
- */
-const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
-  CASE
-    WHEN ${sessions.listMessageCount} IS NOT NULL THEN ${sessions.listMessageCount}
-    ELSE (
-      SELECT count(*) FROM messages m WHERE m.session_id = ${sessions.id}
-    )
-  END
-)`.as('message_count');
-
-/**
- * sidebar-card-mode：最近一条可见 user/assistant 的预览抽出 / role。
- * list_preview 已回填时 CASE 短路，不碰 messages。否则 SQL 侧 json_extract 纯文本，
- * 不把整段 content 跨 worker RPC。autoResume 只检查 user 行的 agent_meta。
- */
-const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
-  CASE
-    WHEN ${sessions.listPreview} IS NOT NULL THEN NULL
-    ELSE (
-      SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
-      WHERE m.session_id = ${sessions.id}
-        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
-        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
-    )
-  END
-)`.as('latest_message_extract');
-const LATEST_MSG_ROLE_SQL = sql<string | null>`(
-  CASE
-    WHEN ${sessions.listPreviewRole} IS NOT NULL THEN ${sessions.listPreviewRole}
-    ELSE (
-      SELECT m.role FROM messages m
-      WHERE m.session_id = ${sessions.id}
-        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
-        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
-    )
-  END
-)`.as('latest_message_role');
-
-/**
  * 按 session id 查 desktop 端 sessions 表的产品快照。
  * 与 maker-core SessionMeta 不重叠 —— SessionMeta 故意不带 status (那是 desktop 产品语义)。
  * Resume 路径(scheduler runner / send_to_session)用它做归档/删除兜底和展示元数据返回。
@@ -938,7 +883,8 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   const ownerScope = captureOwnerScope();
   const ts =
     typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
   // 原子 guard：单条 UPDATE + WHERE 代替 SELECT→条件判断→UPDATE 三步走。
   // 旧实现存在 TOCTOU 竞态：两个并发调用（如 scheduler fire + 手动发送）都可能
   // 通过旧值检查后都执行 UPDATE，后写入的更早时间戳会覆盖已写入的更新值。
@@ -962,7 +908,14 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   // 通过 SELECT 拿回实际落库的 updatedAt（已经是 MAX'd 结果）用于广播，
   // 避免把旧 ts 当作 updatedAt 广播给 renderer。
   const updated = await db
-    .select({ userSendAt: sessions.userSendAt, updatedAt: sessions.updatedAt })
+    .select({
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+      workingDir: sessions.workingDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+      source: sessions.source,
+    })
     .from(sessions)
     .where(and(eq(sessions.id, id), eq(sessions.userSendAt, ts)))
     .limit(1);
@@ -983,6 +936,19 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       },
       ownerScope,
     );
+  }
+  // 项目独立保留真实使用时间；不能等归档/删除时再取清理时间，也不能从剩余任务重算。
+  // 复用入口处的 client，避免 await 期间切换账号后把旧项目写入新账号数据库。
+  const row = updated[0];
+  if (
+    row.workspaceKind === 'project' &&
+    row.workingDir &&
+    !row.remoteHostId &&
+    isRetainableProjectSessionSource(row.source)
+  ) {
+    const projectDir = normalizeWorkingDirForProjectSettings(row.workingDir);
+    const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
+    if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
   }
 }
 
@@ -1260,19 +1226,7 @@ export function registerSessionIpc(
         }
 
         scheduleSessionListProjectionBackfill(mergedRows);
-        return mergedRows.map((r) =>
-          sessionToCamel(
-            projectSessionContextWindow(
-              {
-                ...r.session,
-                messageCount: r.messageCount,
-                latestMessageExtract: r.latestMessageExtract,
-                latestMessageRole: r.latestMessageRole,
-              },
-              opts.resolveContextWindow,
-            ),
-          ),
-        );
+        return mergedRows.map((row) => projectSessionReadResult(flattenSessionReadRow(row), opts.resolveContextWindow));
       };
       const loadUsageHistoryRows = async () => {
         // 用量历史的“最耗任务”必须覆盖整个会话表，再由 renderer 按所选日历范围
@@ -1557,12 +1511,25 @@ export function registerSessionIpc(
     return { ok: true };
   });
 
+  // Bounded reconciliation read: same metadata/count/preview as GET, one DB RPC.
+  // Omitted rows mean missing or remotely hidden; the tunnel filters visibility.
+  ipcMain.handle('local-db:sessions:get-many', async (event, value: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(value) || value.length > SESSION_READ_BATCH_LIMIT) {
+      throwIpcError('INVALID_PARAMS', `sessionIds must be an array of at most ${SESSION_READ_BATCH_LIMIT} ids`);
+    }
+    const ids = [...new Set(value.map((id) => requireString(id, 'sessionId')))];
+    if (!ids.length) return [];
+    const rows = await selectSessionsByIds(getDbClient().drizzle, ids);
+    return rows.map((row) => projectSessionReadResult(row, opts.resolveContextWindow));
+  });
+
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return sessionToCamel(projectSessionContextWindow(row, opts.resolveContextWindow));
+    return projectSessionReadResult(row, opts.resolveContextWindow);
   });
 
   /**
@@ -1931,7 +1898,7 @@ export async function updateSessionInDb(
     // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
     const statusChanged = p.status !== undefined;
     if (
-      (projectTargetChanged || p.status === 'deleted' || p.status === 'archived') &&
+      projectTargetChanged &&
       row.workspaceKind === 'project' &&
       row.workingDir &&
       !row.remoteHostId &&
@@ -2055,7 +2022,7 @@ export async function patchSessionMetaInDb(
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
-  const { updated, source } = await withStatusWriteLock(db, sessionId, patch.status, async () => {
+  const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     await writeSessionPatch(db, sessionId, setObj, patch.status);
     const row = await selectSessionWithCount(db, sessionId);
@@ -2065,23 +2032,8 @@ export async function patchSessionMetaInDb(
       row.summary = null;
     }
     cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
-    return { updated: sessionToCamel(row), source: row.source };
+    return sessionToCamel(row);
   });
-  if (
-    (patch.status === 'deleted' || patch.status === 'archived') &&
-    updated.workspaceKind === 'project' &&
-    updated.workingDir &&
-    !updated.remoteHostId &&
-    isRetainableProjectSessionSource(source)
-  ) {
-    const touched = await upsertRecentWorkdir(
-      updated.workingDir,
-      Date.now(),
-      process.platform,
-      dbClient,
-    );
-    if (touched) broadcastRecentWorkdirsChanged(updated.workingDir, ownerScope);
-  }
   notifyAgentIslandSessionPatch(updated.id, {
     status: updated.status,
     title: updated.title,
@@ -2285,23 +2237,6 @@ export async function setSessionsStatusInDb(
   });
   for (const item of applied) {
     compactTerminalSessionToolResults(dbClient, item.sessionId, item.status);
-  }
-  if (status === 'archived') {
-    const touchedAt = Date.now();
-    const localProjectDirs = new Set(
-      applied.flatMap((item) =>
-        item.workspaceKind === 'project' &&
-        item.workingDir &&
-        !item.remoteHostId &&
-        isRetainableProjectSessionSource(item.source)
-          ? [item.workingDir]
-          : [],
-      ),
-    );
-    for (const workingDir of localProjectDirs) {
-      const touched = await upsertRecentWorkdir(workingDir, touchedAt, process.platform, dbClient);
-      if (touched) broadcastRecentWorkdirsChanged(workingDir, ownerScope);
-    }
   }
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
@@ -2685,14 +2620,6 @@ async function drainSessionListProjectionBackfill(): Promise<void> {
   }
 }
 
-/** {@link selectSessionListRows} 的行形状——与 sessionToCamel 的入参对齐。 */
-interface SessionListRow {
-  session: typeof sessions.$inferSelect;
-  messageCount: number;
-  latestMessageExtract: string | null;
-  latestMessageRole: string | null;
-}
-
 /** 用量历史专用行查询：全量读取 sessions，但跳过 sidebar 的消息预览子查询。 */
 function selectSessionUsageRows(
   db: DbClient['drizzle'],
@@ -2733,79 +2660,6 @@ function selectSessionUsageRows(
     .where(where)
     .orderBy(desc(sessions.updatedAt))
     .then((rows) => rows);
-}
-
-/**
- * sessions:list 的行查询——**两段式**：CTE 先按排序取够 `cap` 个 id，主查询只对这批行算
- * messageCount 与 preview。
- *
- * 为什么不能沿用一段式的 `LEFT JOIN messages + GROUP BY`：那个形状下 `LIMIT` 在 GROUP BY
- * **之后**才生效，于是每个候选会话的全部消息都要参与聚合，成本与"最终只要 1000 行"无关。
- * 4.7GB / 111 万条消息的真实库上，把聚合面从 1743 个会话收窄到 1000 个，热缓存 104ms →
- * 54ms。会话越多、limit 占比越小，收益越大。
- *
- * 用单条 CTE 而不是"先查 id 再 IN (...)"两次往返，有两个理由：
- *   1. 一致性——两次查询之间会话可能被删/改状态，第二段就会比第一段少行，列表凭空少一条。
- *      CTE 是单条语句、单一致性快照。
- *   2. 参数——`IN (...)` 要绑 cap 个参数（当前 MAX_LIMIT=1000），CTE 只绑一个 limit。
- *
- * messageCount 在这里是**标量子查询**里的 `count(*)`：无匹配行时聚合返回 0，不存在 LEFT JOIN
- * 那个"空会话数出 1"的坑。它同样只扫 idx_messages_session_created，不回表。
- *
- * @param where 行过滤条件，同时作用于 CTE 与主查询（CTE 决定取哪些、主查询决定算哪些）。
- * @param cap   取前 N 行；`null` = 不限（置顶补齐分支用，pinned 行数天然很少）。
- */
-function selectSessionListRows(
-  db: DbClient['drizzle'],
-  where: SQL | undefined,
-  cap: number | null,
-): Promise<SessionListRow[]> {
-  const pickedBase = db.select({ id: sessions.id }).from(sessions).where(where);
-  const picked = db
-    .$with('picked')
-    .as(
-      cap === null
-        ? pickedBase.orderBy(desc(sessions.updatedAt))
-        : pickedBase.orderBy(desc(sessions.updatedAt)).limit(cap),
-    );
-  return db
-    .with(picked)
-    .select({
-      session: sessions,
-      messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
-      latestMessageRole: LATEST_MSG_ROLE_SQL,
-    })
-    .from(sessions)
-    .innerJoin(picked, eq(picked.id, sessions.id))
-    .where(where)
-    .orderBy(desc(sessions.updatedAt));
-}
-
-/** 单行 SELECT + 标量 count / preview：与 list 同口径，不 JOIN 该会话全部消息。
- *  preview 子查询同步带出——get/update 路径返回的 Session 会整体替换 store 里的行，
- *  缺字段会把列表查询带回的 preview 冲掉。 */
-async function selectSessionWithCount(
-  db: DbClient['drizzle'],
-  id: string,
-): Promise<SessionRowWithCount | undefined> {
-  const [r] = await db
-    .select({
-      session: sessions,
-      messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
-      latestMessageRole: LATEST_MSG_ROLE_SQL,
-    })
-    .from(sessions)
-    .where(eq(sessions.id, id))
-    .limit(1);
-  if (!r) return undefined;
-  return {
-    ...r.session,
-    messageCount: r.messageCount,
-    latestMessageExtract: r.latestMessageExtract,
-    latestMessageRole: r.latestMessageRole,
-  };
 }
 
 function clampLimit(raw: unknown, fallback: number): number {

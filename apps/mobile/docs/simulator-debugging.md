@@ -20,6 +20,13 @@ Windows Android Studio SDK location; they do not need to be on `PATH`. The
 command does not rebuild the native app, so install the matching development
 package first when switching build identity.
 
+The three commands share Metro worktree, source, region and environment checks.
+`whoami` success proves identity consistency, not that the app has loaded a bundle
+or displayed a page (`pageVerified` remains false). `rebuild` reports installation
+separately from a launch request, and exits nonzero if launch is blocked, including
+when Metro is absent. `--build-only` does not require Metro. A successful launch
+request still requires fresh bundle logs and visible page verification.
+
 ## Current Source Verification Contract
 
 Before anyone claims "the simulator is already showing the new version", they
@@ -58,8 +65,9 @@ pnpm mobile:sim:rebuild    # rebuild + reinstall the Global native dev app (nati
 
 `mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
 Mainland build requires explicit `--region=cn`. Before touching
-Expo, all `mobile:sim:*` commands initialize the protocol submodule and repair
-the workspace dependencies when needed. The start/rebuild scripts also
+Expo, all `mobile:sim:*` commands check dependencies without installing or deleting
+anything. If the check fails, preserve the environment and explicitly run
+`pnpm install --frozen-lockfile` in the current worktree after diagnosing the failure. The start/rebuild scripts also
 synchronize
 the selected build region and the matching `config/endpoint*.json` bootstrap
 base into `apps/mobile/.env`. Local Xcode / Simulator builds also read the selected
@@ -190,8 +198,8 @@ Before asking someone to retest, confirm which native app is installed:
 
 ```bash
 xcrun simctl list devices booted
-pnpm mobile:sim:whoami                    # cn(default)
-pnpm mobile:sim:whoami -- --region=global # global
+pnpm mobile:sim:whoami                    # Global(default)
+pnpm mobile:sim:whoami -- --region=cn     # China Mainland
 ```
 
 `mobile:sim:whoami` resolves the selected identity from `app.config.js` plus the

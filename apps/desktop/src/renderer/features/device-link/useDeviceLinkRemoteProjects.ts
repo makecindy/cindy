@@ -60,6 +60,7 @@ import {
 } from './mirrorCacheClient';
 import { prefetchDeviceCapabilities, evictDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
+import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import {
   evictDeviceGitSafetySettings,
   prefetchDeviceGitSafetySettings,
@@ -752,10 +753,7 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
         return;
       }
       if (push.channel !== 'maker:provider:changed') return;
-      evictDeviceProviders(push.deviceId);
-      evictDeviceCapabilities(push.deviceId);
-      void prefetchDeviceProviders(push.deviceId);
-      void prefetchDeviceCapabilities(push.deviceId);
+      void refreshRemoteCatalogSnapshot(push.deviceId);
     });
 
     // WS 重连后:presence 重新对齐 + 对每个已合格设备重新 subscribe + 重新 bootstrap
