@@ -54,3 +54,12 @@ export function HomeEntryProvider({ children }: { children: ReactNode }) {
 
   return <HomeEntryContext.Provider value={{ ready, href }}>{children}</HomeEntryContext.Provider>;
 }
+
+/** Keep the shared startup overlay until the restored destination is committed. */
+export function useHomeEntrySplashRelease(releaseSplash: () => void): void {
+  const auth = useAuth();
+  const entry = useHomeEntry();
+  useEffect(() => {
+    if (auth.initialized && entry.ready && !entry.href) releaseSplash();
+  }, [auth.initialized, entry.ready, entry.href, releaseSplash]);
+}

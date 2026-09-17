@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   path: '/', resourceKind: undefined as string | undefined,
   auth: { initialized: true, isAuthenticated: true },
-  storage: new Map<string, string>(), get: vi.fn(), tasks: vi.fn(), collectionAvailable: true,
+  storage: new Map<string, string>(), get: vi.fn(), tasks: vi.fn(), releaseSplash: vi.fn(), collectionAvailable: true,
 }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: h.get,
@@ -26,7 +26,7 @@ vi.mock('@/device-link/remoteResourceCache', () => ({
   }] : [] }),
 }));
 
-import { HomeEntryProvider, useHomeEntry } from '@/session/HomeEntryProvider';
+import { HomeEntryProvider, useHomeEntry, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { readHomeEntry, saveHomeEntry } from '@/session/homeEntryPreference';
 import { getMobileAuthOwner, setMobileAuthOwner, __testing as ownerTesting } from '@/auth/authOwnerGeneration';
 import IndexScreen from '../../app/index';
@@ -35,6 +35,7 @@ let root: Root;
 let host: HTMLDivElement;
 function Screen() {
   const entry = useHomeEntry();
+  useHomeEntrySplashRelease(h.releaseSplash);
   return <><output data-ready>{String(entry.ready)}</output>{h.path === '/' ? <IndexScreen /> : <div>{h.path}</div>}</>;
 }
 async function render() {
@@ -51,7 +52,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   h.path = '/'; h.resourceKind = undefined; h.auth = { initialized: true, isAuthenticated: true };
   h.collectionAvailable = true;
-  h.storage.clear(); h.tasks.mockClear(); h.get.mockReset();
+  h.storage.clear(); h.tasks.mockClear(); h.releaseSplash.mockClear(); h.get.mockReset();
   h.get.mockImplementation(async (key: string) => h.storage.get(key) ?? null);
   ownerTesting.reset(); setMobileAuthOwner('a', 'global');
   host = document.createElement('div'); root = createRoot(host);
@@ -59,6 +60,15 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); });
 
 describe('mobile startup entry', () => {
+  it('keeps the overlay during auth initialization and releases on the signed-out login route', async () => {
+    h.auth = { initialized: false, isAuthenticated: false };
+    setMobileAuthOwner(null);
+    await navigate('/login');
+    expect(h.releaseSplash).not.toHaveBeenCalled();
+    h.auth.initialized = true;
+    await render();
+    expect(h.releaseSplash).toHaveBeenCalled();
+  });
   it('reopens the partner list after closing a partner chat, with no task screen flash', async () => {
     await render();
     await navigate('/resources/teammates');
@@ -84,21 +94,26 @@ describe('mobile startup entry', () => {
     expect(host.textContent).toContain('tasks');
     expect(host.querySelector('[data-target]')).toBeNull();
   });
-  it('waits for hydration instead of mounting the task screen first', async () => {
+  it('keeps the overlay through hydration and releases only after the restored route commits', async () => {
     let resolve!: (value: string) => void;
     h.get.mockImplementation(() => new Promise<string>((done) => { resolve = done; }));
     await render();
     expect(host.querySelector('[data-ready]')?.textContent).toBe('false');
+    expect(h.releaseSplash).not.toHaveBeenCalled();
     expect(h.tasks).not.toHaveBeenCalled();
     await act(async () => { resolve('bots'); });
     expect(host.querySelector('[data-target]')).not.toBeNull();
     expect(h.tasks).not.toHaveBeenCalled();
+    expect(h.releaseSplash).not.toHaveBeenCalled();
+    await navigate('/resources/teammates');
+    expect(h.releaseSplash).toHaveBeenCalled();
   });
   it.each(['/sessions/linked-task', '/resources/teammates/linked-bot', '/settings'])('preserves explicit cold-start destination %s', async (path) => {
     await saveHomeEntry(getMobileAuthOwner().accountKey, 'bots');
     await navigate(path);
     expect(host.querySelector('[data-target]')).toBeNull();
     expect(host.textContent).toContain(path);
+    expect(h.releaseSplash).toHaveBeenCalled();
     await navigate('/');
     expect(host.textContent).toContain('tasks');
   });

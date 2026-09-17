@@ -4,7 +4,7 @@ import { createMemoryRouter, Outlet, RouterProvider, useLocation } from 'react-r
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { readMainEntryRoute, rememberMainEntry } from '@/lib/mainEntryPreference';
-import { botsListRoute } from '@/features/bots/botsListRoute';
+import { BotsListView } from '@/features/bots/BotsListView';
 import { MainEntryRedirect, useRememberMainEntry } from '../MainEntryRedirect';
 
 const auth = vi.hoisted(() => ({ dataOwnerId: 'account-a' as string | null }));
@@ -18,7 +18,7 @@ function Layout() {
 function launch(path = '/') {
   const router = createMemoryRouter([{ element: <Layout />, children: [
     { path: '/', element: <MainEntryRedirect /> },
-    { path: '/bots', children: [botsListRoute] },
+    { path: '/bots', children: [{ path: 'list', element: <BotsListView /> }] },
     { path: '*', element: <div /> },
   ] }], { initialEntries: [path] });
   const tree = () => <MainViewHistoryProvider ownerKey={auth.dataOwnerId ?? 'signed-out'} locationKey={router.state.location.key}>

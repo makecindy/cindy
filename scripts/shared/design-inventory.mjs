@@ -39,6 +39,7 @@ const LAYOUT_ROUTE_COMPONENTS = new Set([
 
 /** 运行期跳转组件：与 <Navigate> 同类，不是 surface。 */
 const RUNTIME_REDIRECT_COMPONENTS = new Map([
+  ['MainEntryRedirect', '(runtime home entry redirect)'],
   ['CCAgentIndexRedirect', '(runtime session redirect)'],
 ]);
 
@@ -540,9 +541,10 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: '伙伴（列表 / 对话 / 设置 / 历史 / 伙伴私聊）',
       productionEntry:
-        'hash `/bots`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊路由（BotsFeatureLayout）',
+        'hash `/bots`、`/bots/list`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊路由（BotsFeatureLayout）',
       reachableComponents: [
         'BotsHomeView',
+        'BotsListView',
         'BotRosterView',
         'BotSessionView',
         'RemoteBotSessionView',
@@ -559,6 +561,7 @@ export function catalogSurfaces() {
       extraStyleRoots: ['desktop.chat.session'],
       routerPaths: [
         '/bots',
+        '/bots/list',
         '/bots/:botId',
         '/bots/:botId/direct/:threadId',
         '/bots/:botId/history/:sessionId',
@@ -568,6 +571,7 @@ export function catalogSurfaces() {
       ],
       routeEntryComponents: {
         '/bots': 'BotsHomeView',
+        '/bots/list': 'BotsListView',
         '/bots/:botId': 'BotsHomeView',
         '/bots/:botId/direct/:threadId': 'BotDirectMessageView',
         '/bots/:botId/history/:sessionId': 'BotHistorySessionView',

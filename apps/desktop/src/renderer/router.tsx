@@ -28,7 +28,7 @@ import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperi
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
 import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
-import { botsListRoute } from '@/features/bots/botsListRoute';
+import { BotsListView } from '@/features/bots/BotsListView';
 import { BotsHomeView } from '@/features/bots/BotsHomeView';
 import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
 import { BotRosterView } from '@/features/bots/BotRosterView';
@@ -128,7 +128,7 @@ export const router = createHashRouter([
                     element: <BotsFeatureLayout />,
                     children: [
                       { index: true, element: <BotsHomeView /> },
-                      botsListRoute,
+                      { path: 'list', element: <BotsListView /> },
                       // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
                       // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
                       // 被当成一个叫 "roster" 的伙伴。
