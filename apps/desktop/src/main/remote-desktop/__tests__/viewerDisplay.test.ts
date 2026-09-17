@@ -41,6 +41,63 @@ function fixture() {
 }
 
 describe('viewer-sized desktop ownership', () => {
+  it.each(['viewerDisplay', 'restoreViewerDisplay'] as const)(
+    'revokes old safety effects and pending privacy initialization during %s',
+    async (op) => {
+      const f = fixture();
+      const { lease } = await f.start();
+      if (op === 'restoreViewerDisplay') {
+        await f.host.request('phone', { op: 'viewerDisplay', lease, width: 900, height: 1600 });
+        await f.host.request('phone', { op: 'control', lease, enabled: true });
+      }
+      let ready!: () => void;
+      f.deps.privacyScreen = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            ready = resolve;
+          }),
+      );
+      f.deps.stopPrivacyScreen = vi.fn();
+      f.deps.hostMute = vi.fn(async () => {});
+      f.deps.stopHostMute = vi.fn(async () => {});
+      f.deps.clipboardVersion = vi.fn(async () => 'old');
+      await f.host.request('phone', { op: 'hostMute', lease, enabled: true });
+      await f.host.request('phone', { op: 'clipboardSync', lease, enabled: true });
+      const privacy = f.host.request('phone', { op: 'privacyScreen', lease, enabled: true });
+      const rejected = expect(privacy).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+      await f.host.request('phone', { op, lease, width: 900, height: 1600 });
+      expect(f.deps.stopPrivacyScreen).toHaveBeenCalledOnce();
+      expect(f.deps.stopHostMute).toHaveBeenCalledOnce();
+      ready();
+      await rejected;
+      await f.host.request('phone', { op: 'control', lease, enabled: true });
+      await expect(f.host.request('phone', { op: 'clipboardVersion', lease })).rejects.toThrow(
+        'DESKTOP_CLIPBOARD_UNAVAILABLE',
+      );
+    },
+  );
+  it('does not release input or create a display after disconnect during safety restoration', async () => {
+    const f = fixture();
+    const { lease } = await f.start();
+    let restore!: () => void;
+    const restoration = new Promise<void>((resolve) => {
+      restore = resolve;
+    });
+    f.deps.stopHostMute = vi.fn(() => restoration);
+    f.deps.releaseInput = vi.fn(async () => {});
+    const pending = f.host.request('phone', {
+      op: 'viewerDisplay',
+      lease,
+      width: 900,
+      height: 1600,
+    });
+    const rejected = expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+    f.host.stop('phone');
+    restore();
+    await rejected;
+    expect(f.deps.releaseInput).not.toHaveBeenCalled();
+    expect(f.deps.createViewerDisplay).not.toHaveBeenCalled();
+  });
   it.each(['stop', 'restoreViewerDisplay'] as const)(
     'restores the original system mode after switching from a system mode to fit on %s',
     async (ending) => {
@@ -273,6 +330,7 @@ describe('viewer-sized desktop ownership', () => {
       height: 1600,
     });
     expect(f.deps.createViewerDisplay).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     f.host.stop('phone');
     release();
     await expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
@@ -372,6 +430,7 @@ describe('viewer-sized desktop ownership', () => {
       width: 900,
       height: 1600,
     });
+    await vi.waitFor(() => expect(resolve).toBeTypeOf('function'));
     f.host.stop('phone');
     resolve(f.handle);
     await expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED');

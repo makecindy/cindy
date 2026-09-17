@@ -18,7 +18,17 @@ vi.mock('react-native', () => ({
     currentState: 'active',
     addEventListener: () => ({ remove() {} }),
   },
-  View: ({ children }: any) => createElement('div', {}, children),
+  View: ({ children, onLayout }: any) => {
+    useEffect(() => {
+      if (!onLayout) return;
+      const event = { nativeEvent: { layout: { width: 128, height: 32, x: 0, y: 0 } } as
+        | { layout: { width: number; height: number; x: number; y: number } }
+        | null };
+      onLayout(event);
+      event.nativeEvent = null;
+    });
+    return createElement('div', {}, children);
+  },
   Pressable: ({ children, onPress, disabled }: any) =>
     createElement(
       'button',
@@ -118,6 +128,38 @@ afterEach(async () => {
   node.remove();
   vi.useRealTimers();
 });
+it('survives recycled layout events when measuring equal-width task actions', async () => {
+  await render();
+  expect(node.textContent).toContain('devices.companions.openTask');
+  expect(node.textContent).toContain('devices.companions.stopTask');
+});
+
+it('keeps the task card when the host omits delegations or sends a broken status', async () => {
+  h.invoke.mockResolvedValue({ ok: true });
+  await render();
+  expect(node.textContent).toContain('devices.companions.status.unknown');
+  expect(node.textContent).not.toContain('devices.companions.stopTask');
+  h.invoke.mockResolvedValue({
+    ok: true,
+    delegations: [{ id: 'job', status: 'not-a-status', title: 'Report', childSessionId: 'child' }],
+  });
+  await render();
+  expect(node.textContent).toContain('devices.companions.status.unknown');
+  expect(node.textContent).toContain('devices.companions.openTask');
+});
+
+it('isolates a broken private-chat card so the session can keep rendering', async () => {
+  const broken = {
+    ...message,
+    key: 'broken-direct',
+    companion: { kind: 'direct', meta: null },
+  } as unknown as NormalizedRemoteMessage;
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: broken })));
+  consoleError.mockRestore();
+  expect(node.textContent).toBe('devices.companions.actionFailed');
+});
+
 it('reads, opens and stops the task on its source computer, then disables stop offline', async () => {
   await render();
   expect(h.invoke).toHaveBeenCalledWith('home', 'maker:bot-delegations:list', ['parent']);

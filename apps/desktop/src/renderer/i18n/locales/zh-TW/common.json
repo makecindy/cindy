@@ -1,4 +1,12 @@
 {
+  "privacyExit": {
+    "status": "正在透過 Cindy 被遠端控制",
+    "hint": "點擊螢幕或按任意鍵，確認後中斷連線",
+    "title": "中斷遠端桌面連線？",
+    "detail": "這將結束遠端控制並恢復電腦螢幕。如果已開啟結束時鎖定螢幕，電腦也會鎖定。",
+    "cancel": "保持連線",
+    "disconnect": "中斷連線"
+  },
   "appBadge": {
     "attentionCount": "需要關注的任務：{{count}}"
   },

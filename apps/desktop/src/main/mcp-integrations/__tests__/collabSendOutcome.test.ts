@@ -29,6 +29,7 @@ vi.mock('../../logger.js', () => ({
 
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
+  isSessionInTurn: () => false,
 }));
 
 vi.mock('@cindy/mcps', () => ({

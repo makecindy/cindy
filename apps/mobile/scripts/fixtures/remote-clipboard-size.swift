@@ -4,6 +4,12 @@ import Darwin
 @main
 struct ClipboardSizeTests {
   static func main() throws {
+    precondition(RemoteClipboardSize.acceptsImage(width: 2000, height: 2000))
+    precondition(!RemoteClipboardSize.acceptsImage(width: 2001, height: 2000))
+    precondition(!RemoteClipboardSize.acceptsImage(width: 8000, height: 8000))
+    precondition(!RemoteClipboardSize.acceptsImage(width: 0, height: 2000))
+    precondition(!RemoteClipboardSize.acceptsImage(width: .infinity, height: 1))
+    precondition(!RemoteClipboardSize.acceptsImage(width: 1, height: .nan))
     let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
     let string = String(data: data, encoding: .utf8)!
     let expected = CommandLine.arguments[2] == "true"

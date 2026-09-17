@@ -142,46 +142,48 @@ function recentWorkdirProjectIdentity(path: string, localPlatform: NodeJS.Platfo
   return isCaseInsensitiveWindowsPath(grouped, localPlatform) ? grouped.toLowerCase() : grouped;
 }
 
-export function registerRecentWorkdirsIpc(): void {
-  ipcMain.handle('local-db:recent-workdirs:list', async () => {
-    const db = getDbClient().drizzle;
-    const rows = await db.select().from(recentWorkdirs).orderBy(desc(recentWorkdirs.lastUsedAt));
-    const sessionRows = await db
-      .selectDistinct({
-        workingDir: sessions.workingDir,
-        agentKind: sessions.agentKind,
-      })
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.workspaceKind, 'project'),
-          isNull(sessions.remoteHostId),
-          isNotNull(sessions.workingDir),
-        ),
-      );
-    const knownKindsByPath = new Map<string, Set<string>>();
-    for (const session of sessionRows) {
-      if (!session.workingDir) continue;
-      const identity = recentWorkdirProjectIdentity(session.workingDir, process.platform);
-      if (!identity) continue;
-      const kinds = knownKindsByPath.get(identity) ?? new Set<string>();
-      kinds.add(session.agentKind ?? 'cc');
-      knownKindsByPath.set(identity, kinds);
-    }
-    // 存在性探测与条目数解耦；项目只有显式移除才会退出这份持久目录。
-    const exists = await Promise.all(rows.map((r) => dirExists(r.path)));
-    // 返回 ISO 字符串避免序列化数字时区岐义 —— 跟 sessions IPC 输出风格一致。
-    return rows.map((r, i) => {
-      const identity = recentWorkdirProjectIdentity(r.path, process.platform);
-      return {
-        path: r.path,
-        lastUsedAt: new Date(r.lastUsedAt).toISOString(),
-        exists: exists[i],
-        knownAgentKinds: Array.from((identity && knownKindsByPath.get(identity)) ?? []).sort(),
-      };
-    });
+/** Shared persistent project listing, including directories without tasks. */
+export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
+  const db = client.drizzle;
+  const rows = await db.select().from(recentWorkdirs).orderBy(desc(recentWorkdirs.lastUsedAt));
+  const sessionRows = await db
+    .selectDistinct({
+      workingDir: sessions.workingDir,
+      agentKind: sessions.agentKind,
+    })
+    .from(sessions)
+    .where(
+      and(
+        eq(sessions.workspaceKind, 'project'),
+        isNull(sessions.remoteHostId),
+        isNotNull(sessions.workingDir),
+      ),
+    );
+  const knownKindsByPath = new Map<string, Set<string>>();
+  for (const session of sessionRows) {
+    if (!session.workingDir) continue;
+    const identity = recentWorkdirProjectIdentity(session.workingDir, process.platform);
+    if (!identity) continue;
+    const kinds = knownKindsByPath.get(identity) ?? new Set<string>();
+    kinds.add(session.agentKind ?? 'cc');
+    knownKindsByPath.set(identity, kinds);
+  }
+  // 存在性探测与条目数解耦；项目只有显式移除才会退出这份持久目录。
+  const exists = await Promise.all(rows.map((r) => dirExists(r.path)));
+  // 返回 ISO 字符串避免序列化数字时区岐义 —— 跟 sessions IPC 输出风格一致。
+  return rows.map((r, i) => {
+    const identity = recentWorkdirProjectIdentity(r.path, process.platform);
+    return {
+      path: r.path,
+      lastUsedAt: new Date(r.lastUsedAt).toISOString(),
+      exists: exists[i],
+      knownAgentKinds: Array.from((identity && knownKindsByPath.get(identity)) ?? []).sort(),
+    };
   });
+}
 
+export function registerRecentWorkdirsIpc(): void {
+  ipcMain.handle('local-db:recent-workdirs:list', async () => listRecentWorkdirs());
   ipcMain.handle('local-db:recent-workdirs:remove', async (_evt, input: unknown) => {
     const body = (input ?? {}) as { path?: unknown };
     const raw = requireString(body.path, 'path');
