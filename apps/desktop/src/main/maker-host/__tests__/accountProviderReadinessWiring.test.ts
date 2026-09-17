@@ -165,7 +165,7 @@ describe('account provider readiness wiring', () => {
     );
 
     expect(bootstrapSource).toMatch(
-      /accountProviderReadinessArm\.publish\(\s*userId,\s*startProviderReadiness,\s*resumeIncompleteDiscovery\s*,?\s*\)/,
+      /accountProviderReadinessArm\.publish\(\s*userId\s*,\s*startProviderReadiness\s*,\s*resumeIncompleteDiscovery\s*,?\s*\)/,
     );
     expect(bootstrapSource).toContain('accountProviderReadinessArm.clear()');
     expect(bootstrapSource).toContain('startPendingAccountProviderReadiness = null');

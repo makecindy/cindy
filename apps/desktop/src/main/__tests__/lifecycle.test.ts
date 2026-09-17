@@ -140,6 +140,28 @@ function snapshotProcessListeners(events: ProcessEventName[]) {
 }
 
 describe('runQuitDisposers', () => {
+  it('keeps the bootstrap quit budget open for an in-flight mode write and restoration', async () => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers, SHUTDOWN_HARD_KILL_GRACE_SECONDS } = await freshLifecycle();
+    const source = readFileSync(join(__dirname, '../bootstrap-electron.ts'), 'utf8');
+    const budget = Number(source.match(/installQuitHandler\((\d+)\);/)?.[1]);
+    expect(budget).toBeLessThan(SHUTDOWN_HARD_KILL_GRACE_SECONDS * 1000);
+    const events: string[] = [];
+    onQuit('remote-desktop-restore', async () => {
+      for (const step of ['in-flight-write', 'restore-mode', 'display-projection']) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        events.push(step);
+      }
+    }, 'async');
+    onQuit('after-restoration', () => { events.push('post-async'); }, 'post-async');
+    const quitting = runQuitDisposers(budget);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(events).toEqual(['in-flight-write', 'restore-mode']);
+    await vi.advanceTimersByTimeAsync(1);
+    await quitting;
+    expect(events).toEqual(['in-flight-write', 'restore-mode', 'display-projection', 'post-async']);
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();

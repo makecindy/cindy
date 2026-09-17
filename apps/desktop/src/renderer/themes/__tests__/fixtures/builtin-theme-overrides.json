@@ -251,7 +251,8 @@
         "tooltip-bg": "#757575",
         "tooltip-text": "#fdf6e3",
         "update-btn-border": "#859900",
-        "update-btn-text": "#859900"
+        "update-btn-text": "#859900",
+        "form-field-hint": "#686868"
       }
     },
     "cindy-light": {
@@ -835,7 +836,8 @@
         "tooltip-bg": "#282c34",
         "tooltip-text": "#abb2bf",
         "update-btn-border": "#61afef",
-        "update-btn-text": "#61afef"
+        "update-btn-text": "#61afef",
+        "form-field-hint": "#8b909a"
       }
     },
     "github-dark": {

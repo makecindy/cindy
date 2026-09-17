@@ -2088,6 +2088,10 @@ const GENERATED_DEFAULTS = {
   "cmd-palette-shadow": {
     "light": "var(--shadow-soft-panel)",
     "dark": "var(--shadow-soft-panel)"
+  },
+  "form-field-hint": {
+    "light": "var(--text-secondary-mid)",
+    "dark": "var(--text-secondary-mid)"
   }
 } as const;
 
@@ -2181,7 +2185,7 @@ registerColor('text-primary-hsl', GENERATED_DEFAULTS["text-primary-hsl"], 'Prima
 registerColor('text-secondary', GENERATED_DEFAULTS["text-secondary"], 'Secondary 文字 / meta / icon');
 registerColor('text-secondary-cross', GENERATED_DEFAULTS["text-secondary-cross"], '跨主题 secondary 文字');
 registerColor('text-secondary-mid', GENERATED_DEFAULTS["text-secondary-mid"], '偏深 secondary 文字');
-registerColor('text-tertiary', GENERATED_DEFAULTS["text-tertiary"], 'Tertiary / placeholder 文字');
+registerColor('text-tertiary', GENERATED_DEFAULTS["text-tertiary"], 'Tertiary metadata（占位符使用 text-placeholder）');
 registerColor('text-tertiary-stone', GENERATED_DEFAULTS["text-tertiary-stone"], 'Stone 跨主题三级文字');
 registerColor('text-tertiary-mid', GENERATED_DEFAULTS["text-tertiary-mid"], 'Mid Gray 三级文字');
 registerColor('text-tertiary-hsl', GENERATED_DEFAULTS["text-tertiary-hsl"], 'Sidebar / welcome muted HSL');
@@ -2505,8 +2509,8 @@ registerColor('cmd-palette-tooltip-body', GENERATED_DEFAULTS["cmd-palette-toolti
 // Send button — grayscale pill
 registerColor('send-btn-bg', GENERATED_DEFAULTS["send-btn-bg"], 'Near Black — per cc-agent-view spec');
 registerColor('send-btn-icon', GENERATED_DEFAULTS["send-btn-icon"], 'Send button — grayscale pill');
-registerColor('send-btn-disabled-bg', GENERATED_DEFAULTS["send-btn-disabled-bg"], 'Light Gray');
-registerColor('send-btn-disabled-icon', GENERATED_DEFAULTS["send-btn-disabled-icon"], 'Silver');
+registerColor('send-btn-disabled-bg', GENERATED_DEFAULTS["send-btn-disabled-bg"], '历史禁用底色接口；SendButton 采用正常底色 + 40% opacity，当前不消费此字段');
+registerColor('send-btn-disabled-icon', GENERATED_DEFAULTS["send-btn-disabled-icon"], '历史禁用图标接口；SendButton 采用正常图标色 + 40% opacity，当前不消费此字段');
 registerColor('send-btn-hover-bg', GENERATED_DEFAULTS["send-btn-hover-bg"], 'Send button hover bg(default 同 bg,默认皮肤维持 opacity-85 hover;CINDY override 反相中性 hover #2E3237/#E2E2E2,E1D 纳入值表)');
 registerColor('send-btn-pressed-bg', GENERATED_DEFAULTS["send-btn-pressed-bg"], 'Send button pressed bg(default 同 bg;CINDY override 反相中性 pressed #25282C/#D4D4D4,E1D 纳入值表)');
 
@@ -3023,3 +3027,6 @@ registerColor('button-cta-pressed', {
   light: 'color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))',
   dark: 'color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))',
 }, 'DS-4 button/cta pressed — 自 cta hover 朝 CTA 前景再推 10%');
+
+// DS-11 readable form help; preserves existing Cindy secondary-information colors.
+registerColor('form-field-hint', GENERATED_DEFAULTS["form-field-hint"], '表单阅读说明；独立于 metadata 与 placeholder，允许主题单独调节');

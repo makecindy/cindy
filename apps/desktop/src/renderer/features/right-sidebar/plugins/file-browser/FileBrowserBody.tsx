@@ -28,6 +28,8 @@
  * singleton 拿当前 dirty 状态,跟 doc 模式行为一致。
  */
 
+import { openHtmlFileByPreference } from '@/components/chat/useOpenWithMenu';
+import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-react';
@@ -35,7 +37,6 @@ import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-r
 import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { toast } from '@/lib/toast';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
@@ -65,10 +66,6 @@ import {
   filterFiles,
 } from '@/features/cc-agent/workdir-browse/lib/filterFiles';
 import { toOsAbsolutePath } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
-import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { addTab, ensureHydrated } from '@/features/right-sidebar/store';
 import { toWorkdirRel } from '../../../../../shared/workdirPath';
 
@@ -364,15 +361,18 @@ function FileBrowserBodyWithWorkdir({
 
   const handleOpenInSidebarBrowser = useCallback(
     async (entry: DirEntry) => {
-      if (!ctx.sessionId) return;
-      const abs = toOsAbsolutePath(workdir, entry.relPath);
-      try {
-        await openUrlInSidebarBrowser(ctx.sessionId, pathToFileUrl(abs));
-      } catch {
-        toast.error(t('chat.markdownRenderer.openInSidebarFailed'));
-      }
+      await openHtmlFileByPreference(
+        ctx.sessionId,
+        toOsAbsolutePath(workdir, entry.relPath),
+        t,
+        {
+          origin: resolveSessionFileOrigin(deviceId ?? undefined, remoteHostId),
+          workingDir: workdir,
+        },
+        'sidebar',
+      );
     },
-    [ctx.sessionId, workdir, t],
+    [ctx.sessionId, workdir, deviceId, remoteHostId, t],
   );
 
   const handleOpenInFileBrowser = useCallback(
@@ -391,21 +391,18 @@ function FileBrowserBodyWithWorkdir({
 
   const handleOpenInBrowser = useCallback(
     async (entry: DirEntry) => {
-      const abs = toOsAbsolutePath(workdir, entry.relPath);
-      try {
-        await window.electronAPI.openFileInBrowser(abs);
-      } catch (error) {
-        toast.error(
-          t(
-            mapIpcErrorToI18nKey(error, {
-              namespace: 'chat.markdownRenderer',
-              fallback: 'chat.markdownRenderer.openInBrowserFailed',
-            }),
-          ),
-        );
-      }
+      await openHtmlFileByPreference(
+        ctx.sessionId,
+        toOsAbsolutePath(workdir, entry.relPath),
+        t,
+        {
+          origin: resolveSessionFileOrigin(deviceId ?? undefined, remoteHostId),
+          workingDir: workdir,
+        },
+        'external',
+      );
     },
-    [workdir, t],
+    [ctx.sessionId, workdir, deviceId, remoteHostId, t],
   );
 
   const handleDroppedExternalFile = useCallback(
@@ -677,8 +674,8 @@ function FileBrowserBodyWithWorkdir({
                 onCopyFilePath={!isRemote ? handleCopyFilePath : undefined}
                 onRevealInFolder={!isRemote ? handleRevealInFolder : undefined}
                 onOpenInFileBrowser={ctx.sessionId ? handleOpenInFileBrowser : undefined}
-                onOpenInSidebarBrowser={!isRemote && ctx.sessionId ? handleOpenInSidebarBrowser : undefined}
-                onOpenInBrowser={!isRemote ? handleOpenInBrowser : undefined}
+                onOpenInSidebarBrowser={ctx.sessionId ? handleOpenInSidebarBrowser : undefined}
+                onOpenInBrowser={handleOpenInBrowser}
               />
             </div>
           )}

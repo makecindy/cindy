@@ -6166,6 +6166,7 @@
     "loadFailed": "无法加载用量历史。请重新打开设置后重试。",
     "range": {
       "label": "时间范围",
+      "date": "日期",
       "ariaLabel": "筛选用量时间范围",
       "all": "所有时间",
       "30d": "最近 30 天",
@@ -8581,8 +8582,15 @@
       }
     },
     "runningStatus": {
+      "currentRate": "最近速度",
+      "waitingSample": "采样中",
+      "averageRate": "本轮平均",
+      "rateHistory": "生成速度历史",
+      "outputTotal": "累计输出",
+      "observedPeak": "峰值",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "本轮主 Agent 的平均生成速度，含思考，排除工具执行和审批等待。随用量回报更新；旁边显示本轮总耗时。",
+      "tokenRateUnit": "tok/s",
+      "tokenRateDescription": "最近一段生成速度，不含工具执行与等待。",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8806,6 +8814,11 @@
       "closeHint": "或点击背景关闭"
     },
     "remoteFile": {
+      "previewFailed": "无法准备网页预览，请检查目录和连接后重试",
+      "previewNotFound": "找不到 HTML 文件，请确认文件仍然存在",
+      "previewFetching": "正在准备网页预览…",
+      "previewTooLarge": "正在准备的预览过多，请稍后重试",
+      "previewUnsupported": "远程设备暂不支持目录预览，请更新该设备上的 Cindy 后重试",
       "fetching": "正在从远端获取文件…",
       "fetchFailed": "从远端获取文件失败",
       "notFound": "远端文件不存在",

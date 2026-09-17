@@ -66,6 +66,29 @@ describe("viewer display dimensions", () => {
       }),
     ).toEqual({ op: "resolution", lease: "lease", modeId: "123" });
   });
+  it("validates the opt-in flag without changing legacy resolution requests", () => {
+    expect(
+      parseRemoteDesktopRequest({
+        op: "resolution",
+        lease: "lease",
+        modeId: "1",
+        temporary: true,
+      }),
+    ).toEqual({
+      op: "resolution",
+      lease: "lease",
+      modeId: "1",
+      temporary: true,
+    });
+    expect(() =>
+      parseRemoteDesktopRequest({
+        op: "resolution",
+        lease: "lease",
+        modeId: "1",
+        temporary: "true",
+      }),
+    ).toThrow("INVALID_REQUEST");
+  });
   it("updates the existing viewer lease and starts control on the new display", async () => {
     const request = vi.fn(async (value) => {
       if (value.op === "capabilities")
@@ -87,6 +110,12 @@ describe("viewer display dimensions", () => {
         return {
           lease: "lease",
           display: { id: "2", width: value.width, height: value.height },
+          controlling: false,
+        };
+      if (value.op === "resolution")
+        return {
+          lease: "lease",
+          display: { id: "1", width: 3840, height: 2160 },
           controlling: false,
         };
       return {};
@@ -115,5 +144,13 @@ describe("viewer display dimensions", () => {
       height: 1440,
     });
     expect(session.lease?.controlling).toBe(false);
+    await session.control(true);
+    await session.fitDisplay(3840, 2160, false, "123");
+    expect(request).toHaveBeenLastCalledWith(
+      { op: "resolution", lease: "lease", modeId: "123", temporary: true },
+      expect.any(Function),
+    );
+    expect(session.lease).toBe(previous);
+    expect(session.lease?.display.width).toBe(3840);
   });
 });

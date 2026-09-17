@@ -164,6 +164,7 @@ export class RemoteDesktopViewerSession {
     width: number,
     height: number,
     restore = false,
+    modeId?: string,
   ): Promise<RemoteDesktopLease> {
     const lease = this.active;
     if (!lease?.controlling) throw new Error("DESKTOP_VIEW_ONLY");
@@ -173,9 +174,11 @@ export class RemoteDesktopViewerSession {
       if (this.active !== lease) throw new Error("DESKTOP_LEASE_EXPIRED");
     };
     const operation = this.request<RemoteDesktopLease>(
-      restore
-        ? { op: "restoreViewerDisplay", lease: lease.lease }
-        : { op: "viewerDisplay", lease: lease.lease, width, height },
+      modeId
+        ? { op: "resolution", lease: lease.lease, modeId, temporary: true }
+        : restore
+          ? { op: "restoreViewerDisplay", lease: lease.lease }
+          : { op: "viewerDisplay", lease: lease.lease, width, height },
       check,
     );
     this.controlPending = operation;

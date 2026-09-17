@@ -7,6 +7,7 @@ const requireFromMain = createRequire(__filename);
 // 视觉合同见 DESIGN.md §2 的 Windows taskbar attention badge。
 const BADGE_COLORS = { background: '#D91F37', foreground: '#FFFFFF' } as const;
 const SCALE_FACTORS = [1, 1.25, 1.5, 2, 3] as const;
+const BADGE_CONTENT_SCALE = 0.8;
 
 export function renderWindowsBadgePng(count: number, scaleFactor: number): Buffer {
   // 已随正式包附带的 N-API canvas；只在绘制时加载，macOS 启动不加载原生绘图库。
@@ -14,16 +15,17 @@ export function renderWindowsBadgePng(count: number, scaleFactor: number): Buffe
   const size = Math.round(16 * scaleFactor);
   const canvas = createCanvas(size, size);
   const ctx = canvas.getContext('2d');
-  ctx.scale(scaleFactor, scaleFactor);
+  ctx.scale(size / 16, size / 16);
+  // Keep the OS's 16-DIP canvas and shrink the artwork inside it. Shrinking the
+  // PNG itself would make the Shell scale it back up, losing both size and clarity.
+  ctx.translate(8, 8);
+  ctx.scale(BADGE_CONTENT_SCALE, BADGE_CONTENT_SCALE);
+  ctx.translate(-8, -8);
   const label = count > 99 ? '99+' : String(count);
   ctx.fillStyle = BADGE_COLORS.background;
   ctx.beginPath();
   ctx.roundRect(0.5, 0.5, 15, 15, label.length === 1 ? 7.5 : 5);
   ctx.fill();
-  // 细白边让角标在深浅任务栏和不同应用图标底色上都有清晰轮廓。
-  ctx.strokeStyle = BADGE_COLORS.foreground;
-  ctx.lineWidth = 0.75;
-  ctx.stroke();
   const fontSize = label.length === 1 ? 12 : label.length === 2 ? 10 : 8;
   ctx.font = `bold ${fontSize}px "Segoe UI", sans-serif`;
   ctx.fillStyle = BADGE_COLORS.foreground;

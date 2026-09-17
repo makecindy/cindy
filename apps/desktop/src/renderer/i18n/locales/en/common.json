@@ -6172,6 +6172,7 @@
     "loadFailed": "Unable to load usage history. Reopen Settings to try again.",
     "range": {
       "label": "Time range",
+      "date": "Date",
       "ariaLabel": "Filter usage time range",
       "all": "All time",
       "30d": "Last 30 days",
@@ -8590,8 +8591,15 @@
       }
     },
     "runningStatus": {
+      "currentRate": "Latest speed",
+      "waitingSample": "Sampling",
+      "averageRate": "Turn average",
+      "rateHistory": "Generation speed history",
+      "outputTotal": "Output",
+      "observedPeak": "Peak",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "The main Agent’s average generation speed for this turn, including thinking and excluding tool execution and approval waits. Updated with reported usage; the adjacent timer shows total turn time.",
+      "tokenRateUnit": "tok/s",
+      "tokenRateDescription": "Latest generation interval. Excludes tools and waits.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8816,6 +8824,11 @@
       "closeHint": "or click backdrop to close"
     },
     "remoteFile": {
+      "previewFailed": "Could not prepare the web preview. Check the directory and connection, then try again.",
+      "previewNotFound": "The HTML file was not found. Check that it still exists.",
+      "previewFetching": "Preparing Web Preview…",
+      "previewTooLarge": "Too many previews are being prepared. Please try again shortly.",
+      "previewUnsupported": "Update Cindy on the remote device to preview this directory.",
       "fetching": "Fetching file from remote…",
       "fetchFailed": "Failed to fetch file from remote",
       "notFound": "File not found on remote",

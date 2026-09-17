@@ -281,6 +281,23 @@ describe('materializeSshRemoteMedia — baseDir / maxBytes 约束', () => {
     expect(fetchToCache).not.toHaveBeenCalled();
   });
 
+  it('on-demand HTML 入口文档允许 .html', async () => {
+    const fetchToCache = vi.fn(async () => {
+      const p = path.join(tmpDir, 'cached.html');
+      await writeFile(p, '<h1>ok</h1>');
+      return p;
+    });
+    const deps: SshMediaDeps = {
+      request: vi.fn(async () => ({ type: 'file', size: 9, mtimeMs: 1 })) as unknown as SshMediaDeps['request'],
+      fetchToCache: fetchToCache as unknown as SshMediaDeps['fetchToCache'],
+    };
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/index.html'), deps, {
+      baseDir: '/home/u/proj/out',
+    });
+    expect(r.ok).toBe(true);
+    expect(fetchToCache).toHaveBeenCalledTimes(1);
+  });
+
   it('maxBytes 内 → 正常拉取', async () => {
     const { deps, fetchToCache } = makeDeps(1024);
     const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/a.css'), deps, {

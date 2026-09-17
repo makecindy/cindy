@@ -8867,6 +8867,24 @@
               ]
             }
           }
+        },
+        "palette-HINT_TEXT": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.545098,
+              0.564706,
+              0.603922
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
         }
       },
       "solarized-light": {
@@ -9593,6 +9611,24 @@
               0.933333,
               0.909804,
               0.835294
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "palette-HINT_TEXT": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.407843,
+              0.407843,
+              0.407843
             ]
           },
           "$extensions": {

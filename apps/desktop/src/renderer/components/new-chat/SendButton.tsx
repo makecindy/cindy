@@ -49,6 +49,7 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
       className={cn(
         // transform 进过渡集:承载 active 按压缩放(DESIGN.md §14.4 按压原型)。
         'flex shrink-0 items-center justify-center rounded-full transition-[color,background-color,transform]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--chat-input-bg)]',
         !disabled && 'active:scale-[0.98]',
         // create-agent(新建对话框)send 与会话内共用 send-btn-* token,三态(hover/pressed/disabled)一致;
         // 仅尺寸随所在工具条密度不同(新建对话框行高 30px,会话内 28px)。

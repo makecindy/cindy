@@ -1,3 +1,4 @@
+import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
 import { codexAccountState } from './maker-host/codex-account-auth.js';
@@ -503,6 +504,8 @@ import { isMainShellWindowUrl } from './cindy-brain/scheduleSlot.js';
 import { sanitizeGhostNoticeText } from './cindy-brain/notifySlot.js';
 import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
+import { copyPngToClipboard } from './pngClipboard.js';
+import { COPY_PNG_TO_CLIPBOARD_CHANNEL } from '../shared/pngClipboard.js';
 import { initHeartbeatService } from './heartbeatService';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
@@ -833,6 +836,7 @@ import { prewarmModelPricing } from './usage/modelPricing.js';
 import { registerMakerBinaryVersionIpc } from './maker-ipc/binary-version.js';
 import { registerCrossAgentConvertIpc } from './cross-agent-convert/ipc.js';
 import { registerFileBrowserIpc } from './file-browser/index.js';
+import { disposeHtmlPreviews } from './file-browser/html-preview-ipc.js';
 import { disposeRemoteFileBrowser } from './file-browser/remote-deps.js';
 import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
@@ -7459,6 +7463,15 @@ const registerIpcHandlers = () => {
     }
   });
 
+  // Local export bytes stay in memory; never route this to a remote host.
+  ipcMain.handle(COPY_PNG_TO_CLIPBOARD_CHANNEL, (event, params) =>
+    copyPngToClipboard(event, params, {
+      assertTrustedSender: assertTrustedAppRendererEvent,
+      decode: (bytes) => nativeImage.createFromBuffer(bytes),
+      write: (data) => clipboard.write(data),
+    }),
+  );
+
   // ── Native clipboard helpers (media:copy-to-clipboard) ──
   //
   // Electron's `clipboard.writeImage` writes raw bitmap data — pastable in
@@ -9177,6 +9190,7 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerFilePeerIpc();
   registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);
   void startupPurgeDrain
     .then(({ purged, pending }) => {
@@ -9243,7 +9257,7 @@ app.on('ready', async () => {
 //   - process.on('uncaughtException')—— main 进程未捕获异常
 //   - app.on('render-process-gone')  —— renderer 崩 (main 还活)
 //
-// 三个阶段串成 sync → async(并发+6s 超时, 见下方 installQuitHandler) → post-async,
+// 三个阶段串成 sync → async(并发+16s 超时, 见下方 installQuitHandler) → post-async,
 // 然后 app.exit(<code>)。
 // 散落的 fire-and-forget 已经收掉, 进程不会在 disposer 跑完之前死。
 // 真硬崩 (segfault / kill -9) JS 层无能为力, 子进程靠 stdin EOF 自死。
@@ -9612,6 +9626,7 @@ onQuit('anthropic-compat-proxy', () => disposeAnthropicCompatProxy(), 'async');
 onQuit('browser-runtime', () => disposeBrowserRuntime(), 'async');
 // Remote file-service clients: 先于 pool 关闭, 挂断远端 daemon 的 exec channel。
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
+onQuit('html-previews', disposeHtmlPreviews, 'async');
 // Remote SSH pool: 主动断开所有活动连接, 防止 ssh2 子句柄阻塞 Node 进程退出。
 // post-async(非 async):shutdown-maker 在 async 阶段关 sessions 时, PiAgent.close()
 // 会经 pi-manager RPC 发 kill 杀远端 daemon —— 若 pool 在 async 并发先
@@ -9633,7 +9648,10 @@ onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, '
 onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 
-installQuitHandler(6000);
+// A display restore may join an in-flight native mode write (5s), restore the
+// original mode (5s), then await Electron geometry (5s). Keep a margin before
+// the existing 20s hard-exit watchdog; completed disposers never wait this long.
+installQuitHandler(16000);
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

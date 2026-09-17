@@ -1,0 +1,22 @@
+[package]
+name = "cindy-windows-taskbar"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[build-dependencies]
+napi-build = "=2.1.3"
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi6"] }
+napi-derive = "2"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "s"
+strip = true

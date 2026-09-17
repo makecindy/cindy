@@ -1,4 +1,5 @@
 import { invokeOpenPath } from './openPath';
+import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
 import { REMOTE_VIEWER } from '../shared/remoteDesktopViewer';
 import type { RoutineInput } from '@cindy/maker-scheduler';
 import {
@@ -2656,6 +2657,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // incremental tree updates while user is in the browse view.
   fileBrowser: {
     listDir: (params: {
+      /** Return all ordinary entries without presentation filtering. */
+      includeIgnored?: boolean;
       /** 非空 = SSH remote 会话,操作经远端 file-service 执行(main 侧路由)。 */
       remoteHostId?: string | null;
       workdir: string;
@@ -2822,6 +2825,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 进度沿用 onTransferProgress,relPath 键 = 原始 absPath。失败按 code 分流:
      * OUTSIDE_WORKDIR(SSH workdir 外,明确占位)/ NOT_FOUND / FETCH_FAILED。
      */
+    previewHtml: (params: {
+      origin:
+        | { kind: 'local' }
+        | { kind: 'device'; deviceId: string }
+        | { kind: 'ssh'; remoteHostId: string };
+      workdir: string;
+      absPath: string;
+    }): Promise<{ ok: true; url: string }> =>
+      ipcRenderer.invoke('maker:html-preview:open', params),
     chatFetch: (params: {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
       workdir: string;
@@ -3919,6 +3931,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     filePath?: string;
   }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:show-item-in-folder', params),
+
+  // Copy an in-memory export without requiring renderer focus.
+  copyPngToClipboard: (params: CopyPngToClipboardParams): Promise<void> =>
+    ipcRenderer.invoke(COPY_PNG_TO_CLIPBOARD_CHANNEL, params),
 
   // Copy an image / video (resolved from xdt-image:// or xdt-video:// URL,
   // or absolute path) into the system clipboard as a FILE REFERENCE. Used

@@ -34,7 +34,7 @@ export function RemoteDesktopSecuritySettings(
 ) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const hint = { color: colors.textTertiary, fontSize: typeScale.caption };
+  const hint = { color: colors.textPrimary, fontSize: typeScale.caption };
   const switchSlot = {
     width: 56,
     minHeight: 44,
@@ -63,7 +63,7 @@ export function RemoteDesktopSecuritySettings(
         <>
           <View
             style={{
-              backgroundColor: colors.sheetActionSurface,
+              backgroundColor: colors.surfaceTranslucent,
               borderColor: colors.sheetActionBorder,
               borderWidth: StyleSheet.hairlineWidth,
               borderRadius: radius.container,
@@ -165,7 +165,7 @@ export function RemoteDesktopSecuritySettings(
       <View
         style={{
           ...row,
-          backgroundColor: colors.sheetActionSurface,
+          backgroundColor: colors.surfaceTranslucent,
           borderColor: colors.sheetActionBorder,
           borderWidth: StyleSheet.hairlineWidth,
           borderRadius: radius.container,
