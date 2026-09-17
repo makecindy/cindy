@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { isCindyMakeWorktreePath, prepareCindyMakeWorkspace } from '../taskWorkspace';
+import {
+  createCindyMakeWorktree,
+  installCindyMakeWorktree,
+  isCindyMakeWorktreePath,
+  prepareCindyMakeWorkspace,
+} from '../taskWorkspace';
 
 describe('prepareCindyMakeWorkspace', () => {
   let userData: string;
@@ -113,6 +118,38 @@ describe('prepareCindyMakeWorkspace', () => {
         pnpm: vi.fn(),
       }),
     ).rejects.toMatchObject({ code: 'gitFailed' });
+  });
+});
+
+describe('split Cindy Make workspace preparation', () => {
+  it('creates the worktree without pnpm, then installs in a separate step', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-make-split-'));
+    try {
+      await mkdir(path.join(userData, 'cindy-make', 'source', '.git'), { recursive: true });
+      const git = vi.fn(async (_env: NodeJS.ProcessEnv, args: string[]) => {
+        if (args[0] === 'branch' && args[2] === 'cindy-personal') return 'cindy-personal\n';
+        if (args[0] === 'rev-parse') return 'base123\n';
+        if (args[0] === 'worktree') return '';
+        return '';
+      });
+      const pnpm = vi.fn(async () => undefined);
+      const workspace = await createCindyMakeWorktree(
+        userData,
+        'run-split',
+        new AbortController().signal,
+        { processEnvironment: {}, git, pnpm },
+      );
+      expect(pnpm).not.toHaveBeenCalled();
+      await installCindyMakeWorktree(
+        userData,
+        workspace,
+        new AbortController().signal,
+        { processEnvironment: {}, git, pnpm },
+      );
+      expect(pnpm).toHaveBeenCalledOnce();
+    } finally {
+      await rm(userData, { recursive: true, force: true });
+    }
   });
 });
 

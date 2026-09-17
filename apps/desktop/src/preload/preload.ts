@@ -3848,6 +3848,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getCindyMakeState: (): Promise<import('../shared/cindyMakeDoctor').CindyMakeGlobalState> =>
     ipcRenderer.invoke('app:get-cindy-make-state'),
+  manageCindyMakeTask: (sessionId: string, action: 'finish' | 'delete'): Promise<void> =>
+    ipcRenderer.invoke('app:manage-cindy-make-task', sessionId, action),
 
   onCindyMakeState: (
     listener: (state: import('../shared/cindyMakeDoctor').CindyMakeGlobalState) => void,
@@ -3877,11 +3879,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelCindyMakeSource: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:cancel-cindy-make-source'),
 
-  // Create the per-task worktree (branch off the personal baseline + install deps).
+  // Compatibility entry point: prepare a worktree and its dependencies.
   prepareCindyMakeWorkspace: (
     runId: string,
   ): Promise<import('../shared/cindyMakeDoctor').MakeTaskWorkspace> =>
     ipcRenderer.invoke('app:prepare-cindy-make-workspace', runId),
+  startCindyMakeTask: (input: import('../shared/cindyMakeDoctor').CindyMakeTaskStart): Promise<string> =>
+    ipcRenderer.invoke('app:start-cindy-make-task', input),
+  cancelCindyMakeTask: (runId: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('app:cancel-cindy-make-task', runId),
 
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
@@ -6415,6 +6421,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       },
     ): Promise<import('@cindy/maker-core').ContextUsageData> =>
       ipcRenderer.invoke('maker:get-context-usage', sessionId, createOpts),
+
+    getSessionTurnActive: (sessionId: string): Promise<{ inTurn: boolean }> =>
+      ipcRenderer.invoke('maker:session:turn-active', sessionId),
 
     abortSession: (sessionId: string): Promise<void> =>
       ipcRenderer.invoke('maker:abort-session', sessionId),

@@ -13,5 +13,21 @@
   "upToDateBody": "You already have the latest app package.",
   "checkFailedTitle": "Check Failed",
   "checkFailedBody": "Couldn't reach the update server. Try again later.",
-  "latestRequestFailed": "latest request failed: HTTP {{status}}"
+  "latestRequestFailed": "latest request failed: HTTP {{status}}",
+  "android": {
+    "permissionRequired": "Cindy needs permission to install this update. You can allow installation in system settings or download with your browser.",
+    "permissionPending": "Checking installation permission…",
+    "permissionDenied": "Installation permission is off. Allow installation or download with your browser.",
+    "grantPermission": "Allow Installation",
+    "browser": "Download in Browser",
+    "downloading": "Downloading update…",
+    "downloadProgress": "Downloading update… {{percent}}%",
+    "failed": "The update could not be downloaded or opened. Retry or download with your browser.",
+    "ready": "The update is downloaded. If you cancelled installation, you can open the installer again.",
+    "installing": "Opening installer…",
+    "install": "Install Update",
+    "retry": "Retry Update",
+    "cancel": "Cancel Update",
+    "browserFailed": "Could not open the download link. Try again later."
+  }
 }

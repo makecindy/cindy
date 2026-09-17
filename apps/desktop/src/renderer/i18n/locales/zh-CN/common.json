@@ -2162,7 +2162,11 @@
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
         "signIn": "登录",
-        "setupLink": { "apiKey": "获取 API Key", "account": "注册或登录", "setup": "设置帮助" },
+        "setupLink": {
+          "apiKey": "获取 API Key",
+          "account": "注册或登录",
+          "setup": "设置帮助"
+        },
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加，稍后在详情里刷新",
         "manualModelHint": "未发现可用模型，请填写此 Proxy 实际提供的模型 ID。",
@@ -5683,6 +5687,7 @@
         "title": "个人版源码",
         "openDir": "打开源码目录",
         "prepare": "准备源码",
+        "retry": "重试准备",
         "reset": "清理源码",
         "update": "更新源码",
         "preparingAction": "正在准备源码",
@@ -5712,6 +5717,36 @@
         "ariaLabel": "测试安装：忽略系统工具",
         "enabledHint": "下方卡片可以测试 Windows 工具的下载与安装，已安装的 Cindy 工具会复用。开关立即生效，刷新或重启后关闭，不改动系统工具。",
         "reportHint": "安装测试已开启：便携工具使用 Cindy 管理的副本。Windows 原生编译工具会模拟缺失，以便测试官方安装指引；关闭开关可检查真实状态。"
+      },
+      "tasks": {
+        "title": "未完成的制作",
+        "search": "搜索制作任务",
+        "noResults": "没有匹配的制作任务",
+        "restore": "恢复并打开任务",
+        "finish": "完成制作",
+        "delete": "删除制作",
+        "retryCleanup": "重试清理",
+        "finishHint": "确认改动后完成制作，合入个人版并清理开发目录。对话记录保留在已归档任务中。",
+        "finishConfirm": "完成「{{title}}」？已提交的改动将合入个人版，随后清理开发目录和制作分支，并归档任务。未提交的改动或合并冲突会阻止清理。",
+        "deleteConfirm": "删除「{{title}}」？将停止制作、删除任务，并清理开发目录、已安装的项目依赖和制作分支。未合入个人版的改动将被丢弃，无法恢复。",
+        "status": {
+          "preparing": "正在准备",
+          "running": "正在制作",
+          "ready": "待确认完成",
+          "archived": "已归档 · 可继续",
+          "failed": "准备失败",
+          "cancelled": "准备已停止",
+          "cleaning": "正在清理",
+          "cleanup": "待清理"
+        },
+        "errors": {
+          "busy": "任务仍在运行或目录正在使用，请停止后重试。",
+          "dirty": "还有未提交的改动，请打开任务保存改动后再完成。",
+          "conflict": "合并未完成，改动已保留。请打开任务解决冲突后重试。",
+          "cleanupFailed": "清理未完成，记录已保留，请重试清理。",
+          "directoryBusy": "开发目录中的文件被占用或无法删除，请关闭使用该目录的终端、编辑器或预览后重试清理。",
+          "unavailable": "任务或开发目录已变化，请刷新后重试。"
+        }
       }
     }
   },
@@ -10994,6 +11029,13 @@
       "descriptionRevealPath": "该路径只会在你允许后返回给当前 Agent，并进入对话记录；配对设备可能同步到这条记录。此操作不授予插件读取文件的权限。",
       "descriptionFsWrite": "该插件请求在当前任务的工作目录写入以下文件。允许后，本任务内它写同一目录不再询问。",
       "descriptionWorkspace": "该文件夹在当前任务的工作目录之外。允许后，Cindy 会以它为工作目录在侧边栏创建一个空任务(已有任务时直接复用)，不会读取其中的文件。",
+      "descriptionForgeSource": "以下目录在当前任务的工作目录之外。允许后，Forge 会在该目录打包或生成插件源码(会写入 .cindy 产物或骨架文件)。",
+      "descriptionForgeScaffold": "以下目录在当前任务的工作目录之外。允许后，Forge 会在该目录生成插件源码骨架。",
+      "descriptionForgePack": "以下目录在当前任务的工作目录之外。允许后，Forge 会在该目录打包插件并写入 .cindy 产物。",
+      "descriptionForgeInstall": "以下目录在当前任务的工作目录之外。允许后，Forge 会打包该目录的插件，并安装、启用到本机。",
+      "descriptionOutsideWorkdir": "以下路径在当前任务的工作目录之外。允许后，当前工具可以读取或写入该位置。",
+      "descriptionOutsideRead": "以下路径在当前任务的工作目录之外。允许后，当前工具可以读取该位置。",
+      "descriptionOutsideWrite": "以下路径在当前任务的工作目录之外。允许后，当前工具可以写入该位置。",
       "dirMeta": "{{count}} 个文件 · {{size}}",
       "directory": "目录",
       "allowDirs": "同时允许这些文件所在目录(本任务内同目录媒体文件不再询问)",
@@ -12617,13 +12659,18 @@
     "source": {
       "preparing": "正在准备源码",
       "phase": {
-        "checking": "正在检查 Git 和源码",
+        "waiting": "正在等待其他工程操作完成…",
+        "checking": "正在检查 Git…",
+        "checkingRemote": "正在查询上游版本…",
+        "checkingLocal": "正在检查本地源码…",
         "cloning": "正在下载源码",
         "fetching": "正在刷新仓库",
         "checkingOut": "正在切换版本",
         "preparingBranch": "正在准备个人版分支",
+        "caching": "正在准备依赖缓存",
         "installing": "正在安装依赖"
       },
+      "cacheProgress": "已解析 {{resolved}} · 已复用 {{reused}} · 已下载 {{downloaded}}",
       "pending": "等待准备源码",
       "ready": "源码已准备好",
       "failed": "源码准备失败",
@@ -12637,7 +12684,7 @@
         "localCommits": "源码中有尚未包含在上游的本地提交或暂存记录，请保留或备份后再清理。",
         "environmentNotReady": "构建环境尚未就绪，请检查所需工具。",
         "gitUnavailable": "Git 不可用，请先在环境卡片中检查并安装 Git，再重试。",
-        "installFailed": "依赖安装失败，请重试。",
+        "installFailed": "依赖准备失败，请重试。",
         "locked": "部分文件正被其他程序占用，无法删除。请关闭相关程序或重启 Cindy 后重试。"
       },
       "gitProgress": {
@@ -12665,7 +12712,35 @@
       "start": "开始制作个人版",
       "open": "打开个人版任务",
       "sendFailed": "需求发送失败，请打开个人版任务重试",
-      "preparingWorkspace": "正在创建独立开发目录并安装依赖",
+      "preparingWorkspace": "正在创建独立开发目录",
+      "preparingDependencies": "正在准备个人版任务依赖",
+      "preparingNpmDependencies": "正在准备 npm 依赖",
+      "phases": {
+        "waiting": "等待准备项目",
+        "environment": "正在准备环境",
+        "source": "正在准备个人项目源码",
+        "workspace": "正在创建任务分支和工作目录",
+        "dependencies": "正在安装任务依赖",
+        "starting": "正在自动开始任务",
+        "completed": "准备完成"
+      },
+      "prepared": "准备完成，已自动开始执行你的需求。",
+      "preparationFailed": "准备失败，尚未开始执行你的需求；可重试继续。",
+      "workspaceUnavailable": "个人版工作目录缺失或不完整，请创建新的制作任务，或恢复原工作目录后再继续",
+      "projectClearing": "正在清理个人版项目，请等待清理完成后再发送消息",
+      "inputLocked": {
+        "executing": "Cindy Make 正在首次执行",
+        "hint": "首次执行结束后恢复输入，提问和计划确认不受影响。",
+        "retry": "输入暂不可用，请在上方准备卡片中重试。"
+      },
+      "dependencyActivity": {
+        "starting": "正在启动依赖安装…",
+        "packages": "正在下载并安装依赖…",
+        "scripts": "正在执行安装脚本…"
+      },
+      "dependencyProgress": "已解析 {{resolved}} · 已复用 {{reused}} · 已下载 {{downloaded}} · 已添加 {{added}}",
+      "taskName": "Cindy Make 个人版",
+      "taskTitle": "[Cindy-Make] {{request}}",
       "workspace": "开发目录 {{branch}}"
     },
     "complete": {

@@ -606,9 +606,22 @@ describe('Make upstream workflow', () => {
     expect(h.prepareSource).not.toHaveBeenCalled();
     expect(h.searchUpstream).not.toHaveBeenCalled();
     finishEnvironment(ready());
+    await vi.waitFor(() => expect(h.prepareSource).toHaveBeenCalled());
+    expect(h.prepareSource).toHaveBeenCalledWith(
+      'make',
+      expect.anything(),
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
     await vi.waitFor(() => expect(h.prepareSource).toHaveBeenCalledOnce());
     expect(h.searchUpstream).not.toHaveBeenCalled();
     expect(h.publish.mock.calls.at(-1)?.[1]).toMatchObject({
+      status: 'running',
+      checks: ready().checks,
+      source: { status: 'preparing' },
+      upstream: { status: 'pending' },
+    });
+    expect(cindyMakeManager.getState().reports?.make).toMatchObject({
       status: 'running',
       checks: ready().checks,
       source: { status: 'preparing' },

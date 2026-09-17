@@ -99,6 +99,21 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it('logs a slash-only DB fallback candidate without exposing the path or changing send behavior', async () => {
+    const workdirDiagnostics = { info: vi.fn(), warn: vi.fn() };
+    const { deps } = createDeps({
+      workdirDiagnostics,
+      readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo'),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({ accepted: true });
+    expect(workdirDiagnostics.info).toHaveBeenCalledWith('workdir DB fallback candidate', expect.objectContaining({
+      source: 'live', sameNormalizedDirectory: true,
+    }));
+    expect(JSON.stringify(workdirDiagnostics.info.mock.calls)).not.toContain('repo');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
   it('stamps device-link provenance at the enqueue boundary and rejects forged local values', () => {
     const item = { clientId: 'input-1', text: 'hello' } as unknown as AgentInputQueuedMessage;
     expect(stampTrustedDeviceLinkQueuedOrigin(item, true)).toMatchObject({

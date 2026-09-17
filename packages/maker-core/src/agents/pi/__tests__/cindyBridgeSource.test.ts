@@ -676,7 +676,9 @@ describe('cindy-bridge extension source', () => {
       expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain(
         "if (credentialRead && permission.mode === 'bypassPermissions')",
       );
-      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("if (permission.mode === 'bypassPermissions') return;");
+      expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+        "if (permission.mode === 'bypassPermissions' && !controlPlaneWrite) return;",
+      );
       expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('await ctx.ui.input(');
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -1775,21 +1777,18 @@ describe('cindy-bridge extension source', () => {
       "if (event.toolName === 'cindy_pi_extension' || event.toolName === 'cindy_pi_command') return;",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "if (permission.mode === 'bypassPermissions') return;",
+      "if (permission.mode === 'bypassPermissions' && !controlPlaneWrite) return;",
     );
   });
 
-  it('hard-blocks writes only in read-only reference roots, not external writable roots', () => {
+  it('bubbles Extra Dirs writes and forces confirmation for agent-home writes', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    const readOnlyGate = source.indexOf('permission.readOnlyRoots.some((root) =>');
-    const credentialGate = source.indexOf('const environRead = isCindyShellTool(event.toolName)', readOnlyGate);
-    expect(readOnlyGate).toBeGreaterThan(-1);
-    expect(credentialGate).toBeGreaterThan(readOnlyGate);
-    expect(source.slice(readOnlyGate, credentialGate)).not.toContain('permission.writableRoots');
+    expect(source).not.toContain('Cindy extra reference directories are read-only.');
+    expect(source).not.toContain('Cindy agent runtime directory is read-only.');
     expect(source).not.toContain('Cindy blocks reading credential or key paths, even with Full access.');
     expect(source).not.toContain('Cindy blocks reading process environment (/proc/*/environ), even with Full access.');
-    expect(source).toContain('const writeInsideAnyGrantedRoot = (roots: readonly string[])');
-    expect(source).toContain('&& !writeInsideWritableRoot');
+    expect(source).toContain('const controlPlaneWrite = Boolean(');
+    expect(source).toContain('...(controlPlaneWrite ? { controlPlaneWrite: true } : {})');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
     expect(source).toContain(
       'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',

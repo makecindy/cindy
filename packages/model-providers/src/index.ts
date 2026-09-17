@@ -301,7 +301,7 @@ export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
-export { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime } from "./providerEndpointTemplate.js";
+export { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from "./providerEndpointTemplate.js";
 
 export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';

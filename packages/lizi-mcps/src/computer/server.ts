@@ -4,6 +4,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonObjectArg } from '../json-object-arg.js';
 import { resolvePathInsideRoot, PathBoundaryError } from '../shared/assertInsidePath.js';
+import {
+  authorizeSessionPathOutsideWorkdir,
+  authorizedSessionPathStillBound,
+  resolveCanonicalSessionPath,
+} from '../session-path-auth.js';
 import type {
   ComputerMcpCallContext,
   ComputerMcpDeps,
@@ -108,10 +113,12 @@ interface ReplayTrajectoryAction {
   turn: string;
   tool: ComputerMcpToolName;
   args: Record<string, unknown>;
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>;
 }
 
 interface ComputerDispatchOptions {
   pathWorkingDirOverride?: string;
+  preAuthorizedOutsidePaths?: Map<string, AuthorizedOutsidePath>;
 }
 
 type ComputerMcpTextResult = ReturnType<typeof textResult>;
@@ -273,6 +280,113 @@ function readSessionId(options: ComputerMcpServerOptions): string | undefined {
   return readCallContext(options)?.sessionId;
 }
 
+function isInsideDir(parent: string, child: string): boolean {
+  if (parent === child) return true;
+  const rel = path.relative(parent, child);
+  return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+type AuthorizedOutsidePath = {
+  path: string;
+  isCurrent?: () => boolean;
+};
+
+function authorizedDirPath(
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
+  key = 'dir',
+): string | undefined {
+  return authorizedOutsidePaths.get(key)?.path;
+}
+
+function outsideGrantExpired(grant?: AuthorizedOutsidePath): boolean {
+  return grant?.isCurrent?.() === false;
+}
+
+function staleOutsideGrantResult(tool: string, arg: string) {
+  return textResult(
+    {
+      ok: false,
+      errorCode: 'PATH_NOT_ALLOWED',
+      data: {
+        tool,
+        arg,
+        message: '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。',
+      },
+    },
+    true,
+  );
+}
+
+function reboundOutsideGrantResult(tool: string, arg: string) {
+  return textResult(
+    {
+      ok: false,
+      errorCode: 'PATH_NOT_ALLOWED',
+      data: {
+        tool,
+        arg,
+        message: '已授权路径在回放前发生变化，已停止读取。请用当前任务权限重试。',
+      },
+    },
+    true,
+  );
+}
+
+function staleAuthorizedOutsideGrant(
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
+  tool: string,
+): ComputerMcpTextResult | null {
+  for (const [key, authorized] of authorizedOutsidePaths) {
+    if (outsideGrantExpired(authorized)) return staleOutsideGrantResult(tool, key);
+  }
+  return null;
+}
+
+async function replayDirGrantStillBound(
+  workingDir: string,
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
+): Promise<ComputerMcpTextResult | null> {
+  const dirGrant = authorizedOutsidePaths.get('dir');
+  if (!dirGrant) return null;
+  if (outsideGrantExpired(dirGrant)) return staleOutsideGrantResult('replay_trajectory', 'dir');
+  if (!await authorizedPathStillBound(workingDir, dirGrant)) {
+    return reboundOutsideGrantResult('replay_trajectory', 'dir');
+  }
+  if (outsideGrantExpired(dirGrant)) return staleOutsideGrantResult('replay_trajectory', 'dir');
+  return null;
+}
+
+async function authorizedPathStillBound(
+  workingDir: string,
+  authorized: AuthorizedOutsidePath,
+): Promise<boolean> {
+  return authorizedSessionPathStillBound(workingDir, authorized.path);
+}
+
+async function resolveReplayBoundPath(
+  workingRoot: string,
+  inputPath: string,
+  authorizedRoot?: string,
+): Promise<string> {
+  if (!authorizedRoot) return resolvePathInsideRoot(workingRoot, inputPath);
+  const resolved = path.isAbsolute(inputPath)
+    ? path.resolve(inputPath)
+    : path.resolve(workingRoot, inputPath);
+  let real: string;
+  try {
+    real = await fs.realpath(resolved);
+  } catch {
+    if (!isInsideDir(authorizedRoot, resolved)) {
+      throw new PathBoundaryError(`路径越界: "${inputPath}" 不在已授权回放目录内`);
+    }
+    return resolved;
+  }
+  if (!isInsideDir(authorizedRoot, real)) {
+    throw new PathBoundaryError(`路径越界: "${inputPath}" 不在已授权回放目录内`);
+  }
+  return resolved;
+}
+
 export function createComputerMcpServer(
   deps: ComputerMcpDeps,
   options: ComputerMcpServerOptions = {},
@@ -345,16 +459,19 @@ export function createComputerMcpServer(
 
     // Resolve every local path before a guard reads it. In particular,
     // trajectory inspection must never follow a model-supplied path outside
-    // the current task working directory.
+    // the current task working directory. Keep the grant map on this call so
+    // concurrent Codex HTTP dispatches cannot steal each other's authorized root.
+    const authorizedOutsidePaths = new Map(dispatchOptions?.preAuthorizedOutsidePaths);
     const pathGuardError = await guardPathArgs(
       name as ComputerMcpToolName,
       parsedData,
       dispatchOptions?.pathWorkingDirOverride,
+      authorizedOutsidePaths,
     );
     if (pathGuardError) return pathGuardError;
 
     if (name === 'replay_trajectory') {
-      return replayTrajectoryWithGuards(parsedData, signal);
+      return replayTrajectoryWithGuards(parsedData, signal, authorizedOutsidePaths);
     }
 
     // 快照代际护栏:element_index 指向"某次 get_window_state 的第几项",观察和
@@ -374,6 +491,31 @@ export function createComputerMcpServer(
       snapshotTracker.invalidate(sessionId, parsedData.pid as number, parsedData.window_id as number);
     }
     if (signal?.aborted) return replayCancelledResult();
+
+    const workingDir = dispatchOptions?.pathWorkingDirOverride
+      ?? options.getSessionContext?.().workingDir
+      ?? '';
+    for (const [key, authorized] of authorizedOutsidePaths) {
+      if (outsideGrantExpired(authorized)) {
+        return staleOutsideGrantResult(name, key);
+      }
+      if (!workingDir || !await authorizedPathStillBound(workingDir, authorized)) {
+        return textResult(
+          {
+            ok: false,
+            errorCode: 'PATH_NOT_ALLOWED',
+            data: {
+              tool: name,
+              arg: key,
+              message: '已授权路径在派发前发生变化，已停止写入。请用当前任务权限重试。',
+            },
+          },
+          true,
+        );
+      }
+    }
+    const staleAfterBind = staleAuthorizedOutsideGrant(authorizedOutsidePaths, name);
+    if (staleAfterBind) return staleAfterBind;
 
     const parsedArgs = withSessionArg(
       name as ComputerMcpToolName,
@@ -528,7 +670,8 @@ export function createComputerMcpServer(
 
   async function prepareReplayTrajectory(
     parsedData: Record<string, unknown>,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
   ): Promise<ReplayTrajectoryPreparation> {
     const directory = parsedData.dir;
     const workingDir = options.getSessionContext?.().workingDir ?? '';
@@ -550,7 +693,16 @@ export function createComputerMcpServer(
       // a legitimate symlinked workspace (including macOS /var -> /private/var)
       // is not rejected by a lexical alias mismatch.
       trajectoryRoot = await fs.realpath(directory);
-      await resolvePathInsideRoot(workingRoot, trajectoryRoot);
+      const authorizedRoot = authorizedDirPath(authorizedOutsidePaths);
+      if (authorizedRoot) {
+        const rebound = await replayDirGrantStillBound(workingDir, authorizedOutsidePaths);
+        if (rebound) return { error: rebound };
+        if (!isInsideDir(authorizedRoot, trajectoryRoot)) {
+          throw new PathBoundaryError('回放目录不再匹配已授权路径');
+        }
+      } else {
+        await resolvePathInsideRoot(workingRoot, trajectoryRoot);
+      }
 
       let entryCount = 0;
       const trajectoryDirectory = await fs.opendir(trajectoryRoot);
@@ -593,9 +745,12 @@ export function createComputerMcpServer(
     for (const turn of candidates) {
       try {
         if (signal?.aborted) return { error: replayCancelledResult() };
-        const turnPath = await resolvePathInsideRoot(
+        const rebound = await replayDirGrantStillBound(workingDir, authorizedOutsidePaths);
+        if (rebound) return { error: rebound };
+        const turnPath = await resolveReplayBoundPath(
           workingRoot,
           path.join(trajectoryRoot, turn),
+          authorizedDirPath(authorizedOutsidePaths),
         );
         if (!(await fs.lstat(turnPath)).isDirectory()) {
           return {
@@ -606,9 +761,10 @@ export function createComputerMcpServer(
           };
         }
 
-        const actionPath = await resolvePathInsideRoot(
+        const actionPath = await resolveReplayBoundPath(
           workingRoot,
           path.join(turnPath, 'action.json'),
+          authorizedDirPath(authorizedOutsidePaths),
         );
         if ((await fs.lstat(actionPath)).isSymbolicLink()) {
           return {
@@ -619,7 +775,11 @@ export function createComputerMcpServer(
           };
         }
         const canonicalActionPath = await fs.realpath(actionPath);
-        await resolvePathInsideRoot(workingRoot, canonicalActionPath);
+        await resolveReplayBoundPath(
+          workingRoot,
+          canonicalActionPath,
+          authorizedDirPath(authorizedOutsidePaths),
+        );
         const actionFile = await fs.open(actionPath, REPLAY_READ_FLAGS);
         let actionText: string;
         try {
@@ -633,7 +793,11 @@ export function createComputerMcpServer(
             };
           }
           const currentCanonicalPath = await fs.realpath(actionPath);
-          await resolvePathInsideRoot(workingRoot, currentCanonicalPath);
+          await resolveReplayBoundPath(
+            workingRoot,
+            currentCanonicalPath,
+            authorizedDirPath(authorizedOutsidePaths),
+          );
           const currentStat = await fs.stat(currentCanonicalPath);
           if (currentStat.dev !== stat.dev || currentStat.ino !== stat.ino) {
             return {
@@ -715,9 +879,10 @@ export function createComputerMcpServer(
           };
         }
         const args = parsed.data as Record<string, unknown>;
-        const nestedPathError = await guardPathArgs(toolName, args, workingRoot);
+        const nestedGrants = new Map<string, AuthorizedOutsidePath>();
+        const nestedPathError = await guardPathArgs(toolName, args, workingRoot, nestedGrants);
         if (nestedPathError) return { error: nestedPathError };
-        actions.push({ turn, tool: toolName, args });
+        actions.push({ turn, tool: toolName, args, authorizedOutsidePaths: nestedGrants });
       } catch (error) {
         if (signal?.aborted) return { error: replayCancelledResult() };
         deps.logger?.warn('failed to validate Computer Use trajectory action', {
@@ -802,9 +967,10 @@ export function createComputerMcpServer(
 
   async function replayTrajectoryWithGuards(
     parsedData: Record<string, unknown>,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
   ) {
-    const prepared = await prepareReplayTrajectory(parsedData, signal);
+    const prepared = await prepareReplayTrajectory(parsedData, signal, authorizedOutsidePaths);
     if ('error' in prepared) return prepared.error;
 
     const startedAt = Date.now();
@@ -822,6 +988,11 @@ export function createComputerMcpServer(
 
     for (const [index, action] of prepared.actions.entries()) {
       if (signal?.aborted) return replayCancelledResult();
+      const rebound = await replayDirGrantStillBound(
+        options.getSessionContext?.().workingDir ?? '',
+        authorizedOutsidePaths,
+      );
+      if (rebound) return rebound;
       if (Date.now() - startedAt >= MAX_REPLAY_WALL_CLOCK_MS) {
         return replayBudgetExceededResult();
       }
@@ -834,6 +1005,7 @@ export function createComputerMcpServer(
         // root. Reuse it so a symlink spelling of the session workingDir does
         // not make those immutable absolute paths look lexically out of scope.
         pathWorkingDirOverride: prepared.workingRoot,
+        preAuthorizedOutsidePaths: action.authorizedOutsidePaths,
       });
       if (signal?.aborted) return replayCancelledResult();
       const payload = JSON.parse(result.content[0].text) as { outcome?: { status?: string }; data?: { outcome_unknown?: boolean } };
@@ -895,7 +1067,8 @@ export function createComputerMcpServer(
   async function guardPathArgs(
     name: ComputerMcpToolName,
     parsedData: Record<string, unknown>,
-    workingDirOverride?: string,
+    workingDirOverride: string | undefined,
+    authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
   ) {
     const argNames = COMPUTER_PATH_ARGS[name];
     if (!argNames) return null;
@@ -923,6 +1096,35 @@ export function createComputerMcpServer(
         parsedData[key] = await resolvePathInsideRoot(workingDir, value);
       } catch (e) {
         if (e instanceof PathBoundaryError) {
+          const sessionContext = options.getSessionContext?.();
+          const abs = await resolveCanonicalSessionPath(workingDir, value);
+          const existing = authorizedOutsidePaths.get(key);
+          if (
+            existing
+            && existing.path === abs
+            && existing.isCurrent?.() !== false
+            && await authorizedPathStillBound(workingDir, existing)
+          ) {
+            parsedData[key] = abs;
+            continue;
+          }
+          const auth = await authorizeSessionPathOutsideWorkdir({
+            sessionId: sessionContext?.sessionId,
+            sessionInstanceId: sessionContext?.sessionInstanceId,
+            workingDir,
+            remoteHostId: sessionContext?.remoteHostId,
+            path: abs,
+            toolName: `cindy-computer:${name}`,
+            operation: name === 'replay_trajectory' ? 'read' : 'write',
+          });
+          if (auth.allowed) {
+            parsedData[key] = abs;
+            authorizedOutsidePaths.set(key, {
+              path: abs,
+              ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
+            });
+            continue;
+          }
           return textResult(
             {
               ok: false,
@@ -931,8 +1133,8 @@ export function createComputerMcpServer(
                 tool: name,
                 arg: key,
                 message: key === 'screenshot_out_file'
-                  ? `${e.message} 请省略 screenshot_out_file 由 driver 使用默认路径，或将其改为当前 workingDir 内的路径。`
-                  : e.message,
+                  ? `${auth.reason} 也可省略 screenshot_out_file 由 driver 使用默认路径。`
+                  : auth.reason,
               },
             },
             true,

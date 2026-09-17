@@ -156,7 +156,7 @@ interface MetricSlot {
 function computeMetricSlots(
   claudeQuota: ClaudeAccountUsageSnapshot | null,
   creditTotals: CreditTotals | null,
-  sessionMoney: RegionalMoney | null,
+  sessionLabel: string | null,
   t: TFunction,
 ): Record<MetricKey, MetricSlot> {
   const slots: Record<MetricKey, MetricSlot> = {
@@ -225,11 +225,10 @@ function computeMetricSlots(
     }
   }
 
-  if (sessionMoney && sessionMoney.amount > 0) {
-    const cost = formatTurnCostMoney(sessionMoney);
+  if (sessionLabel) {
     slots.session = {
-      label: t('todaySpend.sessionCostLabel', { cost }),
-      tooltipLabel: t('todaySpend.tooltip.sessionUsed', { cost }),
+      label: sessionLabel,
+      tooltipLabel: sessionLabel,
       available: true,
     };
   }
@@ -562,7 +561,12 @@ function toQuotaHoverCardSessionUsage(
   sessionTokens: number | null,
 ): QuotaHoverCardSessionUsage | null {
   const { actualMoney, estimatedValueMoney, totalMoney } = sessionUsage;
-  if (!totalMoney?.amount && !hasPositiveSessionTokens(sessionTokens)) return null;
+  if (
+    !actualMoney?.amount &&
+    !estimatedValueMoney?.amount &&
+    !hasPositiveSessionTokens(sessionTokens)
+  )
+    return null;
 
   return {
     costText: totalMoney?.amount ? formatTurnCostMoney(totalMoney) : null,
@@ -896,7 +900,6 @@ export function TodaySpendChip({
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
   const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd);
-  const sessionMoney = sessionUsage.totalMoney;
   const sessionTokens = useSessionTokens(
     vendorKey === 'pi' ||
       isCodexApi ||
@@ -1136,11 +1139,27 @@ export function TodaySpendChip({
     [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer],
   );
 
-  const sessionSegment = sessionMoney?.amount
-    ? t('todaySpend.sessionCostLabel', {
-        cost: formatTurnCostMoney(sessionMoney),
-      })
-    : null;
+  const sessionSegment = sessionUsage.totalMoney?.amount
+    ? t(
+        sessionUsage.totalMoney.kind === 'value-estimate'
+          ? 'todaySpend.codex.sessionValueLabel'
+          : 'todaySpend.sessionCostLabel',
+        { cost: formatTurnCostMoney(sessionUsage.totalMoney) },
+      )
+    : [
+        sessionUsage.actualMoney?.amount
+          ? t('todaySpend.tooltip.sessionUsed', {
+              cost: formatTurnCostMoney(sessionUsage.actualMoney),
+            })
+          : null,
+        sessionUsage.estimatedValueMoney?.amount
+          ? t('todaySpend.codex.sessionValueLabel', {
+              cost: formatTurnCostMoney(sessionUsage.estimatedValueMoney),
+            })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || null;
   // codex-oauth / cc+chatgpt bridge → ChatGPT 用量看板; cc+xai bridge → grok.com 用量页;
   // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 暂无看板(null,见文件头 TODO)。
   // device-link 远程会话额度属于被控端账号,本机浏览器打开的看板是控制端自己的账号 → 不跳。
@@ -1382,7 +1401,7 @@ export function TodaySpendChip({
           : buildClaudeUsageCard(claudeSubscriptionUsage, t);
     }
   } else {
-    const slots = computeMetricSlots(claudeQuota, creditTotals, sessionMoney, t);
+    const slots = computeMetricSlots(claudeQuota, creditTotals, sessionSegment, t);
     const chipSegments = getGatewayChipSegments(slots);
     const codexApiHasTokenFallback =
       isCodexApi && !slots.session.available && hasPositiveSessionTokens(sessionTokens);

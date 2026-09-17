@@ -242,6 +242,10 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { classifyCindyMakeCommand, tryStartCindyMakeCommand } from '@/lib/cindyMakeCommand';
+import {
+  CindyMakePreflightDialog,
+  type CindyMakePreflightProps,
+} from '@/components/cindy-make/CindyMakePreflightDialog';
 import { getModelById } from '@/lib/modelDefinitions';
 import {
   beginSlashCommandRosterLoad,
@@ -1689,6 +1693,10 @@ export function ChatInput({
   // 这里用本地乐观态承接即时反馈:seed 自 initialProviderId,选择时乐观更新;
   // initialProviderId 变化(将来 session 回流)时跟随。null = 跟随默认路由。
   const currentSessionIdRef = useRef(sessionId);
+  const [makePreflight, setMakePreflight] = useState<
+    Omit<CindyMakePreflightProps, 'onOpenChange'> | null
+  >(null);
+  useEffect(() => setMakePreflight(null), [sessionId]);
   currentSessionIdRef.current = sessionId;
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     initialProviderId ?? null,
@@ -5202,13 +5210,36 @@ export function ChatInput({
             toast.error(t('cindyMakeDoctor.failed'));
             return;
           }
-          if (makeResult.kind === 'started') {
+          if (makeResult.kind === 'started' || makeResult.kind === 'preflight') {
             editor.commands.clearContent(true);
             historyIndexRef.current = -1;
             hydratedHistoryDocumentRef.current = null;
             draftRef.current = null;
             if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
-            if (makeResult.sessionId !== sourceSessionId) {
+            if (makeResult.kind === 'preflight') {
+              const {
+                agentKind,
+                model,
+                effort,
+                permissionMode,
+                providerId,
+                fastMode,
+                planModeEnabled,
+              } = makeResult.createOptions ?? {};
+              setMakePreflight({
+                request: makeResult.request,
+                sessionId: sourceSessionId,
+                createOptions: {
+                  agentKind,
+                  model,
+                  effort,
+                  permissionMode,
+                  providerId,
+                  fastMode,
+                  planModeEnabled,
+                },
+              });
+            } else if (makeResult.sessionId !== sourceSessionId) {
               navigate('/cc-agent/' + makeResult.sessionId);
             }
             return;
@@ -8158,6 +8189,12 @@ export function ChatInput({
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+      {makePreflight && makePreflight.sessionId === sessionId && (
+        <CindyMakePreflightDialog
+          {...makePreflight}
+          onOpenChange={(open) => !open && setMakePreflight(null)}
+        />
+      )}
       {/* 计划模式激活态 chip(输入框上方,与 GoalIndicator 同形)。-mb-2 抵一部分
           root gap-4,让 chip 与输入框间距接近 GoalIndicator 的节奏。 */}
       {planModeEntry && planModeEnabled && (
@@ -8728,12 +8765,16 @@ export function ChatInput({
                 {!hideRuntimeControls ? (
                 <div
                   data-session-model-slot={sessionId ? '' : undefined}
-                  // A cold session has no trustworthy label yet. Keep the same geometry before
-                  // and after hydration without mounting an interactive default-model control.
+                  // Reserve space while the model is unknown, keeping the toolbar height and
+                  // right-aligned actions stable. Once ready, wide toolbars hug the model label;
+                  // only narrow toolbars retain the fixed-width, truncating slot.
                   className={sessionId
-                    ? cn('h-[30px] shrink', useUltraCompactToolbar
-                        ? 'w-[64px] min-w-[64px]'
-                        : 'w-[148px] min-w-[72px]')
+                    ? cn('h-[30px] shrink',
+                        useUltraCompactToolbar
+                          ? 'w-[64px] min-w-[64px]'
+                          : useNarrowToolbar || sessionModelLoading
+                            ? 'w-[148px] min-w-[72px]'
+                            : 'min-w-0')
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector

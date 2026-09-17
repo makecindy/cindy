@@ -5689,6 +5689,7 @@
         "title": "Personal build source",
         "openDir": "Open source folder",
         "prepare": "Prepare source",
+        "retry": "Retry Preparation",
         "reset": "Clear source",
         "update": "Update source",
         "preparingAction": "Preparing source",
@@ -5718,6 +5719,36 @@
         "ariaLabel": "Test Installation: Ignore System Tools",
         "enabledHint": "The card below can test downloading and installing missing Windows tools. Existing Cindy-managed tools are reused. This takes effect immediately and resets on reload or restart; system tools stay unchanged.",
         "reportHint": "Installation test is on: portable tools use Cindy-managed copies. Windows compiler tools are shown as missing to test the official installation guide; turn off the switch to check their real status."
+      },
+      "tasks": {
+        "title": "Unfinished builds",
+        "search": "Search build sessions",
+        "noResults": "No matching build sessions",
+        "restore": "Restore and open session",
+        "finish": "Finish build",
+        "delete": "Delete build",
+        "retryCleanup": "Retry cleanup",
+        "finishHint": "After reviewing the changes, finish to merge them into your personal version and clean up the development folder. Conversation history stays in the archived session.",
+        "finishConfirm": "Finish “{{title}}”? Committed changes will be merged into your personal version, the development folder and build branch removed, and the session archived. Uncommitted changes or merge conflicts will prevent cleanup.",
+        "deleteConfirm": "Delete “{{title}}”? This stops the build, deletes the session, and removes its development folder, installed project dependencies, and build branch. Changes not merged into your personal version will be permanently discarded.",
+        "status": {
+          "preparing": "Preparing",
+          "running": "Building",
+          "ready": "Awaiting completion",
+          "archived": "Archived · Can resume",
+          "failed": "Preparation failed",
+          "cancelled": "Preparation stopped",
+          "cleaning": "Cleaning up",
+          "cleanup": "Cleanup pending"
+        },
+        "errors": {
+          "busy": "The session or folder is still in use. Stop it and try again.",
+          "dirty": "There are uncommitted changes. Open the session and save them before finishing.",
+          "conflict": "The merge did not finish. Your changes are preserved. Open the session to resolve conflicts and retry.",
+          "cleanupFailed": "Cleanup did not finish. The record is kept so you can retry.",
+          "directoryBusy": "Files in the development folder are in use or cannot be removed. Close terminals, editors, or previews using this folder, then retry cleanup.",
+          "unavailable": "The session or development folder changed. Refresh and try again."
+        }
       }
     }
   },
@@ -11014,6 +11045,13 @@
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
+      "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
+      "descriptionForgeScaffold": "The directory below is outside this session's working directory. If you allow, Forge will create plugin source files there.",
+      "descriptionForgePack": "The directory below is outside this session's working directory. If you allow, Forge will pack the plugin there and write a .cindy artifact.",
+      "descriptionForgeInstall": "The directory below is outside this session's working directory. If you allow, Forge will pack this plugin and install and enable it on this computer.",
+      "descriptionOutsideWorkdir": "The path below is outside this session's working directory. If you allow, the current tool can read or write there.",
+      "descriptionOutsideRead": "The path below is outside this session's working directory. If you allow, the current tool can read there.",
+      "descriptionOutsideWrite": "The path below is outside this session's working directory. If you allow, the current tool can write there.",
       "dirMeta": "{{count}} files · {{size}}",
       "directory": "Directory",
       "allowDirs": "Also allow their folders (media files in the same folders won't ask again this session)",
@@ -12638,13 +12676,18 @@
     "source": {
       "preparing": "Preparing source checkout…",
       "phase": {
-        "checking": "Checking Git and source",
+        "waiting": "Waiting for other project operations to finish…",
+        "checking": "Checking Git…",
+        "checkingRemote": "Checking the upstream version…",
+        "checkingLocal": "Checking local source…",
         "cloning": "Downloading source",
         "fetching": "Refreshing repository",
         "checkingOut": "Selecting version",
         "preparingBranch": "Preparing personal branch",
+        "caching": "Preparing dependency cache",
         "installing": "Installing dependencies"
       },
+      "cacheProgress": "Resolved {{resolved}} · Reused {{reused}} · Downloaded {{downloaded}}",
       "pending": "Waiting to prepare source",
       "ready": "Source is ready",
       "failed": "Source preparation failed",
@@ -12658,7 +12701,7 @@
         "localCommits": "The source contains local commits or stashes not included upstream. Keep or back them up before clearing.",
         "environmentNotReady": "The build environment is not ready. Check the required tools.",
         "gitUnavailable": "Git is unavailable. Check and install Git in the environment card, then retry.",
-        "installFailed": "Dependency install failed. Please retry.",
+        "installFailed": "Dependency preparation failed. Please retry.",
         "locked": "Some files are in use by another program and could not be removed. Close it or restart Cindy, then retry."
       },
       "gitProgress": {
@@ -12686,7 +12729,35 @@
       "start": "Start personal build",
       "open": "Open personal build task",
       "sendFailed": "Could not send the request to the personal build task",
-      "preparingWorkspace": "Creating an isolated workspace and installing dependencies",
+      "preparingWorkspace": "Creating an isolated workspace",
+      "preparingDependencies": "Preparing dependencies for the personal task",
+      "preparingNpmDependencies": "Preparing npm dependencies",
+      "phases": {
+        "waiting": "Waiting for project preparation",
+        "environment": "Preparing the environment",
+        "source": "Preparing personal project source",
+        "workspace": "Creating the task branch and worktree",
+        "dependencies": "Installing task dependencies",
+        "starting": "Starting your request",
+        "completed": "Preparation complete"
+      },
+      "prepared": "Preparation complete. Your request has started automatically.",
+      "preparationFailed": "Preparation failed. Your request has not started; retry to continue.",
+      "workspaceUnavailable": "The personal-build workspace is missing or incomplete. Create a new build task, or restore the original worktree before continuing.",
+      "projectClearing": "The personal-build project is being cleared. Wait before sending another message.",
+      "inputLocked": {
+        "executing": "Cindy Make is running your first request",
+        "hint": "Input resumes after this run. You can still answer questions and review plans.",
+        "retry": "Input is unavailable. Retry from the preparation card above."
+      },
+      "dependencyActivity": {
+        "starting": "Starting dependency installation…",
+        "packages": "Downloading and installing dependencies…",
+        "scripts": "Running installation scripts…"
+      },
+      "dependencyProgress": "Resolved {{resolved}} · reused {{reused}} · downloaded {{downloaded}} · added {{added}}",
+      "taskName": "Cindy Make personal build",
+      "taskTitle": "[Cindy-Make] {{request}}",
       "workspace": "Workspace {{branch}}"
     },
     "complete": {

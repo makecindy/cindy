@@ -449,6 +449,7 @@ export function registerBuiltinDesktopCommands(
                   error: progress.error,
                   phase: progress.phase,
                   progress: progress.progress,
+                  dependencies: progress.dependencies,
                 },
               });
             },

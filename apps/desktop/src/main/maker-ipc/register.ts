@@ -233,6 +233,7 @@ import {
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
 import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { workdirDiagnosticContext, workdirDiagnosticErrorCode, workdirDiagnosticId } from '../workdirDiagnostics.js';
 import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, findSimilarWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
@@ -586,6 +587,10 @@ import { readXaiSubscriptionUsageSnapshotForDeviceLink, readClaudeSubscriptionUs
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { applyPersistedCindyMakeMarker } from './cindyMakeSessionStart.js';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession.js';
+import { cindyMakeManager } from '../cindy-make/manager.js';
+import { assertCindyMakeWorkspace, withCindyMakeProjectUse } from '../cindy-make/projectAccess.js';
+import { isCindyMakeWorktreePath } from '../cindy-make/sourcePaths.js';
+import { assertCindyMakeTaskReady, configureCindyMakeTaskSender, CINDY_MAKE_TASK_DISPATCH } from '../cindy-make/taskRuntime.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
@@ -1099,8 +1104,9 @@ import { handleSessionEvent, type SessionEventDependencies } from './sessionEven
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
+const workdirLog = createLogger('workdir-diagnostics');
 const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory }, async (sessionId) =>
-  ensureDialogueWorkspaceDir(sessionId, Date.now()));
+  ensureDialogueWorkspaceDir(sessionId, Date.now()), workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
@@ -4570,6 +4576,8 @@ const sessionEventDependencies: SessionEventDependencies = {
 };
 
 const sessionTurnObserverDependencies = {
+  beforeLocalProviderStart: (session: Session) =>
+    withCindyMakeProjectUse(app.getPath('userData'), session.workDir, async () => undefined),
   silentStopTurnLeaseGate,
   sessionTurnLeaseTracker,
   providerTurnLeaseId,
@@ -6544,7 +6552,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }> {
     if (o.id && o.workingDir && !o.remoteHostId) {
       o.workingDir = workingDirectoryRecovery.resolve(o.id, o.workingDir);
-      await workingDirectoryRecovery.observe(o.id, o.workingDir).catch(() => undefined);
+      await workingDirectoryRecovery.observe(o.id, o.workingDir).catch((error) => {
+        workdirLog.warn('workdir bootstrap observation failed', {
+          ...workdirDiagnosticContext(o.id!, o.workingDir), code: workdirDiagnosticErrorCode(error),
+        });
+      });
     }
     o.hostStartupPreferences = {
       userPrompt: o.userPrompt,
@@ -8460,47 +8472,57 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     anchorClientId: string,
     opts: SessionSendOptions,
   ): Promise<SessionSendResult> {
-    let baselineStarted = false;
-    let turnChangeSetStarted = false;
-    const pendingHandoff = await agentHandoffPending.peek(session.id);
-    const outgoingMessage: UserMessage = pendingHandoff
-      ? (prependHandoffToUserMessage(
-          { type: 'user', content: message },
-          pendingHandoff,
-        ) as UserMessage)
-      : { type: 'user', content: message };
-    try {
-      const sendResult = await session.send(outgoingMessage, {
-        ...opts,
-        onAccepted: async () => {
-          await opts.onAccepted?.();
-          await beginTurnChangeSetAtDispatch(session, anchorClientId);
-          turnChangeSetStarted = true;
-          if (gitSnapshotCoordinator) {
-            await gitSnapshotCoordinator.onTurnStart(session.id);
-            baselineStarted = true;
-          }
-        },
-      });
-      if (turnChangeSetStarted && !sendResult.accepted) {
-        clearPendingTurnChangeSets(session.id);
-      }
-      if (baselineStarted && !sendResult.accepted) {
-        gitSnapshotCoordinator?.onTurnAbort(session.id);
-      }
-      if (pendingHandoff && sendResult.accepted) {
-        agentHandoffPending.consume(session.id);
-      }
-      return sendResult;
-    } catch (err) {
-      if (turnChangeSetStarted) {
-        clearPendingTurnChangeSets(session.id);
-      }
-      if (baselineStarted) {
-        gitSnapshotCoordinator?.onTurnAbort(session.id);
-      }
-      throw err;
+    if (!session.remoteHostId && isCindyMakeWorktreePath(app.getPath('userData'), session.workDir)) {
+      if (cindyMakeManager.isTaskPreparing(session.id))
+        throwIpcError('PRECONDITION_FAILED', 'Cindy Make is still preparing this task');
+      await assertCindyMakeTaskReady(session.id);
     }
+    const dispatch = async (): Promise<SessionSendResult> => {
+      let baselineStarted = false;
+      let turnChangeSetStarted = false;
+      const pendingHandoff = await agentHandoffPending.peek(session.id);
+      const outgoingMessage: UserMessage = pendingHandoff
+        ? (prependHandoffToUserMessage(
+            { type: 'user', content: message },
+            pendingHandoff,
+          ) as UserMessage)
+        : { type: 'user', content: message };
+      try {
+        const sendResult = await session.send(outgoingMessage, {
+          ...opts,
+          onAccepted: async () => {
+            await opts.onAccepted?.();
+            await beginTurnChangeSetAtDispatch(session, anchorClientId);
+            turnChangeSetStarted = true;
+            if (gitSnapshotCoordinator) {
+              await gitSnapshotCoordinator.onTurnStart(session.id);
+              baselineStarted = true;
+            }
+          },
+        });
+        if (turnChangeSetStarted && !sendResult.accepted) {
+          clearPendingTurnChangeSets(session.id);
+        }
+        if (baselineStarted && !sendResult.accepted) {
+          gitSnapshotCoordinator?.onTurnAbort(session.id);
+        }
+        if (pendingHandoff && sendResult.accepted) {
+          agentHandoffPending.consume(session.id);
+        }
+        return sendResult;
+      } catch (err) {
+        if (turnChangeSetStarted) {
+          clearPendingTurnChangeSets(session.id);
+        }
+        if (baselineStarted) {
+          gitSnapshotCoordinator?.onTurnAbort(session.id);
+        }
+        throw err;
+      }
+    };
+    return session.remoteHostId
+      ? dispatch()
+      : withCindyMakeProjectUse(app.getPath('userData'), session.workDir, dispatch);
   }
 
   async function sendToSessionInternal(params: {
@@ -12283,12 +12305,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
     prepareUnhealthySession: (sessionId) =>
       contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+    workdirDiagnostics: workdirLog,
     log,
   });
 
   const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
     const [sessionId] = args;
     if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
+    if (cindyMakeManager.isTaskPreparing(sessionId) && (args[3] as Record<PropertyKey, unknown> | undefined)?.[CINDY_MAKE_TASK_DISPATCH] !== true) {
+      throwIpcError('PRECONDITION_FAILED', 'Cindy Make is still preparing this task');
+    }
     await assertReviewExternalInputAllowed(sessionId);
     await reconcileBotModelRoute(sessionId);
     const compactedRuntime = maker.getSession(sessionId);
@@ -12299,6 +12325,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .drizzle.select({
           source: sessions.source,
           role: botSessionLinks.role,
+          workingDir: sessions.workingDir,
+          remoteHostId: sessions.remoteHostId,
           profileStatus: botProfiles.status,
           hiddenAt: botProfiles.hiddenAt,
         })
@@ -12308,6 +12336,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       const blocked = botSessionInputBlockReason(botInput ?? null);
+      if (botInput?.source === CINDY_MAKE_SESSION_SOURCE && (args[3] as Record<PropertyKey, unknown> | undefined)?.[CINDY_MAKE_TASK_DISPATCH] !== true) {
+        await assertCindyMakeTaskReady(sessionId);
+      }
       if (isDeviceLinkInvoke() && botInput?.source === 'bot' && (botInput.hiddenAt || botInput.profileStatus === 'archived')) {
         throwIpcError('NOT_FOUND', 'Session does not exist');
       }
@@ -12315,7 +12346,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (inputCoordinator.isExecutionPaused(sessionId)) {
         throwIpcError('PRECONDITION_FAILED', 'Task is paused; resume it before continuing');
       }
-      return sendToAgentAcceptedUnlocked(...args);
+      return botInput?.remoteHostId ? sendToAgentAcceptedUnlocked(...args)
+        : withCindyMakeProjectUse(app.getPath('userData'), botInput?.workingDir, () => sendToAgentAcceptedUnlocked(...args));
     });
   };
   contextOverflowRolloverHolder = createContextOverflowRollover({
@@ -12611,7 +12643,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (row.source !== 'desktop' || isHeadlessGhostSetupTurn(sessionId) || bindingStore.findByTarget(sessionId))) {
         return { accepted: false };
       }
-      const result = await sendToAgentAcceptedUnlocked(
+      const sendReplay = () => sendToAgentAcceptedUnlocked(
         sessionId,
         persistedUserContentToWireMessage(agentFacingWireContent ?? content),
         createOpts,
@@ -12626,6 +12658,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             }
           : { signal: recovery?.signal },
       );
+      const result = row.remoteHostId ? await sendReplay()
+        : await withCindyMakeProjectUse(app.getPath('userData'), row.workingDir, sendReplay);
       return { accepted: result.accepted === true };
     },
     withSessionLock: withSendToSessionLock,
@@ -12824,6 +12858,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   };
   const revokeTrustedDesktopQueueOrigin = (item?: AgentInputQueuedMessage): void => { if (item?.origin) delete (item.origin as Record<PropertyKey, unknown>)[TRUSTED_DESKTOP_QUEUE_ORIGIN]; };
+  configureCindyMakeTaskSender((sessionId, message, createOpts, sendOpts) =>
+    sendToAgentAccepted(sessionId, message, createOpts, attachTrustedDesktopSendContext(message, sendOpts)),
+    (sessionId) => inputCoordinator.getClearBoundaryMs(sessionId),
+  );
   registerMakerSessionSendHandler(
     {
       handle(channel, handler) {
@@ -12877,6 +12915,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? sanitizedSendOpts
           : attachTrustedDesktopSendContext(message, sanitizedSendOpts),
       );
+    },
+  );
+
+  // #4513: session 双时间戳「疑似中断」是纯 DB 启发式,对任何在飞 turn 都成立;
+  // renderer 的运行态抑制依赖 status(isRunning) 事件,而消息流与状态流是两条通道,
+  // 事件可能缺失/迟到(协同 worker 视图实测复现)。这里把 main 侧权威运行态暴露
+  // 给 renderer 做一次真值回填:tracker 由 status/done/终止型 error 事件维护,
+  // 再叠加 live runtime 的 isTurnRunning 兜底。进程内存态重启后自然清空,
+  // 不会把「真中断」误报成在飞。
+  ipcMain.handle(
+    MAKER_INVOKE.SESSION_TURN_ACTIVE,
+    (event, sessionId: unknown): { inTurn: boolean } => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'sessionId required');
+      }
+      const live = getMakerIfReady()?.getSession(sessionId);
+      return {
+        inTurn:
+          sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
+          live?.isTurnRunning() === true,
+      };
     },
   );
 
@@ -15335,6 +15395,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           isRemoteInvoke: remoteInvoke,
         });
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        cindyMakeManager.cancelTasksForSession(sid);
         workingDirectoryRecovery.discard(sid);
         resetAutomaticRecoveryForExplicitStop(sid);
         // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
@@ -18026,14 +18087,24 @@ async function checkWorkDirExists(
   // 或者 agent 真跑起来时由远端 codex 自己报 ENOENT)。这里直接放行。
   if (remoteHostId) return true;
   if (!workingDir?.trim()) return true;
+  const cindyMakeWorkspace = isCindyMakeWorktreePath(app.getPath('userData'), workingDir);
+  if (cindyMakeWorkspace) workingDirectoryRecovery.discard(sessionId);
   workingDir = workingDirectoryRecovery.resolve(sessionId, workingDir);
   const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
   // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
   const suppress = opts?.suppressMissingBroadcast === true;
+  const startedAt = Date.now();
+  const diagnosticContext = {
+    ...workdirDiagnosticContext(sessionId, workingDir),
+    suppressMissingBroadcast: suppress,
+    usingFallback: workingDirectoryRecovery.isFallback(sessionId, workingDir),
+  };
   try {
+    if (cindyMakeWorkspace) await assertCindyMakeWorkspace(app.getPath('userData'), workingDir);
     const stat = await statWorkingDirectory(workingDir);
     if (!stat.isDirectory()) {
+      workdirLog.warn('workdir preflight rejected', { ...diagnosticContext, reason: 'not-directory' });
       if (suppress) {
         log.warn('send: workdir not a directory (broadcast suppressed, caller has fallback)', {
           sessionId,
@@ -18051,6 +18122,7 @@ async function checkWorkDirExists(
     if (getManagedWorktreeBasePath(normalizedWorkingDir) !== null) {
       const ready = await restoreMissingManagedWorktreeForSession(sessionId, workingDir);
       if (!ready) {
+        workdirLog.warn('workdir preflight rejected', { ...diagnosticContext, reason: 'managed-worktree-not-ready' });
         if (suppress) {
           log.warn('send: managed worktree not ready (broadcast suppressed, caller has fallback)', {
             sessionId,
@@ -18062,16 +18134,33 @@ async function checkWorkDirExists(
         return false;
       }
     }
-    if (getManagedWorktreeBasePath(normalizedWorkingDir) === null) {
-      if (!await workingDirectoryRecovery.recover(sessionId, workingDir)) return false;
+    if (!cindyMakeWorkspace && getManagedWorktreeBasePath(normalizedWorkingDir) === null) {
+      if (!await workingDirectoryRecovery.recover(sessionId, workingDir)) {
+        workdirLog.warn('workdir preflight rejected', { ...diagnosticContext, reason: 'recovery-failed-after-stat' });
+        return false;
+      }
       await workingDirectoryRecovery.observe(sessionId, workingDir);
     }
+    workdirLog.info('workdir preflight ready', {
+      ...diagnosticContext,
+      usingFallback: workingDirectoryRecovery.isFallback(sessionId, workingDir),
+      resolvedDirectoryRef: workdirDiagnosticId(workingDirectoryRecovery.resolve(sessionId, workingDir)),
+      elapsedMs: Date.now() - startedAt,
+    });
     return true;
   } catch (error) {
+    workdirLog.warn('workdir preflight failed', {
+      ...diagnosticContext, code: workdirDiagnosticErrorCode(error), elapsedMs: Date.now() - startedAt,
+    });
+    if (cindyMakeWorkspace) {
+      if (!suppress) emitWorkDirMissingError(sessionId, workingDir, source, 'not-exist');
+      return false;
+    }
     // Cindy 托管 worktree 被外部 PR cleanup / 手动 git 命令移除时，先按 DB 中
     // 的精确 worktree_path 从本地或 origin tracking 分支重建，保留原代码与快照。
     const restored = await restoreMissingManagedWorktreeForSession(sessionId, workingDir);
     if (restored) {
+      workdirLog.info('workdir preflight recovered', { ...diagnosticContext, action: 'managed-worktree-restored' });
       log.info('send: restored missing managed worktree', { sessionId, workingDir });
       return true;
     }
@@ -18094,7 +18183,15 @@ async function checkWorkDirExists(
           .filter((session) => !session.remoteHostId)
           .map((session) => ({ id: session.id, workingDir: session.workDir })))
     ) {
-      log.info('send: recreated missing working directory for conversation', { sessionId, workingDir });
+      const resolvedDir = workingDirectoryRecovery.resolve(sessionId, workingDir);
+      workdirLog.info('workdir preflight recovered', {
+        ...diagnosticContext, code: workdirDiagnosticErrorCode(error),
+        resolvedDirectoryRef: workdirDiagnosticId(resolvedDir),
+        usingFallback: workingDirectoryRecovery.isFallback(sessionId, workingDir),
+        sameDirectory: path.resolve(workingDir) === path.resolve(resolvedDir),
+        elapsedMs: Date.now() - startedAt,
+      });
+      log.info('send: working directory recovery completed', { sessionId, workingDir });
       return true;
     }
     if (suppress) {
@@ -18104,6 +18201,12 @@ async function checkWorkDirExists(
       });
       return false;
     }
+    workdirLog.warn('workdir preflight blocked', {
+      ...diagnosticContext, code: workdirDiagnosticErrorCode(error), reportedReason: 'not-exist',
+      recoveryEligible: (error as NodeJS.ErrnoException).code === 'ENOENT' || unavailable,
+      managedWorktree: getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) !== null,
+      similarPathFound: !!similar, elapsedMs: Date.now() - startedAt,
+    });
     emitWorkDirMissingError(sessionId, workingDir, source, 'not-exist', similar);
     return false;
   }

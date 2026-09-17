@@ -857,7 +857,7 @@ describe('ModelSelector trigger variants', () => {
     expect(modelListMaxHeightForRows(100)).toBe(300);
   });
 
-  it('bounds the default-session trigger in narrow and ultra-narrow composers', () => {
+  it('bounds the default-session trigger in wide, narrow and ultra-narrow composers', () => {
     const props = {
       modelId: 'claude-opus-4-8',
       effort: 'xhigh' as Effort,
@@ -866,7 +866,16 @@ describe('ModelSelector trigger variants', () => {
       vendorKey: 'cc' as const,
       compactToolbar: true,
     };
-    const view = render(React.createElement(ModelSelector, props));
+    const view = render(React.createElement(ModelSelector, { ...props, compactToolbar: false }));
+
+    const wideTrigger = screen.getByRole('button', {
+      name: /Current: Opus 4\.8, effort: 超高/,
+    });
+    expect(wideTrigger.className).toContain('max-w-[min(320px,100%)]');
+    expect(within(wideTrigger).getByText('Opus 4.8').className).toContain('truncate');
+    expect(wideTrigger.getAttribute('title')).toContain('Opus 4.8');
+
+    view.rerender(React.createElement(ModelSelector, props));
 
     let trigger = screen.getByRole('button', {
       name: /Current: Opus 4\.8, effort: 超高/,
@@ -891,6 +900,25 @@ describe('ModelSelector trigger variants', () => {
     // 可及名仍保留完整模型 + effort，视觉仅收起文字，不丢选择能力。
     expect(trigger.getAttribute('aria-label')).toContain('Opus 4.8');
     expect(trigger.getAttribute('aria-label')).toContain('超高');
+  });
+
+  it('caps the toolbar panel while field panels still follow their field width', () => {
+    const props = {
+      modelId: 'claude-opus-4-8',
+      effort: 'high' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      unifiedPanel: true,
+    };
+    const view = render(React.createElement(ModelSelectorContent, props));
+    let pane = view.container.querySelector('[data-unified-model-panel]') as HTMLElement;
+    expect(pane.className).toContain('max-w-[min(420px,calc(100vw-48px))]');
+
+    view.rerender(React.createElement(ModelSelectorContent, { ...props, fluidWidth: true }));
+    pane = view.container.querySelector('[data-unified-model-panel]') as HTMLElement;
+    expect(pane.className).toContain('w-full min-w-0');
+    expect(pane.className).not.toContain('420px');
   });
 
   it('keeps the session Agent explicit when Claude Code uses an OpenAI-branded model', () => {
@@ -984,6 +1012,9 @@ describe('ModelSelector trigger variants', () => {
     providersRef.providers = [{
       id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} },
       models: { codex: [{ id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 1000000, efforts: ['high'], defaultEffort: 'high', supportsFastMode: true }] },
+    }, {
+      id: 'xd', name: 'Gateway', connected: true, agents: [currentAgent], routing: { [currentAgent]: {} },
+      models: { [currentAgent]: [{ id: 'previous-model', name: 'Previous model', efforts: ['high'], supportsFastMode: true }] },
     }];
     try {
       const props = {
@@ -995,7 +1026,8 @@ describe('ModelSelector trigger variants', () => {
         currentSelection: { agentKind: currentAgent, model: 'previous-model', providerId: 'xd', effort: 'high' as const, fastMode: true },
       };
       const view = render(React.createElement(ModelSelector, props));
-      const trigger = screen.getByRole('button', { name: /Current:.*previous-model/ });
+      const trigger = screen.getByRole('button', { name: /Current:.*Previous model/ });
+      expect(trigger.title).not.toContain('previous-model');
       expect(trigger.title).toContain('Next message: Codex · GPT-6 Astra');
       expect(trigger.title.split('Next message:')[1]).not.toContain('快速');
       expect(trigger.querySelector('[data-model-selection-pending]')).not.toBeNull();
@@ -1037,7 +1069,8 @@ describe('ModelSelector trigger variants', () => {
         onProviderChange: vi.fn(), onNavigateToProviders: vi.fn(), onReconnectSource: navigate, unifiedPanel: true,
       }));
       const trigger = screen.getByRole('button', { name: connected ? /模型不可用/ : /已断开/ });
-      expect(trigger.textContent).toContain(connected ? 'gpt-6-astra' : 'GPT-6 Astra');
+      expect(trigger.textContent).toContain(connected ? '选择模型' : 'GPT-6 Astra');
+      expect(trigger.textContent).not.toContain('gpt-6-astra');
       fireEvent.click(trigger);
       const recovery = await screen.findByRole('button', { name: connected ? '管理来源' : '重新连接' });
       fireEvent.click(recovery);

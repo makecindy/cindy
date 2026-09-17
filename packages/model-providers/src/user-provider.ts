@@ -1,7 +1,7 @@
 import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
 import { nativeModelAgents } from './modelProtocol.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
-import { providerEndpointBindings, bindProviderPresetRuntime } from './providerEndpointTemplate.js';
+import { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from './providerEndpointTemplate.js';
 import { PI_MODEL_APIS } from "./types.js";
 import { providerModelRecord, providerPresetModelRecord, providerModelMetadata } from "./providerModelCatalog.js";
 import { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
@@ -455,27 +455,32 @@ export function buildUserProvider(
     const rt = config.runtimes[agent];
     if (!rt) continue;
     agents.push(agent);
-    routing[agent] = toRouting(
-      agent,
-      rt.baseUrl,
-      rt.requestPath,
-      rt.headers,
-      rt.headersState,
-      strategy,
-      rt.modelsUrl,
-      rt.wireProtocol,
-      rt.piCatalogProviderId,
-      rt.supportsImageGeneration,
-    );
     const preset = options.presets?.find(
       (preset) => preset.id === rt.catalogPresetId,
     );
     const presetRuntimeSource = preset?.runtimes[agent];
-    const presetRuntime = presetRuntimeSource && providerEndpointBindings(presetRuntimeSource.baseUrl, rt.baseUrl)
+    const presetBindings = presetRuntimeSource
+      ? providerEndpointBindings(presetRuntimeSource.baseUrl, rt.baseUrl) : null;
+    const presetRuntime = presetRuntimeSource && presetBindings
       ? bindProviderPresetRuntime(presetRuntimeSource, rt.baseUrl) : presetRuntimeSource;
+    const resolvedBaseUrl = presetBindings && presetRuntimeSource
+      ? bindProviderEndpoint(presetRuntimeSource.baseUrl, presetBindings, rt.baseUrl)
+      : rt.baseUrl;
+    routing[agent] = toRouting(
+      agent,
+      resolvedBaseUrl,
+      rt.requestPath,
+      rt.headers,
+      rt.headersState,
+      strategy,
+      presetRuntime?.modelsUrl ?? rt.modelsUrl,
+      rt.wireProtocol,
+      rt.piCatalogProviderId,
+      rt.supportsImageGeneration,
+    );
     const followsPreset =
       presetRuntime &&
-      withoutTrailingSlashes(rt.baseUrl) ===
+      withoutTrailingSlashes(resolvedBaseUrl) ===
         withoutTrailingSlashes(presetRuntime.baseUrl) &&
       (rt.wireProtocol ?? defaultWireProtocol(agent)) ===
         (presetRuntime.wireProtocol ?? defaultWireProtocol(agent)) &&
@@ -494,9 +499,16 @@ export function buildUserProvider(
         ...(agent === 'pi' && interfaceDefault.piApi ? { piApi: interfaceDefault.piApi } : {}),
         ...(interfaceDefault.route ? { route: { ...interfaceDefault.route } } : {}),
       } : storedModel;
-      const m = rt.requestPath ? configuredModel : alignModelApiRoute(
-        providerInterfaceModelRoute(configuredModel, agent, rt.catalogPresetId, rt.baseUrl),
-        rt.baseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
+      const boundConfiguredModel = configuredModel.route
+        ? { ...configuredModel, route: {
+          ...configuredModel.route,
+          baseUrl: canonicalProviderEndpoint(presetRuntimeSource?.baseUrl ?? '', configuredModel.route.baseUrl)
+            ?? configuredModel.route.baseUrl,
+        } }
+        : configuredModel;
+      const m = rt.requestPath ? boundConfiguredModel : alignModelApiRoute(
+        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl),
+        resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
       );
       const presetModel = followsPreset
         ? presetRuntime.models.find((model) => model.id === m.id)
@@ -523,7 +535,7 @@ export function buildUserProvider(
       // 目录(预设只声明 context/image 时 reasoning 仍由目录补),用户显式配置仍优先。
       const catalogDefaults =
         agent === "pi" && rt.piCatalogProviderId && !m.route &&
-        piNativeCatalogRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
+        piNativeCatalogRouteMatches(rt.piCatalogProviderId, resolvedBaseUrl, rt.wireProtocol)
           ? piNativeCatalogModelDefaults(rt.piCatalogProviderId, m.id)
           : undefined;
       const wire = m.route?.wireProtocol ?? rt.wireProtocol ?? defaultWireProtocol(agent);
@@ -531,10 +543,10 @@ export function buildUserProvider(
       // discarding all metadata when a Responses/Gemini model shares a Chat connection.
       // With no explicit model route/API, an exact endpoint + unique ID supplies Pi's API.
       const imported = !(m.route?.requestPath ?? rt.requestPath)
-        ? providerModelRecord(m.id, m.route?.baseUrl ?? rt.baseUrl,
+        ? providerModelRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl,
             m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
             !m.api && !m.piApi && !m.route)
-          ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, rt.baseUrl)
+          ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl)
             ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
           ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
             ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
@@ -583,7 +595,7 @@ export function buildUserProvider(
         ...(importedApi && !m.piApi && !m.api ? {
           api: importedApi, ...(agent === 'pi' ? { piApi: importedApi } : {}),
           ...(!m.route && providerWireProtocolForApi(importedApi) && providerWireProtocolForApi(importedApi) !== wire ? { route: {
-            baseUrl: providerBaseUrlForApi(rt.baseUrl, importedApi),
+            baseUrl: providerBaseUrlForApi(resolvedBaseUrl, importedApi),
             wireProtocol: providerWireProtocolForApi(importedApi)!,
           } } : {}),
         } : {}),
