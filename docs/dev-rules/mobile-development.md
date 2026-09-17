@@ -109,3 +109,24 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 本文只覆盖本地开发、调试和验证。商业发布、版本分发、签名与渠道运维属于维护者内部
 流程，不在公开仓库文档或 Agent 手册中维护。
+
+## Android 自建安装包的应用内更新
+
+启动检查、设置页与强制更新屏共用 `src/update/useBundleUpdatePrompt.ts` 的安装出口。
+Android 8 及以上的新原生包优先应用内下载 HTTPS APK；Android 7、旧包缺少
+`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限只由自建构建的 `app.config.js` 声明，商店构建不声明。
+
+- 已授权直接下载；未授权先显示说明与「去授权 / 浏览器下载 / 稍后」，用户点「去授权」
+  才打开系统设置。返回后读取实际权限；拒绝不会循环申请，可选择浏览器下载。
+- 下载显示进度并支持取消；网络停滞会结束并提供重试。下载在后台完成时，等回到前台
+  再打开安装器。关闭下载面板不会解除原有强制更新闸门。
+- APK 只写入 app 私有 `cache/cindy-updates/`。原生桥只接受该目录内的 APK，校验包名、
+  目标版本与递增的 versionCode；最终签名校验、安装确认和覆盖安装由 Android 负责。
+- 安装器已打开不代表安装完成。取消系统安装后可再次安装已下载的文件；交接后的文件
+  不立即删除，后续下载时清理超过 24 小时的本功能缓存。
+
+实现：`modules/cindy-app-installer/`、`src/update/androidInstallController.ts`、
+`src/update/androidInstaller.ts`、`src/update/AndroidUpdateSheet.tsx`。
+定向测试为对应的 `androidInstallController.test.ts` 与 `androidInstaller.test.ts`，构建配置
+边界由 `src/__tests__/nativeAppConfig.test.ts` 验证。原生验证还应检查授权/拒绝返回、系统
+安装取消、签名不匹配拒绝与同签名覆盖安装；不能把 JS 单测当作这些原生路径的实测。
