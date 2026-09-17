@@ -409,6 +409,11 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     ref,
     () => ({
       scrollToPath: (relPath: string) => {
+        // 每次新的导航意图都先作废上一次还没完成的横轴对齐任务，**包括下面
+        // index < 0 的提前返回**：导航到不存在 / 未展开的路径同样是「用户离开了
+        // 上一个目标」，旧行稍后挂载时不该再把横向视口拉回过时目标。
+        horizontalAlignCancelRef.current?.();
+        horizontalAlignCancelRef.current = null;
         // 虚拟化后目标行多半不在 DOM 里（甚至还没进视口），不能再 querySelector +
         // scrollIntoView —— 按行索引让虚拟器滚过去，它会把目标行渲染出来。
         const index = rowsRef.current.findIndex(
@@ -419,8 +424,6 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
         // 横轴：目标行可能仍停在视口右侧之外（深层缩进 + 长名字把行撑宽），
         // 纵向到位后把该行横向也拉进可见区。行是虚拟器按需挂载的（远距离跳跃时
         // 要等 smooth 滚动把它带进 overscan），所以逐帧等到它出现再对齐。
-        // 先取消上一次还没完成的导航：否则旧行稍后挂载时会把横向视口拉回去。
-        horizontalAlignCancelRef.current?.();
         horizontalAlignCancelRef.current = startRowHorizontalAlign(containerRef.current, relPath);
       },
     }),

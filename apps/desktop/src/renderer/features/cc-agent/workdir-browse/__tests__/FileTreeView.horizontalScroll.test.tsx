@@ -270,6 +270,39 @@ describe('FileTreeView 横向滚动契约', () => {
     // 旧任务若没被取消：这里会变成 500（旧行右缘 700 - 容器右缘 200）。
     expect(scroll.scrollLeft).toBe(0);
   });
+
+  it('随后导航到树里不存在的路径，也会作废上一次的对齐任务', async () => {
+    setTestViewportSize(300);
+    const ref = createRef<FileTreeViewHandle>();
+    const { container } = render(
+      <FileTreeView
+        ref={ref}
+        tree={makeFarTargetsTree()}
+        scrollScope="test-tab"
+        selectedPath={null}
+        onSelectFile={vi.fn()}
+      />,
+    );
+    const scroll = container.firstElementChild as HTMLElement;
+
+    // 第一次导航指向一个还没挂载的有效目标；第二次指向树里不存在的路径
+    // （`index < 0` 提前返回）—— 这次「无效导航」也必须让旧任务失效。
+    ref.current?.scrollToPath('deep/l2/l3');
+    ref.current?.scrollToPath('nope/missing.ts');
+
+    // 旧目标随后进了视口：它的对齐任务必须已经被作废。
+    scroll.scrollTop = 122 * 29;
+    fireEvent.scroll(scroll);
+    const staleRow = scroll.querySelector<HTMLElement>('[data-relpath="deep/l2/l3"]');
+    expect(staleRow).toBeTruthy();
+    scroll.getBoundingClientRect = () => rect(0, 200);
+    staleRow!.getBoundingClientRect = () => rect(40, 700);
+
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    // 若取消发生在 `index < 0` 检查之后：这里会变成 500。
+    expect(scroll.scrollLeft).toBe(0);
+  });
 });
 
 describe('globals.css 里的 .tree-hscroll 规则', () => {
