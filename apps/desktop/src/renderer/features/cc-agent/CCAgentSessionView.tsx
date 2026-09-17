@@ -201,11 +201,12 @@ import {
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { BotAvatar } from '@/features/bots/BotAvatar';
+import { BotSessionContentHeaderRegistration } from '@/features/bots/BotSessionContentHeader';
 import {
-  BotSessionContentHeaderRegistration,
-  type BotChatIdentity,
-} from '@/features/bots/BotSessionContentHeader';
-import { botComposerPlaceholderKey } from '@/features/bots/botChatPresentation';
+  botComposerPlaceholderKey,
+  resolveBotChatIdentity,
+  type BotChatBinding,
+} from '@/features/bots/botChatPresentation';
 import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';
 import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
@@ -486,9 +487,9 @@ interface CCAgentSessionViewProps {
   /**
    * 本对话所属的伙伴身份（仅 Bot 路由传）。传入即把这个聊天当成「跟 TA 聊天」渲染：
    * 顶栏换成伙伴 lockup、assistant 气泡挂 TA 的头像、输入框使用伙伴称呼，保留标准权限入口。
-   * 判定仍与 `session.source === 'bot'` 双重成立才生效——URL 不是身份。
+   * 调用方须先验证持久归属并绑定 sessionId；运行快照不决定伙伴界面身份。
    */
-  botIdentity?: BotChatIdentity;
+  botIdentity?: BotChatBinding;
   /** Entry-time read boundary for a Bot chat; preserved after the live read position advances. */
   botUnreadBoundaryAt?: number | null;
 }
@@ -942,10 +943,9 @@ export function CCAgentSessionView({
       : null;
   const isOrcaLeadSessionView = session?.orcaRole === 'lead';
 
-  // 「这是一场跟伙伴的对话」的单一判据:路由声明的身份 + 任务自己的 source 双重成立。
-  // 只有 URL 说了不算 —— 那是导航投影,不是身份。
-  const botChatIdentity: BotChatIdentity | null =
-    botIdentity && session?.source === 'bot' ? botIdentity : null;
+  // Bot route gates have already checked durable ownership. The async runtime
+  // snapshot may be absent during load/reconnect; it must never change the skin.
+  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   // 伙伴没有 RunningStatusBar，折叠呼吸灯继续留在输入框上方，不能随状态行一起消失。
   const showCenteredControlledBanner =
     hasControlledBanner && (!controlledBannerCollapsed || Boolean(botChatIdentity));

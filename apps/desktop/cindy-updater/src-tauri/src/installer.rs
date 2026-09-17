@@ -247,6 +247,11 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                 "[installer] LAUNCH VERIFIED: {} is running",
                 args.exe_name
             ));
+            // Best-effort metadata only, outside the file replacement/rollback
+            // transaction. Reuse existing elevation for HKLM, never request it.
+            if let Some(key) = installation_version_key(args) {
+                crate::installation_version::sync(&args.app_dir.join(&args.exe_name), &key);
+            }
             let _ = fs::remove_dir_all(&backup_dir);
             cleanup_staging();
             Ok(())
@@ -903,8 +908,38 @@ fn build_elevation_arg_string(args: &CliArgs) -> String {
         out.push(' ');
         out.push_str(&quote_cmdline_arg(v));
     }
+    // ShellExecute(runas) need not preserve the caller's environment. This is
+    // self-reentry into the same binary, so the optional flag is supported.
+    if let Some(key) = installation_version_key(args) {
+        out.push_str(" --install-key ");
+        out.push_str(&quote_cmdline_arg(&key));
+    }
     out.push_str(" --elevated");
     out
+}
+
+fn installation_version_key(args: &CliArgs) -> Option<String> {
+    args.install_key.clone().or_else(|| std::env::var("CINDY_VERSION_SYNC_KEY").ok())
+}
+
+#[cfg(test)]
+mod version_metadata_args_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn legacy_launchers_work_and_elevation_preserves_optional_install_key() {
+        let mut args = CliArgs::try_parse_from([
+            "updater", "--zip", "patch.zip", "--app-dir", "app", "--exe-name",
+            "Cindy.exe", "--pid", "123", "--log", "update.log", "--lock", "lock",
+            "--workdir", "temp",
+        ]).unwrap();
+        assert!(args.install_key.is_none());
+        args.install_key = Some("5a59f1e9-8f21-5646-8eed-e6da4126bb5c".into());
+        assert!(build_elevation_arg_string(&args).ends_with(
+            "--install-key 5a59f1e9-8f21-5646-8eed-e6da4126bb5c --elevated"
+        ));
+    }
 }
 
 /// CommandLineToArgvW-compatible quoting. Required because ShellExecuteExW

@@ -328,7 +328,7 @@ export function renderItemStartMs(item: RenderItem): number | null {
  * 段里只有一个 tool_use,它的 createdAt 是"开始执行"的时刻,拿它当段末会把结束
  * 时间低估整个执行时长,紧随其后的最终答复照样被误判成空洞。
  */
-function renderItemEndMs(item: RenderItem): number | null {
+export function renderItemEndMs(item: RenderItem): number | null {
   if (item.type === 'tool_segment') {
     let latest = Number.NEGATIVE_INFINITY;
     for (const call of item.toolCalls) {

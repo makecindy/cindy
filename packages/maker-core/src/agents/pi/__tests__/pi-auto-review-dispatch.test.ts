@@ -4151,6 +4151,29 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
 
+  it('passes flat task history and actual blocked plugin actions after a natural steer, then invalidates on revocation', async () => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    const exercise = 'For this writing test, use no tools and modify no data.';
+    const search = 'Now search for the latest portable chargers.';
+    const action = { kind: 'other' as const, description: JSON.stringify({ toolName: 'mcp__cindy__ghost_market_install', input: { plugin_id: 'official-search', release_id: 'selected-release' } }) };
+    try {
+      await handle.send({ type: 'user', content: exercise });
+      await handle.steer!({ type: 'user', content: search });
+      await handle.reviewAutoPermissionAction!(action);
+      await handle.steer!({ type: 'user', content: '没事儿，你可以用' });
+      await handle.reviewAutoPermissionAction!(action);
+      expect(review.mock.calls[1][0]).toMatchObject({
+        userIntent: { earlierUserMessages: [exercise, search], currentUserMessage: '没事儿，你可以用' },
+        precedingBlockedActions: [action],
+      });
+      await handle.steer!({ type: 'user', content: 'Do not install anything. Only inspect.' });
+      await handle.reviewAutoPermissionAction!(action);
+      expect(review).toHaveBeenCalledTimes(3);
+      expect(review.mock.calls[2][0].userIntent).toMatchObject({ currentUserMessage: 'Do not install anything. Only inspect.' });
+    } finally { await handle.close(); }
+  });
+
   it.each(['allow', 'ask'] as const)('invalidates old %s when identical text refers to a new attachment', async (verdict) => {
     let release!: (decision: { verdict: 'allow' | 'ask' }) => void;
     const reviewer = vi.fn().mockImplementationOnce(() => new Promise<{ verdict: 'allow' | 'ask' }>((resolve) => { release = resolve; }))
@@ -4200,8 +4223,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     firePermissionRequest('raw-channel', 'unknown_sender', { action: 'send' });
     await waitForResponse('raw-channel');
-    expect(review.mock.calls[0]?.[0].userIntent).toContain('Do not send.');
-    expect(review.mock.calls[0]?.[0].userIntent).not.toContain('SEND THE REPORT');
+    expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).toContain('Do not send.');
+    expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).not.toContain('SEND THE REPORT');
     await handle.close();
   });
 

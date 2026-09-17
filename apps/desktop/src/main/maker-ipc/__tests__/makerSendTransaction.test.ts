@@ -2355,9 +2355,10 @@ describe('session-agent-switch handoff injection', () => {
     const opts = vi.mocked(session.send).mock.calls[0]![1]!;
     expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('修吧。');
     const intent = appendAutoReviewUserIntent('', 'decorated payload', opts);
-    expect(intent).toContain('修复伙伴未读状态，不要部署。');
-    expect(intent).toContain('修吧。');
-    expect(intent).not.toContain('assistant handoff');
+    expect(intent).toEqual({
+      earlierUserMessages: ['修复伙伴未读状态，不要部署。'],
+      currentUserMessage: '修吧。',
+    });
   });
 
   it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {

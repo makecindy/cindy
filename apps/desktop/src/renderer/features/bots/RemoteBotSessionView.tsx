@@ -16,7 +16,7 @@ export function RemoteBotSessionView() {
   const { t } = useTranslation();
   const bots = useRemoteBots();
   const bot = bots.find((row) => row.id === botId && row.deviceId === deviceId);
-  const [ready, setReady] = useState<RemoteBot | null>(null);
+  const [ready, setReady] = useState<(RemoteBot & { sessionId: string }) | null>(null);
   const [validatedSessionId, setValidatedSessionId] = useState<string | null | undefined>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -65,7 +65,7 @@ export function RemoteBotSessionView() {
       if (readIsCurrent) remoteProjectsStore.mergeDeviceSessions(deviceId, currentMirror?.deviceLinkDeviceName ?? bot.deviceName, [
         isSessionReadCurrent.mergeActivity(session),
       ]);
-      setReady(resolved);
+      setReady({ ...resolved, sessionId: canonicalId });
       setValidatedSessionId(sessionId);
     })().catch(() => {
       if (!disposed) setFailed(true);

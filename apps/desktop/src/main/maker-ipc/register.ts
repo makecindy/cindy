@@ -1,3 +1,7 @@
+import { createBotMessageTransport } from './botMessageTransport.js';
+import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
+import { getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { registerModelFavoritesSync } from './modelFavoritesSync.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { configureAppDefaultModelSelection } from './appDefaultModelControl.js';
@@ -9397,6 +9401,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   botDirectMessageServiceHolder = createBotDirectMessageService({
+    transport: createBotMessageTransport({ selfDeviceId: getSelfDeviceId,
+      listDevices: () => handleListDevices(deviceDirectoryDeps()), invoke: invokeBotPeer }),
     hasQueuedDelivery: async (sessionId, clientId) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
       return inputCoordinator.hasKnownClientId(sessionId, clientId);
@@ -9444,6 +9450,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       broadcastToAllWindows(MAKER_PUSH.BOT_DIRECT_MESSAGE_CHANGED, payload, ownerScope);
     },
   });
+  setBotRemoteMessageService(botDirectMessageServiceHolder);
   botDelegationServiceHolder?.dispose();
   botDelegationServiceHolder = createBotDelegationService({
     taskControl: {

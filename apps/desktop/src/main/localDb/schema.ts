@@ -470,13 +470,9 @@ export const botDirectMessageThreads = sqliteTable(
   'bot_direct_message_threads',
   {
     id: text('id').primaryKey(),
-    /** Pair ids are always stored in lexical order so one pair has one active thread. */
-    botAId: text('bot_a_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
-    botBId: text('bot_b_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Lifecycle deletion guards shared history. */
+    botAId: text('bot_a_id').notNull(),
+    botBId: text('bot_b_id').notNull(),
     status: text('status', { enum: ['active', 'closed'] })
       .notNull()
       .default('active'),
@@ -506,12 +502,8 @@ export const botDirectMessages = sqliteTable(
       .notNull()
       .references(() => botDirectMessageThreads.id, { onDelete: 'cascade' }),
     sequence: integer('sequence').notNull(),
-    senderBotId: text('sender_bot_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
-    recipientBotId: text('recipient_bot_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    senderBotId: text('sender_bot_id').notNull(),
+    recipientBotId: text('recipient_bot_id').notNull(),
     senderSessionId: text('sender_session_id').references(() => sessions.id, {
       onDelete: 'set null',
     }),
@@ -523,6 +515,10 @@ export const botDirectMessages = sqliteTable(
     })
       .notNull()
       .default('pending'),
+    senderName: text('sender_name'),
+    recipientName: text('recipient_name'),
+    // Remote conversation captured before a legacy send; never a local Session FK.
+    bridgeSessionId: text('bridge_session_id'),
     content: text('content').notNull(),
     createdAt: integer('created_at').notNull(),
   },
