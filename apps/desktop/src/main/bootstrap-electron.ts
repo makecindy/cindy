@@ -517,9 +517,12 @@ import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectory
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
+  isSessionMeetingAvailable,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
 } from './device-link';
+import { closeSessionMeetingsBeforeLogout } from './device-link/sessionMeetingRuntime.js';
+import { registerSessionMeetingIpc } from './device-link/sessionMeetingIpc.js';
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
@@ -1971,6 +1974,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
       // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
       try {
+        await closeSessionMeetingsBeforeLogout();
         await releaseDeviceLinkOwnershipBeforeLogout();
       } catch (err) {
         authBoundaryLog.error(
@@ -1995,6 +1999,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
   // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
   try {
+    await closeSessionMeetingsBeforeLogout();
     await releaseDeviceLinkOwnershipBeforeLogout();
   } catch (err) {
     authBoundaryLog.error(
@@ -9230,6 +9235,7 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerSessionMeetingIpc(isSessionMeetingAvailable);
   registerFilePeerIpc();
   registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);
   void startupPurgeDrain

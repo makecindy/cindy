@@ -27,6 +27,8 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { createSessionMeetingSettingGuard } from './sessionMeetingSetting.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
@@ -869,6 +871,8 @@ export function registerMakerSessionAgentSwitchHandler(
       effort: unknown,
       fastMode: unknown,
     ) => {
+      const context = getDeviceLinkInvokeContext();
+      const guard = createSessionMeetingSettingGuard(context?.meeting, String(sessionId), context?.meetingSetting ?? { admitted: false });
       const run = () => performSessionAgentSwitch(deps, {
         sessionId,
         targetAgentKind,
@@ -876,6 +880,7 @@ export function registerMakerSessionAgentSwitchHandler(
         providerId,
         effort,
         fastMode,
+        assertSelectionCurrent: guard.admit,
       });
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock
         ? deps.withSessionLock(sessionId, run)

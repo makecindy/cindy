@@ -9,6 +9,10 @@ import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
   DeviceLinkClient,
+  isMeetingPeer,
+  probeSessionMeetingHost,
+  sessionMeetingTopics,
+  SESSION_MEETING_CAPABILITY,
   DeviceLinkError,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
@@ -35,6 +39,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { useSessionMeetingApi } from './useSessionMeetingApi';
 import {
   applyAccessRevokedFrame,
   withAccessRevokedHandling,
@@ -148,6 +154,8 @@ import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
+  /** Current online relay capability; undefined while not connected. */
+  sessionMeetingAvailable?: boolean;
   /** Peers with queued, running, or retrying recovery work. Read-only UI projection. */
   recoveringDeviceIds: ReadonlySet<string>;
   /** 连接层可分类的失败原因(鉴权失效/被顶号/超限/版本不符);null = 无异常 */
@@ -197,6 +205,7 @@ const recoveryDiagnostics = new WeakMap<DeviceLinkClient, ReturnType<typeof crea
  * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
  */
 const CONTROLLER_CAPABILITIES = [
+  SESSION_MEETING_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   // maker:event 微批:被控端把同一会话的连续事件合并成一帧,本端拆包后逐条消费
@@ -326,6 +335,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }
 
   const auth = useAuth();
+  const meetingApi = useSessionMeetingApi();
   const currentDataOwnerIdRef = useRef<string | null>(auth.user?.id ?? null);
   currentDataOwnerIdRef.current = auth.user?.id ?? null;
   const clientRef = useRef<DeviceLinkClient | null>(null);
@@ -385,6 +395,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   // 发起代仍为当前代时登记远端 ACK,避免迟到成功覆盖较新的 unsubscribe。
   const backgroundReleaseGenerationRef = useRef(0);
   const [status, setStatus] = useState<DeviceLinkStatus>('stopped');
+  const [sessionMeetingAvailable, setSessionMeetingAvailable] = useState<boolean | undefined>();
   const [connectionIssue, setConnectionIssue] = useState<DeviceLinkConnectionIssue | null>(null);
   const [presenceVersion, setPresenceVersion] = useState(0);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
@@ -471,6 +482,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     topics: readonly Topic[],
   ) => {
     const releaseGeneration = backgroundReleaseGenerationRef.current;
+    topics = sessionMeetingTopics(deviceId, topics);
     const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpochRef.current);
     await confirmTrackedSubscription({
       isCurrent: () => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !backgroundReleaseInFlightRef.current
@@ -505,6 +517,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const probeUnresponsiveDevice = useCallback(
     async (client: DeviceLinkClient, deviceId: string): Promise<void> => {
       try {
+        if (isMeetingPeer(deviceId)) {
+          const owner = getMobileAuthOwner();
+          await probeSessionMeetingHost(deviceId, {
+            isCurrent: () => clientRef.current === client && isMobileAuthOwnerCurrent(owner),
+            get: (meetingId) => meetingApi.get(meetingId),
+            openLink: () => sendOpenLinkOnce(client, deviceId, true).request,
+            invoke: (channel, args) => sendInvokeWithAccessHandling(client, deviceId, channel, args, { allowProbe: true }),
+          });
+          return;
+        }
         await sendOpenLinkOnce(client, deviceId, true).request;
         await sendInvokeWithAccessHandling(
           client,
@@ -517,7 +539,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // swallow — settle 已在 sendOpenLink / sendInvoke 内完成。
       }
     },
-    [sendOpenLinkOnce],
+    [sendOpenLinkOnce, meetingApi],
   );
 
   const hasOutboundPeerRecoveryIntent = useCallback((
@@ -659,6 +681,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         wipeUnavailableDeviceMirror(deviceId);
       },
       onDeviceUnavailable: (deviceId) => {
+        if (isMeetingPeer(deviceId)) {
+          // Logical peers have no same-account presence entry. Preserve the
+          // existing bounded peer retry instead of waiting for an impossible
+          // physical-presence transition. Never restart the shared relay.
+          remoteSubscribedTopicsRef.current.delete(deviceId);
+          clearDeviceResponsivenessTrackingFor(deviceId);
+          setPresenceVersion((version) => version + 1);
+          return;
+        }
         publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => {
           availabilityByDevice.set(deviceId, false);
         });
@@ -684,7 +715,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         const releaseGeneration = backgroundReleaseGenerationRef.current;
         return rebuildSessionSnapshot(client, deviceId, sessionId, epoch, {
           ...opts,
-          subscriptionIdentity: remoteSubscribedTopicsRef.current.identity(deviceId, ['sessions', `session:${sessionId}`]),
+          subscriptionIdentity: remoteSubscribedTopicsRef.current.identity(deviceId, sessionMeetingTopics(deviceId, ['sessions', `session:${sessionId}`])),
         }, () => client === clientRef.current
           && client.getStatus() === 'online'
           && connectionEpochRef.current === epoch
@@ -785,6 +816,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       presenceUnavailableVerdictsRef.current.clear();
       backgroundReleaseInFlightRef.current = false;
       setStatus('stopped');
+      setSessionMeetingAvailable(undefined);
       setConnectionIssue(null);
       // 登出 / 进程内切号:清掉所有 per-account 残留,避免下一个账号串到上一个账号的数据。
       // - 供应商目录是 module 级单例缓存(useDeviceProviders 按 deviceId 命中),不随组件卸载清;
@@ -813,6 +845,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       getWsUrl: () => deviceLinkWsUrl(),
       getToken: auth.getAccessToken,
       getHello: () => ({
+        capabilities: [SESSION_MEETING_CAPABILITY],
         deviceName: mobileDeviceName(),
         platform: Platform.OS,
         appVersion: Constants.expoConfig?.version ?? '0.0.0',
@@ -867,6 +900,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offIssue = client.onConnectionIssue(setConnectionIssue);
     const offStatus = client.onStatusChange((next) => {
       setStatus(next);
+      setSessionMeetingAvailable(next === 'online' ? client.hasServerCapability(SESSION_MEETING_CAPABILITY) : undefined);
       if (next !== 'online') {
         catalogRefresh.clear();
         openLinkInFlightRef.current.clear();
@@ -1015,12 +1049,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offFrame = client.onFrame((env) => routeFrame(env, {
       currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => {
+        if (isMeetingPeer(deviceId)) setPresenceVersion((version) => version + 1);
         catalogRefresh.cancel(deviceId);
         remoteSubscribedTopicsRef.current.delete(deviceId);
         forcedPeerRecoveryIntentRef.current.cancel(deviceId);
         peerRecoverySchedulerRef.current?.cancel(deviceId);
       },
       onLinkClosed: (deviceId, reason) => {
+        if (isMeetingPeer(deviceId)) setPresenceVersion((version) => version + 1);
         catalogRefresh.cancel(deviceId);
         resetRemoteProjectOrderPushFence(deviceId);
         updateRehydrateSuppressionOnLinkClose(
@@ -1114,6 +1150,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     client.start();
 
     const offResponseEvidence = subscribeRemoteResponseEvidence((deviceId) => {
+      if (client === clientRef.current && isMeetingPeer(deviceId)) setPresenceVersion((version) => version + 1);
       const currentEpoch = capturePresenceAvailabilityEpoch(
         remoteResponseEvidenceEpochs,
         deviceId,
@@ -1338,6 +1375,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [sendOpenLinkOnce]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
+    topics = sessionMeetingTopics(deviceId, topics);
     // `owner` is the stable id of the mounted consumer (e.g. `session:<id>`). Tracking is
     // idempotent per (owner, topic), so resync/retry resubscribes don't accumulate. The
     // server subscribe is idempotent, so it's safe to (re)send the requested topics.
@@ -1350,6 +1388,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [sendTrackedSubscribe]);
 
   const unsubscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
+    topics = sessionMeetingTopics(deviceId, topics);
     // Drop only this owner's hold; release (server unsubscribe) the topics whose last owner
     // just left. If a focused screen blurs before subscribe acknowledgement, a later cleanup may
     // ask to unsubscribe an already-released owner; resend only topics that are currently unheld
@@ -1371,17 +1410,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const getPresenceAvailability = useCallback((deviceId: string): boolean | null => (
-    presenceAvailableByDeviceRef.current.get(deviceId) ?? null
+    isMeetingPeer(deviceId) ? clientRef.current?.isLinkReady(deviceId) ?? false
+      : presenceAvailableByDeviceRef.current.get(deviceId) ?? null
   ), []);
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
     status,
+    sessionMeetingAvailable,
     recoveringDeviceIds,
     connectionIssue,
     presenceVersion,
     connectionEpoch,
     lastPresenceSnapshot,
-    getSubscriptionIdentity: (deviceId, topics) => remoteSubscribedTopicsRef.current.identity(deviceId, topics),
+    getSubscriptionIdentity: (deviceId, topics) => remoteSubscribedTopicsRef.current.identity(deviceId, sessionMeetingTopics(deviceId, topics)),
     getPresenceAvailability,
     readDeviceList,
     openLink,
@@ -1405,6 +1446,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     reopenLink,
     presenceVersion,
     status,
+    sessionMeetingAvailable,
     subscribe,
     unsubscribe,
     subscribeRemoteAgentRoster,

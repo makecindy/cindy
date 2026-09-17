@@ -1346,7 +1346,12 @@ describe('路径边界与覆盖语义', () => {
     )).resolves.toEqual(Buffer.from('granted-bytes'));
 
     await fs.rm(granted);
-    await fs.symlink(other, granted);
+    // Windows file symlinks require elevation/developer mode. A real directory
+    // junction also replaces the granted leaf with a symbolic link, without
+    // skipping the authorization rejection on unprivileged Windows runners.
+    await fs.symlink(process.platform === 'win32' ? outsideDir : other, granted,
+      process.platform === 'win32' ? 'junction' : 'file');
+    expect((await fs.lstat(granted)).isSymbolicLink()).toBe(true);
     await expect(readInputFileWithinLimit(
       workdir,
       granted,

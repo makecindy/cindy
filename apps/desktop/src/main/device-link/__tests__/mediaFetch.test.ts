@@ -33,7 +33,13 @@ const realpathMock = vi.hoisted(() => vi.fn());
 const openMock = vi.hoisted(() => vi.fn());
 vi.mock('node:fs/promises', () => ({ stat: statMock, realpath: realpathMock, open: openMock }));
 
-import { fetchLocalMediaToOss, __testing } from '../mediaFetch.js';
+const assertSharedTaskMedia = vi.hoisted(() => vi.fn());
+vi.mock('../sessionMeetingMediaAccess.js', () => ({ assertSharedTaskMedia }));
+
+import { fetchLocalMediaToOss, resolveAuthorizedMedia, __testing } from '../mediaFetch.js';
+import { runDeviceLinkInvokeContext } from '../invoke-context.js';
+import { sessionMeetingMediaId } from '../sessionMeetingMediaContext.js';
+import type { SessionMeetingPeerCapture } from '../sessionMeetingDispatch.js';
 
 async function codeOf(fn: () => Promise<unknown>): Promise<string> {
   try {
@@ -46,6 +52,7 @@ async function codeOf(fn: () => Promise<unknown>): Promise<string> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  assertSharedTaskMedia.mockReset();
   __testing.uploadCache.clear();
   statMock.mockResolvedValue({ size: 42, mtimeMs: 1000 });
   realpathMock.mockImplementation(async (p: string) => p);
@@ -76,6 +83,44 @@ afterEach(() => {
 });
 
 describe('fetchLocalMediaToOss — scheme 路由', () => {
+  const meeting: SessionMeetingPeerCapture = {
+    author: { meetingId: 'shared', sessionId: 'task', memberId: 'guest', accountId: 'user', displayName: 'Guest' },
+    isCurrent: () => true,
+    authorize: () => true,
+  };
+  const shared = <T>(work: () => T) => runDeviceLinkInvokeContext({
+    controllerDeviceId: 'guest-device', channel: 'device-link:media:fetch', meeting,
+  }, work);
+
+  it('checks task authorization in the shared resolver before inline reads or file transfer', async () => {
+    assertSharedTaskMedia.mockRejectedValue(new Error('[PERMISSION_DENIED] Outside shared task'));
+    const arg = { url: 'xdt-image://other/a.png', prepareOnly: true };
+    await expect(shared(() => resolveAuthorizedMedia(arg, 1024))).rejects.toThrow('PERMISSION_DENIED');
+    await expect(shared(() => fetchLocalMediaToOss(arg))).rejects.toThrow('PERMISSION_DENIED');
+    expect(imageResolve).not.toHaveBeenCalled();
+    expect(openMock).not.toHaveBeenCalled();
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+  });
+
+  it('preserves upload size limits and isolates shared-task upload cache', async () => {
+    const url = 'xdt-file://local?path=' + encodeURIComponent(path.resolve('work/a.png')) + '&maxBytes=100';
+    let scope: string | undefined;
+    uploadLocalFile.mockImplementation(async () => {
+      scope = sessionMeetingMediaId();
+      return { key: 'shared-key', size: 42, contentType: 'image/png' };
+    });
+    await shared(() => fetchLocalMediaToOss({ url }));
+    expect(scope).toBe('shared');
+    expect(uploadLocalFile).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ maxBytes: 100 }));
+    imageResolve.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
+    const image = { url: 'xdt-image://task/a.png' };
+    await fetchLocalMediaToOss(image);
+    await shared(() => fetchLocalMediaToOss(image));
+    await shared(() => fetchLocalMediaToOss(image));
+    expect(uploadLocalFile).toHaveBeenCalledTimes(3);
+    expect(scope).toBe('shared');
+  });
+
   it.each([0, 65_536, 65_537])(
     'prepares %s bytes inline only within the shared limit',
     async (size) => {

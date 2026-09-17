@@ -3824,6 +3824,10 @@ interface ElectronAPI {
   openRemoteDesktop: (target: {deviceId: string; name: string}) => Promise<void>;
   remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
+  sessionMeeting: {
+    host(command: import('@cindy/device-link').SessionMeetingHostCommand): Promise<unknown>;
+    account(command: import('@cindy/device-link').SessionMeetingAccountCommand): Promise<unknown>;
+  };
   deviceLink: {
     getState: () => Promise<{
       remoteControlEnabled: boolean;

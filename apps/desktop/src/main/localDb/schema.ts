@@ -20,6 +20,21 @@ import {
 
 import type { SessionSource } from '../../shared/sessionSource.js';
 
+/** Per-profile authority journal. Snapshots are recovery/audit data, not offline grants. */
+export const sessionMeetingEvents = sqliteTable('session_meeting_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  meetingId: text('meeting_id').notNull(),
+  sessionId: text('session_id').notNull().references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  kind: text('kind', { enum: ['authority', 'local-close'] }).notNull(),
+  terminal: integer('terminal', { mode: 'boolean' }).notNull(),
+  snapshot: text('snapshot'),
+  recordedAt: integer('recorded_at').notNull(),
+}, (table) => ({
+  uniqueRevision: uniqueIndex('session_meeting_events_revision_idx').on(table.meetingId, table.kind, table.revision),
+  bySession: index('session_meeting_events_session_idx').on(table.sessionId, table.id),
+}));
+
 const SESSION_SOURCES = [
   'desktop',
   'feishu',

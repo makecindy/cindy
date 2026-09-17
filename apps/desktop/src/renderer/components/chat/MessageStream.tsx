@@ -6223,6 +6223,7 @@ const MessageItem = memo(function MessageItem({
     case 'user':
       return (
         <UserMessage
+          sharedAuthorName={message.sharedAuthorName}
           workingDir={workingDir}
           content={message.content}
           sessionReferences={message.sessionReferences}

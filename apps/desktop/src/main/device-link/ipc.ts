@@ -53,6 +53,8 @@ import {
 } from './index';
 import { getActiveControllers } from './dispatch';
 import { rewriteOutboundMedia } from './outboundMedia';
+import { parseMeetingPeer } from '@cindy/device-link';
+import { withSessionMeetingMedia } from './sessionMeetingMediaContext.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
@@ -141,7 +143,7 @@ export interface DeviceLinkIpcDeps {
    * 出方向附件改写:把消息里的本机附件上传 OSS、替换成引用串(仅 send/steer/enqueue 生效)。
    * 可选 —— 测试可不注入(跳过改写,行为同旧版纯透传)。
    */
-  rewriteOutboundMedia?(channel: string, args: unknown[]): Promise<unknown[]>;
+  rewriteOutboundMedia?(channel: string, args: unknown[], existing?: ReadonlySet<string>): Promise<unknown[]>;
   /** 控制端 main 在越过 device-link 前把相对引用解析为可信、预算化快照。 */
   rewriteOutboundSessionReferences?(channel: string, args: unknown[]): Promise<unknown[]>;
 }
@@ -648,7 +650,20 @@ export async function handleInvoke(
   // 上传失败 → MEDIA_TRANSFER_FAILED,整条消息不发(产品决策:不静默丢附件)。
   if (deps.rewriteOutboundMedia) {
     try {
-      callArgs = await deps.rewriteOutboundMedia(channel, callArgs);
+      const peer = parseMeetingPeer(normalizedDeviceId);
+      let existing: ReadonlySet<string> | undefined;
+      if (peer?.role === 'host' && channel === 'maker:input:update-content') {
+        const projection = await deps.invoke(normalizedDeviceId, 'maker:input:get-projection', [callArgs[0]]);
+        if (!projection.ok) throw new Error(projection.error.message);
+        const value = projection.result as { sessionId?: string; pendingQueue?: Array<{ clientId: string; files?: Array<{ path?: string; url?: string }> }> };
+        if (value?.sessionId !== callArgs[0] || !Array.isArray(value.pendingQueue)) throw new Error('Invalid shared input projection');
+        const item = value.pendingQueue.find((row) => row.clientId === callArgs[1]);
+        if (!item) throw new Error('Queued message is no longer pending');
+        existing = new Set((item.files ?? []).flatMap((file) => [file.path, file.url].filter((ref): ref is string => typeof ref === 'string')));
+        assertControlTargetEnabled(deps, normalizedDeviceId);
+      }
+      callArgs = await withSessionMeetingMedia(peer?.role === 'host' ? peer.meetingId : undefined,
+        () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs));
     } catch (err) {
       throwIpcError(
         'DEVICE_LINK_MEDIA_TRANSFER_FAILED',

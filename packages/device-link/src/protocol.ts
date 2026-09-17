@@ -25,6 +25,9 @@ import {
   type RelayErrorPayload,
 } from '@cindy/device-link-protocol';
 
+export { SESSION_MEETING_RELAY_CAPABILITY, SESSION_MEETING_PEER_PREFIX, meetingHostPeer, meetingGuestPeer, isMeetingPeer, parseMeetingPeer } from '@cindy/device-link-protocol';
+export type { SessionMeetingPeer } from '@cindy/device-link-protocol';
+
 export {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,

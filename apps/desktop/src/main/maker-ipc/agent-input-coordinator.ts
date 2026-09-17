@@ -1,4 +1,6 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { assertSessionMeetingQueueMutation } from './sessionMeetingInput.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -227,6 +229,7 @@ export interface AgentInputSendOpts {
   /** Session reservation 时回调本轮 vendor generation；必须在 send 返回前绑定 leftover。 */
   onVendorTurnReserved?: (generation: number) => void;
   persistUserMessage?: {
+    meetingAuthor?: AgentInputQueuedMessage['meetingAuthor'];
     clientId: string;
     content: string;
     /** Overflow 重放用的 agent-facing wire payload（mention / 标注附件等）。 */
@@ -1540,6 +1543,7 @@ export class AgentInputCoordinator {
   ): AgentInputProjection {
     const state = this.getState(sessionId);
     item = captureOriginalSyntheticTrigger(item);
+    assertSessionMeetingQueueMutation(getDeviceLinkInvokeContext()?.meeting, sessionId, 'input.send');
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机
     // 断连自动重试 / 用户对 ack 丢失的消息重发)在补发同一条消息,不是新消息。
     // 直接返回当前 projection、不再入队——否则同一条消息双入队、agent 跑两轮。
@@ -1945,6 +1949,8 @@ export class AgentInputCoordinator {
       (opts?.expectedTurnGeneration === undefined ||
         this.deps.getTurnGeneration?.(sessionId) === opts.expectedTurnGeneration);
     if (!matchesExpectedTurn()) return false;
+    const meeting = getDeviceLinkInvokeContext()?.meeting;
+    assertSessionMeetingQueueMutation(meeting, sessionId, 'input.send');
     const state = this.getState(sessionId);
     // Capture the clear boundary before any screening/reference/steer await.  The
     // live state may advance when `/clear` wins the race; this turn must retain
@@ -1954,6 +1960,7 @@ export class AgentInputCoordinator {
     let steersStoredQueueItem = false;
     if (opts?.removeFromQueue) {
       const storedItem = state.pendingQueue.find((queued) => queued.clientId === item.clientId);
+      if (meeting) assertSessionMeetingQueueMutation(meeting, sessionId, 'input.edit', storedItem);
       if (storedItem) {
         steersStoredQueueItem = true;
         // Renderer projections intentionally omit trusted reference bodies. The main-owned
@@ -2166,6 +2173,7 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
+        ...(item.meetingAuthor ? { meetingAuthor: item.meetingAuthor } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: item.autoReviewUserText ?? '',
         ...(readAutoReviewUserText(item.persistedContent) === null
           ? { [AUTO_REVIEW_USER_INTENT]: item.autoReviewUserText ?? '' } : {}),
@@ -2515,6 +2523,9 @@ export class AgentInputCoordinator {
     sessionId: string,
     opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean },
   ): AgentInputProjection {
+    const meeting = getDeviceLinkInvokeContext()?.meeting;
+    assertSessionMeetingQueueMutation(meeting, sessionId, 'agent.stop');
+    if (meeting) opts = { ...opts, keepQueue: true };
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
     this.supersedePendingAutoResumeRecoveries(sessionId);
@@ -2614,6 +2625,7 @@ export class AgentInputCoordinator {
   }
 
   resume(sessionId: string): AgentInputProjection {
+    assertSessionMeetingQueueMutation(getDeviceLinkInvokeContext()?.meeting, sessionId, 'input.send');
     const state = this.getState(sessionId);
     const recovery = state.recovery;
     const pausedQueueHeadRecoveryClientId =
@@ -2946,6 +2958,7 @@ export class AgentInputCoordinator {
 
   remove(sessionId: string, clientId: string): AgentInputProjection {
     const state = this.getState(sessionId);
+    assertSessionMeetingQueueMutation(getDeviceLinkInvokeContext()?.meeting, sessionId, 'input.withdraw', state.pendingQueue.find((item) => item.clientId === clientId));
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     const before = state.pendingQueue.length;
     const removed = state.pendingQueue.find((q) => q.clientId === clientId);
@@ -2990,6 +3003,7 @@ export class AgentInputCoordinator {
     const trimmed = newText.trim();
     if (!trimmed) return this.getProjection(sessionId);
     const state = this.getState(sessionId);
+    assertSessionMeetingQueueMutation(getDeviceLinkInvokeContext()?.meeting, sessionId, 'input.edit', state.pendingQueue.find((item) => item.clientId === clientId));
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     state.pendingQueue = state.pendingQueue.map((entry) => {
       if (entry.clientId !== clientId) return entry;
@@ -3054,6 +3068,7 @@ export class AgentInputCoordinator {
     if (index < 0) return { projection: this.getProjection(sessionId), updated: false };
     const current = state.pendingQueue[index];
     const updated = updateQueuedMessageContent(current, next);
+    assertSessionMeetingQueueMutation(getDeviceLinkInvokeContext()?.meeting, sessionId, 'input.edit', current);
     const authorizationContentChanged = updated.text !== current.text
       || updated.persistedContent !== current.persistedContent
       || updated.files !== current.files
@@ -3202,6 +3217,7 @@ export class AgentInputCoordinator {
   }
 
   setExpanded(sessionId: string, expanded: boolean): AgentInputProjection {
+    assertSessionMeetingQueueMutation(getDeviceLinkInvokeContext()?.meeting, sessionId, 'input.send');
     const state = this.getState(sessionId);
     state.queueExpanded = expanded;
     this.emit(sessionId);
@@ -3265,6 +3281,7 @@ export class AgentInputCoordinator {
 
   setEditLock(sessionId: string, clientId: string, locked: boolean): AgentInputProjection {
     const state = this.getState(sessionId);
+    assertSessionMeetingQueueMutation(getDeviceLinkInvokeContext()?.meeting, sessionId, 'input.edit', state.pendingQueue.find((item) => item.clientId === clientId));
     state.queueEditLocks = toggleList(state.queueEditLocks, clientId, locked);
     this.emit(sessionId);
     if (!locked) {
@@ -4458,6 +4475,7 @@ export class AgentInputCoordinator {
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         persistUserMessage: {
+          ...(head.meetingAuthor ? { meetingAuthor: head.meetingAuthor } : {}),
           clientId: head.clientId,
           content: head.persistedContent,
           agentFacingWireContent: makerUserMessage,
@@ -6162,6 +6180,7 @@ export class AgentInputCoordinator {
           content: item.persistedContent,
           agentMeta: {
             uuid: active.messageUuid,
+            ...(item.meetingAuthor ? { meetingAuthor: item.meetingAuthor } : {}),
             ...(item.autoReviewUserText !== undefined ? { autoReviewUserText: item.autoReviewUserText } : {}),
             sdkSessionId,
             delivery: active.delivery,

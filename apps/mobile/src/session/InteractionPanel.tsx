@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isMeetingPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   Check,
@@ -224,7 +225,7 @@ export function InteractionPanel({
     gap: touchLayout.cardGap,
     padding: touchLayout.cardPadding,
   };
-  if (readOnlyReason) {
+  if (readOnlyReason || isMeetingPeer(deviceId)) {
     return (
       <View style={[styles.root, fillAvailableHeight && styles.rootFill, rootLayoutStyle]} testID="interaction.panel">
         <PendingTaskHeader
@@ -235,7 +236,8 @@ export function InteractionPanel({
         <View style={[styles.card, cardLayoutStyle]} testID="interaction.readOnlyCard">
           <Text style={styles.kind}>{t('interaction.panel.readOnlyKind')}</Text>
           <Text style={styles.cardTitle}>{t('interaction.panel.readOnlyTitle')}</Text>
-          <Text style={styles.body}>{readOnlyReason}</Text>
+          <Text style={styles.body}>{readOnlyReason ?? t('sessionMeeting.waitingHost')}</Text>
+          {isMeetingPeer(deviceId) && <Text selectable style={styles.body}>{JSON.stringify(activeInteraction.request, null, 2)}</Text>}
         </View>
       </View>
     );

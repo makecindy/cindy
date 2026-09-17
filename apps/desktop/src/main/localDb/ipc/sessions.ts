@@ -1844,6 +1844,10 @@ export async function updateSessionInDb(
         if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
         await writeSessionPatch(db, sid, setObj, p.status);
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
+        if (p.status === 'archived' || p.status === 'deleted') {
+          const { closeSessionMeetingForTask } = await import('../../device-link/sessionMeetingRuntime.js');
+          await closeSessionMeetingForTask(sid, dbClient);
+        }
       },
       p.workingDir !== undefined,
     );
@@ -2032,6 +2036,10 @@ export async function patchSessionMetaInDb(
       row.summary = null;
     }
     cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
+    if (patch.status === 'archived' || patch.status === 'deleted') {
+      const { closeSessionMeetingForTask } = await import('../../device-link/sessionMeetingRuntime.js');
+      await closeSessionMeetingForTask(sessionId, dbClient);
+    }
     return sessionToCamel(row);
   });
   notifyAgentIslandSessionPatch(updated.id, {
@@ -2230,6 +2238,10 @@ export async function setSessionsStatusInDb(
       });
       for (const item of rows) {
         cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
+        if (item.status === 'archived') {
+          const { closeSessionMeetingForTask } = await import('../../device-link/sessionMeetingRuntime.js');
+          await closeSessionMeetingForTask(item.sessionId, dbClient);
+        }
       }
       for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
       return rows;

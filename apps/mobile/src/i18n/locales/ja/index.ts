@@ -17,6 +17,7 @@ import interaction from './interaction.json';
 import message from './message.json';
 import models from './models.json';
 import session from './session.json';
+import sessionMeeting from './sessionMeeting.json';
 import settings from './settings.json';
 import shared from './shared.json';
 import startup from './startup.json';
@@ -35,6 +36,7 @@ export default {
   message,
   models,
   session,
+  sessionMeeting,
   settings,
   shared,
   startup,

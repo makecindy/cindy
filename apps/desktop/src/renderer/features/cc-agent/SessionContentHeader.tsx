@@ -82,6 +82,8 @@ import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
+import { SessionMeetingButton } from '@/features/device-link/SessionMeetingButton';
+import { isMeetingPeer } from '@cindy/device-link';
 
 const log = createLogger('SessionContentHeader');
 
@@ -147,6 +149,7 @@ export function SessionContentHeader({
   // 会停留在旧值(Codex review P2)。prop 兜底覆盖 archived 等不在
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
+  const sharedGuest = isMeetingPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   const { confirm: confirmDialog } = useConfirmDialog();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
@@ -156,7 +159,7 @@ export function SessionContentHeader({
   // Draft 判定与 SessionItem 同口径:标题仍是默认哨兵且无消息。
   const isEmpty = isEmptyDraftSession(session);
   const remoteWritesBlocked =
-    readOnly || remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
+    readOnly || sharedGuest || remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   // 「移动到项目」/「导出会话…」可见性与 SessionItem 同条件。
   const canMoveToProject =
     !isEmpty && !session.remoteHostId && !session.deviceLinkDeviceId && !isArchived;
@@ -523,6 +526,7 @@ export function SessionContentHeader({
 
   return (
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
+      {!readOnly && session.status === 'active' && <SessionMeetingButton key={session.id} session={session} />}
       {isPinned && (
         <Pin
           size={13}
@@ -573,7 +577,7 @@ export function SessionContentHeader({
         // 双击(死区内)不动窗、正常进入改名。
         <span
           {...titleManualDrag}
-          onDoubleClick={startEdit}
+          onDoubleClick={sharedGuest ? undefined : startEdit}
           title={displayTitle}
           className="min-w-0 max-w-[40vw] cursor-default truncate text-sm font-medium text-foreground"
           style={WINDOW_NO_DRAG_STYLE}
@@ -582,7 +586,7 @@ export function SessionContentHeader({
         </span>
       )}
 
-      {!isEditing && !readOnly && (
+      {!isEditing && !readOnly && !sharedGuest && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
         <DropdownMenu

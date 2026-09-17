@@ -44,6 +44,7 @@ export * from './sessionList.js';
 export * from './sessionListCollapse.js';
 export * from './sessionOperation.js';
 export * from './sessionSelection.js';
+export * from './sessionMeeting.js';
 export * from './syntheticTrigger.js';
 export * from './subagentObservation.js';
 export * from './subagentWorkspace.js';

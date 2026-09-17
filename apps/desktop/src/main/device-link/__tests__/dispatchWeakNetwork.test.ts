@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkClient,
+  SESSION_MEETING_CAPABILITY,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DL_SUBSCRIBE_CHANNEL,
@@ -46,6 +47,12 @@ vi.mock('../../logger', async (importOriginal) => ({
 
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
+}));
+const meeting = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
+vi.mock('../sessionMeetingDispatch.js', async (original) => ({
+  ...await original<typeof import('../sessionMeetingDispatch.js')>(),
+  refreshSessionMeetingPeer: meeting.refresh,
+  captureSessionMeetingPeer: meeting.capture,
 }));
 
 import {
@@ -235,6 +242,24 @@ afterEach(() => {
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  it('refreshes first-join authority and ignores an older failed open after a newer success', async () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const peer = 'meeting~m~guest~g~d';
+    const payload = { controllerName: 'Guest', protocolVersion: PROTOCOL_VERSION, appVersion: '0.0.0-test', capabilities: [SESSION_MEETING_CAPABILITY] };
+    let rejectOld!: (error: Error) => void;
+    meeting.capture.mockReturnValue({ author: { displayName: 'Guest' } });
+    meeting.refresh.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOld = reject; })).mockResolvedValue(undefined);
+    __testing.handleLinkOpen(client as never, peer, 'old', payload);
+    expect(client.sendLinkAccept).not.toHaveBeenCalled();
+    __testing.handleLinkOpen(client as never, peer, 'new', payload);
+    await Promise.resolve();
+    expect(client.sendLinkAccept).toHaveBeenCalledWith(peer, 'new', expect.anything());
+    rejectOld(new Error('old network failure'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(client.closeLink).not.toHaveBeenCalled();
+    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
+  });
   it('declares history projection support in the host accept, including for legacy controllers', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);

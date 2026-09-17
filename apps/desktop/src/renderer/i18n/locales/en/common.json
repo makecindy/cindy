@@ -1,4 +1,29 @@
 {
+  "sessionMeeting": {
+    "waitingHost": "Waiting for the host to respond. You can continue sending messages.",
+    "join": "Join Shared Task",
+    "joinHint": "Paste an invitation to open the shared task.",
+    "login": "Sign in to Cindy to join a task.",
+    "openTask": "Open Task",
+    "notJoined": "This task is no longer shared with you.",
+    "invitation": "Invitation",
+    "invalid": "Enter a valid invitation and your display name.",
+    "nickname": "Display Name",
+    "requestJoin": "Join",
+    "dismiss": "Close Dialog",
+    "title": "Share Task",
+    "retry": "Could not update sharing. Check your connection and retry.",
+    "upgrade": "Sharing requires updated clients and server.",
+    "sharing": "Guests can read all task content and use the Agent with this task’s permissions. Existing approvals stay with the owner.",
+    "open": "Start Sharing",
+    "members": "Members: {{count}}",
+    "host": "Host",
+    "remove": "Remove Guest",
+    "leave": "Leave Shared Task",
+    "invite": "Copy Invitation",
+    "close": "Stop Sharing",
+    "invitationCopied": "Invitation copied"
+  },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
   },

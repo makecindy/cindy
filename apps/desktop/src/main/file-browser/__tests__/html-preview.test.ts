@@ -54,10 +54,33 @@ describe('directory HTML preview', () => {
     await expect(copyPreviewFile(source, path.join(dir, 'short.html'), size - 1)).rejects.toThrow(
       'PREVIEW_CHANGED',
     );
-    await fs.symlink(source, path.join(dir, 'link.html'));
-    await expect(
-      copyPreviewFile(path.join(dir, 'link.html'), path.join(dir, 'linked.html'), size),
-    ).rejects.toThrow();
+    const link = path.join(dir, 'link.html');
+    // Windows file symlinks require an OS privilege. Model their lstat result
+    // there, while retaining real symlink coverage on Unix. The target exists
+    // so accidentally following it would copy successfully and fail this test.
+    let restoreLinkStat: (() => void) | undefined;
+    if (process.platform === 'win32') {
+      await fs.copyFile(source, link);
+      const originalLstat = fs.lstat;
+      const metadata = await originalLstat(link);
+      const spy = vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+        if (args[0] === link) return Object.assign(metadata, {
+          isFile: () => false, isSymbolicLink: () => true,
+        });
+        return originalLstat(...args);
+      });
+      restoreLinkStat = () => spy.mockRestore();
+    } else {
+      await fs.symlink(source, link);
+    }
+    const open = vi.spyOn(fs, 'open');
+    try {
+      await expect(copyPreviewFile(link, path.join(dir, 'linked.html'), size)).rejects.toThrow('PREVIEW_CHANGED');
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      restoreLinkStat?.();
+    }
   });
   it('serves requested resources and root-relative module assets through authenticated HTTP', async () => {
     const { dir, source, args } = await fixture();

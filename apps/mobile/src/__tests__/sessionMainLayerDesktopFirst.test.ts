@@ -97,8 +97,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(source).toContain('if (collaborationLabel) return collaborationLabel;');
     // 写编排(设置/队列/fork-rewind/interaction)仍用写 read-only reason,不被放开。
     expect(source).toContain('readOnlyReason={collaborationReadOnlyReason}');
-    expect(source).toContain('onForkMessage={collaborationReadOnlyReason ? undefined : forkAtMessage}');
-    expect(source).toContain('onPreviewRewind={collaborationReadOnlyReason ? undefined : previewRewindAtMessage}');
+    expect(source).toContain('onForkMessage={collaborationReadOnlyReason || isMeetingPeer(deviceId) ? undefined : forkAtMessage}');
+    expect(source).toContain('onPreviewRewind={collaborationReadOnlyReason || isMeetingPeer(deviceId) ? undefined : previewRewindAtMessage}');
   });
 
   it('resyncs sessions from connection recovery or target availability, not every presence tick', () => {

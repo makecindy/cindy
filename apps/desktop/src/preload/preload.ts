@@ -4328,6 +4328,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     windowsSupport: (enabled) => ipcRenderer.invoke(DESKTOP_LOCAL.WINDOWS_SUPPORT, enabled),
     stop: () => ipcRenderer.invoke(DESKTOP_LOCAL.STOP),
   } satisfies RemoteDesktopApi,
+  sessionMeeting: {
+    host: (command: import('@cindy/device-link').SessionMeetingHostCommand): Promise<unknown> =>
+      ipcRenderer.invoke('maker:session-meeting', command),
+    account: (command: import('@cindy/device-link').SessionMeetingAccountCommand): Promise<unknown> =>
+      ipcRenderer.invoke('session-meeting:account', command),
+  },
   deviceLink: {
     getState: (): Promise<{
       remoteControlEnabled: boolean;

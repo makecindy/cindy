@@ -72,7 +72,7 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 
   it('伙伴仍可使用权限快捷键，锁定任务不能切换', () => {
-    expect(chatInput).toContain('settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
+    expect(chatInput).toContain('settingsLocked || sharedGuest ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
     expect(chatInput).not.toContain('settingsLocked || hideRuntimeControls');
   });
 

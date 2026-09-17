@@ -156,6 +156,20 @@ describe('serverApiFetch', () => {
     expect(mocks.invalidateSession).toHaveBeenCalledWith('account-unavailable');
   });
 
+  it.each(['ACCOUNT_UNAVAILABLE', 'TOKEN_EXPIRED'])('detached teardown %s cannot refresh or invalidate the next account', async (code) => {
+    mocks.getAccessToken.mockReturnValue('test-new-token');
+    mocks.netFetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({ error: { code } }) });
+    await expect(serverApiFetch('/api/resource', {
+      baseUrl: 'https://old-resource.example.test', token: 'test-old-token',
+      skipAutoRefresh: true, skipSessionInvalidation: true,
+    })).rejects.toMatchObject({ code, statusCode: 401 });
+    expect(mocks.netFetch).toHaveBeenCalledWith('https://old-resource.example.test/api/resource',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-old-token' }) }));
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
   it.each(['INVALID_TOKEN', 'UNAUTHORIZED'])('%s refresh 一次后重试', async (code) => {
     mocks.getAccessToken.mockReturnValueOnce('token-a').mockReturnValueOnce('token-b');
     mocks.refresh.mockResolvedValue(true);

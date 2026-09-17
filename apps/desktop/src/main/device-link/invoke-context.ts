@@ -10,10 +10,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { isMobilePlatform } from './controllerPlatform';
 import * as subscriptions from './subscriptions.js';
+import type { SessionMeetingPeerCapture } from './sessionMeetingDispatch.js';
 
 export interface DeviceLinkInvokeContext {
   controllerDeviceId: string;
   channel: string;
+  /** Host-verified meeting identity and revocation fence; never populated from wire args. */
+  meeting?: SessionMeetingPeerCapture;
+  /** Shared only within this invoke; an admitted native mutation must finish or roll back. */
+  meetingSetting?: { admitted: boolean };
   /**
    * 控制端平台(presence 登记的 `PresenceSnapshot.platform`);未登记时 undefined。
    *

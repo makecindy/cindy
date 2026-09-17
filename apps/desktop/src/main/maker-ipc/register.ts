@@ -1019,9 +1019,19 @@ import {
 } from '../device-link/dispatch.js';
 import {
   deviceLinkInvokeControllerSupports,
+  getDeviceLinkInvokeContext,
   isDeviceLinkInvoke,
   isMobileControllerInvoke,
 } from '../device-link/invoke-context.js';
+import { stampSessionMeetingInput } from './sessionMeetingInput.js';
+import { createSessionMeetingContextUsageGuard } from './sessionMeetingContextUsage.js';
+import { createSessionMeetingSettingGuard } from './sessionMeetingSetting.js';
+import { setSessionMeetingQueueReader } from '../device-link/sessionMeetingDispatch.js';
+
+function captureMeetingSettingGuard(sessionId: string) {
+  const context = getDeviceLinkInvokeContext();
+  return createSessionMeetingSettingGuard(context?.meeting, sessionId, context?.meetingSetting ?? { admitted: false });
+}
 import {
   attachMainOwnedInputBoundary,
   buildMobileClientPromptNote,
@@ -6553,11 +6563,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return verdict.kind === 'reroute' ? verdict.providerId : undefined;
   }
 
-  async function bootstrapSession(o: CreateOpts): Promise<{
+  async function bootstrapSession(o: CreateOpts, assertAccess?: () => void): Promise<{
     session: Awaited<ReturnType<typeof maker.createSession>>;
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
   }> {
+    assertAccess?.();
     if (o.id && o.workingDir && !o.remoteHostId) {
       o.workingDir = workingDirectoryRecovery.resolve(o.id, o.workingDir);
       await workingDirectoryRecovery.observe(o.id, o.workingDir).catch((error) => {
@@ -6580,6 +6591,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       o.effort = runtimeOverride.effort ?? undefined;
       o.fastMode = runtimeOverride.fastMode;
     }
+    assertAccess?.();
     await applyPersistedReviewMode(o);
     await applyPersistedCindyMakeMarker(o, readSessionSource);
     const didInjectOrcaInstructions = o.reviewMode === true ? false : applyOrcaInstructions(o);
@@ -6588,6 +6600,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const usingFallback = !!o.id && !!o.workingDir && !o.remoteHostId &&
       workingDirectoryRecovery.isFallback(o.id, o.workingDir);
+    assertAccess?.();
     await prepareDirectoryGrantsForBootstrap(o, {
       statDirectory: usingFallback ? statWorkingDirectory : undefined,
       realpathDirectory: usingFallback ? realpathWorkingDirectory : undefined,
@@ -6599,11 +6612,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           .from(sessions)
           .where(eq(sessions.id, sessionId))
           .limit(1);
+        assertAccess?.();
         if (existing) await persistSessionFields(sessionId, patch);
       },
     });
 
     await hydrateProviderIdBeforeSessionStart(o);
+    assertAccess?.();
     await ensureManagedOllamaReadyForSession({
       providerId: o.providerId,
       remoteHostId: o.remoteHostId ?? null,
@@ -6643,6 +6658,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (pin) o.providerId = pin;
       }
     }
+    assertAccess?.();
     const session = await maker.createSession(o);
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     wireSessionToIpc(session);
@@ -12956,12 +12972,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof sessionId !== 'string' || sessionId.length === 0) {
         throwIpcError('INVALID_PARAMS', 'sessionId required');
       }
+      const meetingAccess = createSessionMeetingContextUsageGuard(
+        getDeviceLinkInvokeContext()?.meeting, sessionId,
+      );
+      meetingAccess.assertCurrent();
       let sess = maker.getSession(sessionId);
       if (!sess) {
-        if (!createOpts) {
+        const trustedCreateOpts = await meetingAccess.resolveCreateOpts(
+          createOpts, async () => ({
+            ...await readSessionMeetingTaskCreateOpts(sessionId),
+            extraDirs: extraDirsForRuntime(await readSessionExtraDirsFromDb(sessionId)),
+            writableDirs: await readSessionWritableDirsFromDb(sessionId),
+          }),
+        );
+        if (!trustedCreateOpts) {
           throwIpcError('NOT_FOUND', `Session ${sessionId} is not running`);
         }
-        const co = buildCreateOptsWithStderr({ ...(createOpts as CreateOpts), id: sessionId });
+        const co = buildCreateOptsWithStderr({ ...(trustedCreateOpts as CreateOpts), id: sessionId });
         // session-agent-switch:先按 DB 行校正再判 claude-only——否则切到 codex 后
         // 残留的 claude createOpts 会在这里 spawn 出旧引擎的 live session 并被后续
         // send 复用(会话被劫持回旧引擎,2026-07-20 审计实锤)。
@@ -12998,12 +13025,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (row.length > 0) co.writableDirs = row;
         }
         try {
+          meetingAccess.assertCurrent();
           await ensureRemoteReadyForSessionStart({ createOpts: co });
           const {
             session: lazySess,
             didInjectOrcaInstructions,
             didInjectProjectContext,
-          } = await bootstrapSession(co);
+          } = await bootstrapSession(co, meetingAccess.assertCurrent);
           await markOrcaRoleIfNeeded(lazySess.id, co.orcaRole);
           log.info('context-usage: lazy create-session', {
             sessionId,
@@ -13992,6 +14020,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
+  setSessionMeetingQueueReader((sessionId, clientId) => {
+    const item = inputCoordinator.getProjection(sessionId).pendingQueue.find((pending) => pending.clientId === clientId);
+    return item ? { sessionId, authorAccountId: item.meetingAuthor?.accountId ?? '', state: 'pending', attachments: item.files } : undefined;
+  });
   getAgentIslandService()?.setCompletionDeferResolver((sessionId) =>
     inputCoordinator.hasPendingQueuedWork(sessionId),
   );
@@ -14411,6 +14443,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    delete normalized.meetingAuthor;
     delete normalized.autoReviewUserText;
     // Only Main-created welcomes and restored host snapshots may carry this policy.
     delete normalized.toolsDisabled;
@@ -14441,6 +14474,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   ipcMain.handle(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL, () => ({ supported: true, version: 1 }));
+
+  async function readSessionMeetingTaskCreateOpts(sid: string): Promise<AgentInputCreateOpts> {
+    const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, sid)).limit(1);
+    if (!row || row.status !== 'active' || !row.workingDir) throwIpcError('NOT_FOUND', 'Meeting task unavailable');
+    return {
+      agentKind: dbToMakerAgentKind(row.agentKind), workingDir: row.workingDir,
+      model: row.model, providerId: row.providerId, effort: row.effort,
+      permissionMode: row.permissionMode, fastMode: row.fastMode,
+      planMode: row.planModeEnabled, remoteHostId: row.remoteHostId ?? undefined,
+      resumeSessionId: row.sdkSessionId ?? undefined, orcaRole: row.orcaRole,
+    };
+  }
+
+  const prepareMeetingInput = async (sid: string, item: AgentInputQueuedMessage) => {
+    const meeting = getDeviceLinkInvokeContext()?.meeting;
+    if (!meeting) return item;
+    return stampSessionMeetingInput(item, meeting, await readSessionMeetingTaskCreateOpts(sid));
+  };
 
   /**
    * device-link 远控输入的自动起名(入队 / 插话共用)。
@@ -14737,7 +14788,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await assertReviewExternalInputAllowed(sid);
       const deviceLinkInvoke = isDeviceLinkInvoke();
       if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);
-      const parsed = requireQueuedMessage(item);
+      const parsed = await prepareMeetingInput(sid, requireQueuedMessage(item));
       assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
       if (!deviceLinkInvoke) await observeLocalInputClearBoundary(sid);
@@ -14904,12 +14955,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               touchUserSend?: boolean;
             } & AgentInputClearBoundaryOpts)
           : undefined;
-      const parsed = requireQueuedMessage(item, {
+      const parsed = await prepareMeetingInput(sid, requireQueuedMessage(item, {
         // A device-link projection intentionally omits the trusted snapshot;
         // Only the explicit remove-from-queue steer path may reattach it from
         // the main-owned row; all other IPC paths remain fail-closed here.
         allowMissingTrustedContexts: deviceLinkInvoke && steerOpts?.removeFromQueue === true,
-      });
+      }));
       assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
       if (!deviceLinkInvoke) await observeLocalInputClearBoundary(sid);
@@ -15677,7 +15728,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let atomicSelection = selection as
       { effort: SessionRuntimeProfile['effort']; fastMode: boolean } | undefined;
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+    const assertMeetingCurrent = captureMeetingSettingGuard(sessionId);
     const assertRuntimeOwnerCurrent = (): void => {
+      assertMeetingCurrent();
       internalOptions.assertSelectionCurrent?.();
       if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
         throwIpcError(
@@ -15687,6 +15740,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     const supersededByOwnerBoundary = (): boolean => {
+      assertMeetingCurrent();
       if (sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return false;
       if (internalOptions.source === 'user') {
         assertRuntimeOwnerCurrent();
@@ -15893,6 +15947,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (internalOptions.source === 'user' && !internalOptions.applyingUserSelectionOnSend &&
           !runtimeStatus.remoteHostId && !runtimeStatus.orcaRole) {
         assertRuntimeOwnerCurrent();
+        assertMeetingCurrent.admit();
         clearPendingCredentialSwitchForSession(sessionId, { wake: false });
         const intent = {
           ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
@@ -15928,6 +15983,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
         }
+        assertMeetingCurrent.admit();
         const generation = routeExplicit
           ? acceptSessionRuntimeMutation({
               sessionId,
@@ -16057,6 +16113,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
         if (!liveSessionBeforeRouteChange) {
+          assertRuntimeOwnerCurrent();
+          assertMeetingCurrent.admit();
           try {
             await rehydrateColdPiRuntimeForWindowVerification(sessionId);
           } catch {
@@ -16233,7 +16291,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               onConfirmationRequired: (contextTokens) => {
                 confirmationContextTokens = contextTokens;
               },
-              assertCanCommit: assertRuntimeOwnerCurrent,
+              assertCanCommit: () => { assertRuntimeOwnerCurrent(); assertMeetingCurrent.admit(); },
               beforeClose: () => {
                 clearPendingCredentialSwitchForSession(sessionId, { wake: false });
                 pendingClearedForWindowRebuild = true;
@@ -16410,6 +16468,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const result = routeExplicit
           ? await applyRuntimeSetModelChange({
               maker,
+              admit: () => { assertRuntimeOwnerCurrent(); assertMeetingCurrent.admit(); },
               sessionId,
               model,
               providerId: effectiveProviderId,
@@ -16561,6 +16620,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         if (atomicSelection) {
           const selectionToCommit = atomicSelection;
+          assertRuntimeOwnerCurrent();
+          assertMeetingCurrent.admit();
           // model/provider/effort/fast 是一次选择快照，必须在同一把 session 锁内收敛。
           // applyRuntimeSetModelChange 可能 close + wake；若 effort/fast 留给 renderer
           // 后续独立调用，queue drain 会用新 model + 旧偏好重建，跨控制端时还会发生
@@ -16624,6 +16685,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           const routeProjectionOwnerScope = captureDataOwnerBroadcastScope();
           try {
+            assertRuntimeOwnerCurrent();
+            assertMeetingCurrent.admit();
             await persistSessionFields(sessionId, patch);
           } catch (persistenceError) {
             // The live route and host stores are applied before SQLite so the
@@ -16890,7 +16953,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'sessionId + effort required');
     }
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+    const assertMeetingCurrent = captureMeetingSettingGuard(sessionId);
     const assertOwnerCurrent = () => {
+      assertMeetingCurrent();
       if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
         throwIpcError(
           'PRECONDITION_FAILED',
@@ -16902,6 +16967,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const remoteResponse = remoteInvoke ? {} : undefined;
     const persistEffort = async () => {
       if (!remoteResponse) return;
+      assertOwnerCurrent();
+      assertMeetingCurrent.admit();
       await persistSessionFields(sessionId, { effort });
       markRemoteSettingPersistedInsideHandler(remoteResponse);
     };
@@ -16924,6 +16991,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const userIntent = agentSwitchPending.get(sessionId);
       if (userIntent?.sameAgentSelection) {
         assertOwnerCurrent();
+        assertMeetingCurrent.admit();
         const result = await agentSwitchDeps.selectSameAgentModel!(sessionId,
           { ...userIntent, effort: effort }, false);
         if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
@@ -16968,10 +17036,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? (await readSessionRuntimeProfiles(sessionId))?.effective
           : undefined;
         const result = await applyRuntimeEffortWithRecovery({
-          applyRuntime: () =>
-            sess.setEffort(
+          applyRuntime: () => {
+            assertOwnerCurrent();
+            assertMeetingCurrent.admit();
+            return sess.setEffort(
               effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra',
-            ),
+            );
+          },
           terminateSession: () => maker.closeSession(sessionId),
         });
         if (result === 'session-terminated') {
@@ -17327,7 +17398,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
       const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
+      const assertMeetingCurrent = captureMeetingSettingGuard(sessionId);
       const assertOwnerCurrent = () => {
+        assertMeetingCurrent();
         if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
           throwIpcError(
             'PRECONDITION_FAILED',
@@ -17339,6 +17412,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const remoteResponse = remoteInvoke ? {} : undefined;
       const persistFastMode = async () => {
         if (!remoteResponse) return;
+        assertOwnerCurrent();
+        assertMeetingCurrent.admit();
         await persistSessionFields(sessionId, { fastMode: enabled });
         markRemoteSettingPersistedInsideHandler(remoteResponse);
       };
@@ -17361,6 +17436,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const userIntent = agentSwitchPending.get(sessionId);
         if (userIntent?.sameAgentSelection) {
           assertOwnerCurrent();
+          assertMeetingCurrent.admit();
           const result = await agentSwitchDeps.selectSameAgentModel!(sessionId,
             { ...userIntent, fastMode: enabled }, false);
           if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
@@ -17421,6 +17497,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const previousProfile = remoteInvoke
           ? (await readSessionRuntimeProfiles(sessionId))?.effective
           : undefined;
+        assertOwnerCurrent();
+        assertMeetingCurrent.admit();
         await sess.setFastMode(enabled);
         await commitRuntimeAxisAfterPersistence({
           persist: persistFastMode,
@@ -17466,9 +17544,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof sessionId !== 'string' || typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
+      const assertMeetingCurrent = captureMeetingSettingGuard(sessionId);
       await assertReviewSettingsUnlocked(sessionId);
+      assertMeetingCurrent();
       const sess = maker.getSession(sessionId);
       if (!sess) return;
+      assertMeetingCurrent.admit();
       await sess.setThinkingEnabled(enabled);
     },
   );

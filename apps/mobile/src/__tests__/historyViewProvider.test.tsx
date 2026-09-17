@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  SESSION_MEETING_CAPABILITY,
   type DeviceLinkClient,
   type DeviceLinkStatus,
   type LinkAcceptPayload,
@@ -63,6 +64,8 @@ const transport = vi.hoisted(() => {
     connectNow = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
+    serverCapabilities: string[] = [];
+    hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
     isOutboundExplicitlyClosed = () => false;
     // No background recovery owner; each test explicitly starts the fresh read.
     hasPendingRequestsTo = () => false;
@@ -110,6 +113,22 @@ beforeEach(async () => {
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+describe('Provider shared-task relay compatibility', () => {
+  it('distinguishes an old online relay from disconnection and re-negotiates after upgrade', async () => {
+    const client = transport.clients[0];
+    expect(context.sessionMeetingAvailable).toBeUndefined();
+    await act(async () => client.statusChanged('online'));
+    expect(context.sessionMeetingAvailable).toBe(false);
+    await act(async () => client.statusChanged('connecting'));
+    expect(context.sessionMeetingAvailable).toBeUndefined();
+    client.serverCapabilities = [SESSION_MEETING_CAPABILITY];
+    await act(async () => client.statusChanged('online'));
+    expect(context.sessionMeetingAvailable).toBe(true);
+    await act(async () => client.statusChanged('stopped'));
+    expect(context.sessionMeetingAvailable).toBeUndefined();
+  });
+});
 
 describe('Provider network recovery priority', () => {
   const wifi = { type: 'WIFI', isConnected: true, isInternetReachable: true };

@@ -1,4 +1,5 @@
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
+import { sessionMeetingAuthorName } from '@cindy/maker-shared';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
@@ -3276,6 +3277,8 @@ function MessageBubble({
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
+      {isUser && sessionMeetingAuthorName(item.message.source.agentMeta) ?
+        <Text style={styles.hookSourceTitle}>{sessionMeetingAuthorName(item.message.source.agentMeta)}</Text> : null}
       {hookSource ? (
         <View style={styles.hookSourceHeader} testID="message.hookSource">
           <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />

@@ -584,6 +584,8 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
           // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
           const authoritative = new Set(devices.map((d) => d.deviceId));
           for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
+            // Meeting shards are reconciled against membership, not the own-device directory.
+            if (deviceId.startsWith('meeting~')) continue;
             if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
             log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
             clearArchivedSessionRetry(deviceId);

@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
     persistedSdkSessionId: null,
   })),
   closeSession: vi.fn(async (_sessionId: string) => undefined),
+  closeSharedTask: vi.fn(async (_sessionId: string, _database: unknown): Promise<void> => undefined),
   tapWindowBroadcast: vi.fn(),
   windows: [] as Array<{
     isDestroyed: ReturnType<typeof vi.fn>;
@@ -108,6 +109,9 @@ vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
 vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../device-link/sessionMeetingRuntime.js', () => ({
+  closeSessionMeetingForTask: h.closeSharedTask,
+}));
 vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: vi.fn(() =>
@@ -801,6 +805,7 @@ describe('local-db:sessions:update handler wiring', () => {
   it('cleans runtime state before releasing the local terminal status lock', async () => {
     const order: string[] = [];
     h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.closeSharedTask.mockImplementationOnce(async () => { order.push('sharing-closed'); });
     h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
       const result = await task();
       order.push('lock-released');
@@ -810,13 +815,15 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await invokeUpdate('codex-local', { status: 'archived' });
 
-    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(order).toEqual(['runtime-cleanup', 'sharing-closed', 'lock-released']);
     expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+    expect(h.closeSharedTask).toHaveBeenCalledWith('codex-local', h.client);
   });
 
   it('cleans runtime state before releasing the remote terminal status lock', async () => {
     const order: string[] = [];
     h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.closeSharedTask.mockImplementationOnce(async () => { order.push('sharing-closed'); });
     h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
       const result = await task();
       order.push('lock-released');
@@ -826,8 +833,9 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await patchSessionMetaInDb('codex-local', { status: 'archived' });
 
-    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(order).toEqual(['runtime-cleanup', 'sharing-closed', 'lock-released']);
     expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+    expect(h.closeSharedTask).toHaveBeenCalledWith('codex-local', h.client);
   });
 
   // 竞态收敛(review on #3225):写入与查询不在同一串行区间,归档写入后、查询前

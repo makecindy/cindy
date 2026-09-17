@@ -731,6 +731,7 @@ export class DeviceLinkClient {
   private staleLinkNotifiedAt = new Map<string, number>();
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
+  private peerStreamAcceptedHandlers = new Set<(peer: string, streamId: string) => void>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
   private peerRouteStateHandlers = new Set<
     (change: DeviceLinkPeerRouteStateChanged) => void
@@ -983,6 +984,12 @@ export class DeviceLinkClient {
 
   getStatus(): DeviceLinkStatus {
     return this.status;
+  }
+
+  /** Verified outbound handshake, before recovered business frames are delivered. */
+  onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void {
+    this.peerStreamAcceptedHandlers.add(cb);
+    return () => this.peerStreamAcceptedHandlers.delete(cb);
   }
 
   /** 目标设备是否已完成 link-open / link-accept，可安全进入 streaming tier。 */
@@ -2266,6 +2273,12 @@ export class DeviceLinkClient {
             // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向
             // 的重试耗尽误拆整条共享 relay(字段注释有完整语义)。
             if (peer.reliable) {
+              if (env.src === p.dst && peer.remoteStreamId) {
+                for (const cb of this.peerStreamAcceptedHandlers) {
+                  try { cb(env.src, peer.remoteStreamId); }
+                  catch (error) { this.log.error('peer stream accepted handler threw', error); }
+                }
+              }
               const resume = this.planReliableSendResume(peer);
               this.commitReliableReceiveReady(env.src, peer);
               this.commitReliableSendResume(env.src, peer, resume);

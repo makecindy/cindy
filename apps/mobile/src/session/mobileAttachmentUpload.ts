@@ -66,7 +66,7 @@ export function effectiveUploadMimeType(mimeType: string | undefined): string {
 
 export async function presignMobileAttachmentUpload(
   candidate: MobileAttachmentUploadCandidate,
-  options: { token: string | null; deps?: UploadDeps },
+  options: { token: string | null; meetingId?: string; deps?: UploadDeps },
 ): Promise<MobileAttachmentPresignResult> {
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const result = await withTransientRemoteRetry(
@@ -79,6 +79,7 @@ export async function presignMobileAttachmentUpload(
         size: candidate.size,
         contentType: effectiveUploadMimeType(candidate.mimeType),
         ext: uploadExtForName(candidate.name),
+        ...(options.meetingId ? { meetingId: options.meetingId } : {}),
       },
     }),
     { maxAttempts: PRESIGN_MAX_ATTEMPTS },
@@ -294,7 +295,7 @@ export async function statMobileAttachmentFileSize(uri: string): Promise<number>
 export async function uploadMobileAttachment(
   candidate: MobileAttachmentUploadCandidate,
   body: MobileAttachmentUploadBody,
-  options: { token: string | null; id?: string; deps?: UploadDeps },
+  options: { token: string | null; meetingId?: string; id?: string; deps?: UploadDeps },
 ): Promise<RemoteSerializedAttachment> {
   // 上传前先校验类型:不支持的本机文件(如 .zip)若先 presign + PUT、再在
   // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下一个永不被引用、
@@ -327,6 +328,7 @@ export async function uploadMobileAttachmentFromFile(
   fileUri: string,
   options: {
     token: string | null;
+    meetingId?: string;
     id?: string;
     deps?: UploadDeps;
     signal?: AbortSignal;

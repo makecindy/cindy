@@ -669,6 +669,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         return requiresRemoteRebuild ? 'remote-unsupported' : 'not-needed';
       }
       if (!deps.rehydrateColdPiRuntimeForWindowVerification) return 'unknown-context';
+      target.assertCanCommit?.();
       try {
         await deps.rehydrateColdPiRuntimeForWindowVerification(sessionId);
       } catch (error) {

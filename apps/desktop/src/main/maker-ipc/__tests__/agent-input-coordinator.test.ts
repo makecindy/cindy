@@ -208,6 +208,22 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     );
   });
 
+  it('retains host-stamped meeting attribution when the queue drains outside the original invoke', async () => {
+    const h = createHarness();
+    const sid = 'meeting-task';
+    const author = { meetingId: 'meeting', sessionId: sid, memberId: 'member', accountId: 'guest', displayName: 'Guest' };
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('meeting-input', 'hello', { meetingAuthor: author, userName: author.displayName }));
+    expect(h.coordinator.getProjection(sid).pendingQueue[0].meetingAuthor).toEqual(author);
+    h.setRunning(false);
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      sid, expect.anything(), expect.anything(),
+      expect.objectContaining({ userName: 'Guest', persistUserMessage: expect.objectContaining({ meetingAuthor: author }) }),
+    );
+  });
+
   it('restores first, reserves at the head with a host stamp, deduplicates, and emits once', async () => {
     const h = createHarness();
     const sid = 'priority-worker';

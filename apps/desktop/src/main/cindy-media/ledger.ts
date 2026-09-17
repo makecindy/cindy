@@ -31,6 +31,16 @@ function defaultDb(): LedgerDb {
   return getDbClient().drizzle;
 }
 
+/** Shared task reads use existing provenance; knowing a blob hash grants nothing. */
+export async function sessionCanRead(hash: string, sessionId: string, db: LedgerDb = defaultDb()): Promise<boolean> {
+  const rows = await db.select({ one: sql`1` }).from(mediaRefs).where(and(
+    eq(mediaRefs.hash, hash),
+    or(eq(mediaRefs.originSessionId, sessionId),
+      and(eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))),
+  )).limit(1).all();
+  return rows.length > 0;
+}
+
 /**
  * 引用方类型(多态引用,详见 schema.ts mediaRefs 注释)。
  * 'ghost-grant':用户显式引渡给某意识的图(随 ghost_call attachments

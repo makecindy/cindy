@@ -1384,6 +1384,7 @@ export function mobileCatalogSurfaces() {
     ['resources', '远程资源列表与详情', ['resources/[collectionId].tsx', 'resources/[collectionId]/[resourceId].tsx']],
     ['companions.direct', '伙伴私聊回看', ['companions/direct/[threadId].tsx']],
     ['chat.session', '任务内容与输入', ['sessions/[sessionId].tsx']],
+    ['chat.sharing', '共享任务邀请与成员', ['shared-session.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
     ['automations', '自动化', ['automations/[deviceId].tsx']],

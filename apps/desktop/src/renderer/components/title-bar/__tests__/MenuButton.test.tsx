@@ -20,6 +20,8 @@ vi.mock('@/lib/checkForUpdateWithToast', () => ({
 }));
 
 import { MenuButton } from '@/components/title-bar/MenuButton';
+vi.mock('@/features/device-link/useSessionMeetingTasks', () => ({ useSessionMeetingTasks: vi.fn() }));
+vi.mock('@/features/device-link/JoinSessionMeetingDialog', () => ({ JoinSessionMeetingDialog: () => null }));
 
 afterEach(() => {
   cleanup();

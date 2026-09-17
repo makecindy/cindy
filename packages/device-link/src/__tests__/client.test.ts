@@ -122,6 +122,48 @@ function makeHarness(opts?: {
 
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+describe('verified outbound stream notification', () => {
+  it('notifies before business delivery and keeps two peers independent across restart', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    h.client.start(); await tick(); h.current().ack();
+    const events: string[] = [];
+    const off = h.client.onPeerStreamAccepted((peer, stream) => { events.push(peer + ':' + stream); });
+    h.client.onFrame((frame) => { if (frame.kind === 'push') events.push('push:' + frame.src); });
+    const accept = async (peer: string, stream: string) => {
+      const opened = h.client.openLink(peer, { controllerName: 'Test', protocolVersion: 1, appVersion: '1' });
+      const request = h.current().sent.filter((e) => e.kind === 'link-open').at(-1)!;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: request.id, src: peer, payload: {
+        appVersion: '1', allowlistHash: 'hash', capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: stream,
+      } });
+      await opened;
+    };
+    const push = (peer: string, stream: string, seq: number) => {
+      for (const frame of encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'push', src: peer,
+        payload: { channel: 'maker:event', payload: {} },
+      }, stream, seq)) h.current().push(frame);
+    };
+    try {
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: 'unrequested', src: 'a',
+        payload: { appVersion: '1', allowlistHash: 'hash', transportStreamId: 'unverified' } });
+      expect(events).toEqual([]);
+      await accept('a', 'old');
+      await accept('b', 'steady');
+      push('a', 'old', 1); push('b', 'steady', 1); await tick();
+      expect(events).toEqual(['a:old', 'b:steady', 'push:a', 'push:b']);
+      await accept('a', 'new');
+      push('a', 'new', 1); push('b', 'steady', 2); await tick();
+      expect(events.slice(4)).toEqual(['a:new', 'push:a', 'push:b']);
+      push('a', 'old', 2); await tick();
+      expect(events).toHaveLength(7);
+      off();
+      await accept('a', 'last');
+      expect(events).toHaveLength(7);
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); }
+  });
+});
+
 describe('network change probes', () => {
   it.each([true, false])('only post-hint valid inbound activity avoids the redundant probe (valid=%s)', async (valid) => {
     vi.useFakeTimers();

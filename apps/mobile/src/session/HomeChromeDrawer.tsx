@@ -63,6 +63,7 @@ export function HomeChromeDrawer({
   onOpenSearch,
   onOpenAccounts,
   onOpenDevices,
+  onOpenSharedSession,
   onOpenSettings,
   onLogout,
   loggingOut = false,
@@ -76,6 +77,7 @@ export function HomeChromeDrawer({
   onOpenSearch(): void;
   onOpenAccounts(): void;
   onOpenDevices(): void;
+  onOpenSharedSession?(): void;
   onOpenSettings(): void;
   onLogout(): void;
   loggingOut?: boolean;
@@ -333,6 +335,16 @@ export function HomeChromeDrawer({
             <Monitor color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
             <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.management.title')}</Text>
           </Pressable>
+
+          {onOpenSharedSession && <Pressable
+            accessibilityLabel={t('sessionMeeting.join')}
+            accessibilityRole="button"
+            onPress={onOpenSharedSession}
+            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
+          >
+            <UsersRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={styles.menuLabel}>{t('sessionMeeting.join')}</Text>
+          </Pressable>}
 
           <Pressable
             accessibilityLabel={t("devices.list.a11y.openSettings")}

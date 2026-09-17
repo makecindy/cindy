@@ -130,7 +130,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     expect(sidebarUpperSrc).toContain('isRemoteSessionWriteBlocked(session)');
     expect(sidebarUpperSrc).toContain('selectedSessions.some(isRemoteSessionWriteBlocked)');
     expect(sessionItemSrc).toContain(
-      'const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)',
+      "const remoteWritesBlocked = isMeetingPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session)",
     );
     expect(sessionCardSrc).toContain(
       'const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)',
