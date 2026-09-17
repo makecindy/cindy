@@ -55,6 +55,50 @@ export interface MakeDoctorReport {
   forceManagedTools?: boolean;
   upstream?: MakeUpstreamQuery;
   source?: MakeSourcePreparation;
+  task?: CindyMakeTaskPreparation;
+}
+
+export interface CindyMakeTaskPreparation {
+  title?: string;
+  request?: string;
+  sessionId: string;
+  originSessionId?: string;
+  phase:
+    'waiting' | 'environment' | 'source' | 'workspace' | 'dependencies' | 'starting' | 'completed';
+  dependencies?: MakeDependencyProgress;
+  /** Settings projection; preparation completion is not production completion. */
+  sessionStatus?: 'active' | 'archived' | 'deleted';
+  executing?: boolean;
+  /** Persisted only after the task directory and branch have both been reclaimed. */
+  finished?: boolean;
+}
+
+export interface MakeDependencyProgress {
+  /** Absent when pnpm only emits lifecycle activity (e.g. an up-to-date install). */
+  resolved?: number;
+  reused?: number;
+  downloaded?: number;
+  added?: number;
+  activity?: 'packages' | 'scripts';
+}
+
+export interface CindyMakeTaskOptions {
+  agentKind?: 'cc' | 'codex' | 'pi';
+  model?: string;
+  effort?: string;
+  providerId?: string | null;
+  permissionMode?: string;
+  fastMode?: boolean;
+  planModeEnabled?: boolean;
+}
+
+export interface CindyMakeTaskStart {
+  originSessionId?: string;
+  /** Home/settings entry has no origin task before the user chooses Continue. */
+  createOptions?: CindyMakeTaskOptions;
+  runId: string;
+  request: string;
+  title: string;
 }
 
 /** Main-owned snapshots for all Cindy Make resources. Renderer only subscribes. */
@@ -63,11 +107,32 @@ export interface CindyMakeOperationSnapshot {
   report: MakeDoctorReport;
 }
 
+export const CINDY_MAKE_TASK_ERROR_CODES = [
+  'busy',
+  'dirty',
+  'conflict',
+  'cleanupFailed',
+  'unavailable',
+  'directoryBusy',
+] as const;
+export type CindyMakeTaskError = (typeof CINDY_MAKE_TASK_ERROR_CODES)[number];
+export interface CindyMakeTaskActionState {
+  action: 'finish' | 'delete';
+  status: 'running' | 'failed';
+  error?: CindyMakeTaskError;
+}
+
 export interface CindyMakeGlobalState {
+  ownerStamp?: import('./dataOwnerPush').DataOwnerPushStamp;
   environmentCheck?: CindyMakeOperationSnapshot;
   environmentPrepare?: CindyMakeOperationSnapshot;
   sourcePrepare?: CindyMakeOperationSnapshot;
   sourceClear?: CindyMakeOperationSnapshot;
+  source?: MakeSourceStatus;
+  reports?: Record<string, MakeDoctorReport>;
+  tasks?: Record<string, MakeDoctorReport>;
+  /** Current-owner cleanup jobs, keyed by session ID; independent of Settings lifetime. */
+  taskActions?: Record<string, CindyMakeTaskActionState>;
 }
 
 export interface MakeSourcePreparation {
@@ -99,8 +164,19 @@ export interface MakeSourcePreparation {
     | 'installFailed'
     | 'locked'
     | 'cancelled';
-  phase?: 'checking' | 'cloning' | 'fetching' | 'checkingOut' | 'preparingBranch' | 'installing';
+  phase?:
+    | 'waiting'
+    | 'checking'
+    | 'checkingRemote'
+    | 'checkingLocal'
+    | 'cloning'
+    | 'fetching'
+    | 'checkingOut'
+    | 'preparingBranch'
+    | 'caching'
+    | 'installing';
   progress?: MakeSourceGitProgress;
+  dependencies?: MakeDependencyProgress;
 }
 
 /** A per-task worktree branched from the personal baseline; the code task's working directory. */
@@ -137,6 +213,7 @@ export interface MakeSourceStatus {
   error?: MakeSourcePreparation['error'];
   phase?: MakeSourcePreparation['phase'];
   progress?: MakeSourceGitProgress;
+  dependencies?: MakeDependencyProgress;
 }
 
 export interface MakeUpstreamItem {

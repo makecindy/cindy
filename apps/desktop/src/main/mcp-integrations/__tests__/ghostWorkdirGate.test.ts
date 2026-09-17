@@ -12,7 +12,7 @@
  *      自动过户，降档恢复确认；缺会话、查询失败、远程会话 fail closed。
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -134,7 +134,9 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: logInfoMock, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
 // Claude 走建线闭包 ctx；Codex / Pi 用此 mock 模拟 HTTP bridge 的 ALS 恢复。
-vi.mock('@cindy/mcps', () => ({ getLiziMcpSessionContext: () => alsSessionContextMock() }));
+vi.mock('@cindy/mcps', () => ({
+  getLiziMcpSessionContext: () => alsSessionContextMock(),
+}));
 
 const isAuthorizationSessionMock = vi.fn(async () => false);
 vi.mock('../../maker-ipc/botAuthorizationHost.js', () => ({ isBotAuthorizationSession: isAuthorizationSessionMock }));
@@ -250,7 +252,7 @@ vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
 }));
 
-const { getCindyGhostsMcpDeps, getGhostRosterPrompt } = await import('../ghost');
+const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt } = await import('../ghost');
 const { createCindyGhostsMcpServer } = await import('cindy-tools');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
   await import('../../cindy-brain/ghostWorkdirPrefs');
@@ -747,6 +749,390 @@ describe('Forge session workdir gate', () => {
       }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
     expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Forge workdir-out permission path', () => {
+  let localWorkdir: string;
+  let outsideRoot: string;
+  let sourceDir: string;
+
+  beforeEach(() => {
+    localWorkdir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-grant-wd-'));
+    outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-grant-src-'));
+    sourceDir = path.join(outsideRoot, 'plugin-src');
+    fs.mkdirSync(sourceDir);
+    sessionSnapshotMock.mockResolvedValue({
+      workingDir: localWorkdir,
+      permissionMode: 'auto',
+      planModeEnabled: false,
+      remoteHostId: null,
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(localWorkdir, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
+  });
+
+  function packedOk() {
+    return {
+      ok: true as const,
+      buf: Buffer.from('packed'),
+      cindyPath: path.join(sourceDir, 'demo-1.0.0.cindy'),
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' },
+    };
+  }
+
+  it('Full Access packs an outside source without a confirm card', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
+    packGhostDirMock.mockResolvedValueOnce(packedOk());
+    const result = await makeDeps('pi', 'forge-bypass').forgePack({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: true });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(packGhostDirMock).toHaveBeenCalledWith(
+      sourceDir,
+      expect.objectContaining({
+        sessionWorkdir: localWorkdir,
+        allowOutsideWorkdir: true,
+        authorizedDir: fs.realpathSync.native(sourceDir),
+      }),
+    );
+    expect(packGhostDirMock.mock.calls[0]?.[1]?.isCurrent?.()).toBe(true);
+    expect(packGhostDirMock.mock.calls[0]?.[1]?.authorizedAncestors).toBeUndefined();
+  });
+
+  it('Auto-review allow packs an outside source', async () => {
+    const reviewAction = vi.fn(async (_action: { description?: string }) => ({ verdict: 'allow' as const }));
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'auto',
+      remoteHostId: null,
+      reviewAction,
+      isCurrent: () => true,
+    });
+    packGhostDirMock.mockResolvedValueOnce(packedOk());
+    const result = await makeDeps('pi', 'forge-auto').forgePack({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: true });
+    expect(reviewAction).toHaveBeenCalledOnce();
+    const action = reviewAction.mock.calls[0]?.[0];
+    expect(action?.description).toContain('plugin_file_handoff');
+    expect(action?.description).toContain('forge_source');
+    expect(action?.description).toContain('ghost_forge_pack');
+    expect(action?.description).toContain('write');
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(packGhostDirMock).toHaveBeenCalledWith(
+      sourceDir,
+      expect.objectContaining({
+        allowOutsideWorkdir: true,
+        authorizedDir: fs.realpathSync.native(sourceDir),
+      }),
+    );
+  });
+
+  it('Auto-review block returns PERMISSION_DENIED without packing', async () => {
+    const reviewAction = vi.fn(async () => ({
+      verdict: 'block' as const,
+      reason: 'Stay in the session workdir',
+    }));
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'auto',
+      remoteHostId: null,
+      reviewAction,
+      isCurrent: () => true,
+    });
+    const result = await makeDeps('pi', 'forge-auto-block').forgePack({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('Ask shows a forge_source confirm card then packs', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'ask',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
+    packGhostDirMock.mockResolvedValueOnce(packedOk());
+    const result = await makeDeps('pi', 'forge-ask').forgePack({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: true });
+    expect(confirmRequestMock).toHaveBeenCalledWith(
+      'forge-ask',
+      expect.objectContaining({
+        ghostId: 'cindy-forge',
+        ghostName: 'Forge',
+        lane: 'forge_source',
+        sourceTool: 'ghost_forge_pack',
+        operation: 'write',
+      }),
+    );
+    expect(packGhostDirMock).toHaveBeenCalledWith(
+      sourceDir,
+      expect.objectContaining({
+        allowOutsideWorkdir: true,
+        authorizedDir: fs.realpathSync.native(sourceDir),
+      }),
+    );
+  });
+
+  it('Ask deny does not pack', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'ask',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
+    confirmRequestMock.mockResolvedValueOnce({ confirmed: false, allowDirs: false });
+    const result = await makeDeps('pi', 'forge-ask-deny').forgePack({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+  });
+
+  it('Full Access scaffolds an outside directory without a confirm card', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
+    const dir = path.join(outsideRoot, 'new-plugin');
+    await expect(
+      makeDeps('pi', 'forge-scaffold-bypass').forgeScaffold({
+        dir,
+        template: 'plain',
+        id: 'new-plugin',
+        name: 'New plugin',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(scaffoldGhostDirMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minCindyVersion: '2.3.4' }),
+      expect.objectContaining({
+        sessionWorkdir: localWorkdir,
+        allowOutsideWorkdir: true,
+        authorizedDir: path.join(fs.realpathSync.native(outsideRoot), 'new-plugin'),
+      }),
+    );
+  });
+
+  it('rejects an outside source after the live grant expires', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => false,
+    });
+    const result = await makeDeps('pi', 'forge-expired').forgePack({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+  });
+
+  it('denies an outside pack when the session instance is missing or dead', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => true,
+    });
+    await expect(
+      makeDeps('pi', 'forge-no-instance', null).forgePack({ dir: sourceDir }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+
+    liveGrantStateMock.mockReturnValue(null);
+    await expect(
+      makeDeps('pi', 'forge-dead-instance').forgePack({ dir: sourceDir }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+  });
+
+  it('does not install after pack if the live grant expires', async () => {
+    let current = true;
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => current,
+    });
+    packGhostDirMock.mockImplementation(async () => {
+      current = false;
+      return packedOk();
+    });
+    const result = await makeDeps('pi', 'forge-install-stale').forgeInstall({ dir: sourceDir });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(forgeInstallPackageMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the live grant into the Forge install transaction', async () => {
+    const isCurrent = () => true;
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent,
+    });
+    packGhostDirMock.mockResolvedValueOnce(packedOk());
+    await expect(
+      makeDeps('pi', 'forge-install-current').forgeInstall({ dir: sourceDir }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(forgeInstallPackageMock).toHaveBeenCalledWith(
+      packedOk().cindyPath,
+      expect.objectContaining({
+        ghostId: 'demo',
+        isCurrent,
+      }),
+    );
+  });
+
+  it('does not stage a publish pack after the live grant expires', async () => {
+    let current = true;
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent: () => current,
+    });
+    packGhostDirMock.mockImplementation(async () => {
+      current = false;
+      return packedOk();
+    });
+    const result = await makeDeps('pi', 'forge-publish-stale').forgePack({
+      dir: sourceDir,
+      intent: 'publish',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(completeForgePackStagingMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('session path authorization for docs/computer', () => {
+  const outsidePath = path.join(outsideDir, 'report.docx');
+
+  it('Full Access allows a local outside path without a confirm card', async () => {
+    const isCurrent = () => true;
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent,
+    });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toEqual({ allowed: true, isCurrent });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('Auto review can allow or block an outside path', async () => {
+    const isCurrent = () => true;
+    const reviewAction = vi.fn(async (_action: { description?: string }): Promise<{ verdict: 'allow' | 'block'; reason?: string }> => ({
+      verdict: 'allow',
+    }));
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'auto',
+      remoteHostId: null,
+      reviewAction,
+      isCurrent,
+    });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toEqual({ allowed: true, isCurrent });
+    expect(reviewAction).toHaveBeenCalledOnce();
+    const reviewed = reviewAction.mock.calls[0]?.[0];
+    expect(reviewed?.description).toContain('cindy-docs');
+    expect(reviewed?.description).toContain('"operation":"write"');
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+
+    reviewAction.mockResolvedValueOnce({ verdict: 'block', reason: 'not this path' });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-computer:get_window_state',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('Ask shows a confirm card and remote sessions stay closed', async () => {
+    const isCurrent = () => true;
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'ask',
+      remoteHostId: null,
+      isCurrent,
+    });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toEqual({ allowed: true, isCurrent });
+    expect(confirmRequestMock).toHaveBeenCalledOnce();
+    expect(confirmRequestMock).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        lane: 'outside_workdir',
+        sourceTool: 'cindy-docs',
+        operation: 'write',
+      }),
+    );
+
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR,
+      remoteHostId: 'ssh-1',
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('denies outside paths when the session instance is missing or dead', async () => {
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+    });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+
+    liveGrantStateMock.mockReturnValue(null);
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 'dead-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-computer:get_window_state',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+
+    liveGrantStateMock.mockImplementation(() => {
+      throw new Error('runtime registry unavailable');
+    });
+    await expect(authorizeDesktopSessionPath({
+      sessionId: 's1',
+      sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR,
+      path: outsidePath,
+      toolName: 'cindy-docs',
+      operation: 'write',
+    }, liveGrantStateMock)).resolves.toMatchObject({ allowed: false });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
   });
 });
 

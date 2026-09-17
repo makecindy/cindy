@@ -10,6 +10,82 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it('records same-directory fallback and a later failed fallback probe without changing recovery behavior', async () => {
+    const dir = path.resolve('/private/dialogue');
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async () => { throw Object.assign(new Error('private-project'), { code: 'WORKDIR_PROBE_TIMEOUT' }); },
+      mkdir: vi.fn(),
+    }, async () => dir, log);
+    expect(await recovery.recover('private-session', dir)).toBe(true);
+    expect(log.info).toHaveBeenCalledWith('workdir recovery completed', expect.objectContaining({
+      action: 'fallback-selected', sameDirectory: true,
+    }));
+    expect(log.warn).toHaveBeenCalledWith('workdir recovery unavailable', expect.objectContaining({
+      reason: 'ancestor-probe-failed', code: 'WORKDIR_PROBE_TIMEOUT',
+    }));
+    expect(await recovery.recover('private-session', dir)).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith('workdir recovery attempt failed', expect.objectContaining({
+      stage: 'fallback-stat', code: 'WORKDIR_PROBE_TIMEOUT', usingFallback: true,
+    }));
+    expect(JSON.stringify([...log.info.mock.calls, ...log.warn.mock.calls])).not.toContain('private');
+  });
+
+  it('logs original directory creation separately from fallback allocation', async () => {
+    const dir = path.resolve('/private/project');
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async (target) => {
+        if (target === dir) throw Object.assign(new Error('private missing directory'), { code: 'ENOENT' });
+        return { isDirectory: () => true, dev: 1 };
+      }, mkdir: vi.fn(),
+    }, async () => path.resolve('/private/fallback'), log);
+    expect(await recovery.recover('private-session', dir, '/private/similar')).toBe(true);
+    expect(log.info).toHaveBeenCalledExactlyOnceWith('workdir recovery directory created', expect.objectContaining({
+      action: 'directory-recreated', code: 'ENOENT', similarPathFound: true,
+    }));
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain('private');
+  });
+
+  it('records changed device identity before selecting fallback', async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    let device = 1;
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async () => ({ isDirectory: () => true, dev: device }), mkdir: vi.fn(),
+    }, async () => path.resolve('/private/fallback'), log);
+    const dir = path.resolve('/private/project');
+    await recovery.observe('private-session', dir);
+    device = 2;
+    expect(await recovery.recover('private-session', dir)).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith('workdir recovery unavailable', expect.objectContaining({
+      reason: 'device-changed', expectedDevice: 1, actualDevice: 2,
+    }));
+    expect(log.info).toHaveBeenCalledWith('workdir recovery completed', expect.objectContaining({ action: 'fallback-selected', sameDirectory: false }));
+  });
+
+  it.each(['EACCES', 'ENOSPC'])('records the stage and code of failed original directory creation: %s', async (code) => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const dir = path.resolve('/private/project');
+    const recovery = createWorkingDirectoryRecovery({
+      stat: async (target) => {
+        if (target === dir) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return { isDirectory: () => true, dev: 1 };
+      },
+      mkdir: async () => { throw Object.assign(new Error('private details'), { code }); },
+    }, async () => path.resolve('/private/fallback'), log);
+    expect(await recovery.recover('private-session', dir)).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith('workdir recovery attempt failed', expect.objectContaining({ stage: 'original-mkdir', code }));
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it('does not emit recovery messages for healthy checks', async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const recovery = createWorkingDirectoryRecovery({ stat: async () => ({ isDirectory: () => true, dev: 1 }), mkdir: vi.fn() }, undefined, log);
+    expect(await recovery.recover('private-session', path.resolve('/private/project'))).toBe(true);
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it.each(['WORKDIR_PROBE_TIMEOUT', 'EIO', 'EACCES'])('handles a share failing during mkdir: %s', async (code) => {
     const dir = path.resolve('/share/project');
     const fallback = path.resolve('/conversation');

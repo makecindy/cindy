@@ -282,7 +282,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   secondary: { light: '60.0 12.8% 92.4%', dark: '0 0% 11.4%' },
   'settings-btn-primary-text': { light: '#FCFCFC', dark: '#151515' }, // 2026-08 §9 更新;沿革: E1D
   'settings-btn-secondary-hover-bg': { light: '#F6F6F1', dark: '#1D1D1D' },
-  'text-placeholder': { light: '#6B6B67', dark: '#C1C1C1' },
+  'text-placeholder': { light: '#C4C4C4', dark: '#525252' },
   'settings-integration-avatar-bg': { light: '#FDFDF8', dark: '#1D1D1D' },
   'settings-logout-bg': { light: '#FDFDF8', dark: '#1F1F1F' },
   'settings-menu-bg-hover': { light: '#E8E8E3', dark: '#282828' }, // 2026-08 §9 更新;沿革: 用户改稿 2026-07-21:原值贴着页底(#EDEDED/#2A2828)不可见,light 压暗 / dark 提亮到 ~5-6% 亮度差

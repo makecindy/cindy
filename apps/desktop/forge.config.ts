@@ -1471,7 +1471,10 @@ if (isWin) {
         extraMetadata: { description: BRAND_IDENTITY.displayName },
         nsis: {
           oneClick: false,
-          allowToChangeInstallationDirectory: true,
+          allowElevation: true,
+          // installer-directory.nsh supplies the directory page with a write-access
+          // check before installation. The stock page only elevates for all-users.
+          allowToChangeInstallationDirectory: false,
           installerIcon: 'resources/icon.ico',
           uninstallerIcon: 'resources/icon.ico',
           createDesktopShortcut: 'always',

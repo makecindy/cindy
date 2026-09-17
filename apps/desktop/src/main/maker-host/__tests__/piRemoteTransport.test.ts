@@ -310,10 +310,8 @@ describe('killRemotePiManagerSession sessionId validation (sync rejection)', () 
 });
 
 // ---------------------------------------------------------------------------
-// 轮 40-w5 HIGH:SSH stdout 分帧缓冲的 OOM 守卫 —— 远端输出无换行字节流超过
-// 16MB(与本地 attachJsonlReader 对齐的硬上限)时必须关闭 transport, 而不是
-// 让主进程内存随远端字节流无界增长。用直连模式 + fake ExecStreamHandle 驱动
-// onStdoutBytes, 不依赖真实 SSH。
+// SSH stdout 分帧缓冲的 OOM 守卫 —— 远端输出无换行字节流超过 16MB 时丢掉当前
+// 行并resync, 不关 transport。合法 get_entries 带图历史可以超过该上限。
 // ---------------------------------------------------------------------------
 function fakeLogger() {
   const logger = {
@@ -342,7 +340,7 @@ describe('SSH stdout buffer overflow guard', () => {
     return { handlers, handle };
   }
 
-  it('closes the transport when remote streams >16MB without a newline', async () => {
+  it('resyncs after an oversized unterminated line instead of closing the transport', async () => {
     const execStream = vi.fn();
     const host = { id: 'test-host', execStream } as unknown as RemoteHost;
     const { handlers, handle } = fakeChannel();
@@ -356,20 +354,24 @@ describe('SSH stdout buffer overflow guard', () => {
       env: {},
       logger: fakeLogger() as never,
     });
+    const lines: string[] = [];
+    const oversized: unknown[] = [];
+    transport.onLine((line) => lines.push(line));
+    transport.onOversizedFrame?.(() => oversized.push(true));
     const closed: PiTransportCloseInfo[] = [];
     transport.onClose((info) => closed.push(info));
 
     // 等 async IIFE 完成 channel 建立并注册 handlers。
     await vi.waitFor(() => expect(handlers.onStdoutBytes).toBeDefined());
 
-    // 单块无换行字节流超过 16MB 上限。
     handlers.onStdoutBytes!(Buffer.alloc(16 * 1024 * 1024 + 1, 0x61));
+    handlers.onStdoutBytes!(Buffer.from('residual-base64-fragment\n{"ok":1}\n'));
 
-    await vi.waitFor(() => expect(closed.length).toBe(1));
-    expect(closed[0].reason).toMatch(/buffer overflow/);
-    expect(handle.kill).toHaveBeenCalled(); // fireClose 关闭 channel
-    // transport 已关闭:后续写入必须 reject。
-    await expect(transport.writeLine('{"type":"request"}')).rejects.toThrow(/closed/);
+    expect(closed).toHaveLength(0);
+    expect(handle.kill).not.toHaveBeenCalled();
+    expect(oversized).toHaveLength(1);
+    expect(lines).toEqual(['{"ok":1}']);
+    await expect(transport.writeLine('{"type":"request"}')).resolves.toBeUndefined();
   });
 
   it('does not trip the guard on legitimately large line-framed output', async () => {

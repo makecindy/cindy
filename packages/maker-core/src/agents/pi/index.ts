@@ -30,6 +30,7 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { piSupportedEfforts } from '@cindy/model-providers/pi-thinking-levels';
 import { readPiGlobalContext } from './global-context.js';
+import { scanPiSessionJsonl } from './session-jsonl-scan.js';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -4286,6 +4287,7 @@ export class PiAgent extends BaseAgent {
       let input: Record<string, unknown> = {};
       let resolvedWritePath: string | null | undefined;
       let resolvedWritableRoots: string[] | null | undefined;
+      let controlPlaneWrite = false;
       const approvalPayload = approval.method === 'input'
         ? approval.placeholder
         : approval.message;
@@ -4296,6 +4298,7 @@ export class PiAgent extends BaseAgent {
             input?: unknown;
             resolvedWritePath?: unknown;
             resolvedWritableRoots?: unknown;
+            controlPlaneWrite?: unknown;
           };
           if (typeof payload.toolName === 'string' && payload.toolName) toolName = payload.toolName;
           if (payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
@@ -4316,6 +4319,7 @@ export class PiAgent extends BaseAgent {
               ? payload.resolvedWritableRoots as string[]
               : null;
           }
+          controlPlaneWrite = payload.controlPlaneWrite === true;
         } catch {
           /* malformed permission payload remains a generic, deny-by-default prompt */
         }
@@ -4344,7 +4348,12 @@ export class PiAgent extends BaseAgent {
       const requestUserDecision = async (
         options: { forcePrompt: boolean; unavailableHandoff?: boolean },
       ): Promise<PiPermissionResolution | null> => {
-        if (permissionMode === 'bypassPermissions' && !adopted && !turnPolicyForcePrompt) return 'allow';
+        if (
+          permissionMode === 'bypassPermissions'
+          && !adopted
+          && !turnPolicyForcePrompt
+          && !options.forcePrompt
+        ) return 'allow';
         // Session wires the resolver immediately after handle creation. Keep a
         // very fast Ask/gray request pending until that wiring exists instead
         // of turning startup ordering into a denial. The runner timeout remains
@@ -4360,7 +4369,9 @@ export class PiAgent extends BaseAgent {
             resolve(resolution);
           };
           unregister = registerPendingPrompt(requestId, {
-            forcePrompt: adopted || turnPolicyForcePrompt,
+            // control-plane writes must keep forcePrompt across a Full Access
+            // hot-switch; otherwise dismissAllPendingPrompts would allow them.
+            forcePrompt: options.forcePrompt || adopted || turnPolicyForcePrompt,
             ...(options.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // Durable child: losing the surface parks the question.
             deferWhenSurfaceLost: true,
@@ -4427,6 +4438,7 @@ export class PiAgent extends BaseAgent {
       const resolveConfirmation = async (): Promise<PiPermissionResolution | null> => {
         // Review resumed child evidence against current user authorization.
         // Other modes retain the independent confirmation for adopted work.
+        if (controlPlaneWrite) return requestUserDecision({ forcePrompt: true });
         if (adopted && permissionMode !== 'auto') return requestUserDecision({ forcePrompt: true });
         if (permissionMode === 'bypassPermissions') {
           return turnPolicyForcePrompt ? 'system-deny' : 'allow';
@@ -5386,7 +5398,39 @@ export class PiAgent extends BaseAgent {
       throw err;
     }
 
-    const readPersistedPlanMode = async (): Promise<boolean | null> => {
+    let localSessionScanCache:
+      | { file: string; mtimeMs: number; size: number; scan: NonNullable<Awaited<ReturnType<typeof scanPiSessionJsonl>>> }
+      | null = null;
+
+    const readLocalSessionScan = async () => {
+      // 远端 sessionFile 不在本机;带图长任务的 get_entries 会撑破 16 Mi 字符 JSONL 帧。
+      if (remote || typeof sdkSessionId !== 'string' || !path.isAbsolute(sdkSessionId)) return null;
+      try {
+        const stat = await fs.stat(sdkSessionId);
+        if (
+          localSessionScanCache
+          && localSessionScanCache.file === sdkSessionId
+          && localSessionScanCache.mtimeMs === stat.mtimeMs
+          && localSessionScanCache.size === stat.size
+        ) {
+          return localSessionScanCache.scan;
+        }
+        const scan = await scanPiSessionJsonl(sdkSessionId);
+        if (scan) {
+          localSessionScanCache = {
+            file: sdkSessionId,
+            mtimeMs: stat.mtimeMs,
+            size: stat.size,
+            scan,
+          };
+        }
+        return scan;
+      } catch {
+        return null;
+      }
+    };
+
+    const readPersistedPlanModeFromEntries = async (): Promise<boolean | null> => {
       const entriesResp = await proc.request({ type: 'get_entries' });
       if (!entriesResp.success) return null;
       const entries =
@@ -5408,24 +5452,36 @@ export class PiAgent extends BaseAgent {
       return false;
     };
 
+    const readPersistedPlanMode = async (): Promise<boolean | null> => {
+      const local = await readLocalSessionScan();
+      if (local) return local.lastPlanModeEnabled ?? false;
+      return readPersistedPlanModeFromEntries();
+    };
+
+    const readPiUserEntryIdsFromEntries = async (): Promise<Set<string> | null> => {
+      const response = await proc.request({ type: 'get_entries' });
+      if (!response.success) return null;
+      const data = typeof response.data === 'object' && response.data !== null ? (response.data as Record<string, unknown>) : null;
+      // malformed success 不能当“空历史”，否则下一次正常读取会把任意既有 user entry
+      // 误判成刚发送的消息并串错附件。
+      if (!Array.isArray(data?.entries)) return null;
+      const entries = data.entries;
+      const ids = new Set<string>();
+      for (const raw of entries) {
+        if (typeof raw !== 'object' || raw === null) continue;
+        const entry = raw as Record<string, unknown>;
+        if (entry.type !== 'message' || typeof entry.id !== 'string' || entry.id.length === 0) continue;
+        const message = typeof entry.message === 'object' && entry.message !== null ? (entry.message as Record<string, unknown>) : null;
+        if (message?.role === 'user') ids.add(entry.id);
+      }
+      return ids;
+    };
+
     const readPiUserEntryIds = async (): Promise<Set<string> | null> => {
       try {
-        const response = await proc.request({ type: 'get_entries' });
-        if (!response.success) return null;
-        const data = typeof response.data === 'object' && response.data !== null ? (response.data as Record<string, unknown>) : null;
-        // malformed success 不能当“空历史”，否则下一次正常读取会把任意既有 user entry
-        // 误判成刚发送的消息并串错附件。
-        if (!Array.isArray(data?.entries)) return null;
-        const entries = data.entries;
-        const ids = new Set<string>();
-        for (const raw of entries) {
-          if (typeof raw !== 'object' || raw === null) continue;
-          const entry = raw as Record<string, unknown>;
-          if (entry.type !== 'message' || typeof entry.id !== 'string' || entry.id.length === 0) continue;
-          const message = typeof entry.message === 'object' && entry.message !== null ? (entry.message as Record<string, unknown>) : null;
-          if (message?.role === 'user') ids.add(entry.id);
-        }
-        return ids;
+        const local = await readLocalSessionScan();
+        if (local) return local.userEntryIds;
+        return await readPiUserEntryIdsFromEntries();
       } catch (error) {
         this.deps.logger.warn('pi user-entry snapshot failed (attachment link unavailable)', {
           message: error instanceof Error ? error.message : String(error),
@@ -5437,7 +5493,7 @@ export class PiAgent extends BaseAgent {
     const reportAcceptedPiUserEntry = async (before: Set<string> | null, callback: SendOptions['onTranscriptUserEntry']): Promise<void> => {
       if (!before || !callback) return;
       // prompt RPC 在 Pi 的 preflight acceptance 点返回，entry 紧接着才 append。短轮询
-      // get_entries，按“此前不存在的 user entry”取稳定 id；捕获失败只影响附件分支恢复，
+      // session JSONL / get_entries，按“此前不存在的 user entry”取稳定 id；捕获失败只影响附件分支恢复，
       // 不能把已被 Pi 接受的发送伪报成失败。
       for (let attempt = 0; attempt < 25; attempt += 1) {
         const current = await readPiUserEntryIds();
@@ -5783,13 +5839,13 @@ export class PiAgent extends BaseAgent {
 
       // plan 镜像与 pi 持久态对齐(resume 关键):pi 的 plan-mode 扩展在 session_start 会从
       // session entry 自恢复 planModeEnabled,但不发 notify。若镜像固定为 false 而 pi 实为 true,
-      // 由于 /plan 是 toggle + setPlanMode 幂等短路,会导致方向反转或关不掉。故从 get_entries
-      // 读最后一条 plan-mode custom entry 的 enabled 校正镜像(get_entries 已验证暴露该 entry)。
+      // 由于 /plan 是 toggle + setPlanMode 幂等短路,会导致方向反转或关不掉。故从本机 session
+      // JSONL(远端仍走 get_entries)读活动分支上最后一条 plan-mode custom entry 的 enabled 校正镜像。
       if (planModeExtAvailable) {
         try {
           planModeActive = await readPersistedPlanMode();
           if (planModeActive === null) {
-            this.deps.logger.warn('pi plan-mode state sync: get_entries failed or returned an invalid state; plan mirror remains unknown');
+            this.deps.logger.warn('pi plan-mode state sync: persisted session scan failed; plan mirror remains unknown');
           }
         } catch (err) {
           planModeActive = null;
@@ -8104,6 +8160,7 @@ export class PiAgent extends BaseAgent {
       let resolvedCredentialPaths: string[] | null | undefined;
       let resolvedWritePath: string | null | undefined;
       let resolvedWritableRoots: string[] | null | undefined;
+      let controlPlaneWrite = false;
       try {
         const rawPayload = method === 'input' ? event.placeholder : event.message;
         const payload = JSON.parse(typeof rawPayload === 'string' ? rawPayload : '{}') as {
@@ -8112,6 +8169,7 @@ export class PiAgent extends BaseAgent {
           resolvedCredentialPaths?: unknown;
           resolvedWritePath?: unknown;
           resolvedWritableRoots?: unknown;
+          controlPlaneWrite?: unknown;
         };
         if (typeof payload.toolName === 'string' && payload.toolName.length > 0) toolName = payload.toolName;
         if (payload.input && typeof payload.input === 'object') input = payload.input as Record<string, unknown>;
@@ -8137,6 +8195,7 @@ export class PiAgent extends BaseAgent {
             ? payload.resolvedWritableRoots as string[]
             : null;
         }
+        controlPlaneWrite = payload.controlPlaneWrite === true;
       } catch {
         /* keep defaults */
       }
@@ -8338,6 +8397,13 @@ export class PiAgent extends BaseAgent {
         // 本轮策略命中时不吃 Full Access 短路:policy + bypassPermissions 已在 send 预检
         // 拒绝、且 policy turn 持 host lease 堵死热切到 bypass,故此处 turnPolicyForcePrompt
         // 为真本不可达;仍显式 fail-closed,避免任一上游闸门被绕过就静默放行破坏性调用。
+        if (controlPlaneWrite) {
+          sendPermissionResolution(await requestUserConfirmation({
+            forcePrompt: true,
+            requireExplicitDecision: true,
+          }));
+          return;
+        }
         if (isFullAccessNow() && !turnPolicyForcePrompt) {
           sendPermissionResolution('allow');
           return;

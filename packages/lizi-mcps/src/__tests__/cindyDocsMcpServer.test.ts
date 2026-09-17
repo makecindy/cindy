@@ -27,6 +27,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
+import { setSessionPathAuthorizer } from '../session-path-auth.js';
 import {
   DOCX_MAX_MARKDOWN_BYTES,
   DOCX_MAX_SUBTITLE_BYTES,
@@ -65,7 +66,7 @@ it('preserves the authoritative root including trailing whitespace', async () =>
   await fs.mkdir(root);
   await fs.mkdir(root.trim());
   const output = await prepareOutputPath(resolveSessionRoot(sessionCtx({ workingDir: root })), 'result.txt', false);
-  await fs.writeFile(output, 'exact');
+  await fs.writeFile(output.abs, 'exact');
   expect(await fs.readFile(path.join(root, 'result.txt'), 'utf8')).toBe('exact');
   await expect(fs.stat(path.join(root.trim(), 'result.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -76,6 +77,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setSessionPathAuthorizer(undefined);
   vi.restoreAllMocks();
   while (created.length > 0) {
     const dir = created.pop()!;
@@ -1215,6 +1217,78 @@ describe('路径边界与覆盖语义', () => {
     await expect(fs.stat(path.join(outside, 'escaped.docx'))).rejects.toThrow();
   });
 
+  it('Host 授权后可以把文档写到工作目录外', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-'));
+    created.push(outside);
+    const outPath = path.join(await fs.realpath(outside), 'granted.docx');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(outPath);
+      expect(request.operation).toBe('write');
+      expect(request.toolName).toBe('make_docx');
+      return { allowed: true, isCurrent: () => true };
+    });
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# granted',
+      outPath,
+    });
+    expect(result.ok).toBe(true);
+    await expect(fs.stat(outPath)).resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it('Host 授权经工作目录链接时写入真实目标', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-link-granted-'));
+    created.push(outside);
+    await fs.symlink(
+      outside,
+      path.join(workdir, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const canonical = path.join(await fs.realpath(outside), 'escaped.docx');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(canonical);
+      return { allowed: true, isCurrent: () => true };
+    });
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# escaped',
+      outPath: 'link/escaped.docx',
+    });
+    expect(result.ok).toBe(true);
+    await expect(fs.stat(canonical)).resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it('Host 拒绝后工作目录外的文档写入仍失败', async () => {
+    const outside = path.join(os.tmpdir(), 'cindy-docs-denied.docx');
+    setSessionPathAuthorizer(async () => ({ allowed: false, reason: '审阅拒绝了这次越界写入。' }));
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# denied',
+      outPath: outside,
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect((result.data as Record<string, string>).hint).toContain('审阅拒绝');
+    await expect(fs.stat(outside)).rejects.toThrow();
+  });
+
+  it('授权后权限失效则不再落盘', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-grant-'));
+    created.push(outside);
+    const outPath = path.join(await fs.realpath(outside), 'stale.docx');
+    const isCurrent = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    setSessionPathAuthorizer(async () => ({ allowed: true, isCurrent }));
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# stale',
+      outPath,
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect((result.data as Record<string, string>).hint).toContain('当前任务权限');
+    await expect(fs.stat(outPath)).rejects.toThrow();
+  });
+
   it('同名文件默认不覆盖,overwrite:true 才覆盖', async () => {
     const client = await connect();
     const first = await callTool(client, 'make_docx', {
@@ -1240,6 +1314,46 @@ describe('路径边界与覆盖语义', () => {
     });
     expect(forced.ok).toBe(true);
     expect(await unzip(forced.path as string, 'word/document.xml')).toContain('第二版');
+  });
+
+  it('打开外部输入前授权代次失效则拒绝读取', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-open-'));
+    created.push(outsideDir);
+    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
+    await fs.writeFile(granted, 'granted-bytes');
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true, isCurrent: () => false },
+    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+
+  it('获批的外部输入被换成符号链接后不再跟读', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-read-'));
+    created.push(outsideDir);
+    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
+    const other = path.join(await fs.realpath(outsideDir), 'other.txt');
+    await fs.writeFile(granted, 'granted-bytes');
+    await fs.writeFile(other, 'other-bytes');
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true },
+    )).resolves.toEqual(Buffer.from('granted-bytes'));
+
+    await fs.rm(granted);
+    await fs.symlink(other, granted);
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true },
+    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
   });
 
   it('输入读取只接受与边界校验相同的已打开文件身份', async () => {

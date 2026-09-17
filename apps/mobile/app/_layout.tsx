@@ -1,3 +1,4 @@
+import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import {
@@ -432,6 +433,7 @@ function RootLayout() {
                 hidden={endpointGate.status === 'error' || forcedUpdate !== null}
               >
                 <ConnectionNoticeProvider>{body}</ConnectionNoticeProvider>
+                <AndroidUpdateSheet />
               </StartupSplashOverlay>
             </MobileLoginHandoffProvider>
           </LocaleProvider>

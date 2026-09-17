@@ -198,7 +198,16 @@ const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])
 ];
 
 function hostMatches(hostname: string, brandHost: string): boolean {
-  if (brandHost === 'aiplatform.googleapis.com' && hostname.endsWith('-aiplatform.googleapis.com')) return true;
+  if (brandHost === 'aiplatform.googleapis.com') {
+    return hostname === brandHost
+      || hostname.endsWith('-aiplatform.googleapis.com')
+      || /^aiplatform\.(us|eu)\.rep\.googleapis\.com$/.test(hostname);
+  }
+  if (brandHost === 'openai.azure.com') {
+    return hostname === brandHost
+      || hostname.endsWith('.openai.azure.com')
+      || hostname.endsWith('.cognitiveservices.azure.com');
+  }
   if (brandHost === 'ai-gateway.vercel.sh') return hostname === brandHost;
   return hostname === brandHost || hostname.endsWith(`.${brandHost}`);
 }

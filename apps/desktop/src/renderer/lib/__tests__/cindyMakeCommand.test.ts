@@ -154,18 +154,23 @@ describe('native environment-check entry', () => {
   ])(
     'starts the same diagnostics without a connected model: $text',
     async ({ text, invocation }) => {
-      expect(await tryStartCindyMakeCommand(input({ text, agentKind: null }))).toEqual({
-        kind: 'started',
-        sessionId: 'source-task',
-      });
-      expect(h.ensureTask).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'source-task' }),
-      );
-      expect(h.start).toHaveBeenCalledExactlyOnceWith('source-task', invocation);
+      const result = await tryStartCindyMakeCommand(input({ text, agentKind: null }));
+      if (invocation.command === 'cindy-make') {
+        expect(result).toMatchObject({
+          kind: 'preflight',
+          request: 'fix scrolling',
+          sessionId: 'source-task',
+        });
+        expect(h.ensureTask).not.toHaveBeenCalled();
+        expect(h.start).not.toHaveBeenCalled();
+      } else {
+        expect(result).toEqual({ kind: 'started', sessionId: 'source-task' });
+        expect(h.start).toHaveBeenCalledExactlyOnceWith('source-task', invocation);
+      }
     },
   );
 
-  it('passes home preferences only to task creation and starts a persistent timeline card', async () => {
+  it('returns home preferences for the preflight without creating a task', async () => {
     h.ensureTask.mockResolvedValue('home-task');
     const createOptions = {
       workspaceKind: 'dialogue',
@@ -178,19 +183,13 @@ describe('native environment-check entry', () => {
       planModeEnabled: true,
     } as const;
     expect(await tryStartCindyMakeCommand(input({ sessionId: undefined, createOptions }))).toEqual({
-      kind: 'started',
-      sessionId: 'home-task',
-    });
-    expect(h.ensureTask).toHaveBeenCalledWith({
+      kind: 'preflight',
       sessionId: undefined,
-      createOptions,
-      title: 'fix scrolling',
-      isCurrent: expect.any(Function),
-    });
-    expect(h.start).toHaveBeenCalledWith('home-task', {
-      command: 'cindy-make',
       request: 'fix scrolling',
+      createOptions,
     });
+    expect(h.ensureTask).not.toHaveBeenCalled();
+    expect(h.start).not.toHaveBeenCalled();
   });
 
   it.each(['cindy-make', 'cindy-make-doctor'])(
@@ -243,7 +242,11 @@ describe('native environment-check entry', () => {
         else current = false;
         return 'late-task';
       });
-      expect(await tryStartCindyMakeCommand(input({ isCurrent: () => current }))).toEqual({
+      expect(
+        await tryStartCindyMakeCommand(
+          input({ text: '/cindy-make-doctor', isCurrent: () => current }),
+        ),
+      ).toEqual({
         kind: 'stale',
       });
       expect(h.start).not.toHaveBeenCalled();
@@ -252,7 +255,9 @@ describe('native environment-check entry', () => {
 
   it('returns a sanitized failure if task creation fails', async () => {
     h.ensureTask.mockRejectedValue(new Error('private error details'));
-    expect(await tryStartCindyMakeCommand(input())).toEqual({ kind: 'failed' });
+    expect(await tryStartCindyMakeCommand(input({ text: '/cindy-make-doctor' }))).toEqual({
+      kind: 'failed',
+    });
     expect(h.start).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import {
+  captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
+} from '../device-link/broadcast-tap.js';
 import type { DesktopCommandContext, DesktopCommandDefinition } from '../commands/registry.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -88,6 +92,7 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
         return { success: true };
       }
       const startedAt = Date.now();
+      const owner = captureDataOwnerBroadcastScope();
       const timeoutMs = name === 'cindy-make' ? 20 * 60_000 : 60_000;
       // Presence (including empty text) distinguishes the chat workflow from Settings preparation.
       const workflow = name === 'cindy-make' && ctx.makeRequest !== undefined && !ctx.makeAction;
@@ -121,7 +126,8 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
           ...(workflow ? { upstream: report.upstream ?? latest.upstream } : {}),
           ...(ctx.forceManagedTools ? { forceManagedTools: true } : {}),
         };
-        deps.publish(ctx, latest);
+        cindyMakeManager.setReport(latest, () => isDataOwnerBroadcastScopeCurrent(owner));
+        if (isDataOwnerBroadcastScopeCurrent(owner)) deps.publish(ctx, latest);
       };
       let managerOperation: CindyMakeOperationHandle<T>;
       try {

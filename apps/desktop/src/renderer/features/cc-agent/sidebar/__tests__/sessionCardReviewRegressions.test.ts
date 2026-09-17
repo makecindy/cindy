@@ -7,7 +7,10 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
-const sessionOrdinalBadgeSource = readFileSync(resolve(sidebarDir, 'sessionOrdinalBadges.tsx'), 'utf8');
+const sessionOrdinalBadgeSource = readFileSync(
+  resolve(sidebarDir, 'sessionOrdinalBadges.tsx'),
+  'utf8',
+);
 const railNavSource = readFileSync(resolve(sidebarDir, 'RailNav.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(
   resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
@@ -44,7 +47,7 @@ describe('SessionCard review regressions', () => {
 
   it('keeps awaiting text in list mode previews', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
+      'const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
     expect(sessionCardSource).toContain('{listPreview}');
   });
@@ -237,11 +240,13 @@ describe('SessionCard review regressions', () => {
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
+      'const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
-    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? bodyPreview');
+    expect(sessionCardSource).toContain(
+      'const cardPreview = awaitingText ?? preparationText ?? bodyPreview',
+    );
     expect(sessionCardSource).not.toContain(
-      'const cardPreview = awaitingText ?? runningDetail ?? bodyPreview',
+      'const cardPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
   });
 

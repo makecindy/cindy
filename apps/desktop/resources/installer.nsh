@@ -7,7 +7,17 @@
 ; 接受);dev 仍独立名,dev 安装器绝不误伤同机并存的正式安装。注册表键名
 ; Windows 大小写不敏感,shell 键 "Cindy" 与历史写入的 "cindy" 是同一个键,
 ; 行为零变化。
+!include "installer-directory.nsh"
+
+!ifndef BUILD_UNINSTALLER
 !macro customInit
+  !insertmacro cindyDirectoryInit
+!macroend
+
+; Run only after the directory preflight, immediately before replacing the app.
+; The upstream install section skips this hook in elevated inner instances;
+; cindyDirectoryBeforeInstall invokes it for those instances instead.
+!macro customCheckAppRunning
   ; Check if the app is already running
   check_running:
     nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
@@ -15,8 +25,9 @@
     ${If} $R0 == 0
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
         "${PRODUCT_FILENAME} 正在运行，请先关闭后再继续安装。$\n$\n点击「确定」将在关闭后继续。" \
-        IDOK kill_app
-      Abort
+        /SD IDCANCEL IDOK kill_app
+      SetErrorLevel 1602
+      Quit
       kill_app:
         nsProcess::_KillProcess "${APP_EXECUTABLE_FILENAME}"
         Sleep 1000
@@ -35,6 +46,7 @@
   ; 同步清掉 PinnedTaskbar 里的副本（任务栏固定项也会缓存图标）
   Delete "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\${SHORTCUT_NAME}.lnk"
 !macroend
+!endif
 
 !macro customInstall
   ; 注册文件夹右键菜单 "通过 <区域名> 打开" (与 main/folderContextMenu.ts 写的是同一组键)。
