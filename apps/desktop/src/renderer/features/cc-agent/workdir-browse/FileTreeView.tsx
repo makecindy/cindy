@@ -223,23 +223,35 @@ function alignRowHorizontally(container: HTMLElement | null, relPath: string): b
 const HORIZONTAL_ALIGN_MAX_FRAMES = 120;
 
 /**
- * 逐帧重试，直到目标行进入 DOM 后再对齐横轴。
+ * 逐帧重试，直到目标行进入 DOM 后再对齐横轴，返回取消函数。
  *
  * 目标行离当前虚拟窗口较远时，要等 smooth 纵向滚动把它带进 overscan 才会挂载 ——
  * 「调一次 / 等下一帧 / 等固定 320ms」这种固定时刻的尝试可能全部跑在挂载之前，
  * 结果是纵向跳到位、深层长路径仍留在横向视口之外。这里改成挂载驱动：每帧试一次，
  * 行一出现就对齐；上限见上（不常驻，不给热路径留后台任务）。
+ *
+ * 取消是必需的：连续两次导航（用户连点两个搜索结果）时旧任务会在旧行稍后挂载时
+ * 改写共享容器的 scrollLeft，把横向视口从最新目标拉回旧行。
  */
-function alignRowHorizontallyWhenMounted(container: HTMLElement | null, relPath: string): void {
-  if (!container) return;
+function startRowHorizontalAlign(container: HTMLElement | null, relPath: string): () => void {
+  if (!container) return () => {};
   let frames = 0;
+  let cancelled = false;
+  let rafId: number | null = null;
   const attempt = (): void => {
+    rafId = null;
+    if (cancelled) return;
     if (alignRowHorizontally(container, relPath)) return;
     if (frames >= HORIZONTAL_ALIGN_MAX_FRAMES || !container.isConnected) return;
     frames += 1;
-    requestAnimationFrame(attempt);
+    rafId = requestAnimationFrame(attempt);
   };
   attempt();
+  return () => {
+    cancelled = true;
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    rafId = null;
+  };
 }
 
 export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(function FileTreeView(
@@ -317,6 +329,8 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
 
   // scroll 容器 ref —— 虚拟器与滚动锚点都以它为坐标原点。
   const containerRef = useRef<HTMLDivElement>(null);
+  // 当前正在等目标行挂载的横轴对齐任务（取消上一次用，见 startRowHorizontalAlign）。
+  const horizontalAlignCancelRef = useRef<(() => void) | null>(null);
 
   // 行内编辑行（新建 / 重命名）必须始终留在虚拟窗口里：输入值存在 InlineTreeRow
   // 自己的 state 里、提交靠 blur —— 行被虚拟化回收时元素从 DOM 移除，浏览器不会
@@ -405,9 +419,19 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
         // 横轴：目标行可能仍停在视口右侧之外（深层缩进 + 长名字把行撑宽），
         // 纵向到位后把该行横向也拉进可见区。行是虚拟器按需挂载的（远距离跳跃时
         // 要等 smooth 滚动把它带进 overscan），所以逐帧等到它出现再对齐。
-        alignRowHorizontallyWhenMounted(containerRef.current, relPath);
+        // 先取消上一次还没完成的导航：否则旧行稍后挂载时会把横向视口拉回去。
+        horizontalAlignCancelRef.current?.();
+        horizontalAlignCancelRef.current = startRowHorizontalAlign(containerRef.current, relPath);
       },
     }),
+    [],
+  );
+
+  // 卸载时取消还在逐帧等待的对齐任务（不再对已卸载的容器写 scrollLeft）。
+  useEffect(
+    () => () => {
+      horizontalAlignCancelRef.current?.();
+    },
     [],
   );
 

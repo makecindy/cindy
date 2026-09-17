@@ -54,6 +54,46 @@ const deepEntries: DirEntry[] = [
 const deeperEntries: DirEntry[] = [
   { name: 'l3', relPath: 'deep/l2/l3', type: 'directory', size: 0, mtimeMs: 4 },
 ];
+const otherEntries: DirEntry[] = [
+  { name: 'l2', relPath: 'other/l2', type: 'directory', size: 0, mtimeMs: 5 },
+];
+const otherDeeperEntries: DirEntry[] = [
+  { name: 'l3', relPath: 'other/l2/l3', type: 'directory', size: 0, mtimeMs: 6 },
+];
+
+/**
+ * 120 行文件 + deep / other 两棵深目录：目标行（`deep/l2/l3` = 行 122、
+ * `other/l2/l3` = 行 125）都远在 300px 视口（约 10 行 + overscan）之外，
+ * 初始不在 DOM 里 —— 用来覆盖「目标行要靠虚拟滚动才挂载」那条路径。
+ */
+function makeFarTargetsTree(): UseFileTreeReturn {
+  const many: DirEntry[] = Array.from({ length: 120 }, (_, i) => ({
+    name: `f${i}.ts`,
+    relPath: `f${i}.ts`,
+    type: 'file',
+    size: 1,
+    mtimeMs: 0,
+  }));
+  return {
+    entries: new Map([
+      ['', [...many, rootEntries[1], { name: 'other', relPath: 'other', type: 'directory', size: 0, mtimeMs: 5 }]],
+      ['deep', deepEntries],
+      ['deep/l2', deeperEntries],
+      ['other', otherEntries],
+      ['other/l2', otherDeeperEntries],
+    ]),
+    expanded: new Set(['', 'deep', 'deep/l2', 'other', 'other/l2']),
+    loadingPaths: new Set(),
+    initialLoading: false,
+    loadError: null,
+    showIgnoredDirsSupported: true,
+    storeKey: 'test-store',
+    toggleFolder: vi.fn(),
+    collapseAll: vi.fn(),
+    refresh: vi.fn(async () => undefined),
+    expandToPath: vi.fn(async () => undefined),
+  };
+}
 
 function makeTree(): UseFileTreeReturn {
   return {
@@ -169,37 +209,11 @@ describe('FileTreeView 横向滚动契约', () => {
 
   it('目标行还没进虚拟窗口时，挂载后仍会把横轴对齐（不依赖固定时刻的尝试）', async () => {
     setTestViewportSize(300);
-    // 目标行排在 120 个文件之后（行号 122），远超 300px 视口（约 10 行 +
-    // overscan），初始根本不在 DOM 里 —— 「调一次 / 下一帧 / 固定 320ms」这类
-    // 固定时刻的尝试会全部跑在挂载之前。
-    const many: DirEntry[] = Array.from({ length: 120 }, (_, i) => ({
-      name: `f${i}.ts`,
-      relPath: `f${i}.ts`,
-      type: 'file',
-      size: 1,
-      mtimeMs: 0,
-    }));
     const ref = createRef<FileTreeViewHandle>();
     const { container } = render(
       <FileTreeView
         ref={ref}
-        tree={{
-          entries: new Map([
-            ['', [...many, rootEntries[1]]],
-            ['deep', deepEntries],
-            ['deep/l2', deeperEntries],
-          ]),
-          expanded: new Set(['', 'deep', 'deep/l2']),
-          loadingPaths: new Set(),
-          initialLoading: false,
-          loadError: null,
-          showIgnoredDirsSupported: true,
-          storeKey: 'test-store',
-          toggleFolder: vi.fn(),
-          collapseAll: vi.fn(),
-          refresh: vi.fn(async () => undefined),
-          expandToPath: vi.fn(async () => undefined),
-        }}
+        tree={makeFarTargetsTree()}
         scrollScope="test-tab"
         selectedPath={null}
         onSelectFile={vi.fn()}
@@ -223,6 +237,38 @@ describe('FileTreeView 横向滚动契约', () => {
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
 
     expect(scroll.scrollLeft).toBe(120);
+  });
+
+  it('连续两次导航时，旧目标挂载不会把横轴从最新目标拉回去', async () => {
+    setTestViewportSize(300);
+    const ref = createRef<FileTreeViewHandle>();
+    const { container } = render(
+      <FileTreeView
+        ref={ref}
+        tree={makeFarTargetsTree()}
+        scrollScope="test-tab"
+        selectedPath={null}
+        onSelectFile={vi.fn()}
+      />,
+    );
+    const scroll = container.firstElementChild as HTMLElement;
+
+    // 用户连点两个搜索结果：两次导航的目标都还没挂载。
+    ref.current?.scrollToPath('deep/l2/l3');
+    ref.current?.scrollToPath('other/l2/l3');
+
+    // 只有旧目标进了视口（新目标还没到）——它的对齐任务必须已经失效。
+    scroll.scrollTop = 122 * 29;
+    fireEvent.scroll(scroll);
+    const staleRow = scroll.querySelector<HTMLElement>('[data-relpath="deep/l2/l3"]');
+    expect(staleRow).toBeTruthy();
+    scroll.getBoundingClientRect = () => rect(0, 200);
+    staleRow!.getBoundingClientRect = () => rect(40, 700);
+
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    // 旧任务若没被取消：这里会变成 500（旧行右缘 700 - 容器右缘 200）。
+    expect(scroll.scrollLeft).toBe(0);
   });
 });
 
