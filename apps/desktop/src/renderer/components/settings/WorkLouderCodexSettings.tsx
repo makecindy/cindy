@@ -1,3 +1,4 @@
+import { Slider } from '@/components/ui/slider';
 import {
   useEffect,
   useMemo,
@@ -269,9 +270,9 @@ export function WorkLouderCodexSettings({
     return () => unsubscribe?.();
   }, []);
 
-  const commitBrightness = (): void => {
-    if (!state || brightnessDraft === state.settings.lightingBrightness) return;
-    void setSettings({ lightingBrightness: brightnessDraft });
+  const commitBrightness = ([brightness]: number[]): void => {
+    if (!state || saving || brightness === state.settings.lightingBrightness) return;
+    void setSettings({ lightingBrightness: brightness });
   };
 
   const patchLayout = (update: (layout: WorkLouderCodexLayout) => void): void => {
@@ -1004,18 +1005,15 @@ export function WorkLouderCodexSettings({
           description={t('settings.shortcuts.workLouderCodex.lighting.brightness.description')}
           control={
             <div className="flex min-w-[220px] items-center gap-3">
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={100}
                 step={10}
-                value={brightnessDraft}
+                value={[brightnessDraft]}
                 disabled={!state || saving}
-                onChange={(event) => setBrightnessDraft(Number(event.currentTarget.value))}
-                onPointerUp={commitBrightness}
-                onKeyUp={commitBrightness}
-                onBlur={commitBrightness}
-                className="h-1 flex-1 cursor-pointer accent-[var(--switch-track-on)] disabled:cursor-not-allowed disabled:opacity-50"
+                onValueChange={([brightness]) => setBrightnessDraft(brightness)}
+                onValueCommit={commitBrightness}
+                className="flex-1"
                 aria-label={t('settings.shortcuts.workLouderCodex.lighting.brightness.aria')}
               />
               <span className="w-10 text-right text-12 tabular-nums text-[var(--text-secondary)]">

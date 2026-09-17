@@ -28,6 +28,7 @@ import path from 'node:path';
 import { relocateClaudeSessionTranscripts } from '@cindy/maker-core';
 
 import { getDbClient } from '../localDb/client/current.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import { createLogger } from '../logger.js';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors.js';
 
@@ -66,9 +67,9 @@ function isRealSdkSessionId(id: string | null): id is string {
  * 失败),不守卫的话 json_extract 抛 malformed JSON 会让整次迁移被外层吞掉;
  * meta 只是补充来源,查询失败也不应拖垮核心迁移(DB id + 内存 id 已覆盖 resume)。
  */
-async function listMetaSdkSessionIds(sessionId: string): Promise<string[]> {
+async function listMetaSdkSessionIds(sessionId: string, client?: DbClient): Promise<string[]> {
   try {
-    const metaRows = await getDbClient().query<{ sid: string | null }>(
+    const metaRows = await (client ?? getDbClient()).query<{ sid: string | null }>(
       `SELECT DISTINCT json_extract(agent_meta, '$.sdkSessionId') AS sid
        FROM messages
        WHERE session_id = ? AND agent_meta IS NOT NULL AND json_valid(agent_meta)`,
@@ -133,27 +134,33 @@ export async function relocateClaudeTranscriptsForSessionMove(
   sessionId: string,
   oldWorkingDir: string,
   newWorkingDir: string,
+  scope?: { client: DbClient; assertCurrent: () => void },
 ): Promise<RelocateForSessionMoveResult> {
   let persistedSdkSessionId: string | null = null;
   try {
+    scope?.assertCurrent();
+    const client = scope?.client ?? getDbClient();
+    const bridge = liveCcSessionBridge;
+    const projectsRoot = path.join(defaultClaudeConfigDirCandidates()[0], 'projects');
     // 1. 内存 id 必须在关闭 handle 前取;SDK 未回填时是 '<pending>' 占位符,过滤掉
     //    (占位符不持久化、不参与迁移,但 handle 本身仍要关——它连的是旧 cwd)。
-    const rawLiveId = liveCcSessionBridge?.resolveSdkSessionId(sessionId) ?? null;
+    const rawLiveId = bridge?.resolveSdkSessionId(sessionId) ?? null;
     const liveId = isRealSdkSessionId(rawLiveId) ? rawLiveId : null;
 
     // 2. DB 旧 id 必须在被覆盖前读走——它可能不在 messages meta 里(消息未落库),
     //    先 UPDATE 再读会把它从迁移集合里漏掉(PR #472 Greptile review 指出)。
     const dbId =
       (
-        await getDbClient().queryOne<{ sdkSessionId: string | null }>(
+        await client.queryOne<{ sdkSessionId: string | null }>(
           'SELECT sdk_session_id AS sdkSessionId FROM sessions WHERE id = ? LIMIT 1',
           [sessionId],
         )
       )?.sdkSessionId ?? null;
 
     // 3. 内存 id 领先 DB 时持久化——handle 关闭后 lazy-create resume 只认 DB 值。
+    scope?.assertCurrent();
     if (liveId && liveId !== dbId) {
-      await getDbClient().exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', [
+      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', [
         liveId,
         sessionId,
       ]);
@@ -162,12 +169,15 @@ export async function relocateClaudeTranscriptsForSessionMove(
 
     // 4. 关闭活跃 handle:让 CLI flush 落盘,并杜绝旧 cwd 进程继续追加旧目录
     //    jsonl 造成的新旧目录分叉;下一次 send 以新 workingDir lazy-create resume。
-    if (liveCcSessionBridge) {
-      await liveCcSessionBridge.closeSession(sessionId);
+    scope?.assertCurrent();
+    if (bridge) {
+      await bridge.closeSession(sessionId);
     }
 
     const ids = new Set<string>([liveId, dbId].filter((id): id is string => !!id));
-    for (const sid of await listMetaSdkSessionIds(sessionId)) ids.add(sid);
+    scope?.assertCurrent();
+    for (const sid of await listMetaSdkSessionIds(sessionId, client)) ids.add(sid);
+    scope?.assertCurrent();
     const sdkSessionIds = [...ids];
     if (sdkSessionIds.length === 0) {
       log.debug('transcript relocation skipped: no sdk session ids', { sessionId });
@@ -176,7 +186,6 @@ export async function relocateClaudeTranscriptsForSessionMove(
     // projectsRoot 必须与 CLI 子进程实际使用的配置目录一致:dev 多实例下
     // auth-adapters 把 CLI 的 CLAUDE_CONFIG_DIR 重定向到 XDT_USER_DATA_DIR/claude-home,
     // 主进程 env 里却没有该变量(boot 期被 strip),不能让 maker-core 回退 ~/.claude。
-    const projectsRoot = path.join(defaultClaudeConfigDirCandidates()[0], 'projects');
     const result = await relocateClaudeSessionTranscripts({
       sdkSessionIds,
       oldWorkingDir,

@@ -205,6 +205,99 @@ describe('native input lifecycle', () => {
       await flush();
     }
   });
+  it.each(['ready', 'failure', 'stop'] as const)(
+    'keeps resumed input paused through preparation and handshake: %s',
+    async (outcome) => {
+      const first = childProcess();
+      const replacement = childProcess();
+      const failure = vi.fn();
+      let prepared!: (binary: string) => void;
+      const resolveBinary = vi
+        .fn()
+        .mockResolvedValueOnce('/test/helper')
+        .mockImplementationOnce(
+          () =>
+            new Promise<string>((resolve) => {
+              prepared = resolve;
+            }),
+        );
+      const spawn = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          queueMicrotask(() => first.child.stdout.emit('data', Buffer.from('ready\n')));
+          return first.typed;
+        })
+        .mockReturnValueOnce(replacement.typed);
+      const host = new DesktopInputHost(failure, { platform: 'darwin', resolveBinary, spawn });
+      const events = [{ kind: 'key' as const, code: 'Enter', down: true }];
+      await host.start('1');
+      const pausing = host.pauseForPrivacy();
+      first.exit();
+      const resume = await pausing;
+      const resuming = resume();
+      expect(() => host.input(events)).not.toThrow();
+      await Promise.resolve();
+      expect(() => host.input(events)).not.toThrow();
+      prepared('/test/helper');
+      await Promise.resolve();
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(() => host.input(events)).not.toThrow();
+      expect(replacement.child.stdin.write).not.toHaveBeenCalled();
+      if (outcome === 'stop') host.stop();
+      replacement.child.stdout.emit(
+        'data',
+        Buffer.from(outcome === 'failure' ? 'permission\n' : 'ready\n'),
+      );
+      await resuming;
+      if (outcome === 'ready') {
+        host.input(events);
+        await flush();
+        expect(replacement.child.stdin.write).toHaveBeenCalledOnce();
+      } else {
+        expect(() => host.input(events)).toThrow('DESKTOP_INPUT_UNAVAILABLE');
+        expect(replacement.child.stdin.write).not.toHaveBeenCalled();
+      }
+      expect(failure).toHaveBeenCalledTimes(outcome === 'failure' ? 1 : 0);
+      host.stop();
+      replacement.exit();
+      await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+    },
+  );
+  it.each([false, true])(
+    'pauses remote input while retaining ownership; disconnected=%s',
+    async (disconnected) => {
+      const children = [childProcess(), childProcess()];
+      let index = 0;
+      const spawn = vi.fn(() => {
+        const c = children[index++];
+        queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+        return c.typed;
+      });
+      const host = new DesktopInputHost(vi.fn(), {
+        platform: 'darwin',
+        resolveBinary: async () => '/test/helper',
+        spawn,
+      });
+      await host.start('1');
+      const pausing = host.pauseForPrivacy();
+      host.input([{ kind: 'key', code: 'Enter', down: true }]);
+      expect(children[0].child.stdin.write).not.toHaveBeenCalled();
+      children[0].exit();
+      const resume = await pausing;
+      await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+      if (disconnected) host.stop();
+      await resume();
+      expect(spawn).toHaveBeenCalledTimes(disconnected ? 1 : 2);
+      if (!disconnected) {
+        host.input([{ kind: 'key', code: 'Enter', down: true }]);
+        await flush();
+        expect(children[1].child.stdin.write).toHaveBeenCalled();
+      }
+      host.stop();
+      children[1].exit();
+      await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+    },
+  );
   it('keeps Agent input excluded until the old helper has actually exited', async () => {
     const c = childProcess();
     const host = new DesktopInputHost(vi.fn(), {

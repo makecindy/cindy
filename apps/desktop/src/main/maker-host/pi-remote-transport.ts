@@ -27,6 +27,8 @@
 import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+
 import type { RemoteHost, ExecStreamHandle } from '@cindy/maker-remote-ssh';
 import { probeRemoteAgent, probePiManager } from '@cindy/maker-remote-ssh';
 
@@ -65,6 +67,7 @@ export interface SshPiTransportOptions {
 }
 
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
+const MAX_STDERR_LINE_CHARS = 16 * 1024;
 
 // 轮 40-w4-t5 CRITICAL:key-aware 敏感字段名 —— 值形状正则覆盖不了 64-hex
 // sessionToken / 自定义 MCP header 值, 字段名命中即整体替换。
@@ -526,6 +529,8 @@ function createSshPiChannelTransport(
   const closeHandlers = new Set<PiCloseHandler>();
   const stderrHandlers = new Set<(line: string) => void>();
   const pendingWrites: Array<{ line: string; resolve: () => void; reject: (err: Error) => void }> = [];
+  let stderrBuffer = '';
+  let skippingOversizedStderr = false;
   /** stdout 行切分缓冲(ssh channel 文本块可能跨行/半行)。 */
   let stdoutBuffer = '';
   let skippingOversizedLine = false;
@@ -554,6 +559,8 @@ function createSshPiChannelTransport(
     if (closed) return;
     closed = true;
     flushStdoutTail();
+    if (!skippingOversizedStderr && stderrBuffer) emitStderrLine(stderrBuffer);
+    stderrBuffer = '';
     if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null; }
     clearBackpressureTimer();
     drainListenerAttached = false;
@@ -578,6 +585,36 @@ function createSshPiChannelTransport(
 
   const fireStderr = (line: string): void => {
     for (const handler of stderrHandlers) handler(line);
+  };
+
+  // SSH callbacks deliver chunks, whereas PiTransport promises complete lines.
+  // Redact only after framing; never expose a truncated secret from an oversized line.
+  const emitStderrLine = (line: string): void => {
+    if (!line.trim()) return;
+    const redacted = redactCredentialText(redactSensitiveText(line.replace(/\r$/, '')));
+    logger.warn('pi ssh stderr', { line: redacted.slice(0, 500) });
+    fireStderr(redacted);
+  };
+  const consumeStderr = (chunk: string): void => {
+    if (closed) return;
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf('\n', start);
+      const end = newline === -1 ? chunk.length : newline;
+      if (!skippingOversizedStderr) {
+        if (stderrBuffer.length + end - start > MAX_STDERR_LINE_CHARS) {
+          stderrBuffer = '';
+          skippingOversizedStderr = true;
+        } else {
+          stderrBuffer += chunk.slice(start, end);
+        }
+      }
+      if (newline === -1) break;
+      if (!skippingOversizedStderr) emitStderrLine(stderrBuffer);
+      stderrBuffer = '';
+      skippingOversizedStderr = false;
+      start = newline + 1;
+    }
   };
 
   /** 轮 23-H4 HIGH:背压感知的写入 —— channel.write 返回 false(ssh2 缓冲满)
@@ -761,16 +798,7 @@ function createSshPiChannelTransport(
       });
       envWritten = true;
       drainPending();
-      ch.onStderr((s) => {
-        const trimmed = s.trim();
-        if (trimmed) {
-          // 轮 40-w4-t5 CRITICAL:direct fallback 的 stderr 绕过 daemon 侧 scrub,
-          // 进桌面日志前 key-aware 脱敏(env 凭证/64-hex sessionToken)。
-          const redacted = redactCredentialText(trimmed);
-          logger.warn('pi ssh stderr', { line: redacted.slice(0, 500) });
-          fireStderr(redacted);
-        }
-      });
+      ch.onStderr(consumeStderr);
       ch.onClose((info) => {
         // 尾部 flush 统一由 fireClose 里的 flushStdoutTail 执行(幂等)——
         // 这里不再自己 flush:fireClose 可能已被其它路径(队列溢出/缓冲超限/

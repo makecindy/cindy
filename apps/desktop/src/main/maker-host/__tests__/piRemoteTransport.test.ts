@@ -340,6 +340,61 @@ describe('SSH stdout buffer overflow guard', () => {
     return { handlers, handle };
   }
 
+  it.each(['close', 'error'] as const)('redacts complete stderr lines and flushes the final tail before %s', async (end) => {
+    const { handlers, handle } = fakeChannel();
+    const logger = fakeLogger();
+    const transport = createSshPiTransport({
+      remoteHost: { id: 'test-host', execStream: vi.fn().mockResolvedValue(handle) } as unknown as RemoteHost,
+      binaryPath: '/remote/pi', args: ['--mode', 'rpc'], cwd: '/remote/workdir', env: {}, logger,
+    });
+    const lines: string[] = [];
+    transport.onStderr!((line) => lines.push(line));
+    const atClose: string[][] = [];
+    transport.onClose(() => atClose.push([...lines]));
+    await vi.waitFor(() => expect(handlers.onStderr).toBeDefined());
+    handlers.onStderr!('sessionTo');
+    handlers.onStderr!('ken=FAKE_OPAQUE_CREDENTIAL\r');
+    expect(lines).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalled();
+    handlers.onStderr!('\npassword="fake spaced');
+    handlers.onStderr!(' password"\nError: Failed to load extension placeholder');
+    if (end === 'close') handlers.onClose!({ code: 1, signal: null });
+    else handlers.onError!(new Error('channel failed'));
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('[REDACTED]');
+    expect(lines[1]).toContain('[REDACTED]');
+    expect(lines[2]).toBe('Error: Failed to load extension placeholder');
+    expect(atClose).toEqual([lines]);
+    const output = JSON.stringify({ lines, logs: logger.warn.mock.calls });
+    expect(output).not.toContain('FAKE_OPAQUE_CREDENTIAL');
+    expect(output).not.toContain('fake spaced');
+    expect(output).not.toContain(' password');
+    handlers.onStderr!('late secret');
+    expect(lines).toHaveLength(3);
+  });
+
+  it('discards an entire oversized stderr line including its later chunks, then resumes', async () => {
+    const { handlers, handle } = fakeChannel();
+    const logger = fakeLogger();
+    const transport = createSshPiTransport({
+      remoteHost: { id: 'test-host', execStream: vi.fn().mockResolvedValue(handle) } as unknown as RemoteHost,
+      binaryPath: '/remote/pi', args: ['--mode', 'rpc'], cwd: '/remote/workdir', env: {}, logger,
+    });
+    const lines: string[] = [];
+    transport.onStderr!((line) => lines.push(line));
+    await vi.waitFor(() => expect(handlers.onStderr).toBeDefined());
+    handlers.onStderr!('sessionToken=' + 'x'.repeat(16 * 1024));
+    handlers.onStderr!('FAKE_SECRET_TAIL');
+    expect(lines).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(handle.kill).not.toHaveBeenCalled();
+    handlers.onStderr!('\nError: missing extension\n');
+    handlers.onStderr!('password=' + 'x'.repeat(16 * 1024) + 'FAKE_FINAL_TAIL');
+    handlers.onClose!({ code: 1, signal: null });
+    expect(lines).toEqual(['Error: missing extension']);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('FAKE');
+  });
+
   it('resyncs after an oversized unterminated line instead of closing the transport', async () => {
     const execStream = vi.fn();
     const host = { id: 'test-host', execStream } as unknown as RemoteHost;
