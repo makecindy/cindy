@@ -9408,10 +9408,13 @@
       },
       "unified": {
         "railFavorites": "お気に入り",
+        "railRecent": "最近",
         "railAll": "すべて",
         "railRemoteProvider": "{{provider}} · {{device}}",
         "remoteLoading": "そのパソコンのモデルを読み込み中…",
         "favoritesGroup": "お気に入り",
+        "recentGroup": "最近",
+        "recentEmpty": "最近使ったモデルはまだありません——モデルを選ぶとここに表示されます",
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
         "addFavorite": "お気に入りに保存",
         "customize": "カスタマイズ",
