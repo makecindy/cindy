@@ -1564,6 +1564,9 @@ export class AgentIslandService {
       this.mutedCompletionSoundSessionIds.clear();
       this.clearStreamingPreviewPublishTimer();
       this.clearPublishTimer();
+      // Input devices (Passport, keyboards) read activity from the main process,
+      // so they must not wait for the renderer to sync the island UI settings.
+      this.notifySessionActivityConsumer(this.buildSessionActivityPayload());
       return;
     }
     if (!this.enabled) {
