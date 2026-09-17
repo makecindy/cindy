@@ -55,10 +55,10 @@ function CloneButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
       type="button"
       onClick={onClick}
       className={cn(
-        'flex shrink-0 items-center justify-center gap-[6px] rounded-full transition-colors',
+        'flex shrink-0 items-center justify-center gap-1.5 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
       )}
-      style={{ height: '36px', padding: '0 16px', fontSize: '13px', fontWeight: 500 }}
+      style={{ height: '36px', padding: '0 16px', fontSize: 'var(--text-13)', fontWeight: 500 }}
     >
       <Download size={14} className="shrink-0" />
       <span className="leading-none">{t('skillhub.marketCard.clone')}</span>
@@ -101,7 +101,7 @@ export function ManageMenu({
             'flex h-9 shrink-0 items-center gap-2 rounded-full px-[18px]',
             'text-sm font-medium',
             'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]',
-            'transition-colors',
+            'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           )}
         >
           <span className="leading-none">{t('skillhub.marketCard.manage')}</span>
@@ -170,36 +170,44 @@ export function MarketCard({
           : 'border-[var(--cmd-palette-border)]',
         onClick ? 'cursor-pointer' : '',
       )}
-      style={{ gap: '10px', height: '220px', borderWidth: '1.5px' }}
+      style={{ gap: '10px', minHeight: '220px', borderWidth: '1.5px' }}
     >
       {/* Title */}
       <div className="flex w-full min-w-0 items-center" style={{ gap: '10px' }}>
         <SkillIcon url={skill.icon} />
         <h3
           className="min-w-0 flex-1 truncate font-medium text-[var(--msg-assistant-text)]"
-          style={{ fontSize: '16px' }}
+          style={{ fontSize: 'var(--text-16)' }}
         >
-          {skill.displayName || skill.name}
+          {onClick ? (
+            <button
+              type="button"
+              onClick={(event) => { event.stopPropagation(); onClick(skill); }}
+              className="block w-full truncate text-left [font:inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+            >
+              {skill.displayName || skill.name}
+            </button>
+          ) : skill.displayName || skill.name}
         </h3>
         <SkillTagList tags={skill.tags} maxVisible={1} className="shrink-0" />
       </div>
 
       {/* Author · Version + Visibility tag */}
       <div className="flex w-full items-center" style={{ gap: '8px' }}>
-        <span className="text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '12px' }}>
+        <span className="text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-12)' }}>
           {skillPublisherLabel(skill)} · {versionStr}
         </span>
         {status ? (
           <span
             className={cn('inline-flex shrink-0 items-center justify-center rounded-full border font-medium', publishedStatusClass(status))}
-            style={{ height: '20px', padding: '0 8px', fontSize: '11px' }}
+            style={{ height: '20px', padding: '0 8px', fontSize: 'var(--text-11)' }}
           >
             {t(publishedStatusLabelKey(status))}
           </span>
         ) : null}
         <span
           className="ml-auto inline-flex shrink-0 items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]"
-          style={{ height: '20px', padding: '0 8px', fontSize: '11px' }}
+          style={{ height: '20px', padding: '0 8px', fontSize: 'var(--text-11)' }}
         >
           {visibilityLabel(skill, allowPrivateVisibilityLabel)}
         </span>
@@ -208,7 +216,7 @@ export function MarketCard({
       {/* Description (max 3 lines) */}
       <p
         className="line-clamp-3 text-[var(--settings-section-desc)]"
-        style={{ fontSize: '13px', lineHeight: 1.55 }}
+        style={{ fontSize: 'var(--text-13)', lineHeight: 1.55 }}
       >
         {skill.description}
       </p>
@@ -219,11 +227,11 @@ export function MarketCard({
       {/* Footer: 时间戳 + 按钮 */}
       <div
         className="flex w-full items-center justify-between"
-        style={{ gap: '8px', height: '36px' }}
+        style={{ gap: '8px', minHeight: '36px' }}
       >
         <div
           className="flex min-w-0 items-center text-[var(--cmd-palette-item-meta)]"
-          style={{ gap: '12px', fontSize: '11px' }}
+          style={{ gap: '12px', fontSize: 'var(--text-11)' }}
         >
           <span
             className="flex min-w-0 items-center"

@@ -13,6 +13,15 @@ import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
+import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
+
+// Backend selection must precede ready and the dynamic bootstrap/auth imports.
+// This default never overrides --password-store; no plaintext fallback is added.
+configureLinuxPasswordStore({
+  platform: process.platform,
+  env: process.env,
+  commandLine: app.commandLine,
+});
 
 // 正式目录保持历史兼容：global 构建继续使用 CindyGlobal，cn 版继续使用
 // productName 默认的 Cindy；dev 也按构建区域选择对应 profile。必须在

@@ -322,7 +322,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 
 本节是开源贡献者可读的路线摘要与实际 PR 链接入口；逐 surface 的事实、owner、迁移状态与下一动作只维护在 [inventory](./design-inventory.md)。项目完整施工安排与过程记录由项目负责人持续维护，不作为贡献者必读依赖；仓内须足以定位规则、当前能力、未决项及下一批工作。不要在本节复制个人施工日志，也不另建逐 surface 台账。
 
-**编号就是执行顺序**：已合入 DS-1—9 保留；本期剩余 DS-10，为桌面保护、维护与最终验收。每批默认一张 PR。Mobile 延至独立阶段，暂不编号，已有兼容保护和检查保留。Permission 桌面三项仅阻塞对应文件；所有门禁升级继续受 §8 管理员审核约束。
+**编号就是执行顺序**：已合入 DS-1—10 保留；DS-10 的平台与人工验收缺项继续分别跟进；2026-09-15 用户追加 DS-11，合并处理复核确认的修复与逐项视觉对照。每批默认一张 PR。Mobile 延至独立阶段，暂不编号，已有兼容保护和检查保留。Permission 桌面三项仅阻塞对应文件；所有门禁升级继续受 §8 管理员审核约束。
 
 ### 系列命名规则
 
@@ -345,7 +345,8 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 | DS-7 | 复用守卫，成熟写法先报告/反例/历史回放后阻断；增量发现 Mobile 入口；未成熟范围继续报告 | CI 门禁 | 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)：成熟颜色增量接 verify，Mobile 入口纳入同一台账；[历史证据](../design-evidence/2026-09-10/ds7-guards.md) 的版本边界见 §8。DS-7 当次双审豁免不延续至后续批次 |
 | DS-8 | Desktop 颜色、排版、间距、圆角/尺寸与动效的 DTCG → 生成 → 生产链；旧主题兼容，结束影子阶段 | 零视觉接管 | 已合并 [#4268](https://github.com/makecindy/cindy/pull/4268)，merge `2e74488d21`；人工及平台证据缺口继续登记 |
 | DS-9 | 统一桌面聊天、代码与附件；核跨入口继承；按正式决定整理桌面授权呈现 | 有意可见 | [#4300](https://github.com/makecindy/cindy/pull/4300) 已于 09-12 合并，最终 head `023bde86ac` / merge `f1955f9354`；09-11 用户视觉验收通过，后续媒体 FocusScope 修复有测试与 CI 证据，实机复验另记；[实现与验收记录](../design-evidence/2026-09-11/ds9-desktop-core.md) |
-| DS-10 | 完善报告准确性、维护交接与 Desktop G1—G4 验收 | CI 门禁 | 本地验证完成，待提交；基线 `07eac89584`；复用已有接线与阻断，不新增 required；[本地结果与未验收项](../design-evidence/2026-09-13/ds10-desktop-guards.md)分别记录，不额外拆批 |
+| DS-10 | 完善报告准确性、维护交接与 Desktop G1—G4 验收 | CI 门禁 | [#4427](https://github.com/makecindy/cindy/pull/4427) 已合入，main 提交 `2afecd89e5`（本轮核对）；复用已有接线与阻断，不新增 required；[本地结果与未验收项](../design-evidence/2026-09-13/ds10-desktop-guards.md)分别记录，不额外拆批 |
+| DS-11 | 收尾复核确认的字体、焦点、表单、通知、日期入口与规范冲突；Cindy 两模式逐项前后对照；N7 Mobile Sheet 减弱动效于 2026-09-16 按用户决定撤出，留待后续独立处理 | 有意可见 / 交互修复 | 正式 PR [#4455](https://github.com/makecindy/cindy/pull/4455)，历史实现已完成自审与单测；结合最新 main 的增量验证另记；[方案、结果与证据边界](../design-evidence/2026-09-15/ds11-review-fixes.md)；接续 DS-10，独立审查与用户最终视觉验收分别跟进 |
 | Mobile 后续（未编号） | 接同一数值源，保留平台适配；独立裁决授权呈现，验证 iOS/Android | 按实际变化分类 | 新重构方案就绪后另行启动；沿用 fingerprint 冷更规则与既有兼容检查 |
 
 ### 完成条件：分别验收 G1—G4
@@ -368,7 +369,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 1. **词法扫描的边界**——共享 matcher 在新增行上下文中识别 HEX 与完整字面颜色函数，
    纯语义包装/PR编号/注释排除，嵌套字面 fallback 仍检查。默认阻断仅限 §8 列出的
    Desktop renderer 消费者后缀；`.svg`、assets/vendor、Mobile 和其它路径仅报告。
-   它不是 JS/CSS AST 或运行期求值器：命名色、拼接/转义字符串、部分数值通道、动态
+   DS-11 对 Tailwind 字面色板类增加 candidate report（不新增阻断），须人工核对用途/例外。它不是 JS/CSS AST 或运行期求值器：命名 CSS 色、拼接/转义字符串、部分数值通道、动态
    样式、自绘 canvas/xterm、复杂模板嵌套、间接调用和裸数字几何仍须 review。普通
    `color(surface)` 与空函数文档不是颜色；未知写法不能据“未命中”判合规。
    `--worktree` 扫 staged/unstaged/指定源码目录内 untracked，commit 模式仅扫明确 refs。

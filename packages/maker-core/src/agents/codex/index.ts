@@ -201,6 +201,7 @@ import {
 import { createStdioTransport } from './app-server/stdioTransport.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
+import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
 import {
   CONTACTS_RULES_DISABLED,
@@ -4282,6 +4283,7 @@ export class CodexAgent extends BaseAgent {
     // Kept across the internal plan implementation/revision turns. A later
     // explicit Session.send replaces it before turn/start.
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    let activeToolsDisabled = false;
     // Capability source choice belongs to the server-accepted turn that
     // carried it. A global "last send text" can be poisoned by a turn/start
     // that later fails, and can then unlock an unrelated surviving turn.
@@ -5119,6 +5121,21 @@ export class CodexAgent extends BaseAgent {
     let nativeAutoReviewUnavailable = false;
     let nativeApprovalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
     let approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+    let nativeContinuationConfig: Record<string, unknown> = {};
+    if (!reviewMode && nativeApprovalsReviewerRouteSupported) {
+      try {
+        const response = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead, { cwd: opts.workingDir, includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        assertCurrentHost('Native auto-review policy');
+        if (response.config) nativeContinuationConfig = nativeAutoReviewContinuationConfig(initResp.userAgent, response.config);
+      } catch {
+        // Failure to inspect policy must preserve native behavior, not replace an
+        // unseen custom policy or disable review. No user config file is written.
+        log.warn('Native auto-review continuation policy unavailable; preserving native policy');
+      }
+    }
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     if (reviewMode && !readonlyReferenceDirsSupported) {
@@ -5293,6 +5310,7 @@ export class CodexAgent extends BaseAgent {
       }
     }
 
+    const textOnlyPolicyCleanups = new Map<string, () => void>();
     const registerCodexMcpContext = (
       threadId: string,
       mcpCallerKind: 'root' | 'descendant',
@@ -5300,6 +5318,10 @@ export class CodexAgent extends BaseAgent {
       // remoteHostId 不再跳过:远端 daemon 经 SSH remote-forward 直连本机
       // HTTP MCP bridge 后,tool call 同样按 params._meta.threadId 路由,
       // 需要这条注册让 CodexMcpThreadContextStore 能解析 remote thread。
+      if (!textOnlyPolicyCleanups.has(threadId) && !opts.remoteHostId && host.isCodexProxyActive()
+        && this.deps.registerCodexTextOnlyPolicy) {
+        textOnlyPolicyCleanups.set(threadId, this.deps.registerCodexTextOnlyPolicy(threadId, () => activeToolsDisabled));
+      }
       if (!sid || reviewMode) return;
       try {
         const register = this.deps.registerCodexMcpThreadContext;
@@ -5328,6 +5350,8 @@ export class CodexAgent extends BaseAgent {
       }
     };
     const unregisterCodexMcpContext = (threadId: string): void => {
+      textOnlyPolicyCleanups.get(threadId)?.();
+      textOnlyPolicyCleanups.delete(threadId);
       // 与 register 对齐:remote thread 同样注册过 context,close 时同样注销。
       if (!sid) return;
       try {
@@ -5868,6 +5892,9 @@ export class CodexAgent extends BaseAgent {
         ...(reviewMode ? {} : readSessionMcpConfig()),
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
+        // Install while the thread is created/resumed: a later switch to Auto
+        // changes the turn reviewer without rebuilding this thread config.
+        ...nativeContinuationConfig,
         // Bot memory and delegation belong to its Cindy Profile and Session
         // tasks, not the shared native home or hidden harness child threads.
         ...(opts.botRuntimeProfile ? {
@@ -12422,6 +12449,9 @@ export class CodexAgent extends BaseAgent {
       get codexProductPromptDelivery() { return codexProductPromptDelivery; },
 
       validateSendOptions(sendOpts: SendOptions) {
+        if (sendOpts.toolsDisabled && (!host.isCodexProxyActive() || !textOnlyPolicyCleanups.has(threadId))) {
+          throw new Error('Host text-only turns require an active Codex request policy proxy.');
+        }
         if (
           sendOpts.turnPermissionPolicy &&
           mutablePermissionMode === 'bypassPermissions'
@@ -12439,6 +12469,12 @@ export class CodexAgent extends BaseAgent {
         }
         const internalOpts = sendOpts as CodexInternalSendOptions | undefined;
         const yieldAttempt = internalOpts?.[CODEX_YIELD_CONTINUATION];
+        const isContinuation = internalOpts?.[CODEX_INTERNAL_CONTINUATION] === true
+          || internalOpts?.[CODEX_INTERACTION_CONTINUATION] === true;
+        const nextToolsDisabled = isContinuation ? activeToolsDisabled : sendOpts?.toolsDisabled === true;
+        if (handle.isTurnRunning?.() && activeToolsDisabled !== nextToolsDisabled) {
+          throw new Error('Cannot change the tool policy while a Codex turn is active.');
+        }
         if (yieldAttempt == null && internalOpts?.[CODEX_INTERNAL_CONTINUATION] !== true) {
           cancelActiveYieldContinuation('new send');
           yieldContinuationProductFailed = false;
@@ -12447,6 +12483,7 @@ export class CodexAgent extends BaseAgent {
         clearReconnectStall();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeToolsDisabled = nextToolsDisabled;
         const capabilitySelectionText =
           (sendOpts as CodexInternalSendOptions | undefined)?.[
             CODEX_INHERITED_CAPABILITY_SELECTION

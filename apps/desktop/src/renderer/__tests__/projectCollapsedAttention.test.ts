@@ -253,7 +253,7 @@ describe('collapsed project attention wiring', () => {
     expect(automationGroupSource).not.toMatch(/useRemoteSessionActivityRevision\s*\(/);
     expect(automationGroupSource).toMatch(/useSessionsAttentionKindMap\(groupSessionIds\)/);
     expect(automationGroupSource).toMatch(/useSessionsAttentionUrgencyIdSet\(groupSessionIds\)/);
-    expect(automationGroupSource).toMatch(/useRemoteSessionsPhaseMap\(groupSessionIds\)/);
+    expect(automationGroupSource).toMatch(/useRemoteSessionsPhaseMap\(group.sessions\)/);
   });
 
   it('opens the unread-failed session from a collapsed red group header', () => {

@@ -498,7 +498,17 @@
       "switch-track-on": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-switch-track-on}",
-        "$description": "开启态轨道:值与依据见决策表(用户调参 2026-08-05)"
+        "$description": "开启态轨道:蓝色 #417CDD(用户裁决 2026-09-15)"
+      },
+      "switch-thumb-on": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-thumb-light}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名"
+      },
+      "switch-thumb-off": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-thumb-light}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名"
       },
       "status-badge-fg": {
         "$type": "color",
@@ -863,7 +873,7 @@
       "text-placeholder": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-placeholder}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "独立占位文字色，与正文/三级信息区分（用户修正，2026-09-16）"
       },
       "settings-integration-avatar-bg": {
         "$type": "color",
@@ -1326,7 +1336,31 @@
       "switch-track-on": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-switch-track-on}",
-        "$description": "开启态轨道:值与依据见决策表(用户调参 2026-08-05)"
+        "$description": "开启态轨道:蓝色 #417CDD(用户裁决 2026-09-15)"
+      },
+      "switch-thumb-on": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-background}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "background",
+            "wrapper": "hsl",
+            "mode": "light"
+          }
+        }
+      },
+      "switch-thumb-off": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-on-card}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-on-card",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
       },
       "status-badge-fg": {
         "$type": "color",
@@ -1676,7 +1710,7 @@
       "text-placeholder": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-placeholder}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "独立占位文字色，与正文/三级信息区分（用户修正，2026-09-16）"
       },
       "settings-integration-avatar-bg": {
         "$type": "color",
@@ -4297,6 +4331,10 @@
       "update-btn-text": {
         "$type": "color",
         "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "form-field-hint": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HINT_TEXT}"
       }
     },
     "solarized-light": {
@@ -4737,6 +4775,10 @@
       "update-btn-text": {
         "$type": "color",
         "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "form-field-hint": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-HINT_TEXT}"
       }
     }
   }

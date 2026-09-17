@@ -83,13 +83,16 @@ interface Scan {
   templateCount: number;
 }
 
+// A literal prefix followed by concatenation is not a complete static key.
+const STATIC_KEY_RE = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*(?=[,)])/g;
+
 async function scanSource(): Promise<Scan> {
   const used = new Set<string>();
   const withDefault = new Set<string>();
   let templateCount = 0;
 
   // 静态 t('a.b') / t("a.b");捕获 key 与其后是否紧跟逗号(可能是默认值)。
-  const keyRe = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*(,)?/g;
+  const keyRe = STATIC_KEY_RE;
   // 位置参默认:t('k', '默认')
   const posDefaultRe = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*,\s*['"]/g;
   // 选项默认:t('k', { ... defaultValue ... })
@@ -108,6 +111,13 @@ async function scanSource(): Promise<Scan> {
 }
 
 describe('i18n completeness (static keys present in all locales)', () => {
+  it('checks complete literal keys without treating dynamic prefixes as keys', () => {
+    const source = `t('static.key'); t("static.options", { count: 2 });
+      t('dynamic.' + phase); t('multiline.'
+ + status);`;
+    expect([...source.matchAll(STATIC_KEY_RE)].map(match => match[1]))
+      .toEqual(['static.key', 'static.options']);
+  });
   it('every static t() key (no inline default) exists in all supported locales', async () => {
     const locales = localeNames();
     const trees = loadLocales();

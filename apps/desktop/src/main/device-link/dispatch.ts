@@ -1,3 +1,5 @@
+import { FILE_PEER_CHANNEL } from '@cindy/device-link';
+import { requestFilePeer, stopFilePeers } from './filePeer';
 /**
  * dispatch —— device-link 被控端隧道层。
  *
@@ -21,6 +23,8 @@
 
 import {
   computeAllowlistHash,
+  canCoalesceRemoteListing,
+  isCompletedInvokeRetryableReadChannel,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
@@ -638,21 +642,22 @@ type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
 let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
 let inFlightRemoteInvokeCount = 0;
 const REMOTE_INVOKE_IN_FLIGHT_LIMIT = 64;
-/**
- * 控制端周期对账 / 熔断探测会用新 requestId 连打相同 listing。按 requestId 去重
- * 拦不住，16 条并发 sessions:list 会把单线程 DB worker 打到 128/512 硬顶。
- * 同一控制端、同一 channel+args 的只读 listing 合并成一次执行。
- */
-const COALESCE_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+/** Host DB admission is independent of whether a read can share an in-flight snapshot. */
+const BACKGROUND_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
-  // sessions:get 是写后权威回读（mobile 设置失败恢复会复用同一参数），
-  // 不能并进仍停在投影 await 的写前查询。
+  'local-db:sessions:interrupted-pending',
+  'maker:list-active',
+  'local-db:bots:list',
+  'maker:remote-resources:list',
   'maker:get-capabilities',
   'maker:provider:list',
   'maker:git-safety:get',
-  // Studio/手机周期对账会连打这条；不合并就会把单线程 DB worker 打满。
   'maker:schedule:list-sidebar-index-runs',
 ]);
+/** Include pre/post authorization and cached delivery, not only the IPC handler. */
+function withRemoteDbAdmission<T>(channel: string | undefined, fn: () => T): T {
+  return channel && BACKGROUND_REMOTE_INVOKE_CHANNELS.has(channel) ? runAsBackgroundDbRpc(fn) : fn();
+}
 /** 隧道回包必须低于 4MB 传输上限与 per-controller 4MB 准入；2MB 给 envelope 留余量。 */
 const REMOTE_SCHEDULE_INDEX_MAX_BYTES = 2 * 1024 * 1024;
 /**
@@ -2037,6 +2042,7 @@ export function dropAllControllers(
   client: DeviceLinkClient,
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
+  stopFilePeers();
   remoteDesktop.stop();
   void remoteCredentialHost.closeAll().catch(() => remoteCredentialHost.dispose());
   const controllerIds = new Set([
@@ -2097,6 +2103,7 @@ function deactivateControllerState(
   }
   let changed = false;
   changed = acceptedLinkControllers.delete(deviceId) || changed;
+  stopFilePeers(deviceId);
   remoteDesktop.stop(deviceId);
   void remoteCredentialHost.close(deviceId).catch(() => remoteCredentialHost.dispose());
   changed = controllerConnectionEpochByDevice.delete(deviceId) || changed;
@@ -2139,6 +2146,7 @@ export function deactivateController(
 
 /** Relay 连接离开 online：清本连接代所有 active controller，但保留恢复意图。 */
 export function deactivateAllControllers(reason: string): void {
+  stopFilePeers();
   remoteDesktop.stop();
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
@@ -2178,6 +2186,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 
 /** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
 export function purgeRevokedController(deviceId: string): void {
+  stopFilePeers(deviceId);
   remoteDesktop.stop(deviceId);
   const changed = deactivateControllerState(deviceId);
   topicSubscriptionControllers.delete(deviceId);
@@ -2227,6 +2236,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
         return;
       }
       clearRemoteInvokeStateFor(src);
+      stopFilePeers(src);
       remoteDesktop.stop(src);
       void remoteCredentialHost.close(src).catch(() => remoteCredentialHost.dispose());
       offlinePushQueue.clear(src);
@@ -2668,19 +2678,6 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
   return null;
 }
 
-function isFreshSessionListInvoke(payload: InvokePayload): boolean {
-  if (payload.channel !== 'local-db:sessions:list') return false;
-  const options = payload.args?.[2];
-  return !!(options && typeof options === 'object' && !Array.isArray(options)
-    && (options as { fresh?: unknown }).fresh === true);
-}
-
-function canCoalesceRemoteListing(payload: InvokePayload | undefined): payload is InvokePayload {
-  return !!payload
-    && COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
-    && !isFreshSessionListInvoke(payload);
-}
-
 function remoteListingFlightKey(src: string, payload: InvokePayload): string {
   return `${src}\u0000${payload.channel}\u0000${JSON.stringify(payload.args ?? [])}`;
 }
@@ -2836,13 +2833,19 @@ function sanitizeMessageInvokeResult(
 async function authorizeRemoteBotResult(
   channel: string | undefined, args: unknown[] | undefined, result: InvokeResultPayload,
 ): Promise<InvokeResultPayload> {
-  if (!result.ok) return result;
-  try {
-    await assertRemoteBotInvocationAllowed(args ?? [], channel);
-    return { ok: true, result: await projectRemoteSessionResult(channel ?? '', result.result) };
-  } catch {
-    return { ok: false, error: { code: 'IPC_ERROR', message: '[NOT_FOUND] Session does not exist' } };
-  }
+  return withRemoteDbAdmission(channel, async () => {
+    if (!result.ok) return result;
+    try {
+      await assertRemoteBotInvocationAllowed(args ?? [], channel);
+      return { ok: true, result: await projectRemoteSessionResult(channel ?? '', result.result) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isDbWorkerOverloadedError(message) && isCompletedInvokeRetryableReadChannel(channel)) {
+        return { ok: false, error: { code: 'BACKPRESSURE', message } };
+      }
+      return { ok: false, error: { code: 'IPC_ERROR', message: '[NOT_FOUND] Session does not exist' } };
+    }
+  });
 }
 
 /** Revalidate cached/replayed replies without executing a mutation twice. */
@@ -3521,6 +3524,10 @@ export async function runInvoke(
   src: string,
   payload: InvokePayload | undefined,
 ): Promise<InvokeResultPayload> {
+  return withRemoteDbAdmission(payload?.channel, () => executeRemoteInvoke(src, payload));
+}
+
+async function executeRemoteInvoke(src: string, payload: InvokePayload | undefined): Promise<InvokeResultPayload> {
   if (!payload || typeof payload.channel !== 'string') {
     return { ok: false, error: { code: 'INTERNAL', message: 'malformed invoke payload' } };
   }
@@ -3542,6 +3549,10 @@ export async function runInvoke(
     };
   }
 
+  if (payload.channel === FILE_PEER_CHANNEL) {
+    try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0]) }; }
+    catch { return { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } }; }
+  }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
     try { return { ok: true, result: await requestRemoteDesktop(src, payload.args?.[0]) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
@@ -3709,6 +3720,7 @@ export async function runInvoke(
     }
   }
 
+  let handlerCompleted = false;
   try {
     const args = payload.args ?? [];
     const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
@@ -3728,17 +3740,12 @@ export async function runInvoke(
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
-      // 对账 listing 走后台读配额，不占满写入名额。
-      () => {
-        const invoke = () => dispatchLocalInvoke(
-          payload.channel,
-          payload.channel === 'maker:provider:list' ? [] : args,
-        );
-        return COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
-          ? runAsBackgroundDbRpc(invoke)
-          : invoke();
-      },
+      () => dispatchLocalInvoke(
+        payload.channel,
+        payload.channel === 'maker:provider:list' ? [] : args,
+      ),
     );
+    handlerCompleted = true;
     if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
@@ -3761,7 +3768,7 @@ export async function runInvoke(
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
     const message = err instanceof Error ? err.message : String(err);
-    if (isDbWorkerOverloadedError(message)) {
+    if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
     }
     return { ok: false, error: { code: 'IPC_ERROR', message } };
@@ -3878,7 +3885,7 @@ export const __testing = {
   projectInvokeResultForTunnel,
   capScheduleSidebarIndexForTunnel,
   remoteScheduleIndexMaxBytes: REMOTE_SCHEDULE_INDEX_MAX_BYTES,
-  coalesceRemoteInvokeChannels: COALESCE_REMOTE_INVOKE_CHANNELS,
+  canCoalesceRemoteListing,
   remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
   remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,

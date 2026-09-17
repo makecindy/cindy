@@ -1,8 +1,9 @@
 // expo-router 深链拦截。
 //
-// auth-server 回调 cindycn://auth / cindy://auth 没有对应路由页,默认会落到 expo-router 的
-// +not-found(「Unmatched Route」白屏),把登录界面盖住。这里把该回调路径重定向到 '/'(index),
-// 让 index 按登录态渲染(未登录→/login,已登录→首页)。
+// auth-server 回调 cindycn://auth / cindy://auth 与 Share Extension 的
+// cindycn://expo-sharing / cindy://expo-sharing 都没有对应路由页,默认会落到
+// expo-router 的 +not-found(「Unmatched Route」白屏)。这里分别把它们重定向到首页与
+// 新建任务页；分享 payload 由根级 IncomingShareBridge 独立领取。
 //
 // 实际的 PKCE code 交换**不依赖路由**:由 src/auth/AuthContext.tsx 的 Linking.addEventListener /
 // getInitialURL 监听器独立捕获原始 URL 并完成(见其 handleDeepLink)。本文件只负责别让路由 404。
@@ -18,8 +19,9 @@ export function redirectSystemPath({ path }: { path: string; initial: boolean })
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
-    // 命中 OAuth 回调 → 回首页;其余深链(/sessions/xxx、/devices 等)原样放行。
+    // 命中 OAuth 回调 → 回首页；Share Extension → 新建任务；其余深链原样放行。
     if (pathname === '/auth') return '/';
+    if (pathname === '/expo-sharing') return '/sessions/new';
     return path;
   } catch {
     return path;

@@ -108,7 +108,7 @@ describe('Projects sidebar section', () => {
       'const remoteActivityRevision = useRemoteSessionActivityRevision()',
     );
     expect(projectsSectionSource).toContain(
-      'const activity = getRemoteSessionActivity(session.id)',
+      'const activity = getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)',
     );
     // running / needs-interaction / error / completed-unread 各归其档。
     expect(projectsSectionSource).toMatch(

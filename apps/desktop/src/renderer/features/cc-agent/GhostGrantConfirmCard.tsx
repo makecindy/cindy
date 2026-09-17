@@ -72,7 +72,21 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
             ? 'ghostGrant.confirm.descriptionFsWrite'
             : pending.lane === 'workspace'
               ? 'ghostGrant.confirm.descriptionWorkspace'
-              : 'ghostGrant.confirm.descriptionSaveDir';
+              : pending.lane === 'forge_source'
+                ? pending.sourceTool === 'ghost_forge_install'
+                  ? 'ghostGrant.confirm.descriptionForgeInstall'
+                  : pending.sourceTool === 'ghost_forge_scaffold'
+                    ? 'ghostGrant.confirm.descriptionForgeScaffold'
+                    : pending.sourceTool === 'ghost_forge_pack'
+                      ? 'ghostGrant.confirm.descriptionForgePack'
+                      : 'ghostGrant.confirm.descriptionForgeSource'
+                : pending.lane === 'outside_workdir'
+                  ? pending.operation === 'read'
+                    ? 'ghostGrant.confirm.descriptionOutsideRead'
+                    : pending.operation === 'write'
+                      ? 'ghostGrant.confirm.descriptionOutsideWrite'
+                      : 'ghostGrant.confirm.descriptionOutsideWorkdir'
+                  : 'ghostGrant.confirm.descriptionSaveDir';
 
   return (
     <div

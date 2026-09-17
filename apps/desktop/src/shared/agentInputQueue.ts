@@ -9,6 +9,7 @@
  */
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   describeAgentInputReference,
@@ -220,6 +221,8 @@ export interface RecoveryCheckpoint {
 export interface AgentInputQueuedMessage {
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
   autoReviewUserText?: string;
+  /** Host-owned text-only input; retained by queue persistence and retry. */
+  toolsDisabled?: boolean;
   clientId: string;
   text: string;
   /**
@@ -407,7 +410,7 @@ export interface AgentInputProjection {
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /**
    * 中断自动续跑接管中:上游把「已经干到一半」的 turn 打断了,main 守卫已决定自动
-   * 续跑,正在退避窗口里(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
+   * 续跑,正在退避或出队后的派发准备阶段(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
    *
    * 此时 `error` 刻意保持 null —— 自愈过程不该弹红色横幅,只在聊天流里显示一条低调
    * 的「正在自动继续」分隔条(renderer 据本字段插 ephemeral system card)。真正救不
@@ -543,6 +546,11 @@ export function updateQueuedMessageText(
   newText: string,
   sessionRefs: AgentInputSessionRef[] = reconcileSessionRefsForText(newText, entry.sessionRefs),
 ): AgentInputQueuedMessage {
+  // A plugin rewrite must not turn a hidden host welcome into an editable user draft.
+  if (entry.toolsDisabled === true && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    && !newText.startsWith(UI_ACTION_TRIGGER_PREFIX)) {
+    newText = `${UI_ACTION_TRIGGER_PREFIX}${newText}`;
+  }
   const hasEncodedQuoteMarker = stripChatQuoteMarkerLines(newText) !== newText;
   const refsUnchanged = JSON.stringify(sessionRefs) === JSON.stringify(entry.sessionRefs ?? []);
   let nextPersisted = entry.persistedContent;
@@ -736,11 +744,15 @@ export function serializeSessionReferencePayload(
 
 /** Immutable semantic projection shared by Ghost, titles, turn and steer. */
 export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
-  return projectAgentFacingText({
+  const text = projectAgentFacingText({
     text: queued.text,
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
   });
+  // Host text-only welcomes stay synthetic in queue/history projections, not in model input.
+  return queued.toolsDisabled === true && text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    ? text.slice(UI_ACTION_TRIGGER_PREFIX.length)
+    : text;
 }
 
 /**

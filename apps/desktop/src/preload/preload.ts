@@ -1,6 +1,12 @@
 import { invokeOpenPath } from './openPath';
+import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
 import { REMOTE_VIEWER } from '../shared/remoteDesktopViewer';
 import type { RoutineInput } from '@cindy/maker-scheduler';
+import {
+  LOGIN_ITEM_GET_CHANNEL,
+  LOGIN_ITEM_SET_CHANNEL,
+  type LoginItemState,
+} from '../shared/loginItem';
 import type { BotToolsetContext } from '../shared/botRemoteCapabilities';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
@@ -1698,6 +1704,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   windowBehavior: {
+    getLoginItem: (): Promise<LoginItemState> => ipcRenderer.invoke(LOGIN_ITEM_GET_CHANNEL),
+    setLoginItem: (enabled: boolean): Promise<LoginItemState> =>
+      ipcRenderer.invoke(LOGIN_ITEM_SET_CHANNEL, enabled),
     // 通知 main 落盘"首次点击是否吞掉"。仅落盘,不改变已创建窗口的行为——macOS
     // acceptFirstMouse 是 BrowserWindow 构造参数,需要下次启动才读到新值。Windows
     // 上此调用只是保持 userData 落盘和 renderer localStorage 一致,Windows JS
@@ -2648,6 +2657,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // incremental tree updates while user is in the browse view.
   fileBrowser: {
     listDir: (params: {
+      /** Return all ordinary entries without presentation filtering. */
+      includeIgnored?: boolean;
       /** 非空 = SSH remote 会话,操作经远端 file-service 执行(main 侧路由)。 */
       remoteHostId?: string | null;
       workdir: string;
@@ -2814,6 +2825,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 进度沿用 onTransferProgress,relPath 键 = 原始 absPath。失败按 code 分流:
      * OUTSIDE_WORKDIR(SSH workdir 外,明确占位)/ NOT_FOUND / FETCH_FAILED。
      */
+    previewHtml: (params: {
+      origin:
+        | { kind: 'local' }
+        | { kind: 'device'; deviceId: string }
+        | { kind: 'ssh'; remoteHostId: string };
+      workdir: string;
+      absPath: string;
+    }): Promise<{ ok: true; url: string }> =>
+      ipcRenderer.invoke('maker:html-preview:open', params),
     chatFetch: (params: {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
       workdir: string;
@@ -3826,6 +3846,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCindyMakeSourceStatus: (): Promise<import('../shared/cindyMakeDoctor').MakeSourceStatus> =>
     ipcRenderer.invoke('app:get-cindy-make-source-status'),
 
+  getCindyMakeState: (): Promise<import('../shared/cindyMakeDoctor').CindyMakeGlobalState> =>
+    ipcRenderer.invoke('app:get-cindy-make-state'),
+  manageCindyMakeTask: (sessionId: string, action: 'finish' | 'delete'): Promise<void> =>
+    ipcRenderer.invoke('app:manage-cindy-make-task', sessionId, action),
+
+  onCindyMakeState: (
+    listener: (state: import('../shared/cindyMakeDoctor').CindyMakeGlobalState) => void,
+  ): (() => void) => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      state: import('../shared/cindyMakeDoctor').CindyMakeGlobalState,
+    ) => listener(state);
+    ipcRenderer.on('maker:cindy-make:state-changed', wrapped);
+    return () => ipcRenderer.removeListener('maker:cindy-make:state-changed', wrapped);
+  },
+
   openCindyMakeSourceDir: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:open-cindy-make-source-dir'),
 
@@ -3843,11 +3879,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelCindyMakeSource: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:cancel-cindy-make-source'),
 
-  // Create the per-task worktree (branch off the personal baseline + install deps).
+  // Compatibility entry point: prepare a worktree and its dependencies.
   prepareCindyMakeWorkspace: (
     runId: string,
   ): Promise<import('../shared/cindyMakeDoctor').MakeTaskWorkspace> =>
     ipcRenderer.invoke('app:prepare-cindy-make-workspace', runId),
+  startCindyMakeTask: (input: import('../shared/cindyMakeDoctor').CindyMakeTaskStart): Promise<string> =>
+    ipcRenderer.invoke('app:start-cindy-make-task', input),
+  cancelCindyMakeTask: (runId: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('app:cancel-cindy-make-task', runId),
 
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
@@ -3897,6 +3937,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     filePath?: string;
   }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:show-item-in-folder', params),
+
+  // Copy an in-memory export without requiring renderer focus.
+  copyPngToClipboard: (params: CopyPngToClipboardParams): Promise<void> =>
+    ipcRenderer.invoke(COPY_PNG_TO_CLIPBOARD_CHANNEL, params),
 
   // Copy an image / video (resolved from xdt-image:// or xdt-video:// URL,
   // or absolute path) into the system clipboard as a FILE REFERENCE. Used
@@ -4774,6 +4818,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:add-binding'),
     rebindTeam: (teamId: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:rebind-team', { teamId }),
+    setSlackCommunications: (teamId: string, enabled: boolean): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:set-slack-communications', { teamId, enabled }),
     revokeTeam: (teamId: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:revoke-team', { teamId }),
     cancelPendingBind: (): Promise<{ hook: unknown }> =>
@@ -5250,10 +5296,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;
       }> => ipcRenderer.invoke('local-db:bots:model-chain-settings-set', body),
-      list: (body?: { lastReadAtByBotId?: Record<string, number> }): Promise<unknown[]> =>
+      list: (body?: { lastReadAtByBotId?: Record<string, number>; welcomeContext?: import('../shared/botWelcomeContext').BotWelcomeContext; locale?: import('../shared/locale').SupportedLocale }): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:list', body),
       get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
-      chooseAvatar: (body: { botId: string }): Promise<unknown> =>
+      chooseAvatar: (body: { botId: string; avatarImageBase64?: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:choose-avatar', body),
       searchHistory: (body: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:bots:search-history', body),
@@ -6375,6 +6421,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       },
     ): Promise<import('@cindy/maker-core').ContextUsageData> =>
       ipcRenderer.invoke('maker:get-context-usage', sessionId, createOpts),
+
+    getSessionTurnActive: (sessionId: string): Promise<{ inTurn: boolean }> =>
+      ipcRenderer.invoke('maker:session:turn-active', sessionId),
 
     abortSession: (sessionId: string): Promise<void> =>
       ipcRenderer.invoke('maker:abort-session', sessionId),

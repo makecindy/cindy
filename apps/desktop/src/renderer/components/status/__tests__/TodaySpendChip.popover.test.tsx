@@ -692,6 +692,24 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText('本轮消耗：$0.46')).toBeTruthy();
   });
 
+  it('异币种费用与订阅估值在状态栏和卡片分别显示，无 token 时也保留金额', () => {
+    mocks.sessionUsage = {
+      actualMoney: { ...usdMoney(1), currency: 'CNY' },
+      estimatedValueMoney: usdMoney(0.5, 'value-estimate'),
+      totalMoney: null,
+    };
+    mocks.sessionTokens = null;
+    renderClaudeSubscriptionChip();
+    const chip = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    expect(chip.textContent).toContain('本任务已用 ¥1.00');
+    expect(chip.textContent).toContain('本任务价值 $0.50');
+    const { card } = openCardFromHover();
+    const section = within(card).getByTestId('quota-session-usage');
+    expect(within(section).getByText('本任务已用 ¥1.00')).toBeTruthy();
+    expect(within(section).getByText('本任务价值 $0.50')).toBeTruthy();
+    expect(section.textContent).not.toContain('1.50');
+  });
+
   it('第三方参考价的近似实际费用仍标为本任务已用', () => {
     const approximateActualMoney: RegionalMoney = {
       ...usdMoney(0.25),
@@ -721,6 +739,9 @@ describe('TodaySpendChip Claude subscription popover', () => {
     };
 
     renderClaudeSubscriptionChip();
+    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).textContent).toContain(
+      '本任务价值 $0.50',
+    );
     const { card } = openCardFromHover();
     const sessionSection = within(card).getByTestId('quota-session-usage');
 

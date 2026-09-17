@@ -104,6 +104,8 @@ import {
   chatEligibleSourcesForModel,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
+  findCatalogModel,
+  nativeDefaultSourceId,
   getModel,
   modelSupportsFastMode,
   providerOffersModel,
@@ -316,6 +318,23 @@ function ModelOptionsFloatingPanel({
 
 function providerDisplayName(p: ProviderView, t: (key: string) => string): string {
   return sharedProviderDisplayName(p, t);
+}
+
+/** Display-only alias lookup; implicit choices retain the default-source eligibility/order. */
+function modelDisplayProvider(
+  providers: ProviderView[], providerId: string | null | undefined,
+  modelId: string, agent: AgentKind, actualRoute: boolean,
+): ProviderView | undefined {
+  if (providerId) return providers.find((provider) => provider.id === providerId);
+  const resolveSource = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
+  const eligible = providers.filter((provider) => {
+    // Source eligibility must preserve distinct products such as [1m]. Metadata
+    // may fall back to the base model only after the source has been selected.
+    const model = findCatalogModel(provider, modelId, agent, { exact: true });
+    return model && resolveSource([provider], provider.id, model.id, agent) === provider.id;
+  });
+  const defaultId = nativeDefaultSourceId(eligible, agent);
+  return eligible.find((provider) => provider.id === defaultId);
 }
 
 // 来源供应商 → 单色官方 mark(fill=currentColor)。trigger 默认右间距 + trigger 文字色;
@@ -2794,12 +2813,11 @@ function ModelSelectorContentView({
             // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
             // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
             'max-h-[min(560px,calc(100vh-120px))]',
-            // 宽度自适应(规格 §1.2):长模型名先把面板撑宽,到上限才截断,不硬砍名字。
-            // 最小宽只兜「搜索行 + 空态不局促」的底(Chris 2026-08-13:min 460 让短名列表
-            // 中间留一条空隙 —— 面板应该贴着最长行收窄,理论最小值可以很小)。
+            // 紧凑内容宽度：长模型名在 420px 上限内省略，不为完整名称撑大面板。
+            // field 入口仍绑定字段宽度；窄窗口继续受视口与 morph 锚点约束。
             fluidWidth
               ? 'w-full min-w-0'
-              : 'w-max min-w-[300px] max-w-[min(600px,calc(100vw-48px))]',
+              : 'w-max min-w-[300px] max-w-[min(420px,calc(100vw-48px))]',
           )}
         >
           {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
@@ -3399,17 +3417,33 @@ export function ModelSelector({
   const currentModel = routeModel
     ? { ...routeModel, displayName: routeModel.name, id: modelId }
     : visibleModels.find((m) => m.id === modelId);
-  // 已保存模型即使隐藏、断开或下架，实际任务仍保留模型 ID；偏好字段可通过
-  // unknownModelLabel 提供诊断文案。没有保存选择的入口才显示选择模型占位符。
+  // Wire IDs can differ from catalog IDs during a switch. Resolve display metadata
+  // through the existing alias lookup without changing routing/capability decisions.
+  const displayProvider = agentKind
+    ? modelDisplayProvider(providers, currentProviderId, modelId, agentKind, actualRoute)
+    : undefined;
+  const resolvedModelName = (agentKind ? findCatalogModel(displayProvider, modelId, agentKind)?.name : undefined)
+    ?? currentModel?.displayName;
+  const labelKey = JSON.stringify([deviceId ?? null, currentProviderId ?? null, agentKind, modelId]);
+  const lastModelName = useRef<{ key: string; name: string | undefined } | null>(null);
+  const modelName = resolvedModelName
+    ?? (lastModelName.current?.key === labelKey ? lastModelName.current.name : undefined);
+  useEffect(() => {
+    // Retain only this selection's label through catalog refresh/failure. Never
+    // borrow the previous model, source, engine or device's name for a new choice.
+    lastModelName.current = { key: labelKey, name: modelName };
+  }, [labelKey, modelName]);
+  const localizedName = modelName ? localizedModelName(modelName, t) : undefined;
+  // Explicit diagnostic fields can supply unknownModelLabel; ordinary triggers
+  // must not expose internal wire IDs when no display metadata is available.
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
   const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
-    : ((currentModel ? localizedModelName(currentModel.displayName, t) : undefined) ??
+    : (localizedName ??
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
-      (actualRoute && modelId ? modelId : null) ??
       t('newChat.modelSelector.trigger.placeholder'));
   const agentName =
     agentIdentity && !fallbackOption?.active
@@ -3572,11 +3606,12 @@ export function ModelSelector({
   // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
   // 错误图标时只看到模型名、无法判断发送为何被阻断。
   const describeSelection = (selection: SessionRuntimeProfileProjection): string => {
-    const pid = actualSourceIdForModel(providers, selection.providerId, selection.model, selection.agentKind);
-    const provider = providers.find((p) => p.id === (selection.providerId ?? pid));
-    const model = provider ? getModel(provider, selection.model, selection.agentKind) : undefined;
+    const provider = modelDisplayProvider(providers, selection.providerId, selection.model, selection.agentKind, true);
+    const model = findCatalogModel(provider, selection.model, selection.agentKind);
+    const selectionKey = JSON.stringify([deviceId ?? null, selection.providerId, selection.agentKind, selection.model]);
+    const name = selectionKey === labelKey ? localizedName : model?.name ? localizedModelName(model.name, t) : undefined;
     const vendor = selection.agentKind === 'claude-code' ? 'Claude Code' : selection.agentKind === 'pi' ? 'Pi' : 'Codex';
-    return [vendor, model?.name ?? selection.model, provider ? providerDisplayName(provider, t) : selection.providerId,
+    return [vendor, name ?? t('newChat.modelSelector.trigger.placeholder'), provider ? providerDisplayName(provider, t) : selection.providerId,
       selection.effort ? modelEffortLabel(t, model, selection.effort) : null,
       selection.fastMode ? t('newChat.modelSelector.meta.fastBadge') : null].filter(Boolean).join(' · ');
   };
@@ -3691,7 +3726,7 @@ export function ModelSelector({
                 ? 'w-[64px] min-w-[64px]'
                 : isCompactToolbar
                   ? 'w-[148px] min-w-[72px]'
-                  : 'min-w-[72px]',
+                  : 'min-w-[72px] max-w-[min(320px,100%)]',
               'border border-transparent bg-transparent',
               'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
             ),
@@ -3762,9 +3797,7 @@ export function ModelSelector({
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
-            {/* 断开来源可能是该模型的唯一提供方 → visibleModels 查不到,回落显示原始 id,
-                    比 "Select model" 占位更能说明「哪个模型的来源断了」。 */}
-            {currentModel ? localizedModelName(currentModel.displayName, t) : modelId}
+            {displayLabel}
           </span>
           {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
               结构位,不靠出错才显示)。 */}

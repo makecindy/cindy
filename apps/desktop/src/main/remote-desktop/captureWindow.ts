@@ -21,12 +21,16 @@ export class DesktopCaptureWindow {
   } | null = null;
   private captureSession: Session | null = null;
   private get url(): string {
-    return DESKTOP_CAPTURE_VITE_DEV_SERVER_URL
+    const base = DESKTOP_CAPTURE_VITE_DEV_SERVER_URL
       ? new URL('index.html', DESKTOP_CAPTURE_VITE_DEV_SERVER_URL).href
       : CAPTURE_URL;
+    return this.mode === 'files' ? `${base}?mode=files` : base;
   }
 
-  constructor(private readonly failed: () => void) {}
+  constructor(
+    private readonly failed: () => void,
+    private readonly mode: 'desktop' | 'files' = 'desktop',
+  ) {}
 
   get contents() {
     return this.window?.webContents ?? null;
@@ -57,7 +61,10 @@ export class DesktopCaptureWindow {
 
   private getSession(): Session {
     if (this.captureSession) return this.captureSession;
-    const ses = session.fromPartition('cindy-desktop-capture', { cache: false });
+    const ses = session.fromPartition(
+      this.mode === 'files' ? 'cindy-file-peer' : 'cindy-desktop-capture',
+      { cache: false },
+    );
     this.captureSession = ses;
     installContentSecurityPolicy(ses, {
       isDev: Boolean(DESKTOP_CAPTURE_VITE_DEV_SERVER_URL),
@@ -67,6 +74,7 @@ export class DesktopCaptureWindow {
     const origin = `${new URL(this.url).protocol}//${new URL(this.url).host}`;
     ses.setPermissionCheckHandler(
       (owner, permission, requestingOrigin) =>
+        this.mode === 'desktop' &&
         owner === this.contents &&
         owner?.mainFrame.url === this.url &&
         (requestingOrigin === origin || requestingOrigin === `${origin}/`) &&
@@ -74,7 +82,8 @@ export class DesktopCaptureWindow {
     );
     ses.setPermissionRequestHandler((owner, permission, callback, details) => {
       callback(
-        owner === this.contents &&
+        this.mode === 'desktop' &&
+          owner === this.contents &&
           owner?.mainFrame.url === this.url &&
           details.isMainFrame === true &&
           details.requestingUrl === this.url &&
@@ -92,7 +101,12 @@ export class DesktopCaptureWindow {
         if (
           request.method !== 'GET' ||
           url.host !== 'capture' ||
-          url.search ||
+          (url.search !== '' &&
+            !(
+              this.mode === 'files' &&
+              url.search === '?mode=files' &&
+              url.pathname === '/index.html'
+            )) ||
           !/^\/(?:index\.html|assets\/[A-Za-z0-9_-]+\.js)$/.test(url.pathname)
         )
           return new Response(null, { status: 403 });

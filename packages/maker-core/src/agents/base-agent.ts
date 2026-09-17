@@ -1092,6 +1092,8 @@ export interface AgentDeps {
    * for host-owned HTTP MCP bridges. Missing hooks keep the old no-session
    * behavior; implementations should be in-memory and best-effort.
    */
+  /** Synchronous local policy registration; no RPC or IO on a send. Returns owner-scoped cleanup. */
+  registerCodexTextOnlyPolicy?: (threadId: string, disabled: () => boolean) => () => void;
   registerCodexMcpThreadContext?: (args: CodexMcpThreadContextArgs) => void;
   unregisterCodexMcpThreadContext?: (
     threadId: string,
@@ -1995,6 +1997,8 @@ export interface SendOptions {
    * approval boundary, before MCP auto-approval or permission-mode bypasses.
    */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** Host-owned text-only turn. Block every tool before execution, including reads and Full access. */
+  toolsDisabled?: boolean;
 }
 
 export type TurnPermissionOrigin =

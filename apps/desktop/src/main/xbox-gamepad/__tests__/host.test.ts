@@ -2,6 +2,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
@@ -21,7 +22,7 @@ vi.mock('../../logger.js', () => ({
   }),
 }));
 
-import { createXboxGamepadHost } from '../host.js';
+import { createXboxGamepadHost, resolveXboxGamepadHelperPath } from '../host.js';
 
 function fakeChild(): ChildProcessWithoutNullStreams {
   const child = new EventEmitter() as EventEmitter & {
@@ -43,6 +44,22 @@ async function flush(): Promise<void> {
 }
 
 describe('XboxGamepadHost', () => {
+  it('resolves a packaged Windows helper rather than rejecting the platform', async () => {
+    vi.stubGlobal('process', { ...process, resourcesPath: path.resolve('resources') });
+    try {
+      const helper = await resolveXboxGamepadHelperPath('win32');
+      expect(helper).toBe(
+        path.join(
+          process.resourcesPath,
+          'tools',
+          'xbox-gamepad',
+          'cindy-windows-gamepad-helper.exe',
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it('turns a spawn error into host-error instead of crashing the process', async () => {
     const onMessage = vi.fn();
     const child = fakeChild();
@@ -267,6 +284,17 @@ describe('XboxGamepadHost', () => {
 });
 
 describe('Xbox gamepad helper packaging contract', () => {
+  it('starts Windows input and ships a native helper for the requested architecture', () => {
+    const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const forge = readFileSync(new URL('../../../../forge.config.ts', import.meta.url), 'utf8');
+    expect(index).toContain("process.platform === 'darwin' || process.platform === 'win32'");
+    expect(forge).toContain('buildWindowsGamepadHelper(platform, arch)');
+    expect(forge).toContain('aarch64-pc-windows-msvc');
+    expect(forge).toContain('x86_64-pc-windows-msvc');
+    expect(forge).toContain("buildWindowsInputHelper('gamepad', platform, arch)");
+    expect(forge).toContain("buildWindowsInputHelper('micro', platform, arch)");
+    expect(forge).toContain('cindy-windows-${kind}-helper.exe');
+  });
   it('matches HID transport to the current controller instead of any Microsoft USB device', () => {
     const source = readFileSync(
       new URL('../../../../native/xbox-gamepad/macos-xbox-gamepad-helper.swift', import.meta.url),
@@ -296,7 +324,7 @@ describe('Xbox gamepad helper packaging contract', () => {
     expect(source).toContain('switch2-usb off');
     expect(source).toContain('switch2_usb_shutdown');
     expect(source).toContain('func setSwitch2UsbWanted');
-    const startFn = source.match(/func start\(\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+    const startFn = source.match(/func start\(\) \{[\s\S]*?\n {2}\}/)?.[0] ?? '';
     expect(startFn).not.toContain('switch2_usb_ensure');
     expect(startFn).not.toContain('scheduledTimer');
     expect(source).toContain('switch2PollTimer');

@@ -1,27 +1,48 @@
+import {
+  tryMobilePeerFile,
+  peerMediaUri,
+  releasePeerMedia,
+} from "./peerFileRegistry";
+import { withTransientRemoteRetry } from "./remoteRetry";
+import {
+  getMobileAuthOwner,
+  isMobileAuthOwnerCurrent,
+} from "@/auth/authOwnerGeneration";
 import type {
   ConversationSearchRequest,
   ConversationSearchResponse,
-} from '@cindy/maker-shared/conversation-search';
+} from "@cindy/maker-shared/conversation-search";
 import type {
   InputProjection,
   PendingInteraction,
   QueuedRemoteMessage,
   RemoteMessage,
   RemoteSession,
-} from '@/session/types';
+} from "@/session/types";
 import type {
   MobileSessionReference,
   MobileSessionReferenceContext,
-} from '@/session/sessionReferences';
+} from "@/session/sessionReferences";
 import {
   DEVICE_LINK_MEDIA_FETCH_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   MOBILE_REMOTE_INVOKE_CHANNELS,
-} from '@cindy/maker-shared/device-link-contract';
-import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
-import type { HistoryViewPage, HistoryDetailPage, HistoryWorkSummary } from '@cindy/maker-shared/message-window';
+} from "@cindy/maker-shared/device-link-contract";
+import {
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  readDeviceFile,
+  FILE_PEER_MAX_BYTES,
+  createDeviceFileOperations,
+  exportDeviceFile,
+  assertFileReadActive,
+} from "@cindy/device-link";
+import type {
+  HistoryViewPage,
+  HistoryDetailPage,
+  HistoryWorkSummary,
+} from "@cindy/maker-shared/message-window";
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatusPayload,
@@ -32,10 +53,13 @@ import type {
   MobileVoiceDictionaryLearningRequest,
   MobileVoiceDictionarySnapshotResult,
   MobileVoiceDictionaryLearningResult,
-} from '@cindy/maker-shared/device-link-contract';
-import type { ProviderView } from '@cindy/model-providers/registry';
-import type { RewindPreviewPayload } from '@/session/rewindPreview';
-import type { MobileRemoteMediaFetchResult } from '@/session/remoteMedia';
+} from "@cindy/maker-shared/device-link-contract";
+import type { ProviderView } from "@cindy/model-providers/registry";
+import type { RewindPreviewPayload } from "@/session/rewindPreview";
+import type {
+  MobileRemoteMediaFetchOptions,
+  MobileRemoteMediaFetchResult,
+} from "@/session/remoteMedia";
 import type {
   RemoteSchedule,
   RemoteScheduleCreateFromTemplateInput,
@@ -43,7 +67,7 @@ import type {
   RemoteScheduleTemplate,
   RemoteScheduleWriteInput,
   ScheduleListFilter,
-} from '@/scheduler/types';
+} from "@/scheduler/types";
 
 export type RemoteInvoke = <T = unknown>(
   deviceId: string,
@@ -54,6 +78,7 @@ export type RemoteInvoke = <T = unknown>(
 export interface MobileMakerTransportDeps {
   deviceId: string;
   invoke: RemoteInvoke;
+  isCurrent?: () => boolean;
 }
 
 export interface SendOptions {
@@ -63,7 +88,7 @@ export interface SendOptions {
 }
 
 export interface CreateSessionOptions {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: "claude-code" | "codex" | "pi";
   /**
    * 控制端预生成的 sessionId(新建会话乐观管线用):被控端 readCreateSessionOpts
    * 自手机远控首版(2026-06-21)起透传 body.id,maker-core createSession 对
@@ -76,7 +101,7 @@ export interface CreateSessionOptions {
   effort?: string;
   permissionMode?: string;
   fastMode?: boolean;
-  workspaceKind?: 'project' | 'dialogue';
+  workspaceKind?: "project" | "dialogue";
   extraDirs?: string[];
   /**
    * 显式选中的供应商(来源)id。仅当用户在模型下拉里选了非默认来源时带上;
@@ -95,22 +120,22 @@ export interface CreateSessionResult {
   usedProjectContext?: boolean;
 }
 
-export type MobileAgentKind = 'claude-code' | 'codex' | 'pi';
+export type MobileAgentKind = "claude-code" | "codex" | "pi";
 
 export type MobileSlashCommand =
-  | { kind: 'agent-builtin'; name: string; description: string }
+  | { kind: "agent-builtin"; name: string; description: string }
   | {
-      kind: 'agent-skill';
+      kind: "agent-skill";
       name: string;
       description?: string;
-      source: 'user' | 'skill';
+      source: "user" | "skill";
       path?: string;
       scope?: string;
       enabled?: boolean;
     }
   // desktop 自有命令(被控端 main 的 DesktopCommandRegistry,如 /learn):
   // 由控制端按名字分流执行,不转发给 agent。
-  | { kind: 'desktop'; name: string; description: string };
+  | { kind: "desktop"; name: string; description: string };
 
 export interface MobileAgentCommandListResult {
   success: boolean;
@@ -127,9 +152,9 @@ export interface MobileDesktopCommandListResult {
 /** learn:start 请求(形状对齐被控端 learn-host 的 LearnStartRequest 校验)。 */
 export interface MobileLearnStartRequest {
   input: string;
-  sourceKind: 'freetext' | 'session' | 'hub';
+  sourceKind: "freetext" | "session" | "hub";
   hubSlug?: string;
-  hubCatalogScope?: 'market' | 'team';
+  hubCatalogScope?: "market" | "team";
   originSessionId?: string;
 }
 
@@ -140,7 +165,7 @@ export interface MobileAgentSkillListResult {
 }
 
 export interface MobileAtResourceItem {
-  type: 'file' | 'dir' | 'agent';
+  type: "file" | "dir" | "agent";
   name: string;
   relPath: string;
   description?: string;
@@ -167,7 +192,7 @@ export interface MessageAroundOptions {
 
 export interface RemoteDirectoryEntry {
   name: string;
-  kind: 'dir' | 'symlink' | 'file';
+  kind: "dir" | "symlink" | "file";
   path: string;
 }
 
@@ -178,14 +203,14 @@ export interface RemoteDirectoryListResult {
 }
 
 export interface RemotePathStatResult {
-  kind: 'dir' | 'file' | 'missing';
+  kind: "dir" | "file" | "missing";
   resolvedPath: string;
 }
 
 export interface RemoteTextFilePreviewResult {
   success: boolean;
   error?: string;
-  reason?: 'oversize' | 'not_found' | 'forbidden' | 'read_failed';
+  reason?: "oversize" | "not_found" | "forbidden" | "read_failed";
   data?: string;
   size: number;
   limitMb?: number;
@@ -199,6 +224,7 @@ export interface RemoteTextFilePreviewResult {
 export interface FileBrowserCapsResult {
   ok: boolean;
   gzip?: boolean;
+  completeDirectoryListing?: boolean;
   /** 老被控端对未知 op 返回 {ok:false,message:'unknown op: caps'}。 */
   message?: string;
 }
@@ -210,21 +236,33 @@ export interface FileBrowserReadFileData {
   size: number;
   mtimeMs: number;
   truncated?: boolean;
-  contentEncoding?: 'gzip';
+  contentEncoding?: "gzip";
 }
 
 export type FileBrowserReadFileResult =
   | { ok: true; data: FileBrowserReadFileData }
   | {
       ok: false;
-      code?: 'OVERSIZE' | 'BINARY_FILE' | 'READ_FAILED';
+      code?: "OVERSIZE" | "BINARY_FILE" | "READ_FAILED";
       message?: string;
-      stat?: { relPath: string; type: 'file'; size: number; mtimeMs: number };
+      stat?: { relPath: string; type: "file"; size: number; mtimeMs: number };
     };
 
 export type FileBrowserThumbnailResult =
-  | { ok: true; dataBase64: string; mimeType: 'image/webp'; width: number; height: number; size: number; mtimeMs: number }
-  | { ok: false; code?: 'THUMB_UNSUPPORTED' | 'THUMB_TOO_LARGE' | 'THUMB_FAILED'; message?: string };
+  | {
+      ok: true;
+      dataBase64: string;
+      mimeType: "image/webp";
+      width: number;
+      height: number;
+      size: number;
+      mtimeMs: number;
+    }
+  | {
+      ok: false;
+      code?: "THUMB_UNSUPPORTED" | "THUMB_TOO_LARGE" | "THUMB_FAILED";
+      message?: string;
+    };
 
 export interface FileBrowserListAllFilesResult {
   files: string[];
@@ -238,7 +276,14 @@ export type FileBrowserExportStartResult =
   | { ok: false; message?: string };
 
 export type FileBrowserExportStatusResult =
-  | { ok: true; state: 'uploading' | 'done' | 'error'; key?: string; message?: string; size: number; uploaded: number }
+  | {
+      ok: true;
+      state: "uploading" | "done" | "error";
+      key?: string;
+      message?: string;
+      size: number;
+      uploaded: number;
+    }
   | { ok: false; message?: string };
 
 export interface FileBrowserSearchMatch {
@@ -371,7 +416,15 @@ export interface MobileWorktreeMeta {
 /** 工作端 worktree:create 回包(error.message 为被控端生成的可展示文案)。 */
 export type MobileWorktreeCreateResult =
   | { ok: true; meta: MobileWorktreeMeta }
-  | { ok: false; error: { kind: string; message: string; hint?: string; rawStderr?: string } };
+  | {
+      ok: false;
+      error: {
+        kind: string;
+        message: string;
+        hint?: string;
+        rawStderr?: string;
+      };
+    };
 
 export interface MobileMakerTransport {
   createSession(opts: CreateSessionOptions): Promise<CreateSessionResult>;
@@ -397,8 +450,13 @@ export interface MobileMakerTransport {
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
   getSession(sessionId: string): Promise<RemoteSession>;
-  searchConversations(request: ConversationSearchRequest): Promise<ConversationSearchResponse>;
-  patchSessionMeta(sessionId: string, patch: SessionMetaPatch): Promise<RemoteSession>;
+  searchConversations(
+    request: ConversationSearchRequest,
+  ): Promise<ConversationSearchResponse>;
+  patchSessionMeta(
+    sessionId: string,
+    patch: SessionMetaPatch,
+  ): Promise<RemoteSession>;
   /**
    * error-tail「忽略」:被控端把该 role='error' 行的 content merge dismissed:true
    * 持久化(不丢原字段),重连/历史重拉后 banner 不复活。老被控端无此 channel →
@@ -415,15 +473,36 @@ export interface MobileMakerTransport {
    * handler)。只生成不落库,持久化仍走 patchSessionMeta;失败/无素材时 title 为 null。
    */
   regenerateSessionTitle(sessionId: string): Promise<{ title: string | null }>;
-  listMessages(sessionId: string, opts?: MessageListOptions): Promise<RemoteMessage[]>;
-  readHistoryView(sessionId: string, before?: string): Promise<HistoryViewPage<RemoteMessage>>;
-  readWorkDetails(sessionId: string, ref: HistoryWorkSummary, after?: string): Promise<HistoryDetailPage<RemoteMessage>>;
-  setHistoryExpanded(sessionId: string, refs: readonly HistoryWorkSummary[]): Promise<void>;
-  aroundMessages(sessionId: string, messageId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
-  aroundMessagesByClientId(sessionId: string, clientId: string, opts?: MessageAroundOptions): Promise<RemoteMessage[]>;
+  listMessages(
+    sessionId: string,
+    opts?: MessageListOptions,
+  ): Promise<RemoteMessage[]>;
+  readHistoryView(
+    sessionId: string,
+    before?: string,
+  ): Promise<HistoryViewPage<RemoteMessage>>;
+  readWorkDetails(
+    sessionId: string,
+    ref: HistoryWorkSummary,
+    after?: string,
+  ): Promise<HistoryDetailPage<RemoteMessage>>;
+  setHistoryExpanded(
+    sessionId: string,
+    refs: readonly HistoryWorkSummary[],
+  ): Promise<void>;
+  aroundMessages(
+    sessionId: string,
+    messageId: string,
+    opts?: MessageAroundOptions,
+  ): Promise<RemoteMessage[]>;
+  aroundMessagesByClientId(
+    sessionId: string,
+    clientId: string,
+    opts?: MessageAroundOptions,
+  ): Promise<RemoteMessage[]>;
   send(
     sessionId: string,
-    message: string | { type: 'user'; content: unknown },
+    message: string | { type: "user"; content: unknown },
     createOpts?: CreateSessionOptions,
     sendOpts?: SendOptions,
   ): Promise<{ accepted: true } | { accepted: false; reason?: string }>;
@@ -448,7 +527,9 @@ export interface MobileMakerTransport {
     fastMode?: boolean,
   ): Promise<MobileSessionAgentSwitchResult>;
   /** 读取 desktop main 的权威 pending intent，用于重连 / 重进页面恢复。 */
-  getSessionAgentSwitchIntent(sessionId: string): Promise<MobileSessionAgentSwitchIntent | null>;
+  getSessionAgentSwitchIntent(
+    sessionId: string,
+  ): Promise<MobileSessionAgentSwitchIntent | null>;
   setEffort(sessionId: string, effort: string): Promise<void>;
   setPermissionMode(sessionId: string, mode: string): Promise<void>;
   /** 计划模式一级开关(#494 新协议,capabilities.planMode.supported 时可用);
@@ -463,12 +544,20 @@ export interface MobileMakerTransport {
    * 接口返回为准,shape 见 maker-shared summarizeAccountRateLimits),claude-code →
    * 网关配额。老被控端 CHANNEL_NOT_ALLOWED → 调用方隐藏限额区块。
    */
-  getAccountUsage(agentKind: MobileAgentKind, providerId?: string): Promise<unknown>;
-  getSessionEstimatedValue(sessionId: string): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
+  getAccountUsage(
+    agentKind: MobileAgentKind,
+    providerId?: string,
+  ): Promise<unknown>;
+  getSessionEstimatedValue(
+    sessionId: string,
+  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   /** Consume the desktop-issued offer; retries must pass the same idempotency key. */
-  resetCodexRateLimits(idempotencyKey: string, providerId?: string): Promise<MobileCodexRateLimitResetResult>;
+  resetCodexRateLimits(
+    idempotencyKey: string,
+    providerId?: string,
+  ): Promise<MobileCodexRateLimitResetResult>;
   /** 网关 API key presence-only 探测(只回 boolean;老被控端 → 调用方按 unknown 处理)。 */
   getApiKeyPresent(): Promise<{ present: boolean }>;
   /** 会话「非选中模型」effort/fast 写穿(老被控端 → 调用方吞掉降级)。 */
@@ -476,7 +565,9 @@ export interface MobileMakerTransport {
   /** 草稿「模型 effort/fast」写穿(active 恒 false;老被控端 → 调用方吞掉降级)。 */
   applyNewMakerDraftPref(pref: MobileNewMakerDraftPref): Promise<void>;
   /** 工作端 New Maker 草稿默认值镜像(只读;手机当前只消费 worktreeEnabled)。 */
-  getNewMakerDefaults(agentKind: MobileAgentKind): Promise<MobileNewMakerDefaults>;
+  getNewMakerDefaults(
+    agentKind: MobileAgentKind,
+  ): Promise<MobileNewMakerDefaults>;
   /** 「新建会话默认启用 worktree」写穿工作端(老被控端 → 调用方吞掉降级)。 */
   applyNewMakerWorktreePref(worktreeEnabled: boolean): Promise<void>;
   /** 读取工作端某 canonical repo 的 New Maker worktree 源分支；未选择过返回 null。 */
@@ -512,9 +603,10 @@ export interface MobileMakerTransport {
      * 精确 worktree。create 回包前恢复时可改用预先持久化的 recoveryKey；被控端会再次
      * 校验登记匹配、dirty 与 live ownership。
      */
-    discardPrecreated(input:
-      | { sessionId: string; path: string; recoveryKey?: never }
-      | { sessionId: string; recoveryKey: string; path?: never }
+    discardPrecreated(
+      input:
+        | { sessionId: string; path: string; recoveryKey?: never }
+        | { sessionId: string; recoveryKey: string; path?: never },
     ): Promise<{ discarded: true; branchDeleted?: boolean }>;
   };
   listAgentCommands(
@@ -532,20 +624,42 @@ export interface MobileMakerTransport {
     agentKind: MobileAgentKind,
     opts: { workingDir?: string; forceReload?: boolean; sessionId?: string },
   ): Promise<MobileAgentSkillListResult>;
-  scanAtResources(agentKind: MobileAgentKind, opts: { workingDir: string; cap?: number; query?: string }): Promise<MobileAtResourceScanResult>;
-  fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean }): Promise<MobileRemoteMediaFetchResult>;
-  transcribeVoice(input: MobileVoiceTranscribeRequest): Promise<MobileVoiceTranscribeResult>;
-  recordVoiceDictionaryLearning(input: MobileVoiceDictionaryLearningRequest): Promise<MobileVoiceDictionaryLearningResult>;
+  scanAtResources(
+    agentKind: MobileAgentKind,
+    opts: { workingDir: string; cap?: number; query?: string },
+  ): Promise<MobileAtResourceScanResult>;
+  fetchRemoteMedia(
+    url: string,
+    opts?: MobileRemoteMediaFetchOptions,
+  ): Promise<MobileRemoteMediaFetchResult>;
+  transcribeVoice(
+    input: MobileVoiceTranscribeRequest,
+  ): Promise<MobileVoiceTranscribeResult>;
+  recordVoiceDictionaryLearning(
+    input: MobileVoiceDictionaryLearningRequest,
+  ): Promise<MobileVoiceDictionaryLearningResult>;
   /**
    * 拉取被控桌面的语音词典只读快照。老被控端不识别该 channel 会回
    * CHANNEL_NOT_ALLOWED,调用方据此静默回退到「无词典」,不打断语音输入。
    */
   getVoiceDictionary(): Promise<MobileVoiceDictionarySnapshotResult>;
   getPendingInteractions(sessionId: string): Promise<PendingInteraction[]>;
-  resolveInteraction(requestId: string, decision: Record<string, unknown>): Promise<{ accepted: boolean } | void>;
-  getContextUsage(sessionId: string, createOpts?: Record<string, unknown>): Promise<unknown>;
-  fork(sourceSessionId: string, messageClientId: string): Promise<RemoteSession>;
-  rewindPreview(sessionId: string, clientId: string): Promise<RewindPreviewPayload>;
+  resolveInteraction(
+    requestId: string,
+    decision: Record<string, unknown>,
+  ): Promise<{ accepted: boolean } | void>;
+  getContextUsage(
+    sessionId: string,
+    createOpts?: Record<string, unknown>,
+  ): Promise<unknown>;
+  fork(
+    sourceSessionId: string,
+    messageClientId: string,
+  ): Promise<RemoteSession>;
+  rewindPreview(
+    sessionId: string,
+    clientId: string,
+  ): Promise<RewindPreviewPayload>;
   rewindCommit(sessionId: string, clientId: string): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
@@ -559,10 +673,17 @@ export interface MobileMakerTransport {
    * 'explicit' = 内容真实展示(可清 error 未读);'passive' = 导航类被动信号。
    * 老被控端无此 channel → CHANNEL_NOT_ALLOWED,调用方吞掉降级。
    */
-  clearSessionAttention(sessionId: string, intent: 'explicit' | 'passive'): Promise<void>;
+  clearSessionAttention(
+    sessionId: string,
+    intent: "explicit" | "passive",
+  ): Promise<void>;
   /** 目标模式:goal 状态机在被控端 GoalController 执行,这里只是隧道封装(路 A)。 */
   goal: {
-    set(input: { sessionId: string; objective: string; limits?: MobileGoalLimitsInput }): Promise<void>;
+    set(input: {
+      sessionId: string;
+      objective: string;
+      limits?: MobileGoalLimitsInput;
+    }): Promise<void>;
     clear(sessionId: string): Promise<void>;
     getStatus(sessionId: string): Promise<MobileGoalStatusPayload | null>;
     pause(sessionId: string): Promise<void>;
@@ -577,9 +698,14 @@ export interface MobileMakerTransport {
     list(filter?: ScheduleListFilter): Promise<RemoteSchedule[]>;
     get(id: string): Promise<RemoteSchedule>;
     listTemplates(): Promise<RemoteScheduleTemplate[]>;
-    createFromTemplate(input: RemoteScheduleCreateFromTemplateInput): Promise<RemoteSchedule>;
+    createFromTemplate(
+      input: RemoteScheduleCreateFromTemplateInput,
+    ): Promise<RemoteSchedule>;
     create(input: RemoteScheduleWriteInput): Promise<RemoteSchedule>;
-    update(id: string, patch: Partial<RemoteScheduleWriteInput>): Promise<RemoteSchedule>;
+    update(
+      id: string,
+      patch: Partial<RemoteScheduleWriteInput>,
+    ): Promise<RemoteSchedule>;
     listRuns(id: string, limit?: number): Promise<RemoteScheduleRun[]>;
     runNow(id: string): Promise<void>;
     pause(id: string): Promise<RemoteSchedule>;
@@ -598,17 +724,28 @@ export interface MobileMakerTransport {
   compactSession(
     sessionId: string,
     instructions?: string,
-  ): Promise<{ tokensBefore?: number; estimatedTokensAfter?: number; noop?: boolean } | null>;
+  ): Promise<{
+    tokensBefore?: number;
+    estimatedTokensAfter?: number;
+    noop?: boolean;
+  } | null>;
   input: {
     getProjection(sessionId: string): Promise<InputProjection>;
-    enqueue(sessionId: string, item: QueuedRemoteMessage, opts?: { sendAtMs?: number }): Promise<InputProjection>;
+    enqueue(
+      sessionId: string,
+      item: QueuedRemoteMessage,
+      opts?: { sendAtMs?: number },
+    ): Promise<InputProjection>;
     compact(sessionId: string): Promise<InputProjection>;
     steer(
       sessionId: string,
       item: QueuedRemoteMessage,
       opts?: { removeFromQueue?: boolean; touchUserSend?: boolean },
     ): Promise<boolean>;
-    stop(sessionId: string, opts?: { keepQueue?: boolean; pauseQueue?: boolean }): Promise<InputProjection>;
+    stop(
+      sessionId: string,
+      opts?: { keepQueue?: boolean; pauseQueue?: boolean },
+    ): Promise<InputProjection>;
     resume(sessionId: string): Promise<InputProjection>;
     retryLastError(sessionId: string): Promise<InputProjection>;
     clearError(sessionId: string): Promise<InputProjection>;
@@ -621,11 +758,27 @@ export interface MobileMakerTransport {
       trustedContexts?: MobileSessionReferenceContext[],
     ): Promise<InputProjection>;
     /** 整条内容替换(文本+附件),排队消息复用 composer 编辑的保存入口;老桌面端无此通道会抛 CHANNEL_NOT_ALLOWED。 */
-    updateContent(sessionId: string, clientId: string, item: QueuedRemoteMessage): Promise<InputProjection>;
-    move(sessionId: string, clientId: string, targetIndex: number): Promise<InputProjection>;
+    updateContent(
+      sessionId: string,
+      clientId: string,
+      item: QueuedRemoteMessage,
+    ): Promise<InputProjection>;
+    move(
+      sessionId: string,
+      clientId: string,
+      targetIndex: number,
+    ): Promise<InputProjection>;
     setExpanded(sessionId: string, expanded: boolean): Promise<InputProjection>;
-    setInteractionLock(sessionId: string, lockId: string, locked: boolean): Promise<InputProjection>;
-    setEditLock(sessionId: string, clientId: string, locked: boolean): Promise<InputProjection>;
+    setInteractionLock(
+      sessionId: string,
+      lockId: string,
+      locked: boolean,
+    ): Promise<InputProjection>;
+    setEditLock(
+      sessionId: string,
+      clientId: string,
+      locked: boolean,
+    ): Promise<InputProjection>;
     clearSession(sessionId: string): Promise<InputProjection>;
   };
   fs: {
@@ -636,87 +789,178 @@ export interface MobileMakerTransport {
   };
   /** 完整文件浏览(workdir 相对路径语义,被控端 file-browser:remote-op 聚合通道)。 */
   fileBrowser: {
+    cacheScope: string;
+    readBytes(
+      workdir: string,
+      relPath: string,
+      signal?: AbortSignal,
+      beforeInvoke?: () => Promise<unknown>,
+      options?: { stream?: boolean },
+    ): Promise<MobileRemoteMediaFetchResult>;
     caps(workdir: string): Promise<FileBrowserCapsResult>;
     /** 返回裸 entries(unknown),消费方用 normalizeRemoteOpDirEntries 归一化。 */
-    listDir(workdir: string, relPath: string): Promise<unknown>;
-    readFile(workdir: string, relPath: string, opts?: { acceptGzip?: boolean }): Promise<FileBrowserReadFileResult>;
-    listAllFiles(workdir: string, cap?: number): Promise<FileBrowserListAllFilesResult>;
+    listDir(
+      workdir: string,
+      relPath: string,
+      opts?: { includeIgnored?: boolean; maxEntries?: number },
+    ): Promise<unknown>;
+    readFile(
+      workdir: string,
+      relPath: string,
+      opts?: { acceptGzip?: boolean },
+    ): Promise<FileBrowserReadFileResult>;
+    listAllFiles(
+      workdir: string,
+      cap?: number,
+    ): Promise<FileBrowserListAllFilesResult>;
     /** ripgrep 内容搜索(被控端 searchCollect,一次性收集,上限被控端封顶 500)。 */
     searchCollect(
       workdir: string,
       query: string,
       opts?: { caseSensitive?: boolean; maxMatches?: number },
     ): Promise<FileBrowserSearchCollectResult>;
-    thumbnail(workdir: string, relPath: string): Promise<FileBrowserThumbnailResult>;
-    exportFileStart(workdir: string, relPath: string): Promise<FileBrowserExportStartResult>;
-    exportFileStatus(workdir: string, transferId: string): Promise<FileBrowserExportStatusResult>;
+    thumbnail(
+      workdir: string,
+      relPath: string,
+    ): Promise<FileBrowserThumbnailResult>;
+    exportFileStart(
+      workdir: string,
+      relPath: string,
+    ): Promise<FileBrowserExportStartResult>;
+    exportFileStatus(
+      workdir: string,
+      transferId: string,
+    ): Promise<FileBrowserExportStatusResult>;
   };
 }
 
-export type SessionMetaPatch = Partial<Pick<RemoteSession, 'status' | 'title' | 'pinnedAt'>>;
+export type SessionMetaPatch = Partial<
+  Pick<RemoteSession, "status" | "title" | "pinnedAt">
+>;
 
 export const MOBILE_MAKER_CHANNELS = MOBILE_REMOTE_INVOKE_CHANNELS;
 
 export function createMobileMakerTransport({
   deviceId,
   invoke,
+  isCurrent,
 }: MobileMakerTransportDeps): MobileMakerTransport {
-  const call = <T,>(channel: string, args: unknown[] = []): Promise<T> => {
-    if (!deviceId) return Promise.reject(new Error('remote device id is required'));
+  const fileOwner = getMobileAuthOwner();
+  const callerIsCurrent = isCurrent;
+  isCurrent = () =>
+    isMobileAuthOwnerCurrent(fileOwner) && callerIsCurrent?.() !== false;
+  const call = <T>(channel: string, args: unknown[] = []): Promise<T> => {
+    if (!deviceId)
+      return Promise.reject(new Error("remote device id is required"));
     return invoke<T>(deviceId, channel, args);
+  };
+  const fileOp = async <T>(args: Record<string, unknown>): Promise<T> => {
+    if (isCurrent?.() === false) throw new Error("FILE_PEER_CANCELLED");
+    const result = await call<T>("file-browser:remote-op", [args]);
+    if (isCurrent?.() === false) throw new Error("FILE_PEER_CANCELLED");
+    return result;
+  };
+  const files = createDeviceFileOperations(fileOp);
+  const fetchMedia = (
+    url: string,
+    opts?: MobileRemoteMediaFetchOptions,
+    fallback?: () => Promise<MobileRemoteMediaFetchResult>,
+    stream = opts?.stream ?? true,
+  ) => {
+    const fetch = (prepareOnly: boolean) =>
+      call<MobileRemoteMediaFetchResult>(DEVICE_LINK_MEDIA_FETCH_CHANNEL, [
+        {
+          url,
+          prepareOnly,
+          ...(opts?.skipCache ? { skipCache: true } : {}),
+          ...(opts?.thumbnail ? { thumbnail: true } : {}),
+        },
+      ]);
+    return readDeviceFile({
+      stream,
+      peerResultIsTransient: true,
+      isCurrent,
+      discard: (result) => {
+        const uri = peerMediaUri(result);
+        if (uri) releasePeerMedia(uri);
+        else if (
+          isMobileAuthOwnerCurrent(fileOwner) &&
+          typeof result.ossKey === "string" &&
+          result.ossKey.length > 0
+        )
+          opts?.onDiscardOssKey?.(result.ossKey);
+      },
+      signal: opts?.signal,
+      prepare: () => fetch(!opts?.thumbnail),
+      peer: (metadata) =>
+        metadata.size <= FILE_PEER_MAX_BYTES
+          ? tryMobilePeerFile(deviceId, url, opts?.signal)
+          : Promise.resolve(null),
+      fallback: fallback ?? (() => fetch(false)),
+    });
   };
 
   return {
-    createSession: (opts) => call('maker:create-session', [opts]),
-    getCapabilities: (agentKind) => call('maker:get-capabilities', [agentKind]),
+    createSession: (opts) => call("maker:create-session", [opts]),
+    getCapabilities: (agentKind) => call("maker:get-capabilities", [agentKind]),
     listAvailableAgents: () => call('maker:list-available-agents', []),
     // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
     // 确认为 Pi 时展示入口，并在渲染前校验返回的树形状。
-    getSessionTree: (sessionId) => call('maker:get-session-tree', [sessionId]),
+    getSessionTree: (sessionId) => call("maker:get-session-tree", [sessionId]),
     navigateSessionTree: (sessionId, entryId, options) =>
-      call('maker:navigate-session-tree', [sessionId, entryId, options]),
-    listProviders: () => call('maker:provider:list', [{
-      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-    }]),
-    getSession: (sessionId) => call('local-db:sessions:get', [sessionId]),
-    searchConversations: (request) => call('local-db:conversations:search', [request]),
-    patchSessionMeta: (sessionId, patch) => call('local-db:sessions:patch-meta', [sessionId, patch]),
+      call("maker:navigate-session-tree", [sessionId, entryId, options]),
+    listProviders: () =>
+      call("maker:provider:list", [
+        {
+          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+        },
+      ]),
+    getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
+    searchConversations: (request) =>
+      call("local-db:conversations:search", [request]),
+    patchSessionMeta: (sessionId, patch) =>
+      call("local-db:sessions:patch-meta", [sessionId, patch]),
     dismissErrorMessage: (sessionId, clientId) =>
-      call('local-db:messages:dismiss-error', [sessionId, clientId]),
-    ackInterruptedTurn: (sessionId) => call('local-db:sessions:ack-interrupted', [sessionId]),
-    regenerateSessionTitle: (sessionId) => call('maker:regenerate-title', [{ sessionId }]),
-    listMessages: (sessionId, opts) => call('local-db:messages:list', [sessionId, opts]),
-    readHistoryView: (sessionId, before) => call('local-db:messages:view', [sessionId, { before }]),
-    readWorkDetails: (sessionId, ref, after) => call('local-db:messages:work-details', [sessionId, ref, { after }]),
-    setHistoryExpanded: (sessionId, refs) => call('local-db:messages:view-intent', [sessionId, refs]),
+      call("local-db:messages:dismiss-error", [sessionId, clientId]),
+    ackInterruptedTurn: (sessionId) =>
+      call("local-db:sessions:ack-interrupted", [sessionId]),
+    regenerateSessionTitle: (sessionId) =>
+      call("maker:regenerate-title", [{ sessionId }]),
+    listMessages: (sessionId, opts) =>
+      call("local-db:messages:list", [sessionId, opts]),
+    readHistoryView: (sessionId, before) =>
+      call("local-db:messages:view", [sessionId, { before }]),
+    readWorkDetails: (sessionId, ref, after) =>
+      call("local-db:messages:work-details", [sessionId, ref, { after }]),
+    setHistoryExpanded: (sessionId, refs) =>
+      call("local-db:messages:view-intent", [sessionId, refs]),
     aroundMessages: (sessionId, messageId, opts) =>
-      call('local-db:messages:around', [sessionId, messageId, opts]),
+      call("local-db:messages:around", [sessionId, messageId, opts]),
     aroundMessagesByClientId: (sessionId, clientId, opts) =>
-      call('local-db:messages:around-client-id', [sessionId, clientId, opts]),
+      call("local-db:messages:around-client-id", [sessionId, clientId, opts]),
     send: (sessionId, message, createOpts, sendOpts) =>
-      call('maker:send', [sessionId, message, createOpts, sendOpts]),
-    listActiveSessions: () => call('maker:list-active', [{ summary: true }]),
+      call("maker:send", [sessionId, message, createOpts, sendOpts]),
+    listActiveSessions: () => call("maker:list-active", [{ summary: true }]),
     setModel: async (sessionId, model, providerId, selection) => {
       const wireArgs = selection
         ? [sessionId, model, providerId ?? null, null, selection]
         : providerId
           ? [sessionId, model, providerId]
           : [sessionId, model];
-      const result = await call<{ deferred?: boolean; superseded?: boolean } | undefined>(
-        'maker:set-model',
-        wireArgs,
-      );
+      const result = await call<
+        { deferred?: boolean; superseded?: boolean } | undefined
+      >("maker:set-model", wireArgs);
       if (
         result !== null &&
-        typeof result === 'object' &&
-        ('contextWindowConfirmationRequired' in result ||
-          'contextTokensForConfirmation' in result)
+        typeof result === "object" &&
+        ("contextWindowConfirmationRequired" in result ||
+          "contextTokensForConfirmation" in result)
       ) {
         throw Object.assign(
           new Error(
-            'remote model-window confirmation is unsupported; runtime selection was not changed',
+            "remote model-window confirmation is unsupported; runtime selection was not changed",
           ),
-          { code: 'PRECONDITION_FAILED' },
+          { code: "PRECONDITION_FAILED" },
         );
       }
       return result;
@@ -728,182 +972,278 @@ export function createMobileMakerTransport({
       providerId,
       effort,
       fastMode,
-    ) => call('maker:switch-session-agent', [
-      sessionId,
-      targetAgentKind,
-      model,
-      providerId,
-      effort,
-      fastMode,
-    ]),
+    ) =>
+      call("maker:switch-session-agent", [
+        sessionId,
+        targetAgentKind,
+        model,
+        providerId,
+        effort,
+        fastMode,
+      ]),
     getSessionAgentSwitchIntent: (sessionId) =>
-      call('maker:get-session-agent-switch-intent', [sessionId]),
-    setEffort: (sessionId, effort) => call('maker:set-effort', [sessionId, effort]),
-    setPermissionMode: (sessionId, mode) => call('maker:set-permission-mode', [sessionId, mode]),
-    setPlanMode: (sessionId, enabled) => call('maker:set-plan-mode', [sessionId, enabled]),
-    setFastMode: (sessionId, enabled) => call('maker:set-fast-mode', [sessionId, enabled]),
-    setExtraDirs: (sessionId, dirs) => call('maker:set-extra-dirs', [sessionId, dirs]),
-    getModelPricing: () => call('maker:usage:model-pricing'),
+      call("maker:get-session-agent-switch-intent", [sessionId]),
+    setEffort: (sessionId, effort) =>
+      call("maker:set-effort", [sessionId, effort]),
+    setPermissionMode: (sessionId, mode) =>
+      call("maker:set-permission-mode", [sessionId, mode]),
+    setPlanMode: (sessionId, enabled) =>
+      call("maker:set-plan-mode", [sessionId, enabled]),
+    setFastMode: (sessionId, enabled) =>
+      call("maker:set-fast-mode", [sessionId, enabled]),
+    setExtraDirs: (sessionId, dirs) =>
+      call("maker:set-extra-dirs", [sessionId, dirs]),
+    getModelPricing: () => call("maker:usage:model-pricing"),
     getAccountUsage: async (agentKind, providerId) => {
-      const result = await call<unknown>('maker:usage:account', providerId ? [agentKind, providerId] : [agentKind]);
-      if (providerId && providerId !== 'openai' && result && (result as { providerId?: string }).providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      const result = await call<unknown>(
+        "maker:usage:account",
+        providerId ? [agentKind, providerId] : [agentKind],
+      );
+      if (
+        providerId &&
+        providerId !== "openai" &&
+        result &&
+        (result as { providerId?: string }).providerId !== providerId
+      )
+        throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
-    getSessionEstimatedValue: (sessionId) => call('local-db:messages:estimatedSessionValue', [sessionId]),
+    getSessionEstimatedValue: (sessionId) =>
+      call("local-db:messages:estimatedSessionValue", [sessionId]),
     getCodexRateLimits: async (providerId) => {
-      const result = await call<MobileCodexRateLimitsResult>('maker:usage:codex-rate-limits', providerId ? [providerId] : undefined);
-      if (providerId && providerId !== 'openai' && result.providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      const result = await call<MobileCodexRateLimitsResult>(
+        "maker:usage:codex-rate-limits",
+        providerId ? [providerId] : undefined,
+      );
+      if (
+        providerId &&
+        providerId !== "openai" &&
+        result.providerId !== providerId
+      )
+        throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
     resetCodexRateLimits: async (idempotencyKey, providerId) => {
-      const result = await call<MobileCodexRateLimitResetResult>('maker:usage:codex-rate-limit-reset', providerId ? [idempotencyKey, providerId] : [idempotencyKey]);
-      if (providerId && providerId !== 'openai' && result.providerId !== providerId) throw new Error('PRECONDITION_FAILED: Account scope unsupported');
+      const result = await call<MobileCodexRateLimitResetResult>(
+        "maker:usage:codex-rate-limit-reset",
+        providerId ? [idempotencyKey, providerId] : [idempotencyKey],
+      );
+      if (
+        providerId &&
+        providerId !== "openai" &&
+        result.providerId !== providerId
+      )
+        throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
-    getApiKeyPresent: () => call('maker:api-key:present'),
-    setSessionModelPref: (pref) => call('maker:set-session-model-pref', [pref]),
-    applyNewMakerDraftPref: (pref) => call('maker:apply-new-maker-draft-pref', [pref]),
-    getNewMakerDefaults: (agentKind) => call('maker:get-new-maker-defaults', [agentKind]),
+    getApiKeyPresent: () => call("maker:api-key:present"),
+    setSessionModelPref: (pref) => call("maker:set-session-model-pref", [pref]),
+    applyNewMakerDraftPref: (pref) =>
+      call("maker:apply-new-maker-draft-pref", [pref]),
+    getNewMakerDefaults: (agentKind) =>
+      call("maker:get-new-maker-defaults", [agentKind]),
     applyNewMakerWorktreePref: (worktreeEnabled) =>
-      call('maker:apply-new-maker-worktree-pref', [{ worktreeEnabled }]),
+      call("maker:apply-new-maker-worktree-pref", [{ worktreeEnabled }]),
     getNewMakerWorktreeBranchPref: (baseRepo) =>
-      call('maker:get-new-maker-worktree-branch-pref', [{ baseRepo }]),
+      call("maker:get-new-maker-worktree-branch-pref", [{ baseRepo }]),
     applyNewMakerWorktreeBranchPref: (baseRepo, sourceBranch) =>
-      call('maker:apply-new-maker-worktree-branch-pref', [{ baseRepo, sourceBranch }]),
+      call("maker:apply-new-maker-worktree-branch-pref", [
+        { baseRepo, sourceBranch },
+      ]),
     worktree: {
-      detectCwd: (cwd) => call('worktree:detect-cwd', [{ cwd }]),
-      listBranches: (baseRepo) => call('worktree:list-branches', [{ baseRepo }]),
-      suggestName: (baseRepo) => call('worktree:suggest-name', [{ baseRepo }]),
-      create: (req) => call('worktree:create', [req]),
-      discardPrecreated: (input) => call('worktree:discard-precreated', [input]),
+      detectCwd: (cwd) => call("worktree:detect-cwd", [{ cwd }]),
+      listBranches: (baseRepo) =>
+        call("worktree:list-branches", [{ baseRepo }]),
+      suggestName: (baseRepo) => call("worktree:suggest-name", [{ baseRepo }]),
+      create: (req) => call("worktree:create", [req]),
+      discardPrecreated: (input) =>
+        call("worktree:discard-precreated", [input]),
     },
     listAgentCommands: (agentKind, opts) =>
-      call('maker:list-agent-commands', opts ? [agentKind, opts] : [agentKind]),
-    listDesktopCommands: () => call('maker:list-desktop-commands', []),
-    learnStart: (req) => call('learn:start', [req]),
-    listAgentSkills: (agentKind, opts) => call('maker:list-agent-skills', [agentKind, opts]),
-    scanAtResources: (agentKind, opts) => call('maker:scan-at-resources', [agentKind, opts]),
+      call("maker:list-agent-commands", opts ? [agentKind, opts] : [agentKind]),
+    listDesktopCommands: () => call("maker:list-desktop-commands", []),
+    learnStart: (req) => call("learn:start", [req]),
+    listAgentSkills: (agentKind, opts) =>
+      call("maker:list-agent-skills", [agentKind, opts]),
+    scanAtResources: (agentKind, opts) =>
+      call("maker:scan-at-resources", [agentKind, opts]),
     // skipCache:上次拿到的 ossKey 已悬空(对象被删)时,强制被控端绕过上传去重缓存重传。
     // thumbnail:聊天列表只要缩略图,被控端缩到 1024px webp inline 回包(老被控端
     // 不识别该字段,回落原图 ossKey,消费方两种回包都兼容)。
-    fetchRemoteMedia: (url, opts) => call(
-      DEVICE_LINK_MEDIA_FETCH_CHANNEL,
-      [{
-        url,
-        ...(opts?.skipCache ? { skipCache: true } : {}),
-        ...(opts?.thumbnail ? { thumbnail: true } : {}),
-      }],
-    ),
-    transcribeVoice: (input) => call(DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL, [input]),
-    recordVoiceDictionaryLearning: (input) => call(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL, [input]),
-    getVoiceDictionary: () => call(DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL, []),
-    getPendingInteractions: (sessionId) => call('maker:get-pending-interactions', [sessionId]),
+    fetchRemoteMedia: fetchMedia,
+    transcribeVoice: (input) =>
+      call(DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL, [input]),
+    recordVoiceDictionaryLearning: (input) =>
+      call(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL, [input]),
+    getVoiceDictionary: () =>
+      call(DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL, []),
+    getPendingInteractions: (sessionId) =>
+      call("maker:get-pending-interactions", [sessionId]),
     resolveInteraction: (requestId, decision) =>
-      call('maker:resolve-interaction', [requestId, decision]),
+      call("maker:resolve-interaction", [requestId, decision]),
     getContextUsage: (sessionId, createOpts) =>
-      call('maker:get-context-usage', [sessionId, createOpts]),
+      call("maker:get-context-usage", [sessionId, createOpts]),
     fork: (sourceSessionId, messageClientId) =>
-      call('maker:fork', [sourceSessionId, messageClientId]),
-    rewindPreview: (sessionId, clientId) => call('maker:rewind:preview', [sessionId, clientId]),
-    rewindCommit: (sessionId, clientId) => call('maker:rewind:commit', [sessionId, clientId]),
-    deleteMessage: (sessionId, clientId) => call('maker:message:delete', [sessionId, clientId]),
-    closeSession: (sessionId) => call('maker:close-session', [sessionId]),
+      call("maker:fork", [sourceSessionId, messageClientId]),
+    rewindPreview: (sessionId, clientId) =>
+      call("maker:rewind:preview", [sessionId, clientId]),
+    rewindCommit: (sessionId, clientId) =>
+      call("maker:rewind:commit", [sessionId, clientId]),
+    deleteMessage: (sessionId, clientId) =>
+      call("maker:message:delete", [sessionId, clientId]),
+    closeSession: (sessionId) => call("maker:close-session", [sessionId]),
     clearSessionAttention: (sessionId, intent) =>
-      call('notification:clear-session-attention', [sessionId, intent]),
+      call("notification:clear-session-attention", [sessionId, intent]),
     goal: {
-      set: (input) => call('maker:goal:set', [input]),
-      clear: (sessionId) => call('maker:goal:clear', [sessionId]),
-      getStatus: (sessionId) => call('maker:goal:get-status', [sessionId]),
-      pause: (sessionId) => call('maker:goal:pause', [sessionId]),
-      resume: (sessionId) => call('maker:goal:resume', [sessionId]),
-      update: (sessionId, patch) => call('maker:goal:update', [{ sessionId, patch }]),
+      set: (input) => call("maker:goal:set", [input]),
+      clear: (sessionId) => call("maker:goal:clear", [sessionId]),
+      getStatus: (sessionId) => call("maker:goal:get-status", [sessionId]),
+      pause: (sessionId) => call("maker:goal:pause", [sessionId]),
+      resume: (sessionId) => call("maker:goal:resume", [sessionId]),
+      update: (sessionId, patch) =>
+        call("maker:goal:update", [{ sessionId, patch }]),
     },
     schedule: {
-      listSidebarIndexRuns: () => call('maker:schedule:list-sidebar-index-runs'),
-      list: (filter) => call('maker:schedule:list', filter ? [filter] : []),
-      get: (id) => call('maker:schedule:get', [id]),
-      listTemplates: () => call('maker:schedule:list-templates'),
-      createFromTemplate: (input) => call('maker:schedule:create-from-template', [input]),
-      create: (input) => call('maker:schedule:create', [input]),
-      update: (id, patch) => call('maker:schedule:update', [id, patch]),
-      listRuns: (id, limit) => call('maker:schedule:list-runs', [id, limit]),
-      runNow: (id) => call('maker:schedule:run-now', [id]),
-      pause: (id) => call('maker:schedule:pause', [id]),
-      resume: (id) => call('maker:schedule:resume', [id]),
-      delete: (id) => call('maker:schedule:delete', [id]),
-      getInflightCount: (id) => call('maker:schedule:get-inflight-count', [id]),
-      markRunRead: (runId) => call('maker:schedule:mark-run-read', [runId]),
+      listSidebarIndexRuns: () =>
+        call("maker:schedule:list-sidebar-index-runs"),
+      list: (filter) => call("maker:schedule:list", filter ? [filter] : []),
+      get: (id) => call("maker:schedule:get", [id]),
+      listTemplates: () => call("maker:schedule:list-templates"),
+      createFromTemplate: (input) =>
+        call("maker:schedule:create-from-template", [input]),
+      create: (input) => call("maker:schedule:create", [input]),
+      update: (id, patch) => call("maker:schedule:update", [id, patch]),
+      listRuns: (id, limit) => call("maker:schedule:list-runs", [id, limit]),
+      runNow: (id) => call("maker:schedule:run-now", [id]),
+      pause: (id) => call("maker:schedule:pause", [id]),
+      resume: (id) => call("maker:schedule:resume", [id]),
+      delete: (id) => call("maker:schedule:delete", [id]),
+      getInflightCount: (id) => call("maker:schedule:get-inflight-count", [id]),
+      markRunRead: (runId) => call("maker:schedule:mark-run-read", [runId]),
       markScheduleRunsRead: (scheduleId) =>
-        call('maker:schedule:mark-schedule-runs-read', [scheduleId]),
-      deleteRun: (runId) => call('maker:schedule:delete-run', [runId]),
+        call("maker:schedule:mark-schedule-runs-read", [scheduleId]),
+      deleteRun: (runId) => call("maker:schedule:delete-run", [runId]),
     },
     projectAutomation: {
-      removeSchedule: (input) => call('maker:project-automation:remove-schedule', [input]),
+      removeSchedule: (input) =>
+        call("maker:project-automation:remove-schedule", [input]),
     },
     compactSession: (sessionId, instructions) =>
       call(
-        'maker:compact-session',
+        "maker:compact-session",
         instructions === undefined ? [sessionId] : [sessionId, instructions],
       ),
     input: {
-      getProjection: (sessionId) => call('maker:input:get-projection', [sessionId]),
-      enqueue: (sessionId, item, opts) => call('maker:input:enqueue', [sessionId, item, opts]),
-      compact: (sessionId) => call('maker:input:compact', [sessionId]),
-      steer: (sessionId, item, opts) => call('maker:input:steer', [sessionId, item, opts]),
-      stop: (sessionId, opts) => call('maker:input:stop', [sessionId, opts]),
-      resume: (sessionId) => call('maker:input:resume', [sessionId]),
-      retryLastError: (sessionId) => call('maker:input:retry-last-error', [sessionId]),
-      clearError: (sessionId) => call('maker:input:clear-error', [sessionId]),
-      remove: (sessionId, clientId) => call('maker:input:remove', [sessionId, clientId]),
-      updateText: (sessionId, clientId, newText, sessionRefs, trustedContexts) =>
+      getProjection: (sessionId) =>
+        call("maker:input:get-projection", [sessionId]),
+      enqueue: (sessionId, item, opts) =>
+        call("maker:input:enqueue", [sessionId, item, opts]),
+      compact: (sessionId) => call("maker:input:compact", [sessionId]),
+      steer: (sessionId, item, opts) =>
+        call("maker:input:steer", [sessionId, item, opts]),
+      stop: (sessionId, opts) => call("maker:input:stop", [sessionId, opts]),
+      resume: (sessionId) => call("maker:input:resume", [sessionId]),
+      retryLastError: (sessionId) =>
+        call("maker:input:retry-last-error", [sessionId]),
+      clearError: (sessionId) => call("maker:input:clear-error", [sessionId]),
+      remove: (sessionId, clientId) =>
+        call("maker:input:remove", [sessionId, clientId]),
+      updateText: (
+        sessionId,
+        clientId,
+        newText,
+        sessionRefs,
+        trustedContexts,
+      ) =>
         call(
-          'maker:input:update-text',
+          "maker:input:update-text",
           sessionRefs
             ? [sessionId, clientId, newText, sessionRefs, trustedContexts]
             : [sessionId, clientId, newText],
         ),
       updateContent: (sessionId, clientId, item) =>
-        call('maker:input:update-content', [sessionId, clientId, item]),
+        call("maker:input:update-content", [sessionId, clientId, item]),
       move: (sessionId, clientId, targetIndex) =>
-        call('maker:input:move', [sessionId, clientId, targetIndex]),
+        call("maker:input:move", [sessionId, clientId, targetIndex]),
       setExpanded: (sessionId, expanded) =>
-        call('maker:input:set-expanded', [sessionId, expanded]),
+        call("maker:input:set-expanded", [sessionId, expanded]),
       setInteractionLock: (sessionId, lockId, locked) =>
-        call('maker:input:set-interaction-lock', [sessionId, lockId, locked]),
+        call("maker:input:set-interaction-lock", [sessionId, lockId, locked]),
       setEditLock: (sessionId, clientId, locked) =>
-        call('maker:input:set-edit-lock', [sessionId, clientId, locked]),
-      clearSession: (sessionId) => call('maker:input:clear-session', [sessionId]),
+        call("maker:input:set-edit-lock", [sessionId, clientId, locked]),
+      clearSession: (sessionId) =>
+        call("maker:input:clear-session", [sessionId]),
     },
     fs: {
-      listDir: (path) => call('fs:list-dir', [{ path }]),
-      statPath: (path) => call('fs:stat-path', [{ path }]),
-      mkdirP: (path) => call('fs:mkdir-p', [{ path }]),
-      readTextFilePreview: (filePath) => call('text-file:read-preview', [{ filePath }]),
+      listDir: (path) => call("fs:list-dir", [{ path }]),
+      statPath: (path) => call("fs:stat-path", [{ path }]),
+      mkdirP: (path) => call("fs:mkdir-p", [{ path }]),
+      readTextFilePreview: (filePath) =>
+        call("text-file:read-preview", [{ filePath }]),
     },
     fileBrowser: {
-      caps: (workdir) => call('file-browser:remote-op', [{ op: 'caps', workdir }]),
-      listDir: (workdir, relPath) =>
-        call('file-browser:remote-op', [{ op: 'listDir', workdir, relPath }]),
-      readFile: (workdir, relPath, opts) =>
-        call('file-browser:remote-op', [
-          { op: 'readFile', workdir, relPath, ...(opts?.acceptGzip ? { acceptGzip: true } : {}) },
-        ]),
-      listAllFiles: (workdir, cap) =>
-        call('file-browser:remote-op', [{ op: 'listAllFiles', workdir, ...(cap ? { cap } : {}) }]),
-      searchCollect: (workdir, query, opts) =>
-        call('file-browser:remote-op', [{
-          op: 'searchCollect',
+      cacheScope: JSON.stringify([fileOwner.accountKey, deviceId]),
+      readBytes: async (workdir, relPath, signal, beforeInvoke, options) => {
+        assertFileReadActive(signal);
+        const retryOp = <T>(args: Record<string, unknown>) =>
+          withTransientRemoteRetry(async () => {
+            assertFileReadActive(signal);
+            await beforeInvoke?.();
+            assertFileReadActive(signal);
+            return fileOp<T>(args);
+          });
+        const caps = await retryOp<{ fileRead?: boolean }>({
+          op: "caps",
           workdir,
-          query,
-          ...(opts?.caseSensitive ? { caseSensitive: true } : {}),
-          ...(opts?.maxMatches ? { maxMatches: opts.maxMatches } : {}),
-        }]),
+        });
+        assertFileReadActive(signal);
+        const fallback = () =>
+          exportDeviceFile(retryOp, workdir, relPath, signal);
+        if (!caps.fileRead) return fallback();
+        const reference = await retryOp<{
+          ok: boolean;
+          url: string;
+          message?: string;
+        }>({ op: "fileUrl", workdir, relPath });
+        assertFileReadActive(signal);
+        if (!reference.ok)
+          throw new Error(reference.message ?? "FILE_READ_FAILED");
+        return fetchMedia(reference.url, { signal }, fallback, options?.stream ?? false);
+      },
+      caps: (workdir) =>
+        call("file-browser:remote-op", [{ op: "caps", workdir }]),
+      listDir: (workdir, relPath, opts) =>
+        files.listDir({ workdir, relPath, ...opts }),
+      readFile: (workdir, relPath, opts) =>
+        files.readFile({
+          workdir,
+          relPath,
+          ...(opts?.acceptGzip ? { acceptGzip: true } : {}),
+        }),
+      listAllFiles: (workdir, cap) =>
+        call("file-browser:remote-op", [
+          { op: "listAllFiles", workdir, ...(cap ? { cap } : {}) },
+        ]),
+      searchCollect: (workdir, query, opts) =>
+        call("file-browser:remote-op", [
+          {
+            op: "searchCollect",
+            workdir,
+            query,
+            ...(opts?.caseSensitive ? { caseSensitive: true } : {}),
+            ...(opts?.maxMatches ? { maxMatches: opts.maxMatches } : {}),
+          },
+        ]),
       thumbnail: (workdir, relPath) =>
-        call('file-browser:remote-op', [{ op: 'thumbnail', workdir, relPath }]),
+        call("file-browser:remote-op", [{ op: "thumbnail", workdir, relPath }]),
       exportFileStart: (workdir, relPath) =>
-        call('file-browser:remote-op', [{ op: 'exportFileStart', workdir, relPath }]),
+        call("file-browser:remote-op", [
+          { op: "exportFileStart", workdir, relPath },
+        ]),
       exportFileStatus: (workdir, transferId) =>
-        call('file-browser:remote-op', [{ op: 'exportFileStatus', workdir, transferId }]),
+        call("file-browser:remote-op", [
+          { op: "exportFileStatus", workdir, transferId },
+        ]),
     },
   };
 }

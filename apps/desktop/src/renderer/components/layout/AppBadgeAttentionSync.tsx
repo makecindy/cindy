@@ -1,15 +1,8 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
-import {
-  getRemoteSessionActivity,
-  useRemoteSessionActivityRevision,
-} from '@/features/device-link/remoteSessionActivityStore';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import {
-  useRemoteProjectSessions,
-  useRemoteScheduleIndex,
-} from '@/features/device-link/remoteProjectsStore';
+import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { usePublishedAutomationScheduleSessionIndex } from '@/features/cc-agent/hooks/useAutomationScheduleSessionIndex';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
@@ -35,10 +28,8 @@ export function AppBadgeAttentionSync() {
     [allSessions, history.sessions],
   );
   const localSchedules = usePublishedAutomationScheduleSessionIndex();
-  const remoteSchedules = useRemoteScheduleIndex();
   const attentionKinds = useSessionAttentionKinds();
   const localActivities = useAgentIslandActivityMap();
-  useRemoteSessionActivityRevision();
   const running = useSyncExternalStore(
     makerChatStore.subscribeAll,
     makerChatStore.getRunningSnapshot,
@@ -55,10 +46,8 @@ export function AppBadgeAttentionSync() {
   const count = countAppAttention({
     sessions: allSessions,
     localSchedules,
-    remoteSchedules,
     attentionKinds,
     localActivities,
-    getRemoteActivity: getRemoteSessionActivity,
     runningSessionIds: displayRunningSessionIds,
   });
   useEffect(() => {

@@ -233,6 +233,16 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  it('advertises metadata discovery as read-only without marking the dispatcher read-only', async () => {
+    try {
+      const { tools } = await h.client.listTools();
+      expect(tools.find((tool) => tool.name === 'list_tools')?.annotations).toMatchObject({
+        readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false,
+      });
+      expect(tools.find((tool) => tool.name === 'call_tool')?.annotations?.readOnlyHint).not.toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
   it('list_tools(category=scheduler) lists all 11 tools by name', async () => {
     const result = await h.client.callTool({
       name: 'list_tools',

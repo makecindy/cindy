@@ -89,6 +89,10 @@ export function RemoteDesktopControls({
     settings: RemoteDesktopVideoSettings;
     busy: boolean;
     modesSupported: boolean;
+    displayGeometry?: string;
+    viewerDisplaySupported?: boolean;
+    viewerDisplayMatched?: boolean;
+    onFitDisplay?(): void;
     notice: string | null;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
@@ -522,9 +526,9 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.control,
     },
     segment: { flex: 1, minHeight: 44, borderRadius: radius.control },
-    hint: { color: colors.textTertiary, fontSize: typeScale.caption },
+    hint: { color: colors.textPrimary, fontSize: typeScale.caption },
     group: {
-      backgroundColor: colors.sheetActionSurface,
+      backgroundColor: colors.surfaceTranslucent,
       borderRadius: radius.container,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.sheetActionBorder,

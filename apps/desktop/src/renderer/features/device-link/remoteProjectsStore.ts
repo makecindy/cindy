@@ -98,12 +98,41 @@ const renameSubs = new Set<(deviceId: string, name: string) => void>();
  * 故 mark disconnected / remove / clear 都用自增(条目保留,仅随 distinct 设备数增长,可忽略)。
  */
 const snapshotEpoch = new Map<string, number>();
+// Detail reads do not share list epochs: sessions:list deliberately omits bots.
+// Keep monotonic lifecycle/patch revisions only for devices and sessions opened
+// through detail reads, including reads begun before the first shard exists.
+const detailDeviceEpoch = new Map<string, number>();
+const detailPatchEpoch = new Map<string, number>();
+// Origin/connection restamps retain content identity. Authoritative snapshots
+// and route/content patches produce a new identity, even when values are equal.
+const sessionContentOrigins = new WeakMap<Session, Session>();
+// Activity and list presentation pushes do not establish a newer model route.
+const activityFields = ['totalMoney', 'totalCostUsd', 'totalTokenUsage', 'lastTurnEndedAt',
+  'preview', 'title', 'userSendAt', 'updatedAt'] as const;
+const activityFieldNames: ReadonlySet<string> = new Set(activityFields);
+type ActivityField = typeof activityFields[number];
+// Per-field markers distinguish pushes after a GET began, even equal-value pushes.
+const sessionActivityChanges = new WeakMap<Session, Partial<Record<ActivityField, object>>>();
+
+function preserveSessionContent(previous: Session, next: Session): Session {
+  sessionContentOrigins.set(next, sessionContentOrigin(previous)!);
+  const changes = sessionActivityChanges.get(previous);
+  if (changes) sessionActivityChanges.set(next, changes);
+  return next;
+}
+
+function sessionContentOrigin(session: Session | undefined): Session | undefined {
+  return session && (sessionContentOrigins.get(session) ?? session);
+}
 
 function snapshotEpochKey(deviceId: string, status: RemoteSessionStatus): string {
   return `${deviceId}\u0000${status}`;
 }
 
 function invalidateDeviceSnapshotEpochs(deviceId: string): void {
+  if (detailDeviceEpoch.has(deviceId)) {
+    detailDeviceEpoch.set(deviceId, detailDeviceEpoch.get(deviceId)! + 1);
+  }
   for (const status of ['active', 'archived'] as const) {
     const key = snapshotEpochKey(deviceId, status);
     snapshotEpoch.set(key, (snapshotEpoch.get(key) ?? 0) + 1);
@@ -394,12 +423,13 @@ function stamp(
   deviceName: string,
   connectionStatus: DeviceLinkConnectionStatus,
 ): Session {
-  return {
+  const stamped: Session = {
     ...session,
     deviceLinkDeviceId: deviceId,
     deviceLinkDeviceName: deviceName,
     deviceLinkConnectionStatus: connectionStatus,
   };
+  return preserveSessionContent(session, stamped);
 }
 
 const actions = {
@@ -583,8 +613,11 @@ const actions = {
       deviceName,
       [
         ...rawSessions,
+        // setDeviceSessions already preserves missing companions. Feeding them
+        // back as incoming rows would turn a connection restamp into a snapshot.
         ...existing.sessions.filter(
-          (session) => session.status === status && !incomingIds.has(session.id),
+          (session) =>
+            session.source !== 'bot' && session.status === status && !incomingIds.has(session.id),
         ),
       ],
       status,
@@ -599,6 +632,19 @@ const actions = {
    *    为用户尚未查看的历史记录额外取数。
    */
   applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
+    // Even an unknown row can be deleted/archived while its first GET is in flight.
+    // Usage, reply timestamps and list presentation cannot change its route
+    // or lifecycle. These activity-only pushes are
+    // dropped before a row exists, so they must not invalidate the only detail
+    // capable of loading it. Mixed patches still invalidate; existing rows also
+    // retain newer activity through the detail read's per-field merge.
+    const changesDetail = Object.keys(patch).some((key) =>
+      !activityFieldNames.has(key),
+    );
+    const detailKey = `${deviceId}\u0000${sessionId}`;
+    if (changesDetail && detailPatchEpoch.has(detailKey)) {
+      detailPatchEpoch.set(detailKey, detailPatchEpoch.get(detailKey)! + 1);
+    }
     const deleted = patch.status === 'deleted';
     // 删除清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
     // 还没有分片,但它完全可能有一份上次打开时留下的消息缓存文件 —— 那时早退就等于把
@@ -633,17 +679,20 @@ const actions = {
     const wasPinned = shard.sessions[idx]?.pinnedAt != null;
     const unpinned =
       Object.prototype.hasOwnProperty.call(patch, 'pinnedAt') && patch.pinnedAt == null;
-    shard.sessions = shard.sessions.map((s) =>
-      s.id === sessionId
-        ? {
-            ...s,
-            ...(patch as Partial<Session>),
-            deviceLinkDeviceId: shard.deviceId,
-            deviceLinkDeviceName: shard.deviceName,
-            deviceLinkConnectionStatus: shard.connectionStatus,
-          }
-        : s,
-    );
+    shard.sessions = shard.sessions.map((session) => {
+      if (session.id !== sessionId) return session;
+      const next = stamp({ ...session, ...(patch as Partial<Session>) },
+        shard.deviceId, shard.deviceName, shard.connectionStatus);
+      if (!changesDetail) {
+        preserveSessionContent(session, next);
+        const changes = { ...sessionActivityChanges.get(session) };
+        for (const field of activityFields) {
+          if (Object.prototype.hasOwnProperty.call(patch, field)) changes[field] = {};
+        }
+        sessionActivityChanges.set(next, changes);
+      }
+      return next;
+    });
     recompute();
     if (wasPinned && unpinned) requestRemoteReseed(deviceId, 'active');
   },
@@ -656,11 +705,9 @@ const actions = {
     const shard = shards.get(deviceId);
     if (shard && shard.deviceName !== name) {
       shard.deviceName = name;
-      shard.sessions = shard.sessions.map((s) => ({
-        ...s,
-        deviceLinkDeviceName: name,
-        deviceLinkConnectionStatus: shard.connectionStatus,
-      }));
+      shard.sessions = shard.sessions.map((session) =>
+        stamp(session, deviceId, name, shard.connectionStatus),
+      );
       recompute();
     }
     renameSubs.forEach((fn) => fn(deviceId, name));
@@ -702,6 +749,7 @@ const actions = {
   /** 标记全部已缓存远程设备暂不可达,但不清空侧边栏会话快照。 */
   markAllDisconnected(): void {
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
+    for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     const bootstrapStateChanged =
       bootstrapLoadingDeviceIds.size > 0 ||
       archivedLoadingDeviceIds.size > 0 ||
@@ -760,6 +808,7 @@ const actions = {
     // 所有设备 epoch 无条件**自增**(不 clear-to-0,见 snapshotEpoch 注释的 ABA):清空时在途
     // 首拉立即失效;下一轮 bootstrap 拿到更高 epoch,不会与清空前的 epoch 撞值把陈旧 snapshot 盖回。
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
+    for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     // 登出 / device-link stopped 是明确的生命周期边界:叠加层是本次会话期的临时
     // 显示态,跨过边界后不该复活(也避免长期留存用户输入的文本)。
     pendingTitlePreview.clear();
@@ -853,6 +902,38 @@ const actions = {
   getDeviceSessions(deviceId: string, status?: RemoteSessionStatus): readonly Session[] {
     const sessions = shards.get(deviceId)?.sessions ?? EMPTY;
     return status ? sessions.filter((session) => session.status === status) : sessions;
+  },
+
+  /** A detail read must not roll back a newer push, deletion, or device lifecycle. */
+  captureSessionRead(deviceId: string, sessionId: string): (() => boolean) & { mergeActivity: (detail: Session) => Session } {
+    const beforeRow = shards.get(deviceId)?.sessions.find((session) => session.id === sessionId);
+    const before = sessionContentOrigin(beforeRow);
+    const beforeActivity = beforeRow ? sessionActivityChanges.get(beforeRow) : undefined;
+    const deviceEpoch = detailDeviceEpoch.get(deviceId) ?? 0;
+    detailDeviceEpoch.set(deviceId, deviceEpoch);
+    const detailKey = `${deviceId}\u0000${sessionId}`;
+    const patchEpoch = detailPatchEpoch.get(detailKey) ?? 0;
+    detailPatchEpoch.set(detailKey, patchEpoch);
+    const isCurrent = () =>
+      sessionContentOrigin(
+        shards.get(deviceId)?.sessions.find((session) => session.id === sessionId),
+      ) === before &&
+      detailDeviceEpoch.get(deviceId) === deviceEpoch &&
+      detailPatchEpoch.get(detailKey) === patchEpoch;
+    return Object.assign(isCurrent, {
+      mergeActivity(detail: Session): Session {
+        const current = shards.get(deviceId)?.sessions.find((session) => session.id === sessionId);
+        if (!current || !isCurrent()) return detail;
+        const changes = sessionActivityChanges.get(current);
+        const overrides: Partial<Session> = {};
+        for (const field of activityFields) {
+          if (changes?.[field] && changes[field] !== beforeActivity?.[field]) {
+            Object.assign(overrides, { [field]: current[field] });
+          }
+        }
+        return { ...detail, ...overrides };
+      },
+    });
   },
 
   /** 该设备的指定状态桶是否已成功拿到过权威列表（权威空数组也算）。 */
