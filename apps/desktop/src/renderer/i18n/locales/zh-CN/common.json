@@ -9372,6 +9372,18 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "readingMemory": "正在读取记忆…",
+      "savingMemory": "正在保存记忆…",
+      "readingFile": "正在读取文件…",
+      "savingFile": "正在更新文件…",
+      "readingWeb": "正在读取网页…",
+      "searchingFiles": "正在查找文件…",
+      "testing": "正在运行测试…",
+      "checking": "正在检查代码…",
+      "reviewingMemory": "正在核对记忆…",
+      "reviewingFiles": "正在核对文件…",
+      "reviewingSources": "正在核对网页资料…",
+      "reviewingChecks": "正在核对检查结果…",
       "replying": "正在回复…",
       "processing": "正在处理…",
       "thinking": "正在思考…",

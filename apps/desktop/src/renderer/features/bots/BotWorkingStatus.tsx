@@ -2,12 +2,14 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage as Message } from '@/lib/makerChatStore';
 import { Spinner } from '@/components/ui/spinner';
-import { localizePlainAgentStatus } from '@/features/cc-agent/lib/localizeAgentStatus';
+import { useWorkingStatusCopy } from './useWorkingStatusCopy';
+import { localizePlainAgentStatus, resolvePlainAgentPhase } from '@/features/cc-agent/lib/localizeAgentStatus';
 import { WorkingStatusText } from '@/features/cc-agent/WorkingStatusText';
 
 export function BotWorkingStatus({
-  visible, status, messages, startedAt, processingOnly, avatar, inputWidth,
+  visible, status, messages, startedAt, processingOnly, avatar, inputWidth, sessionId,
 }: {
+  sessionId?: string;
   visible: boolean;
   status: string;
   messages: readonly Message[];
@@ -17,6 +19,8 @@ export function BotWorkingStatus({
   inputWidth?: CSSProperties['width'];
 }) {
   const { t } = useTranslation();
+  const phase = processingOnly ? 'processing' : resolvePlainAgentPhase(status, messages, startedAt);
+  const polished = useWorkingStatusCopy(sessionId, startedAt, phase, visible && !processingOnly);
   // Terminal events bypass cadence and opacity: never linger with working copy.
   if (!visible) return null;
   const text = processingOnly
@@ -25,6 +29,8 @@ export function BotWorkingStatus({
   return (
     <div
       data-testid="bot-working-indicator"
+      data-working-phase={phase}
+      data-working-copy-source={polished ? 'generated' : 'default'}
       role="status"
       aria-live="polite"
       className="mx-auto flex min-w-0 select-none items-center gap-2 px-2 py-[6px] text-12 text-[var(--text-tertiary)]"
@@ -32,7 +38,7 @@ export function BotWorkingStatus({
     >
       {avatar}
       <Spinner size={12} />
-      <WorkingStatusText key={startedAt} text={text} />
+      <WorkingStatusText key={startedAt} text={polished ?? text} />
     </div>
   );
 }

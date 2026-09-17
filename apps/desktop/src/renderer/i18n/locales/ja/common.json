@@ -9372,6 +9372,18 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "readingMemory": "記憶を読んでいます…",
+      "savingMemory": "記憶を保存しています…",
+      "readingFile": "ファイルを読んでいます…",
+      "savingFile": "ファイルを更新しています…",
+      "readingWeb": "ウェブページを読んでいます…",
+      "searchingFiles": "ファイルを探しています…",
+      "testing": "テストを実行しています…",
+      "checking": "コードを確認しています…",
+      "reviewingMemory": "記憶を確認しています…",
+      "reviewingFiles": "ファイルを確認しています…",
+      "reviewingSources": "ウェブ情報を確認しています…",
+      "reviewingChecks": "チェック結果を確認しています…",
       "replying": "返信中…",
       "processing": "処理中…",
       "thinking": "考え中…",
