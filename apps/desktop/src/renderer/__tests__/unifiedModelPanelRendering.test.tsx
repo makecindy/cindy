@@ -10,7 +10,8 @@
  *   3. 点自定义 / 右键弹出配置浮层,浮层里的引擎胶囊只列候选引擎;
  *   4. 点引擎胶囊 → 写 modelEnginePrefs override,行三元组当场跟着变;
  *   5. 点 ☆ → 写 modelFavorites 配置副本,收藏区置顶出现;
- *   6. 点行 → 按该行生效配置回调 (provider, model, effort)。
+ *   6. 点行 → 按该行生效配置回调 (provider, model, effort);
+ *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -30,6 +31,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
+        'newChat.modelSelector.unified.recentGroup': '最近',
+        'newChat.modelSelector.unified.recentEmpty': '还没有最近使用的模型',
         'newChat.modelSelector.unified.recommended': '推荐',
         'newChat.modelSelector.unified.addFavorite': '存为收藏',
         'newChat.modelSelector.unified.customize': '自定义',
@@ -38,6 +41,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.customized': '已自定义',
         'newChat.modelSelector.unified.reset': '恢复推荐',
         'newChat.modelSelector.unified.railAll': '全部',
+        'newChat.modelSelector.unified.railRecent': '最近',
         'newChat.modelSelector.unified.railSameEngine': `仅 ${options?.agent ?? ''}`,
         'newChat.modelSelector.unified.crossEngineWarning': '切换引擎会重建上下文，可能丢失内容',
         'newChat.modelSelector.category.anthropic': 'Anthropic',
@@ -207,6 +211,11 @@ import {
   listModelFavorites,
   updateModelFavorite,
 } from '@/state/modelFavorites';
+import {
+  __resetForTest as resetRecentModels,
+  listRecentModels,
+  recordRecentModel,
+} from '@/state/recentModels';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 
 const onProviderChange = vi.fn();
@@ -252,6 +261,7 @@ beforeEach(() => {
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
+  resetRecentModels();
 });
 
 describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
@@ -4047,4 +4057,275 @@ it('teammate fallback exposes supported Harness choices and preserves the primar
   await act(async () => { fireEvent.click(cc); });
   await act(async () => { fireEvent.click(within(rowFor('GPT-5.6')).getByText('GPT-5.6')); });
   expect(change).toHaveBeenLastCalledWith([primary, expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
+});
+
+describe('统一面板 · 最近使用记录与陈列', () => {
+  it('默认不记录(非对话入口不开 recordRecentUsage)', async () => {
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(listRecentModels()).toEqual([]);
+    expect(document.querySelector('[data-group-label="最近"]')).toBeNull();
+  });
+
+  it('开启后选择成功即记(归一化行身份),但常规视图不陈列最近区', async () => {
+    renderPanel({ recordRecentUsage: true });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.6'));
+    });
+    expect(listRecentModels().map((item) => `${item.providerId}:${item.modelId}`)).toEqual([
+      'openai:gpt-5.6',
+    ]);
+    // 最近只作为侧栏「最近」格的独立视图,不再混进全部 / 供应商列表(2026-09-16 实测裁决)。
+    expect(document.querySelector('[data-group-label="最近"]')).toBeNull();
+  });
+
+  it('选择失败(false)不记', async () => {
+    onProviderChange.mockImplementationOnce(() => false);
+    renderPanel({ recordRecentUsage: true });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(listRecentModels()).toEqual([]);
+  });
+
+  it('收藏行(存的是旧 wire id)记的是归一化行身份', async () => {
+    addModelFavorite({ providerId: 'openai', modelId: 'chatgpt/gpt-5.6', agent: 'cc' });
+    renderPanel({ recordRecentUsage: true });
+    const favRow = document.querySelector('[data-unified-anchor^="fav::"]');
+    expect(favRow).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(favRow as HTMLElement);
+    });
+    expect(listRecentModels().map((item) => item.modelId)).toEqual(['gpt-5.6']);
+  });
+
+  it('rail 的「最近」格在收藏之上,点击后只留最近区', async () => {
+    recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' }, 1000);
+    renderPanel();
+    const railKeys = [...document.querySelectorAll('[data-rail-item]')].map((el) =>
+      el.getAttribute('data-rail-item'),
+    );
+    expect(railKeys.indexOf('recent')).toBeGreaterThanOrEqual(0);
+    expect(railKeys.indexOf('recent')).toBeLessThan(railKeys.indexOf('favorites'));
+
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    const list = screen.getByRole('listbox');
+    expect(within(list).getByText('GPT-5.6')).toBeTruthy();
+    expect(within(list).queryByText('GPT-5.5')).toBeNull();
+    // 最近面板与收藏面板一致:L2 显示 provider 来源(来源详情行),不是模型描述。
+    const sourceRow = list.querySelector('[data-model-source-details]');
+    expect(sourceRow?.textContent).toContain('OpenAI');
+    expect(within(list).queryByText(/A very long English description/)).toBeNull();
+  });
+
+  it('最近视图为空时显示引导空态', async () => {
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    expect(screen.getByText('还没有最近使用的模型')).toBeTruthy();
+  });
+
+  it('点最近行按该副本的完整配置回调(引擎 / 深度一并带出)', async () => {
+    recordRecentModel(
+      { providerId: 'openai', modelId: 'gpt-5.6', agent: 'cc', effort: 'high' },
+      1000,
+    );
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.6'));
+    });
+    // 副本存的是 cc 引擎 → 按 cc 的 wire id 与 high 档发出。
+    expect(onProviderChange).toHaveBeenCalledWith(
+      'openai',
+      'chatgpt/gpt-5.6',
+      'high',
+      expect.any(Boolean),
+    );
+  });
+
+  it('最近行的星标按配置副本匹配收藏:未收藏点星新增,已收藏点星取消', async () => {
+    recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' }, 1000);
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    // 未收藏:悬停星是「存为收藏」,点一下把这份副本存进收藏。
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('button', { name: '存为收藏' }));
+    });
+    expect(listModelFavorites()).toHaveLength(1);
+    expect(listModelFavorites()[0]).toMatchObject({
+      providerId: 'openai',
+      modelId: 'gpt-5.6',
+      agent: 'codex',
+    });
+    // 星标点亮(按钮语义变为「取消收藏」)。
+    expect(
+      within(screen.getByRole('listbox')).getByRole('button', { name: '取消收藏' }),
+    ).toBeTruthy();
+
+    // 再点一次 → 移除匹配的那条收藏,星灭。
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('button', { name: '取消收藏' }));
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+    expect(within(screen.getByRole('listbox')).getByRole('button', { name: '存为收藏' })).toBeTruthy();
+  });
+
+  it('已收藏的副本在最近视图里直接亮星,点星移除对应收藏', async () => {
+    addModelFavorite({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' });
+    recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' }, 1000);
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('button', { name: '取消收藏' }));
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+  });
+
+  it('星标先圈定来源 + 模型:另一型号的收藏即使三元组巧合一致也不误命中(2026-09-16 review P0)', async () => {
+    // gpt-5.5 的收藏解析后与 gpt-5.6 的这条副本同引擎 / 同档 / 同 Fast —— 只有模型不同。
+    addModelFavorite({ providerId: 'openai', modelId: 'gpt-5.5', agent: 'codex' });
+    recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' }, 1000);
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    const list = screen.getByRole('listbox');
+    // 不能点亮:本行并没有被收藏。
+    expect(within(list).getByRole('button', { name: '存为收藏' })).toBeTruthy();
+    // 点星只能新增 gpt-5.6 这条,绝不能把 gpt-5.5 的收藏删掉。
+    await act(async () => {
+      fireEvent.click(within(list).getByRole('button', { name: '存为收藏' }));
+    });
+    expect(
+      listModelFavorites()
+        .map((item) => item.modelId)
+        .sort(),
+    ).toEqual(['gpt-5.5', 'gpt-5.6']);
+  });
+
+  it('点已标星的最近行 = 按收藏副本选中(锚点带上那条收藏的 uid)', async () => {
+    const uid = addModelFavorite({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' });
+    expect(uid).not.toBe('');
+    recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' }, 1000);
+    const onSessionFavoriteAnchorChange = vi.fn();
+    renderPanel({ onSessionFavoriteAnchorChange });
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.6'));
+    });
+    // 选择真的应用(同引擎链路回调拿到行配置)……
+    expect(onProviderChange).toHaveBeenCalledWith('openai', 'gpt-5.6', 'medium', false);
+    // ……锚点才记上命中的那条收藏(与收藏行同构;不传就是「选中态回落到模型行」)。
+    expect(onSessionFavoriteAnchorChange).toHaveBeenCalledWith(
+      expect.objectContaining({ uid, engine: 'codex', providerId: 'openai' }),
+    );
+  });
+
+  it('最近行不提供配置入口:不宣告 ← / 不抢右键 / 按 ← 不开浮层(2026-09-16 review P1)', async () => {
+    recordRecentModel({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' }, 1000);
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    const row = rowFor('GPT-5.6');
+    expect(row.getAttribute('aria-keyshortcuts')).toBeNull();
+    expect(row.querySelector('[data-row-customize]')).toBeNull();
+    // 右键不 preventDefault(不吞原生菜单),也不开浮层。
+    const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    await act(async () => {
+      row.dispatchEvent(contextMenu);
+    });
+    expect(contextMenu.defaultPrevented).toBe(false);
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(row, { key: 'ArrowLeft' });
+    });
+    expect(screen.queryByTestId('unified-model-config-flyout')).toBeNull();
+  });
+
+  it('在最近视图取消「当前选中的那份收藏」:与收藏视图同一口径——先把默认配置应用出去再删', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'cc',
+      effort: 'low',
+    });
+    recordRecentModel({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'cc', effort: 'low' }, 1000);
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'cc',
+      effort: 'low',
+      fastMode: false,
+    });
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('listbox')).getByRole('button', { name: '取消收藏' }));
+    });
+    // 删的正是正在跑的那一份 → 先把默认配置应用出去(与收藏视图逐字同一条链路),
+    // 再删记录;否则配置与选中态会分家。
+    expect(onUnifiedSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      engine: 'codex',
+      effort: 'high',
+      fast: false,
+      favoriteUid: null,
+      resetToRecommended: true,
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+  });
+
+  it('会话跨引擎:点已标星的最近行仍走切换事务,并把命中的收藏 uid 带过去', async () => {
+    const uid = addModelFavorite({
+      providerId: 'anthropic',
+      modelId: 'claude-opus-5',
+      agent: 'cc',
+    });
+    recordRecentModel({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc' }, 1000);
+    const onCrossEngineSelect = vi.fn();
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
+      vendorKey: 'codex',
+      currentProviderId: 'openai',
+      modelId: 'codex/gpt-5.6',
+    });
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('Opus 5'));
+    });
+    // 跨引擎不走 onProviderChange(selectRow 内改道),锚点随事务一起交出去。
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'anthropic',
+        targetAgent: 'claude-code',
+        favoriteUid: uid,
+      }),
+    );
+  });
 });

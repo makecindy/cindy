@@ -8004,8 +8004,11 @@
       },
       "unified": {
         "railFavorites": "收藏",
+        "railRecent": "最近",
         "railAll": "全部",
         "favoritesGroup": "收藏",
+        "recentGroup": "最近",
+        "recentEmpty": "還沒有最近使用——選一個模型後，它會出現在這裡",
         "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
         "addFavorite": "存為收藏",
         "customize": "自訂",

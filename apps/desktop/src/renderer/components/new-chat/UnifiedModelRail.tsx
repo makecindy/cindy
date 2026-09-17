@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { LayoutGrid, Star } from 'lucide-react';
+import { History, LayoutGrid, Star } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -23,7 +23,7 @@ import {
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
  *
  * 格位由数据派生(见 `buildUnifiedRail`),这里只负责画:
- *   ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ ──分隔── → 全部 → 各来源。
+ *   最近 → ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ ──分隔── → 全部 → 各来源。
  * rail 常驻(2026-08-13 裁决),分隔线与设计稿 .rail-sep 同构:「个人钉的」与
  * 「目录本身的视图」两段之间画一条 22px 细线。
  */
@@ -67,15 +67,17 @@ export function UnifiedModelRail({
           provider?.openAiAccount?.identity?.trim() ||
           provider?.subscriptionAccount?.identity?.trim();
         const label =
-          item.kind === 'favorites'
-            ? t('newChat.modelSelector.unified.railFavorites')
-            : item.kind === 'engine'
-              ? t('newChat.modelSelector.unified.railSameEngine', {
-                  agent: engineOption?.label ?? '',
-                })
-              : item.kind === 'all'
-                ? t('newChat.modelSelector.unified.railAll')
-                : providerLabel(item.providerId);
+          item.kind === 'recent'
+            ? t('newChat.modelSelector.unified.railRecent')
+            : item.kind === 'favorites'
+              ? t('newChat.modelSelector.unified.railFavorites')
+              : item.kind === 'engine'
+                ? t('newChat.modelSelector.unified.railSameEngine', {
+                    agent: engineOption?.label ?? '',
+                  })
+                : item.kind === 'all'
+                  ? t('newChat.modelSelector.unified.railAll')
+                  : providerLabel(item.providerId);
         return (
           <div key={key} className="contents">
             {separatorBefore && (
@@ -93,7 +95,11 @@ export function UnifiedModelRail({
               disabled={interactionDisabled}
               provider={localProviderUsage ? provider : undefined}
             >
-              {item.kind === 'favorites' ? (
+              {item.kind === 'recent' ? (
+                // 最近格用 History(时钟 + 回拨箭头)表达「用过的时间序」,与 ★ 的「钉住」
+                // 语义区分;与其它非激活格同灰,hover 提亮,不抢视线。
+                <History size={16} />
+              ) : item.kind === 'favorites' ? (
                 // ☆ 未激活与其它格同灰(hover 提亮)—— 常亮金色会在没进收藏视图时也
                 // 抢视线(2026-08-14 实机自查);激活时整格反色 + 实心星跟随 currentColor。
                 <Star size={16} fill={isActive ? 'currentColor' : 'none'} />
