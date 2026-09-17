@@ -86,7 +86,8 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(a.agents).toEqual(['codex', 'claude-code', 'pi']);
     expect(a.titleModel).toBeTruthy();
     expect(a.models.pi?.length).toBeGreaterThan(0);
-    expect(a.imageModels?.every((model) => model.id.startsWith('openai-a/'))).toBe(true);
+    expect(a.imageModels).toBeUndefined(); // bound from the current public catalog by the host
+    expect(a.imageDefaults).toBeUndefined();
     expect(a.routing.codex?.authStrategy).toBe('oauth-passthrough');
     expect(a.routing.codex?.supportsResponsesCustomTools).not.toBe(false);
     expect(a.id).not.toBe(b.id);
@@ -1528,9 +1529,10 @@ describe("official Pi catalog defaults for preset-marked sources (#4295)", () =>
       supportsImageInput: true,
       maxOutput: 131072,
     });
-    // 官方目录对该模型只声明 reasoning 而无档位表:与 pi-host 运行期同样得到通用四档。
+    // 旧连接缺少档位时，继承 K2.8 官方目录的三档和 max 默认值。
     expect(models.find((m) => m.id === "kimi-for-coding")).toMatchObject({
-      efforts: ["minimal", "low", "medium", "high"],
+      efforts: ["low", "high", "max"],
+      defaultEffort: "max",
     });
   });
 
@@ -1561,7 +1563,8 @@ describe("official Pi catalog defaults for preset-marked sources (#4295)", () =>
     ).models.pi!;
     expect(models.find((m) => m.id === "k3-256k")).toMatchObject({ efforts: ["low", "high"], defaultEffort: "low" });
     expect(models.find((m) => m.id === "kimi-for-coding")).toMatchObject({
-      efforts: ["minimal", "low", "medium", "high"],
+      efforts: ["low", "high", "max"],
+      defaultEffort: "max",
       supportsImageInput: true,
     });
   });

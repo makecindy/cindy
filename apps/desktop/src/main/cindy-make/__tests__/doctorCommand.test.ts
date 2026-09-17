@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createMakeDoctorCommand } from '../doctorCommand.js';
+import { cindyMakeManager } from '../manager.js';
 import { DesktopCommandRegistry } from '../../commands/registry.js';
 import type { MakeDoctorEnvironment } from '../doctor.js';
 import { MAKE_DOCTOR_CHECK_IDS, type MakeDoctorReport } from '../../../shared/cindyMakeDoctor.js';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function harness() {
   const environment = vi.fn((): MakeDoctorEnvironment => ({
@@ -51,9 +62,7 @@ describe('/cindy-make-doctor command', () => {
     });
     const pending = command.execute({ senderWebContentsId: 1, doctorRunId: 'first' });
     await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
-    await expect(
-      command.execute({ senderWebContentsId: 2, doctorRunId: 'second' }),
-    ).rejects.toThrow('already running');
+    const attached = command.execute({ senderWebContentsId: 2, doctorRunId: 'second' });
     // A source-only run is global and may coexist with tool provisioning: it is
     // not rejected as busy but runs to its own outcome (unavailable here, so failed).
     await expect(
@@ -65,6 +74,9 @@ describe('/cindy-make-doctor command', () => {
     ).resolves.toMatchObject({ doctorReport: { runId: 'source', status: 'failed' } });
     finish({ runId: 'first', mode: 'prepare', status: 'completed', checks: [] } as never);
     await expect(pending).resolves.toMatchObject({ doctorReport: { mode: 'prepare' } });
+    await expect(attached).resolves.toMatchObject({
+      doctorReport: { runId: 'second', mode: 'prepare' },
+    });
   });
   it('is discoverable and returns the same terminal snapshot as progress', async () => {
     const { registry, publish } = harness();
@@ -185,7 +197,10 @@ describe('Make upstream workflow', () => {
   function workflow(report = ready()) {
     const { environment } = harness();
     const publish = vi.fn();
-    const searchUpstream = vi.fn(async () => ({ status: 'notFound' as const, items: [] }));
+    const searchUpstream = vi.fn(async (_request: string, _signal: AbortSignal) => ({
+      status: 'notFound' as const,
+      items: [],
+    }));
     const prepare = vi.fn(async (_id, _env, _signal, publishReport) => {
       publishReport(report);
       return report;
@@ -211,7 +226,7 @@ describe('Make upstream workflow', () => {
       allowInstallTest: () => true,
       description: () => '',
     });
-    return { command, publish, searchUpstream, prepare, prepareSource };
+    return { command, environment, publish, searchUpstream, prepare, prepareSource };
   }
   it('automatically prepares source after checks, then searches and retains all step results', async () => {
     const h = workflow();
@@ -253,10 +268,313 @@ describe('Make upstream workflow', () => {
     expect(await h.command.execute({ senderWebContentsId: 1, makeRequest: '' })).toMatchObject({
       doctorReport: { upstream: { status: 'needsRequest' } },
     });
-    const result = await h.command.execute({ senderWebContentsId: 1 });
+    const result = await h.command.execute({ senderWebContentsId: 1, doctorRunId: 'make' });
     expect(result).toEqual({ success: true, doctorReport: ready() });
     expect(h.searchUpstream).not.toHaveBeenCalled();
     expect(h.prepareSource).not.toHaveBeenCalled();
+  });
+  it.each(['settings', 'workflow'])(
+    'shares only the environment when %s starts first',
+    async (first) => {
+      const setup = workflow();
+      const environment = deferred<MakeDoctorReport>();
+      const source = deferred<MakeDoctorReport>();
+      setup.prepare.mockImplementationOnce(() => environment.promise);
+      setup.prepareSource.mockImplementationOnce(() => source.promise);
+      const startSettings = () =>
+        setup.command.execute({
+          senderWebContentsId: 1,
+          doctorRunId: 'settings-shared',
+        });
+      const startWorkflow = () =>
+        setup.command.execute({
+          senderWebContentsId: 2,
+          doctorRunId: 'workflow-shared',
+          makeRequest: 'scrolling',
+        });
+      const firstRun = first === 'settings' ? startSettings() : startWorkflow();
+      await vi.waitFor(() => expect(setup.prepare).toHaveBeenCalledOnce());
+      const secondRun = first === 'settings' ? startWorkflow() : startSettings();
+      const settingsRun = first === 'settings' ? firstRun : secondRun;
+      const workflowRun = first === 'workflow' ? firstRun : secondRun;
+      let workflowFinished = false;
+      void Promise.resolve(workflowRun).then(() => {
+        workflowFinished = true;
+      });
+      environment.resolve(ready());
+      await expect(settingsRun).resolves.toMatchObject({
+        doctorReport: { runId: 'settings-shared', status: 'completed', checks: ready().checks },
+      });
+      await vi.waitFor(() => expect(setup.prepareSource).toHaveBeenCalledOnce());
+      expect(workflowFinished).toBe(false);
+      expect(setup.environment).toHaveBeenCalledOnce();
+      expect(setup.prepare).toHaveBeenCalledOnce();
+      expect(setup.prepareSource.mock.calls[0][1]).toBe(setup.prepare.mock.calls[0][1]);
+      const snapshot = cindyMakeManager.getState().environmentPrepare;
+      expect(snapshot).toMatchObject({ active: false, report: { status: 'completed' } });
+      expect(snapshot?.report.source).toBeUndefined();
+      expect(snapshot?.report.upstream).toBeUndefined();
+      expect(
+        setup.publish.mock.calls
+          .filter(([context]) => context.senderWebContentsId === 2)
+          .every(([, report]) => report.runId === 'workflow-shared' && report.status === 'running'),
+      ).toBe(true);
+      source.resolve({
+        ...ready(),
+        checks: [],
+        source: { status: 'ready', path: 'managed-source' },
+      });
+      await expect(workflowRun).resolves.toMatchObject({
+        doctorReport: {
+          runId: 'workflow-shared',
+          status: 'completed',
+          source: { status: 'ready' },
+          upstream: { status: 'notFound' },
+        },
+      });
+      expect(setup.searchUpstream).toHaveBeenCalledWith('scrolling', expect.any(AbortSignal));
+      expect(cindyMakeManager.getState().environmentPrepare).toEqual(snapshot);
+    },
+  );
+
+  it('continues two distinct requests independently after one shared preparation', async () => {
+    const setup = workflow();
+    const environment = deferred<MakeDoctorReport>();
+    setup.prepare.mockImplementationOnce(() => environment.promise);
+    setup.searchUpstream.mockImplementation(async (request: string) => ({
+      status: 'notFound',
+      items: [],
+      terms: [request],
+    }));
+    const first = setup.command.execute({
+      senderWebContentsId: 1,
+      doctorRunId: 'scrolling',
+      makeRequest: 'fix scrolling',
+    });
+    await vi.waitFor(() => expect(setup.prepare).toHaveBeenCalledOnce());
+    const second = setup.command.execute({
+      senderWebContentsId: 2,
+      doctorRunId: 'keyboard',
+      makeRequest: 'fix keyboard',
+    });
+    environment.resolve(ready());
+    const results = await Promise.all([first, second]);
+    expect(results).toMatchObject([
+      { doctorReport: { runId: 'scrolling', upstream: { terms: ['fix scrolling'] } } },
+      { doctorReport: { runId: 'keyboard', upstream: { terms: ['fix keyboard'] } } },
+    ]);
+    expect(setup.environment).toHaveBeenCalledOnce();
+    expect(setup.prepare).toHaveBeenCalledOnce();
+    expect(setup.prepareSource).toHaveBeenCalledTimes(2);
+    expect(setup.prepareSource.mock.calls.map(([runId]) => runId).sort()).toEqual([
+      'keyboard',
+      'scrolling',
+    ]);
+    expect(
+      setup.prepareSource.mock.calls.every(([, env]) => env === setup.prepare.mock.calls[0][1]),
+    ).toBe(true);
+    expect(setup.searchUpstream).toHaveBeenCalledTimes(2);
+    for (const [context, report] of setup.publish.mock.calls) {
+      expect(report.runId).toBe(context.doctorRunId);
+      if (report.upstream?.terms) expect(report.upstream.terms).toEqual([context.makeRequest]);
+    }
+  });
+
+  it.each(['canonical', 'attached'])(
+    'allows a trusted settings observer or attached caller to explicitly cancel using %s',
+    async (target) => {
+      const setup = workflow();
+      setup.prepare.mockImplementationOnce(async (_runId, _env, signal: AbortSignal) => {
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        return ready();
+      });
+      const first = setup.command.execute({ senderWebContentsId: 1, doctorRunId: 'canonical' });
+      await vi.waitFor(() => expect(setup.prepare).toHaveBeenCalledOnce());
+      const attached = setup.command.execute({
+        senderWebContentsId: 2,
+        doctorRunId: 'attached',
+        makeRequest: 'scrolling',
+      });
+      const snapshot = cindyMakeManager.getState().environmentPrepare;
+      expect(snapshot).toMatchObject({ active: true, report: { runId: 'canonical' } });
+      await setup.command.execute({
+        senderWebContentsId: target === 'canonical' ? 99 : 2,
+        doctorRunId: target === 'canonical' ? snapshot!.report.runId : 'attached',
+        doctorAction: 'cancel',
+      });
+      await expect(first).resolves.toMatchObject({ doctorReport: { status: 'cancelled' } });
+      await expect(attached).resolves.toMatchObject({
+        doctorReport: { runId: 'attached', status: 'cancelled' },
+      });
+      expect(setup.prepareSource).not.toHaveBeenCalled();
+      expect(setup.searchUpstream).not.toHaveBeenCalled();
+      expect(cindyMakeManager.getState().environmentPrepare).toMatchObject({
+        active: false,
+        report: { status: 'cancelled' },
+      });
+      await expect(
+        setup.command.execute({ senderWebContentsId: 2, doctorRunId: 'attached' }),
+      ).resolves.toMatchObject({ doctorReport: { status: 'completed' } });
+    },
+  );
+
+  it.each([{ remoteHostId: 'ssh' }, { deviceId: 'device' }, { senderWebContentsId: undefined }])(
+    'does not admit an untrusted or remote cancellation context: %j',
+    async (extra) => {
+      const setup = workflow();
+      const environment = deferred<MakeDoctorReport>();
+      setup.prepare.mockImplementationOnce(() => environment.promise);
+      const pending = setup.command.execute({
+        senderWebContentsId: 1,
+        doctorRunId: 'trusted-only',
+      });
+      await vi.waitFor(() => expect(setup.prepare).toHaveBeenCalledOnce());
+      try {
+        await expect(
+          setup.command.execute({
+            senderWebContentsId: 99,
+            doctorRunId: 'trusted-only',
+            doctorAction: 'cancel',
+            ...extra,
+          }),
+        ).rejects.toThrow();
+        expect(setup.prepare.mock.calls[0][2].aborted).toBe(false);
+      } finally {
+        environment.resolve(ready());
+        await pending;
+      }
+    },
+  );
+
+  it('shares environment failure without starting either workflow and allows a retry', async () => {
+    const setup = workflow();
+    const environment = deferred<MakeDoctorReport>();
+    setup.prepare.mockImplementationOnce(() => environment.promise);
+    const first = setup.command.execute({
+      senderWebContentsId: 1,
+      doctorRunId: 'failed-first',
+      makeRequest: 'scrolling',
+    });
+    await vi.waitFor(() => expect(setup.prepare).toHaveBeenCalledOnce());
+    const second = setup.command.execute({
+      senderWebContentsId: 2,
+      doctorRunId: 'failed-second',
+      makeRequest: 'keyboard',
+    });
+    environment.reject(new Error('tool preparation failed'));
+    await expect(first).resolves.toMatchObject({ doctorReport: { status: 'failed' } });
+    await expect(second).resolves.toMatchObject({ doctorReport: { status: 'failed' } });
+    expect(setup.prepareSource).not.toHaveBeenCalled();
+    await expect(
+      setup.command.execute({
+        senderWebContentsId: 2,
+        doctorRunId: 'failed-second',
+        makeRequest: 'retry',
+      }),
+    ).resolves.toMatchObject({
+      doctorReport: { status: 'completed', upstream: { status: 'notFound' } },
+    });
+  });
+
+  it('shares an environment timeout with attached callers and releases the operation', async () => {
+    vi.useFakeTimers();
+    try {
+      const setup = workflow();
+      setup.prepare.mockImplementationOnce(async (_runId, _env, signal: AbortSignal) => {
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        return ready();
+      });
+      const first = setup.command.execute({ senderWebContentsId: 1, doctorRunId: 'timeout-first' });
+      await vi.waitFor(() => expect(setup.prepare).toHaveBeenCalledOnce());
+      const attached = setup.command.execute({
+        senderWebContentsId: 2,
+        doctorRunId: 'timeout-attached',
+        makeRequest: 'scrolling',
+      });
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      await expect(first).resolves.toMatchObject({ doctorReport: { status: 'failed' } });
+      await expect(attached).resolves.toMatchObject({ doctorReport: { status: 'failed' } });
+      expect(setup.prepareSource).not.toHaveBeenCalled();
+      expect(setup.searchUpstream).not.toHaveBeenCalled();
+      expect(cindyMakeManager.getState().environmentPrepare).toMatchObject({
+        active: false,
+        report: { status: 'failed' },
+      });
+      await expect(
+        setup.command.execute({
+          senderWebContentsId: 2,
+          doctorRunId: 'timeout-attached',
+          makeRequest: 'retry',
+        }),
+      ).resolves.toMatchObject({
+        doctorReport: { status: 'completed', upstream: { status: 'notFound' } },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels one workflow continuation without cancelling the other request', async () => {
+    const setup = workflow();
+    const environment = deferred<MakeDoctorReport>();
+    const firstSearch = deferred<{ status: 'notFound'; items: never[] }>();
+    const secondSearch = deferred<{ status: 'notFound'; items: never[] }>();
+    setup.prepare.mockImplementationOnce(() => environment.promise);
+    setup.searchUpstream.mockImplementation((request: string) =>
+      request === 'scrolling' ? firstSearch.promise : secondSearch.promise,
+    );
+    const first = setup.command.execute({
+      senderWebContentsId: 1,
+      doctorRunId: 'private-first',
+      makeRequest: 'scrolling',
+    });
+    await vi.waitFor(() => expect(setup.prepare).toHaveBeenCalledOnce());
+    const second = setup.command.execute({
+      senderWebContentsId: 2,
+      doctorRunId: 'private-second',
+      makeRequest: 'keyboard',
+    });
+    environment.resolve(ready());
+    await vi.waitFor(() => expect(setup.searchUpstream).toHaveBeenCalledTimes(2));
+    await expect(
+      setup.command.execute({
+        senderWebContentsId: 99,
+        doctorRunId: 'private-first',
+        doctorAction: 'cancel',
+      }),
+    ).rejects.toThrow('another window');
+    await setup.command.execute({
+      senderWebContentsId: 1,
+      doctorRunId: 'private-first',
+      doctorAction: 'cancel',
+    });
+    await expect(first).resolves.toMatchObject({
+      doctorReport: {
+        runId: 'private-first',
+        status: 'cancelled',
+        upstream: { status: 'cancelled' },
+      },
+    });
+    const secondSignal = setup.searchUpstream.mock.calls.find(
+      ([request]) => request === 'keyboard',
+    )?.[1];
+    expect(secondSignal?.aborted).toBe(false);
+    secondSearch.resolve({ status: 'notFound', items: [] });
+    await expect(second).resolves.toMatchObject({
+      doctorReport: {
+        runId: 'private-second',
+        status: 'completed',
+        upstream: { status: 'notFound' },
+      },
+    });
+    const publishCount = setup.publish.mock.calls.length;
+    firstSearch.resolve({ status: 'notFound', items: [] });
+    await Promise.resolve();
+    expect(setup.publish).toHaveBeenCalledTimes(publishCount);
   });
   it('waits for each step before starting the next and preserves environment checks during checkout', async () => {
     const h = workflow();
@@ -288,9 +606,22 @@ describe('Make upstream workflow', () => {
     expect(h.prepareSource).not.toHaveBeenCalled();
     expect(h.searchUpstream).not.toHaveBeenCalled();
     finishEnvironment(ready());
+    await vi.waitFor(() => expect(h.prepareSource).toHaveBeenCalled());
+    expect(h.prepareSource).toHaveBeenCalledWith(
+      'make',
+      expect.anything(),
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
     await vi.waitFor(() => expect(h.prepareSource).toHaveBeenCalledOnce());
     expect(h.searchUpstream).not.toHaveBeenCalled();
     expect(h.publish.mock.calls.at(-1)?.[1]).toMatchObject({
+      status: 'running',
+      checks: ready().checks,
+      source: { status: 'preparing' },
+      upstream: { status: 'pending' },
+    });
+    expect(cindyMakeManager.getState().reports?.make).toMatchObject({
       status: 'running',
       checks: ready().checks,
       source: { status: 'preparing' },

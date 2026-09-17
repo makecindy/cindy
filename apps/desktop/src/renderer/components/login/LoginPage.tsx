@@ -1485,14 +1485,19 @@ export function LoginPage({
       )}
       {realmConfirmation && (
         <LoginConsentDialog
-          title={t('login.realmConsent.title')}
+          title={t(realmConfirmation.personalLoginAvailable
+            ? 'login.realmConsent.personalTitle' : 'login.realmConsent.title')}
           body={t(
-            realmConfirmation.targetRegion === 'cn'
-              ? 'login.realmConsent.bodyCn'
-              : 'login.realmConsent.bodyGlobal',
+            realmConfirmation.personalLoginAvailable
+              ? (realmConfirmation.targetRegion === 'cn'
+                ? 'login.realmConsent.personalBodyCn' : 'login.realmConsent.personalBodyGlobal')
+              : (realmConfirmation.targetRegion === 'cn'
+                ? 'login.realmConsent.bodyCn' : 'login.realmConsent.bodyGlobal'),
           )}
-          agreeLabel={t('login.realmConsent.agree')}
-          disagreeLabel={t('login.realmConsent.disagree')}
+          agreeLabel={t(realmConfirmation.personalLoginAvailable
+            ? 'login.realmConsent.enterpriseLogin' : 'login.realmConsent.agree')}
+          disagreeLabel={t(realmConfirmation.personalLoginAvailable
+            ? 'login.realmConsent.continuePersonal' : 'login.realmConsent.disagree')}
           onAgree={() => void dispatch({ type: 'confirm-sso-realm' })}
           onDisagree={() => void dispatch({ type: 'cancel-sso-realm' })}
           onOpenTerms={() => undefined}

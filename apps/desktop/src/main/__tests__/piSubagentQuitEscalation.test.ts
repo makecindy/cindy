@@ -212,7 +212,9 @@ describe('PI Subagent quit sweep', () => {
     // The kill confirmation is bounded but not free (~0.8s per surviving
     // runner), so the stop wait cannot also use the whole phase.
     expect(quitHookSource()).toMatch(/stopAllPiSubagentRunsForExit\(agentHome, 2_500,/);
-    expect(source).toContain('installQuitHandler(6000);');
+    const budget = Number(source.match(/installQuitHandler\((\d+)\);/)?.[1]);
+    expect(budget).toBeGreaterThan(2_500 + 800);
+    expect(budget).toBeLessThan(20_000);
   });
 
   it('reports survivors as an error rather than an acknowledged stop', () => {

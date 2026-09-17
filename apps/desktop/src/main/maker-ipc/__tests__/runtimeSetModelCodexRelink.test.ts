@@ -250,7 +250,7 @@ describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) 
 
     expect(clearPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { wake: false });
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, oldPending);
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(relinkCodexThread).toHaveBeenCalledOnce();
     expect(getSessionProvider(sessionId)).toBe(sourceProvider);
     expect(wakeSessionInputQueue).not.toHaveBeenCalled();

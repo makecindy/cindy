@@ -93,6 +93,18 @@
       "expo-secure-store",
       "expo-web-browser",
       [
+        "expo-sharing",
+        {
+          "ios": {
+            "enabled": true,
+            "activationRule": {
+              "supportsFileWithMaxCount": 20,
+              "supportsImageWithMaxCount": 20
+            }
+          }
+        }
+      ],
+      [
         "expo-font",
         {
           "ios": {
@@ -120,6 +132,7 @@
           }
         }
       ],
+      "./plugins/with-incoming-share-files",
       "./plugins/with-remote-desktop-presentation",
       "./plugins/with-foreground-only-audio",
       [

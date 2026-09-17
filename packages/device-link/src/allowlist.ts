@@ -23,6 +23,7 @@
  * 不接受 URL、不直接打开系统设置/请求 OS 授权、不修改开关;系统权限按钮仅本机可信
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
+import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
@@ -223,6 +224,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 数据真相在被控端(其 renderer 草稿),无 sender 依赖、无本机副作用 → 准入。老被控端无此 handler
   // → 控制端收 CHANNEL_NOT_ALLOWED → 回退被控端 capabilities 默认。
   'maker:get-new-maker-defaults',
+  'maker:model-favorites:get',
+  'maker:model-favorites:apply',
   // device-link 草稿「每个模型 effort/fast」写穿(控制端 → 被控端):控制端在远程项目草稿里改
   // 选中 / 非选中模型的 effort/fast 时通知被控端,被控端调它原来的本地 setter(setEffortForModel /
   // setFastModeForModel)写真实草稿;被控端 newMakerDraft 变更自动经既有 maker:sync-new-maker-draft
@@ -263,6 +266,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',
+  // Bounded metadata reconciliation. Old hosts reject this; controllers fall back to GET.
+  'local-db:sessions:get-many',
   // Read-only indexed task search for the remote Composer @ palette and the
   // controller sidebar task search. Older controlled clients reject this
   // channel and the controller falls back to the bounded legacy sessions:list
@@ -313,6 +318,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   DL_UNSUBSCRIBE_CHANNEL,
   // 入方向媒体取件(被控端 dispatch 拦截执行,不落 ipcMain handler;契约登记 + 能力探测)。
   DL_MEDIA_FETCH_CHANNEL,
+  FILE_PEER_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。
@@ -672,6 +678,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →
   // topics.ts 的 ACCOUNT_CHANNELS 把它并入 `sessions` topic(控制端按设备订阅 sessions)。
   'maker:new-maker-draft:changed',
+  'maker:model-favorites:changed',
   // 被控端 repo-scoped worktree 源分支选择变化；无 sessionId，topics.ts 按账号级
   // 并入 sessions topic，控制端再按来源 deviceId + payload.baseRepo 精确消费。
   'maker:new-maker-worktree-branch:changed',
@@ -702,6 +709,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  [FILE_PEER_CHANNEL]: 30_000,
   // Capture renderer readiness + source enumeration + offer, then reply delivery.
   "device-link:remote-desktop:v1": REMOTE_DESKTOP_INVOKE_MS,
   // 被控端 CMD_TIMEOUT_MS(30s)+ CMD_KILL_GRACE_MS(5s)+ 5s 回程余量
@@ -726,6 +734,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 不吃满超时),不会误伤首拉重试。
   'local-db:sessions:list': 12_000,
   'local-db:sessions:get': 12_000,
+  'local-db:sessions:get-many': 12_000,
 };
 
 /**

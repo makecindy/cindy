@@ -1565,3 +1565,33 @@ V2 完成标准:
 
 - 手机完整支持协作模式 / Orca。
 - Lead / Worker 切换、创建 worker、switch focus、archive worker、stop collaboration 全部可用。
+
+## HTML 文件预览
+
+消息里的 `xdt-file` 链接与文件浏览共用 `/files/preview/[sessionId]`。HTML 渲染态通过
+`mobileHtmlPreview.ts` 按网页实际请求读取资源，再由 `modules/cindy-html-preview`
+在手机的 `127.0.0.1` 随机端口提供只读 HTTP，交给应用内 WebView。源码查看保持原有文本
+读取和大小限制，不影响完整网页的渲染。
+
+- 新原生接口 `startOnDemand` / `resolveRequest` 通过事件请求单个资源；打开时不枚举目录，
+  不检查目录文件数和总大小。资源复用既有内联、WebRTC 直连/TURN、OSS 回退及 SSH 读取链路。
+  文件通道忙时排队；预览不另设 100 MiB 限制，文件传输上限提高至 2 GiB。完整接收后响应，
+  不是 HTTP Range 流式传输。临时传输总预算为 4 GiB，接收前预留消费者副本与 256 MiB 磁盘余量。
+  接收命令改为 60 秒无落盘进展超时；原生请求含排队的总等待窗口为两小时。
+- 单个资源失败不关闭整个页面。各次请求可能看到不同时间的源文件，不再承诺目录一致快照。
+  资源限于入口父目录，拒绝隐藏路径，并通过源端 realpath 校验阻止符号链接越界。
+- 保留旧 `start(files)` 原生接口兼容；旧安装包继续使用原来的目录快照及 2000 项、100 MiB、
+  32 层限制。按需加载必须配合新原生安装包。
+- 每个 HTML 都先校验 UTF-8 并添加现有 CSP/设备能力守卫；脚本、样式、图片和 fetch
+  可访问同源资源，顶层导航只允许该目录内的 HTML。签名下载地址和账号凭证不进入网页。
+  既有 WebRTC/子 realm 边界仍见 `htmlPreviewCsp.ts`，不能宣称完整隔离或绝对零出网。
+- 离开预览、切到源码、进入后台时取消下载并停止服务；回到前台重新打开预览。
+  临时文件正常关闭时删除，进程异常退出的残留在下次预览时回收。
+- 手机端只承诺应用内预览；切到系统浏览器会使 App 进入后台，不承诺外置浏览器可持续访问。
+  不运行项目的后端、开发服务器或动态构建，也不自动访问快照目录外的资源。
+- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；合并仍遵守
+  `docs/dev-rules/mobile-development.md` 的冷更确认门。服务端不需要新增接口。
+
+定向行为测试为 `htmlDirectorySnapshot.test.ts`、`mobileHtmlPreview.test.ts` 及既有预览/链接
+测试；macOS 可运行 `node apps/mobile/scripts/test-html-preview-native.mjs --on-demand` 验证生产 Swift
+监听器的真实 HTTP、路径/来源限制和关闭行为。该测试不替代手机 WebView 与 Android 实测。

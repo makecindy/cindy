@@ -40,6 +40,8 @@ import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
 import { compareAppUpdateVersions } from './updateVersionPolicy';
+import { CURRENT_APP_ID } from '../shared/brandRegion';
+import { syncWindowsVersionAfterUpdate, windowsInstallKey } from './windowsInstallationVersion';
 import { writeStartupBinaryUpdateMarker } from './agent-binaries/startup-update';
 
 import { createLogger, maskPath } from './logger';
@@ -66,6 +68,9 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
+import { findLinuxUserInstallation, isDebianManagedInstallation, missingLinuxUserInstallTools, type LinuxUserInstallation } from './linuxInstallation';
+import { linuxPasswordStoreRelaunchArgs } from './linuxPasswordStore';
+import { CURRENT_CINDY_REGION } from '../shared/brandRegion';
 import { disposeAndroidAdb } from './mcp-integrations/android';
 import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
@@ -1506,6 +1511,9 @@ function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
     detached: true,
     stdio: 'ignore',
     windowsHide: false,
+    // Optional metadata, not a new CLI flag: older updater binaries ignore it
+    // instead of rejecting the entire update. New updaters forward it on elevation.
+    env: { ...process.env, CINDY_VERSION_SYNC_KEY: windowsInstallKey(CURRENT_APP_ID) },
   });
 
   const spawnTimeout = setTimeout(() => {
@@ -1720,7 +1728,7 @@ function readStagedLinuxDebSha256(debPath: string): string | null {
   return linuxStagedDebSha256;
 }
 
-function executeUpdateLinux(debPath: string): void {
+function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation | null): void {
   const exePath = app.getPath('exe');
   const lockFilePath = getUpdateLockPath();
   const logDir = path.join(app.getPath('userData'), 'logs');
@@ -1762,8 +1770,19 @@ function executeUpdateLinux(debPath: string): void {
 
   let script: string;
   try {
+    // Do not change installation strategy after the preflight (there is an
+    // await while reclaiming runners). A changed layout must fail closed.
+    const now = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    if (installation
+      ? !now || now.prefix !== installation.prefix || now.current !== installation.current
+        || now.region !== installation.region || !readyVersion
+      : now !== null || !isDebianManagedInstallation(exePath)) {
+      throw new Error('Linux installation changed after preflight');
+    }
     script = buildLinuxUpdateScript({
       pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
+      userInstallation: installation ? { ...installation, version: readyVersion! } : undefined,
+      relaunchArgs: linuxPasswordStoreRelaunchArgs(app.commandLine?.getSwitchValue('password-store') ?? ''),
     });
   } catch (err) {
     log.error('failed to build Linux update script:', err);
@@ -1918,6 +1937,25 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
   // keeps both Cindy and the already-downloaded patch intact.
   if (!ensureWindowsUpdaterPrerequisites()) return;
 
+  // Do not stop active work or quit into a Debian-only installer on Arch.
+  // This also protects pacman/AUR-owned and manually unpacked applications.
+  let linuxInstallation: LinuxUserInstallation | null = null;
+  if (process.platform === 'linux') {
+    const exePath = app.getPath('exe');
+    const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    linuxInstallation = installation;
+    const supported = installation
+      ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
+      : isDebianManagedInstallation(exePath);
+    if (!supported) {
+      log.error('Linux installation cannot self-update; use the installation guide or its package manager');
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      setStatus('ready', { version: readyVersion ?? undefined, errorCode: 'linux_installation_unsupported' });
+      return;
+    }
+  }
+
   // Gate *before* the updater is spawned, not inside forceQuit: once the
   // updater script is running it polls our pid and SIGKILLs us after 120s
   // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
@@ -1957,7 +1995,7 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
       break;
     case 'linux':
       incrementApplyAttempts();
-      executeUpdateLinux(readyFilePath);
+      executeUpdateLinux(readyFilePath, linuxInstallation);
       break;
     default:
       log.error(`Unsupported platform: ${process.platform}`);
@@ -1968,6 +2006,20 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export function initUpdateService(): void {
+  // Observe the successful old-updater receipt before existing cleanup removes
+  // it. Async and metadata-only; no effect on download/apply/rollback decisions.
+  if (process.platform === 'win32' && app.isPackaged && !isDev()) {
+    void syncWindowsVersionAfterUpdate({
+      platform: process.platform,
+      packaged: true,
+      version: app.getVersion(),
+      appId: CURRENT_APP_ID,
+      exePath: app.getPath('exe'),
+      resourcesPath: process.resourcesPath,
+      patchInfoPath: path.join(getUpdatesDir(), PATCH_INFO_FILE),
+      warn: (message) => log.warn(message),
+    });
+  }
   // Best-effort cleanup of >7-day-old `cindy-update*`/`xdt-update*` leftovers in %TEMP%.
   // Counterpart to the Rust updater's own sweep — covers the case where the
   // user stays on the latest version and never triggers another updater run.

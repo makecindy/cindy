@@ -1,3 +1,4 @@
+import type { FavoriteStore } from '@/state/useRemoteModelFavorites';
 /**
  * useUnifiedRowActions —— 统一模型选择器面板里**所有会改用户数据的动作**的单点集合
  * (model-selector-unified §1.4 / §1.5 / §1.6)。
@@ -48,6 +49,7 @@ import {
 type ActionResult = void | boolean | Promise<void | boolean>;
 
 export interface UnifiedRowActionsOptions {
+  favoriteStore?: FavoriteStore;
   interactionDisabled: boolean;
   /** 这一行是不是当前会话 / 草稿正在用的那一行(来源 + 模型 + 引擎都对上)。 */
   isLiveRow: (entry: UnifiedModelEntry, config: UnifiedRowConfig) => boolean;
@@ -255,6 +257,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     onBeforeRemoveFavorite,
   } = options;
 
+  const favorites: FavoriteStore = options.favoriteStore ?? {
+    get: getModelFavorite,
+    add: config => { addModelFavorite(config); },
+    update: updateModelFavorite,
+    remove: removeModelFavorite,
+  };
+
   // ── 「把一份配置真的应用到正在跑的那一份上」的三条链路 ─────────────────────
   // 恢复推荐(§1.4)与「删除当前选中的收藏」(§1.5)是同一件事的两个入口:都要把行回落到
   // 默认 / 推荐配置。三条链路抽在这里,两个入口共用 —— 各写一遍必然漂移成「恢复推荐会
@@ -292,7 +301,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    */
   const favoriteCopyIsLive = (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
     if (anchor.kind !== 'fav') return false;
-    const item = getModelFavorite(anchor.uid);
+    const item = favorites.get(anchor.uid);
     if (!item || !resolveFavoriteConfig) return false;
     const copy = resolveFavoriteConfig(entry, item);
     if (!isLiveRow(entry, copy)) return false;
@@ -391,7 +400,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
      * 的收藏就走不到「先回落默认配置」那条路。
      */
     favoriteUid: string | null;
-    onApplied: () => void;
+    onApplied: () => void | Promise<void>;
   }): Promise<void> => {
     if (!sessionEngineFilter) return Promise.resolve();
     return runLive(() =>
@@ -408,7 +417,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 只有明确的 false 表示「没切」(见 UnifiedModelPanelProps.onCrossEngineSelect);
         // 返回 void 的调用方视为已切。
         if (applied === false) return;
-        args.onApplied();
+        return args.onApplied();
       },
       // 事务抛错(切换失败)同样按「没应用」处理。
       () => {},
@@ -459,9 +468,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 顺序与 G2 一致:**live 真写成了才**落收藏 store 的这次编辑 —— 写穿失败时收藏原样保留,
    * 不留「收藏行写着新档、任务还在旧档」的半套状态。
    *
-   * 这里的 `live` 恒是**一笔**写入(改的是哪一格就写哪一格:深度 / Fast;引擎编辑传 null),
-   * 所以不存在 applyDefaultsLive 那种「第一笔落了、第二笔没落」的中间态,不需要回滚
-   * (2026-08-17 review 第五轮 M1 同族核对)。要在这里加第二笔时,必须一并把回滚补上。
+   * 收藏持久化是第二笔写入；失败时必须等待运行配置回滚，再向调用方报告失败。
    */
   const applySelectedFavoriteEdit = (args: {
     anchor: UnifiedAnchor;
@@ -476,12 +483,22 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
      * `null` = 这一维没有同引擎实时通道(引擎编辑),直接走下面两条链路。
      */
     live: (() => Promise<boolean>) | null;
+    rollback?: () => void | Promise<void>;
     /** 落收藏 store 的这次编辑。 */
-    commit: () => void;
+    commit: () => void | Promise<void>;
   }): ActionResult => {
+    const commitOrRestore = async (restore: () => unknown) => {
+      try {
+        await args.commit();
+      } catch (error) {
+        await restore();
+        throw error;
+      }
+    };
     if (args.live && isLiveRow(args.entry, args.config)) {
       return args.live().then((applied) => {
-        if (applied) args.commit();
+        if (applied) return commitOrRestore(async () => { await args.rollback?.(); });
+        if (args.rollback) return args.rollback();
       });
     }
     const wireModelId = args.target.wireModelId ?? args.anchor.modelId;
@@ -497,7 +514,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 按编辑后的目标值(wire id / 引擎)重记这条锚点。草稿分支下面那条 onSelect 里的
         // `favoriteUid: args.uid` 是同一个语义,两条链路必须一致(2026-08-17 review K3)。
         favoriteUid: args.uid,
-        onApplied: args.commit,
+        onApplied: () => commitOrRestore(() => sessionEngineFilter?.onCrossEngineSelect({
+          providerId: args.anchor.providerId,
+          modelId: args.config.wireModelId ?? args.anchor.modelId,
+          targetAgent: args.config.agent,
+          effort: args.config.effort ?? '',
+          fast: args.config.fast,
+          favoriteUid: args.uid,
+        })),
       });
     }
     return runLive(() =>
@@ -508,7 +532,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         rowModelId: args.anchor.modelId,
       }),
     ).then((applied) => {
-      if (applied) args.commit();
+      if (applied) return commitOrRestore(() => onSelect(
+        args.anchor.providerId, args.config.wireModelId ?? args.anchor.modelId,
+        args.config.effort ?? '', {
+          engine: args.config.engine, fast: args.config.fast,
+          favoriteUid: args.uid, rowModelId: args.anchor.modelId,
+        },
+      ));
     });
   };
 
@@ -546,7 +576,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, entry, config, engine) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
-      const commit = (): void => updateModelFavorite(anchor.uid, { agent: engine });
+      const commit = () => favorites.update(anchor.uid, { agent: engine });
       // 编辑后的整份副本 = 旧副本 ⊕ 新引擎,由收藏行**同一条**解析链路算出(见
       // resolveFavoriteConfig 头注:换引擎会连带换 wire id / 档位集合 / Fast 能力)。
       const target =
@@ -562,8 +592,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // 改的不是当前选中的那条收藏(或引擎没变 / 没注入解析器)→ 它只描述「下次选它用什么」,
       // 行为不变:只改副本。副本已不再是正在跑的配置时同样只改记录,不隐式写回运行态。
       if (!target || !favoriteCopyIsLive(anchor, entry)) {
-        commit();
-        return;
+        return commit();
       }
       return applySelectedFavoriteEdit({
         anchor,
@@ -623,7 +652,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const applyEffort: UnifiedRowActions['applyEffort'] = (anchor, entry, config, effort) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
-      const commit = (): void => updateModelFavorite(anchor.uid, { effort });
+      const commit = () => favorites.update(anchor.uid, { effort });
       // 改的不是当前选中的那条收藏(或压根没有 live 深度通道)→ 它只描述「下次选它用什么」,
       // 行为不变:只改副本。
       if (
@@ -631,8 +660,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         !onEffortChangeLive ||
         !favoriteCopyIsLive(anchor, entry)
       ) {
-        commit();
-        return;
+        return commit();
       }
       return applySelectedFavoriteEdit({
         anchor,
@@ -642,6 +670,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 只动深度这一格,引擎 / wire id / Fast 沿用这条收藏当前的解析结果。
         target: { ...config, effort },
         live: () => runLive(() => onEffortChangeLive(effort)),
+        rollback: async () => { await onEffortChangeLive(config.effort ?? ''); },
         commit,
       });
     }
@@ -673,15 +702,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
   const applyFast: UnifiedRowActions['applyFast'] = (anchor, entry, config, enabled) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
-      const commit = (): void => updateModelFavorite(anchor.uid, { fast: enabled });
+      const commit = () => favorites.update(anchor.uid, { fast: enabled });
       // 同 applyEffort:非选中收藏(或没有 live Fast 通道)只改副本,不动正在跑的那一份。
       if (
         selectedFavoriteUid !== anchor.uid ||
         !onFastModeChangeLive ||
         !favoriteCopyIsLive(anchor, entry)
       ) {
-        commit();
-        return;
+        return commit();
       }
       return applySelectedFavoriteEdit({
         anchor,
@@ -691,6 +719,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 只动 Fast 这一格。
         target: { ...config, fast: enabled },
         live: () => runLive(() => onFastModeChangeLive(enabled)),
+        rollback: async () => { await onFastModeChangeLive(config.fast ?? false); },
         commit,
       });
     }
@@ -848,13 +877,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
 
   const addFavorite: UnifiedRowActions['addFavorite'] = (anchor, config) => {
     if (interactionDisabled) return;
-    addModelFavorite({
+    const result = favorites.add({
       providerId: anchor.providerId,
       modelId: anchor.modelId,
       agent: config.engine,
       ...(config.effort ? { effort: config.effort } : {}),
       ...(config.fast ? { fast: true as const } : {}),
     });
+    if (result) return result.then(() => { onFavoriteFlash(anchorKey(anchor)); });
     onFavoriteFlash(anchorKey(anchor));
   };
 
@@ -874,9 +904,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    */
   const removeFavorite: UnifiedRowActions['removeFavorite'] = (anchor, entry) => {
     if (interactionDisabled || anchor.kind !== 'fav') return;
-    const commit = (): void => {
+    const commit = () => {
+      const result = favorites.remove(anchor.uid);
+      if (result) return result.then(() => { onBeforeRemoveFavorite(anchor); });
       onBeforeRemoveFavorite(anchor);
-      removeModelFavorite(anchor.uid);
     };
     // 删除前再次核对收藏仍是实时配置，避免覆盖后来从其他入口修改的值:
     // 副本仍是正在跑的那一份。用户选中收藏后又从别的入口改了模型/思维,uid 还在,
@@ -886,8 +917,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         ? resolveDefaultRowConfig?.(entry)
         : undefined;
     if (!fallback) {
-      commit();
-      return;
+      return commit();
     }
     const wireModelId = fallback.wireModelId ?? anchor.modelId;
     // 草稿:恒走 onSelect —— 除了把默认配置写回草稿,它还是清掉草稿层收藏锚点
@@ -901,7 +931,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           effort: fallback.effort,
         }),
       ).then((applied) => {
-        if (applied) commit();
+        if (applied) return commit();
       });
     }
     // 会话内回落:默认引擎 ≠ 正在跑的引擎,或正挂着待发送意图,都走切换事务。
@@ -924,7 +954,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 会话 + 默认引擎 == 正在跑的引擎,且没有待发送意图:无损,两个 live 回调把深度 / Fast 复位。
     // 与跨引擎分支同一条顺序:**live 真写成了才**删记录。
     return applyDefaultsLive(fallback.effort).then((applied) => {
-      if (applied) commit();
+      if (applied) return commit();
     });
   };
 

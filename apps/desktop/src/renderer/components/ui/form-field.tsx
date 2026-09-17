@@ -72,7 +72,7 @@ export function FormField({
           )}
         >
           {hint && (
-            <p id={hintId} className="text-[var(--text-tertiary)]">
+            <p id={hintId} className="text-[var(--form-field-hint)]">
               {hint}
             </p>
           )}

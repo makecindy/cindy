@@ -29,11 +29,19 @@ afterEach(() => {
   controller?.dispose();
   vi.useRealTimers();
 });
-async function fixture(firstControl?: Promise<{ controlling: boolean }>) {
+async function fixture(
+  firstControl?: Promise<{ controlling: boolean }>,
+  resolutionRestore = false,
+) {
   const control = vi.fn(async (enabled: boolean) => ({ controlling: enabled }));
   if (firstControl) control.mockImplementationOnce(() => firstControl);
   const heartbeat = vi.fn(async () => ({ controlling: true }));
   const clipboard = vi.fn(async () => {});
+  const resolution = vi.fn(async (_modeId: string) => ({
+    lease: 'lease',
+    controlling: false,
+    display: { id: 'one', width: 3840, height: 2160 },
+  }));
   const api = {
     state: async () => ({
       generation: 1,
@@ -57,6 +65,9 @@ async function fixture(firstControl?: Promise<{ controlling: boolean }>) {
             version: 1,
             enabled: true,
             canControl: true,
+            viewerDisplay: true,
+            viewerDisplayRestore: true,
+            resolutionRestore,
             clipboardText: true,
             automaticReconnect: true,
             displays: [{ id: 'one', name: 'Display', width: 1280, height: 720 }],
@@ -71,6 +82,19 @@ async function fixture(firstControl?: Promise<{ controlling: boolean }>) {
           return control(request.enabled);
         case 'heartbeat':
           return heartbeat();
+        case 'displayModes':
+          return [
+            { id: '640', width: 640, height: 1242, current: false },
+            { id: '4k', width: 3840, height: 2160, current: false },
+          ];
+        case 'resolution':
+          return resolution(request.modeId);
+        case 'viewerDisplay':
+          return {
+            lease: 'lease',
+            controlling: false,
+            display: { id: 'viewer', width: request.width, height: request.height },
+          };
         case 'frame':
           return { jpeg: null };
         default:
@@ -82,12 +106,61 @@ async function fixture(firstControl?: Promise<{ controlling: boolean }>) {
     snapshot = state;
   });
   await vi.advanceTimersByTimeAsync(0);
-  return { control, heartbeat, clipboard };
+  return { control, heartbeat, clipboard, resolution };
 }
 const present = () => runtime.post?.({ type: 'streaming', epoch: 'lease' });
 const inputEnabled = () =>
   runtime.receive.mock.calls.filter(([message]) => message.type === 'control').at(-1)?.[0]
     .enabled ?? false;
+
+it('keeps high-resolution system modes on a restorable lease', async () => {
+  const f = await fixture(undefined, true);
+  present();
+  await controller.resolution('4k');
+  expect(f.resolution).toHaveBeenCalledWith('4k');
+  expect(
+    runtime.receive.mock.calls.some(([m]) => m.type === 'videoSettings' && m.width === 3840),
+  ).toBe(true);
+});
+
+it('does not silently make a persistent resolution change on an older host', async () => {
+  const f = await fixture();
+  present();
+  await expect(controller.resolution('4k')).rejects.toThrow('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+  expect(f.resolution).not.toHaveBeenCalled();
+});
+
+it('matches the viewer ratio without replacing the lease or resetting input sequence', async () => {
+  const f = await fixture();
+  present();
+  await controller.fitDisplay(500, 1000);
+  expect(snapshot.displayId).toBe('one');
+  expect(snapshot.controlling).toBe(true);
+  expect(f.control).toHaveBeenLastCalledWith(true);
+  expect(runtime.receive).toHaveBeenCalledWith({
+    type: 'videoSettings',
+    width: 960,
+    height: 1920,
+    audio: false,
+  });
+  expect(runtime.receive.mock.calls.filter(([m]) => m.type === 'init')).toHaveLength(1);
+});
+
+it('changes portrait resolution using the same temporary screen lease', async () => {
+  await fixture();
+  present();
+  await controller.fitDisplay(500, 1000);
+  await controller.resolution('640');
+  expect(snapshot.controlling).toBe(true);
+  expect(snapshot.displayId).toBe('one');
+  expect(runtime.receive).toHaveBeenCalledWith({
+    type: 'videoSettings',
+    width: 640,
+    height: 1242,
+    audio: false,
+  });
+  expect(runtime.receive.mock.calls.filter(([m]) => m.type === 'init')).toHaveLength(1);
+});
 
 it('orders quick copy/paste shortcuts and reports transfer failure without reconnecting', async () => {
   const current = await fixture();

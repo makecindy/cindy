@@ -68,6 +68,33 @@ function events() {
     m.type === 'input' ? (m.events as Record<string, unknown>[]) : [],
   );
 }
+
+it('moves the separate cursor before input is sent and ignores delayed host positions while moving', () => {
+  const cursor = {
+    visible: true,
+    x: 0.1,
+    y: 0.1,
+    width: 32,
+    height: 32,
+    hotX: 2,
+    hotY: 3,
+    png: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+  };
+  viewer.receive({ type: 'frame', jpeg: 'frame', cursor });
+  pointer('pointermove', 800, 452);
+  const overlay = document.getElementById('cursor')!;
+  expect(overlay.style.display).toBe('block');
+  expect(overlay.style.left).toBe('798px');
+  expect(overlay.style.top).toBe('397px');
+  expect(events()).toEqual([]);
+  viewer.receive({ type: 'frame', jpeg: 'frame', cursor: { ...cursor, x: 0.2, y: 0.2 } });
+  expect(overlay.style.left).toBe('798px');
+  vi.advanceTimersByTime(34);
+  expect(events()).toContainEqual({ kind: 'move', x: 0.8, y: 400 / 600 });
+  viewer.receive({ type: 'control', enabled: false });
+  viewer.receive({ type: 'frame', jpeg: 'frame', cursor });
+  expect(overlay.style.left).toBe('98px');
+});
 it('scopes cursor hiding to the remote picture regardless of window focus or cursor metadata', () => {
   expect(stage.style.cursor).toBe('none');
   viewer.receive({ type: 'frame', jpeg: 'frame' });

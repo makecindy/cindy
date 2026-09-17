@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  constants as fsConstants,
   createReadStream,
   lstatSync,
   readFileSync,
@@ -112,6 +113,31 @@ export async function clearPiSubagentDeletedTombstone(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
+  }
+}
+
+async function copyStagedRipgrep(
+  fromConfigHome: string,
+  toConfigHome: string,
+  fallbackSourcePath?: string,
+): Promise<void> {
+  const basename = process.platform === 'win32' ? 'rg.exe' : 'rg';
+  const candidates = [path.join(fromConfigHome, 'bin', basename)];
+  if (fallbackSourcePath && path.isAbsolute(fallbackSourcePath)) candidates.push(fallbackSourcePath);
+  for (const source of candidates) {
+    try {
+      const sourceStat = await fs.stat(source);
+      if (!sourceStat.isFile()) continue;
+      const destDir = path.join(toConfigHome, 'bin');
+      const dest = path.join(destDir, basename);
+      await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
+      await fs.copyFile(source, dest, fsConstants.COPYFILE_FICLONE);
+      if (process.platform !== 'win32') await fs.chmod(dest, 0o755);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
   }
 }
 
@@ -2644,6 +2670,13 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await copyStagedRipgrep(
+      sourceConfigHome,
+      childConfigHome,
+      typeof launch.env.CINDY_PI_MANAGED_RG_PATH === 'string'
+        ? launch.env.CINDY_PI_MANAGED_RG_PATH
+        : undefined,
+    );
     await fs.writeFile(bridgeExtension, bridgeSource, { mode: 0o600, flag: 'wx' });
     await writeAtomicJson(permissionFile, launch.permissionSnapshot);
     await fs.writeFile(runnerFile, runnerSource, { mode: 0o600, flag: 'wx' });

@@ -32,7 +32,7 @@ describe('mobile message text selection', () => {
     expect(source).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
     expect(source).toContain('uiTextView');
     expect(source).toContain('function MarkdownSelectableSpan(');
-    expect(source).toContain('const SpanText = ctx.SpanText ?? Text;');
+    expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
     expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
 
     // 气泡是纯 View,不挂 Pressable/onLongPress(避免干扰横向 ScrollView 手势)。

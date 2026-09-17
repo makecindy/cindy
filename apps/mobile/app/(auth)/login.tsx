@@ -1496,14 +1496,19 @@ export function LoginScreen({
       {realmConfirmation ? (
         <LoginConsentDialog
           scale={groupScale}
-          title={loginText('realmConsentTitle')}
+          title={loginText(realmConfirmation.personalLoginAvailable
+            ? 'realmConsentPersonalTitle' : 'realmConsentTitle')}
           body={loginText(
-            realmConfirmation.targetRegion === 'cn'
-              ? 'realmConsentBodyCn'
-              : 'realmConsentBodyGlobal',
+            realmConfirmation.personalLoginAvailable
+              ? (realmConfirmation.targetRegion === 'cn'
+                ? 'realmConsentPersonalBodyCn' : 'realmConsentPersonalBodyGlobal')
+              : (realmConfirmation.targetRegion === 'cn'
+                ? 'realmConsentBodyCn' : 'realmConsentBodyGlobal'),
           )}
-          agreeLabel={loginText('realmConsentAgree')}
-          disagreeLabel={loginText('realmConsentDisagree')}
+          agreeLabel={loginText(realmConfirmation.personalLoginAvailable
+            ? 'realmConsentEnterpriseLogin' : 'realmConsentAgree')}
+          disagreeLabel={loginText(realmConfirmation.personalLoginAvailable
+            ? 'realmConsentContinuePersonal' : 'realmConsentDisagree')}
           onAgree={() =>
             void auth.dispatchLoginAction({ type: 'confirm-sso-realm' })
           }

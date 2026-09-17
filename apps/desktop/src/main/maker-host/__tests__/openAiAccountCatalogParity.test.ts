@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, type CatalogModel } from '@cindy/model-providers';
 import {
   getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels,
-  setLocalCatalogOverrides,
+  setLocalCatalogOverrides, setCustomProviderConfigs, setDiscoveredProviderMediaModels,
 } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, hasLocalAddition, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
@@ -22,11 +22,69 @@ function entry(providerId: string, agent: 'codex' | 'claude-code' | 'pi', id: st
 afterEach(() => {
   setCustomProviders([]);
   setDiscoveredCodexModels([]);
+  setDiscoveredProviderMediaModels('openai', null);
+  setDiscoveredProviderMediaModels(accountId, null);
   setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
   setActiveCatalog(BUNDLED_CATALOG);
 });
 
 describe('OpenAI account catalog identity', () => {
+  it.each(['before', 'after', 'configs'] as const)('updates existing image members and defaults from the public catalog (account: %s)', (order) => {
+    const config = {
+      id: accountId, name: 'OpenAI', auth: { method: 'oauth' as const, native: 'codex' as const },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [] } },
+    };
+    if (order === 'before') setCustomProviders([account()]);
+    if (order === 'configs') setCustomProviderConfigs([config]);
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const definition = catalog.providers.find(p => p.id === 'openai')!;
+    definition.imageModels = [{ id: 'openai/gpt-image-fixture', name: 'Public image' }];
+    definition.imageDefaults = { standard: 'openai/gpt-image-fixture', best: 'openai/gpt-image-fixture' };
+    setActiveCatalog(catalog);
+    if (order === 'after') setCustomProviders([account()]);
+    const images = (id: string) => getActiveCatalog().providers.find(p => p.id === id)!;
+    for (const id of ['openai', accountId]) {
+      expect(images(id).imageModels?.map(m => m.id)).toEqual([`${id}/gpt-image-fixture`]);
+      expect(images(id).imageDefaults).toEqual({ standard: `${id}/gpt-image-fixture`, best: `${id}/gpt-image-fixture` });
+    }
+    definition.imageModels = [{ id: 'openai/gpt-image-next', name: 'Next image' }];
+    delete definition.imageDefaults;
+    setActiveCatalog(structuredClone(catalog));
+    for (const id of ['openai', accountId]) {
+      expect(images(id).imageModels?.map(m => m.id)).toEqual([`${id}/gpt-image-next`]);
+      expect(images(id).imageDefaults).toBeUndefined();
+    }
+    definition.imageModels = [];
+    setActiveCatalog(structuredClone(catalog));
+    for (const id of ['openai', accountId]) expect(images(id).imageModels).toEqual([]);
+    delete definition.imageModels;
+    setActiveCatalog(structuredClone(catalog));
+    expect(images(accountId).imageModels?.map(m => m.id.replace(`${accountId}/`, 'openai/')))
+      .toEqual(images('openai').imageModels?.map(m => m.id));
+    expect(images(accountId).imageModels?.length).toBeGreaterThan(0);
+  });
+
+  it('keeps Platform discovery and connection overrides out of other subscription image lists', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    setActiveCatalog(catalog);
+    setCustomProviders([account()]);
+    setDiscoveredProviderMediaModels('openai', { imageModels: [{ id: 'openai/gpt-image-api-only', name: 'API only' }] });
+    setLocalCatalogOverrides(sanitizeModelCatalogOverrides({ patches: {
+      [`${accountId}:${accountId}/gpt-image-2`]: { base: { name: 'My image' } },
+    } }).overrides);
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const providers = getActiveCatalog().providers;
+      expect(providers.find(p => p.id === 'openai')!.imageModels?.map(m => m.id)).toEqual(['openai/gpt-image-api-only']);
+      const images = providers.find(p => p.id === accountId)!.imageModels!;
+      expect(images.some(m => m.id.endsWith('/gpt-image-api-only'))).toBe(false);
+      expect(images.find(m => m.id === `${accountId}/gpt-image-2`)?.name).toBe('My image');
+      setActiveCatalog(structuredClone(catalog));
+    }
+    setDiscoveredProviderMediaModels(accountId, { imageModels: [] });
+    expect(getActiveCatalog().providers.find(p => p.id === accountId)!.imageModels).toEqual([]);
+    expect(getActiveCatalog().providers.find(p => p.id === 'openai')!.imageModels).toHaveLength(1);
+  });
+
   it.each([false, true])('Pro/Cyber keep all Harness routes and inherit available public tiers (old snapshot: %s)', (oldSnapshot) => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const slugs = ['gpt-5.4-pro', 'gpt-5.5-pro', 'gpt-5.6-cyber'];
@@ -101,7 +159,7 @@ describe('OpenAI account catalog identity', () => {
     const second = providers.find(p => p.id === accountId)!;
     for (const agent of ['codex', 'claude-code', 'pi'] as const) {
       const ids = second.models[agent]!.map(m => m.id);
-      expect(ids).toEqual(expect.arrayContaining(original.models[agent]!.map(m => m.id)));
+      expect([...ids].sort()).toEqual(original.models[agent]!.map(m => m.id).sort());
       expect(new Set(ids).size).toBe(ids.length);
     }
     expect(entry(accountId, 'pi', remotePi.id)).toMatchObject(remotePi);

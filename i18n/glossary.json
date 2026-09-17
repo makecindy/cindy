@@ -6,6 +6,45 @@
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
+      "id": "local-session-scope",
+      "status": "proposed",
+      "en": "Local",
+      "translations": {
+        "zh-CN": "本机任务",
+        "zh-TW": "本機任務",
+        "ja": "このデバイスのセッション",
+        "ko": "이 기기의 세션"
+      },
+      "checkCase": false,
+      "alsoAllowed": {
+        "zh-CN": [
+          {
+            "text": "本机",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine（设备菜单与新建任务按钮）、ccAgent.sidebar.deviceGroup.local（设备分组标题）"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "本機",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local"
+          }
+        ],
+        "ja": [
+          {
+            "text": "このデバイス",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local"
+          }
+        ],
+        "ko": [
+          {
+            "text": "이 기기",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local"
+          }
+        ]
+      },
+      "note": "用于 Desktop 本机范围标签。translations 中带任务／セッション／세션 的译法仅用于侧栏任务范围标题 ccAgent.sidebar.scopeLocalSessions；设备菜单、新建任务按钮和设备分组标题使用 alsoAllowed 中不带任务的设备标签译法，不可互换。英文统一使用 Local，表示当前电脑或其上的任务；其他语言保留各位置现有表达。不表示本地模型、离线模式或未登录状态，也不约束其他语境中的 local。"
+    },
+    {
       "id": "remote-desktop-direct",
       "status": "proposed",
       "en": "Direct to computer",

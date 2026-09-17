@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, GitBranch, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronRight, GitBranch, Plus, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
@@ -7,6 +7,11 @@ import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { MakeDoctorReportCard } from '@/components/chat/CindyMakeDoctorCard';
+import { CindyMakeSourceDetails } from '@/components/cindy-make/CindyMakeSourceDetails';
+import { CindyMakeCreateDialog } from '@/components/cindy-make/CindyMakeCreateDialog';
+import { CindyMakeDependencyProgress } from '@/components/cindy-make/CindyMakeDependencyProgress';
+import { CindyMakeTasksPanel } from '@/components/cindy-make/CindyMakeTasksPanel';
+import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { cancelMakeDoctor, startMakeDoctor } from '@/lib/cindyMakeDoctor';
 import { useCindyMakeSettings } from '@/lib/cindyMakeSettings';
 import { toast } from '@/lib/toast';
@@ -15,7 +20,11 @@ import type { MakeDoctorReport, MakeSourceStatus } from '../../../shared/cindyMa
 export function CindyMakeSection() {
   const { t } = useTranslation();
   const { forceManagedTools, setForceManagedTools } = useCindyMakeSettings();
+  const [createOpen, setCreateOpen] = useState(false);
   const [report, setReport] = useState<MakeDoctorReport>();
+  const makeState = useCindyMakeState();
+  const [dismissedPreparationId, setDismissedPreparationId] = useState<string>();
+  const [trackedPreparationId, setTrackedPreparationId] = useState<string>();
   const [checkVersion, setCheckVersion] = useState(0);
   const [runMode, setRunMode] = useState<'check' | 'prepare'>('check');
   const [runVersion, setRunVersion] = useState(0);
@@ -23,30 +32,15 @@ export function CindyMakeSection() {
     makeAction: 'prepare-source' | 'clear-source';
     forceManagedTools: boolean;
   }>();
-  // Source state is global (Main owns one shared job): the initial read returns
-  // live progress when something is running, and the broadcast keeps every
-  // window current whether Settings or the /cindy-make workflow started it.
-  const [sourceStatus, setSourceStatus] = useState<MakeSourceStatus>();
+  const sourceStatus = makeState.source;
   const [sourceRunPending, setSourceRunPending] = useState(false);
   const { confirm } = useConfirmDialog();
   useEffect(() => {
-    let active = true;
-    const unsubscribe =
-      window.electronAPI.onCindyMakeSourceStatus?.((status) => {
-        if (!active) return;
-        setSourceStatus(status);
-        if (status.status !== 'preparing') setSourceRunPending(false);
-      }) ?? (() => {});
-    Promise.resolve(window.electronAPI.getCindyMakeSourceStatus?.())
-      .then((status) => {
-        if (active && status) setSourceStatus((current) => current ?? status);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-      unsubscribe();
-    };
+    void window.electronAPI.getCindyMakeSourceStatus?.().catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (sourceStatus?.status !== 'preparing') setSourceRunPending(false);
+  }, [sourceStatus]);
   useEffect(() => {
     if (!sourceRun) return;
     const controller = new AbortController();
@@ -56,17 +50,7 @@ export function CindyMakeSection() {
         // catches a start that never reached Main (e.g. the IPC itself failed).
         if (sourceReport.status === 'running' || sourceReport.source) return;
         setSourceRunPending(false);
-        setSourceStatus((current) =>
-          current && current.status === 'preparing'
-            ? {
-                ...current,
-                status: sourceReport.status === 'cancelled' ? 'cancelled' : 'failed',
-                error: sourceReport.status === 'cancelled' ? 'cancelled' : 'gitFailed',
-                phase: undefined,
-                progress: undefined,
-              }
-            : current,
-        );
+        toast.error(t('cindyMakeDoctor.failed'));
       },
       undefined,
       'cindy-make',
@@ -88,6 +72,31 @@ export function CindyMakeSection() {
     return () => controller.abort();
   }, [forceManagedTools, checkVersion, runMode, runVersion]);
   const sourceBusy = sourceRunPending || sourceStatus?.status === 'preparing';
+  const preparation = makeState.environmentPrepare;
+  const check = makeState.environmentCheck;
+  useEffect(() => {
+    if (
+      preparation?.active &&
+      (preparation.report.forceManagedTools === true) === forceManagedTools &&
+      preparation.report.runId !== dismissedPreparationId
+    )
+      setTrackedPreparationId(preparation.report.runId);
+  }, [
+    preparation?.active,
+    preparation?.report.runId,
+    preparation?.report.forceManagedTools,
+    forceManagedTools,
+    dismissedPreparationId,
+  ]);
+  const displayReport =
+    preparation &&
+    (preparation.active || preparation.report.runId === trackedPreparationId) &&
+    (preparation.report.forceManagedTools === true) === forceManagedTools &&
+    preparation.report.runId !== dismissedPreparationId
+      ? preparation.report
+      : check && (check.report.forceManagedTools === true) === forceManagedTools
+        ? check.report
+        : report;
 
   return (
     <div className="flex flex-col gap-[18px]">
@@ -99,7 +108,12 @@ export function CindyMakeSection() {
         <p className="mt-2 text-13 leading-[1.45] text-[var(--settings-section-desc)]">
           {t('settings.cindyMake.description')}
         </p>
+        <Button className="mt-3" onClick={() => setCreateOpen(true)}>
+          <Plus size={14} aria-hidden="true" />
+          {t('settings.cindyMake.create.title')}
+        </Button>
       </div>
+      {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
 
       {import.meta.env.DEV && (
         <div className="flex flex-col gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
@@ -118,6 +132,7 @@ export function CindyMakeSection() {
                 // Toggling the developer switch is a diagnostic recheck. Never
                 // let it restart an in-progress preparation run implicitly.
                 setRunMode('check');
+                setTrackedPreparationId(undefined);
                 setForceManagedTools(checked);
               }}
               aria-label={t('settings.cindyMake.forceManaged.ariaLabel')}
@@ -133,13 +148,14 @@ export function CindyMakeSection() {
         </div>
       )}
 
-      {report ? (
+      {displayReport ? (
         <MakeDoctorReportCard
-          report={report}
+          report={displayReport}
           showSource={false}
           showSteps={false}
           alwaysAllowRecheck
           onPrepare={() => {
+            setDismissedPreparationId(undefined);
             setRunMode('prepare');
             setRunVersion((version) => version + 1);
           }}
@@ -152,11 +168,13 @@ export function CindyMakeSection() {
               .catch(() => toast.error(t('cindyMakeDoctor.failed')));
           }}
           onStop={() => {
-            void cancelMakeDoctor(report.runId, report.mode).catch(() =>
+            void cancelMakeDoctor(displayReport.runId, displayReport.mode).catch(() =>
               toast.error(t('cindyMakeDoctor.failed')),
             );
           }}
           onRecheck={() => {
+            setDismissedPreparationId(preparation?.report.runId);
+            setTrackedPreparationId(undefined);
             setRunMode('check');
             setCheckVersion((version) => version + 1);
           }}
@@ -198,6 +216,12 @@ export function CindyMakeSection() {
           }}
         />
       )}
+      {Object.keys(makeState.tasks ?? {}).length > 0 && (
+        <CindyMakeTasksPanel
+          reports={Object.values(makeState.tasks ?? {})}
+          taskActions={makeState.taskActions}
+        />
+      )}
     </div>
   );
 }
@@ -218,6 +242,9 @@ function CindyMakeSourceStatusCard({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const displayStatus = preparing ? 'preparing' : status.status;
+  // A click is pending before Main publishes the new run. Never reuse the last
+  // run's phase, counters or error in that window.
+  const activeStatus = preparing && status.status === 'preparing' ? status : undefined;
   const statusClass =
     displayStatus === 'ready'
       ? 'text-[var(--status-success)]'
@@ -255,73 +282,43 @@ function CindyMakeSourceStatusCard({
           <p className="text-13 text-[var(--text-secondary)]">
             {t('settings.cindyMake.source.description')}
           </p>
-          <dl className="grid gap-1 text-12 text-[var(--text-secondary)]">
+          {(status.branch || status.commit || status.status === 'ready') && (
+            <CindyMakeSourceDetails source={status} />
+          )}
+          <dl className="grid gap-1 text-12 text-[var(--text-tertiary)]">
             <div>
               <dt className="inline font-medium">{t('settings.cindyMake.source.path')}: </dt>
               <dd className="inline break-all font-mono">{status.path}</dd>
             </div>
-            {status.channel && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.channel')}: </dt>
-                <dd className="inline">{status.channel}</dd>
-              </div>
-            )}
-            {status.version && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.version')}: </dt>
-                <dd className="inline">{status.version}</dd>
-              </div>
-            )}
-            {status.ref && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.ref')}: </dt>
-                <dd className="inline">{status.ref}</dd>
-              </div>
-            )}
-            {status.branch && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.branch')}: </dt>
-                <dd className="inline font-mono">{status.branch}</dd>
-              </div>
-            )}
-            {status.commit && (
-              <div>
-                <dt className="inline font-medium">{t('settings.cindyMake.source.commit')}: </dt>
-                <dd className="inline break-all font-mono">{status.commit}</dd>
-              </div>
-            )}
-            {status.baseCommit && (
-              <div>
-                <dt className="inline font-medium">
-                  {t('settings.cindyMake.source.baseCommit')}:{' '}
-                </dt>
-                <dd className="inline break-all font-mono">
-                  {status.ref ? `${status.ref} ` : ''}
-                  {status.baseCommit}
-                </dd>
-              </div>
-            )}
-            {status.error && (
-              <div className="text-[var(--status-danger)]">
-                {t(`cindyMake.source.errors.${status.error}`)}
-              </div>
-            )}
           </dl>
-          {preparing && status.progress && (
-            <div
-              className="flex items-center gap-2 text-12 text-[var(--text-secondary)]"
-              aria-live="polite"
-            >
-              <Spinner size={14} />
-              <span>{t(`cindyMake.source.gitProgress.${status.progress.stage}`)}</span>
-            </div>
+          {activeStatus?.progress?.message && (
+            <p className="break-all font-mono text-11 text-[var(--text-tertiary)]">
+              {activeStatus.progress.message}
+            </p>
           )}
         </div>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-4 py-3">
-        <div className={`min-w-0 flex-1 text-13 ${statusClass}`} role="status">
-          {t(`settings.cindyMake.source.status.${displayStatus}`)}
-          {preparing && status.phase ? ` · ${t(`cindyMake.source.phase.${status.phase}`)}` : ''}
+        <div className={`min-w-0 flex-1 space-y-1 text-13 ${statusClass}`} role="status">
+          <div>
+            {t(`settings.cindyMake.source.status.${displayStatus}`)}
+            {activeStatus?.phase ? ` · ${t(`cindyMake.source.phase.${activeStatus.phase}`)}` : ''}
+            {activeStatus?.progress && (
+              <>
+                {' · '}
+                <span>{t(`cindyMake.source.gitProgress.${activeStatus.progress.stage}`)}</span>{' '}
+                <span>({activeStatus.progress.percent}%)</span>
+              </>
+            )}
+          </div>
+          {!preparing && status.error && <p>{t(`cindyMake.source.errors.${status.error}`)}</p>}
+          {(activeStatus?.phase === 'installing' || activeStatus?.phase === 'caching') && (
+            <CindyMakeDependencyProgress
+              progress={activeStatus.dependencies}
+              running={activeStatus.phase === 'installing'}
+              cacheOnly={activeStatus.phase === 'caching'}
+            />
+          )}
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           <Button variant="secondary" onClick={openSourceDir}>
@@ -337,7 +334,9 @@ function CindyMakeSourceStatusCard({
               {t(
                 status.status === 'ready'
                   ? 'settings.cindyMake.source.update'
-                  : 'settings.cindyMake.source.prepare',
+                  : status.status === 'failed' || status.status === 'cancelled'
+                    ? 'settings.cindyMake.source.retry'
+                    : 'settings.cindyMake.source.prepare',
               )}
             </Button>
           )}

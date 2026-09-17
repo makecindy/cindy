@@ -8,6 +8,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   createLiziMcpProviders,
   resolveLiziMcpSessionContext,
+  setSessionPathAuthorizer,
   type IOSSimulatorMcpAccessDecision,
   type LiziMcpProvider,
   type LiziMcpSessionContext,
@@ -18,6 +19,7 @@ import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
+  authorizeDesktopSessionPath,
   getCindyGhostsMcpDeps,
   type GhostGrantLiveSessionState,
   type CindyGhostsHostDeps,
@@ -115,6 +117,9 @@ export interface DesktopMcpProvidersDeps {
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
+  setSessionPathAuthorizer((request) =>
+    authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
+  );
   const { pluginRegistry } = deps;
   let redactSshText: ((snapshot: SshHostSnapshotLike, text: string) => string) | undefined;
   const loadRemoteSsh = async () => {
@@ -551,6 +556,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botMessaging: {
+        checkMessage: async (params) => {
+          const svc = tryGetBotDirectMessageService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate messaging is unavailable' };
+          return svc.checkMessage(params);
+        },
+        listAgents: async ({ callerSessionId }) => {
+          const svc = tryGetBotDirectMessageService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
+          return svc.listAgents(callerSessionId);
+        },
         messageAgent: async (params) => {
           const svc = tryGetBotDirectMessageService();
           if (!svc) {

@@ -76,6 +76,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
     );
   });
   const { title, body, type, publicName = '' } = draft;
+  const hasRelatedLogs = body.includes('## 相关日志');
   const selectedIdentity =
     legacyFixedGithubIdentity ??
     (draft.submissionIdentityKind === 'github-user' && pending.githubUserIdentity
@@ -266,6 +267,11 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
         {t('issueAgent.confirm.privacyHint')}
       </p>
+      {hasRelatedLogs && (
+        <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.relatedLogsHint')}
+        </p>
+      )}
 
       {/*
         新版 Main:平台 Bot 默认 + 可选 GitHub 用户。旧版 Main 可能已固定为 GitHub

@@ -44,7 +44,7 @@ interface RuntimeSetModelActiveSession {
 export interface RuntimeSetModelMaker {
   getSession: (sessionId: string) => RuntimeSetModelSession | undefined;
   listActiveSessions: () => RuntimeSetModelActiveSession[];
-  closeSession: (sessionId: string) => Promise<void>;
+  closeSession: (sessionId: string, reason?: 'runtime-refresh') => Promise<void>;
 }
 
 interface RuntimeSetModelLogger {
@@ -306,7 +306,7 @@ export async function applyRuntimeSetModelChange(
         // A configuration reload targets this task's remote handle only. The
         // local-only credential helper deliberately does not close SSH handles.
         if (isSelfBusy()) throw new CredentialModeSwitchBusyError([sessionId]);
-        await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+        await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'runtime-refresh'));
       } else {
         await prepareLocalSessionCredentialModeSwitch({
           maker,

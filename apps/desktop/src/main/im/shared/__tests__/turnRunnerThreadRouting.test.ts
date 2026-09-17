@@ -274,6 +274,7 @@ beforeEach(() => {
   mocks.takePendingInteractionsForSession.mockReturnValue([]);
   // maker.createSession: 按 id 返回独立 harness(多 session 并行的关键)
   mocks.getMaker.mockReturnValue({
+    getSession: vi.fn((id: string) => harnesses.get(id)?.session),
     on: vi.fn(() => () => undefined),
     createSession: vi.fn(async (args: { id?: string }) => {
       const id = args.id ?? 'anon';

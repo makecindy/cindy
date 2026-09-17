@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { normalizeBotName } from '../../../shared/botCreation';
 import { Spinner } from '@/components/ui/spinner';
-import { BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
+import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
 import { addBotProfileAndWait, BotModelSelectionRequiredError, useBotProfiles, type BotProfile } from './botStore';
 
 interface BotRosterViewProps {
@@ -22,6 +22,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
   const bots = useBotProfiles();
   const [name, setName] = useState('');
   const [portrait, setPortrait] = useState<string>();
+  const [initialPortrait] = useState(() => Math.floor(Math.random() * BOT_PORTRAIT_COUNT));
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitting = useRef(false);
@@ -29,11 +30,11 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
   useEffect(() => {
     alive.current = true;
     let cancelled = false;
-    void galleryPortrait(bots.length % 16).then(value => {
+    void galleryPortrait(initialPortrait).then(value => {
       if (!cancelled) setPortrait(current => current ?? value);
     }).catch(() => { if (!cancelled) setError(t('bots.profile.avatarSelectionFailed')); });
     return () => { cancelled = true; alive.current = false; };
-  }, []);
+  }, [initialPortrait]);
   const duplicate = bots.some(bot => bot.status !== 'archived' && normalizeBotName(bot.name) === normalizeBotName(name));
   const close = () => { if (onClose) onClose(); else navigate('/bots'); };
   const create = async () => {
@@ -67,7 +68,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
         <label className="min-w-0 flex-1 text-13 text-[var(--text-secondary)]">
           {t('bots.creationName')}
           <input autoFocus value={name} maxLength={200} disabled={creating} onChange={event => setName(event.target.value)}
-            className="mt-2 h-11 w-full rounded-lg border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-16 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" />
+            className="mt-2 h-11 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-16 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" />
         </label>
       </div>
       {(error || duplicate) && <p role="alert" className="mt-4 text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : error}</p>}

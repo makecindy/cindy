@@ -25,6 +25,8 @@ import {
   type SubmitIssueRequest,
 } from './githubIssueSubmitService';
 import { invalidateMyIssuesCache } from './myIssuesRuntime.js';
+import { formatRelatedIssueLogs } from './issueDiagnostics';
+import { collectLogsFromDisk } from '../log-upload/collectRuntime';
 import { recordSubmittedIssue } from './submittedIssueLedger.js';
 import {
   postGithubIssueAsUser,
@@ -103,6 +105,15 @@ export async function submitGithubIssueForSession(
       getRegion: () => CURRENT_CINDY_REGION,
       getFallbackLocale: () => app.getLocale(),
       getSubmitterName: getCurrentMembershipDisplayName,
+      collectRelatedLogs: async () => {
+        const nowMs = Date.now();
+        const result = await collectLogsFromDisk({
+          reason: 'manual',
+          anchors: [],
+          includeAgentLogs: true,
+        });
+        return formatRelatedIssueLogs(result.records, nowMs, req.workingDir);
+      },
       onSubmitted: (record) => {
         try {
           recordSubmittedIssue(record, submitScope);

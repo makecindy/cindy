@@ -10,7 +10,7 @@
 
 - Pi pin 升至 v0.83.0；Mac Intel/Apple Silicon、Linux x64/arm64、Windows x64/arm64
   六平台资产有官方 digest pin，Forge 按目标平台 provision 完整目录并打包。
-- 文件附件、Extra Dirs（结构化写工具只读保护）、minimal thinking、纯 BYOM 无 Cindy 登录已开放。
+- 文件附件、Extra Dirs（结构化写跟随会话权限）、minimal thinking、纯 BYOM 无 Cindy 登录已开放。
 - 精确 rewind 由 Pi `fork(entryId)` 裁剪对话，文件恢复复用 Cindy Git savepoint；与原会话树共用入口。
 - Pi Auto Memory 控制面已开放，自动/手动 compaction summary 写 searchable digest；reset 复用
   Maker Memory manager。

@@ -1,6 +1,7 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { createQueuedDispatchReceipts } from '../queuedDispatchReceipts.js';
 import { createOrcaInterAgentDispatcher } from '../orcaInterAgentDispatcher.js';
 import {
   createOrcaTeamService,
@@ -21,6 +22,7 @@ import type {
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
+  UI_ACTION_TRIGGER_PREFIX,
 } from '../../../shared/interruptedTurn.js';
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
 import {
@@ -46,6 +48,111 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+describe('queued welcome dispatch receipts', () => {
+  function setup() {
+    const h = createHarness();
+    const receipts = createQueuedDispatchReceipts();
+    h.onDispatchedUserTurn.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, true); });
+    h.onRejectedUserTurn.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, false); });
+    h.onUndispatchedUserTurn.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, false); });
+    h.onDiscardedQueuedMessage.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, false); });
+    const dispatch = (id: string) => receipts.dispatch('welcome-session', id, () =>
+      h.coordinator.enqueue('welcome-session', makeItem(id, `${UI_ACTION_TRIGGER_PREFIX}Say hello.`, { toolsDisabled: true })));
+    return { h, receipts, dispatch };
+  }
+
+  it('does not acknowledge enqueue or persistence before vendor acceptance', async () => {
+    const { h, dispatch } = setup();
+    let accept!: () => void;
+    const gate = new Promise<void>(resolve => { accept = resolve; });
+    h.sendToAgent.mockImplementation(async (sid, _message, _create, opts) => {
+      await persistQueuedUserMessage(sid, opts);
+      await gate;
+      return sendSuccess();
+    });
+    const settled = vi.fn();
+    const result = dispatch('welcome').then(value => { settled(value); return value; });
+    await flush();
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'Say hello.' });
+    expect(h.sendToAgent.mock.calls[0]?.[3]?.persistUserMessage?.content)
+      .toBe(`${UI_ACTION_TRIGGER_PREFIX}Say hello.`);
+    expect(settled).not.toHaveBeenCalled();
+    accept();
+    await expect(result).resolves.toBe(true);
+  });
+
+  it.each([false, true])('rejects pre-start failure (already persisted=%s)', async persisted => {
+    const { h, dispatch } = setup();
+    h.sendToAgent.mockImplementation(async (sid, _message, _create, opts) => {
+      if (persisted) await persistQueuedUserMessage(sid, opts);
+      throw new Error('Host text-only turns require Codex 0.145.0 or newer');
+    });
+    await expect(dispatch('failed-welcome')).resolves.toBe(false);
+    expect(h.onDispatchedUserTurn).not.toHaveBeenCalled();
+    const projection = h.coordinator.getProjection('welcome-session');
+    const retained = projection.recovery?.kind === 'active-turn'
+      ? projection.recovery.item : projection.pendingQueue[0];
+    expect(retained?.text).toBe(`${UI_ACTION_TRIGGER_PREFIX}Say hello.`);
+    h.sendToAgent.mockImplementation(async (sid, _message, _create, opts) => {
+      await persistQueuedUserMessage(sid, opts);
+      return sendSuccess();
+    });
+    await expect(dispatch('retry-welcome')).resolves.toBe(true);
+  });
+
+  it('keeps a rewritten welcome synthetic when dispatch fails', async () => {
+    const { h, dispatch } = setup();
+    h.setScreenUserMessage(async () => ({ action: 'rewrite', text: 'Warm welcome.', ghostId: 'test', ghostName: 'test' }));
+    h.sendToAgent.mockRejectedValue(new Error('runtime unavailable'));
+    await expect(dispatch('rewritten-welcome')).resolves.toBe(false);
+    expect(h.coordinator.getProjection('welcome-session').pendingQueue[0]?.text)
+      .toBe(`${UI_ACTION_TRIGGER_PREFIX}Warm welcome.`);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'Warm welcome.' });
+  });
+
+  it('releases the receipt when enqueue itself throws', async () => {
+    const receipts = createQueuedDispatchReceipts();
+    await expect(receipts.dispatch('s', 'c', () => { throw new Error('enqueue failed'); })).rejects.toThrow('enqueue failed');
+    await expect(receipts.dispatch('s', 'c', () => receipts.settle('s', 'c', true))).resolves.toBe(true);
+  });
+
+  it('rejects when Stop wins before provider dispatch', async () => {
+    const { h, dispatch } = setup();
+    let release!: () => void;
+    const vendorStart = vi.fn();
+    h.sendToAgent.mockImplementation(async (sid, _message, _create, opts) => {
+      await persistQueuedUserMessage(sid, opts);
+      vendorStart();
+      return sendSuccess();
+    });
+    h.beforeDispatchUserTurn.mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
+    const result = dispatch('welcome');
+    await flush();
+    expect(h.beforeDispatchUserTurn).toHaveBeenCalledOnce();
+    h.coordinator.stop('welcome-session');
+    release();
+    await expect(result).resolves.toBe(false);
+    expect(vendorStart).not.toHaveBeenCalled();
+  });
+
+  it('settles a removed queued welcome without acknowledging another session', async () => {
+    const { h, receipts, dispatch } = setup();
+    h.setRunning(true);
+    const settled = vi.fn();
+    const result = dispatch('welcome').then(value => { settled(value); return value; });
+    receipts.settle('other-session', 'welcome', true);
+    await flush();
+    expect(h.coordinator.getProjection('welcome-session').pendingQueue[0]?.text)
+      .toBe(`${UI_ACTION_TRIGGER_PREFIX}Say hello.`);
+    expect(settled).not.toHaveBeenCalled();
+    h.coordinator.remove('welcome-session', 'welcome');
+    await expect(result).resolves.toBe(false);
+    receipts.settle('welcome-session', 'welcome', true);
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false);
+  });
+});
+
 describe('AgentInputCoordinator Orca priority queue transactions', () => {
   const orcaItem = (clientId: string, text: string) =>
     makeItem(clientId, text, {
@@ -69,6 +176,18 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'first' });
+  });
+
+  it('preserves a text-only restriction across persisted queue restore and dispatch', async () => {
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async () => [makeItem('welcome', 'Say hello.', { toolsDisabled: true })]);
+    await h.coordinator.ensureQueueRestored('welcome-session');
+    h.coordinator.resume('welcome-session');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      'welcome-session', expect.anything(), expect.anything(),
+      expect.objectContaining({ toolsDisabled: true }),
+    );
   });
 
   it('forwards main-stamped device-link provenance from enqueue to send', async () => {
@@ -792,7 +911,9 @@ function createHarness(opts?: {
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
+  const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    rewindPersistedUserMessageAfterClear,
     sendToAgent,
     steerToAgent,
     abortSession,
@@ -867,6 +988,7 @@ function createHarness(opts?: {
   });
 
   return {
+    rewindPersistedUserMessageAfterClear,
     coordinator,
     sendToAgent,
     steerToAgent,
@@ -10287,6 +10409,44 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     expect(h.coordinator.hasQueuedItemWhere(sid, (item) => item.clientId === 'c1')).toBe(false);
   });
 
+  it.each(['cancel-result', 'cancel-throw', 'mode-throw'])(
+    'rewinds the scheduler row after persisted preparation rejection: %s', async (path) => {
+      const h = createHarness();
+      const sid = 'scheduler-preparation-rejected';
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        if (path === 'mode-throw') throw Object.assign(
+          new Error('Scheduled task modes changed before vendor dispatch'), { code: 'PRECONDITION_FAILED' },
+        );
+        if (path === 'cancel-throw') throw new Error('[SEND_CANCELLED_BEFORE_DISPATCH] cancelled');
+        return { kind: 'session-dispatch', source: 'test', dispatched: false, reason: 'cancelled-before-dispatch' } as never;
+      });
+      h.coordinator.enqueue(sid, makeItem('scheduled-row', 'heartbeat', { origin: schedOrigin }));
+      await flush();
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(sid, 'scheduled-row');
+      expect(h.persistTerminalSendError).not.toHaveBeenCalled();
+      expect(latestProjection(h.projections).error).toBeNull();
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(h.coordinator.hasQueuedItemWhere(sid, item => item.clientId === 'scheduled-row')).toBe(false);
+    },
+  );
+
+  it.each(['interactive', 'uncertain', 'rollback-failed'])(
+    'preserves failure history when preparation rollback is unsafe or fails: %s', async (path) => {
+      const h = createHarness();
+      if (path === 'rollback-failed') h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('disk unavailable'));
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        throw Object.assign(new Error(path === 'uncertain' ? 'delivery uncertain' : 'Scheduled task modes changed before vendor dispatch'),
+          { code: path === 'uncertain' ? 'TURN_DISPATCH_UNCONFIRMED' : 'PRECONDITION_FAILED' });
+      });
+      h.coordinator.enqueue('preserve-row', makeItem('row', 'prompt', path === 'interactive' ? {} : { origin: schedOrigin }));
+      await flush();
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(path === 'rollback-failed' ? 1 : 0);
+      expect(h.persistTerminalSendError).toHaveBeenCalled();
+    },
+  );
+
   it('onAccepted 抛错取消 scheduler 项:放掉 activeTurn 并唤醒队列(不把会话钉死)', async () => {
     // runner 在拿不到 live 会话时会从 onAcceptedQueuedMessage 抛错让 coordinator 回滚,
     // 于是走 persisted-error 分支。摘掉 scheduler recovery 之后,若不一并放掉 activeTurn,
@@ -11980,6 +12140,32 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.autoResumePending).toBeUndefined();
     expect(projection.error).toBeNull();
   });
+
+  it.each(['allow', 'reject', 'close'] as const)(
+    'keeps recovery projected through drained preparation and settles on %s', async (outcome) => {
+      const h = createHarness();
+      const sid = `takeover-preparing-${outcome}`;
+      h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+      h.setHasAssistantProgressAfter(async () => true);
+      await failAfterDispatch(h, sid);
+      const screen = deferred<{ action: 'allow' }>();
+      h.setScreenUserMessage(() => screen.promise);
+      await h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal);
+      await flush();
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+      expect(h.coordinator.getProjection(sid).autoResumePending).toEqual(TAKEOVER_INFO);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      if (outcome === 'close') {
+        h.coordinator.onSessionClosed(sid);
+        expect(h.coordinator.getProjection(sid).autoResumePending).toBeUndefined();
+      }
+      if (outcome === 'reject') screen.reject(new Error('preparation failed'));
+      else screen.resolve({ action: 'allow' });
+      await flush();
+      expect(h.coordinator.getProjection(sid).autoResumePending).toBeUndefined();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(outcome === 'allow' ? 2 : 1);
+    },
+  );
 
   it('abandonAutoResume 带 message → 错误回落成横幅', async () => {
     const h = createHarness();

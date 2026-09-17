@@ -181,6 +181,62 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
   });
 });
 
+describe('uploadLocalFile — bounded snapshots', () => {
+  it.each([NaN, Infinity, -1, 1.5, 99])(
+    'rejects invalid or exceeded budget %s before presign',
+    async (maxBytes) => {
+      statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+      await expect(uploadLocalFile('/tmp/a.bin', { maxBytes })).rejects.toThrow();
+      expect(apiFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, 100])(
+    'uploads bounded small files of %s bytes without an unbounded read',
+    async (size) => {
+      statMock.mockResolvedValue({ isFile: () => true, size });
+      createReadStreamMock.mockImplementation(() =>
+        Readable.from(size ? [Buffer.alloc(size)] : []),
+      );
+      okPut();
+      await expect(uploadLocalFile('/tmp/a.bin', { maxBytes: size })).resolves.toMatchObject({
+        size,
+      });
+      expect(createReadStreamMock).toHaveBeenCalledWith('/tmp/a.bin', { end: size });
+      expect(readFileMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects small-file growth before PUT and removes the presigned object', async () => {
+    statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+    createReadStreamMock.mockImplementation(() => Readable.from([Buffer.alloc(101)]));
+    await expect(uploadLocalFile('/tmp/a.bin', { maxBytes: 100 })).rejects.toThrow(
+      'REMOTE_FILE_TOO_LARGE',
+    );
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+    expect(readFileMock).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith(DEL_PATH, expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('rejects streaming growth before forwarding excess bytes without retrying the source failure', async () => {
+    const size = __testing.STREAM_THRESHOLD + 1;
+    statMock.mockResolvedValue({ isFile: () => true, size });
+    createReadStreamMock.mockImplementation(() =>
+      Readable.from([Buffer.alloc(size), Buffer.alloc(1)]),
+    );
+    let received = 0;
+    undiciFetchMock.mockImplementation(async (_url, init) => {
+      for await (const chunk of init.body) received += chunk.length;
+      return { ok: true, status: 200 };
+    });
+    await expect(uploadLocalFile('/tmp/a.bin', { maxBytes: size })).rejects.toThrow();
+    expect(received).toBeLessThanOrEqual(size);
+    expect(createReadStreamMock).toHaveBeenCalledWith('/tmp/a.bin', { end: size });
+    expect(netFetchMock).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith(DEL_PATH, expect.objectContaining({ method: 'DELETE' }));
+  });
+});
+
 describe('uploadLocalFile — 大文件流式 PUT', () => {
   it('超阈值 → body 为 ReadableStream + duplex half,不读进内存', async () => {
     const size = __testing.STREAM_THRESHOLD + 1;

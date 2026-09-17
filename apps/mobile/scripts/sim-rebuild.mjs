@@ -73,14 +73,12 @@ import { podInstallBounded } from './sim-pod-install.mjs';
 import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import {
-  cwdOfPid,
   gitSourceIdentity,
-  gitSourceOfPid,
-  isInside,
-  listenerPid,
-  portInUse,
   probeMetroOwnership,
 } from './sim-metro.mjs';
+
+import { readSimEnvironment } from './lib/sim-environment.mjs';
+import { extractSimWhoamiUdidArgs, bootedSimulatorLinesForTarget, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity } from './lib/sim-whoami.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
@@ -90,17 +88,7 @@ const { region, passthrough } = extractMobileDevRegionArgs(process.argv.slice(2)
 const clean = passthrough.includes('--clean');
 const forceBuild = passthrough.includes('--force-build');
 const buildOnly = passthrough.includes('--build-only');
-const simulatorUdidIndex = passthrough.indexOf('--udid');
-const simulatorUdid = simulatorUdidIndex >= 0
-  ? passthrough[simulatorUdidIndex + 1]?.trim().toUpperCase()
-  : null;
-if (
-  simulatorUdidIndex >= 0
-  && !/^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/.test(simulatorUdid ?? '')
-) {
-  console.error('✗ --udid 必须是精确的 Simulator UUID。');
-  process.exit(1);
-}
+const { simulatorUdid } = extractSimWhoamiUdidArgs(passthrough);
 const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
 const localConfigStatus = formatMobileLocalConfigStatus(localConfigResult, worktreeRoot);
 if (localConfigStatus) console.log(localConfigStatus);
@@ -122,7 +110,6 @@ const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: 
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 console.log(`==> Mobile dev region: ${region}`);
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
-const currentSource = gitSourceIdentity(worktreeRoot);
 
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', cwd: mobileDir, env: devProcessEnv, ...opts });
@@ -159,53 +146,33 @@ function capturePnpm(args) {
 // Windows 路径上触发 iOS 的 xcrun、pod 或 xcodebuild。
 if (process.platform === 'win32') {
   await rebuildAndroidSimulator();
-  process.exit(0);
+  process.exit(process.exitCode ?? 0);
 }
 
 // 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。
 if (!buildOnly) {
   const booted = capture('xcrun', ['simctl', 'list', 'devices', 'booted']);
-  if (!/\(Booted\)/.test(booted)) {
-    console.error('✗ 没有 booted 的模拟器。先打开 Simulator.app 并启动一台 iPhone,再重试。');
+  if (bootedSimulatorLinesForTarget(booted.split('\n'), simulatorUdid).length !== 1) {
+    console.error('✗ 需要唯一的已启动模拟器；多设备时传 --udid，指定设备必须已启动。');
     process.exit(1);
   }
 }
 
 async function ensureMetroOwnershipBeforeLaunch(packageName) {
-  if (!await portInUse(8081)) return true;
   const ownership = probeMetroOwnership(8081);
-  const metroPid = ownership?.pid ?? null;
-  if (!metroPid) {
-    console.log(`\nNative package installed (${packageName}).`);
-    console.error('Metro on 8081 is occupied, but its listener PID could not be verified.');
-    console.error('Refusing to launch until the port owner can be identified.');
-    return false;
-  }
-  const metroCwd = ownership.cwd;
-  const foreign = !metroCwd || !isInside(worktreeRoot, metroCwd);
-  const runningSource = ownership.source;
-  if (foreign || runningSource !== currentSource) {
-    const why = foreign
-      ? `foreign worktree (${metroCwd || 'unknown'})`
-      : `stale source (${runningSource || 'unknown'}; current=${currentSource})`;
-    console.log(`\\nNative package installed (${packageName}).`);
-    console.error(`Metro on 8081 is not owned by the current source: ${why}.`);
-    console.error('Stop it, start this worktree with pnpm mobile:sim:start, then launch the app.');
-    return false;
-  }
-  if (envChanged) {
-    console.log(`\\nNative package installed (${packageName}).`);
-    console.error('Metro on 8081 was started with an older apps/mobile/.env.');
-    console.error('Restart Metro with pnpm mobile:sim:start before launching the app.');
-    return false;
-  }
-  if (ownership.region !== region) {
-    console.log(`\nNative package installed (${packageName}).`);
-    console.error(`Metro on 8081 uses region ${ownership.region || '(unknown)'}, but this build requested ${region}.`);
-    console.error('Restart Metro with the matching --region before launching the app.');
-    return false;
-  }
-  return true;
+  const { envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
+  const verdict = validateSimMetroIdentity({
+    listener: classifySimMetroListener({ cwd: ownership?.cwd, source: ownership?.source, targetWorktree: worktreeRoot }),
+    currentSource: gitSourceIdentity(worktreeRoot), runningSource: ownership?.source,
+    currentRegion: region, runningRegion: ownership?.region,
+    currentEnvFingerprint: envFingerprint, runningEnvFingerprint: ownership?.envFingerprint,
+    envChanged,
+  });
+  if (verdict.healthy) return true;
+  console.error(`Native package installed (${packageName}); launch blocked: ${verdict.code}.`);
+  console.error(`Run pnpm mobile:sim:start -- --region=${region}, then mobile:sim:whoami with the same region.`);
+  process.exitCode = 1;
+  return false;
 }
 
 async function rebuildAndroidSimulator() {
@@ -267,11 +234,12 @@ async function rebuildAndroidSimulator() {
   run(adb, [...target, 'shell', 'am', 'force-stop', packageName]);
   if (!await ensureMetroOwnershipBeforeLaunch(packageName)) return;
   run(adb, [...target, 'shell', 'monkey', '-p', packageName, '1']);
-  console.log(`\n✓ 完成: ${packageName} 已重装并启动。JS 改动直接由 Metro Fast Refresh 提供。`);
+  console.log(`\n✓ 完成: ${packageName} 已安装并发送启动请求；尚未验证页面显示。JS 改动直接由 Metro Fast Refresh 提供。`);
 }
 
 // 宿主机架构只参与缓存隔离；真实构建架构由 Xcode 与各 Pod 的支持矩阵决定。
 const simArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+const expectedBundleId = resolveMobileSimulatorBundleId(region);
 
 // —— fingerprint 产物缓存查询 ——
 // 失败(工具异常等)只降级为完整构建,绝不让缓存机制本身挡住构建路径。
@@ -347,10 +315,12 @@ if (!app) {
     console.error(`✗ 没找到产物 ${app}`);
     process.exit(1);
   }
+  assertBundleIdentity(app);
   if (cacheDir) storeAppCacheEntry(cacheDir, scheme, app, readAppBundleIdentifier(app));
 }
 
 assertAppSupportsArchitecture(app, simArch);
+assertBundleIdentity(app);
 
 // bundle identity 必须从实际产物读:global 的 app.config.js 会把 bundle id
 // 切成 com.xd.cindy，不能再用默认 cn 的 app.json 值启动错 app。
@@ -366,42 +336,18 @@ if (clean) {
   // uninstall 容错:app 未安装时 simctl 返回非零会让 execFileSync 抛错、后续 install 不执行
   // (首次干净安装就是这个场景)。卸载失败基本只意味着"本来就没装",忽略即可。
   try {
-    run('xcrun', ['simctl', 'uninstall', 'booted', bundleId]);
+    run('xcrun', ['simctl', 'uninstall', simulatorUdid ?? 'booted', bundleId]);
   } catch {
     console.log('  (没有可卸载的旧包,跳过)');
   }
 }
 console.log('› 安装到 booted 模拟器…');
-run('xcrun', ['simctl', 'install', 'booted', app]);
+run('xcrun', ['simctl', 'install', simulatorUdid ?? 'booted', app]);
 
-// 启动前校验 8081(app 默认连 8081)。两种情况都会让"装了本分支 native、却加载别处 JS"污染验证:
-//   (a) 8081 被别的 worktree 占;(b) 是本 worktree 的 Metro 但没注入当前分支 git env
-//       (手动 expo start 起的 / 起后切过分支)。命中则不自动启动,提示用 sim:start 起对的 Metro。
-const metroPid = listenerPid(8081);
-if (metroPid) {
-  const metroCwd = cwdOfPid(metroPid);
-  const foreign = !metroCwd || !isInside(worktreeRoot, metroCwd);
-  const runningSource = gitSourceOfPid(metroPid);
-  if (foreign || runningSource !== currentSource) {
-    const why = foreign
-      ? `属于别的 worktree(${metroCwd || '未知'})`
-      : `源码指纹已过期(运行中=${runningSource || '无'} ≠ 当前=${currentSource})`;
-    console.log(`\n✓ native 包已安装(${bundleId})。`);
-    console.error(`⚠️ 未自动启动:8081 上的 Metro ${why}。`);
-    console.error('   直接启动会让 app 加载错分支的 JS(native 是本分支、JS 不是)。');
-    console.error('   先停掉它、再 `pnpm mobile:sim:start`(起本 worktree 当前分支的 8081 Metro),然后启动 app。');
-    process.exit(0);
-  }
-  if (envChanged) {
-    console.log(`\n✓ native 包已安装(${bundleId})。`);
-    console.error('⚠️ 未自动启动:已补/改 apps/mobile/.env,但 8081 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。');
-    console.error('   先停掉它再 `pnpm mobile:sim:start`(用新 env 起 Metro),然后启动 app,新 env 才生效。');
-    process.exit(0);
-  }
-}
+if (!await ensureMetroOwnershipBeforeLaunch(bundleId)) process.exit(1);
 console.log('› 启动…');
-run('xcrun', ['simctl', 'launch', 'booted', bundleId]);
-console.log(`\n✓ 完成。${bundleId} 已重装并启动。改 JS 直接靠 Metro Fast Refresh,不用再跑本脚本。`);
+run('xcrun', ['simctl', 'launch', simulatorUdid ?? 'booted', bundleId]);
+console.log(`\n✓ 完成。${bundleId} 已安装并发送启动请求；尚未验证页面显示。改 JS 直接靠 Metro Fast Refresh,不用再跑本脚本。`);
 
 /**
  * 用**当前环境**跑 @expo/fingerprint。不能用 ci-fingerprint 默认 runner:它是
@@ -430,6 +376,7 @@ function readAppCacheEntry(dir, expectedArch) {
     if (typeof meta.scheme !== 'string' || !meta.scheme) return null;
     const cachedApp = join(dir, `${meta.scheme}.app`);
     if (!existsSync(cachedApp)) return null;
+    if (readAppBundleIdentifier(cachedApp) !== expectedBundleId) return null;
     const architectures = readAppArchitectures(cachedApp);
     if (!architectures.includes(expectedArch)) {
       console.warn(
@@ -463,6 +410,11 @@ function storeAppCacheEntry(dir, scheme, builtApp, builtBundleId) {
   } catch (error) {
     console.warn(`  产物缓存写入失败(${error.message}),忽略。`);
   }
+}
+
+function assertBundleIdentity(appPath) {
+  const actual = readAppBundleIdentifier(appPath);
+  if (actual !== expectedBundleId) throw new Error(`Native bundle identity mismatch: ${actual}; expected ${expectedBundleId} (${region}).`);
 }
 
 /** 从已构建 .app 的 Info.plist 读取真实 bundle identity。 */

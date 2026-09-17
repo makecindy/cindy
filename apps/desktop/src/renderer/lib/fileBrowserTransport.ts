@@ -18,6 +18,7 @@
  */
 
 import { createLogger } from '@/lib/logger';
+import { createDeviceFileOperations } from '@cindy/device-link';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import { gzipTextToBase64, gunzipBase64ToText } from './gzipBase64';
@@ -102,7 +103,9 @@ export function isDeviceTooOldError(err: unknown): boolean {
  * 与 window.electronAPI.fileBrowser 同形的读写子集,按 deviceId 路由。
  * device 分支的返回形状由被控端 device-op 保证与本地 handler 逐字段一致。
  */
-export function fileBrowserApiFor(deviceId: string | null | undefined): Pick<
+export function fileBrowserApiFor(
+  deviceId: string | null | undefined,
+): Pick<
   LocalFileBrowser,
   | 'listDir'
   | 'listAllFiles'
@@ -115,17 +118,20 @@ export function fileBrowserApiFor(deviceId: string | null | undefined): Pick<
   | 'stat'
 > {
   if (!deviceId) return window.electronAPI.fileBrowser;
+  const files = createDeviceFileOperations(
+    <T>(args: Record<string, unknown>) =>
+      window.electronAPI.deviceLink.invoke(deviceId, REMOTE_OP_CHANNEL, [args]) as Promise<T>,
+  );
   return {
-    listDir: (p) => invokeOp(deviceId, 'listDir', p),
+    listDir: (p) => files.listDir(p),
     listAllFiles: (p) => invokeOp(deviceId, 'listAllFiles', p),
     // readFile 恒带 acceptGzip(老被控端忽略未知字段,无害);返回若为 gzip
     // 编码则在这里解回明文,上层 hooks(useFileContent 等)零感知。
     readFile: async (p) => {
-      const res = await invokeOp<Awaited<ReturnType<LocalFileBrowser['readFile']>>>(
-        deviceId,
-        'readFile',
-        { ...p, acceptGzip: true },
-      );
+      const res = await files.readFile<Awaited<ReturnType<LocalFileBrowser['readFile']>>>({
+        ...p,
+        acceptGzip: true,
+      });
       if (res && res.ok) {
         const data = res.data as typeof res.data & { contentEncoding?: 'gzip' };
         if (data.contentEncoding === 'gzip') {
@@ -139,7 +145,10 @@ export function fileBrowserApiFor(deviceId: string | null | undefined): Pick<
     // 大内容且被控端确认支持 gzip → 以 contentGz 发送(明文 content 不再上帧);
     // 其余情况(小内容 / 老端 / 探测瞬断 / 压缩异常)全部回退现状明文。
     writeFile: async (p) => {
-      if (p.content.length > WRITE_GZIP_MIN_CHARS && (await deviceSupportsGzip(deviceId, p.workdir))) {
+      if (
+        p.content.length > WRITE_GZIP_MIN_CHARS &&
+        (await deviceSupportsGzip(deviceId, p.workdir))
+      ) {
         try {
           const contentGz = await gzipTextToBase64(p.content);
           // 预算预检:压缩结果超帧预算(不可压缩内容 gzip+base64 反而膨胀)
@@ -161,10 +170,13 @@ export function fileBrowserApiFor(deviceId: string | null | undefined): Pick<
           // 立刻负缓存该设备,并用明文重发同一内容自愈,把数据丢失闸死在一次
           // 保存内(下一轮 dirty 基线也以明文重发结果为准)。
           if (res && res.ok === true && res.size === 0) {
-            log.warn('gzip write landed as empty file (stale caps, target downgraded?), resending plaintext', {
-              deviceId,
-              relPath: p.relPath,
-            });
+            log.warn(
+              'gzip write landed as empty file (stale caps, target downgraded?), resending plaintext',
+              {
+                deviceId,
+                relPath: p.relPath,
+              },
+            );
             deviceGzipCaps.set(deviceId, Promise.resolve(false));
             return invokeOp(deviceId, 'writeFile', p);
           }

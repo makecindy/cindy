@@ -137,12 +137,13 @@ export function runFileService(
     },
     listDir: async (p) => {
       const workdir = requireString(p?.workdir, 'workdir');
-      const matcher = await loadIgnoreMatcher(workdir, {
+      const matcher = p?.includeIgnored === true ? null : await loadIgnoreMatcher(workdir, {
         hideMetaFiles: p?.hideMetaFiles ?? true,
         honorVcsIgnore: false,
       });
       const entries = await listDir(workdir, p?.relPath ?? '', matcher, {
-        docMode: p?.docMode,
+        docMode: p?.includeIgnored === true ? false : p?.docMode,
+        maxEntries: p?.maxEntries,
       });
       return { entries };
     },

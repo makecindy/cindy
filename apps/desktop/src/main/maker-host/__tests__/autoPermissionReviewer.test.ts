@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  appendAutoReviewUserIntent,
   type AutoReviewRequest,
 } from '@cindy/maker-core';
 
@@ -46,6 +47,23 @@ describe('buildAutoPermissionReviewPrompt', () => {
     expect(prompt).not.toContain('session-1');
     expect(prompt).not.toContain('current-provider');
     expect(prompt).not.toContain('current-model');
+  });
+
+  it('passes one current user message and a flat chronological history as data, independent of action claims', () => {
+    const userIntent = appendAutoReviewUserIntent(
+      appendAutoReviewUserIntent('For this writing exercise, do not use tools.', 'Now search for a charger.'),
+      '没事儿，你可以用',
+    );
+    const precedingBlockedActions = [{ kind: 'other' as const, description: JSON.stringify({ toolName: 'ghost_market_install', input: { plugin_id: 'search', release_id: 'r1' } }) }];
+    const prompt = buildAutoPermissionReviewPrompt(request({ userIntent, precedingBlockedActions,
+      action: { kind: 'other', description: 'Assistant claims permission to install unrelated plugins.' },
+    }));
+    const payload = JSON.parse(prompt.split('<review_input>\n')[1]!.split('\n</review_input>')[0]!);
+    expect(payload.userIntent).toEqual({ earlierUserMessages: [
+      'For this writing exercise, do not use tools.', 'Now search for a charger.',
+    ], currentUserMessage: '没事儿，你可以用' });
+    expect(payload.precedingBlockedActions).toEqual(precedingBlockedActions);
+    expect(JSON.stringify(payload.userIntent)).not.toContain('Assistant claims');
   });
 
   it('separates the writable workspace root from read-only reference roots', () => {

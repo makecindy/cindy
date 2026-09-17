@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/e0a370868f475a14ac16cb7ddb7a86e3c60bd63bfbb560c019d2208bda4b9682",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/bd303f92c7516f986d25d2b0e8d1678fce0593db824497b4c2462f2f2e1933a4",
   "creationInfo": {
-    "created": "2026-09-13T03:14:43Z",
+    "created": "2026-09-16T04:54:18Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -457,6 +457,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:cargo/bitflags@2.13.1"
+        }
+      ]
+    },
+    {
+      "name": "bitflags",
+      "SPDXID": "SPDXRef-Package-ca671449c7f6168e",
+      "versionInfo": "2.13.2",
+      "downloadLocation": "https://github.com/bitflags/bitflags",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/bitflags@2.13.2"
         }
       ]
     },
@@ -1634,6 +1651,23 @@
       ]
     },
     {
+      "name": "hidapi",
+      "SPDXID": "SPDXRef-Package-91bc23af2f89b87d",
+      "versionInfo": "2.6.7",
+      "downloadLocation": "https://github.com/ruabmbua/hidapi-rs",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/hidapi@2.6.7"
+        }
+      ]
+    },
+    {
       "name": "html5ever",
       "SPDXID": "SPDXRef-Package-e1e93f831860d1fe",
       "versionInfo": "0.38.0",
@@ -2038,6 +2072,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:cargo/libc@0.2.186"
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "SPDXID": "SPDXRef-Package-34a71dbb96a0de0c",
+      "versionInfo": "0.2.189",
+      "downloadLocation": "https://github.com/rust-lang/libc",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/libc@0.2.189"
         }
       ]
     },
@@ -20490,6 +20541,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-616963e2fc3a9428"
     },
     {
@@ -20596,6 +20652,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-ebf2f9b3d70482e9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-ca671449c7f6168e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20945,6 +21006,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-91bc23af2f89b87d"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-e1e93f831860d1fe"
     },
     {
@@ -21061,6 +21127,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-2a9843e9e27b33b0"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-34a71dbb96a0de0c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -26471,11 +26542,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0f1fa15d8e8fb256"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
     }
   ],
   "hasExtractedLicensingInfos": [
