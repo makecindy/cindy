@@ -10,7 +10,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { listAllFilesWalk } from '../listAllFiles.js';
-import { __clearCacheForTesting } from '../ignore.js';
+import { __clearCacheForTesting, loadIgnoreMatcher } from '../ignore.js';
 
 describe('listAllFilesWalk', () => {
   let workdir: string;
@@ -60,5 +60,29 @@ describe('listAllFilesWalk', () => {
     const res = await listAllFilesWalk({ workdir });
     expect(res.truncated).toBe(false);
     expect(res.files.some((f) => f.includes('loop'))).toBe(false);
+  });
+
+  /**
+   * 决策测试(不是遗漏):文件名筛选**不跟随**文件树的「显示被忽略的目录」开关。
+   * 同一份工作区里两侧故意给出不同答案:文件树(loadIgnoreMatcher)在开关打开后
+   * 放行 build/,而筛选清单仍然不含它。
+   *
+   * 为什么不能只改 fallback:rg 后端无法"只放行构建产物"而保留用户自己的
+   * .gitignore 规则,单边跟随会让筛选结果随「机器上装没装 rg」而变(更细的理据
+   * 见 listAllFiles.ts 的 fallback 注释)。要改这条语义必须两个后端一起改,这条
+   * 测试就是那道闸。
+   */
+  it('不跟随「显示被忽略的目录」:树放行 build/,筛选清单仍然不含它', async () => {
+    await mkdir(path.join(workdir, 'build'));
+    await writeFile(path.join(workdir, 'build', 'bundle.js'), 'x\n', 'utf8');
+
+    const treeMatcher = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      showIgnoredDirs: true,
+    });
+    expect(treeMatcher.ignores('build/', true)).toBe(false); // 树:看得见
+
+    const res = await listAllFilesWalk({ workdir });
+    expect(res.files.some((f) => f.startsWith('build/'))).toBe(false); // 筛选:找不到
   });
 });

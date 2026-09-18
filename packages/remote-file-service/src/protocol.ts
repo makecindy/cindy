@@ -132,7 +132,24 @@ export interface FsRpcMethods {
     };
   };
   listDir: {
-    params: { workdir: string; relPath?: string; hideMetaFiles?: boolean; docMode?: boolean; includeIgnored?: boolean; maxEntries?: number };
+    params: {
+      workdir: string;
+      relPath?: string;
+      hideMetaFiles?: boolean;
+      docMode?: boolean;
+      /**
+       * 完全绕过展示过滤(手机 HTML 快照枚举用)。可选 / append-only:老 daemon
+       * 忽略未知字段 → 维持隐藏语义(拿不到全量,但不会报错)。
+       */
+      includeIgnored?: boolean;
+      /** 条目上限;超出时 daemon 返回 DIRECTORY_TOO_LARGE。 */
+      maxEntries?: number;
+      /**
+       * 控制端「显示被忽略的目录」开关。可选 / append-only:老 daemon 忽略未知
+       * 字段 → 维持隐藏语义(拿不到放行,但不会报错)。
+       */
+      showIgnoredDirs?: boolean;
+    };
     result: { entries: DirEntry[] };
   };
   readFile: {
@@ -193,12 +210,23 @@ export interface FsRpcMethods {
     params: { searchId: string };
     result: { ok: true };
   };
+  /**
+   * 订阅某个 workdir 的文件事件。`consumerId` 标识订阅方(desktop 文件树 /
+   * device-link 被控端 watch),可选 —— 老调用方缺省即归到默认消费者。
+   * 同一 workdir 的多个消费者各自登记过滤需求,daemon 取**可见性并集**
+   * (见 WorkdirWatchManager),不会互相覆盖 matcher。
+   */
   watchStart: {
-    params: { workdir: string; hideMetaFiles?: boolean };
+    params: {
+      workdir: string;
+      hideMetaFiles?: boolean;
+      showIgnoredDirs?: boolean;
+      consumerId?: string;
+    };
     result: { ok: true };
   };
   watchStop: {
-    params: { workdir: string };
+    params: { workdir: string; consumerId?: string };
     result: { ok: true };
   };
 }
