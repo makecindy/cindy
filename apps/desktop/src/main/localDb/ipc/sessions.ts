@@ -21,6 +21,10 @@ import {
   stopAndRemovePiSubagentRuns,
   writePiSubagentDeletedTombstone,
 } from '@cindy/maker-core/pi-subagent-runs';
+import {
+  piBackgroundCommandRoot,
+  removePiBackgroundCommandRoot,
+} from '@cindy/maker-core/pi-background-commands';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 import { getDbClient } from '../client/current';
@@ -2513,6 +2517,23 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
         }
         const removed = await stopAndRemovePiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
         if (removed) {
+          // 后台命令日志随任务删除一并回收(与 subagent run 同目录层次;删不掉只告警,
+          // 不影响删除结果)。root 计算对不安全 sessionId 会抛错 —— 那说明根本没有对应
+          // 目录,同样只告警:不能让一个永远不会成功的清理把退避重试无限拖下去。
+          // 跨实例边界:subagent runner 有 stop mailbox,异进程删任务也能收;后台命令进程
+          // 只属 spawn 它的实例,这里**收不掉**别的实例仍在跑的进程(设计如此,同
+          // stopAllPiBackgroundCommandsForExit 的实例表口径),日志目录回收只是 best-effort。
+          // 共享 userData 的拓扑(dev --passive / 打包版双开)下这意味着:本实例把任务删掉、
+          // 面板也按历史行显示「已停止」,而另一个实例里那条进程可能真的还在跑 —— 这是
+          // 静默误导,但不做机制改动(正确做法是去那个实例里停,或直接杀进程树)。
+          try {
+            await removePiBackgroundCommandRoot(piBackgroundCommandRoot(agentHome, sessionId));
+          } catch (err) {
+            log.warn('PI background command log cleanup failed', {
+              sessionId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
           piSubagentCleanupTimers.delete(sessionId);
           return;
         }

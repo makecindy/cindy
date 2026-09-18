@@ -3432,6 +3432,7 @@ function _purgeSession(sessionId: string): void {
   invalidateBackgroundTaskReconcile(sessionId);
   cancelBackgroundTaskReconcile(sessionId);
   backgroundTaskStaleRetrySessions.delete(sessionId);
+  clearPendingStopBackgroundTaskReconcile(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   releaseRemoteHistoryView(sessionId);
@@ -5149,7 +5150,7 @@ function stopRunningAgentTasks(
 
 /**
  * 快照对账收口:把「早于快照请求就已 running、但 main 权威表里已不存在」的
- * claude-code 条目标 stopped —— 终态 agent_task_update 丢失时的自愈路径
+ * 后台条目标 stopped —— 终态 agent_task_update 丢失时的自愈路径
  * (此前 taskUpdates 不在任何 reconcile 覆盖内,终态掉帧 = spinner 永久转)。
  *
  * 时序安全性(为何不会误杀在跑任务):main 的 runningBackgroundTasks 在
@@ -5160,10 +5161,21 @@ function stopRunningAgentTasks(
  * 收口正确。即便极端竞态下收错,后续真实事件(task_progress → running /
  * task_notification → 终态)仍会覆盖回来,非终局性错误。
  *
- * 仅 provider==='claude-code'(快照通道只覆盖 claude-code 的任务表;codex /
- * pi 条目对空快照没有任何含义)。别名键(taskId / parentToolUseId)共享同一
- * 新对象,口径 = stopRunningAgentTasks。
+ * 覆盖 provider==='claude-code' 与 **PI 后台命令**(provider==='pi' +
+ * taskType==='local_bash')。PI 这一路是必须的:它的终态 update 由会话自己的事件队列
+ * 送,而 Pi 进程被强杀/崩溃时队列随 `end()` 一起没了(dispose 注释承认的窗口),
+ * 不靠快照对账就成永久转圈的僵尸行。快照通道对两者都权威 ——
+ * listBackgroundTasks 的 PI 分支就是本进程 manager 的运行表。
+ * 刻意**不**收 PI 的 pi_subagent:durable run 可能活得比父进程久(也不属于本进程
+ * 的运行表),拿快照缺席当收口依据会误杀仍在跑的 run,它的收敛有 persisted status 那一路。
+ * codex 同理不收(快照通道不覆盖它们的任务表)。
+ * 别名键(taskId / parentToolUseId)共享同一新对象,口径 = stopRunningAgentTasks。
  */
+function isReconcilableRunningTask(task: AgentTaskUpdate): boolean {
+  return task.provider === 'claude-code'
+    || (task.provider === 'pi' && task.taskType === 'local_bash');
+}
+
 function reconcileStaleRunningTasks(
   state: SessionChatState,
   snapshot: ReadonlyArray<{ taskId: string; toolUseId?: string }>,
@@ -5182,7 +5194,7 @@ function reconcileStaleRunningTasks(
   for (const [key, task] of tasks) {
     const stale =
       task.status === 'running' &&
-      task.provider === 'claude-code' &&
+      isReconcilableRunningTask(task) &&
       candidates.has(task.taskId) &&
       !alive.has(task.taskId) &&
       !(task.parentToolUseId && alive.has(task.parentToolUseId));
@@ -7012,6 +7024,12 @@ let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 // 事件 / wake turn 落地留窗口,到点后拉一次快照走 seed+对账;每会话至多一个
 // 待执行定时器(防抖),active:true 到达即取消。只在翻转沿触发,不轮询。
 const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
+/**
+ * 「停止」点击后自发对账的延迟:短到让用户觉得点击确有反应,又长于一次 IPC 往返。
+ * 不用 0 —— 主进程此刻可能刚在关闭日志流(终止帧还没送到),那一瞬的快照仍会列出它,
+ * 本次对账会空转;真终态帧随后自己会纠正。候选集为空(subagent 行)时也不会发 IPC。
+ */
+const BACKGROUND_TASK_RECONCILE_AFTER_STOP_DELAY_MS = 1200;
 
 /**
  * 唤醒桥接对账收口的最小年龄:距最近一次桥接置位不足此时长时一律不收口
@@ -7022,6 +7040,36 @@ const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
 const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const backgroundTaskReconcileEpoch = new Map<string, number>();
+/**
+ * 「停止点击后还没走完的自愈对账」(sessionId → 延迟 + 剩余补挂预算)。
+ *
+ * 为什么需要独立记录:这类对账与熄灭沿共用定时器槽,而 `active:true` 到达会取消该槽
+ * (会话重新活跃 = 熄灭沿那份快照作废)。但「我刚点停止的那条还在不在」不该因为同一会话
+ * 里**别的任务**在跑就永远不问 —— 那恰恰是僵尸行最容易长期滞留的场景。
+ *
+ * 两条硬约束:① 每次点击最后**必须**落成一次快照仲裁,不能被代际作废静默吞掉 ——
+ * 定时器到点时代际已变的话,按新代际再挂一次;② 但也不能变成轮询:预算 2 次,
+ * 用完即销账(常活跃会话下每次 activity 翻转最多补挂一次,补满 2 次就放弃)。
+ */
+const BACKGROUND_TASK_STOP_RECONCILE_REARM_BUDGET = 2;
+interface PendingStopReconcile {
+  delayMs: number;
+  reArmsLeft: number;
+}
+const backgroundTaskStopReconcilePending = new Map<string, PendingStopReconcile>();
+function clearPendingStopBackgroundTaskReconcile(sessionId: string): void {
+  backgroundTaskStopReconcilePending.delete(sessionId);
+}
+/** 取一次补挂机会(消耗预算);预算用尽返回 null。 */
+function takeStopReconcileRearm(sessionId: string): number | null {
+  const pending = backgroundTaskStopReconcilePending.get(sessionId);
+  if (!pending || pending.reArmsLeft <= 0) {
+    backgroundTaskStopReconcilePending.delete(sessionId);
+    return null;
+  }
+  pending.reArmsLeft -= 1;
+  return pending.delayMs;
+}
 
 // A remote `messages:created` push can be lost while the controlled session
 // keeps streaming.  Keep a small, per-session repair debounce so any later
@@ -7062,14 +7110,25 @@ function cancelBackgroundTaskReconcile(sessionId: string): void {
   }
 }
 
-function scheduleBackgroundTaskReconcile(sessionId: string): void {
+function scheduleBackgroundTaskReconcile(
+  sessionId: string,
+  delayMs: number = BACKGROUND_TASK_RECONCILE_DELAY_MS,
+): void {
   cancelBackgroundTaskReconcile(sessionId);
   const reconcileEpochAtSchedule = backgroundTaskReconcileEpoch.get(sessionId) ?? 0;
   backgroundTaskReconcileTimers.set(
     sessionId,
     setTimeout(() => {
       backgroundTaskReconcileTimers.delete(sessionId);
-      if ((backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule) return;
+      if ((backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule) {
+        // 代际被作废(active 翻转 / purge)。停止点击后的那次对账不能就这么消失:按新
+        // 代际再挂一次(预算有限)。熄灭沿的定时器没有 pending 标记,照旧直接丢弃。
+        const rearmDelayMs = takeStopReconcileRearm(sessionId);
+        if (rearmDelayMs !== null) scheduleBackgroundTaskReconcile(sessionId, rearmDelayMs);
+        return;
+      }
+      // 真正发出请求才销账(上面的作废分支已经取走预算)。
+      clearPendingStopBackgroundTaskReconcile(sessionId);
       // 触发沿复查远程归属(粘滞版):调度沿已筛过,但 3s 窗口内会话可能被识别
       // 为远程(启动期 registry 迟到水合等)。误放行的代价是拿本机空快照把镜像
       // 里真实在跑的任务错误收口,必须再拦一次。
@@ -7077,7 +7136,7 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
       // 候选集在发起请求前捕获(时序论证见 reconcileStaleRunningTasks);此刻
       // 已无 running 条目则无账可对,不发无谓 IPC。定时器只在 store 对象初始化
       // 之后才可能到点,前向引用 makerChatStore 安全。
-      const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
+      const staleRunningCandidates = makerChatStore.captureReconcilableRunningTaskIds(sessionId);
       // 桥接泄漏时 taskUpdates 里往往已无 running 条目(迟到终态本身就是 completed),
       // 只看 running 候选会把桥接对账挡在门外 —— pendingTaskWake > 0 时同样放行。
       // 桥接代际在请求发起前捕获(计数 + 置位代次):收口只在「响应落地时计数与
@@ -7133,7 +7192,7 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
         .catch(() => {
           // 静默:与其余快照拉取失败同口径(失败不对账,下次翻转沿 / 挂载重试)。
         });
-    }, BACKGROUND_TASK_RECONCILE_DELAY_MS),
+    }, delayMs),
   );
 }
 
@@ -9159,6 +9218,15 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         invalidateBackgroundTaskReconcile(p.sessionId);
         backgroundTaskStaleRetrySessions.delete(p.sessionId);
         cancelBackgroundTaskReconcile(p.sessionId);
+        // 停止点击后的自愈对账不能就这么丢掉:见 backgroundTaskStopReconcilePending
+        // 的注释(同一会话里别的任务仍在跑,正是僵尸行最需要被收口的场景)。
+        // 重挂会捕获新代际,依旧受后续任何翻转沿 / purge 作废。
+        if (!isRemoteSessionSticky(p.sessionId)) {
+          const rearmDelayMs = takeStopReconcileRearm(p.sessionId);
+          if (rearmDelayMs !== null) scheduleBackgroundTaskReconcile(p.sessionId, rearmDelayMs);
+        } else {
+          clearPendingStopBackgroundTaskReconcile(p.sessionId);
+        }
         return;
       }
       // A new inactive edge starts a fresh, bounded stale-task retry window and
@@ -9169,7 +9237,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // 调度前粗筛:没有 running 条目就不必挂定时器;到点后还会再次捕获候选集。
       // 唤醒桥接(pendingTaskWake)泄漏时 running 条目为空,同样需要对账,放行。
       if (
-        makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0 &&
+        makerChatStore.captureReconcilableRunningTaskIds(p.sessionId).size === 0 &&
         makerChatStore.capturePendingWakeBridge(p.sessionId).count === 0
       )
         return;
@@ -9189,6 +9257,12 @@ function __teardownGlobalListeners(): void {
   pendingTextDeltaBatches.clear();
   for (const timer of backgroundTaskReconcileTimers.values()) clearTimeout(timer);
   backgroundTaskReconcileTimers.clear();
+  // 停止后对账的待补挂标记、对账代际与「有界重试窗口」标记一并清:否则 HMR / 测试
+  // 重装监听器后,第一次 active:true 会按上一代的陈旧延迟补挂一次对账,或让新定时器
+  // 撞上旧代际被判作废空转一次(生产 purge 路径已单独处理,这里补测试/HMR 面)。
+  backgroundTaskStopReconcilePending.clear();
+  backgroundTaskReconcileEpoch.clear();
+  backgroundTaskStaleRetrySessions.clear();
   for (const timer of remoteMessageRepairTimers.values()) clearTimeout(timer);
   remoteMessageRepairTimers.clear();
   clearDeferredStateNotificationTimer();
@@ -16488,16 +16562,38 @@ export const makerChatStore = {
   setTitleUpdateCallback,
   syncActiveTurnsFromMain,
   /**
-   * 当前 running 的 claude-code 后台任务 taskId 集合(按 taskId 归一,别名键去重)。
+   * 当前 running 且**可对账**的后台任务 taskId 集合(按 taskId 归一,别名键去重):
+   * claude-code 全部 + PI 的 local_bash(见 reconcileStaleRunningTasks 的口径说明)。
    * 用途:快照对账的候选集捕获 —— 必须在发起 listSessionBackgroundTasks **之前**
    * 调用,请求在飞窗口内新启动的任务才不会被误收(见 reconcileStaleRunningTasks)。
    */
-  captureRunningClaudeTaskIds: (sessionId: string): ReadonlySet<string> => {
+  /**
+   * 请求一次「拿 main 权威快照对账」,默认 1.2s 后执行(去抖:同一会话只留最后一次)。
+   *
+   * 用途是**停止点击后的自愈**:`stopAgentTask` 对「main 侧其实已经不在」的 id 是静默
+   * 成功的(两套控制面都查无此任务:终态事件丢包、或进程属别的实例),点了按钮什么都不会
+   * 发生,行会一直挂在「运行中」直到下一次活动熄灭对账 —— 用户看到的是「点了没反应」。
+   * 点完立刻对一次账,行要么在 1.2s 内翻成「已停止」(它本来就已结束),要么证明它**确实**
+   * 还在跑(快照里有它)并保持运行中 —— 两种都比静默强,且不伪造终态。
+   *
+   * 与活动熄灭对账共用同一套护栏:远程(粘滞)会话直接豁免、快照落地时复查代际与候选集。
+   */
+  requestBackgroundTaskReconcile: (sessionId: string, delayMs?: number): void => {
+    const effectiveDelayMs = delayMs ?? BACKGROUND_TASK_RECONCILE_AFTER_STOP_DELAY_MS;
+    // 登记「还没走完」:活动重新活跃 / 代际作废会取消定时器,那时按这个延迟再挂一次
+    // (预算 2 次)。重复点击覆盖旧登记 —— 最后一次点击的延迟胜出。
+    backgroundTaskStopReconcilePending.set(sessionId, {
+      delayMs: effectiveDelayMs,
+      reArmsLeft: BACKGROUND_TASK_STOP_RECONCILE_REARM_BUDGET,
+    });
+    scheduleBackgroundTaskReconcile(sessionId, effectiveDelayMs);
+  },
+  captureReconcilableRunningTaskIds: (sessionId: string): ReadonlySet<string> => {
     const tasks = sessions.get(sessionId)?.taskUpdates;
     const out = new Set<string>();
     if (!tasks) return out;
     for (const task of tasks.values()) {
-      if (task.status === 'running' && task.provider === 'claude-code') out.add(task.taskId);
+      if (task.status === 'running' && isReconcilableRunningTask(task)) out.add(task.taskId);
     }
     return out;
   },
@@ -16518,7 +16614,7 @@ export const makerChatStore = {
    * 后台任务快照水合:把 main 的 listSessionBackgroundTasks 结果补进 taskUpdates。
    * 只补「store 里完全没见过」的任务 —— 事件流是唯一实时源,快照可能落后于刚到
    * 的终态事件,已存在的条目(无论何状态)绝不用快照的 running 覆盖复活。
-   * 消费方:useBackgroundBashTasks(会话挂载 / reloadMessages 清空 taskUpdates 后)、
+   * 消费方:useBackgroundSessionTasks(会话挂载 / reloadMessages 清空 taskUpdates 后)、
    * BackgroundTasksBody(面板挂载)、活动熄灭触发的延迟对账。
    *
    * opts.staleRunningCandidates(可选):对账收口 —— 调用方在**发起快照请求前**

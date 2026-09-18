@@ -24,6 +24,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PI_BASH_STATIC_SECRET_ENV_NAMES } from '../pi-bash-secret-envs.js';
 import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 
 const captured = vi.hoisted(() => ({
@@ -2994,6 +2995,65 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('authenticates the PI background command control channel with the per-session bearer', async () => {
+    const handle = await start('ask');
+    try {
+      // 能力开关就是 bearer 本身:host 每会话签发,并纳入 bash spawn 边界的剥离名单。
+      const token = captured.env.CINDY_PI_BACKGROUND_COMMANDS;
+      expect(token).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+      expect(JSON.parse(captured.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]'))
+        .toContain('CINDY_PI_BACKGROUND_COMMANDS');
+
+      const fire = (id: string, payload: Record<string, unknown>): void => {
+        captured.onEvent!({
+          type: 'extension_ui_request',
+          method: 'input',
+          id,
+          title: 'cindy:bash-background',
+          placeholder: JSON.stringify(payload),
+        });
+      };
+      const startPayload = {
+        action: 'start',
+        taskId: 'call-1',
+        command: 'pnpm dev',
+        cwd,
+        shell: { shell: '/bin/bash', args: ['-lc'], commandTransport: 'standard' },
+        title: 'pnpm dev',
+      };
+      const unavailable = { ok: false, error: 'Cindy background commands are unavailable in this session.' };
+
+      // 无 token(子代理转发上来的审批请求就是这个形状)/ 错 token 都不得起进程:
+      // title 与 payload 在 Pi 进程内人人可见,而这条通道会以父会话的 env 与 cwd spawn。
+      fire('bg-forged', startPayload);
+      expect(JSON.parse(String((await waitForResponse('bg-forged')).value))).toEqual(unavailable);
+      fire('bg-stale', { ...startPayload, token: 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v' });
+      expect(JSON.parse(String((await waitForResponse('bg-stale')).value))).toEqual(unavailable);
+      // 拿对 token 也不允许走下子代理转发这条捷径:legacy 布尔值同样不算认证。
+      fire('bg-legacy', { ...startPayload, token: '1' });
+      expect(JSON.parse(String((await waitForResponse('bg-legacy')).value))).toEqual(unavailable);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('treats stopping an unknown task id as idempotent success where no Subagent plane exists', async () => {
+    // Review / Bot / 远端会话没有 subagent 控制面:对「本来就不在跑」的 id,停止必须
+    // 幂等成功。抛错会让一条已经停掉的行显示「停止未确认」(CC 侧同一情形是静默成功)。
+    const deps = buildDeps();
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'stop-idempotent',
+      workingDir: cwd,
+      model: 'm',
+      reviewMode: true,
+    });
+    try {
+      await expect(handle.stopBackgroundTask('call-does-not-exist')).resolves.toBeUndefined();
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('locks Review sessions to the local read-only tool surface without memory, MCP, or subagents', async () => {
     const deps = buildDeps(undefined, false, {
       serverNames: ['cindy_memory', 'cindy_helper'],
@@ -3026,6 +3086,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(captured.args).toContain('--no-extensions');
       expect(captured.args).not.toContain('--skill');
       expect(captured.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
+      // 后台命令同样是本地普通会话专属能力:Review 会话不注入 bearer,控制面直接拒绝。
+      expect(captured.env.CINDY_PI_BACKGROUND_COMMANDS).toBeUndefined();
       expect(captured.mcpVendorOptions).toBeUndefined();
       expect(deps.getGhostRosterPrompt).not.toHaveBeenCalled();
       expect(deps.resolvePiProjectTrustInput).not.toHaveBeenCalled();
@@ -3434,7 +3496,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(bridge).toContain('const clean = withoutPiSecrets(env)');
     expect(bridge).toContain('clean.PI_CODING_AGENT_DIR = bashPackageHome');
     expect(bridge).toContain('exposeSessionEnvironment: false');
-    expect(bridge).toContain("'CINDY_PI_PERMISSION_FILE'");
+    // 静态剥离名单是单一来源:生成代码必须原样落进 SECRET_ENV_NAMES
+    // (换掉字面量改为插值后,这条断言同时钉住单源与落盘。)
+    expect(bridge).toContain(
+      `const SECRET_ENV_NAMES = new Set<string>(${JSON.stringify(PI_BASH_STATIC_SECRET_ENV_NAMES)});`,
+    );
+    expect(PI_BASH_STATIC_SECRET_ENV_NAMES).toContain('CINDY_PI_PERMISSION_FILE');
     expect(path.normalize(captured.env.CINDY_PI_BASH_PACKAGE_HOME as string)).toBe(
       path.normalize(path.join(configHome, 'bash-package-home')),
     );

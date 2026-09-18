@@ -7129,6 +7129,7 @@
       "empty": "No background tasks in this session yet",
       "stop": "Stop",
       "stopping": "Stopping…",
+      "stopUnconfirmed": "Stop unconfirmed — the task may still be running",
       "back": "Back",
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
@@ -8565,6 +8566,7 @@
         "stopped": "Stopped"
       },
       "stop": "Stop this task",
+      "stopUnconfirmed": "Stop unconfirmed — the task may still be running",
       "openInPanel": "Open in the background tasks panel",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} agents",
       "workflowProgressCount": "{{done}}/{{total}} agents",
@@ -8738,6 +8740,9 @@
       "bashStatus_other": "{{count}} background tasks running…",
       "stopAll": "Stop all",
       "stopAllTitle": "Shut down this session's background process and stop all background subtasks (the session stays usable)",
+      "stopUnconfirmed": "Stop unconfirmed — {{count}} task(s) may still be running",
+      "stopUnconfirmed_one": "Stop unconfirmed — {{count}} task may still be running",
+      "stopUnconfirmed_other": "Stop unconfirmed — {{count}} tasks may still be running",
       "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",
       "stopping": "Stopping…"
     },

@@ -45,6 +45,15 @@ vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
   openSubagentsTab: openSubagentsTabMock,
 }));
 
+// 卡片在停止成功后会对一次账(僵尸行自愈),store 本身会拖进完整 i18n 初始化,
+// 这里只替身这一个方法。
+const { requestBackgroundTaskReconcileMock } = vi.hoisted(() => ({
+  requestBackgroundTaskReconcileMock: vi.fn(),
+}));
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: { requestBackgroundTaskReconcile: requestBackgroundTaskReconcileMock },
+}));
+
 const { getWorkflowProgressForMock } = vi.hoisted(() => ({
   getWorkflowProgressForMock: vi.fn().mockResolvedValue(null),
 }));
@@ -340,6 +349,45 @@ describe('AgentTaskCard', () => {
         await Promise.resolve();
       });
       expect(stopAgentTask).toHaveBeenCalledWith('session-1', 'bash-1');
+      // 停止成功后立刻对一次账:main 侧其实已不在的僵尸行会自愈成已停止。
+      expect(requestBackgroundTaskReconcileMock).toHaveBeenCalledWith('session-1');
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
+
+  it('does not reconcile when the stop IPC itself fails', async () => {
+    const stopAgentTask = vi.fn().mockRejectedValue(new Error('boom'));
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      maker: { stopAgentTask },
+    };
+    requestBackgroundTaskReconcileMock.mockClear();
+    try {
+      const { container } = render(
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-fail',
+          update: {
+            provider: 'pi',
+            taskId: 'pi-bash-fail',
+            status: 'running',
+            taskType: 'local_bash',
+          },
+        }),
+      );
+      const btn = stopButton(container);
+      expect(btn).not.toBeNull();
+      await act(async () => {
+        btn!.click();
+        await Promise.resolve();
+      });
+      expect(stopAgentTask).toHaveBeenCalledWith('session-fail', 'pi-bash-fail');
+      // 连 IPC 都没通:不知道 main 侧状态,不要假装对过账。
+      expect(requestBackgroundTaskReconcileMock).not.toHaveBeenCalled();
+      // 也不装作成功:行上给「停止未确认」,按钮留着可重试(host 只会在 SIGKILL
+      // 之后仍未确认退出时让 stop 失败,这是用户唯一能看到的信号)。
+      expect(container.querySelector('[data-agent-task-stop-unconfirmed="true"]')).not.toBeNull();
+      expect(container.textContent).toContain('chat.agentTask.stopUnconfirmed');
+      expect(stopButton(container)).not.toBeNull();
     } finally {
       delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     }
@@ -370,6 +418,39 @@ describe('AgentTaskCard', () => {
         await Promise.resolve();
       });
       expect(stopAgentTask).toHaveBeenCalledWith('session-pi', 'pi-tool-1');
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
+
+  it('stops a running PI background command and labels it as a shell task', async () => {
+    const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      maker: { stopAgentTask },
+    };
+    try {
+      const { container } = render(
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-pi',
+          sessionAgentKind: 'pi',
+          update: {
+            provider: 'pi',
+            taskId: 'pi-bash-1',
+            status: 'running',
+            taskType: 'local_bash',
+            title: 'pnpm dev',
+          },
+        }),
+      );
+      // 后台命令卡用 shell 标签,不显示成子代理
+      expect(container.textContent).toContain('chat.agentTask.provider.shell');
+      const btn = stopButton(container);
+      expect(btn).not.toBeNull();
+      await act(async () => {
+        btn!.click();
+        await Promise.resolve();
+      });
+      expect(stopAgentTask).toHaveBeenCalledWith('session-pi', 'pi-bash-1');
     } finally {
       delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     }

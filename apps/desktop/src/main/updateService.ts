@@ -32,6 +32,7 @@ import {
   requestStopAllPiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
+import { stopAllPiBackgroundCommandsForExit, stopAllPiBackgroundCommandsForExitSync } from '@cindy/maker-core/pi-background-commands';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
@@ -1378,6 +1379,13 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
 
 // ── Spawn failure handler ─────────────────────────────────────────────────
 
+/**
+ * 最近一次 reclaim 被哪一路挡住(失败归因):'subagent' = durable runner 复检,
+ * 'background' = PI 后台命令清扫。两者共用 `reclaimSubagentRunnersForRelaunch` 的
+ * 布尔结果,但给 renderer/日志的 reason 必须分开 —— 否则用户按 subagent 去查会查不到。
+ */
+let relaunchReclaimBlockedBy: 'subagent' | 'background' = 'subagent';
+
 function handleApplyFailure(reason: string): void {
   cancelStartupBinaryUpdateCheck?.();
   cancelStartupBinaryUpdateCheck = undefined;
@@ -1558,6 +1566,14 @@ function forceQuit(): void {
   requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
     hostPid: process.pid,
   });
+  // 后台命令的同一个残留窗口,而且比 subagent 那个更宽:async 清扫在 reclaim 里、
+  // updater 落盘与 spawn 之前就跑了,父 Pi 会话之后几秒内仍可发起新命令;它们是
+  // detached 进程组,父进程退出不会带走。同步收口(不 await,否则卡 updater 轮询)。
+  try {
+    stopAllPiBackgroundCommandsForExitSync();
+  } catch {
+    // 尽力而为:退出路径不因清扫报错而拖延。
+  }
   // Node 子进程同理——before-quit 的 destroyAll 不会触发,这里同步 kill。
   try { getGhostNodeRuntimeBroker().destroyAll(); } catch { /* best-effort */ }
   for (const win of BrowserWindow.getAllWindows()) {
@@ -1675,6 +1691,8 @@ async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
   });
   if (!releaseSubagentLaunchFence) return false;
   const deadline = Date.now() + SUBAGENT_RECLAIM_TOTAL_MS;
+  // 每轮从 subagent 起判:只有真的被后台命令清扫挡住时才改归因。
+  relaunchReclaimBlockedBy = 'subagent';
   for (let round = 1; round <= SUBAGENT_RECLAIM_MAX_ROUNDS; round += 1) {
     if (!await reclaimSubagentRunnersOnce(agentHome)) return false;
     let stillActive: boolean;
@@ -1685,7 +1703,31 @@ async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
       log.error('Subagent stability re-check failed: %s', String(err));
       return false;
     }
-    if (!stillActive) return true;
+    if (!stillActive) {
+      // 本进程 spawn 的 PI 后台命令随重启一并清理(不跨实例,无需 fence/hostPid 范围)。
+      // **只能在“一定会重启”分支里做**:上面任何一条 return false 都会取消重启
+      // (handleApplyFailure 后应用继续跑),而杀掉的 dev server / 长构建不会自己回来 ——
+      // 用户点一次失败的重启不该把在跑的活干掉。
+      //
+      // 与 subagent 同一口径 fail closed:sweep 之后仍有确认不了退出的进程(顽固进程 /
+      // 孙进程占住管道),就**取消重启**而不是带病重启 —— 那些是 detached 进程组,会带着
+      // 旧版本 env 活到新版本旁边、占着端口与锁。读不到结果(抛错)同样按未确认处理。
+      let unconfirmed = 1;
+      try {
+        unconfirmed = await stopAllPiBackgroundCommandsForExit(2_000);
+      } catch (err) {
+        log.warn('PI background command sweep before update relaunch failed: %s', String(err));
+      }
+      if (unconfirmed > 0) {
+        log.error(
+          'PI background commands could not be confirmed stopped before relaunch (%d unconfirmed)',
+          unconfirmed,
+        );
+        relaunchReclaimBlockedBy = 'background';
+        return false;
+      }
+      return true;
+    }
     log.warn('A durable Subagent run appeared after reclaim round %d; retrying', round);
     if (Date.now() >= deadline) break;
   }
@@ -1969,7 +2011,11 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
       'executeRelaunch() cancelled — PI Subagent runners could not be confirmed stopped; '
       + 'update relaunch aborted rather than leaving them running unsupervised',
     );
-    handleApplyFailure('subagent_reclaim_unconfirmed');
+    handleApplyFailure(
+      relaunchReclaimBlockedBy === 'background'
+        ? 'pi_background_commands_unconfirmed'
+        : 'subagent_reclaim_unconfirmed',
+    );
     return;
   }
 

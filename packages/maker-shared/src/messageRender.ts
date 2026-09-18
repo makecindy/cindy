@@ -5,6 +5,7 @@ import {
   type AgentTaskUpdate,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
+  isAgentTaskLaunchReceipt,
   isAgentTaskToolName,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
@@ -1553,15 +1554,11 @@ function isRunningAgentTaskItem<
     persistedStatus: item.toolCall?.agentTaskStatus,
     resultIsLaunchReceipt:
       item.toolCall !== undefined &&
-      (subagentSpawnReceiptName(
+      isAgentTaskLaunchReceipt(
         toolNameOf(item.toolCall.source),
         toolInputOf(item.toolCall.source),
         item.toolCall.secondaryBody,
-      ) !== undefined
-        || subagentSpawnResultIndicatesRunning(
-          toolNameOf(item.toolCall.source),
-          item.toolCall.secondaryBody,
-        )),
+      ),
   });
   return status === 'running';
 }

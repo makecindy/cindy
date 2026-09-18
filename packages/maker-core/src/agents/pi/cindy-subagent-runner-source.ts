@@ -790,6 +790,11 @@ function main() {
       childEnv.CINDY_PI_SUBAGENT_RUN_DIR = config.runDir;
       // Independent child turns do not share the parent welcome policy channel.
       delete childEnv.CINDY_PI_TURN_TOOL_POLICY;
+      // 后台命令控制通道是 host ↔ **根 bridge** 的私有面:子 Pi 既不该暴露 background
+      // 参数,也不能拿 bearer 去驱动父会话的进程管理器 —— 否则子代理发一条 background:true
+      // 就能绕过本层审批、以父会话 env 与 cwd 直接执行(shell 路径也由它指定)。
+      // 能力开关与 bearer 是同一个键。
+      delete childEnv.CINDY_PI_BACKGROUND_COMMANDS;
       delete childEnv.CINDY_PI_MCP_BRIDGE;
       for (const key of Object.keys(childEnv)) {
         if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];

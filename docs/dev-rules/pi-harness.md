@@ -85,7 +85,10 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
 子代理 route 保持 pending，失败则终止该 live 任务。Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
-外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
+`CINDY_PI_BACKGROUND_COMMANDS`（值是 Host 每会话签发的一次性 bearer，同时充当能力开关；
+仅本地普通会话注入，bridge 读入闭包并在每个控制请求里回带、Host 逐请求校验，bridge **不删**
+该 env——扩展重载会重新执行 bridge，删了就等于重载后静默关掉能力；因此该键必须同时出现在
+bash 剥离名单与子代理 runner 的剥离面，SSH 远端不注入）、外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
 Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
@@ -243,6 +246,101 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    realpath 校验包含关系，传给 runner 的 argv 必须与 `config.runDir` 同一套原始绝对路径。
    dispose 未确认 runner 退出必须失败；Host 观察到的退出要能通过控制协议通知前台等待，不能只靠 status.json。
    Windows 上 SIGTERM 不得带 taskkill /F；前台若已读到终态必须先返回，不得被 Host 退出通知盖成失败。
+12. **PI 后台命令由 Host 独占拥有（2026-09-18）**：`bash` 的 `background: true` 只是请求
+   —— bridge 用 Pi 自己的 `getShellConfig` 解析 shell，经 `extension_ui_request` 把 start
+   交给 Host；进程由 `PiBackgroundCommands` 在 main 里 spawn 并持有，不落 pid 记录文件，
+   也不允许 bridge 自己 spawn 后再由 Host 杀任意 pid（那会把一个可伪造的文件变成杀进程能力）。
+   会话 close / 账号边界 / 退出清扫都走宿主侧 dispose：先杀树，再按 `stopped` 对 UI 收口
+   （Pi 进程退出后事件队列会 end，真实退出事件可能到不了 renderer）。未启用能力的会话
+   （Review / Bot / SSH 远端）不注入 env，bridge 不暴露参数，并对显式传入的 `background` /
+   `run_in_background` 报错 —— Pi 校验会透传未声明参数，绝不允许它静默变成前台等待。
+   命令 env 必须与前台 bash 同口径（共用 `PI_BASH_STATIC_SECRET_ENV_NAMES` + 动态名单剥离，
+   `PI_CODING_AGENT_DIR` 指向 bash package home，删 `PI_PACKAGE_DIR`）；输出写有界日志
+   （超限继续消费不写盘），终态 `summary` 取尾部。powershell 无后台通道，显式拒绝。
+   控制通道是**带 bearer 的私有面**（同 Pi 包管理通道）：env 里的值就是 Host 签发的 token，
+   Host 逐请求比对，不匹配一律拒绝 —— `extension_ui_request` 的 title / payload 在 Pi 进程内
+   对所有扩展可见，而这条通道会以父会话的 env 与 cwd spawn 进程、shell 路径也由请求方指定。
+   与包管理 token 不同的一点：bridge **不得**把这个 env 删掉 —— 扩展重载（#3070，同处
+   bash home 就因此加了 stash）会重新执行 bridge，删了 env 会在重载后静默关掉能力（模型下一次
+   `background:true` 直接拿到 unavailable，2026-09-18 真机实测）。防泄漏靠剥离面而不是删 env：
+   该键必须在静态名单 + `piSecretEnvNames` 里，且子代理 runner 必须把它从子 Pi env 里剥掉
+   （与 `CINDY_PI_TURN_TOOL_POLICY` 同处），否则一次子代理发起的 `background:true` 就能绕过
+   审批、直接驱动父会话的进程管理器。
+   参数面以「能力开启 **且** 能解析出 shell」为条件（旧 Pi 无 `getShellConfig` 就不暴露）。
+   停止 / 退出清扫以**操作系统报告退出**为确认口径，不得把「UI 已按 stopped 收口」当成
+   进程已死：dispose 后未确认退出的进程仍留在退出清扫表里（否则 unref 的升级定时器在应用
+   退出时不会触发，留下 detached 孤儿进程组）；已观察到退出的记录不得再发任何信号
+   （Windows pid 会被回收）。退出清扫只在**确实会重启**的分支执行，取消重启不得白杀用户进程。
+   但 `forceQuit()` 绕过 before-quit 链，且不能 await（会卡住 updater 的 pid 轮询）——它必须
+   像 subagent 的 `requestStopAllPiSubagentRunsSync` 一样**同步**收口后台命令
+   （`stopAllPiBackgroundCommandsForExitSync`）。要覆的窗口是「更新重启的 reclaim 扫过之后、
+   `process.exit(0)` 之前」：那几秒里父 Pi 会话仍然活着，模型仍可发起新命令，而它们是 detached
+   进程组、父进程退出带不走。同步清扫的两条硬要求：① 跳过条件只能看**操作系统确认退出**
+   （`record.exit`），不能看 `finalized` —— dispose 会先把记录 finalized（UI 收口）而进程还活着，
+   而 `pendingKills` 里的记录全都是 finalized 的；② 它必须同时**关门**（置 `disposed`），
+   让在飞的 `start()` 在 post-spawn 复查处被拒并杀树、新来的 start 直接失败，否则「清理快照之后
+   又冒出来一条」永远无法靠信号拦住。
+   更新重启的 async 清扫（`stopAllPiBackgroundCommandsForExit`）要**返回未确认退出的条数**，
+   调用方按「> 0 即取消重启、读不到结果也按未确认」fail closed（与 subagent 的复检同口径）：
+   确认不了退出的 detached 进程会带着旧版本 env 活到新版本旁边、占着端口与锁。
+   taskId 必须**原样**保留（它就是 Pi 的 toolCallId，渲染层靠它把 update 配回聊天流的 tool_use）；
+   字符集不合法只影响日志**文件名**（`piBackgroundCommandLogFileName`，非常规字符走 sha256 前缀），
+   绝不能换 id —— 换 id 的后果是聊天卡被过滤、只剩面板孤儿行。`start()` 的重复 id 检查与占位
+   必须在同一同步段（`running.set` 先于所有 await），否则并发同 id 的两路会互相覆盖记录、
+   把前一棵 detached 进程树变成谁都杀不到的泄漏。
+   渲染层自愈：PI 的 `local_bash` 必须与 claude-code 一起纳入快照对账（`reconcileStaleRunningTasks`
+   + `captureReconcilableRunningTaskIds`）——它的终态 update 走会话自己的事件队列，Pi 进程被
+   强杀时队列随 `end()` 一起消失，没有这条对账就是永久转圈的僵尸行。`pi_subagent` 刻意不在
+   对账范围内（durable run 可能活得比父进程久，快照缺席不等于已停）。
+   回执里的绝对日志路径（`Output: <logPath>`）是**有意保留**的：模型只能靠它去读后台命令的
+   输出（没有别的读取面），而它指向的就是本会话自己 runtime 目录下的文件；路径里的用户名与
+   会话工作目录同源，不构成新的披露面。命令**正文**则一律不进日志（见下）。
+   停止的返回值是**三态**（`PiBackgroundCommandStopOutcome`：`stopped` / `not-running` /
+   `unconfirmed`），不能再压成 boolean：`unconfirmed`（SIGKILL 之后仍未确认退出）必须在
+   IPC 停止入口**抛错**、在 bridge 控制通道里回专门文案，渲染层据此在行上显示「停止未确认」并
+   保留按钮 —— 回 true 假装成功，用户点一次就再没有任何反馈（UI 没有终态事件可翻状态）。
+   `not-running` 是幂等面（不报错，回落 subagent 控制面）。真正杀不掉的只有三类（不可中断的
+   系统调用 / 自己脱树的进程 / 权限或内核卡死），要覆盖它们只有 OS 级容器化（Job Object /
+   cgroup），本仓不做，只保证「可见 + 可重试」（2026-09-18 与用户确认的口径）。
+   **语义分叉（刻意）**：PI 后台命令的停止是「退出确认」，claude-code 的 `stopTask` 是
+   「接受确认」（SDK 不给退出确认，补确认只能轮询快照，不值得）；两者共用同一句
+   「停止未确认」提示，所以 CC 侧显示它只意味着 RPC 失败，不意味着进程一定还在。
+   三态在会话生命周期上的边界（第 4 轮评审确认，均为**刻意**）：
+   ① 会话关闭 / 账号边界走 `dispose()`，它对 UI 发 stopped、把未确认的进程记进 `pendingKills`，
+   存活期没有再对它们发起停止的入口（那行已是停止态，UI 无重试按钮）—— 直到应用退出时
+   退出清扫再补一轮；② 状态栏「全部停止」是**关闭语义**（见下），逐任务失败面由行内 Stop
+   与其自愈对账承载；③ 无 subagent 控制面的会话（Review / Bot / 远端）对未知 id 的停止是
+   **幂等成功**（抛错会让一条已停掉的行显示「停止未确认」）。
+   停止后的自愈对账另有**有限补挂预算**（`BACKGROUND_TASK_STOP_RECONCILE_REARM_BUDGET`）：活动
+   重新活跃会取消那次定时器，此时按新代际补挂，最多 2 次 —— 既不能让一次点击被代际作废
+   静默吞掉，也不能在常活跃会话里退化成对账轮询。
+   **两条「全部停止」不是一回事，别混**：
+   - 状态栏按钮（`CCAgentSessionView`）在**只有后台命令/子代理在跑**时走
+     `useBackgroundSessionTasks.stopAll`＝**逐任务精确停止**（与行内 Stop 同一个
+     `stopAgentTask` IPC）；单条 `unconfirmed` 会让这次 stop reject，条数回显在按钮的
+     `title`/`aria-label` 上，并触发一次停止后自愈对账。这条路径**不允许**静默假装成功。
+   - 会话级强制停止（`STOP_SESSION_BACKGROUND_TASKS` → `closeSession` → `dispose()`，以及
+     CC 常驻进程在跑时状态栏走的 `backgroundActivity.stopAll`）是**关闭语义**：按 stopped
+     收口 UI 并 best-effort 杀树，未确认的进程不会让 IPC 变成失败 —— 那个入口的定位是
+     「最终止损必须始终可用」。
+   两者的差别是有意的：前者回答「这一条停掉了没有」，后者回答「把这个会话的背景工作收干净」。
+   「停止」点击后追加一次自愈对账（`makerChatStore.requestBackgroundTaskReconcile`，默认 1.2s）：
+   `stopAgentTask` 对 main 侧其实已不在的 id 是**静默成功**的（两套控制面都查无此任务：终态
+   事件丢包，或进程属别的实例），不补这一下，用户看到的就是「点了没反应」且行一直挂在运行中。
+   不做乐观收口 —— 快照命中（确实还在跑）时保持运行中，宁可慢一拍也不伪造终态。
+   跨实例边界（刻意）：后台命令进程只属 spawn 它的那个实例，**异实例删任务收不掉另一个实例
+   的进程**（同一 userData 的 dev + 打包 / `--passive` 多开是受支持拓扑）；日志目录回收是
+   best-effort，被别的实例占用时删除会失败或让存活实例的日志写入降级为 warn（不许升级成错误）。
+   日志目录的生命周期：`<sessionId>/` 随会话删除回收；**无会话时的 `anon-<pid>-<ts>/` 没有其它
+   回收路径**（会话删除需要 sessionId，退出清扫只杀进程），所以启动期做一次
+   `sweepStalePiBackgroundCommandAnonRoots` —— 只删目录名里 owner pid 已不在的（活实例的目录
+   必须保留），删除失败无所谓（Windows 上被占用时会失败，或留下一条无人再读的文件）。
+   判活口径必须是 `code !== 'ESRCH'`：**EPERM 表示进程存在但本进程无权发信号**（另一个用户 /
+   提权实例），把它判死等于删掉那个实例正在写的日志 —— 宁可漏收一个目录，也不能误删。
+   反向（pid 复用给无关进程 → 死目录被判活、永久残留）是接受的泄漏方向：单目录 8MiB 上限，
+   崩溃残留本就罕见，不值得为它引入 owner 身份文件。
+   `pi-subagent-runs/anon-*` 不适用同一判据：durable run 可能活得比主进程久，它的 anon 目录
+   不能按 pid 判死（本 sweep 只处理 `pi-bash-tasks`）。
 
 ### 4.1 包变更与执行终态
 
