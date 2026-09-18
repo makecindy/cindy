@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { transferableAbortController } from 'node:util';
-import { cleanup, render, screen, act } from '@testing-library/react';
+import { cleanup, render, screen, act, fireEvent } from '@testing-library/react';
 import { createMemoryRouter, Outlet, RouterProvider, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { readMainEntryRoute, rememberMainEntry } from '@/lib/mainEntryPreference';
+import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { BotsListView } from '@/features/bots/BotsListView';
 import { MainEntryRedirect, useRememberMainEntry } from '../MainEntryRedirect';
 
@@ -13,8 +14,9 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
 
 function Layout() {
   useRememberMainEntry();
+  const { navigateToView } = useActiveMainView();
   const location = useLocation();
-  return <><output data-testid="route">{location.pathname}{location.search}</output><Outlet /></>;
+  return <><button onClick={() => navigateToView('bots')}>Partners</button><button onClick={() => navigateToView('cc-agent')}>Tasks</button><output data-testid="route">{location.pathname}{location.search}</output><Outlet /></>;
 }
 function launch(path = '/') {
   const router = createMemoryRouter([{ element: <Layout />, children: [
@@ -47,6 +49,30 @@ describe('main entry startup', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(JSON.stringify(localStorage)).not.toContain('private-bot');
     expect(JSON.stringify(localStorage)).not.toContain('private-task');
+  });
+  it('opens the unselected partner list after restarting from tasks', () => {
+    launch('/bots/dash/session/dash-main');
+    fireEvent.click(screen.getByText('Tasks'));
+    expect(screen.getByTestId('route').textContent).toBe('/cc-agent');
+    cleanup();
+    launch();
+    fireEvent.click(screen.getByText('Partners'));
+    expect(screen.getByTestId('route').textContent).toBe('/bots/list');
+    expect(screen.getByRole('main').childElementCount).toBe(0);
+  });
+  it('returns to the selected partner when switching areas without restarting', () => {
+    launch('/bots/dash/session/dash-main');
+    fireEvent.click(screen.getByText('Tasks'));
+    fireEvent.click(screen.getByText('Partners'));
+    expect(screen.getByTestId('route').textContent).toBe('/bots/dash/session/dash-main');
+  });
+  it('does not restore the previous account partner through the area switcher', async () => {
+    const app = launch('/bots/dash/session/dash-main');
+    auth.dataOwnerId = 'account-b';
+    app.rerender();
+    await act(() => app.router.navigate('/cc-agent'));
+    fireEvent.click(screen.getByText('Partners'));
+    expect(screen.getByTestId('route').textContent).toBe('/bots/list');
   });
   it('keeps the task index behavior for no record and after returning to tasks', async () => {
     const app = launch();
