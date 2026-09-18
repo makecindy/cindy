@@ -1,4 +1,12 @@
 {
+  "privacyExit": {
+    "status": "Cindy를 통해 원격 제어 중입니다",
+    "hint": "화면을 클릭하거나 아무 키나 누르면 연결 끊기를 확인합니다",
+    "title": "원격 데스크톱 연결을 끊을까요?",
+    "detail": "원격 제어를 종료하고 컴퓨터 화면을 복원합니다. 종료 시 잠금이 켜져 있으면 컴퓨터도 잠깁니다.",
+    "cancel": "연결 유지",
+    "disconnect": "연결 끊기"
+  },
   "appBadge": {
     "attentionCount": "확인이 필요한 세션: {{count}}"
   },
@@ -65,6 +73,7 @@
     "showDesktop": "데스크톱",
     "allWindows": "모든 창",
     "reconnecting": "다시 연결 중…",
+    "connectionTimeout": "연결 시간이 초과되었습니다. 네트워크와 컴퓨터의 온라인 상태를 확인한 후 다시 연결하세요.",
     "connectionBusy": "다른 기기가 이 원격 데스크톱에 연결되어 있습니다. 해당 기기에서 원격 데스크톱을 종료한 후 다시 연결하세요.",
     "takeoverConnection": "연결 넘겨받기",
     "connectionBusyTakeover": "다른 기기가 연결되어 있습니다. 연결을 넘겨받으면 해당 기기의 연결이 끊어집니다.",
@@ -884,10 +893,10 @@
       },
       "linuxUpdates": {
         "title": "Linux 설치와 업데이트",
-        "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
-        "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-<아키텍처>.deb 를 사용하세요(x64는 amd64, arm64는 arm64).",
-        "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
-        "item3": "Linux x64에서는 Beta 채널을 사용할 수 있지만 arm64는 아직 지원하지 않습니다. 설치에는 시스템 권한 승인이 필요하므로 두 아키텍처 모두 유휴 상태 자동 설치를 지원하지 않습니다."
+        "description": "Ubuntu는 시스템 .deb 패키지를 사용합니다. Arch Linux와 Omarchy는 같은 검증된 .deb 콘텐츠를 관리되는 사용자 디렉터리에 설치합니다. Debian 패키지 관리자는 필요하지 않습니다.",
+        "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb를 실행하세요. Arch/Omarchy: docs/linux.md의 사용자 설치 안내를 따르세요.",
+        "item2": "업데이트 시 시스템 .deb 설치는 인증을 요청하고, 사용자 설치는 시스템 비밀번호 없이 버전을 전환합니다. 다른 패키지 관리자로 설치한 경우 해당 관리자로 업데이트하세요.",
+        "item3": "Linux x64는 Beta 채널을 지원하며 arm64는 아직 지원하지 않습니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
@@ -948,7 +957,7 @@
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
-      "linuxUpdateDescription": "새 빌드가 있으면 앱에서 .deb를 다운로드합니다. 설치할 때 시스템 비밀번호가 필요하므로 유휴 상태에서는 자동 설치하지 않습니다.",
+      "linuxUpdateDescription": "재시작을 선택하면 업데이트가 적용됩니다. 시스템 .deb 설치에는 시스템 비밀번호가 필요하지만 사용자 설치에는 필요하지 않습니다. 다른 설치 방식은 패키지 관리자를 사용하세요.",
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
@@ -6323,7 +6332,7 @@
       "ready": "새 버전 준비 완료 — 사이드바를 클릭해 업데이트 완료",
       "manifestFailed": "업데이트 확인 실패, 네트워크를 확인하세요",
       "downloadFailed": "새 버전 다운로드 실패, 나중에 다시 시도하세요",
-      "manualDownload": "앱에서 업데이트를 다운로드하세요. 설치하려면 시스템 비밀번호가 필요합니다."
+      "manualDownload": "앱에서 다운로드한 뒤 재시작할 때를 선택하세요. 시스템 .deb 설치에만 시스템 비밀번호가 필요합니다."
     },
     "closeConfirm": {
       "title": "정말 나가시겠습니까?",
@@ -7220,6 +7229,13 @@
       "move": "지금 이동 (권장)",
       "download": "수동으로 다운로드"
     },
+    "linuxInstallation": {
+      "title": "이 설치는 자체 업데이트할 수 없습니다",
+      "description": "패키지 관리자를 사용하거나 Linux 사용자 설치 안내를 확인하세요. 관리되는 설치에는 누락된 도구를 설치하거나 쓰기 권한을 복원해야 할 수 있습니다. Cindy와 다운로드한 업데이트는 유지됩니다.",
+      "guide": "Linux 안내 열기",
+      "retry": "다시 확인",
+      "later": "나중에"
+    },
     "windowsRuntimeMissing": {
       "title": "Microsoft Visual C++ 런타임 필요",
       "description": "이 PC에는 업데이터에 필요한 Microsoft Visual C++ 런타임이 없습니다. 다운로드한 업데이트는 유지됩니다. Microsoft 공식 x64 런타임을 설치한 후 다시 확인해 주세요.",
@@ -8015,7 +8031,8 @@
         "effortEndFast": "더 빠르게",
         "effortEndSmart": "더 똑똑하게",
         "railSameEngine": "{{agent}} 전용",
-        "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다"
+        "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다",
+        "favoritesSyncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다."
       }
     },
     "permissionSelector": {
@@ -8754,6 +8771,7 @@
     },
     "media": {
       "clickToZoom": "클릭하여 확대",
+      "audioProgress": "재생 위치",
       "audioPlay": "오디오 재생",
       "audioPause": "오디오 일시 정지",
       "modelPreviewAlt": "3D 모델 미리보기",
@@ -9375,6 +9393,22 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "readingMemory": "기억을 읽고 있어요…",
+      "savingMemory": "기억을 저장하고 있어요…",
+      "deletingMemory": "기억을 삭제하고 있어요…",
+      "organizingMemory": "기억을 정리하고 있어요…",
+      "readingFile": "파일을 읽고 있어요…",
+      "savingFile": "파일을 수정하고 있어요…",
+      "readingWeb": "웹 페이지를 읽고 있어요…",
+      "searchingFiles": "파일을 찾고 있어요…",
+      "testing": "테스트를 실행하고 있어요…",
+      "checking": "코드를 확인하고 있어요…",
+      "reviewingMemory": "기억을 확인하고 있어요…",
+      "reviewingFiles": "파일을 확인하고 있어요…",
+      "reviewingSources": "웹 자료를 확인하고 있어요…",
+      "reviewingChecks": "검사 결과를 확인하고 있어요…",
+      "replying": "답변 중…",
+      "processing": "처리 중…",
       "thinking": "생각 중…",
       "generating": "생성 중…",
       "editingFiles": "파일 수정 중…",

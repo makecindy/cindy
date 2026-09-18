@@ -2,6 +2,7 @@ import { RemoteBotSessionView } from '@/features/bots/RemoteBotSessionView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
+import { MainEntryRedirect } from '@/components/layout/MainEntryRedirect';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
 import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
 import { GhostPanelWindowLayout } from '@/components/layout/GhostPanelWindowLayout';
@@ -27,6 +28,7 @@ import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperi
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
 import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
+import { BotsListView } from '@/features/bots/BotsListView';
 import { BotsHomeView } from '@/features/bots/BotsHomeView';
 import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
 import { BotRosterView } from '@/features/bots/BotRosterView';
@@ -43,7 +45,7 @@ import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatu
  *   ProtectedRoute (已登录) — 校验 canEnterApp（真登出或换号窗口）
  *    └── LocalDbGate               → 等 localDb.ensureReady（按 userId 切库）
  *         └── MainLayout            → 主功能区
- *              ├── /                → Navigate to /cc-agent
+ *              ├── /                → Restore account's last top-level entry
  *              ├── /cc-agent/...    → CCAgentFeatureLayout
  *              ├── /bots/...        → BotsFeatureLayout
  *              └── /settings        → SettingsView
@@ -96,7 +98,7 @@ export const router = createHashRouter([
                 // 切到其它页面;MainLayout 自身崩溃才冒泡到根级全屏兜底。
                 errorElement: <RouteErrorFallback variant="section" />,
                 children: [
-                  { index: true, element: <Navigate to="/cc-agent" replace /> },
+                  { index: true, element: <MainEntryRedirect /> },
                   {
                     path: 'cc-agent',
                     element: <CCAgentFeatureLayout />,
@@ -126,6 +128,7 @@ export const router = createHashRouter([
                     element: <BotsFeatureLayout />,
                     children: [
                       { index: true, element: <BotsHomeView /> },
+                      { path: 'list', element: <BotsListView /> },
                       // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
                       // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
                       // 被当成一个叫 "roster" 的伙伴。

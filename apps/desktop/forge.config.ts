@@ -11,6 +11,7 @@ import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-nati
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeArch, ForgeConfig, ForgePlatform } from '@electron-forge/shared-types';
+import { stageLinuxBuildInfo } from './forge-linux';
 import {
   BRAND_IDENTITY,
   allDeepLinkSchemes,
@@ -828,6 +829,7 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   if (windowsUpdaterRuntimeResource) {
     base.unshift(
       `resources/${UPDATER_EXE}`,
+      'resources/windows-installation-version.ps1',
       windowsUpdaterRuntimeResource,
     );
   }
@@ -844,6 +846,7 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   if (targetPlatform === 'darwin') {
     base.push('resources/cli');
   }
+  if (targetPlatform === 'linux') base.push('resources/linux');
 
   return base;
 }
@@ -1104,7 +1107,8 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
     const result = spawnSync('xcrun', ['clang', path.join(__dirname, 'native', 'remote-desktop', 'macos-capture.m'),
       ...captureArch, '-mmacosx-version-min=10.15', '-fobjc-arc', '-fblocks', '-O2',
       '-framework', 'Foundation', '-framework', 'AppKit', '-framework', 'CoreGraphics', '-framework', 'CoreImage',
-      '-framework', 'IOSurface', '-framework', 'ImageIO', '-framework', 'IOKit', '-o', capture], { stdio: 'inherit' });
+      '-framework', 'IOSurface', '-framework', 'ImageIO', '-framework', 'IOKit',
+      '-weak_framework', 'ScreenCaptureKit', '-framework', 'CoreMedia', '-framework', 'CoreVideo', '-o', capture], { stdio: 'inherit' });
     if (result.error || result.status !== 0) throw new Error('Remote desktop capture build failed');
     fs.chmodSync(capture, 0o755);
   } else if (process.platform === 'win32' && platform === 'win32') {
@@ -1707,6 +1711,8 @@ const config: ForgeConfig = {
     postPackage: async (_forgeConfig, opts) => {
       try {
         for (const buildPath of opts.outputPaths) {
+          stageLinuxBuildInfo(buildPath, opts.platform, opts.arch,
+            process.env.APP_VERSION || DESKTOP_PACKAGE_VERSION, CINDY_REGION);
           const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);

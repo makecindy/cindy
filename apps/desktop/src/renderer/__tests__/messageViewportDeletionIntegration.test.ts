@@ -16,6 +16,7 @@ import {
   toRenderItemViewportSnapshot,
 } from '../components/chat/MessageStream';
 import {
+  findRenderItemElement,
   canCompensateMessageHeight,
   viewportAnchorCorrection,
 } from '../components/chat/messageViewportCompensation';
@@ -100,6 +101,7 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
   const elements = new Map<string, HTMLElement>();
   for (const item of after) {
     const row = items.appendChild(document.createElement('div'));
+    row.dataset.renderItemKey = item.key;
     const rowTop = item.key === afterGroup.key ? 200 : item.type === 'message' && item.message.role === 'user' ? 0 : 1800;
     row.getBoundingClientRect = () => rect(containerTop + rowTop - root.scrollTop, 1000);
     for (const id of collectDeleteAnchorClientIds([item])) {
@@ -128,6 +130,7 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
     requestAnimationFrame: (callback: FrameRequestCallback) => frames.push(callback),
     beginProgrammaticScroll: () => { programmaticScrollRef.current = true; return 1; },
     finishProgrammaticScroll: () => { programmaticScrollRef.current = false; },
+    findRenderItemElement,
     canCompensateMessageHeight,
     viewportAnchorCorrection,
     renderItemContainsClientId,

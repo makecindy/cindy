@@ -687,6 +687,7 @@ export function MessageRenderer({
   canLoadEarlier,
   emptyTestID,
   bottomOverlayHeight,
+  contentBottomInset,
   isSessionStreaming,
   makerTurnRunning,
   continuationTurnClientId,
@@ -702,6 +703,8 @@ export function MessageRenderer({
   devRecycleItems = false,
 }: {
   bottomOverlayHeight?: number;
+  /** Floating composers reserve a stable tail gap while their expanded surface overlays history. */
+  contentBottomInset?: number;
   /** 顶部 chrome(绝对定位半透明工具栏)实测高度:内容顶部按此让位,详见 mobileMessageListTopPadding。 */
   topOverlayHeight?: number;
   focusedItemKey?: string | null;
@@ -1518,7 +1521,7 @@ export function MessageRenderer({
     lightboxImagesRef.current = next;
     return next;
   }, [galleryImages, imageLightboxOpen, payload]);
-  const bottomPadding = mobileMessageListBottomPadding(bottomOverlayHeight);
+  const bottomPadding = mobileMessageListBottomPadding(contentBottomInset ?? bottomOverlayHeight);
   const topPadding = mobileMessageListTopPadding(topOverlayHeight);
   listBottomPaddingRef.current = bottomPadding;
   listTopPaddingRef.current = topPadding;

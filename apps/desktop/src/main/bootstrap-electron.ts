@@ -221,6 +221,10 @@ import {
   setUpdateAutoRelaunchBusyProbe,
 } from './updateService';
 import {
+  isWindowsUpdateLockSharingViolation,
+  shouldKeepWaitingForWindowsUpdateLock,
+} from './updateLockWait';
+import {
   createUpdatePresentationRecoveryController,
   decideUpdateRelaunchBusyTransition,
   hasUpdateRelaunchBusyActivity,
@@ -817,6 +821,7 @@ import {
   setChatEmbeddingEnabled,
   resetCacheForNewDb as resetChatEmbedderCache,
 } from './embedders/chat-history-embedder.js';
+import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
 import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
@@ -2652,8 +2657,46 @@ if (started) {
       Atomics.wait(lockWait, 0, 0, pollMs);
       continue;
     }
-    if (Date.now() - start >= maxWaitMs) break;
-    Atomics.wait(lockWait, 0, 0, pollMs);
+    const holderPid = readLockPid();
+    const holderAlive = holderPid !== null && pidAlive(holderPid);
+    const elapsedMs = Date.now() - start;
+    if (
+      shouldKeepWaitingForWindowsUpdateLock({
+        lockExists: true,
+        elapsedMs,
+        maxWaitMs,
+        holderPid,
+        holderAlive,
+        unlinkFailed: false,
+        sharingViolation: false,
+      })
+    ) {
+      Atomics.wait(lockWait, 0, 0, pollMs);
+      continue;
+    }
+    let unlinkFailed = false;
+    let sharingViolation = false;
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (error) {
+      unlinkFailed = fs.existsSync(lockPath);
+      sharingViolation = unlinkFailed && isWindowsUpdateLockSharingViolation(error);
+    }
+    if (
+      shouldKeepWaitingForWindowsUpdateLock({
+        lockExists: fs.existsSync(lockPath),
+        elapsedMs,
+        maxWaitMs,
+        holderPid,
+        holderAlive,
+        unlinkFailed,
+        sharingViolation,
+      })
+    ) {
+      Atomics.wait(lockWait, 0, 0, pollMs);
+      continue;
+    }
+    break;
   }
   // If still locked after the wait, proceed anyway (stale lock).
   // 锁已不存在(更新脚本正常清掉)同样算已清——等锁实例必须走
@@ -6000,6 +6043,7 @@ const registerIpcHandlers = () => {
         onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+      registerWorkingStatusIpc();
       registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();

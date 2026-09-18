@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { configureLinuxPasswordStore } from '../linuxPasswordStore.js';
+import { configureLinuxPasswordStore, linuxPasswordStoreRelaunchArgs } from '../linuxPasswordStore.js';
+
+describe('Linux secure storage startup policy', () => {
+  it('preserves the backend on relaunch without forwarding arbitrary arguments', () => {
+    expect(linuxPasswordStoreRelaunchArgs('gnome-libsecret')).toEqual(['--password-store=gnome-libsecret']);
+    expect(linuxPasswordStoreRelaunchArgs('kwallet6')).toEqual(['--password-store=kwallet6']);
+    expect(linuxPasswordStoreRelaunchArgs('')).toEqual([]);
+    expect(linuxPasswordStoreRelaunchArgs('gnome-libsecret --no-sandbox')).toEqual([]);
+  });
+});
 
 function configure(
   env: NodeJS.ProcessEnv,
@@ -49,6 +58,7 @@ describe('Hyprland password store startup selection', () => {
     { XDG_CURRENT_DESKTOP: 'GNOME', DESKTOP_SESSION: 'hyprland' },
     { XDG_CURRENT_DESKTOP: 'KDE', XDG_SESSION_DESKTOP: 'Hyprland' },
     { XDG_CURRENT_DESKTOP: 'sway' },
+    { XDG_CURRENT_DESKTOP: 'niri' },
     { XDG_CURRENT_DESKTOP: 'not-hyprland' },
     { XDG_SESSION_TYPE: 'wayland' },
   ])('leaves other or unknown desktops to Electron: %j', (env) => {

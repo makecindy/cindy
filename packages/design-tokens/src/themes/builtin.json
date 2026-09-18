@@ -1270,6 +1270,21 @@
       "sidebar-user-card-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-user-card-text}"
+      },
+      "slider-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-track}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-fill": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-fill}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-thumb": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-thumb}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
       }
     },
     "cindy-light": {
@@ -2143,6 +2158,21 @@
       "create-agent-send-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-send-icon}"
+      },
+      "slider-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-track}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-fill": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-fill}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-thumb": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-thumb}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
       }
     },
     "default-dark": {

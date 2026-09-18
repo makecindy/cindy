@@ -768,3 +768,14 @@ BORDER_BG → border-default，TEXT_PRIMARY/SECONDARY/TERTIARY → 对应 text �
 DS-11 补充分类：实际文字或动作换行的 Toast 外框按 §5 内容容器取 12px；短通知仍为 pill。依据同日用户明确要求以 Cindy 实际 UI 效果为先，消除长通知被撑成大椭圆的效果；颜色与默认停留时长不改。最终亮暗截图供用户逐项验收，不把实现裁决写成最终验收通过。
 
 DS-11 帮助文字补验：新增 `form-field-hint`，默认保持 `text-secondary-mid` 运行期 alias，Cindy 原色不变。One Dark Pro 的帮助角色为 #8b909a，Solarized Light 为 #686868，仅修说明文字，不调整原 secondary/tertiary 或用户主题文件。独立冻结预期只添加此 ID 和两项覆盖，不自动刷全部快照。
+
+## 2026-09-17 — Slider 三变体统一
+
+用户要求在一个 PR 中落地 Design Lab v6，并统一调用入口。普通数值 Slider 原先轨道与滑块在
+暗色中不易分辨，改成独立中性色 token、无描边浅阴影滑块；hover 放大、按压成为真正药丸形、
+左右箭头光标。推理强度是明确例外：保留原彩色圆块的面板描边与外晕，只增加同族交互。
+媒体进度条保留细轨道，增加透明点击区、拖动与键盘定位。原生播放器不改。
+
+入口：外观的界面字号/代码字号，压缩阈值 Claude/Pi，Work Louder 键盘亮度；模型配置推理强度；
+音频卡、音效卡、插件音频插槽。键盘亮度原使用 Switch token，导致预览曾误用蓝色；现在与
+Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖动实现。规范见 DESIGN §15.18。

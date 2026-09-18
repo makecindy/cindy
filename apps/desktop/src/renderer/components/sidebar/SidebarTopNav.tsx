@@ -34,6 +34,7 @@ import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSe
 import { SidebarIconButton } from './SidebarIconButton';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { GhostMainViewNavEntries } from './GhostMainViewNavEntries';
+import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 
 /** 列表行通用样式 —— 各行同款 pill 行。 */
 const ROW_CLASS =
@@ -71,13 +72,9 @@ export function SidebarTopNav({
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasGhostUnread = useAnyGhostUnread();
 
-  // 通用「新建」入口:只 navigate 到草稿页,不清空 newMakerDraft。
-  // 之前这里会把 workingDir / remoteHostId / extraDirs 清成默认,导致用户在草稿页
-  // 选好「对话或选择项目」后,切到别的会话再点「新建」回来时选择被重置为默认、需要
-  // 重新选。草稿页的选择由 newMakerDraft store 持久化(见 state/newMakerDraft.ts),
-  // 通用新建应保留上次选择;「新建对话」等显式入口才负责清空(见 CCAgentSidebarUpper)。
+  // 通用新建继承当前任务的电脑，由草稿页集中迁移；同机保留已选项目。
   const handleNew = () => {
-    navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+    navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
   };
 
   // 搜索结果 overlay 只在 cc-agent 视图(CCAgentSidebarUpper)绘制;本行却在所有非 rail 视图都渲染。

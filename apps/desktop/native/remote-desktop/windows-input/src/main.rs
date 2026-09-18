@@ -9,6 +9,7 @@ use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*};
 mod desktop;
 mod selection;
+mod privacy;
 
 static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 fn send(input: INPUT) -> bool {
@@ -136,6 +137,10 @@ fn release(keys: &mut HashSet<u16>, buttons: &mut HashSet<u64>) {
     }
 }
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--privacy-input") {
+        privacy::run();
+        return;
+    }
     if matches!(std::env::args().nth(1).as_deref(), Some("--clipboard-selection" | "--clipboard-content-selection")) {
         match selection::read(std::env::args().nth(1).as_deref() == Some("--clipboard-content-selection")) {
             Ok(text) => println!("{}", serde_json::json!({"text":text})),

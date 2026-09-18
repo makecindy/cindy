@@ -167,4 +167,27 @@ describe('Ollama list refresh convergence', () => {
     expect(await upsertManagedOllamaModels([])).toMatchObject({ ok: true, changed: true });
     expect(await upsertManagedOllamaModels([])).toMatchObject({ ok: true, changed: false });
   });
+
+  it.each(['offline', 'tags failure'])(
+    'repairs old names once during %s and retains the saved model across service restarts',
+    async (failure) => {
+      const id = 'hf.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF:Q4_K_M';
+      const saved = { id, name: id, contextWindow: 65_536, defaultEnabled: false };
+      provider.runtimes.pi!.models = [saved];
+      provider.runtimes.codex!.models = [{ ...saved, name: 'My coding model' }];
+      offline = failure === 'offline';
+      tagsFail = failure === 'tags failure';
+
+      expect((await makeService().list()).catalogDirty).toBe(true);
+      expect(provider.runtimes.pi!.models).toEqual([
+        { ...saved, name: 'Ornith 1.5 35B A3B (Q4_K_M)' },
+      ]);
+      expect(provider.runtimes.codex!.models).toEqual([{ ...saved, name: 'My coding model' }]);
+      expect(provider.runtimes['claude-code']!.models).toEqual([]);
+      const persisted = structuredClone(provider);
+      expect((await makeService().list()).catalogDirty).toBe(false);
+      expect(provider).toEqual(persisted);
+      expect(updateCustomProvider).toHaveBeenCalledTimes(1);
+    },
+  );
 });

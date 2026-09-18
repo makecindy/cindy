@@ -728,6 +728,7 @@ class KeepAliveMicSession {
       activation?.onInterrupted?.('Microphone input stopped unexpectedly. Please try again.');
     }
     this.trackCleanup.splice(0).forEach((cleanup) => cleanup());
+    this.worklet?.port.postMessage({ type: 'dispose' });
     this.worklet?.port.close();
     this.worklet?.disconnect();
     this.sink?.disconnect();
@@ -1334,6 +1335,7 @@ export class WebMicAudioEngine {
     if (this.context) this.context.onstatechange = null;
     if (this.processor) this.processor.onaudioprocess = null;
     this.flushPendingFrame(Date.now());
+    this.worklet?.port.postMessage({ type: 'dispose' });
     this.worklet?.port.close();
     this.worklet?.disconnect();
     this.processor?.disconnect();

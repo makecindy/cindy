@@ -1,5 +1,5 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, appendAutoReviewUserIntent, extractAutoReviewUserIntent } from '@cindy/maker-core';
-import type { SendOptions, UserMessage } from '@cindy/maker-core';
+import type { AutoReviewUserIntent, SendOptions, UserMessage } from '@cindy/maker-core';
 import { joinChatQuoteTextSegments, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
@@ -27,7 +27,7 @@ export async function restoreAutoReviewSteerIntent(
   content: string | ReadonlyArray<{ type: string; [key: string]: unknown }>,
   options: SendOptions,
   readHistory: () => Promise<AutoReviewHistoryMessage[]>,
-): Promise<string | undefined> {
+): Promise<AutoReviewUserIntent | undefined> {
   options.signal?.throwIfAborted();
   // Resource changes already carry an explicit replacement, including an empty one.
   if (options[AUTO_REVIEW_USER_INTENT] !== undefined) return options[AUTO_REVIEW_USER_INTENT];
@@ -111,8 +111,8 @@ export function currentAutoReviewResourceIntent(
 export function restoreAutoReviewUserIntent(
   history: readonly AutoReviewHistoryMessage[],
   current?: { clientId: string; content: unknown; authoredText?: string },
-): string {
-  let intent = '';
+): AutoReviewUserIntent {
+  let intent: AutoReviewUserIntent = '';
   let replayed = false;
   const latest = current ? current.authoredText ?? readAutoReviewUserText(current.content) : null;
   // Cards are created before the user answers; their acceptance time orders authority.

@@ -13911,8 +13911,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'raw-turn', serverName: 'cindy', mode: 'form',
       _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'send', tool_params: { to: 'recipient' } }, message: 'Allow tool call', requestedSchema: {},
     });
-    expect(review.mock.calls[0]?.[0].userIntent).toContain('Do not send.');
-    expect(review.mock.calls[0]?.[0].userIntent).not.toContain('SEND THE REPORT');
+    expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).toContain('Do not send.');
+    expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).not.toContain('SEND THE REPORT');
     await handle.close();
   });
 
@@ -20099,10 +20099,74 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it.each([
+    { detached: false, answer: '没事儿，你可以用', verdict: 'allow' as const },
+    { detached: true, answer: '没事儿，你可以用', verdict: 'allow' as const },
+    { detached: false, answer: '不要用它，保持只读', verdict: 'block' as const },
+    { detached: true, answer: '不要用它，保持只读', verdict: 'block' as const },
+  ])('preserves denied action evidence for clarification "$answer" (detached=$detached)', async ({ detached, answer, verdict }) => {
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'block', reason: 'needs authorization' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-clarification-action-context',
+      model: 'gpt-5.5', providerId: 'openai', workingDir: '/repo', permissionMode: 'auto',
+    });
+    try {
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.requestUserInput || !handlers.commandExecutionApproval) {
+        throw new Error('expected ask and approval handlers');
+      }
+      const ownerDecision = deferred<InteractionDecision>();
+      handle.setInteractionResolver(async () => ownerDecision.promise);
+      await handle.send({ type: 'user', content: '检查项目，先不要安装依赖' });
+      const action = { command: 'npm install express', cwd: '/repo' };
+      const approve = (id: string) => handlers.commandExecutionApproval!({
+        threadId: 'start-thread-id', turnId: `turn-${turnSeq}`, itemId: id, approvalId: id, ...action,
+      });
+      await expect(approve('initial-denial')).resolves.toEqual({ decision: 'decline' });
+      const question = '安装 express 以继续检查？';
+      const response = handlers.requestUserInput({
+        threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'ask-install',
+        questions: [{ id: 'install', header: 'Dependency', question, isOther: true, isSecret: false, options: null }],
+      }, { requestId: 'req-install' });
+      if (detached) {
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
+      }
+      ownerDecision.resolve({ kind: 'ask_user_question', answers: { [question]: answer } });
+      await response;
+      if (detached) await vi.waitFor(() => expect(askUserTurnStartCalls(host)).toHaveLength(2));
+
+      reviewer.mockResolvedValue({ verdict, reason: 'clarification reviewed' });
+      await expect(approve('after-clarification')).resolves.toEqual({ decision: verdict === 'allow' ? 'accept' : 'decline' });
+      expect(reviewer).toHaveBeenCalledTimes(2);
+      expect(reviewer.mock.calls[1]?.[0]).toMatchObject({
+        userIntent: {
+          earlierUserMessages: ['检查项目，先不要安装依赖'],
+          currentUserMessage: expect.stringContaining(answer),
+        },
+        precedingBlockedActions: [{ kind: 'exec', ...action }],
+      });
+
+      handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: `turn-${turnSeq}`, status: 'completed' } });
+      await handle.send({ type: 'user', content: '继续检查' });
+      await approve('next-user-message');
+      expect(reviewer.mock.calls[2]?.[0].precedingBlockedActions).toEqual(
+        verdict === 'block' ? [{ kind: 'exec', ...action }] : [],
+      );
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('keeps the originating turn auto-review intent on detached continuation', async () => {
     const seenIntents: string[] = [];
     const reviewAutoPermissionAction = vi.fn<AutoReviewDelegate>(async (request) => {
-      seenIntents.push(request.userIntent);
+      seenIntents.push(typeof request.userIntent === 'string' ? request.userIntent : JSON.stringify(request.userIntent));
       return { verdict: 'allow' as const };
     });
     const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
@@ -20414,7 +20478,7 @@ describe('CodexAgent yield continuation', () => {
   it('inherits origin capability selection and auto-review intent on the yield continuation turn', async () => {
     const seenIntents: string[] = [];
     const reviewAutoPermissionAction = vi.fn<AutoReviewDelegate>(async (request) => {
-      seenIntents.push(request.userIntent);
+      seenIntents.push(typeof request.userIntent === 'string' ? request.userIntent : JSON.stringify(request.userIntent));
       return { verdict: 'allow' as const };
     });
     const agent = new CodexAgent(createDeps({}, {
@@ -21075,7 +21139,8 @@ describe('CodexAgent yield continuation', () => {
   });
 
   it('does not cancel a yield claim when ask_user continuation starts', async () => {
-    const agent = new CodexAgent(createDeps());
+    const reviewer = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'block', reason: 'user restriction' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: reviewer }));
     let turnSeq = 0;
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
@@ -21088,9 +21153,10 @@ describe('CodexAgent yield continuation', () => {
       sessionId: 'session-yield-ask-user-internal',
       model: 'gpt-5.4',
       workingDir: '/repo',
+      permissionMode: 'auto',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.itemCompleted || !handlers.turnCompleted || !handlers.requestUserInput) {
+    if (!handlers?.itemCompleted || !handlers.turnCompleted || !handlers.requestUserInput || !handlers.commandExecutionApproval) {
       throw new Error('expected item, turn, and user-input handlers');
     }
     const ownerDecision = deferred<InteractionDecision>();
@@ -21133,10 +21199,17 @@ describe('CodexAgent yield continuation', () => {
     });
     ownerDecision.resolve({
       kind: 'ask_user_question',
-      answers: { 'Pick one': 'A' },
+      answers: { 'Pick one': '不要安装依赖，保持只读' },
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-2', itemId: 'install-while-yielded',
+      command: 'npm install express', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    expect(reviewer.mock.calls.at(-1)?.[0].userIntent).toMatchObject({
+      currentUserMessage: expect.stringContaining('不要安装依赖，保持只读'),
+    });
     const claimedDone = events.find((event) => event.type === 'done' && event.turnContinuationId != null);
     expect(handle.beginTurnContinuationWait?.(claimedDone?.turnContinuationId)).toBe('active');
     expect(handle.isTurnRunning?.()).toBe(true);

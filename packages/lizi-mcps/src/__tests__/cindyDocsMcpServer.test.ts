@@ -1346,14 +1346,29 @@ describe('路径边界与覆盖语义', () => {
     )).resolves.toEqual(Buffer.from('granted-bytes'));
 
     await fs.rm(granted);
-    await fs.symlink(other, granted);
-    await expect(readInputFileWithinLimit(
-      workdir,
+    // Match the directory-link fixtures above on Windows: no developer mode
+    // required, and the substituted link must be rejected before any open.
+    const targetDirectory = path.join(outsideDir, 'target');
+    await fs.mkdir(targetDirectory);
+    await fs.symlink(
+      process.platform === 'win32' ? targetDirectory : other,
       granted,
-      1024,
-      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
-      { allowOutsideRoot: true },
-    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+      process.platform === 'win32' ? 'junction' : 'file',
+    );
+    expect((await fs.lstat(granted)).isSymbolicLink()).toBe(true);
+    const open = vi.spyOn(fs, 'open');
+    try {
+      await expect(readInputFileWithinLimit(
+        workdir,
+        granted,
+        1024,
+        (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+        { allowOutsideRoot: true },
+      )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
   });
 
   it('输入读取只接受与边界校验相同的已打开文件身份', async () => {

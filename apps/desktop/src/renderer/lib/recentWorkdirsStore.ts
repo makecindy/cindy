@@ -13,8 +13,8 @@
  *    (main 端 session 创建广播 = 可能新增了 recent_workdirs row)
  *  - 调用方 (hook) 也可以主动调 forceRefresh
  *
- * 普通字段变更 (rename / pin) 不影响 recent_workdirs；归档 / 删除会由 main 刷新
- * lastUsedAt，并经 recentWorkdirs.onChanged 触发强制重拉。
+ * 普通字段变更 (rename / pin) 与归档 / 删除不影响 recent_workdirs；发送消息会由 main
+ * 刷新 lastUsedAt，并经 recentWorkdirs.onChanged 触发强制重拉。
  */
 
 import {
@@ -46,9 +46,8 @@ function notify(): void {
 
 async function fetchList(): Promise<RecentWorkdirEntry[]> {
   // window.electronAPI 在 SSR / 测试 / preload 未就绪场景可能不存在 —— 直接返回空。
-  const api = (typeof window !== 'undefined'
-    ? window.electronAPI?.localDb?.recentWorkdirs
-    : undefined);
+  const api =
+    typeof window !== 'undefined' ? window.electronAPI?.localDb?.recentWorkdirs : undefined;
   if (!api) return [];
   return api.list();
 }
@@ -128,9 +127,8 @@ export const recentWorkdirsStore = {
       cache = cache.filter((e) => e.path !== path);
       notify();
     }
-    const api = (typeof window !== 'undefined'
-      ? window.electronAPI?.localDb?.recentWorkdirs
-      : undefined);
+    const api =
+      typeof window !== 'undefined' ? window.electronAPI?.localDb?.recentWorkdirs : undefined;
     if (!api) return;
     try {
       await api.remove({ path });
@@ -164,7 +162,7 @@ if (typeof window !== 'undefined') {
       });
     });
   }
-  // 变更广播:显式移除与软删除 activity touch 都会改变持久目录投影；强制重拉
+  // 变更广播:显式移除与发送消息 都会改变持久目录投影；强制重拉
   // 保证本窗口的 lastActivity 过滤立即看到新时间，而不是等下一次 session 创建。
   const recentApi = window.electronAPI?.localDb?.recentWorkdirs;
   if (recentApi?.onChanged) {

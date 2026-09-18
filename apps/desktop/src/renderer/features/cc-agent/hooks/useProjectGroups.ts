@@ -3,21 +3,20 @@
  * ---------------------------------------------------------------------------
  * 包 `groupSessions` 纯函数并用 useMemo 锁结果，避免 render 时重复计算。
  *
- * 注：useCCSessions 当前每次 fetch 都返回新数组引用，因此 sessions 引用变化
- * 即触发重算。在 n ≤ 16 的规模下成本可忽略；如需进一步优化，可在
- * useCCSessions 内做 deep-equal 短路（属于上游优化，不在本期范围）。
+ * Row-only patches reuse membership and ordering, keeping unrelated nodes stable.
  */
 
 import { useMemo } from 'react';
+import { createProjectGroupsSelector } from '../lib/projectGroupsSelector';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
 import { buildBotSessionOwners } from '@/features/bots/botSessionOwners';
 import { useBotProfiles } from '@/features/bots/botStore';
 import {
-  groupSessions,
   type PersistentLocalProject,
   type ProjectGroupsResult,
+  type ProjectNode,
 } from '../lib/projectGrouping';
 import {
   collectAmbiguousDeviceNames,
@@ -30,8 +29,11 @@ export function useProjectGroups(
   includePinnedInProjects: boolean = false,
   persistentLocalProjects?: readonly PersistentLocalProject[],
   localPlatform: string = '',
+  /** Reuse an earlier call when the activity filter did not change its inputs. */
+  equivalentResult?: ProjectGroupsResult,
 ): ProjectGroupsResult {
   const sshHosts = useRemoteSshHosts();
+  const selectGroups = useMemo(() => createProjectGroupsSelector(), []);
   /*
     伙伴归属表。会话行本身不带 botId,归属只有伙伴档案知道 —— 档案还没加载完的
     那一瞬间这张表是空的,伙伴任务就走原来的分组落到别处,**不会消失**。
@@ -39,32 +41,52 @@ export function useProjectGroups(
   const botProfiles = useBotProfiles();
   const botOwnerBySessionId = useMemo(() => buildBotSessionOwners(botProfiles), [botProfiles]);
 
-  return useMemo(() => {
-    const groups = groupSessions(sessions, {
+  const groups = useMemo(() => {
+    if (equivalentResult) return equivalentResult;
+    return selectGroups(sessions, {
       projectAliases,
       includePinnedInProjects,
       botOwnerBySessionId,
       persistentLocalProjects,
       localPlatform,
     });
-    // 撞名判定要看全量项目(哪些设备名对应了多个 deviceId),所以先扫一遍再逐个富化。
-    const ambiguousDeviceNames = collectAmbiguousDeviceNames(groups.projects);
-    return {
-      ...groups,
-      projects: groups.projects.map((project) => ({
-        ...project,
-        remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts, {
-          ambiguousDeviceNames,
-        }),
-      })),
-    };
   }, [
+    equivalentResult,
+    selectGroups,
     sessions,
     projectAliases,
     includePinnedInProjects,
     persistentLocalProjects,
     localPlatform,
-    sshHosts,
     botOwnerBySessionId,
   ]);
+  const ambiguousDeviceNames = useMemo(
+    () => collectAmbiguousDeviceNames(groups.projects),
+    [groups.projects],
+  );
+  const ambiguityKey = JSON.stringify([...ambiguousDeviceNames].sort());
+  // Weak keys keep only live grouping nodes. Registry/collision changes must
+  // re-enrich even unchanged nodes so remote labels never retain stale names.
+  const enrichedProjects = useMemo(
+    () => new WeakMap<ProjectNode, ProjectNode>(),
+    [sshHosts, ambiguityKey],
+  );
+  return useMemo(() => {
+    if (equivalentResult) return equivalentResult;
+    return {
+      ...groups,
+      projects: groups.projects.map((project) => {
+        const cached = enrichedProjects.get(project);
+        if (cached) return cached;
+        const enriched = {
+          ...project,
+          remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts, {
+            ambiguousDeviceNames,
+          }),
+        };
+        enrichedProjects.set(project, enriched);
+        return enriched;
+      }),
+    };
+  }, [groups, equivalentResult, enrichedProjects, sshHosts, ambiguousDeviceNames]);
 }

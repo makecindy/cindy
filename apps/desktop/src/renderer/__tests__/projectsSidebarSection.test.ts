@@ -108,15 +108,13 @@ describe('Projects sidebar section', () => {
       'const remoteActivityRevision = useRemoteSessionActivityRevision()',
     );
     expect(projectsSectionSource).toContain(
-      'const activity = getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)',
+      'getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase',
     );
-    // running / needs-interaction / error / completed-unread 各归其档。
-    expect(projectsSectionSource).toMatch(
-      /activity\.phase === 'needs-interaction' \|\| activity\.phase === 'error'/,
-    );
+    // 档位映射由 sidebarPriorityContext 行为测试覆盖;排序和点击共用该入口。
+    expect(projectsSectionSource).toContain('sidebarPriorityContext(');
     // 三个集合作为一个整体喂给混排模型。
     expect(projectsSectionSource).toContain('priorityContext,');
-    expect(projectsSectionSource).toContain('advanceViewedPriorityHold(');
+    expect(projectsSectionSource).toContain('useViewedPriorityHold(');
     expect(projectsSectionSource).toContain('holdViewedPriorityRank(');
     expect(projectsSectionSource).toContain('viewedSessionId ?? activeSessionId');
     // 折叠豁免与排序同一口径(含远程),不再用只有本地的 notifications。
@@ -131,7 +129,7 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain(
       'return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {',
     );
-    expect(projectsSectionSource).toContain('unclassified: deviceGroupingActive && !unclassifiedHidden ? unclassified : []');
+    expect(projectsSectionSource).toContain('unclassified: deviceGroupingActive && !unclassifiedHidden ? unclassified : undefined');
     // 每段独立折叠视图 + 段内作用域的「显示全部」(复核 P2:共用一个标志会让
     // 点任一段全段展开)。
     expect(projectsSectionSource).toMatch(

@@ -6781,6 +6781,83 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
+  it('paces a slow socket before any 1013 while another peer and control ACKs keep progressing', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      for (const peer of ['a', 'b']) {
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      const send = socket.send.bind(socket);
+      let peak = 0;
+      socket.send = (data) => {
+        socket.bufferedAmount += Buffer.byteLength(data);
+        peak = Math.max(peak, socket.bufferedAmount);
+        send(data);
+      };
+      // Repeat the incident's ~300KB catalog replies; a deliberately never ACKs.
+      for (let i = 0; i < 12; i++) h.client.sendInvokeResult('a', `catalog-${i}`, { ok: true, result: 'x'.repeat(295_000) });
+      const firstBurst = socket.sent.length;
+      h.client.sendInvokeResult('b', 'healthy-result', { ok: true, result: 'ok' });
+      socket.push(encodeReliableFrames({ v: 1, kind: 'push', src: 'a', payload: { channel: 'maker:event', payload: {} } }, 'stream-a', 1)[0]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.sent.some((env) => (env.payload as { channel?: string })?.channel === DEVICE_LINK_TRANSPORT_ACK_CHANNEL)).toBe(true);
+      expect(firstBurst).toBeLessThan(12);
+      for (let window = 0; window < 24; window++) {
+        socket.bufferedAmount = Math.max(0, socket.bufferedAmount - 128 * 1024);
+        await vi.advanceTimersByTimeAsync(250);
+        if (window === 3) expect(socket.sent.some((env) => env.id === 'healthy-result')).toBe(true);
+      }
+      const ids = new Set(socket.sent.filter((env) => env.dst === 'a' && env.kind === 'invoke-result').map((env) => env.id));
+      expect(ids.size).toBe(12);
+      expect(peak).toBeLessThan(1024 * 1024);
+      expect(h.client.getStatus()).toBe('online');
+      expect(socket.closed).toBeNull();
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('admits an atomic maximum-size reply after draining without pacing a fast empty socket', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const opened = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+      const socket = h.current();
+      socket.sent.length = 0;
+      socket.bufferedAmount = 600 * 1024;
+      h.client.sendInvokeResult('a', 'max-reply', { ok: true, result: 'x'.repeat(4 * 1024 * 1024 - 1024) });
+      expect(socket.sent).toHaveLength(0);
+      socket.bufferedAmount = 0;
+      await vi.advanceTimersByTimeAsync(250);
+      const large = socket.sent.filter((env) => env.id === 'max-reply');
+      expect(large.length).toBeGreaterThan(1);
+      const last = parseTransportPayload(large.at(-1)!.payload)!;
+      expect(large.length).toBe(last.meta.segment!.total);
+      socket.push({ v: 1, kind: 'push', src: 'a', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: last.meta.streamId, ackSeq: last.meta.seq },
+      } });
+      const beforeLarge = socket.sent.length;
+      h.client.sendInvokeResult('a', 'fast-large', { ok: true, result: 'x'.repeat(4 * 1024 * 1024 - 1024) });
+      expect(socket.sent.length - beforeLarge).toBe(large.length);
+      const before = socket.sent.length;
+      for (let i = 0; i < 10; i++) h.client.sendInvokeResult('a', `fast-${i}`, { ok: true, result: 'ok' });
+      expect(socket.sent.length - before).toBe(10);
+      expect(socket.closed).toBeNull();
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('paces all reliable sends after 1013 without starving another peer or control ACKs', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: {

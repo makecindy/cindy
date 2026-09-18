@@ -1275,8 +1275,8 @@ describe('Auto review for progressive MCP operations', () => {
     });
     await canUseTool('mcp__cindy__ghost_call', { action: 'send' }, { toolUseID: 'raw-channel' });
     const intent = reviewedRequest(reviewAutoPermissionAction).userIntent;
-    expect(intent).toContain('Do not send.');
-    expect(intent).not.toContain('SEND THE REPORT');
+    expect(JSON.stringify(intent)).toContain('Do not send.');
+    expect(JSON.stringify(intent)).not.toContain('SEND THE REPORT');
     await handle.close();
   });
   it.each(['prompt', 'prompt-each-time'] as const)('uses AI three-way decisions for policy %s', async (policy) => {

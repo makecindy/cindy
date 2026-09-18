@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 543,
+  "count": 547,
   "colors": [
     {
       "id": "surface",
@@ -2716,6 +2716,26 @@
       "id": "form-field-hint",
       "light": "var(--text-secondary-mid)",
       "dark": "var(--text-secondary-mid)"
+    },
+    {
+      "id": "slider-track",
+      "light": "var(--border-default)",
+      "dark": "var(--border-default)"
+    },
+    {
+      "id": "slider-fill",
+      "light": "var(--text-primary)",
+      "dark": "var(--text-primary)"
+    },
+    {
+      "id": "slider-thumb",
+      "light": "var(--surface-elevated)",
+      "dark": "var(--text-primary)"
+    },
+    {
+      "id": "slider-thumb-shadow",
+      "light": "0 1px 3px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08)",
+      "dark": "0 1px 3px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.16)"
     }
   ]
 }

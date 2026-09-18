@@ -28,6 +28,7 @@ vi.mock("../useAutoUnlockSettings", () => ({
   },
 }));
 vi.mock("../useLockOnExitPreference", () => ({
+  useRemoteDesktopPreference: () => [false, vi.fn(), true],
   useLockOnExitPreference: () => [
     fixture.lockOnExit,
     (value: boolean) => {
@@ -385,6 +386,68 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  it("bounds repeated failures without renewing the deadline on each retry", async () => {
+    fixture.openLink.mockRejectedValue(new Error("INVOKE_TIMEOUT"));
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(host.textContent).toContain("remoteDesktop.connectionTimeout");
+    const attempts = fixture.openLink.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(fixture.openLink).toHaveBeenCalledTimes(attempts);
+    fixture.openLink.mockResolvedValue({});
+    await act(async () => button("connect").click());
+    act(() =>
+      fixture.message!({
+        nativeEvent: {
+          data: '{"type":"framePresented","epoch":"lease"}',
+        },
+      }),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(host.textContent).not.toContain("remoteDesktop.connectionTimeout");
+  });
+
+  it("times out while waiting for the first frame and ignores late presentation", async () => {
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(host.textContent).toContain("remoteDesktop.connectionTimeout");
+    expect(requests().filter((r) => r.op === "stop")).toEqual([
+      { op: "stop", lease: "lease" },
+    ]);
+    act(() =>
+      fixture.message!({
+        nativeEvent: {
+          data: '{"type":"framePresented","epoch":"lease"}',
+        },
+      }),
+    );
+    expect(host.textContent).toContain("remoteDesktop.connectionTimeout");
+  });
+
+  it("cancels the deadline after a frame and gives background resume a fresh budget", async () => {
+    await connect();
+    await act(async () => vi.advanceTimersByTimeAsync(150_000));
+    expect(host.textContent).not.toContain("remoteDesktop.connectionTimeout");
+    await act(async () => {
+      AppState.currentState = "background";
+      fixture.appState!("background");
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(150_000));
+    expect(host.textContent).not.toContain("remoteDesktop.connectionTimeout");
+    await act(async () => {
+      AppState.currentState = "active";
+      fixture.appState!("active");
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(59_000));
+    expect(host.textContent).not.toContain("remoteDesktop.connectionTimeout");
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(host.textContent).toContain("remoteDesktop.connectionTimeout");
+  });
+
   it("retries an initial capabilities timeout normally on a legacy host", async () => {
     const original = fixture.invoke.getMockImplementation()!;
     let attempts = 0;
@@ -2795,5 +2858,11 @@ describe("remote desktop controls", () => {
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
     expect(button("back").disabled).toBe(false);
+    if (error === "DESKTOP_STOPPED") {
+      expect(fixture.alert).toHaveBeenCalledWith(
+        "remoteDesktop.disconnected",
+        "remoteDesktop.hostDisconnected",
+      );
+    }
   });
 });

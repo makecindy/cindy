@@ -115,6 +115,47 @@ describe('keep-alive microphone idle window', () => {
     expect(track.stopped).toBe(true);
   });
 
+  it('terminates a direct processor before closing its port on stop', async () => {
+    const engine = new mod.WebMicAudioEngine({ workletUrl: WORKLET_URL, keepAlive: false });
+    await engine.start();
+    const worklet = vi.mocked(AudioWorkletNode).mock.results[0].value as AudioWorkletNode;
+    await engine.stop();
+    await engine.stop();
+
+    const messages = vi.mocked(worklet.port.postMessage).mock;
+    const disposalIndex = messages.calls.findIndex(([message]) => message.type === 'dispose');
+    expect(messages.calls.filter(([message]) => message.type === 'dispose')).toHaveLength(1);
+    expect(messages.invocationCallOrder[disposalIndex]).toBeLessThan(
+      vi.mocked(worklet.port.close).mock.invocationCallOrder[0],
+    );
+    expect(track.stopped).toBe(true);
+  });
+
+  it('reuses a paused keep-alive processor and only terminates it at final disposal', async () => {
+    const first = new mod.WebMicAudioEngine({ workletUrl: WORKLET_URL, keepAlive: true });
+    await first.start();
+    const worklet = vi.mocked(AudioWorkletNode).mock.results[0].value as AudioWorkletNode;
+    await first.stop();
+    expect(worklet.port.postMessage).not.toHaveBeenCalledWith({ type: 'dispose' });
+
+    const second = new mod.WebMicAudioEngine({ workletUrl: WORKLET_URL, keepAlive: true });
+    await second.start();
+    expect(AudioWorkletNode).toHaveBeenCalledTimes(1);
+    expect(worklet.port.postMessage).toHaveBeenLastCalledWith({
+      type: 'setActive', active: true, reset: true,
+    });
+    await second.stop();
+    await mod.disposeKeepAliveVoiceInputMicrophone('test_final_dispose');
+
+    const messages = vi.mocked(worklet.port.postMessage).mock;
+    const disposalIndex = messages.calls.findIndex(([message]) => message.type === 'dispose');
+    expect(disposalIndex).toBeGreaterThanOrEqual(0);
+    expect(messages.invocationCallOrder[disposalIndex]).toBeLessThan(
+      vi.mocked(worklet.port.close).mock.invocationCallOrder[0],
+    );
+    expect(track.stopped).toBe(true);
+  });
+
   it('does not extend the idle window when prewarm re-asserts keep-alive intent', async () => {
     await mod.prewarmVoiceInputMicrophone({ workletUrl: WORKLET_URL });
 

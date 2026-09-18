@@ -33,7 +33,7 @@ import {
   MonitorSmartphone,
   SquarePen,
 } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
@@ -50,6 +50,7 @@ import {
   useRemoteHostProjectOrders,
 } from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
+import { useMainListEntries } from '../../hooks/useMainListEntries';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import { ProjectNode } from './ProjectNode';
@@ -68,8 +69,6 @@ import {
   DIALOGUE_GROUP_ALL_KEY,
 } from '../../hooks/helpers/sidebarFilterCore';
 import {
-  advanceViewedPriorityHold,
-  buildMainListEntries,
   getMainListEntrySessions,
   holdViewedPriorityRank,
   splitEntriesByDevice,
@@ -77,6 +76,8 @@ import {
   type MainListEntry,
   type ViewedPriorityHoldState,
 } from '../../lib/mainListModel';
+import { sidebarPriorityContext } from '../../lib/sidebarPriorityContext';
+import { useViewedPriorityHold } from '../../hooks/useViewedPriorityHold';
 import { projectKeyComparisonKey, type BotGroupNode } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
@@ -246,11 +247,13 @@ export interface ProjectsSectionProps {
   isCreateDialogueDisabled?: boolean;
 }
 
+const EMPTY_BOTS: BotGroupNode[] = [];
+
 export function ProjectsSection({
   unclassified,
   projects,
   dialogues,
-  bots = [],
+  bots = EMPTY_BOTS,
   onOpenBot,
   allKnownProjects,
   dialogueCount = 0,
@@ -304,23 +307,39 @@ export function ProjectsSection({
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
   // 折叠溢出且未点「显示全部」时禁用，避免只重排可见前缀。
-  const projectOrderScope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
-  const hostSnapshotForDisplay = projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
-    ? localHostProjectOrder.snapshot
-    : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
-      ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
-      : undefined;
-  const displayedProjectOrder = resolveDisplayedProjectOrder(
-    projectOrderScope,
-    hostSnapshotForDisplay,
-    filter,
-    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
-      ? localHostProjectOrder.snapshot.manualProjectOrder
-      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
-        ? controllerManualOrderForDevice(projectOrderScope.deviceId, hostSnapshotForDisplay) ?? []
-        : [],
+  const projectOrderScope = useMemo(
+    () => projectOrderWriteScopeForSelection(selectedMachineForOrder),
+    [selectedMachineForOrder],
   );
-  const customProjectOrder = filter.groupBy === 'project' && displayedProjectOrder.projectOrder === 'custom';
+  const hostSnapshotForDisplay =
+    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+      ? localHostProjectOrder.snapshot
+      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+        ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
+        : undefined;
+  const displayedProjectOrder = useMemo(
+    () =>
+      resolveDisplayedProjectOrder(
+        projectOrderScope,
+        hostSnapshotForDisplay,
+        { projectOrder: filter.projectOrder, manualProjectOrder: filter.manualProjectOrder },
+        projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+          ? localHostProjectOrder.snapshot.manualProjectOrder
+          : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+            ? (controllerManualOrderForDevice(projectOrderScope.deviceId, hostSnapshotForDisplay) ??
+              [])
+            : [],
+      ),
+    [
+      projectOrderScope,
+      hostSnapshotForDisplay,
+      filter.projectOrder,
+      filter.manualProjectOrder,
+      localHostProjectOrder.snapshot.manualProjectOrder,
+    ],
+  );
+  const customProjectOrder =
+    filter.groupBy === 'project' && displayedProjectOrder.projectOrder === 'custom';
   const projectDragEnabled = customProjectOrder;
   const projectKeysForOrderBaseline = allProjectKeysForOrder;
   // 段级收起已随「全部任务 = 范围下拉」取消(2026-08-13 用户定稿):标题的点击
@@ -341,18 +360,27 @@ export function ProjectsSection({
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
       // 位置会被无关拖拽悄悄打乱)。做法:先取全量规范顺序作 baseline,再把可见新序原位填回。
       const scope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
-      const hostSnapshot = scope.kind === 'host' && scope.deviceId === null
-        ? localHostProjectOrder.snapshot
-        : scope.kind === 'host' && scope.deviceId
-          ? remoteHostProjectOrders.orders.get(scope.deviceId)
-          : undefined;
+      const hostSnapshot =
+        scope.kind === 'host' && scope.deviceId === null
+          ? localHostProjectOrder.snapshot
+          : scope.kind === 'host' && scope.deviceId
+            ? remoteHostProjectOrders.orders.get(scope.deviceId)
+            : undefined;
       const persistViewer = (order: readonly string[]) => {
-        const fullOrder = normalizeManualProjectOrder(filter.manualProjectOrder, projectKeysForOrderBaseline, localPlatform);
+        const fullOrder = normalizeManualProjectOrder(
+          filter.manualProjectOrder,
+          projectKeysForOrderBaseline,
+          localPlatform,
+        );
         const merged = mergeVisibleReorder(fullOrder, order, projectComparisonKey);
         filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
         if (filter.projectOrder !== 'custom') filter.setProjectOrder('custom');
       };
-      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId === null) {
+      if (
+        projectOrderWriteLedger(scope, hostSnapshot) === 'host' &&
+        scope.kind === 'host' &&
+        scope.deviceId === null
+      ) {
         const localKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith('local:'));
         const fullOrder = normalizeManualProjectOrder(
           localHostProjectOrder.snapshot.manualProjectOrder,
@@ -360,29 +388,38 @@ export function ProjectsSection({
           localPlatform,
         );
         const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void localHostProjectOrder.apply({
-          manualProjectOrder: next,
-          projectOrder: 'custom',
-        }).then((result) => {
-          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-        });
+        void localHostProjectOrder
+          .apply({
+            manualProjectOrder: next,
+            projectOrder: 'custom',
+          })
+          .then((result) => {
+            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+          });
         return;
       }
-      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId) {
+      if (
+        projectOrderWriteLedger(scope, hostSnapshot) === 'host' &&
+        scope.kind === 'host' &&
+        scope.deviceId
+      ) {
         const deviceId = scope.deviceId;
-        const remoteKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith(`device:${encodeURIComponent(deviceId)}:`));
-        const current = controllerManualOrderForDevice(
-          deviceId,
-          remoteHostProjectOrders.orders.get(deviceId),
-        ) ?? [];
+        const remoteKeys = projectKeysForOrderBaseline.filter((key) =>
+          key.startsWith(`device:${encodeURIComponent(deviceId)}:`),
+        );
+        const current =
+          controllerManualOrderForDevice(deviceId, remoteHostProjectOrders.orders.get(deviceId)) ??
+          [];
         const fullOrder = normalizeManualProjectOrder(current, remoteKeys, localPlatform);
         const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
-        void remoteHostProjectOrders.apply(deviceId, {
-          manualProjectOrder: next,
-          projectOrder: 'custom',
-        }).then((result) => {
-          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
-        });
+        void remoteHostProjectOrders
+          .apply(deviceId, {
+            manualProjectOrder: next,
+            projectOrder: 'custom',
+          })
+          .then((result) => {
+            if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+          });
         return;
       }
       persistViewer(visibleNewOrder);
@@ -429,52 +466,24 @@ export function ProjectsSection({
         notifications,
         attentionKinds,
         urgentSessionIds: urgentSet,
-        remotePhaseOf: (sessionId, deviceId) => getRemoteSessionActivity(sessionId, deviceId)?.phase,
+        remotePhaseOf: (sessionId, deviceId) =>
+          getRemoteSessionActivity(sessionId, deviceId)?.phase,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
     [runningSessionIds, notifications, attentionKinds, urgentSet, remoteActivityRevision],
   );
   // 正在看的任务 id:files 路由下回落到被浏览文件所属任务。
   const viewedIdForSort = viewedSessionId ?? activeSessionId;
-  const priorityContext = useMemo(() => {
-    const running = new Set(runningSessionIds);
-    const attention = new Set(notifications);
+  const naturalPriorityContext = useMemo(() => {
     const waiting = new Set<string>(urgentSet);
     for (const [sessionId, kind] of attentionKinds) {
       if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
     }
-    const considerRemote = (session: Session) => {
-      const activity = getRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
-      if (!activity) return; // 本地会话 / 无活动条目:一次 Map 查找即返回
-      if (activity.phase === 'running') {
-        running.add(session.id);
-        return;
-      }
-      // needs-interaction / error → waiting;completed(镜像只保留未读终态,
-      // 已读收尾包会删条目)→ 完成未读档。
-      attention.add(session.id);
-      if (activity.phase === 'needs-interaction' || activity.phase === 'error') {
-        waiting.add(session.id);
-      }
-    };
-    for (const project of projects) for (const session of project.sessions) considerRemote(session);
-    for (const session of dialogues) considerRemote(session);
-    for (const session of unclassified) considerRemote(session);
-
-    const hold = advanceViewedPriorityHold(
-      viewedPriorityHold,
-      viewedIdForSort,
-      { runningSessionIds: running, attentionSessionIds: attention, waitingSessionIds: waiting },
-      Date.now(),
+    return sidebarPriorityContext(
+      { runningSessionIds, attentionSessionIds: notifications, waitingSessionIds: waiting },
+      [...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified],
+      (session) => getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase,
     );
-
-    return {
-      runningSessionIds: running,
-      attentionSessionIds: attention,
-      waitingSessionIds: waiting,
-      heldPriorityRanks: hold.heldPriorityRanks,
-      recentlyViewedAtMs: hold.recentlyViewedAtMs,
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
   }, [
     runningSessionIds,
@@ -485,8 +494,18 @@ export function ProjectsSection({
     dialogues,
     unclassified,
     remoteActivityRevision,
-    viewedIdForSort,
   ]);
+  const hold = useViewedPriorityHold(viewedPriorityHold, viewedIdForSort, naturalPriorityContext);
+  const priorityContext = useMemo(
+    () => ({
+      ...naturalPriorityContext,
+      heldPriorityRanks: hold.heldPriorityRanks,
+      recentlyViewedAtMs: hold.recentlyViewedAtMs,
+    }),
+    [naturalPriorityContext, hold],
+  );
+
+  const sortingPriorityContext = filter.sortBy === 'priority' ? priorityContext : undefined;
 
   // starting 只让位给真实 in-flight:本地 isRunning(见 useStartingSessionIds),
   // 远程 running / needs-interaction。终态 attention 不再吸收 —— 旧终态会误伤
@@ -495,7 +514,11 @@ export function ProjectsSection({
   useEffect(() => {
     const settled = new Set<string>();
     const considerRemote = (session: Session) => {
-      if (isRemoteSessionActivityActive(getRemoteSessionActivity(session.id, session.deviceLinkDeviceId))) {
+      if (
+        isRemoteSessionActivityActive(
+          getRemoteSessionActivity(session.id, session.deviceLinkDeviceId),
+        )
+      ) {
         settled.add(session.id);
       }
     };
@@ -525,38 +548,20 @@ export function ProjectsSection({
   // 混排模型(D 期):项目行 / 散排对话 / 对话组统一为顶层条目并按同一口径排序。
   // 这有意推翻旧「Dialogue 固定段在 Projects 之后」的裁决(mainListModel.ts 文件头)。
   // 设备分组开启时,未分类草稿并进混排再按设备切段;单段路径仍走顶部独立段。
-  const mixedEntries = useMemo(
-    () =>
-      buildMainListEntries({
-        projects,
-        dialogues,
-        bots,
-        unclassified: deviceGroupingActive && !unclassifiedHidden ? unclassified : [],
-        groupBy: filter.groupBy,
-        groupDialogue: filter.groupDialogue,
-        sortBy: filter.sortBy,
-        projectOrder: displayedProjectOrder.projectOrder,
-        manualProjectOrder: displayedProjectOrder.manualProjectOrder,
-        priorityContext,
-        notifications,
-        scheduleSessionIndex,
-      }),
-    [
-      projects,
-      dialogues,
-      bots,
-      unclassified,
-      unclassifiedHidden,
-      deviceGroupingActive,
-      filter.groupBy,
-      filter.groupDialogue,
-      filter.sortBy,
-      displayedProjectOrder,
-      priorityContext,
-      notifications,
-      scheduleSessionIndex,
-    ],
-  );
+  const mixedEntries = useMainListEntries({
+    projects,
+    dialogues,
+    bots,
+    unclassified: deviceGroupingActive && !unclassifiedHidden ? unclassified : undefined,
+    groupBy: filter.groupBy,
+    groupDialogue: filter.groupDialogue,
+    sortBy: filter.sortBy,
+    projectOrder: displayedProjectOrder.projectOrder,
+    manualProjectOrder: displayedProjectOrder.manualProjectOrder,
+    priorityContext,
+    notifications,
+    scheduleSessionIndex,
+  });
 
   // 顶层条目折叠:最多显示 N 条,超出收起 + 「显示全部 N 项」。与会话同一套
   // 规则(getSessionListCollapseView):始终保留"有需关注会话"的条目、以及包含当前会话的
@@ -633,7 +638,7 @@ export function ProjectsSection({
       sortBy: filter.sortBy,
       projectOrder: filter.projectOrder,
       manualProjectOrder: filter.manualProjectOrder,
-      priorityContext,
+      priorityContext: sortingPriorityContext,
     });
   }, [
     deviceGroupingActive,
@@ -643,7 +648,7 @@ export function ProjectsSection({
     filter.sortBy,
     filter.projectOrder,
     filter.manualProjectOrder,
-    priorityContext,
+    sortingPriorityContext,
   ]);
   // 设备段折叠(E 期):本机段 key 'local'。
   const [collapsedDevices, setCollapsedDevices] = useState<ReadonlySet<string>>(new Set());
@@ -790,13 +795,8 @@ export function ProjectsSection({
     return [...projects.flatMap((project) => project.sessions), ...dialogues];
   }, [filter.groupBy, projects, dialogues]);
   const dialogueSourceLabelMap = useMemo(
-    () =>
-      buildSessionSourceLabelMap(
-        flattenedSessionsForSourceLabels,
-        allKnownProjects,
-        t('ccAgent.sidebar.dialogues'),
-      ),
-    [flattenedSessionsForSourceLabels, allKnownProjects, t],
+    () => buildSessionSourceLabelMap(flattenedSessionsForSourceLabels, allKnownProjects),
+    [flattenedSessionsForSourceLabels, allKnownProjects],
   );
 
   // F-PJ-10：即使 projects 因 filter 收窄到空，也要保留段头供用户切回 Filter。
@@ -820,7 +820,13 @@ export function ProjectsSection({
         collapsed.has(project.projectKey) ? collapsedAttentionToneFor(project.sessions) : null
       }
       parentSectionCollapsed={false}
-      activeSessionId={activeSessionId}
+      // Unrelated projects keep an undefined selection prop across navigation,
+      // so ProjectNode's memo need not rebuild every session list on a click.
+      activeSessionId={
+        project.sessions.some((session) => session.id === activeSessionId)
+          ? activeSessionId
+          : undefined
+      }
       runningSessionIds={runningSessionIds}
       attachedSessionIds={attachedSessionIds}
       notifications={notifications}
@@ -997,184 +1003,184 @@ export function ProjectsSection({
         }
       />
       {hasMainListContent ? (
-      <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
-        {!deviceGroupingActive ? (
-          <UnclassifiedSection
-            sessions={unclassified}
-            hidden={unclassifiedHidden}
-            activeSessionId={activeSessionId}
-            runningSessionIds={runningSessionIds}
-            attachedSessionIds={attachedSessionIds}
-            notifications={notifications}
-            scheduleSessionIndex={scheduleSessionIndex}
-            selectedSessionIds={selectedSessionIds}
-            onSessionClick={onSessionClick}
-            onAction={onAction}
-            onRename={onRename}
-            onTogglePin={onTogglePin}
-            onMoveSession={onMoveSession}
-            projectOptions={projectOptions}
-            onScheduleAction={onScheduleAction}
-            sessionVariant={mainSessionVariant}
-          />
-        ) : null}
-        {/* 混排渲染(D / E 期):
+        <div className="relative flex flex-col gap-1 pt-1 pr-0 pl-3">
+          {!deviceGroupingActive ? (
+            <UnclassifiedSection
+              sessions={unclassified}
+              hidden={unclassifiedHidden}
+              activeSessionId={activeSessionId}
+              runningSessionIds={runningSessionIds}
+              attachedSessionIds={attachedSessionIds}
+              notifications={notifications}
+              scheduleSessionIndex={scheduleSessionIndex}
+              selectedSessionIds={selectedSessionIds}
+              onSessionClick={onSessionClick}
+              onAction={onAction}
+              onRename={onRename}
+              onTogglePin={onTogglePin}
+              onMoveSession={onMoveSession}
+              projectOptions={projectOptions}
+              onScheduleAction={onScheduleAction}
+              sessionVariant={mainSessionVariant}
+            />
+          ) : null}
+          {/* 混排渲染(D / E 期):
               - 自定义项目顺序:模型保证项目行连续在前 → 项目段走 SortableList,
                 其后是散排对话 / 对话组。折叠+溢出时禁用拖拽,点「显示全部」后再拖。
                 可与设备分组叠加:每段各自拖本段项目。
               - 按最近活动:按 deviceSections 切段(设备分组开启时),段内项目行与
                 散排对话按任务排序口径交错,项目行不可拖。 */}
-        {customProjectOrder && !deviceGroupingActive ? (
-          <>
-            <SortableList
-              items={visibleProjectNodes}
-              getId={getProjectId}
-              onReorder={handleReorder}
-              disabled={!projectDragEnabled || (projectsOverflow && !showAllProjects)}
-              reducedMotion={reducedMotion}
-              handle={MANUAL_PROJECT_SORT_HANDLE}
-              filter={MANUAL_PROJECT_SORT_FILTER}
-              className="flex flex-col gap-1"
-              renderItem={(project) => renderProjectNode(project)}
-            />
-            {visibleMixedEntries
-              .filter((entry) => entry.kind !== 'project')
-              .map((entry) => renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY))}
-          </>
-        ) : deviceGroupingActive ? (
-          <div className="flex flex-col gap-1">
-            {deviceSections.map((section) => {
-              const key = deviceSectionKey(section.deviceId);
-              const device = section.deviceId
-                ? remoteDeviceIndex?.get(section.deviceId)
-                : undefined;
-              const name = section.deviceId
-                ? (device?.name ?? section.deviceId)
-                : t('ccAgent.sidebar.deviceGroup.local');
-              const online = section.deviceId ? (device?.online ?? false) : true;
-              const sectionCollapsed = collapsedDevices.has(key);
-              return (
-                <div key={key} className="flex flex-col gap-1">
-                  {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
-                  <DeviceSectionHeader deviceId={section.deviceId} name={name}>
-                    <button
-                      type="button"
-                      onClick={() => toggleDeviceSection(key)}
-                      aria-expanded={!sectionCollapsed}
-                      aria-label={
-                        sectionCollapsed
-                          ? t('ccAgent.sidebar.deviceGroup.expand')
-                          : t('ccAgent.sidebar.deviceGroup.collapse')
-                      }
-                      className={cn(
-                        'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5',
-                        'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
-                      )}
-                    >
-                      {sectionCollapsed ? (
-                        <ChevronRight size={12} strokeWidth={2} className="shrink-0" />
-                      ) : (
-                        <ChevronDown size={12} strokeWidth={2} className="shrink-0" />
-                      )}
-                      <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
-                      <span className="min-w-0 truncate text-xs font-medium">{name}</span>
-                      {!online && (
-                        <span
-                          aria-hidden
-                          className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
-                        />
-                      )}
-                      {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
+          {customProjectOrder && !deviceGroupingActive ? (
+            <>
+              <SortableList
+                items={visibleProjectNodes}
+                getId={getProjectId}
+                onReorder={handleReorder}
+                disabled={!projectDragEnabled || (projectsOverflow && !showAllProjects)}
+                reducedMotion={reducedMotion}
+                handle={MANUAL_PROJECT_SORT_HANDLE}
+                filter={MANUAL_PROJECT_SORT_FILTER}
+                className="flex flex-col gap-1"
+                renderItem={(project) => renderProjectNode(project)}
+              />
+              {visibleMixedEntries
+                .filter((entry) => entry.kind !== 'project')
+                .map((entry) => renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY))}
+            </>
+          ) : deviceGroupingActive ? (
+            <div className="flex flex-col gap-1">
+              {deviceSections.map((section) => {
+                const key = deviceSectionKey(section.deviceId);
+                const device = section.deviceId
+                  ? remoteDeviceIndex?.get(section.deviceId)
+                  : undefined;
+                const name = section.deviceId
+                  ? (device?.name ?? section.deviceId)
+                  : t('ccAgent.sidebar.deviceGroup.local');
+                const online = section.deviceId ? (device?.online ?? false) : true;
+                const sectionCollapsed = collapsedDevices.has(key);
+                return (
+                  <div key={key} className="flex flex-col gap-1">
+                    {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
+                    <DeviceSectionHeader deviceId={section.deviceId} name={name}>
+                      <button
+                        type="button"
+                        onClick={() => toggleDeviceSection(key)}
+                        aria-expanded={!sectionCollapsed}
+                        aria-label={
+                          sectionCollapsed
+                            ? t('ccAgent.sidebar.deviceGroup.expand')
+                            : t('ccAgent.sidebar.deviceGroup.collapse')
+                        }
+                        className={cn(
+                          'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5',
+                          'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
+                        )}
+                      >
+                        {sectionCollapsed ? (
+                          <ChevronRight size={12} strokeWidth={2} className="shrink-0" />
+                        ) : (
+                          <ChevronDown size={12} strokeWidth={2} className="shrink-0" />
+                        )}
+                        <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
+                        <span className="min-w-0 truncate text-xs font-medium">{name}</span>
+                        {!online && (
+                          <span
+                            aria-hidden
+                            className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                          />
+                        )}
+                        {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
                             (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
                             段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}
-                      {!online && (
-                        <span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                          {t('ccAgent.sidebar.deviceGroup.offline')}
-                        </span>
-                      )}
-                    </button>
-                  </DeviceSectionHeader>
-                  <SectionCollapse collapsed={sectionCollapsed}>
-                    <div className="flex flex-col gap-1 pl-2">
-                      {/* 折叠上限每段独立应用(切段在前,见 deviceSections 注释);
+                        {!online && (
+                          <span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+                            {t('ccAgent.sidebar.deviceGroup.offline')}
+                          </span>
+                        )}
+                      </button>
+                    </DeviceSectionHeader>
+                    <SectionCollapse collapsed={sectionCollapsed}>
+                      <div className="flex flex-col gap-1 pl-2">
+                        {/* 折叠上限每段独立应用(切段在前,见 deviceSections 注释);
                             「显示全部」的作用域同样是段内(expandedDeviceSections)。 */}
-                      {(() => {
-                        const sectionView = collapseEntries(
-                          section.entries,
-                          expandedDeviceSections.has(key),
-                        );
-                        const sectionDialogueTarget = section.deviceId
-                          ? { deviceId: section.deviceId, deviceName: name }
-                          : null;
-                        const sectionProjects = sectionView.visibleEntries
-                          .filter(
-                            (entry): entry is Extract<MainListEntry, { kind: 'project' }> =>
-                              entry.kind === 'project',
-                          )
-                          .map((entry) => entry.project);
-                        return (
-                          <>
-                            {customProjectOrder ? (
-                              <>
-                                <SortableList
-                                  items={sectionProjects}
-                                  getId={getProjectId}
-                                  onReorder={handleReorder}
-                                  disabled={
-                                    !projectDragEnabled ||
-                                    (sectionView.isOverflowing &&
-                                      !expandedDeviceSections.has(key))
+                        {(() => {
+                          const sectionView = collapseEntries(
+                            section.entries,
+                            expandedDeviceSections.has(key),
+                          );
+                          const sectionDialogueTarget = section.deviceId
+                            ? { deviceId: section.deviceId, deviceName: name }
+                            : null;
+                          const sectionProjects = sectionView.visibleEntries
+                            .filter(
+                              (entry): entry is Extract<MainListEntry, { kind: 'project' }> =>
+                                entry.kind === 'project',
+                            )
+                            .map((entry) => entry.project);
+                          return (
+                            <>
+                              {customProjectOrder ? (
+                                <>
+                                  <SortableList
+                                    items={sectionProjects}
+                                    getId={getProjectId}
+                                    onReorder={handleReorder}
+                                    disabled={
+                                      !projectDragEnabled ||
+                                      (sectionView.isOverflowing &&
+                                        !expandedDeviceSections.has(key))
+                                    }
+                                    reducedMotion={reducedMotion}
+                                    handle={MANUAL_PROJECT_SORT_HANDLE}
+                                    filter={MANUAL_PROJECT_SORT_FILTER}
+                                    className="flex flex-col gap-1"
+                                    renderItem={(project) => renderProjectNode(project)}
+                                  />
+                                  {sectionView.visibleEntries
+                                    .filter((entry) => entry.kind !== 'project')
+                                    .map((entry) =>
+                                      renderNonProjectEntry(entry, key, sectionDialogueTarget),
+                                    )}
+                                </>
+                              ) : (
+                                sectionView.visibleEntries.map((entry) =>
+                                  entry.kind === 'project'
+                                    ? renderProjectNode(entry.project)
+                                    : renderNonProjectEntry(entry, key, sectionDialogueTarget),
+                                )
+                              )}
+                              {sectionView.isOverflowing && (
+                                <ShowAllEntriesButton
+                                  count={sectionView.totalCount}
+                                  onClick={() =>
+                                    setExpandedDeviceSections((prev) => new Set(prev).add(key))
                                   }
-                                  reducedMotion={reducedMotion}
-                                  handle={MANUAL_PROJECT_SORT_HANDLE}
-                                  filter={MANUAL_PROJECT_SORT_FILTER}
-                                  className="flex flex-col gap-1"
-                                  renderItem={(project) => renderProjectNode(project)}
                                 />
-                                {sectionView.visibleEntries
-                                  .filter((entry) => entry.kind !== 'project')
-                                  .map((entry) =>
-                                    renderNonProjectEntry(entry, key, sectionDialogueTarget),
-                                  )}
-                              </>
-                            ) : (
-                              sectionView.visibleEntries.map((entry) =>
-                                entry.kind === 'project'
-                                  ? renderProjectNode(entry.project)
-                                  : renderNonProjectEntry(entry, key, sectionDialogueTarget),
-                              )
-                            )}
-                            {sectionView.isOverflowing && (
-                              <ShowAllEntriesButton
-                                count={sectionView.totalCount}
-                                onClick={() =>
-                                  setExpandedDeviceSections((prev) => new Set(prev).add(key))
-                                }
-                              />
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  </SectionCollapse>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {visibleMixedEntries.map((entry) =>
-              entry.kind === 'project'
-                ? renderProjectNode(entry.project)
-                : renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY),
-            )}
-          </div>
-        )}
-        {/* 全局「显示全部」只属于未按设备分组的单段路径;设备分组下折叠与 footer 都在段内。 */}
-        {!deviceGroupingActive && projectsOverflow && (
-          <ShowAllEntriesButton count={projectsTotal} onClick={() => setShowAllProjects(true)} />
-        )}
-      </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </SectionCollapse>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {visibleMixedEntries.map((entry) =>
+                entry.kind === 'project'
+                  ? renderProjectNode(entry.project)
+                  : renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY),
+              )}
+            </div>
+          )}
+          {/* 全局「显示全部」只属于未按设备分组的单段路径;设备分组下折叠与 footer 都在段内。 */}
+          {!deviceGroupingActive && projectsOverflow && (
+            <ShowAllEntriesButton count={projectsTotal} onClick={() => setShowAllProjects(true)} />
+          )}
+        </div>
       ) : null}
     </div>
   );

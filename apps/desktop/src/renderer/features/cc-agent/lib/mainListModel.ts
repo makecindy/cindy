@@ -174,7 +174,7 @@ export function holdViewedPriorityRank(
 }
 
 export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriorityContext): number {
-  if (sessionNaturalPriorityRank(session, ctx) !== LIVE_TASK_PRIORITY.rest) {
+  if (sessionPriorityRank(session, ctx) !== LIVE_TASK_PRIORITY.rest) {
     return sessionActivityMs(session);
   }
   const viewedAt = ctx.recentlyViewedAtMs?.get(session.id) ?? 0;
@@ -233,21 +233,15 @@ export function sortSessionsForMainList(
   sortBy: FilterSortBy,
   ctx: MainListPriorityContext = EMPTY_PRIORITY_CONTEXT,
 ): Session[] {
-  if (sortBy === 'priority') {
-    return sessions
-      .slice()
-      .sort(
-        (a, b) =>
-          sessionPriorityRank(a, ctx) - sessionPriorityRank(b, ctx) ||
-          sessionPriorityRecencyMs(b, ctx) - sessionPriorityRecencyMs(a, ctx),
-      );
-  }
-  if (sortBy === 'created') {
-    return sessions.slice().sort((a, b) =>
-      sessionCreatedMs(b) - sessionCreatedMs(a) || a.id.localeCompare(b.id),
-    );
-  }
-  return sessions.slice().sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a));
+  // Compute numeric keys once per call, never retain them across session updates.
+  return sessions.map((session) => ({
+    session,
+    rank: sortBy === 'priority' ? sessionPriorityRank(session, ctx) : 0,
+    time: sortBy === 'priority' ? sessionPriorityRecencyMs(session, ctx)
+      : sortBy === 'created' ? sessionCreatedMs(session) : sessionActivityMs(session),
+  })).sort((a, b) => a.rank - b.rank || b.time - a.time ||
+    (sortBy === 'created' ? a.session.id.localeCompare(b.session.id) : 0))
+    .map(({ session }) => session);
 }
 
 export interface BuildMainListEntriesInput {
@@ -372,24 +366,6 @@ export function buildMainListEntries({
   return sortMainListEntries(entries, sortBy, projectOrder, manualProjectOrder, ctx);
 }
 
-function compareEntriesBySortBy(
-  a: MainListEntry,
-  b: MainListEntry,
-  sortBy: FilterSortBy,
-  ctx: MainListPriorityContext,
-): number {
-  if (sortBy === 'priority') {
-    return (
-      entryPriorityRank(a, ctx) - entryPriorityRank(b, ctx) ||
-      entryPriorityRecencyMs(b, ctx) - entryPriorityRecencyMs(a, ctx)
-    );
-  }
-  const timeDifference = entryTimeMs(b, sortBy) - entryTimeMs(a, sortBy);
-  if (timeDifference !== 0 || sortBy !== 'created') return timeDifference;
-  return (getMainListEntrySessions(a)[0]?.id ?? '').localeCompare(
-    getMainListEntrySessions(b)[0]?.id ?? '',
-  );
-}
 
 function sortMainListEntries(
   entries: readonly MainListEntry[],
@@ -398,6 +374,17 @@ function sortMainListEntries(
   manualProjectOrder: readonly string[],
   ctx: MainListPriorityContext,
 ): MainListEntry[] {
+  const keys = new Map(entries.map((entry) => [entry, {
+    rank: sortBy === 'priority' ? entryPriorityRank(entry, ctx) : 0,
+    time: sortBy === 'priority' ? entryPriorityRecencyMs(entry, ctx) : entryTimeMs(entry, sortBy),
+    id: sortBy === 'created' ? getMainListEntrySessions(entry)[0]?.id ?? '' : '',
+  }]));
+  const compare = (a: MainListEntry, b: MainListEntry) => {
+    const left = keys.get(a)!;
+    const right = keys.get(b)!;
+    return left.rank - right.rank || right.time - left.time ||
+      (sortBy === 'created' ? left.id.localeCompare(right.id) : 0);
+  };
   if (projectOrder === 'custom') {
     // 自定义项目序:项目行按 manualProjectOrder;不在序的新项目由 normalize
     // 追加到已排序列之后。非项目条目排在项目之后,仍按当前任务排序。
@@ -420,11 +407,11 @@ function sortMainListEntries(
             Number.MAX_SAFE_INTEGER)
         );
       }
-      return compareEntriesBySortBy(a, b, sortBy, ctx);
+      return compare(a, b);
     });
   }
 
-  return entries.slice().sort((a, b) => compareEntriesBySortBy(a, b, sortBy, ctx));
+  return entries.slice().sort((a, b) => compare(a, b));
 }
 
 /* ============================== 设备分组(E 期) ============================== */

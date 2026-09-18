@@ -1,3 +1,4 @@
+import { MountedMenuContent } from '../MountedMenuContent';
 /**
  * ProjectNode — 单个 Project 节点（Header + 受控折叠的子 sessions）
  * ---------------------------------------------------------------------------
@@ -157,6 +158,119 @@ export const ProjectNode = memo(function ProjectNode({
   onBrowseFiles,
   onArchiveAll,
 }: ProjectNodeProps) {
+  return (
+    // 两个 data 属性各自服务不同消费者:
+    //   - data-project-working-dir : Sortable drop-target 识别 (历史: ProjectsSection 手写拖拽热区,
+    //                                现已被 SortableList 接管,但保留供深度链接/测试 hook)
+    //   - data-project-workingdir  : CCAgentSidebarUpper 深度链接 scrollIntoView
+    // 名字差一个连字符是历史遗留,保留两个比贸然统一更稳。
+    <div
+      data-project-working-dir={project.projectKey}
+      data-project-workingdir={project.projectKey}
+      className={cn('relative flex flex-col w-full select-none')}
+    >
+      <ProjectHeader
+        project={project}
+        statusFilter={statusFilter}
+        isCollapsed={isCollapsed}
+        collapsedAttentionTone={collapsedAttentionTone}
+        hideRemoteMachineLabel={hideRemoteMachineLabel}
+        onToggle={onToggle}
+        isProjectPinned={isProjectPinned}
+        onToggleProjectPin={onToggleProjectPin}
+        onRenameProject={onRenameProject}
+        onRemoveFromSidebar={onRemoveFromSidebar}
+        onCreateInProject={onCreateInProject}
+        onOpenConversationSearch={onOpenConversationSearch}
+        onOpenInExplorer={onOpenInExplorer}
+        onLinkCodexProject={onLinkCodexProject}
+        linkingCodexProject={linkingCodexProject}
+        onBrowseFiles={onBrowseFiles}
+        onArchiveAll={onArchiveAll}
+      />
+
+      {/* Project Sessions（容器只负责 gap + 顶部 padding；左缩进由 SessionItem 自身承担）
+          展开/收起走 SectionCollapse 高度动画；「显示全部」在收起动画结束后复位。
+          data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
+          被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
+          SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
+      <SectionCollapse collapsed={isCollapsed} data-no-drag>
+        {/* pb-1.5:展开块与下一个项目标题之间的间距(4px 树 gap + 6px = 10px),
+            大于会话行间距(gap-0.5),让项目块之间有分组呼吸(参考 Codex,2026-07 定稿)。 */}
+        <div
+          className={cn(
+            'flex flex-col gap-0.5 pt-0.5 pb-1.5 pr-0',
+            sessionVariant === 'list' ? 'pl-3' : 'pl-0',
+          )}
+        >
+          <SessionEntryList
+            sessions={displaySessions ?? project.sessions}
+            activeSessionId={activeSessionId}
+            runningSessionIds={runningSessionIds}
+            attachedSessionIds={attachedSessionIds}
+            notifications={notifications}
+            scheduleSessionIndex={scheduleSessionIndex}
+            selectedSessionIds={selectedSessionIds}
+            collapsible
+            collapseLimit={getProjectSessionCollapseLimit()}
+            disableCollapse={disableSessionCollapse}
+            sectionCollapsed={isCollapsed || parentSectionCollapsed}
+            onSessionClick={onSessionClick}
+            onAction={onAction}
+            onRename={onRename}
+            onTogglePin={onTogglePin}
+            onMoveSession={onMoveSession}
+            projectOptions={projectOptions}
+            onScheduleAction={onScheduleAction}
+            indented
+            sessionVariant={sessionVariant}
+          />
+        </div>
+      </SectionCollapse>
+    </div>
+  );
+});
+
+type ProjectHeaderProps = Pick<
+  ProjectNodeProps,
+  | 'project'
+  | 'statusFilter'
+  | 'isCollapsed'
+  | 'collapsedAttentionTone'
+  | 'hideRemoteMachineLabel'
+  | 'onToggle'
+  | 'isProjectPinned'
+  | 'onToggleProjectPin'
+  | 'onRenameProject'
+  | 'onRemoveFromSidebar'
+  | 'onCreateInProject'
+  | 'onOpenConversationSearch'
+  | 'onOpenInExplorer'
+  | 'onLinkCodexProject'
+  | 'linkingCodexProject'
+  | 'onBrowseFiles'
+  | 'onArchiveAll'
+>;
+
+const ProjectHeader = memo(function ProjectHeader({
+  project,
+  statusFilter,
+  isCollapsed,
+  collapsedAttentionTone = null,
+  hideRemoteMachineLabel = false,
+  onToggle,
+  isProjectPinned,
+  onToggleProjectPin,
+  onRenameProject,
+  onRemoveFromSidebar,
+  onCreateInProject,
+  onOpenConversationSearch,
+  onOpenInExplorer,
+  onLinkCodexProject,
+  linkingCodexProject,
+  onBrowseFiles,
+  onArchiveAll,
+}: ProjectHeaderProps) {
   const { t } = useTranslation();
   // remote 项目复用本地专属入口（在文件管理器打开 / 复制深链 / 同步 Codex）会按本机
   // 路径误操作或丢失 host 身份，故这些入口对 remote 一律隐藏；host-aware 版本后续单独迭代。
@@ -244,16 +358,7 @@ export const ProjectNode = memo(function ProjectNode({
   }, [onRemoveFromSidebar, project]);
 
   return (
-    // 两个 data 属性各自服务不同消费者:
-    //   - data-project-working-dir : Sortable drop-target 识别 (历史: ProjectsSection 手写拖拽热区,
-    //                                现已被 SortableList 接管,但保留供深度链接/测试 hook)
-    //   - data-project-workingdir  : CCAgentSidebarUpper 深度链接 scrollIntoView
-    // 名字差一个连字符是历史遗留,保留两个比贸然统一更稳。
-    <div
-      data-project-working-dir={project.projectKey}
-      data-project-workingdir={project.projectKey}
-      className={cn('relative flex flex-col w-full select-none')}
-    >
+    <>
       {/* Project Header
           group 用于 hover 显示右侧 More / + New 图标按钮。
           data-project-workingdir 挂在外层 wrapper 上 — 深度链接 scrollIntoView
@@ -477,29 +582,32 @@ export const ProjectNode = memo(function ProjectNode({
           // 统一菜单 surface(menuStyles):与 SessionItem / Dialogue / 自动化 等同款
           className={cn(MENU_CONTENT_CLASS, 'min-w-[160px] overflow-hidden')}
         >
-          <DropdownMenuItem
-            onClick={() => {
-              beginRename();
-            }}
-            className={MENU_ITEM_CLASS}
-          >
-            {t('ccAgent.sidebar.projectAction.rename')}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => {
-              setMenuPos(null);
-              onToggleProjectPin(project, isProjectPinned);
-            }}
-            className={MENU_ITEM_CLASS}
-          >
-            {t(
-              isProjectPinned
-                ? 'ccAgent.sidebar.projectAction.unpin'
-                : 'ccAgent.sidebar.projectAction.pin',
-            )}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
-          {/* 菜单 items 顺序:浏览 → 工具 → 危险
+          <MountedMenuContent>
+            {() => (
+              <>
+                <DropdownMenuItem
+                  onClick={() => {
+                    beginRename();
+                  }}
+                  className={MENU_ITEM_CLASS}
+                >
+                  {t('ccAgent.sidebar.projectAction.rename')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setMenuPos(null);
+                    onToggleProjectPin(project, isProjectPinned);
+                  }}
+                  className={MENU_ITEM_CLASS}
+                >
+                  {t(
+                    isProjectPinned
+                      ? 'ccAgent.sidebar.projectAction.unpin'
+                      : 'ccAgent.sidebar.projectAction.pin',
+                  )}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
+                {/* 菜单 items 顺序:浏览 → 工具 → 危险
               [搜索, 查看文件, 在文件管理器中打开] - [复制深度链接, 同步 Codex] - [全部归档]
               与 SessionItem 风格保持一致:纯文字、无 icon。
               remote 项目隐藏「查看文件 / 在文件管理器中打开 / 复制深链 / 同步 Codex」四项:
@@ -508,118 +616,82 @@ export const ProjectNode = memo(function ProjectNode({
               前一并屏蔽。remote 菜单收敛为 [搜索] - [全部归档]。
               注:handleBrowseFiles 的 remote 重定向 + WorkdirBrowseRoute 路由守卫保留,
               作为直达 /cc-agent/files/:id 的安全兜底。 */}
-          <DropdownMenuItem
-            onClick={() => {
-              setMenuPos(null);
-              onOpenConversationSearch(project);
-            }}
-            className={MENU_ITEM_CLASS}
-          >
-            {t('ccAgent.sidebar.projectAction.search')}
-          </DropdownMenuItem>
-          {!isRemote && (
-            <>
-              <DropdownMenuItem
-                onClick={() => {
-                  setMenuPos(null);
-                  onBrowseFiles(project);
-                }}
-                className={MENU_ITEM_CLASS}
-              >
-                {t('ccAgent.sidebar.projectAction.showFiles')}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  setMenuPos(null);
-                  onOpenInExplorer(project.workingDir);
-                }}
-                className={MENU_ITEM_CLASS}
-              >
-                {t('ccAgent.sidebar.projectAction.openInExplorer')}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-              <DropdownMenuItem
-                onClick={() => {
-                  setMenuPos(null);
-                  void handleCopyDeepLink();
-                }}
-                className={MENU_ITEM_CLASS}
-              >
-                {t('ccAgent.sidebar.projectAction.copyDeepLink')}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  setMenuPos(null);
-                  onLinkCodexProject(project);
-                }}
-                disabled={linkingCodexProject}
-                className={MENU_ITEM_CLASS}
-              >
-                {t('ccAgent.sidebar.projectAction.syncCodex')}
-              </DropdownMenuItem>
-            </>
-          )}
-          <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-          {project.scope === 'local' && (
-            <DropdownMenuItem onClick={handleRemoveFromSidebar} className={MENU_ITEM_CLASS}>
-              {t('ccAgent.sidebar.projectAction.removeFromSidebar')}
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuItem
-            disabled={projectWritesBlocked}
-            onClick={() => {
-              handleArchiveAll();
-            }}
-            className={MENU_ITEM_CLASS}
-          >
-            {t(
-              bulkArchiveAction === 'unarchive'
-                ? 'ccAgent.sidebar.projectAction.unarchiveAll'
-                : 'ccAgent.sidebar.projectAction.archivedAll',
+                <DropdownMenuItem
+                  onClick={() => {
+                    setMenuPos(null);
+                    onOpenConversationSearch(project);
+                  }}
+                  className={MENU_ITEM_CLASS}
+                >
+                  {t('ccAgent.sidebar.projectAction.search')}
+                </DropdownMenuItem>
+                {!isRemote && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setMenuPos(null);
+                        onBrowseFiles(project);
+                      }}
+                      className={MENU_ITEM_CLASS}
+                    >
+                      {t('ccAgent.sidebar.projectAction.showFiles')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setMenuPos(null);
+                        onOpenInExplorer(project.workingDir);
+                      }}
+                      className={MENU_ITEM_CLASS}
+                    >
+                      {t('ccAgent.sidebar.projectAction.openInExplorer')}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setMenuPos(null);
+                        void handleCopyDeepLink();
+                      }}
+                      className={MENU_ITEM_CLASS}
+                    >
+                      {t('ccAgent.sidebar.projectAction.copyDeepLink')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setMenuPos(null);
+                        onLinkCodexProject(project);
+                      }}
+                      disabled={linkingCodexProject}
+                      className={MENU_ITEM_CLASS}
+                    >
+                      {t('ccAgent.sidebar.projectAction.syncCodex')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+                <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                {project.scope === 'local' && (
+                  <DropdownMenuItem onClick={handleRemoveFromSidebar} className={MENU_ITEM_CLASS}>
+                    {t('ccAgent.sidebar.projectAction.removeFromSidebar')}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  disabled={projectWritesBlocked}
+                  onClick={() => {
+                    handleArchiveAll();
+                  }}
+                  className={MENU_ITEM_CLASS}
+                >
+                  {t(
+                    bulkArchiveAction === 'unarchive'
+                      ? 'ccAgent.sidebar.projectAction.unarchiveAll'
+                      : 'ccAgent.sidebar.projectAction.archivedAll',
+                  )}
+                </DropdownMenuItem>
+              </>
             )}
-          </DropdownMenuItem>
+          </MountedMenuContent>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      {/* Project Sessions（容器只负责 gap + 顶部 padding；左缩进由 SessionItem 自身承担）
-          展开/收起走 SectionCollapse 高度动画；「显示全部」在收起动画结束后复位。
-          data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
-          被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
-          SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
-      <SectionCollapse collapsed={isCollapsed} data-no-drag>
-        {/* pb-1.5:展开块与下一个项目标题之间的间距(4px 树 gap + 6px = 10px),
-            大于会话行间距(gap-0.5),让项目块之间有分组呼吸(参考 Codex,2026-07 定稿)。 */}
-        <div
-          className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pb-1.5 pr-0',
-            sessionVariant === 'list' ? 'pl-3' : 'pl-0',
-          )}
-        >
-          <SessionEntryList
-            sessions={displaySessions ?? project.sessions}
-            activeSessionId={activeSessionId}
-            runningSessionIds={runningSessionIds}
-            attachedSessionIds={attachedSessionIds}
-            notifications={notifications}
-            scheduleSessionIndex={scheduleSessionIndex}
-            selectedSessionIds={selectedSessionIds}
-            collapsible
-            collapseLimit={getProjectSessionCollapseLimit()}
-            disableCollapse={disableSessionCollapse}
-            sectionCollapsed={isCollapsed || parentSectionCollapsed}
-            onSessionClick={onSessionClick}
-            onAction={onAction}
-            onRename={onRename}
-            onTogglePin={onTogglePin}
-            onMoveSession={onMoveSession}
-            projectOptions={projectOptions}
-            onScheduleAction={onScheduleAction}
-            indented
-            sessionVariant={sessionVariant}
-          />
-        </div>
-      </SectionCollapse>
-    </div>
+    </>
   );
 });
 

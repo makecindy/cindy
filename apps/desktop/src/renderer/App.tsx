@@ -1,3 +1,4 @@
+import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
 
@@ -234,6 +235,8 @@ export function App() {
     syncNewMakerPrefs();
     return subscribeDraft(syncNewMakerPrefs);
   }, []);
+
+  useModelFavoritesHost();
 
   // Worker 创建偏好的真源是 renderer localStorage；main 只缓存权限默认值供
   // Orca UI / agent tool 的创建路径读取。tool 显式改默认时再经 apply push 回写真源。

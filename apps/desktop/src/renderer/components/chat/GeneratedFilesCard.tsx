@@ -659,40 +659,51 @@ const MAX_VISIBLE_BOT_ARTIFACTS = 4;
 
 function generatedFilesCardPropsEqual(
   prev: {
+    renderItemKey?: string;
     files: readonly GeneratedFileRef[];
     turnStartMs: number | null;
     turnEndMs: number | null;
     turnSealed?: boolean;
     botArtifacts?: boolean;
+    onVisibilityChange?: (checkKey: string, visible: boolean) => void;
   },
   next: {
+    renderItemKey?: string;
     files: readonly GeneratedFileRef[];
     turnStartMs: number | null;
     turnEndMs: number | null;
     turnSealed?: boolean;
     botArtifacts?: boolean;
+    onVisibilityChange?: (checkKey: string, visible: boolean) => void;
   },
 ): boolean {
   return (
+    prev.renderItemKey === next.renderItemKey &&
     prev.botArtifacts === next.botArtifacts &&
+    prev.onVisibilityChange === next.onVisibilityChange &&
     generatedFilesCheckKey(prev.files, prev.turnStartMs, prev.turnEndMs, prev.turnSealed) ===
       generatedFilesCheckKey(next.files, next.turnStartMs, next.turnEndMs, next.turnSealed)
   );
 }
 
 export const GeneratedFilesCard = memo(function GeneratedFilesCard({
+  renderItemKey,
   files,
   turnStartMs,
   turnEndMs,
   turnSealed = false,
   botArtifacts = false,
+  onVisibilityChange,
 }: {
+  renderItemKey?: string;
   files: readonly GeneratedFileRef[];
   turnStartMs: number | null;
   turnEndMs: number | null;
   turnSealed?: boolean;
   /** 伙伴会话专属：成果优先、辅助文件默认收起。 */
   botArtifacts?: boolean;
+  /** Report the same checked visibility used by the card, never candidate paths. */
+  onVisibilityChange?: (checkKey: string, visible: boolean) => void;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
@@ -751,6 +762,9 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       turnSealed,
     });
     visibleRef.current = plan.visible;
+    // A remounted viewport starts with unknown visibility. Keep the parent's
+    // last confirmation until this check settles instead of reviving prose.
+    if (plan.visible !== null) onVisibilityChange?.(checkKey, plan.visible.length > 0);
     if (plan.visible === null) {
       setExisting(null);
     } else {
@@ -806,6 +820,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
         turnWindowChanged,
       });
       visibleRef.current = merged;
+      onVisibilityChange?.(checkKey, merged.length > 0);
       setExisting((prev) => reuseGeneratedFilesIfUnchanged(prev, merged));
     })();
 
@@ -820,6 +835,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     turnSealed,
     fileCtx.workingDir,
     remoteVerdictGen,
+    onVisibilityChange,
   ]);
 
   if (!existing || existing.length === 0) return null;
@@ -830,7 +846,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     const hiddenPrimaryCount = primary.length - visiblePrimary.length;
 
     return (
-      <div className="my-1 flex max-w-[680px] flex-col gap-2" data-testid="bot-generated-artifacts">
+      <div data-render-item-key={renderItemKey} className="my-1 flex max-w-[680px] flex-col gap-2" data-testid="bot-generated-artifacts">
         {primary.length > 0 ? (
           <>
             <span className="text-12 font-medium text-[var(--text-secondary)]">
@@ -900,7 +916,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   const hasOnlyArtifacts = existing.every((file) => file.artifact);
 
   return (
-    <div className="my-1 flex flex-col gap-2">
+    <div data-render-item-key={renderItemKey} className="my-1 flex flex-col gap-2">
       {!hasOnlyArtifacts && (
         <span className="text-12 font-medium text-[var(--text-secondary)]">
           {t('chat.generatedFiles.title')}

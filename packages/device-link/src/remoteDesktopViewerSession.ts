@@ -4,6 +4,9 @@ import type {
   RemoteDesktopRequest,
 } from "./remoteDesktop.js";
 
+// Whole foreground connection/recovery budget, including retries and first frame.
+export const REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS = 60_000;
+
 export type DesktopViewerRequest = <T>(
   request: RemoteDesktopRequest,
   beforeSend?: () => void,
@@ -247,6 +250,7 @@ export function viewerDisplaySize(
 
 /** Only transient connection errors may restart a viewer. Explicit stop wins. */
 export function remoteDesktopFailureKey(code: string): string | null {
+  if (/DESKTOP_CONNECTION_TIMEOUT/.test(code)) return "connectionTimeout";
   if (/ACCESS_REVOKED/.test(code)) return "accessRevoked";
   if (/REMOTE_DISABLED/.test(code)) return "remoteDisabled";
   if (/DESKTOP_BUSY/.test(code)) return "connectionBusy";

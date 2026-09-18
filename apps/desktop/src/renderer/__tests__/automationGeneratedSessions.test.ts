@@ -858,7 +858,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('toggleCollapsed()');
     // 切折叠必须复位轴 2:showAll 被收起告警列表和展开历史列表共用。复位挂在
     // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
-    expect(source).toContain('useLayoutEffect(() => {\n    setShowAll(false);\n  }, [collapsed]);');
+    expect(source).toMatch(/useLayoutEffect\(\(\) => \{\s+setShowAll\(false\);\s+\}, \[collapsed\]\);/);
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
     // 轴 1 收起时只留组头 + 被提上来的未处理告警行,取舍统一由 childView 决定

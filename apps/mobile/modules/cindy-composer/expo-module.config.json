@@ -1,0 +1,11 @@
+{
+  "platforms": [
+    "apple"
+  ],
+  "apple": {
+    "podspecPath": "./ios/CindyComposer.podspec",
+    "modules": [
+      "CindyComposerModule"
+    ]
+  }
+}

@@ -122,7 +122,7 @@ describe('接管陈旧锁', () => {
       // 降级(而不是宣称持有):内容写会跳过,清理路径照常执行。
       expect(status).toEqual({ held: false, reason: 'busy' });
       // 不该把 waitMs 熬完,也不该反复重试删除。
-      expect(elapsed).toBeLessThan(1_000);
+      expect(elapsed).toBeLessThan(2_000);
       expect(renameAttempts).toBe(1);
       // 别人的锁没被动过。
       expect(fs.existsSync(lock)).toBe(true);

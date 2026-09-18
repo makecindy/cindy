@@ -214,7 +214,7 @@ describe('Shared create project picker', () => {
 
   it('invalidates an in-flight folder restore before applying a same-route dialogue target', () => {
     const effectStart = newMakerDraftRouteSource.indexOf(
-      '// “对话”分组可能在 /cc-agent/new 已经打开时再次导航到同一路由',
+      'handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;',
     );
     const effectEnd = newMakerDraftRouteSource.indexOf(
       '// 弹窗确认添加后的落点',
@@ -1310,7 +1310,8 @@ describe('Shared create project picker', () => {
     );
     const body = action.slice(0, action.indexOf('      patchDraft({'));
     // 变化判据本身。
-    expect(body).toContain('const deviceChanged = req.deviceId !== prevDeviceId;');
+    expect(body).toContain('const deviceChanged = !isSameNewMakerDevice(req.deviceId, {');
+    expect(body).toContain('remoteHostId: effectiveRemoteHostId,');
     expect(body).toContain('const workingDirChanged = req.workingDir !== draft.workingDir;');
     // mention chip 存**项目相对**路径 → 设备或项目任一变化都要剥(第 29 轮 P1)。
     expect(body).toContain(
@@ -1327,6 +1328,7 @@ describe('Shared create project picker', () => {
     // 判据读 draft.workingDir,必须在依赖数组里,否则闭包比的是上一次渲染的值。
     const deps = action.slice(action.indexOf('    [', action.indexOf('patchDraft({')));
     expect(deps.slice(0, deps.indexOf('  );'))).toContain('draft.workingDir,');
+    expect(deps.slice(0, deps.indexOf('  );'))).toContain('effectiveRemoteHostId,');
   });
 
   // #807 review 第十九轮:被控端能力 / 供应商 / Git safety 快照是「拉一次、无 TTL、只在设备下线
