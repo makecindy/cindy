@@ -6,7 +6,7 @@ const state = vi.hoisted(() => ({
   rows: [] as Array<{ id: string; status: string; source: string; currentDatabase: boolean }>,
   records: [] as WorktreeRecycleRecord[],
   changed: () => {},
-  watchError: (_error: unknown) => {},
+  watchError: vi.fn<(error: unknown) => void>(),
 }));
 const remove = vi.hoisted(() => vi.fn());
 const list = vi.hoisted(() => vi.fn());
@@ -72,6 +72,37 @@ describe('durable worktree maintenance', () => {
   it('does not infer deletion from a row missing in the local view', async () => {
     state.rows = []; await maintenance.start();
     expect(remove).not.toHaveBeenCalled(); expect(closeAndRecycle).not.toHaveBeenCalled();
+  });
+  it('keeps missing owners recoverable beyond three checks without charging failures', async () => {
+    state.rows = [];
+    await maintenance.start();
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(client.readLocalWorktreeReferences).toHaveBeenCalledTimes(4);
+    expect(maintenance.isRetrySuspended(state.records[0])).toBe(false);
+    expect(closeAndRecycle).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+    state.rows = [{ id: 'owner', status: 'archived', source: 'desktop', currentDatabase: true }];
+    closeAndRecycle.mockImplementationOnce(async () => { state.records[0].phase = 'removed'; });
+    await vi.advanceTimersByTimeAsync(80_000);
+    expect(closeAndRecycle).toHaveBeenCalledExactlyOnceWith('owner', 'archived');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('bounds genuine prerequisite failures without executing the removal core', async () => {
+    read.mockRejectedValue(new Error('journal unavailable'));
+    await maintenance.start();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(maintenance.isRetrySuspended(state.records[0])).toBe(true);
+    expect(closeAndRecycle).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('charges a rejected core attempt once rather than again in its catch', async () => {
+    closeAndRecycle.mockRejectedValue(new Error('lock unavailable'));
+    await maintenance.start();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(closeAndRecycle).toHaveBeenCalledTimes(3);
+    expect(maintenance.isRetrySuspended(state.records[0])).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
   it('leaves an empty queue idle without reading databases or scanning historical registrations', async () => {
     state.records = []; await maintenance.start();

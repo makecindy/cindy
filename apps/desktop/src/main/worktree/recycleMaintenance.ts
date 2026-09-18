@@ -39,7 +39,7 @@ export class WorktreeRecycleMaintenance {
   private scanFailures = 0;
   private initialPass = true;
   private readonly wakeIds = new Set<string>();
-  private readonly attempts = new Map<string, { count: number; notBefore: number }>();
+  private readonly attempts = new Map<string, { count: number; checks: number; notBefore: number }>();
 
   constructor(public options: WorktreeMaintenanceOptions) {}
 
@@ -128,6 +128,15 @@ export class WorktreeRecycleMaintenance {
     return (this.attempts.get(this.key(record))?.count ?? 0) >= MAX_RECYCLE_FAILURES;
   }
 
+  private chargeAttempt(record: WorktreeRecycleRecord): void {
+    const previous = this.attempts.get(this.key(record));
+    this.attempts.set(this.key(record), {
+      count: (previous?.count ?? 0) + 1,
+      checks: previous?.checks ?? 1,
+      notBefore: previous?.notBefore ?? Date.now() + retryDelay(1),
+    });
+  }
+
   private deadline(record: WorktreeRecycleRecord): number {
     if (this.isRetrySuspended(record)) return Infinity;
     return Math.max(record.nextAttemptAt, this.attempts.get(this.key(record))?.notBefore ?? 0);
@@ -156,9 +165,13 @@ export class WorktreeRecycleMaintenance {
     // Empty queues and not-yet-due requests never open task databases.
     if (due.length) {
       for (const record of due) {
-        const count = (this.attempts.get(this.key(record))?.count ?? 0) + 1;
-        // Also back off errors before the removal core can persist nextAttemptAt.
-        this.attempts.set(this.key(record), { count, notBefore: Date.now() + retryDelay(count) });
+        const previous = this.attempts.get(this.key(record));
+        const checks = (previous?.checks ?? 0) + 1;
+        // A missing owner is not a failed removal. Keep a bounded-rate metadata
+        // recheck so account/database visibility can recover without a resource event.
+        this.attempts.set(this.key(record), {
+          count: previous?.count ?? 0, checks, notBefore: Date.now() + retryDelay(checks),
+        });
       }
       await this.retry(due, wakeIds);
     }
@@ -178,6 +191,7 @@ export class WorktreeRecycleMaintenance {
       const rows = await db.readLocalWorktreeReferences();
       for (const record of records) {
         if (this.stopped || !this.options.isReady() || getDbClient() !== db) return;
+        let charged = false;
         try {
           const latest = await readRecycleRecord(record.meta.path);
           if (this.stopped || !this.options.isReady() || getDbClient() !== db) return;
@@ -189,6 +203,8 @@ export class WorktreeRecycleMaintenance {
           // Unknown is not an orphan, including after switching the selected account.
           if (!ownerRows.length || ownerRows.some((row) => row.source === 'bot'
             || (row.status !== 'archived' && row.status !== 'deleted'))) continue;
+          this.chargeAttempt(record);
+          charged = true;
           attempted = true;
           const currentRow = ownerRows.find((row) => row.currentDatabase);
           if (currentRow) {
@@ -206,10 +222,12 @@ export class WorktreeRecycleMaintenance {
             });
           }
         } catch (error) {
+          if (!charged) this.chargeAttempt(record);
           log.warn('worktree request postponed', { resourceId: record.id, code: (error as NodeJS.ErrnoException).code ?? 'unavailable' });
         }
       }
     } catch (error) {
+      for (const record of records) this.chargeAttempt(record);
       log.warn('worktree references postponed', { code: (error as NodeJS.ErrnoException).code ?? 'unavailable' });
     }
     if (attempted && !this.stopped) await this.options.onAttemptComplete?.();
