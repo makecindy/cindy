@@ -18,6 +18,7 @@ import {
   type RegisterSessionIpcOpts,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
 } from './sessions';
 import { registerMessageIpc } from './messages';
@@ -92,6 +93,8 @@ export interface RegisterLocalDbIpcOpts {
   cleanupRemovedSession?: (sessionId: string) => Promise<void>;
   /** Record worktree recycle intent before a terminal session status is persisted. */
   requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
+  /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
+  lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
   /** Apply a persisted task-level context window budget to the live runtime. */
@@ -123,6 +126,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   setSessionRemovalCancelOperations(opts.cancelSessionOperations ?? null);
   setSessionRemovalCleanup(opts.cleanupRemovedSession ?? null);
   setSessionWorktreeRecycle(opts.requestWorktreeRecycle ?? null);
+  setSessionWorktreeBindingLookup(opts.lookupSessionWorktreeBinding ?? null);
   setSessionRouteLockImplementation(opts.withSessionLock ?? null);
   const runEnsureReady = createOwnerEnsureCoordinator({
     isOwnerCurrent: opts.isOwnerCurrent ?? (() => true),
