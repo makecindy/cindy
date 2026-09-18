@@ -15,7 +15,7 @@
 // 本回归关心的契约;真实组件在 loaded 分支用 rAF 触发同一个回调。
 
 import { createElement, useEffect } from 'react';
-import { act, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FileDiff, Hunk } from '@/lib/gitReview.types';
@@ -155,6 +155,7 @@ let originalOffsetHeight: PropertyDescriptor | undefined;
 let originalGetBoundingClientRect: typeof Element.prototype.getBoundingClientRect;
 
 beforeEach(() => {
+  vi.useFakeTimers();
   Object.assign(CARD_HEIGHTS, BASE_CARD_HEIGHTS);
   pendingObservations = [];
   observedTargets.clear();
@@ -188,7 +189,14 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // 在 jsdom 仍存在时卸载组件，并排空虚拟列表的滚动 debounce。
+  cleanup();
+  await act(async () => {
+    await vi.runOnlyPendingTimersAsync();
+  });
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
   if (originalOffsetHeight) {
     Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight);
   }
@@ -241,7 +249,7 @@ function renderDiffList() {
 
 async function flushAsyncWork() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await vi.advanceTimersByTimeAsync(60);
   });
 }
 

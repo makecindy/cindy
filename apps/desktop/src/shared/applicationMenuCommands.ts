@@ -23,6 +23,9 @@ export const APPLICATION_MENU_COMMANDS = [
   'new-maker',
   'new-maker-shortcut',
   'toggle-sidebar',
+  // webview guest 内按 capture-region 快捷键时由 main(webview-security)转发,
+  // 复用本 channel 送达 MainLayout 的全局区域截图入口。
+  'capture-region',
 ] as const;
 
 export type ApplicationMenuCommand = (typeof APPLICATION_MENU_COMMANDS)[number];

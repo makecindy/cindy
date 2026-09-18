@@ -29,6 +29,7 @@ import {
   Bot,
   Check,
   ClipboardList,
+  Crop,
   File as FileIcon,
   Folder as FolderIcon,
   FolderPlus,
@@ -109,6 +110,7 @@ interface AtMentionPanelProps {
 
 const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
   'attach-files': Paperclip,
+  'capture-region': Crop,
   'new-goal': Target,
   'plan-mode': ClipboardList,
   collaboration: UsersRound,

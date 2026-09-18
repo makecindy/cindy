@@ -252,7 +252,7 @@ export function setComposerDraftOwner(ownerId: string | null): void {
  * a setContent reset (which would clobber the cursor and trigger another
  * onUpdate → another save → ...).
  */
-type DraftListener = () => void;
+type DraftListener = (composerId?: symbol) => void;
 const listeners = new Map<string, Set<DraftListener>>();
 
 /**
@@ -404,7 +404,7 @@ export function subscribeDraftPresence(sessionId: string, handler: DraftListener
 export function saveDraft(
   sessionId: string,
   draft: ComposerDraft,
-  opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean },
+  opts?: { silent?: boolean; preserveRemoteOptimisticRecovery?: boolean; composerId?: symbol },
 ): void {
   const key = draftKey(sessionId);
   if (!opts?.silent && !opts?.preserveRemoteOptimisticRecovery) {
@@ -424,7 +424,7 @@ export function saveDraft(
     if (set)
       for (const fn of set) {
         try {
-          fn();
+          fn(opts?.composerId);
         } catch (err) {
           log.warn('listener threw:', err);
         }
@@ -876,18 +876,25 @@ export function quickStartTextToTiptapDoc(text: string): JSONContent {
  * ChatInput uses this to force-setContent when an outside writer (rewind /
  * fork pre-fill) updates the draft for the currently-mounted session.
  */
-export function subscribeDraft(sessionId: string, handler: DraftListener): () => void {
+export function subscribeDraft(sessionId: string, handler: DraftListener, opts?: { composerId?: symbol }): () => void {
+  // Capture updates may refresh one editor without replacing sibling live text.
+  // Untagged consumers (attachment/presence views) retain normal notifications.
+  const listener: DraftListener = opts?.composerId
+    ? (composerId) => {
+      if (!composerId || composerId === opts.composerId) handler();
+    }
+    : handler;
   const key = draftKey(sessionId);
   let set = listeners.get(key);
   if (!set) {
     set = new Set();
     listeners.set(key, set);
   }
-  set.add(handler);
+  set.add(listener);
   return () => {
     const s = listeners.get(key);
     if (!s) return;
-    s.delete(handler);
+    s.delete(listener);
     if (s.size === 0) listeners.delete(key);
   };
 }
