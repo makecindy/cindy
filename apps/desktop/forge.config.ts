@@ -1774,6 +1774,12 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/worktree/recoveryArchiveWorker.ts',
+          config: 'vite.recovery-archive-worker.config.ts',
+          // Physical ASAR bytes belong in recovery archives; isolate noAsar from main.
+          target: 'preload',
+        },
+        {
           entry: 'src/main/process-monitor/windowsProcessScanWorker.ts',
           config: 'vite.process-scan-worker.config.ts',
           // Windows PowerShell 的进程管道偶发 ENOTCONN；一次性 worker 隔离后
