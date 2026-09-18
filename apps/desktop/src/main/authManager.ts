@@ -153,6 +153,12 @@ import {
 } from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
+import {
+  doesRuntimeRefreshOwnActiveSession,
+  removeRejectedRuntimeCredentialCopies,
+  runGuardedRuntimeAuthExpiry,
+  type RuntimeCredentialRemovalResult,
+} from './authRuntimeExpiryGuard';
 import { withCrossProcessLock } from './device-link/crossProcessLock';
 import {
   StableOwnerPostCommitCoordinator,
@@ -331,10 +337,12 @@ type AccountSwitchTeardown = (context: {
 
 /** Releases every account-scoped runtime before terminal local sign-out. */
 type AuthSessionTeardown = (reason: string) => void | Promise<void>;
+type AuthSessionRestore = (context: { ownerId: string; reason: string }) => void | Promise<void>;
 type ProjectionRepairTeardown = (reason: string) => void | Promise<void>;
 
 let accountSwitchTeardown: AccountSwitchTeardown | null = null;
 let authSessionTeardown: AuthSessionTeardown | null = null;
+let authSessionRestore: AuthSessionRestore | null = null;
 let projectionRepairTeardown: ProjectionRepairTeardown | null = null;
 
 const stableOwnerPostCommitCoordinator = new StableOwnerPostCommitCoordinator({
@@ -1564,14 +1572,15 @@ async function commitDesktopRefreshCredentials(
           vault.resources[key]?.refreshToken === requestedRefreshToken) ||
         (realm === AUTH_REGION &&
           readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY) === requestedRefreshToken);
-      const canClaimUninitializedVault =
-        options.allowUnclaimedVault === true &&
-        vault.activeAccountKey === null &&
-        typeof vault.signedOutAt !== 'number' &&
-        Object.keys(vault.resources).length === 0 &&
-        !loggedOutAccountKeySet(vault).has(key);
-      const stillOwnsActiveSession =
-        requestedTokenStillStored && (vault.activeAccountKey === key || canClaimUninitializedVault);
+      const stillOwnsActiveSession = doesRuntimeRefreshOwnActiveSession({
+        requestedTokenStillStored,
+        accountKey: key,
+        activeAccountKey: vault.activeAccountKey,
+        allowUnclaimedVault: options.allowUnclaimedVault === true,
+        vaultResourceCount: Object.keys(vault.resources).length,
+        vaultHasSignedOutTombstone: typeof vault.signedOutAt === 'number',
+        accountIsLoggedOut: loggedOutAccountKeySet(vault).has(key),
+      });
       const passportId = pair.membership.passportId;
       if (passportId && (stillOwnsActiveSession || vault.resources[key])) {
         // A passive stale refresh may still rotate account A's resource token
@@ -1671,6 +1680,83 @@ async function removeVaultAccount(accountKey: string): Promise<void> {
     delete vault.resources[accountKey];
     if (vault.activeAccountKey === accountKey) vault.activeAccountKey = null;
   });
+}
+
+/**
+ * Remove only the active Resource generation rejected by this runtime refresh.
+ * The vault mutation is the authoritative CAS; compatibility records are then
+ * deleted with their existing compare-and-delete guard so a concurrent login
+ * can replace either representation without being erased by stale cleanup.
+ */
+async function removeRejectedRuntimeCredentials(input: {
+  realm: AuthRegion;
+  rejectedRefreshTokens: readonly string[];
+  validateBeforeWrite: () => void;
+}): Promise<RuntimeCredentialRemovalResult> {
+  return removeRejectedRuntimeCredentialCopies({
+    ...input,
+    mutateVault: (operation) => mutateAuthAccountVault(operation),
+    serializeSession: serializeAuthSessionRecord,
+    removeSessionIfUnchanged: (expected) => removeSafeIfUnchanged(AUTH_SESSION_KEY, expected),
+    ...(input.realm === AUTH_REGION
+      ? {
+          removeLegacyIfUnchanged: (expected: string) =>
+            removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, expected),
+        }
+      : {}),
+  });
+}
+
+/**
+ * Recheck every shared-userData projection immediately before expiry commits.
+ * Another client can rotate credentials after the cleanup CAS without changing
+ * this process's auth epoch, so any generation beyond the rejected set makes
+ * the pending expiry stale.
+ */
+function isPersistedRuntimeExpiryGenerationCurrent(input: {
+  realm: AuthRegion;
+  rejectedRefreshTokens: readonly string[];
+}): boolean {
+  const rejectedRefreshTokens = new Set(input.rejectedRefreshTokens);
+  const vault = readAuthAccountVault();
+  const activeResource = vault.activeAccountKey
+    ? vault.resources[vault.activeAccountKey]
+    : undefined;
+  if (
+    activeResource &&
+    (activeResource.realm !== input.realm ||
+      !rejectedRefreshTokens.has(activeResource.refreshToken))
+  ) {
+    return false;
+  }
+
+  const persistedSession = readSafe(AUTH_SESSION_KEY);
+  if (persistedSession === null && !isPersistedSecretAbsent(AUTH_SESSION_KEY)) {
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Persisted auth session could not be rechecked before expiry',
+    );
+  }
+  if (
+    persistedSession !== null &&
+    !input.rejectedRefreshTokens.some(
+      (token) => persistedSession === serializeAuthSessionRecord(input.realm, token),
+    )
+  ) {
+    return false;
+  }
+
+  if (input.realm !== AUTH_REGION) return true;
+  const legacyRefreshToken = readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+  if (legacyRefreshToken === null && !isPersistedSecretAbsent(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)) {
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Legacy auth session could not be rechecked before expiry',
+    );
+  }
+  return legacyRefreshToken === null || rejectedRefreshTokens.has(legacyRefreshToken);
 }
 
 function bindResourcePairToSavedAccount(
@@ -2406,6 +2492,9 @@ async function withAccountFreeOwnerCommit(opts: {
   authAlreadyCleared?: boolean;
   validateBeforeCommit?: () => boolean;
   shouldClearOnFailure?: () => boolean;
+  markPassiveLocalSignOut?: boolean;
+  onAuthCleared?: () => void;
+  onTeardownStarted?: () => void;
 }): Promise<void> {
   let authCleared = opts.authAlreadyCleared ?? false;
   let releaseBoundary: (() => void) | null = null;
@@ -2425,6 +2514,7 @@ async function withAccountFreeOwnerCommit(opts: {
         'Account-free owner transition was superseded before commit',
       );
     }
+    if (opts.markPassiveLocalSignOut) passiveLocalSignOut = true;
     if (!authCleared) {
       clearAuth({
         notify: false,
@@ -2433,6 +2523,7 @@ async function withAccountFreeOwnerCommit(opts: {
         deferSessionCommit: true,
       });
       authCleared = true;
+      opts.onAuthCleared?.();
     }
     commitVolatileAppSession(opts.nextMode);
     if (notify) {
@@ -2454,12 +2545,14 @@ async function withAccountFreeOwnerCommit(opts: {
           if (!authSessionTeardown) {
             throw new Error('account-free owner transition requires a teardown hook');
           }
+          opts.onTeardownStarted?.();
           await authSessionTeardown(opts.reason);
         } else {
           if (!projectionRepairTeardown) {
             throw new Error('account-free projection repair requires a teardown hook');
           }
           forceBumpGeneration = true;
+          opts.onTeardownStarted?.();
           await projectionRepairTeardown(opts.reason);
         }
       },
@@ -2473,6 +2566,16 @@ async function withAccountFreeOwnerCommit(opts: {
         }
       },
       commit: () => {
+        // prepareCommit follows an await boundary. Recheck synchronously at the
+        // actual commit point so a shared-userData writer that lands in that
+        // final gap cannot make this process publish a stale expiry.
+        if (opts.validateBeforeCommit && !opts.validateBeforeCommit()) {
+          throw new AuthApiError(
+            'AUTH_FLOW_SUPERSEDED',
+            409,
+            'Account-free owner transition was superseded at commit',
+          );
+        }
         if (!authCleared) {
           clearAuth({
             notify: false,
@@ -2481,6 +2584,7 @@ async function withAccountFreeOwnerCommit(opts: {
             deferSessionCommit: true,
           });
           authCleared = true;
+          opts.onAuthCleared?.();
         }
         commitActiveAppSession(opts.nextMode);
         // Same-owner account-free repair: advance the owner generation after the
@@ -2504,6 +2608,7 @@ async function withAccountFreeOwnerCommit(opts: {
           deferSessionCommit: true,
         });
         authCleared = true;
+        opts.onAuthCleared?.();
       }
       // The durable app-session write may be the operation that failed. Keep
       // the process account-free without retrying that write on this path.
@@ -2768,6 +2873,10 @@ export function setAccountSwitchTeardown(teardown: AccountSwitchTeardown | null)
 
 export function setAuthSessionTeardown(teardown: AuthSessionTeardown | null): void {
   authSessionTeardown = teardown;
+}
+
+export function setAuthSessionRestore(restore: AuthSessionRestore | null): void {
+  authSessionRestore = restore;
 }
 
 export function setProjectionRepairTeardown(teardown: ProjectionRepairTeardown | null): void {
@@ -3562,10 +3671,9 @@ function clearAuth(
     notify?: boolean;
     nextMode?: Extract<AppSessionMode, 'signed-out' | 'local'>;
     /**
-     * 为 true 时不删除磁盘上的 refresh token 文件。仅用于「凭证已确认缺席」的
-     * 过期路径(credential-lost):此刻磁盘上没有属于本进程的 token 可清,而共享
-     * userData 的另一个实例可能刚好在登出→重登间隙写入了新 token——无条件
-     * removeSafe 会把别人的新 token 删掉,把对方也踢成半死。
+     * 为 true 时不删除磁盘上的 refresh token 文件。用于「凭证已确认缺席」或调用方已
+     * compare-and-delete 本轮被拒 generation 的过期路径：共享 userData 的另一个实例
+     * 可能刚好写入了新 token，无条件 removeSafe 会把别人的新 token 删掉。
      */
     preservePersistedRefreshToken?: boolean;
     /**
@@ -3646,52 +3754,157 @@ function clearAuth(
 async function expireRuntimeAuth(
   previousUserId: string,
   reason: SessionExpiredReason = 'unknown',
-  opts: { preservePersistedRefreshToken?: boolean } = {},
+  opts:
+    | { preservePersistedRefreshToken: true }
+    | {
+        preservePersistedRefreshToken?: false;
+        rejectedRealm: AuthRegion;
+        rejectedRefreshTokens: readonly string[];
+      },
 ): Promise<void> {
-  const expiredAccountKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;
-  if (
-    expiredAccountKey &&
-    !opts.preservePersistedRefreshToken &&
-    !isPassiveSharedUserDataInstance()
-  ) {
-    try {
-      await removeVaultAccount(expiredAccountKey);
-    } catch (error) {
-      log.warn('failed to remove expired account from saved-account vault', error);
-    }
-  }
-  // Raise the owner boundary before clearing auth so queued owner-scoped
-  // continuations see the pending boundary and fail closed, rather than
-  // executing between token clearance and the async teardown (P1,
+  const expiryEpoch = authStateEpoch;
+  const expiryRealm = activeAuthRealm;
+  const expiryUserId = currentUser?.id ?? getActiveAppSession().dataOwnerId ?? previousUserId;
+  const isExpiryStillCurrent = (): boolean =>
+    authStateEpoch === expiryEpoch &&
+    activeAuthRealm === expiryRealm &&
+    (currentUser?.id ?? getActiveAppSession().dataOwnerId ?? previousUserId) === expiryUserId;
+  const assertExpiryStillCurrent = (): void => {
+    if (isExpiryStillCurrent()) return;
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Runtime auth expiry was superseded by a newer auth action',
+    );
+  };
+
+  // Raise the owner boundary before awaiting credential cleanup or teardown
+  // so queued owner-scoped continuations fail closed throughout the stale-
+  // expiry race window (P1,
   // PRRT_kwDOTgdRUs6YaakC).  beginAppSessionBoundary is ref-counted;
   // withAccountFreeOwnerCommit will extend it, and the finally block
   // releases the outer reference after teardown completes.
   const releaseBoundary = beginAppSessionBoundary();
-  clearAuth({
-    notify: false,
-    nextMode: 'signed-out',
-    preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
-    deferSessionCommit: true,
-  });
+  let expiryCommitted = false;
+  let expiryClearedOnFailure = false;
+  let restoreRetainedRuntime = false;
   try {
-    await withAccountFreeOwnerCommit({
-      reason,
-      nextMode: 'signed-out',
-      preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
-      notify: false,
-      clearOnFailure: true,
-      authAlreadyCleared: true,
+    const outcome = await runGuardedRuntimeAuthExpiry({
+      isCurrent: isExpiryStillCurrent,
+      ...(!opts.preservePersistedRefreshToken
+        ? {
+            isPersistedCredentialCurrent: () =>
+              isPersistedRuntimeExpiryGenerationCurrent({
+                realm: opts.rejectedRealm,
+                rejectedRefreshTokens: opts.rejectedRefreshTokens,
+              }),
+            isRetryableError: (error: unknown) =>
+              error instanceof AuthApiError && error.code === 'CREDENTIAL_STORE_UNAVAILABLE',
+          }
+        : {}),
+      ...(!opts.preservePersistedRefreshToken && !isPassiveSharedUserDataInstance()
+        ? {
+            removeRejectedCredentials: async () => {
+              try {
+                return await removeRejectedRuntimeCredentials({
+                  realm: opts.rejectedRealm,
+                  rejectedRefreshTokens: opts.rejectedRefreshTokens,
+                  validateBeforeWrite: assertExpiryStillCurrent,
+                });
+              } catch (error) {
+                if (error instanceof AuthApiError && error.code === 'AUTH_FLOW_SUPERSEDED') {
+                  throw error;
+                }
+                // A definitive rejection still has to end the in-memory
+                // session when storage is unavailable. Preserve every disk
+                // representation rather than falling back to key deletion.
+                log.warn('failed to compare-and-delete rejected runtime credentials', error);
+                return 'missing';
+              }
+            },
+          }
+        : {}),
+      commit: ({
+        validateBeforeCommit,
+        shouldClearOnFailure,
+        markSelfCleared,
+        markTeardownStarted,
+      }) =>
+        withAccountFreeOwnerCommit({
+          reason,
+          nextMode: 'signed-out',
+          // Runtime expiry has already compare-and-deleted only the rejected
+          // generation above. Never let clearAuth key-delete a replacement that
+          // arrived while the vault lock or teardown was pending.
+          preservePersistedRefreshToken: true,
+          notify: false,
+          clearOnFailure: true,
+          markPassiveLocalSignOut: true,
+          onAuthCleared: markSelfCleared,
+          onTeardownStarted: markTeardownStarted,
+          validateBeforeCommit,
+          shouldClearOnFailure: () => {
+            const shouldClear = shouldClearOnFailure();
+            if (shouldClear) expiryClearedOnFailure = true;
+            return shouldClear;
+          },
+        }),
     });
+    if (outcome === 'superseded') return;
+    if (outcome === 'stale-credential' || outcome === 'stale-credential-after-teardown') {
+      restoreRetainedRuntime = outcome === 'stale-credential-after-teardown';
+      log.warn(
+        'runtime auth expiry found a newer active credential generation; keeping the replacement and retrying later',
+      );
+      scheduleRefreshRetryAfterTransientFailure();
+      return;
+    }
+    if (outcome === 'retry' || outcome === 'retry-after-teardown') {
+      restoreRetainedRuntime = outcome === 'retry-after-teardown';
+      log.warn(
+        'runtime auth expiry could not recheck persisted credentials; preserving the in-memory session and retrying later',
+      );
+      scheduleRefreshRetryAfterTransientFailure();
+      return;
+    }
+    expiryCommitted = true;
   } catch (err) {
+    if (err instanceof AuthApiError && err.code === 'AUTH_FLOW_SUPERSEDED') {
+      log.info('runtime auth expiry was superseded; preserving the newer auth owner');
+      return;
+    }
     // A teardown or durable-state failure must not restore an expired
     // credential. The helper has already cleared the in-memory owner; leave
     // the durable boundary non-stable for the next recovery attempt.
     log.error('runtime auth expiry owner transition failed', err);
   } finally {
     releaseBoundary();
-    notifyRenderer();
-    notifyAuthListeners();
-    notifySessionExpired(reason);
+    if (restoreRetainedRuntime) {
+      try {
+        if (!authSessionRestore) {
+          throw new Error('runtime auth restore hook is not registered');
+        }
+        await authSessionRestore({
+          ownerId: expiryUserId,
+          reason: 'stale-runtime-expiry',
+        });
+      } catch (error) {
+        log.error('failed to restore retained auth runtime after stale expiry teardown', error);
+      } finally {
+        // prepareTransition already published the account-free boundary snapshot.
+        // The credential replacement kept this process authenticated, so always
+        // republish that retained state after the recovery attempt. A failed
+        // runtime restart remains logged above, but must not strand renderers on
+        // the login screen while Main still owns the valid account.
+        notifyRenderer();
+        notifyAuthListeners();
+      }
+    }
+    if (expiryCommitted || expiryClearedOnFailure) {
+      notifyRenderer();
+      notifyAuthListeners();
+      notifySessionExpired(reason);
+    }
   }
 }
 
@@ -5657,7 +5870,7 @@ export async function refresh(): Promise<boolean> {
     }
 
     try {
-      const { result, failureAction, replacementRetries, requestedToken } =
+      const { result, failureAction, replacementRetries, requestedToken, rejectedTokens } =
         await runAuthRefreshWithReplacementRetry(storedToken, {
           phase: 'runtime',
           realm: refreshRealm,
@@ -5684,7 +5897,10 @@ export async function refresh(): Promise<boolean> {
           );
           const previousUserId =
             currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
-          await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));
+          await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code), {
+            rejectedRealm: refreshRealm,
+            rejectedRefreshTokens: rejectedTokens,
+          });
         } else if (action.kind === 'foreign-device') {
           log.warn(
             'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',
@@ -5715,6 +5931,14 @@ export async function refresh(): Promise<boolean> {
         data,
         refreshRealm,
         requestedToken,
+        {
+          // A compatibility-only client can replace AUTH_SESSION_KEY after
+          // expiry CAS removes the rejected vault generation. The persisted
+          // replacement proves ownership, while the active-owner, logout-
+          // tombstone, and account-tombstone checks keep reclaim fail-closed.
+          // Other inactive account resources do not own the active session.
+          allowUnclaimedVault: true,
+        },
       );
       if (credentialCommit !== 'active') {
         log.warn(
