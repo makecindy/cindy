@@ -89,6 +89,7 @@ export function resolveRemoteInvokeTimeoutMs(
 const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
   'local-db:sessions:list',
   'local-db:sessions:get',
+  'local-db:sessions:get-many',
   'local-db:conversations:search',
   'local-db:history:messages',
   'local-db:messages:list',
@@ -124,6 +125,7 @@ export function isPeerResetRetryableReadChannel(channel: string): boolean {
 const COMPLETED_INVOKE_RETRYABLE_READ_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
   'local-db:sessions:get',
+  'local-db:sessions:get-many',
   'local-db:sessions:interrupted-pending',
   'maker:list-active',
 ]);

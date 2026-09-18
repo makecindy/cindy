@@ -74,6 +74,9 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
 
   it('holds the current priority rank before click-path attention clear', () => {
     const clickHandler = extractHandlerBlock(sidebarSource, 'handleSessionClick');
+    // Remote rows live in the merged index, not the local sessions array.
+    expect(clickHandler).toContain('const target = sessionsByIdRef.current.get(id)');
+    expect(clickHandler).toContain('target ? [target] : []');
     expect(clickHandler.indexOf('holdSidebarViewedPriority')).toBeGreaterThan(-1);
     expect(clickHandler.indexOf('holdSidebarViewedPriority')).toBeLessThan(
       clickHandler.indexOf('clearNotification(id)'),

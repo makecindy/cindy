@@ -181,7 +181,7 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
   it('context-sheet 选图限额走同一占坑真源(直接入队路径不绕过粘贴占位)', () => {
     for (const page of ['app/sessions/new.tsx', 'app/sessions/[sessionId].tsx']) {
       const source = read(page);
-      expect(source, page).toContain('attachments.length + pendingMediaAssets.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS');
+      expect(source, page).toContain('attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS');
     }
   });
 });

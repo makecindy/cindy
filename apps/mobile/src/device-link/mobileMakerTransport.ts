@@ -4,6 +4,7 @@ import {
   releasePeerMedia,
 } from "./peerFileRegistry";
 import { withTransientRemoteRetry } from "./remoteRetry";
+import { fetchAgentCapabilities } from "@/session/agentCapabilitiesCache";
 import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
@@ -447,6 +448,7 @@ export interface MobileMakerTransport {
    */
   listProviders(): Promise<{
     providers: ProviderView[];
+    providerOrder?: string[];
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
   getSession(sessionId: string): Promise<RemoteSession>;
@@ -902,7 +904,10 @@ export function createMobileMakerTransport({
 
   return {
     createSession: (opts) => call("maker:create-session", [opts]),
-    getCapabilities: (agentKind) => call("maker:get-capabilities", [agentKind]),
+    getCapabilities: (agentKind) => fetchAgentCapabilities(deviceId, agentKind, () => {
+      if (!isCurrent()) throw new Error("Capabilities read superseded");
+      return call("maker:get-capabilities", [agentKind]);
+    }),
     listAvailableAgents: () => call('maker:list-available-agents', []),
     // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
     // 确认为 Pi 时展示入口，并在渲染前校验返回的树形状。

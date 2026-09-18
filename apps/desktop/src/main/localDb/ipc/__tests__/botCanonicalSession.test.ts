@@ -394,6 +394,9 @@ function createDb(filename = ':memory:'): void {
       sender_session_id TEXT,
       recipient_session_id TEXT,
       delivery_status TEXT NOT NULL DEFAULT 'pending',
+      sender_name TEXT,
+      recipient_name TEXT,
+      bridge_session_id TEXT,
       content TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       UNIQUE(thread_id, sequence)

@@ -42,17 +42,13 @@ import {
 import {
   clearAllDeviceProviders,
   evictDeviceProviders,
-  fetchDeviceProviders,
-  markDeviceFetchEpoch,
   type DeviceProvidersPayload,
 } from '@/device-link/deviceProvidersCache';
 import {
-  commitAgentCapabilities,
   evictAgentCapabilitiesForDevice,
-  getAgentCapabilitiesGeneration,
   resetAgentCapabilitiesCache,
 } from '@/session/agentCapabilitiesCache';
-import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
+import { createDeviceCatalogRefresh } from '@/device-link/deviceCatalogRefresh';
 import { evictComposerPaletteCacheForDevice, resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
@@ -214,6 +210,11 @@ const CONTROLLER_CAPABILITIES = [
 const remoteResponseEvidenceEpochs = createPresenceAvailabilityEpochs();
 const remoteResponseEvidenceListeners = new Set<(deviceId: string) => void>();
 const remoteAgentRosterListeners = new Set<(deviceId: string) => void>();
+const remoteFavoritesChangedListeners = new Set<(deviceId: string) => void>();
+export function subscribeRemoteFavoritesChanged(listener: (deviceId: string) => void): () => void {
+  remoteFavoritesChangedListeners.add(listener);
+  return () => { remoteFavoritesChangedListeners.delete(listener); };
+}
 const remoteBotChangedListeners = new Set<(deviceId: string, channel: string, payload: unknown) => void>();
 export function subscribeRemoteBotChanges(listener: (deviceId: string, channel: string, payload: unknown) => void): () => void {
   remoteBotChangedListeners.add(listener);
@@ -841,6 +842,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       },
     });
     clientRef.current = client;
+    const catalogRefresh = createDeviceCatalogRefresh({
+      connectionEpoch: () => connectionEpochRef.current,
+      readProviders: (deviceId) => sendInvokeWithAccessHandling<DeviceProvidersPayload>(
+        client, deviceId, 'maker:provider:list',
+        [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
+      ),
+      readCapabilities: (deviceId, agent) => sendInvokeWithAccessHandling<unknown>(
+        client, deviceId, 'maker:get-capabilities', [agent],
+      ),
+    });
     mobileDebugLog('debug', 'device-link', 'runtime identity', {
       commit: /^[a-f0-9]{7,40}$/i.test(process.env.EXPO_PUBLIC_XDT_GIT_COMMIT ?? '')
         ? process.env.EXPO_PUBLIC_XDT_GIT_COMMIT : 'unknown',
@@ -857,6 +868,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offStatus = client.onStatusChange((next) => {
       setStatus(next);
       if (next !== 'online') {
+        catalogRefresh.clear();
         openLinkInFlightRef.current.clear();
         remoteSubscribedTopicsRef.current.clear();
         // 掉线:所有会话的实时行都可能从此漏收,窗口连续性结论的上界不再可续算。
@@ -1003,11 +1015,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offFrame = client.onFrame((env) => routeFrame(env, {
       currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => {
+        catalogRefresh.cancel(deviceId);
         remoteSubscribedTopicsRef.current.delete(deviceId);
         forcedPeerRecoveryIntentRef.current.cancel(deviceId);
         peerRecoverySchedulerRef.current?.cancel(deviceId);
       },
       onLinkClosed: (deviceId, reason) => {
+        catalogRefresh.cancel(deviceId);
         resetRemoteProjectOrderPushFence(deviceId);
         updateRehydrateSuppressionOnLinkClose(
           rehydrateSuppressedDeviceIds,
@@ -1056,30 +1070,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         }
       },
       onProviderChanged: (deviceId) => {
-        // provider 目录与 capabilities.availableModels 是同一份 active catalog 的两种视图。
-        // 同时驱逐并后台重拉；页面保留旧画面，当前代完整快照提交后由订阅一次性更新。
-        evictDeviceProviders(deviceId);
-        evictAgentCapabilitiesForDevice(deviceId);
-        const epochAtWrite = connectionEpoch;
-        void fetchDeviceProviders(deviceId, () =>
-          sendInvokeWithAccessHandling<DeviceProvidersPayload>(
-            client,
-            deviceId,
-            'maker:provider:list',
-            [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
-          )
-        )
-          .then(() => {
-            // 无挂载 hook 的后台缓存写入也要标记所属连接代际(codex review P1):
-            // 不 mark 则 deviceFetchEpoch 保持 undefined,断线前旧目录在重连后被
-            // 当「首次挂载缓存命中」采信、永不刷新——选择器无限期展示已删供应商。
-            // fetch 期间重连(epoch 变化)则 mark 的是捕获时的旧代际 → 下次 effect
-            // 判 reconnected → 强制 fresh(保守正确)。失败不 mark(evict 已清缓存,
-            // 无旧目录可被误采信)。
-            markDeviceFetchEpoch(deviceId, epochAtWrite);
-          })
-          .catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
-        void refreshDeviceCapabilities(client, deviceId);
+        catalogRefresh.notify(deviceId);
       },
       onAgentsChanged: (deviceId) => {
         for (const listener of remoteAgentRosterListeners) listener(deviceId);
@@ -1254,6 +1245,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       offResponseEvidence();
       offBeforeLink();
       offFrame();
+      catalogRefresh.dispose();
       offPresence();
       offPeerTransportReset();
       offStatus();
@@ -1449,6 +1441,10 @@ export function routeFrame(env: Envelope, handlers: {
   if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
+  if (push.channel === 'maker:model-favorites:changed') {
+    for (const listener of remoteFavoritesChangedListeners) listener(env.src);
+    return;
+  }
   if (push.channel === 'maker:provider:changed') {
     handlers.onProviderChanged?.(env.src);
     return;
@@ -1510,28 +1506,6 @@ export function routeFrame(env: Envelope, handlers: {
     remoteSessionStore.invalidateSessionMessageWindow(historySessionId as string, env.src);
     historyView.reset();
   } else if (historyView?.getSnapshot().ready && (push.channel === 'local-db:messages:created' || push.channel === 'maker:status-changed')) historyView.invalidate();
-}
-
-/** provider revision 后并行重拉所有 agent 的能力；旧代或异常结果都不触碰当前页面。 */
-async function refreshDeviceCapabilities(
-  client: DeviceLinkClient,
-  deviceId: string,
-): Promise<void> {
-  const generation = getAgentCapabilitiesGeneration(deviceId);
-  await Promise.allSettled(
-    (['claude-code', 'codex', 'pi'] as const).map(async (agentKind) => {
-      const raw = await sendInvokeWithAccessHandling<unknown>(
-        client,
-        deviceId,
-        'maker:get-capabilities',
-        [agentKind],
-      );
-      const normalized = normalizeMobileAgentCapabilities(raw);
-      if (normalized) {
-        commitAgentCapabilities(deviceId, agentKind, generation, normalized);
-      }
-    }),
-  );
 }
 
 async function rebuildSessionSnapshot(

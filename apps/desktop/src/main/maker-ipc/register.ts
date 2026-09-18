@@ -1,3 +1,8 @@
+import { createBotMessageTransport } from './botMessageTransport.js';
+import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
+import { getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { registerModelFavoritesSync } from './modelFavoritesSync.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { configureAppDefaultModelSelection } from './appDefaultModelControl.js';
 import type { BuiltinApiKeyBridgeDeps } from '../secrets/builtinApiKeyBridge.js';
@@ -232,7 +237,7 @@ import {
   isDbClientNotReadyError,
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
-import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { createWorkingDirectoryRecovery, isUnavailableFilesystemError, worktreeConversationFallbackDir } from './workingDirectoryRecovery.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode, workdirDiagnosticId } from '../workdirDiagnostics.js';
 import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, findSimilarWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
@@ -661,7 +666,7 @@ import { registerNewMakerWorktreePreferenceHandler } from './newMakerWorktreePre
 import { registerNewMakerWorktreeBranchPreferenceHandler } from './newMakerWorktreeBranchPreferenceHandler.js';
 import {
   resolveFreshSourceBranch,
-  restoreMissingManagedWorktreeForSession,
+  getManagedWorktreeReadinessForSession,
   WorktreeManager as worktreeManager,
   worktreeStore,
 } from '../worktree/index.js';
@@ -1106,8 +1111,14 @@ import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
 const workdirLog = createLogger('workdir-diagnostics');
-const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory }, async (sessionId) =>
-  ensureDialogueWorkspaceDir(sessionId, Date.now()), workdirLog);
+const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory }, async (sessionId, workingDir, mode) => {
+  if (mode === 'unrestored-worktree') {
+    const fallback = worktreeConversationFallbackDir(dialogueWorkspaceRootDir(), sessionId, workingDir);
+    await fsp.mkdir(fallback, { recursive: true });
+    return fallback;
+  }
+  return ensureDialogueWorkspaceDir(sessionId, Date.now());
+}, workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
@@ -4718,6 +4729,7 @@ let disposePiPackagesChangedBroadcast: (() => void) | null = null;
  * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
  */
 export function registerModelVisibilitySyncIpc(): void {
+  registerModelFavoritesSync(broadcastToAllWindows);
   configureAppDefaultModelSelection((appDefaultSelection) => {
     broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
       agent: appDefaultSelection.route.harness === 'claude' ? 'claude-code' : appDefaultSelection.route.harness,
@@ -9390,6 +9402,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   botDirectMessageServiceHolder = createBotDirectMessageService({
+    transport: createBotMessageTransport({ selfDeviceId: getSelfDeviceId,
+      listDevices: () => handleListDevices(deviceDirectoryDeps()), invoke: invokeBotPeer }),
     hasQueuedDelivery: async (sessionId, clientId) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
       return inputCoordinator.hasKnownClientId(sessionId, clientId);
@@ -9437,6 +9451,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       broadcastToAllWindows(MAKER_PUSH.BOT_DIRECT_MESSAGE_CHANGED, payload, ownerScope);
     },
   });
+  setBotRemoteMessageService(botDirectMessageServiceHolder);
   botDelegationServiceHolder?.dispose();
   botDelegationServiceHolder = createBotDelegationService({
     taskControl: {
@@ -9898,7 +9913,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const createOpts = buildCreateOptsWithStderr({
       id: sessionId,
       agentKind: meta.agentKind,
-      workingDir: meta.workDir,
+      workingDir: row.workingDir ?? meta.workDir,
       model: meta.model,
       providerId: row.providerId,
       resumeSessionId: meta.sdkSessionId,
@@ -12167,6 +12182,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     checkWorkDirExists,
     resolveRecoveredWorkingDir: (sessionId, dir) => workingDirectoryRecovery.resolve(sessionId, dir),
     statDirectory: (dir) => statWorkingDirectory(dir),
+    isPersistedWorktreeFallback: (dir) => path.dirname(path.resolve(dir)) ===
+      path.join(dialogueWorkspaceRootDir(), 'worktree-recovery'),
     preflightBotRuntimeResources: async (opts) => { await preflightBotRuntimeResources(opts); },
     readWorkingDirectoryRecoveryCreateOpts: async (sessionId) => {
       const [row] = await getDbClient().drizzle.select().from(sessions)
@@ -12400,7 +12417,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const live = getMaker().getSession(sessionId);
         // busy ≠ failed：外层已守卫 turn-running；这里若仍撞上，中止而不是升级成 rebuild。
         if (live?.isTurnRunning()) return 'busy';
-        if (live) await getMaker().closeSession(sessionId);
+        if (live) await getMaker().closeSession(sessionId, 'runtime-refresh');
         const forked = await getMaker().forkSdkSession('codex', {
           sourceSdkSessionId: threadId,
           model: model ?? undefined,
@@ -12493,7 +12510,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     findLatestRebuildMeta: findLatestContextRebuildMeta,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     rehydrateColdPiRuntimeForWindowVerification,
-    closeSession: (sessionId) => maker.closeSession(sessionId),
+    closeSession: (sessionId) => maker.closeSession(sessionId, 'runtime-refresh'),
     drainPersistQueue,
     commitRebuild: async (sessionId, handoff, meta, signal) => {
       // Read projection metadata before the transaction: after a successful
@@ -18123,8 +18140,9 @@ async function checkWorkDirExists(
     // deliberately leaves the directory present while keeping the session blocked.
     const normalizedWorkingDir = path.resolve(workingDir).replace(/\\/g, '/');
     if (getManagedWorktreeBasePath(normalizedWorkingDir) !== null) {
-      const ready = await restoreMissingManagedWorktreeForSession(sessionId, workingDir);
-      if (!ready) {
+      const ready = await getManagedWorktreeReadinessForSession(sessionId, workingDir);
+      if (ready !== 'ready') {
+        if (ready === 'gone' && !suppress && await workingDirectoryRecovery.recover(sessionId, workingDir, undefined, [], 'unrestored-worktree')) return true;
         workdirLog.warn('workdir preflight rejected', { ...diagnosticContext, reason: 'managed-worktree-not-ready' });
         if (suppress) {
           log.warn('send: managed worktree not ready (broadcast suppressed, caller has fallback)', {
@@ -18161,8 +18179,8 @@ async function checkWorkDirExists(
     }
     // Cindy 托管 worktree 被外部 PR cleanup / 手动 git 命令移除时，先按 DB 中
     // 的精确 worktree_path 从本地或 origin tracking 分支重建，保留原代码与快照。
-    const restored = await restoreMissingManagedWorktreeForSession(sessionId, workingDir);
-    if (restored) {
+    const restored = await getManagedWorktreeReadinessForSession(sessionId, workingDir);
+    if (restored === 'ready') {
       workdirLog.info('workdir preflight recovered', { ...diagnosticContext, action: 'managed-worktree-restored' });
       log.info('send: restored missing managed worktree', { sessionId, workingDir });
       return true;
@@ -18171,6 +18189,12 @@ async function checkWorkDirExists(
     // A fuzzy match is a lead for the agent, not authority to switch project identity.
     const unavailable = isUnavailableFilesystemError(error);
     let similar: string | null = null;
+    if (
+      restored === 'gone' && !suppress &&
+      ((error as NodeJS.ErrnoException).code === 'ENOENT' || unavailable) &&
+      getManagedWorktreeBasePath(path.resolve(workingDir).replace(/\\/g, '/')) !== null &&
+      await workingDirectoryRecovery.recover(sessionId, workingDir, undefined, [], 'unrestored-worktree')
+    ) return true;
     // A missing ordinary/dialogue cwd must not stop the conversation. Prefer a repaired
     // DB path when the caller has one; never turn a managed Git recovery into
     // an empty project, or treat permission/non-directory failures as ENOENT.

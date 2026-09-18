@@ -1,3 +1,5 @@
+import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
 /**
  * MessageStream
@@ -29,7 +31,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { HistoryViewHandoff, renderHistoryView, historyPrefetchThreshold } from '@cindy/maker-shared/message-window';
+import { HistoryViewHandoff, renderHistoryView, historyPrefetchThreshold, historyViewLeaves } from '@cindy/maker-shared/message-window';
 import { getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
@@ -74,6 +76,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { BrandLoadingMark } from '@/components/branding/BrandLoadingMark';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
+import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
 import { useTurnChangeSets } from './useTurnChangeSets';
@@ -288,6 +291,7 @@ import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
 import { TurnChangesCard } from './TurnChangesCard';
+import { useBotGeneratedFileDeliveries } from '@/features/bots/useBotGeneratedFileDeliveries';
 import { GeneratedFilesCard, generatedFilesCheckKey } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
@@ -484,89 +488,6 @@ export interface InlinePlanVisibility {
 // ---------------------------------------------------------------------------
 
 // Item types and pure work grouping live in messageWorkGroups; window/DOM behavior stays here.
-function isBotInternalActivity(item: RenderItem): boolean {
-  if (
-    item.type === 'tool_segment' ||
-    item.type === 'agent_task' ||
-    item.type === 'work_group' ||
-    item.type === 'agent_plan' ||
-    item.type === 'turn_changes'
-  ) {
-    return true;
-  }
-  return item.type === 'message' && item.message.role === 'thinking';
-}
-
-export function simplifyBotRenderItems(
-  items: readonly RenderItem[],
-  isStreaming: boolean,
-): RenderItem[] {
-  const visible = items.filter((item) => !isBotInternalActivity(item));
-  if (!isStreaming) return visible;
-
-  // 当前回合的普通 assistant 正文从首字开始流式展示；工具媒体、交付卡等容易
-  // 改变布局的结果仍等回合完成后出现。这样既不泄露内部工作过程，也不会把整段
-  // 答案藏到 done 后才突然闪现。
-  let currentTurnStart = -1;
-  for (let index = visible.length - 1; index >= 0; index -= 1) {
-    const item = visible[index];
-    if (
-      item.type === 'message' &&
-      item.message.role === 'user' &&
-      item.message.delivery !== 'steer' &&
-      !item.message.isSyntheticTrigger
-    ) {
-      currentTurnStart = index;
-      break;
-    }
-  }
-  if (currentTurnStart < 0) return visible;
-  return visible.filter((item, index) => {
-    if (index <= currentTurnStart) return true;
-    if (item.type !== 'message') return false;
-    if (item.message.role === 'user') return !item.message.isSyntheticTrigger;
-    // A direct-message stamp is the durable entry into the Bot-to-Bot conversation,
-    // not an expanding work/result card. The reverse delivery starts another hidden
-    // canonical turn; hiding system cards during that turn used to make the already
-    // persisted "sent" stamp flash and disappear until streaming finished.
-    if (item.message.systemCardType === 'bot-direct-message' || item.message.systemCardType === 'bot-session-task') return true;
-    return (
-      item.message.role === 'assistant' &&
-      !item.message.systemCardType &&
-      item.message.content.trim().length > 0
-    );
-  });
-}
-
-/**
- * 当前可见用户 turn 是否已经产出正文。Bot composer 用它把「正在思考」限制在
- * 首字到来之前；子代理内部行、系统卡、空 assistant 和合成续跑行都不参与判断。
- */
-export function hasBotAssistantOutputInCurrentTurn(messages: readonly ChatMessage[]): boolean {
-  let currentTurnStart = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (isSubagentInternalMessage(message)) continue;
-    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) {
-      currentTurnStart = index;
-      break;
-    }
-  }
-  if (currentTurnStart < 0) return false;
-  for (let index = currentTurnStart + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (isSubagentInternalMessage(message)) continue;
-    if (
-      message.role === 'assistant' &&
-      !message.systemCardType &&
-      message.content.trim().length > 0
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
   return item?.type === 'fork_origin' || (item?.type === 'message' && item.message.role === 'user');
 }
@@ -2549,14 +2470,23 @@ export function MessageStream({
     historyView?.getSnapshot ?? (() => null),
     historyView?.getSnapshot ?? (() => null),
   );
+  const displayMessages = useMemo(() => {
+    if (!historySnapshot) return messages;
+    const historyIds = new Set(historyViewLeaves(historySnapshot.items).flatMap((item) =>
+      item.type === 'messages' ? item.messages.map((row) => row.clientId) : []));
+    for (const detail of historySnapshot.details.values()) {
+      for (const row of detail.messages) historyIds.add(row.clientId);
+    }
+    return projectRemoteUsers(messages, historyIds);
+  }, [historySnapshot, messages]);
   const historyHandoff = useMemo(() => new HistoryViewHandoff<HistoryChatMessage>(
     (row) => row.isStreaming === true,
   ), [historyView]);
   // Observe live rows before the first history page too: a stream can finish
   // while that page is in flight. Local tasks retain their existing path.
-  const historyLiveMessages = useMemo(() => historyView ? messages.map((row) => ({
+  const historyLiveMessages = useMemo(() => historyView ? displayMessages.map((row) => ({
     ...row, id: row.id ?? row.clientId, createdAt: row.createdAt ?? '',
-  })) : [], [historyView, messages]);
+  })) : [], [historyView, displayMessages]);
   const handoff = useMemo(() => historySnapshot
     ? historyHandoff.reconcile(historySnapshot, historyLiveMessages) : null,
   [historyHandoff, historySnapshot, historyLiveMessages]);
@@ -2751,7 +2681,7 @@ export function MessageStream({
   // 入口与运行态标记(review: codex P2;同族的 isSyntheticTrigger 坑见
   // findLastUserMessageClientId 注释)。按子代理归属反查的派生(buildSubagentModelMap)
   // 仍吃原始 messages —— 它要的正是这些被隐藏的行。
-  const visibleMessages = useMemo(() => selectVisibleMessages(messages), [messages]);
+  const visibleMessages = useMemo(() => selectVisibleMessages(displayMessages), [displayMessages]);
 
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
@@ -2765,7 +2695,7 @@ export function MessageStream({
   // parsed image targets without retaining state beyond the session mount.
   const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
-    const built = buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+    const built = buildRenderItems(displayMessages, taskUpdates, ghostCardSnapshot, {
       historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
       turnChangeSets,
       workingDir,
@@ -2778,7 +2708,7 @@ export function MessageStream({
         view: historyView, snapshot: historySnapshot, liveMessages: historyLiveMessages, streaming: isSessionStreaming,
         isLive: (row) => row.isStreaming === true,
         pendingHandoff: handoff?.pending,
-        isLocalUser: (row) => row.role === 'user' && (row.isPendingPersist === true || !!row.blockedByGhost),
+        isLocalUser: (row) => row.role === 'user' && (row.isPendingPersist === true || !!row.blockedByGhost || !!row.localSendPrecedingClientIds),
         build: (rows) => {
           const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
             historyWindowIncomplete: true, workingDir,
@@ -2812,7 +2742,7 @@ export function MessageStream({
       singleResultMap: built.singleResultMap,
     };
   }, [
-    messages,
+    displayMessages,
     historyView,
     historySnapshot,
     historyLiveMessages,
@@ -2844,15 +2774,18 @@ export function MessageStream({
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。
   // isSessionStreaming 翻转(每 turn 一次)与 items 变化时重算,O(n) 单扫描。
+  const { visibleGeneratedFileKeys, onGeneratedFilesVisibilityChange } = useBotGeneratedFileDeliveries(
+    ungroupedRenderItems, sessionFileValue,
+  );
   const allRenderItems = useMemo(() => {
     const grouped = insertForkOriginItem(
       historySnapshot?.ready ? ungroupedRenderItems : groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
       forkOrigin,
   );
     return simplifiedBotConversation
-      ? simplifyBotRenderItems(grouped, isSessionStreaming)
+      ? simplifyBotRenderItems(grouped, isSessionStreaming, visibleGeneratedFileKeys)
       : grouped;
-  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation, historySnapshot?.ready]);
+  }, [ungroupedRenderItems, isSessionStreaming, forkOrigin, simplifiedBotConversation, historySnapshot?.ready, visibleGeneratedFileKeys]);
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -2897,9 +2830,9 @@ export function MessageStream({
   const latestInlinePlanBelongsToActiveTurn = useMemo(
     () =>
       latestInlinePlan
-        ? planSessionBelongsToLatestUserTurn(messages, latestInlinePlan.sourceClientIds)
+        ? planSessionBelongsToLatestUserTurn(displayMessages, latestInlinePlan.sourceClientIds)
         : false,
-    [latestInlinePlan, messages],
+    [latestInlinePlan, displayMessages],
   );
 
   /**
@@ -5516,8 +5449,8 @@ export function MessageStream({
   // 切片,还有老页未加载(hasMoreMessages)时不能把切片首条误判为对话首条
   // (判定逻辑与陷阱见 findFirstUserMessageClientId 注释)。
   const firstUserMessageClientId = useMemo(
-    () => findFirstUserMessageClientId(messages, Boolean(hasMoreMessages)),
-    [messages, hasMoreMessages],
+    () => findFirstUserMessageClientId(displayMessages, Boolean(hasMoreMessages)),
+    [displayMessages, hasMoreMessages],
   );
 
   // edit-last-message: 最后一条 user 消息才显示编辑入口(编辑 = rewind 到该条
@@ -5538,12 +5471,12 @@ export function MessageStream({
     [visibleMessages],
   );
 
-  // 刻意吃**原始** messages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
+  // 使用未过滤子代理的 displayMessages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
   // 真实花费,过滤掉等于把子代理的账从用量里抹掉(成本失真,比显示问题更糟)。
   // 归属键 turnFinalAssistantClientIds 已按可见序列算出,聚合区间仍落在正确的 turn 内。
   const userTurnUsageDetailsByAssistantId = useMemo(() => {
-    return collectAssistantTurnUsageDetails(messages, turnFinalAssistantClientIds);
-  }, [messages, turnFinalAssistantClientIds]);
+    return collectAssistantTurnUsageDetails(displayMessages, turnFinalAssistantClientIds);
+  }, [displayMessages, turnFinalAssistantClientIds]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
@@ -5773,6 +5706,7 @@ export function MessageStream({
                           turnEndMs={item.turnEndMs}
                           turnSealed={item.turnSealed === true}
                           botArtifacts={simplifiedBotConversation}
+                          onVisibilityChange={simplifiedBotConversation ? onGeneratedFilesVisibilityChange : undefined}
                         />
                       );
                     }
@@ -5882,6 +5816,7 @@ export function MessageStream({
                             isStreaming={item.isStreaming}
                             startedAtMs={item.startedAtMs}
                             childItems={childItems}
+                            compact={simplifiedBotConversation}
                             deferred={item.deferred}
                           />
                         </div>

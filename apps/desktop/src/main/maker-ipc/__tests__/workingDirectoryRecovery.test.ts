@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
+import { createWorkingDirectoryRecovery, worktreeConversationFallbackDir } from '../workingDirectoryRecovery';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -10,6 +10,70 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it('reuses recovery files across restarts while isolating owners, tasks and original worktrees', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-worktree-fallback-'));
+    roots.push(root);
+    const original = path.join(root, 'repo', '.cindy-worktrees', 'missing');
+    const fallback = worktreeConversationFallbackDir(root, 'task', original);
+    const allocate = async () => { await fsp.mkdir(fallback, { recursive: true }); return fallback; };
+    const first = createWorkingDirectoryRecovery(fsp, allocate);
+    expect(await first.recover('task', original, undefined, [], 'unrestored-worktree')).toBe(true);
+    await fsp.writeFile(path.join(fallback, 'notes.txt'), 'keep');
+    const restarted = createWorkingDirectoryRecovery(fsp, allocate);
+    expect(await restarted.recover('task', original, undefined, [], 'unrestored-worktree')).toBe(true);
+    expect(restarted.resolve('task', original)).toBe(fallback);
+    expect(await fsp.readFile(path.join(fallback, 'notes.txt'), 'utf8')).toBe('keep');
+    expect(worktreeConversationFallbackDir(root, 'other', original)).not.toBe(fallback);
+    expect(worktreeConversationFallbackDir(root, 'task', `${original}-other`)).not.toBe(fallback);
+    expect(worktreeConversationFallbackDir(path.join(root, 'other-owner'), 'task', original)).not.toBe(fallback);
+  });
+
+  it('continues in a conversation directory after Git restore fails without touching the worktree', async () => {
+    const original = path.resolve('/repo/.cindy-worktrees/missing');
+    const fallback = path.resolve('/owned/dialogues/task');
+    const io = { stat: vi.fn(async () => ({ isDirectory: () => true })), mkdir: vi.fn() };
+    const allocate = vi.fn(async () => fallback);
+    const recovery = createWorkingDirectoryRecovery(io, allocate);
+    expect(await recovery.recover('task', original, undefined, [], 'unrestored-worktree')).toBe(true);
+    expect(io.stat).not.toHaveBeenCalled();
+    expect(io.mkdir).not.toHaveBeenCalled();
+    expect(recovery.resolve('task', original)).toBe(fallback);
+    const note = recovery.peek('task', fallback)!;
+    expect(note).toContain('could not restore');
+    expect(note).toContain('original project and worktree');
+    expect(note).toContain(JSON.stringify(original));
+    expect(note).toContain('Do not create an empty replacement');
+    recovery.consume('task', note);
+    expect(await recovery.recover('task', original, undefined, [], 'unrestored-worktree')).toBe(true);
+    expect(allocate).toHaveBeenCalledOnce();
+    expect(recovery.resolve('task', original)).toBe(fallback);
+    expect(recovery.peek('task')).toBeNull();
+  });
+
+  it.each(['discard', 'clear', 'move'] as const)('does not revive worktree fallback after %s during allocation', async (operation) => {
+    let finish!: (dir: string) => void;
+    const allocate = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const recovery = createWorkingDirectoryRecovery({ stat: vi.fn(), mkdir: vi.fn() }, allocate);
+    const pending = recovery.recover('task', '/repo/.cindy-worktrees/task', undefined, [], 'unrestored-worktree');
+    await vi.waitFor(() => expect(allocate).toHaveBeenCalledOnce());
+    if (operation === 'clear') recovery.clear();
+    else if (operation === 'discard') recovery.discard('task');
+    else recovery.resolve('task', '/chosen-project');
+    finish('/conversation');
+    expect(await pending).toBe(false);
+    expect(recovery.peek('task')).toBeNull();
+  });
+
+  it('keeps worktree recovery unsuccessful when the conversation directory cannot be allocated', async () => {
+    const mkdir = vi.fn();
+    const recovery = createWorkingDirectoryRecovery({ stat: vi.fn(), mkdir }, async () => {
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+    expect(await recovery.recover('task', '/repo/.cindy-worktrees/task', undefined, [], 'unrestored-worktree')).toBe(false);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(recovery.peek('task')).toBeNull();
+  });
+
   it('records same-directory fallback and a later failed fallback probe without changing recovery behavior', async () => {
     const dir = path.resolve('/private/dialogue');
     const log = { info: vi.fn(), warn: vi.fn() };

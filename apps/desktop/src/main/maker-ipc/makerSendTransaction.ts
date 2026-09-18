@@ -1,3 +1,4 @@
+import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
@@ -219,7 +220,7 @@ type MakerSendOptions = {
   toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   /** Main-only continuation: a restored intent is not an authored user turn. */
-  readonly [AUTO_REVIEW_USER_INTENT]?: string;
+  readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
   readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   messageUuid?: string;
@@ -346,6 +347,7 @@ export interface MakerSendTransactionDeps {
     opts?: { suppressMissingBroadcast?: boolean },
   ): Promise<boolean>;
   resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
+  isPersistedWorktreeFallback?(workingDir: string): boolean;
   /**
    * 纯文件系统探测(不做 recovery / mkdir / 广播)。判断 DB 里的 working_dir 是否
    * **真实存在** —— 会话移动后 runtime cwd 与 DB 漂移时,只有确认 DB 目录真实存在
@@ -704,6 +706,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         });
         return false;
       }
+    }
+    // A queued runtime cwd may be a recovery directory from a previous process.
+    // Start from the durable binding so the new process retries Git restoration
+    // and, if still unavailable, supplies a fresh recovery note. In-process
+    // recovery.resolve continues to preserve the already selected fallback.
+    if (!createOpts.remoteHostId && createOpts.workingDir &&
+      deps.isPersistedWorktreeFallback?.(createOpts.workingDir)) {
+      if (!dbDir) return false;
+      createOpts.workingDir = dbDir;
     }
     if (opts?.preferDbWorkingDir && dbDir && dbDir !== createOpts.workingDir) {
       const adopted = createOpts.remoteHostId

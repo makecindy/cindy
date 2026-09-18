@@ -53,5 +53,24 @@
     "confirmMessage": "次のメッセージを送信すると、{{appName}} は現在のセッションを {{agent}} に引き継ぎます。2つのエージェントはコンテキストやツールの理解が異なる場合があります。確認してから対象のモデルを選択してください。",
     "cancel": "キャンセル",
     "confirm": "続けて選択"
+  },
+  "unified": {
+    "favorites": "お気に入り",
+    "all": "すべてのモデル",
+    "recommended": "おすすめ",
+    "source": "接続元",
+    "harness": "Harness",
+    "addFavorite": "お気に入りに追加",
+    "removeFavorite": "お気に入りを解除",
+    "restoreRecommended": "推奨設定に戻す",
+    "saveFailed": "保存できませんでした。再試行してください。",
+    "configure": "設定",
+    "syncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
+    "timeUnit": {
+      "day": "日",
+      "hour": "時間",
+      "minute": "分",
+      "second": "秒"
+    }
   }
 }

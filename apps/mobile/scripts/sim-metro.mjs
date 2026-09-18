@@ -160,6 +160,7 @@ export function probeMetroOwnership(port, options = {}) {
   const pid = (options.listenerPid ?? listenerPid)(port);
   if (!pid) return null;
   if ((options.platform ?? process.platform) !== 'win32') {
+    if (!(options.isMetroPid ?? isMetroPid)(pid)) return { pid, cwd: null, source: null };
     const cwd = cwdOfPid(pid);
     const source = gitSourceOfPid(pid);
     const owner = (options.readOwner ?? readMetroOwner)(port);
@@ -173,6 +174,8 @@ export function probeMetroOwnership(port, options = {}) {
         && owner && Object.hasOwn(owner, 'loginScenario')
         ? { loginScenario: owner.loginScenario }
         : {}),
+      region: ownerRoot && ownerRoot === worktreeRoot && owner?.source === source
+        ? owner.region ?? null : null,
       envFingerprint: ownerRoot && ownerRoot === worktreeRoot && owner?.source === source
         ? owner.envFingerprint ?? null
         : null,

@@ -238,6 +238,53 @@ afterEach(() => {
 });
 
 describe('device-link controller mirror — end-to-end scenarios', () => {
+  it('keeps the existing mirror when an old Host rejects history-view and raw fallback fails', async () => {
+    const s = sid();
+    const cached = dbMessage(s, 'cached', 'usable offline history', '2026-09-08T00:00:00Z');
+    vi.mocked(readCachedMessages).mockResolvedValue([cached]);
+    host.seedSession(s);
+    const original = host.invoke.getMockImplementation()!;
+    host.invoke.mockImplementation((...args) => {
+      if (args[1] === 'local-db:messages:list') return Promise.reject(new Error('raw fallback timed out'));
+      return original(...args);
+    });
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await vi.waitFor(() => expect(host.invoke).toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything()));
+    await flush();
+    expect(clearCachedMessages).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(s).messages.map((row) => row.content)).toContain('usable offline history');
+    makerChatStore.purgeSession(s);
+    vi.mocked(readCachedMessages).mockResolvedValue([]);
+  });
+
+  it('keeps the real sent row reserved through DB echo until history takes ownership', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const original = host.invoke.getMockImplementation()!;
+    host.invoke.mockImplementation((...args) => args[1] === 'maker:input:enqueue'
+      ? Promise.resolve(emptyProjection(s)) : original(...args));
+    await makerChatStore.sendMessage(s, 'keep my message', 'claude', '', 'default', '/remote/project');
+    const sent = makerChatStore.getSnapshot(s).messages.find((row) => row.content === 'keep my message')!;
+    expect(sent.localSendPrecedingClientIds).toBeDefined();
+    host.hostMessage(s, { ...dbMessage(s, 'sent-db', 'keep my message', '2026-09-17T00:00:00Z', 'user'), clientId: sent.clientId });
+    await flush();
+    const echoed = makerChatStore.getSnapshot(s).messages.find((row) => row.clientId === sent.clientId)!;
+    expect(echoed.isPendingPersist).toBeUndefined();
+    expect(echoed.localSendPrecedingClientIds).toBeDefined();
+    await getRemoteHistoryView(s)!.refresh();
+    const final = makerChatStore.getSnapshot(s).messages.filter((row) => row.clientId === sent.clientId);
+    expect(final).toHaveLength(1);
+    expect(final[0].localSendPrecedingClientIds).toBeUndefined();
+    makerChatStore.purgeSession(s);
+  });
+
   it('does not lose repair signals received while the first historical page is in flight', async () => {
     const s = sid();
     const old = dbMessage(s, 'h1', 'old page', '2026-09-08T00:00:00Z');
@@ -803,7 +850,8 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
         expect(state.historyLoaded).toBe(true);
         expect(state.messages.some((row) => row.cacheHydrated)).toBe(false);
         expect(getLatestMessageTodoState(state.messages).hasPlanEvent).toBe(false);
-        expect(clearCachedMessages).toHaveBeenCalledWith(DEVICE_ID, s);
+        // Successful structured history now replaces the mirror snapshot instead of deleting it.
+        expect(clearCachedMessages).not.toHaveBeenCalled();
         if (scenario === 'rewound') {
           expect(state.messages.map((row) => row.content)).toEqual(['current text', 'live output']);
         } else expect(state.messages).toHaveLength(0);

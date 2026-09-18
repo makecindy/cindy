@@ -2510,6 +2510,8 @@ const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
 const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task';
 const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
 const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
+const CINDY_CHECK_AGENT_MESSAGE_TOOL = 'check_agent_message';
+const CINDY_LIST_AGENTS_TOOL = 'list_agents';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
@@ -2518,6 +2520,8 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   CINDY_MESSAGE_SESSION_TASK_TOOL,
   CINDY_STOP_SESSION_TASK_TOOL,
   CINDY_SEND_TO_AGENT_TOOL,
+  CINDY_CHECK_AGENT_MESSAGE_TOOL,
+  CINDY_LIST_AGENTS_TOOL,
   CINDY_CREATE_TEAMMATE_TOOL,
   'routine_list', 'routine_save', 'routine_sources',
   'routine_history', 'routine_delete', 'routine_run_now',
@@ -3229,16 +3233,40 @@ class CindyMcpGateway {
       });
     }
 
+    if (this.resolveDirectHelperTool(CINDY_LIST_AGENTS_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_LIST_AGENTS_TOOL,
+        label: 'Find teammates',
+        description: 'Discover teammates on this device and authorized remote devices. Use the exact returned id with send_to_agent; device names distinguish namesakes. Unavailable devices are reported separately. Do not guess IDs or poll.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_LIST_AGENTS_TOOL, params, signal),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_CHECK_AGENT_MESSAGE_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_CHECK_AGENT_MESSAGE_TOOL,
+        label: 'Read teammate reply',
+        description: 'Read persisted ordinary replies to a message sent through an older remote conversation. Use the message_id from send_to_agent when transport is remote-conversation, or after uncertain delivery. Does not resend. No remote tool-call or completed-turn claim. Check on follow-up; do not poll.',
+        parameters: { type: 'object', properties: { message_id: { type: 'string', minLength: 1, maxLength: 80 } },
+          required: ['message_id'], additionalProperties: false },
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_CHECK_AGENT_MESSAGE_TOOL, params, signal),
+      });
+    }
+
     if (this.resolveDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, {})) {
       pi.registerTool({
         name: CINDY_SEND_TO_AGENT_TOOL,
         label: 'Send message to teammate',
         description:
-          'Send one bounded asynchronous message to a named Cindy Bot teammate. This does not create a task or progress state. Use start_session_task for tracked work. A structured @Bot reference already contains the exact target ID, so do not list Bots first.',
+          'Send one bounded asynchronous message to a named Cindy Bot teammate. This does not create a task or progress state. Use start_session_task for tracked work. Use the exact stable ID from list_agents or a structured @Bot reference. Remote IDs contain deviceId::botId; never route by name. Accepted or queued does not mean delivered or replied.',
         parameters: {
           type: 'object',
           properties: {
-            target_id: { type: 'string', minLength: 1, maxLength: 128 },
+            // deviceId (80) + separator (2) + existing Bot profile ID (128).
+            target_id: { type: 'string', minLength: 1, maxLength: 210 },
             message: { type: 'string', minLength: 1, maxLength: 12000 },
           },
           required: ['target_id', 'message'],

@@ -32,7 +32,9 @@ vi.mock('@/lib/sessionService', () => ({
   touchUserSend: vi.fn(async () => ({})),
 }));
 
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, getRemoteHistoryView } from '@/lib/makerChatStore';
+import { projectHistoryView } from '@cindy/maker-shared/message-window';
+import { encodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { listMessagesFor } from '@/lib/makerTransport';
 import { collectSessionListSnapshot } from '@/features/device-link/refreshRemoteSessions';
@@ -267,6 +269,22 @@ afterEach(() => {
 });
 
 describe('冷缓存 hydrate', () => {
+  it('restores the structured view through the actual offline session entry', async () => {
+    const s = sid();
+    const rows = [{ id: 'cached', clientId: 'cached', role: 'user', content: 'offline history', createdAt: '2026-09-17T00:00:00Z' }];
+    const historyView = encodeRemoteHistory({ items: projectHistoryView(rows, false), details: new Map(), expanded: new Set(),
+      ready: true, loading: false, error: null, nextCursor: 'older', hasMore: true });
+    getMessages.mockResolvedValueOnce({ messages: [], invalidation: 0, ownerToken: cachedOwnerToken, accountCounter: 0, historyView } as CachedRead);
+    registerRemote(s);
+    remoteProjectsStore.markDeviceDisconnected(DEVICE_ID);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+    expect(getRemoteHistoryView(s)?.getSnapshot().items).toEqual(projectHistoryView(rows, false));
+    expect(makerChatStore.getSnapshot(s).messages.map((row) => row.content)).toEqual(['offline history']);
+    expect(invoke).not.toHaveBeenCalled();
+    makerChatStore.purgeSession(s);
+  });
+
   it('首拉未回来时用缓存种入,行带 cacheHydrated 且不置 historyLoaded', async () => {
     const s = sid();
     cachedMessages.set(`${DEVICE_ID}::${s}`, [
@@ -1189,8 +1207,8 @@ describe('会话作废计数补读的等待纪律', () => {
     });
     await flush(20);
 
-    expect(putMessages).toHaveBeenCalledTimes(1);
-    expect(putMessages.mock.calls[0]?.[3]).toBeUndefined();
+    // The renderer now drops the old owner's write before dispatch as well.
+    expect(putMessages).not.toHaveBeenCalled();
 
     // 第二次仍须补读:99 属于旧 owner,不能成为 B 的已知计数。
     putMessages.mockClear();

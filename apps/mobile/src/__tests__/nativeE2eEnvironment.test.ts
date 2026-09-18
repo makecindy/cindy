@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { readSimEnvironment } from '../../scripts/lib/sim-environment.mjs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
@@ -12,13 +14,13 @@ describe('native e2e environment', () => {
     ['providers:email-only', 'another-scenario', 'providers:email-only'],
     [undefined, undefined, ''],
   ])('records shell scenario %j over dotenv scenario %j as %j', (shell, dotenv, expected) => {
-    const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
-    const declaration = source.match(/const loginScenario = [\s\S]*?;/)?.[0];
-    expect(declaration).toBeDefined();
-    const env = shell === undefined ? {} : { EXPO_PUBLIC_LOGIN_SCENARIO: shell };
-    expect(runInNewContext(`${declaration}\nloginScenario`, {
-      process: { env }, projectEnv: { env: { EXPO_PUBLIC_LOGIN_SCENARIO: dotenv } },
-    })).toBe(expected);
+    const mobileDir = mkdtempSync(resolve(tmpdir(), 'cindy-scenario-'));
+    try {
+      if (dotenv !== undefined) writeFileSync(resolve(mobileDir, '.env'), `EXPO_PUBLIC_LOGIN_SCENARIO=${dotenv}\n`);
+      const env: NodeJS.ProcessEnv = { NODE_ENV: 'development', ...(shell === undefined ? {} : { EXPO_PUBLIC_LOGIN_SCENARIO: shell }) };
+      expect(readSimEnvironment(mobileDir, {}, env).loginScenario).toBe(expected);
+    } finally { rmSync(mobileDir, { recursive: true, force: true }); }
+
   });
 
   it.each([false, true])('preserves custom-port ownership when occupied=%s', async (occupied) => {
@@ -114,9 +116,8 @@ describe('native e2e environment', () => {
     expect(runner).toContain('const toolEnv = resolveJavaRuntimeEnv(process.env);');
     expect(runner).toContain('...toolEnv');
     const simStart = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
-    expect(simStart).toContain("import { parseProjectEnv } from '@expo/env';");
-    expect(simStart).toContain('projectEnv.env.EXPO_PUBLIC_LOGIN_SCENARIO');
-    expect(simStart).toContain('const loginScenario = process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()');
+    expect(simStart).toContain("import { readSimEnvironment } from './lib/sim-environment.mjs';");
+    expect(simStart).toContain('const { loginScenario, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);');
     expect(simStart).toContain('writeMetroOwner(portArgs.port, {');
     expect(simStart).toContain("child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));");
     expect(simStart).not.toContain('writeMetroOwner(DEFAULT_PORT,');

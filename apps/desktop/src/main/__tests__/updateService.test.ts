@@ -32,11 +32,18 @@ const appGetPath = vi.fn((name: string) => {
 const fetchManifest = vi.fn();
 const getBaseUrl = vi.fn(() => CDN_EXTERNAL_BASE_URL);
 const isDev = vi.fn(() => false);
+const syncWindowsVersionAfterUpdate = vi.fn(async () => undefined);
 const download = vi.fn();
 const readAutoUpdateSettings = vi.fn(() => ({ autoRelaunchOnIdle: true }));
 const spawnProcess = vi.fn(() => ({
   unref: vi.fn(),
   on: vi.fn(),
+}));
+const findLinuxUserInstallation = vi.fn(() => null);
+const isDebianManagedInstallation = vi.fn(() => false);
+const missingLinuxUserInstallTools = vi.fn(() => [] as string[]);
+vi.mock('../linuxInstallation', () => ({
+  findLinuxUserInstallation, isDebianManagedInstallation, missingLinuxUserInstallTools,
 }));
 const checkWindowsUpdaterPrerequisites = vi.fn<
   () => { satisfied: boolean; missingFiles: string[] }
@@ -152,6 +159,11 @@ vi.mock('../windowsUpdaterPrerequisites', () => ({
   stageBundledWindowsUpdaterRuntime,
 }));
 
+vi.mock('../windowsInstallationVersion', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../windowsInstallationVersion')>(),
+  syncWindowsVersionAfterUpdate,
+}));
+
 vi.mock('../security/trustedAppRenderer', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
 }));
@@ -201,6 +213,11 @@ afterAll(() => {
   fs.rmSync(TEST_ROOT, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 beforeEach(() => {
+  // Own every startup/background timer so afterEach can cancel it before the
+  // app.getPath mock starts pointing at the next test's isolated fixture.
+  // stopUpdateService clears intervals but not the initial 10-second check.
+  vi.useFakeTimers();
+  syncWindowsVersionAfterUpdate.mockClear();
   browserWindowGetAllWindows.mockReset();
   browserWindowGetAllWindows.mockReturnValue([]);
   ipcHandlers.clear();
@@ -249,6 +266,12 @@ beforeEach(() => {
   readAutoUpdateSettings.mockReset();
   readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
   spawnProcess.mockClear();
+  findLinuxUserInstallation.mockReset();
+  findLinuxUserInstallation.mockReturnValue(null);
+  isDebianManagedInstallation.mockReset();
+  isDebianManagedInstallation.mockReturnValue(false);
+  missingLinuxUserInstallTools.mockReset();
+  missingLinuxUserInstallTools.mockReturnValue([]);
   checkWindowsUpdaterPrerequisites.mockReset();
   checkWindowsUpdaterPrerequisites.mockReturnValue({
     satisfied: true,
@@ -270,6 +293,34 @@ afterEach(() => {
 });
 
 describe.sequential('updateService', () => {
+describe('installation version repair scope', () => {
+  it.each(['darwin', 'linux'] as const)('does not add metadata work to %s startup', async (platform) => {
+    const service = await freshUpdateService(platform);
+    service.initUpdateService();
+    expect(syncWindowsVersionAfterUpdate).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('does not touch Windows development installations', async () => {
+    const service = await freshUpdateService('win32');
+    isDev.mockReturnValue(true);
+    service.initUpdateService();
+    expect(syncWindowsVersionAfterUpdate).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('checks only the current Windows install and its existing update receipt', async () => {
+    const service = await freshUpdateService('win32');
+    service.initUpdateService();
+    expect(syncWindowsVersionAfterUpdate).toHaveBeenCalledOnce();
+    expect(syncWindowsVersionAfterUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'win32', packaged: true, version: appGetVersion(), exePath: TEST_EXE,
+      patchInfoPath: path.join(TEST_USER_DATA, 'updates', 'patch-info.json'),
+    }));
+    service.stopUpdateService();
+  });
+});
+
 describe('binary version checks after a user-requested update', () => {
   beforeEach(() => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
@@ -349,6 +400,9 @@ describe('binary version checks after a user-requested update', () => {
       await service.checkForUpdate(updateManifest());
       ipcListeners.get('update-relaunch')?.({}, 'dark');
       await vi.waitFor(() => { expect(childListeners.has('error')).toBe(true); });
+      const [, updaterArgs, updaterOptions] = spawnProcess.mock.calls.at(-1)! as unknown as [string, string[], { env: Record<string, string> }];
+      expect(updaterArgs).not.toContain('--install-key');
+      expect(updaterOptions.env.CINDY_VERSION_SYNC_KEY).toMatch(/^[0-9a-f-]{36}$/);
       const markerPath = path.join(TEST_USER_DATA, 'agent-binary-update-once.json');
       expect(fs.existsSync(markerPath)).toBe(true);
       childListeners.get('error')?.(Object.assign(new Error('spawn denied'), { code: 'EACCES' }));
@@ -449,6 +503,33 @@ function linuxInstallerManifest(version = '0.0.65') {
 }
 
 describe('checkForUpdate Linux installer flow', () => {
+  it('does not quit or increment attempts for an unmanaged Linux installation', async () => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready', errorCode: 'linux_installation_unsupported',
+      }));
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(info.applyAttempts).toBeUndefined();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', info.fileName))).toBe(true);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
   it('downloads the Linux installer .deb instead of a hotfix zip', async () => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
