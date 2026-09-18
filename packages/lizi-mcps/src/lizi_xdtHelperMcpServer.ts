@@ -33,6 +33,9 @@ import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
+import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
+import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/move_session.js';
+import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
   registerGetCurrentSessionIdTool,
@@ -631,6 +634,10 @@ export interface XdtHelperMcpDeps {
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
    */
   sendToSession?: SendToSessionCallback;
+  /** Register an existing local directory as a Cindy project without starting a task. */
+  createProject?: CreateProjectCallback;
+  moveSession?: MoveSessionCallback;
+  projectManagement?: ProjectManagementCallbacks;
   /** Cindy Bot-only background Session-task controls. Host validates the caller Session. */
   sessionTasks?: SessionTaskCallbacks;
   botRoutines?: BotRoutineCallbacks;
@@ -714,6 +721,24 @@ export function createXdtHelperMcpServer(
     registerSetCurrentSessionTitleTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       setCurrentSessionTitle: deps.setCurrentSessionTitle,
+    });
+  }
+  if (deps.createProject) {
+    registerCreateProjectTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      createProject: deps.createProject,
+    });
+  }
+  if (deps.projectManagement) {
+    registerProjectManagementTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.projectManagement,
+    });
+  }
+  if (deps.moveSession) {
+    registerMoveSessionTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      moveSession: deps.moveSession,
     });
   }
   if (deps.renameSessions) {

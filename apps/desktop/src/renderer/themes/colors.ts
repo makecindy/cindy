@@ -2096,6 +2096,22 @@ const GENERATED_DEFAULTS = {
   "form-field-hint": {
     "light": "var(--text-secondary-mid)",
     "dark": "var(--text-secondary-mid)"
+  },
+  "slider-track": {
+    "light": "var(--border-default)",
+    "dark": "var(--border-default)"
+  },
+  "slider-fill": {
+    "light": "var(--text-primary)",
+    "dark": "var(--text-primary)"
+  },
+  "slider-thumb": {
+    "light": "var(--surface-elevated)",
+    "dark": "var(--text-primary)"
+  },
+  "slider-thumb-shadow": {
+    "light": "0 1px 3px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08)",
+    "dark": "0 1px 3px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.16)"
   }
 } as const;
 
@@ -3035,3 +3051,11 @@ registerColor('button-cta-pressed', {
 
 // DS-11 readable form help; preserves existing Cindy secondary-information colors.
 registerColor('form-field-hint', GENERATED_DEFAULTS["form-field-hint"], '表单阅读说明；独立于 metadata 与 placeholder，允许主题单独调节');
+
+registerColor('slider-track', GENERATED_DEFAULTS["slider-track"], '共享 Slider 组件颜色');
+
+registerColor('slider-fill', GENERATED_DEFAULTS["slider-fill"], '共享 Slider 组件颜色');
+
+registerColor('slider-thumb', GENERATED_DEFAULTS["slider-thumb"], '共享 Slider 组件颜色');
+
+registerColor('slider-thumb-shadow', GENERATED_DEFAULTS["slider-thumb-shadow"], 'Slider 滑块阴影:用户批准 2026-09-17');

@@ -180,6 +180,9 @@ const GENERATED_OVERRIDES = {
   "sidebar-user-card-bg-hover": "rgba(255, 255, 255, 0.10)",
   "sidebar-user-card-border": "rgba(255, 255, 255, 0.13)",
   "sidebar-user-card-text": "#D4D4D4",
+  "slider-track": "#626262", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "slider-fill": "#EEEEEE", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "slider-thumb": "#FCFCFC", // Slider 用户定稿 2026-09-17;与 Switch 独立
 } as const;
 // END GENERATED DS-8: theme
 

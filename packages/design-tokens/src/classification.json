@@ -1,12 +1,12 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 543,
+  "snapshotCount": 547,
   "categories": {
     "literal": 265,
-    "alias": 242,
+    "alias": 245,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 30
+    "runtime-derived-or-protected": 31
   },
   "entries": [
     {
@@ -5410,6 +5410,50 @@
         "light": "text-secondary-mid",
         "dark": "text-secondary-mid"
       },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-track",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-fill",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-thumb",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-thumb-shadow",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "shadow",
+      "darkKind": "shadow",
       "modeledAsSemantic": false
     }
   ]

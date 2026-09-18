@@ -222,6 +222,9 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'text-tertiary-hsl': { light: '60.0 1.9% 41.2%', dark: '0.0 0.0% 75.7%' },
   'text-disabled': { light: '#6B6B67', dark: '#C1C1C1' },
   'text-disabled-tertiary': { light: '#6B6B67', dark: '#C1C1C1' },
+  'slider-track': { light: '#A3A39E', dark: '#626262' },
+  'slider-fill': { light: '#3C3F43', dark: '#EEEEEE' },
+  'slider-thumb': { light: '#FDFDF8', dark: '#FCFCFC' },
   'switch-track-off': { light: '#888888', dark: '#787878' }, // 用户调参 2026-08-05:两端都顶到 3:1 底线内的极值拉开开/关差距——light 最亮档 #888888(×surface 3.03),dark 最深档 #787878(×elevated 3.01,等效白 36% 透明)
   'switch-track-on': { light: '#417CDD', dark: '#417CDD' }, // 用户裁决 2026-09-15:两模式开启轨道改为蓝色,替代 2026-08-05 中性开启态;亮色滑块后续裁决见下
   'switch-thumb-on': { light: 'hsl(var(--background))', dark: '#FCFCFC' }, // 用户批准 2026-09-16:暗色亮滑块,浅色保留别名

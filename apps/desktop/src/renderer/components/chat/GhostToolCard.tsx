@@ -1,3 +1,6 @@
+import { createRoot } from 'react-dom/client';
+import { MediaScrubber } from '@/components/ui/media-scrubber';
+import sliderCss from '@/components/ui/slider.css?inline';
 /**
  * GhostToolCard — 消息流「意识卡片」(卡槽③海报模式)。
  *
@@ -102,10 +105,7 @@ function buildAudioRowHtml(durationLabel: string): string {
     AUDIO_PLAY_SVG +
     '</button>' +
     `<span data-x-cur style="${timeStyle}">0:00</span>` +
-    '<div data-x-track style="position:relative;height:4px;flex:1;cursor:pointer;border-radius:9999px;background:var(--msg-tool-card-border,#d7d7d4);touch-action:none">' +
-    '<div data-x-fill style="position:absolute;left:0;top:0;height:100%;width:0%;border-radius:9999px;background:var(--msg-tool-card-text,#262626)"></div>' +
-    '<div data-x-dot style="position:absolute;top:50%;left:-5px;width:10px;height:10px;transform:translateY(-50%);border-radius:9999px;background:var(--msg-tool-card-text,#262626)"></div>' +
-    '</div>' +
+    '<div data-x-track style="flex:1;min-width:0"></div>' +
     `<span data-x-dur style="${timeStyle}">${durationLabel}</span>` +
     '</div>'
   );
@@ -139,6 +139,7 @@ function buildCardSrcDoc(sanitizedHtml: string, themeVars: string): string {
     // 时突兀。改由宿主用 Web Animations API 逐个判 iterations,见 hiddenAnimationGate 的
     // syncFrameAnimations 与下面 onLoad 的对齐。
     '<style>html,body{margin:0;padding:0;overflow:hidden;font-family:system-ui,-apple-system,sans-serif}img{max-width:100%;-webkit-user-drag:none;-webkit-user-select:none;user-select:none}@media (prefers-reduced-motion:reduce){*{animation:none!important}}</style>',
+    `<style>${sliderCss}</style>`,
     '</head><body>',
     sanitizedHtml,
     '</body></html>',
@@ -281,9 +282,9 @@ function GhostCardCanvas({
       const curEl = slot.querySelector<HTMLElement>('[data-x-cur]');
       const durEl = slot.querySelector<HTMLElement>('[data-x-dur]');
       const trackEl = slot.querySelector<HTMLElement>('[data-x-track]');
-      const fillEl = slot.querySelector<HTMLElement>('[data-x-fill]');
-      const dotEl = slot.querySelector<HTMLElement>('[data-x-dot]');
-      if (!btn || !curEl || !durEl || !trackEl || !fillEl || !dotEl) return;
+      if (!btn || !curEl || !durEl || !trackEl) return;
+      // Mount the same production component inside the host-owned audio slot.
+      const scrubberRoot = createRoot(trackEl);
 
       const getDur = (): number =>
         Number.isFinite(a.duration) && a.duration > 0
@@ -291,9 +292,10 @@ function GhostCardCanvas({
           : Number.isFinite(declared) && declared > 0 ? declared : 0;
       const render = (): void => {
         const d = getDur();
-        const pct = d > 0 ? Math.min(100, Math.max(0, (a.currentTime / d) * 100)) : 0;
-        fillEl.style.width = `${pct}%`;
-        dotEl.style.left = `calc(${pct}% - 5px)`;
+        scrubberRoot.render(<MediaScrubber currentTime={a.currentTime}
+          duration={d}
+          label={t('chat.media.audioProgress')}
+          onSeek={(seconds) => { a.currentTime = seconds; render(); }} />);
         curEl.textContent = formatAudioClock(a.currentTime);
         durEl.textContent = formatAudioClock(d);
         btn.innerHTML = a.paused ? AUDIO_PLAY_SVG : AUDIO_PAUSE_SVG;
@@ -313,6 +315,8 @@ function GhostCardCanvas({
       audioBindsRef.current.set(url, () => {
         for (const ev of evs) a.removeEventListener(ev, render);
         a.removeEventListener('ended', onEnded);
+        // Parent React cleanup may be committing; dispose the nested root afterward.
+        queueMicrotask(() => scrubberRoot.unmount());
       });
 
       btn.addEventListener('click', () => {
@@ -320,32 +324,6 @@ function GhostCardCanvas({
         if (a.paused) void a.play().catch(() => undefined);
         else a.pause();
       });
-      // scrub:click + pointer drag 复用;capture 让拖出插槽仍收 move/up。
-      let dragging = false;
-      const seekTo = (clientX: number): void => {
-        const d = getDur();
-        if (!d) return;
-        const rect = trackEl.getBoundingClientRect();
-        const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-        a.currentTime = ratio * d;
-        render();
-      };
-      trackEl.addEventListener('pointerdown', (e) => {
-        if (!getDur()) return;
-        trackEl.setPointerCapture(e.pointerId);
-        dragging = true;
-        seekTo(e.clientX);
-      });
-      trackEl.addEventListener('pointermove', (e) => {
-        if (dragging) seekTo(e.clientX);
-      });
-      const endDrag = (e: PointerEvent): void => {
-        if (!dragging) return;
-        dragging = false;
-        if (trackEl.hasPointerCapture(e.pointerId)) trackEl.releasePointerCapture(e.pointerId);
-      };
-      trackEl.addEventListener('pointerup', endDrag);
-      trackEl.addEventListener('pointercancel', endDrag);
       // 右键 → 宿主菜单(打开音频所在目录);坐标换算同图片菜单。
       slot.addEventListener('contextmenu', (e) => {
         e.preventDefault();

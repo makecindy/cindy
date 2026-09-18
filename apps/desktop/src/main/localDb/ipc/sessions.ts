@@ -27,7 +27,14 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
-import { selectSessionListRows, selectSessionWithCount, selectSessionsByIds, flattenSessionReadRow, projectSessionReadResult, type SessionListRow } from '../sessionQueries';
+import {
+  selectSessionListRows,
+  selectSessionWithCount,
+  selectSessionsByIds,
+  flattenSessionReadRow,
+  projectSessionReadResult,
+  type SessionListRow,
+} from '../sessionQueries';
 import { commitBotProfileDeletion } from '../botProfileDeletionStore.js';
 import {
   persistSessionListProjectionBatch,
@@ -90,7 +97,10 @@ import {
 import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
 import { SESSION_READ_BATCH_LIMIT } from '../../../shared/sessionRead';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
-import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
@@ -381,7 +391,7 @@ export function broadcastSessionPatched(
   }
   for (const w of windows) {
     try {
-      if (w.isDestroyed()) continue;
+      if (!isTrustedAppRendererWindow(w)) continue;
       if (hasCapturedScope) {
         w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
       } else if (ownerStamp === undefined) {
@@ -403,7 +413,7 @@ function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): v
   const hasCapturedScope = ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed()) continue;
+    if (!isTrustedAppRendererWindow(window)) continue;
     if (hasCapturedScope || ownerStamp !== undefined) {
       window.webContents.send('local-db:recent-workdirs:changed', { path }, ownerStamp);
     } else {
@@ -1246,7 +1256,9 @@ export function registerSessionIpc(
         }
 
         scheduleSessionListProjectionBackfill(mergedRows);
-        return mergedRows.map((row) => projectSessionReadResult(flattenSessionReadRow(row), opts.resolveContextWindow));
+        return mergedRows.map((row) =>
+          projectSessionReadResult(flattenSessionReadRow(row), opts.resolveContextWindow),
+        );
       };
       const loadUsageHistoryRows = async () => {
         // 用量历史的“最耗任务”必须覆盖整个会话表，再由 renderer 按所选日历范围
@@ -1536,7 +1548,10 @@ export function registerSessionIpc(
   ipcMain.handle('local-db:sessions:get-many', async (event, value: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     if (!Array.isArray(value) || value.length > SESSION_READ_BATCH_LIMIT) {
-      throwIpcError('INVALID_PARAMS', `sessionIds must be an array of at most ${SESSION_READ_BATCH_LIMIT} ids`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `sessionIds must be an array of at most ${SESSION_READ_BATCH_LIMIT} ids`,
+      );
     }
     const ids = [...new Set(value.map((id) => requireString(id, 'sessionId')))];
     if (!ids.length) return [];
@@ -1734,7 +1749,16 @@ export async function updateSessionInDb(
   sid: string,
   p: Record<string, unknown>,
   opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
+  moveGuard?: {
+    /** Identity only: also used after commit and inside transcript relocation. */
+    assertCurrent: () => void;
+    /** Runs inside the existing route/worktree locks, including dialogue moves. */
+    beforeUpdate: () => Promise<void>;
+    /** Mutable running/IM preconditions must not reject an already committed move. */
+    beforeWrite?: () => void | Promise<void>;
+  },
 ): Promise<ReturnType<typeof sessionToCamel>> {
+  moveGuard?.assertCurrent();
   const ownerScope = captureOwnerScope();
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
     throwIpcError(
@@ -1747,6 +1771,11 @@ export async function updateSessionInDb(
   // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
   // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
   const update = async () => {
+    if (moveGuard) {
+      moveGuard.assertCurrent();
+      await moveGuard.beforeUpdate();
+      moveGuard.assertCurrent();
+    }
     if (p.workspaceKind !== undefined) {
       const value = p.workspaceKind;
       if (value !== 'project' && value !== 'dialogue') {
@@ -1790,7 +1819,7 @@ export async function updateSessionInDb(
         );
       }
     }
-    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
+    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,提交前对比实际变化。
     // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报
     // "No conversation found with session ID"(见 claude-transcript-relocation.ts)。
     const beforeMove =
@@ -1858,6 +1887,7 @@ export async function updateSessionInDb(
     // before persisting the new directory so the next send lazily recreates the
     // runtime with the moved session's cwd instead of continuing in the old one.
     if (movingLocalNonClaudeSession) {
+      moveGuard?.assertCurrent();
       if (!opts.closeIdleSessionForMove) {
         throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
       }
@@ -1893,6 +1923,34 @@ export async function updateSessionInDb(
       setObj.listPreview = null;
       setObj.listPreviewRole = null;
     }
+    // 在提交新 cwd 前完成现有 CC 迁移,与 Pi/Codex 的 runtime 关闭同处提交前。
+    // 迁移只复制、不删除旧转录:切账号或写库失败时旧 cwd 仍可恢复；提交后
+    // 围栏即使拒绝返回,也不会留下新 cwd 配旧转录。复用原锁与 best-effort 策略。
+    // 动态 import 避免 localDb → maker-host 静态模块环。
+    if (
+      beforeMove &&
+      beforeMove.agentKind === 'cc' &&
+      !beforeMove.remoteHostId &&
+      beforeMove.workingDir &&
+      typeof p.workingDir === 'string' &&
+      p.workingDir &&
+      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
+    ) {
+      const m = await import('../../maker-host/claude-transcript-relocation.js');
+      moveGuard?.assertCurrent();
+      await moveGuard?.beforeWrite?.();
+      moveGuard?.assertCurrent();
+      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
+        sid,
+        beforeMove.workingDir,
+        p.workingDir,
+        ...(moveGuard ? [{ client: dbClient, assertCurrent: moveGuard.assertCurrent }] : []),
+      );
+      if (reloc.persistedSdkSessionId) {
+        p.sdkSessionId = reloc.persistedSdkSessionId;
+        setObj.sdkSessionId = reloc.persistedSdkSessionId;
+      }
+    }
     // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
     // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
     // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
@@ -1905,12 +1963,16 @@ export async function updateSessionInDb(
       sid,
       p.status,
       async () => {
+        moveGuard?.assertCurrent();
         if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
+        await moveGuard?.beforeWrite?.();
+        moveGuard?.assertCurrent();
         await writeSessionPatch(db, sid, setObj, p.status);
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
       },
       p.workingDir !== undefined,
     );
+    moveGuard?.assertCurrent();
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
@@ -1923,31 +1985,8 @@ export async function updateSessionInDb(
       }
       void recomputePrRefsForSession(sid).catch(() => undefined);
     }
-    // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
-    // renderer 拿到更新结果时转录已就位(用户可立即续聊),且迁移中持久化的最新
-    // sdkSessionId 能进返回行与广播 patch——否则 renderer 留着旧 resume id,下一次
-    // lazy-create 仍会 resume 到 pre-fork 会话。内部 best-effort 不抛错。
-    // 动态 import 避免 localDb → maker-host 的静态模块环(同下方 sessionTaskSummary)。
-    if (
-      beforeMove &&
-      beforeMove.agentKind === 'cc' &&
-      !beforeMove.remoteHostId &&
-      beforeMove.workingDir &&
-      typeof p.workingDir === 'string' &&
-      p.workingDir &&
-      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
-    ) {
-      const m = await import('../../maker-host/claude-transcript-relocation.js');
-      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
-        sid,
-        beforeMove.workingDir,
-        p.workingDir,
-      );
-      if (reloc.persistedSdkSessionId) {
-        (p as Record<string, unknown>).sdkSessionId = reloc.persistedSdkSessionId;
-      }
-    }
     const row = await selectSessionWithCount(db, sid);
+    moveGuard?.assertCurrent();
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
     if (p.pinnedAt !== undefined && row.pinnedAt == null) {
@@ -2007,6 +2046,7 @@ export async function updateSessionInDb(
               ? { status: broadcastStatus }
               : {}),
           };
+    moveGuard?.assertCurrent();
     if (
       projectTargetChanged ||
       settingsChanged ||
@@ -2038,7 +2078,7 @@ export async function updateSessionInDb(
     compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;
   };
-  if (p.workingDir === undefined) return update();
+  if (p.workingDir === undefined && !moveGuard) return update();
   return withSessionRouteLock(sid, async () => {
     const [binding] = await db
       .select({ remoteHostId: sessions.remoteHostId })

@@ -140,6 +140,11 @@ export interface RemoteDesktopCapabilities {
   cursorOverlay?: boolean;
   clipboardText?: boolean;
   clipboardContent?: boolean;
+  clipboardSync?: boolean;
+  /** Bounded single-message clipboard payloads, with legacy chunk fallback. */
+  clipboardInline?: boolean;
+  privacyScreen?: boolean;
+  hostMute?: boolean;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -164,6 +169,15 @@ export interface RemoteDesktopLease {
   controlling: boolean;
 }
 export type RemoteDesktopRequest =
+  | {
+      op: "privacyScreen";
+      lease: string;
+      enabled: boolean;
+      lockOnExit?: boolean;
+    }
+  | { op: "hostMute"; lease: string; enabled: boolean }
+  | { op: "clipboardSync"; lease: string; enabled: boolean }
+  | { op: "clipboardVersion"; lease: string }
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
@@ -219,6 +233,26 @@ export function parseRemoteDesktopRequest(
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
     throw new Error("INVALID_LEASE");
   const lease = v.lease;
+  if (v.op === "privacyScreen" && typeof v.enabled === "boolean") {
+    if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      enabled: v.enabled,
+      ...(typeof v.lockOnExit === "boolean"
+        ? { lockOnExit: v.lockOnExit }
+        : {}),
+    };
+  }
+  if (
+    (v.op === "privacyScreen" ||
+      v.op === "clipboardSync" ||
+      v.op === "hostMute") &&
+    typeof v.enabled === "boolean"
+  )
+    return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "clipboardVersion") return { op: v.op, lease };
   if (v.op === "ice") {
     if (!isDesktopAttemptId(v.attemptId) || !isDesktopIceCursor(v.after))
       throw new Error("INVALID_REQUEST");

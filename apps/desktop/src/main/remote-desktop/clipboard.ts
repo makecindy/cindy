@@ -1,6 +1,52 @@
 import { clipboard, nativeImage } from 'electron';
-import { REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS, type DesktopInput, type RemoteClipboardContent, parseClipboardContent, CLIPBOARD_MAX_CHARS } from '@cindy/device-link';
+import { createHash } from 'node:crypto';
+import {
+  REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS,
+  type DesktopInput,
+  type RemoteClipboardContent,
+  parseClipboardContent,
+  CLIPBOARD_MAX_CHARS,
+} from '@cindy/device-link';
 import { readDesktopClipboardVersion, readDesktopSelection } from './inputHost';
+
+const IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_PIXELS = 4_000_000;
+
+function checkImageSize(width: number, height: number): void {
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width <= 0 ||
+    height <= 0 ||
+    width > IMAGE_PIXELS / height
+  )
+    throw new Error('CLIPBOARD_TOO_LONG');
+}
+
+/** Bound native encoding before PNG allocation, and Base64/hash copies afterwards. */
+function clipboardPng(image: Electron.NativeImage): Buffer {
+  if (image.isEmpty()) return Buffer.alloc(0);
+  const size = image.getSize(1);
+  checkImageSize(size.width, size.height);
+  const png = image.toPNG({ scaleFactor: 1 });
+  if (png.length > IMAGE_BYTES) throw new Error('CLIPBOARD_TOO_LONG');
+  return png;
+}
+
+function incomingPng(encoded: string): Buffer {
+  if (encoded.length > Math.ceil(IMAGE_BYTES / 3) * 4) throw new Error('CLIPBOARD_TOO_LONG');
+  const bytes = Buffer.from(encoded, 'base64');
+  if (bytes.length > IMAGE_BYTES) throw new Error('CLIPBOARD_TOO_LONG');
+  if (
+    bytes.length < 33 ||
+    !bytes
+      .subarray(0, 16)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]))
+  )
+    throw new Error('CLIPBOARD_UNSUPPORTED');
+  checkImageSize(bytes.readUInt32BE(16), bytes.readUInt32BE(20));
+  return bytes;
+}
 
 /** Explicit selection/text transfer. No background sync, logging or persistence. */
 export async function transferDesktopClipboard(
@@ -56,23 +102,29 @@ export async function transferDesktopClipboardContent(
   content: RemoteClipboardContent | undefined,
   isCurrent: () => boolean,
   input: (events: DesktopInput[]) => void,
-): Promise<RemoteClipboardContent | void> {
-  const check = () => { if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED'); };
+  options?: { sync?: boolean; version?: string },
+): Promise<RemoteClipboardContent | { version: string } | void> {
+  const check = () => {
+    if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  };
   check();
-  input([{ kind: 'release' }]);
+  if (!options?.sync) input([{ kind: 'release' }]);
   if (action === 'copy') {
-    const selected = await readDesktopSelection(true);
+    const selected = options?.sync ? null : await readDesktopSelection(true);
     check();
     if (selected) return { text: selected };
     const before = await readDesktopClipboardVersion(true);
     check();
+    if (options?.version && before !== options.version)
+      throw new Error('DESKTOP_CLIPBOARD_CHANGED');
     const formats = clipboard.availableFormats();
     // A file-backed image may also expose a portable bitmap. Never read the
     // file flavor or dereference its path; a file alone remains unsupported.
-    const fileBacked = formats.some((format) => /file-url|filenames|hdrop|filecontents|filegroupdescriptor|uri-list/i.test(format));
+    const fileBacked = formats.some((format) =>
+      /file-url|filenames|hdrop|filecontents|filegroupdescriptor|uri-list/i.test(format),
+    );
     const image = clipboard.readImage();
-    if (fileBacked && image.isEmpty())
-      throw new Error('CLIPBOARD_UNSUPPORTED');
+    if (fileBacked && image.isEmpty()) throw new Error('CLIPBOARD_UNSUPPORTED');
     const snapshot: RemoteClipboardContent = {};
     // File-manager text/HTML can be a local path rather than image content.
     const text = fileBacked ? '' : clipboard.readText();
@@ -82,41 +134,59 @@ export async function transferDesktopClipboardContent(
     if (html) snapshot.html = html;
     if (rtf) snapshot.rtf = rtf;
     if (!image.isEmpty()) {
-      const size = image.getSize();
-      if (size.width * size.height > 64_000_000) throw new Error('CLIPBOARD_TOO_LONG');
-      snapshot.png = image.toPNG().toString('base64');
+      snapshot.png = clipboardPng(image).toString('base64');
     }
     const after = await readDesktopClipboardVersion(true);
     check();
     if (before !== after) throw new Error('DESKTOP_CLIPBOARD_CHANGED');
-    if (!Object.keys(snapshot).length) throw new Error(formats.length ? 'CLIPBOARD_UNSUPPORTED' : 'CLIPBOARD_EMPTY');
+    if (!Object.keys(snapshot).length)
+      throw new Error(formats.length ? 'CLIPBOARD_UNSUPPORTED' : 'CLIPBOARD_EMPTY');
     const json = JSON.stringify(snapshot);
     if (json.length > CLIPBOARD_MAX_CHARS) throw new Error('CLIPBOARD_TOO_LONG');
     return parseClipboardContent(json);
   }
   if (!content) throw new Error('CLIPBOARD_EMPTY');
+  const pngBytes = content.png ? incomingPng(content.png) : undefined;
   const value = parseClipboardContent(JSON.stringify(content));
   let image: Electron.NativeImage | undefined;
   if (value.png) {
-    const bytes = Buffer.from(value.png, 'base64');
-    // Bound decompression before passing untrusted image bytes to nativeImage.
-    if (bytes.length < 24 || bytes.readUInt32BE(16) * bytes.readUInt32BE(20) > 64_000_000)
-      throw new Error('CLIPBOARD_TOO_LONG');
-    image = nativeImage.createFromBuffer(bytes);
+    image = nativeImage.createFromBuffer(pngBytes!);
     if (image.isEmpty()) throw new Error('CLIPBOARD_UNSUPPORTED');
   }
-  await readDesktopClipboardVersion();
+  const version = await readDesktopClipboardVersion();
   check();
+  if (options?.version && version !== options.version) throw new Error('DESKTOP_CLIPBOARD_CHANGED');
   clipboard.write({
     ...(value.text || value.url ? { text: value.text || value.url } : {}),
     ...(value.html ? { html: value.html } : {}),
     ...(value.rtf ? { rtf: value.rtf } : {}),
     ...(image ? { image } : {}),
   });
-  if ((image && clipboard.readImage().isEmpty()) ||
-      (value.text && clipboard.readText() !== value.text))
+  if (
+    (image && clipboard.readImage().isEmpty()) ||
+    (value.text && clipboard.readText() !== value.text)
+  )
     throw new Error('DESKTOP_CLIPBOARD_WRITE_FAILED');
   check();
+  if (options?.sync) {
+    const fingerprint = () =>
+      createHash('sha256')
+        .update(
+          JSON.stringify([
+            clipboard.availableFormats(),
+            clipboard.readText(),
+            clipboard.readHTML(),
+            clipboard.readRTF(),
+          ]),
+        )
+        .update(clipboardPng(clipboard.readImage()))
+        .digest('hex');
+    const written = fingerprint();
+    const version = await readDesktopClipboardVersion(true);
+    check();
+    if (fingerprint() !== written) throw new Error('DESKTOP_CLIPBOARD_CHANGED');
+    return { version };
+  }
   const modifier = process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
   input([
     { kind: 'release' },
