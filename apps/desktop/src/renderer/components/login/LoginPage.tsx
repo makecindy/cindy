@@ -1,6 +1,4 @@
 import {
-  lazy,
-  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -107,11 +105,6 @@ const REGION_PILL_KEY: Partial<Record<typeof CURRENT_CINDY_REGION, string>> = {
 };
 
 const log = createLogger('LoginPage');
-const AccountSwitcherDialog = lazy(() =>
-  import('@/components/sidebar/AccountSwitcherDialog').then((module) => ({
-    default: module.AccountSwitcherDialog,
-  })),
-);
 
 /**
  * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库)。
@@ -138,7 +131,6 @@ export function LoginPage({
     hasAccountDeletionReceipt = false,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
-    listAccounts,
     dispatch,
     dispatchWithResult,
     clearError,
@@ -147,34 +139,13 @@ export function LoginPage({
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
   const isAddAccount = intent === 'add-account';
-  const accountSwitcherTriggerRef = useRef<HTMLButtonElement>(null);
   const accountListRef = useRef<HTMLDivElement>(null);
-  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
-  const [hasSavedAccounts, setHasSavedAccounts] = useState(false);
   const accountCount = loginState?.step === 'account-selection' ? loginState.accounts.length : 0;
 
   useEffect(() => {
     if (accountCount <= 3 || !accountListRef.current) return;
     flashScrollbar(accountListRef.current);
   }, [accountCount]);
-
-  useEffect(() => {
-    if (isAddAccount || !listAccounts) {
-      setHasSavedAccounts(false);
-      return;
-    }
-    let active = true;
-    void listAccounts()
-      .then((snapshot) => {
-        if (active) setHasSavedAccounts(snapshot.accounts.length > 0);
-      })
-      .catch(() => {
-        if (active) setHasSavedAccounts(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [isAddAccount, listAccounts]);
 
   // 主题跟随(DESIGN.md §16.5):首次打开 Cindy → 亮色登录界面(默认);第二次起
   // → 跟随用户上一次使用的主题。首启亮色门在 bootstrap 已生效(品牌舞台首帧即
@@ -1360,52 +1331,31 @@ export function LoginPage({
       ? `opacity ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}, transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
       : undefined,
   };
-  const accountSwitcherEntry =
-    !isAddAccount && hasSavedAccounts && loginState?.step !== 'browser-redirect' ? (
-      <button
-        ref={accountSwitcherTriggerRef}
-        data-testid="login-account-switcher"
-        type="button"
-        onClick={() => setAccountSwitcherOpen(true)}
-        className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-        style={{ minHeight: 40 }}
+  const loginFooter = showLocalModeFooter ? (
+    <>
+      <div className="flex items-center justify-center gap-3">
+        <button
+          data-testid="login-local-mode"
+          type="button"
+          disabled={localModePending || isLoading}
+          // error 步逃生入口与面板内文字按钮同口径:过协议门(2026-07-29 拍板)
+          onClick={() => requireConsent(() => void openLocalMode(), { deferConsentPersist: true })}
+          aria-describedby="login-local-mode-description"
+          className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ minHeight: 40 }}
+        >
+          {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
+        </button>
+      </div>
+      <span
+        id="login-local-mode-description"
+        className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
+        style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
       >
-        {t('sidebar.accountSwitcher.title')}
-      </button>
-    ) : null;
-  const loginFooter =
-    showLocalModeFooter || accountSwitcherEntry ? (
-      <>
-        <div className="flex items-center justify-center gap-3">
-          {accountSwitcherEntry}
-          {showLocalModeFooter ? (
-            <button
-              data-testid="login-local-mode"
-              type="button"
-              disabled={localModePending || isLoading}
-              // error 步逃生入口与面板内文字按钮同口径:过协议门(2026-07-29 拍板)
-              onClick={() =>
-                requireConsent(() => void openLocalMode(), { deferConsentPersist: true })
-              }
-              aria-describedby="login-local-mode-description"
-              className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-              style={{ minHeight: 40 }}
-            >
-              {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
-            </button>
-          ) : null}
-        </div>
-        {showLocalModeFooter ? (
-          <span
-            id="login-local-mode-description"
-            className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
-            style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
-          >
-            {t('login.localModeDescription')}
-          </span>
-        ) : null}
-      </>
-    ) : null;
+        {t('login.localModeDescription')}
+      </span>
+    </>
+  ) : null;
 
   return (
     // 根级 z-[9990] 建立 LoginPage 自己的 stacking context:整体压过品牌 overlay
@@ -1420,19 +1370,6 @@ export function LoginPage({
       >
         {node}
       </LoginStage>
-      {accountSwitcherOpen ? (
-        <Suspense fallback={null}>
-          <AccountSwitcherDialog
-            open
-            onOpenChange={setAccountSwitcherOpen}
-            onAddAccount={() => {
-              setAccountSwitcherOpen(false);
-              reset();
-            }}
-            triggerRef={accountSwitcherTriggerRef}
-          />
-        </Suspense>
-      ) : null}
       {/* 注销状态提示气泡(figma 678:1075「注销状态」组件集):浮层——不占文档流、
           不推挤下方内容,z-30 盖过 stage 全部内容(低于拖拽条 z-40 与协议弹窗 z-50);
           窗口顶 72px 恒定、水平窗口居中、宽 670 恒定,均不随 loginScale 缩放。
@@ -1491,19 +1428,30 @@ export function LoginPage({
       )}
       {realmConfirmation && (
         <LoginConsentDialog
-          title={t(realmConfirmation.personalLoginAvailable
-            ? 'login.realmConsent.personalTitle' : 'login.realmConsent.title')}
+          title={t(
+            realmConfirmation.personalLoginAvailable
+              ? 'login.realmConsent.personalTitle'
+              : 'login.realmConsent.title',
+          )}
           body={t(
             realmConfirmation.personalLoginAvailable
-              ? (realmConfirmation.targetRegion === 'cn'
-                ? 'login.realmConsent.personalBodyCn' : 'login.realmConsent.personalBodyGlobal')
-              : (realmConfirmation.targetRegion === 'cn'
-                ? 'login.realmConsent.bodyCn' : 'login.realmConsent.bodyGlobal'),
+              ? realmConfirmation.targetRegion === 'cn'
+                ? 'login.realmConsent.personalBodyCn'
+                : 'login.realmConsent.personalBodyGlobal'
+              : realmConfirmation.targetRegion === 'cn'
+                ? 'login.realmConsent.bodyCn'
+                : 'login.realmConsent.bodyGlobal',
           )}
-          agreeLabel={t(realmConfirmation.personalLoginAvailable
-            ? 'login.realmConsent.enterpriseLogin' : 'login.realmConsent.agree')}
-          disagreeLabel={t(realmConfirmation.personalLoginAvailable
-            ? 'login.realmConsent.continuePersonal' : 'login.realmConsent.disagree')}
+          agreeLabel={t(
+            realmConfirmation.personalLoginAvailable
+              ? 'login.realmConsent.enterpriseLogin'
+              : 'login.realmConsent.agree',
+          )}
+          disagreeLabel={t(
+            realmConfirmation.personalLoginAvailable
+              ? 'login.realmConsent.continuePersonal'
+              : 'login.realmConsent.disagree',
+          )}
           onAgree={() => void dispatch({ type: 'confirm-sso-realm' })}
           onDisagree={() => void dispatch({ type: 'cancel-sso-realm' })}
           onOpenTerms={() => undefined}

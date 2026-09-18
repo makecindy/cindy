@@ -58,6 +58,7 @@ import { projectHistoryView, HistoryViewHandoff } from '@cindy/maker-shared/mess
 import { getLatestMessageTodoState } from '@cindy/maker-shared/message-render';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { readCachedMessages, clearCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import { clearSystemSessionAttention, setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 
 // ─── 忠实的被控端内存替身(单一真相源)───────────────────────────────────────────
 
@@ -238,6 +239,128 @@ afterEach(() => {
 });
 
 describe('device-link controller mirror — end-to-end scenarios', () => {
+  it.each(['success', 'force', 'hidden', 'page-failed', 'interaction-failed', 'replaced'])(
+    'releases history-view read receipts only after visible successful reconciliation: %s',
+    async (scenario) => {
+      const s = sid();
+      host.enableHistoryView();
+      host.seedSession(s, {}, [dbMessage(s, 'answer', 'answer', '2026-06-15T00:00:00Z')]);
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      await makerChatStore.ensureInitialMessages(s);
+      await flush();
+      const view = getRemoteHistoryView(s)!;
+      expect(view.getSnapshot().ready).toBe(true);
+      const original = host.invoke.getMockImplementation()!;
+      let finish!: () => void;
+      host.invoke.mockImplementation(async (device, channel, args) => {
+        if (channel === 'local-db:messages:view') {
+          await new Promise<void>((done) => { finish = done; });
+          if (scenario === 'page-failed') throw new Error('history unavailable');
+        }
+        if (channel === 'maker:get-pending-interactions' && scenario === 'interaction-failed') {
+          throw new Error('interactions unavailable');
+        }
+        return original(device, channel, args);
+      });
+      const receipts = () => host.invoke.mock.calls.filter(([, channel]) => channel === 'notification:clear-session-attention');
+      clearSystemSessionAttention(s);
+      setRemoteReceiptDisplayReady(s, scenario !== 'hidden');
+      const sync = makerChatStore.reconcileRemoteMessages(s, { force: scenario === 'force' });
+      // Attach immediately: interaction errors may arrive before the page does.
+      const settled = sync.catch(() => false);
+      await flush();
+      expect(receipts()).toHaveLength(0);
+      if (scenario === 'replaced') view.setActive(false);
+      finish();
+      await settled;
+      await flush();
+      if (scenario === 'success' || scenario === 'force') {
+        expect(receipts()).toEqual([[DEVICE_ID, 'notification:clear-session-attention', [s, 'passive']]]);
+      } else {
+        expect(receipts()).toHaveLength(0);
+      }
+      setRemoteReceiptDisplayReady(s, false);
+      view.setActive(false);
+    },
+  );
+
+  it.each(['success', 'failed', 'hidden', 'collapsed'])(
+    'waits for refreshed expanded details before releasing a read receipt: %s', async (scenario) => {
+      const s = sid();
+      host.enableHistoryView(true);
+      const user = dbMessage(s, 'question', 'question', '2026-09-08T00:00:00Z', 'user');
+      const thought = (text: string) => ({
+        ...dbMessage(s, 'thought', '', '2026-09-08T00:00:01Z', 'thinking'),
+        content: { kind: 'thinking', text, durationMs: 2000, finishedAt: Date.parse('2026-09-08T00:00:03Z') },
+      });
+      host.seedSession(s, {}, [user, thought('old thought')]);
+      remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+      await makerChatStore.ensureInitialMessages(s);
+      await flush();
+      const view = getRemoteHistoryView(s)!;
+      const group = view.getSnapshot().items.find((item) => item.type === 'work')!;
+      view.setExpanded(group.key, true);
+      await flush();
+      expect(view.getSnapshot().details.get(group.key)?.complete).toBe(true);
+      host.seedSession(s, {}, [user, thought('updated thought')]);
+      const original = host.invoke.getMockImplementation()!;
+      let finish!: () => void;
+      host.invoke.mockImplementation(async (...args) => {
+        if (args[1] === 'local-db:messages:work-details') {
+          await new Promise<void>((resolve) => { finish = resolve; });
+          if (scenario === 'failed') throw new Error('details unavailable');
+        }
+        return original(...args);
+      });
+      clearSystemSessionAttention(s);
+      setRemoteReceiptDisplayReady(s, true);
+      const receipts = () => host.invoke.mock.calls.filter(([, channel]) => channel === 'notification:clear-session-attention');
+      const sync = makerChatStore.reconcileRemoteMessages(s);
+      await flush();
+      expect(finish).toBeTypeOf('function');
+      expect(receipts()).toHaveLength(0);
+      if (scenario === 'hidden') view.setActive(false);
+      if (scenario === 'collapsed') view.setExpanded(group.key, false);
+      finish();
+      await sync;
+      expect(receipts()).toHaveLength(scenario === 'success' || scenario === 'collapsed' ? 1 : 0);
+      setRemoteReceiptDisplayReady(s, false);
+      makerChatStore.purgeSession(s);
+    },
+  );
+
+  it('does not certify a history page that was already in flight before the read receipt', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'answer', 'answer', '2026-06-15T00:00:00Z')]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    await makerChatStore.ensureInitialMessages(s);
+    await flush();
+    const view = getRemoteHistoryView(s)!;
+    const original = host.invoke.getMockImplementation()!;
+    const finishes: Array<() => void> = [];
+    host.invoke.mockImplementation(async (device, channel, args) => {
+      if (channel === 'local-db:messages:view') await new Promise<void>((done) => { finishes.push(done); });
+      return original(device, channel, args);
+    });
+    const oldPage = view.refresh();
+    await flush();
+    clearSystemSessionAttention(s);
+    setRemoteReceiptDisplayReady(s, true);
+    const sync = makerChatStore.reconcileRemoteMessages(s);
+    const receipts = () => host.invoke.mock.calls.filter(([, channel]) => channel === 'notification:clear-session-attention');
+    finishes[0]();
+    await oldPage;
+    await flush();
+    expect(receipts()).toHaveLength(0);
+    expect(finishes).toHaveLength(2);
+    finishes[1]();
+    await sync;
+    expect(receipts()).toEqual([[DEVICE_ID, 'notification:clear-session-attention', [s, 'passive']]]);
+    setRemoteReceiptDisplayReady(s, false);
+    view.setActive(false);
+  });
+
   it('keeps the existing mirror when an old Host rejects history-view and raw fallback fails', async () => {
     const s = sid();
     const cached = dbMessage(s, 'cached', 'usable offline history', '2026-09-08T00:00:00Z');
@@ -953,7 +1076,9 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       expect(JSON.stringify(plan.insertion)).toContain('Collect logs');
       expect(view.getSnapshot().hasMore).toBe(false);
       expect(view.getSnapshot().details.size).toBe(0);
-      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(entry === 'resumed' ? 4 : 3);
+      // Resuming starts a new receipt sync, which must read after the already
+      // running reactivation page rather than certifying that older request.
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(entry === 'resumed' ? 5 : 3);
       expect(host.invoke.mock.calls.some(([, channel]) => channel === 'local-db:messages:list' || channel === 'local-db:messages:work-details')).toBe(false);
     } finally {
       leave?.();

@@ -7288,6 +7288,10 @@
       "downloadMobile": "Cindy モバイル版をダウンロード"
     },
     "accountSwitcher": {
+      "current": "現在のアカウント",
+      "switching": "アカウントを切り替え中…",
+      "adding": "ログインを準備中…",
+      "sharedDataRestriction": "この開発用ウィンドウは別の Cindy インスタンスとアカウントデータを共有しているため、アカウントの切り替えや追加はできません。元の Cindy ウィンドウで操作するか、独立したデータで開発版を起動してください。",
       "title": "アカウントを切り替え",
       "description": "このデバイスでログインしたアカウントを選択します",
       "syncing": "ログイン状態を確認中…",

@@ -113,9 +113,12 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
 
 vi.mock('@/contexts/WorktreeContext', () => {
   const reportLiveness = vi.fn();
+  const refreshObserved = vi.fn();
   return {
     useWorktreeForSession: () => null,
     useReportWorktreeLiveness: () => reportLiveness,
+    useObservedWorktreeForSession: () => null,
+    useRefreshObservedWorktree: () => refreshObserved,
   };
 });
 

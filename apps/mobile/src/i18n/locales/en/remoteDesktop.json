@@ -128,7 +128,7 @@
   "loadingSettings": "Loading…",
   "retrySettings": "Could not load. Tap to retry.",
   "followComputer": "Follow computer",
-  "restoreViewerDisplay": "Restore Original Resolution",
+  "restoreViewerDisplay": "Restore Original Aspect Ratio",
   "fitViewerDisplay": "Fit to This Screen",
   "fitViewerDisplayHint": "Adjusts the computer resolution to reduce empty space.",
   "resolutionHint": "Resolution changes affect the computer’s window layout. The original resolution is restored on disconnect.",

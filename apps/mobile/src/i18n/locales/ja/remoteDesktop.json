@@ -128,7 +128,7 @@
   "loadingSettings": "読み込み中…",
   "retrySettings": "読み込み失敗。タップして再試行。",
   "followComputer": "パソコンに合わせる",
-  "restoreViewerDisplay": "元の解像度に戻す",
+  "restoreViewerDisplay": "元の縦横比に戻す",
   "fitViewerDisplay": "この画面に合わせる",
   "fitViewerDisplayHint": "パソコンの解像度を調整して余白を減らします。",
   "resolutionHint": "解像度の変更はパソコンのウィンドウ配置に影響します。切断すると元の解像度に戻ります。",

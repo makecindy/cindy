@@ -7290,6 +7290,10 @@
       "downloadMobile": "Download Cindy Mobile"
     },
     "accountSwitcher": {
+      "current": "Current account",
+      "switching": "Switching accounts…",
+      "adding": "Preparing sign-in…",
+      "sharedDataRestriction": "This development window shares account data with another Cindy instance, so it cannot switch or add accounts. Use the original Cindy window, or start the development app with separate data.",
       "title": "Switch account",
       "description": "Choose an account used on this device",
       "syncing": "Checking sign-in status…",

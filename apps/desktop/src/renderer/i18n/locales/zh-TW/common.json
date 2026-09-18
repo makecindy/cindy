@@ -7288,6 +7288,10 @@
       "downloadMobile": "下載 Cindy 移動端"
     },
     "accountSwitcher": {
+      "current": "目前帳號",
+      "switching": "正在切換帳號…",
+      "adding": "正在準備登入…",
+      "sharedDataRestriction": "目前的開發視窗與另一個 Cindy 執行個體共用帳號資料，無法切換或新增帳號。請在原 Cindy 視窗操作，或使用獨立資料啟動開發版。",
       "title": "切換帳號",
       "description": "選擇這台裝置上登入過的帳號",
       "syncing": "正在檢查登入狀態…",

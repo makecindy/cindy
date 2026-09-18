@@ -7288,6 +7288,10 @@
       "downloadMobile": "下载 Cindy 移动端"
     },
     "accountSwitcher": {
+      "current": "当前账号",
+      "switching": "正在切换账号…",
+      "adding": "正在准备登录…",
+      "sharedDataRestriction": "当前开发窗口与另一个 Cindy 实例共用账号数据，无法切换或添加账号。请在原 Cindy 窗口操作，或使用独立数据启动开发版。",
       "title": "切换账号",
       "description": "选择这台设备上登录过的账号",
       "syncing": "正在检查登录状态…",

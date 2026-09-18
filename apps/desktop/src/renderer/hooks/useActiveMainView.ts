@@ -14,6 +14,7 @@
  * URL 派生由本 hook 维护；各视图最后位置由账号级 MainViewHistoryProvider 共享，
  * 避免侧栏滚动段卸载后丢失返回位置。未提供 Provider 时使用实例内记忆。
  * 自动化页保留当前视图归属，但不覆盖任务返回位置。
+ * 无运行期伙伴位置时进入 /bots/list，不自动选择伙伴。
  * 伙伴创建页的返回位置使用 /bots，由入口解析最近有效伙伴，不恢复创建表单。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -38,7 +39,7 @@ const VIEWS: ViewDef[] = [
   { key: 'cc-agent', to: '/cc-agent', prefixes: ['/cc-agent'] },
   { key: 'issues', to: '/issues', prefixes: ['/issues'] },
   { key: 'plugins', to: '/plugins', prefixes: ['/plugins', '/skillhub'] },
-  { key: 'bots', to: '/bots', prefixes: ['/bots'] },
+  { key: 'bots', to: '/bots/list', prefixes: ['/bots'] },
 ];
 
 const DEFAULT_KEY: MainViewKey = 'cc-agent';

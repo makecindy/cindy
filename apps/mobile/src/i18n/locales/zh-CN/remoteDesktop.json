@@ -129,7 +129,7 @@
   "retrySettings": "读取失败，轻点重试",
   "followComputer": "跟随电脑",
   "resolutionHint": "调整分辨率会改变电脑上的窗口布局，断开连接后恢复原分辨率。",
-  "restoreViewerDisplay": "恢复原分辨率",
+  "restoreViewerDisplay": "恢复原始比例",
   "fitViewerDisplay": "适配此屏幕",
   "fitViewerDisplayHint": "调整电脑分辨率，减少留白。",
   "resolutionControlHint": "接管操作后可以更改分辨率。",

@@ -7288,6 +7288,10 @@
       "downloadMobile": "Cindy 모바일 다운로드"
     },
     "accountSwitcher": {
+      "current": "현재 계정",
+      "switching": "계정 전환 중…",
+      "adding": "로그인 준비 중…",
+      "sharedDataRestriction": "이 개발용 창은 다른 Cindy 인스턴스와 계정 데이터를 공유하므로 계정을 전환하거나 추가할 수 없습니다. 원래 Cindy 창에서 작업하거나 별도의 데이터로 개발 버전을 실행하세요.",
       "title": "계정 전환",
       "description": "이 기기에서 로그인한 계정을 선택하세요",
       "syncing": "로그인 상태 확인 중…",

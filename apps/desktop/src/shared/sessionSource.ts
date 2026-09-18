@@ -28,14 +28,21 @@ export const RETAINABLE_PROJECT_SESSION_SOURCES = [
   'plugin',
 ] as const satisfies readonly SessionSource[];
 
-export type RetainableProjectSessionSource =
-  (typeof RETAINABLE_PROJECT_SESSION_SOURCES)[number];
+export type RetainableProjectSessionSource = (typeof RETAINABLE_PROJECT_SESSION_SOURCES)[number];
 
 /** Fail closed for legacy/malformed rows whose source is missing or unknown. */
 export function isRetainableProjectSessionSource(
   source: unknown,
 ): source is RetainableProjectSessionSource {
   return source === 'desktop' || source === 'plugin';
+}
+
+/** Internal worker directories are execution inputs, not user project registrations. */
+export function isRetainableProjectSession(session: {
+  source?: unknown;
+  orcaRole?: unknown;
+}): boolean {
+  return session.orcaRole !== 'worker' && isRetainableProjectSessionSource(session.source);
 }
 
 export function isReviewSessionSource(source: unknown): source is 'review' {
