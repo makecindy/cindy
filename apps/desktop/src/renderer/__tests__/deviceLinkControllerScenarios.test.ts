@@ -56,6 +56,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 import { makerChatStore, getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
 import { projectHistoryView, HistoryViewHandoff } from '@cindy/maker-shared/message-window';
 import { getLatestMessageTodoState } from '@cindy/maker-shared/message-render';
+import { clearSystemSessionAttention, setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { readCachedMessages, clearCachedMessages } from '@/features/device-link/mirrorCacheClient';
 
@@ -1251,6 +1252,31 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       'client-u', 'client-thought', 'client-answer',
     ]);
     expect(view.getSnapshot().expanded.has(group.key)).toBe(false);
+    view.setActive(false);
+  });
+
+  it.each([false, true])('releases a passive receipt only after a successful fresh HistoryView sync (failed=%s)', async (failed) => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s, {}, [dbMessage(s, 'answer', 'answer', '2026-06-15T00:00:00.000Z')]);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+    const view = getRemoteHistoryView(s)!;
+    setRemoteReceiptDisplayReady(s, true);
+    clearSystemSessionAttention(s, 'passive');
+    const receipts = () => host.invoke.mock.calls.filter(([, channel]) => channel === 'notification:clear-session-attention');
+    expect(receipts()).toHaveLength(0);
+    if (failed) {
+      const refresh = vi.spyOn(view, 'refresh').mockRejectedValueOnce(new Error('refresh failed'));
+      await expect(makerChatStore.reconcileRemoteMessages(s, { force: true })).rejects.toThrow('refresh failed');
+      expect(receipts()).toHaveLength(0);
+      refresh.mockRestore();
+    }
+    await makerChatStore.reconcileRemoteMessages(s, { force: true });
+    expect(receipts()).toEqual([[DEVICE_ID, 'notification:clear-session-attention', [s, 'passive']]]);
+    setRemoteReceiptDisplayReady(s, false);
     view.setActive(false);
   });
 
