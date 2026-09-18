@@ -120,17 +120,31 @@ describe('durable worktree maintenance', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(closeAndRecycle).toHaveBeenCalledExactlyOnceWith('owner', 'archived');
   });
-  it('keeps retrying after the backoff cap and lets a resource event wake it early', async () => {
+  it('stops automatic retries after the budget and permits an explicit resource wake', async () => {
     await maintenance.start();
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(closeAndRecycle).toHaveBeenCalledTimes(8);
-    expect(vi.getTimerCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(closeAndRecycle).toHaveBeenCalledTimes(9);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(closeAndRecycle).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
     notifyWorktreeRecycleOpportunity(state.records[0].meta.path);
     await vi.advanceTimersByTimeAsync(100);
-    expect(closeAndRecycle.mock.calls.length).toBeGreaterThan(9);
-    expect(vi.getTimerCount()).toBe(1);
+    expect(closeAndRecycle).toHaveBeenCalledTimes(4);
+  });
+  it('never wakes durable pauses on incidental resource events', async () => {
+    state.records[0].retryPolicy = { state: 'paused', failures: 3, failedWorkMs: 100 };
+    await maintenance.start();
+    notifyWorktreeRecycleOpportunity(state.records[0].meta.path);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(closeAndRecycle).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('rechecks waiting references once at startup, then waits for a release event', async () => {
+    state.records[0].retryPolicy = { state: 'waiting', failures: 0, failedWorkMs: 0 };
+    await maintenance.start();
+    expect(closeAndRecycle).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    notifyWorktreeRecycleOpportunity(state.records[0].meta.path);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(closeAndRecycle).toHaveBeenCalledTimes(2);
   });
   it('continues with other resources after one request fails', async () => {
     state.records.push(record('second')); state.rows.push({ ...state.rows[0], id: 'second' });

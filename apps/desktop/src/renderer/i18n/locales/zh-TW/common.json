@@ -5757,6 +5757,31 @@
           "unavailable": "任務或開發目錄已變更，請重新整理後重試。"
         }
       }
+    },
+    "worktreeRecycle": {
+      "title": "worktree 回收",
+      "refresh": "重新整理",
+      "empty": "沒有等待回收的 worktree",
+      "loadFailed": "無法讀取回收狀態",
+      "actionFailed": "未能更新回收狀態，請重新整理後再試",
+      "retry": "重試回收",
+      "keep": "保留目錄",
+      "state": {
+        "retrying": "等待回收",
+        "waiting": "等待釋放",
+        "paused": "已暫停自動重試",
+        "kept": "已保留目錄"
+      },
+      "reason": {
+        "in-use": "仍在使用",
+        "changed": "檔案內容已變更",
+        "kept": "已要求保留",
+        "integrity": "備份驗證失敗",
+        "storage": "請檢查磁碟空間和權限",
+        "identity": "目錄身分需要檢查",
+        "failed": "回收未能完成",
+        "pending": "已排入佇列"
+      }
     }
   },
   "remoteDevice": {

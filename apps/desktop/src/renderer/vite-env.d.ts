@@ -3632,6 +3632,10 @@ interface ElectronAPI {
   /** Delete the files referenced by the given xdt-image:// URLs. */
   cleanupCachedImages: (urls: string[]) => Promise<void>;
 
+  worktreeRecycle: {
+    list(): Promise<import('../shared/worktreeRecycle').WorktreeRecycleStatus[]>;
+    control(input: import('../shared/worktreeRecycle').WorktreeRecycleAction): Promise<void>;
+  };
   /**
    * 媒体总仓存储管理(关于页存储空间卡片):占用统计 / 清理
    * 预检(报数)/ 执行清理 / 对账体检。draftUrls 由 renderer 从

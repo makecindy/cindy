@@ -32,7 +32,7 @@ vi.mock('../worktree/recoveryArchive', async (original) => ({
   createRecoveryArchive: archive, verifyRecoveryArchive: async () => {},
 }));
 
-import { recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
+import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
 import { readRecycleRecord } from '../worktree/recycleJournal';
 import { inventoryWorktree } from '../worktree/recoveryArchive';
 import { physicalWorktreeKey } from '../worktree/resourceLock';
@@ -72,6 +72,17 @@ describe('shared worktree recycling', () => {
     await fs.rm(state.root, { recursive: true, force: true });
   });
   const recycle = () => recycleManagedWorktree(meta, { canRemove: async () => removable });
+
+  it('does not rebuild failed archives after the durable budget is exhausted', async () => {
+    archive.mockRejectedValue(new Error('temporary filesystem failure'));
+    for (let attempt = 0; attempt < 5; attempt++) expect(await recycle()).toBe(false);
+    expect(archive).toHaveBeenCalledTimes(3);
+    expect((await readRecycleRecord(meta.path))?.retryPolicy?.state).toBe('paused');
+    await expect(checkpointWorktreeForReuse(meta)).rejects.toThrow('recycling is paused');
+    expect(archive).toHaveBeenCalledTimes(3);
+    expect((await fs.stat(meta.path)).isDirectory()).toBe(true);
+    expect(state.registry.has(meta.sessionId)).toBe(true);
+  });
 
   it('limits simultaneous recycling of distinct resources to one', async () => {
     let release!: () => void;

@@ -1,3 +1,4 @@
+import { MAX_RECYCLE_FAILURES, recyclePolicy } from './recyclePolicy';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
@@ -36,6 +37,7 @@ export class WorktreeRecycleMaintenance {
   private watchFailures = 0;
   private watchRetryAt = 0;
   private scanFailures = 0;
+  private initialPass = true;
   private readonly wakeIds = new Set<string>();
   private readonly attempts = new Map<string, { count: number; notBefore: number }>();
 
@@ -112,17 +114,22 @@ export class WorktreeRecycleMaintenance {
 
   private key(record: WorktreeRecycleRecord): string { return `${record.id}:${record.generation}`; }
 
-  private eligible(record: WorktreeRecycleRecord): boolean {
+  private eligible(record: WorktreeRecycleRecord, opportunity = false): boolean {
+    const state = recyclePolicy(record).state;
+    if (state === 'paused' || state === 'kept' || (state === 'waiting' && !opportunity)) return false;
     if (record.phase === 'restored' || record.phase === 'restoring' || record.meta.ephemeral) return false;
     const current = store.get(record.meta.sessionId);
     if (record.phase === 'removed' && !current) return false;
-    // Attempts only control backoff. A directory may remain externally locked
-    // longer than one backoff window; it must become eligible again when the
-    // lock is released or the next deadline arrives.
+    // Runtime-release hints can wake reference waits, never a paused failure budget.
     return !current || worktreeGeneration(current) === record.generation;
   }
 
+  isRetrySuspended(record: WorktreeRecycleRecord): boolean {
+    return (this.attempts.get(this.key(record))?.count ?? 0) >= MAX_RECYCLE_FAILURES;
+  }
+
   private deadline(record: WorktreeRecycleRecord): number {
+    if (this.isRetrySuspended(record)) return Infinity;
     return Math.max(record.nextAttemptAt, this.attempts.get(this.key(record))?.notBefore ?? 0);
   }
 
@@ -137,8 +144,14 @@ export class WorktreeRecycleMaintenance {
     const records = await listRecycleRecords();
     const wakeIds = new Set(this.wakeIds);
     this.wakeIds.clear();
+    // A resource may have been released while Cindy was closed: recheck waits
+    // once on startup, but never reset a persisted fault/keep decision.
+    if (this.initialPass) {
+      for (const record of records) if (recyclePolicy(record).state === 'waiting') wakeIds.add(record.id);
+      this.initialPass = false;
+    }
     for (const record of records) if (wakeIds.has(record.id)) this.attempts.delete(this.key(record));
-    const due = records.filter((record) => this.eligible(record)
+    const due = records.filter((record) => this.eligible(record, wakeIds.has(record.id))
       && (wakeIds.has(record.id) || this.deadline(record) <= Date.now()));
     // Empty queues and not-yet-due requests never open task databases.
     if (due.length) {
@@ -168,7 +181,7 @@ export class WorktreeRecycleMaintenance {
         try {
           const latest = await readRecycleRecord(record.meta.path);
           if (this.stopped || !this.options.isReady() || getDbClient() !== db) return;
-          if (!latest || latest.generation !== record.generation
+          if (!latest || !this.eligible(latest, wakeIds.has(record.id)) || latest.generation !== record.generation
             || latest.phase === 'restored' || latest.phase === 'restoring'
             || (latest.phase === 'removed' && !store.get(latest.meta.sessionId))
             || (!wakeIds.has(record.id) && latest.nextAttemptAt > Date.now())) continue;
@@ -245,4 +258,9 @@ export async function auditRegisteredWorktrees(): Promise<void> {
   };
   await fs.writeFile(path.join(app.getPath('userData'), 'worktree-audit.json'), JSON.stringify({ at: new Date().toISOString(), summary, entries }), { mode: 0o600 });
   log.info('worktree registry audit completed', summary);
+}
+
+/** Fallback for failures before the journal can be written (for example a locked volume). */
+export function isWorktreeRecycleRetrySuspended(record: WorktreeRecycleRecord): boolean {
+  return maintenance?.isRetrySuspended(record) ?? false;
 }

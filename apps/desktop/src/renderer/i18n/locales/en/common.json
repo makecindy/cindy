@@ -5759,6 +5759,31 @@
           "unavailable": "The session or development folder changed. Refresh and try again."
         }
       }
+    },
+    "worktreeRecycle": {
+      "title": "Worktree cleanup",
+      "refresh": "Refresh",
+      "empty": "No worktrees awaiting cleanup",
+      "loadFailed": "Could not load cleanup status",
+      "actionFailed": "Could not update cleanup. Refresh and try again.",
+      "retry": "Retry cleanup",
+      "keep": "Keep directory",
+      "state": {
+        "retrying": "Awaiting cleanup",
+        "waiting": "Waiting for release",
+        "paused": "Automatic retries paused",
+        "kept": "Directory retained"
+      },
+      "reason": {
+        "in-use": "Still in use",
+        "changed": "Contents changed",
+        "kept": "Kept by request",
+        "integrity": "Backup verification failed",
+        "storage": "Check disk space and permissions",
+        "identity": "Directory identity needs review",
+        "failed": "Cleanup could not finish",
+        "pending": "Queued"
+      }
     }
   },
   "remoteDevice": {

@@ -5757,6 +5757,31 @@
           "unavailable": "任务或开发目录已变化，请刷新后重试。"
         }
       }
+    },
+    "worktreeRecycle": {
+      "title": "worktree 回收",
+      "refresh": "刷新",
+      "empty": "没有等待回收的 worktree",
+      "loadFailed": "无法读取回收状态",
+      "actionFailed": "未能更新回收状态，请刷新后重试",
+      "retry": "重试回收",
+      "keep": "保留目录",
+      "state": {
+        "retrying": "等待回收",
+        "waiting": "等待释放",
+        "paused": "已暂停自动重试",
+        "kept": "已保留目录"
+      },
+      "reason": {
+        "in-use": "仍在使用",
+        "changed": "文件内容已变化",
+        "kept": "已要求保留",
+        "integrity": "备份校验失败",
+        "storage": "请检查磁盘空间和权限",
+        "identity": "目录身份需要检查",
+        "failed": "回收未能完成",
+        "pending": "已排队"
+      }
     }
   },
   "remoteDevice": {

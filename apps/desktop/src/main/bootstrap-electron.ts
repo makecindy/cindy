@@ -1,3 +1,4 @@
+import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
@@ -7918,6 +7919,16 @@ const registerIpcHandlers = () => {
       });
     },
   );
+
+  // Local storage controls never accept a filesystem path from the renderer.
+  ipcMain.handle('worktree-recycle:list', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return listWorktreeRecycleStatus();
+  });
+  ipcMain.handle('worktree-recycle:control', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    await controlWorktreeRecycle(input);
+  });
 
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。

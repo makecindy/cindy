@@ -5757,6 +5757,31 @@
           "unavailable": "タスクまたは開発フォルダーが変更されました。更新して再試行してください。"
         }
       }
+    },
+    "worktreeRecycle": {
+      "title": "worktree のクリーンアップ",
+      "refresh": "更新",
+      "empty": "クリーンアップ待ちの worktree はありません",
+      "loadFailed": "状態を読み込めませんでした",
+      "actionFailed": "状態を更新できませんでした。更新して再試行してください",
+      "retry": "再試行",
+      "keep": "ディレクトリを保持",
+      "state": {
+        "retrying": "クリーンアップ待ち",
+        "waiting": "解放待ち",
+        "paused": "自動再試行を停止中",
+        "kept": "ディレクトリを保持"
+      },
+      "reason": {
+        "in-use": "使用中",
+        "changed": "内容が変更されました",
+        "kept": "保持が指定されています",
+        "integrity": "バックアップ検証に失敗",
+        "storage": "空き容量と権限を確認してください",
+        "identity": "ディレクトリの確認が必要",
+        "failed": "クリーンアップ未完了",
+        "pending": "待機中"
+      }
     }
   },
   "remoteDevice": {

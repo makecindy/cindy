@@ -5757,6 +5757,31 @@
           "unavailable": "작업 또는 개발 폴더가 변경되었습니다. 새로 고침한 후 다시 시도하세요."
         }
       }
+    },
+    "worktreeRecycle": {
+      "title": "worktree 정리",
+      "refresh": "새로 고침",
+      "empty": "정리 대기 중인 worktree가 없습니다",
+      "loadFailed": "정리 상태를 불러오지 못했습니다",
+      "actionFailed": "상태를 업데이트하지 못했습니다. 새로 고침 후 다시 시도하세요",
+      "retry": "정리 재시도",
+      "keep": "디렉터리 유지",
+      "state": {
+        "retrying": "정리 대기 중",
+        "waiting": "사용 종료 대기 중",
+        "paused": "자동 재시도 일시 중지",
+        "kept": "디렉터리 유지됨"
+      },
+      "reason": {
+        "in-use": "사용 중",
+        "changed": "내용이 변경됨",
+        "kept": "유지 요청됨",
+        "integrity": "백업 검증 실패",
+        "storage": "디스크 공간과 권한을 확인하세요",
+        "identity": "디렉터리 확인 필요",
+        "failed": "정리를 완료하지 못함",
+        "pending": "대기 중"
+      }
     }
   },
   "remoteDevice": {
