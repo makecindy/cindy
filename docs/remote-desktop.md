@@ -29,8 +29,9 @@ also restores the local cursor inside the picture.
 With the picture focused, Cmd+C/V on macOS or Ctrl+C/V on Windows copies selected
 remote text to the local clipboard or pastes local text remotely. Transfers use
 the existing authorized Main bridge, are ordered and user-triggered, and report
-failure without reconnecting. There is no background clipboard monitoring or
-automatic context-menu synchronization; images, files and cut are not bridged.
+failure without reconnecting. These Desktop keyboard shortcuts remain text-only;
+images, files and cut are not bridged by them. The opt-in Mobile clipboard sync
+described below is a separate, foreground-only operation.
 
 The shared viewer session marks recovery only when a start is attempted, so an
 initial capability-query timeout does not turn a retry against a legacy host into
@@ -341,7 +342,10 @@ the Agent must successfully observe the target window again with input idle at
 both the start and end of the read and no input revision change during the read
 before acting on it, including the first action of a new or cleaned-up driver
 session. Actions without a window ID accept an observation of the same process;
-an explicit window ID still requires that exact window. Empty connection
+an explicit window ID still requires that exact window. Automatic recovery reads
+are text-only evidence, do not capture screenshots, and do not restore input permission. Failed or cancelled explicit
+reads revoke prior permission, and older concurrent reads cannot restore it.
+Empty connection
 heartbeats do not claim input ownership.
 
 The native macOS/Windows helper acknowledges a batch only after posting all its
@@ -543,8 +547,8 @@ the existing remote-desktop business channel. Old desktops show an upgrade hint;
 no relay/server protocol changes are required. Both operations require the current
 peer-bound controlling lease, reject concurrent transfers, and check revocation
 again after asynchronous native work. The phone also discards results after its
-lease changes or it leaves the foreground. No clipboard listeners, background
-synchronization, history, logs containing text, or disk persistence are added.
+lease changes or it leaves the foreground. These explicit text operations do not
+retain clipboard history or log its contents. Opt-in synchronization is described below.
 
 TypeScript and native compilation checks cover this implementation. Keyboard/menu
 interaction, application-specific selection support, and physical-phone transfer
@@ -564,7 +568,10 @@ fall back to clipboard content, but protected/failed/stale selection reads do no
 
 Clipboard JSON is transferred sequentially in 64 Ki-character chunks, at most
 32 Mi-characters total (native iOS additionally bounds UTF-8 bytes). Images are
-limited to 64 million pixels. Each transfer is peer/lease/control-generation
+limited to 4 million pixels on iOS before PNG encoding or incoming PNG decoding,
+with an 8 MiB encoded PNG limit. Oversized images are rejected, not downsampled.
+Android uses the limits described below.
+Each transfer is peer/lease/control-generation
 bound, lives only in memory, expires after 60 seconds, and is discarded on
 control changes or disconnect. Commit consumes its transfer before pasting and
 is never automatically retried. No transport/global frame limits are changed.
@@ -583,13 +590,49 @@ Validation: mobile/desktop TypeScript checks, iOS device compilation, macOS
 helper typecheck and Windows cross-compilation check. No actual clipboard content
 was read and no physical-device or Windows application paste was exercised.
 
-### macOS local cursor overlay
+### macOS and Windows local cursor overlay
 
 Optional `cursorOverlay` on capabilities, offer and compatibility-frame requests
 negotiates cursor-free capture; omitted flags retain the original protocol.
 The macOS helper reads the global NSCursor image/hotspot and the public legacy
 CGCursorIsVisible symbol, with normalized position within the selected display.
 No cursor-hiding call is applied to the user's physical desktop.
+
+Windows advertises the same capability only when its installed native service is
+ready. Negotiated capture omits DrawIconEx from the picture and reads the cursor
+image, hotspot, visibility and monitor-relative position separately. The existing
+viewer moves that raster locally before the next input batch is sent; delayed
+host positions do not replace it during active movement. Omitted/false flags
+retain the legacy screenshot/video path, including its embedded cursor.
+
+The Windows worker sends bounded premultiplied BGRA only through its authenticated
+local broker pipe. Main validates geometry and byte length, converts the raster
+to PNG using Electron, and converts physical cursor dimensions/hotspot to desktop
+points using the selected monitor's DPI. Only negotiated capture gets the larger
+1.75 MB local response budget; the existing remote PNG/frame limits and all input,
+owner, console-session and lease checks remain unchanged. Older helpers returning
+plain JPEG still work. No new dependencies, persisted pixels, IPC channels, device-link
+messages or Mobile native changes are needed.
+
+Legacy Windows AND/XOR cursors are rendered against black and white to recover
+transparency. Pixels that invert the background cannot be represented exactly by
+a PNG; they use a solid silhouette with a contrasting outline (including I-beams).
+Other cursor colors/alpha are retained. Missing or invalid cursor data does not
+stop video. Windows overlay capture supports up to 4096px, the requested video
+quality and existing 30/60 fps caps; the old compatibility path stays at 1280px.
+Highly detailed overlay frames lower JPEG quality/resolution to keep the 1 MB
+native JPEG bound, and the capture connection keeps that reduced quality or the
+1280px fallback for later frames. This is not a guarantee of the delivered frame rate.
+
+Windows regression coverage: [cursor raster tests](../apps/desktop/native/remote-desktop/windows-host/src/cursor.rs),
+[large-frame pipe transfer](../apps/desktop/native/remote-desktop/windows-host/src/pipe.rs),
+[capture lifecycle](../apps/desktop/src/main/remote-desktop/__tests__/nativeCapture.test.ts),
+[DPI and bounds](../apps/desktop/src/main/remote-desktop/__tests__/windowsCursorFrame.test.ts),
+and [immediate viewer movement](../apps/desktop/src/renderer/features/remote-desktop/__tests__/viewerInput.test.ts).
+Native cursor tests use system shapes without moving the pointer; compiling these
+tests needs cargo feature windows-sys/Win32_UI_Input_KeyboardAndMouse for the
+existing input-desktop test module. Actual two-device control, lock/UAC transitions,
+Light/Dark viewing and sustained video performance require manual validation.
 
 Current Electron does not advertise the cursor media constraint. The negotiated
 path therefore uses native cursor-free video (up to 4096 pixels on the long edge,
@@ -622,7 +665,46 @@ clipboard. Transfers support text, HTML, RTF, URLs and PNG images through bounde
 sequential chunks, with a blocking progress overlay. Arbitrary files and private
 application clipboard formats are not supported. Transfer buffers are discarded
 on completion, cancellation and lease termination; uncertain paste responses are
-never automatically retried. Native clipboard access requires a new iOS build.
+never automatically retried. Native portable clipboard access and version tracking
+require new iOS and Android native builds; older runtimes retain the text fallback.
+Android supports text, HTML, HTTP(S) URLs and PNG images (not RTF), limits decoded
+clipboard image reads and incoming PNGs to 4 million pixels, with 8 MiB limits on both the source
+and encoded PNG. Incoming Base64 length is checked before decoding, and its PNG
+header and dimensions before publication. Oversized images are rejected before unbounded encoding or
+Base64 copies; images are not downsampled. Android clipboard images
+use grant-scoped cache files. Every successful image, text or URL replacement
+reclaims unreferenced published images, retaining at most three previous images
+(24 MiB) for up to one hour as a read grace period. Current clipboard URIs are
+always preserved. Preparation uses unpublished temporary files; failed or cancelled
+preparation/publication removes only its own file. Cleanup is best effort when
+the clipboard cannot be inspected or the filesystem rejects deletion.
+Subsequent successful replacements also reclaim unpublished files left by older
+processes once they are over one hour old. Filenames include the process ID and
+start time, so current-process preparation survives long suspensions and module
+recreation without an active-file registry.
+
+Desktop manual copy, automatic reads and write verification share a 4 million
+pixel check before native PNG encoding. PNG buffers over 8 MiB are rejected before
+Base64/hash copies. Incoming PNGs have encoded-length, byte and dimension checks
+before native decoding. The pixel limit bounds encoding work; Electron still
+allocates the PNG buffer before its byte length can be checked.
+
+### Opt-in Mobile clipboard synchronization
+
+On supported peers, the security options can enable clipboard synchronization
+while the phone is foregrounded and owns the controlling lease. Every 1.5 seconds
+the phone checks local and remote version tokens, reading portable content only
+when a version changes. Android uses change notifications and description timestamps
+without reading the clipboard body during unchanged polls. Image provider reads,
+conversion and file preparation run off the Android main thread; clipboard access
+and the final foreground/version check and write run on the main thread.
+
+Synchronization compares content digests to avoid echoing its own writes and
+checks the destination version again before writing so it cannot overwrite a
+newer local copy. Disabling sync, leaving the foreground, losing control or
+disconnecting invalidates pending work. It does not poll in the background,
+maintain history or log clipboard contents. Private formats and arbitrary files
+remain unsupported; only portable representations are synchronized.
 
 Only one viewer lease is active. A second viewer sees a busy state and can
 explicitly take over when the host advertises `connectionTakeover`. Ordinary

@@ -53,5 +53,24 @@
     "confirmMessage": "下一條訊息傳送時，{{appName}} 會把當前任務交接給 {{agent}}。兩個 Agent 對上下文和工具的理解可能不同，請確認後再選擇目標模型。",
     "cancel": "取消",
     "confirm": "繼續選擇"
+  },
+  "unified": {
+    "favorites": "收藏",
+    "all": "全部模型",
+    "recommended": "推薦",
+    "source": "來源",
+    "harness": "Harness",
+    "addFavorite": "加入收藏",
+    "removeFavorite": "取消收藏",
+    "restoreRecommended": "恢復推薦",
+    "saveFailed": "無法儲存，請重試。",
+    "configure": "設定",
+    "syncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
+    "timeUnit": {
+      "day": "天",
+      "hour": "小時",
+      "minute": "分鐘",
+      "second": "秒"
+    }
   }
 }

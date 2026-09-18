@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -11,19 +10,21 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { isSelectableVendor } from '@/lib/agentVendors';
+import { CindyMakePreflightDialog, type CindyMakePreflightProps } from './CindyMakePreflightDialog';
 
 const MAX_REQUEST_LENGTH = 4000;
 
 export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const [preflight, setPreflight] = useState<Omit<CindyMakePreflightProps, 'onOpenChange'> | null>(
+    null,
+  );
   const [request, setRequest] = useState('');
   const [starting, setStarting] = useState(false);
   const [failed, setFailed] = useState(false);
   const submitting = useRef(false);
   const mounted = useRef(true);
   const owner = useRef(getDataOwnerGeneration());
-  const sessionId = useRef<string | undefined>(undefined);
   const returnFocusRef = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
@@ -47,19 +48,15 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
     setStarting(true);
     setFailed(false);
     try {
-      const [{ ensureMakeTask, startMakeDoctorInStream }, draftState] = await Promise.all([
-        import('@/lib/cindyMakeDoctorStream'),
-        import('@/state/newMakerDraft'),
-      ]);
+      const draftState = await import('@/state/newMakerDraft');
       if (!isCurrent()) return;
       const draft = draftState.getDraft();
       const vendor = isSelectableVendor(draft.vendor) ? draft.vendor : 'cc';
       const prefs = draft.lastByVendor[vendor];
-      const createdId = await ensureMakeTask({
-        sessionId: sessionId.current,
-        title: t('settings.cindyMake.create.title'),
+      if (!mounted.current) return;
+      setPreflight({
+        request,
         createOptions: {
-          workspaceKind: 'dialogue',
           agentKind: vendor,
           model: prefs.model,
           effort: prefs.effort,
@@ -68,17 +65,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
           fastMode: draftState.getFastModeForModel(prefs.model),
           planModeEnabled: prefs.planMode,
         },
-        isCurrent,
       });
-      if (!isCurrent()) return;
-      if (!createdId) throw new Error('Cindy Make task was not created');
-      sessionId.current = createdId;
-      const runId = startMakeDoctorInStream(createdId, { command: 'cindy-make', request });
-      if (!runId) throw new Error('Cindy Make workflow was not started');
-      if (mounted.current) {
-        onOpenChange(false);
-        navigate('/cc-agent/' + createdId);
-      }
     } catch {
       if (mounted.current && isCurrent()) setFailed(true);
     } finally {
@@ -89,6 +76,8 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
       }
     }
   };
+
+  if (preflight) return <CindyMakePreflightDialog {...preflight} onOpenChange={onOpenChange} />;
 
   return (
     <Dialog.Root open onOpenChange={(open) => !submitting.current && onOpenChange(open)}>

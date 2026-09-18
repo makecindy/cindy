@@ -26,6 +26,8 @@ import {
 } from '../makerSendTransaction';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
+import path from 'node:path';
+import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 
 function createSession(overrides: Partial<MakerSendTransactionSession> = {}): MakerSendTransactionSession {
   return {
@@ -99,6 +101,21 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it('logs a slash-only DB fallback candidate without exposing the path or changing send behavior', async () => {
+    const workdirDiagnostics = { info: vi.fn(), warn: vi.fn() };
+    const { deps } = createDeps({
+      workdirDiagnostics,
+      readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo'),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({ accepted: true });
+    expect(workdirDiagnostics.info).toHaveBeenCalledWith('workdir DB fallback candidate', expect.objectContaining({
+      source: 'live', sameNormalizedDirectory: true,
+    }));
+    expect(JSON.stringify(workdirDiagnostics.info.mock.calls)).not.toContain('repo');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+
   it('stamps device-link provenance at the enqueue boundary and rejects forged local values', () => {
     const item = { clientId: 'input-1', text: 'hello' } as unknown as AgentInputQueuedMessage;
     expect(stampTrustedDeviceLinkQueuedOrigin(item, true)).toMatchObject({
@@ -399,6 +416,15 @@ describe('maker SEND transaction', () => {
 
     expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT])
       .toBeUndefined();
+  });
+
+  it('passes the host text-only restriction to the runtime without leaking it into ordinary sends', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', 'Say hello.', undefined, { toolsDisabled: true });
+    expect(vi.mocked(session.send).mock.calls[0]?.[1]).toMatchObject({ toolsDisabled: true });
+    await transaction.sendToAgentAccepted('session-1', 'Normal user request.');
+    expect(vi.mocked(session.send).mock.calls[1]?.[1]?.toolsDisabled).toBeUndefined();
   });
 
   it('does not preserve Desktop package authority across queued attachments', async () => {
@@ -1230,6 +1256,100 @@ describe('maker SEND transaction', () => {
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/conversation' }));
     expect(session.send).not.toHaveBeenCalled();
     expect(recovered.send).toHaveBeenCalledWith(expect.stringContaining('Original filesystem unavailable'), expect.anything());
+  });
+
+  it.each(['error', 'missing'] as const)('does not bootstrap a queued fallback without the DB binding (%s)', async (failure) => {
+    const fallback = '/owned/dialogues/worktree-recovery/key';
+    const original = '/repo/.cindy-worktrees/task';
+    let dbReady = false;
+    const { deps } = createDeps({
+      getSession: () => undefined,
+      readSessionWorkingDirFromDb: async () => {
+        if (dbReady) return original;
+        if (failure === 'error') throw new Error('DB unavailable');
+        return null;
+      },
+      isPersistedWorktreeFallback: (dir) => dir === fallback,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const opts = { agentKind: 'codex' as const, workingDir: fallback };
+    await expect(transaction.sendToAgentAccepted('session-1', 'queued', opts))
+      .resolves.toMatchObject({ accepted: false, reason: 'WORKDIR_MISSING' });
+    expect(deps.checkWorkDirExists).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    dbReady = true;
+    await transaction.sendToAgentAccepted('session-1', 'retry', opts);
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: original }));
+  });
+
+  it.each([true, false])('rechecks the DB worktree after restarting with a queued fallback (restored: %s)', async (restored) => {
+    const original = '/repo/.cindy-worktrees/task';
+    const fallback = '/owned/dialogues/worktree-recovery/key';
+    let current: MakerSendTransactionSession | undefined;
+    const check = vi.fn(async (_id: string, _dir: string | undefined | null) => true);
+    const { deps } = createDeps({
+      getSession: () => current,
+      readSessionWorkingDirFromDb: async () => original,
+      isPersistedWorktreeFallback: (dir) => dir === fallback,
+      checkWorkDirExists: check,
+      resolveRecoveredWorkingDir: (_id, dir) => restored ? dir : fallback,
+      peekWorkingDirectoryRecoveryNote: () => restored ? null : 'worktree still unavailable after restart',
+      bootstrapSession: vi.fn(async (opts) => {
+        current = createSession({ workDir: opts.workingDir });
+        return { session: current, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      }),
+    });
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'queued', {
+      agentKind: 'codex', workingDir: fallback, resumeSessionId: 'native-history',
+    });
+    expect(check.mock.calls[0]?.[1]).toBe(original);
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: restored ? original : fallback, resumeSessionId: 'native-history',
+    }));
+    expect(current!.send).toHaveBeenCalledOnce();
+    if (!restored) expect(current!.send).toHaveBeenCalledWith(expect.stringContaining('still unavailable after restart'), expect.anything());
+  });
+
+  it.each([false, true])('sends once after an unrestorable worktree falls back (live runtime: %s)', async (live) => {
+    const original = path.resolve('/repo/.cindy-worktrees/missing');
+    const fallback = path.resolve('/owned/dialogues/task');
+    const recovery = createWorkingDirectoryRecovery({
+      stat: vi.fn(async () => ({ isDirectory: () => true })), mkdir: vi.fn(),
+    }, async () => fallback);
+    let current = live ? createSession({ workDir: original }) : undefined;
+    const old = current;
+    const persisted = { workingDir: original, worktreePath: original, resumeSessionId: 'native-history', model: 'gpt-5.4' };
+    const { deps } = createDeps({
+      getSession: () => current,
+      readSessionWorkingDirFromDb: async () => persisted.workingDir,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'codex', ...persisted }),
+      checkWorkDirExists: async (id, dir) => recovery.isFallback(id, dir!)
+        ? recovery.recover(id, dir!)
+        : recovery.recover(id, dir!, undefined, [], 'unrestored-worktree'),
+      resolveRecoveredWorkingDir: (id, dir) => recovery.resolve(id, dir),
+      peekWorkingDirectoryRecoveryNote: (id, dir) => recovery.peek(id, dir),
+      consumeWorkingDirectoryRecoveryNote: (id, note) => recovery.consume(id, note),
+      bootstrapSession: vi.fn(async (opts) => {
+        current = createSession({ workDir: opts.workingDir });
+        return { session: current, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await expect(transaction.sendToAgentAccepted('session-1', 'continue', {
+      agentKind: 'codex', ...persisted,
+    })).resolves.toMatchObject({ accepted: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: fallback, resumeSessionId: 'native-history',
+    }));
+    if (old) expect(old.send).not.toHaveBeenCalled();
+    expect(current!.send).toHaveBeenCalledOnce();
+    expect(current!.send).toHaveBeenCalledWith(expect.stringContaining('could not restore'), expect.anything());
+    expect(recovery.peek('session-1')).toBeNull();
+    expect(persisted.workingDir).toBe(original);
+    expect(persisted.worktreePath).toBe(original);
+    await transaction.sendToAgentAccepted('session-1', 'next');
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(current!.send).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the old runtime when Bot resource preflight fails, then resumes normally after repair', async () => {
@@ -2235,9 +2355,10 @@ describe('session-agent-switch handoff injection', () => {
     const opts = vi.mocked(session.send).mock.calls[0]![1]!;
     expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('修吧。');
     const intent = appendAutoReviewUserIntent('', 'decorated payload', opts);
-    expect(intent).toContain('修复伙伴未读状态，不要部署。');
-    expect(intent).toContain('修吧。');
-    expect(intent).not.toContain('assistant handoff');
+    expect(intent).toEqual({
+      earlierUserMessages: ['修复伙伴未读状态，不要部署。'],
+      currentUserMessage: '修吧。',
+    });
   });
 
   it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {

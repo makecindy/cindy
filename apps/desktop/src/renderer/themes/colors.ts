@@ -249,6 +249,10 @@ const GENERATED_DEFAULTS = {
     "light": "var(--surface-on-card)",
     "dark": "var(--surface-on-card)"
   },
+  "switch-thumb-on": {
+    "light": "hsl(var(--background))",
+    "dark": "hsl(var(--background))"
+  },
   "switch-disabled-opacity": {
     "light": "0.3",
     "dark": "0.3"
@@ -2092,6 +2096,22 @@ const GENERATED_DEFAULTS = {
   "form-field-hint": {
     "light": "var(--text-secondary-mid)",
     "dark": "var(--text-secondary-mid)"
+  },
+  "slider-track": {
+    "light": "var(--border-default)",
+    "dark": "var(--border-default)"
+  },
+  "slider-fill": {
+    "light": "var(--text-primary)",
+    "dark": "var(--text-primary)"
+  },
+  "slider-thumb": {
+    "light": "var(--surface-elevated)",
+    "dark": "var(--text-primary)"
+  },
+  "slider-thumb-shadow": {
+    "light": "0 1px 3px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08)",
+    "dark": "0 1px 3px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.16)"
   }
 } as const;
 
@@ -2227,6 +2247,7 @@ registerColor('border', GENERATED_DEFAULTS["border"], 'border');
 registerColor('input', GENERATED_DEFAULTS["input"], 'input');
 registerColor('switch-track-off', GENERATED_DEFAULTS["switch-track-off"], '共享 Switch 未选中轨道；跟随主题次要前景，与默认/悬停表面及滑块保持至少 3:1 非文字组件对比度，同时弱于开启态');
 registerColor('switch-thumb-off', GENERATED_DEFAULTS["switch-thumb-off"], '共享 Switch 未选中滑块；跟随主题反相前景，与未选中轨道保持至少 3:1 非文字组件对比度');
+registerColor('switch-thumb-on', GENERATED_DEFAULTS["switch-thumb-on"], '共享 Switch 开启滑块;默认沿用 background 保持旧主题与用户覆盖,CINDY Dark 独立改为近白(用户批准 2026-09-16)');
 registerColor('switch-disabled-opacity', GENERATED_DEFAULTS["switch-disabled-opacity"], '共享 Switch 禁用态整体不透明度(纯数值 token,非颜色);全局 0.3(用户裁决 2026-08-05,自出货值 0.5 调深),各皮肤仍可覆盖');
 registerColor('switch-disabled-thumb-opacity', GENERATED_DEFAULTS["switch-disabled-thumb-opacity"], '共享 Switch 禁用态滑块自身不透明度(纯数值 token,叠加在整体不透明度之上);全局 0.5(用户裁决 2026-08-05)——禁用态滑块与轨道趋近、削掉立体感,「不可用」区别于「关」的关键');
 registerColor('switch-track-on', GENERATED_DEFAULTS["switch-track-on"], '共享 Switch 开启态轨道;默认沿用 primary(不覆盖的主题外观不变),移植主题覆盖为各自主题色、CINDY 冻结于决策表;每个覆盖值须过 switchThemeContrast 的 ≥3:1 守卫(用户裁决 2026-08-05)');
@@ -3030,3 +3051,11 @@ registerColor('button-cta-pressed', {
 
 // DS-11 readable form help; preserves existing Cindy secondary-information colors.
 registerColor('form-field-hint', GENERATED_DEFAULTS["form-field-hint"], '表单阅读说明；独立于 metadata 与 placeholder，允许主题单独调节');
+
+registerColor('slider-track', GENERATED_DEFAULTS["slider-track"], '共享 Slider 组件颜色');
+
+registerColor('slider-fill', GENERATED_DEFAULTS["slider-fill"], '共享 Slider 组件颜色');
+
+registerColor('slider-thumb', GENERATED_DEFAULTS["slider-thumb"], '共享 Slider 组件颜色');
+
+registerColor('slider-thumb-shadow', GENERATED_DEFAULTS["slider-thumb-shadow"], 'Slider 滑块阴影:用户批准 2026-09-17');

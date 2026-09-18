@@ -2,6 +2,7 @@ import { access, lstat, mkdir, mkdtemp, readFile, rename, stat, writeFile } from
 import originalFs from 'original-fs';
 import path from 'node:path';
 import { createLogger } from '../logger.js';
+import { cindyMakeManager } from './manager.js';
 import {
   resolveMakeToolEnvironment,
   type MakeToolchainEnvironment,
@@ -77,26 +78,23 @@ export async function readCindySourceStatus(root: string): Promise<MakeSourceSta
   }
 }
 
-const sourceStatusListeners = new Set<(status: MakeSourceStatus) => void>();
-
-interface SharedSourceJob {
-  clearOnly: boolean;
-  controller: AbortController;
-  latest?: SourcePreparationProgress;
-  status?: MakeSourceStatus;
-  listeners: Set<(progress: SourcePreparationProgress) => void>;
-  promise: Promise<SourcePreparationResult>;
-}
-
-/** The single in-flight source operation; later callers attach to it instead of racing it. */
-let inFlight: SharedSourceJob | undefined;
-
-/** Subscribe to source preparation state shared by every renderer window. */
 export function subscribeCindySourceStatus(
   listener: (status: MakeSourceStatus) => void,
 ): () => void {
-  sourceStatusListeners.add(listener);
-  return () => sourceStatusListeners.delete(listener);
+  let previous: MakeSourceStatus | undefined;
+  let initial = true;
+  return cindyMakeManager.subscribe((state) => {
+    if (initial) {
+      initial = false;
+      if (state.source?.status !== 'preparing') {
+        previous = state.source;
+        return;
+      }
+    }
+    if (!state.source || JSON.stringify(state.source) === JSON.stringify(previous)) return;
+    previous = state.source;
+    listener(state.source);
+  });
 }
 
 /**
@@ -107,7 +105,8 @@ export async function readCurrentCindySourceStatus(
   root: string,
   env?: MakeToolchainEnvironment,
 ): Promise<MakeSourceStatus> {
-  if (inFlight?.status) return inFlight.status;
+  const live = cindyMakeManager.sourceStatus(root);
+  if (live) return live;
   const status = await readCindySourceStatus(root);
   if (status.status === 'ready' && env) {
     const sourcePath = path.resolve(root, 'source');
@@ -138,7 +137,7 @@ export async function readCurrentCindySourceStatus(
       };
     }
   }
-  if (status.status === 'preparing' && !inFlight) {
+  if (status.status === 'preparing' && !cindyMakeManager.isPreparingSource(root)) {
     return {
       ...status,
       status: 'cancelled',
@@ -152,9 +151,7 @@ export async function readCurrentCindySourceStatus(
 
 /** Stop the running source operation, whichever window or workflow started it. */
 export function cancelCindySourcePreparation(): boolean {
-  if (!inFlight || inFlight.controller.signal.aborted) return false;
-  inFlight.controller.abort('cancelled');
-  return true;
+  return cindyMakeManager.cancelSource();
 }
 
 function toSourceStatus(progress: SourcePreparationProgress): MakeSourceStatus {
@@ -175,6 +172,7 @@ function toSourceStatus(progress: SourcePreparationProgress): MakeSourceStatus {
     ...(progress.error ? { error: progress.error } : {}),
     ...(progress.phase ? { phase: progress.phase } : {}),
     ...(progress.progress ? { progress: progress.progress } : {}),
+    ...(progress.dependencies ? { dependencies: progress.dependencies } : {}),
   };
 }
 
@@ -211,6 +209,7 @@ export interface SourcePreparationProgress extends SourceRevisions {
   error?: SourcePreparationResult['error'];
   phase?: MakeSourceStatus['phase'];
   progress?: MakeSourceGitProgress;
+  dependencies?: MakeSourceStatus['dependencies'];
 }
 
 /** Resolve the two allowed release refs. A dev build always follows main. */
@@ -385,55 +384,20 @@ export async function prepareCindySource(
     target: sourceTarget(identity),
     error: 'cancelled',
   });
-  while (inFlight && inFlight.clearOnly !== clearOnly) {
-    if (callerSignal.aborted) return cancelled();
-    await inFlight.promise.catch(() => undefined);
-  }
-  if (callerSignal.aborted) return cancelled();
-  if (inFlight) {
-    const job = inFlight;
-    const forwardAbort = () => job.controller.abort(callerSignal.reason);
-    job.listeners.add(onProgress);
-    callerSignal.addEventListener('abort', forwardAbort, { once: true });
-    if (job.latest) onProgress(job.latest);
-    try {
-      return await job.promise;
-    } finally {
-      job.listeners.delete(onProgress);
-      callerSignal.removeEventListener('abort', forwardAbort);
-    }
-  }
-  const controller = new AbortController();
-  const forwardAbort = () => controller.abort(callerSignal.reason);
-  callerSignal.addEventListener('abort', forwardAbort, { once: true });
-  const job: SharedSourceJob = {
+  return cindyMakeManager.prepareSource({
+    root,
     clearOnly,
-    controller,
-    listeners: new Set([onProgress]),
-    promise: Promise.resolve(cancelled()),
-  };
-  const fanout = (progress: SourcePreparationProgress) => {
-    job.latest = progress;
-    job.status =
+    signal: callerSignal,
+    cancelled,
+    onCancelledBeforeStart: (result) => persistSourceStatus(root, toSourceStatus(result)),
+    onProgress,
+    toStatus: (progress) =>
       clearOnly && progress.status === 'ready'
         ? { status: 'missing', path: progress.path }
-        : toSourceStatus(progress);
-    for (const listener of job.listeners) listener(progress);
-    for (const listener of sourceStatusListeners) listener(job.status);
-  };
-  inFlight = job;
-  job.promise = prepareCindySourceInternal(
-    env,
-    root,
-    identity,
-    controller.signal,
-    fanout,
-    options,
-  ).finally(() => {
-    callerSignal.removeEventListener('abort', forwardAbort);
-    if (inFlight === job) inFlight = undefined;
+        : toSourceStatus(progress),
+    run: (signal, publish) =>
+      prepareCindySourceInternal(env, root, identity, signal, publish, options),
   });
-  return job.promise;
 }
 
 async function prepareCindySourceInternal(
@@ -508,8 +472,15 @@ async function prepareCindySourceInternal(
       return result;
     }
 
+    await emitProgress({ status: 'preparing', path: sourcePath, target, phase: 'checkingRemote' });
     const resolvedRef = await resolveRemoteRef(env, target, signal);
     const resolvedTarget = { ...target, ref: resolvedRef };
+    await emitProgress({
+      status: 'preparing',
+      path: sourcePath,
+      target: resolvedTarget,
+      phase: 'checkingLocal',
+    });
     if (await exists(gitDir)) {
       const remote = await git(env, ['remote', 'get-url', 'origin'], sourcePath, signal);
       if (remote !== CINDY_SOURCE_REPOSITORY)
@@ -547,6 +518,12 @@ async function prepareCindySourceInternal(
       );
       // Nobody works in the managed checkout itself (tasks use their own worktrees),
       // so uncommitted changes here mean an older layout or outside tampering.
+      await emitProgress({
+        status: 'preparing',
+        path: sourcePath,
+        target: resolvedTarget,
+        phase: 'checkingLocal',
+      });
       const dirty = await git(env, ['status', '--porcelain'], sourcePath, signal);
       if (dirty) throw Object.assign(new Error('dirty'), { code: 'dirty' });
     }
@@ -644,18 +621,39 @@ async function prepareCindySourceInternal(
       commit,
       branch: CINDY_PERSONAL_BRANCH,
       ...revisions,
-      phase: 'installing',
+      phase: 'caching',
     });
-    const processEnvironment = await resolveMakeToolEnvironment(
-      env,
-      ['node', 'pnpm', 'python'],
-      signal,
-    );
+    const processEnvironment = await resolveMakeToolEnvironment(env, ['node', 'pnpm'], signal);
+    // Settings and preflight warm the same pnpm store. Check the current lockfile
+    // and cache each time, filling changed or evicted packages without trusting a
+    // stale ready marker. The personal baseline needs no installed dependencies.
     await runSourcePnpm(
       processEnvironment,
-      ['install', '--frozen-lockfile', '--prefer-offline', '--prod=false'],
+      [
+        'fetch',
+        '--frozen-lockfile',
+        '--prefer-offline',
+        '--prod=false',
+        '--ignore-scripts',
+        // The hoisted linker imports packages even with modules disabled. Override
+        // only this command; worktree installs keep the repository's linker and
+        // run the required lifecycle scripts as usual.
+        '--config.node-linker=isolated',
+        '--config.enable-modules-dir=false',
+      ],
       sourcePath,
       signal,
+      (dependencies) =>
+        onProgress({
+          status: 'preparing',
+          path: sourcePath,
+          target: resolvedTarget,
+          commit,
+          branch: CINDY_PERSONAL_BRANCH,
+          ...revisions,
+          phase: 'caching',
+          dependencies,
+        }),
     );
     signal.throwIfAborted();
     const result: SourcePreparationResult = {

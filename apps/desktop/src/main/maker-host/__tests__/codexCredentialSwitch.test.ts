@@ -407,7 +407,7 @@ describe('prepareLocalSessionCredentialModeSwitch', () => {
 
     expect(result).toEqual({ closedSessionIds: ['target-claude'] });
     expect(closeSession).toHaveBeenCalledTimes(1);
-    expect(closeSession).toHaveBeenCalledWith('target-claude');
+    expect(closeSession).toHaveBeenCalledWith('target-claude', 'runtime-refresh');
     expect(sideEffect).not.toHaveBeenCalled();
   });
 
@@ -489,7 +489,7 @@ describe('prepareLocalCodexCredentialModeSwitch', () => {
 
     expect(result).toEqual({ closedSessionIds: ['local-codex-1'] });
     expect(closeSession).toHaveBeenCalledTimes(1);
-    expect(closeSession).toHaveBeenCalledWith('local-codex-1');
+    expect(closeSession).toHaveBeenCalledWith('local-codex-1', 'runtime-refresh');
     expect(sideEffect).not.toHaveBeenCalled();
   });
 

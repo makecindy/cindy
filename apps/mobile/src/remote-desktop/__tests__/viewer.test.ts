@@ -243,37 +243,51 @@ function viewer(rtc = false, frameCallback = true) {
 }
 
 describe("remote desktop viewport", () => {
-  it("measures the usable picture and fits updated geometry above the toolbar", () => {
-    const v = viewer();
-    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
-    v.send({ type: "mouseButtons", bottomInset: 100 });
-    v.send({ type: "measureViewport" });
-    expect(v.messages.find((m) => m.type === "viewportSize")).toMatchObject({
-      width: 400,
-      height: 500,
-    });
-    v.send({ type: "videoSettings", width: 800, height: 1000, audio: false });
-    expect(v.elements.video.style).toMatchObject({
-      width: "400px",
-      height: "500px",
-      left: "0px",
-      top: "0px",
-    });
-    v.send({ type: "control", enabled: true });
-    v.send({ type: "mode", mode: "touch" });
-    v.pointer("pointerdown", 1, 200, 250);
-    v.pointer("pointerup", 1, 200, 250);
-    v.ack();
-    v.flush();
-    expect(
-      v.messages
-        .flatMap((m) => m.events ?? [])
-        .filter((e) => e.kind === "button"),
-    ).toEqual([
-      { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
-      { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
-    ]);
-  });
+  it.each([0, 59])(
+    "fits between the top safe area (%s) and toolbar with correct touch coordinates",
+    (topInset) => {
+      const v = viewer();
+      v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+      v.send({ type: "mouseButtons", topInset, bottomInset: 100 });
+      expect(
+        v.messages.filter((m) => m.type === "viewportChanged").at(-1),
+      ).toMatchObject({
+        width: 400,
+        height: 500 - topInset,
+      });
+      v.send({ type: "measureViewport" });
+      expect(v.messages.find((m) => m.type === "viewportSize")).toMatchObject({
+        width: 400,
+        height: 500 - topInset,
+      });
+      v.send({
+        type: "videoSettings",
+        width: 800,
+        height: (500 - topInset) * 2,
+        audio: false,
+      });
+      expect(v.elements.video.style).toMatchObject({
+        width: "400px",
+        height: `${500 - topInset}px`,
+        left: "0px",
+        top: `${topInset}px`,
+      });
+      v.send({ type: "control", enabled: true });
+      v.send({ type: "mode", mode: "touch" });
+      v.pointer("pointerdown", 1, 200, (500 + topInset) / 2);
+      v.pointer("pointerup", 1, 200, (500 + topInset) / 2);
+      v.ack();
+      v.flush();
+      expect(
+        v.messages
+          .flatMap((m) => m.events ?? [])
+          .filter((e) => e.kind === "button"),
+      ).toEqual([
+        { kind: "button", button: 0, down: true, x: 0.5, y: 0.5 },
+        { kind: "button", button: 0, down: false, x: 0.5, y: 0.5 },
+      ]);
+    },
+  );
   it.each([
     ["left", 0],
     ["right", 2],

@@ -193,6 +193,30 @@
           }
         }
       },
+      "switch-thumb-on": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.background.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "background",
+              "wrapper": "hsl",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.background.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "background",
+              "wrapper": "hsl",
+              "mode": "dark"
+            }
+          }
+        }
+      },
       "switch-track-on": {
         "light": {
           "$type": "color",
@@ -5818,6 +5842,78 @@
           "$extensions": {
             "com.cindy.desktop": {
               "cssAlias": "text-secondary-mid",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
+      "slider-track": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.border-default.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "border-default",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.border-default.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "border-default",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
+      "slider-fill": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.text-primary.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "text-primary",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.text-primary.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "text-primary",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
+      "slider-thumb": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.surface-elevated.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "surface-elevated",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.text-primary.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "text-primary",
               "wrapper": "var",
               "mode": "dark"
             }

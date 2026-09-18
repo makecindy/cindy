@@ -11,6 +11,7 @@ import {
   within,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cindyMakeState } from '@/lib/cindyMakeState';
 
 import {
   applyRemoteSessionActivity,
@@ -240,7 +241,46 @@ describe('SessionCard visual cases', () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
   });
+
+  it.each(['card', 'list'] as const)(
+    'keeps %s active during preparation before the Agent starts',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+      vi.spyOn(cindyMakeState, 'subscribe').mockReturnValue(() => {});
+      vi.spyOn(cindyMakeState, 'taskForSession').mockReturnValue({
+        runId: 'make-run',
+        platform: 'win32',
+        arch: 'x64',
+        checks: [],
+        status: 'running',
+        task: { sessionId: visualCase.session.id, phase: 'dependencies' },
+      });
+      renderCase(visualCase.id, {
+        variant,
+        isRunning: false,
+        session: { ...visualCase.session, source: 'cindy-make' },
+      });
+      expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+      expect(screen.getByText('cindyMake.code.phases.dependencies')).toBeTruthy();
+      if (variant === 'list') {
+        expect(
+          sessionRowEl().querySelector('[data-sidebar-right-status="running"]'),
+        ).not.toBeNull();
+      }
+
+      cleanup();
+      mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
+      renderCase(visualCase.id, {
+        variant,
+        isRunning: false,
+        session: { ...visualCase.session, source: 'cindy-make' },
+      });
+      expect(screen.getByText('等待插件设置')).toBeTruthy();
+      expect(screen.queryByText('cindyMake.code.phases.dependencies')).toBeNull();
+    },
+  );
 
   it('keeps a broad gallery of title, body, icon, and state combinations', () => {
     expect(sessionCardVisualCases.map((item) => item.id)).toEqual([

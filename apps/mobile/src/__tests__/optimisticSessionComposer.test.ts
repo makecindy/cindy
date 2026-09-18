@@ -468,7 +468,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession);');
     expect(source).toContain('disabled={controlBusy || !canUseRemoteSessionControls}');
     // 2) 会话设置 RPC 的硬门(统一入口,覆盖全部 runControlAction 调用点)。
-    expect(source).toContain('if (!canUseRemoteSessionControls) return;\n    setControlBusy(true);');
+    expect(source).toContain('if (!canUseRemoteSessionControls) return false;\n    setControlBusy(true);');
     // 3) 消息派发:复合判据,「不存在」是它的子集。
     expect(source).toContain('if (isRemoteSessionMissing(row)) return true;');
     expect(source).not.toContain('const sessionSettingsLocked = currentSession?.pendingLocalCreation === true;');

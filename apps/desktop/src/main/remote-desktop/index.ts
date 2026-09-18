@@ -12,6 +12,7 @@ import {
   type DesktopCapturerSource,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
+import { release as osRelease } from 'node:os';
 import { loadDesktopIceServers } from './iceConfig';
 import { remoteCredentialHost } from './credentialHost';
 import {
@@ -44,12 +45,15 @@ import { desktopCaptureSource, enumerateDesktopSources } from './captureSource';
 import { encodeDesktopFrame, encodeNativeRelayFrame } from './frame';
 import { transferDesktopClipboard, transferDesktopClipboardContent } from './clipboard';
 import { NativeDesktopCapture } from './nativeCapture';
+import { PrivacyScreen } from './privacyScreen';
+import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
 import { readWindowsDesktopSupport, configureWindowsDesktopSupport } from './windowsHost';
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
   setDesktopDisplayMode,
   readDesktopInputPermission,
+  readDesktopClipboardVersion,
   readDesktopLockState,
   lockDesktopScreen,
   requestDesktopInputPermission,
@@ -99,6 +103,20 @@ const permissions = new RemoteDesktopPermissionsService({
 let host: WebContents | null = null;
 const captureWindow = new DesktopCaptureWindow(() => remoteDesktop.stop());
 const nativeCapture = new NativeDesktopCapture();
+const privacyScreen = new PrivacyScreen(
+  (ids) => nativeCapture.setExcludedWindows(ids),
+  () => {
+    return remoteDesktop
+      .stopPrivacyByUser()
+      .catch((error) => console.error('[remote-desktop] privacy exit lock failed', error));
+  },
+  () => input.pauseForPrivacy(),
+);
+const supportsPrivacyScreen =
+  (process.platform === 'darwin' &&
+    typeof process.getSystemVersion === 'function' &&
+    Number(process.getSystemVersion().split('.')[0]) >= 14) ||
+  (process.platform === 'win32' && Number(osRelease().split('.')[2]) >= 19041);
 let displayAwake: number | null = null;
 let nativeDisplay: string | null = null;
 let windowsAvailable = false;
@@ -216,7 +234,7 @@ async function offer(
     if (settings?.audio && !supportsSystemAudio) throw new Error('DESKTOP_AUDIO_UNAVAILABLE');
     captureGrant = source ? { source, lease: lease.lease, audio: settings?.audio === true } : null;
     nativeDisplay = nativeAvailable ? lease.display.id : null;
-    nativeOverlay = cursorOverlay === true && process.platform === 'darwin';
+    nativeOverlay = cursorOverlay === true && nativeAvailable;
     nativeSettings = settings;
     setVideoLease(lease.lease);
     videoAttempt = attemptId;
@@ -346,17 +364,21 @@ export const remoteDesktop = new RemoteDesktopController({
     const viewerDisplay = enabled && (await viewerDisplaySupported());
     return {
       version: 1,
-      cursorOverlay: process.platform === 'darwin',
+      cursorOverlay: process.platform === 'darwin' || (process.platform === 'win32' && windowsAvailable),
       lockOnExit: process.platform === 'darwin',
       clipboardContent: process.platform === 'darwin' || process.platform === 'win32',
+      clipboardSync: process.platform === 'darwin' || process.platform === 'win32',
+      clipboardInline: process.platform === 'darwin' || process.platform === 'win32',
+      privacyScreen: supportsPrivacyScreen,
+      hostMute: process.platform === 'darwin' || process.platform === 'win32',
       clipboardText: process.platform === 'darwin' || process.platform === 'win32',
       videoSettings: true,
       trickleIce: true,
       backgroundViewing: true,
       systemAudio: supportsSystemAudio,
-      displayModes: process.platform === 'darwin',
       viewerDisplay,
       viewerDisplayRestore: viewerDisplay,
+      displayModes: process.platform === 'darwin',
       enabled,
       canControl: process.platform === 'darwin' || process.platform === 'win32',
       platform: process.platform,
@@ -385,7 +407,7 @@ export const remoteDesktop = new RemoteDesktopController({
     if (process.platform === 'darwin' || windowsAvailable) {
       const frame = await nativeCapture.frame(
         displayId,
-        cursorOverlay === true && process.platform === 'darwin',
+        cursorOverlay === true,
         nativeSettings,
       );
       return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
@@ -399,8 +421,49 @@ export const remoteDesktop = new RemoteDesktopController({
   },
   clipboard: (action, text, isCurrent) =>
     transferDesktopClipboard(action, text, isCurrent, (events) => input.input(events)),
-  clipboardContent: (action, content, isCurrent) =>
-    transferDesktopClipboardContent(action, content, isCurrent, (events) => input.input(events)),
+  clipboardContent: (action, content, isCurrent, options) =>
+    transferDesktopClipboardContent(
+      action,
+      content,
+      isCurrent,
+      (events) => input.input(events),
+      options,
+    ),
+  // Poll counters even for nonportable items; the content read owns format validation.
+  clipboardVersion: () => readDesktopClipboardVersion(),
+  privacyScreen: async (enabled, current) => {
+    if (!supportsPrivacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+    if (enabled && process.platform === 'darwin' && videoLease && nativeDisplay) {
+      nativeOverlay = true;
+      await privacyScreen.set(true, current);
+      try {
+        await nativeCapture.preparePrivacy(nativeDisplay, nativeSettings);
+      } catch (error) {
+        if (current()) privacyScreen.stop();
+        throw error;
+      }
+      if (!current()) {
+        throw new Error('DESKTOP_LEASE_EXPIRED');
+      }
+      return;
+    }
+    await privacyScreen.set(enabled, current);
+    if (!enabled || process.platform === 'win32') return;
+    const deadline = Date.now() + 4500;
+    while (current() && !nativeCapture.privacyReady && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+    if (!nativeCapture.privacyReady) {
+      privacyScreen.stop();
+      throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+    }
+  },
+  stopPrivacyScreen: () => privacyScreen.stop(),
+  hostMute: async (enabled) => {
+    if (enabled) await systemAudioMuteGuard.mute('remote-desktop');
+    else await systemAudioMuteGuard.restore('remote-desktop');
+  },
+  stopHostMute: () => systemAudioMuteGuard.restore('remote-desktop'),
   displayModes: readDesktopDisplayModes,
   displayPresent: (displayId) =>
     screen.getAllDisplays().some((display) => String(display.id) === displayId),
@@ -471,6 +534,11 @@ export function registerRemoteDesktopIpc(
   screen.on('display-removed', (_event, display) => {
     if (remoteDesktop.changingDisplay) return;
     if (String(display.id) === remoteDesktop.displayId) remoteDesktop.stop();
+  });
+  screen.on('display-added', () => {
+    // A new screen invalidates mask coverage, not the selected capture geometry.
+    // Include masks still being prepared, before the controller reports enabled.
+    if (privacyScreen.active && !remoteDesktop.changingDisplay) remoteDesktop.stop();
   });
   screen.on('display-metrics-changed', (_event, display, metrics) => {
     if (remoteDesktop.changingDisplay) return;

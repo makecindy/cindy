@@ -1,4 +1,6 @@
 mod capture;
+mod capture_protocol;
+mod cursor;
 mod pipe;
 mod security;
 mod service;

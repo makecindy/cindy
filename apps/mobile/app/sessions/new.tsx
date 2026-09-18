@@ -1,7 +1,9 @@
 import { isRemoteTaskSuggestionId } from '@/session/remoteTaskSuggestionsModel';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
-import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { NewTaskSelectionSheet } from '@/session/NewTaskSelectionSheet';
+import { simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { formatMobileBuildLabel, normalizeBuildInfo } from '@/config/buildInfo';
@@ -47,7 +49,6 @@ import {
   MessageCircle,
   Mic,
   Plus,
-  Scan,
   Settings,
   Target,
   X,
@@ -118,11 +119,11 @@ import {
 } from '@/session/agentCapabilitiesCache';
 import {
   ContextSheet,
-  ContextSheetFooterButton,
+
   ContextSheetGroup,
   ContextSheetRow,
 } from '@/session/ContextSheet';
-import { RecentPhotosStrip, ScreenshotsGrid } from '@/session/ContextSheetMediaViews';
+import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalCreateForm } from '@/session/ContextSheetGoalView';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from '@/session/ComposerAttachmentTray';
@@ -305,8 +306,10 @@ import {
   resolveRowSelection,
   type ProviderModelRow,
 } from '@/session/providerModelSections';
+import type { MobileModelConfiguration } from '@/session/unifiedMobileModels';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
+import { NativePermissionSheet } from '@/session/NativePermissionSheet';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
@@ -433,6 +436,7 @@ export default function NewRemoteSessionScreen() {
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';
   const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;
   const router = useRouter();
+  const nativeSelectionSheet = Platform.OS === 'ios';
   const auth = useAuth();
   const {
     getPresenceAvailability,
@@ -525,7 +529,7 @@ export default function NewRemoteSessionScreen() {
   const [showHiddenDirectories, setShowHiddenDirectories] = useState(false);
   // Context 面板(+ 号弹出的可拖动 sheet):open + 子视图(主视图 / 截图列表 / 目标草稿)。
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
-  const [contextSheetView, setContextSheetView] = useState<'main' | 'screenshots' | 'goal'>('main');
+  const [contextSheetView, setContextSheetView] = useState<'main' | 'goal'>('main');
   const contextSheetMediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
   // 目标模式(对齐桌面 NewMakerDraftRoute.handleCreateGoal):填完表单直接建会话 + setGoal,
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
@@ -611,7 +615,7 @@ export default function NewRemoteSessionScreen() {
   // 相册资产 → 已上传附件 id 的映射(缩略图勾选态真相)。
   const [mediaAssetAttachments, setMediaAssetAttachments] = useState<Record<string, string>>({});
   // 待选相册资产(按选中顺序;Cursor 式两段提交,底部「加入对话」统一上传)。
-  const [pendingMediaAssets, setPendingMediaAssets] = useState<ContextSheetMediaAsset[]>([]);
+  const mediaTapAcceptedRef = useRef(false);
   // 本机图片附件的本地预览 uri(attachmentId → file://),composer 托盘缩略图 / 全图查看用。
   const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({});
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
@@ -2286,6 +2290,28 @@ export default function NewRemoteSessionScreen() {
     setModelSheetOpen(false);
   }, [capabilities, draftMemory]);
 
+  const selectUnifiedModel = useCallback(async (config: MobileModelConfiguration): Promise<boolean> => {
+    if (creating || !selectedDeviceId) return false;
+    const deviceAtStart = selectedDeviceId;
+    const sequence = ++runtimeActionSeqRef.current;
+    const targetCapabilities = normalizeMobileAgentCapabilities(await maker.getCapabilities(config.agent));
+    if (!targetCapabilities) return false;
+    const storedPermission = newSessionPreferences?.permissionModeByAgent[config.agent];
+    const permission = config.agent === draft.agentKind ? draft.permissionMode
+      : storedPermission ?? defaultPermissionModeForNewSessionAgent(config.agent);
+    if (config.agent !== draft.agentKind && !await confirmFullAccessChange(draft.permissionMode, permission, {
+      restoringRememberedChoice: storedPermission !== undefined,
+    })) return false;
+    if (deviceAtStart !== selectedDeviceRef.current || sequence !== runtimeActionSeqRef.current) return false;
+    userTouchedRuntimeRef.current = true;
+    explicitProviderModelSelectionRef.current = config.modelId;
+    const fastMode = targetCapabilities.hasFastMode === true && config.fast;
+    setDraft(current => ({ ...current, agentKind: config.agent, model: config.modelId,
+      providerId: config.providerId, effort: config.effort, fastMode, permissionMode: permission }));
+    void saveNewSessionPreferences({ agentKind: config.agent });
+    return true;
+  }, [creating, selectedDeviceId, maker, newSessionPreferences, draft.agentKind, draft.permissionMode]);
+
   // 扁平回退(被控端 0 供应商):只落 model、清来源(默认路由),effort 跟随 capabilities reconcile。
   const selectFlatModel = useCallback((option: MobileModelOption) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
@@ -3620,7 +3646,7 @@ export default function NewRemoteSessionScreen() {
       {composerShowCreateButton ? renderCreateButton() : null}
     </>
   );
-  const renderComposerInputOverlay = () => voiceIsListening ? (
+  const renderComposerInputOverlay = () => voiceIsListening && Platform.OS !== 'ios' ? (
     <ScrollView
       ref={voiceDraftScrollRef}
       contentContainerStyle={[
@@ -3877,45 +3903,16 @@ export default function NewRemoteSessionScreen() {
     }
     return ids;
   }, [pendingUploads]);
-  // Context 面板媒体缩略图点选(Cursor 式两段提交):已附加 → 立即移除;
-  // 待选 → 取消待选;其余 → 加入待选,由底部「加入对话」按钮统一上传提交。
+  // 单张点按即同步入队，再关闭面板；不等待鉴权或上传才占用附件槽位。
   const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset) => {
-    const attachedId = mediaAssetAttachments[asset.id];
-    if (attachedId) {
-      // 复用统一移除路径:除清 attachments/previews/映射外,还会 best-effort 回收
-      // 已上传的 OSS 中转对象(codex review #504,缩略图取消与 X 按钮同语义)。
-      removeAttachment(attachedId);
-      setAttachmentError(null);
-      return;
-    }
-    if (pendingMediaAssets.some((item) => item.id === asset.id)) {
-      setPendingMediaAssets(pendingMediaAssets.filter((item) => item.id !== asset.id));
-      return;
-    }
-    // 上传中的资产不可再选(UI 已标 busy 禁点,这里是防御兜底),落定后转勾选态。
-    if (uploadingMediaAssetIds.has(asset.id)) return;
-    // 在途占坑读 getPendingUploadCount 同步真源(上传中 + 粘贴占位):粘贴占位
-    // 窗口(原生还在读剪贴板)任务未入队也未进 pendingUploads state,不计入的话
-    // 这里会放行超额选图,占位兑现时轮到粘贴图自己撞上限被丢(review P2)。
-    if (attachments.length + pendingMediaAssets.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
+    if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || uploadingMediaAssetIds.has(asset.id)) return;
+    if (attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
       setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
       return;
     }
+    mediaTapAcceptedRef.current = true;
     setAttachmentError(null);
-    setPendingMediaAssets([...pendingMediaAssets, asset]);
-  }, [attachments.length, getPendingUploadCount, mediaAssetAttachments, pendingMediaAssets, removeAttachment, uploadingMediaAssetIds]);
-  // 底部「加入对话」:点击当帧把待选照片同步入队(缩略图立即进托盘)并关面板;token 传
-  // Promise 由任务自行等待(codex review R8:先 await token 再 enqueue 的等待窗里,面板可被
-  // 背板关掉、create() 的 waitForPendingUploads 看不到任务,首条消息会丢下刚选的图先发出去)。
-  // 全程同步也天然免疫双击重入与限额竞态:批次即时计入 pendingUploads,不再需要
-  // in-flight 门 / 限额预留 / enqueue 前复查那套等待窗补丁。解析(ph://→file://、HEIC
-  // 转码缩边)+ 降采样 + 上传全部在后台管线并发跑,单张失败经 onFailed 报错(含登录过期)。
-  const commitPendingMediaAssets = useCallback(() => {
-    const assets = pendingMediaAssets;
-    if (assets.length === 0) return;
-    setPendingMediaAssets([]);
-    setAttachmentError(null);
-    enqueueUploads(assets.map((asset, index) => ({
+    enqueueUploads([{
       kind: 'image' as const,
       uri: asset.uri,
       name: asset.filename,
@@ -3926,7 +3923,7 @@ export default function NewRemoteSessionScreen() {
         const candidate = buildMobileImageAttachmentCandidate({
           fileName: resolved.filename,
           uri: resolved.uri,
-        }, index);
+        }, 0);
         return {
           uri: candidate.uri,
           name: candidate.name,
@@ -3937,9 +3934,9 @@ export default function NewRemoteSessionScreen() {
           skipPreprocess: resolved.optimized === true,
         };
       },
-    })), { token: auth.getAccessToken() });
+    }], { token: auth.getAccessToken() });
     setContextSheetOpen(false);
-  }, [auth, enqueueUploads, pendingMediaAssets]);
+  }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
   const selectedMediaAssetIds = useMemo(() => {
     const attachmentIds = new Set(attachments.map((item) => item.id));
     return new Set(
@@ -3948,11 +3945,6 @@ export default function NewRemoteSessionScreen() {
         .map(([assetId]) => assetId),
     );
   }, [attachments, mediaAssetAttachments]);
-  // 待选序号角标(从 1 起,按选中顺序)。
-  const pendingMediaOrder = useMemo(
-    () => new Map(pendingMediaAssets.map((item, index) => [item.id, index + 1])),
-    [pendingMediaAssets],
-  );
   // composer 托盘图片附件 → 全屏查看器图集(本地 file:// 直接可显示,不走远端取件)。
   // 标注附件点开显示**原图**(叠矢量笔迹可继续编辑/撤销)而非烧录预览图,同会话页。
   const composerGalleryImages = useMemo<MobileMessageGalleryImage[]>(() => {
@@ -4044,9 +4036,9 @@ export default function NewRemoteSessionScreen() {
       {renderComposerCollapsedAttachmentBadge()}
     </View>
   );
-  // 面板关闭即丢弃未提交的待选(不产生任何上传副作用)。
+  // 每次打开允许一次添加；同步门防止收起动画期间连续点按重复入队。
   useEffect(() => {
-    if (!contextSheetOpen) setPendingMediaAssets([]);
+    if (contextSheetOpen) mediaTapAcceptedRef.current = false;
   }, [contextSheetOpen]);
   // iOS 进页面就静默预取最近照片(仅已授权时),打开 + 面板即刻出图;Android 统一走系统选择器。
   useEffect(() => {
@@ -5361,7 +5353,15 @@ export default function NewRemoteSessionScreen() {
   ]);
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="newSession.screen">
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="newSession.screen">
+      {Platform.OS === 'ios' ? (
+        <>
+          <Stack.Screen options={{ headerShown: true, headerBackVisible: false, headerShadowVisible: false, title: '', headerStyle: { backgroundColor: colors.surface }, headerTintColor: colors.textPrimary }} />
+          <Stack.Toolbar placement="left">
+            <Stack.Toolbar.Button icon="chevron.backward" accessibilityLabel={t('shared.back')} onPress={handleBack} />
+          </Stack.Toolbar>
+        </>
+      ) : null}
       <ComposerKeyboardAvoidingView
         keyboard={keyboardState}
         bottomInset={safeAreaInsets.bottom}
@@ -5371,18 +5371,18 @@ export default function NewRemoteSessionScreen() {
         style={styles.keyboard}
       >
         <View style={styles.screen}>
-          <View style={styles.topBar}>
-            <ScreenBackButton
+          {Platform.OS !== 'ios' || buildLabel || creating ? <View style={styles.topBar}>
+            {Platform.OS !== 'ios' ? <ScreenBackButton
               hitSlop={12}
               onPress={handleBack}
               style={styles.backButton}
               testID="newSession.backButton"
-            />
+            /> : null}
             {buildLabel ? (
               <Text numberOfLines={1} style={styles.buildLabel}>{buildLabel}</Text>
             ) : null}
             {creating ? <ActivityIndicator color={colors.textSecondary} /> : null}
-          </View>
+          </View> : null}
 
           <View style={styles.bottomCluster}>
             <View style={styles.selectorStack}>
@@ -5410,7 +5410,7 @@ export default function NewRemoteSessionScreen() {
                   <ChevronsUpDown color={colors.borderStrong} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 ) : null}
               </Pressable>
-              {devicePickerOpen && deviceHasChoices ? (
+              {!nativeSelectionSheet && devicePickerOpen && deviceHasChoices ? (
                 <View style={styles.devicePickerPanel} testID="newSession.devicePickerPanel">
                   {deviceOptions.map((option) => {
                     const selected = option.deviceId === selectedDeviceId;
@@ -5440,6 +5440,7 @@ export default function NewRemoteSessionScreen() {
                 </View>
               ) : null}
               </View>
+              {deviceProviders.unsupported ? (
               <View style={styles.agentSelectorWrap}>
                 <Pressable
                   accessibilityLabel={t('session.new.selectAgent')}
@@ -5488,6 +5489,7 @@ export default function NewRemoteSessionScreen() {
                   </View>
                 ) : null}
               </View>
+              ) : null}
               <View style={styles.workspaceSelectorWrap}>
                 <Pressable
                   accessibilityLabel={t('session.new.selectWorkspace')}
@@ -5507,7 +5509,7 @@ export default function NewRemoteSessionScreen() {
                   <Text style={styles.selectorText} numberOfLines={1}>{workspaceLabel}</Text>
                   <ChevronsUpDown color={colors.borderStrong} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
-                {workspacePickerOpen ? (
+                {!nativeSelectionSheet && workspacePickerOpen ? (
                   <View style={styles.workspacePickerPanel} testID="newSession.workspacePickerPanel">
                     <Pressable
                       accessibilityLabel={t('session.new.dialogueNoProject')}
@@ -5660,7 +5662,7 @@ export default function NewRemoteSessionScreen() {
               ) : null}
             </View>
 
-            {browseOpen ? (
+            {!nativeSelectionSheet && browseOpen ? (
               <View style={styles.browsePanel} testID="newSession.remoteBrowsePanel">
                 <View style={styles.browseHeader}>
                   <Text style={styles.browsePath} numberOfLines={1} testID="newSession.remoteBrowseCurrentPath">
@@ -5855,11 +5857,12 @@ export default function NewRemoteSessionScreen() {
                   inputRef={firstMessageInputRef}
                   leading={renderComposerCompactLeading()}
                   inputFrameAnimatedStyle={composerResize.frameStyle}
+                    collapseProgress={composerResize.collapseProgress}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
-                  inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                  inputFrameMinHeight={Platform.OS !== 'ios' && voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                   inputOverlay={renderComposerInputOverlay()}
-                  inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
+                  inputStyle={voiceIsListening && Platform.OS !== 'ios' ? styles.inputVoiceHidden : undefined}
                   inputTestID="newSession.firstMessageInput"
                   maxHeight={composerResize.inputMaxHeight}
                   multilineShape={!composerCardActive && composerInputIsMultiline}
@@ -5944,35 +5947,56 @@ export default function NewRemoteSessionScreen() {
         </View>
       </ComposerKeyboardAvoidingView>
       <ContextSheet
-        footer={contextSheetView !== 'goal' && pendingMediaAssets.length > 0 ? (
-          <ContextSheetFooterButton
-            disabled={creating}
-            label={t('session.common.joinConversation', { num: pendingMediaAssets.length })}
-            onPress={() => void commitPendingMediaAssets()}
-            testID="newSession.contextSheetCommitMedia"
-          />
-        ) : undefined}
+        media={contextSheetView === 'main' && contextSheetMediaLibraryEnabled ? (
+            <RecentPhotosStrip
+              busyAssetIds={uploadingMediaAssetIds}
+              disabled={creating}
+              enabled={contextSheetOpen}
+              onToggleAsset={toggleMediaAssetAttachment}
+
+              selectedAssetIds={selectedMediaAssetIds}
+              testID="newSession.contextSheetPhotos"
+            />
+          ) : null}
+        error={contextSheetView === 'main' ? attachmentError : null}
         keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         onBack={contextSheetView !== 'main' ? () => setContextSheetView('main') : undefined}
         onClose={() => setContextSheetOpen(false)}
         testID="newSession.contextSheet"
-        title={contextSheetView === 'screenshots' ? t('session.common.screenshot') : contextSheetView === 'goal' ? t('session.common.goalMode') : t('session.common.context')}
+        title={contextSheetView === 'goal' ? t('session.common.goalMode') : t('session.common.context')}
         visible={contextSheetOpen}
       >
         {contextSheetView === 'main' ? (
           <>
-            {contextSheetMediaLibraryEnabled ? (
-              <RecentPhotosStrip
-                busyAssetIds={uploadingMediaAssetIds}
+
+
+            <ContextSheetGroup label={Platform.OS === 'ios' && contextSheetMediaLibraryEnabled ? '' : t('session.common.groupAdd')}>
+              <ContextSheetRow
                 disabled={creating}
-                enabled={contextSheetOpen}
-                onToggleAsset={toggleMediaAssetAttachment}
-                pendingOrder={pendingMediaOrder}
-                selectedAssetIds={selectedMediaAssetIds}
-                testID="newSession.contextSheetPhotos"
+                icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                label={t('session.common.photo')}
+                onPress={() => void addLocalImageAttachments('library')}
+                dismissBeforePress
+                  testID="newSession.contextSheetPhotoRow"
               />
-            ) : null}
-            <ContextSheetGroup label={t('session.common.groupMode')}>
+              <ContextSheetRow
+                disabled={creating}
+                icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                label={t('session.common.takePhoto')}
+                onPress={() => void addLocalImageAttachments('camera')}
+                dismissBeforePress
+                  testID="newSession.contextSheetCameraRow"
+              />
+              <ContextSheetRow
+                disabled={creating}
+                icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                label={t('session.common.file')}
+                onPress={() => void addLocalFileAttachment()}
+                dismissBeforePress
+                  testID="newSession.contextSheetFileRow"
+              />
+            </ContextSheetGroup>
+<ContextSheetGroup label={t('session.common.groupMode')}>
               {planModeSupported ? (
                 // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
                 <ContextSheetRow
@@ -5996,56 +6020,7 @@ export default function NewRemoteSessionScreen() {
                 trailing="chevron"
               />
             </ContextSheetGroup>
-            <ContextSheetGroup label={t('session.common.groupAdd')}>
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.photo')}
-                onPress={() => void addLocalImageAttachments('library')}
-                testID="newSession.contextSheetPhotoRow"
-              />
-              {contextSheetMediaLibraryEnabled ? (
-                <ContextSheetRow
-                  disabled={creating}
-                  icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label={t('session.common.screenshot')}
-                  onPress={() => setContextSheetView('screenshots')}
-                  testID="newSession.contextSheetScreenshotsRow"
-                  trailing="chevron"
-                />
-              ) : null}
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.takePhoto')}
-                onPress={() => void addLocalImageAttachments('camera')}
-                testID="newSession.contextSheetCameraRow"
-              />
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.file')}
-                onPress={() => void addLocalFileAttachment()}
-                testID="newSession.contextSheetFileRow"
-              />
-            </ContextSheetGroup>
-            {attachmentError ? (
-              <Text style={{ color: colors.errorText, fontSize: typeScale.footnote, paddingTop: 12 }}>
-                {attachmentError}
-              </Text>
-            ) : null}
           </>
-        ) : contextSheetView === 'screenshots' && contextSheetMediaLibraryEnabled ? (
-          <ScreenshotsGrid
-            busyAssetIds={uploadingMediaAssetIds}
-            contentWidth={windowDimensions.width - 40}
-            disabled={creating}
-            enabled={contextSheetOpen && contextSheetView === 'screenshots'}
-            onToggleAsset={toggleMediaAssetAttachment}
-            pendingOrder={pendingMediaOrder}
-            selectedAssetIds={selectedMediaAssetIds}
-            testID="newSession.contextSheetScreenshotsGrid"
-          />
         ) : (
           <ContextSheetGoalCreateForm
             busy={goalBusy}
@@ -6060,6 +6035,30 @@ export default function NewRemoteSessionScreen() {
           />
         )}
       </ContextSheet>
+      {nativeSelectionSheet ? <NewTaskSelectionSheet
+        page={browseOpen ? 'directory' : devicePickerOpen ? 'device' : workspacePickerOpen ? 'workspace' : null}
+        busy={creating || voiceIsProcessing}
+        devices={deviceOptions}
+        selectedDeviceId={selectedDeviceId}
+        workspaces={recentWorkspaces}
+        workspaceKind={draft.workspaceKind}
+        workingDir={draft.workingDir}
+        path={browsePath}
+        parent={browseParent}
+        entries={visibleBrowseEntries}
+        loading={browseLoading}
+        error={browseError}
+        showHidden={showHiddenDirectories}
+        onClose={() => { setDevicePickerOpen(false); setWorkspacePickerOpen(false); setBrowseOpen(false); }}
+        onBack={() => { setBrowseOpen(false); setWorkspacePickerOpen(true); }}
+        onDevice={(id) => { const option = deviceOptions.find(device => device.deviceId === id); if (option && !deviceSelectorDisabled) selectDevice(option); }}
+        onDialogue={selectDialogueWorkspace}
+        onProject={selectRecentProject}
+        onBrowse={openProjectBrowse}
+        onEnter={(path) => void loadBrowsePath(path)}
+        onChoose={chooseWorkingDir}
+        onShowHidden={setShowHiddenDirectories}
+      /> : null}
       <SheetModal
         backdropTestID="newSession.worktreeBranchSheet.backdrop"
         onBackdropPress={() => setWorktreeBranchSheetOpen(false)}
@@ -6109,6 +6108,16 @@ export default function NewRemoteSessionScreen() {
         </SheetSurface>
       </SheetModal>
       <ModelPickerSheet
+        unified={{
+          scope: JSON.stringify([auth.user?.id, selectedDeviceId]),
+          agents: availableNewSessionAgentOptions(availableAgentKinds).map(option => option.kind),
+          loadCapabilities: async agent => {
+            const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
+            if (!result) throw new Error('Capabilities unavailable');
+            return result;
+          },
+          onSelect: selectUnifiedModel,
+        }}
         activeModelId={draft.model}
         activePermissionMode={displayPermissionMode}
         agentKind={draft.agentKind}
@@ -6144,7 +6153,9 @@ export default function NewRemoteSessionScreen() {
       />
       {/* 权限模式独立浮窗:composer 权限药丸点开;列表复用 MobilePermissionPickerList,
           选择走 selectPermissionMode(含 Full access 确认弹层 + per-agent 记忆)后关浮窗。 */}
-      <SheetModal
+      {Platform.OS === 'ios' ? (<NativePermissionSheet visible={permissionSheetOpen} onClose={() => setPermissionSheetOpen(false)}
+ activeMode={displayPermissionMode} disabled={creating} onSelect={selectPermissionMode}
+ options={runtimeOptions.permissionOptions} testID="newSession.permissionSheet" />) : (<SheetModal
         backdropTestID="newSession.permissionSheet.backdrop"
         onBackdropPress={() => setPermissionSheetOpen(false)}
         onRequestClose={() => setPermissionSheetOpen(false)}
@@ -6170,7 +6181,7 @@ export default function NewRemoteSessionScreen() {
             testID="newSession.permissionSheet.option"
           />
         </SheetSurface>
-      </SheetModal>
+      </SheetModal>)}
       {composerPreviewUrl && composerGalleryImages.length > 0 ? (
         // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。
         // annotation:托盘图可圈点标注 / 再编辑,保存后烧录替换附件重新上传。

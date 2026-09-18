@@ -33,11 +33,18 @@ pnpm install
 新 worktree 不共享 `node_modules`。确认 checkout 已完成且根 `package.json` 存在后，
 在该 worktree 内重新运行 `pnpm install`。
 
-Cindy Make 在准备受管源码时，先切到 `cindy-personal`，按锁文件安装包含开发依赖的完整
-依赖，成功后才标记仓库就绪。后续开发分支的 worktree 使用已选定的系统或 Cindy 管理
+Cindy Make 的设置入口和指令前置弹窗共用源码准备流程：切到 `cindy-personal` 后，
+按锁文件预热包含开发依赖的 pnpm store 缓存，成功后才标记源码就绪。预热使用
+`pnpm fetch --frozen-lockfile --prefer-offline --prod=false --ignore-scripts
+--config.node-linker=isolated --config.enable-modules-dir=false`，只下载／复用缓存，
+不为个人分支建立依赖目录、不执行安装脚本；这两个 config 参数仅作用于预热子进程。
+每次准备都由 pnpm 校验当前锁文件和缓存，缺失或变化的包才补下载，不用就绪标记跳过校验。
+实现与回归见 [sourcePreparation.ts](../../apps/desktop/src/main/cindy-make/sourcePreparation.ts)
+及其[测试](../../apps/desktop/src/main/cindy-make/__tests__/sourcePreparation.test.ts)。
+用户继续后，开发任务的 worktree 使用已选定的系统或 Cindy 管理
 工具（含原生依赖构建所需的 Python），并通过
 `pnpm install --frozen-lockfile --prefer-offline --prod=false` 优先复用
-准备阶段填充的 pnpm store 缓存；各 worktree 仍保留独立的 `node_modules`，不复制或
+准备阶段填充的 pnpm store 缓存，并执行必要的安装脚本；各 worktree 仍保留独立的 `node_modules`，不复制或
 链接个人分支的依赖目录。安装失败或取消可在现有 checkout 上重试，不重置个人分支。
 
 ## Linux：Electron SUID sandbox 权限

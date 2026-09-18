@@ -533,7 +533,7 @@ fn serve(mut client: Pipe) -> Result<()> {
             }
         }
         worker.write(&request)?;
-        let response = worker.line(240001)?;
+        let response = worker.line(crate::capture_protocol::response_limit(&parsed))?;
         if session != unsafe { WTSGetActiveConsoleSessionId() } || STOP.load(Ordering::SeqCst) {
             return denied();
         }
@@ -546,7 +546,7 @@ fn serve(mut client: Pipe) -> Result<()> {
                 return denied();
             }
         }
-        client.write(&response)?;
+        client.write_response(&response, &parsed)?;
     }
 }
 struct Worker {
@@ -604,13 +604,13 @@ pub fn worker(name: &str) -> Result<()> {
     }
     let init: serde_json::Value = serde_json::from_slice(&pipe.line(1024)?)?;
     if init["mode"] == "capture" {
-        let mut capture = crate::capture::Capture::new(&init["rect"])?;
+        let mut capture = crate::capture::Capture::new(&init)?;
         pipe.write(b"ready\n")?;
         loop {
             if pipe.line(16)? != b"f\n" {
                 return denied();
             }
-            pipe.write(&capture.frame()?)?;
+            pipe.write_response(&capture.frame()?, &init)?;
         }
     }
     if init["mode"] != "input" {

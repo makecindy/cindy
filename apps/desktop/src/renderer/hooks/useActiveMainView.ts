@@ -14,6 +14,7 @@
  * URL 派生由本 hook 维护；各视图最后位置由账号级 MainViewHistoryProvider 共享，
  * 避免侧栏滚动段卸载后丢失返回位置。未提供 Provider 时使用实例内记忆。
  * 自动化页保留当前视图归属，但不覆盖任务返回位置。
+ * 伙伴创建页的返回位置使用 /bots，由入口解析最近有效伙伴，不恢复创建表单。
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -76,7 +77,11 @@ export function useActiveMainView() {
         location.pathname === '/cc-agent/scheduled' ||
         location.pathname.startsWith('/cc-agent/scheduled/');
       if (!isAutomations) {
-        history.current.paths[matchedKey] = location.pathname + location.search + location.hash;
+        const isBotCreation =
+          location.pathname === '/bots/roster' || location.pathname === '/bots/roster/';
+        history.current.paths[matchedKey] = isBotCreation
+          ? '/bots'
+          : location.pathname + location.search + location.hash;
       }
     }
   }, [history, matchedKey, location.key, location.pathname, location.search, location.hash]);

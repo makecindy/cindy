@@ -272,7 +272,9 @@
         "surface-hover-hsl": "60.0 12.8% 92.4%",
         "surface-on-card": "#FFFFFF",
         "switch-track-off": "#888888",
-        "switch-track-on": "#4A4D51",
+        "switch-track-on": "#417CDD",
+        "switch-thumb-on": "hsl(var(--background))",
+        "switch-thumb-off": "var(--surface-on-card)",
         "status-badge-fg": "#1F1F1F",
         "border-default": "#E4E4DF",
         "border-default-hsl": "60.0 8.5% 88.4%",
@@ -425,7 +427,10 @@
         "completion-badge-fg": "#1f1f1e",
         "create-agent-control-bg-hover": "var(--surface-hover)",
         "create-agent-control-bg-pressed": "var(--surface-hover-soft)",
-        "create-agent-send-icon": "#FCFCFC"
+        "create-agent-send-icon": "#FCFCFC",
+        "slider-track": "#A3A39E",
+        "slider-fill": "#3C3F43",
+        "slider-thumb": "#FDFDF8"
       }
     },
     "cindy-dark": {
@@ -445,7 +450,9 @@
         "surface-hover-hsl": "0 0% 11.4%",
         "surface-on-card": "#181818",
         "switch-track-off": "#787878",
-        "switch-track-on": "#EEEEEE",
+        "switch-track-on": "#417CDD",
+        "switch-thumb-on": "#FCFCFC",
+        "switch-thumb-off": "#FCFCFC",
         "status-badge-fg": "#121212",
         "border-default": "#313131",
         "border-default-hsl": "0 0% 19.2%",
@@ -598,7 +605,10 @@
         "sidebar-nav-text": "#D4D4D4",
         "sidebar-user-card-bg-hover": "rgba(255, 255, 255, 0.10)",
         "sidebar-user-card-border": "rgba(255, 255, 255, 0.13)",
-        "sidebar-user-card-text": "#D4D4D4"
+        "sidebar-user-card-text": "#D4D4D4",
+        "slider-track": "#626262",
+        "slider-fill": "#EEEEEE",
+        "slider-thumb": "#FCFCFC"
       }
     },
     "default-dark": {

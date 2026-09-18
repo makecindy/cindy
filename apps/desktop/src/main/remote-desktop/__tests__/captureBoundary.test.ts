@@ -175,6 +175,7 @@ vi.mock('../../utils/ipcValidate', () => ({
   },
 }));
 import { registerRemoteDesktopIpc } from '../index';
+import { PrivacyScreen } from '../privacyScreen';
 const event = (owner = h.owner) => ({ sender: owner, senderFrame: owner.mainFrame });
 const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -203,10 +204,17 @@ beforeEach(() => {
   registerRemoteDesktopIpc();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   h.deps.stopVideo();
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it.each([false, true])('only stops on added displays with privacy masks active=%s', (active) => {
+  vi.spyOn(PrivacyScreen.prototype, 'active', 'get').mockReturnValue(active);
+  h.screenHandlers.get('display-added')({}, { id: 2 });
+  expect(h.stop).toHaveBeenCalledTimes(active ? 1 : 0);
 });
 
 it.each(['resolution', 'restoreResolution'])(
@@ -250,19 +258,18 @@ it.each(['resolution', 'restoreResolution'])(
   },
 );
 
-it.each([
-  ['scaleFactor'],
-  ['bounds', 'scaleFactor'],
-  ['bounds', 'workArea', 'scaleFactor'],
-])('keeps managed geometry after late display metrics %j', (...metrics) => {
-  h.screenHandlers.get('display-metrics-changed')(
-    {},
-    { id: 1, size: { width: 1920, height: 1080 } },
-    metrics,
-  );
-  expect(h.geometryMatches).toHaveBeenCalledWith('1', 1920, 1080);
-  expect(h.stop).not.toHaveBeenCalled();
-});
+it.each([['scaleFactor'], ['bounds', 'scaleFactor'], ['bounds', 'workArea', 'scaleFactor']])(
+  'keeps managed geometry after late display metrics %j',
+  (...metrics) => {
+    h.screenHandlers.get('display-metrics-changed')(
+      {},
+      { id: 1, size: { width: 1920, height: 1080 } },
+      metrics,
+    );
+    expect(h.geometryMatches).toHaveBeenCalledWith('1', 1920, 1080);
+    expect(h.stop).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   [true, ['rotation']],
@@ -572,4 +579,55 @@ it('routes native input failure to control release rather than capture teardown'
   expect(h.releaseControl).toHaveBeenCalledOnce();
   expect(h.stop).not.toHaveBeenCalled();
   expect(h.dispose).not.toHaveBeenCalled();
+});
+
+it.each(['darwin', 'win32'])(
+  'negotiates cursor-free capture on %s only when requested',
+  async (platform) => {
+    vi.stubGlobal('process', { ...process, platform });
+    expect((await h.deps.capabilities()).cursorOverlay).toBe(true);
+    for (const overlay of [false, true]) {
+      const pending = h.deps.offer(
+        { lease: h.lease, display: { id: '1' } },
+        'sdp',
+        undefined,
+        overlay,
+        'attempt',
+      );
+      h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+      await flush();
+      const command = h.owner.send.mock.calls[0][1];
+      expect(command.cursorOverlay).toBe(overlay);
+      expect(command.nativeCapture).toBe(true);
+      h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), command.id, 'answer');
+      await pending;
+      await h.handlers.get(DESKTOP_LOCAL.NATIVE_FRAME)(event(), h.lease);
+      expect(h.nativeFrame).toHaveBeenLastCalledWith('1', overlay, undefined);
+      await h.deps.frame('1', overlay);
+      expect(h.nativeFrame).toHaveBeenLastCalledWith('1', overlay, undefined);
+    }
+  },
+);
+
+it('does not advertise or select Windows overlays without a ready native service', async () => {
+  vi.stubGlobal('process', { ...process, platform: 'win32' });
+  const { readWindowsDesktopSupport } = await import('../windowsHost');
+  vi.mocked(readWindowsDesktopSupport)
+    .mockResolvedValueOnce('missing')
+    .mockResolvedValueOnce('missing');
+  expect((await h.deps.capabilities()).cursorOverlay).toBe(false);
+  const pending = h.deps.offer(
+    { lease: h.lease, display: { id: '1' } },
+    'sdp',
+    undefined,
+    true,
+    'attempt',
+  );
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  const command = h.owner.send.mock.calls[0][1];
+  expect(command.cursorOverlay).toBe(false);
+  expect(command.nativeCapture).toBe(false);
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), command.id, 'answer');
+  await pending;
 });

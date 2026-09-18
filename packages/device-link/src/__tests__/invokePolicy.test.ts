@@ -2,12 +2,31 @@ import { describe, expect, it } from 'vitest';
 import {
   canCoalesceRemoteListing,
   isPeerResetRetryableReadChannel,
+  isCompletedInvokeRetryableReadChannel,
   resolveRemoteInvokeTimeoutMs,
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  it.each(['local-db:sessions:list', 'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:interrupted-pending', 'maker:list-active'])(
+    'explicitly permits retrying completed %s reads', (channel) => {
+      expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(true);
+    },
+  );
+
+  it.each([
+    'maker:remote-resources:list', 'maker:remote-resources:get',
+    'local-db:bots:list', 'local-db:bots:get',
+    'maker:send', 'maker:input:enqueue',
+    'maker:get-capabilities', 'maker:provider:list', 'maker:git-safety:get',
+    'maker:schedule:list-sidebar-index-runs', 'unknown:list', undefined,
+  ])('does not infer completed retry safety for %s from listing, peer-reset or background classification', (channel) => {
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+  });
+
   it('allows retrying a read without sharing a snapshot from before a write', () => {
     expect(isPeerResetRetryableReadChannel('local-db:sessions:get')).toBe(true);
+    expect(isPeerResetRetryableReadChannel('local-db:sessions:get-many')).toBe(true);
+    expect(canCoalesceRemoteListing({ channel: 'local-db:sessions:get-many', args: [['id']] })).toBe(false);
     expect(canCoalesceRemoteListing({ channel: 'local-db:sessions:get', args: ['id'] })).toBe(false);
     expect(isPeerResetRetryableReadChannel('local-db:sessions:list')).toBe(true);
     expect(canCoalesceRemoteListing({ channel: 'local-db:sessions:list', args: [] })).toBe(true);

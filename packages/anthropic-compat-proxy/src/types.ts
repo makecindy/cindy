@@ -209,6 +209,18 @@ export interface ProxyOptions {
    * 传空数组 [] = 显式禁用所有 transform,纯透传。
    */
   transformRequest?: RequestTransform[];
+  /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
+   * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
+  requestGuard?: (ctx: RequestTransformCtx) => {
+    transformBody: (body: Buffer) => Buffer;
+    response: (headers: Readonly<Record<string, number | string | string[] | undefined>>) => Transform;
+  } | null;
+  /** Optional message enforcement. Requires uncompressed RFC6455 negotiation. */
+  webSocketTransforms?: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => {
+    outbound: Transform;
+    inbound: Transform;
+  };
+
   /**
    * Optional byte-preservation gate for non-chat endpoints sharing this proxy.
    * Returning true skips every request-body transform for this request only.
@@ -310,7 +322,8 @@ export interface ProxyOptions {
    * 而 upgrade 请求没有 body、也未必带 session/thread header, 会 fallback 到默认
    * 上游。开了 WS 的 provider 是明确且唯一的, 上游可以直接给定, 不需要推导。
    *
-   * **WS 流量上以下能力一律不生效**(proxy 只做 socket 级转发, 不解析 WS 帧):
+   * **WS 流量上以下能力一律不生效**（默认 socket 级转发；显式 webSocketTransforms
+   * 可单独装配消息边界检查，不复用 HTTP 转换链）：
    * requestTransform / routingTransform 的 body 改写、recoveryRules、
    * responseObserver、maxRequestBodyBytes。放开某个 provider 的 WS 前必须确认
    * 它不依赖这些。

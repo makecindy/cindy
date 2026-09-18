@@ -1,11 +1,16 @@
-import { isRemoteDesktopCursor, type RemoteDesktopCursorFrame, type RemoteDesktopVideoSettings } from '@cindy/device-link';
-import { app, screen } from 'electron';
+import {
+  isRemoteDesktopCursor,
+  type RemoteDesktopCursorFrame,
+  type RemoteDesktopVideoSettings,
+} from '@cindy/device-link';
+import { app, nativeImage, screen } from 'electron';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { openWindowsDesktopConnection, type WindowsDesktopConnection } from './windowsHost';
+import { decodeWindowsCursorFrame } from './windowsCursorFrame';
 
 const exec = promisify(execFile);
 const name = 'cindy-macos-desktop-capture';
@@ -52,6 +57,12 @@ async function binary(): Promise<string> {
           'ImageIO',
           '-framework',
           'IOKit',
+          '-weak_framework',
+          'ScreenCaptureKit',
+          '-framework',
+          'CoreMedia',
+          '-framework',
+          'CoreVideo',
           '-o',
           temporary,
         ],
@@ -73,6 +84,23 @@ async function binary(): Promise<string> {
  * Neither adapter keeps frame history on disk.
  */
 export class NativeDesktopCapture {
+  private excludedWindows = '';
+  private confirmedExclusion = '';
+  setExcludedWindows(ids: number[]): void {
+    const next = ids.join(',');
+    if (next === this.excludedWindows) return;
+    this.stop();
+    this.excludedWindows = next;
+  }
+  get privacyReady(): boolean {
+    return !!this.excludedWindows && this.confirmedExclusion === this.excludedWindows;
+  }
+  async preparePrivacy(display: string, settings?: RemoteDesktopVideoSettings): Promise<void> {
+    if (process.platform !== 'darwin') return;
+    this.stop();
+    const frame = await this.frame(display, true, settings);
+    if (!frame || !this.privacyReady) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  }
   private windows: WindowsDesktopConnection | null = null;
   private child: ChildProcessWithoutNullStreams | null = null;
   private display = '';
@@ -81,10 +109,15 @@ export class NativeDesktopCapture {
   private busy = false;
   private cancel: ((error?: Error) => void) | null = null;
 
-  async frame(display: string, overlay = false, settings?: RemoteDesktopVideoSettings): Promise<string | RemoteDesktopCursorFrame | null> {
+  async frame(
+    display: string,
+    overlay = false,
+    settings?: RemoteDesktopVideoSettings,
+  ): Promise<string | RemoteDesktopCursorFrame | null> {
     if (process.platform === 'win32') {
       if (this.busy) return null;
-      if (this.display && this.display !== display) this.stop();
+      const config = overlay ? 'overlay:' + (settings?.bitrate ?? 0) : '';
+      if (this.windows && (this.display !== display || this.config !== config)) this.stop();
       const selected = screen.getAllDisplays().find((item) => String(item.id) === display);
       if (!selected) return null;
       this.busy = true;
@@ -95,6 +128,7 @@ export class NativeDesktopCapture {
           const connection = await openWindowsDesktopConnection({
             mode: 'capture',
             rect: [bounds.x, bounds.y, bounds.width, bounds.height],
+            ...(overlay ? { cursorOverlay: true, bitrate: settings?.bitrate ?? 0 } : {}),
           });
           if (generation !== this.generation) {
             connection.close();
@@ -102,8 +136,14 @@ export class NativeDesktopCapture {
           }
           this.windows = connection;
           this.display = display;
+          this.config = config;
         }
         const jpeg = (await this.windows.request('f')).trim();
+        if (generation !== this.generation) return null;
+        if (overlay) {
+          return decodeWindowsCursorFrame(jpeg, selected.scaleFactor,
+            (pixels, size) => nativeImage.createFromBitmap(pixels, size).toPNG());
+        }
         return generation === this.generation &&
           jpeg.length <= 240000 &&
           /^[A-Za-z0-9+/]+={0,2}$/.test(jpeg)
@@ -127,8 +167,13 @@ export class NativeDesktopCapture {
       if (!this.child) {
         const executable = await binary();
         if (generation !== this.generation) return null;
-        const quality = settings?.bitrate === 20_000_000 ? 0.95 : settings?.bitrate === 8_000_000 ? 0.8 : 0.65;
-        const child = spawn(executable, overlay ? [display, 'cursor-overlay', String(settings?.fps ?? 30), String(quality)] : [display], { stdio: 'pipe' });
+        const quality =
+          settings?.bitrate === 20_000_000 ? 0.95 : settings?.bitrate === 8_000_000 ? 0.8 : 0.65;
+        const args = overlay
+          ? [display, 'cursor-overlay', String(settings?.fps ?? 30), String(quality)]
+          : [display];
+        if (this.excludedWindows) args.push(this.excludedWindows);
+        const child = spawn(executable, args, { stdio: 'pipe' });
         this.child = child;
         this.display = display;
         this.config = config;
@@ -141,9 +186,11 @@ export class NativeDesktopCapture {
         });
         child.on('exit', (code) => {
           if (this.child !== child) return;
-          this.cancel?.(new Error(code === 3
-            ? 'DESKTOP_SCREEN_PERMISSION_REQUIRED'
-            : 'DESKTOP_VIDEO_UNAVAILABLE'));
+          this.cancel?.(
+            new Error(
+              code === 3 ? 'DESKTOP_SCREEN_PERMISSION_REQUIRED' : 'DESKTOP_VIDEO_UNAVAILABLE',
+            ),
+          );
           this.stop();
         });
       }
@@ -151,6 +198,8 @@ export class NativeDesktopCapture {
       return await new Promise<string | RemoteDesktopCursorFrame | null>((resolve, reject) => {
         let text = '';
         const finish = (frame: string | RemoteDesktopCursorFrame | null, error?: Error) => {
+          if (frame && generation === this.generation)
+            this.confirmedExclusion = this.excludedWindows;
           clearTimeout(timer);
           child.stdout.off('data', receive);
           this.cancel = null;
@@ -167,11 +216,17 @@ export class NativeDesktopCapture {
           if (overlay) {
             try {
               const value = JSON.parse(text) as RemoteDesktopCursorFrame;
-              if (typeof value.jpeg !== 'string' || value.jpeg.length > 1_333_336 ||
-                  !/^[A-Za-z0-9+/]+={0,2}$/.test(value.jpeg) || (value.cursor !== null && !isRemoteDesktopCursor(value.cursor)))
+              if (
+                typeof value.jpeg !== 'string' ||
+                value.jpeg.length > 1_333_336 ||
+                !/^[A-Za-z0-9+/]+={0,2}$/.test(value.jpeg) ||
+                (value.cursor !== null && !isRemoteDesktopCursor(value.cursor))
+              )
                 throw new Error('INVALID_CURSOR_FRAME');
               finish(generation === this.generation ? value : null);
-            } catch { this.stop(); }
+            } catch {
+              this.stop();
+            }
             return;
           }
           const jpeg = text.slice(0, -1);
@@ -193,6 +248,7 @@ export class NativeDesktopCapture {
   }
 
   stop(): void {
+    this.confirmedExclusion = '';
     this.generation++;
     this.windows?.close();
     this.windows = null;

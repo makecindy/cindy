@@ -45,6 +45,18 @@ const useOrcaWorkerSelectionSourcePath = resolve(__dirname, '..', '..', 'rendere
 const useOrcaWorkerSelectionSource = readFileSync(useOrcaWorkerSelectionSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('sendToSession ordering', () => {
+  it('guards Cindy Make direct sends without reentering the session send lock', () => {
+    const block = extractBetween(source, 'async function sendUserMessageWithAwaitedGitBaseline', 'async function sendToSessionInternal');
+    expect(block).toContain('cindyMakeManager.isTaskPreparing(session.id)');
+    expectOrder(block, 'await assertCindyMakeTaskReady(session.id)', 'const dispatch = async');
+    expect(block).toContain("withCindyMakeProjectUse(app.getPath('userData'), session.workDir, dispatch)");
+    expect(block).not.toContain('sendToAgentAccepted(');
+    expect(block).not.toContain('sendToSessionLocks');
+    const observer = extractBetween(source, 'const sessionTurnObserverDependencies =', 'export function wireSessionToIpc');
+    expect(observer).toContain('beforeLocalProviderStart:');
+    expect(observer).toContain("withCindyMakeProjectUse(app.getPath('userData'), session.workDir,");
+  });
+
   it('routes pending harness selections through the canonical queued send before using a live handle', () => {
     const block = extractSendToSessionSource();
     const routing = block.indexOf('|| agentSwitchPending.get(targetSessionId)');
@@ -207,7 +219,9 @@ describe('sendToSession ordering', () => {
     expect(queuedCreateOptsBlock).toContain('inheritTargetPlanMode = false,');
     expect(queuedCreateOptsBlock).toContain('planMode: inheritTargetPlanMode ? !!row.planModeEnabled : false,');
     expect(orcaInterAgentDispatcherSource).toContain('planMode: false,');
-    expect(schedulerRunnerSource).toContain('planMode: routinePermissions?.planMode ?? false,');
+    expect(schedulerRunnerSource).toContain(
+      'planMode: routinePermissions?.planMode ?? heartbeatPermissions?.planMode ?? false,',
+    );
     expect(goalControllerSource).toContain("origin: { kind: 'goal', goalSessionId: sessionId },");
     expect(goalControllerSource).toContain('planMode: false,');
     expect(imTurnRunnerSource).toContain('planMode: false,');

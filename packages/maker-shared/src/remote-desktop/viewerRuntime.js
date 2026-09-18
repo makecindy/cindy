@@ -237,6 +237,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     viewportRightInset = 0,
     viewportLeftInset = 0,
     viewportBottomInset = 0,
+    viewportTopInset = 0,
     keyboardViewportInset = 0,
     portraitKeyboardTopInset = 0;
   let keyboardViewportOpen = false;
@@ -246,8 +247,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   // Insets guide centering and pan limits without clipping the full-screen
   // video surface or adding an opaque strip beside the Dynamic Island.
   const viewportLeft = () => (fillHeight ? viewportLeftInset : 0);
+  const usableHeight = () =>
+    Math.max(1, stage.clientHeight - viewportTopInset - viewportBottomInset);
   const viewportHeight = () =>
-    Math.max(1, stage.clientHeight - (viewerSized ? viewportBottomInset : 0));
+    viewerSized ? usableHeight() : Math.max(1, stage.clientHeight);
   const viewportWidth = () =>
     Math.max(
       1,
@@ -259,12 +262,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   // The usable center is (topInset + stageHeight) / 2, so shift by topInset / 2.
   // Keep the fitted size and cap the shift when the desktop is too tall to fit.
   const verticalOffset = (height) =>
-    fillHeight
+    (viewerSized ? viewportTopInset : 0) +
+    (fillHeight
       ? 0
       : Math.min(
-          portraitKeyboardTopInset / 2,
+          Math.max(
+            0,
+            portraitKeyboardTopInset - (viewerSized ? viewportTopInset : 0),
+          ) / 2,
           Math.max(0, (viewportHeight() - height) / 2),
-        );
+        ));
   const layout = () => {
     const r = transform(
       viewportWidth(),
@@ -534,7 +541,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       bottom = Math.max(1, stage.clientHeight - viewportBottomInset);
     // Keep the entire cursor, including its hotspot offset, clear of chrome.
     const minX = Math.min(right - 1, left + 8 + hotX),
-      minY = Math.min(bottom - 1, 8 + hotY);
+      minY = Math.min(
+        bottom - 1,
+        (viewerSized ? viewportTopInset : 0) + 8 + hotY,
+      );
     return {
       minX,
       maxX: Math.max(minX, right - 8 - (w - hotX)),
@@ -1282,7 +1292,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     post({
       type: "viewportChanged",
       width: viewportWidth(),
-      height: Math.max(1, stage.clientHeight - viewportBottomInset),
+      height: usableHeight(),
     });
   }
   const observer = new ResizeObserver(() => {
@@ -1739,7 +1749,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         post({
           type: "viewportSize",
           width: viewportWidth(),
-          height: Math.max(1, stage.clientHeight - viewportBottomInset),
+          height: usableHeight(),
         });
         break;
       case "presentation":
@@ -1856,6 +1866,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       case "mouseButtons": {
         nativeMouseControls = message.native === true;
         const before = layout(),
+          previousTopInset = viewportTopInset,
           previousBottomInset = viewportBottomInset,
           keyboardOpen = fillHeight && message.keyboardOpen === true;
         const keepHorizontal =
@@ -1870,6 +1881,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           );
         const offsetChanged = previousOffset !== portraitKeyboardTopInset;
         let sideInsetsChanged = false;
+        if (Number.isFinite(message.topInset))
+          viewportTopInset = Math.max(
+            0,
+            Math.min(stage.clientHeight - 1, message.topInset),
+          );
         if (Number.isFinite(message.bottomInset))
           viewportBottomInset = Math.max(
             0,
@@ -1923,6 +1939,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         } else if (
           sideInsetsChanged ||
           offsetChanged ||
+          (viewerSized && previousTopInset !== viewportTopInset) ||
           (viewerSized && previousBottomInset !== viewportBottomInset)
         ) {
           settlePan();

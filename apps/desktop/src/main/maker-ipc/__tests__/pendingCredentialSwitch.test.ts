@@ -105,7 +105,7 @@ describe('PendingCredentialSwitchService', () => {
     await h.service.onTurnSettled(sessionId);
 
     expect(h.service.has(sessionId)).toBe(false);
-    expect(h.closeSession).toHaveBeenCalledWith(sessionId);
+    expect(h.closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(getSessionProvider(sessionId)).toBe('xd');
     expect(h.broadcastApplied).toHaveBeenCalledWith({
       sessionId,

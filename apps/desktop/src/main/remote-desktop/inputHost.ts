@@ -48,6 +48,7 @@ async function resolveBinary(): Promise<string> {
     if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
     if (process.platform === 'win32') {
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
+      digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'privacy.rs')));
       digest.update(
         await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'selection.rs')),
       );
@@ -107,6 +108,8 @@ async function resolveBinary(): Promise<string> {
   });
   return build;
 }
+
+export { resolveBinary as resolveDesktopInputBinary };
 
 /** Probe the actual input process, never CuaDriver's or Electron's AX grant. */
 export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'unavailable'> {
@@ -193,6 +196,7 @@ export class DesktopInputHost {
   private generation = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private stopping: Promise<void> = Promise.resolve();
+  private privacyPaused = false;
   constructor(
     private readonly onFailure: () => void,
     private readonly runtime: {
@@ -208,6 +212,10 @@ export class DesktopInputHost {
     this.stop();
     const platform = this.runtime.platform ?? process.platform;
     if (platform !== 'darwin' && platform !== 'win32') throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+    // A replacement helper is not usable until its ready handshake completes.
+    // In particular, canceling a privacy confirmation must keep dropping input
+    // throughout teardown, binary preparation and startup, without losing control.
+    this.privacyPaused = true;
     const generation = this.generation;
     await this.stopping;
     if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
@@ -227,6 +235,7 @@ export class DesktopInputHost {
         this.windows = connection;
         this.displayId = displayId;
         this.heartbeat = setInterval(() => this.write([]), 2000);
+        this.privacyPaused = false;
         return;
       }
       const binary = await this.runtime.resolveBinary();
@@ -277,12 +286,15 @@ export class DesktopInputHost {
         }
       });
       this.heartbeat = setInterval(() => this.write([]), 2000);
+      this.privacyPaused = false;
     } catch (error) {
-      if (generation === this.generation) this.stop();
+      if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
+      this.stop();
       throw error;
     }
   }
   input(events: DesktopInput[]): void {
+    if (this.privacyPaused) return;
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
     if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     if (events.length === 0) return;
@@ -351,8 +363,33 @@ export class DesktopInputHost {
     this.stop();
     await this.stopping;
   }
+  /** Drain/release native input before a local-only confirmation gains focus.
+   * Restart only this input helper on cancel, never the media session or lease.
+   */
+  async pauseForPrivacy(): Promise<() => Promise<void>> {
+    if (!this.child && !this.windows) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    const displayId = this.displayId;
+    this.stop();
+    // The old activity stays owned until native exit. Hold a separate existing
+    // activity reservation for the local confirmation, released by stop/start.
+    this.activity = new HumanDesktopInput();
+    this.activity.holdUntilExit();
+    this.privacyPaused = true;
+    const generation = this.generation;
+    await this.stopping;
+    return async () => {
+      if (generation !== this.generation) return;
+      try {
+        await this.start(displayId);
+      } catch (error) {
+        if (!(error instanceof Error && error.message === 'DESKTOP_LEASE_EXPIRED'))
+          this.onFailure();
+      }
+    };
+  }
   stop(): void {
     this.generation++;
+    this.privacyPaused = false;
     this.acknowledge?.(new Error('DESKTOP_LEASE_EXPIRED'));
     const windows = this.windows;
     const writing = this.writing;

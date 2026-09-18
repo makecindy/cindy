@@ -12,6 +12,7 @@
  */
 
 import {
+  promises as fs,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -440,6 +441,47 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }) as Promise<PiTestSessionHandle>;
   }
 
+  it('toggles welcome policy without filesystem writes or extra prompt RPCs', async () => {
+    const handle = await start('bypassPermissions');
+    const token = captured.env.CINDY_PI_TURN_TOOL_POLICY;
+    captured.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:text-only-ready:' + token });
+    const write = vi.spyOn(fs, 'writeFile').mockRejectedValue(new Error('storage unavailable'));
+    const remove = vi.spyOn(fs, 'rm').mockRejectedValue(new Error('storage unavailable'));
+    const begin = captured.requests.length;
+    try {
+      await handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true });
+      expect(captured.requests.at(-1)?.message).toBe('[CINDY_TEXT_ONLY_INPUT]:' + token + '\nWelcome.');
+      await expect(handle.send({ type: 'user', content: 'Too soon.' })).rejects.toThrow('tool policy');
+      captured.onEvent?.({ type: 'agent_start' });
+      captured.onEvent?.({ type: 'agent_end', messages: [] });
+      captured.onEvent?.({ type: 'agent_settled' });
+      await handle.send({ type: 'user', content: 'Ordinary.' });
+      expect(captured.requests.at(-1)?.message).toBe('Ordinary.');
+      expect(captured.requests.slice(begin).map(frame => frame.type)).toEqual(['prompt', 'prompt']);
+      expect(write).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore(); remove.mockRestore();
+      await handle.close();
+    }
+  });
+
+  it.each(['missing', 'closed'] as const)('rejects only welcome input when the policy boundary is %s', async (state) => {
+    const handle = await start('bypassPermissions');
+    const token = captured.env.CINDY_PI_TURN_TOOL_POLICY;
+    if (state === 'closed') {
+      captured.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:text-only-ready:' + token });
+      captured.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:text-only-unavailable:' + token });
+    }
+    const begin = captured.requests.length;
+    try {
+      await expect(handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true })).rejects.toThrow('policy is unavailable');
+      expect(captured.requests).toHaveLength(begin);
+      await handle.send({ type: 'user', content: 'Ordinary.' });
+      expect(captured.requests.slice(begin)).toEqual([expect.objectContaining({ type: 'prompt', message: 'Ordinary.' })]);
+    } finally { await handle.close(); }
+  });
+
   /**
    * 等某个权限请求的回帧落地。用「等信号 + 有界超时」而不是固定 flush ——
    * 档位热切换会多经一次串行写入队列,靠 setTimeout(0) 的轮数猜等待就是计时型脆弱用例。
@@ -462,6 +504,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resolvedCredentialPaths?: unknown;
       resolvedWritePath?: unknown;
       resolvedWritableRoots?: unknown;
+      controlPlaneWrite?: unknown;
     },
   ): void {
     const writeEvidence = toolName === 'write' || toolName === 'edit'
@@ -3590,6 +3633,70 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(replacementWritableDir, { recursive: true, force: true });
   });
 
+  it('forces an explicit decision for agent-home writes even under Full Access', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('bypassPermissions', review);
+    const resolver = vi.fn(async (): Promise<{ kind: 'permission'; behavior: 'allow' | 'deny' }> => ({
+      kind: 'permission',
+      behavior: 'allow',
+    }));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'control-plane-bypass',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    expect(await waitForResponse('control-plane-bypass')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+
+    resolver.mockResolvedValueOnce({ kind: 'permission', behavior: 'deny' });
+    firePermissionRequest(
+      'control-plane-deny',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    expect(await waitForResponse('control-plane-deny')).toMatchObject({ confirmed: false });
+    await handle.close();
+  });
+
+  it('does not settle a pending agent-home write when switching to Full Access', async () => {
+    const handle = await start('ask');
+    handle.setInteractionResolver?.(async () => await new Promise(() => {}));
+    firePermissionRequest(
+      'control-plane-pending',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    await flush();
+    expect(captured.sent.find((m) => m.id === 'control-plane-pending')).toBeUndefined();
+    await handle.setPermissionMode?.('bypassPermissions');
+    expect(await waitForResponse('control-plane-pending')).toMatchObject({ confirmed: false });
+    await handle.close();
+  });
+
+  it('does not let Auto-review silently allow agent-home writes', async () => {
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const handle = await start('auto', review);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' as const }));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionRequest(
+      'control-plane-auto',
+      'write',
+      { path: path.join(cwd, 'models.json') },
+      { controlPlaneWrite: true },
+    );
+    expect(await waitForResponse('control-plane-auto')).toMatchObject({ confirmed: true });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('reviews evidence for remote Pi destructive paths instead of using controller realpath', async () => {
     const localSafeTarget = path.join(cwd, 'controller-safe-target');
     const remoteLink = path.join(cwd, 'remote-link');
@@ -4044,6 +4151,29 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
 
+  it('passes flat task history and actual blocked plugin actions after a natural steer, then invalidates on revocation', async () => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    const exercise = 'For this writing test, use no tools and modify no data.';
+    const search = 'Now search for the latest portable chargers.';
+    const action = { kind: 'other' as const, description: JSON.stringify({ toolName: 'mcp__cindy__ghost_market_install', input: { plugin_id: 'official-search', release_id: 'selected-release' } }) };
+    try {
+      await handle.send({ type: 'user', content: exercise });
+      await handle.steer!({ type: 'user', content: search });
+      await handle.reviewAutoPermissionAction!(action);
+      await handle.steer!({ type: 'user', content: '没事儿，你可以用' });
+      await handle.reviewAutoPermissionAction!(action);
+      expect(review.mock.calls[1][0]).toMatchObject({
+        userIntent: { earlierUserMessages: [exercise, search], currentUserMessage: '没事儿，你可以用' },
+        precedingBlockedActions: [action],
+      });
+      await handle.steer!({ type: 'user', content: 'Do not install anything. Only inspect.' });
+      await handle.reviewAutoPermissionAction!(action);
+      expect(review).toHaveBeenCalledTimes(3);
+      expect(review.mock.calls[2][0].userIntent).toMatchObject({ currentUserMessage: 'Do not install anything. Only inspect.' });
+    } finally { await handle.close(); }
+  });
+
   it.each(['allow', 'ask'] as const)('invalidates old %s when identical text refers to a new attachment', async (verdict) => {
     let release!: (decision: { verdict: 'allow' | 'ask' }) => void;
     const reviewer = vi.fn().mockImplementationOnce(() => new Promise<{ verdict: 'allow' | 'ask' }>((resolve) => { release = resolve; }))
@@ -4093,8 +4223,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     firePermissionRequest('raw-channel', 'unknown_sender', { action: 'send' });
     await waitForResponse('raw-channel');
-    expect(review.mock.calls[0]?.[0].userIntent).toContain('Do not send.');
-    expect(review.mock.calls[0]?.[0].userIntent).not.toContain('SEND THE REPORT');
+    expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).toContain('Do not send.');
+    expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).not.toContain('SEND THE REPORT');
     await handle.close();
   });
 

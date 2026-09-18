@@ -10,6 +10,8 @@ import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compa
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import type { JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/index.js';
 import type {
   ComputerMcpCallContext,
   ComputerDriverPermissionGrant,
@@ -24,6 +26,7 @@ import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { resolveDesktopOutboundProxy } from '../maker-host/outbound-proxy-resolver.js';
 import { adaptComputerDriverArgs, type ComputerDriverToolSchema } from './computer-contract.js';
 import { computerResultOutcome, getComputerTool, isUnavailableWindowObservation } from '@cindy/mcps/computer';
+import { callComputerToolWithOutputValidation } from './computer-output.js';
 
 const logger = createLogger('mcp/cindy_computer');
 const DRIVER_COMMAND = 'cua-driver';
@@ -288,6 +291,7 @@ interface CuaMcpSessionEntry {
   ready: Promise<void>;
   driverSessionId: string;
   toolSchemas: Map<string, ComputerDriverToolSchema>;
+  outputValidators: Map<string, JsonSchemaValidator<unknown>>;
   cursorSetup: {
     motion: CursorSetupState;
     style: CursorSetupState;
@@ -2123,19 +2127,31 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
     transport,
     driverSessionId: getDriverSessionId(sessionId),
     toolSchemas: new Map(),
+    outputValidators: new Map(),
     cursorSetup: {
       motion: capabilities?.motion === 'unavailable' ? 'unavailable' : 'pending',
       style: capabilities?.style === 'unavailable' ? 'unavailable' : 'pending',
     },
     ready: withTimeout(
       client.connect(transport).then(async () => {
+        const outputValidator = new AjvJsonSchemaValidator();
         let cursor: string | undefined;
         const seen = new Set<string>();
         do {
           const page = await client.listTools(cursor ? { cursor } : undefined);
-          for (const tool of page.tools) entry.toolSchemas.set(tool.name, tool.inputSchema as ComputerDriverToolSchema);
+          for (const tool of page.tools) {
+            entry.toolSchemas.set(tool.name, tool.inputSchema as ComputerDriverToolSchema);
+            // Required-task tools must stay on SDK callTool's task protocol guard.
+            if (tool.outputSchema && tool.execution?.taskSupport !== 'required') {
+              entry.outputValidators.set(
+                tool.name,
+                outputValidator.getValidator(tool.outputSchema),
+              );
+            }
+          }
           cursor = page.nextCursor;
-          if (cursor && (seen.has(cursor) || seen.size >= 20)) throw new ComputerDriverError('Driver tools/list pagination did not terminate.');
+          if (cursor && (seen.has(cursor) || seen.size >= 20))
+            throw new ComputerDriverError('Driver tools/list pagination did not terminate.');
           if (cursor) seen.add(cursor);
         } while (cursor);
       }),
@@ -2207,20 +2223,47 @@ async function callCuaMcpTool(
   signal?: AbortSignal,
 ): Promise<unknown> {
   signal?.throwIfAborted();
+  if (
+    name === 'drag' &&
+    process.platform === 'darwin' &&
+    args.delivery_mode === undefined &&
+    Object.hasOwn(entry.toolSchemas.get(name)?.properties ?? {}, 'delivery_mode')
+  ) {
+    // Older drivers may not accept delivery_mode at all; adapt only advertised capabilities.
+    args = { ...args, delivery_mode: 'foreground' };
+  }
   const driverArgs = adaptComputerDriverArgs(name, args, entry.toolSchemas);
   const result = await withTimeout(
-    entry.client.callTool({
-      name,
-      arguments: driverArgs,
-    }, undefined, { signal }),
+    callComputerToolWithOutputValidation(
+      entry.client,
+      {
+        name,
+        arguments: driverArgs,
+      },
+      entry.outputValidators.get(name),
+      getComputerTool(name)?.readOnly === true,
+      signal,
+    ),
     timeoutMs,
     `cua-driver mcp tool ${name}`,
   );
   if ((result as { isError?: unknown }).isError) {
     const text = firstTextFromMcpResult(result);
     const details = objectValue(parseMcpToolResult(result));
-    throw new ComputerDriverError(text ?? `cua-driver mcp tool ${name} returned an error`,
-      typeof details?.code === 'string' ? details.code : 'COMPUTER_DRIVER_ERROR');
+    throw new ComputerDriverError(
+      typeof details?.message === 'string'
+        ? details.message
+        : (text ?? `cua-driver mcp tool ${name} returned an error`),
+      typeof details?.code === 'string'
+        ? details.code
+        : typeof details?.error === 'string' && /^[A-Z][A-Z0-9_]+$/.test(details.error)
+          ? details.error
+          : 'COMPUTER_DRIVER_ERROR',
+      getComputerTool(name)?.readOnly !== true && (
+        details?.effect === 'partial' || details?.effect === 'unverifiable' ||
+        details?.code === 'type_text_incomplete'
+      ),
+    );
   }
   const parsed = parseMcpToolResult(result);
   if (typeof parsed === 'string' && STALE_CUA_SESSION_MARKER_RE.test(parsed)) {
@@ -3379,7 +3422,7 @@ export async function grantComputerDriverPermissions(
 
 // Remote input invalidates previously observed targets even after its short
 // ownership window ends. Never resume typing into a stale focus implicitly.
-const inputObservations = new Map<string, { windows: Map<string, number> }>();
+const inputObservations = new Map<string, { windows: Map<string, number | symbol> }>();
 
 export async function callComputerDriverTool(
   name: ComputerMcpToolName,
@@ -3396,14 +3439,23 @@ export async function callComputerDriverTool(
   const window = `${args.pid}:${args.window_id}`;
   if (getComputerTool(name)?.readOnly === true) {
     const startedIdle = !isHumanDesktopInputActive();
+    const explicitObservation = name === 'get_window_state' && context?.observationPurpose !== 'recovery';
+    const observation = Symbol('pending observation');
+    const app = `${args.pid}:undefined`;
+    if (explicitObservation) {
+      // Revoke old permission and prevent an older concurrent read from
+      // restoring it after this read fails or is cancelled.
+      observations?.windows.set(window, observation);
+      observations?.windows.set(app, observation);
+    }
     const result = await callComputerDriverToolImpl(name, args, context);
-    if (name === 'get_window_state' && startedIdle && computerResultOutcome(name, result).ok
-      && !isUnavailableWindowObservation(result, args)
+    if (explicitObservation && startedIdle && !context?.signal?.aborted
+      && !isUnavailableWindowObservation(result, args) && computerResultOutcome(name, result).ok
       && revision === desktopInputRevision() && !isHumanDesktopInputActive()) {
-      observations?.windows.set(window, revision);
+      if (observations?.windows.get(window) === observation) observations.windows.set(window, revision);
       // App-scoped actions may omit window_id; a successful observation of
       // that app also refreshes its focus, without refreshing other windows.
-      observations?.windows.set(`${args.pid}:undefined`, revision);
+      if (observations?.windows.get(app) === observation) observations.windows.set(app, revision);
     }
     return result;
   }

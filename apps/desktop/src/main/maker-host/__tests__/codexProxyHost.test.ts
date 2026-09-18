@@ -3884,6 +3884,30 @@ describe('codex proxy host', () => {
     setCustomProviders([]);
   });
 
+  it.each([
+    { frozen: 'oauth-bearer' as const, global: 'env-key' as const, search: false },
+    { frozen: 'env-key' as const, global: 'oauth-bearer' as const, search: true },
+  ])('uses frozen $frozen auth for native search despite global $global auth', async ({ frozen, global, search }) => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    host.setCodexProxyAuthInjection(global);
+    await host.ensureCodexControlPlaneProxyReady(frozen);
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const input = [{ role: 'user', content: 'First message?' }];
+    const tools = [{ type: 'function', name: 'read_file', parameters: { type: 'object', properties: {} } }];
+    let current: unknown = { model: 'gpt-5.6-luna', input, tools };
+    const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': 'frozen-search-thread' } };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+    expect(current).toMatchObject({ input, tools: search ? [...tools, { type: 'web_search' }] : tools });
+    expect((current as { tools: unknown[] }).tools).toHaveLength(search ? 2 : 1);
+  });
+
   it('restores native web_search for Gateway GPT-5.6 when Codex omitted the declaration', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

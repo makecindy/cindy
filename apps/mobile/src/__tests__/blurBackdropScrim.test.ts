@@ -40,10 +40,10 @@ describe('BlurBackdrop scrim 双模式恒深 (用户定稿 2026-07-21)', () => {
     // SessionActionSheet 操作卡 / 取消卡底色(sheetActionSurface)。
     expect(actionSheet).toContain('intensity={32}');
     expect(actionSheet).toContain('overlayColor={colors.sheetActionSurface}');
-    // 会话顶栏 chrome 底色(chatHeaderSurface)——非 scrim,走 surface 语义。
+    // iOS 顶栏使用原生渐进模糊，不再叠自定义 surface 背板。
     const sessionHeader = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     expect(sessionHeader).toContain(
-      'return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;',
+      '<SessionHeaderNativeBlur height=',
     );
   });
 

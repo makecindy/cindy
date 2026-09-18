@@ -248,6 +248,10 @@
       "light": "component.defaults.switch-thumb-off.light",
       "dark": "component.defaults.switch-thumb-off.dark"
     },
+    "switch-thumb-on": {
+      "light": "component.defaults.switch-thumb-on.light",
+      "dark": "component.defaults.switch-thumb-on.dark"
+    },
     "switch-disabled-opacity": {
       "light": "semantic.defaults.switch-disabled-opacity.light",
       "dark": "semantic.defaults.switch-disabled-opacity.dark"
@@ -2091,6 +2095,22 @@
     "form-field-hint": {
       "light": "component.defaults.form-field-hint.light",
       "dark": "component.defaults.form-field-hint.dark"
+    },
+    "slider-track": {
+      "light": "component.defaults.slider-track.light",
+      "dark": "component.defaults.slider-track.dark"
+    },
+    "slider-fill": {
+      "light": "component.defaults.slider-fill.light",
+      "dark": "component.defaults.slider-fill.dark"
+    },
+    "slider-thumb": {
+      "light": "component.defaults.slider-thumb.light",
+      "dark": "component.defaults.slider-thumb.dark"
+    },
+    "slider-thumb-shadow": {
+      "light": "semantic.defaults.slider-thumb-shadow.light",
+      "dark": "semantic.defaults.slider-thumb-shadow.dark"
     }
   },
   "retained": {
@@ -2244,6 +2264,8 @@
         "surface-on-card": "themes.cindy-dark.surface-on-card",
         "switch-track-off": "themes.cindy-dark.switch-track-off",
         "switch-track-on": "themes.cindy-dark.switch-track-on",
+        "switch-thumb-on": "themes.cindy-dark.switch-thumb-on",
+        "switch-thumb-off": "themes.cindy-dark.switch-thumb-off",
         "status-badge-fg": "themes.cindy-dark.status-badge-fg",
         "border-default": "themes.cindy-dark.border-default",
         "border-default-hsl": "themes.cindy-dark.border-default-hsl",
@@ -2395,7 +2417,10 @@
         "sidebar-nav-text": "themes.cindy-dark.sidebar-nav-text",
         "sidebar-user-card-bg-hover": "themes.cindy-dark.sidebar-user-card-bg-hover",
         "sidebar-user-card-border": "themes.cindy-dark.sidebar-user-card-border",
-        "sidebar-user-card-text": "themes.cindy-dark.sidebar-user-card-text"
+        "sidebar-user-card-text": "themes.cindy-dark.sidebar-user-card-text",
+        "slider-track": "themes.cindy-dark.slider-track",
+        "slider-fill": "themes.cindy-dark.slider-fill",
+        "slider-thumb": "themes.cindy-dark.slider-thumb"
       },
       "retained": {
         "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.dark"
@@ -2417,6 +2442,8 @@
         "surface-on-card": "themes.cindy-light.surface-on-card",
         "switch-track-off": "themes.cindy-light.switch-track-off",
         "switch-track-on": "themes.cindy-light.switch-track-on",
+        "switch-thumb-on": "themes.cindy-light.switch-thumb-on",
+        "switch-thumb-off": "themes.cindy-light.switch-thumb-off",
         "status-badge-fg": "themes.cindy-light.status-badge-fg",
         "border-default": "themes.cindy-light.border-default",
         "border-default-hsl": "themes.cindy-light.border-default-hsl",
@@ -2568,7 +2595,10 @@
         "completion-badge-fg": "themes.cindy-light.completion-badge-fg",
         "create-agent-control-bg-hover": "themes.cindy-light.create-agent-control-bg-hover",
         "create-agent-control-bg-pressed": "themes.cindy-light.create-agent-control-bg-pressed",
-        "create-agent-send-icon": "themes.cindy-light.create-agent-send-icon"
+        "create-agent-send-icon": "themes.cindy-light.create-agent-send-icon",
+        "slider-track": "themes.cindy-light.slider-track",
+        "slider-fill": "themes.cindy-light.slider-fill",
+        "slider-thumb": "themes.cindy-light.slider-thumb"
       },
       "retained": {
         "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.light"

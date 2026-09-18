@@ -1,7 +1,7 @@
 /**
  * sessionSourceLabel — vitest unit tests
  *
- * 覆盖 buildSessionSourceLabelMap 的四条分支:dialogue label / ProjectNode 命中 /
+ * 覆盖 buildSessionSourceLabelMap 的分支:独立对话不标 / ProjectNode 命中 /
  * workingDir basename 回退(POSIX + Windows 分隔符)/ 拿不到来源时不注入。
  * 该 helper 由 DateGroupedSessionsSection 与 PinnedSection 共用,提取自两处
  * 原本逐字节重复的 useMemo(PR #533 follow-up)。
@@ -69,55 +69,53 @@ function projectNodeFor(session: Session, displayName: string): ProjectNode {
   };
 }
 
-const DIALOGUE = '对话';
-
 /* ============================== tests ============================== */
 
 describe('buildSessionSourceLabelMap', () => {
-  it('maps dialogue sessions to the provided dialogue label', () => {
+  it('does not label standalone dialogue sessions', () => {
     const d = s({ id: 'd1', workspaceKind: 'dialogue' });
-    const map = buildSessionSourceLabelMap([d], [], DIALOGUE);
-    expect(map.get('d1')).toBe(DIALOGUE);
+    const map = buildSessionSourceLabelMap([d], []);
+    expect(map.has('d1')).toBe(false);
   });
 
   it('uses the matching ProjectNode displayName for a project session', () => {
     const p = s({ id: 'p1', workspaceKind: 'project', workingDir: '/home/me/repo-a' });
     const node = projectNodeFor(p, 'parent/repo-a');
-    const map = buildSessionSourceLabelMap([p], [node], DIALOGUE);
+    const map = buildSessionSourceLabelMap([p], [node]);
     expect(map.get('p1')).toBe('parent/repo-a');
   });
 
   it('falls back to POSIX workingDir basename when no ProjectNode matches', () => {
     const p = s({ id: 'p2', workspaceKind: 'project', workingDir: '/home/me/my-proj' });
-    const map = buildSessionSourceLabelMap([p], [], DIALOGUE);
+    const map = buildSessionSourceLabelMap([p], []);
     expect(map.get('p2')).toBe('my-proj');
   });
 
   it('falls back to Windows workingDir basename (backslash separator)', () => {
     const p = s({ id: 'p3', workspaceKind: 'project', workingDir: 'D:\\code\\win-proj' });
-    const map = buildSessionSourceLabelMap([p], [], DIALOGUE);
+    const map = buildSessionSourceLabelMap([p], []);
     expect(map.get('p3')).toBe('win-proj');
   });
 
   it('does not inject a label when a project session has no workingDir', () => {
     const p = s({ id: 'p4', workspaceKind: 'project', workingDir: null });
-    const map = buildSessionSourceLabelMap([p], [], DIALOGUE);
+    const map = buildSessionSourceLabelMap([p], []);
     expect(map.has('p4')).toBe(false);
   });
 
-  it('handles a mixed batch, only injecting resolvable sources', () => {
+  it('handles a mixed batch, only injecting resolvable project sources', () => {
     const d = s({ id: 'm-d', workspaceKind: 'dialogue' });
     const named = s({ id: 'm-named', workspaceKind: 'project', workingDir: '/x/named-proj' });
     const node = projectNodeFor(named, 'named-proj');
     const fallback = s({ id: 'm-fb', workspaceKind: 'project', workingDir: '/x/fallback-proj' });
     const empty = s({ id: 'm-empty', workspaceKind: 'project', workingDir: null });
 
-    const map = buildSessionSourceLabelMap([d, named, fallback, empty], [node], DIALOGUE);
+    const map = buildSessionSourceLabelMap([d, named, fallback, empty], [node]);
 
-    expect(map.get('m-d')).toBe(DIALOGUE);
+    expect(map.has('m-d')).toBe(false);
     expect(map.get('m-named')).toBe('named-proj');
     expect(map.get('m-fb')).toBe('fallback-proj');
     expect(map.has('m-empty')).toBe(false);
-    expect(map.size).toBe(3);
+    expect(map.size).toBe(2);
   });
 });

@@ -31,3 +31,14 @@ export function makeTaskBranch(runId: string): string {
 export function makeTaskWorktreePath(userData: string, runId: string): string {
   return path.resolve(makeWorktreesRoot(userData), runId);
 }
+
+export function isCindyMakeWorktreePath(userData: string, workingDir: string): boolean {
+  const relative = path.relative(makeWorktreesRoot(userData), path.resolve(workingDir));
+  return (
+    relative.length > 0 &&
+    !relative.startsWith('..') &&
+    !path.isAbsolute(relative) &&
+    !relative.includes(path.sep) &&
+    CINDY_MAKE_RUN_ID_PATTERN.test(relative)
+  );
+}
