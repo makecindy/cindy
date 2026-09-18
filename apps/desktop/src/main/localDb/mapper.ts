@@ -49,6 +49,7 @@ import type {
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { normalizeContextWindowBudget } from '../../shared/sessionContextWindowBudget.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
   addRegionalMoney,
@@ -244,6 +245,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
+    contextWindowBudget: row.contextWindowBudget ?? null,
     fastMode: !!row.fastMode,
     planModeEnabled: !!row.planModeEnabled,
     clearedAt: msToIso(row.clearedAt),
@@ -372,6 +374,11 @@ export function sessionCreateToRow(
         providerId?: string | null;
         /** Main-owned purposes only; the renderer create IPC validates which values it accepts. */
         source?: 'bot' | 'cindy-make';
+        /**
+         * 任务级工作上下文预算（tokens）。缺省 = 跟随模型路由默认；
+         * 新建任务时用户在草稿里选定的档位在此透传，后续由 sessions:update 修改。
+         */
+        contextWindowBudget?: number | null;
       }
     | undefined,
   now: number,
@@ -393,6 +400,7 @@ export function sessionCreateToRow(
     totalCostUsd: 0,
     contextTokens: 0,
     contextWindow: 0,
+    contextWindowBudget: normalizeContextWindowBudget(body?.contextWindowBudget),
     // 新建 session 默认 Fast Mode OFF；调用方显式传 true 时才打开。
     fastMode: !!body?.fastMode,
     // 计划模式默认 OFF；草稿里开了计划模式的会话显式传 true。
@@ -442,6 +450,7 @@ export function sessionPatchToRow(
     totalCostUsd?: number;
     contextTokens?: number;
     contextWindow?: number;
+    contextWindowBudget?: number | null;
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;
@@ -469,6 +478,9 @@ export function sessionPatchToRow(
   if (patch.totalCostUsd !== undefined) out.totalCostUsd = patch.totalCostUsd;
   if (patch.contextTokens !== undefined) out.contextTokens = patch.contextTokens;
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
+  if (patch.contextWindowBudget !== undefined) {
+    out.contextWindowBudget = normalizeContextWindowBudget(patch.contextWindowBudget);
+  }
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
   if (patch.status !== undefined) out.status = patch.status;

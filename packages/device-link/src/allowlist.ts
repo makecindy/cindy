@@ -205,6 +205,14 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 计划模式一级开关(runtime-only, 持久化经 dispatch persistRemoteSetting 回流)。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
+  // 任务级工作上下文窗口档位(会话级设置, 无本机 shell/UI 副作用; 控制端 DB 是被控端那份,
+  // 写本机不生效)。被控端落库并应用到活实例。老被控端无 handler → CHANNEL_NOT_ALLOWED
+  // → 控制端提示「该设备版本不支持」并保留原档位。
+  'maker:set-context-window-budget',
+  // 任务级窗口边界的只读查询(路由默认/物理上限/该路由模型级上限):控制端打开远程档位
+  // 菜单时拉一次,才能给出「更大」的档位。无 event.sender / 无本机副作用,不写任何存储。
+  // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」。
+  'maker:get-context-window-bounds',
   'maker:set-extra-dirs',
   'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步

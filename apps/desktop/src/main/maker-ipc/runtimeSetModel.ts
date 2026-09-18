@@ -26,7 +26,7 @@ interface RuntimeSetModelSession {
   model: string;
   setModel: (
     model: string,
-    opts?: { providerId?: string | null; effort?: Effort },
+    opts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null },
   ) => Promise<void>;
   requiresModelSwitchRebuild?: (
     model: string,
@@ -63,6 +63,11 @@ export interface ApplyRuntimeSetModelChangeInput {
    * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
    */
   forceSessionRebuild?: boolean;
+  /**
+   * 任务级工作上下文预算：host 已按**目标路由**重新收敛（含目录上限与模型级上限）。
+   * 只在会话已有显式预算且目标路由变化时下发；缺席 = 引擎保持当前预算。
+   */
+  contextWindowBudget?: number | null;
   /** Fail closed before an otherwise-required runtime replacement mutates route state. */
   assertSessionCloseSupported?: () => void;
   isSessionInTurn?: (sessionId: string) => boolean;
@@ -403,6 +408,9 @@ export async function applyRuntimeSetModelChange(
         ? { providerId: nextProviderId }
         : {}),
       ...(effort !== undefined ? { effort } : {}),
+      ...(input.contextWindowBudget !== undefined
+        ? { contextWindowBudget: input.contextWindowBudget }
+        : {}),
     });
   } catch (err) {
     if (providerId !== undefined) {

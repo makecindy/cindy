@@ -26,6 +26,14 @@ import {
 } from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows the read-only task context-window bounds query but no generic session write', () => {
+    // 只读边界查询：控制端据此才能在远程任务上给出「更大」的档位。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-context-window-bounds')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:set-context-window-budget')).toBe(true);
+    // 通用写入口不因这条查询放开。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:sessions:update')).toBe(false);
+  });
+
   it('allows the reduced teammate directory while keeping native configuration local', () => {
     for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);

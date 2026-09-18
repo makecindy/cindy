@@ -25,6 +25,10 @@ import {
   formatTurnCostUsd,
 } from '@/lib/usageFormat';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  registerStatusBarCard,
+  type StatusBarCardHandle,
+} from '@/lib/statusBarCards';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
@@ -1002,6 +1006,8 @@ export function TodaySpendChip({
   const quotaPopoverTriggerRef = React.useRef<HTMLElement>(null);
   const quotaPopoverContentRef = React.useRef<HTMLDivElement>(null);
   const quotaPopoverDashboardButtonRef = React.useRef<HTMLButtonElement>(null);
+  // 底栏卡片互斥协调器的本实例句柄（见 statusBarCards：认实例，不认种类）。
+  const statusCardHandleRef = React.useRef<StatusBarCardHandle | null>(null);
   const setQuotaPopoverFocusTarget = React.useCallback((node: HTMLElement | null) => {
     quotaPopoverTriggerRef.current = node;
   }, []);
@@ -1077,6 +1083,30 @@ export function TodaySpendChip({
     quotaPopoverPointerInsideRef.current = true;
     scheduleQuotaPopoverOpen();
   }, [scheduleQuotaPopoverOpen]);
+
+  // 底栏状态卡片互斥（用户要求"该窗体为唯一窗体"）：本卡展开时请求独占（另一张立刻收起），
+  // 收起时让位；另一张卡展开时由协调器回调到这里立刻收起。
+  // 句柄认**本实例**：分屏可能同时挂载多份底栏，按种类登记会互相顶掉关闭回调。
+  React.useEffect(() => {
+    const handle = registerStatusBarCard('quota', () => {
+      keepQuotaPopoverOpen();
+      setQuotaPopoverOpen(false);
+      restoreQuotaPopoverFocus();
+    });
+    statusCardHandleRef.current = handle;
+    return () => {
+      statusCardHandleRef.current = null;
+      handle.unregister();
+    };
+  }, [keepQuotaPopoverOpen, restoreQuotaPopoverFocus]);
+  React.useEffect(() => {
+    if (!quotaPopoverOpen) {
+      statusCardHandleRef.current?.release();
+      return;
+    }
+    // 注册 effect 更早声明，挂载时句柄已就位；若还没就位（首帧即开着）则下帧重试。
+    statusCardHandleRef.current?.request();
+  }, [quotaPopoverOpen]);
 
   const quotaPopoverContextRef = React.useRef({
     identity: JSON.stringify([

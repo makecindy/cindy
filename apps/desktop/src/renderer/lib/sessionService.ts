@@ -184,6 +184,11 @@ export async function update(
     totalCostUsd?: number;
     contextTokens?: number;
     contextWindow?: number;
+    /**
+     * 任务级工作上下文预算（tokens）；null = 清除显式选择、跟随模型路由默认。
+     * 落库后 main 会把新窗口应用到活实例（空闲冷重建 / 回合中登记 pending）。
+     */
+    contextWindowBudget?: number | null;
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;

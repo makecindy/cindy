@@ -1765,6 +1765,12 @@ export interface StartSessionOptions {
   remoteHostId?: string;
   model: string;
   /**
+   * 本任务级工作上下文预算（tokens）。host 已按目录 `contextWindowMax` 与用户在同一
+   * 路由上设过的模型级上限收敛，引擎只需直接采用；缺席 = 跟随 `resolveModelContextLimit`
+   * / 目录默认（旧行为零变化）。
+   */
+  contextWindowBudget?: number;
+  /**
    * 本次会话显式选择的供应商来源。maker-core 只用它推导子进程凭证形态;
    * 具体上游路由仍由 host 的 proxy / provider catalog 负责。
    */
@@ -2253,7 +2259,19 @@ export interface AgentSessionHandle {
   reviewAutoPermissionAction?(action: ReviewableAction): Promise<AutoReviewDecision>;
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
-  setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
+  setModel?(
+    model: string,
+    opts?: {
+      providerId?: string | null;
+      effort?: Effort;
+      /**
+       * 本任务级工作上下文预算（tokens）；host 已按目标路由的目录上限与模型级上限
+       * 收敛。显式传 null / undefined 时保持当前预算不变（host 在预算变化时直接
+       * 触发重建，不走热切）。
+       */
+      contextWindowBudget?: number | null;
+    },
+  ): Promise<void>;
 
   /**
    * 当前 provider handle 是否必须先关闭、再由同一业务任务 cold resume 才能应用目标模型。
