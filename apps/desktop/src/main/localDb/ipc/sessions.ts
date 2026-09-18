@@ -2576,17 +2576,80 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
   const ids = new Set<string>();
   for (const row of deletedPi) ids.add(row.id);
   for (const row of diskDeleted) ids.add(row.id);
-  for (const id of ids) scheduleDeletedPiSubagentCleanup(id);
+  for (const id of ids) {
+    scheduleDeletedPiSubagentCleanup(id);
+    void removeDeletedPiTranscript(id).catch((err) => {
+      log.warn('PI transcript resume sweep failed', {
+        sessionId: id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+}
+
+/**
+ * #4596: reclaim the engine transcript of a deleted PI task.
+ *
+ * The PI adapter keeps its session identity in `sdk_session_id`, and for a
+ * local task that value *is* the absolute path of the JSONL transcript Pi
+ * writes under `<userData>/pi-agent-home/sessions/` (`--session-dir`; see
+ * `maker-host/pi-host.ts` `resolvePiAgentHome` and the adapter's
+ * `stateData.sessionFile`). Deleting the DB row left that file behind forever.
+ *
+ * The DB field is not a blank cheque. A file is removed only when every
+ * ownership signal agrees: the row is still `deleted` (a concurrent restore
+ * wins), `agent_kind` is `pi` — codex stores a thread id there, so a path
+ * *literal* from another engine is never authorised — the task is local
+ * (`remote_host_id` empty; a remote transcript lives on that host, under a
+ * `$HOME/...` literal that means nothing here), the value is an absolute path,
+ * and it resolves to a regular file inside the local PI sessions root. Missing
+ * file is not an error, so a double delete or an already-cleaned task stays
+ * quiet.
+ */
+async function removeDeletedPiTranscript(sessionId: string): Promise<void> {
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({
+      sdkSessionId: sessions.sdkSessionId,
+      agentKind: sessions.agentKind,
+      remoteHostId: sessions.remoteHostId,
+      status: sessions.status,
+    })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (!row || row.status !== 'deleted' || row.agentKind !== 'pi' || row.remoteHostId) return;
+  const file = row.sdkSessionId;
+  if (!file || !path.isAbsolute(file)) return;
+  // Direct children only: a live PI parent writes its JSONL straight into
+  // `--session-dir`, while `sessions/shared/` holds content-hash-keyed imports
+  // that several sessions may point at — deleting those would destroy files
+  // this session does not exclusively own. `resolve` normalizes traversal.
+  const root = path.resolve(path.join(app.getPath('userData'), 'pi-agent-home', 'sessions'));
+  if (path.dirname(path.resolve(file)) !== root) return;
+  const stat = await fs.stat(file).catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  });
+  if (!stat?.isFile()) return;
+  await fs.rm(file, { force: true });
 }
 
 /**
  * Terminal task artifact cleanup. Archive only removes one-shot hook files;
- * delete additionally stops and removes detached PI Subagents owned by the
- * parent task. All status writers must pass through this helper.
+ * delete additionally reclaims the PI engine transcript (#4596) and stops and
+ * removes detached PI Subagents owned by the parent task. All status writers
+ * must pass through this helper.
  */
 function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   if (status === 'deleted') {
+    void removeDeletedPiTranscript(sessionId).catch((err) => {
+      log.warn('PI transcript cleanup failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
     void removeTurnChangeSetsForSession(sessionId).catch((err) => {
       log.warn('turn change-set cleanup failed', {
         sessionId,
