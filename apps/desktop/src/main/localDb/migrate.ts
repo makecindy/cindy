@@ -30,6 +30,7 @@ import {
   hashMigrationFile,
   listPendingMigrations,
   readSchemaVersion,
+  reconcileRenumberedAppliedSchema,
   runMigrationReplay,
 } from './migrationRunner';
 import {
@@ -94,6 +95,9 @@ export async function runMigrations(
     log.info(
       JSON.stringify({ event: 'localDb.migrate.upToDate', currentVersion }),
     );
+    // 「旧 checkout 把某条 migration 重编号到更大 seq」的血统：该 migration 永远不会再 pending，
+    // 所以它的等效 schema 收敛必须在每次启动都核对，不能只在 replay 里做。
+    reconcileRenumberedAppliedSchema(db, (event) => log.warn(JSON.stringify(event)));
     return;
   }
   if (
@@ -164,6 +168,9 @@ export async function runMigrations(
         );
       },
     });
+    // 同一启动内完成「重放 → 重编号血统 schema 收敛」，否则本次启动就会带着缺列继续跑。
+    // 失败同样吃下面的备份回滚；已到达的库（无 pending）由 up-to-date 分支负责。
+    reconcileRenumberedAppliedSchema(db, (event) => log.warn(JSON.stringify(event)));
   } catch (err) {
     log.error(
       JSON.stringify({

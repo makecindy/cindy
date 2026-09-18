@@ -176,6 +176,76 @@ function runtimeIdentityMatches(
   );
 }
 
+/**
+ * 已发布分支在合入主干时按主干 migration 链重新生成序号，同一份 schema 意图换到了新的 seq
+ * / 文件名。这里登记这种「重编号」：applied 是旧 checkout 已落库的旧身份，canonical 是当前
+ * checkout 的同内容身份。
+ *
+ * 只在两侧内容指纹完全一致时允许，且必须逐条登记；未登记的重编号、或同 seq 但内容不同的
+ * 改写（比如另一条 `_loose_puppet_master` 的 SQL）一律继续失败关闭。
+ */
+const KNOWN_RENUMBERED_APPLIED_MIGRATIONS: ReadonlyArray<{
+  applied: MigrationRuntimeIdentity;
+  canonical: MigrationRuntimeIdentity;
+}> = [
+  {
+    // 0108_loose_puppet_master.sql（context_window_budget，PR #4598 分支身份）→
+    // 主干重新生成后落在 0110_green_unus.sql。
+    applied: {
+      seq: 108,
+      fileName: '0108_loose_puppet_master.sql',
+      sqlHash: 'dd2c6cd26bdd7420d17046c67a0043cae099ded9b3bf01d68c453c46bf8cc40b',
+      scriptHash: null,
+    },
+    canonical: {
+      seq: 110,
+      fileName: '0110_green_unus.sql',
+      sqlHash: 'dd2c6cd26bdd7420d17046c67a0043cae099ded9b3bf01d68c453c46bf8cc40b',
+      scriptHash: null,
+    },
+  },
+];
+
+function sameRuntimeSignature(
+  left: MigrationRuntimeIdentity,
+  right: MigrationRuntimeIdentity,
+): boolean {
+  return (
+    left.sqlHash === right.sqlHash &&
+    left.scriptHash === right.scriptHash &&
+    (left.scriptHash === null || left.fileName === right.fileName)
+  );
+}
+
+/**
+ * 把已落库的旧身份解析成它等价于哪个 canonical migration。
+ *
+ * 同 seq 且 runtime identity 相同 → 它自己；命中登记在册的重编号且内容指纹一致 → 新身份。
+ * 返回 null 表示这是未登记的身份漂移，调用方必须失败关闭。
+ */
+function resolveCanonicalAppliedIdentity(
+  applied: MigrationRuntimeIdentity,
+  expectedBySeq: ReadonlyMap<number, MigrationRuntimeIdentity>,
+): { canonical: MigrationRuntimeIdentity; vacatedSeqs: number[] } | null {
+  const sameSeq = expectedBySeq.get(applied.seq);
+  if (sameSeq && runtimeIdentityMatches(applied, sameSeq)) {
+    return { canonical: sameSeq, vacatedSeqs: [] };
+  }
+  for (const renumbered of KNOWN_RENUMBERED_APPLIED_MIGRATIONS) {
+    // 只接受「向更大 seq 重编号」；canonical seq 不大于旧 seq 时一律当未登记漂移。
+    if (renumbered.canonical.seq <= applied.seq) continue;
+    if (!sameRuntimeSignature(applied, renumbered.applied)) continue;
+    const canonical = expectedBySeq.get(renumbered.canonical.seq);
+    if (canonical && sameRuntimeIdentity(canonical, renumbered.canonical)) {
+      // 重编号把同一条 migration 换了序号，它腾出的旧序号在 canonical 链上不存在。
+      const vacatedSeqs: number[] = [];
+      for (let seq = applied.seq; seq < canonical.seq; seq += 1) vacatedSeqs.push(seq);
+      return { canonical, vacatedSeqs };
+    }
+  }
+  return null;
+}
+
 function runtimeIdentityListsMatch(
   applied: MigrationRuntimeIdentity[],
   canonical: MigrationRuntimeIdentity[],
@@ -229,20 +299,26 @@ export function prepareMigrationRuntimeManifest(
   const existing = readMigrationRuntimeManifest(dbFilePath);
   if (existing) {
     const expectedBySeq = new Map(expected.migrations.map((identity) => [identity.seq, identity]));
-    const existingBySeq = new Map(existing.migrations.map((identity) => [identity.seq, identity]));
+    // 已落库身份解析到 canonical 后，同时从「未登记漂移」与「canonical 未执行」两侧销账。
+    // 重编号会让已落库前缀里的旧 seq 在 canonical 链上不存在（旧 0108 重编号后 canonical 只有
+    // 0110），所以「缺条目」只查到已落库前缀为止，且重编号腾出的序号不算缺。
+    const resolvedCanonicalSeqs = new Set<number>();
+    let appliedThroughSeq = -1;
     for (const identity of existing.migrations) {
       if (identity.seq > databaseVersion) continue;
-      const current = expectedBySeq.get(identity.seq);
-      if (!current || !runtimeIdentityMatches(identity, current)) {
+      const resolved = resolveCanonicalAppliedIdentity(identity, expectedBySeq);
+      if (!resolved) {
         throw new Error(
           `applied migration runtime identity changed at seq ${identity.seq} (${identity.fileName})`,
         );
       }
+      resolvedCanonicalSeqs.add(resolved.canonical.seq);
+      for (const seq of resolved.vacatedSeqs) resolvedCanonicalSeqs.add(seq);
+      appliedThroughSeq = Math.max(appliedThroughSeq, identity.seq);
     }
     for (const identity of expected.migrations) {
-      if (identity.seq > databaseVersion) continue;
-      const applied = existingBySeq.get(identity.seq);
-      if (!applied || !runtimeIdentityMatches(applied, identity)) {
+      if (identity.seq > appliedThroughSeq) continue;
+      if (!resolvedCanonicalSeqs.has(identity.seq)) {
         throw new Error(`applied migration runtime identity missing at seq ${identity.seq}`);
       }
     }
@@ -431,13 +507,180 @@ export function checkMigrationCompatibility(
   };
 }
 
-// 0084 落地时违背了「ALTER TABLE ADD COLUMN 不能直接写进 migration SQL」的可重放
-// 惯例(SQLite 无 IF NOT EXISTS 列语义;正确形态见 0075/0076:SQL 置空 + companion
-// 用 PRAGMA table_info 守卫),而文件本体已随 main 永久冻结、不可回改。这里在
-// runner 侧补等效守卫:目标列已存在时按已生效处理,跳过 SQL 本体,schema_version
-// 与 migration history 照常推进。只允许命中登记在册的冻结缺陷,不为后续 migration
-// 提供任何通用容错——新迁移必须自带守卫。
+/**
+ * 0084 落地时违背了「ALTER TABLE ADD COLUMN 不能直接写进 migration SQL」的可重放
+ * 惯例(SQLite 无 IF NOT EXISTS 列语义;正确形态见 0075/0076:SQL 置空 + companion
+ * 用 PRAGMA table_info 守卫),而文件本体已随 main 永久冻结、不可回改。这里在
+ * runner 侧补等效守卫:目标列已存在时按已生效处理,跳过 SQL 本体,schema_version
+ * 与 migration history 照常推进。只允许命中登记在册的冻结缺陷,不为后续 migration
+ * 提供任何通用容错——新迁移必须自带守卫。
+ *
+ * 0108_lowly_scarlet_witch 的 guard 是 KNOWN_RENUMBERED_APPLIED_MIGRATIONS 的另一半：
+ * 只服务「旧 checkout 把 context_window_budget 落在 0108、bot 私聊表由更早分支创建」的
+ * 重编号血统——它已具备 0108 的后续改动(bridge_session_id/索引),但缺 sender_name /
+ * recipient_name。裸跑 0108 会索引重名失败,不跑则运行时 select 到不存在的列。
+ * 这里把该表收敛回 0108 执行后的等价结构(列顺序/索引与 canonical 一致),仅限这张表、
+ * 仅限检测到 bridge_session_id 这个重编号标志的库;其余库一律走原 SQL。
+ */
+const BOT_DIRECT_MESSAGES_RENUMBER_MARKER = 'bridge_session_id';
+/** 0108 迁移执行后的 canonical 列定义（顺序即 drizzle snapshot 的顺序）。 */
+const BOT_DIRECT_MESSAGES_CANONICAL_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ['id', 'text PRIMARY KEY NOT NULL'],
+  ['thread_id', 'text NOT NULL'],
+  ['sequence', 'integer NOT NULL'],
+  ['sender_bot_id', 'text NOT NULL'],
+  ['recipient_bot_id', 'text NOT NULL'],
+  ['sender_session_id', 'text'],
+  ['recipient_session_id', 'text'],
+  ['delivery_status', `text DEFAULT 'pending' NOT NULL`],
+  ['sender_name', 'text'],
+  ['recipient_name', 'text'],
+  ['content', 'text NOT NULL'],
+  ['created_at', 'integer NOT NULL'],
+];
+
+const BOT_DIRECT_MESSAGES_FOREIGN_KEYS: ReadonlyArray<string> = [
+  'FOREIGN KEY (`thread_id`) REFERENCES `bot_direct_message_threads`(`id`) ON UPDATE no action ON DELETE cascade',
+  'FOREIGN KEY (`sender_session_id`) REFERENCES `sessions`(`id`) ON UPDATE no action ON DELETE set null',
+  'FOREIGN KEY (`recipient_session_id`) REFERENCES `sessions`(`id`) ON UPDATE no action ON DELETE set null',
+];
+
+const BOT_DIRECT_MESSAGES_INDEXES: ReadonlyArray<string> = [
+  'CREATE UNIQUE INDEX `uniq_bot_direct_messages_thread_sequence` ON `bot_direct_messages` (`thread_id`,`sequence`)',
+  'CREATE INDEX `idx_bot_direct_messages_thread_created` ON `bot_direct_messages` (`thread_id`,`created_at`)',
+];
+
+function tableColumnNames(db: Database.Database, table: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info('${table}')`).all() as Array<{ name: string }>;
+  return rows.map((row) => row.name);
+}
+
+function tableIndexNames(db: Database.Database, table: string): Set<string> {
+  const rows = db
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL`,
+    )
+    .all(table) as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+function tableColumnNamesOfAll(db: Database.Database): string[] {
+  const rows = db
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
+    )
+    .all() as Array<{ name: string }>;
+  return rows.map((row) => row.name);
+}
+
+/**
+ * 把重编号血统的 bot_direct_messages 收敛成 0108 执行后的等价结构。
+ *
+ * 不自己开事务：调用方（replay）已在本条 migration 的事务内，且事务中执行
+ * `PRAGMA foreign_keys` 会被 SQLite 静默忽略（no-op），不能依赖它关外键检查。
+ * 安全前提在函数内自查：无任何其他表外键引用本表时才允许重建。
+ */
+function repairRenumberedBotDirectMessages(db: Database.Database): boolean {
+  const existing = tableColumnNames(db, 'bot_direct_messages');
+  const canonical = BOT_DIRECT_MESSAGES_CANONICAL_COLUMNS.map(([name]) => name);
+  const missing = canonical.filter((name) => !existing.includes(name));
+  if (missing.length === 0) return false;
+  const expectedMissing = ['sender_name', 'recipient_name'];
+  if (missing.length !== expectedMissing.length || missing.some((name) => !expectedMissing.includes(name))) {
+    throw new Error(
+      `bot_direct_messages 重编号修复只支持缺 sender_name/recipient_name,实际缺:[${missing.join(', ')}]`,
+    );
+  }
+  // 重建会 DROP + RENAME；先确认没有别的表还引用着它（sqlite_rename_table 会维护引用，
+  // 但被引用的表被删时重建语句会报错）。用逐表 PRAGMA 检查，避开表值函数在旧 SQLite
+  // 版本上的兼容差异。
+  const referencing: string[] = [];
+  for (const table of tableColumnNamesOfAll(db)) {
+    if (table === 'bot_direct_messages') continue;
+    const foreignKeys = db.prepare(`PRAGMA foreign_key_list('${table}')`).all() as Array<{ table: string }>;
+    if (foreignKeys.some((fk) => fk.table === 'bot_direct_messages')) referencing.push(table);
+  }
+  if (referencing.length > 0) {
+    throw new Error(
+      `bot_direct_messages 重编号修复遇到外部外键引用(重建会报错):${referencing.join(', ')}`,
+    );
+  }
+
+  // 只搬运源表确实存在的列：旧 0108 血统在执行本条时还没有 bridge_session_id（由 0109 补），
+  // 而重放 0108 之后重建出来的表也必须保持那一刻的形状，不能提前长出该列。
+  const carriedColumns = canonical.filter((name) => existing.includes(name));
+  const insertList = carriedColumns.map((name) => `\`${name}\``).join(', ');
+  const selectList = carriedColumns.map((name) => `\`${name}\``).join(', ');
+  const createSql =
+    'CREATE TABLE `__renumber_bot_direct_messages` (\n' +
+    [
+      ...BOT_DIRECT_MESSAGES_CANONICAL_COLUMNS.map(([name, type]) => `\t\`${name}\` ${type}`),
+      ...BOT_DIRECT_MESSAGES_FOREIGN_KEYS.map((clause) => `\t${clause}`),
+    ].join(',\n') +
+    '\n)';
+
+  db.prepare(createSql).run();
+  db.prepare(
+    `INSERT INTO \`__renumber_bot_direct_messages\` (${insertList}) SELECT ${selectList} FROM \`bot_direct_messages\``,
+  ).run();
+  db.prepare('DROP TABLE `bot_direct_messages`').run();
+  db.prepare('ALTER TABLE `__renumber_bot_direct_messages` RENAME TO `bot_direct_messages`').run();
+  for (const statement of BOT_DIRECT_MESSAGES_INDEXES) {
+    const indexName = /INDEX `([^`]+)`/.exec(statement)?.[1];
+    if (indexName && !tableIndexNames(db, 'bot_direct_messages').has(indexName)) {
+      db.prepare(statement).run();
+    }
+  }
+
+  const repaired = tableColumnNames(db, 'bot_direct_messages');
+  if (repaired.join('\u0000') !== canonical.join('\u0000')) {
+    throw new Error(
+      `bot_direct_messages 重编号修复后列序/列集仍未对齐:${repaired.join(', ')}`,
+    );
+  }
+  const indexes = tableIndexNames(db, 'bot_direct_messages');
+  for (const statement of BOT_DIRECT_MESSAGES_INDEXES) {
+    const indexName = /INDEX `([^`]+)`/.exec(statement)?.[1];
+    if (indexName && !indexes.has(indexName)) {
+      throw new Error(`bot_direct_messages 重编号修复未完成,缺索引 ${indexName}`);
+    }
+  }
+  return true;
+}
+
+/**
+ * 「已发布分支的 migration 在合入主干时被重编号」会在库里留下一种固定形态：
+ * 旧 seq 的 applied identity 对应不到 canonical 链，且被重编号的那条 migration 的
+ * 等效 schema 从来没真正执行过。runtime manifest 侧由
+ * KNOWN_RENUMBERED_APPLIED_MIGRATIONS 收敛；这里收敛它残留的 schema 缺口。
+ *
+ * 只处理已登记的 0108_lowly_scarlet_witch 重编号（0108 执行后的 bot 私聊表结构）。
+ * 正常库/新库全部条件不命中，直接返回；不报错、不写库、不产生备份。
+ * 返回是否实际做了修复，供调用方记日志。
+ */
+export function reconcileRenumberedAppliedSchema(
+  db: Database.Database,
+  onWarning?: (event: Record<string, unknown>) => void,
+): boolean {
+  const columns = tableColumnNames(db, 'bot_direct_messages');
+  // 重编号标志：旧分支已经在 0109 落过 bridge_session_id（正常 pre-0108 库没有这张表/这列）。
+  if (!columns.includes(BOT_DIRECT_MESSAGES_RENUMBER_MARKER)) return false;
+  if (columns.includes('sender_name') && columns.includes('recipient_name')) return false;
+  const repaired = repairRenumberedBotDirectMessages(db);
+  if (repaired) {
+    onWarning?.({ event: 'localDb.migrate.renumberedSchemaConverged', table: 'bot_direct_messages' });
+  }
+  return repaired;
+}
+
 const FROZEN_REPLAY_DEFECT_GUARDS: Record<string, (db: Database.Database) => boolean> = {
+  '0110_green_unus.sql': (db) => {
+    // 与 KNOWN_RENUMBERED_APPLIED_MIGRATIONS 的 0108_loose_puppet_master 是同一次重编号的
+    // 两半：旧 checkout 已在 0108 落过同一列，这里再裸 ALTER 必然 duplicate column name。
+    // 目标列已存在 → 按已生效处理；列不存在（正常库）仍执行 SQL，缺陷不会外溢到新库。
+    const columns = db.prepare(`PRAGMA table_info('sessions')`).all() as Array<{ name: string }>;
+    return columns.some((column) => column.name === 'context_window_budget');
+  },
   '0084_small_gwen_stacy.sql': (db) => {
     const columns = db
       .prepare(`PRAGMA table_info('schedules')`)

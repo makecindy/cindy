@@ -80,6 +80,13 @@ function tableExists(db: Database.Database, tableName: string): boolean {
   );
 }
 
+function indexNames(db: Database.Database, tableName: string): string[] {
+  return db
+    .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL")
+    .all(tableName)
+    .map((row) => String((row as { name: unknown }).name));
+}
+
 function indexExists(db: Database.Database, indexName: string): boolean {
   return (
     db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(indexName) !==
@@ -524,6 +531,128 @@ describeMigrationReplay('migration replay', () => {
     } finally {
       cleanupDb();
       cleanupDrizzle();
+    }
+  });
+  it('skips the frozen 0110 duplicate-column ALTER on a database that already owns the column', () => {
+    const { db, cleanup: cleanupDb } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-renumbered-replay-'));
+    try {
+      const migration = listMigrations(drizzleDir()).find(
+        (item) => item.fileName === '0110_green_unus.sql',
+      )!;
+      copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+
+      // 旧 checkout 已在 0108_loose_puppet_master 落过同一列：裸 ALTER 会 duplicate column。
+      db.exec(
+        `CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+         CREATE TABLE sessions (id TEXT PRIMARY KEY, context_window_budget INTEGER);`
+      );
+
+      const result = runMigrationReplay(db, {
+        drizzleDir: stagedDir,
+        currentVersion: migration.seq - 1,
+      });
+
+      expect(result.applied.map((item) => item.seq)).toEqual([migration.seq]);
+      expect(columnNames(db, 'sessions')).toContain('context_window_budget');
+      expect(
+        db.prepare("SELECT value FROM migration_meta WHERE key='schema_version'").pluck().get(),
+      ).toBe(String(migration.seq));
+    } finally {
+      rmSync(stagedDir, { recursive: true, force: true });
+      cleanupDb();
+    }
+  });
+
+  it('still applies the 0110 ALTER on a database without the column', () => {
+    const { db, cleanup: cleanupDb } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-renumbered-replay-plain-'));
+    try {
+      const migration = listMigrations(drizzleDir()).find(
+        (item) => item.fileName === '0110_green_unus.sql',
+      )!;
+      copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+      db.exec(
+        `CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+         CREATE TABLE sessions (id TEXT PRIMARY KEY);`
+      );
+
+      runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+
+      expect(columnNames(db, 'sessions')).toContain('context_window_budget');
+    } finally {
+      rmSync(stagedDir, { recursive: true, force: true });
+      cleanupDb();
+    }
+  });
+/** 旧重编号血统的 bot 私聊表：缺 sender_name/recipient_name，其余与 0108 后一致。 */
+const RENUMBERED_BOT_TABLES_SQL = `
+  CREATE TABLE bot_profiles (id TEXT PRIMARY KEY);
+  CREATE TABLE sessions (id TEXT PRIMARY KEY, context_window_budget INTEGER);
+  CREATE TABLE bot_direct_message_threads (
+    id text PRIMARY KEY NOT NULL, bot_a_id text NOT NULL, bot_b_id text NOT NULL,
+    status text DEFAULT 'active' NOT NULL, close_reason text,
+    message_count integer DEFAULT 0 NOT NULL, max_messages integer NOT NULL,
+    expires_at integer NOT NULL, blocked_until integer, created_at integer NOT NULL,
+    updated_at integer NOT NULL, closed_at integer,
+    FOREIGN KEY (bot_a_id) REFERENCES bot_profiles(id) ON UPDATE no action ON DELETE cascade,
+    FOREIGN KEY (bot_b_id) REFERENCES bot_profiles(id) ON UPDATE no action ON DELETE cascade
+  );
+  CREATE TABLE bot_direct_messages (
+    id text PRIMARY KEY NOT NULL, thread_id text NOT NULL, sequence integer NOT NULL,
+    sender_bot_id text NOT NULL, recipient_bot_id text NOT NULL, sender_session_id text,
+    recipient_session_id text, delivery_status text DEFAULT 'pending' NOT NULL,
+    content text NOT NULL, created_at integer NOT NULL, bridge_session_id text,
+    FOREIGN KEY (thread_id) REFERENCES bot_direct_message_threads(id) ON UPDATE no action ON DELETE cascade,
+    FOREIGN KEY (sender_bot_id) REFERENCES bot_profiles(id) ON UPDATE no action ON DELETE cascade,
+    FOREIGN KEY (recipient_bot_id) REFERENCES bot_profiles(id) ON UPDATE no action ON DELETE cascade,
+    FOREIGN KEY (sender_session_id) REFERENCES sessions(id) ON UPDATE no action ON DELETE set null,
+    FOREIGN KEY (recipient_session_id) REFERENCES sessions(id) ON UPDATE no action ON DELETE set null
+  );
+  CREATE UNIQUE INDEX uniq_bot_dm_threads_active_pair ON bot_direct_message_threads (bot_a_id,bot_b_id);
+  CREATE INDEX idx_bot_dm_threads_pair_updated ON bot_direct_message_threads (bot_a_id,bot_b_id,updated_at);
+  CREATE UNIQUE INDEX uniq_bot_direct_messages_thread_sequence ON bot_direct_messages (thread_id,sequence);
+  CREATE INDEX idx_bot_direct_messages_thread_created ON bot_direct_messages (thread_id,created_at);
+  INSERT INTO bot_direct_message_threads (id,bot_a_id,bot_b_id,max_messages,expires_at,created_at,updated_at)
+    VALUES ('thread-1','bot-a','bot-b',20,0,1,1);
+  INSERT INTO bot_direct_messages (id,thread_id,sequence,sender_bot_id,recipient_bot_id,content,created_at,bridge_session_id)
+    VALUES ('msg-1','thread-1',1,'bot-a','bot-b','legacy content',1,'bridge-1');
+`;
+
+  it('converges the renumbered bot DM lineage to the 0108 structure and keeps rows', () => {
+    const { db, cleanup: cleanupDb } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-renumbered-bot-dm-'));
+    try {
+      const migration = listMigrations(drizzleDir()).find(
+        (item) => item.fileName === '0108_lowly_scarlet_witch.sql',
+      )!;
+      copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+      db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+      // fixture 里用简化的 bot_profiles/sessions 占位表，关外键以便造历史数据。
+      db.pragma('foreign_keys = OFF');
+      db.exec(RENUMBERED_BOT_TABLES_SQL);
+      db.pragma('foreign_keys = ON');
+
+      runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+
+      // 本用例只 staged 了 0108：重建后应与 0108 执行完那一刻的形状一致（无 bridge_session_id）。
+      expect(columnNames(db, 'bot_direct_messages')).toEqual([
+        'id','thread_id','sequence','sender_bot_id','recipient_bot_id','sender_session_id',
+        'recipient_session_id','delivery_status','sender_name','recipient_name','content',
+        'created_at',
+      ]);
+      expect(indexNames(db, 'bot_direct_messages').sort()).toEqual([
+        'idx_bot_direct_messages_thread_created',
+        'uniq_bot_direct_messages_thread_sequence',
+      ]);
+      expect(db.prepare('SELECT content, sender_name, recipient_name FROM bot_direct_messages').get()).toEqual({
+        content: 'legacy content',
+        sender_name: null,
+        recipient_name: null,
+      });
+    } finally {
+      rmSync(stagedDir, { recursive: true, force: true });
+      cleanupDb();
     }
   });
 });
