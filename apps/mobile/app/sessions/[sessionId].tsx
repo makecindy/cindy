@@ -77,6 +77,7 @@ import type { TextInput as NativeTextInput } from 'react-native';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
+import { usePromptRecommendation } from '@/session/usePromptRecommendation';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
@@ -1072,6 +1073,7 @@ export default function SessionScreen() {
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
+  const recommendationSession = sessions.find((item) => item.id === sessionId);
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
   const taskUpdates = useSessionTaskUpdates(sessionId);
   const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
@@ -1386,6 +1388,16 @@ export default function SessionScreen() {
   const voiceStartPendingSeqRef = useRef(0);
   const voiceStartedOnPressInRef = useRef(false);
   const [voiceState, setVoiceStateInternal] = useState<MobileVoiceState>('idle');
+  const { prompt: promptRecommendation, dismiss: dismissPromptRecommendation } = usePromptRecommendation({
+    ownerId: auth.user?.id, deviceId, sessionId, maker,
+    agentKind: recommendationSession ? agentKindForSession(recommendationSession) : null,
+    revision: recommendationSession?.lastTurnEndedAt, running: remoteSessionRunning,
+    composerSource: composerDraftSource,
+    hasAttachments: attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0,
+    hasTerminalError: remoteSessionRunStatus.hasTerminalError === true,
+    voiceIsBusy: voiceStartPending || voiceState === 'listening'
+      || voiceState === 'submitting' || voiceState === 'refining',
+  });
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   // 「语音结束保持展开」hold:语音真实收尾(busy → done/error)时布防,草稿仍有
@@ -6129,6 +6141,7 @@ export default function SessionScreen() {
       return;
     }
     pendingSkillSelectionRef.current = null;
+    dismissPromptRecommendation();
     // 乐观第一拍:点发送立刻清空输入框并跟到底部,不等任何网络往返(enqueue 是
     // device-link 远程调用,弱网下数秒;文字已捕获进 text)。失败时若输入框仍为空
     // 则恢复原文——用户可能在 await 期间又打了字,不能覆盖。
@@ -9682,6 +9695,8 @@ export default function SessionScreen() {
                 </View>
               ) : null}
               <SessionComposerInput
+                promptRecommendation={promptRecommendation}
+                onDismissPromptRecommendation={dismissPromptRecommendation}
                 key={activeComposerDraftScopeKey}
                 source={composerDraftSource}
                 sessionId={sessionId}
@@ -10387,6 +10402,8 @@ interface SessionComposerControls {
   voiceButton: (style?: StyleProp<ViewStyle>) => ReactNode;
 }
 interface SessionComposerInputProps {
+  promptRecommendation?: string | null;
+  onDismissPromptRecommendation?: () => void;
   source: ComposerDraftSource;
   sessionId: string;
   composerInputRef: RefObject<ComposerRichInputHandle | null>;
@@ -10425,6 +10442,8 @@ interface SessionComposerInputProps {
 
 /** High-frequency editor, dictation, timer and resize state stops at this boundary. */
 function SessionComposerInput({
+  promptRecommendation,
+  onDismissPromptRecommendation,
   source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, renderControls,
@@ -10452,6 +10471,11 @@ function SessionComposerInput({
   // 引用已是 ComposerDocument 内的 atom；排队编辑同样可能只有引用而没有可见
   // 文本，因此必须计入 payload，否则「保存修改」会被错误禁用。
   const composerQuoteCount = composerDocumentQuotes(composerDocument).length;
+  const visibleRecommendation = promptRecommendation
+    && !draft.trim() && !composerQuoteCount && !attachmentCount && !pendingUploadCount
+    && canUseComposer && !canStopComposer && !sending && !queueBusy
+    && !voiceIsBusy && !voiceStartPending
+    ? promptRecommendation : null;
   // Context 面板是 Modal sheet,不再有内联附件面板 → attachmentPickerOpen 恒 false。
   const composerLayout = useMemo(() => buildSessionComposerLayout({
     attachmentBusy: false,
@@ -10792,6 +10816,32 @@ function SessionComposerInput({
                   styles.composerSurface,
                   compactComposer && !composerCardActive && styles.composerSurfaceCompact,
                 ]}>
+                  {visibleRecommendation ? (
+                    <View style={styles.promptRecommendationRow} testID="session.promptRecommendation">
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={visibleRecommendation}
+                        onPress={() => { onDismissPromptRecommendation?.(); setComposerDraft(visibleRecommendation); composerInputRef.current?.focus(); }}
+                        style={styles.promptRecommendationAction}
+                      >
+                        <Sparkles color={colors.statusAccent} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                        <Text numberOfLines={3} style={styles.promptRecommendationText}>
+                          {visibleRecommendation}
+                        </Text>
+                        <ChevronRight color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={t('session.common.dismissRecommendation')}
+                        accessibilityRole="button"
+                        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                        onPress={onDismissPromptRecommendation}
+                        style={styles.promptRecommendationDismiss}
+                        testID="session.promptRecommendationDismiss"
+                      >
+                        <X color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                      </Pressable>
+                    </View>
+                  ) : null}
                   <MobileComposerInputRow
                     key={sessionId}
                     frameOutside={nativeComposerFrameAvailable}
@@ -11955,6 +12005,39 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceDraftOverlay: {
     ...StyleSheet.absoluteFill,
     overflow: 'hidden',
+  },
+  promptRecommendationRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginBottom: spacing.sm,
+    minHeight: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+  },
+  promptRecommendationAction: {
+    minHeight: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    alignItems: 'center',
+    // Use the base surface so the recommendation reads as a distinct inset card
+    // inside the lighter composer frame in both themes.
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.container,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    minWidth: 0,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  promptRecommendationText: {
+    ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
+    color: colors.textPrimary,
+    flex: 1,
+    marginHorizontal: spacing.sm,
+  },
+  promptRecommendationDismiss: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    width: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   },
   // 草稿滚动层填满外层触摸区(外层负责「点输入区停听写」,自身 pointerEvents 关闭)。
   voiceDraftScroll: {

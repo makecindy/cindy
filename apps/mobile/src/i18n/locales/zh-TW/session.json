@@ -7,6 +7,7 @@
   },
   "common": {
     "cancel": "取消",
+    "dismissRecommendation": "關閉推薦",
     "delete": "刪除",
     "openContextPanel": "開啟上下文面板",
     "groupMode": "模式",

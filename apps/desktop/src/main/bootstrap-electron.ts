@@ -254,6 +254,11 @@ import {
 } from './im';
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
+import { createAuthCredentialRecovery } from './authCredentialRecovery';
+import {
+  evaluateRelaunchBusyActivity,
+  type RelaunchBusyActivitySources,
+} from './relaunchBusyActivity';
 import { hasPersistedSessionHint } from './authSessionHint';
 import {
   hasExclusiveSharedLegacyUserDataAccess,
@@ -1220,7 +1225,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     startLearnHost({
       maker,
       broadcast: broadcastLearnEvent,
-      fetchHubSkill: (slug, catalogScope) => fetchHubSkillReference(learnMarketService, slug, catalogScope),
+      fetchHubSkill: (slug, catalogScope) =>
+        fetchHubSkillReference(learnMarketService, slug, catalogScope),
       ...automationGitBaselineHooks,
     });
   } catch (err) {
@@ -1386,8 +1392,8 @@ function scheduleChatEmbeddingRuntimeReconcile(): Promise<void> {
   chatEmbeddingRuntimeReconcile = chatEmbeddingRuntimeReconcile
     .then(async () => {
       if (
-        isChatEmbeddingAvailable()
-        && readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled
+        isChatEmbeddingAvailable() &&
+        readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled
       ) {
         attemptStartEmbeddingHost();
       } else {
@@ -1590,10 +1596,10 @@ function markAccountBoundaryAbortedMidTeardown(reason: string): void {
   if (accountBoundaryAbortedMidTeardown !== null) return;
   accountBoundaryAbortedMidTeardown = reason;
   authBoundaryLog.error(
-    `account handover on ${reason} was aborted after teardown had already run — this `
-    + 'account keeps its custom provider catalog cleared and its IM, scheduler, '
-    + 'embedding, Ghost projection and Learn services stopped until the app is '
-    + 'restarted or a later handover succeeds',
+    `account handover on ${reason} was aborted after teardown had already run — this ` +
+      'account keeps its custom provider catalog cleared and its IM, scheduler, ' +
+      'embedding, Ghost projection and Learn services stopped until the app is ' +
+      'restarted or a later handover succeeds',
   );
 }
 
@@ -2040,8 +2046,8 @@ authManager.setProjectionRepairTeardown(teardownGhostProjectionBoundary);
 // mid-relaunch) would otherwise refuse this instance's Subagent launches for as
 // long as the file sits there. Only fences whose owner is gone are dropped, so a
 // concurrent instance genuinely mid-relaunch keeps its own.
-void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agent-home'))
-  .catch((err: unknown) => {
+void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agent-home')).catch(
+  (err: unknown) => {
     piSubagentLog.warn('stale Subagent launch fence cleanup failed (non-fatal):', err);
   },
 );
@@ -3164,6 +3170,61 @@ const updatePresentationRecovery = isUpdateRelaunchCandidate
 // 直接 show 回来,renderer 不重新加载。Cmd+Q / before-quit 时把这个标志置 true,
 // 让窗口 close handler 放行真正的销毁。
 let isQuitting = false;
+const authCredentialRecoveryLog = createLogger('auth-credential-recovery');
+
+function readRelaunchActivitySources(): RelaunchBusyActivitySources {
+  return {
+    anySessionInTurn: () => {
+      const maker = getMakerIfReady();
+      return maker ? anySessionInTurn(maker) : false;
+    },
+    listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
+    anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
+    // run_in_background 的 Bash 不调模型、也不折算 running,前两个来源都看不到它。
+    anyBackgroundBashRunning: () =>
+      getMakerIfReady()
+        ?.listActiveSessions()
+        .some((session) => session.listBackgroundTasks().length > 0) ?? false,
+    // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
+    // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
+    anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
+    // Scope to this process: `pi-agent-home` is shared with a concurrent
+    // dev/packaged/`--passive` instance, and its running Subagents are not
+    // a reason to hold up *our* quit.
+    anyPiSubagentRunning: () =>
+      hasActivePiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
+        hostPid: process.pid,
+      }),
+    // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
+    anySchedulerRunRunning: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
+  };
+}
+
+const authCredentialRecovery = createAuthCredentialRecovery({
+  enabled: process.platform === 'darwin' && app.isPackaged,
+  argv: process.argv.slice(1),
+  needsRecovery: () => authManager.needsCredentialProcessRecovery(),
+  readScreenState: () => powerMonitor.getSystemIdleState(1),
+  isQuitting: () => isQuitting,
+  isBusy: () =>
+    hasUpdateRelaunchBusyActivity({
+      readSynchronousBusy: () =>
+        isAppSessionBoundaryPending() ||
+        authManager.isAuthFlowBusy() ||
+        getUpdateRelaunchControllers().length > 0 ||
+        hasInFlightRemoteInvokes(),
+      readScheduleBusy: async () =>
+        (await evaluateRelaunchBusyActivity(readRelaunchActivitySources())).busy,
+    }),
+  relaunch: (args) => {
+    app.relaunch({ args });
+    app.quit(); // Normal lifecycle: flush storage and dispose background services.
+  },
+  schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+  cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  onEvent: (event) => authCredentialRecoveryLog.info(event),
+});
+
 let windowsTray: Tray | null = null;
 // 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
@@ -3418,6 +3479,7 @@ app.on('before-quit', () => {
   linuxClosePromptFallback.dispose();
   destroyWindowsTray();
   disposeUpdatePresentationRecovery();
+  authCredentialRecovery.dispose();
 });
 
 function handleUpdatePresentationLock(): void {
@@ -3759,15 +3821,15 @@ const createWindow = () => {
   // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
   // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
   const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
-  const isDark = process.platform === 'win32'
+  const isDark =
+    process.platform === 'win32'
       ? resolveAppThemeIsDark(
           nativeTheme.shouldUseDarkColors,
           persistedTheme?.mode,
           persistedTheme?.resolvedIsDark,
         )
       : nativeTheme.shouldUseDarkColors;
-  const bgColor =
-    process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
+  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
@@ -4202,7 +4264,8 @@ function checkDatabaseSizeWarningAtStartup(): void {
   if (
     startupDatabaseSizeWarningStatusChecked &&
     startupDatabaseSizeWarningOwnerScope === ownerScope
-  ) return;
+  )
+    return;
   startupDatabaseSizeWarningStatus = collectCurrentDatabaseSizeWarningStatus();
   startupDatabaseSizeWarningStatusChecked = true;
   startupDatabaseSizeWarningOwnerScope = ownerScope;
@@ -4220,10 +4283,7 @@ function syncPluginMarketForActiveOwner(minIntervalMs = 0): void {
   const scope = activeOwnerScopeKey();
   if (scope === pluginMarketSyncInFlightScope) return;
   const now = Date.now();
-  if (
-    scope === lastPluginMarketSyncScope &&
-    now - lastPluginMarketSyncAt < minIntervalMs
-  ) {
+  if (scope === lastPluginMarketSyncScope && now - lastPluginMarketSyncAt < minIntervalMs) {
     return;
   }
   pluginMarketSyncInFlightScope = scope;
@@ -4461,9 +4521,7 @@ const registerIpcHandlers = () => {
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
 
-  ipcMain.on(
-    'theme:apply-vibrancy',
-    (event, rawPayload: unknown) => {
+  ipcMain.on('theme:apply-vibrancy', (event, rawPayload: unknown) => {
     assertTrustedAppRendererEvent(event);
     const payload = parseWindowThemeVibrancyPayload(rawPayload);
     if (!payload) return;
@@ -4722,7 +4780,9 @@ const registerIpcHandlers = () => {
     resetCompactionPct();
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.COMPACTION_SET_PCT,
+    async (event, pct: unknown, owner: unknown) => {
       assertTrustedAppRendererEvent(event);
       if (typeof pct !== 'number' || !Number.isFinite(pct)) {
         throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
@@ -4747,7 +4807,9 @@ const registerIpcHandlers = () => {
     resetPiCompactionPct();
     return piCompactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT,
+    async (event, pct: unknown, owner: unknown) => {
       assertTrustedAppRendererEvent(event);
       if (typeof pct !== 'number' || !Number.isFinite(pct)) {
         throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
@@ -4869,9 +4931,7 @@ const registerIpcHandlers = () => {
       return chatEmbeddingWire();
     },
   );
-  ipcMain.handle(
-    MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET,
-    async (_e, owner: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET, async (_e, owner: unknown) => {
     assertChatEmbeddingMutationOwner(owner);
     try {
       await resetChatEmbeddingSettings(chatEmbeddingDefaultContext());
@@ -4946,32 +5006,44 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN, async (event, loginKey?: string) => {
     assertTrustedAppRendererEvent(event);
     const owner = activeOwnerScopeKey();
-    if (isAppSessionBoundaryPending() || !getActiveAppSession().dataOwnerId) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (isAppSessionBoundaryPending() || !getActiveAppSession().dataOwnerId)
+      return { ok: false, reason: 'login_cancelled', authorized: false };
     const signal = beginClaudeLocalLogin(loginKey);
     resetProviderModelAutoRefreshCooldowns('anthropic');
     await clearAnthropicDiscoveredModels();
-    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      return { ok: false, reason: 'login_cancelled', authorized: false };
     await ensureAnthropicCompatProxyReady();
-    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
-    if (!reconnectClaudeAiOAuth()) return { ok: false, reason: 'local_unavailable', authorized: false };
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (!reconnectClaudeAiOAuth())
+      return { ok: false, reason: 'local_unavailable', authorized: false };
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
     void refreshAnthropicModelsFromHttp();
     return { ok: true, authorized: hasClaudeAiOAuth() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT,
+    async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
       assertTrustedAppRendererEvent(event);
       const active = getActiveAppSession();
       const owner = activeOwnerScopeKey();
-    if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
+      if (
+        isAppSessionBoundaryPending() ||
+        (ownerScope &&
+          (ownerScope.dataOwnerId !== active.dataOwnerId ||
+            ownerScope.ownerGeneration !== active.generation))
+      ) {
         throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       }
       // Cancel pending Cindy login/refresh before revoking the binding; keep native credentials.
       try {
         cancelClaudeOAuthLogin();
         await disconnectClaudeAiOAuth();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
+        if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+          return { authorized: false };
         resetProviderModelAutoRefreshCooldowns('anthropic');
       } catch (err) {
         throwIpcError(
@@ -4980,7 +5052,8 @@ const registerIpcHandlers = () => {
         );
       }
       await broadcastClaudeAuthStateChanged();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { authorized: false };
       // Binding revoked: read() clears the Cindy quota snapshot and broadcasts null.
       syncClaudeSubscriptionUsageForAuthChange();
       // 模型清单动态发现:登出完成前清空清单 + 删磁盘缓存,并等待旧 SDK 写盘收尾。
@@ -5033,19 +5106,22 @@ const registerIpcHandlers = () => {
     // reason 是 renderer 决定提示用的结构化数据,不抛 throwIpcError(规则 13 查询型例外)。
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
     const result = await runGrokOAuthLogin();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      return { ok: false, reason: 'login_cancelled', authorized: false };
     if (result.ok) {
       void retainProviderPresentationAfterAuthChange('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
       // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
       await clearXaiSubscriptionUsageSnapshot();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
       // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
       clearXaiDiscoveredModels();
       await discardXaiModelsDiskCache();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧账号凭证。先跨授权边界清掉旧账号发现快照，再补拉新账号；
       // 旧在途请求由 discovery generation + owner scope 双重守卫作废。
       clearXaiMediaModels();
@@ -5054,7 +5130,8 @@ const registerIpcHandlers = () => {
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
       clearXaiRateLimitSnapshot();
       await syncXaiSubscriptionUsageForAuthChange();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       broadcastXaiAuthStateChanged();
       void refreshXaiModelsFromHttp();
       void refreshProviderModelsManually('xai').catch((error) => {
@@ -5066,11 +5143,18 @@ const registerIpcHandlers = () => {
     }
     return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT,
+    async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
       assertTrustedAppRendererEvent(event);
       const active = getActiveAppSession();
       const owner = activeOwnerScopeKey();
-    if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
+      if (
+        isAppSessionBoundaryPending() ||
+        (ownerScope &&
+          (ownerScope.dataOwnerId !== active.dataOwnerId ||
+            ownerScope.ownerGeneration !== active.generation))
+      ) {
         throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       }
       try {
@@ -5080,7 +5164,8 @@ const registerIpcHandlers = () => {
         resetProviderModelAutoRefreshCooldowns('xai');
         await clearXaiSubscriptionUsageSnapshot();
         await presentation;
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+        if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+          return { ok: false, reason: 'login_cancelled', authorized: false };
         clearXaiDiscoveredModels();
         clearXaiMediaModels();
       } catch (err) {
@@ -5093,7 +5178,8 @@ const registerIpcHandlers = () => {
       // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
       clearXaiRateLimitSnapshot();
       await syncXaiSubscriptionUsageForAuthChange();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       broadcastXaiAuthStateChanged();
       return { authorized: hasGrokOAuthLogin() };
     },
@@ -5706,7 +5792,13 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       const active = getActiveAppSession();
-      if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+      if (
+        isAppSessionBoundaryPending() ||
+        (ownerScope &&
+          (ownerScope.dataOwnerId !== active.dataOwnerId ||
+            ownerScope.ownerGeneration !== active.generation))
+      )
+        throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
       await retainProviderPresentationAfterAuthChange(
         builtinApiKeyPresentationId(providerId as string),
@@ -5719,11 +5811,13 @@ const registerIpcHandlers = () => {
   ipcMain.handle('auth:initialize', async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
-      const state = await authManager.initialize({
-        onColdStartPending: (completion) => {
-          pendingCompletion = completion;
-        },
-      });
+      const state = await authManager
+        .initialize({
+          onColdStartPending: (completion) => {
+            pendingCompletion = completion;
+          },
+        })
+        .finally(() => authCredentialRecovery.request());
       await authManager.ensureStableOwnerPostCommitTasks('auth-initialize');
       if (!app.isPackaged) {
         recordDesktopDevAuthStartupResult(state, pendingCompletion, () =>
@@ -5993,29 +6087,7 @@ const registerIpcHandlers = () => {
       //
       // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
       // 且远程控制端不会代替用户点被控端的更新重启。
-      registerRelaunchBusyActivityIpc(() => ({
-        anySessionInTurn: () => anySessionInTurn(getMakerCore()),
-        listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
-        anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
-        // run_in_background 的 Bash 不调模型、也不折算 running,前两个来源都看不到它。
-        anyBackgroundBashRunning: () =>
-          getMakerCore()
-            .listActiveSessions()
-            .some((session) => session.listBackgroundTasks().length > 0),
-        // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
-        // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
-        anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
-        // Scope to this process: `pi-agent-home` is shared with a concurrent
-        // dev/packaged/`--passive` instance, and its running Subagents are not
-        // a reason to hold up *our* quit.
-        anyPiSubagentRunning: () =>
-          hasActivePiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
-            hostPid: process.pid,
-          }),
-        // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
-        anySchedulerRunRunning: () =>
-          readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
-      }));
+      registerRelaunchBusyActivityIpc(readRelaunchActivitySources);
       // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
       // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
       getMakerCore();
@@ -6396,7 +6468,8 @@ const registerIpcHandlers = () => {
           isGlobalVoiceInputOverlaySender(candidate.sender) &&
           candidate.senderFrame === candidate.sender.mainFrame &&
           isTrustedCindyRendererWindow(overlayWindow)
-        ) return;
+        )
+          return;
         assertTrustedAppRendererEvent(candidate);
       },
       openExternal: (url) => shell.openExternal(url),
@@ -7432,9 +7505,7 @@ const registerIpcHandlers = () => {
 
   // Settings → Cindy Make: open Cindy's private managed-tool directory.
   // The path is derived in main so the renderer cannot choose an arbitrary folder.
-  ipcMain.handle(
-    'app:open-cindy-make-tools-dir',
-    async (event): Promise<{ success: boolean }> => {
+  ipcMain.handle('app:open-cindy-make-tools-dir', async (event): Promise<{ success: boolean }> => {
     assertTrustedAppRendererEvent(event);
     return openMakeToolsDirectory(app.getPath('userData'), {
       openPath: (directory) => shell.openPath(directory),
@@ -8131,7 +8202,8 @@ const registerIpcHandlers = () => {
           >,
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
-        const result = ownerWindow && !ownerWindow.isDestroyed()
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
             ? await dialog.showOpenDialog(ownerWindow, options)
             : await dialog.showOpenDialog(options);
         return result.canceled ? null : (result.filePaths[0] ?? null);
@@ -8159,7 +8231,8 @@ const registerIpcHandlers = () => {
           noLink: true,
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
-        const result = ownerWindow && !ownerWindow.isDestroyed()
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
             ? await dialog.showMessageBox(ownerWindow, options)
             : await dialog.showMessageBox(options);
         return result.response === 0;
@@ -8179,7 +8252,8 @@ const registerIpcHandlers = () => {
           noLink: true,
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
-        const result = ownerWindow && !ownerWindow.isDestroyed()
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
             ? await dialog.showMessageBox(ownerWindow, options)
             : await dialog.showMessageBox(options);
         return result.response === 0;
@@ -9319,6 +9393,7 @@ app.on('ready', async () => {
 
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
+    authCredentialRecovery.request();
     authManager.handleResume();
     handleProviderModelSystemResume();
     syncPluginMarketForActiveOwner(30_000);
@@ -9326,6 +9401,18 @@ app.on('ready', async () => {
     handleDeviceLinkSystemResume();
   });
   powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
+  powerMonitor.on('lock-screen', authCredentialRecovery.onScreenLock);
+  powerMonitor.on('unlock-screen', authCredentialRecovery.onScreenUnlock);
+  onQuit(
+    'auth-credential-recovery',
+    () => {
+      authCredentialRecovery.dispose();
+      powerMonitor.removeListener('lock-screen', authCredentialRecovery.onScreenLock);
+      powerMonitor.removeListener('unlock-screen', authCredentialRecovery.onScreenUnlock);
+    },
+    'sync',
+  );
+  authCredentialRecovery.request();
 
   // Memory diagnostics — dev only, log per-process memory every 30s
   if (!app.isPackaged) {
@@ -9530,9 +9617,9 @@ onQuit(
       });
       if (!stopped) {
         piSubagentLog.error(
-          'PI Subagent runners survived stop and identity-verified kill on quit — '
-          + 'runners this app could not confirm as stopped are still running with their '
-          + 'inherited credentials',
+          'PI Subagent runners survived stop and identity-verified kill on quit — ' +
+            'runners this app could not confirm as stopped are still running with their ' +
+            'inherited credentials',
         );
       }
     }
@@ -9554,8 +9641,8 @@ onQuit(
     // failure means the parent is *not* confirmed down and the fence stays up.
     if (piSessionFailures > 0) {
       piSubagentLog.error(
-        `${piSessionFailures} PI session(s) failed to detach during quit — holding the `
-        + 'launch fence, since a surviving parent could still start a durable runner',
+        `${piSessionFailures} PI session(s) failed to detach during quit — holding the ` +
+          'launch fence, since a surviving parent could still start a durable runner',
       );
       return;
     }
@@ -9630,8 +9717,8 @@ onQuit(
       });
       if (!stopped) {
         piSubagentLog.error(
-          'PI Subagent runners appeared after the first quit sweep and could not be '
-          + 'confirmed stopped — they are still running with their inherited credentials',
+          'PI Subagent runners appeared after the first quit sweep and could not be ' +
+            'confirmed stopped — they are still running with their inherited credentials',
         );
       }
       // No fence and no proof the parent is down: this pass is not conclusive,
@@ -9680,9 +9767,9 @@ onQuit(
         // could still launch — so the fence stays up until the process exits,
         // and the next instance's stale sweep removes the file.
         piSubagentLog.error(
-          'parent shutdown was not confirmed complete on quit — holding the PI Subagent '
-          + 'launch fence until this process exits so a still-live parent cannot start '
-          + 'a durable runner nothing is left to reclaim',
+          'parent shutdown was not confirmed complete on quit — holding the PI Subagent ' +
+            'launch fence until this process exits so a still-live parent cannot start ' +
+            'a durable runner nothing is left to reclaim',
         );
       } else {
         // Neither guarantee is available: the fence could not be raised on
@@ -9692,9 +9779,9 @@ onQuit(
         // thing narrowing the window; state the exposure instead of implying it
         // is closed.
         piSubagentLog.error(
-          'quit ended with no PI Subagent launch fence and no proof the parent is down — '
-          + 'a surviving parent could still publish a durable runner after the last scan, '
-          + 'and it would keep running with the credentials it inherited',
+          'quit ended with no PI Subagent launch fence and no proof the parent is down — ' +
+            'a surviving parent could still publish a durable runner after the last scan, ' +
+            'and it would keep running with the credentials it inherited',
         );
       }
     }
@@ -10002,8 +10089,10 @@ let lastWorktreeMaintenanceDb: ReturnType<typeof tryGetDbClient> = null;
 /** Worktree maintenance needs both storage and runtime-close services. */
 function startReadyWorktreeMaintenance(): void {
   startWorktreeRecycleMaintenance({
-    isReady: () => worktreeRuntimeCloseReady && getMakerIfReady() !== null && tryGetDbClient() !== null,
-    recycleCurrentSession: (sessionId, status) => recycleSessionWorktreeForStatusChange(sessionId, status),
+    isReady: () =>
+      worktreeRuntimeCloseReady && getMakerIfReady() !== null && tryGetDbClient() !== null,
+    recycleCurrentSession: (sessionId, status) =>
+      recycleSessionWorktreeForStatusChange(sessionId, status),
     onAttemptComplete: auditRegisteredWorktrees,
   });
   const db = tryGetDbClient();

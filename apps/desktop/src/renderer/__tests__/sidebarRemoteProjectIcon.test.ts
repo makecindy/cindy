@@ -87,11 +87,15 @@ describe('sidebar remote project icon', () => {
   });
 
   // 2026-08-12 用户裁决:设备段头的条数去掉——它数的是顶层条目(项目行 + 散排对话
-  // + 对话组)而非任务数,读起来只会误导;「离线」标签接手 ml-auto 保持靠右。
+  // + 对话组)而非任务数,读起来只会误导。右侧后来改为灯组容器(聚合未读点 +
+  // 「离线」标注,2026-08 未读聚合灯),ml-auto 靠右语义由容器承接。
   it('drops the entry count from the device group header', () => {
     expect(projectsSectionSource).not.toContain('{section.entries.length}');
     expect(projectsSectionSource).toContain(
-      '<span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">',
+      '<span className="ml-auto flex shrink-0 items-center gap-1.5">',
+    );
+    expect(projectsSectionSource).toContain(
+      '<span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">',
     );
   });
 
