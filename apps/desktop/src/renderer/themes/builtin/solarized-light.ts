@@ -103,7 +103,7 @@ const GENERATED_OVERRIDES = {
   "plan-toolbar-btn-hover-bg": "#eee8d5",
   "popover": "46 42% 88%",
   "primary-foreground": "0 0% 100%",
-  "search-match-fg": "0 0% 46%",
+  "search-match-fg": "0 0% 35%",
   "secondary": "46 42% 88%",
   "settings-btn-primary-text": "#FFFFFF",
   "settings-btn-secondary-hover-bg": "#eee8d5",
@@ -126,6 +126,7 @@ const GENERATED_OVERRIDES = {
   "update-btn-border": "#859900",
   "update-btn-text": "#859900",
   "form-field-hint": "#686868",
+  "search-match-bg": "45 100% 62%",
 } as const;
 // END GENERATED DS-8: theme
 

@@ -14,6 +14,25 @@ const report = (
 });
 
 describe('CindyMakeManager', () => {
+  it('hides a merge task identity after its account boundary changes', () => {
+    const manager = new CindyMakeManager();
+    let current = true;
+    manager.setUpstreamMerge({ id: 'merge', ref: 'main', upstreamCommit: 'a'.repeat(40), status: 'conflict', sessionId: 'private-task', hasWorkspace: true }, () => current);
+    expect(manager.getState().upstreamMerge?.sessionId).toBe('private-task');
+    current = false;
+    expect(manager.getState().upstreamMerge).toMatchObject({ sessionId: undefined, ownedByAnotherAccount: true, hasWorkspace: true });
+  });
+  it('blocks source preparation and reset while an unresolved merge workspace is retained', async () => {
+    const manager = new CindyMakeManager();
+    manager.setUpstreamMerge({ id: 'merge', ref: 'main', upstreamCommit: 'a'.repeat(40), status: 'failed', hasWorkspace: true });
+    for (const clearOnly of [false, true]) {
+      const run = vi.fn();
+      await expect(manager.prepareSource({ root: '/managed', clearOnly, signal: new AbortController().signal,
+        cancelled: vi.fn(), onProgress: vi.fn(), toStatus: vi.fn(), run,
+      })).rejects.toMatchObject({ code: 'busy' });
+      expect(run).not.toHaveBeenCalled();
+    }
+  });
   it('deduplicates one operation, replays progress, and keeps state after completion', async () => {
     const manager = new CindyMakeManager();
     const firstListener = vi.fn();

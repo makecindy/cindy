@@ -211,6 +211,16 @@ export class RemoteDesktopController {
     )
       this.stop();
   }
+  /** Losing the signaling socket is expected while the phone shows PiP.
+   * Only an authorized, view-only presentation may outlive it, and only while
+   * the media channel keeps renewing the existing bounded lease. */
+  signalingLost(peer?: string): void {
+    this.tick();
+    const active = this.active;
+    if (active && (!peer || active.peer === peer) && active.backgroundViewing && !active.controlling)
+      return;
+    this.stop(peer);
+  }
   stop(peer?: string): Promise<void> {
     if (peer && this.active?.peer !== peer) {
       // Cancelling a takeover candidate must not revoke the current owner's work.

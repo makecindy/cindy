@@ -143,6 +143,7 @@ import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStarting
 import { createLogger } from '@/lib/logger';
 import {
   markSessionAutomaticHistoryLoadCompleted,
+  readSessionScroll,
   resetSessionAutomaticHistoryLoadCompletion,
 } from '@/lib/sessionScrollStore';
 import {
@@ -3790,7 +3791,42 @@ function retainedWindowKeepsGapCursor(
   return cursorIndex > 0;
 }
 
-function _trimMessagesIfNeeded(sessionId: string): void {
+// A just-closed reading window is still a warm navigation target. Trimming it
+// to the tail forces an around-message IPC/backfill before restoring the reader.
+// Reuse existing session storage, with bounded reservations derived from current
+// state so clear/purge/epoch changes cannot resurrect a separate stale copy.
+const WARM_READING_WINDOWS = 2;
+const WARM_READING_MAX_MESSAGES = 1000;
+const WARM_READING_MAX_CHARACTERS = 32 * 1024 * 1024;
+
+function _trimMessagesIfNeeded(): void {
+  const retained = new Set<string>();
+  let characters = 0;
+  const now = Date.now();
+  // Reverse before sorting so equal timestamps also prefer the latest leave.
+  const recent = [..._lastViewedAt.entries()].reverse().sort((a, b) => b[1] - a[1]);
+  for (const [id, lastViewed] of recent) {
+    if (retained.size >= WARM_READING_WINDOWS) break;
+    const state = sessions.get(id);
+    const scroll = readSessionScroll(id);
+    if (!state?.historyLoaded || _activeViewSessions.has(id) || _isSessionBusy(id, state) ||
+      now - lastViewed >= DEMOTE_IDLE_MS || scroll?.isNearBottom !== false ||
+      state.messages.length <= TRIM_THRESHOLD || state.messages.length > WARM_READING_MAX_MESSAGES) continue;
+    const anchor = scroll.messageClientId ?? scroll.restoreClientId;
+    if (!anchor || !state.messages.some((message) => message.clientId === anchor)) continue;
+    const size = state.messages.reduce((sum, message) => sum + message.content.length, 0);
+    if (characters + size > WARM_READING_MAX_CHARACTERS) continue;
+    characters += size;
+    retained.add(id);
+  }
+  // Admission or a background update can displace another window. Apply the
+  // original guarded/epoch-aware trim to it immediately, not on its next visit.
+  for (const id of sessions.keys()) {
+    if (!retained.has(id)) _trimSessionMessages(id);
+  }
+}
+
+function _trimSessionMessages(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state || state.messages.length <= TRIM_THRESHOLD) return;
   if (_isSessionBusy(sessionId, state)) return;
@@ -4050,7 +4086,7 @@ function leaveView(sessionId: string): void {
         : {}),
     }));
   }
-  _trimMessagesIfNeeded(sessionId);
+  _trimMessagesIfNeeded();
 }
 
 function _demoteIdleSessions(): void {
@@ -7914,7 +7950,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           : s,
       );
       // MEM-OPT-1: trim non-active sessions after turn completes
-      queueMicrotask(() => _trimMessagesIfNeeded(sessionId));
+      queueMicrotask(_trimMessagesIfNeeded);
     }
     // 视觉桥用户提示事件（source==='vision-bridge' + reason 枚举 + isTerminal:false）：
     // 已在 dispatchStreamEventPayload 的 case 'error' 分流为 toast，不进 error-banner /
@@ -11004,7 +11040,7 @@ function createRemoteHistoryView(sessionId: string) {
         mergeMessages(available, state.messages.filter((message) => !message.cacheHydrated), { addOnly: true }),
         new Set(available.filter((message) => message.role === 'user').map((message) => message.clientId)),
       ),
-      hasMoreMessages: snapshot.hasMore, isLoadingMore: snapshot.loading,
+      hasMoreMessages: snapshot.hasMore, isLoadingMore: view.isLoadingOlder(),
       oldestMessageId: snapshot.nextCursor,
       historyWindowHasIsland: false,
     }));
@@ -11855,6 +11891,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   const view = getRemoteHistoryView(sessionId);
   if (view && (view.getSnapshot().ready || opts?.freshHistory || opts?.repair)) {
     const runHistoryView = (flight?: HistoryViewForceFlight) => {
+      const syncToken = noteRemoteSessionSyncStarted(sessionId);
       const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
       const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
       const noteHydration = (before: readonly ChatMessage[], after: readonly ChatMessage[]) => {
@@ -11868,10 +11905,10 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
           }
         }
       };
-      // Force needs a post-signal page, even when a normal repair is in flight.
-      // Keep this view and its expansion state instead of falling back to raw history.
+      // Read receipts also need a post-signal page: joining a pre-existing read
+      // cannot certify this sync generation. Preserve the view and expansion.
       return Promise.all([
-        view.refresh(false, opts?.freshHistory ?? opts?.force),
+        view.refresh(false, true),
         reconcilePendingInteractions(sessionId),
       ]).then(async () => {
         if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
@@ -11879,19 +11916,23 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
           releaseRemoteHistoryView(sessionId, view);
           return runRemoteReconcile(sessionId, { ...opts, force: true }, noteHydration);
         }
-        if (opts?.force) {
+        {
           // readPage starts expanded details without awaiting them. Join those
-          // same reads before hydrating; their cached display may still be old.
+          // same reads before certifying receipts; their display may still be old.
+          // Force repair also needs collapsed details to hydrate lost live rows.
           await Promise.all(historyWorkSummaries(view.getSnapshot().items)
-            .map((summary) => view.loadDetails(summary, { allowCollapsed: true })));
+            .filter((summary) => opts?.force || view.getSnapshot().expanded.has(summary.key))
+            .map((summary) => view.loadDetails(summary, { allowCollapsed: opts?.force })));
           if (getRemoteHistoryView(sessionId) !== view || !view.isActive()
             || (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
           const detailsSnapshot = view.getSnapshot();
           const incompleteDetails = historyWorkSummaries(detailsSnapshot.items).some((summary) => {
+            if (!opts?.force && !detailsSnapshot.expanded.has(summary.key)) return false;
             const detail = detailsSnapshot.details.get(summary.key);
             return !detail?.complete || !!detail.error || detail.revision !== summary.revision;
           });
           if (incompleteDetails) {
+            if (!opts?.force) return false;
             // Collapse can cancel a joined detail read without rejecting it.
             // Missing, partial, failed or stale details cannot certify recovery.
             // Use the same authoritative fallback as a transient read failure;
@@ -11926,6 +11967,9 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
             return messages === state.messages ? state : { ...state, messages };
           });
         }
+        // Failed, inactive or superseded views return above without certifying
+        // unread content. Raw-history fallbacks report their own sync generation.
+        if (snapshot.ready) noteRemoteSessionSyncCompleted(sessionId, syncToken);
         return snapshot.ready;
       });
     };
@@ -16868,7 +16912,9 @@ function collapseConsecutiveAutoResumeRows(messages: ChatMessage[]): ChatMessage
       }
       continue;
     }
-    if (isSubstantiveChatRow(message)) sawCardSinceContent = false;
+    // Without a later resume card there is no boundary to resolve. In particular,
+    // refreshing input projection for cached history must not rescan old tool text.
+    if (sawCardSinceContent && isSubstantiveChatRow(message)) sawCardSinceContent = false;
   }
   return changed && out ? out : messages;
 }

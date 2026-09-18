@@ -17,7 +17,12 @@ const h = vi.hoisted(() => ({
   remote: false,
   publish: undefined as undefined | ((report: MakeDoctorReport) => void),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, values?: { worktree: string; request: string }) =>
+      key === 'cindyMake.code.taskTitle' && values ? `[${values.worktree}] ${values.request}` : key,
+  }),
+}));
 vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
 vi.mock('@/lib/cindyMakeDoctor', () => ({ startMakeDoctor: h.start, cancelMakeDoctor: h.cancel }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { setSessionRuntime: h.runtime } }));
@@ -82,6 +87,21 @@ afterEach(() => {
 });
 
 describe('Make preflight confirmation boundary', () => {
+  it('names the created task after the first four characters of its worktree run', async () => {
+    open();
+    await finishChecks();
+    act(() => h.publish!({ ...ready, runId: 'f428ca8b-242b-43c6-b2e5-e54bdd915f62' }));
+    fireEvent.click(continueButton());
+    await waitFor(() =>
+      expect(h.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'f428ca8b-242b-43c6-b2e5-e54bdd915f62',
+          title: '[f428] Keep my request',
+        }),
+      ),
+    );
+  });
+
   it('starts checks once under StrictMode without cancelling them on the rehearsal mount', async () => {
     render(
       <StrictMode>
@@ -108,7 +128,7 @@ describe('Make preflight confirmation boundary', () => {
         originSessionId: sessionId,
         runId: 'run',
         request: '  Keep my request  ',
-        title: 'cindyMake.code.taskTitle',
+        title: '[run] Keep my request',
         createOptions: { agentKind: 'codex', model: 'selected' },
       });
       expect(h.runtime).toHaveBeenCalledWith('code-task', { autoTitleDisabled: true });

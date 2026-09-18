@@ -42,9 +42,13 @@ export async function readDeviceFile<T extends DeviceFileResult>(options: {
   assertActive();
   const prepared = await options.prepare();
   if (!active()) return discardCancelled(prepared);
-  if (prepared.transferRequired !== true) return prepared;
-  const needsFallback = options.stream &&
-    (options.peerResultIsTransient || /^(audio|video)\//i.test(prepared.mimeType));
+  const mediaStream = options.stream && /^(audio|video)\//i.test(prepared.mimeType);
+  // Small audio/video files arrive inline too, but playback still needs a retained
+  // URL. Reuse the streaming path without re-uploading an old host's OSS result.
+  const inlineMediaStream = mediaStream && !prepared.ossKey &&
+    typeof prepared.inlineBase64 === "string";
+  if (prepared.transferRequired !== true && !inlineMediaStream) return prepared;
+  const needsFallback = mediaStream || (options.stream && options.peerResultIsTransient);
   const direct = needsFallback ? null : await options.peer(prepared);
   if (direct && !active()) return discardCancelled(direct);
   else assertActive();

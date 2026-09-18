@@ -122,7 +122,7 @@ describe('Cindy Make preparation card', () => {
         originSessionId: 'origin',
         runId: 'make-run',
         request: 'original request',
-        title: report.task!.title,
+        title: '[make] Cindy Make: scrolling',
       }),
     );
   });

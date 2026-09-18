@@ -91,6 +91,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
+> - **Cindy Make source comparison** — the owner-requested one-line comparison (2026-09-17) uses `--text-secondary` for the current hash, `--text-tertiary` for the arrow icon, and `--status-success` for the verified latest version and its parenthesized commit difference. This green identifies the official target version, not the state of the local checkout. Unavailable lookups stay neutral. Both modes use the existing semantic tokens; no other version surface inherits this treatment.
 > - **CINDY checked Switch** — `--switch-track-on` uses blue `#417CDD` in CINDY Light and Dark (owner decision 2026-09-15, §15.17). This is an enabled-state signal, independently adjustable from focus, caret and Auto Approval despite sharing their current hue. Other themes retain their own checked-track colors.
 > - **Windows taskbar attention badge** — the native OS overlay uses a fixed red background (`#D91F37`) and white digits with no outline (`#FFFFFF`) in both Light and Dark taskbars. This is the app-wide count of active tasks needing attention, not an error-only status. The image-specific semantic pair lives in `apps/desktop/src/main/windowsBadgeIcon.ts`; it is not an in-app theme token. Keep a 16-logical-pixel transparent canvas and center the circle and digits at 80% of their original size (user refinement, 2026-09-16). Render using the highest connected display scale and pass that physical-size image directly to the Windows Shell through the native taskbar bridge (Electron 41 otherwise forces overlays to 16 physical pixels). Redraw after display/DPI changes and taskbar recreation; keep the multi-resolution Electron overlay as a failure fallback. Use a circle for one digit, a rounded square for multiple digits, and `99+` above 99. The accessibility description keeps the exact total. Only the OS image may use its fitted 8–12px system-font digits; web typography and status-dot color rules are unchanged.
 > - **Toast Info / Success / Warning / Error** — `#417CDD` / `#2AAE5B` / `#F3A115` / `#D91F37`(finalized 2026-07-17; Toast exemption lifted) — used ONLY on the 16×16 lucide icon inside Toast pill notifications. The pill body (background, text, border, close icon) remains strictly grayscale. Info blue #417CDD equals the focus-ring / Auto Approval value (originally #3B82F6, added 2026-07-14, now finalized); success/warning/error equal the global status colors (done green / status error / warning foreground).
@@ -670,6 +671,15 @@ the version number and does not consume a red Beta badge token. This is a persis
 cue, not an error or CTA; the mobile white text contrast is 4.98:1.
 
 Never freestyle these semantic colors as hardcoded hex — always go through the corresponding token.
+
+**Search matches (2026-09-18, user-approved direction):** global find, file previews and
+file editors share `search-match-bg` / `search-match-fg` for ordinary matches and
+`search-match-active-bg` / `search-match-active-fg` for the current match. Both modes
+use a stronger gold current-match fill with readable dark text. Keep a non-color cue:
+global CSS highlights use an underline; preview/editor marks retain their outline.
+The existing IDs and explicit theme overrides remain supported. Exact values live in
+`packages/design-tokens/src/reference/color.json` and generate `themes/colors.ts`;
+this decision does not grant new uses of warning/status colors.
 
 ### Built-in Themes
 

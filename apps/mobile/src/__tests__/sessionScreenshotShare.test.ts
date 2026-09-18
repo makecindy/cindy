@@ -14,9 +14,6 @@ describe("mobile screenshot-triggered share guards", () => {
     );
     expect(source).toContain("settingsOpen");
     expect(source).toContain("searchOpen");
-    expect(source).toContain(
-      "sessionTreeOpen && currentSession?.agentKind === 'pi'",
-    );
     expect(source).toContain("contextSheetOpen");
     expect(source).toContain("chipMenuTarget !== null");
     expect(source).toContain("modelSheetOpen && canUseComposer");

@@ -94,6 +94,7 @@ export function CindyMakePreflightDialog({
         runId: report.runId,
         request,
         title: t('cindyMake.code.taskTitle', {
+          worktree: report.runId.slice(0, 4),
           request: chars.slice(0, 60).join('') + (chars.length > 60 ? '…' : ''),
         }),
         createOptions,

@@ -432,6 +432,14 @@
       "light": "semantic.defaults.search-match-fg.light",
       "dark": "semantic.defaults.search-match-fg.dark"
     },
+    "search-match-active-bg": {
+      "light": "semantic.defaults.search-match-active-bg.light",
+      "dark": "semantic.defaults.search-match-active-bg.dark"
+    },
+    "search-match-active-fg": {
+      "light": "semantic.defaults.search-match-active-fg.light",
+      "dark": "semantic.defaults.search-match-active-fg.dark"
+    },
     "update-btn-border": {
       "light": "semantic.defaults.update-btn-border.light",
       "dark": "semantic.defaults.update-btn-border.dark"
@@ -3302,7 +3310,8 @@
         "tooltip-text": "themes.solarized-light.tooltip-text",
         "update-btn-border": "themes.solarized-light.update-btn-border",
         "update-btn-text": "themes.solarized-light.update-btn-text",
-        "form-field-hint": "themes.solarized-light.form-field-hint"
+        "form-field-hint": "themes.solarized-light.form-field-hint",
+        "search-match-bg": "themes.solarized-light.search-match-bg"
       },
       "retained": {},
       "type": "light"

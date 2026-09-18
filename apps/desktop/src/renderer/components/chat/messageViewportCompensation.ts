@@ -43,3 +43,14 @@ export function rememberedItemIntrinsicSize(
     return undefined;
   return `auto ${height}px`;
 }
+
+/** Null-rendering cards do not occupy a DOM index. Match the stable render key. */
+export function findRenderItemElement(
+  container: HTMLElement | null | undefined,
+  key: string | undefined,
+): HTMLElement | undefined {
+  if (!container || !key) return undefined;
+  return Array.from(container.children).find(
+    (element) => element.getAttribute('data-render-item-key') === key,
+  ) as HTMLElement | undefined;
+}

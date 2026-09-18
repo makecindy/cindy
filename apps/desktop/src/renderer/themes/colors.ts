@@ -426,12 +426,20 @@ const GENERATED_DEFAULTS = {
     "dark": "0 0% 45%"
   },
   "search-match-bg": {
-    "light": "53 100% 89%",
-    "dark": "40 33% 16%"
+    "light": "45 100% 70%",
+    "dark": "40 55% 21%"
   },
   "search-match-fg": {
     "light": "0 0% 15%",
     "dark": "0 0% 90%"
+  },
+  "search-match-active-bg": {
+    "light": "34 100% 55%",
+    "dark": "42 100% 65%"
+  },
+  "search-match-active-fg": {
+    "light": "0 0% 10%",
+    "dark": "0 0% 10%"
   },
   "update-btn-border": {
     "light": "#d4d4d4",
@@ -2298,8 +2306,10 @@ registerColor('sidebar-item-active-border', GENERATED_DEFAULTS["sidebar-item-act
 registerColor('sidebar-search-bg', GENERATED_DEFAULTS["sidebar-search-bg"], 'Light Surface');
 registerColor('sidebar-muted', GENERATED_DEFAULTS["sidebar-muted"], 'Stone #737373');
 registerColor('sidebar-action-icon', GENERATED_DEFAULTS["sidebar-action-icon"], 'Silver #a3a3a3 — hover action icons');
-registerColor('search-match-bg', GENERATED_DEFAULTS["search-match-bg"], '#fff8c5 — Primer attention-muted');
+registerColor('search-match-bg', GENERATED_DEFAULTS["search-match-bg"], 'Search matches - distinct from surrounding content surfaces');
 registerColor('search-match-fg', GENERATED_DEFAULTS["search-match-fg"], 'Near-black #262626 — text inherit');
+registerColor('search-match-active-bg', GENERATED_DEFAULTS["search-match-active-bg"], 'Current search match - stronger than other matches');
+registerColor('search-match-active-fg', GENERATED_DEFAULTS["search-match-active-fg"], 'Current search match text and outline on the gold fill');
 
 // UpdateBanner — Relaunch button (White Pill variant)
 registerColor('update-btn-border', GENERATED_DEFAULTS["update-btn-border"], 'Border Light — per docs/design-rules/cindy-design-system.md White Pill');

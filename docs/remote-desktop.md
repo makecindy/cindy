@@ -197,15 +197,15 @@ both sides. Duplicate candidates are applied once. A timed-out exchange does
 not tear down healthy video; polling is bounded to 30 seconds. SDP, candidate
 addresses, credentials and desktop content are not added to logs.
 
-| Phase | Bound |
-| --- | --- |
-| Desktop source enumeration | 2 seconds with native capture, 5 seconds otherwise |
-| Desktop offer command | 18 seconds |
-| Remote-desktop invoke | 30 seconds; other invoke channels are unchanged |
-| Viewer waiting for answer | 25 seconds |
-| ICE checks after answer | 15 seconds |
-| Temporary media disconnect | 5-second grace period |
-| Automatic media retries | 1, 3 and 8 seconds; restored after 30 seconds connected |
+| Phase                      | Bound                                                   |
+| -------------------------- | ------------------------------------------------------- |
+| Desktop source enumeration | 2 seconds with native capture, 5 seconds otherwise      |
+| Desktop offer command      | 18 seconds                                              |
+| Remote-desktop invoke      | 30 seconds; other invoke channels are unchanged         |
+| Viewer waiting for answer  | 25 seconds                                              |
+| ICE checks after answer    | 15 seconds                                              |
+| Temporary media disconnect | 5-second grace period                                   |
+| Automatic media retries    | 1, 3 and 8 seconds; restored after 30 seconds connected |
 
 On a transient disconnect the viewer keeps the picture, releases held input and
 shows the existing reconnecting badge. Input uses the existing authorized invoke
@@ -410,10 +410,13 @@ remote desktop reconnects with fresh dimensions. The shared relay and other
 peer links remain untouched. Windows/Linux display mode changes are currently
 unavailable and are not advertised.
 
-System PiP is offered only when WebKit reports support for this video and the
-native presentation module and host backgroundViewing capability are present.
+System PiP requires the native presentation module and host backgroundViewing
+capability. New iOS binaries use AVKit readiness; browser receivers require WebKit
+support for the video. Native automatic entry is armed in the foreground after the
+first frame, with host authorization completed in parallel during Home entry.
 Entering releases control. A capture-renderer challenge/pong heartbeat renews
-only a view-only lease while the viewer reports actual system PiP presentation.
+only a view-only lease after host authorization while the viewer reports actual
+system PiP presentation.
 Closing PiP, closing WebRTC, local disconnect, revocation and the ordinary finite
 lease timeout all terminate background viewing. This does not grant indefinite
 background control or extend the lifetime of unrelated device links.
@@ -486,7 +489,6 @@ Remaining platform adapters are explicitly separate:
 The macOS pre-login and Linux service adapters remain unimplemented. The remote business protocol and shared relay are unchanged. Recovery
 affects only this desktop lease/video track, not other connected peers.
 
-
 ### Windows system service (implementation awaiting Windows runtime validation)
 
 Packaged Windows builds include a native SCM service, a Main-only Node-API pipe
@@ -522,7 +524,6 @@ Windows display-mode changes and pre-login/unattended post-reboot control are no
 implemented. Linux remains deferred. Do not present this as fully validated
 Windows support or advertise high-frame-rate secure capture.
 
-
 ### Keyboard clipboard actions
 
 The keyboard's leading clipboard button opens two actions in both phone and
@@ -553,7 +554,6 @@ retain clipboard history or log its contents. Opt-in synchronization is describe
 TypeScript and native compilation checks cover this implementation. Keyboard/menu
 interaction, application-specific selection support, and physical-phone transfer
 have not been exercised; manual verification remains with the user.
-
 
 ### Portable clipboard content
 
@@ -655,7 +655,6 @@ Checked: desktop/mobile types, native compilation, a bounded read-only native
 capture returning cursor geometry/raster metadata. Real phone gestures,
 application-by-application cursor transitions and sustained frame rate remain
 for manual verification.
-
 
 ## Clipboard and connection handoff
 

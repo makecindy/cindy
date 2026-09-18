@@ -129,6 +129,50 @@ describe('remote desktop authority and lifecycle', () => {
       }
     },
   );
+  it('keeps only a live view-only presentation across signaling loss', async () => {
+    const h = harness();
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+    h.controller.signalingLost('other-phone');
+    h.controller.signalingLost('phone');
+    h.controller.signalingLost();
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    for (let i = 0; i < 10; i++) {
+      h.advance(10_000);
+      h.controller.viewHeartbeat(lease);
+      h.controller.tick();
+    }
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    h.advance(12_000);
+    h.controller.tick();
+    expect(h.deps.stopVideo).toHaveBeenCalledOnce();
+  });
+
+  it('does not preserve foreground control or revoked presentations when signaling disappears', async () => {
+    const foreground = harness();
+    const { lease } = await foreground.start();
+    await foreground.controller.request('phone', { op: 'control', lease, enabled: true });
+    foreground.controller.signalingLost('phone');
+    expect(foreground.deps.stopVideo).toHaveBeenCalledOnce();
+    const revoked = harness();
+    const presentation = await revoked.start();
+    await revoked.controller.request('phone', { op: 'presentation', lease: presentation.lease, enabled: true });
+    revoked.revoke();
+    revoked.controller.signalingLost('phone');
+    revoked.controller.viewHeartbeat(presentation.lease);
+    expect(revoked.deps.stopVideo).toHaveBeenCalled();
+  });
+
+  it('explicit disconnect still stops a presentation after signaling loss', async () => {
+    const h = harness();
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+    h.controller.signalingLost('phone');
+    h.controller.stopByUser();
+    h.controller.viewHeartbeat(lease);
+    expect(h.deps.stopVideo).toHaveBeenCalledOnce();
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow('DESKTOP_STOPPED');
+  });
   it('does not publish selected geometry or resume control before it is observed', async () => {
     const h = harness();
     h.deps.displayModes = async () => [

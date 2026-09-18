@@ -99,11 +99,19 @@ vi.mock('@/components/sidebar/MobileDownloadDialog', () => ({
 }));
 
 import { UserInfoSection } from '@/components/sidebar/UserInfoSection';
+import { toast } from '@/lib/toast';
+
+vi.mock('@/lib/toast', () => ({
+  toast: { loading: vi.fn(() => 'progress-toast'), dismiss: vi.fn(), error: vi.fn() },
+}));
 
 beforeEach(() => {
+  vi.mocked(toast.loading).mockClear();
+  vi.mocked(toast.dismiss).mockClear();
+  vi.mocked(toast.error).mockClear();
   confirm.mockReset().mockResolvedValue(true);
   runningSnapshot.clear();
-  navigate.mockClear();
+  navigate.mockReset();
   authState.user = { name: 'Cindy user', avatar: null };
   authState.mode = 'cloud';
   authState.dataOwnerId = 'owner-a';
@@ -223,12 +231,95 @@ describe('UserInfoSection mobile download entry', () => {
     });
 
     expect(await screen.findByRole('menuitem', { name: /Other user/ })).toBeTruthy();
+    expect(screen.getByText('sidebar.accountSwitcher.current')).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: /Cindy user/ }).getAttribute('aria-disabled')).toBe(
       'true',
     );
 
     await userEvent.click(screen.getByRole('menuitem', { name: /Other user/ }));
     await waitFor(() => expect(switchAccount).toHaveBeenCalledWith('other'));
+  });
+
+  it('explains a loaded shared-data restriction without mislabeling the loading state', async () => {
+    const saved = await listAccounts();
+    let resolveList!: (value: typeof saved) => void;
+    listAccounts.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      }),
+    );
+    syncAccounts.mockResolvedValue({ ...saved, mutationAllowed: false });
+    render(<UserInfoSection isCollapsed={false} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      key: 'Enter',
+    });
+    expect(screen.queryByText('sidebar.accountSwitcher.sharedDataRestriction')).toBeNull();
+
+    await act(async () => resolveList({ ...saved, mutationAllowed: false }));
+    expect(await screen.findByText('sidebar.accountSwitcher.sharedDataRestriction')).toBeTruthy();
+    const other = screen.getByRole('menuitem', { name: /Other user/ });
+    expect(other.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(other);
+    expect(switchAccount).not.toHaveBeenCalled();
+    expect(toast.loading).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'keeps progress visible after menu dismissal and clears it on completion (failure=%s)',
+    async (failure) => {
+      let resolveSwitch!: () => void;
+      let rejectSwitch!: (reason: Error) => void;
+      switchAccount.mockReturnValueOnce(
+        new Promise<void>((resolve, reject) => {
+          resolveSwitch = resolve;
+          rejectSwitch = reject;
+        }),
+      );
+      render(<UserInfoSection isCollapsed={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+        key: 'Enter',
+      });
+      await userEvent.click(await screen.findByRole('menuitem', { name: /Other user/ }));
+      await waitFor(() =>
+        expect(toast.loading).toHaveBeenCalledWith('sidebar.accountSwitcher.switching'),
+      );
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(toast.dismiss).not.toHaveBeenCalled();
+
+      await act(async () => {
+        if (failure) rejectSwitch(new Error('switch failed'));
+        else resolveSwitch();
+      });
+      expect(toast.dismiss).toHaveBeenCalledWith('progress-toast');
+      if (failure) expect(toast.error).toHaveBeenCalledWith('sidebar.accountSwitcher.switchFailed');
+      else expect(toast.error).not.toHaveBeenCalled();
+      fireEvent.keyDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+        key: 'Enter',
+      });
+      expect(
+        (await screen.findByRole('menuitem', { name: /Other user/ })).getAttribute('aria-disabled'),
+      ).not.toBe('true');
+    },
+  );
+
+  it('does not report switching while confirmation is pending or cancelled', async () => {
+    runningSnapshot.set('running-session', { isRunning: true });
+    let resolveConfirm!: (confirmed: boolean) => void;
+    confirm.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveConfirm = resolve;
+      }),
+    );
+    render(<UserInfoSection isCollapsed={false} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      key: 'Enter',
+    });
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Other user/ }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    expect(toast.loading).not.toHaveBeenCalled();
+    await act(async () => resolveConfirm(false));
+    expect(toast.loading).not.toHaveBeenCalled();
+    expect(switchAccount).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -385,5 +476,27 @@ describe('UserInfoSection mobile download entry', () => {
     await waitFor(() =>
       expect(navigate).toHaveBeenCalledWith('/add-account', { state: { returnTo: '/' } }),
     );
+    expect(toast.loading).not.toHaveBeenCalled();
+  });
+
+  it('reports navigation failure and re-enables the sign-in entry', async () => {
+    authState.user = null;
+    authState.mode = 'local';
+    navigate.mockRejectedValueOnce(new Error('navigation failed'));
+    render(<UserInfoSection isCollapsed={false} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      key: 'Enter',
+    });
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'login.signIn' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('sidebar.accountSwitcher.startFailed'),
+    );
+    expect(toast.loading).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'sidebar.user.moreLabel' }), {
+      key: 'Enter',
+    });
+    expect(
+      (await screen.findByRole('menuitem', { name: 'login.signIn' })).getAttribute('aria-disabled'),
+    ).not.toBe('true');
   });
 });

@@ -10,6 +10,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       ? root.getElementById(id)
       : root.querySelector("#" + id);
   const { net, iceServers } = config;
+  let nativeVideoActive = false;
   const validKeys = new Set(config.keyCodes);
   const transform =
     /* BEGIN TRANSFORM */
@@ -321,6 +322,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     return null;
   }
   function paintBackground() {
+    if (nativeVideoActive) {
+      if (bg) bg.style.display = "none";
+      return;
+    }
     if (!bg || !bgCanvas || !bgContext) return;
     const vw = stage.clientWidth,
       vh = stage.clientHeight;
@@ -611,6 +616,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }
   function render() {
     const r = layout();
+    if (config.nativeMedia && epoch)
+      post({
+        type: "nativeViewport",
+        fillHeight,
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+      });
     const touchFeedback = control && mode === "touch" && touchCursorVisible;
     const cursorX = mode === "touch" && touchCursor ? touchCursor.x : cx;
     const cursorY = mode === "touch" && touchCursor ? touchCursor.y : cy;
@@ -1753,6 +1767,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         });
         break;
       case "presentation":
+        if (config.nativeMedia) {
+          release();
+          showKeyboard(false);
+          break;
+        }
         try {
           if (message.enabled) {
             release();
@@ -1793,7 +1812,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         }
         video.muted = !message.audio;
         retries = 0;
-        connect();
+        if (!config.nativeMedia) connect();
         break;
       case "keyboard":
         showKeyboard(message.enabled === true);
@@ -1806,8 +1825,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         break;
       case "theme":
         if (/^#[0-9a-f]{3,8}$/i.test(message.surface)) {
-          document.body.style.background = message.surface;
-          document.documentElement.style.background = message.surface;
+          document.body.style.background = config.nativeMedia
+            ? "transparent"
+            : message.surface;
+          document.documentElement.style.background = config.nativeMedia
+            ? "transparent"
+            : message.surface;
           document.documentElement.style.setProperty(
             "--surface",
             message.surface,
@@ -1970,6 +1993,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         break;
       }
       case "init":
+        nativeVideoActive = false;
+        image.style.visibility = "visible";
         viewerSized = false;
         followRest = null;
         cursorNeedsEntry = true;
@@ -1992,7 +2017,17 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         trickleIce = message.trickleIce === true;
         retries = 0;
         render();
-        connect();
+        if (!config.nativeMedia) connect();
+        break;
+      case "nativeVideo":
+        if (!config.nativeMedia || message.epoch !== epoch) break;
+        nativeVideoActive = message.active === true;
+        image.style.visibility = nativeVideoActive ? "hidden" : "visible";
+        paintBackground();
+        break;
+      case "nativeCursor":
+        if (config.nativeMedia && message.epoch === epoch)
+          receiveCursor(message.cursor);
         break;
       case "viewport":
         fillHeight = message.fillHeight === true;
@@ -2064,6 +2099,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           sending = false;
         break;
       case "stop":
+        nativeVideoActive = false;
+        image.style.visibility = "visible";
         showKeyboard(false);
         control = false;
         release();

@@ -30,8 +30,17 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
 
 describe('session runtime control wiring', () => {
   it('replays Windows attention after the main window is shown independently of inventory loading', () => {
-    const body = handlerBody(bootstrapSource, "mainWindow.once('ready-to-show'", 'if (!app.isPackaged) markDesktopDevWindowReady();');
-    expect(body.indexOf('refreshWindowsAppBadge();')).toBeGreaterThan(body.indexOf('showMainWindowAndRestoreFullscreen('));
+    const body = handlerBody(
+      bootstrapSource,
+      "mainWindow.once('ready-to-show'",
+      'void runComputerUseSmokeIfRequested();',
+    );
+    const shown = body.indexOf('showMainWindowAndRestoreFullscreen(');
+    const badge = body.indexOf('refreshWindowsAppBadge();');
+    expect(shown).toBeGreaterThan(-1);
+    expect(badge).toBeGreaterThan(shown);
+    expect(body.indexOf('markDesktopDevWindowReady();')).toBeGreaterThan(badge);
+    expect(body).toContain('if (!app.isPackaged || isCindyVersionLaunchPending()) markDesktopDevWindowReady();');
   });
   it('advertises host-side model-window protection to remote controllers', () => {
     const capabilities = handlerBody(
@@ -254,7 +263,7 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('const persistOnly = !sess');
     expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, nextRoot)');
     expect(registerSource).toContain(
-      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId))',
+      'const storedExtraDirs = await readSessionExtraDirsFromDb(target.sessionId)',
     );
     const applyLibrary = handlerBody(
       registerSource,

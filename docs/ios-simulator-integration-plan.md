@@ -59,7 +59,7 @@
 - 已实现 ownership、lease、generation、跨 Session 占用拒绝、每设备 Agent grant、精确 UDID 生命周期与 10 分钟 grace 语义。
 - 已实现固定 WDA 源码归档随包、校验解包、按 source/Xcode/runtime/arch 缓存的构建与进程管理；Xcode 计划使用 `-quiet` 保持有界日志。
 - 已实现稳定 element ID、旧 screen snapshot 拒绝、每实例输入串行、操作后 snapshot 失效和 bounded MJPEG 自动重连。
-- 已实现 Generic Xcode 与 Cindy Mobile project adapter；App artifact 绑定当前 worktree/实例，不向 MCP 或 renderer 暴露本地路径、端口和原始 Xcode 输出。
+- 已实现 Generic Xcode 与 Cindy Mobile project adapter；`build_app.projectDir` 可显式选择任务目录外的本地工程或 worktree，省略时每次回到当前任务目录。App artifact 记录实际构建目录，并继续绑定当前任务的实例；不向 MCP 或 renderer 暴露本地绝对路径、端口和原始 Xcode 输出。
 - 显式截图/录屏已接入 `cindy-media` Session 引用；stop/detach 会终止活动录屏并清理临时目录，transient frame 始终只在内存。
 - 已实现 Session 级有界 diagnostics store，以及全局串行 start、soft limit 2、hard limit 4、内存余量拒绝的 resource scheduler。
 - build 与 open URL 使用逐次审批，设备 mutation 使用 per-device grant，两类权限不能互相替代。
@@ -989,7 +989,7 @@ MVP 规则：
 | `detach_device`           | 停止 stream、解除 pane viewer，不等于 shutdown       |
 | `start_instance`          | boot、等待 ready、连接 driver                        |
 | `stop_instance`           | 安全停止并释放资源                                   |
-| `build_app`               | 经 Session permission mode 构建并返回 diagnostics ID |
+| `build_app`               | 经 Session permission mode 从可选 `projectDir` 构建并返回 artifact / diagnostics ID |
 | `install_app`             | 安装已验证来源的 `.app`                              |
 | `launch_app`              | 启动 bundle，支持受控 args/env                       |
 | `terminate_app`           | 停止当前 bundle                                      |
@@ -1016,6 +1016,34 @@ MVP 规则：
 | `take_simulator_screenshot` | 显式持久化模拟设备截图到 `cindy-media`             |
 | `start_recording`         | 开始显式录屏                                         |
 | `stop_recording`          | 停止并摄入 `cindy-media`                             |
+
+`build_app.projectDir` 接受本地绝对目录或相对当前任务目录的路径，Host 以 realpath
+解析并检查目录存在。`containerPath` 相对所选目录解析，仍必须位于该目录内；显式目录
+不改变任务身份、设备 route 或设备控制授权。每次调用独立选择来源，不保存“上次目录”。
+DerivedData / SPM 以实际来源目录、架构、container 分组；artifact 保留来源目录，
+Cindy Mobile 启动时也对该来源执行 Metro 检查。返回的 project 摘要只含目录名、目录
+fingerprint 和相对 container 路径；该 fingerprint 不代表 Git revision 或源码内容。
+
+构建和 Metro 检查借用现有 worktree runtime lease 保护所选托管目录。本进程的回收事件
+会取消正在使用该目录的操作，实际读取结束后才释放租约；跨进程回收也必须等待租约释放。
+模拟器借用会同时发布 profile 内租约和 `appData/Cindy/shared-worktree-runtime-leases`
+中的共享副本，回收器合并读取两处，避免隔离 profile 之间看不到对方的借用；释放失败
+沿用 `.release` 回执重试，进程退出本身不能证明 Xcode 或 Metro 已停止读取。
+借用前还在同一资源锁内，经 `appData/Cindy/shared-worktree-recycle-journals` 登记的日志位置
+读取各 profile 对该目录的原始回收记录；当前目录处于待回收、快照、删除或恢复阶段时，
+在发布租约前拒绝构建/启动，避免使用残缺目录或阻挡 owner 恢复。完成的记录或旧目录身份
+不阻止新目录使用。日志监听启动时登记既有日志，写入新意图前也必须完成登记；共享索引
+只保存日志位置，不复制状态、不改变原 profile 的日志格式和恢复归属。
+兼容尚未读取共享租约的旧版回收方：借用时还在资源锁内验证 linked worktree 的 Git
+元数据和反向链接，并创建或沿用源目录外的 `<commonGitDir>/worktrees/<id>/locked`。
+旧版删除与池化复用均已检查该 Git 标准锁；构建脚本在源目录内执行 `git clean -fdx`
+不会移除保护。用户已有或后来修改/替换的锁不会被删除；Host 自建锁只在最后一个共享
+借用者结束、文件身份与内容仍匹配时移除。元数据不匹配、位于源目录内或锁发布失败时，
+不开始源目录 I/O；清理失败通过共享 `.release` 回执重试，旧回执仍按原身份清理旧标记，
+异常退出留下的租约继续保护旧版回收路径。
+日志预检只读取已登记 profile 的原始日志；profile 内租约副本保留原读取协议。
+任务 A 结束时排空自己的操作，不因其构建了 B 就把 B 加入 A 的目录删除范围。
+这仍是工程选择与目录边界校验，不是对 Xcode build scripts 的文件系统沙箱。
 
 ### 13.1.1 稳定性扩展工具与动作契约
 

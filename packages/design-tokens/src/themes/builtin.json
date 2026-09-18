@@ -4720,7 +4720,7 @@
       },
       "search-match-fg": {
         "$type": "color",
-        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY_HSL}"
+        "$value": "{reference.themes.solarized-light.value-search-match-fg}"
       },
       "secondary": {
         "$type": "color",
@@ -4809,6 +4809,10 @@
       "form-field-hint": {
         "$type": "color",
         "$value": "{reference.themes.solarized-light.palette-HINT_TEXT}"
+      },
+      "search-match-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-search-match-bg}"
       }
     }
   }

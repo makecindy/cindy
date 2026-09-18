@@ -70,6 +70,25 @@ let trackedInstance: { filePath: string; record: DesktopDevInstanceRecord } | nu
 let mainWindowReady = false;
 let applicationReady = false;
 let startupSettled = false;
+let startupResult: boolean | undefined;
+const startupResultListeners = new Set<(ready: boolean) => void>();
+/** Local version handoff consumes the existing auth + database + window readiness contract. */
+export function observeDesktopStartupResult(listener: (ready: boolean) => void): () => void {
+  if (startupResult !== undefined) listener(startupResult);
+  else startupResultListeners.add(listener);
+  return () => startupResultListeners.delete(listener);
+}
+function publishDesktopStartupResult(ready: boolean): void {
+  startupResult = ready;
+  for (const listener of startupResultListeners) {
+    try {
+      listener(ready);
+    } catch {
+      // A diagnostic observer must never affect startup.
+    }
+  }
+  startupResultListeners.clear();
+}
 
 function atomicWriteJson(filePath: string, value: unknown): void {
   atomicWriteFileSync(filePath, `${JSON.stringify(value)}\n`);
@@ -132,6 +151,7 @@ export async function beginDesktopDevInstance(
   mainWindowReady = false;
   applicationReady = false;
   startupSettled = false;
+  startupResult = undefined;
   const pid = options.pid ?? process.pid;
   const startedAtMs = options.startedAtMs ?? Date.now();
   const record: DesktopDevInstanceRecord = {
@@ -204,6 +224,7 @@ function settleDesktopDevReadyIfPossible(): void {
   updateExternalStartupStatus('ready', {
     instance: trackedInstance?.record ?? null,
   });
+  publishDesktopStartupResult(true);
 }
 
 /** Record that the main BrowserWindow can render, without claiming the database is ready. */
@@ -287,4 +308,5 @@ export function markDesktopDevStartupFailed(
   const failure = { code, message, ...(detail ? { detail } : {}) };
   updateTrackedInstance('failed', failure);
   updateExternalStartupStatus('failed', { code, message, ...(detail ? { detail } : {}) });
+  publishDesktopStartupResult(false);
 }

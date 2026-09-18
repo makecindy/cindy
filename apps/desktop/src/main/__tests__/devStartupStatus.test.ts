@@ -11,6 +11,7 @@ import {
   markDesktopDevWindowReady,
   recordDesktopDevAuthStartupResult,
   recordDesktopDevLocalDbStartupResult,
+  observeDesktopStartupResult,
 } from '../devStartupStatus.js';
 import { withLocalProfileMigrationStartupBarrier } from '../localProfileDataMigration.js';
 
@@ -52,7 +53,10 @@ describe('devStartupStatus', () => {
       startedAtMs: 100,
     });
 
+    const ready = vi.fn();
+    observeDesktopStartupResult(ready);
     markDesktopDevWindowReady();
+    expect(ready).not.toHaveBeenCalled();
 
     expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toMatchObject({
       state: 'window-ready',
@@ -63,6 +67,7 @@ describe('devStartupStatus', () => {
     ))).toMatchObject({ state: 'starting' });
 
     markDesktopDevReady();
+    expect(ready).toHaveBeenCalledExactlyOnceWith(true);
 
     const external = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
     const persistent = JSON.parse(fs.readFileSync(

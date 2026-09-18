@@ -883,6 +883,26 @@
           "$value": "{reference.defaults.search-match-fg.dark}"
         }
       },
+      "search-match-active-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-bg.dark}"
+        }
+      },
+      "search-match-active-fg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-fg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-fg.dark}"
+        }
+      },
       "update-btn-border": {
         "light": {
           "$type": "color",

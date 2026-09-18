@@ -805,6 +805,7 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   const base = [
     'resources/icon.png',
     'resources/cindy-source.json',
+    'resources/cindy-version-protocol.json',
     // Input bytes for upgrading retired preset avatars to ordinary managed images.
     'resources/legacy-teammate-avatars',
     'resources/teammate-portrait-gallery.png',
@@ -1771,6 +1772,12 @@ const config: ForgeConfig = {
           entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
           config: 'vite.contacts-sync-codec-worker.config.ts',
           // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/worktree/recoveryArchiveWorker.ts',
+          config: 'vite.recovery-archive-worker.config.ts',
+          // Physical ASAR bytes belong in recovery archives; isolate noAsar from main.
           target: 'preload',
         },
         {

@@ -12,6 +12,8 @@
 
 ## 2026-09
 
+- **09-18 搜索命中层级（Issue #4650，用户授权实施）**：全局 Ctrl+F 普通与当前命中原本同色，且两模式底色与内容表面接近。增强普通命中，新增当前命中的独立金色背景与深色文字；全局保留下划线，文件预览与编辑器保留描边，统一消费搜索语义 token。旧 ID 与显式主题覆盖保留。方向授权不等于最终实机验收。落点：`DESIGN.md §10`、`themes/colors.ts`、颜色冻结快照与 `searchHighlightContrast.test.ts`。
+
 - **09-17（撤销 CINDY placeholder 降对比度）**：用户明确要求撤销提交 `7bf645447cf9ae8feeffb781220d44aab79cde45`。CINDY Light / Dark 的 `text-placeholder` 恢复为 `#6B6B67` / `#C1C1C1`，DTCG 数值源、内置主题与独立冻结预期同步恢复；取代 09-16 降低占位文字显著程度的决定。09-16 原记录作为历史保留，Cindy Make 与后续 Switch 改动不受影响。现行规则见 `DESIGN.md §4 / §15`；本条不代表 Light/Dark 实机视觉验收。
 
 - **09-16（Switch 亮滑块与轻微形变）**：用户确认 HTML 并要求应用到当前 Cindy Switch。CINDY Dark 的开/关滑块统一为 `#FCFCFC`，开启轨道沿用蓝色 `#417CDD`；新增 `switch-thumb-on`，默认跟随旧 `background`，保留其他主题与用户覆盖。参考 Fluid Functionalism 后，用户认为压缩过大，将按压由 20×12 收敛到 18×14、悬停由 18×16 收敛到 17×16，静止仍为 16×16；沿用 Cindy 150ms 缓动和 80ms 轨道变色，无过冲、无阴影。共享 Desktop 组件支持拖动，保留 Radix 的 ref、checked/defaultChecked、键盘与表单回调；禁用与减少动态效果适配。规范见 `DESIGN.md §14.4 / §15.17`。本次为独立有意可见变化，DS-10 #4427 已合并，DS-11 #4455 的远端内容不在本次修改范围。

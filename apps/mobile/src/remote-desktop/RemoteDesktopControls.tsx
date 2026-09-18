@@ -48,6 +48,7 @@ import {
 export function RemoteDesktopControls({
   connected,
   controlling,
+  viewOnly = !controlling,
   controlDisabled,
   inputMode,
   displays,
@@ -68,6 +69,7 @@ export function RemoteDesktopControls({
   connected: boolean;
   security?: RemoteDesktopSecuritySettingsProps;
   controlling: boolean;
+  viewOnly?: boolean;
   controlDisabled: boolean;
   inputMode: "touch" | "pointer";
   displays: RemoteDesktopDisplay[];
@@ -81,6 +83,7 @@ export function RemoteDesktopControls({
     canRotate: boolean;
     canPip: boolean;
     canAudio: boolean;
+    enabled?: boolean;
     onRotate(): void;
     onPip(): void;
   };
@@ -108,7 +111,11 @@ export function RemoteDesktopControls({
   const currentDisplay = displays.find((display) => display.id === displayId);
   const canChooseDisplay = connected && displays.length > 1;
   const nativeDisplayMenu = canChooseDisplay && usesNativePullDownMenu();
-  const hint = !controlling ? "viewOnlyHint" : `${inputMode}Hint`;
+  const hint = viewOnly
+    ? "viewOnlyHint"
+    : !controlling
+      ? "controlUnavailableHint"
+      : `${inputMode}Hint`;
   const displayLabel = (display: RemoteDesktopDisplay, index: number) =>
     display.name?.trim() ||
     t("remoteDesktop.displayNumber", { number: index + 1 });
@@ -137,13 +144,14 @@ export function RemoteDesktopControls({
       icon: Eye,
       onPress: onViewOnly,
       disabled: controlDisabled,
-      selected: connected && !controlling,
+      selected: connected && viewOnly,
     },
     {
       key: "smallWindow",
       icon: PictureInPicture2,
       onPress: presentation.onPip,
-      disabled: !presentation.canPip || !connected,
+      disabled: !presentation.enabled && (!presentation.canPip || !connected),
+      selected: presentation.enabled,
     },
   ];
 
@@ -161,6 +169,11 @@ export function RemoteDesktopControls({
                 testID={`remoteDesktop.${key}`}
                 accessibilityRole="button"
                 accessibilityLabel={t(`remoteDesktop.${key}`)}
+                accessibilityHint={
+                  key === "smallWindow"
+                    ? t("remoteDesktop.backgroundRunningHint")
+                    : undefined
+                }
                 accessibilityState={{ disabled, selected }}
                 disabled={disabled}
                 onPress={onPress}
@@ -188,6 +201,12 @@ export function RemoteDesktopControls({
             ),
           )}
         </View>
+      )}
+
+      {!displaySettings && (
+        <Text style={styles.hint}>
+          {t("remoteDesktop.backgroundRunningHint")}
+        </Text>
       )}
 
       {!displaySettings && (
@@ -244,7 +263,12 @@ export function RemoteDesktopControls({
               importantForAccessibility="no-hide-descendants"
               style={{ flexDirection: "row", opacity: 0 }}
             >
-              {["touchHint", "pointerHint", "viewOnlyHint"].map((key) => (
+              {[
+                "touchHint",
+                "pointerHint",
+                "viewOnlyHint",
+                "controlUnavailableHint",
+              ].map((key) => (
                 <Text
                   key={key}
                   style={[styles.hint, { width: "100%", flexShrink: 0 }]}

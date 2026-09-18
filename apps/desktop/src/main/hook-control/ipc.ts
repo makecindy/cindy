@@ -194,8 +194,7 @@ async function drainCodexMcpRefreshForSlackAvailability(): Promise<void> {
     while (codexMcpRefreshPending) {
       codexMcpRefreshPending = false;
       try {
-        await restartCodexAfterAuthModeChange();
-        await shutdownCodexEnvironment();
+        await restartCodexAfterAuthModeChange(shutdownCodexEnvironment);
         log.info('Codex MCP environment refreshed after Slack provider availability changed', {
           enabled: latestSlackToolProviderEnabled,
         });

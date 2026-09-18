@@ -31,7 +31,7 @@ it('retains realpath boundaries when listing without presentation filters', asyn
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'complete-dir-'));
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'complete-outside-'));
   roots.push(root, outside);
-  await fs.symlink(outside, path.join(root, 'link'));
+  await fs.symlink(outside, path.join(root, 'link'), 'junction');
   expect(await listDir(root, '')).toEqual([]);
   await expect(listDir(root, 'link')).rejects.toThrow('escapes');
 });

@@ -8,6 +8,8 @@ import type {
   RemoteDesktopIceReply,
   DesktopIceServer,
 } from '@cindy/device-link';
+// Initial capture plus three lease-scoped audio retries; also bounds Main's grant.
+export const DESKTOP_AUDIO_RETRY_MS = [3_000, 10_000, 30_000] as const;
 export const DESKTOP_LOCAL = {
   STATE: 'remote-desktop:state',
   ENABLE: 'remote-desktop:enable',

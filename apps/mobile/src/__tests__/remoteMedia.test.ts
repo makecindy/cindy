@@ -3,6 +3,7 @@ import {
   canPreviewResolvedRemoteMedia,
   formatRemoteMediaSize,
   isDesktopLocalMediaUrl,
+  isDirectPreviewableMediaUrl,
   isResolvedRemoteMediaFresh,
   localCopyResolvedMedia,
   REMOTE_MEDIA_NEVER_EXPIRES,
@@ -10,6 +11,14 @@ import {
 } from "@/session/remoteMedia";
 
 describe("mobile remote media", () => {
+  it("accepts inline audio and video data URLs for the media player", () => {
+    expect(isDirectPreviewableMediaUrl("https://example.com/a.mp4")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:image/png;base64,aaa")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:audio/mpeg;base64,aaa")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:video/mp4;base64,aaa")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:text/plain;base64,aaa")).toBe(false);
+  });
+
   it("recognizes desktop-local media schemes only", () => {
     expect(isDesktopLocalMediaUrl("xdt-image://cache/a.png")).toBe(true);
     expect(isDesktopLocalMediaUrl("xdt-video://cache/a.mp4")).toBe(true);
@@ -180,6 +189,28 @@ describe("mobile remote media", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith("xdt-image://cache/a.png", {
       thumbnail: true,
     });
+    expect(presignGet).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["audio", "audio/mpeg"],
+    ["video", "video/mp4"],
+  ] as const)("turns inline %s bytes into a player-accepted data URL", async (kind, mimeType) => {
+    const inlineBase64 = "aGVsbG8=";
+    const fetchRemoteMedia = vi.fn(async () => ({
+      ossKey: "",
+      mimeType,
+      size: 5,
+      inlineBase64,
+    }));
+    const presignGet = vi.fn();
+    const resolved = await resolveMobileRemoteMedia(
+      { kind, url: `cindy-media://blobs/${"a".repeat(64)}.bin` },
+      { fetchRemoteMedia, presignGet },
+    );
+    expect(resolved.url).toBe(`data:${mimeType};base64,${inlineBase64}`);
+    expect(isDirectPreviewableMediaUrl(resolved.url)).toBe(true);
+    expect(resolved.previewable).toBe(true);
     expect(presignGet).not.toHaveBeenCalled();
   });
 

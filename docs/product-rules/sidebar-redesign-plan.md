@@ -232,7 +232,7 @@
 |---|---|---|
 | 最近活动时间 | **勾** | 现状行为 |
 | PR 状态 | | 状态 icon + 等宽 `#号`(与顶栏 PrChip 同款,2026-08-12 用户裁决):状态颜色只上在 icon 上(形状 + 颜色双编码,四态见 `gitContextPrVisuals`;open 绿按表面取 `#2EA043` / `#3FB950`,2026-08-17);`#号` 文字用信息槽常规灰;open/draft 且有未解决 review thread 时 icon 右上角 5px `--status-bar-accent` 静点;文字状态放 hover;无 PR 的任务不显示不占位 |
-| worktree | | Folders 图标,不写短名;默认不勾。仅本机 Desktop。侧栏只认 Cindy 官方 store(共享快照);打开中的任务才回溯遥测,短名在聊天框底部 `仓库 (worktree)`。SSH / device-link / Mobile 不显示。外部 observed 不可从侧栏 reveal。目录没了摘标。 |
+| worktree | | Folders 图标,不写短名;默认不勾。仅本机 Desktop。侧栏与卡片共享 Cindy 官方登记和工具调用识别出的存活 Worktree;打开任务及工具消息落库后按需回溯遥测,不在列表挂载时逐行扫描 Git。识别结果在切换任务后保留于当前窗口,短名在聊天框底部 `仓库 (worktree)`。SSH / device-link / Mobile 不显示。外部 observed 不进入托管登记或回收,不可从侧栏 reveal。重新探测确认目录没了摘标。实现与回归见 `sessionWorktreeInfo.ts`、`worktreeContextRecycleRefresh.test.tsx`。 |
 | 累计 token | | `1.4M` / `320k` 缩写,无单位 |
 | 费用 | | 按 `totalCostCurrency` 显示 $/¥;无数据(如订阅模式)留空 |
 

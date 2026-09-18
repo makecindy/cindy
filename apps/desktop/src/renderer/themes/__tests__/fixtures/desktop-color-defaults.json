@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 547,
+  "count": 549,
   "colors": [
     {
       "id": "surface",
@@ -579,13 +579,23 @@
     },
     {
       "id": "search-match-bg",
-      "light": "53 100% 89%",
-      "dark": "40 33% 16%"
+      "light": "45 100% 70%",
+      "dark": "40 55% 21%"
     },
     {
       "id": "search-match-fg",
       "light": "0 0% 15%",
       "dark": "0 0% 90%"
+    },
+    {
+      "id": "search-match-active-bg",
+      "light": "34 100% 55%",
+      "dark": "42 100% 65%"
+    },
+    {
+      "id": "search-match-active-fg",
+      "light": "0 0% 10%",
+      "dark": "0 0% 10%"
     },
     {
       "id": "update-btn-border",

@@ -219,6 +219,12 @@ export interface AutomationGroupChildViewOptions {
    * —— 与组头红点、项目折叠头红点同一份判据。
    */
   alertSessionIds?: ReadonlySet<string>;
+  /**
+   * 展开态折叠的追加豁免集合(只影响折叠),语义同 SessionEntryList 的同名 prop:
+   * 父层把 device-link 远程活动镜像并进来,保证项目行 / 对话组 / 设备段头聚合灯
+   * 为之点亮的远程子运行不会藏在「显示全部」后(review P2)。
+   */
+  foldExemptSessionIds?: ReadonlySet<string>;
 }
 
 /**
@@ -281,7 +287,17 @@ export function getAutomationGroupChildView(
     const frozenSessions = options.frozenVisibleSessionIds
       .map((sessionId) => byId.get(sessionId))
       .filter((session): session is Session => Boolean(session));
-    return withoutOverflow(frozenSessions);
+    // 冻结只固定已点选布局，不能藏住后来变为运行/未读的本地或远程子运行。
+    const visibleIds = new Set(frozenSessions.map((session) => session.id));
+    const visibleSessions = [
+      ...frozenSessions,
+      ...allRuns.filter((session) => !visibleIds.has(session.id) &&
+        (options.notifications.has(session.id) ||
+          options.runningSessionIds?.has(session.id) ||
+          options.foldExemptSessionIds?.has(session.id))),
+    ];
+    const hiddenCount = allRuns.length - visibleSessions.length;
+    return { visibleSessions, isOverflowing: hiddenCount > 0, totalCount: allRuns.length, hiddenCount };
   }
 
   // 默认展开态:全部运行套用普通对话同款折叠,每条(含被组头代表的最新一条)各自成行。
@@ -296,7 +312,8 @@ export function getAutomationGroupChildView(
     isActiveEntry: (session) => session.id === options.activeSessionId,
     hasAttentionEntry: (session) =>
       options.notifications.has(session.id) ||
-      (options.runningSessionIds?.has(session.id) ?? false),
+      (options.runningSessionIds?.has(session.id) ?? false) ||
+      (options.foldExemptSessionIds?.has(session.id) ?? false),
   });
   return {
     visibleSessions: [...view.visibleEntries],

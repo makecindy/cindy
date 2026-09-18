@@ -891,3 +891,4 @@ describe('Cindy Make task runtime', () => {
     expect(harness.send).not.toHaveBeenCalled();
   });
 });
+vi.mock('../historyCapture.js', () => ({ captureMakeHistoryReport: vi.fn() }));

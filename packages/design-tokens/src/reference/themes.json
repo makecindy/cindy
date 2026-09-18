@@ -9764,6 +9764,48 @@
               "alpha": false
             }
           }
+        },
+        "value-search-match-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "hsl",
+            "components": [
+              45,
+              100,
+              62
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "triplet",
+              "precision": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "value-search-match-fg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "hsl",
+            "components": [
+              0,
+              0,
+              35
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "triplet",
+              "precision": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
         }
       }
     }
