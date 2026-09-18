@@ -2245,8 +2245,8 @@ pub(crate) fn capture_install_dir_identity(path: &Path) -> io::Result<InstallDir
     }
     Ok(InstallDirIdentity {
         is_reparse: is_reparse_point(path),
-        device: file_device(&meta),
-        inode: file_inode(&meta),
+        device: file_device(path, &meta),
+        inode: file_inode(path, &meta),
     })
 }
 
@@ -2577,27 +2577,52 @@ fn path_grants_access(path: &Path, desired_access: u32, flags: u32) -> Option<bo
 }
 
 #[cfg(unix)]
-fn file_device(meta: &fs::Metadata) -> u64 {
+fn file_device(_path: &Path, meta: &fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     meta.dev()
 }
 
 #[cfg(unix)]
-fn file_inode(meta: &fs::Metadata) -> u64 {
+fn file_inode(_path: &Path, meta: &fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     meta.ino()
 }
 
 #[cfg(windows)]
-fn file_device(meta: &fs::Metadata) -> u64 {
-    use std::os::windows::fs::MetadataExt;
-    meta.volume_serial_number().unwrap_or(0) as u64
+fn file_device(path: &Path, _meta: &fs::Metadata) -> u64 {
+    file_identity_windows(path).map(|(device, _)| device).unwrap_or(0)
 }
 
 #[cfg(windows)]
-fn file_inode(meta: &fs::Metadata) -> u64 {
-    use std::os::windows::fs::MetadataExt;
-    meta.file_index().unwrap_or(0)
+fn file_inode(path: &Path, _meta: &fs::Metadata) -> u64 {
+    file_identity_windows(path).map(|(_, inode)| inode).unwrap_or(0)
+}
+
+// 注意：不能用 std 的 `MetadataExt::volume_serial_number()` / `file_index()`——它们
+// 仍在不稳定的 `windows_by_handle` 特性后面，stable 工具链编译不过（E0658）。
+// 这里改走公开 Win32 API `GetFileInformationByHandle`，字段与那两个方法一一对应
+// （dwVolumeSerialNumber / nFileIndexHigh|Low）；查询失败时回 0（与旧实现
+// unwrap_or(0) 的取值一致）。目录需要 FILE_FLAG_BACKUP_SEMANTICS 才能打开句柄。
+#[cfg(windows)]
+fn file_identity_windows(path: &Path) -> Option<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+
+    let handle = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .ok()?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle() as _, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    let index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+    Some((info.dwVolumeSerialNumber as u64, index))
 }
 
 #[cfg(windows)]
@@ -2605,11 +2630,10 @@ fn directory_owned_by_current_user_windows(app_dir: &Path) -> Option<bool> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+        TokenUser,
     };
-    use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
-    };
+    use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let wide: Vec<u16> = app_dir
