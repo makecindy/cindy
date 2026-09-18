@@ -934,12 +934,14 @@ import {
   CredentialModeSwitchBusyError,
   isCredentialModeSwitchBusyError,
   isLocalSessionBusy,
+  shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
 import {
   applyRuntimeSetModelChange,
   refreshActiveModelContextSettings,
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
+  type ApplyRuntimeSetModelChangeResult,
 } from './runtimeSetModel.js';
 import {
   codexCustomProviderConfigSignature,
@@ -16111,6 +16113,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
         }
       }
+      // 本地 Pi 路由变化是否会退役 live runtime:与 applyRuntimeSetModelChange 的关闭判定
+      // 同源(Orca worker 强制重建 / proxy 身份跨越 / 同 route 配置重载)。退役后没有 live
+      // runtime 可以做 #3601 的终态窗口核验,窗口保护事务必须在关闭前完成;其余 Pi 路由
+      // 变化维持「先切换、再按实际窗口核验/保护」的既有流程。
+      let piRouteChangeRetiresRuntime = false;
+      if (runtimeAgentKind === 'pi' && runtimeRouteChanged && !runtimeStatus.remoteHostId) {
+        piRouteChangeRetiresRuntime =
+          rebuildLiveOrcaWorker ||
+          shouldCloseSessionForCredentialSwitch({
+            agentKind: 'pi',
+            remoteHostId: runtimeStatus.remoteHostId,
+            currentProviderId,
+            nextProviderId: targetRouteProviderId,
+            currentModel: currentRuntimeModel ?? model,
+            nextModel: model,
+          }) ||
+          (await liveSessionBeforeRouteChange?.requiresModelSwitchRebuild?.(model, {
+            providerId: targetRouteProviderId,
+          })) === true;
+      }
       let targetContextWindow: number | undefined;
       let currentContextWindow: number | undefined;
       let verifiedCurrentWindow: number | undefined;
@@ -16242,7 +16264,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         if (
           !modelSwitchPlan.skipRebuild &&
-          runtimeAgentKind !== 'pi' &&
+          (runtimeAgentKind !== 'pi' || piRouteChangeRetiresRuntime) &&
           typeof targetContextWindow === 'number' &&
           targetContextWindow > 0 &&
           !targetDoesNotShrink
@@ -16440,7 +16462,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
       };
       try {
-        const result = routeExplicit
+        const result: ApplyRuntimeSetModelChangeResult = routeExplicit
           ? await applyRuntimeSetModelChange({
               maker,
               sessionId,
@@ -16455,7 +16477,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               forceSessionRebuild:
                 rebuildLiveOrcaWorker ||
                 (atomicSelection?.effort === null && runtimeAgentKind !== 'pi'),
-              ...(runtimeAgentKind === 'pi' && runtimeRouteChanged
+              ...(runtimeAgentKind === 'pi' && runtimeRouteChanged && !piRouteChangeRetiresRuntime
                 ? {
                     assertSessionCloseSupported: () => {
                       throwIpcError(
@@ -16493,11 +16515,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return { deferred: false, superseded: true };
         }
         const piSessionAfterRouteChange = maker.getSession(sessionId);
+        // apply 已按预期退役旧 runtime 时(本地 Pi 跨 proxy 身份等),没有 live runtime
+        // 可读终态窗口;目标 route 已提交,下一次发送按新来源懒创建。这里只跳过「活进程
+        // 快照核验」:需要缩窗保护的替换已在关闭前走 prepareModelWindowSwitch。
+        const runtimeRetiredForRouteChange =
+          result.status !== 'deferred' && result.runtimeRetired === true;
         if (
           runtimeAgentKind === 'pi' &&
           runtimeRouteChanged &&
           result.status !== 'deferred' &&
-          !modelWindowRebuilt
+          !modelWindowRebuilt &&
+          !runtimeRetiredForRouteChange
         ) {
           if (!piSessionAfterRouteChange) {
             restoreControlStores();

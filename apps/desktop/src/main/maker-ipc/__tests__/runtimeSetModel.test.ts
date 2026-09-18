@@ -713,7 +713,7 @@ describe('applyRuntimeSetModelChange', () => {
       codexAuthInjection: 'oauth-bearer',
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', runtimeRetired: true });
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
@@ -750,7 +750,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'deepseek',
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', runtimeRetired: true });
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('deepseek');
@@ -956,7 +956,7 @@ describe('applyRuntimeSetModelChange', () => {
       registerPendingCredentialSwitch: vi.fn(),
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', runtimeRetired: true });
     expect(closeSession).toHaveBeenCalledTimes(1);
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(getSessionProvider(sessionId)).toBe('xd');
@@ -1141,7 +1141,7 @@ describe('applyRuntimeSetModelChange', () => {
       wakeSessionInputQueue,
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', runtimeRetired: true });
     // clear 必须不带唤醒(否则 drain 趁 close 窗口把队首派发到旧会话),
     // 唤醒在 close + 写路由完成之后。
     expect(order).toEqual(['clear-no-wake', 'close', 'wake']);
@@ -1185,7 +1185,7 @@ describe('applyRuntimeSetModelChange', () => {
         expect(opts).toEqual({ wake: false });
       }),
       wakeSessionInputQueue,
-    })).resolves.toEqual({ status: 'applied' });
+    })).resolves.toEqual({ status: 'applied', runtimeRetired: true });
 
     expect(order).toEqual(['close', 'route', 'wake']);
     expect(closeSession).toHaveBeenCalledOnce();
@@ -1261,7 +1261,7 @@ describe('applyRuntimeSetModelChange', () => {
         providerId: toProvider,
         clearPendingCredentialSwitch: vi.fn(),
         wakeSessionInputQueue: vi.fn(),
-      })).resolves.toEqual({ status: 'applied' });
+      })).resolves.toEqual({ status: 'applied', runtimeRetired: true });
 
       expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
       expect(setModel).not.toHaveBeenCalled();
@@ -1357,7 +1357,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(closeSession).not.toHaveBeenCalled();
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { model: 'same-model', providerId: 'xd', forceSessionRebuild: true });
     busy = false;
-    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'applied' });
+    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'applied', runtimeRetired: true });
     expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
@@ -1391,7 +1391,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'xd',
       forceSessionRebuild: true,
       clearPendingCredentialSwitch: vi.fn(),
-    })).resolves.toEqual({ status: 'applied' });
+    })).resolves.toEqual({ status: 'applied', runtimeRetired: true });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
@@ -1423,7 +1423,7 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'gpt-5.6-sol',
       providerId: 'mygpt',
       clearPendingCredentialSwitch: vi.fn(),
-    })).resolves.toEqual({ status: 'applied' });
+    })).resolves.toEqual({ status: 'applied', runtimeRetired: true });
 
     expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
       providerId: 'mygpt',
@@ -1464,7 +1464,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'mygpt',
       requiresCodexThreadRelink: true,
       relinkCodexThread,
-    })).resolves.toEqual({ status: 'applied', persistedRoute: true });
+    })).resolves.toEqual({ status: 'applied', persistedRoute: true, runtimeRetired: true });
 
     expect(order).toEqual(['close', 'relink']);
     expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
