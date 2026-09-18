@@ -1425,6 +1425,14 @@ if (isWin) {
   makers.unshift(
     new MakerNSIS({
       getAppBuilderConfig: async () => ({
+        // electron-builder 只把 directories.buildResources 加进 NSIS 的 !addincludedir
+        // 搜索路径（见 app-builder-lib NsisTarget: 有自定义 include 时
+        // addIncludeDir(packager.info.buildResourcesDir)）。resources/installer.nsh 里
+        // 的相对 include（installer-directory.nsh，553816b98 引入）就靠它解析；不设这里
+        // 时 buildResources 落在 <project>/build（不存在），makensis 报
+        // !include: could not find: "installer-directory.nsh"。
+        // 与 apps/desktop/scripts/check-windows-installer.mjs 的 buildResources 对齐。
+        directories: { buildResources: path.join(__dirname, 'resources') },
         // NSIS installer(Setup.exe)与 uninstaller(Uninstall <App>.exe)的签名。
         // 这是签卸载器的唯一入口(Issue #998):uninstaller 由 NSIS 编译期两遍生成后
         // 嵌入 installer,postPackage 阶段还不存在、也没有独立成品文件可事后补签,
