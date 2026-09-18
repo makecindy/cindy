@@ -8021,8 +8021,11 @@
       },
       "unified": {
         "railFavorites": "收藏",
+        "railRecent": "最近",
         "railAll": "全部",
         "favoritesGroup": "收藏",
+        "recentGroup": "最近",
+        "recentEmpty": "还没有最近使用——选一个模型后，它会出现在这里",
         "favoritesEmpty": "还没有收藏——把鼠标停到模型行上，点 ☆ 存到这里",
         "addFavorite": "存为收藏",
         "customize": "自定义",

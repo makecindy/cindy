@@ -16,8 +16,10 @@ import { cn } from '@/lib/utils';
 import { modelPriceDiscountLabelValues, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
+import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import { useModelFavorites, type ModelFavoriteItem } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
+import { useRecentModels, type RecentModelItem } from '@/state/recentModels';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
@@ -61,6 +63,7 @@ const RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
 /** 定宽 sizer 的行不接交互。 */
 const noop = (): void => {};
 const NO_FAVORITES: readonly ModelFavoriteItem[] = [];
+const NO_RECENT: readonly RecentModelItem[] = [];
 
 export interface UnifiedSelectedRow {
   /** 该行**生效**引擎(推荐 ⊕ override ⊕ 会话内 pinnedEngine ⊕ 收藏副本)。 */
@@ -131,6 +134,14 @@ export interface UnifiedModelPanelProps {
   onPaymentRequired?: () => void;
   /** false = 只选模型,不出配置浮层(设置类入口的 configurationEnabled)。 */
   configurationEnabled?: boolean;
+  /**
+   * 选择真的应用成功后,把该模型记进「最近使用」(见 state/recentModels 的语义边界)。
+   * **默认关**:统一面板被对话之外的入口(定时任务 / IM 默认 / Bot / Hook / Worker /
+   * 子代理 / 设置页)共用,那些入口的选择是配置动作,不是「用这个模型跑过活」。只有
+   * 对话侧的两个入口(ChatInput 的新任务草稿与会话内)显式开启,且远程(SSH /
+   * device-link)不传 —— 被控端目录的模型写进本机列表只会得到一行永远不可路由的记录。
+   */
+  recordRecentUsage?: boolean;
   isRouteDisabled?: (providerId: string, modelId: string, agent: AgentKind) => boolean;
   /**
    * official = 模型优先的受限入口。忽略全局引擎偏好、模型记忆和收藏配置，
@@ -284,6 +295,7 @@ export function UnifiedModelPanel({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   configurationEnabled = true,
+  recordRecentUsage = false,
   selectionPolicy = 'personalized',
   deviceId,
   isRouteDisabled,
@@ -302,6 +314,10 @@ export function UnifiedModelPanel({
   const storedFavorites = useModelFavorites();
   const remoteFavorites = useRemoteModelFavorites(deviceId);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES : deviceId ? remoteFavorites.items : storedFavorites;
+  const storedRecentModels = useRecentModels();
+  // official 入口(设置页 / create-agent)刻意不展示「最近」:那里的选择动作不记录(见
+  // `recordRecentUsage`)也不该被个人流水影响 —— 与收藏区同一条策略门。
+  const recentModels = selectionPolicy === 'official' ? NO_RECENT : storedRecentModels;
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。
   const enginePrefsVersion = useModelEnginePrefsVersion();
@@ -450,14 +466,15 @@ export function UnifiedModelPanel({
   const configOf = useCallback(
     (
       entry: UnifiedModelEntry,
-      favorite?: ModelFavoriteItem,
+      /** 配置副本条目(收藏 / 最近)—— 只读它自存的引擎 / 深度 / Fast。 */
+      copy?: ModelConfigCopy,
       // 定宽 sizer 量的是「全部」视图,必须按那条轨解析,不能继承当前 effectiveRail
       // (否则兼容行被钉成 π 后量到更窄的三元组,切「全部」再弹宽)。
       railForConfig: UnifiedRailFilter = effectiveRail,
     ): UnifiedRowConfig => {
-      // 收藏条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
-      if (favorite) {
-        return resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable });
+      // 收藏 / 最近条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
+      if (copy) {
+        return resolveFavoriteRowConfig({ entry, item: copy, agentFastModeCapable });
       }
       // 两个版本号只作重算触发器:store 是模块级单例,值本身不进依赖。
       void enginePrefsVersion;
@@ -555,7 +572,7 @@ export function UnifiedModelPanel({
    * configOf 把显示/点选钉在轨引擎,这里不钉 —— 否则排序键全变成当前轨,优先/兼容段塌掉。
    */
   const effectiveEngineOf = useCallback(
-    (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedEngine => {
+    (entry: UnifiedModelEntry, favorite?: ModelConfigCopy): UnifiedEngine => {
       if (favorite) {
         // 收藏行引擎 = 副本自存引擎(掉出候选回落推荐)。不传 agentFastModeCapable:
         // 它只影响 fast/fastCapable,不影响 engine。
@@ -592,6 +609,7 @@ export function UnifiedModelPanel({
       buildUnifiedListSections({
         entries,
         favorites,
+        recentModels,
         query,
         matchesQuery: (entry, q) => matchesModelName({
           id: entry.modelId, displayName: entry.displayName, description: entry.description,
@@ -603,7 +621,7 @@ export function UnifiedModelPanel({
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
+    [entries, favorites, recentModels, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId],
   );
 
   // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
@@ -736,13 +754,40 @@ export function UnifiedModelPanel({
   const isSelectedRow = useCallback(
     (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
       if (anchor.kind === 'fav') return false;
+      // 最近行 = 配置副本:选中态按**整份配置**核对(同模型不同档位各占一行,不能都打上
+      // 选中底色)。与收藏锚点同一条判据,只是没有 uid、以副本身份为锚点。
+      if (anchor.kind === 'recent') {
+        const item = recentModels.find(
+          (candidate) => modelConfigCopyIdentity(candidate) === anchor.key,
+        );
+        return (
+          !!item &&
+          favoriteMatchesSelection({
+            entry,
+            item,
+            selected,
+            agent: liveEngineAgent,
+            effort: selectedEffort,
+            fast: fastMode,
+            agentFastModeCapable,
+          })
+        );
+      }
       // 会话 / 草稿存的是 wire id;按「行 id 或任一引擎 wire id 命中」解析(合并行契约)。
       return (
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === anchor.providerId)
       );
     },
-    [selected.modelId, selected.providerId],
+    [
+      agentFastModeCapable,
+      fastMode,
+      liveEngineAgent,
+      recentModels,
+      selected.modelId,
+      selected.providerId,
+      selectedEffort,
+    ],
   );
 
   /** ☆ 点亮 0.7s 后恢复(规格 §1.5:源头行不持有收藏态,只给一次动作反馈)。 */
@@ -771,6 +816,7 @@ export function UnifiedModelPanel({
   } = useUnifiedRowActions({
     favoriteStore: deviceId ? remoteFavorites.store : undefined,
     interactionDisabled,
+    recordRecentUsage,
     isLiveRow,
     // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值,以及收藏 live 判定
     // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
@@ -799,9 +845,9 @@ export function UnifiedModelPanel({
     // 「按这份收藏副本解析该行」——与收藏行渲染(configOf 的 favorite 分支)走**同一个**
     // resolveFavoriteRowConfig:编辑选中收藏的引擎时,新引擎的 wire id / 档位回落 / Fast
     // 能力必须与编辑完之后行上显示的那一份逐字一致(详见 useUnifiedRowActions)。
-    // uid 在这里无意义(解析只看配置),给空串占位。
+    // uid 在这里无意义(解析只看配置),配置副本类型直接兼容收藏条目。
     resolveFavoriteConfig: (entry, favorite) =>
-      resolveFavoriteRowConfig({ entry, item: { uid: '', ...favorite }, agentFastModeCapable }),
+      resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable }),
     // 「该行没有收藏语境时的默认配置」:引擎 = 推荐 ⊕ 用户 override ⊕ 会话 pinned(与
     // configOf 的模型行分支同一套合成,少给一路就会算出一个用户从没见过的引擎),
     // **刻意不传 memoryEffort / memoryFast** —— 回落的是「该模型的默认」,不是用户上次在
@@ -862,13 +908,15 @@ export function UnifiedModelPanel({
   };
 
   /**
-   * 小节标题:收藏 / 供应商分组(Chris 2026-08-13 裁决:按供应商,不按模型家族;
-   * 组名与模型设置页同一套 providerLabel)。
+   * 小节标题:收藏 / 最近 / 推荐 / 供应商分组(Chris 2026-08-13 裁决:按供应商,
+   * 不按模型家族;组名与模型设置页同一套 providerLabel)。
    */
   const sectionLabel = (section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
-      : section.kind === 'recommended'
+      : section.kind === 'recent'
+        ? t('newChat.modelSelector.unified.recentGroup')
+        : section.kind === 'recommended'
         ? t('newChat.modelSelector.unified.recommended')
       : section.group
         ? providerLabel(section.group.providerId)
@@ -876,6 +924,16 @@ export function UnifiedModelPanel({
 
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
+
+  /**
+   * 行 L2 显示 provider 来源而不是模型描述(2026-09-16 实测裁决)。
+   * 收藏 / 最近 / 全部三个视图一致:它们都是「跨来源的快捷清单」,行上必须说清
+   * 这一条是哪家供的(同名模型跨来源价格不同);单来源视图(供应商轨)不需要重复来源。
+   */
+  const showsSourceRow =
+    effectiveRail.kind === 'all' ||
+    effectiveRail.kind === 'recent' ||
+    effectiveRail.kind === 'favorites';
 
   /**
    * 行内价格的派生(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
@@ -947,13 +1005,14 @@ export function UnifiedModelPanel({
         ? buildUnifiedListSections({
             entries,
             favorites,
+            recentModels,
             query: '',
             rail: RAIL_ALL,
             effectiveEngineOf,
             providerOrder,
           })
         : [],
-    [widthSizerActive, entries, favorites, effectiveEngineOf, providerOrder],
+    [widthSizerActive, entries, favorites, recentModels, effectiveEngineOf, providerOrder],
   );
 
   const panelContent = (
@@ -1052,10 +1111,12 @@ export function UnifiedModelPanel({
           {deviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t('newChat.modelSelector.unified.favoritesSyncFailed')}</div> : null}
           {!hasRows ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
-              {/* ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;★ 常驻后必经)。 */}
-              {effectiveRail.kind === 'favorites' && !query.trim()
+              {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
+              {!query.trim() && effectiveRail.kind === 'favorites'
                 ? t('newChat.modelSelector.unified.favoritesEmpty')
-                : t('newChat.modelSelector.search.noResults')}
+                : !query.trim() && effectiveRail.kind === 'recent'
+                  ? t('newChat.modelSelector.unified.recentEmpty')
+                  : t('newChat.modelSelector.search.noResults')}
             </div>
           ) : (
             sections.map((section) => (
@@ -1073,25 +1134,57 @@ export function UnifiedModelPanel({
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
-                  const config = configOf(row.entry, row.favorite);
+                  const config = configOf(row.entry, row.favorite ?? row.recent);
                   const key = anchorKey(row.anchor);
                   const priceDisplay = priceDisplayOf(row.entry, config);
+                  /**
+                   * 最近行按**解析后的整份配置**匹配收藏(2026-09-16 裁决:最近也是配置副本):
+                   * 同一来源 + 同一模型下,引擎 / 深度 / Fast 解析后一致就点亮星标;
+                   * 点星把它存进收藏 / 从收藏里移除。
+                   * 前两维(来源 + 模型)必须先圈定(2026-09-16 review P0):只看三元组的话,
+                   * 另一个型号的收藏只要引擎 / 深度 / Fast 巧合一致就会被误命中,点星删掉的是
+                   * 用户根本没点的那条收藏。三元组用**解析值**而不是存储字面量比:两边都可能是
+                   * 「跟随推荐」的缺省字段 —— 按字面量会比出「一边有 effort、一边没有」的假不匹配。
+                   */
+                  const matchingFavorite = row.recent
+                    ? favorites.find((favorite) => {
+                        if (favorite.providerId !== row.entry.providerId) return false;
+                        if (!entryMatchesModelId(row.entry, favorite.modelId)) return false;
+                        const favoriteConfig = resolveFavoriteRowConfig({
+                          entry: row.entry,
+                          item: favorite,
+                          agentFastModeCapable,
+                        });
+                        return (
+                          favoriteConfig.engine === config.engine &&
+                          favoriteConfig.effort === config.effort &&
+                          favoriteConfig.fast === config.fast
+                        );
+                      })
+                    : undefined;
+                  const recentRow = !!row.recent;
+                  // 最近行本身不持有收藏态:命中的收藏就是它的星标与**选中锚点**
+                  // (点击=按这份副本配置应用,同收藏副本语义 —— 带上 uid,锚点/星标才一致)。
+                  const starredFavorite = row.favorite ?? matchingFavorite;
                   return (
                     <UnifiedModelRow
                       key={key}
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
-                      {...(effectiveRail.kind === 'all' || effectiveRail.kind === 'favorites'
+                      {...(showsSourceRow
                         ? { sourceLabel: providerLabel(row.entry.providerId) }
                         : {})}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
-                      isFavoriteRow={!!row.favorite}
+                      isFavoriteRow={!!starredFavorite}
                       justFavorited={justFavorited === key}
                       {...(priceDisplay ? { priceDisplay } : {})}
 
                       configurationEnabled={configurationEnabled}
+                      // 最近行是只读的配置副本(流水账):不在这一页改配置,也没有配置浮层
+                      // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
+                      customizeEnabled={!recentRow}
                       interactionDisabled={
                         interactionDisabled ||
                         actionPending ||
@@ -1107,15 +1200,31 @@ export function UnifiedModelPanel({
                       {...(onPaymentRequired ? { onPaymentRequired } : {})}
                       effortLabelOf={effortLabelOf}
                       providers={providers}
-                      onReveal={revealFlyout}
-                      onRevealForKeyboard={revealFlyoutForKeyboard}
-                      onSelect={() => selectRow(row.anchor, config, row.favorite)}
+                      onReveal={recentRow ? noop : revealFlyout}
+                      onRevealForKeyboard={recentRow ? noop : revealFlyoutForKeyboard}
+                      onSelect={() =>
+                        // 星标行的点击与收藏行同构:带上命中的那条收藏,选中态才不只停在「配置像」上。
+                        selectRow(row.anchor, config, starredFavorite, row.entry)
+                      }
                       onStar={
                         selectionPolicy === 'personalized'
-                          ? () =>
-                              row.favorite
-                                ? removeFavorite(row.anchor, row.entry)
-                                : addFavorite(row.anchor, config)
+                          ? recentRow
+                            ? () =>
+                                matchingFavorite
+                                  ? removeFavorite(
+                                      {
+                                        kind: 'fav',
+                                        uid: matchingFavorite.uid,
+                                        providerId: matchingFavorite.providerId,
+                                        modelId: matchingFavorite.modelId,
+                                      },
+                                      row.entry,
+                                    )
+                                  : addFavorite(row.anchor, config)
+                            : () =>
+                                row.favorite
+                                  ? removeFavorite(row.anchor, row.entry)
+                                  : addFavorite(row.anchor, config)
                           : undefined
                       }
                     />
@@ -1147,7 +1256,7 @@ export function UnifiedModelPanel({
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
-                  const config = configOf(row.entry, row.favorite, RAIL_ALL);
+                  const config = configOf(row.entry, row.favorite ?? row.recent, RAIL_ALL);
                   const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
                     <UnifiedModelRow
@@ -1195,7 +1304,7 @@ export function UnifiedModelPanel({
         >
           {(() => {
             const target = flyTarget;
-            const config = configOf(target.entry, target.favorite);
+            const config = configOf(target.entry, target.favorite ?? target.recent);
             const state: ModelConfigFlyoutState = target.favorite
               ? 'favorite'
               : config.customized

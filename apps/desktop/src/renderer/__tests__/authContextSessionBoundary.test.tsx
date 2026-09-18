@@ -94,6 +94,11 @@ import {
   addModelFavorite,
   listModelFavorites,
 } from '@/state/modelFavorites';
+import {
+  __resetForTest as resetRecentModels,
+  listRecentModels,
+  recordRecentModel,
+} from '@/state/recentModels';
 import { __testing as ssoOrgHistoryTesting } from '@/state/ssoOrgHistory';
 
 function user(id: string) {
@@ -469,13 +474,15 @@ describe('AuthContext session cache boundaries', () => {
    * applyIncomingState,不能自己拼半套 setter —— 漏接任一 owner 分区都会让本地模式
    * 读写上一个身份的数据:跨身份可见,还会把改动写进别人的账号。
    */
-  it('repartitions unified-picker favorites and engine overrides across local mode', async () => {
+  it('repartitions unified-picker favorites, recents and engine overrides across local mode', async () => {
     resetFavorites();
     resetEnginePrefs();
+    resetRecentModels();
     const view = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));
     const cloudUid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
     setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    recordRecentModel({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' }, 1000);
     expect(cloudUid).not.toBe('');
 
     await act(async () => {
@@ -484,12 +491,14 @@ describe('AuthContext session cache boundaries', () => {
     // 本地模式是另一个分区:云端身份存的东西一条都不该露出来。
     expect(listModelFavorites()).toHaveLength(0);
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    expect(listRecentModels()).toHaveLength(0);
     const localUid = addModelFavorite({
       providerId: 'anthropic',
       modelId: 'claude-opus-5',
       agent: 'cc',
     });
     setModelEngineOverride('anthropic', 'claude-opus-5', 'codex');
+    recordRecentModel({ providerId: 'anthropic', modelId: 'claude-opus-5', agent: 'cc' }, 2000);
     expect(listModelFavorites().map((item) => item.uid)).toEqual([localUid]);
 
     mocks.service.exitLocalMode.mockResolvedValue(authState('account-a'));
@@ -500,8 +509,10 @@ describe('AuthContext session cache boundaries', () => {
     expect(listModelFavorites().map((item) => item.uid)).toEqual([cloudUid]);
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
     expect(getModelEngineOverride('anthropic', 'claude-opus-5')).toBeUndefined();
+    expect(listRecentModels().map((item) => item.modelId)).toEqual(['gpt-5.5']);
     resetFavorites();
     resetEnginePrefs();
+    resetRecentModels();
     window.localStorage.clear();
   });
 
