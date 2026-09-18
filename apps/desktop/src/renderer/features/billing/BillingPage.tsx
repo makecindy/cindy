@@ -2360,7 +2360,7 @@ function BillingOfferDialog({
                       }),
                     )}
                     freeAction={t('billing.comparison.topup')}
-                    freeHint={t('billing.comparison.topupUnlock')}
+                    onViewModels={onClose}
                     onFreeAction={() => onTopup?.()}
                   />
                 )}
