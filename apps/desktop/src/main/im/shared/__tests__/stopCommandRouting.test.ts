@@ -276,6 +276,17 @@ describe('messageHandler !stop routing', () => {
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
 
+  it('falls back to a normal turn when pending-question routing fails', async () => {
+    answerPendingQuestion.mockRejectedValueOnce(new Error('session lookup failed'));
+    deliver(makeEvent({ text: 'Alex' }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+
+    expect(answerPendingQuestion).toHaveBeenCalledTimes(1);
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'answerPendingQuestion probe failed (fallback to normal turn): session lookup failed',
+    );
+  });
+
   it('keeps group text on the normal turn path', async () => {
     answerPendingQuestion.mockResolvedValue(true);
     deliver(makeEvent({ text: 'Alex', speaker: { id: 'member', name: 'Alex', isOwner: false } }));

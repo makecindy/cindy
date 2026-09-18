@@ -1418,6 +1418,10 @@ function sanitizeMentionName(value: string): string {
  * 消息文本清洗: 剥掉 @bot 的占位符(`@_user_1` 形态, key 来自 mentions),
  * 其他人的占位符替换为 `@名字`(名字是平台可改字段 — 不可信输入, 控制字符
  * 剥除 + 截断后使用)。text/post 抽出的正文里的占位符同一口径处理。
+ *
+ * 私聊不依赖 botOpenId 来决定是否处理消息；连接刚建立或重连时该身份可能
+ * 还在异步拉取中。这种窗口统一按显示名还原所有 mention，宁可暂时保留
+ * `@Cindy`，也不能把平台的 `@_user_N` 占位符交给模型。
  */
 function resolveMentionPlaceholders(
   text: string,
@@ -1621,10 +1625,9 @@ async function processClaimedMessage(
   }
 
   // 私聊和群聊都使用 @_user_N 占位符；两种消息都要还原显示名。
-  const text =
-    data.message?.mentions && botOpenId
-      ? resolveMentionPlaceholders(parsed.text, data.message.mentions, botOpenId)
-      : parsed.text;
+  const text = data.message?.mentions
+    ? resolveMentionPlaceholders(parsed.text, data.message.mentions, botOpenId ?? '')
+    : parsed.text;
 
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0) {

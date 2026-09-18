@@ -289,18 +289,25 @@ export function createMessageHandler(
 
     // A pending ask blocks this turn. Consume the next ordinary private-chat
     // text as its answer instead of queueing it behind the blocked turn.
-    if (
-      pureTextCommandInput &&
-      !event.speaker &&
-      !notificationSessionId &&
-      (await turnRunner.answerPendingQuestion?.({
-        botContextId: event.contextId,
-        userId: event.senderId,
-        scopeKey: threadScoped ? event.scopeKey : undefined,
-        text: event.text,
-      }))
-    ) {
-      return;
+    //
+    // This is only a routing probe. If its session/database lookup fails, the
+    // message must still follow the normal turn path; otherwise a transient
+    // lookup error silently drops the user's message.
+    if (pureTextCommandInput && !event.speaker && !notificationSessionId) {
+      let answeredPendingQuestion = false;
+      try {
+        answeredPendingQuestion =
+          (await turnRunner.answerPendingQuestion?.({
+            botContextId: event.contextId,
+            userId: event.senderId,
+            scopeKey: threadScoped ? event.scopeKey : undefined,
+            text: event.text,
+          })) ?? false;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`answerPendingQuestion probe failed (fallback to normal turn): ${msg}`);
+      }
+      if (answeredPendingQuestion) return;
     }
 
     const hasContent = event.text.length > 0 || event.attachments.length > 0;

@@ -258,6 +258,21 @@ describe('feishu inbound message dedupe', () => {
     expect(events[0].text).toBe('请把结果发给 @Alex');
   });
 
+  it('bot 身份尚未就绪时，私聊 mention 仍还原显示名而不泄漏占位符', async () => {
+    const events = collectMessages();
+    await connect();
+    wsClient.setBotOpenIdForTest(null);
+
+    await mocks.eventHandlers['im.message.receive_v1'](
+      p2pMessage('请把结果发给 @_user_1', 'om_dm_mention_cold_start', [
+        { key: '@_user_1', id: { open_id: 'ou_colleague' }, name: 'Alex' },
+      ]),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toBe('请把结果发给 @Alex');
+  });
+
   it('sanitizes control characters in private-chat mention names', async () => {
     const events = collectMessages();
     await connect();
