@@ -3275,8 +3275,10 @@ function MessageBubble({
       onResolveRemoteMedia={actions.onResolveRemoteMedia}
     />
   ) : null;
+  const hasPluginInvocations = isUser && actions.showPluginInvocations !== false
+    && Boolean(item.message.pluginInvocations?.length);
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody
+    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || hasPluginInvocations
   );
   // 气泡是纯 View,不承接任何手势:文本选择走正文原生 Text selectable(长按文字就地选择复制),
   // 气泡上不能挂 Pressable——它会参与触摸协商,干扰正文里表格/代码块横向 ScrollView 的拖动。
@@ -3291,10 +3293,10 @@ function MessageBubble({
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
-      {isUser && actions.showPluginInvocations !== false && item.message.pluginInvocations?.length ? (
+      {hasPluginInvocations ? (
         <PluginInvocationHeader
           key={clientId}
-          plugins={item.message.pluginInvocations}
+          plugins={item.message.pluginInvocations!}
           deviceId={actions.remoteDeviceId}
           sessionId={item.message.source.sessionId}
           running={actions.isSessionStreaming === true && clientId === actions.lastUserInputClientId}
