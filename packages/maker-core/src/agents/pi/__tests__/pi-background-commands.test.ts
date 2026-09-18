@@ -193,6 +193,24 @@ describe('PiBackgroundCommands', () => {
     }
   });
 
+  it('kills a command that was asked to stop while it was still starting', async () => {
+    const { manager, updates } = makeManager();
+    // 记录在第一个 await 之前就进了运行表(同步占位),所以 start() 与 stopAll() 可以在
+    // 同一 tick 里先后发生 —— 这正是「用户点全部停止时命令刚在启动」的窗口。
+    const starting = manager.start({
+      taskId: 'stop-during-spawn',
+      command: 'setInterval(function () {}, 1000);',
+      shell: NODE_EVAL_SHELL,
+    });
+    void manager.stopAll({ timeoutMs: 200 });
+    await expect(starting).rejects.toThrow(/stopped before it finished starting/i);
+    // 没发过 running 帧(否则面板会留下一条点了停不掉的僵尸行),也没有进程活着。
+    expect(updates.filter((u) => u.status === 'running')).toEqual([]);
+    // SIGKILL 之后的 'exit' 是异步的:等这条记录从运行表里销账(不等就等于在赌时序)。
+    // 记录必须立刻销账:留在 running 里会占住这个 taskId(同名启动全被拒)并污染快照。
+    expect(manager.list()).toEqual([]);
+  });
+
   it('rejects empty / over-long commands and a failed spawn', async () => {
     const { manager } = makeManager();
     await expect(manager.start({ command: '   ', shell: NODE_EVAL_SHELL }))

@@ -576,21 +576,32 @@ export class PiBackgroundCommands {
       record.resolveNativeExited();
       throw toStartError(error);
     }
-    // dispose(会话关闭 / 账号边界 / 退出)可能在等 'spawn' 期间就把记录按 stopped 收口了:
-    // 终态已经发出、不会再发第二个,所以不能再发 running(否则面板与状态栏永久停在僵尸
-    // running,而 bridge 已经把「已启动」的回执交回模型)。直接杀掉刚起的进程并报失败。
-    if (this.disposed || record.finalized || this.running.get(taskId) !== record) {
+    // 等 'spawn' 期间可能有三种外部决定落在同一条记录上:
+    // ① dispose(会话关闭 / 账号边界 / 退出)——记录已被按 stopped 收口,终态不会再发第二个;
+    // ② stopAll(「全部停止」/ 退出清扫)已经置位 stopRequested —— 用户/会话已经要求停,
+    //    而那时子进程还不存在,killTree 是空打,请求本身只能返回「未确认」;
+    // ③ 记录被同 id 的新启动顶掉。
+    // 任一命中都不能再发 running(否则面板与状态栏停在僵尸 running,而 bridge 已经把
+    // 「已启动」的回执交回模型),也不能让刚产生的进程活下去 —— 用户已经明确不要它了。
+    // 直接 SIGKILL,不走 SIGTERM→2s→SIGKILL:此时无人在等优雅退出,且这条路径可能落在
+    // forceQuit 时序里(unref 升级定时器在主进程 exit 后永不执行)。
+    const stoppedBeforeSpawn = record.stopRequested;
+    if (
+      this.disposed
+      || stoppedBeforeSpawn
+      || record.finalized
+      || this.running.get(taskId) !== record
+    ) {
       record.stopRequested = true;
-      // 直接 SIGKILL,不走 SIGTERM→2s→SIGKILL:能走到这里,说明调用方已经注定拿到
-      // 失败(它的启动回执不会再交付),没有任何消费者在等它优雅退出;而这个分支
-      // 主要发生在 forceQuit 的退出时序里 —— 升级定时器是 unref 的,主进程
-      // process.exit 之后永不执行,只发 SIGTERM 会给「忽略 SIGTERM 的 dev server」
-      // 留下跨版本存活的 detached 进程组(killAllSync 的关门挡不住已通过旧检查、
-      // 正在等 'spawn' 的这一条)。
       this.killTree(record, 'SIGKILL');
-      // 进程可能还活着:交给退出清扫兜底(与 dispose 同一套销账逻辑)。
-      if (!record.exit) this.pendingKills.add(record);
-      throw new Error('Cindy background commands are unavailable in this session.');
+      // 撤下这条从未公告过的记录并把它交给退出清扫兜底(与 dispose 同一套销账逻辑)。
+      this.discardUnannounced(record);
+      // 报错文案要能区分两种原因:被要求停止(用户的意图已经达成)vs 能力不可用。
+      throw new Error(
+        stoppedBeforeSpawn
+          ? 'The background command was stopped before it finished starting.'
+          : 'Cindy background commands are unavailable in this session.',
+      );
     }
     if (stdin && child.stdin) {
       child.stdin.on('error', () => undefined);
@@ -760,6 +771,38 @@ export class PiBackgroundCommands {
       }
       break;
     }
+  }
+
+  /**
+   * 撤下一条**从未对外公告过**的记录(等 'spawn' 期间就被要求停止 / 被顶掉的那条)。
+   *
+   * 与 `finalize` 的唯一区别:不发终态 update —— 它的 running 帧从未发出去,补一个
+   * stopped 帧只会在 UI 里凭空造出一行。但其余记账必须与 finalize 完全一致(离开运行表、
+   * 清定时器、放掉日志与管道句柄),否则记录会永远卡在 running 里:占住这个 taskId 让
+   * 同名启动全部被拒,还会污染 list() 快照。
+   *
+   * 注意 `finalizeFromExit` 对 `!spawned` 恒早退(dispose 已发过终态那条路径依赖它),
+   * 所以这里必须自己销账,不能指望随后的 'exit' 帮忙。
+   */
+  private discardUnannounced(record: RunningCommand): void {
+    if (record.finalized) return;
+    record.finalized = true;
+    if (record.flushTimer) {
+      clearTimeout(record.flushTimer);
+      record.flushTimer = null;
+    }
+    try { record.logStream?.destroy(); } catch { /* 未打开的流无需处理 */ }
+    record.logStream = null;
+    record.stdout?.removeAllListeners();
+    record.stderr?.removeAllListeners();
+    try {
+      record.child?.stdout?.destroy();
+      record.child?.stderr?.destroy();
+    } catch {
+      // 流销毁失败不影响记账。
+    }
+    this.running.delete(record.taskId);
+    if (!record.exit) this.pendingKills.add(record);
   }
 
   private finalizeFromExit(record: RunningCommand): void {

@@ -279,7 +279,12 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    （`record.exit`），不能看 `finalized` —— dispose 会先把记录 finalized（UI 收口）而进程还活着，
    而 `pendingKills` 里的记录全都是 finalized 的；② 它必须同时**关门**（置 `disposed`），
    让在飞的 `start()` 在 post-spawn 复查处被拒并杀树、新来的 start 直接失败，否则「清理快照之后
-   又冒出来一条」永远无法靠信号拦住。
+   又冒出来一条」永远无法靠信号拦住。同一个 post-spawn 复查还必须读 `stopRequested`：等 'spawn'
+   期间用户点了「全部停止」时子进程还不存在（killTree 是空打、请求本身只能返回未确认），若放行，
+   刚起的进程会带着「用户已经要求停止」的状态继续跑。命中复查的那条记录用 `discardUnannounced`
+   销账而不是 `finalize`：它的 running 帧从未发出，补发终态只会在 UI 里凭空造出一行；但离开
+   运行表 / 清定时器 / 放掉管道句柄必须与 finalize 一致，否则记录永远卡在 running 里占住这个
+   taskId（`finalizeFromExit` 对 `!spawned` 恒早退，帮不上忙）。
    更新重启的 async 清扫（`stopAllPiBackgroundCommandsForExit`）要**返回未确认退出的条数**，
    调用方按「> 0 即取消重启、读不到结果也按未确认」fail closed（与 subagent 的复检同口径）：
    确认不了退出的 detached 进程会带着旧版本 env 活到新版本旁边、占着端口与锁。
