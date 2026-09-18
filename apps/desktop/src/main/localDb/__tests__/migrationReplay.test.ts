@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
-import { listMigrations, runMigrationReplay } from '../migrationRunner';
+import { listMigrations, reconcileRenumberedAppliedSchema, runMigrationReplay } from '../migrationRunner';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
@@ -653,6 +653,91 @@ const RENUMBERED_BOT_TABLES_SQL = `
     } finally {
       rmSync(stagedDir, { recursive: true, force: true });
       cleanupDb();
+    }
+  });
+
+  function createRenumberedLineageDb(version: number): {
+    db: Database.Database;
+    cleanup: () => void;
+  } {
+    const { db, cleanup } = createTempDb();
+    db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+    db.prepare(`INSERT INTO migration_meta (key, value) VALUES ('schema_version', ?)`).run(
+      String(version),
+    );
+    db.pragma('foreign_keys = OFF');
+    db.exec(RENUMBERED_BOT_TABLES_SQL);
+    db.pragma('foreign_keys = ON');
+    return { db, cleanup };
+  }
+
+  it('keeps the 0109 bridge column and its values when converging a renumbered lineage past 0109', () => {
+    const { db, cleanup } = createRenumberedLineageDb(110);
+    try {
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(true);
+      expect(columnNames(db, 'bot_direct_messages')).toEqual([
+        'id', 'thread_id', 'sequence', 'sender_bot_id', 'recipient_bot_id', 'sender_session_id',
+        'recipient_session_id', 'delivery_status', 'sender_name', 'recipient_name', 'content',
+        'created_at', 'bridge_session_id',
+      ]);
+      // 重建不得丢 0109 的取值（drizzle schema 声明了这一列）
+      expect(
+        db.prepare('SELECT content, sender_name, recipient_name, bridge_session_id FROM bot_direct_messages').get(),
+      ).toEqual({
+        content: 'legacy content',
+        sender_name: null,
+        recipient_name: null,
+        bridge_session_id: 'bridge-1',
+      });
+      // 幂等
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('restores the 0109 bridge column that an earlier repair dropped', () => {
+    const { db, cleanup } = createRenumberedLineageDb(108);
+    try {
+      // 第一次（首版修复的行为）：版本 108 → 只重建到 0108 形状，bridge 列还没轮到 0109 补
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(true);
+      expect(columnNames(db, 'bot_direct_messages')).not.toContain('bridge_session_id');
+
+      // 0109 跑完之后再启动：列必须被补回来，否则运行时取全列会 no such column
+      db.prepare(`UPDATE migration_meta SET value='110' WHERE key='schema_version'`).run();
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(true);
+      expect(columnNames(db, 'bot_direct_messages')).toContain('bridge_session_id');
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not touch a canonical bot DM table', () => {
+    const { db, cleanup } = createRenumberedLineageDb(110);
+    try {
+      // 先收敛到 canonical 形状，再断言后续启动不再重建（不产额外写入、不动数据）
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(true);
+      const before = db.prepare('SELECT * FROM bot_direct_messages').all();
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(false);
+      expect(db.prepare('SELECT * FROM bot_direct_messages').all()).toEqual(before);
+      expect(columnNames(db, 'bot_direct_messages')).toHaveLength(13);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('leaves the 0109 column to the migration itself while 0109 is still pending', () => {
+    const { db, cleanup } = createRenumberedLineageDb(108);
+    try {
+      expect(reconcileRenumberedAppliedSchema(db)).toBe(true);
+      expect(columnNames(db, 'bot_direct_messages')).toEqual([
+        'id', 'thread_id', 'sequence', 'sender_bot_id', 'recipient_bot_id', 'sender_session_id',
+        'recipient_session_id', 'delivery_status', 'sender_name', 'recipient_name', 'content',
+        'created_at',
+      ]);
+    } finally {
+      cleanup();
     }
   });
 });

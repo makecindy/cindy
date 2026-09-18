@@ -576,13 +576,22 @@ function tableColumnNamesOfAll(db: Database.Database): string[] {
 /**
  * 把重编号血统的 bot_direct_messages 收敛成 0108 执行后的等价结构。
  *
+ * `carryBridgeColumn`：库已经应用过 0109（bridge_session_id）时，重建目标按「0108 列 + 0109 补的列」
+ * 构造并搬运原值；0108 重放路径（0109 还没跑）传 false，保持那一刻的形状。
+ *
  * 不自己开事务：调用方（replay）已在本条 migration 的事务内，且事务中执行
  * `PRAGMA foreign_keys` 会被 SQLite 静默忽略（no-op），不能依赖它关外键检查。
  * 安全前提在函数内自查：无任何其他表外键引用本表时才允许重建。
  */
-function repairRenumberedBotDirectMessages(db: Database.Database): boolean {
+function repairRenumberedBotDirectMessages(
+  db: Database.Database,
+  options: { carryBridgeColumn?: boolean } = {},
+): boolean {
   const existing = tableColumnNames(db, 'bot_direct_messages');
   const canonical = BOT_DIRECT_MESSAGES_CANONICAL_COLUMNS.map(([name]) => name);
+  const target = options.carryBridgeColumn
+    ? [...canonical, BOT_DIRECT_MESSAGES_RENUMBER_MARKER]
+    : canonical;
   const missing = canonical.filter((name) => !existing.includes(name));
   if (missing.length === 0) return false;
   const expectedMissing = ['sender_name', 'recipient_name'];
@@ -606,19 +615,21 @@ function repairRenumberedBotDirectMessages(db: Database.Database): boolean {
     );
   }
 
-  // 只搬运源表确实存在的列：旧 0108 血统在执行本条时还没有 bridge_session_id（由 0109 补），
+  // 只搬运目标表确实存在的列：旧 0108 血统在执行本条时还没有 bridge_session_id（由 0109 补），
   // 而重放 0108 之后重建出来的表也必须保持那一刻的形状，不能提前长出该列。
-  const carriedColumns = canonical.filter((name) => existing.includes(name));
+  const carriedColumns = target.filter((name) => existing.includes(name));
   const insertList = carriedColumns.map((name) => `\`${name}\``).join(', ');
   const selectList = carriedColumns.map((name) => `\`${name}\``).join(', ');
   const createSql =
     'CREATE TABLE `__renumber_bot_direct_messages` (\n' +
     [
       ...BOT_DIRECT_MESSAGES_CANONICAL_COLUMNS.map(([name, type]) => `\t\`${name}\` ${type}`),
+      ...(options.carryBridgeColumn
+        ? [`\t\`${BOT_DIRECT_MESSAGES_RENUMBER_MARKER}\` text`]
+        : []),
       ...BOT_DIRECT_MESSAGES_FOREIGN_KEYS.map((clause) => `\t${clause}`),
     ].join(',\n') +
     '\n)';
-
   db.prepare(createSql).run();
   db.prepare(
     `INSERT INTO \`__renumber_bot_direct_messages\` (${insertList}) SELECT ${selectList} FROM \`bot_direct_messages\``,
@@ -633,7 +644,7 @@ function repairRenumberedBotDirectMessages(db: Database.Database): boolean {
   }
 
   const repaired = tableColumnNames(db, 'bot_direct_messages');
-  if (repaired.join('\u0000') !== canonical.join('\u0000')) {
+  if (repaired.join('\u0000') !== target.join('\u0000')) {
     throw new Error(
       `bot_direct_messages 重编号修复后列序/列集仍未对齐:${repaired.join(', ')}`,
     );
@@ -663,10 +674,28 @@ export function reconcileRenumberedAppliedSchema(
   onWarning?: (event: Record<string, unknown>) => void,
 ): boolean {
   const columns = tableColumnNames(db, 'bot_direct_messages');
+  // 表都不在：不是这条血统（正常 pre-0108 库还没有这张表）。
+  if (columns.length === 0) return false;
+  // 0109 已应用（含被首版修复修过的 live 库）：重建目标必须带上 0109 补的 bridge_session_id，
+  // 否则运行时按 schema.ts 取全列（drizzle 不带字段的 select()）会 no such column。
+  const carryBridgeColumn = readSchemaVersion(db) >= 109;
   // 重编号标志：旧分支已经在 0109 落过 bridge_session_id（正常 pre-0108 库没有这张表/这列）。
-  if (!columns.includes(BOT_DIRECT_MESSAGES_RENUMBER_MARKER)) return false;
-  if (columns.includes('sender_name') && columns.includes('recipient_name')) return false;
-  const repaired = repairRenumberedBotDirectMessages(db);
+  let repaired = false;
+  if (
+    columns.includes(BOT_DIRECT_MESSAGES_RENUMBER_MARKER) &&
+    !(columns.includes('sender_name') && columns.includes('recipient_name'))
+  ) {
+    repaired = repairRenumberedBotDirectMessages(db, { carryBridgeColumn });
+  }
+  // 首版修复重建时丢掉了 0109 的列且无人在此补回：这种库已经是 0108 形状（列值无法恢复），
+  // 补一列空值至少让运行时不再报缺列。
+  if (
+    carryBridgeColumn &&
+    !tableColumnNames(db, 'bot_direct_messages').includes(BOT_DIRECT_MESSAGES_RENUMBER_MARKER)
+  ) {
+    db.prepare('ALTER TABLE `bot_direct_messages` ADD `bridge_session_id` text').run();
+    repaired = true;
+  }
   if (repaired) {
     onWarning?.({ event: 'localDb.migrate.renumberedSchemaConverged', table: 'bot_direct_messages' });
   }
