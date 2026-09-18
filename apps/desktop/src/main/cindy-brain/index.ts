@@ -1,3 +1,4 @@
+import { registerGhostCardRemoteProvider, persistGhostCardWithRemoteChange } from './cardRemoteResource.js';
 import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
 import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
 import { handleRoutineRequest } from './routineSlot.js';
@@ -1811,7 +1812,7 @@ export function getGhostCardService(): GhostCardService {
         return !!g && g.enabled && g.manifest.card !== undefined;
       },
       sanitize: sanitizeGhostCardHtml,
-      persist: (row) => upsertGhostCard(row),
+      persist: persistGhostCardWithRemoteChange,
       broadcast: (payload) => {
         broadcastGhostWindowPush(GHOST_CARD_UPDATED_CHANNEL, payload);
       },
@@ -6418,6 +6419,10 @@ function readLegacyEncryptedSecret(file: string): LegacyMigrationRead<string> {
 }
 
 export function registerGhostIpc(): void {
+  registerGhostCardRemoteProvider((id) => {
+    const ghost = availableGhosts().find((item) => item.manifest.id === id);
+    return ghost ? { name: ghost.manifest.name, iconDataUrl: ghost.iconDataUrl } : undefined;
+  });
   if (ipcRegistered) return;
   ipcRegistered = true;
   const manager = getGhostManager();

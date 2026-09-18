@@ -14,6 +14,11 @@ const tool = (toolName = 'Bash', input: unknown = { command: 'echo hello ' + 'x'
 });
 
 describe('mobile tool projection', () => {
+  it('retains bounded plugin call identity while compacting large arguments', () => {
+    const projected = projectMobileToolMessage(tool('mcp__cindy__ghost_call', { ghost_id: 'art', tool: 'generate', grant_only: false, args: { data: 'x'.repeat(40_000) } })) as ReturnType<typeof tool>;
+    expect(projected.content.input).toEqual({ ghost_id: 'art', tool: 'generate', grant_only: false });
+    expect(bytes(projected)).toBeLessThan(2000);
+  });
   it('keeps stable identity and metadata, replacing a large input with a recoverable reference', () => {
     const original = tool();
     const projected = projectMobileToolMessage(original);
@@ -76,7 +81,7 @@ describe('mobile tool projection', () => {
       _xdt_actions: { jobId: 'job', buttons: [{ label: 'U1', customId: 'u1' }] },
       xdt_audio_tracks: [{ xdt_audio_url: 'cindy-media://blobs/a.mp3', title: 'track' }],
     });
-    expect(projectMobileToolResult(content)).toBe(content);
+    expect(new TextEncoder().encode(projectMobileToolResult(content) as string).byteLength).toBeLessThan(MOBILE_TOOL_RESULT_BYTES);
     expect(extractPayloadToolResultMedia(projectMobileToolResult(content) as string)).toEqual(extractPayloadToolResultMedia(content));
     for (const output of ['x'.repeat(9000) + '\nhttps://example.com/file.pdf',
       '<tool_use_error>' + 'error'.repeat(9000) + '</tool_use_error>',
@@ -85,6 +90,18 @@ describe('mobile tool projection', () => {
       expect(projected).not.toBe(output);
       expect(new TextEncoder().encode(projected).byteLength).toBeLessThanOrEqual(MOBILE_TOOL_RESULT_BYTES);
     }
+  });
+
+  it('preserves plugin fallback assets, nested card refs and summary after large provider output', () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const content = JSON.stringify({ ok: true, result: { providerResponse: 'x'.repeat(50000), xdt_card_id: 'card', note: 'finished' }, xdt_media_produced: [url] });
+    const projected = projectMobileToolResult(content) as string;
+    expect(JSON.parse(projected)).toMatchObject({ xdt_card_id: 'card', note: 'finished', xdt_media_produced: [url] });
+    expect(new TextEncoder().encode(projected).byteLength).toBeLessThan(MOBILE_TOOL_RESULT_BYTES);
+    expect(extractPayloadToolResultMedia(projected)).toMatchObject([{ kind: 'image', url }]);
+    const row = { ...tool(), role: 'tool_result', content };
+    expect(projectMobileToolPush('local-db:messages:created', { message: row })).toEqual({ message: projectMobileMessagePage([row], {})[0] });
+    expect(row.content).toBe(content);
   });
 
   it('removes duplicate result bodies while keeping correlation and failure flags', () => {

@@ -83,7 +83,8 @@ export const REMOTE_MEDIA_NEVER_EXPIRES = "9999-12-31T00:00:00.000Z";
  * 按不同键隔离,查看器取原图不会命中缩略图缓存。
  */
 export type ResolveRemoteMediaFn = (
-  media: Pick<NormalizedToolMedia, "kind" | "url" | "previewable"> & {
+  media: Pick<NormalizedToolMedia, "url" | "previewable"> & {
+    kind: NormalizedToolMedia["kind"] | "file";
     thumbnail?: boolean;
   },
   opts?: {
@@ -103,7 +104,7 @@ export function isDirectPreviewableMediaUrl(url: unknown): url is string {
 }
 
 export function canPreviewResolvedRemoteMedia(
-  kind: NormalizedToolMedia["kind"],
+  kind: NormalizedToolMedia["kind"] | "file",
   mimeType: string,
 ): boolean {
   if (kind === "image") return mimeType.startsWith("image/");
@@ -155,7 +156,7 @@ export function isResolvedRemoteMediaFresh(
 }
 
 export async function resolveMobileRemoteMedia(
-  media: Pick<NormalizedToolMedia, "kind" | "url">,
+  media: { kind: NormalizedToolMedia["kind"] | "file"; url: string },
   deps: MobileRemoteMediaResolverDeps,
   opts?: MobileRemoteMediaResolveOptions,
 ): Promise<MobileResolvedRemoteMedia> {

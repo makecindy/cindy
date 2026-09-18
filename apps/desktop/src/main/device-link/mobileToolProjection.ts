@@ -3,6 +3,9 @@ import { isAgentPlanToolName } from '@cindy/maker-shared/message-render';
 import { isOrcaCommunicationTool } from '@cindy/maker-shared/message-normalize';
 import {
   extractPayloadToolResultMedia,
+  extractPayloadToolResultFiles,
+  extractPayloadToolCardIds,
+  parseToolResultPayload,
   formatPayloadToolUseSummary,
 } from '@cindy/maker-shared/payload-summary';
 
@@ -36,18 +39,31 @@ function exceedsInputBudget(input: unknown): boolean {
   }
 }
 
-/** Preserve structured results and all media/file references until a typed detail projection
- * exists. Cutting JSON or a reference-bearing string would silently remove artifacts. */
+/** Compact large results without cutting presentation references or emitting invalid JSON. */
 export function projectMobileToolResult(content: unknown): unknown {
   if (typeof content !== 'string' || encoder.encode(content).byteLength <= MOBILE_TOOL_RESULT_BYTES) return content;
-  // Keep structured media payloads intact because truncating them can drop an artifact
-  // reference. Plain URLs, action markers, errors, and arbitrary JSON remain bounded.
+  // References take priority over the unrelated provider response.
   try {
-    const parsed: unknown = JSON.parse(content);
-    if (parsed !== null && typeof parsed === 'object' && extractPayloadToolResultMedia(content).length > 0) {
-      return content;
+    if (extractPayloadToolResultMedia(content).length > 0
+      || extractPayloadToolResultFiles(content).length > 0 || extractPayloadToolCardIds(content).length > 0) {
+      const source = parseToolResultPayload(content) ?? {};
+      const projected: Record<string, unknown> = {};
+      // Keep presentation references, not the unrelated multi-MB provider response.
+      // This is a soft budget for assets: never cut JSON or an individual address.
+      for (const [key, value] of Object.entries(source)) {
+        if (/^(?:xdt_(?:image_urls?|video_urls?|audio_urls|audio_tracks|media_produced|card_id|anchor_card_id|images_in_card|audio_in_card)|_xdt_(?:render_image|model_files|actions|audio_tracks))$/.test(key)) projected[key] = value;
+      }
+      for (const key of ['ok', 'status', 'errorCode', 'summary', 'message', 'note', 'text']) {
+        const value = source[key];
+        if (typeof value === 'string') projected[key] = value.length > 1024 ? value.slice(0, 1024) + TRUNCATION_SUFFIX : value;
+        else if (typeof value === 'boolean' || typeof value === 'number') projected[key] = value;
+      }
+      const files = extractPayloadToolResultFiles(content);
+      if (files.length) projected._xdt_model_files = files.map((file) => ({ url: file.url, name: file.title }));
+      projected._remote_content_truncated = true;
+      return JSON.stringify(projected);
     }
-  } catch { /* Plain tool output is the only format shortened in this phase. */ }
+  } catch { /* Fall back to the bounded text preview. */ }
   const bytes = encoder.encode(content);
   let cut = MOBILE_TOOL_RESULT_BYTES - encoder.encode(TRUNCATION_SUFFIX).byteLength;
   while (cut > 0 && (bytes[cut] & 0xc0) === 0x80) cut -= 1;
@@ -69,7 +85,8 @@ export function projectMobileToolMessage(message: unknown): unknown {
       || meta?.remoteContentTruncated === true || !exceedsInputBudget(content.input)) return message;
     return {
       ...row,
-      content: { ...content, input: null, mobilePayloadProjected: true },
+      content: { ...content, input: /(?:^|:|__)ghost_call$/.test(toolName)
+        ? pluginCallIdentity(content.input) : null, mobilePayloadProjected: true },
       mobileToolInputProjection: {
         projected: true,
         version: 1,
@@ -144,4 +161,13 @@ export function projectMobileMessagePage(messages: unknown[], options: unknown):
       agentMeta: { ...record(value.agentMeta), remoteRowsTrimmed: true, remoteOriginalRowCount: rows.length },
     } : row;
   });
+}
+
+
+function pluginCallIdentity(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  return Object.fromEntries(['ghost_id', 'tool', 'grant_only'].flatMap((key) => {
+    const value = input?.[key];
+    return typeof value === 'boolean' || (typeof value === 'string' && value.length <= 256) ? [[key, value]] : [];
+  }));
 }

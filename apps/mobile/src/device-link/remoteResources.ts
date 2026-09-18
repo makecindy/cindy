@@ -331,7 +331,20 @@ export async function getRemoteResource(
   if (!normalized || normalized.ref.kind !== ref.kind || normalized.ref.id !== ref.id) {
     throw new Error('invalid remote resource response');
   }
-  return normalized;
+  const source = recordOf(raw);
+  const blocks = Array.isArray(source?.blocks) ? source.blocks.slice(0, 256).flatMap((rawBlock) => {
+    const block = recordOf(rawBlock);
+    const id = boundedString(block?.id, 256);
+    const primitive = boundedString(block?.primitive, 64);
+    const fallbackMarkdown = typeof block?.fallbackMarkdown === 'string' ? block.fallbackMarkdown : null;
+    if (!id || !primitive || fallbackMarkdown === null || fallbackMarkdown.length > 131072) return [];
+    // Only the inert media URL primitive is needed here. Never copy arbitrary host data.
+    const data = recordOf(block?.data);
+    const inlineIcon = ref.collectionId === 'plugin-identities' && id === 'icon' && primitive === 'image';
+    const url = boundedString(data?.url, inlineIcon ? 256_000 : 4096);
+    return [{ id, primitive, fallbackMarkdown, ...(url ? { data: { url } } : {}) }];
+  }) : undefined;
+  return { ...normalized, ...(blocks ? { blocks } : {}) };
 }
 
 function normalizeRemoteCollectionItem(

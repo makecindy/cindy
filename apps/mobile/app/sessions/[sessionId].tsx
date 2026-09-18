@@ -9342,6 +9342,8 @@ export default function SessionScreen() {
               {showMessageHistory || showSyncingShell ? (
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
                   <MessageRenderer
+                    remoteDeviceId={deviceId}
+                    showPluginInvocations={Boolean(currentSession && currentSession.source !== 'bot')}
                     bottomOverlayHeight={bottomOverlayHeight}
                     contentBottomInset={nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
                       ? MOBILE_MESSAGE_LIST_BOTTOM_PADDING
