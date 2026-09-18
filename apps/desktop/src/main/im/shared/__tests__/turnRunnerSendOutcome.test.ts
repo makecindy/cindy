@@ -72,6 +72,7 @@ const mocks = vi.hoisted(() => ({
   rejectAllPending: vi.fn(),
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
+  resolvePendingAskBySession: vi.fn(),
   buildPermissionCard: vi.fn(),
   buildAskUserCard: vi.fn(),
   buildPlanReviewCard: vi.fn(),
@@ -163,6 +164,7 @@ vi.mock('../pendingInteractions', () => ({
   registerPending: mocks.registerPending,
   registerPendingExternal: mocks.registerPendingExternal,
   rejectAllPending: mocks.rejectAllPending,
+  resolvePendingAskBySession: mocks.resolvePendingAskBySession,
 }));
 
 vi.mock('../../../destructiveGuard', () => ({
@@ -1596,6 +1598,44 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect.objectContaining({ title: expect.any(String) }),
       { deliverToOwnerDm: true },
     );
+  });
+
+  it('registers a single ask with its owning session and original question', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    mocks.buildAskUserCard.mockReturnValueOnce({ title: 'Question', body: 'Who?', buttons: [] });
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValueOnce({ messageId: 'ask-card' });
+    mocks.registerPending.mockResolvedValueOnce({ kind: 'ask_user_question', answers: { 'Who?': 'Alex' } });
+    await runDefaultTurn();
+    const request: InteractionRequest = {
+      kind: 'ask_user_question', requestId: 'ask-text', questions: [{ question: 'Who?' }],
+    };
+    await h.dispatchInteraction(request);
+    expect(mocks.registerPending).toHaveBeenCalledWith('ask-text', 'ask_user_question', 'ask-card', {
+      sessionId: 'feishu-session', askQuestions: request.questions,
+    });
+  });
+
+  it.each([false, true])('closes the answered card and consumes text even if card editing fails: %s', async (patchFails) => {
+    vi.mocked(fakeCards.buildResolvedCard).mockReturnValueOnce({ body: 'Answered: Alex', buttons: [] });
+    mocks.resolvePendingAskBySession.mockReturnValueOnce({
+      messageId: 'ask-card', decision: { kind: 'ask_user_question', answers: { 'Who?': 'Alex' } },
+    });
+    if (patchFails) mocks.feishuIm.updateInteractiveCard.mockRejectedValueOnce(new Error('offline'));
+    expect(await getRunner().answerPendingQuestion!({
+      botContextId: 'cli_test_bot', userId: 'ou_user', text: 'Alex',
+    })).toBe(true);
+    expect(mocks.resolvePendingAskBySession).toHaveBeenCalledWith('feishu-session', 'Alex');
+    expect(mocks.feishuIm.updateInteractiveCard).toHaveBeenCalledWith('ask-card', expect.anything());
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it('does not create a session when trying to answer a nonexistent route', async () => {
+    mocks.findActiveSession.mockResolvedValue(null);
+    expect(await getRunner().answerPendingQuestion!({
+      botContextId: 'cli_test_bot', userId: 'ou_user', text: 'Alex',
+    })).toBe(false);
+    expect(mocks.resolvePendingAskBySession).not.toHaveBeenCalled();
+    expect(mocks.createSession).not.toHaveBeenCalled();
   });
 
   it('does not suppress a requested close during no-op switch acquisition', async () => {

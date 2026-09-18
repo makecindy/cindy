@@ -90,6 +90,7 @@ describe('isStopCommand', () => {
 describe('messageHandler !stop routing', () => {
   let stopActiveTurn: ReturnType<typeof vi.fn>;
   let runAgentTurn: ReturnType<typeof vi.fn>;
+  let answerPendingQuestion: ReturnType<typeof vi.fn>;
   let handleSlashCommand: ReturnType<typeof vi.fn>;
   let sendMarkdownText: ReturnType<typeof vi.fn>;
   let sendText: ReturnType<typeof vi.fn>;
@@ -100,6 +101,7 @@ describe('messageHandler !stop routing', () => {
   function wire(threadScoped: boolean, notificationSessionId?: string): void {
     stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 0 }));
     runAgentTurn = vi.fn(async () => undefined);
+    answerPendingQuestion = vi.fn(async () => false);
     handleSlashCommand = vi.fn(async () => true);
     sendMarkdownText = vi.fn(async () => undefined);
     sendText = vi.fn(async () => undefined);
@@ -133,7 +135,7 @@ describe('messageHandler !stop routing', () => {
     const attach = createMessageHandler(
       adapter,
       { handleSlashCommand } as unknown as ImSlashHandlers,
-      { stopActiveTurn, runAgentTurn } as unknown as ImTurnRunner,
+      { stopActiveTurn, runAgentTurn, answerPendingQuestion } as unknown as ImTurnRunner,
     );
     attach(im);
   }
@@ -258,6 +260,61 @@ describe('messageHandler !stop routing', () => {
     expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
       threadTs: '1234.5678',
     });
+  });
+
+  it('uses ordinary private text to answer a pending question instead of starting a turn', async () => {
+    answerPendingQuestion.mockResolvedValue(true);
+    deliver(makeEvent({ text: 'Alex' }));
+    await flushMicrotasks();
+
+    expect(answerPendingQuestion).toHaveBeenCalledWith({
+      botContextId: 'bot-ctx',
+      userId: 'U123456789',
+      scopeKey: '1234.5678',
+      text: 'Alex',
+    });
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a normal turn when pending-question routing fails', async () => {
+    answerPendingQuestion.mockRejectedValueOnce(new Error('session lookup failed'));
+    deliver(makeEvent({ text: 'Alex' }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+
+    expect(answerPendingQuestion).toHaveBeenCalledTimes(1);
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'answerPendingQuestion probe failed (fallback to normal turn): session lookup failed',
+    );
+  });
+
+  it('keeps group text on the normal turn path', async () => {
+    answerPendingQuestion.mockResolvedValue(true);
+    deliver(makeEvent({ text: 'Alex', speaker: { id: 'member', name: 'Alex', isOwner: false } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalled());
+    expect(answerPendingQuestion).not.toHaveBeenCalled();
+  });
+
+  it('does not use a notification-topic reply to answer the DM question', async () => {
+    wire(false, 'original-session');
+    answerPendingQuestion.mockResolvedValue(true);
+    deliver(makeEvent({ text: 'Alex', replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalled());
+    expect(answerPendingQuestion).not.toHaveBeenCalled();
+  });
+
+  it.each(['/new', '!stop'])('preserves %s while a question is pending', async (text) => {
+    answerPendingQuestion.mockResolvedValue(true);
+    deliver(makeEvent({ text }));
+    await flushMicrotasks();
+    expect(answerPendingQuestion).not.toHaveBeenCalled();
+    expect(text === '!stop' ? stopActiveTurn : handleSlashCommand).toHaveBeenCalled();
+  });
+
+  it('preserves unsupported attachment handling while a question is pending', async () => {
+    answerPendingQuestion.mockResolvedValue(true);
+    deliver(makeEvent({ text: 'Alex', unsupported: [{ type: 'audio', label: 'Audio' }] }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalled());
+    expect(answerPendingQuestion).not.toHaveBeenCalled();
   });
 
   it('mentions dropped queued messages in the stopDone reply', async () => {

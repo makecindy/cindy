@@ -176,6 +176,13 @@ Hook 与本地 IM 共享消息级来源及上下文快照结构。本地所有�
 
 按用户能感知的程度排序。
 
+个人 IM 的普通私聊文本现在可以回答当前任务唯一一张单题、非多选的提问卡
+（`im/shared/pendingInteractions.ts` 的 `resolvePendingAskBySession`，入站接线在
+`messageHandler.ts` / `turnRunner.ts`）。多个待答卡、多题、多选、群消息、通知话题回复
+仍沿原路径；权限卡和计划审批不能用普通文本批准。此行为覆盖个人 Telegram，官方
+hook 路径未改、普通文本应答能力待核。下表 2g 的「无超时」结论不变，个人侧新增了
+这个显式答复入口；回归见 `pendingInteractions.test.ts` 与 `stopCommandRouting.test.ts`。
+
 | # | 缺口 | 现状 | 归属 |
 |---|---|---|---|
 | 1 | **个人 bot 缺 3 条命令** | `/unbind`（清当前 chat 的项目映射）、`/effort`（思考强度）、`/agent`（切 Agent）官方有、个人无，目前只能在桌面端改。注册表已显式登记并由 CI 拦住 | 每条各自独立 PR |
