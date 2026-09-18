@@ -31,7 +31,7 @@ export function runRecoveryArchiveTask<T extends RecoveryArchiveTask>(task: T): 
     worker.once('message', (message: { ok: boolean; result: RecoveryArchiveResult<T>; error?: string }) => {
       finish(message.ok ? undefined : new Error(message.error ?? 'worktree recovery worker failed'), message.result);
     });
-    worker.on('error', (error) => finish(error));
+    worker.on('error', (error: unknown) => finish(error instanceof Error ? error : new Error(String(error))));
     worker.once('exit', (code) => {
       finish(new Error(`worktree recovery worker exited before replying (${code})`));
     });
