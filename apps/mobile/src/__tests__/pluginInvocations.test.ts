@@ -11,14 +11,30 @@ describe('plugin annotations on user messages', () => {
   it('retains call identity when large arguments are released after completion', () => {
     const source = [msg('u', 'user', 'Draw'), call('c', undefined, { ghost_id: 'art', tool: 'generate', args: { data: 'x'.repeat(40_000) } }), msg('r', 'tool_result', 'done', { toolUseId: 'c' })];
     const projected = projectLargeSettledToolInputs(source);
-    expect(normalizeRemoteMessages(projected)[0].pluginInvocations).toEqual([{ id: 'art', name: 'art', tools: ['generate'] }]);
+    expect(normalizeRemoteMessages(projected)[0].pluginInvocations).toEqual([{ id: 'art', name: 'art', tools: ['generate'], hasPendingCalls: false }]);
     expect(JSON.stringify(projected)).not.toContain('x'.repeat(40_000));
   });
   it('uses actual calls and discovery names, deduplicates tools, and rebuilds from history', () => {
     const rows = [msg('user', 'user', 'Draw a cat'), call('info', 'mcp__cindy__ghost_info', { ghost_id: 'art' }),
       msg('result', 'tool_result', JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({ ok: true, ghost: { id: 'art', name: 'Art' } }) }] }), { toolUseId: 'info' }),
       call('c1'), call('c2')];
-    for (let i = 0; i < 2; i++) expect(normalizeRemoteMessages(rows)[0].pluginInvocations).toEqual([{ id: 'art', name: 'Art', tools: ['generate'] }]);
+    for (let i = 0; i < 2; i++) expect(normalizeRemoteMessages(rows)[0].pluginInvocations).toEqual([{ id: 'art', name: 'Art', tools: ['generate'], hasPendingCalls: true }]);
+  });
+  it('settles plugins independently while other calls and assistant output continue', () => {
+    const rows = [msg('u', 'user', 'Work'), call('a'),
+      call('b', undefined, { ghost_id: 'browser', tool: 'read' }),
+      // This result is adjacent to b, but belongs only to a.
+      msg('ra', 'tool_result', '', { toolUseId: 'a' }),
+      msg('text', 'assistant', 'Still working')];
+    const plugins = () => normalizeRemoteMessages(rows)[0].pluginInvocations;
+    expect(plugins()).toMatchObject([
+      { id: 'art', hasPendingCalls: false }, { id: 'browser', hasPendingCalls: true },
+    ]);
+    rows.push(call('a2'));
+    expect(plugins()?.[0].hasPendingCalls).toBe(true);
+    rows.push(msg('rb', 'tool_result', '{"ok":false}', { toolUseId: 'b' }),
+      msg('ra2', 'tool_result', 'done', { toolUseId: 'a2' }));
+    expect(plugins()?.map((plugin) => plugin.hasPendingCalls)).toEqual([false, false]);
   });
   it('keeps steers in their owner turn and never carries calls into the next question', () => {
     const rows = normalizeRemoteMessages([msg('u1', 'user', 'art'), msg('steer', 'user', 'blue', { agentMeta: { delivery: 'steer' } }), call('c'), msg('u2', 'user', 'art')]);

@@ -104,6 +104,32 @@ describe('mobile tool projection', () => {
     expect(row.content).toBe(content);
   });
 
+  it('bounds serialized media, tracks, files and actions without cutting references', () => {
+    const image = (i: number) => `cindy-media://blobs/${i.toString(16).padStart(64, 'a')}.png`;
+    for (const refs of [
+      { xdt_image_urls: Array.from({ length: 3000 }, (_, i) => image(i)) },
+      { xdt_audio_tracks: Array.from({ length: 1000 }, () => ({ xdt_audio_url: 'xdt-audio://local?path=/tmp/a.mp3', title: '音乐'.repeat(150) })) },
+      { _xdt_model_files: Array.from({ length: 1000 }, (_, i) => ({ url: `xdt-file://open?path=/tmp/${i}.pdf`, name: '文档'.repeat(100) })) },
+    ]) {
+      const content = JSON.stringify({ ...refs, xdt_card_id: 'card',
+        _xdt_actions: { buttons: [{ label: 'x'.repeat(50_000) }] }, note: '😀'.repeat(10_000) });
+      const projected = projectMobileToolResult(content) as string;
+      expect(new TextEncoder().encode(projected).byteLength).toBeLessThanOrEqual(MOBILE_TOOL_RESULT_BYTES);
+      expect(JSON.parse(projected)).toMatchObject({ xdt_card_id: 'card', _remote_content_truncated: true });
+      expect(JSON.parse(projected)).not.toHaveProperty('_xdt_actions');
+      const values = Object.values(JSON.parse(projected)).filter(Array.isArray).flat();
+      expect(values.length).toBeGreaterThan(0);
+      expect(values.length).toBeLessThanOrEqual(64);
+      const row = { ...tool(), role: 'tool_result', content };
+      const pushed = projectMobileToolPush('local-db:messages:created', { message: row }) as { message: { content: string } };
+      expect(pushed.message.content).toBe(projected);
+    }
+    const suppressed = projectMobileToolResult(JSON.stringify({ _xdt_render_image: false,
+      xdt_image_urls: Array.from({ length: 1000 }, (_, i) => image(i)) })) as string;
+    expect(JSON.parse(suppressed)._xdt_render_image).toBe(false);
+    expect(extractPayloadToolResultMedia(suppressed)).toEqual([]);
+  });
+
   it('removes duplicate result bodies while keeping correlation and failure flags', () => {
     const fullText = 'output '.repeat(30_000);
     const push = { sessionId: 's', persistId: 'p', resolvedContent: fullText,

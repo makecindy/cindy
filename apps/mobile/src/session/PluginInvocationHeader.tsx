@@ -16,7 +16,7 @@ const SUMMON_CYCLE_MS = 2400;
 export function PluginInvocationHeader({ plugins, running, deviceId, sessionId }: {
   plugins: readonly PluginInvocation[]; running: boolean; deviceId?: string; sessionId: string;
 }) {
-  return <View>{plugins.map((plugin) => <PluginInvocationRow key={plugin.id} plugin={plugin} running={running} deviceId={deviceId} sessionId={sessionId} />)}</View>;
+  return <View>{plugins.map((plugin) => <PluginInvocationRow key={plugin.id} plugin={plugin} running={running && plugin.hasPendingCalls} deviceId={deviceId} sessionId={sessionId} />)}</View>;
 }
 
 function PluginInvocationRow({ plugin, running, deviceId, sessionId }: {

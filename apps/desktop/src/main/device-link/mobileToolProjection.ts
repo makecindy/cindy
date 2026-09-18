@@ -2,7 +2,6 @@ import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
 import { isAgentPlanToolName } from '@cindy/maker-shared/message-render';
 import { isOrcaCommunicationTool } from '@cindy/maker-shared/message-normalize';
 import {
-  extractPayloadToolResultMedia,
   extractPayloadToolResultFiles,
   extractPayloadToolCardIds,
   parseToolResultPayload,
@@ -42,26 +41,60 @@ function exceedsInputBudget(input: unknown): boolean {
 /** Compact large results without cutting presentation references or emitting invalid JSON. */
 export function projectMobileToolResult(content: unknown): unknown {
   if (typeof content !== 'string' || encoder.encode(content).byteLength <= MOBILE_TOOL_RESULT_BYTES) return content;
-  // References take priority over the unrelated provider response.
+  // References take priority over the unrelated provider response. The final
+  // serialized JSON, including escaping and multibyte text, must fit the wire budget.
   try {
-    if (extractPayloadToolResultMedia(content).length > 0
-      || extractPayloadToolResultFiles(content).length > 0 || extractPayloadToolCardIds(content).length > 0) {
-      const source = parseToolResultPayload(content) ?? {};
-      const projected: Record<string, unknown> = {};
-      // Keep presentation references, not the unrelated multi-MB provider response.
-      // This is a soft budget for assets: never cut JSON or an individual address.
-      for (const [key, value] of Object.entries(source)) {
-        if (/^(?:xdt_(?:image_urls?|video_urls?|audio_urls|audio_tracks|media_produced|card_id|anchor_card_id|images_in_card|audio_in_card)|_xdt_(?:render_image|model_files|actions|audio_tracks))$/.test(key)) projected[key] = value;
+    const source = parseToolResultPayload(content) ?? {};
+    const files = extractPayloadToolResultFiles(content);
+    const referenceKeys = [
+      'xdt_image_url', 'xdt_video_url', 'xdt_image_urls', 'xdt_video_urls',
+      'xdt_audio_urls', 'xdt_audio_tracks', '_xdt_audio_tracks', 'xdt_media_produced',
+    ];
+    if (files.length || extractPayloadToolCardIds(content).length
+      || referenceKeys.some((key) => key in source) || source._xdt_render_image === false) {
+      const projected: Record<string, unknown> = { _remote_content_truncated: true };
+      const fits = () => encoder.encode(JSON.stringify(projected)).byteLength <= MOBILE_TOOL_RESULT_BYTES;
+      const add = (key: string, value: unknown) => {
+        // Keep addresses/objects intact or omit them; never slice a reference or action.
+        if (value === undefined || encoder.encode(JSON.stringify(value)).byteLength > 2048) return false;
+        projected[key] = value;
+        if (fits()) return true;
+        delete projected[key];
+        return false;
+      };
+      // Presentation control flags precede references so compaction cannot revive
+      // suppressed assets or images already owned by a card.
+      for (const key of ['_xdt_render_image', 'xdt_images_in_card', 'xdt_audio_in_card']) {
+        if (typeof source[key] === 'boolean') add(key, source[key]);
       }
+      for (const key of ['xdt_card_id', 'xdt_anchor_card_id', 'xdt_image_url', 'xdt_video_url']) {
+        if (typeof source[key] === 'string') add(key, source[key]);
+      }
+      let remainingItems = 64;
+      const addArray = (key: string, entries: unknown[]) => {
+        const kept: unknown[] = [];
+        for (const entry of entries.slice(0, 64)) {
+          if (remainingItems === 0) break;
+          if (encoder.encode(JSON.stringify(entry)).byteLength > 2048) continue;
+          kept.push(entry);
+          projected[key] = kept;
+          if (!fits()) { kept.pop(); break; }
+          remainingItems -= 1;
+        }
+        if (!kept.length) delete projected[key];
+      };
+      for (const key of referenceKeys) {
+        if (Array.isArray(source[key])) addArray(key, source[key]);
+      }
+      if (files.length) addArray('_xdt_model_files', files.map((file) => ({ url: file.url, name: file.title })));
+      add('_xdt_actions', source._xdt_actions);
       for (const key of ['ok', 'status', 'errorCode', 'summary', 'message', 'note', 'text']) {
         const value = source[key];
-        if (typeof value === 'string') projected[key] = value.length > 1024 ? value.slice(0, 1024) + TRUNCATION_SUFFIX : value;
-        else if (typeof value === 'boolean' || typeof value === 'number') projected[key] = value;
+        if (typeof value === 'string') add(key, value.length > 1024 ? value.slice(0, 1024) + TRUNCATION_SUFFIX : value);
+        else if (typeof value === 'boolean' || typeof value === 'number') add(key, value);
       }
-      const files = extractPayloadToolResultFiles(content);
-      if (files.length) projected._xdt_model_files = files.map((file) => ({ url: file.url, name: file.title }));
-      projected._remote_content_truncated = true;
-      return JSON.stringify(projected);
+      const serialized = JSON.stringify(projected);
+      if (encoder.encode(serialized).byteLength <= MOBILE_TOOL_RESULT_BYTES) return serialized;
     }
   } catch { /* Fall back to the bounded text preview. */ }
   const bytes = encoder.encode(content);

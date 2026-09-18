@@ -5,6 +5,7 @@ export interface PluginInvocation {
   id: string;
   name: string;
   tools: string[];
+  hasPendingCalls: boolean;
 }
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -65,7 +66,13 @@ export function collectPluginInvocations(
     if (!id || input?.grant_only === true) continue;
     const calls = turns.get(owner) ?? [];
     let plugin = calls.find((call) => call.id === id);
-    if (!plugin) { plugin = { id, name: names.get(id) ?? id, tools: [] }; calls.push(plugin); }
+    if (!plugin) { plugin = { id, name: names.get(id) ?? id, tools: [], hasPendingCalls: false }; calls.push(plugin); }
+    // Known IDs must pair exactly: an adjacent result may belong to another
+    // concurrent plugin. Legacy ID-less calls retain the existing pairing fallback.
+    const settled = tool.toolUseId
+      ? pairing.resultByToolUseId.has(tool.toolUseId)
+      : pairing.hasResultFor(message, tool);
+    plugin.hasPendingCalls ||= !settled;
     const name = text(input?.tool);
     if (name && !plugin.tools.includes(name)) plugin.tools.push(name);
     turns.set(owner, calls);
