@@ -15,7 +15,10 @@ use windows_sys::Win32::{
     System::{Com::*, JobObjects::*, RemoteDesktop::*, Services::*, Threading::*},
     UI::{Shell::*, WindowsAndMessaging::*},
 };
-static AUTHORIZED: Mutex<Option<Handle>> = Mutex::new(None);
+// Runtime handles guard against PID reuse; the durable grant is the protected
+// installation record, never a stale PID from a previous application run.
+static AUTHORIZED: Mutex<Vec<(Handle, Vec<Handle>)>> = Mutex::new(Vec::new());
+static APPROVAL: Mutex<Option<crate::approval::Approval>> = Mutex::new(None);
 static STOP: AtomicBool = AtomicBool::new(false);
 static CLIENTS: AtomicUsize = AtomicUsize::new(0);
 static STATUS: Mutex<usize> = Mutex::new(0);
@@ -43,9 +46,7 @@ fn service(manager: &ServiceHandle, access: u32) -> Result<ServiceHandle> {
         Ok(ServiceHandle(value))
     }
 }
-pub fn pid() -> Result<u32> {
-    let manager = manager(SC_MANAGER_CONNECT)?;
-    let service = service(&manager, SERVICE_QUERY_STATUS)?;
+fn query_status(service: &ServiceHandle) -> Result<SERVICE_STATUS_PROCESS> {
     let mut status: SERVICE_STATUS_PROCESS = unsafe { mem::zeroed() };
     let mut size = 0;
     if unsafe {
@@ -57,27 +58,54 @@ pub fn pid() -> Result<u32> {
             &mut size,
         )
     } == 0
-        || status.dwCurrentState != SERVICE_RUNNING
-        || status.dwProcessId == 0
     {
+        return Err(error());
+    }
+    Ok(status)
+}
+
+fn process_id(status: &SERVICE_STATUS_PROCESS) -> Option<u32> {
+    (status.dwProcessId != 0).then_some(status.dwProcessId)
+}
+
+pub fn pid() -> Result<u32> {
+    let manager = manager(SC_MANAGER_CONNECT)?;
+    let service = service(&manager, SERVICE_QUERY_STATUS)?;
+    let status = query_status(&service)?;
+    if status.dwCurrentState != SERVICE_RUNNING {
         return denied();
     }
-    Ok(status.dwProcessId)
+    process_id(&status).ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+}
+
+pub fn registered() -> Result<bool> {
+    let manager = manager(SC_MANAGER_CONNECT)?;
+    match service(&manager, SERVICE_QUERY_STATUS) {
+        Ok(_) => Ok(true),
+        Err(error) if error.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST as i32) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 pub fn install() -> Result<()> {
-    let _guard = crate::security::protected_install()?;
+    crate::security::require_elevated()?;
     let manager = manager(SC_MANAGER_CREATE_SERVICE | SC_MANAGER_CONNECT)?;
-    let name = wide(&crate::service_name()?);
-    let executable = std::env::current_exe()?;
+    let installation = crate::installation::Installation::current()?;
+    let name = wide(&installation.name);
+    let display_name = wide(&format!(
+        "Cindy Remote Desktop ({})",
+        &installation.name[19..]
+    ));
+    let executable = installation.binary();
+    let _guard = crate::security::check_paths(vec![executable.clone()])?;
     let command = wide(&format!("\"{}\" --service", executable.display()));
     let raw = unsafe {
         CreateServiceW(
             manager.0,
             name.as_ptr(),
-            wide("Cindy Remote Desktop").as_ptr(),
-            SERVICE_START | SERVICE_QUERY_STATUS,
+            display_name.as_ptr(),
+            SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP | DELETE,
             SERVICE_WIN32_OWN_PROCESS,
-            SERVICE_DEMAND_START,
+            SERVICE_AUTO_START,
             SERVICE_ERROR_NORMAL,
             command.as_ptr(),
             ptr::null(),
@@ -87,6 +115,7 @@ pub fn install() -> Result<()> {
             ptr::null(),
         )
     };
+    let created = !raw.is_null();
     let installed = if raw.is_null() {
         if unsafe { GetLastError() } != ERROR_SERVICE_EXISTS {
             return Err(error());
@@ -95,19 +124,29 @@ pub fn install() -> Result<()> {
     } else {
         ServiceHandle(raw)
     };
-    if unsafe { StartServiceW(installed.0, 0, ptr::null()) } == 0
-        && unsafe { GetLastError() } != ERROR_SERVICE_ALREADY_RUNNING
-    {
-        return Err(error());
-    }
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < deadline {
-        if pid().is_ok() {
-            return Ok(());
+    let start_error = if unsafe { StartServiceW(installed.0, 0, ptr::null()) } == 0 {
+        let code = unsafe { GetLastError() };
+        (code != ERROR_SERVICE_ALREADY_RUNNING).then(|| io::Error::from_raw_os_error(code as i32))
+    } else {
+        None
+    };
+    if start_error.is_none() {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            if pid().is_ok() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
-    Err(io::Error::from(io::ErrorKind::TimedOut))
+    // A newly created AUTO_START service must not remain registered if it never
+    // reached RUNNING. An already-registered service is left for the next update.
+    if created {
+        let mut status: SERVICE_STATUS = unsafe { mem::zeroed() };
+        let _ = unsafe { ControlService(installed.0, SERVICE_CONTROL_STOP, &mut status) };
+        let _ = unsafe { DeleteService(installed.0) };
+    }
+    Err(start_error.unwrap_or_else(|| io::Error::from(io::ErrorKind::TimedOut)))
 }
 pub fn uninstall() -> Result<()> {
     let manager = manager(SC_MANAGER_CONNECT)?;
@@ -116,6 +155,10 @@ pub fn uninstall() -> Result<()> {
         Err(e) if e.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST as i32) => return Ok(()),
         Err(e) => return Err(e),
     };
+    let running_process = query_status(&service)
+        .ok()
+        .and_then(|status| process_id(&status))
+        .and_then(|id| process(id).ok());
     let mut status: SERVICE_STATUS = unsafe { mem::zeroed() };
     if unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) } == 0
         && unsafe { GetLastError() } != ERROR_SERVICE_NOT_ACTIVE
@@ -138,10 +181,14 @@ pub fn uninstall() -> Result<()> {
     if unsafe { DeleteService(service.0) } == 0 {
         return Err(error());
     }
+    if let Some(process) = running_process {
+        if unsafe { WaitForSingleObject(process.0, 15000) } != WAIT_OBJECT_0 {
+            return Err(io::Error::from(io::ErrorKind::TimedOut));
+        }
+    }
     Ok(())
 }
 pub fn elevate(command: &str) -> Result<()> {
-    let _guard = crate::security::protected_install()?;
     let executable = wide(&std::env::current_exe()?.to_string_lossy());
     let verb = wide("runas");
     let parameters = wide(command);
@@ -213,25 +260,27 @@ unsafe extern "system" fn entry(_argc: u32, _argv: *mut *mut u16) {
         return;
     }
     *STATUS.lock().unwrap() = handle as usize;
-    let Ok(_installation) = crate::security::protected_install() else {
+    if crate::security::allow_service_identity_queries().is_err() {
+        status(SERVICE_STOPPED);
+        return;
+    }
+    let Ok(_installation) = crate::security::protected_service() else {
         status(SERVICE_STOPPED);
         return;
     };
+    let Ok(approval) = crate::approval::Approval::read() else {
+        status(SERVICE_STOPPED);
+        return;
+    };
+    *APPROVAL.lock().unwrap() = Some(approval);
     status(SERVICE_RUNNING);
-    let registration_deadline = Instant::now() + Duration::from_secs(30);
     while !STOP.load(Ordering::SeqCst) {
-        let should_stop = match AUTHORIZED.lock() {
-            Ok(authorized) => match authorized.as_ref() {
-                Some(main) => unsafe { WaitForSingleObject(main.0, 0) != WAIT_TIMEOUT },
-                None => Instant::now() >= registration_deadline,
-            },
-            Err(_) => true,
-        };
-        if should_stop {
-            STOP.store(true, Ordering::SeqCst);
-            status(SERVICE_STOP_PENDING);
-            break;
-        }
+        // A closed Cindy releases its code handles, not the installed grant.
+        // This also allows the normal installer to replace a stopped app.
+        AUTHORIZED
+            .lock()
+            .unwrap()
+            .retain(|(main, _)| unsafe { WaitForSingleObject(main.0, 0) == WAIT_TIMEOUT });
 
         if CLIENTS.load(Ordering::SeqCst) >= 3 {
             std::thread::sleep(Duration::from_millis(100));
@@ -405,45 +454,18 @@ fn spawn_worker(name: &str, session: u32) -> Result<(Handle, Handle, u32)> {
 }
 fn serve(mut client: Pipe) -> Result<()> {
     let caller = process(client.client_pid()?)?;
+    if unsafe { WaitForSingleObject(caller.0, 0) } != WAIT_TIMEOUT {
+        return denied();
+    }
     let init = client.line(1024)?;
+    if unsafe { WaitForSingleObject(caller.0, 0) } != WAIT_TIMEOUT {
+        return denied();
+    }
     let parsed: serde_json::Value = serde_json::from_slice(&init)?;
-    if parsed["mode"] == "authorize" {
-        // Only the fixed UAC-elevated setup executable may register a process.
-        let caller_token = token(caller.0)?;
-        let mut elevation: TOKEN_ELEVATION = unsafe { mem::zeroed() };
-        let mut needed = 0;
-        if !crate::security::same_file(&image(caller.0)?, &std::env::current_exe()?)
-            || unsafe {
-                GetTokenInformation(
-                    caller_token.0,
-                    TokenElevation,
-                    (&mut elevation as *mut TOKEN_ELEVATION).cast(),
-                    mem::size_of_val(&elevation) as u32,
-                    &mut needed,
-                )
-            } == 0
-            || elevation.TokenIsElevated == 0
-        {
-            return denied();
-        }
-        let main_pid = parsed["pid"]
-            .as_u64()
-            .filter(|p| *p <= u32::MAX as u64)
-            .ok_or_else(error)? as u32;
-        let (main, _) = crate::security::authorize_client(main_pid)?;
-        *AUTHORIZED.lock().map_err(|_| error())? = Some(main);
-        return client.write(b"ready\n");
+    if !matches!(parsed["mode"].as_str(), Some("probe" | "input" | "capture")) {
+        return denied();
     }
-    {
-        let authorized = AUTHORIZED.lock().map_err(|_| error())?;
-        let main = authorized.as_ref().ok_or_else(error)?;
-        if unsafe { WaitForSingleObject(main.0, 0) } != WAIT_TIMEOUT
-            || unsafe { GetProcessId(main.0) } != client.client_pid()?
-        {
-            return denied();
-        }
-    }
-    let (owner, session) = crate::security::authorize_client(client.client_pid()?)?;
+    let (owner, session) = authorize_connection(caller)?;
     if parsed["mode"] == "probe" {
         return client.write(b"ready\n");
     }
@@ -486,15 +508,6 @@ fn serve(mut client: Pipe) -> Result<()> {
         {
             return denied();
         }
-        {
-            let authorized = AUTHORIZED.lock().map_err(|_| error())?;
-            if !authorized.as_ref().is_some_and(|main| unsafe {
-                WaitForSingleObject(main.0, 0) == WAIT_TIMEOUT
-                    && GetProcessId(main.0) == GetProcessId(owner.0)
-            }) {
-                return denied();
-            }
-        }
         if parsed["mode"] == "input" {
             let events: Vec<serde_json::Value> = serde_json::from_slice(&request)?;
             if events.len() > 64 {
@@ -516,9 +529,10 @@ fn serve(mut client: Pipe) -> Result<()> {
                             worker.write(b"[{\"kind\":\"release\"}]\n")?;
                             worker.line(1024)?;
                             send_sas(&owner)?;
-                            client.write(b"ok\n")?;
                             // Drop this input generation, including all pending batches.
-                            return Ok(());
+                            worker.retire()?;
+                            drop(worker);
+                            return client.write(b"desktop_changed\n");
                         }
                         if down {
                             held.insert(code.to_owned());
@@ -537,14 +551,15 @@ fn serve(mut client: Pipe) -> Result<()> {
         if session != unsafe { WTSGetActiveConsoleSessionId() } || STOP.load(Ordering::SeqCst) {
             return denied();
         }
-        {
-            let authorized = AUTHORIZED.lock().map_err(|_| error())?;
-            if !authorized.as_ref().is_some_and(|main| unsafe {
-                WaitForSingleObject(main.0, 0) == WAIT_TIMEOUT
-                    && GetProcessId(main.0) == GetProcessId(owner.0)
-            }) {
-                return denied();
-            }
+        if unsafe { WaitForSingleObject(owner.0, 0) } != WAIT_TIMEOUT {
+            return denied();
+        }
+        if parsed["mode"] == "input" && response == b"desktop_changed\n" {
+            // The acknowledgement also certifies that the old worker/job is
+            // gone, so Main can safely establish a fresh input generation.
+            worker.retire()?;
+            drop(worker);
+            return client.write(b"desktop_changed\n");
         }
         client.write_response(&response, &parsed)?;
     }
@@ -567,12 +582,23 @@ impl std::ops::DerefMut for Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
+        let _ = self.retire();
+    }
+}
+impl Worker {
+    fn retire(&mut self) -> Result<()> {
         drop(self.pipe.take());
         unsafe {
             if WaitForSingleObject(self.child.0, 1200) != WAIT_OBJECT_0 {
-                TerminateJobObject(self.job.0, 1);
+                if TerminateJobObject(self.job.0, 1) == 0 {
+                    return Err(error());
+                }
+                if WaitForSingleObject(self.child.0, 5000) != WAIT_OBJECT_0 {
+                    return Err(io::Error::from(io::ErrorKind::TimedOut));
+                }
             }
         }
+        Ok(())
     }
 }
 struct InputChild(std::process::Child);
@@ -644,6 +670,9 @@ pub fn worker(name: &str) -> Result<()> {
         // a remote text batch still being applied by the worker.
         let mut acknowledgement = String::new();
         reader.read_line(&mut acknowledgement)?;
+        if acknowledgement == "desktop_changed\n" {
+            return pipe.write(b"desktop_changed\n");
+        }
         if acknowledgement != "ok\n" {
             return denied();
         }
@@ -651,20 +680,42 @@ pub fn worker(name: &str) -> Result<()> {
     }
 }
 
-pub fn authorize(main_pid: u32) -> Result<()> {
-    let mut pipe = Pipe::client(&crate::pipe_name()?)?;
-    let server = process(pipe.server_pid()?)?;
-    if !system(token(server.0)?.0)?
-        || !crate::security::same_file(&image(server.0)?, &std::env::current_exe()?)
-        || pipe.server_pid()? != pid()?
+fn authorize_connection(caller: Handle) -> Result<(Handle, u32)> {
+    let pid = pid_of(caller.0)?;
+    let approval = APPROVAL.lock().map_err(|_| error())?;
+    let approval = approval.as_ref().ok_or_else(error)?;
+    let (owner, session) = crate::security::authorize_client_process(
+        caller,
+        &approval.application,
+        Some(&approval.user_sid),
+    )?;
+    let mut authorized = AUTHORIZED.lock().map_err(|_| error())?;
+    authorized.retain(|(main, _)| unsafe { WaitForSingleObject(main.0, 0) == WAIT_TIMEOUT });
+    if !authorized
+        .iter()
+        .any(|(main, _)| pid_of(main.0).ok() == Some(pid))
+    {
+        if authorized.len() >= 8 {
+            return denied();
+        }
+        let (main, _, guards) = approval.authorize(&owner)?;
+        authorized.push((main, guards));
+    }
+    Ok((owner, session))
+}
+
+pub fn installed_pid() -> Result<u32> {
+    let pid = pid()?;
+    let process = process(pid)?;
+    if !system(token(process.0)?.0)?
+        || !crate::security::same_file(
+            &image(process.0)?,
+            &crate::installation::Installation::current()?.binary(),
+        )
     {
         return denied();
     }
-    pipe.write(format!("{{\"mode\":\"authorize\",\"pid\":{main_pid}}}\n").as_bytes())?;
-    if pipe.line(1024)? != b"ready\n" {
-        return denied();
-    }
-    Ok(())
+    Ok(pid)
 }
 
 fn send_sas(owner: &Handle) -> Result<()> {
@@ -705,4 +756,40 @@ fn send_sas(owner: &Handle) -> Result<()> {
         windows_sys::Win32::Security::Authentication::Identity::SendSAS(0);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn status_distinguishes_registration_from_a_running_pid() {
+        let source = include_str!("service.rs");
+        assert!(source.contains("pub fn registered()"));
+        assert!(source.contains("ERROR_SERVICE_DOES_NOT_EXIST"));
+        let pid = source.split("pub fn pid()").nth(1).unwrap();
+        assert!(pid.contains("SERVICE_RUNNING"));
+        let registered = source
+            .split("pub fn registered() -> Result<bool>")
+            .nth(1)
+            .unwrap()
+            .split("pub fn install()")
+            .next()
+            .unwrap();
+        assert!(registered.contains("ERROR_SERVICE_DOES_NOT_EXIST"));
+    }
+    #[test]
+    fn pipe_client_process_is_opened_before_the_init_read() {
+        let serve = include_str!("service.rs")
+            .split("fn serve(")
+            .nth(1)
+            .unwrap()
+            .split("fn authorize_connection")
+            .next()
+            .unwrap();
+        assert!(
+            serve.find("process(client.client_pid()?)").unwrap()
+                < serve.find("client.line(1024)").unwrap()
+        );
+        assert!(serve.contains("authorize_connection(caller)"));
+        assert!(!serve.contains("authorize_connection(caller_pid)"));
+    }
 }

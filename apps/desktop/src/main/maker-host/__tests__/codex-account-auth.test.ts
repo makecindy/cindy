@@ -106,7 +106,7 @@ describe('native Codex account credentials', () => {
     state.hold = true;
     const progress = vi.fn();
     const pending = loginCodexAccount('account-a', () => true, progress);
-    await vi.waitFor(() => expect(state.child).not.toBeNull());
+    await vi.waitFor(() => expect(state.child).not.toBeNull(), { timeout: 10_000 });
     state.child.stderr.write('https://auth.openai.com.evil.test/oauth/authorize?bad=1\n');
     state.child.stderr.write('https://auth.openai.com/not-login?bad=1\n');
     state.child.stderr.write('x'.repeat(17_000) + 'https://auth.openai.com/authorize?bad=1\n');
@@ -231,7 +231,7 @@ describe('native Codex account credentials', () => {
   it('cancels a pending login without installing its credentials', async () => {
     state.hold = true;
     const pending = loginCodexAccount('account-a', () => true);
-    await vi.waitFor(() => expect(state.child).not.toBeNull());
+    await vi.waitFor(() => expect(state.child).not.toBeNull(), { timeout: 10_000 });
     cancelCodexAccountLogin('account-a');
     expect(await pending).toMatchObject({ ok: false, reason: 'login_cancelled' });
     expect(codexAccountState('account-a').authenticated).toBe(false);

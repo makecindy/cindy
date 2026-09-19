@@ -18,10 +18,11 @@ jpeg-encoder = "0.6"
 napi = { version = "2", features = ["napi6", "tokio_rt"] }
 napi-derive = "2"
 tokio = { version = "1", features = ["rt"] }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authentication_Identity", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Services", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Environment", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authentication_Identity", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Services", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Environment", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Graphics_Gdi"] }
 
 [features]
-default = ["windows-sys/Win32_System_JobObjects", "windows-sys/Win32_System_Registry", "windows-sys/Win32_System_SystemServices"]
+development = ["windows-sys/Win32_System_Diagnostics_Debug"]
+default = ["windows-sys/Win32_System_JobObjects", "windows-sys/Win32_System_Registry", "windows-sys/Win32_System_SystemServices", "windows-sys/Win32_UI_Input_KeyboardAndMouse", "windows-sys/Win32_Graphics_Dwm"]
 
 [profile.release]
 panic = "abort"

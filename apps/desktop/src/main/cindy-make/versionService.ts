@@ -20,6 +20,7 @@ import {
   assertVersionDirectory,
   listPersonalVersions,
   readOriginalVersion,
+  readPersonalVersion,
   readVersionJson,
   selectedVersion,
   versionDirectory,
@@ -27,6 +28,7 @@ import {
   VERSION_ID,
   withVersionStore,
 } from './versionStore.js';
+import { uninstallWindowsDesktopSupportFrom } from '../remote-desktop/windowsHost.js';
 
 let makeBusy: () => boolean = () => true;
 export function configureCindyVersions(probe: () => boolean): void {
@@ -111,6 +113,20 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
         }
         const directory = versionDirectory(profile, id);
         assertVersionDirectory(profile, directory);
+        // Packaged personal versions hash a UUID-specific helper path into an
+        // independent AUTO_START service and harden that runtime tree. Remove
+        // must uninstall through that helper before deleting the snapshot, or
+        // the old SYSTEM service stays running and the hardened files cannot
+        // be deleted. Incomplete snapshots have no version.json.
+        let personal: ReturnType<typeof readPersonalVersion> | null = null;
+        try {
+          personal = readPersonalVersion(profile, id);
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'unavailable') throw error;
+        }
+        if (personal) {
+          await uninstallWindowsDesktopSupportFrom(path.join(directory, personal.resources));
+        }
         await originalFs.promises.rm(directory, {
           recursive: true,
           force: true,

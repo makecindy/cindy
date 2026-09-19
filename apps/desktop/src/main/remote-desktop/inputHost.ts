@@ -187,6 +187,8 @@ export async function requestDesktopInputPermission(
 
 export class DesktopInputHost {
   private windows: WindowsDesktopConnection | null = null;
+  private readonly settledWindows = new WeakSet<WindowsDesktopConnection>();
+  private recovering: number | null = null;
   private queuedBytes = 0;
   private writing = Promise.resolve();
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -207,6 +209,7 @@ export class DesktopInputHost {
       resolveBinary,
       spawn: (binary: string) => spawn(binary, [], { stdio: 'pipe', windowsHide: true }),
     },
+    private readonly onDesktopChange?: () => boolean,
   ) {}
   async start(displayId: string): Promise<void> {
     this.stop();
@@ -221,20 +224,13 @@ export class DesktopInputHost {
     if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
     this.activity = new HumanDesktopInput();
     try {
-      if (
-        platform === 'win32' &&
-        !this.runtime.platform &&
-        (await readWindowsDesktopSupport()) === 'ready'
-      ) {
+      const windowsSupport =
+        platform === 'win32' && !this.runtime.platform
+          ? await readWindowsDesktopSupport()
+          : undefined;
+      if (windowsSupport === 'ready' || windowsSupport === 'updateRequired') {
         if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
-        const connection = await openWindowsDesktopConnection({ mode: 'input' });
-        if (generation !== this.generation) {
-          connection.close();
-          throw new Error('DESKTOP_LEASE_EXPIRED');
-        }
-        this.windows = connection;
-        this.displayId = displayId;
-        this.heartbeat = setInterval(() => this.write([]), 2000);
+        await this.connectWindows(displayId, generation);
         this.privacyPaused = false;
         return;
       }
@@ -293,8 +289,58 @@ export class DesktopInputHost {
       throw error;
     }
   }
+  private async connectWindows(displayId: string, generation: number): Promise<void> {
+    const connection = await openWindowsDesktopConnection({ mode: 'input' });
+    if (generation !== this.generation) {
+      connection.close();
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    }
+    this.windows = connection;
+    this.displayId = displayId;
+    this.heartbeat = setInterval(() => this.write([]), 2000);
+  }
+  /** A desktop switch retires only native input, not the viewer's control grant.
+   * This path never reads a saved password or invokes automatic unlock. */
+  rebindForDesktopChange(): void {
+    if (this.recovering !== null) return;
+    if (!this.windows) {
+      if (this.child) this.write([{ kind: 'release' }]);
+      return;
+    }
+    if (this.onDesktopChange && !this.onDesktopChange()) return;
+    const displayId = this.displayId;
+    this.stop();
+    const generation = this.generation;
+    this.recovering = generation;
+    void (async () => {
+      await this.stopping;
+      if (generation !== this.generation) return;
+      this.activity = new HumanDesktopInput();
+      // Secure-desktop creation can still be settling after the OS notification.
+      // Retry only this native transition, never an arbitrary input failure.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (generation !== this.generation) return;
+        try {
+          await this.connectWindows(displayId, generation);
+          return;
+        } catch (error) {
+          if (generation !== this.generation) return;
+          if (attempt === 2) throw error;
+          await new Promise<void>((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+        }
+      }
+    })()
+      .catch(() => {
+        if (generation === this.generation) this.onFailure();
+      })
+      .finally(() => {
+        if (this.recovering === generation) this.recovering = null;
+      });
+  }
   input(events: DesktopInput[]): void {
     if (this.privacyPaused) return;
+    // Do not queue characters intended for the previous desktop/password field.
+    if (this.recovering !== null) return;
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
     if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     if (events.length === 0) return;
@@ -328,8 +374,13 @@ export class DesktopInputHost {
       this.writing = this.writing.then(async () => {
         if (generation !== this.generation) return;
         if (connection) {
-          if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
-            throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+          const acknowledgement = await connection.request(line.slice(0, -1));
+          if (acknowledgement === 'desktop_changed\n') {
+            this.settledWindows.add(connection);
+            if (generation === this.generation) this.rebindForDesktopChange();
+            return;
+          }
+          if (acknowledgement !== 'ok\n') throw new Error('DESKTOP_INPUT_UNAVAILABLE');
         } else {
           // stdin.write completion only proves bytes were queued. Hold ownership
           // until the helper has finished posting the entire native batch.
@@ -390,6 +441,7 @@ export class DesktopInputHost {
   stop(): void {
     this.generation++;
     this.privacyPaused = false;
+    this.recovering = null;
     this.acknowledge?.(new Error('DESKTOP_LEASE_EXPIRED'));
     const windows = this.windows;
     const writing = this.writing;
@@ -424,8 +476,11 @@ export class DesktopInputHost {
       this.stopping = (async () => {
         try {
           await writing;
-          if ((await windows.request('[{"kind":"release"}]')) !== 'ok\n')
-            throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+          if (!this.settledWindows.has(windows)) {
+            const acknowledgement = await windows.request('[{"kind":"release"}]');
+            if (acknowledgement !== 'ok\n' && acknowledgement !== 'desktop_changed\n')
+              throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+          }
         } catch {
           windows.close();
           // Failed completion: allow the service's 5 s pipe deadline plus

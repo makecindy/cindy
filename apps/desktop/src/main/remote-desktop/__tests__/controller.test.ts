@@ -173,6 +173,36 @@ describe('remote desktop authority and lifecycle', () => {
     expect(h.deps.stopVideo).toHaveBeenCalledOnce();
     await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow('DESKTOP_STOPPED');
   });
+
+  it('fences delayed clipboard work at a desktop switch while keeping the same manual-control lease', async () => {
+    const h = harness();
+    let complete!: () => void;
+    let current!: () => boolean;
+    h.deps.clipboard = vi.fn(async (_action, _text, isCurrent) => {
+      current = isCurrent;
+      await new Promise<void>((resolve) => (complete = resolve));
+      return 'fake-clipboard';
+    });
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    const request = h.controller.request('phone', { op: 'clipboard', lease, action: 'copy' });
+    expect(current()).toBe(true);
+    const stops = vi.mocked(h.deps.stopInput).mock.calls.length;
+    expect(h.controller.prepareInputDesktopChange()).toBe(true);
+    expect(current()).toBe(false);
+    expect(h.controller.state).toEqual({ peer: 'phone', controlling: true });
+    expect(h.controller.hasLease(lease)).toBe(true);
+    expect(h.deps.stopInput).toHaveBeenCalledTimes(stops);
+    complete();
+    await expect(request).rejects.toThrow('DESKTOP_VIEW_ONLY');
+    await h.controller.request('phone', { op: 'control', lease, enabled: false });
+    expect(h.controller.prepareInputDesktopChange()).toBe(false);
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    h.revoke();
+    expect(h.controller.prepareInputDesktopChange()).toBe(false);
+    expect(h.controller.state).toBeNull();
+  });
+
   it('does not publish selected geometry or resume control before it is observed', async () => {
     const h = harness();
     h.deps.displayModes = async () => [

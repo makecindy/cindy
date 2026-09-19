@@ -33,6 +33,34 @@ impl Drop for Handle {
 pub fn process(pid: u32) -> Result<Handle> {
     Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) })
 }
+
+pub fn pid_of(handle: HANDLE) -> Result<u32> {
+    let pid = unsafe { GetProcessId(handle) };
+    if pid == 0 {
+        denied()
+    } else {
+        Ok(pid)
+    }
+}
+
+pub fn duplicate(handle: &Handle) -> Result<Handle> {
+    let mut value = ptr::null_mut();
+    if unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            handle.0,
+            GetCurrentProcess(),
+            &mut value,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        return Err(error());
+    }
+    Handle::new(value)
+}
 pub fn token(process: HANDLE) -> Result<Handle> {
     let mut token = ptr::null_mut();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {

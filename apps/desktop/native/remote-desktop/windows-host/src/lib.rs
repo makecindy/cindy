@@ -1,10 +1,10 @@
 //! Main-only Node-API transport: the OS sees the actual Cindy PID opening the
 //! pipe. A child process or a self-reported parent PID is never authorization.
 mod capture_protocol;
+mod installation;
 mod pipe;
 mod win;
 use napi_derive::napi;
-use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
     sync::{
@@ -27,13 +27,11 @@ impl DesktopConnection {
     #[napi(factory)]
     pub async fn open(binary: String, init: String) -> napi::Result<Self> {
         tokio::task::spawn_blocking(move || {
-            let path = PathBuf::from(binary).canonicalize().map_err(failure)?;
-            let name = format!(
-                "CindyRemoteDesktop-{:x}",
-                Sha256::digest(path.to_string_lossy().to_lowercase().as_bytes())
-            )[..35]
-                .to_string();
-            let mut pipe = pipe::Pipe::client(&format!(r"\\.\pipe\{}", name)).map_err(failure)?;
+            let installation =
+                installation::Installation::for_source(&PathBuf::from(binary)).map_err(failure)?;
+            let path = installation.binary().canonicalize().map_err(failure)?;
+            let name = installation.name.clone();
+            let mut pipe = pipe::Pipe::client(&installation.pipe()).map_err(failure)?;
             let pid = pipe.server_pid().map_err(failure)?;
             let server = win::process(pid).map_err(failure)?;
             if !win::system(win::token(server.0).map_err(failure)?.0).map_err(failure)?
@@ -41,7 +39,9 @@ impl DesktopConnection {
                     .map_err(failure)?
                     .canonicalize()
                     .map_err(failure)?
-                    != path
+                    .to_string_lossy()
+                    .to_lowercase()
+                    != path.to_string_lossy().to_lowercase()
             {
                 return Err(failure("identity"));
             }
