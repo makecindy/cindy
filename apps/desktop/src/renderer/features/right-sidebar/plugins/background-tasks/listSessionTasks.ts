@@ -19,6 +19,7 @@
 import {
   deriveAgentTaskStatus,
   isAgentTaskToolName,
+  isSubagentResultError,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
 } from '@cindy/maker-shared/agent-task';
@@ -275,9 +276,9 @@ export function listSessionTasks(input: {
     if (m.role !== 'tool_result') continue;
     if (typeof m.toolUseId === 'string' && m.toolUseId.length > 0) {
       settledToolUseIds.add(m.toolUseId);
-      if (!resultContentByToolUseId.has(m.toolUseId)) {
-        resultContentByToolUseId.set(m.toolUseId, m.content);
-      }
+      // 同一 toolUseId 多行结果按「末条胜出」覆盖(与共享 buildMessageToolResultPairing
+      // 及聊天流一致):先写中间 <tool_use_error>、后写最终成功结果时,不得因首条误判 failed。
+      resultContentByToolUseId.set(m.toolUseId, m.content);
     }
   }
 
@@ -334,15 +335,30 @@ export function listSessionTasks(input: {
     // 的死任务(同步 Task 没有启动回执,永远不会有结果),断言 running 会让它
     // 永久转圈且无任何收口路径,按 stopped(被中断)呈现。
     const resultText = typeof resultContent === 'string' ? resultContent : undefined;
+    // 重载后与聊天卡(AgentTaskCard)共用 deriveAgentTaskStatus:持久化终态
+    // (agentMeta.agentTaskStatus)必须传入,否则列表与卡片会对同一任务给出不同终态。
+    const persistedStatus = msg.agentMeta?.agentTaskStatus;
+    const resultIsError = isSubagentResultError(resultText);
     const status: AgentTaskStatus = isWorkflowTool
       ? update?.status ?? (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped')
       : update
         ? deriveAgentTaskStatus(update.status, resultText, {
+            persistedStatus,
             resultIsLaunchReceipt:
               subagentSpawnReceiptName(toolName, toolInput, resultText) !== undefined
               || subagentSpawnResultIndicatesRunning(toolName, resultText),
+            resultIsError,
           })
-        : (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
+        : (settled
+          // 无 live update 的历史回放:settled 即终态。也走 deriveAgentTaskStatus:
+          // 持久化终态优先;错误结果收口为 failed;普通结果 completed。未 settled
+          // 时持久化终态仍优先(启动失败只写 agentTaskStatus、无 tool result 的
+          // 场景),否则沿用 running/stopped 的死任务语义 —— 与聊天卡同口径。
+          ? deriveAgentTaskStatus(resultIsError ? undefined : 'completed', resultText, {
+              persistedStatus,
+              resultIsError,
+            })
+          : (persistedStatus ?? (isSessionStreaming ? 'running' : 'stopped')));
     const provider: SessionTaskItem['provider'] =
       update?.provider ?? (toolName.startsWith('collab:') ? 'codex' : 'claude-code');
 
