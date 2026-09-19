@@ -420,7 +420,7 @@ describe('production Session event pipeline', () => {
     effects.fn('onAssistantTextEvent').mockClear();
     effects.fn('broadcast').mockClear();
     h.emit(receipt);
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null, undefined);
     expect(effects.fn('broadcast')).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       sessionId: 'task', event: { ...receipt, data: { ...data, text } },
     }));
@@ -450,7 +450,7 @@ describe('production Session event pipeline', () => {
     const h = harness();
     const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };
     h.emit(event('text', data, { source: 'pi' }));
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
     await h.dispose();
   });
 

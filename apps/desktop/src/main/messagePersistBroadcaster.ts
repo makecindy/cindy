@@ -205,6 +205,28 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+
+/**
+ * 本轮 prompt 之前到达的非 final text（运行时就绪 / 重连期间的提示文本）会先建一个 block，
+ * 它的 createdAt 早于本轮的 user 行。这样的 block 一旦被本轮写入（delta 或本轮全文快照），
+ * 就把起点夹到本轮起点之后；否则落库的回复会排在触发它的 user 消息之前
+ * （renderer 按 (createdAt, rowid) 排序）。本轮自己建的 block 起点就在本轮起点之后，不进这里。
+ * 后台 turn 的文本不属于当前前台 turn，不抬（turnScope === 'background'）。
+ */
+function stampBlockAfterTurnStart(
+  sessionId: string,
+  block: AssistantBlock,
+  turnScope: 'turn' | 'background' | undefined,
+): void {
+  if (turnScope === 'background') return;
+  const turnStartedAt = _turnStartedAtBySession.get(sessionId);
+  if (turnStartedAt === undefined || turnStartedAt <= block.createdAt) return;
+  // /clear 之前的 block 不抬升：抬上去会让 pre-clear 文本跟着漏进清空后的历史
+  // （messages 按 createdAt > clearedAt 过滤、广播也用同一个边界）。
+  const clearBoundary = clearBoundaryBySession.get(sessionId);
+  if (clearBoundary !== undefined && block.createdAt <= clearBoundary) return;
+  block.createdAt = turnStartedAt;
+}
 // In-flight thinking is not in SQLite until final. Keep one recoverable snapshot
 // so expanding midway does not depend on deltas a collapsed controller never received.
 const historyThinkingBlocks = new Map<string, Map<string, Message>>();
@@ -2049,6 +2071,7 @@ export function onAssistantTextEvent(
   sessionId: string,
   data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown },
   agentMeta: AgentMeta | null,
+  turnScope?: 'turn' | 'background',
 ): string | undefined {
   const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
@@ -2116,6 +2139,9 @@ export function onAssistantTextEvent(
       ) {
         block.text = rawText;
       }
+      // 本轮 final 全文就是这个 block 的内容（含未走重写的等长补发），在此校时；
+      // 只看写入条件会因「等长 / 非更长前缀」漏校，旧起点被带到落库。
+      stampBlockAfterTurnStart(sessionId, block, turnScope);
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
     }
@@ -2231,6 +2257,7 @@ export function onAssistantTextEvent(
     assistantBlocks.set(sessionId, block);
   } else {
     block.text += rawText;
+    stampBlockAfterTurnStart(sessionId, block, turnScope);
     if (agentMeta) block.agentMeta = agentMeta;
   }
   return block.persistId;
