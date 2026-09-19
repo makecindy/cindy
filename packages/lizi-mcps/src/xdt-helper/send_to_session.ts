@@ -123,10 +123,11 @@ export function registerSendToSessionTool(
     inputShape: {
       target_session_id: z
         .string()
-        .uuid()
+        .min(1)
         .optional()
         .describe(
-          `目标 ${BRAND_NAME} session 的 business id(UUID)。` +
+          `目标 ${BRAND_NAME} session 的 business id(新建 desktop session 是 UUID,` +
+            "历史 session 可能是 cuid 或 IM 确定性 id,一律按不透明字符串处理、不校验格式)。" +
             "省略 → create:新建一个专属 session 并在返回里回传新建 id;提供 → jump 到该既有 session。",
         ),
       message: z
