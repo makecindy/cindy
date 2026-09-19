@@ -77,6 +77,7 @@ import {
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
+import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
 function NavigationGate() {
   const auth = useAuth();
@@ -148,27 +149,29 @@ function NavigationGate() {
           style={splashActive || mode === 'dark' ? 'light' : 'dark'}
         />
       ) : null}
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: colors.surface },
-          ...(Platform.OS === 'ios'
-            ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
-            : null),
-          // iOS 26 起 react-native-screens 的返回手势默认全屏识别(fullScreenSwipe 默认 true),
-          // 判定范围过大:会与消息内表格/代码块的横向 ScrollView 抢手势,拖动内容时还会误触返回。
-          // 限定手势起始点在屏幕前缘 44pt 内(end = 距前缘最大 x),恢复经典边缘返回的判定范围;
-          // iOS < 26 默认就是边缘返回,本配置不改变其行为;Android 返回手势不走这条路径,不受影响。
-          gestureResponseDistance: { end: 44 },
-        }}
-      >
-        {/* 设置从左侧抽屉进入:接着抽屉方向从左边推出,不要默认从右边盖上来。 */}
-        <Stack.Screen name="settings" options={{ animation: 'slide_from_left' }} />
-        <Stack.Screen
-          name="add-account"
-          options={{ animation: 'fade', gestureEnabled: false }}
-        />
-      </Stack>
+      <RemoteDesktopHost>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: colors.surface },
+            ...(Platform.OS === 'ios'
+              ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
+              : null),
+            // iOS 26 起 react-native-screens 的返回手势默认全屏识别(fullScreenSwipe 默认 true),
+            // 判定范围过大:会与消息内表格/代码块的横向 ScrollView 抢手势,拖动内容时还会误触返回。
+            // 限定手势起始点在屏幕前缘 44pt 内(end = 距前缘最大 x),恢复经典边缘返回的判定范围;
+            // iOS < 26 默认就是边缘返回,本配置不改变其行为;Android 返回手势不走这条路径,不受影响。
+            gestureResponseDistance: { end: 44 },
+          }}
+        >
+          {/* 设置从左侧抽屉进入:接着抽屉方向从左边推出,不要默认从右边盖上来。 */}
+          <Stack.Screen name="settings" options={{ animation: 'slide_from_left' }} />
+          <Stack.Screen
+            name="add-account"
+            options={{ animation: 'fade', gestureEnabled: false }}
+          />
+        </Stack>
+      </RemoteDesktopHost>
     </NavigationThemeProvider>
   );
 }

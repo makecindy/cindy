@@ -116,7 +116,7 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     const relaunch = source.slice(source.indexOf('async function executeRelaunch('));
     const gate = relaunch.indexOf('if (!await reclaimSubagentRunnersForRelaunch())');
     const attempts = relaunch.indexOf('incrementApplyAttempts();');
-    const windows = relaunch.indexOf('executeUpdateWindows(readyFilePath, theme);');
+    const windows = relaunch.indexOf('executeUpdateWindows(readyFilePath, theme, readyZipSha256);');
     const mac = relaunch.indexOf('executeUpdateMacOS(readyFilePath);');
     expect(gate).toBeGreaterThan(-1);
     expect(attempts).toBeGreaterThan(gate);

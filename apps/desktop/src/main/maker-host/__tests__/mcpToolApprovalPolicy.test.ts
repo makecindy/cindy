@@ -272,6 +272,16 @@ describe('desktop MCP approval policy', () => {
     }
   });
 
+  it('keeps external project builds on the existing task permission policy', () => {
+    const route = { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' };
+    for (const projectDir of [undefined, '/projects/worktree-b', '../worktree-b']) {
+      expect(getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator', toolName: 'call_tool',
+        toolParams: { name: 'build_app', args: { ...route, projectDir } },
+      })).toBe('prompt-each-time');
+    }
+  });
+
   it('discloses host file access before an agent starts an Xcode build', () => {
     setMainLocale('en');
     expect(

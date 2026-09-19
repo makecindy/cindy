@@ -1,3 +1,4 @@
+import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
 import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
 import { providerModelRecord } from '@cindy/model-providers';
@@ -3086,6 +3087,7 @@ function createCodexProxyHandle(
       }),
     ),
     maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
+    oversizedRequestRecovery: createAttachmentRecovery(sessionIdFromHeaders),
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,

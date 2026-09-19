@@ -46,6 +46,7 @@ import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionDeliveryResult } from './sessionEventDelivery.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly onSuccessfulProductTurn?: (sessionId: string) => Promise<void>;
   readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   readonly pendingFailedTurnAssistantPersistId: Map<string, string>;
   readonly autoResumeBookkeeping: Pick<
@@ -436,6 +437,15 @@ export function finishSessionTerminalEvent(
         session.id,
         event.sessionTurnGeneration,
       );
+    if (event.type === 'done' && !isContinuationBoundary && !isPairedFailedTurnDone &&
+        !isFailedTurnCompletionTail && !deferredOrcaWorkerTerminal &&
+        !isTerminalTurnErrorEvent(event) && isSuccessfulAssistantReplyDoneData(event.data) &&
+        !deps.autoResumeBookkeeping.hasSuppressedError(session.id) &&
+        !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
+        !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)) {
+      void deps.onSuccessfulProductTurn?.(session.id).catch(() =>
+        deps.log.warn('Could not finish product turn follow-up'));
+    }
     if (
       !shouldSkipOrcaWorkerTerminal({
         isContinuationBoundary,
@@ -451,17 +461,22 @@ export function finishSessionTerminalEvent(
       })
     ) {
       // Capture before queue-drain microtasks can promote the follow-up turn.
-      const botDelegationHadPendingInputAtTerminal =
-        (deps.agentInputCoordinatorHolder?.getQueueControlSnapshot(session.id).pendingQueue.length ?? 0) > 0;
+      const botDelegationPendingInputClientIds =
+        deps.agentInputCoordinatorHolder?.getQueueControlSnapshot(session.id).pendingQueue.flatMap(item => [item.clientId, ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []), ...(item.retrySourceClientId ? [item.retrySourceClientId] : [])]) ?? [];
       void (async () => {
         try {
           const doneData = event.data as { result?: unknown; message?: unknown; reason?: unknown } | null;
           await deps.botDelegationServiceHolder?.settleSession({
             childSessionId: session.id,
+            execution: typeof event.sessionTurnGeneration === 'number'
+              ? { instanceId: event.sessionInstanceId ?? session.instanceId, generation: event.sessionTurnGeneration }
+              : null,
             outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
             resultText: typeof doneData?.result === 'string' ? doneData.result : '',
             error: [doneData?.message, doneData?.reason].find((value): value is string => typeof value === 'string' && value.length > 0),
-            hadPendingInputAtTerminal: botDelegationHadPendingInputAtTerminal,
+            hadPendingInputAtTerminal: botDelegationPendingInputClientIds.length > 0,
+            pendingInputClientIds: botDelegationPendingInputClientIds,
+            resultMessageClientId: turnAssistantPersistId,
           });
         } catch (error) {
           deps.log.warn('Bot delegation terminal settlement failed', {

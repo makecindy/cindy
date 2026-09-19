@@ -31,6 +31,6 @@ describe('Cindy Make composer presentation', () => {
       /pendingPlanReview ||[\s\S]*pendingPermission ||[\s\S]*pendingAskUser/,
     );
     expect(interactionGuard).toContain('pendingGhostGrantConfirm ? null');
-    expect(sessionView).toContain('if (cindyMakeComposerPhase) return false;');
+    expect(sessionView).toContain('if (cindyMakeComposerPhase || cindyMakePendingTest) return false;');
   });
 });

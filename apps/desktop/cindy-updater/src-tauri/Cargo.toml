@@ -24,13 +24,20 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 anyhow = "1"
 thiserror = "2"
 open = "5"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-# Used by installer::self_elevate to call ShellExecuteExW(verb="runas") and
-# trigger the UAC prompt. Minimal feature set — only the three modules whose
-# symbols we touch — to keep the release binary lean (we still strip + LTO).
+# Used by installer::self_elevate (ShellExecuteExW runas),
+# process_is_elevated (OpenProcessToken / TokenElevation), High-IL
+# staging ACLs, and CreateProcessWithTokenW de-elevation. Keep the
+# feature set to the modules whose symbols we touch.
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     # SHELLEXECUTEINFOW carries an HKEY field (hkeyClass) and so the type

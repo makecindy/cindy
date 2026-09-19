@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { posix, win32 } from 'node:path';
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 
@@ -12,6 +13,7 @@ import {
 } from '../sessionDisplayTitle';
 
 const UNNAMED = '未命名任务';
+const MAKE_RUN = 'f428ca8b-242b-43c6-b2e5-e54bdd915f62';
 
 function session(over: Partial<Session> = {}): Session {
   return {
@@ -27,6 +29,49 @@ function session(over: Partial<Session> = {}): Session {
 }
 
 describe('getSessionDisplayTitle', () => {
+  it.each([
+    win32.join('C:/managed', 'worktrees', MAKE_RUN),
+    posix.join('/managed', 'worktrees', MAKE_RUN),
+  ])('uses the worktree name rather than the session id for %s', (workingDir) => {
+    const s = session({
+      id: 'other-session',
+      source: 'cindy-make',
+      workingDir,
+      title: '[Cindy-Make] 修改背景色',
+    });
+    expect(getSessionDisplayTitle(s, UNNAMED)).toBe('[f428] 修改背景色');
+    expect(s.title).toBe('[Cindy-Make] 修改背景色');
+  });
+
+  it.each(['[Cindy Make] 修改背景色', '[f428] 修改背景色', '修改背景色'])(
+    'keeps one short tag when displaying %s',
+    (title) => {
+      const s = session({
+        source: 'cindy-make',
+        title,
+        workingDir: '/managed/worktrees/' + MAKE_RUN,
+      });
+      expect(getSessionDisplayTitle(s, UNNAMED)).toBe('[f428] 修改背景色');
+    },
+  );
+
+  it('does not guess a worktree tag when only the session id is known', () => {
+    const s = session({
+      id: 'abcd-session',
+      source: 'cindy-make',
+      title: '[Cindy-Make] 修改背景色',
+    });
+    expect(getSessionDisplayTitle(s, UNNAMED)).toBe('修改背景色');
+  });
+
+  it('leaves similar prefixes in ordinary task titles untouched', () => {
+    const s = session({
+      title: '[Cindy-Make] notes',
+      workingDir: '/managed/worktrees/' + MAKE_RUN,
+    });
+    expect(getSessionDisplayTitle(s, UNNAMED)).toBe('[Cindy-Make] notes');
+  });
+
   it('哨兵标题换成本地化兜底文案', () => {
     expect(getSessionDisplayTitle(session(), UNNAMED)).toBe(UNNAMED);
   });
@@ -60,16 +105,34 @@ describe('getSessionDisplayTitle', () => {
 describe('isEmptyDraftSession', () => {
   it('哨兵 + 零消息 = 空草稿', () => {
     expect(isEmptyDraftSession(session())).toBe(true);
-    expect(isEmptyDraftSession(session({ _count: { messages: 0 } } as Partial<Session>))).toBe(true);
+    expect(isEmptyDraftSession(session({ _count: { messages: 0 } } as Partial<Session>))).toBe(
+      true,
+    );
   });
 
   it('有消息或已起名都不算空草稿', () => {
-    expect(isEmptyDraftSession(session({ _count: { messages: 1 } } as Partial<Session>))).toBe(false);
+    expect(isEmptyDraftSession(session({ _count: { messages: 1 } } as Partial<Session>))).toBe(
+      false,
+    );
     expect(isEmptyDraftSession(session({ title: '已起名' }))).toBe(false);
   });
 });
 
 describe('toStoredSessionTitle — 显示投影必须还原成存储值', () => {
+  it.each(['新名字', '[f428] 新名字', '[Cindy-Make] 新名字'])(
+    'preserves one worktree tag after renaming to %s',
+    (editedTitle) => {
+      const s = session({
+        source: 'cindy-make',
+        title: '[Cindy-Make] old',
+        workingDir: '/managed/worktrees/' + MAKE_RUN,
+      });
+      const stored = toStoredSessionTitle(s, editedTitle);
+      expect(stored).toBe('[f428] 新名字');
+      expect(getSessionDisplayTitle({ ...s, title: stored }, UNNAMED)).toBe(stored);
+    },
+  );
+
   it('legacy automation 会话补回 [Schedule] 前缀', () => {
     // 预填给用户的是剥掉前缀的 'nightly'。若原样落库,isAutomationGeneratedSession
     // (legacy 数据只靠前缀识别)再也认不出它,会话从 automation 分组消失。
@@ -100,6 +163,16 @@ describe('toStoredSessionTitle — 显示投影必须还原成存储值', () => 
 });
 
 describe('canHighlightSessionDisplayTitle', () => {
+  it('avoids stale search offsets for legacy Make titles and retains them for new titles', () => {
+    const s = session({
+      source: 'cindy-make',
+      title: '[Cindy-Make] old',
+      workingDir: '/managed/worktrees/' + MAKE_RUN,
+    });
+    expect(canHighlightSessionDisplayTitle(s)).toBe(false);
+    expect(canHighlightSessionDisplayTitle({ ...s, title: '[f428] old' })).toBe(true);
+  });
+
   it('显示串等于原始 title 时才允许高亮', () => {
     expect(canHighlightSessionDisplayTitle(session({ title: '帮我排查登录失败' }))).toBe(true);
   });

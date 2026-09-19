@@ -371,7 +371,7 @@ export function sessionCreateToRow(
          */
         providerId?: string | null;
         /** Main-owned purposes only; the renderer create IPC validates which values it accepts. */
-        source?: 'bot' | 'cindy-make';
+        source?: 'bot' | 'cindy-make' | 'cindy-make-merge';
       }
     | undefined,
   now: number,

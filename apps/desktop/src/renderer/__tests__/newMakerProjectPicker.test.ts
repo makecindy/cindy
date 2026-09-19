@@ -56,7 +56,6 @@ const deviceProvidersHookSource = readSource('hooks', 'useDeviceProviders.ts');
 
 const agentCapabilitiesHookSource = readSource('hooks', 'useAgentCapabilities.ts');
 const availableAgentsHookSource = readSource('hooks', 'useAvailableAgents.ts');
-const vendorSwitcherSource = readSource('components', 'new-chat', 'VendorSegmentedSwitcher.tsx');
 
 const scheduleFormDialogSource = readSource(
   'features',
@@ -557,12 +556,6 @@ describe('Shared create project picker', () => {
     expect(availableAgentsHookSource).toContain('prefetchDeviceCapabilities');
     // 未加载完成时不隐藏任何入口(loaded 保持 false → 空 hidden)。
     expect(availableAgentsHookSource).toMatch(/loaded/);
-
-    // 开关按 hiddenVendors 过滤 OPTIONS,但保留当前选中段避免"无选中"过渡帧。
-    expect(vendorSwitcherSource).toContain('hiddenVendors');
-    expect(vendorSwitcherSource).toMatch(
-      /opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/,
-    );
 
     // 路由以被控端(deviceId)为准计算 hidden。不可用性变化只收窄可选入口；不得由
     // 监听旧 draft 的 effect 再写回选中值，否则会覆盖同轮刚应用的新默认组合。

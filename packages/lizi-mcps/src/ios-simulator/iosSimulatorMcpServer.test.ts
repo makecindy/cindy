@@ -262,7 +262,7 @@ describe("createIOSSimulatorMcpServer", () => {
     await Promise.all([client.close(), server.close()]);
   });
 
-  it("accepts an explicit generic Xcode container for build_app", async () => {
+  it.each([undefined, "/projects/worktree-b", "../worktree-b"])("accepts an explicit Xcode container with projectDir %s", async (projectDir) => {
     const callTool = vi.fn(async () => ({ ok: true, data: { built: true } }));
     const { client, server } = await connect({ callTool }, "session-a");
     const args = {
@@ -271,6 +271,7 @@ describe("createIOSSimulatorMcpServer", () => {
       leaseId: "lease-a",
       containerPath: "Examples/App/App.xcworkspace",
       scheme: "App",
+      ...(projectDir === undefined ? {} : { projectDir }),
     };
     const result = await client.callTool({
       name: "call_tool",
@@ -283,6 +284,30 @@ describe("createIOSSimulatorMcpServer", () => {
       origin: "agent",
     });
     await Promise.all([client.close(), server.close()]);
+  });
+
+  it("rejects malformed project selection and task identity overrides before calling Host", async () => {
+    const callTool = vi.fn();
+    const { client, server } = await connect({ callTool }, "session-a");
+    try {
+      for (const extra of [
+        { projectDir: " " }, { projectDir: 7 }, { projectDir: "a".repeat(4097) },
+        { projectDir: "/projects/b", sessionId: "session-b" },
+        { worktreeRoot: "/projects/b" }, { cwd: "/projects/b" },
+      ]) {
+        const result = await client.callTool({
+          name: "call_tool",
+          arguments: { name: "build_app", args: {
+            instanceId: "instance-a", generation: 1, leaseId: "lease-a", ...extra,
+          } },
+        });
+        expect(result.isError).toBe(true);
+        expect(JSON.parse(readResultText(result))).toMatchObject({ errorCode: "INVALID_ARGS" });
+      }
+      expect(callTool).not.toHaveBeenCalled();
+    } finally {
+      await Promise.all([client.close(), server.close()]);
+    }
   });
 
   it("preserves structured host business errors", async () => {

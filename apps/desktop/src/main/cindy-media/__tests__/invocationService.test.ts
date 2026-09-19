@@ -361,6 +361,42 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.ingestMedia).toHaveBeenCalledTimes(1);
   });
 
+  it.each([0, 1, 2])('materializes large base64 images with %i trailing padding characters', async (padding) => {
+    const op = operation({
+      mode: 'sync',
+      media: [{ path: ['data'], encoding: 'base64', kind: 'image' }],
+    });
+    op.request.maxResponseBytes = 32 * 1024 * 1024;
+    mocks.guide.mockResolvedValue(resolvedGuide(op));
+    // Only the decoder and MIME probe are under test; ingestion is mocked.
+    const bytes = Buffer.alloc(6 * 1024 * 1024 - padding);
+    PNG.copy(bytes);
+    const encoded = bytes.toString('base64');
+    mocks.outboundFetch.mockResolvedValue(new Response(JSON.stringify({
+      data: padding === 0 ? encoded : `data:image/png;base64,\n${encoded}\n`,
+    }), { status: 200 }));
+
+    const invocationId = await prepare();
+    await expect(callCindyMedia({
+      action: 'request', invocationId, body: { prompt: 'large image' },
+    })).resolves.toMatchObject({ ok: true, status: 'complete' });
+    expect(mocks.ingestMedia).toHaveBeenCalledTimes(1);
+    expect(mocks.ingestMedia.mock.calls[0][0].buffer.equals(bytes)).toBe(true);
+  });
+
+  it.each(['A', 'AAA', 'AAAA=', 'A===', 'AA=A', '====', 'AA-_', 'AAA!'])('rejects malformed base64 %s before ingestion', async (encoded) => {
+    mocks.guide.mockResolvedValue(resolvedGuide(operation({
+      mode: 'sync',
+      media: [{ path: ['data'], encoding: 'base64', kind: 'image' }],
+    })));
+    mocks.outboundFetch.mockResolvedValue(new Response(JSON.stringify({ data: encoded }), { status: 200 }));
+    const invocationId = await prepare();
+    await expect(callCindyMedia({
+      action: 'request', invocationId, body: { prompt: 'image' },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'MEDIA_RESULT_INVALID' });
+    expect(mocks.ingestMedia).not.toHaveBeenCalled();
+  });
+
   it('Guide 查询键无前缀时仍持久化并提交完整 Gateway modelId', async () => {
     const fullModelId = 'openai/gpt-image-2';
     mocks.models.mockResolvedValue([
@@ -458,6 +494,50 @@ describe('Cindy Core media invocation state and security boundary', () => {
     await expect(callCindyMedia({ action: 'poll', invocationId: prepared.invocation_id as string }))
       .resolves.toMatchObject({ ok: false, errorCode: 'INVOCATION_NOT_FOUND' });
     expect(mocks.providerInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['openai', 'account/gpt-image-2.5-sunburst', { size: '1760x3824', quality: 'max' }, { size: '1760x3824', quality: 'max' }],
+    ['gemini', 'gemini/gemini-3-pro-image', { aspect_ratio: '16:9', resolution: '4k' }, { aspectRatio: '16:9', resolution: '4K' }],
+    ['xai', 'xai/grok-imagine-image', { aspect_ratio: '9:19.5', resolution: '2K' }, { aspectRatio: '9:19.5', resolution: '2k' }],
+  ] as const)('carries %s image parameters from prepare to dispatch', async (imageProtocol, id, body, expected) => {
+    const model = { id, name: id, providerId: 'custom-account', mode: 'image_generation', imageProtocol,
+      modalities: { input: ['text'], output: ['image'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    mocks.providerInvoke.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: id, capability: 'image.generate' });
+    expect(prepared.ok).toBe(true);
+    for (const key of Object.keys(body)) expect((prepared.input_schema as Record<string, unknown>).properties).toHaveProperty(key);
+    const result = await callCindyMedia({ action: 'request', invocationId: prepared.invocation_id as string, body: { prompt: 'image', ...body } });
+    expect(result.ok).toBe(true);
+    expect(mocks.providerInvoke).toHaveBeenCalledWith(expect.objectContaining(expected));
+  });
+
+  it('invalid native size remains editable before claiming a paid invocation', async () => {
+    const model = { id: 'openai/gpt-image-2.5-sunburst', name: 'Sunburst', providerId: 'openai', imageProtocol: 'openai',
+      mode: 'image_generation', modalities: { input: ['text'], output: ['image'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    mocks.providerInvoke.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'openai', modelId: model.id, capability: 'image.generate' });
+    const invocationId = prepared.invocation_id as string;
+    expect(await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'p', size: '1320x2868' } })).toMatchObject({ ok: false, errorCode: 'REQUEST_INVALID' });
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
+    expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
+    expect(await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'p', size: '1760x3824', quality: 'max' } })).toMatchObject({ ok: true });
+    expect(mocks.providerInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates Gateway GPT Image geometry without a paid round trip', async () => {
+    const id = 'openai/gpt-image-2.5-sunburst';
+    mocks.models.mockResolvedValue([{ id, name: 'Sunburst', providerId: 'xd', mode: 'image_generation' }]);
+    const guide = resolvedGuide(operation({ mode: 'sync', media: [{ path: ['data'], encoding: 'base64', kind: 'image' }] }));
+    guide.modelId = id;
+    mocks.guide.mockResolvedValue(guide);
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'xd', modelId: id, capability: 'image.generate' });
+    expect(await callCindyMedia({ action: 'request', invocationId: prepared.invocation_id as string, body: { prompt: 'p', size: '1320x2868' } })).toMatchObject({ ok: false, errorCode: 'REQUEST_INVALID' });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
   });
 
   it('本机准备期间同 owner 代次变化时不保存调用', async () => {

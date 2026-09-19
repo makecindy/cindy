@@ -69,6 +69,11 @@
 - 钥匙串条目名与 userData profile 的存量密文一一绑定：**不得**在共享既有 profile 的
   进程里改 `app.name`——换名后新写入的密文对共用该 profile 的其它身份不可解，双向串坏。
   改动条目名属存量凭证迁移，按上方增量适用原则必须单独设计兼容/回滚/验证方案。
+- Cindy Make 的托管个人版按已验证的本机启动交接继承原版的 profile、设备身份与钥匙串
+  名称；Dev 和安装版同属原版。它只能沿用现有身份，不能认领另一套钥匙串或复制凭证。
+  已有 `keychain-identity` 必须与交接身份一致；无标记只接受默认身份。原版入口和普通
+  packaged 启动的原规则不变，不开放任意环境变量的 packaged profile 覆写。
+  见 [versionStartup](../../apps/desktop/src/main/cindy-make/versionStartup.ts)。
 - 同机装过 cn 与 global 双版的机器上，后启动的版本首次访问 `safeStorage` 会触发系统
   钥匙串授权弹窗，属 macOS 按预期征求同意；应引导用户点「始终允许」。点「拒绝」后
   加解密降级失败，authManager 的 safeStorage helpers 会按原因落一次 warn 日志。
@@ -84,6 +89,9 @@
 | 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
 | Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |
 | 跨 profile 的共享 Skill 文件互斥 | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称 |
+| 跨 profile 的 worktree 借用租约 | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，模拟器工程借用时在原 profile 租约之外发布共享副本；回收器同时读取两处，源目录 I/O 结束后显式释放，释放失败由现有 `.release` 回执重试；不能因进程退出就移除保护 |
+| 旧版 worktree 回收器兼容锁 | 验证 linked worktree 的 Git 元数据与反向链接后，在源目录外的 `<commonGitDir>/worktrees/<id>/locked` 创建 Git 标准锁，避免构建中的 `git clean` 删除保护；旧版删除/池化复用已识别此锁。不覆盖用户锁，仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除。清理失败在共享租约 `.release` 中保留路径及原文件身份，由现有维护重试；旧回执仍按原身份清理 `.worktree-keep` |
+| 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，按日志目录哈希登记原 profile 日志位置，启动日志监听和写入回收记录前原子发布；借用方只读目标资源的原始日志，不复制恢复状态、不代替 owner 执行恢复。索引跨重启保留，原日志不存在时不产生回收意图 |
 | 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
 
 - 禁止把 `process.cwd()`、仓库根或源码目录作为 userData、凭证目录或临时目录的默认回退。

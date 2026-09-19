@@ -5,12 +5,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { RemoteDesktopDisplay } from '@cindy/device-link';
+import { createLinuxViewerDisplay, supportsLinuxViewerDisplay } from './linuxViewerDisplay';
 
 const exec = promisify(execFile);
 let build: Promise<string> | undefined;
 
 /** Prototype only: SPI is not shipped until supported OS/signing tests are complete. */
 export async function viewerDisplaySupported(): Promise<boolean> {
+  if (process.platform === 'linux') return supportsLinuxViewerDisplay();
   try {
     await binary();
     return true;
@@ -114,6 +116,8 @@ export async function createViewerDisplay(
   isCurrent: () => boolean,
   onFailure: () => void,
 ): Promise<ViewerDisplayHandle> {
+  if (process.platform === 'linux')
+    return createLinuxViewerDisplay(sourceDisplayId, isCurrent, onFailure);
   const executable = await binary();
   if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
   const child: ChildProcessWithoutNullStreams = spawn(executable, [], { stdio: 'pipe' });

@@ -13,14 +13,14 @@
  *    的放行依据；远程入口始终实时探测目录当前是否可访问。
  *  - upsert 不暴露 IPC —— 由 main 内部在 session 创建、项目归属变更和发送消息时调用,
  *    避免 renderer 私自污染该表。生命周期与 session 解耦:归档 / 删除既不移除目录，
- *    也不刷新最后活动时间；清空会话后仍按项目独立保存的时间筛选。
+ *    也不刷新最后活动时间；未启用任务时间筛选时仍保留空项目。
  *  - upsert 失败仅日志,不抛 —— 这是"用户体验增强"数据,不该挡住 session 创建主流程。
  */
 
 import { stat } from 'node:fs/promises';
 
 import { BrowserWindow, ipcMain } from 'electron';
-import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../client/DbClient.js';
 import { getDbClient } from '../client/current';
@@ -157,6 +157,7 @@ export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
         eq(sessions.workspaceKind, 'project'),
         isNull(sessions.remoteHostId),
         isNotNull(sessions.workingDir),
+        or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker')),
       ),
     );
   const knownKindsByPath = new Map<string, Set<string>>();

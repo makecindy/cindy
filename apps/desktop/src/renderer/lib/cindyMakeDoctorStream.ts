@@ -42,6 +42,7 @@ export function startMakeCodeSession(sessionId: string, runId: string): Promise<
     try {
       const requestChars = Array.from(request.replace(/\s+/gu, ' ').trim());
       const title = i18n.t('cindyMake.code.taskTitle', {
+        worktree: runId.slice(0, 4),
         request:
           requestChars.length > 60
             ? requestChars.slice(0, 60).join('') + '…'

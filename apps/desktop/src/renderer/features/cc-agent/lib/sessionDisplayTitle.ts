@@ -13,6 +13,8 @@
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import type { Session } from '@/lib/ccAgent.types';
+import { cindyMakeWorktreeName, formatCindyMakeTitle } from '@/lib/cindyMakeTitle';
+import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 
 import {
   getAutomationSessionDisplayTitle,
@@ -51,6 +53,9 @@ export function isEmptyDraftSession(session: Session): boolean {
  */
 export function getSessionDisplayTitle(session: Session, unnamedLabel: string): string {
   if (isDefaultDraftSessionTitle(session.title)) return unnamedLabel;
+  if (isCindyMakeFamilySource(session.source)) {
+    return formatCindyMakeTitle(session.title, cindyMakeWorktreeName(session.workingDir));
+  }
   return getAutomationSessionDisplayTitle(session);
 }
 
@@ -67,10 +72,14 @@ export function getSessionDisplayTitle(session: Session, unnamedLabel: string): 
  *     automation 分组和相关 UI 里消失(PR #1031 review P1)。
  *   - 哨兵会话若被存成兜底文案,自动起名的哨兵匹配失效、永久跳过该会话。后者由调用方
  *     的「没改就不落库」判据挡住(编辑结果等于预填值时直接 return),这里只负责前缀。
+ *   - Cindy Make 使用工作目录的四位标记；保存重命名时保留一次该标记。
  *
  * 新数据带 `source='scheduler'`,不依赖前缀,所以只需给仍带前缀的行补回去。
  */
 export function toStoredSessionTitle(session: Session, editedTitle: string): string {
+  if (isCindyMakeFamilySource(session.source)) {
+    return formatCindyMakeTitle(editedTitle, cindyMakeWorktreeName(session.workingDir));
+  }
   if (!isScheduledSession(session)) return editedTitle;
   // 用户手动把前缀打回来了(或压根没删)→ 不重复叠加。
   if (editedTitle.startsWith(SCHEDULE_TITLE_PREFIX)) return editedTitle;
@@ -82,11 +91,16 @@ export function toStoredSessionTitle(session: Session, editedTitle: string): str
  *
  * `matchIndices` 是搜索在**原始** `session.title` 上算出的下标
  * (见 `lib/sessionSearch.ts` 的 `fuzzyFilterAndRank`),显示串一旦与原串不同,下标
- * 就会错位、把高亮画到别的字上。两种情况必须关掉高亮:
+ * 就会错位、把高亮画到别的字上。以下情况必须关掉高亮:
  *
  *   - `[Schedule] xxx` 前缀被剥掉(既有 case);
  *   - 哨兵标题被换成本地化的「未命名任务」(本次新增,同一个坑)。
+ *   - Cindy Make 的旧前缀被替换为工作目录短标记。
  */
 export function canHighlightSessionDisplayTitle(session: Session): boolean {
-  return !isScheduledSession(session) && !isDefaultDraftSessionTitle(session.title);
+  return (
+    !isScheduledSession(session) &&
+    !isDefaultDraftSessionTitle(session.title) &&
+    getSessionDisplayTitle(session, '') === session.title
+  );
 }

@@ -85,6 +85,7 @@ import {
 import { createLogger, getLogDir } from './logger';
 import { ENDPOINT_MANIFEST_BASE_URL, ENDPOINT_MANIFEST_PEER_BASE_URL } from '../shared/endpoints';
 import { resolvePreferredSystemLocale } from '../shared/locale';
+import { captureCindyVersionOriginEndpoints, getCindyVersionEndpointOverride } from './cindy-make/versionRuntimeIdentity.js';
 
 const log = createLogger('clientEndpoints');
 
@@ -1081,7 +1082,10 @@ function cacheResolvedManifest(manifestUrl: string, manifestText: string): void 
  * 错误框选择退出(app.exit 已调用,调用方必须立即 return,不再继续启动流程)。
  */
 export async function initClientEndpoints(): Promise<boolean> {
-  const source = resolveEndpointSource({
+  // A verified Make profile carries the original Dev's public service configuration.
+  // Ordinary packaged apps still use CDN; ambient file/env overrides cannot enable this path.
+  const versionSnapshot = getCindyVersionEndpointOverride();
+  const source: EndpointSource = versionSnapshot ? { kind: 'file', filePath: 'Cindy Make' } : resolveEndpointSource({
     isPackaged: app.isPackaged,
     env: {
       XDT_ENDPOINTS_CDN: process.env.XDT_ENDPOINTS_CDN,
@@ -1117,7 +1121,7 @@ export async function initClientEndpoints(): Promise<boolean> {
   } = { value: null, fromCache: false };
   const endpoints = await resolveClientEndpointsBlocking({
     fetchManifest:
-      source.kind === 'cdn'
+      versionSnapshot ? () => Promise.resolve({ ok: true as const, text: versionSnapshot.manifestText }) : source.kind === 'cdn'
         ? fetchManifestViaCdn
         : () => Promise.resolve(readManifestFromFile(source.filePath)),
     promptRetry: (context) => promptRetryDialog(context, sourceLabel, dialogLocale),
@@ -1158,7 +1162,11 @@ export async function initClientEndpoints(): Promise<boolean> {
   // 另一 realm 会重新拉线上清单，把本地服务悄悄替换掉。仅对明确的 local + file
   // 启动把同一份清单固定到两个 realm；remote/CDN 与普通文件覆写仍保持区域隔离。
   const pinLocalEndpointsToAllRealms =
-    !app.isPackaged && process.env.XDT_DESKTOP_DEV_MODE === 'local' && source.kind === 'file';
+    versionSnapshot?.local === true || (!app.isPackaged && process.env.XDT_DESKTOP_DEV_MODE === 'local' && source.kind === 'file');
+  captureCindyVersionOriginEndpoints(source.kind === 'file' ? {
+    manifestText: JSON.stringify({ schemaVersion: 1, region: resolvedRegion ?? BUILD_AUTH_REGION, ...endpoints }),
+    local: pinLocalEndpointsToAllRealms,
+  } : undefined);
   if (pinLocalEndpointsToAllRealms) {
     realmEndpointCache.set('cn', endpoints);
     realmEndpointCache.set('global', endpoints);

@@ -18,6 +18,8 @@ import {
   type RemoteResourceRef,
   type RemoteResourceStatus,
   type RemoteText,
+  type RemoteActionDescriptor,
+  type RemoteResourceBlock,
 } from '@cindy/device-link';
 
 import type { RemoteInvoke } from './mobileMakerTransport';
@@ -25,6 +27,7 @@ import type { RemoteInvoke } from './mobileMakerTransport';
 export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
   'status',
   'session-link',
+  'session-controls',
 ] as const;
 
 export interface RemoteResourceHostTarget {
@@ -331,7 +334,31 @@ export async function getRemoteResource(
   if (!normalized || normalized.ref.kind !== ref.kind || normalized.ref.id !== ref.id) {
     throw new Error('invalid remote resource response');
   }
-  return normalized;
+  const source = recordOf(raw);
+  const actions: RemoteActionDescriptor[] = Array.isArray(source?.actions)
+    ? source.actions.slice(0, 16).flatMap((value) => {
+        const entry = recordOf(value);
+        const id = boundedString(entry?.id, MAX_REMOTE_ID_CHARS);
+        const label = normalizeRemoteText(entry?.label, 512);
+        // Forms/confirmations require their own supported interaction. Never execute them silently.
+        if (!entry || !id || !label || entry.fields || entry.confirmation) return [];
+        return [{ id, label, disabled: entry.disabled !== undefined && entry.disabled !== false }];
+      }) : [];
+  const blocks: RemoteResourceBlock[] | undefined = Array.isArray(source?.blocks) ? source.blocks.slice(0, 256).flatMap<RemoteResourceBlock>((rawBlock) => {
+    const block = recordOf(rawBlock);
+    const id = boundedString(block?.id, 256);
+    const primitive = boundedString(block?.primitive, 64);
+    const fallbackMarkdown = typeof block?.fallbackMarkdown === 'string' ? block.fallbackMarkdown : null;
+    if (!id || !primitive || fallbackMarkdown === null || fallbackMarkdown.length > 131072) return [];
+    // Only the inert media URL primitive is needed here. Never copy arbitrary host data.
+    const data = recordOf(block?.data);
+    if (primitive === 'session-controls') return [{ id, primitive, fallbackMarkdown,
+      data: { input: data?.input === 'available' ? 'available' : 'blocked', busy: data?.busy === true } }];
+    const inlineIcon = ref.collectionId === 'plugin-identities' && id === 'icon' && primitive === 'image';
+    const url = boundedString(data?.url, inlineIcon ? 256_000 : 4096);
+    return [{ id, primitive, fallbackMarkdown, ...(url ? { data: { url } } : {}) }];
+  }) : undefined;
+  return { ...normalized, ...(actions.length ? { actions } : {}), ...(blocks ? { blocks } : {}) };
 }
 
 function normalizeRemoteCollectionItem(

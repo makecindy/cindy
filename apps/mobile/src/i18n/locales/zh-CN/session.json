@@ -7,6 +7,7 @@
   },
   "common": {
     "cancel": "取消",
+    "dismissRecommendation": "关闭推荐",
     "delete": "删除",
     "openContextPanel": "打开上下文面板",
     "groupMode": "模式",

@@ -17,6 +17,8 @@
 import { execFileSync, execSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspectSimulatorViewer } from "./lib/simulator-viewer.mjs";
+import { inspectSimulatorNativeIdentity } from "./lib/sim-native-identity.mjs";
 import { mobileClientBundleEnv } from "../../../scripts/shared/client-endpoint-build-env.mjs";
 import { readSimEnvironment } from "./lib/sim-environment.mjs";
 import { withLocalMobileRegionConfig, extractMobileDevRegionArgs } from "./lib/mobile-dev-region.mjs";
@@ -43,10 +45,11 @@ const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const worktreeRoot = resolve(mobileDir, "../..");
 
 const jsonOutput = process.argv.slice(2).includes("--json");
+const requireViewer = process.argv.slice(2).includes("--viewer");
 
 function resolveTarget() {
   const { region, passthrough } = extractMobileDevRegionArgs(
-    process.argv.slice(2).filter((arg) => arg !== "--json"),
+    process.argv.slice(2).filter((arg) => arg !== "--json" && arg !== "--viewer"),
   );
   const udidArgs = extractSimWhoamiUdidArgs(passthrough);
   const portArgs = extractSimMetroPortArgs(udidArgs.passthrough);
@@ -151,6 +154,16 @@ if (!container) {
   }
 }
 
+const native = inspectSimulatorNativeIdentity({
+  appPath: container, projectDir: mobileDir,
+  env: { ...process.env, ...withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })) },
+});
+if (!native.healthy) healthy = false;
+if (!jsonOutput) {
+  console.log(`  native: ${native.code}`);
+  if (!native.healthy) console.log(`  请运行 pnpm mobile:sim:rebuild -- --region=${region}${simulatorUdid ? ` --udid ${simulatorUdid}` : ''}，再检查原生兼容性。`);
+}
+
 if (!jsonOutput) console.log("\n==== Metro 端口归属(哪个端口 = 哪个 worktree)====");
 let anyMetro = false;
 let currentSourceOnExpectedPort = false;
@@ -181,6 +194,13 @@ if (!anyMetro && !jsonOutput)
   );
 if (!currentSourceOnExpectedPort) healthy = false;
 
+const viewer = await inspectSimulatorViewer();
+if (requireViewer && !viewer.running) healthy = false;
+if (!jsonOutput) {
+  console.log(`\nSimulator viewer: ${viewer.status} (${viewer.appPath ?? viewer.error ?? 'not available'})`);
+  console.log('Viewer process status does not verify a visible device window.');
+}
+
 if (!jsonOutput) {
   console.log(`\n当前 worktree 源码指纹:${expectedSource}`);
   console.log(
@@ -188,7 +208,7 @@ if (!jsonOutput) {
   );
   if (healthy) {
     console.log(
-      `✓ PASS:安装包存在、${expectedPort} Metro 身份一致；尚未验证 App 加载 bundle 或显示页面。`,
+      `✓ PASS:原生指纹匹配、${expectedPort} Metro 身份一致；尚未验证 App 加载 bundle 或显示页面。`,
     );
   } else {
     console.error(
@@ -200,6 +220,8 @@ if (!jsonOutput) {
     JSON.stringify({
       healthy,
       pageVerified: false,
+      viewerRequired: requireViewer,
+      viewer,
       region,
       bundleId,
       worktree: worktreeRoot,
@@ -210,6 +232,7 @@ if (!jsonOutput) {
       anyMetro,
       booted: booted.map((line) => line.trim()),
       installed,
+      native,
       metros,
       targetSimulatorUdid: simulatorUdid,
       targetBooted: simulatorUdid ? targetBooted.length === 1 : null,

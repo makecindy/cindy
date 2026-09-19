@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 包 `groupSessions` 纯函数并用 useMemo 锁结果，避免 render 时重复计算。
  *
- * Row-only changes reuse grouping and replace just the affected session references.
+ * Row-only patches reuse membership and ordering, keeping unrelated nodes stable.
  */
 
 import { useMemo } from 'react';
@@ -29,7 +29,7 @@ export function useProjectGroups(
   includePinnedInProjects: boolean = false,
   persistentLocalProjects?: readonly PersistentLocalProject[],
   localPlatform: string = '',
-  /** Result from an earlier call with identical inputs (e.g. no activity filter). */
+  /** Reuse an earlier call when the activity filter did not change its inputs. */
   equivalentResult?: ProjectGroupsResult,
 ): ProjectGroupsResult {
   const sshHosts = useRemoteSshHosts();
@@ -43,14 +43,13 @@ export function useProjectGroups(
 
   const groups = useMemo(() => {
     if (equivalentResult) return equivalentResult;
-    const groups = selectGroups(sessions, {
+    return selectGroups(sessions, {
       projectAliases,
       includePinnedInProjects,
       botOwnerBySessionId,
       persistentLocalProjects,
       localPlatform,
     });
-    return groups;
   }, [
     equivalentResult,
     selectGroups,
@@ -59,7 +58,6 @@ export function useProjectGroups(
     includePinnedInProjects,
     persistentLocalProjects,
     localPlatform,
-    sshHosts,
     botOwnerBySessionId,
   ]);
   const ambiguousDeviceNames = useMemo(
@@ -67,8 +65,8 @@ export function useProjectGroups(
     [groups.projects],
   );
   const ambiguityKey = JSON.stringify([...ambiguousDeviceNames].sort());
-  // Preserve untouched project props as well as session props. Weak keys do not
-  // retain old grouping generations; machine-directory changes invalidate all.
+  // Weak keys keep only live grouping nodes. Registry/collision changes must
+  // re-enrich even unchanged nodes so remote labels never retain stale names.
   const enrichedProjects = useMemo(
     () => new WeakMap<ProjectNode, ProjectNode>(),
     [sshHosts, ambiguityKey],

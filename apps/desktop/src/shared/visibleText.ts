@@ -18,11 +18,11 @@
  * 合法字形也算成不可见反而会把真实产出误判成空。
  */
 
-/** 所有不可见字符：空白 + Unicode 格式字符 + 控制字符。 */
-const INVISIBLE_PATTERN = /[\s\p{Cf}\p{Cc}]/gu;
+/** 找到首个可见字符即可，不为布尔判断扫描并复制整段工具输出。不能加 g。 */
+const VISIBLE_PATTERN = /[^\s\p{Cf}\p{Cc}]/u;
 
 /** 这段文本去掉不可见字符后还有内容吗（非字符串一律 false）。 */
 export function hasUserVisibleText(text: unknown): boolean {
   if (typeof text !== 'string' || text.length === 0) return false;
-  return text.replace(INVISIBLE_PATTERN, '').length > 0;
+  return VISIBLE_PATTERN.test(text);
 }

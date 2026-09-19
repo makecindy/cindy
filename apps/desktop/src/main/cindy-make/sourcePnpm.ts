@@ -88,7 +88,7 @@ export async function runSourcePnpm(
   signal.throwIfAborted();
   // Keep progress visible in a non-TTY/CI process, including lifecycle scripts.
   args = ['install', 'fetch'].includes(args[0]) ? [...args, '--reporter=append-only'] : args;
-  if (args.some((arg) => !/^[\w.=-]+$/.test(arg))) {
+  if (args.some((arg) => !/^[\w.:=-]+$/.test(arg))) {
     throw Object.assign(new Error('unsafe pnpm argument'), { code: 'installFailed' });
   }
   const file = await resolvePnpm(env);

@@ -30,10 +30,86 @@ export function isCindyMakeVendorOptions(
  */
 export interface CindyMakeCompletionMeta {
   reportedAt: number;
-  /** Files committed by this completion on the task branch; absent when Git could not answer. */
+  /** Explicitly returned to editing; this completion must not replace input again. */
+  continuedAt?: number;
+  test?: CindyMakeTestState;
+  personal?: CindyMakePersonalBuildState;
+  lastAction?: 'test' | 'build';
+  /** Changed files in the task workspace; absent when Git could not answer. */
   changedFiles?: number;
-  /** Task-branch commit created by this completion (or HEAD when nothing changed). */
+  /** Local task commit after completion; older records may contain a file-only base HEAD. */
   commit?: string;
-  /** Task branch the changes were committed to. */
+  /** File-content tree, distinct from commit history. */
+  tree?: string;
+  /** Creation baseline, used to distinguish a completed no-op from a feature waiting for integration. */
+  baseTree?: string;
+  /** Task branch owning this completed change. */
   branch?: string;
 }
+
+export interface CindyMakeTestState {
+  status: 'starting' | 'ready' | 'failed' | 'stopped';
+  /** Optional startup detail; older completions retain the broad status. */
+  step?: CindyMakeTestStep;
+  error?: 'unavailable' | 'changed' | 'environment' | 'launchFailed' | 'timeout' | 'interrupted';
+}
+
+export type CindyMakeTestStep =
+  'waiting' | 'environment' | 'workspace' | 'stopping' | 'dependencies' | 'assets' | 'launching';
+
+export interface CindyMakePersonalBuildState {
+  status: 'waiting' | 'checking' | 'merging' | 'packaging' | 'publishing' | 'ready' | 'failed';
+  /** Optional detail within checking; old records/clients retain the broad status. */
+  checkStep?: 'dependencies' | 'tests' | 'types';
+  /** Cancellation is pending until owned processes and disposable outputs are cleaned. */
+  stopping?: boolean;
+  startedAt?: number;
+  /** Verified packaged snapshot, adopted by the personal baseline on success. */
+  commit?: string;
+  /** File-content tree, distinct from commit history. */
+  tree?: string;
+  artifactDirectory?: string;
+  artifactName?: string;
+  sha256?: string;
+  /** Complete runnable snapshot, absent on legacy installer-only builds. */
+  versionId?: string;
+  /** Exact feature operations captured under the source lock for this build. */
+  includedFeatures?: Array<{ runId: string; operationId: string }>;
+  generatedAt?: number;
+  buildId?: string;
+  error?:
+    | 'unavailable'
+    | 'changed'
+    | 'environment'
+    | 'missingShell'
+    | 'checksFailed'
+    | 'conflict'
+    | 'baselineChanged'
+    | 'buildFailed'
+    | 'cancelled'
+    | 'cleanupFailed'
+    | 'interrupted';
+}
+
+/** Only known failure codes may cross from build processes or saved records into UI. */
+export function parseCindyMakeBuildError(
+  value: unknown,
+): NonNullable<CindyMakePersonalBuildState['error']> {
+  switch (value) {
+    case 'unavailable':
+    case 'changed':
+    case 'environment':
+    case 'missingShell':
+    case 'checksFailed':
+    case 'conflict':
+    case 'baselineChanged':
+    case 'interrupted':
+    case 'cancelled':
+    case 'cleanupFailed':
+      return value;
+    default:
+      return 'buildFailed';
+  }
+}
+
+export type CindyMakeTestAction = 'start' | 'continue' | 'status' | 'build' | 'open-build';

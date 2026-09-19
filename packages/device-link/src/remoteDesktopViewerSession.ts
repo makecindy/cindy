@@ -18,7 +18,7 @@ interface ViewerConnectOptions {
   resume?: boolean;
   takeover?: boolean;
   isCurrent: () => boolean;
-  onCapabilities?: (caps: RemoteDesktopCapabilities) => void;
+  onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
 
@@ -80,7 +80,7 @@ export class RemoteDesktopViewerSession {
     if (!caps.enabled) throw new Error("DESKTOP_DISABLED");
     if (options.resume && !caps.automaticReconnect)
       throw new Error("CHANNEL_NOT_ALLOWED");
-    options.onCapabilities?.(caps);
+    await options.onCapabilities?.(caps);
     check();
     const display =
       caps.displays.find((d) => d.id === options.displayId) ?? caps.displays[0];

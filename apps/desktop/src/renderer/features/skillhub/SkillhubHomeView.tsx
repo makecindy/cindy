@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -299,34 +301,27 @@ export function SkillhubHomeView({
                   {t('skillhub.home.description')}
                 </p>
               </div>
-              <div
-                className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1"
-                role="group"
-                aria-label={t('skillhub.home.catalogFiltersAria')}
-              >
-                  {homeCatalogTabs.map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      aria-pressed={catalogTab === tab}
-                      onClick={() => {
-                        setPreviewSkill(null);
-                        setCatalogTab(tab);
-                      }}
-                      className={cn(
-                        'shrink-0 select-none rounded-full px-3.5 py-2 text-12 transition-colors duration-150',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        catalogTab === tab
-                          ? 'bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-                      )}
-                    >
-                      {tab === 'local'
+              <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1" style={WINDOW_NO_DRAG_STYLE}>
+                <SegmentedControl
+                  role="radiogroup"
+                  aria-label={t('skillhub.home.catalogFiltersAria')}
+                  height={32}
+                  optionHeight={28}
+                  optionClassName="px-3.5 text-12"
+                  value={catalogTab}
+                  onValueChange={(tab) => {
+                    setPreviewSkill(null);
+                    setCatalogTab(tab);
+                  }}
+                  options={homeCatalogTabs.map((tab) => ({
+                    value: tab,
+                    label:
+                      tab === 'local'
                         ? t('skillhub.home.local')
-                        : t(`skillhub.home.catalogFilter.${tab}`)}
-                    </button>
-                  ))}
-                  <button
+                        : t(`skillhub.home.catalogFilter.${tab}`),
+                  }))}
+                />
+                <button
                     type="button"
                     onClick={openMarket}
                     className={cn(
@@ -337,7 +332,7 @@ export function SkillhubHomeView({
                   >
                     {t('skillhub.home.catalogMore')}
                     <ChevronRight size={13} strokeWidth={1.8} aria-hidden="true" />
-                  </button>
+                </button>
               </div>
             </header>
 

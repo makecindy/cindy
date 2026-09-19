@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 547,
+  "count": 555,
   "colors": [
     {
       "id": "surface",
@@ -579,13 +579,23 @@
     },
     {
       "id": "search-match-bg",
-      "light": "53 100% 89%",
-      "dark": "40 33% 16%"
+      "light": "45 100% 70%",
+      "dark": "40 55% 21%"
     },
     {
       "id": "search-match-fg",
       "light": "0 0% 15%",
       "dark": "0 0% 90%"
+    },
+    {
+      "id": "search-match-active-bg",
+      "light": "34 100% 55%",
+      "dark": "42 100% 65%"
+    },
+    {
+      "id": "search-match-active-fg",
+      "light": "0 0% 10%",
+      "dark": "0 0% 10%"
     },
     {
       "id": "update-btn-border",
@@ -2736,6 +2746,36 @@
       "id": "slider-thumb-shadow",
       "light": "0 1px 3px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08)",
       "dark": "0 1px 3px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.16)"
+    },
+    {
+      "id": "segmented-track",
+      "light": "rgba(0, 0, 0, 0.06)",
+      "dark": "rgba(0, 0, 0, 0.25)"
+    },
+    {
+      "id": "segmented-selected-bg",
+      "light": "var(--surface-elevated)",
+      "dark": "var(--surface-elevated)"
+    },
+    {
+      "id": "segmented-selected-border",
+      "light": "var(--border-default)",
+      "dark": "var(--border-default)"
+    },
+    {
+      "id": "segmented-selected-shadow",
+      "light": "0 1px 2px rgba(0, 0, 0, 0.1), 0 3px 8px rgba(0, 0, 0, 0.06)",
+      "dark": "0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.24)"
+    },
+    {
+      "id": "segmented-option-fg",
+      "light": "var(--text-secondary)",
+      "dark": "var(--text-secondary)"
+    },
+    {
+      "id": "segmented-hover-bg",
+      "light": "var(--surface-hover)",
+      "dark": "var(--surface-hover)"
     }
   ]
 }

@@ -7,6 +7,7 @@
   },
   "common": {
     "cancel": "취소",
+    "dismissRecommendation": "추천 닫기",
     "delete": "삭제",
     "openContextPanel": "컨텍스트 패널 열기",
     "groupMode": "모드",

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 
@@ -231,24 +232,17 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
 
           <div className="flex flex-col gap-4 px-5 pb-5">
             {row.avail.length > 1 && (
-              <div className="flex rounded-full bg-[var(--surface-chip)] p-0.5">
-                {row.avail.map((candidate) => (
-                  <button
-                    key={candidate}
-                    type="button"
-                    disabled={saving}
-                    onClick={() => setAgent(candidate)}
-                    className={cn(
-                      'h-7 flex-1 rounded-full text-12 font-medium transition-colors disabled:cursor-default',
-                      candidate === agent
-                        ? 'bg-[var(--surface-elevated)] text-[var(--settings-section-title)]'
-                        : 'text-[var(--text-secondary)]',
-                    )}
-                  >
-                    {AGENT_LABEL[candidate]}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                aria-label={t('settings.providers.custom.fields.protocols')}
+                value={agent}
+                onValueChange={setAgent}
+                disabled={saving}
+                fullWidth
+                options={row.avail.map((candidate) => ({
+                  value: candidate,
+                  label: AGENT_LABEL[candidate],
+                }))}
+              />
             )}
 
             {view?.conflict && (

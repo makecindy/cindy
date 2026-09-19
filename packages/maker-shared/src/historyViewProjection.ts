@@ -1,7 +1,7 @@
 import { groupWorkRuns } from './workRunGrouping.js';
 import { isAgentPlanToolName, isDeliveryProseText } from './messageRender.js';
 import { isAgentTaskToolName } from './agentTask.js';
-import { extractPayloadToolResultMedia } from './payloadSummary.js';
+import { extractPayloadToolResultMedia, extractPayloadToolResultFiles, extractPayloadToolCardIds } from './payloadSummary.js';
 import { isOrcaCommunicationTool, messageContentToPreview, parseMessageToolUse } from './messageNormalize.js';
 import type { HistoryMessageSource, HistoryViewItem, HistoryWorkSummary } from './historyView.js';
 
@@ -23,7 +23,7 @@ export function isHistoryDetailTool(name: string): boolean {
 
 export function hasVisibleHistoryResult(content: unknown): boolean {
   const text = messageContentToPreview(content);
-  if (extractPayloadToolResultMedia(text).length > 0 || /^(?:cindy-media|xdt-file):\/\/\S+$/.test(text.trim())) return true;
+  if (extractPayloadToolResultMedia(text).length > 0 || extractPayloadToolResultFiles(text).length > 0 || extractPayloadToolCardIds(text).length > 0 || /^(?:cindy-media|xdt-file):\/\/\S+$/.test(text.trim())) return true;
   // Source listings often contain these field names and error markers. Only a
   // real result object can claim a card; ordinary tool errors remain activities.
   try {

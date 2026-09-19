@@ -4,7 +4,7 @@ import { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
-import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace.js';
+import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace.js';
 import { sessions, botSessionLinks } from '../localDb/schema.js';
 import { normalizeRecentWorkdirPath, upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { restoreLocalProjectVisibility } from '../sidebarSettingsStore.js';
@@ -113,20 +113,24 @@ function isWithinDirectory(directory: string, root: string): boolean {
 
 /** Check physical targets without changing the caller's normalized project identity. */
 export async function validateExistingLocalProjectDirectory(workingDir: string) {
-  const root = dialogueWorkspaceRootDir();
-  if (isWithinDirectory(workingDir, root)) {
+  const roots = dialogueWorkspaceRoots();
+  if (roots.some((root) => isWithinDirectory(workingDir, root))) {
     return fail('INVALID_ARGS', 'Managed dialogue workspaces cannot be registered as projects.');
   }
   if (!(await stat(workingDir)).isDirectory())
     return fail('NOT_A_DIRECTORY', 'working_dir is not a directory.');
   // Resolve both sides: userData itself may use a symlink (e.g. /var on macOS).
   const physicalDirectory = await realpath(workingDir);
-  const physicalRoot = await realpath(root).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return root;
-    throw error;
-  });
-  if (isWithinDirectory(physicalDirectory, physicalRoot)) {
-    return fail('INVALID_ARGS', 'Managed dialogue workspaces cannot be registered as projects.');
+  for (const root of roots) {
+    const physicalRoot = await realpath(root).catch((error: NodeJS.ErrnoException) => {
+      // Unavailable current or historical roots must not block unrelated projects.
+      // Keep their lexical boundary (also checked above), and still resolve accessible aliases.
+      if (typeof error.code === 'string') return root;
+      throw error;
+    });
+    if (isWithinDirectory(physicalDirectory, physicalRoot)) {
+      return fail('INVALID_ARGS', 'Managed dialogue workspaces cannot be registered as projects.');
+    }
   }
   return validateLocalProjectDirectory(physicalDirectory);
 }

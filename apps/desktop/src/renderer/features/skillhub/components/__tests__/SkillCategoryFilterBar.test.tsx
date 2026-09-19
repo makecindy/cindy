@@ -49,13 +49,13 @@ describe('SkillCategoryFilterBar', () => {
   it('renders a single-select category group', () => {
     const { onSelectCategory } = renderBar();
 
-    expect(screen.getByRole('group', { name: 'Filter skills by category' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Automation' }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('radiogroup', { name: 'Filter skills by category' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Automation' }).getAttribute('aria-checked')).toBe(
       'true',
     );
-    expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('radio', { name: 'All' }).getAttribute('aria-checked')).toBe('false');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Productivity' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Productivity' }));
     expect(onSelectCategory).toHaveBeenCalledWith('productivity');
   });
 

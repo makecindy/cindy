@@ -240,6 +240,7 @@ function harness() {
   });
   const activity = new SessionTurnActivityTracker();
   const deps = {
+    onSuccessfulProductTurn: vi.fn(async () => {}),
     log,
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
@@ -389,6 +390,16 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'runs the upstream-merge follow-up only for a successful product boundary: %s', async (status) => {
+      const h = harness();
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('done', { status }));
+      await microtasks();
+      expect(h.deps.onSuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 1 : 0);
+      await h.dispose();
+    },
+  );
   it.each([
     ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
     ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
@@ -451,6 +462,7 @@ describe('production Session event pipeline', () => {
     effects.fn('consumeLastAssistantPersistId').mockReturnValueOnce('segment-row');
     vi.setSystemTime(3000);
     h.emit(event('done', {}, { source, turnContinuationId: 0 }));
+    expect(h.deps.onSuccessfulProductTurn).not.toHaveBeenCalled();
     expect(h.activity.isSessionInTurn('task')).toBe(true);
     expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
     expect(effects.fn('turn-drain')).not.toHaveBeenCalled();

@@ -197,15 +197,15 @@ both sides. Duplicate candidates are applied once. A timed-out exchange does
 not tear down healthy video; polling is bounded to 30 seconds. SDP, candidate
 addresses, credentials and desktop content are not added to logs.
 
-| Phase | Bound |
-| --- | --- |
-| Desktop source enumeration | 2 seconds with native capture, 5 seconds otherwise |
-| Desktop offer command | 18 seconds |
-| Remote-desktop invoke | 30 seconds; other invoke channels are unchanged |
-| Viewer waiting for answer | 25 seconds |
-| ICE checks after answer | 15 seconds |
-| Temporary media disconnect | 5-second grace period |
-| Automatic media retries | 1, 3 and 8 seconds; restored after 30 seconds connected |
+| Phase                      | Bound                                                   |
+| -------------------------- | ------------------------------------------------------- |
+| Desktop source enumeration | 2 seconds with native capture, 5 seconds otherwise      |
+| Desktop offer command      | 18 seconds                                              |
+| Remote-desktop invoke      | 30 seconds; other invoke channels are unchanged         |
+| Viewer waiting for answer  | 25 seconds                                              |
+| ICE checks after answer    | 15 seconds                                              |
+| Temporary media disconnect | 5-second grace period                                   |
+| Automatic media retries    | 1, 3 and 8 seconds; restored after 30 seconds connected |
 
 On a transient disconnect the viewer keeps the picture, releases held input and
 shows the existing reconnecting badge. Input uses the existing authorized invoke
@@ -355,11 +355,115 @@ remote input and CUA calls in this Cindy process: physical keyboard/mouse input,
 other applications, and separate Cindy processes are outside it. Native event
 posting is not proof that an application has finished handling those events.
 
+## Wayland capture lifetime
+
+On Hyprland with the system `/usr/bin/grim` executable, Cindy uses native screencopy
+for unattended viewing. Existing remote-control and remote-desktop opt-ins, peer
+revocation checks and expiring leases authorize each connection. No portal picker,
+restore token, system permission override or persistent image is involved. The
+compositor's own capture permission still applies; a refusal produces no frame.
+Hyprland outputs have stable `hyprland:<output-name>` IDs and logical geometry.
+The legacy whole-desktop ID remains accepted for old viewers. The JPEG backing layer and
+WebRTC video share the actual desktop aspect ratio, including 16:10 displays. Each
+bounded JPEG pull is serialized, kept in memory and cancelled on disconnect.
+The existing canvas/WebRTC and JPEG relay transports consume these frames.
+For a selected unrotated output, a persistent Wayland screencopy child reuses its
+connection and shared-memory pixel buffer. JPEG encoding uses libjpeg-turbo;
+frames stay in memory, capped at a 1920-pixel long edge and 1 MB each, with serial pulls targeting the
+negotiated 30/60 fps (not a guaranteed delivered rate). Capture/decode time counts
+toward the frame interval instead of adding another full interval afterward.
+Unsupported layouts or unavailable helpers use grim for the remainder of the
+lease. Disconnect kills the child; EOF, a three-second capture/write deadline,
+and a ten-second idle watchdog bound orphaned processes. No new peer protocol or
+permission grant is introduced. This requires a running user desktop session; capture while locked, after logout or
+before login is not promised. PipeWire audio support is described below.
+
+Hyprland control is advertised only when the bundled input helper can find the
+Wayland virtual-pointer and virtual-keyboard protocols. Taking control creates
+user-session virtual devices; no root service, uinput permission change or shell
+command injection is involved. Selected-output mouse coordinates are mapped into
+the full logical layout, including negative origins and mixed scales. Layout
+changes release input before its coordinate mapping can become stale.
+The existing native-helper handshake, serialized acknowledgements,
+input ownership and disconnect teardown apply. EOF releases held buttons/keys;
+a six-second watchdog releases input if its parent stops responding (with a
+one-second hard shutdown bound if the compositor is also stalled).
+Text uses a temporary virtual keyboard and in-memory Unicode keymap, never the
+clipboard or process arguments. Text is paced and sent in acknowledged chunks
+of at most 256 code points so long pastes stay within the helper deadline. Physical key events use a US virtual keyboard layout. English and
+Chinese text are validated; supplementary-plane symbols (including emoji) can
+be truncated by Chromium’s Wayland text handling even with a correct keysym. Other Wayland
+compositors keep their existing view-only portal path.
+
+Linux native builds require `cc`, `pkg-config`, `wayland-scanner`, and development
+headers for `wayland-client`, `xkbcommon`, `json-c`, `libturbojpeg`, and `libpng`; packaged builds include
+the helpers and require the corresponding shared libraries. In development it is
+compiled into the existing userData native cache. Missing support keeps viewing
+available and does not advertise control. Native parser checks (no compositor or
+input injection): `node --test apps/desktop/native/remote-desktop/linux-input/test.mjs`.
+Capture buffer/stride/scaling checks use synthetic pixels with ASan/UBSan:
+`node --test apps/desktop/native/remote-desktop/linux-capture/test.mjs`.
+
+On this 2560×1600 Hyprland machine, the final persistent helper averaged 36.9 ms
+per frame (including scaling/JPEG), compared with 317.2 ms for per-frame grim.
+A local Chromium/WebRTC loop decoded 60 frames in five seconds, retained the
+16:10 aspect ratio, and used the persistent helper throughout. That loop includes
+the test driver's bridge and automatic WebRTC resolution adaptation; it is not a
+phone/network latency benchmark or a guarantee of 30/60 fps. Desktop types,
+related unit tests and native memory/bounds checks pass. Phone-side smoothness
+and packaged Linux startup still require validation.
+
+Other Linux Wayland environments (including XWayland applications) expose
+one portal-selected surface. Electron's PipeWire source is not a physical monitor
+enumeration and may have an empty `display_id`; see the
+[Electron Linux caveat](https://www.electronjs.org/docs/latest/api/desktop-capturer#linux)
+and [source contract](https://www.electronjs.org/docs/latest/api/structures/desktop-capturer-source).
+The host advertises one view-only display slot. Its initial 1280×720 geometry is a
+viewport placeholder; video/JPEG dimensions describe the selected surface. The
+existing viewer fallback supplies its localized display name.
+
+A lease creates one isolated capture window and starts one system picker. Local
+consent may take up to two minutes, independently of each bounded video RPC.
+Offers first check the existing frame operation for a ready surface; while it is
+empty, `DESKTOP_CAPTURE_PENDING` keeps the browser viewer's existing retry timer
+active without consuming network retry attempts. Native iOS receivers use their
+existing finite retry configuration with fifteen eight-second consent slots before
+the normal network retry slots; this does not require changing the native binary.
+Mobile allows an additional two minutes only for the `wayland-portal` display.
+A video attempt timing out stops
+only its peer; it does not reopen the picker.
+Subsequent offers clone the same authorized stream, and the existing JPEG frame
+operation snapshots that stream, without enumerating sources again. Frames while
+permission is pending or the video track is muted are empty. Denial stays terminal
+for that lease; polling does not ask again. There is no persistent capture token or
+new unattended access grant.
+
+Explicit stop, lease expiry, host disable/revocation, capture-process failure and
+system sharing termination dispose the capture owner. Every late portal callback
+rechecks both the owner generation and lease. Since Electron does not expose
+cancellation for an in-flight `getSources`, picker exclusivity is scoped to the
+capture generation. A retired picker neither blocks the new owner nor authorizes
+it, and its completion cannot clear the replacement owner's selection state.
+
+The existing capabilities, lease, offer, ICE and frame protocol remains intact.
+Older viewers treat pending consent as a video failure and retain their original
+bounded retries; the extended consent window requires the updated viewer.
+On the portal fallback, Linux input/audio support is
+unchanged. X11, macOS and Windows retain their capture paths. No relay reconnect,
+server change, mobile native dependency or runtime fingerprint change is needed.
+
+Regression coverage includes delayed consent, one-shot selection, video timeout
+with JPEG fallback, revocation before selection, stale replies, ended/muted tracks,
+clone ownership and bounded JPEG size. Real compositor/phone validation still needs
+the running build: select a screen locally, check video and JPEG fallback, retry
+video without another picker, then stop sharing and verify capture terminates.
+
 ## Platform and verification limits
 
 macOS uses a signed Swift helper; Windows uses a Rust helper with Win32 SendInput.
-Forge builds and packages both through the existing tools signing paths. Linux
-currently offers viewing only. Neither helper bypasses OS security boundaries:
+Forge builds and packages them through the existing tools signing paths. Linux
+Hyprland uses the Wayland virtual input helper described above; other Linux
+paths remain view-only. No helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
 System audio and explicit clipboard transfers are supported when advertised by the host. Virtual displays and remote power-on are not included. The phone keyboard sends committed text directly; the computer keyboard supplies modifiers and special keys.
@@ -399,7 +503,31 @@ System audio defaults on with the viewer preference saved locally, supported on 
 single-use display capture grant tied to the current offer, lease and trusted
 main renderer. No microphone is captured. macOS packaging declares
 NSAudioCaptureUsageDescription; development launchers must also have the OS
-permission. Linux audio is not advertised.
+permission. Hyprland hosts with `pw-record` capture the default PipeWire output
+monitor as 48 kHz stereo float PCM. The trusted capture renderer schedules at most
+150 ms into an AudioContext destination and adds its track to the existing WebRTC
+stream; it never connects to local speakers. Main retains at most 100 ms of PCM,
+checks the exact capture window and opted-in video lease on every read, and stops
+the child on disconnect, capture failure, a stalled producer or absent consumer.
+Native audio launch/read failures clean up only audio resources: the video answer,
+connected video/control channel and lease remain valid. A later offer starts a new
+audio capture; callbacks from a retired capture cannot affect its replacement.
+Lock transitions stop the producer and clear the renderer audio track. A confirmed
+unlock of the still-current lease restarts the producer and replaces the existing
+WebRTC audio sender's track without renegotiating the video connection. A repeated
+lock or ended lease invalidates pending recovery; a failed audio recovery leaves
+video and control available. Locked or unknown compositor state denies audio reads.
+This does not add audio to the compatibility JPEG transport.
+
+Linux host mute uses PipeWire `softMute` on the playback branch, retaining the
+monitor signal for the phone. While the generic remote-session `hostMute` lease is
+active, it follows default-output changes and tracks every exact output object
+(id plus serial), so newly selected outputs are muted too. On release it restores
+each saved `softMute` value; an unplugged output is discarded and cannot cause
+restoration to modify a reused node ID. Transient PipeWire failures use bounded
+backoff retries while the snapshots remain owned by the lease. Requires `pactl`,
+`pw-dump` and `pw-cli`. A null-output integration test verifies that playback mute
+leaves the captured tone nonzero; Chromium/WebRTC tests verify remote decoding.
 
 `displayModes` and `resolution` operate on the lease's display. macOS uses
 CoreGraphics mode enumeration and applies only an available mode ID for the
@@ -407,13 +535,212 @@ current login session. The operation requires control and rechecks lease and
 authorization after native preparation. It changes the actual computer display,
 not just the encoded image. Geometry changes release capture/input; only this
 remote desktop reconnects with fresh dimensions. The shared relay and other
-peer links remain untouched. Windows/Linux display mode changes are currently
-unavailable and are not advertised.
+peer links remain untouched. Hyprland enumerates the selected output's native
+modes and accepts only an ID from that enumeration. Both legacy and Lua config
+interfaces are supported; no configuration files are written. Windows display
+mode changes remain unavailable.
 
-System PiP is offered only when WebKit reports support for this video and the
-native presentation module and host backgroundViewing capability are present.
+Hyprland phone-fit uses a uniquely named headless display and temporarily mirrors
+it to the original output. A Python standard-library helper owns the mirror and
+workspace moves. EOF, missed heartbeats and termination restore the source and
+its numbered and named workspaces through the same migration path. Special
+workspaces and workspaces on other outputs are excluded. The legacy dispatcher
+cannot represent workspace names containing whitespace and rejects those names;
+the Lua interface supports them. Cleanup will
+remove only its own output; restoration retries keep the in-memory snapshot alive
+through temporary compositor errors. A missing source is treated as unplugged.
+The helper requires a running user compositor, Python 3 and the native Hyprland
+capture prerequisites (including `grim`). Capability advertisement and creation
+share this check: portal capture cannot target its Hyprland-only display IDs.
+It does not provide
+pre-login access or a physical privacy screen. Explicit mirror/special-workspace
+configurations are rejected rather than being silently replaced. Live scratch
+output tests cover resize, EOF, heartbeat timeout and SIGTERM cleanup.
+
+Linux clipboard transfer uses the existing bounded portable-format path and an
+opaque content generation. Native reads and writes refuse a locked or unknown
+compositor session; logind's advisory `LockedHint` does not prove it is unlocked.
+Clipboard reads recheck after each subprocess result. Window lists and actions
+use the same compositor probe, including after asynchronous dispatch preparation
+and before returning titles. These checks also apply to Quickshell, independently
+of whether its locker supports automatic password unlock.
+Hyprland reads use bounded `wl-paste` calls, so an unfocused Cindy window can
+read the actual system clipboard. A bundled data-control writer offers text,
+HTML, RTF and PNG together, without subprocess arguments or temporary files
+containing clipboard data. It owns only the explicitly copied value until
+replacement or app exit; it does not observe later clipboard changes. Native
+parser checks run with ASan/UBSan via
+`node --test apps/desktop/native/remote-desktop/linux-clipboard/test.mjs`.
+Live tests verify simultaneous text/HTML/RTF offers and native text/HTML reads.
+`loginctl lock-session` implements lock-on-exit; success requires `LockedHint=yes`,
+not merely successful delivery of the lock request. An installed session locker
+is required. Real phone clipboard, lock and sound playback still need end-to-end
+validation with the running development build.
+
+Foreground mobile viewers release their lease immediately when signaling goes
+offline or heartbeat reports `DEVICE_OFFLINE`, matching the host's teardown.
+Returning online starts a fresh lease instead of retaining a dead RTC peer.
+Authorized background presentations retain their existing signaling-loss policy;
+heartbeat timeouts alone do not prove lease revocation. Recovery is scoped to
+this viewer; it never resets a shared relay or another peer's pending requests.
+
+Hyprland cursor overlay uses `ext-image-copy-capture-v1` on the video helper's
+Wayland connection. Bounded PNG cursor images and hotspots reuse the existing
+cursor protocol. Hyprland 0.56 can return a transparent compositor-owned cursor;
+in that case capture includes the OS pointer in the video and clears independent
+cursor metadata. This preserves the actual pointer without a duplicate overlay.
+Linux physical privacy uses the version-bound compositor integration below.
+Persistent capture handles all eight Wayland output
+rotations/reflections, including inverted and padded buffers, after bounded
+scaling. Transformed outputs embed the compositor cursor into video; they do not
+advertise a separately transformed cursor image. Layout changes during a frame
+discard that frame and require fresh geometry. Synthetic native tests cover all
+eight transforms with both buffer row directions under ASan/UBSan.
+
+### macOS / Linux host parity audit (2026-09-18)
+
+The comparison is against Cindy's implemented macOS host, not generic OS features.
+Linux entries below refer to the Hyprland adapter; the generic portal fallback
+remains view-only. An advertised capability and passing unit tests are not evidence
+of physical phone end-to-end parity.
+
+| Capability                           | macOS implementation                                                                  | Hyprland implementation / remaining gap                                                                                                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Video and reconnect                  | Native capture, WebRTC, JPEG fallback                                                 | Persistent Wayland capture, same viewer/transport/reconnect lifecycle; encoder and performance differ                                                                                         |
+| Sound                                | ScreenCaptureKit system output                                                        | PipeWire output monitor; no microphone                                                                                                                                                        |
+| Keyboard, pointer, committed text    | Native input helper                                                                   | Wayland virtual keyboard/pointer; same bounded input protocol                                                                                                                                 |
+| Cursor shape                         | Native cursor metadata                                                                | Separate cursor image/hotspot and cursor-free video on the supported Hyprland native path; unsupported layouts/backends retain the embedded pointer                                           |
+| Monitor selection                    | OS display enumeration                                                                | Compositor output enumeration                                                                                                                                                                 |
+| Frame rate and quality               | Shared 30/60 fps and bitrate options                                                  | Same options and adaptive WebRTC path; targets are not a measured fps guarantee                                                                                                               |
+| Resolution and phone fit             | CoreGraphics modes, temporary virtual display                                         | Native modes, temporary headless output/mirror, restore-on-exit helper                                                                                                                        |
+| Text, rich clipboard, image and sync | Native portable clipboard                                                             | Data-control clipboard, same limits and consent/lease checks                                                                                                                                  |
+| Local speaker mute                   | System output mute and restore                                                        | PipeWire playback soft mute preserving the remote monitor signal                                                                                                                              |
+| Lock on disconnect                   | Verified native lock shortcut                                                         | Omarchy shell lock IPC plus compositor `secure` acknowledgement; other desktops use logind request plus `LockedHint`; requires a running locker                                               |
+| Automatic unlock                     | Native credential channel and system integration                                      | Hyprlock only; current Omarchy Quickshell remains unsupported, as documented in `remote-desktop-credentials.md`                                                                               |
+| Physical privacy screen              | Excluded masks on every display, physical-input interception, local exit confirmation | Hyprland 0.56.2 native output masking after the capture copy, physical/virtual input separation, local confirmation and owner watchdog                                                        |
+| Desktop navigation                   | Mission Control / system shortcuts                                                    | Capability-gated left/right workspace buttons on the captured monitor and an Omarchy menu button when installed; legacy viewers retain the window picker and temporary empty-workspace toggle |
+| PiP, rotation, gestures              | Mobile viewer functionality                                                           | Same viewer functionality, subject to phone/runtime support                                                                                                                                   |
+
+The Omarchy toolbar uses desktop-and-arrow icons and the official Omarchy mark
+(https://omarchy.org/brand/omarchy-logo.svg), tinted with the toolbar foreground
+in both themes. Left/right navigation includes empty workspaces on the captured
+monitor (`r-1` / `r+1`); the menu button uses Omarchy's own `menu toggle`, so a
+second press closes it even when the menu was opened locally.
+
+Linux's window picker supplies selection/switching, not macOS Mission Control's
+thumbnail animation. Its temporary empty-workspace restore retains the snapshot
+when disconnect happens while locked and retries on unlock. This applies to
+Hyprland window actions independently of the optional Omarchy menu.
+Quickshell auto-unlock remains unavailable under the
+existing-system-interface constraint. These differences and the unverified
+physical phone scenarios must not be described as complete macOS parity.
+
+The mobile toolbar uses `workspaceNavigation` to replace its first two actions
+with left/right desktops (`r-1` / `r+1`, including empty workspaces on the selected
+monitor). `omarchyMenu` adds a fifth action, invoking the fixed local
+`omarchy menu toggle` entry point. Keyboard and Controls remain available.
+Both native iOS and shared mobile chrome size the toolbar for its action count;
+the landscape popover stays anchored to Controls. Old hosts keep their original
+toolbar, and all new host actions require an active controlling lease.
+
+### Hyprland native privacy integration
+
+`native/remote-desktop/hyprland-privacy` builds only against Hyprland 0.56.2.
+Runtime checks the compositor commit and the complete plugin ABI hash before
+installing hooks; unknown versions fail closed. Build dependencies are a C++26
+compiler, `pkg-config`, matching Hyprland headers and `json-c`. Forge includes the
+adapter when matching headers are present. Other builds do not advertise it.
+Source-mode builds use the existing per-user native-helper cache. Merely reading
+capabilities does not compile/load a plugin or change compositor configuration.
+
+The same version-bound integration repairs Hyprland 0.56.2 cursor export for
+compositor-owned cursors. A cursor-only framebuffer read uses the bounded SHM
+cursor image after the original permission/source-overlap decision; ordinary
+screen reads and denied cursor reads retain the compositor path. The cursor
+buffer's stride-returning API is handled separately from client SHM allocation
+lengths. Hotspot events are sent before the matching frame is ready, including
+shape changes that complete a pending frame before the next monitor commit.
+This feeds the existing Mac/mobile cursor overlay protocol, without a new wire
+format or mobile native module. Nested-compositor checks cover arrow/text/arrow
+image and hotspot changes, cursor permission denial, and privacy plus capture.
+Physical phone end-to-end remains a manual validation target.
+
+Software cursors are deferred until after the capture/mirror copy, then drawn
+on the local output before its final presentation/privacy mask. Mirrored local
+outputs restore the cursor with the desktop's aspect-fit geometry. Explicit
+cursor-inclusive screencopy requests still draw a cursor; cursor-free requests
+no longer inherit the software cursor from the mirror texture. Hyprland 0.56.2
+reports cursor positions in logical coordinates, so the capture helper applies
+the selected output scale before normalizing against physical video dimensions.
+This prevents host position updates from pulling the phone pointer backwards
+after a touchpad gesture on fractional-scale displays.
+
+`linux-capture/test.mjs` covers coordinate normalization and clamping under
+ASan/UBSan. The opt-in `linux-capture/cursor.integration.py <plugin.so> <capture>`
+starts disposable nested compositors and compares cursor-region pixels at 100%
+and 160% scale, for both separated and legacy embedded cursor modes. It never
+loads the test plugin into the user's compositor. Additional nested checks
+verified the local cursor remains visible, including the phone-fit mirror, and
+privacy still shows Cindy locally while preserving the remote desktop image.
+
+The first authorized connection prepares the optional compositor plugin through
+`hyprctl` before allocating a lease or temporary output. Hyprland reloads its
+configuration when plugins are loaded/unloaded, so preparation waits for that
+reload and never runs under an active capture. Privacy toggles only use an
+already-prepared matching plugin. No configuration files or system lock behavior
+are changed. Mask drawing runs inside the normal final-copy pass, after saving
+the unmasked capture/mirror image and before copying to the physical output.
+It must not draw after `CHyprOpenGLImpl::end()` has invalidated framebuffer state:
+that produced all-black continuous captures on the physical DRM output despite
+passing nested-compositor tests. While privacy is active, each rendered output
+is fully damaged before rendering so a previous mask cannot enter the next
+capture through partial redraw. Text textures explicitly declare their sRGB
+color space. No extra frame is scheduled by this redraw rule;
+direct scanout is inhibited while owned. All enabled physical outputs, including
+mirrors used by phone-fit mode, are covered; headless capture outputs stay unmasked.
+The Linux mask embeds the same Cindy illustration and light/dark wordmarks as
+`privacyScreenHtml` at build time, with horizontal/vertical layouts. Artwork is
+part of the native cache identity; the compositor does not read image paths or
+fetch resources. Both themes were visually checked in an isolated compositor,
+with continuous remote capture remaining unmasked.
+The host waits for first rendered
+masks before acknowledging the toggle. Physical input is consumed before normal
+bindings/application delivery; injected input can operate the desktop, but is
+fenced during local exit confirmation. The initiating press/repeat/release cannot
+answer the confirmation. Remote input drains before that confirmation opens.
+
+The six-second compositor watchdog restores local access if the owning app dies
+or stops renewing. Lease end, revocation and normal disable stop the mask. A late
+start reply retires only its own token. Plugin updates can retire an idle build
+atomically; an active owner's plugin is never unloaded. Local IPC uses the
+existing same-user compositor trust boundary and never carries passwords.
+
+Validated in an isolated nested Hyprland session: remote capture retained test
+content while local output displayed privacy/confirmation; physical input opened
+the confirmation, virtual Enter could not answer it, and local cancel/disconnect
+worked in both Light and Dark. Watchdog expiry and idle-only retirement passed.
+Native input-state tests run under ASan/UBSan. The September 18 black-frame
+regression was reproduced on the actual 2560×1600 eDP-2 DRM output at scale 1.6:
+old code yielded zero mean and zero standard deviation throughout privacy;
+the corrected final-copy path preserved nonblack continuous capture frames.
+Real phone end-to-end, touchscreen and other GPU combinations remain manual
+validation targets.
+
+The additive `windowActions` capability gates `windowAction` list/activate/desktop
+requests. They require the controlling lease; only currently enumerated window
+IDs reach fixed dispatchers. Lua and legacy Hyprland dispatcher syntax are probed
+without changing settings. Replies after revocation are discarded. Desktop
+restoration waits for in-flight actions and does not undo independent local
+workspace navigation. Old viewers/hosts retain their existing shortcuts; the
+relay and its authorization rules are unchanged.
+
+System PiP requires the native presentation module and host backgroundViewing
+capability. New iOS binaries use AVKit readiness; browser receivers require WebKit
+support for the video. Native automatic entry is armed in the foreground after the
+first frame, with host authorization completed in parallel during Home entry.
 Entering releases control. A capture-renderer challenge/pong heartbeat renews
-only a view-only lease while the viewer reports actual system PiP presentation.
+only a view-only lease after host authorization while the viewer reports actual
+system PiP presentation.
 Closing PiP, closing WebRTC, local disconnect, revocation and the ordinary finite
 lease timeout all terminate background viewing. This does not grant indefinite
 background control or extend the lifetime of unrelated device links.
@@ -486,7 +813,6 @@ Remaining platform adapters are explicitly separate:
 The macOS pre-login and Linux service adapters remain unimplemented. The remote business protocol and shared relay are unchanged. Recovery
 affects only this desktop lease/video track, not other connected peers.
 
-
 ### Windows system service (implementation awaiting Windows runtime validation)
 
 Packaged Windows builds include a native SCM service, a Main-only Node-API pipe
@@ -519,9 +845,8 @@ TypeScript checking. Still required on Windows 10/11: signed package linking and
 installation, administrator consent/cancellation, lock/unlock, UAC, policy-enabled
 SAS, mixed-DPI displays, worker cleanup, upgrade/uninstall, and plugin rejection.
 Windows display-mode changes and pre-login/unattended post-reboot control are not
-implemented. Linux remains deferred. Do not present this as fully validated
+implemented. A Linux pre-login service remains deferred. Do not present this as fully validated
 Windows support or advertise high-frame-rate secure capture.
-
 
 ### Keyboard clipboard actions
 
@@ -553,7 +878,6 @@ retain clipboard history or log its contents. Opt-in synchronization is describe
 TypeScript and native compilation checks cover this implementation. Keyboard/menu
 interaction, application-specific selection support, and physical-phone transfer
 have not been exercised; manual verification remains with the user.
-
 
 ### Portable clipboard content
 
@@ -655,7 +979,6 @@ Checked: desktop/mobile types, native compilation, a bounded read-only native
 capture returning cursor geometry/raster metadata. Real phone gestures,
 application-by-application cursor transitions and sustained frame rate remain
 for manual verification.
-
 
 ## Clipboard and connection handoff
 

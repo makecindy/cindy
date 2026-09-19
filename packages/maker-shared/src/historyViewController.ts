@@ -71,6 +71,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     if (available && this.active) void this.refresh();
   }
   getSnapshot = (): HistoryViewSnapshot<T> => this.state;
+  /** Pagination feedback only; background validation must not disturb the reading viewport. */
+  isLoadingOlder = (): boolean => this.state.loading && this.pageOlder;
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

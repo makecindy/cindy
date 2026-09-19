@@ -89,6 +89,26 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('sidebar display settings menu', () => {
+  it('does not enumerate project menu rows while closed, and uses fresh props on open', async () => {
+    const projects = [] as NonNullable<
+      React.ComponentProps<typeof SidebarFilterPopover>['allKnownProjects']
+    >;
+    const enumerate = vi.spyOn(projects, 'map');
+    const filter = makeFilter();
+    const { rerender } = render(
+      <SidebarFilterPopover filter={filter} allKnownProjects={projects} open={false} />,
+    );
+    rerender(
+      <SidebarFilterPopover filter={{ ...filter }} allKnownProjects={projects} open={false} />,
+    );
+    expect(enumerate).not.toHaveBeenCalled();
+    rerender(<SidebarFilterPopover filter={filter} allKnownProjects={projects} open />);
+    expect(enumerate).toHaveBeenCalled();
+    const submenu = await openSubmenu(/^任务排序/);
+    fireEvent.click(within(submenu).getByRole('menuitem', { name: '创建时间' }));
+    expect(filter.setSortBy).toHaveBeenCalledWith('created');
+  });
+
   it('presents seven summarized parent rows with icons, and three direct task sorting choices', async () => {
     const filter = makeFilter();
     render(<Preview filter={filter} />);

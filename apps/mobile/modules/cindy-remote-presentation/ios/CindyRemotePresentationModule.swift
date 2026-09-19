@@ -2,6 +2,7 @@ import ExpoModulesCore
 import UIKit
 import AVFoundation
 import UniformTypeIdentifiers
+import WebRTC
 
 public class CindyRemotePresentationModule: Module {
   private var previousAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
@@ -19,6 +20,19 @@ public class CindyRemotePresentationModule: Module {
       try RemoteClipboard.write(json, expectedVersion: version)
       return String(UIPasteboard.general.changeCount)
     }.runOnQueue(.main)
+    Constants(["nativeVideo": true])
+    View(RemoteDesktopVideoView.self) {
+      Events("onMessage")
+      Prop("inlineVisible") { (view: RemoteDesktopVideoView, visible: Bool) in
+        view.inlineVisible = visible
+      }
+      AsyncFunction("receive") { (view: RemoteDesktopVideoView, message: [String: Any]) in
+        view.receive(message)
+      }
+      AsyncFunction("sendInput") { (view: RemoteDesktopVideoView, message: [String: Any]) -> Bool in
+        view.sendInput(message)
+      }
+    }
     AsyncFunction("readClipboard") { () -> String in
       try RemoteClipboard.read()
     }.runOnQueue(.main)
@@ -47,6 +61,13 @@ public class CindyRemotePresentationModule: Module {
       let session = AVAudioSession.sharedInstance()
       if enabled {
         if self.previousAudio == nil { self.previousAudio = (session.category, session.mode, session.categoryOptions) }
+        // WebRTC reapplies its own template when playout starts. Keep it aligned
+        // with PiP playback instead of restoring a cached ambient category.
+        let configuration = RTCAudioSessionConfiguration()
+        configuration.category = AVAudioSession.Category.playback.rawValue
+        configuration.mode = AVAudioSession.Mode.moviePlayback.rawValue
+        configuration.categoryOptions = [.mixWithOthers]
+        RTCAudioSessionConfiguration.setWebRTC(configuration)
         try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
         try session.setActive(true)
       } else if let previous = self.previousAudio {

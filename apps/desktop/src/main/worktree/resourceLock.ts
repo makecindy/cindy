@@ -31,8 +31,9 @@ export function worktreeResourceId(key: string): string {
 }
 
 /** One physical directory, across tasks, aliases and Cindy processes. */
-export async function withWorktreeResourceLock<T>(value: string, task: () => Promise<T>): Promise<T> {
+export async function withWorktreeResourceLock<T>(value: string, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const key = await physicalWorktreeKey(value);
+  signal?.throwIfAborted();
   const inherited = heldResources.getStore();
   if (inherited?.get(key)?.active) return task();
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
@@ -45,7 +46,7 @@ export async function withWorktreeResourceLock<T>(value: string, task: () => Pro
     } finally {
       token.active = false;
     }
-  });
+  }, signal);
 }
 
 /** Stable physical ordering prevents overlapping batch status/move operations from deadlocking. */
