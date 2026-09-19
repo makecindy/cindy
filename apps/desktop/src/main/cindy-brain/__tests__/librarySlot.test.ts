@@ -364,6 +364,73 @@ describe('GhostLibrarySlot', () => {
     expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID, 'a.txt'))).toBe(false);
   });
 
+  it('cached custom session: missing root stays unavailable without mkdir; same disk recovers; recreated path is binding-moved', async () => {
+    const bound = await bindingStore.setBinding(GHOST_ID, candidate);
+    expect(bound.ok).toBe(true);
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
+    expect(open.state).toBe('ready');
+    expect(open.location).toBe('custom');
+    const live = open as unknown as { libraryGeneration: number; libraryIdentity: string };
+    expect(live.libraryGeneration).toBe(1);
+    const keep = await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'keep.txt', content: 'keep-me' });
+    expect(keep.ok).toBe(true);
+    const customRoot = path.join(candidate, GHOST_ID);
+    expect(fs.existsSync(path.join(customRoot, 'keep.txt'))).toBe(true);
+
+    const parked = `${candidate}.parked`;
+    await fs.promises.rename(candidate, parked);
+    expect(fs.existsSync(customRoot)).toBe(false);
+
+    const missingOpen = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!missingOpen.ok || missingOpen.op !== 'open') throw new Error(JSON.stringify(missingOpen));
+    expect(missingOpen.state).toBe('unavailable');
+    expect(missingOpen.reason).toBe('disk-missing');
+    expect(missingOpen.location).toBe('custom');
+    const missingStatus = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    if (!missingStatus.ok || missingStatus.op !== 'status') throw new Error(JSON.stringify(missingStatus));
+    expect(missingStatus.state).toBe('unavailable');
+    expect(missingStatus.reason).toBe('disk-missing');
+    const blocked = await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'empty.txt', content: 'nope' });
+    expect(blocked).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+    expect(fs.existsSync(customRoot)).toBe(false);
+    expect(fs.existsSync(candidate)).toBe(false);
+    expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID, 'keep.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(defaultRootBase, GHOST_ID, 'empty.txt'))).toBe(false);
+
+    await fs.promises.rename(parked, candidate);
+    const recovered = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!recovered.ok || recovered.op !== 'open') throw new Error(JSON.stringify(recovered));
+    expect(recovered.state).toBe('ready');
+    expect(recovered.reason).toBeUndefined();
+    expect(recovered.location).toBe('custom');
+    expect((recovered as unknown as { libraryIdentity: string }).libraryIdentity).toBe(live.libraryIdentity);
+    expect((recovered as unknown as { libraryGeneration: number }).libraryGeneration).toBe(live.libraryGeneration);
+    const recoveredStatus = await slot.handleLibraryRequest(GHOST_ID, { op: 'status' });
+    if (!recoveredStatus.ok || recoveredStatus.op !== 'status') throw new Error(JSON.stringify(recoveredStatus));
+    expect(recoveredStatus.state).toBe('ready');
+    const reread = await slot.handleLibraryRequest(GHOST_ID, { op: 'read', path: 'keep.txt' });
+    if (!reread.ok || reread.op !== 'read') throw new Error(JSON.stringify(reread));
+    expect(reread.content).toBe('keep-me');
+    const retryWrite = await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'retry.txt', content: 'after-restore' });
+    expect(retryWrite.ok).toBe(true);
+    expect(fs.existsSync(path.join(customRoot, 'retry.txt'))).toBe(true);
+
+    if (process.platform === 'win32') return;
+    const replaced = `${candidate}.replaced`;
+    await fs.promises.rename(candidate, replaced);
+    await fs.promises.mkdir(candidate, { recursive: true });
+    const moved = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!moved.ok || moved.op !== 'open') throw new Error(JSON.stringify(moved));
+    expect(moved.state).toBe('unavailable');
+    expect(moved.reason).toBe('binding-moved');
+    expect(moved.location).toBe('custom');
+    const movedWrite = await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'wrong-root.txt', content: 'nope' });
+    expect(movedWrite).toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+    expect(fs.existsSync(path.join(candidate, GHOST_ID, 'wrong-root.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(candidate, GHOST_ID, 'keep.txt'))).toBe(false);
+  });
+
   it('重装自愈:meta 带 orphaned 标记时,会话建立自动清除', async () => {
     const root = path.join(defaultRootBase, GHOST_ID);
     await fs.promises.mkdir(path.join(root, '.cindy-library'), { recursive: true });

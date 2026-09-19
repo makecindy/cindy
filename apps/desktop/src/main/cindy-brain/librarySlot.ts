@@ -314,8 +314,12 @@ export class GhostLibrarySlot {
       await this.teardownSession(ghostId);
       session = undefined;
     }
+    const resolution = await this.deps.bindingStore.resolveLibraryRoot(ghostId);
+    if (session && !this.sessionMatchesResolution(session, resolution)) {
+      await this.teardownSession(ghostId);
+      session = undefined;
+    }
     if (!session) {
-      const resolution = await this.deps.bindingStore.resolveLibraryRoot(ghostId);
       session = this.createSession(ghostId, resolution, scopeKey);
       this.sessions.set(ghostId, session);
       // 会话建立即自动 open vault(幂等):消除"write 前忘 open"的脚枪。
@@ -361,6 +365,22 @@ export class GhostLibrarySlot {
     } catch {
       return null;
     }
+  }
+
+  /** Cached sessions must re-check the live binding; a missing custom root is unavailable, not an empty mkdir. */
+  private sessionMatchesResolution(
+    session: GhostLibrarySession,
+    resolution: LibraryLocationResolution,
+  ): boolean {
+    const drift = 'drift' in resolution && resolution.root === null ? resolution.drift : null;
+    if (session.drift !== drift || session.locationKind !== resolution.kind) return false;
+    const record = 'record' in resolution ? resolution.record : undefined;
+    if (session.generation !== (record?.generation ?? 0)) return false;
+    if (drift !== null) return true;
+    const root = resolution.kind === 'custom' && resolution.root !== null
+      ? resolution.root
+      : this.deps.getDefaultRoot(session.ghostId);
+    return session.vault.getRootDir() === root;
   }
 
   private createSession(

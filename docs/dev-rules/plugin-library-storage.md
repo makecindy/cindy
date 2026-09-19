@@ -45,7 +45,10 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 
 1. **不可用 ≠ 空**：meta 损坏 → `unavailable(corrupt)`；binding 漂移 →
    `binding-moved` / `disk-missing`。宿主不自动重建、不清空、不回退写默认根、
-   不触发 GC、不判素材已删。插件侧同样语义写进了 FORGE_GUIDE。
+   不触发 GC、不判素材已删。缓存中的 custom 会话在真实根消失后必须现解
+   binding：`open`/`status` 报 unavailable，不得 `mkdir` 重建空库；同一磁盘
+   对象归位后既有 `open`/`status` 恢复，删后重建的同路径是 `binding-moved`
+   不是原盘回归。插件侧同样语义写进了 FORGE_GUIDE。
 2. **卸载不删**：uninstall 只标 orphaned + 作废会话；binding 保留（用户亲选
    事实不因重装消失）。删除 = 设置页独立破坏性确认 + `trashGhostLibrary`
    （rename 进回收站，漂移时 NOT_FOUND 不误删）。内置插件退役清理
