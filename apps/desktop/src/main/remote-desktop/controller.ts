@@ -7,6 +7,7 @@ import {
   REMOTE_DESKTOP_LEASE_MS,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
   type DesktopInput,
+  type RemoteDesktopWindow,
   type RemoteDesktopCursorFrame,
   type RemoteClipboardContent,
   type RemoteDesktopVideoSettings,
@@ -22,6 +23,15 @@ import {
 const log = createLogger('remote-desktop:controller');
 
 export interface DesktopControllerDeps {
+  /** Optional host setup before allocating the first lease or temporary output. */
+  prepare?(current: () => boolean): Promise<void>;
+  windowAction?(
+    action: 'list' | 'activate' | 'desktop' | 'workspaceLeft' | 'workspaceRight' | 'omarchyMenu',
+    id: string | undefined,
+    displayId: string,
+    current: () => boolean,
+  ): Promise<RemoteDesktopWindow[] | null>;
+  stopWindowActions?(): Promise<void>;
   authorized(peer: string): boolean;
   /**
    * Trusted host authentication provider, never a controller-supplied flag.
@@ -36,6 +46,7 @@ export interface DesktopControllerDeps {
   frame(
     displayId: string,
     cursorOverlay?: boolean,
+    lease?: string,
   ): Promise<string | RemoteDesktopCursorFrame | null>;
   startInput(displayId: string): Promise<void>;
   input(events: DesktopInput[]): void;
@@ -53,7 +64,7 @@ export interface DesktopControllerDeps {
   ice?(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceReply>;
   displayModes?(displayId: string): Promise<RemoteDesktopDisplayMode[]>;
   /** Local hardware presence; must not hide displays when remote access is revoked. */
-  displayPresent?(displayId: string): boolean;
+  displayPresent?(displayId: string): boolean | Promise<boolean>;
   resolution?(
     displayId: string,
     modeId: string,
@@ -135,7 +146,7 @@ export class RemoteDesktopController {
     try {
       this.deps.stopPrivacyScreen?.();
     } finally {
-      await this.deps.stopHostMute?.();
+      await Promise.all([this.deps.stopHostMute?.(), this.deps.stopWindowActions?.()]);
     }
   }
   /** Revoke input synchronously; optional OS restoration must never retain it
@@ -210,6 +221,16 @@ export class RemoteDesktopController {
         !this.authenticationCurrent(this.active.peer, this.active.authenticationSession))
     )
       this.stop();
+  }
+  /** Losing the signaling socket is expected while the phone shows PiP.
+   * Only an authorized, view-only presentation may outlive it, and only while
+   * the media channel keeps renewing the existing bounded lease. */
+  signalingLost(peer?: string): void {
+    this.tick();
+    const active = this.active;
+    if (active && (!peer || active.peer === peer) && active.backgroundViewing && !active.controlling)
+      return;
+    this.stop(peer);
   }
   stop(peer?: string): Promise<void> {
     if (peer && this.active?.peer !== peer) {
@@ -319,7 +340,7 @@ export class RemoteDesktopController {
       if (this.viewerDisplay === handle) this.viewerDisplay = null;
       const original = this.originalResolution;
       if (original) {
-        if (this.deps.displayPresent?.(original.displayId) !== false)
+        if ((await this.deps.displayPresent?.(original.displayId)) !== false)
           await (this.deps.restoreResolution ?? this.deps.resolution)!(
             original.displayId,
             original.modeId,
@@ -470,6 +491,16 @@ export class RemoteDesktopController {
       try {
         if (!this.active && (this.viewerDisplay || this.originalResolution))
           await this.restoreStoppedDisplay();
+        if (!this.active && this.deps.prepare) {
+          const current = () =>
+            this.startingPeer === peer &&
+            generation === this.controlGeneration &&
+            this.deps.authorized(peer) &&
+            this.authenticationCurrent(peer, authenticationSession);
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+          await this.deps.prepare(current);
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        }
         const caps = await this.deps.capabilities();
         if (!this.authenticationCurrent(peer, authenticationSession))
           throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
@@ -523,6 +554,25 @@ export class RemoteDesktopController {
     if (this.displayChanging && !['stop', 'heartbeat', 'frame', 'input'].includes(request.op))
       throw new Error('DESKTOP_DISPLAY_BUSY');
     switch (request.op) {
+      case 'windowAction': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.windowAction) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+        const generation = this.controlGeneration;
+        const current = () => {
+          this.tick();
+          return (
+            this.active === active && active.controlling && this.controlGeneration === generation
+          );
+        };
+        const result = await this.deps.windowAction(
+          request.action,
+          request.action === 'activate' ? request.id : undefined,
+          active.display.id,
+          current,
+        );
+        if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        return result;
+      }
       case 'privacyScreen': {
         if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
         if (!this.deps.privacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
@@ -788,7 +838,11 @@ export class RemoteDesktopController {
         this.framePending = true;
         this.lastFrame = this.now();
         try {
-          const jpeg = await this.deps.frame(active.display.id, request.cursorOverlay);
+          const jpeg = await this.deps.frame(
+            active.display.id,
+            request.cursorOverlay,
+            active.lease,
+          );
           this.require(peer, request.lease); // revoke during capture must not leak the result
           if (this.displayChanging || active.display !== display) return { jpeg: null };
           const frame = typeof jpeg === 'object' && jpeg !== null ? jpeg : { jpeg };

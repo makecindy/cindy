@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
@@ -253,7 +253,7 @@ export function AgentResourceSection() {
               })}
             </div>
           </div>
-          <SettingsSegmentedControl
+          <SegmentedControl
             aria-label={t('settings.agentResource.preset')}
             value={activePreset}
             onValueChange={(id) => void applyPreset(id)}
@@ -309,7 +309,7 @@ export function AgentResourceSection() {
             </p>
             <p className={ROW_HINT_CLASS}>{t('settings.agentResource.priorityHint')}</p>
           </div>
-          <SettingsSegmentedControl
+          <SegmentedControl
             aria-label={t('settings.agentResource.priority')}
             value={settings.processPriority}
             onValueChange={(tier) => persist('processPriority', tier)}

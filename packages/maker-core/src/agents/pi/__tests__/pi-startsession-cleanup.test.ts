@@ -2836,7 +2836,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }
   });
 
-  it('starts a new session while stale config-home cleanup is blocked and finishes the backlog later', async () => {
+  it.each([0, 650])('starts a new session with %i ms setup delay while stale config-home cleanup is blocked and finishes the backlog later', async (setupDelayMs) => {
     const { promises: fs } = await import('node:fs');
     const originalRm = fs.rm.bind(fs);
     const staleHomes = Array.from({ length: 10 }, (_, index) => {
@@ -2882,7 +2882,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       }
       return originalRm(target, options);
     });
-    const startPromise = new PiAgent(buildDeps()).startSession({
+    const deps = buildDeps();
+    const prepareSpawn = deps.preparePiExtraSpawnConfig!;
+    const startPromise = new PiAgent({
+      ...deps,
+      preparePiExtraSpawnConfig: async (...args) => {
+        await removalStarted;
+        await new Promise((resolve) => setTimeout(resolve, setupDelayMs));
+        return prepareSpawn(...args);
+      },
+    }).startSession({
       sessionId: 'bounded-stale-sweep',
       workingDir: cwd,
       model: 'm',
@@ -2894,8 +2903,12 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         () => expect(knobs.spawnedEnvs.some(
           (env) => env.CINDY_PI_SESSION_ID === 'bounded-stale-sweep',
         )).toBe(true),
-        { timeout: 500 },
+        // The contract is progress while deletion is blocked, not a 500 ms
+        // startup benchmark. Windows CI can spend longer in unrelated setup.
+        { timeout: 3_000 },
       );
+      expect(removalReleased).toBe(false);
+      expect(staleHomes.every((home) => existsSync(home))).toBe(true);
       unblockRemoval();
       handle = await startPromise;
       await waitFor(() => staleHomes.every((home) => !existsSync(home)));

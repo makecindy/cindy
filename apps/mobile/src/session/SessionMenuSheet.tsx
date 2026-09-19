@@ -19,9 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   Archive,
   ArchiveRestore,
-  ChevronRight,
   Copy,
-  GitBranch,
   Link2,
   Pencil,
   Pin,
@@ -132,8 +130,6 @@ export interface SessionMenuSheetProps {
   onRegenerateTitle(): Promise<{ title: string | null }>;
   /** 打开工作目录(复用文件浏览页);调用方负责关 sheet 并跳转。 */
   onOpenWorkspace(): void;
-  /** Pi 原生会话树入口；只有 host runtime 真正返回 Pi 会话时由父级注入。 */
-  onOpenSessionTree?: () => void;
   onTogglePinned(): void;
   onArchive(): void;
   onRestore(): void;
@@ -167,7 +163,6 @@ export function SessionMenuSheet({
   onRename,
   onRegenerateTitle,
   onOpenWorkspace,
-  onOpenSessionTree,
   onTogglePinned,
   onArchive,
   onRestore,
@@ -595,18 +590,6 @@ export function SessionMenuSheet({
               />
             ))}
           </View>}
-
-          {!messageOnly && session.agentKind === 'pi' && onOpenSessionTree ? (
-            <View style={styles.actionGroup}>
-              <MenuActionRow
-                icon={GitBranch}
-                label={t('session.menu.branches')}
-                onPress={onOpenSessionTree}
-                testID="session.branchesButton"
-                trailing={<ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
-              />
-            </View>
-          ) : null}
 
           {onOpenSearch ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{

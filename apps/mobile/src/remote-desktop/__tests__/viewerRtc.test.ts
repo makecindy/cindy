@@ -217,6 +217,25 @@ it("does not replenish retry budget from a brief connection", async () => {
   h.api.stop();
 });
 
+it("waits for local consent without consuming network retries and cancels on exit", async () => {
+  const h = viewer();
+  await h.api.start();
+  for (let i = 0; i < 12; i++) {
+    h.api.fail("capture-pending");
+    await vi.advanceTimersByTimeAsync(net.retryMs.at(-1)!);
+  }
+  expect(h.peers).toHaveLength(13);
+  await h.answer();
+  for (const delay of net.retryMs) {
+    h.change("failed");
+    await vi.advanceTimersByTimeAsync(delay);
+  }
+  expect(h.peers).toHaveLength(16);
+  h.api.fail("capture-pending");
+  h.api.stop();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it("accepts a cold-host answer after readiness, Windows probe, sources and offer", async () => {
   const h = viewer();
   await h.api.start();

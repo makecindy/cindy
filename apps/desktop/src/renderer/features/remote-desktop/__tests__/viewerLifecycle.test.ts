@@ -39,6 +39,7 @@ async function fixture(
     delayStart?: boolean;
     busy?: boolean;
     alwaysTimeout?: boolean;
+    portal?: boolean;
   } = {},
 ) {
   const start = deferred();
@@ -63,7 +64,7 @@ async function fixture(
           canControl: true,
           connectionTakeover: true,
           automaticReconnect: options.legacyTimeout ? undefined : true,
-          displays: ['one', 'two', 'three'].map((id) => ({
+          displays: (options.portal ? ['wayland-portal'] : ['one', 'two', 'three']).map((id) => ({
             id,
             name: id,
             width: 1280,
@@ -163,6 +164,43 @@ it('times out a lease that never presents a frame and releases only that lease',
   ]);
   runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
   expect(snapshot.error).toBe('connectionTimeout');
+});
+
+it.each(['streaming', 'framePresented'])(
+  'allows portal consent after 60 seconds before %s',
+  async (type) => {
+    const current = await fixture({ portal: true });
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(snapshot).toMatchObject({ error: null, ready: false });
+    expect(current.hostLease()).toBe('lease-wayland-portal');
+    runtime.post?.({ type, epoch: 'lease-wayland-portal' });
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(snapshot).toMatchObject({ error: null, ready: true });
+    expect(current.requests.filter((r) => r.op === 'stop')).toEqual([]);
+  },
+);
+
+it('keeps the portal deadline bounded across fallback and rejects a late frame', async () => {
+  const current = await fixture({ portal: true });
+  await vi.advanceTimersByTimeAsync(90_000);
+  runtime.post?.({ type: 'fallback', epoch: 'lease-wayland-portal' });
+  await vi.advanceTimersByTimeAsync(89_999);
+  expect(snapshot.error).toBeNull();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(snapshot.error).toBe('connectionTimeout');
+  expect(current.hostLease()).toBeNull();
+  runtime.post?.({ type: 'streaming', epoch: 'lease-wayland-portal' });
+  expect(snapshot.ready).toBe(false);
+});
+
+it('retires a portal start arriving after the extended deadline', async () => {
+  const current = await fixture({ portal: true, delayStart: true });
+  await vi.advanceTimersByTimeAsync(180_000);
+  expect(snapshot.error).toBe('connectionTimeout');
+  current.start.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(current.hostLease()).toBeNull();
+  expect(snapshot).toMatchObject({ error: 'connectionTimeout', ready: false });
 });
 
 it('retires a start reply arriving after the connection deadline', async () => {

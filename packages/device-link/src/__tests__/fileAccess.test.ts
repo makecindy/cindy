@@ -27,6 +27,50 @@ describe("shared file read policy", () => {
     expect(peer).toHaveBeenCalledTimes(peerCalls);
     expect(fallback).toHaveBeenCalledTimes(1 - peerCalls);
   });
+  it.each([
+    ["video/mp4", true],
+    ["audio/mpeg", true],
+    ["Audio/MP4", true],
+    ["image/png", false],
+    ["text/plain", false],
+  ] as const)("uses a retained URL only for inline %s playback", async (mimeType, needsUrl) => {
+    const prepared = { ossKey: "", size: 3, mimeType, inlineBase64: "YWJj" };
+    const uploaded = { ossKey: "stream/key", size: 3, mimeType };
+    const peer = vi.fn();
+    const fallback = vi.fn(async () => uploaded);
+    expect(await readDeviceFile({
+      prepare: async () => prepared, peer, fallback, stream: true,
+    })).toBe(needsUrl ? uploaded : prepared);
+    expect(fallback).toHaveBeenCalledTimes(needsUrl ? 1 : 0);
+    expect(peer).not.toHaveBeenCalled();
+
+    // Download/share consumers still receive complete inline bytes without uploading.
+    fallback.mockClear();
+    expect(await readDeviceFile({
+      prepare: async () => prepared, peer, fallback, stream: false,
+    })).toBe(prepared);
+    expect(fallback).not.toHaveBeenCalled();
+    expect(peer).not.toHaveBeenCalled();
+  });
+  it("discards an inline video's uploaded result when playback is cancelled", async () => {
+    const abort = new AbortController();
+    const uploaded = { ossKey: "stream/key", size: 3, mimeType: "video/mp4" };
+    const discard = vi.fn();
+    const peer = vi.fn();
+    await expect(readDeviceFile({
+      prepare: async () => ({ ...uploaded, ossKey: "", inlineBase64: "YWJj" }),
+      peer,
+      fallback: async () => {
+        abort.abort();
+        return uploaded;
+      },
+      stream: true,
+      signal: abort.signal,
+      discard,
+    })).rejects.toThrow("FILE_PEER_CANCELLED");
+    expect(discard).toHaveBeenCalledExactlyOnceWith(uploaded);
+    expect(peer).not.toHaveBeenCalled();
+  });
   it("returns an empty inline file without peer negotiation or OSS", async () => {
     const result = {
       ossKey: "",
@@ -42,12 +86,12 @@ describe("shared file read policy", () => {
     expect(peer).not.toHaveBeenCalled();
     expect(fallback).not.toHaveBeenCalled();
   });
-  it("accepts old hosts ordinary OSS result without uploading twice", async () => {
-    const result = { ossKey: "old/key", size: 1, mimeType: "text/plain" };
+  it.each(["text/plain", "video/mp4", "audio/mpeg"])("accepts old hosts ordinary %s OSS result without uploading twice", async (mimeType) => {
+    const result = { ossKey: "old/key", size: 1, mimeType };
     const peer = vi.fn(),
       fallback = vi.fn();
     expect(
-      await readDeviceFile({ prepare: async () => result, peer, fallback }),
+      await readDeviceFile({ prepare: async () => result, peer, fallback, stream: true }),
     ).toBe(result);
     expect(peer).not.toHaveBeenCalled();
     expect(fallback).not.toHaveBeenCalled();

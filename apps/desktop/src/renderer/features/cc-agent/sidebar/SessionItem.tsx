@@ -29,10 +29,11 @@
  *   Agent → Timer 沿用原 Clock 的 gap-1.5(6px),Timer → 标题同为 6px。
  */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
+import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
@@ -318,7 +319,8 @@ export function hasSessionSelectionModifier(modifiers?: SessionClickModifiers): 
  * 背景:2026-07 切换会话卡顿,实测整栏重画单次 80-96ms、每次切换连跑 3 遍,
  * 根源就是行内全表订阅 + 无 memo。
  */
-export const SessionItem = memo(function SessionItem({
+export const SessionItem = withSidebarNavigation<SessionItemProps>(function SessionItem({
+  navigate,
   session,
   isActive,
   isRunning,
@@ -335,7 +337,7 @@ export const SessionItem = memo(function SessionItem({
   matchIndices,
   sourceLabel,
   insideAutomationGroup = false,
-}: SessionItemProps) {
+}: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const cindyMakePreparing = useCindyMakePreparing(session);
   const prRefs = usePrRefsForSession(session.id);

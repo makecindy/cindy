@@ -15,7 +15,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
 import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
@@ -47,6 +47,7 @@ import {
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
+import { restoreComposerDocument } from './restoreComposerDocument';
 import {
   hasFocusMovedToInteractiveElement,
   useComposerSendFocusRestore,
@@ -395,7 +396,7 @@ import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGes
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
-import { makerApiFor, makerApiForDevice } from '@/lib/makerTransport';
+import { makerApiFor, makerApiForDevice, makerApiForSticky } from '@/lib/makerTransport';
 import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
 const log = createLogger('ChatInput');
@@ -1305,12 +1306,12 @@ export function ChatInput({
       dismissPromptRecommendation(sessionId, recommendation.revision);
       return;
     }
-    // remote / review/read-only 保持原有 fail-closed 语义。deviceLinkDeviceId=undefined
-    // 是归属尚未解析的暂态，先保留 candidate；解析为本地 null 后再继续。
+    // deviceLinkDeviceId=undefined 是归属尚未解析的暂态，先保留 candidate；
+    // 远程推荐通过被控端 maker 隧道生成，避免在控制端读取不到会话素材。
     if (deviceLinkDeviceId === undefined || runtimeAgentKind == null || !hasPredictionMessages) {
       return;
     }
-    if (deviceLinkDeviceId !== null || remoteHostId || disabled) {
+    if (remoteHostId || disabled) {
       dismissPromptRecommendation(sessionId, recommendation.revision);
       return;
     }
@@ -1341,7 +1342,7 @@ export function ChatInput({
       content: message.content,
     }));
 
-    window.electronAPI.maker
+    makerApiForSticky(requestSessionId)
       .predictNextPrompt({
         sessionId: requestSessionId,
         agentKind: runtimeAgentKind,
@@ -3697,11 +3698,11 @@ export function ChatInput({
       isRestoringRef.current = true;
       try {
         const draft = storageKey !== undefined ? getComposerDraft(storageKey) : undefined;
-        if (draft?.text) {
-          editor.commands.setContent(normalizeRestoredComposerDraft(draft.text));
-        } else {
-          editor.commands.clearContent();
-        }
+        restoreComposerDocument(
+          editor,
+          draft?.text ? normalizeRestoredComposerDraft(draft.text) : undefined,
+          voiceInputBusyRef.current || voiceDraftTextRef.current.length > 0,
+        );
       } finally {
         isRestoringRef.current = false;
       }

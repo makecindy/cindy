@@ -776,6 +776,14 @@ describe('local-db:sessions:update handler wiring', () => {
     },
   );
 
+  it('does not register a worker directory when its project target changes', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run('codex-local');
+
+    await invokeUpdate('codex-local', { workingDir: '/worker/dir', workspaceKind: 'project' });
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+  });
+
   it('suppresses the recent-project refresh after an owner switch', async () => {
     h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?").run(
       'codex-local',

@@ -109,6 +109,8 @@ export interface RemoteActionField {
 export interface RemoteActionDescriptor {
   id: string;
   label: RemoteText;
+  /** Presentation only: the host still checks current state at invocation. */
+  disabled?: boolean;
   tone?: 'neutral' | 'primary' | 'destructive' | string;
   confirmation?: {
     title: RemoteText;
@@ -124,6 +126,10 @@ export interface RemoteResourceBlock {
   primitive: string;
   title?: RemoteText;
   fallbackMarkdown: string;
+  /** session-controls: { input: 'blocked' | 'available', busy: boolean }.
+   * Controllers may hide their composer while blocked. Hosts must independently
+   * enforce workspace use; this presentation hint never grants permission.
+   */
   data?: unknown;
 }
 
@@ -144,6 +150,7 @@ export interface RemoteCollectionDescriptor {
   id: string;
   resourceKind: string;
   title: RemoteText;
+  /** session:<source> places a resource keyed by Session id beside its composer. */
   placement?: string;
   icon?: {
     name: string;

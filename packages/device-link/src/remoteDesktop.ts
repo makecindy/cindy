@@ -113,6 +113,11 @@ export interface RemoteDesktopDisplay {
   width: number;
   height: number;
 }
+export interface RemoteDesktopWindow {
+  id: string;
+  title: string;
+  app: string;
+}
 export interface RemoteDesktopCapabilities {
   version: 1;
   enabled: boolean;
@@ -145,6 +150,10 @@ export interface RemoteDesktopCapabilities {
   clipboardInline?: boolean;
   privacyScreen?: boolean;
   hostMute?: boolean;
+  /** Explicit host actions, independent of user-configured keyboard bindings. */
+  windowActions?: boolean;
+  workspaceNavigation?: boolean;
+  omarchyMenu?: boolean;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -169,6 +178,13 @@ export interface RemoteDesktopLease {
   controlling: boolean;
 }
 export type RemoteDesktopRequest =
+  | { op: "windowAction"; lease: string; action: "list" | "desktop" }
+  | {
+      op: "windowAction";
+      lease: string;
+      action: "workspaceLeft" | "workspaceRight" | "omarchyMenu";
+    }
+  | { op: "windowAction"; lease: string; action: "activate"; id: string }
   | {
       op: "privacyScreen";
       lease: string;
@@ -233,6 +249,23 @@ export function parseRemoteDesktopRequest(
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
     throw new Error("INVALID_LEASE");
   const lease = v.lease;
+  if (v.op === "windowAction") {
+    if (
+      v.action === "list" ||
+      v.action === "desktop" ||
+      v.action === "workspaceLeft" ||
+      v.action === "workspaceRight" ||
+      v.action === "omarchyMenu"
+    )
+      return { op: v.op, lease, action: v.action };
+    if (
+      v.action === "activate" &&
+      typeof v.id === "string" &&
+      /^0x[a-f0-9]{1,16}$/.test(v.id)
+    )
+      return { op: v.op, lease, action: v.action, id: v.id };
+    throw new Error("INVALID_REQUEST");
+  }
   if (v.op === "privacyScreen" && typeof v.enabled === "boolean") {
     if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
       throw new Error("INVALID_REQUEST");

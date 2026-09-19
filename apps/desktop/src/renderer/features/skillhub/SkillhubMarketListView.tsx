@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
   useCategoryList,
   useMarketList,
@@ -32,7 +33,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 
-const FILTER_CHIP_STYLE = { height: '32px', padding: '0 12px', fontSize: '12px' };
 // Must match the global native scrollbar width in styles/globals.css.
 const MARKET_SCROLLBAR_GUTTER_PX = 12;
 
@@ -42,33 +42,6 @@ const SORT_OPTIONS: Array<{ value: SortBy; labelKey: string }> = [
   { value: 'updated_at', labelKey: 'skillhub.market.sortLatest' },
   { value: 'created_at', labelKey: 'skillhub.market.sortCreated' },
 ];
-
-/** 圆角 pill 过滤 chip；样式跟 toolbar 上的 visibility chip 完全一致。 */
-function FilterChip({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`flex shrink-0 items-center justify-center rounded-full transition-colors ${
-        active
-          ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-          : 'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] font-normal text-[var(--settings-section-desc)]'
-      }`}
-      style={FILTER_CHIP_STYLE}
-    >
-      <span className="whitespace-nowrap leading-none">{label}</span>
-    </button>
-  );
-}
 
 export function SkillhubMarketListView() {
   return <SkillhubMarketListViewInner />;
@@ -380,18 +353,21 @@ function SkillhubMarketListViewInner() {
             </DropdownMenu>
           ) : null}
 
-          <FilterChip
-            active={visibility === 'all'}
-            label={t('skillhub.market.chipAll')}
-            onClick={() => setVisibility('all')}
+          <SegmentedControl
+            role="radiogroup"
+            aria-label={t('skillhub.market.chipAll')}
+            height={32}
+            optionHeight={28}
+            optionClassName="px-3 text-12"
+            value={visibility}
+            onValueChange={setVisibility}
+            options={[
+              { value: 'all', label: t('skillhub.market.chipAll') },
+              ...(user
+                ? [{ value: 'mine' as const, label: t('skillhub.market.chipMine') }]
+                : []),
+            ]}
           />
-          {user ? (
-            <FilterChip
-              active={visibility === 'mine'}
-              label={t('skillhub.market.chipMine')}
-              onClick={() => setVisibility('mine')}
-            />
-          ) : null}
         </div>
       </div>
 

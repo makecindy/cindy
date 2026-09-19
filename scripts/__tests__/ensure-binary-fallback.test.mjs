@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { ensureBinary } from '../ensure-agent-binaries.mjs';
+import { fetchReleaseAsset } from '../../tools/ripgrep/update.mjs';
 
 const PLATFORM = 'test-fallback-platform'; // 假平台：上游立即抛 unknown，不打网络、不碰真实二进制
 const CLAUDE_PIN = JSON.parse(fs.readFileSync('tools/claude/latest.json', 'utf8')).version;
@@ -84,3 +85,48 @@ test('ensureBinary(ripgrep): 上游失败 → 回退 CDN，落地正确二进制
   const ver = fs.readFileSync(path.join(path.dirname(binPath), '.version'), 'utf8').trim();
   assert.equal(ver, RIPGREP_PIN);
 });
+
+// Official release asset retries, without network access or real timers.
+for (const suffix of ['.tar.gz', '.tar.gz.sha256']) {
+  test(`ripgrep retries transient asset failures for ${suffix}`, async () => {
+    const url = `https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/test${suffix}`;
+    const statuses = [500, 502, 200];
+    const delays = [];
+    const failures = [];
+    const result = await fetchReleaseAsset(url, {
+      fetchImpl: async (requestedUrl) => {
+        assert.equal(requestedUrl, url);
+        const response = new Response('asset', { status: statuses.shift() });
+        if (!response.ok) failures.push(response);
+        return response;
+      },
+      wait: async (milliseconds) => { delays.push(milliseconds); },
+    });
+    assert.equal(await result.text(), 'asset');
+    assert.deepEqual(delays, [1_000, 2_000]);
+    assert.equal(statuses.length, 0);
+    assert.ok(failures.every((response) => response.bodyUsed));
+  });
+}
+
+test('ripgrep exhausts three attempts before preserving the upstream error', async () => {
+  let attempts = 0;
+  const delays = [];
+  await assert.rejects(fetchReleaseAsset('https://example.invalid/rg', {
+    fetchImpl: async () => { attempts++; return new Response('unavailable', { status: 503 }); },
+    wait: async (milliseconds) => { delays.push(milliseconds); },
+  }), /Download failed 503/);
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [1_000, 2_000]);
+});
+
+for (const status of [401, 404]) {
+  test(`ripgrep does not retry HTTP ${status}`, async () => {
+    let attempts = 0;
+    await assert.rejects(fetchReleaseAsset('https://example.invalid/rg', {
+      fetchImpl: async () => { attempts++; return new Response('unavailable', { status }); },
+      wait: async () => { assert.fail('permanent errors must not retry'); },
+    }), new RegExp(`Download failed ${status}`));
+    assert.equal(attempts, 1);
+  });
+}

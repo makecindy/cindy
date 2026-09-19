@@ -28,6 +28,7 @@ import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import path from 'node:path';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
+import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
 
 function createSession(overrides: Partial<MakerSendTransactionSession> = {}): MakerSendTransactionSession {
   return {
@@ -105,6 +106,41 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it('dispatches a bound lazy session after one timed-out probe without probing again at bootstrap', async () => {
+    const h = createPreflightHarness();
+    h.io.stat.mockRejectedValue(filesystemError('WORKDIR_PROBE_TIMEOUT'));
+    const lazySession = createSession({ id: 'lazy-timeout', workDir: h.dir });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      checkWorkDirExists: h.check,
+      readSessionWorkingDirFromDb: h.readBoundWorkingDir,
+      bootstrapSession: vi.fn(async (opts) => {
+        await h.recovery.observe(opts.id!, h.recovery.resolve(opts.id!, opts.workingDir!));
+        return { session: lazySession, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      }),
+    });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('lazy-timeout', 'hello', {
+      id: 'lazy-timeout', agentKind: 'codex', model: 'gpt-5.4', workingDir: h.dir,
+    })).resolves.toMatchObject({ accepted: true, outcome: { kind: 'session-dispatch', dispatched: true } });
+    expect(h.io.stat).toHaveBeenCalledOnce();
+    expect(h.recover).toHaveBeenCalledWith('lazy-timeout', h.dir, undefined, [], 'ordinary', { existingFallbackOnly: true });
+    expect(h.emitMissing).not.toHaveBeenCalled();
+    expect(h.log.warn).not.toHaveBeenCalled();
+    expect(lazySession.send).toHaveBeenCalledOnce();
+  });
+
+  it('keeps an unbound probe timeout as an error instead of a WORKDIR_MISSING send result', async () => {
+    const h = createPreflightHarness();
+    const timeout = filesystemError('WORKDIR_PROBE_TIMEOUT');
+    h.io.stat.mockRejectedValue(timeout);
+    h.readBoundWorkingDir.mockResolvedValue(null);
+    const { deps, session } = createDeps({ checkWorkDirExists: h.check });
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello')).rejects.toBe(timeout);
+    expect(session.send).not.toHaveBeenCalled();
+    expect(h.recover).toHaveBeenCalledWith('session-1', session.workDir, undefined, [], 'ordinary', { existingFallbackOnly: true });
+    expect(h.emitMissing).not.toHaveBeenCalled();
+  });
+
   it('logs a slash-only DB fallback candidate without exposing the path or changing send behavior', async () => {
     const workdirDiagnostics = { info: vi.fn(), warn: vi.fn() };
     const { deps } = createDeps({

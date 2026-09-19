@@ -1267,7 +1267,7 @@ test('Mobile actual route families and shared visible consumers are discoverable
   const coverage = mobileRouteCoverage(ROOT);
   assert.deepEqual(coverage.missing, []);
   assert.deepEqual(coverage.stale, []);
-  assert.equal(coverage.mapped.find(r=>r.path.endsWith('devices/desktop/[deviceId].tsx')).component, '@/remote-desktop/RemoteDesktopScreen');
+  assert.equal(coverage.mapped.find(r=>r.path.endsWith('devices/desktop/[deviceId].tsx')).component, 'RemoteDesktopRoute');
   const { surfaces } = buildGeneratedSurfaces(ROOT);
   for (const [id, ends] of [
     ['mobile.chat.session', ['MessageRenderer.tsx', 'CompanionMessageCard.tsx', 'AuthorizationMessageCard.tsx', 'FailedScheduleNotice.tsx']],

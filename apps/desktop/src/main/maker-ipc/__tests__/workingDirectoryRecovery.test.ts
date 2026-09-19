@@ -10,6 +10,63 @@ afterEach(async () => {
 });
 
 describe('working directory conversation recovery', () => {
+  it('accepts a later preflight stat after deferring bootstrap observation', async () => {
+    const io = {
+      stat: vi.fn(async () => ({ isDirectory: () => true, dev: 7 })),
+      mkdir: vi.fn(),
+    };
+    const recovery = createWorkingDirectoryRecovery(io);
+    recovery.deferObservationUntilNextProbe('s', '/repo');
+    await recovery.observe('s', '/repo');
+    expect(io.stat).not.toHaveBeenCalled();
+    await recovery.observe('s', '/repo', { isDirectory: () => true, dev: 7 });
+    await recovery.observe('s', '/repo');
+    expect(io.stat).not.toHaveBeenCalled();
+  });
+
+  it.each(['discard', 'clear', 'move', 'other-session'] as const)(
+    'does not leak deferred observation across %s',
+    async (change) => {
+      const io = {
+        stat: vi.fn(async () => ({ isDirectory: () => true, dev: 7 })),
+        mkdir: vi.fn(),
+      };
+      const recovery = createWorkingDirectoryRecovery(io);
+      recovery.deferObservationUntilNextProbe('s', '/repo');
+      if (change === 'discard') recovery.discard('s');
+      if (change === 'clear') recovery.clear();
+      const dir = change === 'move' ? '/new-project' : '/repo';
+      await recovery.observe(change === 'other-session' ? 'other' : 's', dir);
+      expect(io.stat).toHaveBeenCalledExactlyOnceWith(dir);
+    },
+  );
+
+  it.each(['EACCES', 'EIO'])('does not abandon a saved recovery workspace when lookup fails with %s', async (code) => {
+    const io = {
+      stat: vi.fn(async () => ({ isDirectory: () => true })),
+      mkdir: vi.fn(),
+      findFallback: vi.fn(async () => { throw Object.assign(new Error(code), { code }); }),
+    };
+    const allocate = vi.fn(async () => '/another-recovery');
+    const recovery = createWorkingDirectoryRecovery(io, allocate);
+    expect(await recovery.recover('task', '/original')).toBe(false);
+    expect(io.stat).not.toHaveBeenCalled();
+    expect(io.mkdir).not.toHaveBeenCalled();
+    expect(allocate).not.toHaveBeenCalled();
+  });
+
+  it('does not revive a saved selection cleared during lookup', async () => {
+    let finish!: (dir: string) => void;
+    const findFallback = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const recovery = createWorkingDirectoryRecovery({ stat: vi.fn(), mkdir: vi.fn(), findFallback });
+    const pending = recovery.recover('task', '/original');
+    await vi.waitFor(() => expect(findFallback).toHaveBeenCalledOnce());
+    recovery.clear();
+    finish('/previous-recovery');
+    expect(await pending).toBe(false);
+    expect(recovery.resolve('task', '/original')).toBe('/original');
+  });
+
   it('reuses recovery files across restarts while isolating owners, tasks and original worktrees', async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-worktree-fallback-'));
     roots.push(root);
@@ -31,10 +88,11 @@ describe('working directory conversation recovery', () => {
   it('continues in a conversation directory after Git restore fails without touching the worktree', async () => {
     const original = path.resolve('/repo/.cindy-worktrees/missing');
     const fallback = path.resolve('/owned/dialogues/task');
-    const io = { stat: vi.fn(async () => ({ isDirectory: () => true })), mkdir: vi.fn() };
+    const io = { stat: vi.fn(async () => ({ isDirectory: () => true })), mkdir: vi.fn(), findFallback: vi.fn(async () => '/ordinary-recovery') };
     const allocate = vi.fn(async () => fallback);
     const recovery = createWorkingDirectoryRecovery(io, allocate);
     expect(await recovery.recover('task', original, undefined, [], 'unrestored-worktree')).toBe(true);
+    expect(io.findFallback).not.toHaveBeenCalled();
     expect(io.stat).not.toHaveBeenCalled();
     expect(io.mkdir).not.toHaveBeenCalled();
     expect(recovery.resolve('task', original)).toBe(fallback);

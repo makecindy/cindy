@@ -4,11 +4,13 @@ const mocks = vi.hoisted(() => ({
   app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => '/fake/profile' },
   exec: vi.fn(),
   access: vi.fn(),
+  accessSync: vi.fn(),
   displays: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: mocks.app, screen: { getAllDisplays: mocks.displays } }));
 vi.mock('node:child_process', () => ({ execFile: vi.fn(), spawn: vi.fn() }));
 vi.mock('node:util', () => ({ promisify: () => mocks.exec }));
+vi.mock('node:fs', () => ({ accessSync: mocks.accessSync, constants: { X_OK: 1, R_OK: 4 } }));
 vi.mock('node:fs/promises', () => ({
   default: {
     readFile: async () => 'source',
@@ -23,12 +25,34 @@ beforeEach(() => {
   mocks.app.isPackaged = false;
   mocks.exec.mockReset().mockResolvedValue({ stdout: '{"available":true}' });
   mocks.access.mockReset().mockResolvedValue(undefined);
+  mocks.accessSync.mockReset();
   vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+it.each(['grim', 'hyprctl', 'python3', 'linux-viewer-display.py', null])(
+  'advertises Linux viewer displays only with all dependencies (missing=%s)',
+  async (missing) => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+    vi.stubEnv('HYPRLAND_INSTANCE_SIGNATURE', 'test');
+    mocks.accessSync.mockImplementation((file: string) => {
+      if (missing && file.endsWith(missing)) throw new Error('missing dependency');
+    });
+    const { viewerDisplaySupported, createViewerDisplay } = await import('../viewerDisplay');
+    expect(await viewerDisplaySupported()).toBe(missing === null);
+    if (missing) {
+      await expect(createViewerDisplay('wayland-portal', () => true, vi.fn())).rejects.toThrow(
+        'DESKTOP_VIEWER_DISPLAY_UNAVAILABLE',
+      );
+      expect(mocks.exec).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it('waits for Electron to observe restored geometry and mirror removal', async () => {
   vi.useFakeTimers();

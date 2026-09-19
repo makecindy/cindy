@@ -8,6 +8,7 @@
  */
 
 import type { AutoReviewUserIntent } from './shared/auto-review-decision.js';
+import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
 
 import type {
@@ -1882,6 +1883,8 @@ export interface StartSessionOptions {
    * 跟 model/effort 同语义: 启动时快照 + 由 setExtraDirs 热更新 closure。
    */
   extraDirs?: string[];
+  /** Current task library root, supplied only by the Host and included in extraDirs. */
+  [LIBRARY_READ_ROOT]?: string | null;
   /**
    * 附加可读写目录列表(绝对路径)。这是用户逐目录授予的会话级权限，不能从
    * extraDirs 自动推导；启动时快照，并可由 setWritableDirs 热更新。
@@ -2320,7 +2323,7 @@ export interface AgentSessionHandle {
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
    */
-  setExtraDirs?(dirs: string[]): Promise<void>;
+  setExtraDirs?(dirs: string[], libraryRoot?: string | null): Promise<void>;
 
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
   setWritableDirs?(dirs: string[]): Promise<void>;

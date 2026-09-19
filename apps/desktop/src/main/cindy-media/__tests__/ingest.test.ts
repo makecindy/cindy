@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { LedgerDb } from '../ledger';
 import type { MediaRefCompensationScope } from '../refCompensationJournal';
 import { fileSymlinkFixture } from './fileSymlinkFixture';
@@ -697,4 +697,22 @@ describe('ingestMedia(白名单外拒绝)', () => {
     expect(ingest.supportedMime('image/png')).toBe(true);
     expect(ingest.supportedMime('application/zip')).toBe(false);
   });
+});
+
+it('compensates an entire recovery larger than one journal shard when its final write fails', async () => {
+  const refIds = Array.from({ length: 300 }, () => randomUUID());
+  const scope = compensationScope();
+  await ingest.ingestMedia({ buffer: PNG_BYTES, mimeType: 'image/png', refs: [] }, db);
+  await expect(refCompensation.withMediaRefCompensation({
+    scope, refIds,
+    perform: async () => {
+      for (const id of refIds) await ledger.addRef({ id, hash: PNG_HASH, refKind: 'session-attachment', refId: 'batch-session' }, db);
+      const markers = fs.readdirSync(scope.journalDir).filter(name => name.endsWith('.pending.json'));
+      expect(markers).toHaveLength(2);
+      throw new Error('last attachment failed');
+    },
+    compensate: id => ledger.removeRefById(id, db),
+  })).rejects.toThrow('last attachment failed');
+  expect(await db.select().from(schema.mediaRefs)).toEqual([]);
+  expect(fs.readdirSync(scope.journalDir).filter(name => name.endsWith('.json'))).toEqual([]);
 });

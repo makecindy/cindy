@@ -22,7 +22,7 @@ import type { Logger, ScheduleRunner } from '@cindy/maker-scheduler';
 import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
-import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
+import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
@@ -181,8 +181,10 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // agent 在对话里建任务时常把自己的 cwd 当 workingDir 传入 —— 引擎据此归一成
     // 对话任务,避免任务/会话错误归入项目分组。path.relative 同时兼容两端分隔符。
     isManagedWorkspaceDir: (dir) => {
-      const rel = path.relative(dialogueWorkspaceRootDir(), dir);
-      return !rel.startsWith('..') && !path.isAbsolute(rel);
+      return dialogueWorkspaceRoots().some((root) => {
+        const rel = path.relative(root, dir);
+        return !rel.startsWith('..') && !path.isAbsolute(rel);
+      });
     },
     // Review sessions are host-owned read-only tasks, not normal unattended
     // automation targets. Re-read their durable source for CRUD and every fire

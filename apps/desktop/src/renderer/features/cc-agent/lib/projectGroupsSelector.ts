@@ -18,10 +18,13 @@ const ROW_ONLY_FIELDS = new Set([
   'contextTokens',
   'contextWindow',
   'updatedAt',
+  '_count',
 ]);
 
 function sameGroupingInput(a: Session, b: Session): boolean {
   if ((a.userSendAt ?? a.updatedAt) !== (b.userSendAt ?? b.updatedAt)) return false;
+  // Only crossing the draft boundary changes grouping.
+  if (((a._count?.messages ?? 0) === 0) !== ((b._count?.messages ?? 0) === 0)) return false;
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const key of keys) {
     if (!ROW_ONLY_FIELDS.has(key) && a[key as keyof Session] !== b[key as keyof Session]) {
@@ -77,7 +80,10 @@ export function createProjectGroupsSelector() {
       }
     | undefined;
 
-  return (sessions: readonly Session[], options: GroupSessionsOptions): ProjectGroupsResult => {
+  return (
+    sessions: readonly Session[],
+    options: GroupSessionsOptions = {},
+  ): ProjectGroupsResult => {
     let result: ProjectGroupsResult | undefined;
     if (
       previous &&

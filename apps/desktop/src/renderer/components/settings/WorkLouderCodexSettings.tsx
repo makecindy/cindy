@@ -26,6 +26,7 @@ import { Switch } from '@/components/ui/switch';
 import { useCodexMicroGuard } from '@/hooks/useCodexMicroGuard';
 import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import {
   WorkLouderCodexKeyboardLayout,
@@ -1424,38 +1425,18 @@ function CreatorKeyRoleChoice({
   onChange: (isTask: boolean) => void;
 }) {
   return (
-    <div
-      role="radiogroup"
+    <SegmentedControl
       aria-label={ariaLabel}
-      className="flex h-8 items-center rounded-full bg-[var(--surface-chip)] p-0.5"
-    >
-      {(
-        [
-          { task: true, label: taskLabel },
-          { task: false, label: actionLabel },
-        ] as const
-      ).map((option) => {
-        const selected = option.task === isTask;
-        return (
-          <button
-            key={option.label}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            disabled={disabled || selected}
-            onClick={() => onChange(option.task)}
-            className={cn(
-              'h-full rounded-full px-3 text-12 leading-none',
-              selected
-                ? 'border border-[var(--border-default)] bg-[var(--settings-theme-card-bg)] font-medium text-[var(--text-primary)]'
-                : 'text-[var(--text-secondary)] enabled:hover:text-[var(--text-primary)]',
-            )}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+      value={isTask ? 'task' : 'action'}
+      onValueChange={(next) => {
+        if ((next === 'task') !== isTask) onChange(next === 'task');
+      }}
+      options={[
+        { value: 'task', label: taskLabel },
+        { value: 'action', label: actionLabel },
+      ]}
+      disabled={disabled}
+    />
   );
 }
 

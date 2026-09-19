@@ -426,12 +426,20 @@ const GENERATED_DEFAULTS = {
     "dark": "0 0% 45%"
   },
   "search-match-bg": {
-    "light": "53 100% 89%",
-    "dark": "40 33% 16%"
+    "light": "45 100% 70%",
+    "dark": "40 55% 21%"
   },
   "search-match-fg": {
     "light": "0 0% 15%",
     "dark": "0 0% 90%"
+  },
+  "search-match-active-bg": {
+    "light": "34 100% 55%",
+    "dark": "42 100% 65%"
+  },
+  "search-match-active-fg": {
+    "light": "0 0% 10%",
+    "dark": "0 0% 10%"
   },
   "update-btn-border": {
     "light": "#d4d4d4",
@@ -2112,6 +2120,30 @@ const GENERATED_DEFAULTS = {
   "slider-thumb-shadow": {
     "light": "0 1px 3px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08)",
     "dark": "0 1px 3px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.16)"
+  },
+  "segmented-track": {
+    "light": "rgba(0, 0, 0, 0.06)",
+    "dark": "rgba(0, 0, 0, 0.25)"
+  },
+  "segmented-selected-shadow": {
+    "light": "0 1px 2px rgba(0, 0, 0, 0.1), 0 3px 8px rgba(0, 0, 0, 0.06)",
+    "dark": "0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.24)"
+  },
+  "segmented-selected-bg": {
+    "light": "var(--surface-elevated)",
+    "dark": "var(--surface-elevated)"
+  },
+  "segmented-selected-border": {
+    "light": "var(--border-default)",
+    "dark": "var(--border-default)"
+  },
+  "segmented-option-fg": {
+    "light": "var(--text-secondary)",
+    "dark": "var(--text-secondary)"
+  },
+  "segmented-hover-bg": {
+    "light": "var(--surface-hover)",
+    "dark": "var(--surface-hover)"
   }
 } as const;
 
@@ -2298,8 +2330,10 @@ registerColor('sidebar-item-active-border', GENERATED_DEFAULTS["sidebar-item-act
 registerColor('sidebar-search-bg', GENERATED_DEFAULTS["sidebar-search-bg"], 'Light Surface');
 registerColor('sidebar-muted', GENERATED_DEFAULTS["sidebar-muted"], 'Stone #737373');
 registerColor('sidebar-action-icon', GENERATED_DEFAULTS["sidebar-action-icon"], 'Silver #a3a3a3 — hover action icons');
-registerColor('search-match-bg', GENERATED_DEFAULTS["search-match-bg"], '#fff8c5 — Primer attention-muted');
+registerColor('search-match-bg', GENERATED_DEFAULTS["search-match-bg"], 'Search matches - distinct from surrounding content surfaces');
 registerColor('search-match-fg', GENERATED_DEFAULTS["search-match-fg"], 'Near-black #262626 — text inherit');
+registerColor('search-match-active-bg', GENERATED_DEFAULTS["search-match-active-bg"], 'Current search match - stronger than other matches');
+registerColor('search-match-active-fg', GENERATED_DEFAULTS["search-match-active-fg"], 'Current search match text and outline on the gold fill');
 
 // UpdateBanner — Relaunch button (White Pill variant)
 registerColor('update-btn-border', GENERATED_DEFAULTS["update-btn-border"], 'Border Light — per docs/design-rules/cindy-design-system.md White Pill');
@@ -3059,3 +3093,11 @@ registerColor('slider-fill', GENERATED_DEFAULTS["slider-fill"], '共享 Slider �
 registerColor('slider-thumb', GENERATED_DEFAULTS["slider-thumb"], '共享 Slider 组件颜色');
 
 registerColor('slider-thumb-shadow', GENERATED_DEFAULTS["slider-thumb-shadow"], 'Slider 滑块阴影:用户批准 2026-09-17');
+
+// Desktop Segmented v8, owner-approved 2026-09-18. Component-local roles.
+registerColor('segmented-track', GENERATED_DEFAULTS["segmented-track"], 'Desktop segmented control: adaptive black-alpha track');
+registerColor('segmented-selected-bg', GENERATED_DEFAULTS["segmented-selected-bg"], 'Desktop segmented control: raised selected pill');
+registerColor('segmented-selected-border', GENERATED_DEFAULTS["segmented-selected-border"], 'Desktop segmented control: low-contrast selected border');
+registerColor('segmented-selected-shadow', GENERATED_DEFAULTS["segmented-selected-shadow"], 'Desktop segmented control: selected pill elevation');
+registerColor('segmented-option-fg', GENERATED_DEFAULTS["segmented-option-fg"], 'Desktop segmented control: unselected label');
+registerColor('segmented-hover-bg', GENERATED_DEFAULTS["segmented-hover-bg"], 'Desktop segmented control: hover plate');

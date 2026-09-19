@@ -11,12 +11,13 @@ import {
   credentialVerificationArguments,
 } from './credentialSigning';
 import { createLogger } from '../logger';
+import { linuxCredentialCommand, readLinuxUnlockState } from './linuxCredentials';
 
 const exec = promisify(execFile);
 const diagnostic = createLogger('remote-credentials');
 const binaryName = 'cindy-macos-remote-credentials';
 let build: Promise<string> | undefined;
-async function resolveBinary(realm: 'global' | 'cn'): Promise<string> {
+async function resolveBinary(): Promise<string> {
   if (app.isPackaged) return path.join(process.resourcesPath, 'tools/remote-desktop', binaryName);
   if (build) return build;
   build = (async () => {
@@ -286,13 +287,15 @@ class RemoteCredentialHost {
     this.starting = (async () => {
       const realm = this.configuredRealm;
       if (!realm) throw new Error('CREDENTIAL_INVALID_IDENTITY');
-      const binary = await resolveBinary(realm);
+      const directory = path.join(app.getPath('userData'), 'remote-desktop/credential-identity');
+      if (process.platform === 'linux' && (await readLinuxUnlockState()) === 'unavailable')
+        throw new Error('CREDENTIAL_UNLOCK_UNAVAILABLE');
+      const command =
+        process.platform === 'linux'
+          ? linuxCredentialCommand(directory)
+          : { file: await resolveBinary(), args: [directory] };
       if (this.epoch !== epoch) throw new Error('CREDENTIAL_CANCELLED');
-      const child = spawn(
-        binary,
-        [path.join(app.getPath('userData'), 'remote-desktop/credential-identity')],
-        { stdio: ['pipe', 'pipe', 'pipe'] },
-      );
+      const child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'] });
       this.child = child;
       let buffer = '';
       child.stdout.setEncoding('utf8');
@@ -357,7 +360,8 @@ class RemoteCredentialHost {
     args: Record<string, unknown> = {},
     timeout = 35_000,
   ): Promise<unknown> {
-    if (process.platform !== 'darwin') throw new Error('CREDENTIAL_UNAVAILABLE');
+    if (process.platform !== 'darwin' && process.platform !== 'linux')
+      throw new Error('CREDENTIAL_UNAVAILABLE');
     if (timeout <= 0) throw new Error('CREDENTIAL_EXPIRED');
     const id = randomUUID();
     let timer: ReturnType<typeof setTimeout>;

@@ -28,6 +28,7 @@ import {
   X,
 } from 'lucide-react';
 
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -2129,30 +2130,20 @@ export function ProviderConnectionDialog({
           {!initial?.auth?.native && <>
           <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.authMode.label')}</FieldLabel>
-            <div className="flex flex-wrap gap-1.5">
-              {(['apiKey', 'oauth', 'none'] as const).map((m) => (
-                <button
-                  key={m}
-                  aria-pressed={authMode === m}
-                  type="button"
-                  onClick={() => {
-                    changeAuthMode(m);
-                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
-                  }}
-                  className={cn(
-                    'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                    authMode === m
-                      ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
-                      : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
-                  )}
-                  style={
-                    authMode === m ? { backgroundColor: 'var(--surface-elevated)' } : undefined
-                  }
-                >
-                  {t(`settings.providers.custom.authMode.${m}`)}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl
+              aria-label={t('settings.providers.custom.authMode.label')}
+              value={authMode}
+              height={38}
+              optionHeight={32}
+              onValueChange={(mode) => {
+                changeAuthMode(mode);
+                setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
+              }}
+              options={(['apiKey', 'oauth', 'none'] as const).map((mode) => ({
+                value: mode,
+                label: t(`settings.providers.custom.authMode.${mode}`),
+              }))}
+            />
             {authMode === 'oauth' && (
               <>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
@@ -2160,29 +2151,17 @@ export function ProviderConnectionDialog({
                 </span>
                 <div className="flex flex-col gap-[7px]">
                   <FieldLabel>{t('settings.providers.custom.authMode.flowLabel')}</FieldLabel>
-                  <div className="flex gap-1.5">
-                    {(['authorization-code', 'device-code'] as const).map((flow) => (
-                      <button
-                        key={flow}
-                        aria-pressed={oauthFlow === flow}
-                        type="button"
-                        onClick={() => setOauthFlow(flow)}
-                        className={cn(
-                          'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                          oauthFlow === flow
-                            ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
-                            : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
-                        )}
-                        style={
-                          oauthFlow === flow
-                            ? { backgroundColor: 'var(--surface-elevated)' }
-                            : undefined
-                        }
-                      >
-                        {t(`settings.providers.custom.authMode.flow.${flow}`)}
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    aria-label={t('settings.providers.custom.authMode.flowLabel')}
+                    value={oauthFlow}
+                    onValueChange={setOauthFlow}
+                    height={38}
+                    optionHeight={32}
+                    options={(['authorization-code', 'device-code'] as const).map((flow) => ({
+                      value: flow,
+                      label: t(`settings.providers.custom.authMode.flow.${flow}`),
+                    }))}
+                  />
                 </div>
                 {(
                   [
@@ -2229,52 +2208,35 @@ export function ProviderConnectionDialog({
           {/* Runtime 分段 Tab：Claude Code 与 Codex 各自维护端点、协议、模型与凭证。 */}
           <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.fields.protocols')}</FieldLabel>
-            <div
-              className="flex h-9 items-center gap-0.5 rounded-full p-[3px]"
-              style={{ backgroundColor: 'var(--surface-chip)' }}
+            <SegmentedControl
               role="tablist"
-            >
-              {VISIBLE_AGENTS.map((a) => {
-                const meta = TAB_META[a];
+              aria-label={t('settings.providers.custom.fields.protocols')}
+              value={activeTab}
+              onValueChange={(agent) => {
+                setChildLayer(null);
+                setActiveTab(agent);
+              }}
+              fullWidth
+              height={36}
+              optionHeight={26}
+              optionClassName="text-13 px-2"
+              options={VISIBLE_AGENTS.map((agent) => {
+                const meta = TAB_META[agent];
                 const Mark = meta.Mark;
-                const active = activeTab === a;
-                const configured = rt[a].baseUrl.trim().length > 0;
-                return (
-                  <button
-                    key={a}
-                    type="button"
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => {
-                      setChildLayer(null);
-                      setActiveTab(a);
-                    }}
-                    className={cn(
-                      'flex h-[26px] flex-1 items-center justify-center gap-1.5 rounded-full px-2 text-13 leading-none transition-colors',
-                      active ? 'font-medium' : 'font-normal',
-                    )}
-                    style={
-                      active
-                        ? {
-                            backgroundColor: 'var(--surface-elevated)',
-                            border: '1px solid var(--border-default)',
-                            color: 'var(--settings-section-title)',
-                          }
-                        : { color: 'var(--text-secondary)' }
-                    }
-                  >
-                    <Mark size={14} className="shrink-0" />
-                    <span className="whitespace-nowrap">{t(meta.labelKey)}</span>
-                    {configured && (
-                      <span
-                        className="h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: 'var(--remote-status-ready)' }}
-                      />
-                    )}
-                  </button>
-                );
+                return {
+                  value: agent,
+                  label: (
+                    <>
+                      <Mark size={14} className="shrink-0" />
+                      <span className="whitespace-nowrap">{t(meta.labelKey)}</span>
+                      {rt[agent].baseUrl.trim().length > 0 && (
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--remote-status-ready)]" />
+                      )}
+                    </>
+                  ),
+                };
               })}
-            </div>
+            />
             <span className="text-12 leading-snug text-[var(--text-tertiary)]">
               {templateBound ? (boundPreset ? presetDisplayName(boundPreset, i18n.language) : name) : t(TAB_META[activeTab].helpKey)}
             </span>

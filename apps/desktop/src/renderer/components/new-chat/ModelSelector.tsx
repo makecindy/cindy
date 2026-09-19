@@ -3024,9 +3024,6 @@ function ModelSelectorContentView({
             dense
             width={304}
             className="mx-auto"
-            // 浮层内选中段用黑白反转强对比(default 的暗色 Card 凸起在浮层
-            // 表面上分不清"当前选的是哪家",2026-07-20 产品实测反馈)。
-            visualVariant="dropdown"
           />
           {browsing && (
             <div className="px-2 pb-0.5 text-12 text-[var(--text-tertiary)]">

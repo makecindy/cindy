@@ -27,6 +27,7 @@ import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
 import { AboutSection } from './AboutSection';
+import { WorktreeRecycleCard } from './WorktreeRecycleCard';
 import { StorageManagementCard } from './StorageManagementCard';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
@@ -661,6 +662,7 @@ export function SettingsView() {
               >
                 <section aria-label={t('settings.about.storage.title')}>
                   <StorageManagementCard />
+                  <WorktreeRecycleCard />
                 </section>
               </div>
             )}

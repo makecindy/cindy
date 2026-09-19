@@ -1,3 +1,4 @@
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Download, FileUp, RefreshCw } from 'lucide-react';
@@ -515,21 +516,14 @@ function SegmentedFilter<T extends string>({
       <span className="w-[56px] text-11 font-medium text-[var(--settings-section-desc)]">
         {label}
       </span>
-      {values.map((filter) => (
-        <button
-          key={filter}
-          type="button"
-          onClick={() => onChange(filter)}
-          className={cn(
-            'h-8 rounded-full border px-3 text-12 font-medium transition-colors active:scale-[0.98]',
-            value === filter
-              ? 'border-[var(--settings-menu-border-selected)] bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
-              : 'border-[var(--settings-input-border)] text-[var(--settings-section-sublabel)] hover:bg-[var(--settings-menu-bg-hover)]',
-          )}
-        >
-          {labelFor(filter)}
-        </button>
-      ))}
+      <SegmentedControl
+        aria-label={label}
+        value={value}
+        onValueChange={onChange}
+        height={38}
+        optionHeight={32}
+        options={values.map((filter) => ({ value: filter, label: labelFor(filter) }))}
+      />
     </div>
   );
 }

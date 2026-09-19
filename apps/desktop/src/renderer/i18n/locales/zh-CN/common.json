@@ -987,6 +987,18 @@
         "unknown": "未知"
       },
       "storage": {
+        "dialogueDirectoryTitle": "对话工作区",
+        "dialogueDirectoryDescription": "仅用于新建任务，已有文件保持原位置。",
+        "dialogueDirectoryOpen": "打开目录",
+        "dialogueDirectoryChoose": "更改目录",
+        "dialogueDirectoryReset": "恢复默认位置",
+        "dialogueDirectoryFailed": "无法更新对话工作区，请确认所选目录可写后重试。",
+        "dialogueDirectoryDefault": "默认",
+        "dialogueDirectoryFullPath": "完整路径",
+        "dialogueDirectoryDetails": "未指定项目文件夹的新任务使用此位置。Cindy 会在所选文件夹中创建当前账号独立的子目录。",
+        "dialogueDirectoryCopy": "复制路径",
+        "dialogueDirectoryCopied": "路径已复制",
+        "dialogueDirectoryCopyFailed": "无法复制路径，请选中路径后手动复制。",
         "mediaSectionTitle": "媒体文件",
         "databaseSectionTitle": "数据库",
         "overviewTitle": "本地存储空间",
@@ -5746,7 +5758,11 @@
           "failed": "准备失败",
           "cancelled": "准备已停止",
           "cleaning": "正在清理",
-          "cleanup": "待清理"
+          "cleanup": "待清理",
+          "cleanupFailed": "清理失败",
+          "integrated": "已合入",
+          "unintegrated": "未合入",
+          "unknown": "合入状态待确认"
         },
         "errors": {
           "busy": "任务仍在运行或目录正在使用，请停止后重试。",
@@ -5755,7 +5771,42 @@
           "cleanupFailed": "清理未完成，记录已保留，请重试清理。",
           "directoryBusy": "开发目录中的文件被占用或无法删除，请关闭使用该目录的终端、编辑器或预览后重试清理。",
           "unavailable": "任务或开发目录已变化，请刷新后重试。"
-        }
+        },
+        "end": "结束制作",
+        "endHint": "结束制作后会清理工作目录，保留制作历史与已保存的改动。",
+        "endConfirm": "结束“{{title}}”并清理工作目录？制作历史与已保存的改动会保留。",
+        "cleanupDeletedConfirm": "清理“{{title}}”剩余的工作目录？已保存的制作历史会保留。",
+        "endUnintegrated": "还有改动未合入个人版，结束制作不会自动合入。",
+        "endUnknown": "暂时无法确认合入状态，请先检查改动再清理。"
+      },
+      "tabs": {
+        "versions": "版本控制",
+        "environment": "环境准备"
+      }
+    },
+    "worktreeRecycle": {
+      "title": "worktree 回收",
+      "refresh": "刷新",
+      "empty": "没有等待回收的 worktree",
+      "loadFailed": "无法读取回收状态",
+      "actionFailed": "未能更新回收状态，请刷新后重试",
+      "retry": "重试回收",
+      "keep": "保留目录",
+      "state": {
+        "retrying": "等待回收",
+        "waiting": "等待释放",
+        "paused": "已暂停自动重试",
+        "kept": "已保留目录"
+      },
+      "reason": {
+        "in-use": "仍在使用",
+        "changed": "文件内容已变化",
+        "kept": "已要求保留",
+        "integrity": "备份校验失败",
+        "storage": "请检查磁盘空间和权限",
+        "identity": "目录身份需要检查",
+        "failed": "回收未能完成",
+        "pending": "已排队"
       }
     }
   },
@@ -5868,6 +5919,7 @@
   "login": {
     "title": "欢迎使用 Cindy",
     "subtitle": "选择一种方式安全登录",
+    "savedLoginPreserved": "已保存的登录信息仍在本机",
     "phonePlaceholder": "请输入手机号",
     "emailPlaceholder": "请输入邮箱",
     "invalidEmail": "请输入正确邮箱",
@@ -5967,6 +6019,9 @@
       "fallback": "登录失败，请稍后重试",
       "AUTH_SERVICE_UNAVAILABLE": "登录服务暂不可用",
       "AUTH_REQUEST_FAILED": "登录请求失败，请重试",
+      "CREDENTIAL_STORE_UNAVAILABLE": "请完全退出 Cindy 后重新打开，以恢复登录",
+      "BROWSER_OPEN_FAILED": "无法打开浏览器，请重试",
+      "BROWSER_OPEN_TIMEOUT": "浏览器未及时启动，请重试",
       "NETWORK_ERROR": "网络连接失败，请检查网络",
       "REQUEST_TIMEOUT": "请求超时，请重试",
       "INVALID_PARAMS": "输入格式不正确",
@@ -7284,6 +7339,10 @@
       "downloadMobile": "下载 Cindy 移动端"
     },
     "accountSwitcher": {
+      "current": "当前账号",
+      "switching": "正在切换账号…",
+      "adding": "正在准备登录…",
+      "sharedDataRestriction": "当前开发窗口与另一个 Cindy 实例共用账号数据，无法切换或添加账号。请在原 Cindy 窗口操作，或使用独立数据启动开发版。",
       "title": "切换账号",
       "description": "选择这台设备上登录过的账号",
       "syncing": "正在检查登录状态…",
@@ -10272,7 +10331,7 @@
     },
     "empty": {
       "promptHeading": "暂无自动化",
-      "promptDescription": "创建一个 cron 自动化，让 Claude Code 或 Codex 按计划执行你的 Prompt。"
+      "promptDescription": "创建一个 cron 自动化，让 Claude Code、Codex 或 Pi 按计划执行你的 Prompt。"
     },
     "usageLimitRecovery": {
       "name": "用量恢复后继续任务",
@@ -10447,7 +10506,7 @@
         "titleCreate": "创建自动化",
         "titleProjectCreate": "新建项目自动化",
         "titleProjectEdit": "编辑项目自动化",
-        "subtitle": "用 Claude 或 Codex 按计划运行 Prompt。",
+        "subtitle": "用 Claude、Codex 或 Pi 按计划运行 Prompt。",
         "subtitleFromGhost": "「{{name}}」请你新建一个自动化。选好模型后保存即可生效。",
         "save": "保存",
         "create": "创建",
@@ -12276,7 +12335,8 @@
     },
     "dialogs": {
       "subscription": {
-        "title": "选择订阅套餐"
+        "title": "选择订阅套餐",
+        "confirmTitle": "确认订阅"
       },
       "topup": {
         "title": "余额充值"
@@ -12409,6 +12469,39 @@
       "targetLabel": "目标套餐：{{name}}",
       "pendingDowngrade": "已排期降级至 {{name}}，{{date}} 生效。",
       "undo": "撤销降级"
+    },
+    "comparison": {
+      "select": "选择{{name}}",
+      "topup": "充值",
+      "topupUnlock": "充值后可解锁额外用量。",
+      "rollover": "{{amount}} 可结转至{{period}}",
+      "changeUnavailable": "无法进行此变更",
+      "upgrade": "升级",
+      "downgrade": "降级",
+      "free": "免费",
+      "freeUsage": "按量使用",
+      "topupExpiry": "充值余额用完为止",
+      "priceFromSuffix": "起",
+      "subscription": "订阅",
+      "includesFree": "包含免费版全部能力",
+      "creditMultiple": "包含金额是{{name}}的 {{multiple}} 倍",
+      "credits": {
+        "MONTH": "每月 {{amount}}",
+        "YEAR": "每年 {{amount}}",
+        "OTHER": "{{amount}}"
+      },
+      "nextPeriod": {
+        "MONTH": "下个月",
+        "YEAR": "明年",
+        "OTHER": "下一周期"
+      },
+      "agent": "Agent 任务",
+      "apiKey": "使用自有 API Key",
+      "existingSubscription": "沿用已有订阅",
+      "localModels": "本地模型",
+      "basicModels": "基础模型",
+      "advancedModels": "进阶模型",
+      "managedService": "托管服务"
     }
   },
   "fileAccess": {
@@ -12737,7 +12830,19 @@
         "mainCommit": "main 版本",
         "currentBranch": "当前项目分支",
         "detached": "未在分支上（固定提交）",
-        "unknown": "更新源码后查看"
+        "unknown": "更新源码后查看",
+        "latest": {
+          "dev": "最新 main",
+          "beta": "最新 beta",
+          "release": "最新正式版",
+          "unavailable": "未能查询，请重新打开设置重试",
+          "same": "（已同步）",
+          "behind_one": "（落后 {{count}} 个提交）",
+          "behind_other": "（落后 {{count}} 个提交）",
+          "ahead_one": "（领先 {{count}} 个提交）",
+          "ahead_other": "（领先 {{count}} 个提交）",
+          "difference": "（落后 {{behind}}，领先 {{ahead}} 个提交）"
+        }
       }
     },
     "code": {
@@ -12765,8 +12870,8 @@
       "projectClearing": "正在清理个人版项目，请等待清理完成后再发送消息",
       "inputLocked": {
         "executing": "Cindy Make 正在首次执行",
-        "hint": "首次执行结束后恢复输入，提问和计划确认不受影响。",
-        "retry": "输入暂不可用，请在上方准备卡片中重试。"
+        "hint": "准备完成后恢复输入，即可开始修改。",
+        "retry": "准备尚未完成，重试后可继续。"
       },
       "dependencyActivity": {
         "starting": "正在启动依赖安装…",
@@ -12775,7 +12880,7 @@
       },
       "dependencyProgress": "已解析 {{resolved}} · 已复用 {{reused}} · 已下载 {{downloaded}} · 已添加 {{added}}",
       "taskName": "Cindy Make 个人版",
-      "taskTitle": "[Cindy-Make] {{request}}",
+      "taskTitle": "[{{worktree}}] {{request}}",
       "workspace": "开发目录 {{branch}}"
     },
     "complete": {
@@ -12786,6 +12891,231 @@
       "changedFiles_other": "{{count}} 个文件有改动",
       "commit": "基于 {{commit}}",
       "branch": "已提交到 {{branch}}"
+    },
+    "versions": {
+      "title": "我的版本",
+      "description": "选择本机要使用的 Cindy 版本。切换后会重启，并保留账号、设置与任务。",
+      "original": "原版",
+      "personal": "个人版",
+      "development": "开发环境",
+      "current": "当前使用",
+      "using": "正在使用",
+      "switch": "切换并重启",
+      "switchPersonal": "切换到此个人版",
+      "remove": "删除版本",
+      "removeTitle": "删除这份个人版？",
+      "removeDescription": "仅删除生成的应用文件，保留源码、账号、设置和任务。",
+      "empty": "还没有生成可切换的个人版。",
+      "unavailable": "此版本的应用文件已不可用。",
+      "incompatible": "此版本与当前数据不兼容，请基于当前原版重新生成。",
+      "readyHint": "个人版已准备好。切换后会重启 Cindy，并保留当前账号、设置和任务。",
+      "errors": {
+        "busy": "还有任务、测试或构建正在进行，请结束后再切换或删除版本。",
+        "incompatible": "数据结构不同，暂时不能切换到这份版本。请基于当前原版重新生成个人版。",
+        "unavailable": "无法读取这份版本，请重新生成后重试。",
+        "launchFailed": "未能启动目标版本，当前版本已保留。",
+        "recovery": "未能启动所选版本。已将原版恢复为默认，请从原入口重新打开 Cindy。现有数据已保留。"
+      },
+      "localChanges": "含本地改动"
+    },
+    "personal": {
+      "generate": "生成个人版",
+      "open": "查看安装包",
+      "description": "将本次修改与个人版合并，检查和打包通过后保存为新个人版。",
+      "readyHint": "安装包 {{name}} 已生成，可打开所在目录。",
+      "checkStep": {
+        "dependencies": "正在安装构建依赖…",
+        "tests": "正在运行自动测试，可能需要数分钟…",
+        "types": "正在检查代码类型…"
+      },
+      "status": {
+        "waiting": "等待生成个人版…",
+        "merging": "正在合并修改…",
+        "checking": "正在检查个人版…",
+        "packaging": "正在打包个人版…",
+        "publishing": "正在保存个人版…",
+        "ready": "个人版已生成",
+        "failed": "个人版未能生成"
+      },
+      "errors": {
+        "unavailable": "无法读取生成记录或安装包，请重新生成。",
+        "changed": "制作目录或代码已有变化，请完成修改后重新生成。",
+        "environment": "构建工具尚未就绪，请检查 Cindy Make 环境后重试。",
+        "missingShell": "自动检查需要 Git Bash，请安装 Git for Windows 后重试。",
+        "checksFailed": "合并后的代码未通过检查，请继续修改后重新生成。",
+        "conflict": "与当前个人版的修改有冲突，请继续修改并解决冲突。",
+        "baselineChanged": "生成期间个人版已有更新，请重新生成以包含最新修改。",
+        "buildFailed": "打包未完成，请重试，或继续修改后再生成。",
+        "cancelled": "制作已取消，可以重新生成个人版。",
+        "cleanupFailed": "制作已停止，但部分临时内容未能清理。请重启 Cindy 后再试。",
+        "interrupted": "生成已停止，可以重新生成个人版。"
+      }
+    },
+    "test": {
+      "resume": {
+        "title": "继续测试",
+        "description": "先检查当前修改，通过后恢复测试和生成个人版的选项。",
+        "action": "检查并继续",
+        "failed": "未能开始检查，请重试。",
+        "request": "请检查当前修改，完成后恢复测试和生成个人版的选项，等待我选择下一步。"
+      },
+      "title": "修改已完成，选择下一步",
+      "description": "可以继续修改、启动隔离版测试，或直接生成个人版安装包。",
+      "readyHint": "请在测试窗口体验修改。点击“继续修改”会关闭测试版并恢复输入。",
+      "start": "启动隔离版测试",
+      "started": "测试版已启动",
+      "continue": "继续修改",
+      "status": {
+        "waiting": "修改已完成，选择下一步",
+        "starting": "正在启动隔离版测试…",
+        "ready": "隔离版已启动，等待测试",
+        "failed": "隔离版未能启动",
+        "stopped": "可以再次启动测试"
+      },
+      "errors": {
+        "unavailable": "这份修改记录或工作目录已变化，请继续修改后重新完成。",
+        "changed": "代码已有新的修改，请完成修改后再启动测试。",
+        "environment": "测试环境尚未就绪，请在设置中检查 Cindy Make 环境后重试。",
+        "launchFailed": "未能启动隔离版，请重试；仍失败可返回继续修改。",
+        "timeout": "隔离版启动超时，请重试。",
+        "interrupted": "上次测试已中断，请重新启动隔离版。"
+      },
+      "retry": "重试启动",
+      "startingHint": "启动完成前暂时不能继续修改，请等待当前步骤完成。",
+      "currentStep": "当前步骤：{{step}}",
+      "failedStep": "中断步骤：{{step}}",
+      "steps": {
+        "waiting": "等待启动",
+        "environment": "检查测试环境",
+        "workspace": "核验修改内容",
+        "stopping": "准备隔离实例",
+        "dependencies": "检查并准备依赖",
+        "assets": "检查并准备运行资源",
+        "launching": "编译并打开测试窗口"
+      }
+    },
+    "history": {
+      "title": "制作历史",
+      "build": "生成个人版",
+      "buildDescription": "将当前个人源码生成新版本，未合入的历史改动不会包含在内。",
+      "building": "正在生成个人版…",
+      "stop": "停止制作",
+      "stopping": "正在停止…",
+      "progress": {
+        "waiting": "等待开始",
+        "merging": "正在合入修改",
+        "checking": "正在运行检查",
+        "packaging": "正在打包个人版",
+        "publishing": "正在保存个人版"
+      },
+      "noActions": {
+        "ended": "这次制作已结束，当前没有可执行的操作。",
+        "sessionUnavailable": "这条制作记录对应的任务已不可用。",
+        "completionUnavailable": "完成记录无法核验，暂时没有安全的操作可执行。",
+        "sourceUnavailable": "个人源码无法核验，暂时没有安全的操作可执行。",
+        "changedAfterCompletion": "记录中的完成结果与当前源码不一致，暂时没有安全的操作可执行。",
+        "busy": "另一个制作或检查正在进行，请稍后再试。",
+        "checking": "正在核对这条制作记录，请稍后再试。"
+      },
+      "counts": "共 {{total}} 次 · 待合入 {{pending}} 次 · 已合入 {{integrated}} 次",
+      "filterLabel": "筛选制作历史",
+      "filters": {
+        "all": "全部制作",
+        "pending": "待合入",
+        "integrated": "已合入",
+        "ended": "已结束"
+      },
+      "loadFailed": "无法读取制作历史，请重试。",
+      "loading": "正在读取制作历史…",
+      "actionFailed": "操作未完成，请刷新后重试。",
+      "openInstaller": "查看安装包",
+      "updated": "更新于 {{time}}",
+      "needsBuild": "源码已有改动，生成个人版后即可使用。",
+      "built": "已包含在 {{time}} 生成的个人版中",
+      "builtKnown": "已包含在生成的个人版中",
+      "conflict": "改动存在冲突，请打开处理任务继续。",
+      "rounds": "{{count}} 轮修改",
+      "round": "第 {{number}} 轮 · {{time}}",
+      "files": "改动 {{count}} 个文件",
+      "working": "正在处理…",
+      "endAndClean": "结束并清理",
+      "endConfirm": "结束这次制作并清理工作目录？制作历史与已保存的改动会保留。",
+      "revertConfirm": "撤销这次制作合入个人源码的改动？其他制作和已生成的应用会保留。",
+      "lifecycle": {
+        "preparing": "准备中",
+        "running": "正在修改",
+        "editing": "修改中",
+        "ready": "等待下一步",
+        "failed": "准备失败",
+        "ended": "已结束",
+        "cleanup": "清理中"
+      },
+      "integration": {
+        "unintegrated": "未合入",
+        "integrated": "已合入",
+        "changed": "有新改动待合入",
+        "reverted": "已撤销合入",
+        "unknown": "合入状态待确认",
+        "unchanged": "没有需要合入的改动"
+      },
+      "actions": {
+        "open": "打开任务",
+        "continue": "继续修改",
+        "test": "启动隔离测试版",
+        "integrate": "合入个人版",
+        "revert": "撤销合入",
+        "reapply": "重新合入",
+        "resolve": "处理冲突",
+        "retry": "重试",
+        "build": "生成个人版",
+        "retryBuild": "重新生成",
+        "end": "结束制作",
+        "retry-prepare": "重试准备",
+        "retry-cleanup": "重试清理"
+      },
+      "buildStatus": {
+        "waiting": "等待生成个人版…",
+        "checking": "正在检查个人版…",
+        "merging": "正在合入改动…",
+        "packaging": "正在打包个人版…",
+        "publishing": "正在保存个人版…",
+        "ready": "个人版已生成",
+        "failed": "个人版生成失败",
+        "installerReady": "安装包已就绪"
+      },
+      "rounds_other": "{{count}} 轮修改",
+      "files_other": "改动 {{count}} 个文件"
+    },
+    "merge": {
+      "getLatest": "获取最新源码",
+      "updateHint": "更新官方源码，并保留个人改动。",
+      "confirmTitle": "更新到最新源码？",
+      "confirmDescription": "会保留你的个人改动。如有冲突，将通过独立任务协助处理。",
+      "confirm": "更新源码",
+      "openTask": "打开处理任务",
+      "resolve": "处理冲突",
+      "resolveHint": "在独立任务中处理冲突并检查结果。",
+      "otherAccount": "这项操作由其他账号发起，请切回该账号继续。",
+      "status": {
+        "fetching": "正在获取最新源码…",
+        "merging": "正在合入源码改动…",
+        "conflict": "有冲突需要处理",
+        "resolving": "正在处理冲突",
+        "checking": "正在检查改动…",
+        "merged": "源码改动已合入",
+        "failed": "源码合入失败"
+      },
+      "errors": {
+        "busy": "其他操作正在进行，请稍后重试。",
+        "dirty": "源码有未提交的改动，请先保存再重试。",
+        "localMain": "main 分支存在本地提交，请检查后再更新。",
+        "unavailable": "源码或操作记录不可用，请刷新后重试。",
+        "gitFailed": "Git 未能完成操作，请重试。",
+        "baselineChanged": "个人源码已发生变化，请基于最新状态重试。",
+        "checksFailed": "改动未通过检查，请打开处理任务继续。",
+        "interrupted": "操作已中断，改动已保留，请重试。",
+        "startFailed": "无法打开处理任务，请重试。"
+      }
     }
   }
 }

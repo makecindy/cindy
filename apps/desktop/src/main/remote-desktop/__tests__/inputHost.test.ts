@@ -355,3 +355,61 @@ describe('native input lifecycle', () => {
     c.exit();
   });
 });
+
+it('keeps Linux whole-desktop coordinates normalized and releases input before returning ownership', async () => {
+  vi.useFakeTimers();
+  const c = childProcess();
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux',
+    resolveBinary: async () => '/test/linux-helper',
+    spawn: () => {
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    },
+  });
+  try {
+    await expect(host.start('1')).rejects.toThrow('DESKTOP_DISPLAY_MISSING');
+    await host.start('wayland-portal');
+    const events = [
+      { kind: 'move' as const, x: 0.25, y: 0.75 },
+      { kind: 'button' as const, button: 0 as const, down: true, x: 0.25, y: 0.75 },
+    ];
+    host.input(events);
+    await flush();
+    expect(c.child.stdin.write.mock.calls[0][0]).toBe(JSON.stringify(events) + '\n');
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    host.input([
+      { kind: 'text', text: '🙂'.repeat(257) },
+      { kind: 'key', code: 'KeyA', down: true },
+      { kind: 'key', code: 'KeyA', down: false },
+    ]);
+    await flush();
+    expect(JSON.parse(c.child.stdin.write.mock.calls.at(-1)![0])).toEqual([
+      { kind: 'text', text: '🙂'.repeat(256) },
+    ]);
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    expect(JSON.parse(c.child.stdin.write.mock.calls.at(-1)![0])).toEqual([
+      { kind: 'text', text: '🙂' },
+    ]);
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    expect(JSON.parse(c.child.stdin.write.mock.calls.at(-1)![0])).toEqual([
+      { kind: 'key', code: 'KeyA', down: true },
+      { kind: 'key', code: 'KeyA', down: false },
+    ]);
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    const released = host.release();
+    expect(c.child.stdin.end).toHaveBeenCalledWith('[{"kind":"release"}]\n');
+    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+    c.exit();
+    await released;
+    expect(() => host.input(events)).toThrow('DESKTOP_INPUT_UNAVAILABLE');
+    await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+  } finally {
+    host.stop();
+    c.exit();
+  }
+});

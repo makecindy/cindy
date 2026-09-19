@@ -64,6 +64,56 @@ function sourceFixture() {
 }
 
 describe('Main-owned Cindy Make task lifecycle', () => {
+  it('reserves one build across entry points and ignores an old release after retry', () => {
+    const manager = new CindyMakeManager();
+    const release = manager.claimPersonalBuild();
+    expect(manager.hasActiveWork()).toBe(true);
+    expect(() => manager.claimPersonalBuild()).toThrow('personal build is running');
+    release();
+    const releaseRetry = manager.claimPersonalBuild();
+    release();
+    expect(manager.hasActiveWork()).toBe(true);
+    releaseRetry();
+    expect(manager.hasActiveWork()).toBe(false);
+  });
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'keeps the lock through final persistence, then retains %s history without staying busy',
+    async (status) => {
+      const manager = new CindyMakeManager();
+      const f = fixture();
+      const persisted = deferred();
+      f.lifecycle.persist = vi.fn(async (report) => {
+        if (report.status !== 'running') await persisted.promise;
+      });
+      if (status === 'failed')
+        f.lifecycle.start = async () => {
+          throw new Error('dispatch failed');
+        };
+      const created = manager.startTask(f.input, f.lifecycle);
+      expect(manager.hasActiveWork()).toBe(true);
+      await created;
+      if (status === 'cancelled') manager.cancel(f.input.runId, 1);
+      f.gate.resolve();
+      await vi.waitFor(() => expect(manager.taskReport(f.input.runId)?.status).toBe(status));
+      expect(manager.hasActiveWork()).toBe(true);
+      persisted.resolve();
+      await manager.waitForTask(f.input.runId);
+      expect(manager.hasActiveWork()).toBe(false);
+      expect(manager.getState().tasks?.[f.input.runId]?.status).toBe(status);
+      vi.mocked(f.lifecycle.isCurrent).mockReturnValue(false);
+      expect(manager.hasActiveWork()).toBe(false);
+    },
+  );
+  it('keeps cancelled old-owner work busy until its actual cleanup settles', async () => {
+    const manager = new CindyMakeManager();
+    const f = fixture();
+    await manager.startTask(f.input, f.lifecycle);
+    vi.mocked(f.lifecycle.isCurrent).mockReturnValue(false);
+    expect(manager.hasActiveWork()).toBe(true);
+    f.gate.resolve();
+    await manager.waitForTask(f.input.runId);
+    expect(manager.hasActiveWork()).toBe(false);
+  });
   it('keeps one cleanup running without renderer subscribers and shares duplicate requests', async () => {
     const manager = new CindyMakeManager();
     const gate = deferred();
@@ -109,6 +159,7 @@ describe('Main-owned Cindy Make task lifecycle', () => {
       status: 'failed',
       error: 'directoryBusy',
     });
+    expect(manager.hasActiveWork()).toBe(false);
     const gate = deferred();
     const retry = manager.runTaskAction(
       'session',

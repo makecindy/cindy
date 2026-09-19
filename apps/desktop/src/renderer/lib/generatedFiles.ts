@@ -293,11 +293,6 @@ function canonicalizeWindowsShape(abs: string): string {
   return /^[a-zA-Z]:[\\/]/.test(abs) ? abs.replace(/\//g, '\\').replace(/\\{2,}/g, '\\') : abs;
 }
 
-/** 单条 tool_use 消息 → 它新建的文件原始路径列表(可能为空)。判定在共享包里。 */
-function createdPathsFromToolUse(toolName: string, input: unknown): string[] {
-  return createdPathsFromDescriptor(describeToolUse(toolName, input));
-}
-
 
 /**
  * 一组消息(通常是一个 turn 的切片,但对任意切片都成立)→ 新建文件的有序去重
@@ -310,6 +305,17 @@ export function collectGeneratedFiles(
   messages: readonly ToolUseLike[],
   workingDir: string,
 ): GeneratedFileRef[] {
+  // The edit/create/command/source passes inspect the same tools. Parse each
+  // descriptor once even on a cold history mount (command parsing is expensive).
+  const descriptors = new Map<ToolUseLike, ReturnType<typeof describeToolUse>>();
+  const descriptorFor = (message: ToolUseLike) => {
+    let descriptor = descriptors.get(message);
+    if (!descriptor) {
+      descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
+      descriptors.set(message, descriptor);
+    }
+    return descriptor;
+  };
   const resultByToolUseId = new Map<string, string>();
   for (const message of messages) {
     if (
@@ -330,7 +336,7 @@ export function collectGeneratedFiles(
     const resultContent = msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined;
     if (msg.toolUseId && resultContent === undefined) continue;
     if (isExplicitFailedToolResult(resultContent)) continue;
-    const d = describeToolUse(msg.toolName, msg.toolInput);
+    const d = descriptorFor(msg);
     if (d.kind === 'file' && d.action === 'edit' && d.filePath) {
       editedKeys.add(dedupeKeyForPath(resolveToolFilePath(d.filePath, workingDir)));
     } else if (d.kind === 'fileChange') {
@@ -370,7 +376,7 @@ export function collectGeneratedFiles(
       });
     };
 
-    for (const rawPath of createdPathsFromToolUse(toolName, msg.toolInput)) {
+    for (const rawPath of createdPathsFromDescriptor(descriptorFor(msg))) {
       addPath(rawPath, 'tool');
     }
     const artifact = extractDocumentArtifactMetadata(toolName, msg.toolInput, resultContent);
@@ -405,7 +411,7 @@ export function collectGeneratedFiles(
         }
       }
     }
-    const descriptor = describeToolUse(toolName, msg.toolInput);
+    const descriptor = descriptorFor(msg);
     if (descriptor.kind === 'command' && descriptor.command) {
       for (const rawPath of extractCommandOutputPathCandidates(descriptor.command)) {
         addPath(rawPath, 'command');
@@ -426,7 +432,7 @@ export function collectGeneratedFiles(
   // 求交集而不是猜字段名,所以只有真产出过的文件才可能被摘。
   for (const msg of messages) {
     if (msg.role !== 'tool_use' || !msg.toolName) continue;
-    const d = describeToolUse(msg.toolName, msg.toolInput);
+    const d = descriptorFor(msg);
     for (const raw of sourcePathCandidatesFromDescriptor(d)) {
       byKey.delete(dedupeKeyForPath(canonicalizeWindowsShape(resolveToolFilePath(raw, workingDir))));
     }

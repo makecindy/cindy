@@ -659,6 +659,7 @@ const MAX_VISIBLE_BOT_ARTIFACTS = 4;
 
 function generatedFilesCardPropsEqual(
   prev: {
+    renderItemKey?: string;
     files: readonly GeneratedFileRef[];
     turnStartMs: number | null;
     turnEndMs: number | null;
@@ -667,6 +668,7 @@ function generatedFilesCardPropsEqual(
     onVisibilityChange?: (checkKey: string, visible: boolean) => void;
   },
   next: {
+    renderItemKey?: string;
     files: readonly GeneratedFileRef[];
     turnStartMs: number | null;
     turnEndMs: number | null;
@@ -676,6 +678,7 @@ function generatedFilesCardPropsEqual(
   },
 ): boolean {
   return (
+    prev.renderItemKey === next.renderItemKey &&
     prev.botArtifacts === next.botArtifacts &&
     prev.onVisibilityChange === next.onVisibilityChange &&
     generatedFilesCheckKey(prev.files, prev.turnStartMs, prev.turnEndMs, prev.turnSealed) ===
@@ -684,6 +687,7 @@ function generatedFilesCardPropsEqual(
 }
 
 export const GeneratedFilesCard = memo(function GeneratedFilesCard({
+  renderItemKey,
   files,
   turnStartMs,
   turnEndMs,
@@ -691,6 +695,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   botArtifacts = false,
   onVisibilityChange,
 }: {
+  renderItemKey?: string;
   files: readonly GeneratedFileRef[];
   turnStartMs: number | null;
   turnEndMs: number | null;
@@ -841,7 +846,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     const hiddenPrimaryCount = primary.length - visiblePrimary.length;
 
     return (
-      <div className="my-1 flex max-w-[680px] flex-col gap-2" data-testid="bot-generated-artifacts">
+      <div data-render-item-key={renderItemKey} className="my-1 flex max-w-[680px] flex-col gap-2" data-testid="bot-generated-artifacts">
         {primary.length > 0 ? (
           <>
             <span className="text-12 font-medium text-[var(--text-secondary)]">
@@ -911,7 +916,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   const hasOnlyArtifacts = existing.every((file) => file.artifact);
 
   return (
-    <div className="my-1 flex flex-col gap-2">
+    <div data-render-item-key={renderItemKey} className="my-1 flex flex-col gap-2">
       {!hasOnlyArtifacts && (
         <span className="text-12 font-medium text-[var(--text-secondary)]">
           {t('chat.generatedFiles.title')}
