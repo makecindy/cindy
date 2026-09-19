@@ -13,6 +13,7 @@ export function resolveMobileSocialLoginMode(input: {
   platform: string;
   nativeSupported: boolean;
 }): MobileSocialLoginMode | null {
+  if (input.provider === 'wechat' && input.region !== 'cn') return null;
   if (input.nativeSupported) return 'native';
   if (
     input.provider === 'apple' &&

@@ -81,6 +81,22 @@ pnpm --filter mobile test:smoke
 
 ## 专项入口
 
+### 中国大陆版微信个人登录
+
+- 复用 `xdt-wechat-login`：iOS/Android 拉起微信取临时 code，再由 auth-server 交换。
+  PC 使用同一服务端的网站应用扫码入口。登录结果统一进入手机号补绑或身份选择流程。
+- 在 Mobile `.env`（本地）或打包机环境中成对填写
+  `EXPO_PUBLIC_CINDY_WECHAT_APP_ID` 与 `EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK`，
+  说明与空值占位见 `apps/mobile/.env.example`。AppID 必须匹配服务端
+  `WECHAT_MOBILE_APPID`；服务端两组 Secret 不进入客户端。自建构建继续继承这两个
+  公开环境变量，不从服务端环境文件读取密钥。
+- 仅 cn 和显式配置的 dev 构建消费微信配置；Global 忽略残留值。全空关闭入口，
+  半配置或非法 Universal Link 在原生配置生成前报错。首次启用需重新出原生包，
+  仅 OTA 无法添加回调配置；按下方冷更规则比对 fingerprint。
+- 真机验证 iOS Universal Link/AASA、Android 包名/签名与 WXEntryActivity，覆盖
+  同意授权、取消、未安装微信、回到前台超时后重试。iOS Simulator 不支持微信授权。
+  未绑手机号须短信验证，已绑用户免短信；用同一微信在 PC 和两种手机上确认账号一致。
+
 - 模拟器与真机排错：
   [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md)。
 
