@@ -23,6 +23,7 @@ import { getMaker } from '../maker-host/index.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { normalizeContextWindowBudget } from '../../shared/sessionContextWindowBudget.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
 import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import {
@@ -984,6 +985,10 @@ export async function forkSessionAtMessage(
         totalCostUsd: 0,
         contextTokens: forkContextTokens,
         contextWindow: forkContextWindow,
+        // 任务级窗口档位随 fork 继承（同一任务意图）；启动时仍会按新路由重新收敛，
+        // 所以跨 agent / 跨模型的 fork 不会残留超出目标上限的值。
+        // 继承前归一化：手改 DB 的脏值不该被复制进新任务（与 updateSessionInDb 同口径）。
+        contextWindowBudget: normalizeContextWindowBudget(source.contextWindowBudget),
         contextWindowRuntime: sameContextRoute && forkContextWindow > 0 && source.contextWindowRuntime === forkContextWindow
           ? forkContextWindow : null,
         fastMode: forkSource.agentKind === source.agentKind ? source.fastMode : false,

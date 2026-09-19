@@ -108,6 +108,16 @@ export const sessions = sqliteTable(
      */
     providerId: text('provider_id'),
     /**
+     * 任务级工作上下文预算（tokens）。本任务显式选择的「上下文窗口档位」；
+     * 有效窗口 = min(budget ?? 模型级上限, 模型级上限 ?? ∞, 目录 contextWindowMax)，
+     * 由 `model-context-settings.ts` 解析后下发给引擎。
+     *
+     * NULL = 未自定义，跟随模型路由默认（老会话零影响）。
+     * **与运行期快照列 `context_window` / `context_window_runtime` 无关**：那两列记录引擎
+     * 实际上报的窗口，由 `sessionSpendBroadcaster` 写；本列只存用户选择，不参与快照覆盖。
+     */
+    contextWindowBudget: integer('context_window_budget'),
+    /**
      * 用户最近一次"按下发送"的时刻（unix ms，NULL = 从未发过）。
      * Sidebar Project / 组内 session 排序唯一时间轴：
      *   - 首条消息发出时由 renderer 通过 touchUserSend IPC 立刻 bump

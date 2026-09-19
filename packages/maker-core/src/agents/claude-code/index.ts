@@ -1244,6 +1244,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const getAuthEnv = this.deps.auth.getAuthEnv.bind(this.deps.auth);
     const sdkModel = sdkModelFor(opts.model);
     const initialSdkEffort = this.sdkEffortForModel(opts.model, opts.effort ?? 'high');
+    // 任务级工作上下文预算（tokens）：host 已按目录上限与模型级上限收敛。
+    // 本任务热切模型时 host 会随 setModel 下新值；缺席保持当前值。
+    // 必须早于下面的 configuredWindows （窗口表在 buildQuery 之前就要用它，
+    // 否则会撞 TDZ）。
+    let mutableContextWindowBudget: number | null = opts.contextWindowBudget ?? null;
     const binaryPath = this.deps.binaryPath;
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
@@ -1273,7 +1278,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     })();
     const configuredWindows = [...new Set([...this.capabilities.availableModels.map((model) => model.id), opts.model])]
       .flatMap((model) => {
-        const limit = this.deps.resolveModelContextLimit?.(opts.providerId, model);
+        // 任务级预算优先于模型级上限：本任务的窗口就是预算（host 已收敛），
+        // 其余模型条目保持目录/上限口径。
+        const limit = model === opts.model && mutableContextWindowBudget !== null
+          ? mutableContextWindowBudget
+          : this.deps.resolveModelContextLimit?.(opts.providerId, model);
         return typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0
           ? [{ id: sdkModelFor(model), contextWindow: limit, mirrorOneMillionSuffix: false as const }]
           : [];
@@ -2374,6 +2383,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       ]),
     ];
     const resolveModelContextWindow = (model: string, providerId = mutableProviderId): number | undefined => {
+      // 任务级预算优先：本任务的工作窗口由用户显式选定，host 已收敛到目录上限内。
+      if (mutableContextWindowBudget !== null && Number.isFinite(mutableContextWindowBudget) && mutableContextWindowBudget > 0) {
+        return mutableContextWindowBudget;
+      }
       const configured = this.deps.resolveModelContextLimit?.(providerId, model);
       if (configured && Number.isFinite(configured) && configured > 0) return configured;
 
@@ -6619,8 +6632,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         return expected !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
       },
 
-      async setModel(newModel: string, setModelOpts?: { providerId?: string | null }) {
+      async setModel(
+        newModel: string,
+        setModelOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
+      ) {
         if (reviewMode) return;
+        if (setModelOpts?.contextWindowBudget !== undefined) {
+          mutableContextWindowBudget = setModelOpts.contextWindowBudget;
+        }
         const targetProviderId = setModelOpts?.providerId !== undefined
           ? setModelOpts.providerId
           : mutableProviderId;
