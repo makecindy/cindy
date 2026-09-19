@@ -2889,40 +2889,44 @@ describe('ghost · launch 启动模式(2026-07-12)', () => {
   });
 });
 
-describe('ghost · 官方保留 id 前缀', () => {
-  it('isOfficialGhostId:三类完整前缀命中,近似形态不命中', () => {
+describe('ghost · 官方保留 id', () => {
+  it('isOfficialGhostId:官方前缀和精确 id 命中,近似形态不命中', () => {
     expect(isOfficialGhostId('cindy-web-search')).toBe(true);
     expect(isOfficialGhostId('cindy-art')).toBe(true);
     expect(isOfficialGhostId('filo-google')).toBe(true);
     expect(isOfficialGhostId('xd-mivo')).toBe(true);
+    expect(isOfficialGhostId('haoplay-feishu')).toBe(true);
     // 前缀必须完整命中:cindyart 无连字符、my-cindy- 前缀不在最左都不算官方。
     expect(isOfficialGhostId('cindyart')).toBe(false);
     expect(isOfficialGhostId('my-cindy-tool')).toBe(false);
     expect(isOfficialGhostId('web-search')).toBe(false);
+    expect(isOfficialGhostId('haoplay-feishu-extra')).toBe(false);
   });
 
-  it('四个官方 id 谓词对本阶段同一组输入返回完全相同的结果', () => {
+  it('保留 id 与 first-party privilege 谓词分离，避免历史同名目录直接获得权限', () => {
     const cases: ReadonlyArray<readonly [id: string, expected: boolean]> = [
       ['cindy-art', true],
       ['filo-google', true],
       ['xd-mivo', true],
+      ['haoplay-feishu', true],
       ['acme-feishu', false],
       ['my-plugin', false],
       ['cindyart', false],
       ['my-cindy-tool', false],
+      ['haoplay-feishu-extra', false],
       ['', false],
     ];
-    const predicates = [
-      isOfficialGhostId,
-      isUserInstallReservedGhostId,
-      isBrokerEligibleGhostId,
-      isFirstPartyHostPrivilegeGhostId,
-    ];
-    // 期望值写死,避免用任一被测谓词或同一前缀表反推 expected 后让错误实现自证正确。
     for (const [id, expected] of cases) {
-      for (const predicate of predicates) {
-        expect(predicate(id), `${predicate.name}(${JSON.stringify(id)})`).toBe(expected);
-      }
+      expect(isOfficialGhostId(id), `isOfficialGhostId(${JSON.stringify(id)})`).toBe(expected);
+      expect(isUserInstallReservedGhostId(id), `isUserInstallReservedGhostId(${JSON.stringify(id)})`)
+        .toBe(expected);
+      const privilegeExpected = id === 'haoplay-feishu' ? false : expected;
+      expect(isBrokerEligibleGhostId(id), `isBrokerEligibleGhostId(${JSON.stringify(id)})`)
+        .toBe(privilegeExpected);
+      expect(
+        isFirstPartyHostPrivilegeGhostId(id),
+        `isFirstPartyHostPrivilegeGhostId(${JSON.stringify(id)})`,
+      ).toBe(privilegeExpected);
     }
   });
 });

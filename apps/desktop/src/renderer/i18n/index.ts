@@ -23,7 +23,10 @@ import jaCommon from './locales/ja/common.json';
 import jaAiRename from './locales/ja/aiRename.json';
 import koCommon from './locales/ko/common.json';
 import koAiRename from './locales/ko/aiRename.json';
-import { GHOST_OFFICIAL_ID_PREFIXES } from '../../shared/ghost';
+import {
+  GHOST_OFFICIAL_ID_EXACT_IDS,
+  GHOST_OFFICIAL_ID_PREFIXES,
+} from '../../shared/ghost';
 import { DEFAULT_LOCALE } from '../../shared/locale';
 
 export {
@@ -110,7 +113,10 @@ void i18n.use(initReactI18next).init({
     defaultVariables: {
       appName: BRAND_NAME,
       pronoun: '这位伙伴',
-      reservedGhostIdPrefixes: GHOST_OFFICIAL_ID_PREFIXES.join(' / '),
+      reservedGhostIdPrefixes: [
+        ...GHOST_OFFICIAL_ID_PREFIXES,
+        ...GHOST_OFFICIAL_ID_EXACT_IDS,
+      ].join(' / '),
     },
   },
   returnNull: false,

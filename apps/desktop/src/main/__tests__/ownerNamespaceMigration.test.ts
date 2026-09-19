@@ -1926,6 +1926,124 @@ describe('legacy Ghost plugin recovery', () => {
     await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
   });
 
+  it('does not recover haoplay-feishu from its id alone', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    await writeGhostDir(root, 'brain', 'haoplay-feishu');
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+        { rejectReservedIds: true },
+      ),
+    ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    await expect(
+      fs.readFile(path.join(root, 'brain', 'haoplay-feishu', 'ghost.json'), 'utf-8'),
+    ).resolves.toContain('"id":"haoplay-feishu"');
+  });
+
+  it('does not scan the target root for an unproven haoplay-feishu source', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const targetRoot = path.join(
+      root,
+      'owners',
+      dataOwnerStorageKey(ownerId),
+      'cindy-brain',
+    );
+    await writeGhostDir(root, 'brain', 'haoplay-feishu');
+    await fs.mkdir(targetRoot, { recursive: true });
+
+    const originalReaddir = fsSync.readdirSync.bind(fsSync);
+    const readdirSpy = vi.spyOn(fsSync, 'readdirSync').mockImplementation((dir, options) => {
+      if (path.resolve(String(dir)) === path.resolve(targetRoot)) {
+        throw Object.assign(new Error('target scan denied'), { code: 'EACCES' });
+      }
+      return originalReaddir(dir as never, options as never) as never;
+    });
+    try {
+      expect(
+        getLegacyGhostRecoveryStatus(
+          { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+          root,
+          false,
+          { rejectReservedIds: true },
+        ),
+      ).toEqual({ state: 'none', legacyPluginCount: 0, canRetry: false });
+      await expect(
+        recoverLegacyGhostPlugins(
+          { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+          realFsDeps(root),
+          { rejectReservedIds: true },
+        ),
+      ).resolves.toMatchObject({ status: 'partial', moved: 0, conflicts: 1 });
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
+  it('recovers haoplay-feishu when the Host market ledger verifies its source', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const source = path.join(root, 'brain', 'haoplay-feishu');
+    await writeGhostDirAtPath(source, 'haoplay-feishu');
+    const verifyLegacyOfficialProvenance = vi.fn(
+      (id: string, dir: string) => id === 'haoplay-feishu' && dir === source,
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+        { rejectReservedIds: true, verifyLegacyOfficialProvenance },
+      ),
+    ).resolves.toMatchObject({
+      status: 'migrated',
+      moved: 1,
+      recoveredIds: ['haoplay-feishu'],
+    });
+    expect(verifyLegacyOfficialProvenance).toHaveBeenCalledWith('haoplay-feishu', source);
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', 'haoplay-feishu', 'ghost.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('"id":"haoplay-feishu"');
+  });
+
+  it('recovers haoplay-feishu when the legacy Host seed ledger names it', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const legacyRoot = path.join(root, 'brain');
+    await writeGhostDir(root, 'brain', 'haoplay-feishu');
+    await fs.writeFile(
+      path.join(legacyRoot, '.builtin-provisioning.json'),
+      JSON.stringify({ removed: [], seeded: ['haoplay-feishu'] }),
+    );
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+        { rejectReservedIds: true },
+      ),
+    ).resolves.toMatchObject({
+      status: 'migrated',
+      moved: 1,
+      provisioningStateMoved: true,
+      recoveredIds: ['haoplay-feishu'],
+    });
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', 'haoplay-feishu', 'ghost.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('"id":"haoplay-feishu"');
+  });
+
   it('keeps corrupt reserved sources out of a newly frozen recovery marker', async () => {
     const root = await tempRoot();
     const ownerId = 'cloud-a';

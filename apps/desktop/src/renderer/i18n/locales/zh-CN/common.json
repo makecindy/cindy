@@ -4979,7 +4979,7 @@
             "authTitle": "私有仓库",
             "authBody": "认证完全依赖系统的 Git 配置，Cindy 不保存任何 Git 凭证。SSH 方式：本机已配置可用的 key；若组织开启了 SAML SSO，还需在 GitHub 的 SSH key 设置里为该组织点 Configure SSO 授权。HTTPS 方式：使用 Personal Access Token，并由系统 credential helper 保存。",
             "rulesTitle": "安装规则",
-            "rulesBody": "插件 id 全局唯一、先装先得——与已安装插件冲突时会明确提示。id 使用官方保留前缀（{{reservedGhostIdPrefixes}}）的插件，不能通过拖入、选择文件或自定义插件市场装入。插件声明的权限会在详情页展示；点击安装后直接完成安装并自动开启，不再额外弹窗确认权限。",
+            "rulesBody": "插件 id 全局唯一、先装先得——与已安装插件冲突时会明确提示。id 使用官方保留命名空间或 ID（{{reservedGhostIdPrefixes}}）的插件，不能通过拖入、选择文件或自定义插件市场装入。插件声明的权限会在详情页展示；点击安装后直接完成安装并自动开启，不再额外弹窗确认权限。",
             "copy": "复制指南",
             "copied": "指南已复制到剪贴板。",
             "copyFailed": "复制失败，请重试。"
@@ -5206,7 +5206,7 @@
         "hostUnsupported": "当前 Cindy 无法识别此插件的清单格式。",
         "alreadyInstalled": "这个插件已经安装",
         "commandConflict": "它的指令和已装插件撞名了，先卸载占用方或让作者改名",
-        "idReserved": "{{reservedGhostIdPrefixes}} 是官方插件保留前缀，不能通过拖入、选择文件或自定义插件市场装入；请从 Cindy 插件市场安装对应的官方插件",
+        "idReserved": "{{reservedGhostIdPrefixes}} 是官方插件保留命名空间或 ID，不能通过拖入、选择文件或自定义插件市场装入；请从 Cindy 插件市场安装对应的官方插件",
         "brokerManualInstallNotAuthorized": "本地装入的 .cindy 不能使用授权 broker；请改从组织插件市场安装",
         "brokerRedirectPortRequired": "这个插件声明了授权 broker，但没有在同一项 OAuth 配置中声明 redirectPort。请让作者补上该字段，确保授权最后一跳能回到本机监听端口。",
         "sourceMissing": "找不到所选文件",

@@ -338,6 +338,7 @@ import {
 } from '../plugin-market/ledger.js';
 import {
   installedMarketManifestIdentity,
+  verifyInstalledMarketManifest,
   type InstalledMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import { createOrganizationPrefixStore } from '../plugin-market/organizationPrefixStore.js';
@@ -713,6 +714,7 @@ function getLegacyGhostRecoveryStatusForActiveSession(): LegacyGhostRecoveryStat
     {
       reservedCommands: reservedBuiltinCommands,
       rejectReservedIds: shouldRejectReservedGhostIds(app.isPackaged),
+      verifyLegacyOfficialProvenance: hasLegacyOfficialMarketProvenance,
     },
   );
 }
@@ -830,6 +832,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
           shouldAbort,
           reservedCommands: reservedBuiltinCommands,
           rejectReservedIds: shouldRejectReservedGhostIds(app.isPackaged),
+          verifyLegacyOfficialProvenance: hasLegacyOfficialMarketProvenance,
         },
       );
     } catch (error) {
@@ -2642,6 +2645,23 @@ function readInstalledGhostManifestIdentity(
     GHOST_INSTALL_MANIFEST_MAX_BYTES,
   );
   return result.ok ? installedMarketManifestIdentity(result.snapshot) : null;
+}
+
+function hasLegacyOfficialMarketProvenance(ghostId: string, dir: string): boolean {
+  const lookup = getPluginMarketLedger().lookupInstallationForOidc(ghostId);
+  if (
+    lookup.kind !== 'found' ||
+    !lookup.record.installed ||
+    (lookup.record.source !== 'market' && lookup.record.source !== 'legacy-adopted')
+  ) {
+    return false;
+  }
+  const result = readInstalledGhostManifestSnapshot(dir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  return result.ok &&
+    verifyInstalledMarketManifest(
+      lookup.record,
+      installedMarketManifestIdentity(result.snapshot),
+    );
 }
 
 /** Resolve Connection metadata from trusted organization installs or explicit Forge receipts. */
@@ -4849,7 +4869,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // (2026-07 apiBaseUrl 清理:旧"编译期注入可能为空 → 回退"的分支随
       // 清单机制成为死代码;配错清单时明确 404 暴露,不静默落主 server)。
       broker: createGhostOauthBrokerClient({
-        apiPost: (path, body) => {
+        apiPost: (path, body, options) => {
           requireAppCapability(
             'canUseCindyOAuthBroker',
             'Cindy OAuth broker requires a Cindy account.',
@@ -4857,6 +4877,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           return serverApiFetch(path, {
             method: 'POST',
             body,
+            timeoutMs: options?.timeoutMs,
             baseUrl: () => getClientEndpoint('oauthBrokerApiBaseUrl'),
           });
         },
@@ -5594,7 +5615,7 @@ function rejectReservedGhostId(id: string): void {
   if (!isUserInstallReservedGhostId(id)) return;
   throwIpcError(
     'GHOST_ID_RESERVED',
-    `id "${id}" 使用了官方保留前缀(cindy- / filo- / xd-),用户通道不可装入`,
+    `id "${id}" 使用了官方保留命名空间或 ID,用户通道不可装入`,
   );
 }
 
