@@ -191,15 +191,23 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
   const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 112);
 
   return `
-    html, body {
+    html {
       margin: 0;
-      padding: 0;
+      overflow-x: hidden;
+      overscroll-behavior-x: none;
+    }
+    body {
+      box-sizing: border-box;
+      margin: 0;
+      min-width: 0;
+      padding: 0 16px;
       background: transparent;
       color: ${textColor};
       font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
       font-size: ${fontSize}px;
       line-height: ${lineHeight}px;
-      overflow: visible;
+      overflow-x: hidden;
+      overflow-y: visible;
       overflow-wrap: anywhere;
       cursor: text;
       touch-action: auto;
@@ -215,6 +223,9 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       display: flex;
       flex-direction: column;
       gap: ${bodyGap}px;
+      max-width: 100%;
+      min-width: 0;
+      width: 100%;
       -webkit-touch-callout: default !important;
       -webkit-user-select: text !important;
       user-select: text !important;
@@ -242,6 +253,11 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     }
     p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, .list-row {
       margin: 0;
+    }
+    /* 正文阅读优先纵向手势:Android WebView 不再因手指的轻微横向漂移
+       把页面拖入横向处理。表格和公式仍显式保留双向手势，以便宽内容横滚。 */
+    p, h1, h2, h3, h4, h5, h6, blockquote, .list-row {
+      touch-action: pan-y;
     }
     /* 标题分三档。改前 h1–h6 全部等于正文字号(只有 font-weight:500 撑),文档里
        完全读不出层级 —— 与聊天消息流同一个缺陷、同一套修法:
@@ -383,6 +399,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       display: block;
       max-width: 100%;
       overflow-x: auto;
+      touch-action: pan-x pan-y;
     }
     th, td {
       border-bottom: 1px solid ${borderColor};
@@ -400,6 +417,7 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     .xdt-math-block {
       overflow-x: auto;
       text-align: center;
+      touch-action: pan-x pan-y;
     }
     .xdt-math-block pre {
       text-align: left;
