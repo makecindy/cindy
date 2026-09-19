@@ -20,17 +20,26 @@ import { WebView } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
+import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 import { selectionQuoteMenuLabel } from '@/session/selectionQuote';
 import { lineHeight, useTheme } from '@/theme';
-import { typeScale } from '@/theme/tokens';
+import { spacing, typeScale } from '@/theme/tokens';
+
+const PAGER_PAN_ACTIVE_X = 16;
+const PAGER_PAN_FAIL_Y = 8;
+const PAGER_SWIPE_DISTANCE = 56;
+const PAGER_SWIPE_VELOCITY = 500;
 
 export function MarkdownFileReader({
   markdown,
+  onPageSwipe,
   onQuoteSelection,
   targetLine,
   testID,
 }: {
   markdown: string;
+  /** 由文件预览 pager 消费的明确横向翻页；纵向移动会让该手势失败给 WebView。 */
+  onPageSwipe?: (direction: 'previous' | 'next') => void;
   /** chat-text-quote:系统菜单「添加到对话」的采集回调;未传时不加菜单项。 */
   onQuoteSelection?: (text: string) => void;
   /** 定位到源码行(1-based):加载后滚到覆盖该行的块并闪两下高亮(不驻留)。 */
@@ -50,6 +59,8 @@ export function MarkdownFileReader({
     chipColor: colors.surfaceChip,
     inlineCodeColor: colors.chatInlineCodeText,
     fontSize: typeScale.body,
+    // 与文件预览源码 FlatList 的 codeContent 对齐。
+    horizontalPadding: spacing.lg,
     // body(16/22)行高比 1.375,低于 DESIGN.md §3 正文区间 1.43–1.56 下限;
     // 文档阅读是长文连续阅读场景,换 bodyRelaxed(16/24)= 1.50 落到规范值。
     // 字号不动:16 = DESIGN.md 的 Body 档。
@@ -80,8 +91,23 @@ export function MarkdownFileReader({
     if (text && text.trim().length > 0) onQuoteSelectionRef.current?.(text);
   }, []);
 
+  // WebView 会在 Android 原生层先接住任何方向的 touch；CSS 无法把轻微横偏
+  // 还给外层 pager。此识别器仅在近似纯横向时激活，纵向一超过 8px 就失败，
+  // 由 WebView 保持与源码 FlatList 相同的连续纵向滚动。
+  const pagerPan = useMemo(() => Gesture.Pan()
+    .activeOffsetX([-PAGER_PAN_ACTIVE_X, PAGER_PAN_ACTIVE_X])
+    .failOffsetY([-PAGER_PAN_FAIL_Y, PAGER_PAN_FAIL_Y])
+    .runOnJS(true)
+    .onEnd((event) => {
+      const isPageSwipe = Math.abs(event.translationX) >= PAGER_SWIPE_DISTANCE
+        || Math.abs(event.velocityX) >= PAGER_SWIPE_VELOCITY;
+      if (!isPageSwipe) return;
+      onPageSwipe?.(event.translationX < 0 ? 'next' : 'previous');
+    }), [onPageSwipe]);
+
   return (
-    <View style={styles.fill} testID={testID}>
+    <GestureDetector gesture={pagerPan}>
+      <View style={styles.fill} testID={testID}>
       <WebView
         menuItems={quoteEnabled ? quoteMenuItems : undefined}
         onCustomMenuSelection={quoteEnabled ? handleCustomMenuSelection : undefined}
@@ -91,7 +117,8 @@ export function MarkdownFileReader({
         source={{ html }}
         style={[styles.fill, { backgroundColor: 'transparent' }]}
       />
-    </View>
+      </View>
+    </GestureDetector>
   );
 }
 

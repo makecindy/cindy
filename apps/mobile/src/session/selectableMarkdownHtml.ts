@@ -25,6 +25,8 @@ export interface SelectableMarkdownHtmlOptions {
   borderColor?: string;
   chipColor?: string;
   fontSize?: number;
+  /** 文件预览正文左右边距；调用方传入共享 spacing.lg。 */
+  horizontalPadding?: number;
   /** 行内 code 文字色(压暗档,不是底色;见 css 里的说明)。 */
   inlineCodeColor?: string;
   lineHeight?: number;
@@ -187,22 +189,31 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     string: cssValue(options.syntaxColors?.string ?? lightColors.syntaxString),
   };
   const bodyGap = cssNumber(options.bodyGap ?? 10);
+  const horizontalPadding = cssNumber(options.horizontalPadding ?? 16);
   const markerWidth = cssNumber(options.markerWidth ?? 24);
-  const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 112);
 
   return `
-    html, body {
+    html {
       margin: 0;
-      padding: 0;
+      overflow-x: hidden;
+      overscroll-behavior-x: none;
+      touch-action: pan-y;
+    }
+    body {
+      box-sizing: border-box;
+      margin: 0;
+      min-width: 0;
+      padding: 0 ${horizontalPadding}px;
       background: transparent;
       color: ${textColor};
       font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
       font-size: ${fontSize}px;
       line-height: ${lineHeight}px;
-      overflow: visible;
+      overflow-x: hidden;
+      overflow-y: visible;
       overflow-wrap: anywhere;
       cursor: text;
-      touch-action: auto;
+      touch-action: pan-y;
       -webkit-text-size-adjust: 100%;
       -webkit-tap-highlight-color: transparent;
       -webkit-touch-callout: default !important;
@@ -215,6 +226,9 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       display: flex;
       flex-direction: column;
       gap: ${bodyGap}px;
+      max-width: 100%;
+      min-width: 0;
+      width: 100%;
       -webkit-touch-callout: default !important;
       -webkit-user-select: text !important;
       user-select: text !important;
@@ -243,6 +257,8 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, .list-row {
       margin: 0;
     }
+    /* 文件预览的横向手势专属外层 pager，用来切换相邻文件。
+       HTML/PDF 是内部横移的例外；Markdown 与源码列表一样只接收纵向滚动。 */
     /* 标题分三档。改前 h1–h6 全部等于正文字号(只有 font-weight:500 撑),文档里
        完全读不出层级 —— 与聊天消息流同一个缺陷、同一套修法:
          h1  20/28 = 1.400(= desktop h1 比例)
@@ -380,16 +396,17 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       border-left: 1px solid ${borderColor};
       border-spacing: 0;
       border-top: 1px solid ${borderColor};
-      display: block;
-      max-width: 100%;
-      overflow-x: auto;
+      table-layout: fixed;
+      width: 100%;
     }
     th, td {
       border-bottom: 1px solid ${borderColor};
       border-right: 1px solid ${borderColor};
       box-sizing: border-box;
-      min-width: ${tableCellMinWidth}px;
+      min-width: 0;
+      overflow-wrap: anywhere;
       padding: 4px 8px;
+      word-break: break-word;
       text-align: left;
       vertical-align: top;
     }
@@ -398,7 +415,8 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
       font-weight: 500;
     }
     .xdt-math-block {
-      overflow-x: auto;
+      max-width: 100%;
+      overflow-x: hidden;
       text-align: center;
     }
     .xdt-math-block pre {

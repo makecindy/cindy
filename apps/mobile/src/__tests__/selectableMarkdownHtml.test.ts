@@ -39,6 +39,24 @@ describe('buildSelectableMarkdownHtml 渲染态行定位', () => {
   });
 });
 
+describe('buildSelectableMarkdownHtml 移动阅读视口', () => {
+  const css = () => buildSelectableMarkdownHtml('# 标题');
+
+  it('正文沿用文件预览的左右安全边距且根视口不横向滚动', () => {
+    expect(css()).toMatch(/body \{[^}]*box-sizing:\s*border-box[^}]*padding:\s*0 16px[^}]*overflow-x:\s*hidden[^}]*touch-action:\s*pan-y/s);
+    expect(buildSelectableMarkdownHtml('# 标题', { horizontalPadding: 12 })).toContain('padding: 0 12px;');
+    expect(css()).toMatch(/html \{[^}]*overflow-x:\s*hidden[^}]*overscroll-behavior-x:\s*none[^}]*touch-action:\s*pan-y/s);
+    expect(css()).toMatch(/#xdt-content \{[^}]*max-width:\s*100%[^}]*min-width:\s*0[^}]*width:\s*100%/s);
+  });
+
+  it('纵向阅读不抢 pager 横滑，宽表格与公式也不建立内部横向滚动', () => {
+    expect(css()).toMatch(/table \{[^}]*table-layout:\s*fixed[^}]*width:\s*100%/s);
+    expect(css()).toMatch(/th, td \{[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere[^}]*word-break:\s*break-word/s);
+    expect(css()).toMatch(/\.xdt-math-block \{[^}]*max-width:\s*100%[^}]*overflow-x:\s*hidden/s);
+    expect(css()).not.toMatch(/touch-action:\s*pan-x/);
+  });
+});
+
 /**
  * 代码块语法着色的 WebView 输出。
  *
