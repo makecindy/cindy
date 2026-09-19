@@ -22,7 +22,7 @@ import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTyp
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
 import { selectionQuoteMenuLabel } from '@/session/selectionQuote';
 import { lineHeight, useTheme } from '@/theme';
-import { typeScale } from '@/theme/tokens';
+import { spacing, typeScale } from '@/theme/tokens';
 
 export function MarkdownFileReader({
   markdown,
@@ -50,6 +50,8 @@ export function MarkdownFileReader({
     chipColor: colors.surfaceChip,
     inlineCodeColor: colors.chatInlineCodeText,
     fontSize: typeScale.body,
+    // 与文件预览源码 FlatList 的 codeContent 对齐。
+    horizontalPadding: spacing.lg,
     // body(16/22)行高比 1.375,低于 DESIGN.md §3 正文区间 1.43–1.56 下限;
     // 文档阅读是长文连续阅读场景,换 bodyRelaxed(16/24)= 1.50 落到规范值。
     // 字号不动:16 = DESIGN.md 的 Body 档。
