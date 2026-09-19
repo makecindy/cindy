@@ -9926,6 +9926,7 @@
         "moveToProjectRunningBlocked": "This session is running. Move it after it finishes.",
         "moveToProjectAttachedBlocked": "This session is being controlled remotely. Move it after control ends.",
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
+        "moveToProjectWorktreeBlocked": "This task's working directory is a worktree, so it can't be moved to another project yet",
         "openInNewWindow": "Open in new window",
         "exportShare": "Export session…",
         "exportHtml": "Export to HTML…",
