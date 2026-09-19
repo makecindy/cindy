@@ -810,6 +810,23 @@
         "secret-chime": "シークレットチャイム",
         "custom": "ローカルファイル…",
         "customSelected": "ローカルファイル: {{name}}"
+      },
+      "desktopCompanion": {
+        "title": "デスクトップ連動",
+        "enableLabel": "システムのデスクトップを変える",
+        "enableHint": "いまのタスク、記憶、時間、場所から Cindy のデスクトップを生成します。人物は隅だけ、アイコン用の余白を残します。静止画のあと、ループ動画を敷きます。",
+        "enableAria": "デスクトップ連動の切り替え",
+        "locationLabel": "現在地を使う",
+        "locationHint": "位置情報を使い、おおよその都市を窓の景色にします。オフまたは拒否のときは時間帯だけ反映します。",
+        "locationAria": "デスクトップの位置情報の切り替え",
+        "previewAlt": "現在のデスクトップ",
+        "lastTopic": "現在：{{topic}}",
+        "empty": "オンにすると最初のデスクトップを生成します",
+        "updateNow": "今すぐ更新",
+        "updating": "生成しています…",
+        "needImageModel": "先に設定で画像モデルを構成してください",
+        "needVideoModel": "先に設定で動画モデルを構成してください",
+        "failed": "今回は生成できませんでした。前のデスクトップのままです"
       }
     },
     "language": {

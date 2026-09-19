@@ -810,6 +810,23 @@
         "secret-chime": "Secret chime",
         "custom": "Local file…",
         "customSelected": "Local file: {{name}}"
+      },
+      "desktopCompanion": {
+        "title": "Desktop presence",
+        "enableLabel": "Change the system desktop",
+        "enableHint": "Generate a Cindy desktop from the current task, memory, time, and location. She stays in one corner so icons remain usable. A still image is applied first, then a looping video.",
+        "enableAria": "Toggle desktop presence",
+        "locationLabel": "Use current location",
+        "locationHint": "Ask macOS for location and use the city in the window scene. If this is off or denied, only the time of day is used.",
+        "locationAria": "Toggle desktop location",
+        "previewAlt": "Current desktop",
+        "lastTopic": "Now: {{topic}}",
+        "empty": "The first desktop is generated after you turn this on",
+        "updateNow": "Update now",
+        "updating": "Generating…",
+        "needImageModel": "Configure an image model in Settings first",
+        "needVideoModel": "Configure a video model in Settings first",
+        "failed": "This update did not finish. The previous desktop stays."
       }
     },
     "language": {

@@ -551,6 +551,7 @@ import {
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
+import { disposeDesktopCompanion, ensureDesktopCompanionRuntime, resetDesktopCompanion } from './desktop-companion/host.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
 import {
   disposeInputDevices,
@@ -1854,6 +1855,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     resetSchedulerReady();
     agentIslandService = getAgentIslandService();
     agentIslandService?.resetRuntimeState();
+    void resetDesktopCompanion();
     // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
     // closeLocalDb 之前先 stop;否则下一秒 tick 会撞 'localDb not ready'。
     // resetScheduler 把 scheduler-host 的 _scheduler 单例置 null,下一次
@@ -2088,6 +2090,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       authBoundaryLog.error(`close local DB on ${reason} failed`, error);
     }
     agentIslandService?.resetRuntimeState();
+    void resetDesktopCompanion();
   }
 
   if (blockingFailures.length > 0) {
@@ -3537,6 +3540,7 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
 
 app.on('before-quit', () => {
   isQuitting = true;
+  void disposeDesktopCompanion();
   disposePiRuntimeRecovery?.();
   retryPiRuntimeAfterNetworkRecovery = null;
   disposePiRuntimeRecovery = null;
@@ -4486,6 +4490,7 @@ const registerIpcHandlers = () => {
       updateInputDeviceSessionActivity(activity);
     },
   })?.setAppFocused(hasFocusedAppWindow());
+  ensureDesktopCompanionRuntime();
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
   // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。

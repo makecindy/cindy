@@ -2170,6 +2170,18 @@
       },
       "checkCase": false,
       "note": "远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。"
+    },
+    {
+      "id": "desktop-presence",
+      "status": "proposed",
+      "en": "Desktop presence",
+      "translations": {
+        "zh-CN": "桌面互动",
+        "zh-TW": "桌面互動",
+        "ja": "デスクトップ連動",
+        "ko": "데스크톱 연동"
+      },
+      "note": "设置「灵动岛」页里按任务、记忆、时间、位置更换 macOS 系统桌面的能力。不要写成桌宠、动态壁纸引擎、Live Wallpaper。"
     }
   ]
 }

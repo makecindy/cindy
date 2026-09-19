@@ -52,6 +52,15 @@ import {
   type AgentIslandSoundChoice,
   type AgentIslandSoundSettings,
 } from '../shared/agentIsland';
+import type { DesktopCompanionSnapshot } from '../shared/desktopCompanion';
+import {
+  DESKTOP_COMPANION_GET_STATE_CHANNEL,
+  DESKTOP_COMPANION_GET_PREVIEW_CHANNEL,
+  DESKTOP_COMPANION_REFRESH_CHANNEL,
+  DESKTOP_COMPANION_SET_ENABLED_CHANNEL,
+  DESKTOP_COMPANION_SET_LOCATION_ENABLED_CHANNEL,
+  DESKTOP_COMPANION_STATE_EVENT_CHANNEL,
+} from '../shared/desktopCompanion';
 import type { AgentProxyTunnelState, SshHostAgentProxyPref } from '../shared/agentProxyConfig';
 import {
   WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
@@ -1939,6 +1948,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 主窗口只持有打开能力；资源窗口的关闭与就绪能力在专用 preload 中暴露。
   resourceUsageWindow: {
     open: (): Promise<void> => ipcRenderer.invoke(RESOURCE_USAGE_WINDOW_OPEN_CHANNEL),
+  },
+
+  desktopCompanion: {
+    getState: (): Promise<DesktopCompanionSnapshot> =>
+      ipcRenderer.invoke(DESKTOP_COMPANION_GET_STATE_CHANNEL),
+    getPreview: (filePath: string): Promise<string> =>
+      ipcRenderer.invoke(DESKTOP_COMPANION_GET_PREVIEW_CHANNEL, filePath),
+    setEnabled: (enabled: boolean): Promise<DesktopCompanionSnapshot> =>
+      ipcRenderer.invoke(DESKTOP_COMPANION_SET_ENABLED_CHANNEL, enabled),
+    setLocationEnabled: (enabled: boolean): Promise<DesktopCompanionSnapshot> =>
+      ipcRenderer.invoke(DESKTOP_COMPANION_SET_LOCATION_ENABLED_CHANNEL, enabled),
+    refresh: (): Promise<DesktopCompanionSnapshot> =>
+      ipcRenderer.invoke(DESKTOP_COMPANION_REFRESH_CHANNEL),
+    onState: (cb: (snapshot: DesktopCompanionSnapshot) => void): (() => void) => {
+      const handler = (_e: unknown, snapshot: DesktopCompanionSnapshot) => cb(snapshot);
+      ipcRenderer.on(DESKTOP_COMPANION_STATE_EVENT_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(DESKTOP_COMPANION_STATE_EVENT_CHANNEL, handler);
+    },
   },
 
   agentIsland: {
