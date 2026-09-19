@@ -2533,7 +2533,17 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
           // 面板也按历史行显示「已停止」,而另一个实例里那条进程可能真的还在跑 —— 这是
           // 静默误导,但不做机制改动(正确做法是去那个实例里停,或直接杀进程树)。
           try {
-            await removePiBackgroundCommandRoot(piBackgroundCommandRoot(agentHome, sessionId));
+            const logCleanup = await removePiBackgroundCommandRoot(
+              piBackgroundCommandRoot(agentHome, sessionId),
+            );
+            if (logCleanup === 'kept-foreign-owner') {
+              // 这个会话的日志目录属于**另一个仍然存活的实例**:我们停不掉它的进程
+              // (跨实例边界),所以**故意保留**目录 —— 删掉只会让那边还在跑的命令连
+              // 输出与线索一起消失。任务本身已经删掉;那边实例自己的表不受影响。
+              log.warn('PI background command log kept: owned by another live instance', {
+                sessionId,
+              });
+            }
           } catch (err) {
             log.warn('PI background command log cleanup failed', {
               sessionId,

@@ -280,11 +280,15 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    而 `pendingKills` 里的记录全都是 finalized 的；② 它必须同时**关门**（置 `disposed`），
    让在飞的 `start()` 在 post-spawn 复查处被拒并杀树、新来的 start 直接失败，否则「清理快照之后
    又冒出来一条」永远无法靠信号拦住。同一个 post-spawn 复查还必须读 `stopRequested`：等 'spawn'
-   期间用户点了「全部停止」时子进程还不存在（killTree 是空打、请求本身只能返回未确认），若放行，
+   期间用户点了「停止」时子进程还不存在（killTree 是空打、请求本身只能返回未确认），若放行，
    刚起的进程会带着「用户已经要求停止」的状态继续跑。命中复查的那条记录用 `discardUnannounced`
    销账而不是 `finalize`：它的 running 帧从未发出，补发终态只会在 UI 里凭空造出一行；但离开
    运行表 / 清定时器 / 放掉管道句柄必须与 finalize 一致，否则记录永远卡在 running 里占住这个
    taskId（`finalizeFromExit` 对 `!spawned` 恒早退，帮不上忙）。
+   这个窗口由 `__tests__/pi-background-commands-race.test.ts` 定向覆盖：真实 `spawn` 的时序
+   不可控，那份测试用假的 `child_process.spawn` 把 `'spawn'` 事件的到达时刻变成显式开关，分别
+   断言「停止落在 spawn 之前」（进程被杀、记录当场销账、**不发** running 帧）与「停止落在 spawn
+   之后、回执交付之前」（正常运行态停止：进程被杀并按 stopped 收口）。
    更新重启的 async 清扫（`stopAllPiBackgroundCommandsForExit`）要**返回未确认退出的条数**，
    调用方按「> 0 即取消重启、读不到结果也按未确认」fail closed（与 subagent 的复检同口径）：
    确认不了退出的 detached 进程会带着旧版本 env 活到新版本旁边、占着端口与锁。
@@ -336,6 +340,10 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    跨实例边界（刻意）：后台命令进程只属 spawn 它的那个实例，**异实例删任务收不掉另一个实例
    的进程**（同一 userData 的 dev + 打包 / `--passive` 多开是受支持拓扑）；日志目录回收是
    best-effort，被别的实例占用时删除会失败或让存活实例的日志写入降级为 warn（不许升级成错误）。
+   为了让删除侧能**保守**一点，每个日志目录在 `start()` 时写一份 `owner.json`（`{pid, at}`）：
+   `removePiBackgroundCommandRoot` 看到 owner 是**另一个仍然存活**的进程时**故意保留目录**并回
+   `'kept-foreign-owner'`（调用方记 warn）—— 我们停不掉那边的进程，删日志只会让它连唯一的输出
+   与线索一起消失。owner 缺失 / 破损 / 指向已死进程或本进程时照常回收（没有任何判据说明还有人用）。
    日志目录的生命周期：`<sessionId>/` 随会话删除回收；**无会话时的 `anon-<pid>-<ts>/` 没有其它
    回收路径**（会话删除需要 sessionId，退出清扫只杀进程），所以启动期做一次
    `sweepStalePiBackgroundCommandAnonRoots` —— 只删目录名里 owner pid 已不在的（活实例的目录

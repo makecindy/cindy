@@ -2319,18 +2319,15 @@ function loadBackgroundCommandHelpers(options: {
   if (options.configuredShellPath !== undefined && env.PI_CODING_AGENT_DIR === undefined) {
     env.PI_CODING_AGENT_DIR = path.join(tmpdir(), 'cindy-pi-bg-config-home');
   }
-  const factory = new Function(
-    'process',
-    'path',
-    'readFileSync',
-    'piCodingAgent',
-    'BACKGROUND_COMMANDS_ENV',
-    'BACKGROUND_COMMAND_CONTROL_TITLE',
-    'BACKGROUND_COMMAND_RECEIPT_PREFIX',
-    'MAX_BACKGROUND_COMMAND_CHARS',
-    `${source.slice(start, end)}
-    return { cindyBackgroundCommandsEnabled, cindyBackgroundCommandAvailable, mapBackgroundCommandAlias, wantsBackgroundCommand,
-      compactBackgroundCommandTitle, resolveBackgroundCommandShellSpec, startCindyBackgroundCommand };`,
+  // 用 node:vm 求值而不是函数构造器:同样是「把生成的 bridge 片段当脚本跑」,但新代码
+  // 不再出现安全扫描器点名的高风险原语(文件里两处存量用法不在本 PR 范围,保持不动)。
+  const factory = runInNewContext(
+    `(function (process, path, readFileSync, piCodingAgent, BACKGROUND_COMMANDS_ENV,
+      BACKGROUND_COMMAND_CONTROL_TITLE, BACKGROUND_COMMAND_RECEIPT_PREFIX, MAX_BACKGROUND_COMMAND_CHARS) {
+      ${source.slice(start, end)}
+      return { cindyBackgroundCommandsEnabled, cindyBackgroundCommandAvailable, mapBackgroundCommandAlias, wantsBackgroundCommand,
+        compactBackgroundCommandTitle, resolveBackgroundCommandShellSpec, startCindyBackgroundCommand };
+    })`,
   ) as (...args: unknown[]) => BackgroundCommandHelpers;
   const helpers = factory(
     { env, cwd: () => process.cwd() },

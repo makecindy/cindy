@@ -224,6 +224,28 @@ export function buildPiBackgroundCommandEnv(input: {
 }
 
 /**
+ * 日志目录的 owner 标记文件名。内容:`{"pid": <进程号>, "at": <毫秒时间戳>}`。
+ *
+ * 用途只有一个:**会话删除侧**判断这个目录是不是另一个仍然存活的实例在用。跨实例边界下
+ * 我们杀不掉那边的进程(见 §4「跨实例边界(刻意)」),删日志只会让那条进程连唯一的输出
+ * 与线索一起消失 —— 所以宁可把它留下,而不是按"任务已删除"顺手清掉。
+ */
+export const PI_BACKGROUND_COMMAND_OWNER_FILE = 'owner.json';
+
+/** best-effort 写 owner 标记:写不进去(只读盘 / 权限)不影响命令本身。 */
+async function writePiBackgroundCommandOwner(logDir: string): Promise<void> {
+  try {
+    await fsp.writeFile(
+      path.join(logDir, PI_BACKGROUND_COMMAND_OWNER_FILE),
+      JSON.stringify({ pid: process.pid, at: Date.now() }),
+      { encoding: 'utf8', mode: 0o600 },
+    );
+  } catch {
+    // 忽略:标记只影响删除侧是否保守,不影响命令执行。
+  }
+}
+
+/**
  * 后台命令日志根目录:`<agentHome>/runtime/pi-bash-tasks/<sessionId>`。
  * 与 pi-subagent-runs 同级,理由相同:属于运行时产物,会话删除时一并回收。
  */
@@ -266,8 +288,11 @@ export async function sweepStalePiBackgroundCommandAnonRoots(
     if (pid === null || pid === process.pid) return false;
     return !alive(pid);
   });
-  await Promise.all(stale.map((entry) => removePiBackgroundCommandRoot(path.join(root, entry))));
-  return stale.length;
+  const results = await Promise.all(
+    stale.map((entry) => removePiBackgroundCommandRoot(path.join(root, entry), { isProcessAlive: alive })),
+  );
+  // owner 标记指向活进程的目录会被保留(理论上只可能是 pid 复用或竞态;不计入回收数)。
+  return results.filter((result) => result === 'removed').length;
 }
 
 /** `anon-<pid>-<ts>` → pid;名字不符 / pid 非法返回 null。 */
@@ -290,13 +315,41 @@ function defaultIsProcessAlive(pid: number): boolean {
   }
 }
 
-/** 会话删除时回收日志目录(不存在视为成功)。 */
-export async function removePiBackgroundCommandRoot(root: string): Promise<void> {
+/**
+ * 会话删除时回收日志目录(不存在视为成功)。
+ *
+ * 返回值区分两种结果:`'removed'` 已回收;`'kept-foreign-owner'` 目录的 owner 标记指向
+ * **另一个仍然存活的进程**,因此**故意保留** —— 跨实例边界下我们无法停止那边的进程,
+ * 删掉日志只会让它连输出与线索一起消失(调用方应记 warn)。owner 标记缺失 / 指向已死
+ * 进程 / 指向本进程时照常回收(我们没有留下任何可读的判据说明它还有人用)。
+ */
+export async function removePiBackgroundCommandRoot(
+  root: string,
+  opts?: { isProcessAlive?: (pid: number) => boolean },
+): Promise<'removed' | 'kept-foreign-owner'> {
+  const owner = await readPiBackgroundCommandOwner(root);
+  if (owner !== null && owner !== process.pid) {
+    const alive = opts?.isProcessAlive ?? defaultIsProcessAlive;
+    if (alive(owner)) return 'kept-foreign-owner';
+  }
   // Windows:刚死的进程还占着 cwd / 打开的 .log,第一次 rmdir 会 EBUSY/EPERM —— 与
   // subagent 那边的 stopAndRemovePiSubagentRuns 同一补救(Node 自带重试)。
   await fsp
     .rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     .catch(() => undefined);
+  return 'removed';
+}
+
+/** 读 owner 标记;缺失 / 损坏 / pid 非法一律返回 null(按"无判据"处理)。 */
+async function readPiBackgroundCommandOwner(root: string): Promise<number | null> {
+  try {
+    const raw = await fsp.readFile(path.join(root, PI_BACKGROUND_COMMAND_OWNER_FILE), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    const pid = (parsed as { pid?: unknown } | null)?.pid;
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -461,6 +514,8 @@ export class PiBackgroundCommands {
     this.running.set(taskId, record);
     try {
       await fsp.mkdir(this.options.logDir, { recursive: true, mode: 0o700 });
+      // owner 标记:删除侧靠它区分「这个目录可能是另一个活着的实例在用」。
+      await writePiBackgroundCommandOwner(this.options.logDir);
       const logStream = fs.createWriteStream(logPath, { flags: 'w', mode: 0o600 });
       record.logStream = logStream;
       // 打开失败必须在这里暴露(例如盘满 / 权限),不能等到写输出时静默丢日志。

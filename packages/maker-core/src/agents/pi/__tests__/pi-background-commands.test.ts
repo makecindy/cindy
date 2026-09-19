@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -7,10 +14,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   PI_BACKGROUND_COMMAND_MAX_CHARS,
+  PI_BACKGROUND_COMMAND_OWNER_FILE,
   PiBackgroundCommands,
   buildPiBackgroundCommandEnv,
   parsePiBackgroundCommandShellSpec,
   piBackgroundCommandRoot,
+  removePiBackgroundCommandRoot,
   stopAllPiBackgroundCommandsForExit,
   sweepStalePiBackgroundCommandAnonRoots,
   type PiBackgroundCommandUpdate,
@@ -193,6 +202,20 @@ describe('PiBackgroundCommands', () => {
     }
   });
 
+  it('records the owning process in the log dir so a foreign instance keeps it', async () => {
+    const { manager, updates, logDir } = makeManager();
+    await manager.start({
+      taskId: 'owner-1',
+      command: 'process.stdout.write("ok")',
+      shell: NODE_EVAL_SHELL,
+    });
+    await waitForUpdate(updates, (u) => u.taskId === 'owner-1' && u.status !== 'running');
+    const owner = JSON.parse(
+      readFileSync(path.join(logDir, PI_BACKGROUND_COMMAND_OWNER_FILE), 'utf8'),
+    ) as { pid?: number };
+    expect(owner.pid).toBe(process.pid);
+  });
+
   it('kills a command that was asked to stop while it was still starting', async () => {
     const { manager, updates } = makeManager();
     // 记录在第一个 await 之前就进了运行表(同步占位),所以 start() 与 stopAll() 可以在
@@ -349,8 +372,9 @@ describe('PiBackgroundCommands', () => {
     expect(path.basename(started.logPath)).toMatch(/^task-[0-9a-f]{32}\.log$/);
     const terminal = await waitForUpdate(updates, (u) => u.status !== 'running');
     expect(terminal.taskId).toBe(weirdId);
-    // 目录里只应有这一份日志(没有逃逸出去的 `evil id.log`)。
-    const listed = await readdir(logDir);
+    // 目录里只应有这一份日志(没有逃逸出去的 `evil id.log`);owner.json 是删除侧的
+    // 归属标记(见 removePiBackgroundCommandRoot),不算日志。
+    const listed = (await readdir(logDir)).filter((name) => name !== PI_BACKGROUND_COMMAND_OWNER_FILE);
     expect(listed).toEqual([path.basename(started.logPath)]);
   });
 
@@ -370,7 +394,8 @@ describe('PiBackgroundCommands', () => {
       shell: NODE_EVAL_SHELL,
     })).rejects.toThrow(/already running/);
     expect(manager.list().map((t) => t.taskId)).toEqual(['dup-1']);
-    expect(await readdir(logDir)).toEqual(['dup-1.log']);
+    expect((await readdir(logDir)).filter((n) => n !== PI_BACKGROUND_COMMAND_OWNER_FILE))
+      .toEqual(['dup-1.log']);
     expect(await manager.stop('dup-1')).toBe('stopped');
   });
 
@@ -534,6 +559,49 @@ describe('sweepStalePiBackgroundCommandAnonRoots', () => {
     expect(removed).toBe(0);
     expect(await listRoot(root)).toEqual([`anon-${process.pid}-1700000000000`]);
     await expect(sweepStalePiBackgroundCommandAnonRoots(makeTempRoot())).resolves.toBe(0);
+  });
+});
+
+describe('removePiBackgroundCommandRoot owner 判定', () => {
+  function seedDir(ownerContent?: string): string {
+    const root = makeTempRoot();
+    mkdirSync(root, { recursive: true });
+    writeFileSync(path.join(root, 'call-1.log'), 'x');
+    if (ownerContent !== undefined) {
+      writeFileSync(path.join(root, PI_BACKGROUND_COMMAND_OWNER_FILE), ownerContent);
+    }
+    return root;
+  }
+
+  it('keeps a directory whose owner marker points at another live process', async () => {
+    const root = seedDir(JSON.stringify({ pid: 4242, at: Date.now() }));
+    await expect(
+      removePiBackgroundCommandRoot(root, { isProcessAlive: () => true }),
+    ).resolves.toBe('kept-foreign-owner');
+    // 目录与日志都还在:那台实例的命令可能仍在往里写。
+    expect(existsSync(path.join(root, 'call-1.log'))).toBe(true);
+  });
+
+  it('removes it once that owner is gone', async () => {
+    const root = seedDir(JSON.stringify({ pid: 4242, at: Date.now() }));
+    await expect(
+      removePiBackgroundCommandRoot(root, { isProcessAlive: () => false }),
+    ).resolves.toBe('removed');
+    expect(existsSync(root)).toBe(false);
+  });
+
+  it('removes markers of this process and unparsable / missing markers', async () => {
+    for (const content of [undefined, 'not json', '{}', JSON.stringify({ pid: 0 })]) {
+      const root = seedDir(content);
+      await expect(
+        removePiBackgroundCommandRoot(root, { isProcessAlive: () => true }),
+      ).resolves.toBe('removed');
+      expect(existsSync(root)).toBe(false);
+    }
+    const mine = seedDir(JSON.stringify({ pid: process.pid, at: Date.now() }));
+    await expect(
+      removePiBackgroundCommandRoot(mine, { isProcessAlive: () => true }),
+    ).resolves.toBe('removed');
   });
 });
 
