@@ -34,8 +34,16 @@ describe('mobile sending queue badge', () => {
 
   it('feeds the in-flight enqueue set into the pending bubbles', () => {
     const source = readSource(SCREEN);
+    const markStart = source.indexOf('const markQueueItemSending');
+    const markEnd = source.indexOf('const clearQueueItemSending', markStart);
+    const mark = source.slice(markStart, markEnd);
 
     expect(source).toContain('sendingClientIds: sendingQueueBadgeClientIds,');
+    // Reservation must anchor to the handoff-aware rows currently rendered.
+    // The raw mirror can lag while history is already visible on the phone, so
+    // the send-time handoff window must feed the reservation's anchor set.
+    expect(mark).toContain('const observed = latestMessagesRef.current;');
+    expect(mark).toContain('appendOptimisticUserMessage(current.items, source, queued, sessionId, observed)');
     // 直发路径与 outbox 交接路径各 mark 一次,各自在 finally 收掉。
     expect(source.match(/markQueueItemSending\(queued\);/g)).toHaveLength(2);
     // Both send entries reserve the user slot before publishing the optimistic
