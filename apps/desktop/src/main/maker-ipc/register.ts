@@ -6669,6 +6669,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (pin) o.providerId = pin;
       }
     }
+    // Native adapters capture first-turn options here, before bridge hydration.
+    // A persisted effort may belong to an earlier model; normalize against the
+    // final route (including runtime override/provider reroute) before capture.
+    // SSH execution uses the remote daemon's route and model capabilities.
+    // The controller catalog cannot validate that route, even for a saved provider.
+    if (!o.remoteHostId) {
+      const catalog = getActiveCatalog();
+      const effortProviderId = resolveDesktopModelContextProviderId(
+        catalog, o.agentKind, o.providerId, o.model,
+      );
+      const provider = catalog.providers.find((candidate) => candidate.id === effortProviderId);
+      const model = findCatalogModel(provider, o.model, o.agentKind);
+      if (model) {
+        if (o.effort !== undefined) {
+          o.effort = resolveCompatibleSessionRuntimeEffort(model, o.effort) ?? undefined;
+        }
+        o.fastMode = o.fastMode === true && model.supportsFastMode === true;
+      }
+    }
     const session = await maker.createSession(o);
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     wireSessionToIpc(session);
@@ -9187,6 +9206,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // 队列里,表现就是「对方做完了,发起方没被叫醒」。
           ...(dbRow.providerId ? { providerId: dbRow.providerId } : {}),
         });
+        // Bot child rows already contain their inherited effort/Fast. Reconcile
+        // before native creation; hydrating the bridge store afterwards cannot
+        // update Codex's captured first-turn options. Bootstrap still applies
+        // any effective runtime override after this persisted baseline.
+        await reconcileCreateOptsAgainstDb(targetSessionId, createOpts);
         await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);
         if (createOpts.extraDirs === undefined) {
           try {
