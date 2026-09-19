@@ -52,6 +52,16 @@ interface SessionImportScanResult {
     codex: number;
     claude: number;
     existing: number;
+    /** Cindy 管理目录下的孤儿/内部对话(不计入 existing,避免误导为「已在应用内」)。 */
+    managedDialogue: number;
+    /** Claude 侧拒绝原因分类(合计等于 claude;见 claude-local-sessions 的 rejected)。 */
+    claudeReasons: {
+      unreadable: number;
+      internal: number;
+      noEvents: number;
+      windowLimit: number;
+      invalidId: number;
+    };
   };
   currentProjectDirs: string[];
 }
@@ -197,7 +207,6 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
       const cwd = normalizeWorkingDirForStorage(item.cwd) ?? item.cwd;
       const projectDir = normalizeWorkingDir(cwd);
       if (isManagedDialogueWorkingDir(projectDir)) {
-        existingCount += 1;
         managedDialogueCount += 1;
         return [];
       }
@@ -229,7 +238,6 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
       const cwd = normalizeWorkingDirForStorage(item.cwd) ?? item.cwd;
       const projectDir = normalizeWorkingDir(cwd);
       if (isManagedDialogueWorkingDir(projectDir)) {
-        existingCount += 1;
         managedDialogueCount += 1;
         return [];
       }
@@ -268,6 +276,14 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
       codex: codex.rejectedCount,
       claude: claude.rejectedCount,
       existing: existingCount,
+      managedDialogue: managedDialogueCount,
+      claudeReasons: claude.rejected ?? {
+        unreadable: 0,
+        internal: 0,
+        noEvents: 0,
+        windowLimit: 0,
+        invalidId: 0,
+      },
     },
     currentProjectDirs: [...currentProjectDirs].sort(),
   };
