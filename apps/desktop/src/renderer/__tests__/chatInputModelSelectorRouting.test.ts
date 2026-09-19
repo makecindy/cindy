@@ -508,6 +508,29 @@ describe('ChatInput model source switching wiring', () => {
     expect(selectorBlock).not.toContain('rowModelId');
   });
 
+  it('keeps a new conversation model pick on the draft path', () => {
+    const draftStart = chatInputSource.indexOf('const handleUnifiedDraftSelect = useCallback(');
+    const draftEnd = chatInputSource.indexOf(
+      '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+      draftStart,
+    );
+    const draftHandler = chatInputSource.slice(draftStart, draftEnd);
+
+    expect(draftHandler).toContain('if (sessionId || settingsLocked) return;');
+    expect(draftHandler).toContain('onUnifiedDraftSelect?.({');
+    expect(draftHandler).not.toContain('maker.setModel(');
+    expect(draftHandler).not.toContain('confirmModelSwitchContextGuard(');
+
+    const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
+    const selectorBlock = chatInputSource.slice(
+      selectorStart,
+      chatInputSource.indexOf('/>', selectorStart) + 2,
+    );
+    expect(selectorBlock).toContain(
+      '!sessionId && unifiedPanelActive && onUnifiedDraftSelect\n                        ? handleUnifiedDraftSelect',
+    );
+  });
+
   it('sends null atomic effort for models with no ranks and keeps row Fast', () => {
     const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
     const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
