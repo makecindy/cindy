@@ -25,7 +25,12 @@ type Href = Parameters<Router['push']>[0];
  * 确定性信号:第一次点击的导航 dispatch 即让本页失焦,其后处理到的补点必然
  * isFocused()===false,丢弃即用户想要的结果(导航已经在路上)。
  */
-export function useGuardedPush(): (href: Href) => void {
+/**
+ * 返回值 = 本次 push 是否被接受。两道门(失焦、前进锁)都是静默丢弃,调用方若要
+ * 在导航成功后才做副作用(如清未读),必须据此判断,不能假定调用即生效。
+ * 既有调用方忽略返回值即可,行为不变。
+ */
+export function useGuardedPush(): (href: Href) => boolean {
   const router = useRouter();
   const navigation = useNavigation();
   useEffect(() => {
@@ -43,8 +48,9 @@ export function useGuardedPush(): (href: Href) => void {
     onFocus();
   }, [onFocus]));
   return useCallback((href: Href) => {
-    if (navigation.isFocused() === false) return;
-    if (!forwardNavigationLock.shouldAllow(navigationTargetKey(href))) return;
+    if (navigation.isFocused() === false) return false;
+    if (!forwardNavigationLock.shouldAllow(navigationTargetKey(href))) return false;
     router.push(href);
+    return true;
   }, [navigation, router]);
 }

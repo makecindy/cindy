@@ -273,6 +273,7 @@ describe("mobile maker transport", () => {
       "maker:get-capabilities",
       "maker:provider:list",
       "local-db:sessions:get",
+      "local-db:orca-workflows:list-workers-by-lead",
       "local-db:conversations:search",
       "local-db:sessions:patch-meta",
       "local-db:messages:dismiss-error",
