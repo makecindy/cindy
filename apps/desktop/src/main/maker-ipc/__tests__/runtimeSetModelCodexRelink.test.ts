@@ -94,7 +94,7 @@ describe.each(routeCases)('Codex route: $sourceModel → $targetModel', (route) 
         clearPendingCredentialSwitch: vi.fn(),
         wakeSessionInputQueue,
       }),
-    ).resolves.toEqual({ status: 'applied', persistedRoute: true });
+    ).resolves.toEqual({ status: 'applied', persistedRoute: true, runtimeRetired: true });
 
     expect(order).toEqual(['close', 'relink', 'route', 'wake']);
     expect(getSessionProvider(sessionId)).toBe(targetProvider);

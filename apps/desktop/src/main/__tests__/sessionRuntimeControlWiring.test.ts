@@ -895,7 +895,7 @@ describe('session runtime control wiring', () => {
     const retainedRecovery = handlerBody(
       setModel,
       'const reconcileRetainedLiveProfile = async (): Promise<void> => {',
-      'try {\n        const result = routeExplicit',
+      'try {\n        const result: ApplyRuntimeSetModelChangeResult = routeExplicit',
     );
     const capabilityLookup = retainedRecovery.indexOf(
       'const retainedProviders = await getDesktopProviderService().listProviders({',
@@ -1164,6 +1164,53 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('`Pi final-window context preparation failed: ${finalPreparation}`');
   });
 
+  it('retires an expected local Pi route replacement without bypassing window protection', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+
+    // 退役判定：仅本地，且与 helper 的关闭判定同源（worker 强制重建 / proxy 身份穿越 /
+    // 同 route 配置重载）。它必须在 apply 前得到，保护事务和守卫都依赖它。
+    const retirementGate = setModel.indexOf('let piRouteChangeRetiresRuntime = false;');
+    expect(retirementGate).toBeGreaterThan(-1);
+    const retirementBlock = setModel.slice(
+      retirementGate,
+      setModel.indexOf('let targetContextWindow: number | undefined;', retirementGate),
+    );
+    expect(retirementBlock).toContain(
+      "runtimeAgentKind === 'pi' && runtimeRouteChanged && !runtimeStatus.remoteHostId",
+    );
+    expect(retirementBlock).toContain('rebuildLiveOrcaWorker ||');
+    expect(retirementBlock).toContain('shouldCloseSessionForCredentialSwitch({');
+    expect(retirementBlock).toContain('requiresModelSwitchRebuild?.(model, {');
+    expect(registerSource).toContain('shouldCloseSessionForCredentialSwitch,');
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(retirementGate).toBeLessThan(apply);
+
+    // 需要缩窗保护的替换必须在关闭前跑保护事务；否则只跳过不存在的活进程终态核验。
+    const preflightPreparation = setModel.indexOf(
+      'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
+    );
+    expect(retirementGate).toBeLessThan(preflightPreparation);
+    expect(setModel).toContain("(runtimeAgentKind !== 'pi' || piRouteChangeRetiresRuntime)");
+    const skipLiveVerification = setModel.indexOf('const runtimeRetiredForRouteChange =');
+    const liveVerification = setModel.indexOf(
+      'const reportedPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;',
+    );
+    expect(skipLiveVerification).toBeGreaterThan(preflightPreparation);
+    expect(skipLiveVerification).toBeLessThan(liveVerification);
+    expect(setModel).toContain("result.status !== 'deferred' && result.runtimeRetired === true");
+    expect(setModel).toContain('!runtimeRetiredForRouteChange');
+
+    // 守卫只对未预期的退役 fail closed，不整体删除。
+    expect(setModel).toContain(
+      "runtimeAgentKind === 'pi' && runtimeRouteChanged && !piRouteChangeRetiresRuntime",
+    );
+    expect(setModel).toContain('unsupported runtime replacement; runtime selection was not changed');
+  });
+
   it('refreshes model-only context snapshots against the retained target provider route', () => {
     const setModel = handlerBody(
       registerSource,
@@ -1249,7 +1296,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('deferSessionRuntimeAxisMutation({');
     expect(setModel).toContain('pendingPatch: pendingAxisPatch');
     expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
-    expect(setModel).toContain('const result = routeExplicit');
+    expect(setModel).toContain('const result: ApplyRuntimeSetModelChangeResult = routeExplicit');
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
     expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
     expect(setModel).toContain('(routeExplicit || internalOptions.effortExplicit === true)');

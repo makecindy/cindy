@@ -83,7 +83,11 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
 `switch_session`，必须重新 `set_model` 并用 `get_state` 校验
 provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
-子代理 route 保持 pending，失败则终止该 live 任务。Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
+子代理 route 保持 pending，失败则终止该 live 任务。本地 Pi 跨 proxy 供应商身份切换来源
+（`x-cindy-pi-provider-id` 会变化）或 Orca worker 路由重建会退役旧 runtime（`runtimeRetired`）、
+目标 route 交给下一次发送懒创建；需要缩窗保护时，90% 固定压力线事务必须在退役关闭前完成。
+不允许保留旧进程只改 provider store —— 旧请求头与新来源不一致会被 proxy 以 403 拒绝。
+Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
