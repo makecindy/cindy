@@ -171,6 +171,13 @@ const CONTROL_NEW: Partial<IMCardActionEvent> = {
   payload: { botAppId: 'cli_abc', workingDir: '/tmp/proj', displayName: 'proj' },
 };
 
+const PROJECT_PICK: Partial<IMCardActionEvent> = {
+  messageId: 'om_picker',
+  buttonId: 'project:pick',
+  chatId: 'oc_chat1',
+  payload: { botAppId: 'cli_abc', workingDir: '/tmp/proj', displayName: 'proj' },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   activateImAccountBoundary();
@@ -238,5 +245,50 @@ describe('飞书群卡片 lane 丢失时的 /ctr fail-closed', () => {
       'sess-target',
       expect.anything(),
     );
+  });
+});
+
+describe('飞书群卡片 lane 丢失时的 /project fail-closed', () => {
+  it('project:pick: 群卡 + senderId 是私聊 open_id ⇒ 不切目录, 提示重发 /project', async () => {
+    const im = makeIm();
+
+    await press(im, { ...PROJECT_PICK, senderId: 'ou_owner' });
+
+    // 关键断言: 绝不能切 —— 否则项目切到 owner 私聊身份的会话行上。
+    const { switchSessionWorkingDir } = await import('../sessionRepo');
+    expect(switchSessionWorkingDir).not.toHaveBeenCalled();
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      'om_picker',
+      expect.objectContaining({ body: feishuUi.cards.project!.staleGroupCard }),
+    );
+  });
+
+  it('project:dialogue: 同样拒绝', async () => {
+    const im = makeIm();
+
+    await press(im, {
+      ...PROJECT_PICK,
+      buttonId: 'project:dialogue',
+      senderId: 'ou_owner',
+    });
+
+    const { switchSessionWorkingDir } = await import('../sessionRepo');
+    expect(switchSessionWorkingDir).not.toHaveBeenCalled();
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      'om_picker',
+      expect.objectContaining({ body: feishuUi.cards.project!.staleGroupCard }),
+    );
+  });
+
+  it('senderId 是话题 lane 时不拦(正常路径不受 guard 影响)', async () => {
+    const im = makeIm();
+
+    await press(im, { ...PROJECT_PICK, senderId: 'g/oc_chat1/omt_t1' });
+
+    // guard 没触发: 卡片不会被 patch 成 staleGroupCard 提示(后续步骤会走
+    // resolveRouteTarget / fs.statSync, 这里只钉住 guard 本身没误拦)。
+    const staleBody = feishuUi.cards.project!.staleGroupCard!;
+    const calls = (im.updateInteractiveCard as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.every(([, spec]) => (spec as { body?: string }).body !== staleBody)).toBe(true);
   });
 });
