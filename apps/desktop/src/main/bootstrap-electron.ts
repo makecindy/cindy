@@ -5100,8 +5100,8 @@ const registerIpcHandlers = () => {
     await ensureAnthropicCompatProxyReady();
     if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       return { ok: false, reason: 'login_cancelled', authorized: false };
-    if (!reconnectClaudeAiOAuth())
-      return { ok: false, reason: 'local_unavailable', authorized: false };
+    const result = reconnectClaudeAiOAuth();
+    if (!result.ok) return { ...result, authorized: false };
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();

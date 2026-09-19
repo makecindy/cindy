@@ -34,17 +34,17 @@ beforeEach(() => {
 it('rejects the revoked credential after disconnect but allows changed native credentials', async () => {
   h.rejected = claudeOAuthCredentialDigest({ accessToken: h.token });
   await disconnectClaudeAiOAuth();
-  expect(await reconnectClaudeAiOAuth()).toBe(false);
+  expect(await reconnectClaudeAiOAuth()).toEqual({ ok: false, reason: 'local_rejected' });
   expect(h.bind).not.toHaveBeenCalled();
   h.token = 'different-account-token';
-  expect(await reconnectClaudeAiOAuth()).toBe(true);
+  expect(await reconnectClaudeAiOAuth()).toEqual({ ok: true });
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
 it('disconnect and reconnect only change the Cindy binding, never native credentials', async () => {
   await disconnectClaudeAiOAuth();
   expect(h.unbind).toHaveBeenCalledWith('anthropic', { revoked: true });
-  expect(await reconnectClaudeAiOAuth()).toBe(true);
+  expect(await reconnectClaudeAiOAuth()).toEqual({ ok: true });
   expect(h.bind).toHaveBeenCalledWith('anthropic', { sharedSystem: true });
   expect(h.presentation).toHaveBeenCalledWith({ providers: { anthropic: { removed: false } } });
   expect(h.write).not.toHaveBeenCalled();
@@ -52,14 +52,14 @@ it('disconnect and reconnect only change the Cindy binding, never native credent
 });
 it('cannot attach a native source with no credentials', async () => {
   h.available = false;
-  expect(await reconnectClaudeAiOAuth()).toBe(false);
+  expect(await reconnectClaudeAiOAuth()).toEqual({ ok: false, reason: 'local_unavailable' });
   expect(h.bind).not.toHaveBeenCalled();
 });
 it('completes login synchronously while auxiliary presentation persistence is blocked', async () => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
   h.presentation.mockReturnValueOnce(pending);
-  expect(reconnectClaudeAiOAuth()).toBe(true);
+  expect(reconnectClaudeAiOAuth()).toEqual({ ok: true });
   expect(h.bind).toHaveBeenCalledWith('anthropic', { sharedSystem: true });
   expect(h.presentation).toHaveBeenCalled();
   expect(h.unbind).not.toHaveBeenCalled();
@@ -70,7 +70,7 @@ it('preserves successful authentication if restoring the entry fails', async () 
   h.presentation.mockImplementationOnce(() => {
     throw new Error('disk full');
   });
-  expect(await reconnectClaudeAiOAuth()).toBe(true);
+  expect(await reconnectClaudeAiOAuth()).toEqual({ ok: true });
   expect(h.unbind).not.toHaveBeenCalled();
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();

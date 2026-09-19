@@ -697,6 +697,8 @@ function AnthropicHeader({
         /* 用户取消,不弹错 */
       } else if (r.reason === 'local_unavailable') {
         toast.error(t('settings.providers.localAccount.unavailable'));
+      } else if (r.reason === 'local_rejected') {
+        toast.error(t('settings.providers.localAccount.rejected'));
       } else if (r.reason === 'not_a_subscription') {
         toast.error(t('settings.connections.claude.toast.notSubscription'));
       } else {

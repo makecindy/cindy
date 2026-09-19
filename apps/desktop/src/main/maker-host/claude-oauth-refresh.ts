@@ -750,14 +750,20 @@ export async function disconnectClaudeAiOAuth(): Promise<void> {
 }
 
 /** Reattach the existing native login; never write or remove system credentials. */
-export function reconnectClaudeAiOAuth(): boolean {
+export function reconnectClaudeAiOAuth():
+  | { ok: true }
+  | { ok: false; reason: 'local_unavailable' | 'local_rejected' } {
   const oauth = readClaudeAiOAuthUnbound();
-  if (!oauth || isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth), { explicitReconnect: true })) return false;
+  if (!oauth) return { ok: false, reason: 'local_unavailable' };
+  // Preserve the rejection boundary, but tell the user which source needs a new login.
+  if (isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth), { explicitReconnect: true })) {
+    return { ok: false, reason: 'local_rejected' };
+  }
   invalidateClaudeOAuthRefresh();
   bindNativeProviderAuth('anthropic', { sharedSystem: true });
   // Binding commits login synchronously; auxiliary disk contention must not keep Cancel open.
   void retainProviderPresentationAfterAuthChange('anthropic');
-  return true;
+  return { ok: true };
 }
 
 /** refresh token 被服务端作废时的通知接线(auth-adapters 装配,内存操作零副作用)。 */

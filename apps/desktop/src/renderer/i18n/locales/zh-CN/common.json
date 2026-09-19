@@ -2370,7 +2370,8 @@
       },
       "localAccount": {
         "useClaude": "使用本机 Claude Code 账号",
-        "unavailable": "未找到可用的本机登录，请先在对应应用中登录，或添加独立账号。"
+        "unavailable": "无法读取本机 Claude Code 登录，请先在终端运行 claude 并登录，或在 Cindy 登录独立账号",
+        "rejected": "本机 Claude Code 登录已失效，请在终端运行 claude 并用 /login 重新登录，或在 Cindy 登录独立账号；此入口不读取 Claude 桌面 App 登录"
       },
       "connection": {
         "modelCount": "已配置 {{count}} 个模型",

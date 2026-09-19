@@ -15,6 +15,7 @@ import React from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { toast } from '@/lib/toast';
 import type { ProviderView } from '@cindy/model-providers';
 
 const {
@@ -192,9 +193,9 @@ function SearchProbe() {
   return <div data-testid="search">{`${location.pathname}${location.search}`}</div>;
 }
 
-function renderSection() {
+function renderSection(search = '/settings?tab=providers') {
   return render(
-    <MemoryRouter initialEntries={['/settings?tab=providers']}>
+    <MemoryRouter initialEntries={[search]}>
       <Routes>
         <Route
           path="/settings"
@@ -416,5 +417,25 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.getByText('sk-••••••ef2a')).toBeTruthy();
     // 共用菜单里既有的供应商级动作不被挤掉。
     expect(screen.getByText('settings.providers.menu.disableProvider')).toBeTruthy();
+  });
+});
+
+describe('ProvidersSection — local Claude login failures', () => {
+  it.each([
+    ['local_rejected', 'settings.providers.localAccount.rejected'],
+    ['local_unavailable', 'settings.providers.localAccount.unavailable'],
+    ['unexpected_failure', 'settings.connections.claude.toast.loginFailed'],
+    ['login_cancelled', null],
+  ])('explains %s in the existing connection entry', async (reason, key) => {
+    providersState.providers = [{ ...makeXd(), id: 'anthropic', name: 'Anthropic',
+      connected: false, removed: false, auth: { method: 'oauth' } }];
+    window.electronAPI.maker.claudeOAuthLogin = vi.fn().mockResolvedValue({ ok: false, authorized: false, reason });
+    renderSection('/settings?tab=providers&connect=anthropic');
+    fireEvent.click(await screen.findByText('settings.providers.localAccount.useClaude'));
+    await waitFor(() => expect(window.electronAPI.maker.claudeOAuthLogin).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByText('settings.providers.localAccount.useClaude')).toBeTruthy());
+    if (key) expect(toast.error).toHaveBeenCalledExactlyOnceWith(key);
+    else expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

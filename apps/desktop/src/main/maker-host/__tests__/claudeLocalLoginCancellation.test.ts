@@ -15,7 +15,7 @@ it.each(['scan', 'proxy'] as const)('does not bind a cancelled local login while
   let resume!: () => void;
   const pending = new Promise<void>(resolve => { resume = resolve; });
   let handler!: () => Promise<{ ok: boolean; reason?: string }>;
-  const bind = vi.fn(() => true);
+  const bind = vi.fn(() => ({ ok: true }));
   const proxy = vi.fn(() => stage === 'proxy' ? pending : Promise.resolve());
   const deps = {
     ipcMain: { handle: (_channel: string, callback: typeof handler) => { handler = callback; } },
@@ -52,4 +52,33 @@ it('reuses cancellation for a replacement local login without aborting the repla
   expect(second.aborted).toBe(false);
   cancelClaudeOAuthLogin('new');
   expect(second.aborted).toBe(true);
+});
+
+it.each(['local_unavailable', 'local_rejected'] as const)('publishes %s without announcing a connected provider', async (reason) => {
+  let handler!: () => Promise<{ ok: boolean; reason?: string; authorized: boolean }>;
+  const broadcast = vi.fn();
+  const usage = vi.fn();
+  const refresh = vi.fn();
+  const deps = {
+    ipcMain: { handle: (_channel: string, callback: typeof handler) => { handler = callback; } },
+    MAKER_IPC_INVOKE: { CLAUDE_OAUTH_LOGIN: 'login' },
+    assertTrustedAppRendererEvent: vi.fn(),
+    activeOwnerScopeKey: () => 'owner',
+    isAppSessionBoundaryPending: () => false,
+    getActiveAppSession: () => ({ dataOwnerId: 'owner' }),
+    beginClaudeLocalLogin,
+    resetProviderModelAutoRefreshCooldowns: vi.fn(),
+    clearAnthropicDiscoveredModels: async () => undefined,
+    ensureAnthropicCompatProxyReady: async () => undefined,
+    reconnectClaudeAiOAuth: () => ({ ok: false, reason }),
+    broadcastClaudeAuthStateChanged: broadcast,
+    syncClaudeSubscriptionUsageForAuthChange: usage,
+    refreshAnthropicModelsFromHttp: refresh,
+    hasClaudeAiOAuth: () => false,
+  };
+  new Function(...Object.keys(deps), compiled)(...Object.values(deps));
+  await expect(handler()).resolves.toEqual({ ok: false, authorized: false, reason });
+  expect(broadcast).not.toHaveBeenCalled();
+  expect(usage).not.toHaveBeenCalled();
+  expect(refresh).not.toHaveBeenCalled();
 });
