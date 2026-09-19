@@ -705,6 +705,39 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
+  it('projects host-produced ghost media into the mobile tool message', () => {
+    const imageUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'ghost-call',
+        role: 'tool_use',
+        toolUseId: 'tu-ghost-call',
+        content: {
+          toolUseId: 'tu-ghost-call',
+          toolName: 'mcp__cindy__ghost_call',
+          input: { ghost_id: 'cindy-art', tool: 'generate', args: { prompt: '猫吃鱼' } },
+        },
+      }),
+      message({
+        id: 'ghost-result',
+        role: 'tool_result',
+        toolUseId: 'tu-ghost-call',
+        content: JSON.stringify({ ok: true, xdt_media_produced: [imageUrl] }),
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: 'tool',
+      label: 'mcp__cindy__ghost_call',
+      media: [
+        { kind: 'image', previewable: false, title: undefined, url: imageUrl },
+      ],
+      toolSettled: true,
+    });
+  });
+
   it('keeps tool image fallback unless the same turn embeds that URL as Markdown', () => {
     const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     const items = normalizeRemoteMessages([

@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { extractPayloadToolResultMedia } from '@cindy/maker-shared/payload-summary';
 
 vi.mock('../localDb/ipc/messages.js', () => ({
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
@@ -71,6 +72,8 @@ import {
 } from '../localDb/codexPlanState.js';
 import {
   recordMediaToolResult,
+  recordMediaToolResultForToolUse,
+  takeMediaToolResult,
   __resetMediaToolResultPoolForTesting,
 } from '../mcp-integrations/mediaToolResultFallback.js';
 import {
@@ -3589,6 +3592,224 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
     flushOrphanToolResults(SESSION, null);
     await flushWrites();
     expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it('cindy ghost_call 正常 echo 会消费无 toolUseId fallback，避免相同重试误领旧结果', () => {
+    const toolUseInput = {
+      ghost_id: 'cindy-art',
+      tool: 'generate',
+      args: { prompt: '猫吃鱼' },
+    };
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'tu_ghost_media_echoed',
+        toolName: 'mcp:cindy:ghost_call',
+        input: toolUseInput,
+      },
+      null,
+    );
+    recordMediaToolResultForToolUse({
+      sessionId: SESSION,
+      toolName: 'mcp__cindy__ghost_call',
+      toolUseInput,
+      resultText: MEDIA_RESULT,
+    });
+
+    onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'tu_ghost_media_echoed', fullText: MEDIA_RESULT },
+      null,
+    );
+
+    expect(
+      takeMediaToolResult(
+        toolUseInput,
+        'mcp:cindy:ghost_call',
+        'tu_ghost_media_retry',
+        SESSION,
+      ),
+    ).toBeNull();
+  });
+
+  it('cindy ghost_call 并发同参调用按 echo 正文消费各自 fallback', async () => {
+    const toolName = 'mcp:cindy:ghost_call';
+    const toolUseInput = {
+      ghost_id: 'cindy-art',
+      tool: 'generate',
+      args: { prompt: '并发同一张图' },
+    };
+    const firstResult = JSON.stringify({
+      ok: true,
+      xdt_media_produced: [`cindy-media://blobs/${'c'.repeat(64)}.png`],
+    });
+    const secondResult = JSON.stringify({
+      ok: true,
+      xdt_media_produced: [`cindy-media://blobs/${'d'.repeat(64)}.png`],
+    });
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'tu_ghost_concurrent_1', toolName, input: toolUseInput },
+      null,
+    );
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'tu_ghost_concurrent_2', toolName, input: toolUseInput },
+      null,
+    );
+    recordMediaToolResultForToolUse({
+      sessionId: SESSION,
+      toolName,
+      toolUseInput,
+      resultText: firstResult,
+    });
+    recordMediaToolResultForToolUse({
+      sessionId: SESSION,
+      toolName,
+      toolUseInput,
+      resultText: secondResult,
+    });
+
+    onToolResultFullEvent(
+      SESSION,
+      { toolUseId: 'tu_ghost_concurrent_1', fullText: firstResult },
+      null,
+    );
+    await flushWrites();
+    vi.mocked(createMessage).mockClear();
+
+    flushOrphanToolResults(SESSION, null);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: secondResult,
+        toolUseId: 'tu_ghost_concurrent_2',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('cindy ghost_call 无 echo → 按完整调用认领账本媒体结果', async () => {
+    const toolName = 'mcp:cindy:ghost_call';
+    const toolUseInput = {
+      ghost_id: 'cindy-art',
+      tool: 'generate',
+      args: { prompt: '猫吃鱼' },
+    };
+    const result = JSON.stringify({
+      ok: true,
+      xdt_media_produced: [`cindy-media://blobs/${'a'.repeat(64)}.png`],
+    });
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'tu_ghost_media_lost', toolName, input: toolUseInput },
+      null,
+    );
+    recordMediaToolResultForToolUse({
+      sessionId: SESSION,
+      toolName: 'mcp__cindy__ghost_call',
+      toolUseId: 'tu_ghost_media_lost',
+      toolUseInput,
+      resultText: result,
+    });
+    await flushWrites();
+    vi.mocked(createMessage).mockClear();
+
+    flushOrphanToolResults(SESSION, null);
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        role: 'tool_result',
+        content: result,
+        toolUseId: 'tu_ghost_media_lost',
+      }),
+      broadcastGuard(),
+    );
+  });
+
+  it('cindy ghost_call 大结果 fallback 落库时保留可解析的媒体投影', async () => {
+    const toolName = 'mcp:cindy:ghost_call';
+    const toolUseInput = {
+      ghost_id: 'cindy-art',
+      tool: 'generate',
+      args: { prompt: '画一张大图' },
+    };
+    const imageUrl = `cindy-media://blobs/${'b'.repeat(64)}.png`;
+    const result = JSON.stringify({
+      ok: true,
+      result: { debug: 'x'.repeat(16 * 1024) },
+      xdt_media_produced: [imageUrl],
+    });
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'tu_ghost_media_large', toolName, input: toolUseInput },
+      null,
+    );
+    recordMediaToolResultForToolUse({
+      sessionId: SESSION,
+      toolName,
+      toolUseId: 'tu_ghost_media_large',
+      toolUseInput,
+      resultText: result,
+    });
+    await flushWrites();
+    vi.mocked(createMessage).mockClear();
+
+    flushOrphanToolResults(SESSION, null);
+    await flushWrites();
+    const content = vi.mocked(createMessage).mock.calls[0]?.[1]?.content;
+    expect(typeof content).toBe('string');
+    expect(() => JSON.parse(content as string)).not.toThrow();
+    expect(extractPayloadToolResultMedia(content as string)).toEqual([
+      expect.objectContaining({ kind: 'image', url: imageUrl }),
+    ]);
+  });
+
+  it('cindy ghost_call 大结果 fallback 落库时保留已声明的图片、视频和音频', async () => {
+    const toolName = 'mcp:cindy:ghost_call';
+    const toolUseInput = {
+      ghost_id: 'cindy-media',
+      tool: 'generate',
+      args: { prompt: '生成多媒体结果' },
+    };
+    const imageUrl = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const videoUrl = `cindy-media://blobs/${'d'.repeat(64)}.mp4`;
+    const audioUrl = `cindy-media://blobs/${'e'.repeat(64)}.mp3`;
+    const result = JSON.stringify({
+      ok: true,
+      result: { debug: 'x'.repeat(16 * 1024) },
+      xdt_image_urls: [imageUrl],
+      xdt_video_urls: [videoUrl],
+      xdt_audio_tracks: [{ xdt_audio_url: audioUrl, title: '生成音频' }],
+    });
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'tu_ghost_declared_media_large', toolName, input: toolUseInput },
+      null,
+    );
+    recordMediaToolResultForToolUse({
+      sessionId: SESSION,
+      toolName,
+      toolUseId: 'tu_ghost_declared_media_large',
+      toolUseInput,
+      resultText: result,
+    });
+    await flushWrites();
+    vi.mocked(createMessage).mockClear();
+
+    flushOrphanToolResults(SESSION, null);
+    await flushWrites();
+    const content = vi.mocked(createMessage).mock.calls[0]?.[1]?.content;
+    expect(typeof content).toBe('string');
+    expect(() => JSON.parse(content as string)).not.toThrow();
+    expect(extractPayloadToolResultMedia(content as string)).toEqual([
+      expect.objectContaining({ kind: 'image', url: imageUrl }),
+      expect.objectContaining({ kind: 'video', url: videoUrl }),
+      expect.objectContaining({ kind: 'audio', url: audioUrl, title: '生成音频' }),
+    ]);
   });
 
   it('非 lizi 媒体工具的 tool_use 不参与认领', async () => {

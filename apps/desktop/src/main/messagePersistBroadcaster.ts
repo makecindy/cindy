@@ -54,8 +54,13 @@ import { getSubagentRunDetail } from './localDb/subagentRuns.js';
 import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import { commitMessageMediaRefs } from './cindy-media/chatAttachments.js';
-import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
+import {
+  clearMediaToolResultsForSession,
+  discardMediaToolResultForToolUse,
+  takeMediaToolResult,
+} from './mcp-integrations/mediaToolResultFallback.js';
 import { capToolResultTextForPersist } from '../shared/toolResultPersistCap.js';
+import { isGhostCallToolName } from '../shared/ghost.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { parseBrowserProxyServer } from '@cindy/browser-control-runtime';
 import {
@@ -829,6 +834,23 @@ const codexPlanRowByTurnToolUseId = new Map<
 >();
 
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
+
+function discardEchoedGhostMediaFallback(
+  sessionId: string,
+  toolUseId: string,
+  echoedResultText?: string,
+): void {
+  const info = toolUseInfoBySession.get(sessionId)?.get(toolUseId);
+  if (!info || !isGhostCallToolName(info.toolName)) return;
+  discardMediaToolResultForToolUse(
+    info.input,
+    info.toolName,
+    toolUseId,
+    sessionId,
+    echoedResultText,
+  );
+}
+
 export function getHistoryToolName(sessionId: string, toolUseId: string): string {
   return toolUseInfoBySession.get(sessionId)?.get(toolUseId)?.toolName ?? '';
 }
@@ -1595,9 +1617,90 @@ function toolResultMeta(sessionId: string, agentMeta: AgentMeta | null): AgentMe
  * 不在这里补挂就会被 recycler 判零引用回收(聊天历史永久缺图)。幂等(hasRef
  * 跳过),失败仅 warn,不阻断落库。
  */
-function persistableToolResultContent(sessionId: string, fullText: string): string {
+function mediaToolResultProjectionForPersist(fullText: string): string | null {
+  try {
+    const parsed = JSON.parse(fullText) as Record<string, unknown> | null;
+    if (!parsed || Array.isArray(parsed)) return null;
+    const managedUrls = (value: unknown, schemes: readonly string[]): string[] =>
+      Array.isArray(value)
+        ? value.filter(
+            (entry): entry is string =>
+              typeof entry === 'string' && schemes.some((scheme) => entry.startsWith(scheme)),
+          )
+        : [];
+    const managedUrl = (value: unknown, schemes: readonly string[]): string | null =>
+      typeof value === 'string' && schemes.some((scheme) => value.startsWith(scheme))
+        ? value
+        : null;
+    const imageSchemes = ['cindy-media://', 'xdt-image://'] as const;
+    const videoSchemes = ['cindy-media://', 'xdt-video://'] as const;
+    const audioSchemes = ['cindy-media://', 'xdt-audio://'] as const;
+    const imageUrl = managedUrl(parsed.xdt_image_url, imageSchemes);
+    const imageUrls = managedUrls(parsed.xdt_image_urls, imageSchemes);
+    const videoUrl = managedUrl(parsed.xdt_video_url, videoSchemes);
+    const videoUrls = managedUrls(parsed.xdt_video_urls, videoSchemes);
+    const audioTracks = Array.isArray(parsed.xdt_audio_tracks)
+      ? parsed.xdt_audio_tracks.filter((entry): entry is Record<string, unknown> => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+          return managedUrl((entry as Record<string, unknown>).xdt_audio_url, audioSchemes) !== null;
+        })
+      : [];
+    const legacyAudioTracks = Array.isArray(parsed._xdt_audio_tracks)
+      ? parsed._xdt_audio_tracks.filter((entry): entry is Record<string, unknown> => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+          const record = entry as Record<string, unknown>;
+          return managedUrl(record.xdt_audio_url ?? record.audioUrl, audioSchemes) !== null;
+        })
+      : [];
+    const audioUrls = managedUrls(parsed.xdt_audio_urls, audioSchemes);
+    const producedMedia = (Array.isArray(parsed.xdt_media_produced)
+      ? parsed.xdt_media_produced
+      : []).filter(
+      (value): value is string =>
+        typeof value === 'string'
+        && /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.[a-z0-9]+$/.test(value),
+    );
+    if (
+      !imageUrl
+      && imageUrls.length === 0
+      && !videoUrl
+      && videoUrls.length === 0
+      && audioTracks.length === 0
+      && legacyAudioTracks.length === 0
+      && audioUrls.length === 0
+      && producedMedia.length === 0
+    ) return null;
+    const projection = JSON.stringify({
+      ...(typeof parsed.ok === 'boolean' ? { ok: parsed.ok } : {}),
+      ...(parsed._xdt_render_image === false ? { _xdt_render_image: false } : {}),
+      ...(imageUrl ? { xdt_image_url: imageUrl } : {}),
+      ...(imageUrls.length > 0 ? { xdt_image_urls: imageUrls } : {}),
+      ...(videoUrl ? { xdt_video_url: videoUrl } : {}),
+      ...(videoUrls.length > 0 ? { xdt_video_urls: videoUrls } : {}),
+      ...(audioTracks.length > 0 ? { xdt_audio_tracks: audioTracks } : {}),
+      ...(legacyAudioTracks.length > 0 ? { _xdt_audio_tracks: legacyAudioTracks } : {}),
+      ...(audioUrls.length > 0 ? { xdt_audio_urls: audioUrls } : {}),
+      ...(producedMedia.length > 0 ? { xdt_media_produced: producedMedia } : {}),
+      _xdt_tool_result_truncated: true,
+    });
+    // 媒体引用本身超过普通正文预算时宁可保留这个最小结构化投影；再次截断
+    // 会把 JSON 变成不可解析文本，历史重载与 Mobile 都会永久丢失产物。
+    return projection;
+  } catch {
+    return null;
+  }
+}
+
+function toolResultContentForPersist(fullText: string): string {
   const capped = capToolResultTextForPersist(fullText);
-  if (capped !== fullText) {
+  if (capped === fullText) return fullText;
+  const mediaProjection = mediaToolResultProjectionForPersist(fullText);
+  return mediaProjection ?? capped;
+}
+
+function persistableToolResultContent(sessionId: string, fullText: string): string {
+  const persisted = toolResultContentForPersist(fullText);
+  if (persisted !== fullText) {
     void commitMessageMediaRefs({ sessionId, role: 'tool_result', content: fullText }).catch(
       (err) => {
         log.warn('tool_result media ref commit failed (pre-truncation)', {
@@ -1607,7 +1710,7 @@ function persistableToolResultContent(sessionId: string, fullText: string): stri
       },
     );
   }
-  return capped;
+  return persisted;
 }
 
 /**
@@ -1638,6 +1741,7 @@ export function onToolResultEvent(
     releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
     return null;
   }
+  for (const id of ids) discardEchoedGhostMediaFallback(sessionId, id);
   const idMap = backgroundState?.toolResultIdByToolUseId ??
     getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
   const pending = backgroundState?.pendingFullTextByToolUseId ??
@@ -1685,7 +1789,7 @@ export function onToolResultEvent(
     // contentMap 存全文(增长比较与 renderer 显示都要它);DB 只落有界内容。
     // 截断后内容没变(全文都在 8KB 之外增长)就跳过 UPDATE——省掉重复写同一
     // 前缀,也省掉 messages 表 UPDATE 附带的 FTS 触发器开销。
-    const cappedPrev = capToolResultTextForPersist(prev);
+    const cappedPrev = toolResultContentForPersist(prev);
     contentMap.set(existing, content);
     const capped = persistableToolResultContent(sessionId, content);
     if (capped !== cappedPrev) {
@@ -1747,6 +1851,7 @@ export function onToolResultFullEvent(
     releaseBackgroundStateForToolUses(sessionId, backgroundState, [toolUseId]);
     return null;
   }
+  discardEchoedGhostMediaFallback(sessionId, toolUseId, fullText);
   const idMap = backgroundState?.toolResultIdByToolUseId ??
     getOrCreateSessionMap(toolResultIdByToolUseId, sessionId);
   const pending = backgroundState?.pendingFullTextByToolUseId ??
@@ -1789,7 +1894,7 @@ export function onToolResultFullEvent(
   if (prev === fullText) return null; // 幂等:内容没变,renderer 无需更新。
   // 同 onToolResultEvent 增长分支:contentMap 存全文,DB 只落有界内容,截断后
   // 内容不变则跳过 UPDATE(renderer 仍拿全文刷新显示)。
-  const cappedPrev = prev === undefined ? undefined : capToolResultTextForPersist(prev);
+  const cappedPrev = prev === undefined ? undefined : toolResultContentForPersist(prev);
   contentMap.set(target, fullText);
   const capped = persistableToolResultContent(sessionId, fullText);
   if (capped !== cappedPrev) {
@@ -1973,7 +2078,7 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
   }
 
   // 媒体 echo 兜底:本 turn 已落库 tool_use、但 echo(tool_result/full)始终没到
-  // 的 lizi_art / lizi_mivo 调用,按 input.args 去 mediaToolResultFallback 池认领
+  // 的旧 lizi 媒体工具或当前 cindy ghost_call 调用,去 mediaToolResultFallback 池认领
   // 工具在 main 内产出的结果直接落库(stdout echo 被日志污染损坏的场景;见
   // mcp-integrations/mediaToolResultFallback.ts)。echo 正常时 idMap 已有映射,
   // 这里不会触发,不产生重复。
@@ -1984,10 +2089,14 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
       if (idMap.has(toolUseId)) continue;
       const info = infoMap.get(toolUseId);
       if (!info) continue;
-      if (!info.toolName.startsWith('mcp__lizi_art__') && !info.toolName.startsWith('mcp__lizi_mivo__')) {
+      if (
+        !info.toolName.startsWith('mcp__lizi_art__')
+        && !info.toolName.startsWith('mcp__lizi_mivo__')
+        && !isGhostCallToolName(info.toolName)
+      ) {
         continue;
       }
-      const reclaimed = takeMediaToolResult(info.input);
+      const reclaimed = takeMediaToolResult(info.input, info.toolName, toolUseId, sessionId);
       if (reclaimed !== null) {
         log.info('media tool_result reclaimed via fallback pool (echo lost)', {
           sessionId,
@@ -2008,6 +2117,7 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
 export function resetTurnPersistState(sessionId: string): void {
   // Event-stream completion is not a persistence barrier. Thinking snapshots
   // survive until their write succeeds or an explicit history/owner cleanup.
+  clearMediaToolResultsForSession(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);

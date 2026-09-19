@@ -435,6 +435,16 @@ export interface CindyGhostsMcpDeps {
     agentToolUseId?: string;
   }): Promise<CindyGhostCallResult>;
   /**
+   * Host 内部的可选持久化兜底：带媒体的 ghost_call 在 MCP 结果组装完成时
+   * 同步登记完整文本，供 tool_result echo 丢失时按原始工具输入恢复。
+   * 该回调不是插件作者契约，不向插件沙箱暴露。
+   */
+  onGhostToolResult?(payload: {
+    input: Record<string, unknown>;
+    resultText: string;
+    toolUseId?: string;
+  }): void;
+  /**
    * 花名册快照(可选,同步):server 创建(= 会话装配)时调用一次,把
    * "已装且唤醒"的意识名单 + 召回线索写进 ghost_list 的工具
    * 描述——模型开局即认识本机意识,语义召回不再依赖字面词表命中。

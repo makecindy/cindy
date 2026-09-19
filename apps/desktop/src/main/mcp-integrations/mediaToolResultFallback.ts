@@ -5,26 +5,42 @@
  * 同进程日志(如 ANTHROPIC_LOG=debug 的请求体 dump)插队损坏,tool_result 的
  * user echo 概率性丢失 → renderer 收不到 xdt_image_urls、图片卡不渲染也不落库。
  *
- * 方案:art / mivo 的 MCP 工具本来就在本 main 进程执行,结果产出的瞬间通过
- * `onMediaToolResult` dep 同步塞进这里;turn 结束时 messagePersistBroadcaster
+ * 方案:媒体 MCP 工具本来就在本 main 进程执行,结果产出的瞬间通过
+ * Host dep 同步塞进这里;turn 结束时 messagePersistBroadcaster
  * 的 flushOrphanToolResults 发现"有 tool_use 但没等到 tool_result"的媒体工具
- * 调用,按 args 确定性配对(mivo 用 jobId,art 用 prompt/model 等入参全集),
+ * 调用,旧 art / mivo 按语义 args 配对,ghost_call 按工具名 + tool_use id
+ * （无 id 时按 session + 完整 input，且只认领唯一候选）精确配对,
  * 直接落库 + 广播,彻底解除对 stdout echo 的依赖。
  *
- * echo 正常到达时池子不被消费,条目靠 TTL 过期 — 不会产生重复消息。
- * 池子进程级共享(MCP service 是跨 session 单例),配对靠 args 语义键,
- * 不依赖 session 归属。
+ * ghost_call 的 echo 正常到达时会消费对应条目,避免无 tool_use id 的后续相同
+ * 调用误领旧结果;旧 art / mivo 条目仍靠 TTL 过期。池子进程级共享(MCP service
+ * 是跨 session 单例),ghost_call 的精确条目额外按 session 隔离。
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import type { MediaToolResultPayload } from '@cindy/mcps';
+import { isGhostCallToolName } from '../../shared/ghost.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mediaToolResultFallback');
 
-interface PendingEntry extends MediaToolResultPayload {
+interface PendingEntryBase {
+  resultText: string;
   ts: number;
   consumed: boolean;
 }
+
+type PendingEntry =
+  | (PendingEntryBase & { match: 'semantic-args'; args: Record<string, unknown> })
+  | (PendingEntryBase & {
+      match: 'exact-tool-use';
+      sessionId: string;
+      toolName: string;
+      toolUseId?: string;
+      toolUseInput: unknown;
+    });
+
+type ExactPendingEntry = Extract<PendingEntry, { match: 'exact-tool-use' }>;
 
 const TTL_MS = 15 * 60 * 1000;
 const MAX_ENTRIES = 50;
@@ -43,9 +59,44 @@ function sweep(): void {
 export function recordMediaToolResult(payload: MediaToolResultPayload): void {
   try {
     sweep();
-    pending.push({ ...payload, ts: Date.now(), consumed: false });
+    pending.push({
+      match: 'semantic-args',
+      ...payload,
+      ts: Date.now(),
+      consumed: false,
+    });
     log.debug('media tool result recorded', {
       keys: Object.keys(payload.args),
+      bytes: payload.resultText.length,
+      poolSize: pending.length,
+    });
+  } catch {
+    // 兜底池故障不影响工具主流程
+  }
+}
+
+/**
+ * 按完整 MCP 工具名和 input 记录结果。ghost_call 的输入可能没有任何
+ * 业务 args，不能沿用旧 art / mivo 的「至少一个语义键」配对。
+ */
+export function recordMediaToolResultForToolUse(payload: {
+  sessionId: string;
+  toolName: string;
+  toolUseId?: string;
+  toolUseInput: unknown;
+  resultText: string;
+}): void {
+  try {
+    sweep();
+    pending.push({
+      match: 'exact-tool-use',
+      ...payload,
+      toolUseInput: structuredClone(payload.toolUseInput),
+      ts: Date.now(),
+      consumed: false,
+    });
+    log.debug('media tool result recorded for exact tool use', {
+      toolName: payload.toolName,
       bytes: payload.resultText.length,
       poolSize: pending.length,
     });
@@ -79,31 +130,131 @@ function argsMatch(toolUseArgs: Record<string, unknown>, payloadArgs: Record<str
   let hits = 0;
   for (const k of keys) {
     if (!(k in toolUseArgs)) continue;
-    if (JSON.stringify(toolUseArgs[k]) !== JSON.stringify(payloadArgs[k])) return false;
+    if (!isDeepStrictEqual(toolUseArgs[k], payloadArgs[k])) return false;
     hits++;
   }
   return hits > 0;
+}
+
+function exactToolUseContextMatches(
+  entry: ExactPendingEntry,
+  toolName?: string,
+  sessionId?: string,
+): boolean {
+  return sessionId === entry.sessionId
+    && (toolName === entry.toolName
+      || (isGhostCallToolName(toolName) && isGhostCallToolName(entry.toolName)));
+}
+
+function consume(entry: PendingEntry): string {
+  entry.consumed = true;
+  log.info('media tool result reclaimed for echo-less tool_use', {
+    match: entry.match,
+    ...(entry.match === 'semantic-args'
+      ? { keys: Object.keys(entry.args) }
+      : { toolName: entry.toolName }),
+    bytes: entry.resultText.length,
+  });
+  return entry.resultText;
+}
+
+/**
+ * 正常 echo 到达后消费对应 ghost_call 条目。无 toolUseId 时必须同时命中
+ * 完整 echo 正文；仅凭相同 input 无法区分并发调用。
+ */
+export function discardMediaToolResultForToolUse(
+  toolUseInput: unknown,
+  toolName?: string,
+  toolUseId?: string,
+  sessionId?: string,
+  echoedResultText?: string,
+): void {
+  try {
+    sweep();
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const entry = pending[i];
+      if (entry.match !== 'exact-tool-use' || entry.consumed) continue;
+      if (!exactToolUseContextMatches(entry, toolName, sessionId)) continue;
+      const matched = entry.toolUseId
+        ? toolUseId === entry.toolUseId
+        : echoedResultText !== undefined
+          && echoedResultText === entry.resultText
+          && isDeepStrictEqual(toolUseInput, entry.toolUseInput);
+      if (!matched) continue;
+      entry.consumed = true;
+      log.debug('media tool result discarded after normal echo', {
+        toolName: entry.toolName,
+        bytes: entry.resultText.length,
+      });
+      return;
+    }
+  } catch {
+    // 兜底池故障不影响工具主流程
+  }
+}
+
+/** turn 收口后移除未消费的 ghost 精确条目，禁止旧结果跨 turn 被重试认领。 */
+export function clearMediaToolResultsForSession(sessionId: string): void {
+  try {
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const entry = pending[i];
+      if (entry.match === 'exact-tool-use' && entry.sessionId === sessionId) {
+        pending.splice(i, 1);
+      }
+    }
+  } catch {
+    // 兜底池故障不影响 turn 收口
+  }
 }
 
 /**
  * 为一个未收到 echo 的 tool_use 认领媒体结果。命中则标记 consumed 并返回
  * resultText(即应落库的 tool_result 内容);无匹配返回 null。
  */
-export function takeMediaToolResult(toolUseInput: unknown): string | null {
+export function takeMediaToolResult(
+  toolUseInput: unknown,
+  toolName?: string,
+  toolUseId?: string,
+  sessionId?: string,
+): string | null {
   const toolUseArgs = extractCallArgs(toolUseInput);
-  if (!toolUseArgs) return null;
+  if (isGhostCallToolName(toolName)) {
+    const unidentifiedMatches: ExactPendingEntry[] = [];
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const entry = pending[i];
+      if (
+        entry.match !== 'exact-tool-use'
+        || entry.consumed
+        || Date.now() - entry.ts > TTL_MS
+        || !exactToolUseContextMatches(entry, toolName, sessionId)
+      ) {
+        continue;
+      }
+      if (entry.toolUseId) {
+        if (toolUseId === entry.toolUseId) return consume(entry);
+        continue;
+      }
+      if (isDeepStrictEqual(toolUseInput, entry.toolUseInput)) unidentifiedMatches.push(entry);
+    }
+    if (unidentifiedMatches.length === 1) return consume(unidentifiedMatches[0]);
+    if (unidentifiedMatches.length > 1) {
+      log.warn('ambiguous media tool results left unclaimed', {
+        toolName,
+        candidates: unidentifiedMatches.length,
+      });
+    }
+    return null;
+  }
   // 从新到旧遍历:同键条目(如同一按钮 TTL 内重复触发)认领最近一次的结果,
   // 避免把上一轮遗留的旧图配给新的 tool_use。
   for (let i = pending.length - 1; i >= 0; i--) {
     const entry = pending[i];
     if (entry.consumed || Date.now() - entry.ts > TTL_MS) continue;
-    if (argsMatch(toolUseArgs, entry.args)) {
-      entry.consumed = true;
-      log.info('media tool result reclaimed for echo-less tool_use', {
-        keys: Object.keys(entry.args),
-        bytes: entry.resultText.length,
-      });
-      return entry.resultText;
+    const matched = entry.match === 'semantic-args'
+      && toolUseArgs !== null
+      && argsMatch(toolUseArgs, entry.args);
+    if (matched) {
+      return consume(entry);
     }
   }
   return null;

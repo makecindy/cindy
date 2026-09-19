@@ -933,21 +933,29 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
   });
 
   it("兜底账本注入:意识未声明媒体字段时 producedMedia → xdt_media_produced", async () => {
-    const payload = parsePayload(
-      await handleGhostCall(
-        fakeDeps({
-          callGhostTool: async () => ({
-            ok: true,
-            result: { note: "画完了但没声明字段" },
-            producedMedia: ["cindy-media://blobs/def.png"],
-          }),
+    const onGhostToolResult = vi.fn();
+    const input = { ghost_id: "art", tool: "gen_image", args: {} };
+    const result = await handleGhostCall(
+      fakeDeps({
+        callGhostTool: async () => ({
+          ok: true,
+          result: { note: "画完了但没声明字段" },
+          producedMedia: ["cindy-media://blobs/def.png"],
         }),
-        { ghost_id: "art", tool: "gen_image", args: {} },
-      ),
+        onGhostToolResult,
+      }),
+      input,
+      "toolu-ghost-media",
     );
+    const payload = parsePayload(result);
     expect(payload.xdt_media_produced).toEqual(["cindy-media://blobs/def.png"]);
     // producedMedia 是主机侧信道,不泄漏原始字段名给模型侧 payload
     expect(payload.producedMedia).toBeUndefined();
+    expect(onGhostToolResult).toHaveBeenCalledWith({
+      input,
+      resultText: result.content[0].text,
+      toolUseId: "toolu-ghost-media",
+    });
   });
 
   it("内联意图令牌:xdt_media_inline + 账本媒体 → hint 改为鼓励 markdown 内联", async () => {

@@ -571,6 +571,39 @@ describe('payloadSummary', () => {
     }))).toEqual([]);
   });
 
+  it('extracts host-produced media fallback by managed blob type', () => {
+    const imageUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const secondImageUrl = `cindy-media://blobs/${'b'.repeat(64)}.webp`;
+    const videoUrl = `cindy-media://blobs/${'c'.repeat(64)}.mov`;
+    const audioUrl = `cindy-media://blobs/${'d'.repeat(64)}.m4a`;
+
+    expect(extractPayloadToolResultMedia(JSON.stringify({
+      xdt_image_url: imageUrl,
+      xdt_media_produced: [
+        imageUrl,
+        secondImageUrl,
+        videoUrl,
+        audioUrl,
+        `cindy-media://blobs/${'e'.repeat(64)}.glb`,
+        'cindy-media://blobs/not-a-content-hash.png',
+        'file:///tmp/forged.png',
+        'https://example.com/forged.png',
+      ],
+    }))).toEqual([
+      { kind: 'image', previewable: false, title: undefined, url: imageUrl },
+      { kind: 'image', previewable: false, title: undefined, url: secondImageUrl },
+      { kind: 'video', previewable: false, title: undefined, url: videoUrl },
+      { kind: 'audio', previewable: false, title: undefined, url: audioUrl },
+    ]);
+
+    // 该字段可能是工具结果中唯一的媒体契约，不能被快速预检过滤。
+    expect(extractPayloadToolResultMedia(JSON.stringify({
+      xdt_media_produced: [secondImageUrl],
+    }))).toEqual([
+      { kind: 'image', previewable: false, title: undefined, url: secondImageUrl },
+    ]);
+  });
+
   it('classifies direct payload media URLs for mobile viewer decisions', () => {
     const image = buildMediaPayload({
       kind: 'image',

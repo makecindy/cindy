@@ -985,13 +985,25 @@ export async function handleGhostCall(
                 hint: "xdt_media_produced 是主机记账的送达通道:这些媒体已自动送达用户(桌面/IM),不要在回复文本里用 markdown 嵌入这些地址,也不要复述它们。",
               }
           : {};
-    return textResult({
+    const response = textResult({
       ...resultForModel,
       ...advisory,
       ...hoisted,
       ...producedFallback,
       ...mediaHint,
     });
+    if (declaredMedia || (Array.isArray(producedMedia) && producedMedia.length > 0)) {
+      try {
+        deps.onGhostToolResult?.({
+          input,
+          resultText: response.content[0].text,
+          ...(agentToolUseId ? { toolUseId: agentToolUseId } : {}),
+        });
+      } catch {
+        // 持久化兜底不得改变已成功的插件调用结果。
+      }
+    }
+    return response;
   } catch (err) {
     return textResult(
       {

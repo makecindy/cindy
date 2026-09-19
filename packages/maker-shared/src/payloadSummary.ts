@@ -355,6 +355,7 @@ export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayl
     !toolResult.includes('xdt_image_url')
     && !toolResult.includes('xdt_video_url')
     && !toolResult.includes('xdt_audio_url')
+    && !toolResult.includes('xdt_media_produced')
   ) {
     return [];
   }
@@ -421,6 +422,26 @@ export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayl
   if (items.every((item) => item.kind !== 'audio') && Array.isArray(parsed.xdt_audio_urls)) {
     for (const url of parsed.xdt_audio_urls) {
       if (typeof url === 'string' && isManagedAudioUrl(url)) push('audio', url);
+    }
+  }
+
+  // ghost_call 的主机账本兜底只携带已入 cindy-media 总仓的 URL，
+  // 没有单独的媒体类型。总仓后缀由 Host 按真实 MIME 固化，因此这里可以
+  // 按严格 blob URL 形状分流；未知类型（如 GLB）保持不可见，不猜测为图片。
+  if (Array.isArray(parsed.xdt_media_produced)) {
+    for (const rawUrl of parsed.xdt_media_produced) {
+      if (typeof rawUrl !== 'string') continue;
+      const match = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.([a-z0-9]+)$/.exec(rawUrl);
+      const extension = match?.[1];
+      const kind =
+        extension && ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension)
+          ? 'image'
+          : extension && ['mp4', 'webm', 'mov'].includes(extension)
+            ? 'video'
+            : extension && ['mp3', 'wav', 'm4a', 'ogg'].includes(extension)
+              ? 'audio'
+              : null;
+      if (kind) push(kind, rawUrl);
     }
   }
 
