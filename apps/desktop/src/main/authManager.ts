@@ -52,6 +52,8 @@ import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
+  isDefinitiveRefreshFailure,
+  isForeignDeviceRefreshFailure,
   runRefreshWithReplacementRetry,
   resolveSessionExpiredReason,
   type RefreshFailureAction,
@@ -2467,6 +2469,7 @@ async function withAccountFreeOwnerCommit(opts: {
   nextMode: Extract<AppSessionMode, 'signed-out' | 'local'>;
   credentialStoreUnavailable?: boolean;
   preservePersistedRefreshToken?: boolean;
+  preservePersistedAccountState?: boolean;
   notify?: boolean;
   clearOnFailure?: boolean;
   authAlreadyCleared?: boolean;
@@ -2496,6 +2499,7 @@ async function withAccountFreeOwnerCommit(opts: {
         notify: false,
         nextMode: opts.nextMode,
         preservePersistedRefreshToken: true,
+        preservePersistedAccountState: opts.preservePersistedAccountState,
         credentialStoreUnavailable: opts.credentialStoreUnavailable,
         deferSessionCommit: true,
       });
@@ -2545,6 +2549,7 @@ async function withAccountFreeOwnerCommit(opts: {
             notify: false,
             nextMode: opts.nextMode,
             preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+            preservePersistedAccountState: opts.preservePersistedAccountState,
             credentialStoreUnavailable: opts.credentialStoreUnavailable,
             deferSessionCommit: true,
           });
@@ -2569,6 +2574,7 @@ async function withAccountFreeOwnerCommit(opts: {
           notify: false,
           nextMode: 'signed-out',
           preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+          preservePersistedAccountState: opts.preservePersistedAccountState,
           credentialStoreUnavailable: opts.credentialStoreUnavailable,
           deferSessionCommit: true,
         });
@@ -3129,6 +3135,11 @@ let persistedRefreshTokenNeedsIdentityCheck = false;
 // 已经被另一个共享 userData 实例换掉,即使本轮没有走 replacement-retry,也必须 /me
 // 核对身份,避免 currentUser 仍是 A 但 accessToken 已切到 B。
 let lastAcceptedRefreshToken: string | null = null;
+/**
+ * macOS keychain 不可用时的当前进程会话。refresh token 只保留在 Main 内存，
+ * 不进入 renderer、日志、safeStorage 或任何其它持久层；进程退出即失效。
+ */
+let volatileRefreshSession: { realm: AuthRegion; refreshToken: string } | null = null;
 let replacementIntegrationReloadTimers: ReturnType<typeof setTimeout>[] = [];
 
 /**
@@ -3636,6 +3647,8 @@ function clearAuth(
      * removeSafe 会把别人的新 token 删掉,把对方也踢成半死。
      */
     preservePersistedRefreshToken?: boolean;
+    /** Keep non-secret state derived from saved credentials during an in-memory session. */
+    preservePersistedAccountState?: boolean;
     /**
      * Clear auth fields immediately, but defer publishing the signed-out
      * owner until the enclosing teardown completes. Owner-bound consumers are
@@ -3662,6 +3675,7 @@ function clearAuth(
   resetLoginFlowState();
   persistedRefreshTokenNeedsIdentityCheck = false;
   lastAcceptedRefreshToken = null;
+  volatileRefreshSession = null;
   clearReplacementIntegrationReloadTimers();
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
@@ -3688,7 +3702,7 @@ function clearAuth(
   // canary-flag.json 同样是整机一份的账号派生状态:passive 清掉它,packaged primary
   // 下次更新轮询就会把自己当 stable 用户,拉到错误的 manifest(见 manifestService
   // fetchManifest)。passive 只登出本进程,不改这个共享文件。
-  if (!isPassiveSharedUserDataInstance()) {
+  if (!opts.preservePersistedAccountState && !isPassiveSharedUserDataInstance()) {
     canaryFlagStore.clear();
   }
   // provider key(XD / Mivo)是绑定账号的本机密钥,**不在登出时清** —— 同账号重新登录 /
@@ -3717,6 +3731,7 @@ async function expireRuntimeAuth(
   reason: SessionExpiredReason = 'unknown',
   opts: { preservePersistedRefreshToken?: boolean } = {},
 ): Promise<void> {
+  const preservePersistedAccountState = volatileRefreshSession !== null;
   const expiredAccountKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;
   if (
     expiredAccountKey &&
@@ -3740,6 +3755,7 @@ async function expireRuntimeAuth(
     notify: false,
     nextMode: 'signed-out',
     preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+    preservePersistedAccountState,
     deferSessionCommit: true,
   });
   try {
@@ -3747,6 +3763,7 @@ async function expireRuntimeAuth(
       reason,
       nextMode: 'signed-out',
       preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+      preservePersistedAccountState,
       notify: false,
       clearOnFailure: true,
       authAlreadyCleared: true,
@@ -3773,15 +3790,22 @@ async function expireRuntimeAuth(
 export function invalidateSession(reason: string): Promise<void> {
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
 
+  const wasVolatileSession = volatileRefreshSession !== null;
   const rejectedAccountKey =
-    currentUser && !isPassiveSharedUserDataInstance()
+    currentUser && !wasVolatileSession && !isPassiveSharedUserDataInstance()
       ? accountVaultKey(activeAuthRealm, currentUser.id)
       : null;
 
   // Raise the owner boundary before clearing auth (same P1 fix as
   // expireRuntimeAuth — see PRRT_kwDOTgdRUs6YaakC).
   const releaseBoundary = beginAppSessionBoundary();
-  clearAuth({ notify: false, nextMode: 'signed-out', deferSessionCommit: true });
+  clearAuth({
+    notify: false,
+    nextMode: 'signed-out',
+    preservePersistedRefreshToken: wasVolatileSession,
+    preservePersistedAccountState: wasVolatileSession,
+    deferSessionCommit: true,
+  });
 
   // Schedule teardown one microtask later so the single-flight promise can be
   // published and credentials can be cleared synchronously first. API calls
@@ -3799,6 +3823,8 @@ export function invalidateSession(reason: string): Promise<void> {
       await withAccountFreeOwnerCommit({
         reason,
         nextMode: 'signed-out',
+        preservePersistedRefreshToken: wasVolatileSession,
+        preservePersistedAccountState: wasVolatileSession,
         notify: false,
         clearOnFailure: true,
         authAlreadyCleared: true,
@@ -4127,9 +4153,12 @@ export async function enterLocalMode(): Promise<AuthState> {
   // tokens before switching the committed owner so cloud credentials cannot
   // be reused by the account-free session.
   getProviderSecretStore().invalidateCaches();
+  const preservePersistedRefreshToken = volatileRefreshSession !== null;
   await withAccountFreeOwnerCommit({
     reason: 'enter-local-mode',
     nextMode: 'local',
+    preservePersistedRefreshToken,
+    preservePersistedAccountState: preservePersistedRefreshToken,
   });
   return snapshotAuthState();
 }
@@ -5013,7 +5042,7 @@ export async function getLoginState(): Promise<DesktopLoginActionResult> {
   }
   const expectedLoginFlowEpoch = loginFlowEpoch;
   try {
-    if (!accessToken && credentialStoreHealth.unavailable) {
+    if (!accessToken && credentialStoreHealth.unavailable && !credentialEncryptionUnavailable) {
       return {
         success: false,
         code: 'CREDENTIAL_STORE_UNAVAILABLE',
@@ -5066,109 +5095,160 @@ async function completeLogin(
     const accountRefreshToken = outcome.accountRefreshToken ?? pendingAccountRefreshToken;
     let previousPersistedSession: ReturnType<typeof readPersistedAuthSession> = null;
     let activeSessionWritten = false;
-    await commitDesktopLoginSessions(
-      {
-        pair: outcome,
-        realm: committedRealm,
-        passportId: nextUser.passportId || undefined,
-        accountRefreshToken,
-        memberships:
-          pendingAccountMemberships.length > 0 ? pendingAccountMemberships : [outcome.membership],
-        restoreLoggedOutAccount: options.restoreLoggedOutAccount ?? true,
-        accountToLogOut: options.accountToLogOut,
-        onLoggedOutPassportRemoved: options.onLoggedOutPassportRemoved,
-      },
-      {
-        commit: async () => {
-          // The aggregate account vault, compatibility active session, old-owner
-          // teardown and final owner publication are one epoch-owned transaction.
-          // Any cancellation before commit restores both durable records while
-          // the cross-process vault lock is still held.
+    const publishRuntimeSession = async (persistCredentials: boolean): Promise<void> => {
+      assertTransitionCurrent();
+      options.validateBeforeCommit?.(loginEpoch);
+      await withCloudOwnerCommit({
+        previousOwnerId: previousSession.dataOwnerId,
+        nextOwnerId: nextUser.id,
+        prepareTransition: async () => {
           assertTransitionCurrent();
-          options.validateBeforeCommit?.(loginEpoch);
-          // Capture the compatibility session only after entering the same
-          // cross-process ownership window as the vault write. A concurrent
-          // passive refresh may have rotated it while this login waited on the
-          // lock; rollback must restore that latest generation, not a stale one.
-          previousPersistedSession = readPersistedAuthSession();
-          writePersistedAuthSessionOrThrow(outcome.refreshToken, committedRealm);
-          activeSessionWritten = true;
-          assertTransitionCurrent();
-          await withCloudOwnerCommit({
-            previousOwnerId: previousSession.dataOwnerId,
-            nextOwnerId: nextUser.id,
-            prepareTransition: async () => {
-              assertTransitionCurrent();
-              if (!accountSwitchTeardown) {
-                throw new Error('login cloud owner transition requires a teardown hook');
-              }
-              await accountSwitchTeardown({
-                previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
-                nextUserId: nextUser.id,
-              });
-              assertTransitionCurrent();
-            },
-            prepareCommit: async () => {
-              assertTransitionCurrent();
-              await claimLegacyNamespaceForVerifiedUser(nextUser.id);
-              assertTransitionCurrent();
-            },
-            commit: () =>
-              commitWithClearedAccountDeletionReceipt(() => {
-                assertTransitionCurrent();
-                pendingAccountToken = null;
-                pendingAccountRefreshToken = null;
-                pendingAccountMemberships = [];
-                pendingAccountDeletionRestored = false;
-                accessToken = outcome.accessToken;
-                persistedRefreshTokenNeedsIdentityCheck = false;
-                clearReplacementIntegrationReloadTimers();
-                const authRealmChanged = committedRealm !== activeAuthRealm;
-                activateClientEndpointRealm(committedRealm);
-                activeAuthRealm = committedRealm;
-                if (!isPassiveSharedUserDataInstance()) {
-                  removeSafe(LEGACY_REFRESH_TOKEN_KEY);
-                }
-                lastAcceptedRefreshToken = outcome.refreshToken;
-                if (!isPassiveSharedUserDataInstance()) {
-                  clearReloginFlag();
-                }
-                accountDeletionRestoredNoticePending = deletionWasRestored;
-                // 显式登录解除本进程登出墓碑(passive / foreign-device)。
-                passiveLocalSignOut = false;
-                foreignDeviceLocalSignOut = false;
-                currentUser = nextUser;
-                credentialStoreHealth.noteRecovered();
-                if (!isPassiveSharedUserDataInstance()) {
-                  canaryFlagStore.clear();
-                }
-                commitCloudAppSession(currentUser.id, authRealmChanged);
-                pendingAuthRealm = null;
-              }),
+          if (!accountSwitchTeardown) {
+            throw new Error('login cloud owner transition requires a teardown hook');
+          }
+          await accountSwitchTeardown({
+            previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
+            nextUserId: nextUser.id,
           });
+          assertTransitionCurrent();
         },
-        rollback: () => {
-          if (!activeSessionWritten) return;
-          restorePersistedAuthSessionIfCurrent(
-            outcome.refreshToken,
-            committedRealm,
-            previousPersistedSession,
-          );
+        prepareCommit: async () => {
+          assertTransitionCurrent();
+          await claimLegacyNamespaceForVerifiedUser(nextUser.id);
+          assertTransitionCurrent();
         },
-      },
-    );
-    await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
-    scheduleCanaryFlagSync({
-      token: outcome.accessToken,
-      expectedAuthEpoch: loginEpoch,
-      expectedUserId: nextUser.id,
-    });
-    scheduleXdOrgBetaDefault({
-      expectedAuthEpoch: loginEpoch,
-      expectedUserId: nextUser.id,
-    });
+        commit: () => {
+          const publish = () => {
+            assertTransitionCurrent();
+            pendingAccountToken = null;
+            pendingAccountRefreshToken = null;
+            pendingAccountMemberships = [];
+            pendingAccountDeletionRestored = false;
+            accessToken = outcome.accessToken;
+            persistedRefreshTokenNeedsIdentityCheck = false;
+            clearReplacementIntegrationReloadTimers();
+            const authRealmChanged = committedRealm !== activeAuthRealm;
+            activateClientEndpointRealm(committedRealm);
+            activeAuthRealm = committedRealm;
+            if (persistCredentials && !isPassiveSharedUserDataInstance()) {
+              removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+            }
+            lastAcceptedRefreshToken = persistCredentials ? outcome.refreshToken : null;
+            volatileRefreshSession = persistCredentials
+              ? null
+              : { realm: committedRealm, refreshToken: outcome.refreshToken };
+            if (persistCredentials && !isPassiveSharedUserDataInstance()) {
+              clearReloginFlag();
+            }
+            accountDeletionRestoredNoticePending = deletionWasRestored;
+            passiveLocalSignOut = false;
+            foreignDeviceLocalSignOut = false;
+            currentUser = nextUser;
+            if (persistCredentials) credentialStoreHealth.noteRecovered();
+            if (persistCredentials) {
+              if (!isPassiveSharedUserDataInstance()) {
+                canaryFlagStore.clear();
+              }
+            }
+            // The owner boundary remains durable even for an in-memory login:
+            // local account data still needs a stable isolation owner. Only
+            // credentials stay process-local, and persistent account-derived
+            // preferences are left unchanged.
+            commitCloudAppSession(currentUser.id, authRealmChanged);
+            pendingAuthRealm = null;
+          };
+          if (persistCredentials) commitWithClearedAccountDeletionReceipt(publish);
+          else publish();
+        },
+      });
+    };
+
+    const canUseVolatileLogin = (): boolean => accessToken === null && currentUser === null;
+    const publishVolatileLogin = async (): Promise<void> => {
+      credentialStoreHealth.noteStartupFailure();
+      log.warn(
+        'credential store unavailable; accepting explicit login as an in-memory session only',
+      );
+      await publishRuntimeSession(false);
+    };
+
+    if (
+      canUseVolatileLogin() &&
+      (credentialStoreHealth.unavailable || credentialEncryptionUnavailable)
+    ) {
+      await publishVolatileLogin();
+    } else {
+      try {
+        await commitDesktopLoginSessions(
+          {
+            pair: outcome,
+            realm: committedRealm,
+            passportId: nextUser.passportId || undefined,
+            accountRefreshToken,
+            memberships:
+              pendingAccountMemberships.length > 0
+                ? pendingAccountMemberships
+                : [outcome.membership],
+            restoreLoggedOutAccount: options.restoreLoggedOutAccount ?? true,
+            accountToLogOut: options.accountToLogOut,
+            onLoggedOutPassportRemoved: options.onLoggedOutPassportRemoved,
+          },
+          {
+            commit: async () => {
+              // The aggregate account vault, compatibility active session, old-owner
+              // teardown and final owner publication are one epoch-owned transaction.
+              // Any cancellation before commit restores both durable records while
+              // the cross-process vault lock is still held.
+              assertTransitionCurrent();
+              // Capture the compatibility session only after entering the same
+              // cross-process ownership window as the vault write. A concurrent
+              // passive refresh may have rotated it while this login waited on the
+              // lock; rollback must restore that latest generation, not a stale one.
+              previousPersistedSession = readPersistedAuthSession();
+              writePersistedAuthSessionOrThrow(outcome.refreshToken, committedRealm);
+              activeSessionWritten = true;
+              await publishRuntimeSession(true);
+            },
+            rollback: () => {
+              if (!activeSessionWritten) return;
+              restorePersistedAuthSessionIfCurrent(
+                outcome.refreshToken,
+                committedRealm,
+                previousPersistedSession,
+              );
+            },
+          },
+        );
+      } catch (error) {
+        // macOS may still report encryption as available when the user rejects
+        // an individual Keychain prompt. The durable transaction has rolled
+        // back before this catch, so an explicit signed-out login can continue
+        // without persisting either refresh credential.
+        if (
+          !(error instanceof AuthApiError) ||
+          error.code !== 'CREDENTIAL_STORE_UNAVAILABLE' ||
+          !canUseVolatileLogin()
+        ) {
+          throw error;
+        }
+        await publishVolatileLogin();
+      }
+    }
+    const sessionIsVolatile = volatileRefreshSession !== null;
+    if (!sessionIsVolatile) {
+      await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
+      scheduleCanaryFlagSync({
+        token: outcome.accessToken,
+        expectedAuthEpoch: loginEpoch,
+        expectedUserId: nextUser.id,
+      });
+      scheduleXdOrgBetaDefault({
+        expectedAuthEpoch: loginEpoch,
+        expectedUserId: nextUser.id,
+      });
+      getProviderSecretStore().reconcileOwner(outcome.membership.id);
+    }
     scheduleRefresh(outcome.accessToken);
-    getProviderSecretStore().reconcileOwner(outcome.membership.id);
     pendingLoginTicket = null;
     pendingBindTicket = null;
     pendingSsoVerificationTicket = null;
@@ -5274,7 +5354,9 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
         // Startup may itself clear an obsolete owner generation. Its current
         // recovery error is still safe to return, even when that cleared the
         // original login flow; successful/newer auth keeps the epoch guard.
-        if (!accessToken && credentialStoreHealth.unavailable) return getLoginState();
+        if (!accessToken && credentialStoreHealth.unavailable && !credentialEncryptionUnavailable) {
+          return getLoginState();
+        }
         assertLoginFlowCurrent(actionLoginFlowEpoch);
         if (accessToken && loginFlowState?.step === 'completed') {
           return { success: true, state: loginFlowState };
@@ -5282,7 +5364,9 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       }
       return { success: true, state: await loadLoginProviders(actionLoginFlowEpoch) };
     }
-    if (!accessToken && credentialStoreHealth.unavailable) return getLoginState();
+    if (!accessToken && credentialStoreHealth.unavailable && !credentialEncryptionUnavailable) {
+      return getLoginState();
+    }
     if (action.type === 'confirm-sso-realm') {
       const confirmation = loginFlowState;
       if (
@@ -5687,6 +5771,56 @@ export async function refresh(): Promise<boolean> {
       );
       return true;
     };
+    const volatileSession = volatileRefreshSession;
+    if (volatileSession) {
+      const result = await requestAuthRefresh(volatileSession.refreshToken, volatileSession.realm);
+      if (refreshWasSuperseded('after-volatile-refresh')) return false;
+      if (!result.ok) {
+        const code = getRefreshErrorCode(result);
+        if (isDefinitiveRefreshFailure(result) || isForeignDeviceRefreshFailure(result)) {
+          const previousUserId =
+            currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
+          await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code), {
+            preservePersistedRefreshToken: true,
+          });
+        } else {
+          log.warn(
+            `in-memory auth refresh failed transiently status=${result.status} code=${code ?? '<none>'} — retrying in ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
+          );
+          scheduleRefreshRetryAfterTransientFailure();
+        }
+        return false;
+      }
+
+      const data = result.data as RefreshResponse;
+      if (
+        !currentUser ||
+        data.membership.id !== currentUser.id ||
+        !canRestoreAuthSessionForMembership(
+          AUTH_REGION,
+          volatileSession.realm,
+          data.membership.kind,
+        )
+      ) {
+        const previousUserId = currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
+        log.warn('in-memory auth refresh returned an incompatible membership; expiring session');
+        await expireRuntimeAuth(previousUserId, 'replaced-elsewhere', {
+          preservePersistedRefreshToken: true,
+        });
+        return false;
+      }
+
+      volatileRefreshSession = {
+        realm: volatileSession.realm,
+        refreshToken: data.refreshToken,
+      };
+      accessToken = data.accessToken;
+      currentUser = mergeMembershipWithExisting(data.membership, currentUser);
+      scheduleRefresh(data.accessToken);
+      notifyRenderer();
+      notifyAuthListeners();
+      return true;
+    }
     const persistedSession = readPersistedAuthSession();
     // #1687:成功读到持久会话 = 凭证库读取工作正常,连续失败计数清零;
     // 若此前已升级为 unavailable,立即广播恢复(banner 自动消失)。
@@ -6041,6 +6175,21 @@ export async function logout(): Promise<void> {
   const activeUser = currentUser;
   if (!activeUser) {
     throw new AuthApiError('UNAUTHENTICATED', 401, 'No current account to log out');
+  }
+  if (volatileRefreshSession) {
+    await withAccountFreeOwnerCommit({
+      reason: 'logout-in-memory-session',
+      nextMode: 'signed-out',
+      clearOnFailure: true,
+      preservePersistedRefreshToken: true,
+      preservePersistedAccountState: true,
+    });
+    revokeLoggedOutAccountBestEffort({
+      accessToken: currentAccessToken,
+      authBaseUrl: currentAuthBaseUrl,
+      passport: null,
+    });
+    return;
   }
   const logoutAuthEpoch = authStateEpoch;
   const isLogoutStillCurrent = (expectedAuthEpoch = logoutAuthEpoch): boolean =>
