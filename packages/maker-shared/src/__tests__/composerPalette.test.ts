@@ -25,7 +25,7 @@ describe('shared composer palette model', () => {
     expect(detectComposerTrigger('open @app now')).toEqual({ kind: 'none' });
   });
 
-  it('merges slash commands with skill priority and prefix filtering', () => {
+  it('merges slash commands with skill priority and query filtering', () => {
     const commands = mergeSlashCommands([
       { kind: 'agent-builtin', name: 'compact', description: 'builtin compact' },
       { kind: 'agent-builtin', name: 'status', description: 'status' },
@@ -42,6 +42,18 @@ describe('shared composer palette model', () => {
     expect(filterSlashCommands(commands, 'co').map((command) => command.name)).toEqual([
       'codereview',
       'compact',
+    ]);
+  });
+
+  it('finds slash commands when the query appears inside the name', () => {
+    const commands = [
+      { kind: 'agent-builtin' as const, name: 'clear-context', description: 'clear context' },
+      { kind: 'agent-builtin' as const, name: 'context', description: 'context' },
+    ];
+
+    expect(filterSlashCommands(commands, 'context').map((command) => command.name)).toEqual([
+      'clear-context',
+      'context',
     ]);
   });
 
