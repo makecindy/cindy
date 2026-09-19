@@ -284,6 +284,59 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 
+test("the final gate binds every required check to one frozen tree", () => {
+	const workflow = readText("docs/dev-rules/development-workflow.md");
+	const section = workflow.match(
+		/- \*\*最终门禁必须绑定冻结快照\*\*：([\s\S]*?)(?=\n  - \*\*)/,
+	)?.[1];
+	assert.ok(section, "development workflow must define the frozen final gate");
+	assert.match(section, /git write-tree/);
+	assert.match(section, /最终有效的受影响 package typecheck、专项数据库门禁与根\s+`pnpm test:unit`/);
+	assert.match(section, /由该 tree[\s\S]*同一干净 checkout 中\s+执行/);
+	assert.match(section, /冻结前跑过的同名检查只作为快速反馈，不能充当最终凭证/);
+	assert.match(section, /该 tree ID 的全部强制检查都取得退出码 `0`/);
+	assert.match(section, /不得使用[^。]*`-a`[^。]*pathspec/);
+	assert.match(section, /git rev-parse "HEAD\^\{tree\}"/);
+	assert.match(section, /commit tree[\s\S]*受测 tree/);
+	assert.match(section, /push 前/);
+});
+
+test("the dependency reuse contract tracks agent-binary download environment inputs", () => {
+	const workflow = readText("docs/dev-rules/development-workflow.md");
+	const section = workflow.match(
+		/- \*\*最终门禁环境要可复现且与产品故障分层\*\*：([\s\S]*?)(?=\n  - \*\*)/,
+	)?.[1];
+	assert.ok(section, "development workflow must define the dependency reuse contract");
+	const ensureSourcePath = "scripts/ensure-agent-binaries.mjs";
+	const ensureSource = readText(ensureSourcePath);
+	const updateSources = [...ensureSource.matchAll(/module:\s*["'](\.\.\/tools\/[^"']+\/update\.mjs)["']/g)]
+		.map((match) => path.posix.normalize(path.posix.join("scripts", match[1])));
+	assert.ok(updateSources.length > 0, "agent-binary kinds must declare their update modules");
+	const installInputSources = new Set([
+		ensureSourcePath,
+		"scripts/agent-binary-cdn-fallback.mjs",
+		"tools/shared/fetch-with-timeout.mjs",
+		...updateSources,
+	]);
+	const environmentInputs = new Set();
+	for (const relativePath of installInputSources) {
+		const source = readText(relativePath);
+		for (const match of source.matchAll(
+			/process\.env(?:\.([A-Z][A-Z0-9_]*)|\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\])/g,
+		)) {
+			environmentInputs.add(match[1] ?? match[2]);
+		}
+		for (const match of source.matchAll(/envInt(?:AllowZero)?\(\s*["']([A-Z][A-Z0-9_]*)["']/g)) {
+			environmentInputs.add(match[1]);
+		}
+	}
+	assert.ok(environmentInputs.size > 0, "postinstall download path must expose its environment inputs");
+	for (const name of environmentInputs) {
+		assert.match(section, new RegExp(`\\b${name}\\b`), `${name} must be part of the dependency reuse contract`);
+	}
+	assert.match(section, /GITHUB_TOKEN[\s\S]*不得[\s\S]*(?:原文|明文)/);
+});
+
 test("client CI keeps the complete two-shard unit gate on Windows", () => {
 	const workflow = readText(".github/workflows/ci.yml");
 	const shards = workflowJob(workflow, "windows-unit-shards");
