@@ -210,8 +210,14 @@ export function PinnedSection({
   // 平铺时标题旁的"项目来源"标签(口径见 buildSessionSourceLabelMap)。
   // 置顶视图传 visibleSessions;文字 / 列表都画,card 变体不画这个标签。
   const sourceLabelMap = useMemo(
-    () => buildSessionSourceLabelMap(visibleSessions, allKnownProjects),
-    [visibleSessions, allKnownProjects],
+    () =>
+      buildSessionSourceLabelMap(
+        visibleSessions,
+        allKnownProjects,
+        t('ccAgent.sidebar.dialogues'),
+        t('settings.cindyMake.title'),
+      ),
+    [visibleSessions, allKnownProjects, t],
   );
 
   const getEntryId = useCallback((entry: PinnedSidebarEntry) => entry.id, []);

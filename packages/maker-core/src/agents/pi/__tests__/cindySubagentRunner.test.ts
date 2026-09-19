@@ -90,7 +90,7 @@ function sharedRunnerFile(): Promise<string> {
  */
 async function readCommandsIfPresent(
   file: string,
-): Promise<Array<{ type?: string; message?: string }> | null> {
+): Promise<Array<{ type?: string; message?: string; id?: string }> | null> {
   let text: string;
   try {
     text = await readFile(file, 'utf8');
@@ -100,7 +100,7 @@ async function readCommandsIfPresent(
   }
   const trimmed = text.trim();
   if (!trimmed) return null;
-  return trimmed.split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+  return trimmed.split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string; id?: string });
 }
 
 /**
@@ -218,6 +218,13 @@ async function makeFixture(options: {
   outputText?: string;
   chain?: boolean;
   approval?: boolean;
+  /**
+   * Emit several approval requests from one prompt, the way a turn whose
+   * parallel tool calls each ask before running does. The fake child only
+   * settles once every id has been answered, so a runner that drops one leaves
+   * the fixture running instead of turning the assertion into a timeout.
+   */
+  approvalIds?: string[];
   approvalMethod?: 'confirm' | 'input';
   modelError?: boolean;
   retryThenSucceed?: boolean;
@@ -315,6 +322,7 @@ setTimeout(() => process.exit(0), 60000).unref();
   await writeFile(permissionFile, '{"mode":"ask"}\n');
   const fixtureOutput = JSON.stringify(options.outputText ?? 'fixture result');
   const approvalMethod = options.approvalMethod ?? 'confirm';
+  const approvalIds = options.approvalIds ?? (options.approval ? ['approval-1'] : []);
   const fixtureLifecycle = options.outputThenHang
     ? `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');`
     : options.hang
@@ -389,6 +397,9 @@ function waitForPidCount(count) {
   }
 }
 let buffer = '';
+const expectedApprovals = ${JSON.stringify(approvalIds)};
+const answeredApprovals = new Set();
+let allowedApprovals = 0;
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   buffer += chunk;
@@ -403,21 +414,27 @@ process.stdin.on('data', (chunk) => {
     if (command.type === 'prompt') {
       fs.appendFileSync(process.env.CINDY_TEST_PI_PROMPTS, JSON.stringify(command.message) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'response', command: 'prompt', success: true }) + '\\n');
-      ${options.approval
-    ? `process.stdout.write(JSON.stringify({ type: 'extension_ui_request', id: 'approval-1', method: ${JSON.stringify(approvalMethod)}, title: 'cindy:permission', ${approvalMethod === 'input' ? 'placeholder' : 'message'}: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }) }) + '\\n');`
+      ${approvalIds.length > 0
+    ? `for (const id of expectedApprovals) {
+        process.stdout.write(JSON.stringify({ type: 'extension_ui_request', id, method: ${JSON.stringify(approvalMethod)}, title: 'cindy:permission', ${approvalMethod === 'input' ? 'placeholder' : 'message'}: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }) }) + '\\n');
+      }`
     : `${options.hangOnMessage ? `if (command.message !== ${JSON.stringify(options.hangOnMessage)}) {` : ''}
       ${options.gateFinishOnPidCount ? `waitForPidCount(${options.gateFinishOnPidCount});` : ''}
       process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'read' }) + '\\n');
       ${fixtureLifecycle}
       ${options.hangOnMessage ? '}' : ''}`}
     }
-    if (command.type === 'extension_ui_response' && command.id === 'approval-1') {
-      if (command.confirmed || command.value === 'allow') {
-        process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'write' }) + '\\n');
-        process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
+    if (command.type === 'extension_ui_response' && expectedApprovals.includes(command.id)) {
+      answeredApprovals.add(command.id);
+      if (command.confirmed || command.value === 'allow') allowedApprovals += 1;
+      if (answeredApprovals.size === expectedApprovals.length) {
+        if (allowedApprovals === expectedApprovals.length) {
+          process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'write' }) + '\\n');
+          process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
+        }
+        process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
+        process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');
       }
-      process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
-      process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');
     }
   }
 });
@@ -1306,6 +1323,95 @@ describe('Cindy durable PI Subagent runner', () => {
       return run?.state === 'completed' ? run : null;
     });
     expect(completed.tasks[0]?.output).toBe('fixture result');
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('queues concurrent child approvals instead of overwriting the earlier request', async () => {
+    // Parallel tool calls raise their approvals in the same turn. With a single
+    // replacement slot the second request displaced the first, the Host only
+    // ever saw the second, and the child waited forever on the first: a live
+    // run sat with zero CPU and a frozen transcript for fifty minutes. Every
+    // request must stay answerable, oldest first.
+    const fixture = await makeFixture({ approvalIds: ['approval-1', 'approval-2'] });
+    const pending = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.tasks[0]?.pendingApproval ? run : null;
+    });
+    expect(pending.tasks[0]?.pendingApproval?.id).toBe('approval-1');
+
+    await expect(controlPiSubagentRuns(fixture.root, 'tool-fixture', 'approval', {
+      childId: pending.tasks[0]?.childId,
+      approvalId: 'approval-1',
+      confirmed: true,
+    })).resolves.toBe(1);
+
+    const second = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.tasks[0]?.pendingApproval?.id === 'approval-2' ? run : null;
+    });
+    await expect(controlPiSubagentRuns(fixture.root, 'tool-fixture', 'approval', {
+      childId: second.tasks[0]?.childId,
+      approvalId: 'approval-2',
+      confirmed: true,
+    })).resolves.toBe(1);
+
+    const completed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    expect(completed.tasks[0]?.output).toBe('fixture result');
+    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    expect(commands
+      .filter((command) => command.type === 'extension_ui_response')
+      .map((command) => command.id))
+      .toEqual(['approval-1', 'approval-2']);
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it('accepts an answer for a queued request that is no longer the published head', async () => {
+    // Two surfaces can read the same status (a second Desktop instance sharing
+    // userData, or a status read that raced the previous answer) and answer
+    // different ids. Refusing the non-head answer because the published head
+    // moved on would strand a request the other surface already recorded as
+    // handed over. Matching by id anywhere in the queue keeps it deliverable;
+    // a control for an id that is not pending stays refused, so replays cannot
+    // answer the same request twice.
+    const fixture = await makeFixture({ approvalIds: ['approval-1', 'approval-2'] });
+    const pending = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.tasks[0]?.pendingApproval?.id === 'approval-1' ? run : null;
+    });
+    // Straight into the mailbox: `controlPiSubagentRuns` filters by the
+    // published head, which is the very restriction this case exists to test
+    // beyond.
+    await publishControlsAtomically(fixture.runDir, [
+      {
+        requestedAt: 1,
+        action: 'approval',
+        childId: pending.tasks[0]?.childId,
+        approvalId: 'approval-2',
+        confirmed: true,
+      },
+    ]);
+
+    // approval-1 is still the published head, and approval-2 is gone from the
+    // queue rather than waiting to be asked again.
+    await expect(controlPiSubagentRuns(fixture.root, 'tool-fixture', 'approval', {
+      childId: pending.tasks[0]?.childId,
+      approvalId: 'approval-1',
+      confirmed: true,
+    })).resolves.toBe(1);
+    const completed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    expect(completed.tasks[0]?.output).toBe('fixture result');
+    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    expect(commands
+      .filter((command) => command.type === 'extension_ui_response')
+      .map((command) => command.id)
+      .sort())
+      .toEqual(['approval-1', 'approval-2']);
     await waitForClose(fixture.child, fixture.stderr);
   });
 

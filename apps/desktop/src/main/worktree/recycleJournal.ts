@@ -5,6 +5,7 @@ import path from 'node:path';
 import { app } from 'electron';
 
 import { physicalWorktreeKey, worktreeResourceId } from './resourceLock';
+import type { WorktreeRecyclePolicy } from './recyclePolicy';
 import type { WorktreeMeta } from './types';
 import type { WorktreeRecoveryArchive } from './recoveryArchive';
 import { createLogger } from '../logger';
@@ -23,6 +24,7 @@ export interface WorktreeRecycleRecord {
   attempts: number;
   nextAttemptAt: number;
   reason?: string;
+  retryPolicy?: WorktreeRecyclePolicy;
   /** null is a durable marker that recovery has reserved a previously absent directory. */
   directoryIdentity?: string | null;
   snapshot?: { head: string; headRef?: string | null; tree: string; indexTree: string; commit: string; ref: string; indexHash: string };
@@ -63,6 +65,10 @@ function parseRecord(raw: string, id: string): WorktreeRecycleRecord {
       && (typeof record.restoreCheckoutPath !== 'string' || !path.isAbsolute(record.restoreCheckoutPath)))
     || typeof record.requestedAt !== 'string' || !Number.isFinite(Date.parse(record.requestedAt))
     || !Number.isInteger(record.attempts) || record.attempts < 0
+    || (record.retryPolicy !== undefined && (!record.retryPolicy
+      || !['retrying', 'waiting', 'paused', 'kept'].includes(record.retryPolicy.state)
+      || !Number.isInteger(record.retryPolicy.failures) || record.retryPolicy.failures < 0
+      || !Number.isFinite(record.retryPolicy.failedWorkMs) || record.retryPolicy.failedWorkMs < 0))
     || !Number.isFinite(record.nextAttemptAt)
     || !['pending', 'snapshotted', 'removing', 'removed', 'restoring', 'restored'].includes(record.phase)) {
     throw new Error('invalid worktree recycle record');

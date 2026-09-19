@@ -42,6 +42,7 @@ import {
   makerChatStore,
   type HistoryChatMessage,
 } from '@/lib/makerChatStore';
+import { isCindyMakeCompletionMessage, isCindyMakePreparationMessage } from '@/lib/cindyMakeComposer';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
@@ -425,6 +426,9 @@ interface MessageStreamProps {
   /** Bot read position captured before entry marks the conversation read. */
   botUnreadBoundaryAt?: number | null;
   messages: ChatMessage[];
+  /** This task's preparation card is shown in the composer, including after history reload. */
+  cindyMakeSessionId?: string;
+  cindyMakeCompletionInComposer?: boolean;
   historyLoaded: boolean;
   /** The task shell remains, but all prior message content was intentionally cleared. */
   historyCleared?: boolean;
@@ -1494,6 +1498,9 @@ export function buildRenderItems(
     botSessionId?: string;
     /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
     markdownImageTargetCache?: MarkdownImageTargetCache;
+    /** Keep the stored preparation report out of its own task's visible timeline. */
+    cindyMakeSessionId?: string;
+    cindyMakeCompletionInComposer?: boolean;
   },
 ): {
   items: RenderItem[];
@@ -1501,7 +1508,12 @@ export function buildRenderItems(
 } {
   // Modal-only Cindy Make cards are transient UI state. They stay in the
   // shared store for the dialog to observe, but never enter the chat timeline.
-  allMessages = allMessages.filter((message) => message.systemCardData?.modalOnly !== true);
+  allMessages = allMessages.filter(
+    (message) =>
+      message.systemCardData?.modalOnly !== true &&
+      !(opts?.cindyMakeCompletionInComposer && isCindyMakeCompletionMessage(message)) &&
+      !isCindyMakePreparationMessage(message, opts?.cindyMakeSessionId),
+  );
   if (opts?.botSessionId) {
     allMessages = placeBotTaskCardsAfterIntroduction(allMessages, (message) => {
       if (message.role === 'user') {
@@ -2572,6 +2584,8 @@ export function MessageStream({
   simplifiedBotConversation = false,
   botUnreadBoundaryAt = null,
   messages,
+  cindyMakeSessionId,
+  cindyMakeCompletionInComposer,
   historyLoaded,
   historyCleared = false,
   taskUpdates,
@@ -2828,6 +2842,8 @@ export function MessageStream({
       workingDir,
       botSessionId: simplifiedBotConversation ? sessionId : undefined,
       markdownImageTargetCache: markdownImageTargetCacheRef.current,
+      cindyMakeSessionId,
+      cindyMakeCompletionInComposer,
     });
     if (historyView && historySnapshot?.ready) {
       const results = new Map(built.singleResultMap);
@@ -2850,6 +2866,8 @@ export function MessageStream({
             workingDir,
             botSessionId: simplifiedBotConversation ? sessionId : undefined,
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
+            cindyMakeSessionId,
+            cindyMakeCompletionInComposer,
           });
           for (const [key, value] of chunk.singleResultMap) results.set(key, value);
           return groupWorkRuns(chunk.items, isSessionStreaming);
@@ -2897,6 +2915,8 @@ export function MessageStream({
     };
   }, [
     displayMessages,
+    cindyMakeSessionId,
+    cindyMakeCompletionInComposer,
     historyView,
     historySnapshot,
     historyLiveMessages,

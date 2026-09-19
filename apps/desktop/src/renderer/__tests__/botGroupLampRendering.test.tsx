@@ -24,7 +24,6 @@ vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
 }));
 vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
 vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: () => null }));
-vi.mock('../features/cc-agent/sidebar/sections/ProjectNode', () => ({ ProjectNode: () => null }));
 // main 633e27c76 起设备段头包了远程桌面快捷入口(挂 device-link presence 订阅,需要
 // preload 桥);本文件只验证段头灯语与折叠豁免,段头壳层直接透传子节点。
 vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
@@ -147,7 +146,7 @@ function expectLamp(header: Element, phase: typeof phases[number] | null) {
   expect(Boolean(header.querySelector('.session-status-breathing'))).toBe(phase === 'running');
   for (const tone of ['awaiting', 'error', 'done']) {
     const expected = phase === 'needs-interaction' ? 'awaiting' : phase === 'completed' ? 'done' : phase;
-    expect(Boolean(header.querySelector(`[class*="--card-status-${tone}"]`))).toBe(tone === expected);
+    expect(Boolean(header.querySelector(`[class*="--card-status-${tone}"], [data-sidebar-right-status="${tone}"]`))).toBe(tone === expected);
   }
 }
 
@@ -164,7 +163,7 @@ describe.each([false, true])('Bot starting lifecycle, device grouping %s', (grou
       expect.soft(getStartingSessionIds().has('lit')).toBe(false);
       act(() => activity(terminal));
       expectLamp(botHeader(), terminal);
-      if (groupDevice) expectLamp(deviceHeader('Remote device'), terminal);
+      if (groupDevice) expectLamp(deviceHeader('Remote device'), null);
       expect(screen.getByTestId('row-lit')).toBeTruthy();
       // No timer advancement: the terminal UI must be correct immediately.
     });
@@ -211,6 +210,34 @@ function multiDeviceProps(): ProjectsSectionProps {
 }
 
 describe('Bot groups across devices', () => {
+  it('keeps awaiting visible in a collapsed project while its device is expanded', () => {
+    const p = props(true);
+    const session = p.bots![0].sessions[2];
+    const projectKey = 'device-link:remote:/demo';
+    p.bots = [];
+    p.projects = [{
+      projectKey, displayName: 'Demo project', workingDir: '/demo', scope: 'local',
+      sessions: [session], remoteHostId: null, deviceLinkDeviceId: 'remote',
+      deviceLinkDeviceName: 'Remote device', deviceLinkConnectionStatus: 'connected',
+      segments: 1, latestActivityAt: session.updatedAt,
+    }];
+    p.collapsed = new Set([projectKey]);
+    activity('needs-interaction');
+    const view = render(<ProjectsSection {...p} />);
+    const projectHeader = () => screen.getByText('Demo project').closest('[data-project-header]')!;
+    expectLamp(deviceHeader('Remote device'), null);
+    expectLamp(projectHeader(), 'needs-interaction');
+    expect(screen.queryByTestId('row-lit')).toBeNull();
+    fireEvent.click(deviceHeader('Remote device'));
+    expectLamp(deviceHeader('Remote device'), 'needs-interaction');
+    fireEvent.click(deviceHeader('Remote device'));
+    expectLamp(deviceHeader('Remote device'), null);
+    expectLamp(projectHeader(), 'needs-interaction');
+    view.rerender(<ProjectsSection {...p} collapsed={new Set()} />);
+    expectLamp(projectHeader(), null);
+    expect(screen.getByTestId('row-lit')).toBeTruthy();
+  });
+
   it.each(phases)('keeps %s lamps and exempt rows on the owning device', (phase) => {
     const p = multiDeviceProps();
     render(<ProjectsSection {...p} />);
@@ -218,7 +245,7 @@ describe('Bot groups across devices', () => {
     expectLamp(deviceHeader('Device A'), null);
     const a = deviceHeader('Device A').parentElement!;
     const b = deviceHeader('Device B').parentElement!;
-    expectLamp(deviceHeader('Device B'), phase);
+    expectLamp(deviceHeader('Device B'), null);
     expectLamp(botHeader(a), null);
     expectLamp(botHeader(b), phase);
     expect(within(a).queryByTestId('row-lit')).toBeNull();
@@ -230,6 +257,12 @@ describe('Bot groups across devices', () => {
     expect(p.onSessionClick).toHaveBeenCalledWith('lit');
     fireEvent.click(within(b).getByRole('button', { name: 'bots.sidebar.newTaskWith' }));
     expect(p.onOpenBot).toHaveBeenCalledWith('demo');
+    fireEvent.click(deviceHeader('Device B'));
+    expect(deviceHeader('Device B').getAttribute('aria-expanded')).toBe('false');
+    expectLamp(deviceHeader('Device B'), phase);
+    fireEvent.click(deviceHeader('Device B'));
+    expect(deviceHeader('Device B').getAttribute('aria-expanded')).toBe('true');
+    expectLamp(deviceHeader('Device B'), null);
   });
 
   it('keeps show-all state per device and stable across task reorder and Bot rename', () => {

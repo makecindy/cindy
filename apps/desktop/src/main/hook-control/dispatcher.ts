@@ -291,7 +291,7 @@ export interface HookDispatcherDeps {
    * 分配独立子目录。
    * 未注入时 chat 别名按 unknown_workspace 拒绝(纯逻辑测试 / 旧行为默认)。
    */
-  dialogue?: { rootDir: () => string; allocateDir: (sessionId: string) => Promise<string> };
+  dialogue?: { rootDir: () => string; rootDirs?: () => string[]; allocateDir: (sessionId: string) => Promise<string> };
   /**
    * 可选: 中断某 session 正在跑的 turn(task.cancel 用; 生产为
    * maker.getSession(id)?.abort())。未注入时 cancel 只能收口排队中的任务。
@@ -1747,7 +1747,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 排队中的任务同样不能因为"目录还在映射里"就照跑(PR #733 review 指出)。
     if (!config || !config.enabled) return false;
     if (Object.values(config.workspaces).some((root) => isPathWithin(root, dir))) return true;
-    return dialogue !== undefined && isPathWithin(dialogue.rootDir(), dir);
+    return dialogue !== undefined && (dialogue.rootDirs?.() ?? [dialogue.rootDir()])
+      .some((root) => isPathWithin(root, dir));
   }
 
   function startExecution(task: PendingTask): void {
@@ -1845,7 +1846,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       );
     /** app 托管对话目录(dialogues 根)内的路径 —— chat 伪目录会话的白名单等价物。 */
     const inDialogueRoot = (dir: string | null): boolean =>
-      dir !== null && dialogue !== undefined && isPathWithin(dialogue.rootDir(), dir);
+      dir !== null && dialogue !== undefined && (dialogue.rootDirs?.() ?? [dialogue.rootDir()])
+        .some((root) => isPathWithin(root, dir));
     // 显式接管的目标失效时会从旧目录 / 本次别名提示里挑一个安全落点, 然后
     // 复用下方的新建路径。普通派发仍原样使用 payload.workspace。
     let effectiveWorkspace = payload.workspace;

@@ -278,7 +278,13 @@ function main() {
       output: '',
       outputTruncated: false,
       error: undefined,
-      pendingApproval: undefined,
+      // Approval requests this child is still waiting on, oldest first. The
+      // status projection publishes only the head (the Host protocol stays one
+      // request at a time), but every entry here must be answered: a newer
+      // request must never displace an earlier unanswered one. That overwrite
+      // is exactly how a child used to wait forever on its first parallel tool
+      // call while the Host only ever saw the second.
+      pendingApprovals: [],
       pendingControls: [],
       stopRequested: false,
       startedAt: undefined,
@@ -370,7 +376,10 @@ function main() {
           ),
           outputTruncated: task.outputTruncated || undefined,
           error: task.error,
-          pendingApproval: task.pendingApproval,
+          // Only the oldest unanswered request is published so the status
+          // schema and every consumer stay unchanged; the runner holds the rest
+          // of the queue and promotes the next entry as answers arrive.
+          pendingApproval: task.pendingApprovals.length > 0 ? task.pendingApprovals[0] : undefined,
           startedAt: task.startedAt,
           endedAt: task.endedAt,
         };
@@ -552,7 +561,15 @@ function main() {
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
-        if (!task.pendingApproval || task.pendingApproval.id !== control.approvalId) continue;
+        // Match by id anywhere in the queue, not only at the head: a second
+        // writer (another Desktop instance sharing userData, or a status read
+        // that raced the previous answer) may answer a request that is still
+        // pending but no longer first. An id that is not pending at all stays
+        // refused, so a replayed control cannot deliver twice.
+        const pendingIndex = task.pendingApprovals.findIndex(function (pending) {
+          return pending.id === control.approvalId;
+        });
+        if (pendingIndex < 0) continue;
         const delivered = send(task, {
           type: 'extension_ui_response',
           id: control.approvalId,
@@ -562,7 +579,7 @@ function main() {
         });
         if (delivered) {
           accepted = true;
-          task.pendingApproval = undefined;
+          task.pendingApprovals.splice(pendingIndex, 1);
         }
       }
       scheduleStatus();
@@ -833,7 +850,7 @@ function main() {
         task.child = undefined;
         task.stdin = undefined;
         task.inputClosed = true;
-        task.pendingApproval = undefined;
+        task.pendingApprovals = [];
         task.endedAt = Date.now();
         if (state.stopRequested || task.stopRequested) {
           task.status = 'stopped';
@@ -869,13 +886,23 @@ function main() {
         }
         safeAppendTranscript(state, { type: 'cindy.subagent.child_event', at: Date.now(), childId: task.childId, event: event });
         if (event.type === 'extension_ui_request') {
-          task.pendingApproval = {
+          const pending = {
             id: typeof event.id === 'string' ? event.id : 'approval-' + randomUUID(),
             method: typeof event.method === 'string' ? event.method : 'confirm',
             title: typeof event.title === 'string' ? event.title.slice(0, 500) : undefined,
             message: typeof event.message === 'string' ? event.message.slice(0, 32000) : undefined,
             placeholder: typeof event.placeholder === 'string' ? event.placeholder.slice(0, 32000) : undefined,
           };
+          // Parallel tool calls raise their approvals in the same turn, so a
+          // single replacement slot silently orphaned every request but the
+          // last. Queue them instead; the child is blocked on all of them.
+          // A repeated id is a restatement of one request, so refresh its
+          // payload rather than queueing a second response for it.
+          const existing = task.pendingApprovals.findIndex(function (entry) {
+            return entry.id === pending.id;
+          });
+          if (existing >= 0) task.pendingApprovals[existing] = pending;
+          else task.pendingApprovals.push(pending);
           scheduleStatus();
           return;
         }
@@ -1126,7 +1153,7 @@ function main() {
       task.child = undefined;
       task.stdin = undefined;
       task.inputClosed = true;
-      task.pendingApproval = undefined;
+      task.pendingApprovals = [];
       if (task.status === 'running' || task.status === 'queued') {
         task.status = state.stopRequested || task.stopRequested ? 'stopped' : 'failed';
         task.error = task.error || reason;

@@ -641,7 +641,7 @@ describe('personal code task handoff', () => {
       originSessionId: id,
       runId,
       request,
-      title: expect.stringContaining('修复滚动 保留 <b>原文</b>'),
+      title: '[code] 修复滚动 保留 <b>原文</b>',
     });
     expect(makerChatStore.getSnapshot(target!).autoTitleDisabled).toBe(true);
     expect(messages(id)[0].systemCardData?.codeSessionId).toBe(target);

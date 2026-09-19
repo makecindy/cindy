@@ -15,8 +15,16 @@ export function isUnavailableFilesystemError(error: unknown): boolean {
  * Its identity includes the original binding; changing projects cannot reuse it.
  */
 export function worktreeConversationFallbackDir(dialoguesRoot: string, sessionId: string, workingDir: string): string {
-  const key = createHash('sha256').update(JSON.stringify([sessionId, path.resolve(workingDir)])).digest('hex');
-  return path.join(dialoguesRoot, 'worktree-recovery', key);
+  return path.join(dialoguesRoot, 'worktree-recovery', recoveryDirectoryKey(sessionId, workingDir));
+}
+
+/** Ordinary recovery also survives date changes, independently of the original volume. */
+export function dialogueConversationFallbackDir(dialoguesRoot: string, sessionId: string, workingDir: string): string {
+  return path.join(dialoguesRoot, 'dialogue-recovery', recoveryDirectoryKey(sessionId, workingDir));
+}
+
+function recoveryDirectoryKey(sessionId: string, workingDir: string): string {
+  return createHash('sha256').update(JSON.stringify([sessionId, path.resolve(workingDir)])).digest('hex');
 }
 
 /** Local directory recovery; failed Git restores may explicitly request conversation fallback. */
@@ -24,6 +32,8 @@ export function createWorkingDirectoryRecovery(io: {
   stat(dir: string): Promise<{ isDirectory(): boolean; dev?: number }>;
   mkdir(dir: string, opts: { recursive: true }): Promise<unknown>;
   realpath?(dir: string): Promise<string>;
+  requiredRoot?(dir: string): string | undefined;
+  findFallback?(sessionId: string, workingDir: string): Promise<string | undefined>;
 } = fsp, allocateFallback?: (sessionId: string, workingDir: string, mode: 'ordinary' | 'unrestored-worktree') => Promise<string>, log?: WorkdirDiagnosticLogger) {
   const pending = new Map<string, { workingDir: string; note: string | null; device?: number; fallback?: string }>();
   function entryFor(sessionId: string, dir: string) {
@@ -35,6 +45,21 @@ export function createWorkingDirectoryRecovery(io: {
     return entry;
   }
   async function mountUnavailable(dir: string, entry: { device?: number }, report: (details: Record<string, unknown>) => void) {
+    const requiredRoot = io.requiredRoot?.(dir);
+    if (requiredRoot) {
+      try {
+        if (!(await io.stat(requiredRoot)).isDirectory()) {
+          report({ reason: 'required-root-not-directory', probedDirectoryRef: workdirDiagnosticId(requiredRoot) });
+          return true;
+        }
+      } catch (error) {
+        if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '') || isUnavailableFilesystemError(error)) {
+          report({ reason: 'required-root-unavailable', code: workdirDiagnosticErrorCode(error), probedDirectoryRef: workdirDiagnosticId(requiredRoot) });
+          return true;
+        }
+        throw error;
+      }
+    }
     const canonical = path.resolve(dir);
     if (process.platform === 'darwin' && canonical.startsWith('/Volumes/')) {
       const volume = canonical.split('/').slice(0, 3).join('/');
@@ -97,7 +122,7 @@ export function createWorkingDirectoryRecovery(io: {
     isFallback(sessionId: string, workingDir: string): boolean {
       return !!entryFor(sessionId, workingDir)?.fallback;
     },
-    async recover(sessionId: string, workingDir: string, similarPath?: string | null | (() => Promise<string | null>), candidates: { id: string; workingDir: string }[] = [], mode: 'ordinary' | 'unrestored-worktree' = 'ordinary'): Promise<boolean> {
+    async recover(sessionId: string, workingDir: string, similarPath?: string | null | (() => Promise<string | null>), candidates: { id: string; workingDir: string }[] = [], mode: 'ordinary' | 'unrestored-worktree' = 'ordinary', options?: { existingFallbackOnly?: boolean }): Promise<boolean> {
       entryFor(sessionId, workingDir);
       const sessions = new Map(candidates.map((session) => [session.id, session.workingDir]));
       sessions.set(sessionId, workingDir);
@@ -116,15 +141,15 @@ export function createWorkingDirectoryRecovery(io: {
         ...context, stage, code: workdirDiagnosticErrorCode(error),
         usingFallback: !!own?.fallback, elapsedMs: Date.now() - startedAt,
       });
-      const useFallback = async (): Promise<boolean> => {
+      const useFallback = async (selectedFallback?: string): Promise<boolean> => {
         stage = 'fallback-allocation';
-        if (!own || !allocateFallback || pending.get(sessionId) !== own) {
+        if (!own || (!selectedFallback && !allocateFallback) || pending.get(sessionId) !== own) {
           log?.warn('workdir recovery fallback skipped', {
             ...context, reason: !allocateFallback ? 'allocator-missing' : 'stale-recovery',
           });
           return false;
         }
-        const fallback = path.resolve(await allocateFallback(sessionId, workingDir, mode));
+        const fallback = path.resolve(selectedFallback ?? await allocateFallback!(sessionId, workingDir, mode));
         if (pending.get(sessionId) !== own) return false;
         pending.set(sessionId, { ...own, fallback, note: [
           '[Working directory recovery]',
@@ -133,7 +158,9 @@ export function createWorkingDirectoryRecovery(io: {
             'The original code, branch and uncommitted changes have not been restored or copied. Do not create an empty replacement at the original path or continue editing in the project root as if it were the original worktree. Investigate the original branch and snapshots before resuming project edits.',
             'Continue responding to the user and explain the unavailable worktree. Files created in this conversation workspace remain here; do not move them or switch workspaces without discussing it with the user. No folder-selection interface is required just to continue the conversation.',
           ] : [
-            `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
+            selectedFallback
+              ? `Cindy is continuing to use the previously selected conversation workspace ${JSON.stringify(fallback)} for ${JSON.stringify(workingDir)}, even if the original filesystem is available again.`
+              : `The filesystem for ${JSON.stringify(workingDir)} is unavailable or has changed. Cindy is using ${JSON.stringify(fallback)} as a temporary conversation workspace.`,
             'The original directory and files have not been restored or copied. Do not create a substitute directory at the original mount location. Files written here stay here when the disk reconnects; do not move them or switch back without discussing it with the user.',
             'Continue responding. If the task needs the original files, investigate the disconnected disk or network share, or ask the user in this conversation. No folder-selection interface is required.',
           ]),
@@ -173,6 +200,15 @@ export function createWorkingDirectoryRecovery(io: {
         // Git restoration already failed. Never probe/mkdir the original path as
         // an ordinary directory: an empty folder is not a restored worktree.
         if (mode === 'unrestored-worktree') return await useFallback();
+        // The existing account/session/original-path directory records an earlier
+        // selection. Reconnection must not silently abandon files written there.
+        stage = 'fallback-lookup';
+        const selectedFallback = await io.findFallback?.(sessionId, workingDir);
+        if (selectedFallback) return await useFallback(selectedFallback);
+        // Preflight can restore a saved selection before touching the original
+        // path, without allocating storage or bypassing the caller's DB repair.
+        if (options?.existingFallbackOnly) return pending.get(sessionId) === own;
+        stage = 'mount-check';
         if (own && allocateFallback && await mountUnavailable(workingDir, own, (details) => {
           log?.warn('workdir recovery unavailable', { ...context, ...details });
         })) {
@@ -222,7 +258,7 @@ export function createWorkingDirectoryRecovery(io: {
         reportFailure(error);
         // The share may disappear after stat, including during mkdir. Reuse the
         // same fallback transition; never retry a timed-out write on the share.
-        if (!own?.fallback && isUnavailableFilesystemError(error)) {
+        if (stage !== 'fallback-lookup' && !own?.fallback && isUnavailableFilesystemError(error)) {
           return useFallback().catch((fallbackError) => {
             reportFailure(fallbackError);
             return false;

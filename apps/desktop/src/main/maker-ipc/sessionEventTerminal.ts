@@ -46,6 +46,7 @@ import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionDeliveryResult } from './sessionEventDelivery.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly onSuccessfulProductTurn?: (sessionId: string) => Promise<void>;
   readonly botDelegationServiceHolder: Pick<BotDelegationService, 'settleSession'> | null;
   readonly pendingFailedTurnAssistantPersistId: Map<string, string>;
   readonly autoResumeBookkeeping: Pick<
@@ -436,6 +437,15 @@ export function finishSessionTerminalEvent(
         session.id,
         event.sessionTurnGeneration,
       );
+    if (event.type === 'done' && !isContinuationBoundary && !isPairedFailedTurnDone &&
+        !isFailedTurnCompletionTail && !deferredOrcaWorkerTerminal &&
+        !isTerminalTurnErrorEvent(event) && isSuccessfulAssistantReplyDoneData(event.data) &&
+        !deps.autoResumeBookkeeping.hasSuppressedError(session.id) &&
+        !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
+        !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)) {
+      void deps.onSuccessfulProductTurn?.(session.id).catch(() =>
+        deps.log.warn('Could not finish product turn follow-up'));
+    }
     if (
       !shouldSkipOrcaWorkerTerminal({
         isContinuationBoundary,

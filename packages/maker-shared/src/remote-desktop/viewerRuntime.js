@@ -408,8 +408,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     bgLoopFrame = null;
   function drawBackground() {
     if (!bgContext || !bgRects) return;
-    bgContext.setTransform(bgDpr, 0, 0, bgDpr, 0, 0);
-    bgContext.clearRect(0, 0, stage.clientWidth, stage.clientHeight);
     const useVideo =
       videoPresented && video.videoWidth > 0 && video.videoHeight > 0;
     const src = useVideo ? video : image;
@@ -418,7 +416,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     // up with what the picture element actually shows.
     const sw = useVideo ? video.videoWidth : image.naturalWidth;
     const sh = useVideo ? video.videoHeight : image.naturalHeight;
-    if (!(sw > 0 && sh > 0)) return;
+    // Cursor updates can schedule a repaint while the next JPEG is loading.
+    // Keep the last backdrop until the replacement has drawable pixels.
+    if ((!useVideo && !image.complete) || !(sw > 0 && sh > 0)) return;
+    bgContext.setTransform(bgDpr, 0, 0, bgDpr, 0, 0);
+    bgContext.clearRect(0, 0, stage.clientWidth, stage.clientHeight);
     const horizontal = bgAxis === "x";
     const sourceLength = horizontal ? sw : sh;
     const cuts = [0, bgEdgeFraction, 1 - bgEdgeFraction, 1];

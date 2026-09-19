@@ -102,6 +102,23 @@
 - 真实 MIME 识别、账号/任务归属、受管入库规则持续有效。下载授权不包含执行文件、
   安装程序或覆盖用户文件的授权。旧 Guide 快照与 base64 结果保持兼容。
 
+## 图像参数与最终结果
+
+- Art 返回的画幅、成品尺寸、分辨率和质量意图不得在客户端适配层静默丢弃。
+  第三方图像通道声明自己的协议，`cindy-media/imageParameters.ts` 同时生成调用指南和
+  验证实际请求；账号 ID 不参与协议推断。旧调用省略新增参数仍然可用。
+- `size` 表示生成像素尺寸，`resolution` 表示供应商的分辨率档，`quality` 是原生质量。
+  不把不同来源的枚举互相套用，不强制 `medium` 或 `1k`。明确参数优先，省略时由上游决定。
+  已知 GPT Image 尺寸约束在付费提交前检查；不合法时保留 prepared 调用供更正。
+  目标成品尺寸不满足模型约束时，由 Agent 选择合法生成尺寸并单独完成成品缩放，不能谎报
+  请求尺寸就是实际输出尺寸。没有自动缩放或偷偷裁切。
+- Codex SSE 的 partial image 仅为预览，不能在失败、未完成或只有预览的断流中当成成品。
+  大 Base64 响应的字符校验必须采用常量栈空间，避免分组重复正则导致已生成图片收取失败。
+- 参数依据：[OpenAI](https://developers.openai.com/api/docs/guides/image-generation)、
+  [Gemini](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)、
+  [xAI](https://docs.x.ai/developers/model-capabilities/images/generation)。
+  回归覆盖 `imageParameters.test.ts`、`invocationService.test.ts` 和各图像通道测试。
+
 ## 多端与远程
 
 - 媒体记录必须保留设备、会话、插件或远程主机等真实归属信息，不能相信调用方自报的

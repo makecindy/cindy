@@ -122,6 +122,7 @@ describe('automation-generated sessions', () => {
       'plugin',
       // /cindy-make 制作个人版创建的代码任务:按源码 workingDir 归入项目分组。
       'cindy-make',
+      'cindy-make-merge',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');

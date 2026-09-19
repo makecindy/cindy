@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { cindyMakeState } from '@/lib/cindyMakeState';
+import { formatCindyMakeTitle } from '@/lib/cindyMakeTitle';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
@@ -21,12 +22,13 @@ import './cindyMakeTasks.css';
 
 function statusOf(report: MakeDoctorReport, action?: CindyMakeTaskActionState): string {
   if (action?.status === 'running') return 'cleaning';
-  if (report.task?.sessionStatus === 'deleted') return 'cleanup';
-  if (report.task?.sessionStatus === 'archived') return 'archived';
+  if (action?.status === 'failed') return 'cleanupFailed';
+  if (report.task?.sessionStatus === 'deleted' || report.task?.cleanupPending) return 'cleanup';
+  if (report.task?.sessionStatus === 'archived') return report.task.integration ?? 'unknown';
   if (report.status === 'running') return 'preparing';
   if (report.status === 'failed') return 'failed';
   if (report.status === 'cancelled') return 'cancelled';
-  return report.task?.executing ? 'running' : 'ready';
+  return report.task?.executing ? 'running' : (report.task?.integration ?? 'unknown');
 }
 
 /** A bounded master/detail view: only the selected task mounts its preparation details. */
@@ -45,15 +47,17 @@ export function CindyMakeTasksPanel({
   const [pending, setPending] = useState(false);
   const [operation, setOperation] = useState<{
     runId: string;
-    action: 'open' | 'finish' | 'delete';
+    action: 'open' | 'end';
   }>();
   const busy = useRef(false);
   const owner = getDataOwnerGeneration();
   const current = () => isDataOwnerGenerationCurrent(owner);
   const tasks = reports.filter((report) => report.task && !report.task.finished);
+  const titleOf = (report: MakeDoctorReport) =>
+    formatCindyMakeTitle(report.task?.title ?? t('cindyMake.code.taskName'), report.runId);
   const search = query.trim().toLocaleLowerCase();
   const visible = tasks.filter((report) =>
-    [report.task?.title, report.task?.request].some((value) =>
+    [titleOf(report), report.task?.request].some((value) =>
       value?.toLocaleLowerCase().includes(search),
     ),
   );
@@ -111,26 +115,40 @@ export function CindyMakeTasksPanel({
     }
   };
 
-  const manage = async (action: 'finish' | 'delete') => {
+  const manage = async () => {
     if (!selected?.task || busy.current || cleaning || !current()) return;
     busy.current = true;
     setPending(true);
     try {
-      if (selected.task.sessionStatus !== 'deleted') {
-        const accepted = await confirm({
-          title: t('settings.cindyMake.tasks.' + action),
-          description: t('settings.cindyMake.tasks.' + action + 'Confirm', {
-            title: selected.task.title,
-          }),
-          confirmText: t('settings.cindyMake.tasks.' + action),
-          cancelText: t('settings.cindyMake.create.cancel'),
-          confirmVariant: action === 'delete' ? 'destructive' : 'default',
-        });
-        if (!accepted || !current()) return;
-      }
-      setOperation({ runId: selected.runId, action });
-      await window.electronAPI.manageCindyMakeTask(selected.task.sessionId, action);
-      if (current()) await cindyMakeState.refresh();
+      // Every deletion, including a retry, has the same explicit confirmation.
+      // The base copy warns about unintegrated work even if the last cell snapshot is stale.
+      const accepted = await confirm({
+        title: t('settings.cindyMake.tasks.end'),
+        description: [
+          t(
+            selected.task.sessionStatus === 'deleted'
+              ? 'settings.cindyMake.tasks.cleanupDeletedConfirm'
+              : 'settings.cindyMake.tasks.endConfirm',
+            { title: titleOf(selected) },
+          ),
+          selected.task.integration !== 'integrated'
+            ? t(
+                selected.task.integration === 'unintegrated'
+                  ? 'settings.cindyMake.tasks.endUnintegrated'
+                  : 'settings.cindyMake.tasks.endUnknown',
+              )
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        confirmText: t('settings.cindyMake.tasks.end'),
+        cancelText: t('settings.cindyMake.create.cancel'),
+        confirmVariant: 'destructive',
+      });
+      if (!accepted || !current()) return;
+      setOperation({ runId: selected.runId, action: 'end' });
+      await cindyMakeState.manageTask(selected.task.sessionId, 'end');
+      if (current()) void cindyMakeState.refresh().catch(() => {});
     } catch (error) {
       if (!current()) return;
       const message = extractIpcError(error)?.message;
@@ -184,9 +202,7 @@ export function CindyMakeTasksPanel({
                 onClick={() => setSelectedId(report.runId)}
                 className="flex w-full min-w-0 flex-col gap-1 rounded-lg px-3 py-3 text-left hover:bg-[var(--surface-hover)] aria-pressed:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
               >
-                <span className="line-clamp-2 break-words font-medium">
-                  {report.task?.title ?? t('cindyMake.code.taskName')}
-                </span>
+                <span className="line-clamp-2 break-words font-medium">{titleOf(report)}</span>
                 <span className="text-12 text-[var(--text-secondary)]">
                   {t(
                     'settings.cindyMake.tasks.status.' +
@@ -208,9 +224,7 @@ export function CindyMakeTasksPanel({
         {selected?.task && (
           <div className="flex min-w-0 max-h-[420px] flex-col">
             <div className="shrink-0 p-4 pb-0">
-              <h4 className="break-words font-medium">
-                {selected.task.title ?? t('cindyMake.code.taskName')}
-              </h4>
+              <h4 className="break-words font-medium">{titleOf(selected)}</h4>
               <p className="mt-1 text-12 text-[var(--text-secondary)]">
                 {t('settings.cindyMake.tasks.status.' + statusOf(selected, taskAction))}
               </p>
@@ -226,7 +240,7 @@ export function CindyMakeTasksPanel({
               )}
               {selected.status === 'completed' && selected.task.sessionStatus !== 'deleted' && (
                 <p className="text-12 text-[var(--text-secondary)]">
-                  {t('settings.cindyMake.tasks.finishHint')}
+                  {t('settings.cindyMake.tasks.endHint')}
                 </p>
               )}
             </div>
@@ -251,32 +265,20 @@ export function CindyMakeTasksPanel({
                     )}
                   </Button>
                 )}
-                {selected.status === 'completed' && selected.task.sessionStatus !== 'deleted' && (
-                  <Button
-                    variant="secondary"
-                    disabled={disabled || selected.task.executing}
-                    loading={
-                      (cleaning && taskAction.action === 'finish') ||
-                      (operation?.runId === selected.runId && operation.action === 'finish')
-                    }
-                    onClick={() => void manage('finish')}
-                  >
-                    {t('settings.cindyMake.tasks.finish')}
-                  </Button>
-                )}
                 <Button
                   variant="secondary"
                   disabled={disabled}
                   loading={
-                    (cleaning && taskAction.action === 'delete') ||
-                    (operation?.runId === selected.runId && operation.action === 'delete')
+                    cleaning || (operation?.runId === selected.runId && operation.action === 'end')
                   }
-                  onClick={() => void manage('delete')}
+                  onClick={() => void manage()}
                 >
                   {t(
-                    selected.task.sessionStatus === 'deleted'
+                    selected.task.sessionStatus === 'deleted' ||
+                      selected.task.cleanupPending ||
+                      failureCode
                       ? 'settings.cindyMake.tasks.retryCleanup'
-                      : 'settings.cindyMake.tasks.delete',
+                      : 'settings.cindyMake.tasks.end',
                   )}
                 </Button>
               </div>

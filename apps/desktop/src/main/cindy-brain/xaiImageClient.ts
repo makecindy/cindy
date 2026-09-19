@@ -8,7 +8,7 @@
 
 import fs from 'node:fs/promises';
 
-import type { GhostImageAspectRatio } from '../../shared/ghost.js';
+import { normalizeImageParameters, type ImageParameters } from '../cindy-media/imageParameters.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import type { ImageChannel, ImageChannelResult } from './imageChannelRegistry.js';
 
@@ -194,12 +194,13 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
       ? Math.min(requestedDownloadLimit, MAX_IMAGE_DOWNLOAD_BYTES)
       : MAX_IMAGE_DOWNLOAD_BYTES;
 
-  async function call(params: {
+  async function call(params: ImageParameters & {
     model: string;
     prompt: string;
-    aspectRatio?: GhostImageAspectRatio;
     imagePaths?: string[];
+    signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
+    const options = normalizeImageParameters('xai', params.model, params);
     const paths = params.imagePaths ?? [];
     if (paths.length > MAX_EDIT_SOURCES) {
       throw new Error(`xAI 图像编辑最多支持 ${MAX_EDIT_SOURCES} 张源图`);
@@ -223,8 +224,9 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
       model: upstreamModelId(params.model),
       prompt: params.prompt,
       response_format: 'b64_json',
-      resolution: '1k',
-      ...(params.aspectRatio ? { aspect_ratio: params.aspectRatio } : {}),
+      ...(options.resolution ? { resolution: options.resolution } : {}),
+      ...(options.quality ? { quality: options.quality } : {}),
+      ...(options.aspectRatio ? { aspect_ratio: options.aspectRatio } : {}),
     };
     if (isEdit) {
       if (images.length === 1) body.image = images[0];
@@ -241,6 +243,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
         Accept: 'application/json',
       },
       body: JSON.stringify(body),
+      signal: params.signal,
     });
     const responseText = await response.text();
     assertStillCurrent();
@@ -302,8 +305,8 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
   return {
     ready: () => opts.hasApiKey?.() === true || opts.hasOAuthLogin(),
     maxEditImages: MAX_EDIT_SOURCES,
-    generateImage: ({ model, prompt, aspectRatio }) => call({ model, prompt, aspectRatio }),
-    editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
-      call({ model, prompt, imagePaths, aspectRatio }),
+    imageProtocol: 'xai',
+    generateImage: call,
+    editImage: call,
   };
 }

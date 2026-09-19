@@ -70,7 +70,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   const bgDraws: unknown[][] = [];
   const bgContext = {
     setTransform() {},
-    clearRect() {},
+    clearRect: vi.fn(),
     drawImage: (...args: unknown[]) => {
       bgDraws.push(args);
     },
@@ -105,6 +105,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       }
     >
   )["image"].naturalHeight = 1080;
+  Object.assign(elements.image, { complete: true });
   const intervals: Array<() => void> = [];
   const frames = new Map<number, () => void>();
   const videoFrames = new Map<number, () => void>();
@@ -181,6 +182,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     messages,
     elements,
     bgDraws,
+    bgClear: bgContext.clearRect,
     videoFrames,
     playVideo: () => {
       const config = messages.findLast((m) => m.type === "iceConfig");
@@ -1127,6 +1129,37 @@ describe("remote desktop three-segment backdrop", () => {
     expect(drawsOf(v)).toHaveLength(3);
     for (const draw of drawsOf(v)) expect(draw[0]).toBe(v.elements.image);
   });
+
+  it.each([
+    { complete: false, naturalWidth: 0, naturalHeight: 0 },
+    { complete: false, naturalWidth: 1920, naturalHeight: 1080 },
+    { complete: true, naturalWidth: 0, naturalHeight: 0 },
+  ])(
+    "preserves the previous backdrop until a JPEG is drawable: %j",
+    (pending) => {
+      const v = landscapeViewer();
+      expect(drawsOf(v)).toHaveLength(3);
+      v.bgDraws.length = 0;
+      v.bgClear.mockClear();
+      // Receiving a frame schedules a cursor-driven repaint before JPEG load.
+      v.send({ type: "frame", jpeg: "QUJD" });
+      const image = Object.assign(v.elements.image, pending);
+      v.frame();
+      expect(v.bgClear).not.toHaveBeenCalled();
+      expect(drawsOf(v)).toHaveLength(0);
+
+      Object.assign(image, {
+        complete: true,
+        naturalWidth: 1920,
+        naturalHeight: 1080,
+      });
+      (image as unknown as { onload: () => void }).onload();
+      v.frame();
+      expect(v.bgClear).toHaveBeenCalledTimes(1);
+      expect(drawsOf(v)).toHaveLength(3);
+      for (const draw of drawsOf(v)) expect(draw[0]).toBe(image);
+    },
+  );
 
   it("fills side bars for a portrait desktop on a landscape stage", () => {
     const v = viewer();

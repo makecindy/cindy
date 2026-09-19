@@ -17,6 +17,7 @@ import {
   sessionPriorityRecencyMs,
   sessionPriorityRank,
   sortSessionsForMainList,
+  partitionCindyMakeSessions,
   splitEntriesByDevice,
   type MainListEntry,
 } from '../features/cc-agent/lib/mainListModel';
@@ -71,7 +72,9 @@ function labels(entries: MainListEntry[]): string[] {
           ? `auto:${entry.group.title}`
           : entry.kind === 'bot-group'
             ? `bot:${entry.bot.displayName}`
-            : `s:${entry.session.title}`,
+            : entry.kind === 'cindy-make-group'
+              ? 'cindy-make-group'
+              : `s:${entry.session.title}`,
   );
 }
 
@@ -79,6 +82,111 @@ const NO_PRIORITY = {
   runningSessionIds: new Set<string>(),
   attentionSessionIds: new Set<string>(),
 };
+
+describe('Cindy Make sidebar group', () => {
+  it('groups a distinct upstream-merge source alongside personal-feature tasks', () => {
+    const merge = session({ source: 'cindy-make-merge', workingDir: '/managed/merge-worktrees/abcd', workspaceKind: 'project', updatedAt: '2026-09-17T00:00:00Z' });
+    const normal = session({ source: 'cindy-make', workingDir: '/managed/worktrees/efgh', workspaceKind: 'project', updatedAt: '2026-09-17T00:00:00Z' });
+    const result = partitionCindyMakeSessions({ projects: [], dialogues: [], unclassified: [merge, normal] });
+    expect(result.cindyMake).toEqual([merge, normal]);
+    expect(result.unclassified).toEqual([]);
+    expect(merge.source).toBe('cindy-make-merge');
+  });
+  const make = (id: string, updatedAt: string, extra: Partial<Session> = {}) =>
+    session({
+      id,
+      updatedAt,
+      title: id,
+      source: 'cindy-make',
+      workspaceKind: 'project',
+      workingDir: '/managed/worktrees/' + id,
+      ...extra,
+    });
+
+  it.each(['project', 'flat'] as const)(
+    'collects different worktrees and newly preparing tasks under one root in %s mode',
+    (groupBy) => {
+      const first = make('first', '2026-09-17T01:00:00Z');
+      const second = make('second', '2026-09-17T02:00:00Z');
+      const waiting = make('waiting', '2026-09-17T03:00:00Z', { workingDir: null });
+      const ordinary = session({ updatedAt: '2026-09-17T00:00:00Z', title: 'Cindy Make' });
+      const entries = buildMainListEntries({
+        projects: [project('first', [first]), project('second', [second])],
+        dialogues: [ordinary],
+        unclassified: [waiting],
+        groupBy,
+        groupDialogue: false,
+        sortBy: 'recency',
+        manualProjectOrder: [],
+      });
+      expect(labels(entries)).toEqual(['cindy-make-group', 's:Cindy Make']);
+      expect(getMainListEntrySessions(entries[0]).map((value) => value.id)).toEqual([
+        'waiting',
+        'second',
+        'first',
+      ]);
+      expect(first.workingDir).toBe('/managed/worktrees/first');
+      expect(second.workingDir).toBe('/managed/worktrees/second');
+    },
+  );
+
+  it('preserves ordinary tasks that share a directory and leaves empty saved projects intact', () => {
+    const personal = make('make', '2026-09-17T02:00:00Z');
+    const ordinary = session({ updatedAt: '2026-09-17T01:00:00Z', title: 'ordinary' });
+    const mixed = project('shared', [personal, ordinary]);
+    const empty = project('saved', []);
+    const result = partitionCindyMakeSessions({
+      projects: [mixed, empty],
+      dialogues: [],
+      unclassified: [],
+    });
+    expect(result.projects.map((value) => value.projectKey)).toEqual([
+      'local:shared',
+      'local:saved',
+    ]);
+    expect(result.projects[0].sessions).toEqual([ordinary]);
+    expect(result.projects[1]).toBe(empty);
+    expect(result.cindyMake).toEqual([personal]);
+    expect(mixed.sessions).toEqual([personal, ordinary]);
+  });
+
+  it('orders the root and its tasks by the existing attention priorities', () => {
+    const waiting = make('waiting', '2026-09-17T01:00:00Z');
+    const newer = make('newer', '2026-09-17T02:00:00Z');
+    const newest = session({ updatedAt: '2026-09-17T03:00:00Z' });
+    const entries = buildMainListEntries({
+      projects: [project('waiting', [waiting]), project('newer', [newer])],
+      dialogues: [newest],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        ...NO_PRIORITY,
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+      },
+    });
+    expect(entries[0].kind).toBe('cindy-make-group');
+    expect(getMainListEntrySessions(entries[0])).toEqual([waiting, newer]);
+  });
+
+  it('separates local and remote Cindy Make roots by device', () => {
+    const local = make('local', '2026-09-17T01:00:00Z');
+    const remote = make('remote', '2026-09-17T02:00:00Z', { deviceLinkDeviceId: 'remote-device' });
+    const sections = splitEntriesByDevice(
+      [{ kind: 'cindy-make-group', sessions: [remote, local] }],
+      ['remote-device'],
+    );
+    expect(sections.map((section) => section.deviceId)).toEqual([null, 'remote-device']);
+    expect(sections.map((section) => section.entries[0].kind)).toEqual([
+      'cindy-make-group',
+      'cindy-make-group',
+    ]);
+    expect(getMainListEntrySessions(sections[0].entries[0])).toEqual([local]);
+    expect(getMainListEntrySessions(sections[1].entries[0])).toEqual([remote]);
+  });
+});
 
 describe('buildMainListEntries — 混排(recency)', () => {
   it('interleaves project rows and stray dialogues by latest activity', () => {

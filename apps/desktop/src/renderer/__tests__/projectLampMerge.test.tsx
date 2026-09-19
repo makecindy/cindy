@@ -77,13 +77,30 @@ describe('project lamp after upstream sidebar merge', () => {
     expect(header.querySelector('.session-status-breathing')).not.toBeNull();
   });
 
-  it('leaves expanded project attention to its child rows', () => {
+  it.each([null, 'done', 'error'] as const)(
+    'shows awaiting ahead of %s unless an error needs attention',
+    (collapsedAttentionTone) => {
+      const { container } = render(
+        <ProjectNode
+          {...props()}
+          collapsedAttentionTone={collapsedAttentionTone}
+          lamp={{ running: false, dotTone: 'awaiting' }}
+        />,
+      );
+      const header = container.querySelector('[data-project-header]')!;
+      const tone = collapsedAttentionTone === 'error' ? 'error' : 'awaiting';
+      expect(header.querySelector(`[data-sidebar-right-status="${tone}"]`)).not.toBeNull();
+      expect(header.querySelectorAll('.rounded-full')).toHaveLength(1);
+    },
+  );
+
+  it.each(['error', 'awaiting', 'done'] as const)('leaves expanded project %s attention and running state to its child rows', (dotTone) => {
     const { container } = render(
       <ProjectNode
         {...props()}
         isCollapsed={false}
         collapsedAttentionTone="error"
-        lamp={{ running: false, dotTone: 'error' }}
+        lamp={{ running: true, dotTone }}
       />,
     );
     const header = container.querySelector('[data-project-header]')!;

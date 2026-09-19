@@ -360,6 +360,183 @@ function createDeps(
 }
 
 describe('CodexAgent spawn configuration', () => {
+  it('holds account session recovery until the MCP bridge replacement is ready', async () => {
+    let endpoint = 'http://127.0.0.1:51359/mcp/cindy_scheduler';
+    const prepare = vi.fn(async () => {
+      const frozenEndpoint = endpoint;
+      return { extraArgs: [], extraEnv: {},
+        buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': frozenEndpoint }) };
+    });
+    const agent = new CodexAgent(createDeps({}, {
+      isolateCodexAccountSessions: true,
+      prepareCodexExtraSpawnConfig: prepare,
+    }));
+    const guard = await agent.beginLocalHostCredentialChange('MCP refresh', { allLocalHosts: true });
+    guard.assertIdle();
+    const recovery = agent.startSession({ sessionId: 'recover-account', sessionInstanceId: 'recover-instance', model: 'gpt-5.4',
+      workingDir: '/repo', resumeSessionId: '11111111-1111-1111-1111-111111111111' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(prepare).not.toHaveBeenCalled();
+    await guard.retireActiveHost();
+    endpoint = 'http://127.0.0.1:51409/mcp/cindy_scheduler';
+    await guard.finalize();
+    const handle = await recovery;
+    const resume = createdTransports[0].lines.map(line => JSON.parse(line))
+      .find(message => message.method === Method.ThreadResume);
+    expect(resume.params.config['mcp_servers.cindy_scheduler.url']).toBe(endpoint);
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('defers MCP refresh while an account session is recovering before registration', async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    MockCodexTransport.beforeThreadStartResponse = async () => {
+      started.resolve();
+      await finish.promise;
+    };
+    const agent = new CodexAgent(createDeps({}, { isolateCodexAccountSessions: true }));
+    const startup = agent.startSession({ sessionId: 'starting-account', model: 'gpt-5.4', workingDir: '/repo' });
+    await started.promise;
+    const guard = await agent.beginLocalHostCredentialChange('MCP refresh', { allLocalHosts: true });
+    expect(() => guard.assertIdle()).toThrow(/active Codex session/);
+    expect(createdTransports[0].closed).toBe(false);
+    guard.release();
+    finish.resolve();
+    const handle = await startup;
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('defers MCP refresh during asynchronous control-plane host preparation', async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig: async () => {
+      started.resolve();
+      await finish.promise;
+      return { extraArgs: [], extraEnv: {} };
+    } }));
+    const models = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+    await started.promise;
+    const busy = new Error('deferrable startup');
+    const guard = await agent.beginLocalHostCredentialChange('MCP refresh', { allLocalHosts: true, busyError: () => busy });
+    expect(() => guard.assertIdle()).toThrow(busy);
+    guard.release();
+    finish.resolve();
+    await models;
+    await agent.dispose();
+  });
+
+  it.each([Method.ModelList, Method.ThreadFork, Method.AccountRateLimitsRead, Method.SkillsList, Method.ConfigRead, Method.MemoryReset])(
+    'keeps %s leased until the control-plane operation settles', async (method) => {
+      const started = deferred<void>();
+      const finish = deferred<void>();
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, async (requested) => {
+        if (requested !== method) return undefined;
+        started.resolve();
+        await finish.promise;
+        if (method === Method.ModelList) return { data: [], nextCursor: null };
+        if (method === Method.AccountRateLimitsRead || method === Method.MemoryReset) return {};
+        return undefined;
+      });
+      const operation = method === Method.ModelList ? agent.refreshLocalModels({ credentialMode: 'oauth-bearer' })
+        : method === Method.ThreadFork ? agent.forkSdkSession({ sourceSdkSessionId: 'source', upToMessageId: 'message', workingDir: '/repo' })
+        : method === Method.AccountRateLimitsRead ? agent.readAccountRateLimits()
+        : method === Method.SkillsList ? agent.listAgentSkills({ workingDir: '/repo' })
+        : method === Method.ConfigRead ? agent.getMemoryStatus()
+        : agent.resetMemory();
+      await started.promise;
+      const busy = new Error('defer auxiliary operation');
+      const guard = await agent.beginLocalHostCredentialChange('MCP refresh', {
+        allLocalHosts: true, busyError: () => busy,
+      });
+      expect(() => guard.assertIdle()).toThrow(busy);
+      await expect(guard.retireActiveHost()).rejects.toThrow(/active Codex session/);
+      expect(host.retire).not.toHaveBeenCalled();
+      guard.release();
+      finish.resolve();
+      await operation;
+      const after = await agent.beginLocalHostCredentialChange('after operation', { allLocalHosts: true });
+      after.assertIdle();
+      await after.finalize();
+    },
+  );
+
+  it('releases the control-plane lease when its RPC rejects', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, (method) => {
+      if (method === Method.ModelList) throw new Error('model failure');
+    });
+    await expect(agent.refreshLocalModels({ credentialMode: 'oauth-bearer' })).rejects.toThrow('model failure');
+    const guard = await agent.beginLocalHostCredentialChange('after failure', { allLocalHosts: true });
+    guard.assertIdle();
+    await guard.finalize();
+  });
+
+  it('defers memory push while refresh owns admission and new RPCs use the replacement host', async () => {
+    const agent = new CodexAgent(createDeps());
+    await agent.refreshLocalModels();
+    const old = createdTransports[0];
+    const guard = await agent.beginLocalHostCredentialChange('MCP refresh', { allLocalHosts: true });
+    const before = old.lines.length;
+    expect(await agent.setMemory(true)).toEqual({ effective: 'next-session' });
+    const models = agent.refreshLocalModels();
+    await Promise.resolve();
+    expect(old.lines).toHaveLength(before);
+    guard.assertIdle();
+    await guard.retireActiveHost();
+    await guard.finalize();
+    await models;
+    expect(old.closed).toBe(true);
+    expect(createdTransports).toHaveLength(2);
+    await agent.dispose();
+  });
+
+  it('serializes overlapping MCP refresh reservations and releases after failure', async () => {
+    const prepare = vi.fn(async () => ({ extraArgs: [], extraEnv: {} }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig: prepare }));
+    const first = await agent.beginLocalHostCredentialChange('first refresh', { allLocalHosts: true });
+    let acquired = false;
+    const secondPromise = agent.beginLocalHostCredentialChange('second refresh', { allLocalHosts: true })
+      .then(guard => { acquired = true; return guard; });
+    await Promise.resolve();
+    expect(acquired).toBe(false);
+    // A bridge replacement failure must release its reservation without
+    // releasing a later refresh that has already acquired admission.
+    first.release();
+    const second = await secondPromise;
+    first.release();
+    const startup = agent.startSession({ sessionId: 'after-failed-refresh', model: 'gpt-5.4', workingDir: '/repo' });
+    await Promise.resolve();
+    expect(prepare).not.toHaveBeenCalled();
+    second.release();
+    const handle = await startup;
+    expect(prepare).toHaveBeenCalledOnce();
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('retires all local MCP consumers without blocking or retiring remote sessions', async () => {
+    const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport: () => {
+      const transport = new MockCodexTransport();
+      createdTransports.push(transport);
+      return transport;
+    } }));
+    await agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+    const localTransport = createdTransports[0];
+    const guard = await agent.beginLocalHostCredentialChange('MCP refresh', { allLocalHosts: true });
+    const remote = await agent.startSession({ sessionId: 'remote-during-refresh', model: 'gpt-5.4',
+      workingDir: '/repo', remoteHostId: 'remote-1' });
+    guard.assertIdle();
+    await guard.retireActiveHost();
+    expect(localTransport.closed).toBe(true);
+    expect(createdTransports[1].closed).toBe(false);
+    await guard.finalize();
+    await remote.close();
+    await agent.dispose();
+  });
+
   it.each(['oauth-bearer', 'gateway-key'] as const)('separates canonical history from target credentials (%s)', async mode => {
     const credentialHome = path.resolve(os.tmpdir(), 'target-account-fixture');
     const historyHome = path.resolve(os.tmpdir(), 'original-history-fixture');
@@ -570,6 +747,7 @@ describe('CodexAgent oneShot dispatch guard', () => {
     });
     const subscribeThread = vi.fn(() => ({ release: vi.fn() }));
     const host = { ensureStarted, request, subscribeThread };
+    (agent as any).hosts.set('test-utility-host', host);
     Object.defineProperty(agent, 'getUtilityHost', {
       value: vi.fn(async () => ({ key: 'test-utility-host', host })),
       configurable: true,
@@ -602,6 +780,7 @@ describe('CodexAgent oneShot dispatch guard', () => {
       request,
       subscribeThread,
     };
+    (agent as any).hosts.set('test-utility-host', host);
     Object.defineProperty(agent, 'getUtilityHost', {
       value: vi.fn(async () => ({ key: 'test-utility-host', host })),
       configurable: true,
@@ -819,6 +998,9 @@ function installFakeHost(
   );
   const getOpenAiWebSocketsEnabled = vi.fn(() => opts.openAiWebSocketsEnabled !== false);
   const host = {
+    activeSubscriptions: 0,
+    retire: vi.fn(async () => {}),
+    notifySubscribersOfForcedRetire: vi.fn(),
     ensureStarted,
     // startSession 的 initialize 直调走限时变体 (codex R13 P1): fake 里
     // 直接委托 ensureStarted (超时语义由 host.test.ts 的真 transport 覆盖)。
@@ -850,7 +1032,11 @@ function installFakeHost(
     discardPendingDescendantLineage: vi.fn(),
   };
 
-  const getHost = vi.fn(async () => host);
+  const getHost = vi.fn(async (remoteHostId?: string, _mode?: string, options?: { keyOverride?: string }) => {
+    const key = options?.keyOverride ?? (remoteHostId ? `remote:${remoteHostId}` : 'local');
+    (agent as any).hosts.set(key, host);
+    return host;
+  });
   Object.defineProperty(agent, 'getHost', {
     value: getHost,
   });
@@ -3095,9 +3281,11 @@ describe('CodexAgent reference directories', () => {
       turn: { id: 'turn-1', status: 'completed' },
     });
 
-    await handle.setExtraDirs?.(['/shared-b']);
+    await handle.setExtraDirs?.(['/shared-b'], '/shared-b');
     await handle.send({ type: 'user', content: 'use the replacement reference' });
     const [, secondTurn] = turnCalls()[1] as [string, Record<string, unknown>];
+    expect(JSON.stringify(secondTurn.input)).toContain('libraryRoot');
+    expect(JSON.stringify(secondTurn.input)).toContain('/shared-b');
     expect(secondTurn.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-b']);
     expect('permissions' in secondTurn).toBe(false);
     expect('sandboxPolicy' in secondTurn).toBe(false);
@@ -3118,9 +3306,11 @@ describe('CodexAgent reference directories', () => {
     });
 
     await handle.setPermissionMode?.('ask');
-    await handle.setExtraDirs?.([]);
+    await handle.setExtraDirs?.([], null);
     await handle.send({ type: 'user', content: 'continue without references' });
     const [, noReferencesTurn] = turnCalls()[3] as [string, Record<string, unknown>];
+    expect(JSON.stringify(noReferencesTurn.input)).toContain('No library root is currently authorized');
+    expect(JSON.stringify(noReferencesTurn.input)).not.toContain('/shared-b');
     expect(noReferencesTurn.runtimeWorkspaceRoots).toEqual(['/repo']);
     expect('permissions' in noReferencesTurn).toBe(false);
     expect(noReferencesTurn.sandboxPolicy).toEqual({

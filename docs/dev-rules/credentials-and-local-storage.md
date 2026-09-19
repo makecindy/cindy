@@ -69,6 +69,11 @@
 - 钥匙串条目名与 userData profile 的存量密文一一绑定：**不得**在共享既有 profile 的
   进程里改 `app.name`——换名后新写入的密文对共用该 profile 的其它身份不可解，双向串坏。
   改动条目名属存量凭证迁移，按上方增量适用原则必须单独设计兼容/回滚/验证方案。
+- Cindy Make 的托管个人版按已验证的本机启动交接继承原版的 profile、设备身份与钥匙串
+  名称；Dev 和安装版同属原版。它只能沿用现有身份，不能认领另一套钥匙串或复制凭证。
+  已有 `keychain-identity` 必须与交接身份一致；无标记只接受默认身份。原版入口和普通
+  packaged 启动的原规则不变，不开放任意环境变量的 packaged profile 覆写。
+  见 [versionStartup](../../apps/desktop/src/main/cindy-make/versionStartup.ts)。
 - 同机装过 cn 与 global 双版的机器上，后启动的版本首次访问 `safeStorage` 会触发系统
   钥匙串授权弹窗，属 macOS 按预期征求同意；应引导用户点「始终允许」。点「拒绝」后
   加解密降级失败，authManager 的 safeStorage helpers 会按原因落一次 warn 日志。

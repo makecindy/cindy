@@ -110,13 +110,26 @@ export class CindyMakeManager {
   >();
   private sourceRevision = 0;
   private isProjectBusy: (root: string) => boolean = () => false;
+  private mergeSessionCurrent: () => boolean = () => true;
 
   setProjectBusyProbe(probe: (root: string) => boolean): void {
     this.isProjectBusy = probe;
   }
 
   private projectInUse(root: string): boolean {
-    return (this.projectUsers.get(root) ?? 0) > 0 || this.isProjectBusy(root);
+    return (this.projectUsers.get(root) ?? 0) > 0 || this.isProjectBusy(root) ||
+      (!!this.states.upstreamMerge && this.states.upstreamMerge.status !== 'merged' &&
+        (this.states.upstreamMerge.hasWorkspace === true || this.states.upstreamMerge.status !== 'failed'));
+  }
+  /** Active preparation/cleanup must finish before a local application version switch. */
+  hasActiveWork(): boolean {
+    return this.active.size > 0 || this.sourceJobs.size > 0 || this.tasks.size > 0 || this.taskActions.size > 0 || this.projectUsers.size > 0;
+  }
+
+  setUpstreamMerge(state: CindyMakeGlobalState['upstreamMerge'], isCurrent: () => boolean = () => true): void {
+    this.states.upstreamMerge = state;
+    this.mergeSessionCurrent = isCurrent;
+    this.notify();
   }
 
   async withProjectUse<T>(root: string, run: () => Promise<T>): Promise<T> {
@@ -167,12 +180,21 @@ export class CindyMakeManager {
     this.notify();
   }
 
-  async refreshSourceStatus(read: () => Promise<MakeSourceStatus>): Promise<MakeSourceStatus> {
-    const revision = this.sourceRevision;
-    const status = await read();
-    if (revision !== this.sourceRevision && this.states.source)
+  async refreshSourceStatus(
+    read: (publish: (status: MakeSourceStatus) => boolean) => Promise<MakeSourceStatus>,
+  ): Promise<MakeSourceStatus> {
+    let revision = ++this.sourceRevision;
+    // One revision guard spans every stage, including our own intermediate writes.
+    // A preparation/clear or another refresh invalidates all remaining stages.
+    const publish = (status: MakeSourceStatus): boolean => {
+      if (revision !== this.sourceRevision) return false;
+      revision += 1;
+      this.setSourceStatus(status);
+      return revision === this.sourceRevision;
+    };
+    const status = await read(publish);
+    if (!publish(status) && this.states.source)
       return structuredClone(this.states.source);
-    this.setSourceStatus(status);
     return status;
   }
 
@@ -209,6 +231,8 @@ export class CindyMakeManager {
       );
     }
     if (input.signal.aborted) return input.cancelled();
+    if (this.states.upstreamMerge?.hasWorkspace && this.states.upstreamMerge.status !== 'merged')
+      throw Object.assign(new Error('upstream merge is pending'), { code: 'busy' });
     if (
       input.clearOnly &&
       (this.projectInUse(input.root) ||
@@ -377,8 +401,7 @@ export class CindyMakeManager {
       // The canonical terminal-session hook runs inside the outer Settings action.
       // It must not await its own parent's promise or overwrite its progress.
       if (nestedRecycle) return run();
-      // A plain archive only checks already-merged work. A later explicit Finish
-      // still needs to perform its merge after that background recycle settles.
+      // A later explicit action waits for the existing background recycle to settle.
       if (existing.recycleOnly)
         return existing.promise
           .catch(() => undefined)
@@ -461,7 +484,11 @@ export class CindyMakeManager {
     const previous = this.restoredTasks.get(report.runId);
     if (previous?.isCurrent()) {
       // Runtime execution is projected separately from the persisted preparation.
-      restored.task = { ...restored.task!, executing: previous.report.task?.executing };
+      restored.task = {
+        ...restored.task!,
+        executing: previous.report.task?.executing,
+        integration: previous.report.task?.integration,
+      };
       if (JSON.stringify(previous.report) === JSON.stringify(restored)) return undefined;
     }
     this.restoredTasks.set(report.runId, { report: restored, isCurrent });
@@ -560,6 +587,9 @@ export class CindyMakeManager {
     };
     return structuredClone({
       ...this.states,
+      ...(this.states.upstreamMerge && !this.mergeSessionCurrent() ? { upstreamMerge: {
+        ...this.states.upstreamMerge, sessionId: undefined, ownedByAnotherAccount: true,
+      } } : {}),
       reports: Object.fromEntries(
         [...this.reports].flatMap(([runId, entry]) =>
           entry.isCurrent() ? [[runId, entry.report]] : [],

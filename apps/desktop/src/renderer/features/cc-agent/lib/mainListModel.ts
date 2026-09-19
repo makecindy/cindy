@@ -24,12 +24,10 @@
  */
 
 import type { Session } from '@/lib/ccAgent.types';
+import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../../../shared/liveTaskPriority';
-import type {
-  FilterProjectOrder,
-  FilterSortBy,
-} from '../hooks/helpers/sidebarFilterCore';
+import type { FilterProjectOrder, FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import {
   groupAutomationSidebarEntries,
@@ -42,6 +40,7 @@ import type { BotGroupNode, ProjectNode } from './projectGrouping';
 export type MainListEntry =
   | { kind: 'project'; project: ProjectNode }
   | { kind: 'dialogue-group'; sessions: Session[] }
+  | { kind: 'cindy-make-group'; sessions: Session[] }
   /** 一个伙伴名下的全部任务。与项目行并列 —— 项目是实体目录,伙伴名是用户起的。 */
   | { kind: 'bot-group'; bot: BotGroupNode }
   | SidebarSessionEntry;
@@ -101,10 +100,7 @@ export function naturalPriorityRankForId(
   });
 }
 
-export function sessionNaturalPriorityRank(
-  session: Session,
-  ctx: MainListPriorityContext,
-): number {
+export function sessionNaturalPriorityRank(session: Session, ctx: MainListPriorityContext): number {
   return naturalPriorityRankForId(session.id, ctx);
 }
 
@@ -183,7 +179,7 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
 
 export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
   if (entry.kind === 'project') return entry.project.sessions;
-  if (entry.kind === 'dialogue-group') return entry.sessions;
+  if (entry.kind === 'dialogue-group' || entry.kind === 'cindy-make-group') return entry.sessions;
   if (entry.kind === 'bot-group') return entry.bot.sessions;
   if (entry.kind === 'automation-group') return entry.group.sessions;
   return [entry.session];
@@ -233,14 +229,27 @@ export function sortSessionsForMainList(
   sortBy: FilterSortBy,
   ctx: MainListPriorityContext = EMPTY_PRIORITY_CONTEXT,
 ): Session[] {
-  // Compute numeric keys once per call, never retain them across session updates.
-  return sessions.map((session) => ({
-    session,
-    rank: sortBy === 'priority' ? sessionPriorityRank(session, ctx) : 0,
-    time: sortBy === 'priority' ? sessionPriorityRecencyMs(session, ctx)
-      : sortBy === 'created' ? sessionCreatedMs(session) : sessionActivityMs(session),
-  })).sort((a, b) => a.rank - b.rank || b.time - a.time ||
-    (sortBy === 'created' ? a.session.id.localeCompare(b.session.id) : 0))
+  if (sortBy === 'priority') {
+    return sessions
+      .slice()
+      .sort(
+        (a, b) =>
+          sessionPriorityRank(a, ctx) - sessionPriorityRank(b, ctx) ||
+          sessionPriorityRecencyMs(b, ctx) - sessionPriorityRecencyMs(a, ctx),
+      );
+  }
+  if (sortBy === 'created') {
+    return sessions
+      .map((session, index) => ({ session, index, createdAt: sessionCreatedMs(session) }))
+      .sort(
+        (a, b) =>
+          b.createdAt - a.createdAt || a.session.id.localeCompare(b.session.id) || a.index - b.index,
+      )
+      .map(({ session }) => session);
+  }
+  return sessions
+    .map((session, index) => ({ session, index, activityAt: sessionActivityMs(session) }))
+    .sort((a, b) => b.activityAt - a.activityAt || a.index - b.index)
     .map(({ session }) => session);
 }
 
@@ -266,6 +275,45 @@ export interface BuildMainListEntriesInput {
 }
 
 const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set<string>();
+
+export const CINDY_MAKE_GROUP_KEY = 'cindy-make';
+
+/** Group by the task's source, never by a title or a guessed worktree path. */
+export function partitionCindyMakeSessions({
+  projects,
+  dialogues,
+  unclassified,
+}: {
+  projects: readonly ProjectNode[];
+  dialogues: readonly Session[];
+  unclassified: readonly Session[];
+}): {
+  projects: ProjectNode[];
+  dialogues: Session[];
+  unclassified: Session[];
+  cindyMake: Session[];
+} {
+  const cindyMake = new Map<string, Session>();
+  const regular = (sessions: readonly Session[]) =>
+    sessions.filter((session) => {
+      if (!isCindyMakeFamilySource(session.source)) return true;
+      cindyMake.set(session.id, session);
+      return false;
+    });
+  const regularProjects = projects.flatMap((project) => {
+    const sessions = regular(project.sessions);
+    if (sessions.length === project.sessions.length) return [project];
+    return sessions.length ? [{ ...project, sessions }] : [];
+  });
+  const regularDialogues = regular(dialogues);
+  const regularUnclassified = regular(unclassified);
+  return {
+    projects: regularProjects,
+    dialogues: regularDialogues,
+    unclassified: regularUnclassified,
+    cindyMake: [...cindyMake.values()],
+  };
+}
 
 function buildFlatSessionEntries(
   sessions: readonly Session[],
@@ -295,6 +343,16 @@ export function buildMainListEntries({
 }: BuildMainListEntriesInput): MainListEntry[] {
   const ctx = priorityContext;
   const entries: MainListEntry[] = [];
+  const partitioned = partitionCindyMakeSessions({ projects, dialogues, unclassified });
+  projects = partitioned.projects;
+  dialogues = partitioned.dialogues;
+  unclassified = partitioned.unclassified;
+  if (partitioned.cindyMake.length) {
+    entries.push({
+      kind: 'cindy-make-group',
+      sessions: sortSessionsForMainList(partitioned.cindyMake, sortBy, ctx),
+    });
+  }
 
   if (groupBy === 'flat') {
     const flatEntries = buildFlatSessionEntries(
@@ -366,6 +424,24 @@ export function buildMainListEntries({
   return sortMainListEntries(entries, sortBy, projectOrder, manualProjectOrder, ctx);
 }
 
+function compareEntriesBySortBy(
+  a: MainListEntry,
+  b: MainListEntry,
+  sortBy: FilterSortBy,
+  ctx: MainListPriorityContext,
+): number {
+  if (sortBy === 'priority') {
+    return (
+      entryPriorityRank(a, ctx) - entryPriorityRank(b, ctx) ||
+      entryPriorityRecencyMs(b, ctx) - entryPriorityRecencyMs(a, ctx)
+    );
+  }
+  const timeDifference = entryTimeMs(b, sortBy) - entryTimeMs(a, sortBy);
+  if (timeDifference !== 0 || sortBy !== 'created') return timeDifference;
+  return (getMainListEntrySessions(a)[0]?.id ?? '').localeCompare(
+    getMainListEntrySessions(b)[0]?.id ?? '',
+  );
+}
 
 function sortMainListEntries(
   entries: readonly MainListEntry[],
@@ -374,17 +450,6 @@ function sortMainListEntries(
   manualProjectOrder: readonly string[],
   ctx: MainListPriorityContext,
 ): MainListEntry[] {
-  const keys = new Map(entries.map((entry) => [entry, {
-    rank: sortBy === 'priority' ? entryPriorityRank(entry, ctx) : 0,
-    time: sortBy === 'priority' ? entryPriorityRecencyMs(entry, ctx) : entryTimeMs(entry, sortBy),
-    id: sortBy === 'created' ? getMainListEntrySessions(entry)[0]?.id ?? '' : '',
-  }]));
-  const compare = (a: MainListEntry, b: MainListEntry) => {
-    const left = keys.get(a)!;
-    const right = keys.get(b)!;
-    return left.rank - right.rank || right.time - left.time ||
-      (sortBy === 'created' ? left.id.localeCompare(right.id) : 0);
-  };
   if (projectOrder === 'custom') {
     // 自定义项目序:项目行按 manualProjectOrder;不在序的新项目由 normalize
     // 追加到已排序列之后。非项目条目排在项目之后,仍按当前任务排序。
@@ -407,11 +472,11 @@ function sortMainListEntries(
             Number.MAX_SAFE_INTEGER)
         );
       }
-      return compare(a, b);
+      return compareEntriesBySortBy(a, b, sortBy, ctx);
     });
   }
 
-  return entries.slice().sort((a, b) => compare(a, b));
+  return entries.slice().sort((a, b) => compareEntriesBySortBy(a, b, sortBy, ctx));
 }
 
 /* ============================== 设备分组(E 期) ============================== */
@@ -458,7 +523,11 @@ export function splitEntriesByDevice(
   // 先把跨设备会话组拆开,再按每个片段的成员计算排序和设备聚合灯。
   const flattened: MainListEntry[] = [];
   for (const entry of entries) {
-    if (entry.kind !== 'dialogue-group' && entry.kind !== 'bot-group') {
+    if (
+      entry.kind !== 'dialogue-group' &&
+      entry.kind !== 'cindy-make-group' &&
+      entry.kind !== 'bot-group'
+    ) {
       flattened.push(entry);
       continue;
     }
@@ -470,9 +539,9 @@ export function splitEntriesByDevice(
       else byDevice.set(key, [s]);
     }
     for (const sessions of byDevice.values()) {
-      flattened.push(entry.kind === 'bot-group'
-        ? { kind: 'bot-group', bot: { ...entry.bot, sessions } }
-        : { kind: 'dialogue-group', sessions });
+      if (entry.kind === 'bot-group')
+        flattened.push({ kind: 'bot-group', bot: { ...entry.bot, sessions } });
+      else flattened.push({ kind: entry.kind, sessions });
     }
   }
 

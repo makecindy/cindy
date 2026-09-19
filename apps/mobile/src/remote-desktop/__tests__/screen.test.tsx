@@ -361,7 +361,8 @@ const visibleInputHint = () =>
 const button = (key: string) =>
   host.querySelector<HTMLButtonElement>(`[aria-label="remoteDesktop.${key}"]`)!;
 beforeEach(async () => {
-  await AsyncStorage.removeItem("cindy.mobile.remote-desktop.audio.v1");
+  await AsyncStorage.removeItem("cindy.mobile.remote-desktop.show-mouse-buttons.v1").catch(() => undefined);
+  await AsyncStorage.removeItem("cindy.mobile.remote-desktop.audio.v1").catch(() => undefined);
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   fixture.beginBackgroundTransition.mockImplementation(
@@ -3504,7 +3505,8 @@ describe("remote desktop controls", () => {
     await connect();
     act(() => button("operations").click());
     expect(button("rightClick")).toBeNull();
-    act(() => button("showMouseButtons").click());
+    expect(button("showMouseButtons").getAttribute("aria-checked")).toBe("false");
+    await act(async () => button("showMouseButtons").click());
     expect(button("showMouseButtons").getAttribute("aria-checked")).toBe(
       "true",
     );

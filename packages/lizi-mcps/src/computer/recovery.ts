@@ -15,7 +15,11 @@ export function isWindowIdentityFailure(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const result = value as Record<string, unknown>;
   return [result.code, result.degraded_reason].some(
-    (code) => code === "window_id_not_found" || code === "ax_window_unresolved",
+    (code) =>
+      code === "window_id_not_found" ||
+      code === "ax_window_unresolved" ||
+      // The driver appends window diagnostics after this reason's colon.
+      (typeof code === "string" && code.startsWith("ax_window_unresolved:")),
   );
 }
 
@@ -43,7 +47,11 @@ export async function readForRecovery(
       controller.signal.addEventListener("abort", onAbort, { once: true });
     });
     const data = await Promise.race([
-      deps.callTool(tool, args, { ...context, signal: controller.signal, observationPurpose: 'recovery' }),
+      deps.callTool(tool, args, {
+        ...context,
+        signal: controller.signal,
+        observationPurpose: "recovery",
+      }),
       cancelled,
     ]);
     controller.signal.throwIfAborted();

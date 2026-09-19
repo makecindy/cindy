@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import { isCindyPersonalRuntime } from './cindy-make/versionRuntimeIdentity.js';
 import os from 'node:os';
 
 import {
@@ -634,6 +635,7 @@ export function clearReloginFlag(): void {
  *                  in the union for backward compatibility with prior callers.)
  */
 function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?: string } {
+  if (isCindyPersonalRuntime()) return { action: 'none' };
   const updatesDir = getUpdatesDir();
   const infoPath = path.join(updatesDir, PATCH_INFO_FILE);
 
@@ -1086,6 +1088,7 @@ export function isVersionlessAppVersion(version: string): boolean {
 }
 
 async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<CheckForUpdateResult> {
+  if (isCindyPersonalRuntime()) return 'idle';
   log.info('checkForUpdate() called, currentStatus=%s', currentStatus);
   // 先跟共享设置对一次有效渠道:共库另一实例改过开关时,本进程内存代际还停在旧值。
   if (syncObservedUpdateChannel()) {
@@ -1977,6 +1980,7 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
 }
 
 async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = false): Promise<void> {
+  if (isCindyPersonalRuntime()) return;
   try {
     await executeRelaunchUnguarded(theme, checkForBinaryUpdates);
   } catch (err) {
@@ -2137,7 +2141,7 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
 export function initUpdateService(): void {
   // Observe the successful old-updater receipt before existing cleanup removes
   // it. Async and metadata-only; no effect on download/apply/rollback decisions.
-  if (process.platform === 'win32' && app.isPackaged && !isDev()) {
+  if (process.platform === 'win32' && app.isPackaged && !isDev() && !isCindyPersonalRuntime()) {
     void syncWindowsVersionAfterUpdate({
       platform: process.platform,
       packaged: true,
@@ -2152,7 +2156,7 @@ export function initUpdateService(): void {
   // Best-effort cleanup of >7-day-old `cindy-update*`/`xdt-update*` leftovers in %TEMP%.
   // Counterpart to the Rust updater's own sweep — covers the case where the
   // user stays on the latest version and never triggers another updater run.
-  sweepStaleUpdateTempDirs();
+  if (!isCindyPersonalRuntime()) sweepStaleUpdateTempDirs();
 
   ipcMain.on('update-relaunch', (event, theme: 'light' | 'dark') => {
     // Linux 分支会退出应用并触发 pkexec 系统授权,属于特权操作;
@@ -2346,7 +2350,7 @@ export function initUpdateService(): void {
     log.info('update-check-startup called');
     startupUpdateCheckInProgress = true;
     try {
-      if (isDev()) {
+      if (isDev() || isCindyPersonalRuntime()) {
         return { hasUpdate: false, action: 'none' as const };
       }
 
@@ -2535,7 +2539,7 @@ export function initUpdateService(): void {
     }
   });
 
-  if (isDev()) {
+  if (isDev() || isCindyPersonalRuntime()) {
     log.info('Dev mode — skipping background polling');
     return;
   }

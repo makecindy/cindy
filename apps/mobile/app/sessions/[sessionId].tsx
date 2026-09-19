@@ -1545,6 +1545,8 @@ export default function SessionScreen() {
     });
     const projection = remoteSessionStore.getInputProjection(sessionId);
     const source = remoteSessionStore.getMessages(sessionId);
+    // Capture at send time, not when React later runs the state updater.
+    const observed = latestMessagesRef.current;
     // Match Desktop's idle-send placement. Busy follow-ups retain the existing
     // pending tail until authoritative history supplies their transcript row.
     const busy = projection.pendingQueue.length > 0 || projection.steeringQueueClientIds.length > 0
@@ -1552,7 +1554,7 @@ export default function SessionScreen() {
       || remoteSessionStore.getPendingInteractions(sessionId).length > 0
       || currentTurnHasStreamingAssistant(source);
     if (!busy) setOptimisticUserState((current) => current.sessionId !== sessionId ? current : {
-      sessionId, items: appendOptimisticUserMessage(current.items, source, queued, sessionId),
+      sessionId, items: appendOptimisticUserMessage(current.items, source, queued, sessionId, observed),
     });
     setSendingQueueClientIds((current) => {
       if (current.has(clientId)) return current;

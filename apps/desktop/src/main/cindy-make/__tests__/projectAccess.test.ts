@@ -28,6 +28,13 @@ beforeEach(() => {
 });
 
 describe('Cindy Make project send access', () => {
+  it('also blocks a missing upstream-merge workspace without recreating it as an ordinary project', async () => {
+    const mergeDir = path.join(userData, 'cindy-make', 'merge-worktrees', '12345678-1234-1234-1234-123456789abc');
+    vi.mocked(lstat).mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    const send = vi.fn(async () => 'accepted');
+    await expect(withCindyMakeProjectUse(userData, mergeDir, send)).rejects.toThrow('PRECONDITION_FAILED');
+    expect(send).not.toHaveBeenCalled();
+  });
   it('checks the worktree and original checkout before dispatch', async () => {
     const send = vi.fn(async () => 'accepted');
     await expect(withCindyMakeProjectUse(userData, workingDir, send)).resolves.toBe('accepted');

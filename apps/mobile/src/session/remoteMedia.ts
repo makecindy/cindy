@@ -100,7 +100,10 @@ export function isDesktopLocalMediaUrl(url: unknown): url is string {
 }
 
 export function isDirectPreviewableMediaUrl(url: unknown): url is string {
-  return isPayloadDirectPreviewableUrl(url);
+  return (
+    isPayloadDirectPreviewableUrl(url)
+    || (typeof url === "string" && (url.startsWith("data:audio/") || url.startsWith("data:video/")))
+  );
 }
 
 export function canPreviewResolvedRemoteMedia(
@@ -184,8 +187,9 @@ export async function resolveMobileRemoteMedia(
       expiresAt: peerMediaExpiry(fetched)!,
       previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
     };
-  // inline 缩略图回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
-  // url 先给 data URI 保证任何情况下可渲染;宿主(会话屏)会把字节落盘并换成 file://。
+  // inline 回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
+  // 缩略图给 data:image;小音视频若仍以内联回包到达,也走 data URI,由播放器直接打开。
+  // 图片宿主(会话屏)会把字节落盘并换成 file://。
   if (isValidInlineResult(fetched)) {
     return {
       url: `data:${fetched.mimeType};base64,${fetched.inlineBase64}`,

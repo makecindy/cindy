@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMakeDependencyProgress } from '../sourcePnpm.js';
+import { parseMakeDependencyProgress, runSourcePnpm } from '../sourcePnpm.js';
 
 describe('dependency progress projection', () => {
   it('keeps the actual counters when pnpm moves into installation scripts', () => {
@@ -27,4 +27,22 @@ describe('dependency progress projection', () => {
       parseMakeDependencyProgress('Progress: resolved 2, reused 1, downloaded'),
     ).toBeUndefined();
   });
+});
+
+it('accepts fixed colon-separated script names while rejecting shell operators before launch', async () => {
+  const signal = new AbortController().signal;
+  await expect(runSourcePnpm({ PATH: '' }, ['test:unit:related'], '.', signal)).rejects.toThrow(
+    'pnpm not found',
+  );
+  for (const argument of [
+    'test:unit&whoami',
+    'test:unit|whoami',
+    'test:unit;whoami',
+    '$(whoami)',
+    '%SECRET%',
+  ]) {
+    await expect(runSourcePnpm({ PATH: '' }, [argument], '.', signal)).rejects.toThrow(
+      'unsafe pnpm argument',
+    );
+  }
 });

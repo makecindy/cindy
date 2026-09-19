@@ -1,5 +1,22 @@
+import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerLoginItemIpc } from './login-item-ipc.js';
+import { createLatestSourceVersionReader } from './cindy-make/latestSourceVersion.js';
+import { refreshCindySourceStatus } from './cindy-make/sourceStatusRefresh.js';
+import {
+  configureUpstreamMerge,
+  actUpstreamMerge,
+  refreshUpstreamMergeProjection,
+} from './cindy-make/upstreamMergeRuntime.js';
+import {
+  configureMakeHistory,
+  getCindyMakeHistory,
+  actCindyMakeHistory,
+  generateHistoryPersonalVersion,
+  cancelHistoryPersonalVersion,
+  openHistoryPersonalBuild,
+  stopMakeHistoryBuild,
+} from './cindy-make/historyRuntime.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
 import { codexAccountState } from './maker-host/codex-account-auth.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
@@ -13,7 +30,10 @@ import {
   auditRegisteredWorktrees,
 } from './worktree/recycleMaintenance';
 import { requestWorktreeRecycle } from './worktree/managedRecycle';
-import { patchSessionMetaInDb, recycleSessionWorktreeForStatusChange } from './localDb/ipc/sessions';
+import {
+  patchSessionMetaInDb,
+  recycleSessionWorktreeForStatusChange,
+} from './localDb/ipc/sessions';
 import { tryGetDbClient } from './localDb/client/current';
 import {
   app,
@@ -292,7 +312,7 @@ import {
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
-import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
+import { invalidatePiEnvironment, shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
 import {
@@ -336,10 +356,37 @@ import {
   createMakeToolchainEnvironment,
   resolveMakeToolEnvironment,
 } from './cindy-make/toolchainEnvironment.js';
-import { CINDY_MAKE_RUN_ID_PATTERN } from './cindy-make/sourcePaths.js';
+import {
+  CINDY_MAKE_RUN_ID_PATTERN,
+  isCindyMakeManagedWorktreePath,
+} from './cindy-make/sourcePaths.js';
 import { prepareCindyMakeWorkspace } from './cindy-make/taskWorkspace.js';
 import { restoreCindyMakeTaskState, startCindyMakeTask } from './cindy-make/taskRuntime.js';
-import { configureCindyMakeTaskManagement, manageCindyMakeTask } from './cindy-make/taskManagement.js';
+import {
+  configureCindyMakeTaskManagement,
+  manageCindyMakeTask,
+  refreshCindyMakeTaskIntegration,
+} from './cindy-make/taskManagement.js';
+import {
+  actCindyMakeTest,
+  cindyMakeTestController,
+  configureCindyMakeTestRuntime,
+} from './cindy-make/testRuntime.js';
+import {
+  actCindyVersion,
+  configureCindyVersions,
+  getCindyVersions,
+} from './cindy-make/versionService.js';
+import {
+  deliverCindyVersionOpenEvents,
+  isCindyVersionLaunchPending,
+  recordCindyVersionActive,
+  watchCindyVersionStartupResult,
+} from './cindy-make/versionStartup.js';
+import {
+  getCindyVersionLockScope,
+  isCindyPersonalRuntime,
+} from './cindy-make/versionRuntimeIdentity.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   collectDatabaseSizeWarningStatus,
@@ -409,6 +456,8 @@ import {
 } from './database-size-warning-settings';
 import { createDatabaseSizeWarningSettingsWatcher } from './database-size-warning-settings-watcher.js';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
+import { createDialogueWorkspaceHandlers, checkDialogueDirectoryWritable, customDialogueWorkspaceRoot } from './dialogue-workspace-ipc.js';
+import { readDialogueWorkspaceSettings, writeDialogueWorkspaceDirectory } from './dialogue-workspace-settings.js';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
   cancelDbSlimmingStartupProgress,
@@ -679,6 +728,7 @@ import {
   anySessionInTurn,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
+  scheduleDeferredCodexRestart,
   clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
@@ -3632,7 +3682,8 @@ function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): numb
 //     写注册表 / .desktop entry; macOS 走 Info.plist, 此调用是兜底)
 //   - app.on('open-url') 是 macOS-only 事件, 冷启动时也会在 ready 之前 fire,
 //     提前 attach 才能接住
-registerDeepLinkProtocol();
+watchCindyVersionStartupResult();
+if (!isCindyPersonalRuntime()) registerDeepLinkProtocol();
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleIncomingDeepLink(url, 'open-url');
@@ -3684,16 +3735,22 @@ app.on('open-file', (event, filePath) => {
 // reader lease 阻止之后的 primary 抢跑 migration。
 // 隔离数据实例走 `--isolated[=<名字>]`(独立 userData → 独立锁域,见 docs/dev-rules/desktop-development.md)。
 if (
+  getCindyVersionLockScope() !== null ||
   shouldRequestSingleInstanceLock({
     isPackaged: app.isPackaged,
     schedulerPassive: process.env.XDT_SCHEDULER_PASSIVE === '1',
   })
 ) {
   const realUserDataDir = app.getPath('userData');
-  const lockScopeDir = resolveSingleInstanceLockUserDataDir({
-    isPackaged: app.isPackaged,
-    userDataDir: realUserDataDir,
-  });
+  const lockScopeDir =
+    getCindyVersionLockScope() === 'profile'
+      ? realUserDataDir
+      : getCindyVersionLockScope() === 'dev'
+        ? path.join(realUserDataDir, 'dev-single-instance-lock')
+        : resolveSingleInstanceLockUserDataDir({
+            isPackaged: app.isPackaged,
+            userDataDir: realUserDataDir,
+          });
   let gotTheLock: boolean;
   if (lockScopeDir === realUserDataDir) {
     gotTheLock = app.requestSingleInstanceLock();
@@ -3717,6 +3774,7 @@ if (
     );
     app.quit();
   } else {
+    recordCindyVersionActive();
     app.on('second-instance', (_event, argv) => {
       // Windows: 用户点 cindy://(或历史 xdt-maker://)链接 / 右键 "通过 Cindy 打开" 时,
       // OS 会再起一个本 app 实例; 单例锁把它 redirect 成 second-instance 事件,
@@ -3756,6 +3814,16 @@ if (
     });
   }
 }
+
+if (
+  app.hasSingleInstanceLock() ||
+  (getCindyVersionLockScope() === null &&
+    !shouldRequestSingleInstanceLock({
+      isPackaged: app.isPackaged,
+      schedulerPassive: process.env.XDT_SCHEDULER_PASSIVE === '1',
+    }))
+)
+  deliverCindyVersionOpenEvents();
 
 // 冷启动 argv 扫描 — Windows 上首次点链接 / 右键 "通过 Cindy 打开" 启动 app
 // 时, URL 或 --open-folder 在 process.argv 末尾。macOS deep link 走 open-url
@@ -4034,7 +4102,7 @@ const createWindow = () => {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
     refreshWindowsAppBadge();
-    if (!app.isPackaged) markDesktopDevWindowReady();
+    if (!app.isPackaged || isCindyVersionLaunchPending()) markDesktopDevWindowReady();
     void runComputerUseSmokeIfRequested();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
     // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
@@ -4888,7 +4956,12 @@ const registerIpcHandlers = () => {
   });
 
   // 智能通讯录 IPC —— 设置开关 + 数据 CRUD(设置页管理 UI 通道), 提前注册。
-  registerContactsIpc();
+  registerContactsIpc({
+    restartCodexAfterAuthModeChange,
+    shutdownCodexEnvironment,
+    scheduleDeferredCodexRestart,
+    invalidatePiEnvironment,
+  });
 
   // 聊天嵌入开关 IPC —— 与 compat-mode 同理提前注册:
   // renderer 启动 bootstrap 同步 localStorage 镜像, 远早于 splash 完成。
@@ -5818,7 +5891,7 @@ const registerIpcHandlers = () => {
         })
         .finally(() => authCredentialRecovery.request());
       await authManager.ensureStableOwnerPostCommitTasks('auth-initialize');
-      if (!app.isPackaged) {
+      if (!app.isPackaged || isCindyVersionLaunchPending()) {
         recordDesktopDevAuthStartupResult(state, pendingCompletion, () =>
           authManager.getAuthState(),
         );
@@ -7511,18 +7584,36 @@ const registerIpcHandlers = () => {
     });
   });
 
+  const readLatestSourceVersion = createLatestSourceVersionReader((url, init) =>
+    net.fetch(url, init),
+  );
+  configureUpstreamMerge((id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false);
+  ipcMain.handle('app:cindy-make-merge', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return actUpstreamMerge(input);
+  });
   ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
     assertTrustedAppRendererEvent(event);
     const userData = app.getPath('userData');
-    let env: Awaited<ReturnType<typeof createMakeToolchainEnvironment>> | undefined;
-    try {
-      env = await createMakeToolchainEnvironment(userData);
-    } catch {
-      // The persisted status remains usable when tool discovery is unavailable.
-    }
-    return cindyMakeManager.refreshSourceStatus(() =>
-      readCurrentCindySourceStatus(makeSourceRoot(userData), env),
-    );
+    const root = makeSourceRoot(userData);
+    const channel = !app.isPackaged
+      ? 'dev'
+      : /-beta(?:\.|$)/i.test(app.getVersion())
+        ? 'beta'
+        : 'release';
+    return refreshCindySourceStatus(cindyMakeManager, {
+      readSummary: () => readCurrentCindySourceStatus(root),
+      readLocal: async () => {
+        let env: Awaited<ReturnType<typeof createMakeToolchainEnvironment>> | undefined;
+        try {
+          env = await createMakeToolchainEnvironment(userData);
+        } catch {
+          // The persisted status remains usable when tool discovery is unavailable.
+        }
+        return readCurrentCindySourceStatus(root, env);
+      },
+      readLatest: (source) => readLatestSourceVersion(source, channel),
+    });
   });
   // 源码准备是全局单例:进度广播给所有窗口,任意窗口都能停止它。
   subscribeCindySourceStatus(broadcastCindyMakeSourceStatus);
@@ -7530,44 +7621,138 @@ const registerIpcHandlers = () => {
   configureCindyMakeTaskManagement({
     isAlive: (id) => getMakerIfReady()?.isSessionAlive(id),
     isRunning: (id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false,
+    isWorkspaceBusy: (workingDir) => cindyMakeTestController.isUsingWorkspace(workingDir),
     setStatus: patchSessionMetaInDb,
     recycle: recycleSessionWorktreeForStatusChange,
   });
+  configureCindyMakeTestRuntime(
+    (id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false,
+  );
+  configureMakeHistory((id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false);
+  ipcMain.handle('app:cindy-make-history', async (event, selected?: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (
+      selected !== undefined &&
+      (typeof selected !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(selected))
+    )
+      throwIpcError('INVALID_PARAMS', 'Invalid history selection');
+    try {
+      return await getCindyMakeHistory(selected as string | undefined);
+    } catch (error) {
+      const details = error as { name?: unknown; code?: unknown; message?: unknown };
+      const message =
+        typeof details.message === 'string'
+          ? details.message
+              .replace(/[A-Za-z]:[\\/][^\r\n]{0,240}|\\\\[^\r\n]{0,240}/g, '<path>')
+              .slice(0, 240)
+          : String(error).slice(0, 240);
+      createLogger('cindy-make:history').warn('history read failed', {
+        errorName: typeof details.name === 'string' ? details.name : undefined,
+        errorCode: typeof details.code === 'string' ? details.code : undefined,
+        errorMessage: message,
+      });
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  ipcMain.handle(
+    'app:cindy-make-history-action',
+    async (event, runId: unknown, action: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      try {
+        return await actCindyMakeHistory(runId, action);
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'unavailable');
+      }
+    },
+  );
+  ipcMain.handle('app:cindy-make-history-build', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await generateHistoryPersonalVersion();
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  app.once('will-quit', stopMakeHistoryBuild);
+  ipcMain.handle('app:cindy-make-history-cancel-build', async (event, buildId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await cancelHistoryPersonalVersion(buildId);
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  ipcMain.handle('app:cindy-make-history-open-build', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      await openHistoryPersonalBuild();
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  configureCindyVersions(
+    () => cindyMakeTestController.hasActiveJobs() || cindyMakeManager.hasActiveWork(),
+  );
+  ipcMain.handle('app:cindy-versions-state', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await getCindyVersions();
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  ipcMain.handle('app:cindy-versions-action', async (event, action: unknown, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return actCindyVersion(action, id);
+  });
+  app.once('will-quit', () => cindyMakeTestController.stopAll());
+  ipcMain.handle(
+    'app:cindy-make-test',
+    async (event, sessionId: unknown, completionId: unknown, action: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      return actCindyMakeTest(sessionId, completionId, action);
+    },
+  );
   cindyMakeManager.setProjectBusyProbe(
     (root) =>
       getMakerIfReady()
         ?.listActiveSessions()
         .some((session) => {
-          const relative = path.relative(path.join(root, 'worktrees'), session.workDir);
           return (
             session.isTurnRunning() &&
-            relative.length > 0 &&
-            !relative.startsWith('..') &&
-            !path.isAbsolute(relative)
+            root === makeSourceRoot(app.getPath('userData')) &&
+            isCindyMakeManagedWorktreePath(app.getPath('userData'), session.workDir)
           );
         }) ?? false,
   );
   ipcMain.handle('app:get-cindy-make-state', async (event) => {
     assertTrustedAppRendererEvent(event);
+    refreshUpstreamMergeProjection();
     try {
       await restoreCindyMakeTaskState();
       for (const [runId, report] of Object.entries(cindyMakeManager.getState().tasks ?? {})) {
-        if (report.task) cindyMakeManager.projectTaskSession(runId, {
-          executing: getMakerIfReady()?.getSession(report.task.sessionId)?.isTurnRunning() ?? false,
-        });
+        if (report.task)
+          cindyMakeManager.projectTaskSession(runId, {
+            executing:
+              getMakerIfReady()?.getSession(report.task.sessionId)?.isTurnRunning() ?? false,
+          });
       }
+      void refreshCindyMakeTaskIntegration();
     } catch {
       throwIpcError('INTERNAL', 'Could not restore Cindy Make preparation state');
     }
     return cindyMakeManager.getState();
   });
-  ipcMain.handle('app:manage-cindy-make-task', async (event, sessionId: unknown, action: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    await manageCindyMakeTask(sessionId, action).catch((error) => {
-      if (error instanceof Error && error.message.startsWith('[')) throw error;
-      throwIpcError('INTERNAL', 'cleanupFailed');
-    });
-  });
+  ipcMain.handle(
+    'app:manage-cindy-make-task',
+    async (event, sessionId: unknown, action: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      await manageCindyMakeTask(sessionId, action).catch((error) => {
+        if (error instanceof Error && error.message.startsWith('[')) throw error;
+        throwIpcError('INTERNAL', 'cleanupFailed');
+      });
+    },
+  );
   ipcMain.handle('app:cancel-cindy-make-source', async (event): Promise<{ success: boolean }> => {
     assertTrustedAppRendererEvent(event);
     return { success: cancelCindySourcePreparation() };
@@ -7990,6 +8175,16 @@ const registerIpcHandlers = () => {
     },
   );
 
+  // Local storage controls never accept a filesystem path from the renderer.
+  ipcMain.handle('worktree-recycle:list', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return listWorktreeRecycleStatus();
+  });
+  ipcMain.handle('worktree-recycle:control', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    await controlWorktreeRecycle(input);
+  });
+
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。
   {
@@ -8164,6 +8359,46 @@ const registerIpcHandlers = () => {
         return { cleared: true };
       }),
     );
+
+    // Native folder selection belongs to this computer; intentionally not exposed via device-link.
+    const dialogueWorkspaceHandlers = createDialogueWorkspaceHandlers({
+      captureScope: () => {
+        if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+          throwIpcError('PRECONDITION_FAILED', 'dialogue workspace requires an active owner');
+        }
+        return activeOwnerScopeKey();
+      },
+      isScopeCurrent: (scope) => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scope,
+      read: readDialogueWorkspaceSettings,
+      write: writeDialogueWorkspaceDirectory,
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.dialogueDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showOpenDialog(ownerWindow, options)
+          : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      // Dedicated owner subtree prevents unrelated folders from being treated as managed tasks.
+      resolveDirectory: (selected) => customDialogueWorkspaceRoot(selected, path.basename(ownerScopedUserDataPath())),
+      checkWritable: checkDialogueDirectoryWritable,
+      openDirectory: (directory) => shell.openPath(directory),
+    });
+    for (const action of ['get', 'choose', 'reset', 'open'] as const) {
+      ipcMain.handle('dialogue-workspace:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await dialogueWorkspaceHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('dialogue workspace settings request failed', { action });
+          throwIpcError('INTERNAL', 'dialogue workspace settings request failed');
+        }
+      });
+    }
 
     const localDbMaintenanceHandlers = createLocalDbMaintenanceIpcHandlers({
       captureOwner: () => {
