@@ -21,6 +21,7 @@ import path from 'node:path';
 
 import { GHOST_SKILL_MD_MAX_BYTES } from '../../shared/ghost.js';
 import {
+  assertGhostContentRootIdentity,
   classifyGhostDirEntry,
   collectGhostContentFiles,
   hashGhostContentFiles,
@@ -28,8 +29,14 @@ import {
   resolveGhostContentPath,
 } from './ghostContentTree.js';
 import {
+  captureGhostSnapshotTargetIdentity,
+  ghostContentRootIdentityFromSnapshot,
+  sameCapturedGhostSnapshotTargetIdentity,
+  sameGhostSnapshotInodeIdentity,
   sameGhostSnapshotParentIdentity,
+  sameGhostSnapshotPath,
   type GhostSnapshotParentIdentity,
+  type GhostSnapshotTargetIdentity,
 } from './ghostSnapshotIdentity.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
@@ -51,11 +58,6 @@ const port = (process as unknown as { parentPort?: Port }).parentPort;
 const send = (message: unknown): void => port?.postMessage(message);
 const hasCode = (error: unknown, code: string): boolean =>
   Boolean(error && typeof error === 'object' && (error as NodeJS.ErrnoException).code === code);
-function samePath(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
-  return normalize(left) === normalize(right);
-}
 function targetParts(request: GhostSnapshotWorkerRequest): string[] {
   const parts = request.targetName.split('/');
   if (request.operation === 'ensure') {
@@ -71,7 +73,9 @@ function targetParts(request: GhostSnapshotWorkerRequest): string[] {
 async function verifyParent(expected: GhostSnapshotParentIdentity, workingDir: string): Promise<void> {
   const stats = await fs.promises.lstat(workingDir, { bigint: true });
   if (!sameGhostSnapshotParentIdentity(stats, expected)) throw new Error('snapshot parent identity changed');
-  if (!samePath(await fs.promises.realpath(workingDir), expected.realPath)) throw new Error('snapshot parent path changed');
+  if (!sameGhostSnapshotPath(await fs.promises.realpath(workingDir), expected.realPath)) {
+    throw new Error('snapshot parent path changed');
+  }
 }
 async function verifyDirectory(workingDir: string, name: string): Promise<void> {
   const target = path.join(workingDir, name);
@@ -83,30 +87,16 @@ async function removeVerifiedDirectory(
   workingDir: string,
   targetPath: string,
   parentName: string,
-  expectedTarget?: { realPath: string; dev: bigint; ino: bigint },
+  expectedTarget?: GhostSnapshotTargetIdentity,
 ): Promise<void> {
-  const targetStat = await fs.promises.lstat(targetPath, { bigint: true });
-  if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
-    throw new Error('snapshot target is not a real directory');
-  }
-  const targetRealPath = await fs.promises.realpath(targetPath);
-  if (expectedTarget && (
-    targetStat.dev !== expectedTarget.dev ||
-    targetStat.ino !== expectedTarget.ino ||
-    !samePath(targetRealPath, expectedTarget.realPath)
-  )) {
+  const targetIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
+  if (expectedTarget && !sameCapturedGhostSnapshotTargetIdentity(targetIdentity, expectedTarget)) {
     throw new Error('snapshot target identity changed before removal');
   }
   const quarantinePath = `${targetPath}.remove-${process.pid}-${Date.now()}`;
   await fs.promises.rename(targetPath, quarantinePath);
   const movedStat = await fs.promises.lstat(quarantinePath, { bigint: true });
-  if (
-    !movedStat.isDirectory()
-    || movedStat.isSymbolicLink()
-    || movedStat.dev !== targetStat.dev
-    || movedStat.ino !== targetStat.ino
-    || !samePath(await fs.promises.realpath(quarantinePath), targetRealPath)
-  ) {
+  if (!sameGhostSnapshotInodeIdentity(movedStat, targetIdentity)) {
     // Never recursively delete an unverified path. Leave the quarantined
     // directory for a later owner-checked cleanup pass.
     throw new Error('snapshot target identity changed during removal');
@@ -114,8 +104,12 @@ async function removeVerifiedDirectory(
   // The pathname was renamed through a mutable parent. Revalidate the
   // owner-bound parent before recursive deletion; on failure the isolated
   // directory is intentionally left for a later guarded cleanup pass.
+  // Removing `<id>` itself leaves no child directory to recheck — the
+  // snapshots root is already covered by verifyParent.
   await verifyParent(expectedParent, workingDir);
-  await verifyDirectory(workingDir, parentName);
+  if (!sameGhostSnapshotPath(path.dirname(targetPath), workingDir)) {
+    await verifyDirectory(workingDir, parentName);
+  }
   await fs.promises.rm(quarantinePath, { recursive: true, force: true });
 }
 async function copyDirectory(source: string, target: string): Promise<void> {
@@ -130,17 +124,45 @@ async function copyDirectory(source: string, target: string): Promise<void> {
     else await fs.promises.copyFile(from, to, fs.constants.COPYFILE_EXCL);
   }
 }
-async function hashes(receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>, root: string): Promise<Record<string, string>> {
+async function hashes(
+  receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>,
+  root: string,
+  pinnedRoot?: GhostSnapshotTargetIdentity,
+): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
+  const pinnedContentRoot = pinnedRoot
+    ? ghostContentRootIdentityFromSnapshot(pinnedRoot)
+    : undefined;
+  if (pinnedContentRoot) {
+    await assertGhostContentRootIdentity(root, pinnedContentRoot);
+  }
   for (const item of receipt.manifest.skill?.items ?? []) {
-    const itemRoot = await resolveGhostContentPath(root, item.dir, { expect: 'directory', label: 'approved skill' });
-    const tree = await collectGhostContentFiles(itemRoot, { dotEntries: 'include', nonRegular: 'throw', label: `approved skill ${item.dir}` });
+    const itemBase = pinnedContentRoot?.realPath ?? root;
+    const itemRoot = await resolveGhostContentPath(itemBase, item.dir, { expect: 'directory', label: 'approved skill' });
+    if (pinnedContentRoot) {
+      await assertGhostContentRootIdentity(root, pinnedContentRoot);
+    }
+    const tree = await collectGhostContentFiles(itemRoot, {
+      dotEntries: 'include',
+      nonRegular: 'throw',
+      label: `approved skill ${item.dir}`,
+    });
+    if (pinnedContentRoot) {
+      await assertGhostContentRootIdentity(root, pinnedContentRoot);
+    }
     result[item.dir] = await hashGhostContentFiles(itemRoot, tree.files, tree.rootIdentity);
+    if (pinnedContentRoot) {
+      await assertGhostContentRootIdentity(root, pinnedContentRoot);
+    }
   }
   return result;
 }
-async function matches(receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>, root: string): Promise<boolean> {
-  const actual = await hashes(receipt, root).catch(() => null);
+async function matches(
+  receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>,
+  root: string,
+  pinnedRoot?: GhostSnapshotTargetIdentity,
+): Promise<boolean> {
+  const actual = await hashes(receipt, root, pinnedRoot).catch(() => null);
   return Boolean(actual && (receipt.manifest.skill?.items ?? []).every(
     (item) => actual[item.dir] === receipt.skillContentSha256[item.dir],
   ));
@@ -162,15 +184,7 @@ export async function runGhostSnapshotWorkerRequest(
     await verifyParent(request.expectedParent, workingDir);
     if (parts.length !== 1) throw new Error('invalid snapshot removal target');
     await verifyDirectory(workingDir, parts[0]);
-    const targetStat = await fs.promises.lstat(targetPath, { bigint: true });
-    if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
-      throw new Error('snapshot target is not a real directory');
-    }
-    const targetIdentity = {
-      realPath: await fs.promises.realpath(targetPath),
-      dev: targetStat.dev,
-      ino: targetStat.ino,
-    };
+    const targetIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
     await removeVerifiedDirectory(
       request.expectedParent,
       workingDir,
@@ -182,28 +196,24 @@ export async function runGhostSnapshotWorkerRequest(
   }
   if (!request.receipt || !request.sourceDir) throw new Error('approved skill snapshot is missing');
   let exists = false;
-  let existingTargetIdentity: { realPath: string; dev: bigint; ino: bigint } | undefined;
+  let existingTargetIdentity: GhostSnapshotTargetIdentity | undefined;
   try {
-    const stat = await fs.promises.lstat(targetPath, { bigint: true });
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('snapshot target is not a real directory');
+    existingTargetIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
     exists = true;
-    existingTargetIdentity = {
-      realPath: await fs.promises.realpath(targetPath),
-      dev: stat.dev,
-      ino: stat.ino,
-    };
   } catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
   if (exists) {
     await verifyDirectory(workingDir, parts[0]);
-    if (await matches(request.receipt, targetPath)) {
-      // matches() reads through pathnames and does not validate the
-      // baseDir itself (ghostContentTree.ts:68).  Recheck the target
-      // identity with lstat (no-follow) before accepting the fast path,
-      // so a concurrent process that swapped <id>/<revision> for a
-      // symlink after the initial lstat can't publish a linked external
-      // tree as the approved snapshot (P1, PRRT_kwDOTgdRUs6Yb404).
-      const targetKind = await classifyGhostDirEntry(targetPath);
-      if (targetKind !== 'directory') throw new Error('snapshot target is not a real directory on fast path');
+    if (await matches(request.receipt, targetPath, existingTargetIdentity)) {
+      // matches() reads through pathnames and does not validate the root
+      // itself. Recapture a bound identity after the content match so a
+      // concurrent replacement cannot mix an old inode with a new path.
+      const targetIdentityAfterMatch = await captureGhostSnapshotTargetIdentity(targetPath);
+      if (!existingTargetIdentity || !sameCapturedGhostSnapshotTargetIdentity(
+        targetIdentityAfterMatch,
+        existingTargetIdentity,
+      )) {
+        throw new Error('snapshot target identity changed after fast path match');
+      }
       send({ ok: true }); return;
     }
   }
@@ -277,19 +287,21 @@ export async function runGhostSnapshotWorkerRequest(
     }
     await verifyParent(request.expectedParent, workingDir);
     await verifyDirectory(workingDir, parts[0]);
-    if (!await matches(request.receipt, targetPath)) {
+    // Pin the freshly published target before matching, and recompare the
+    // identity after the match, so a swap between match and ok cannot let a
+    // replacement directory be reported as the approved snapshot.
+    const publishedIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
+    if (!await matches(request.receipt, targetPath, publishedIdentity)) {
       if (await verifyParent(request.expectedParent, workingDir).then(() => true, () => false) &&
         await verifyDirectory(workingDir, parts[0]).then(() => true, () => false)) {
         await fs.promises.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
       }
       throw new Error('approved skill snapshot changed while being published');
     }
-    // matches() follows symlinks through resolveGhostContentPath and does
-    // not validate the root itself (ghostContentTree.ts:68).  Recheck
-    // after matches() so a concurrent swap to a symlink with identical
-    // bytes is caught before we send ok (same P1 as PRRT_kwDOTgdRUs6Yb404).
-    const targetKindAfterMatch = await classifyGhostDirEntry(targetPath);
-    if (targetKindAfterMatch !== 'directory') throw new Error('snapshot target no longer a real directory after match');
+    const publishedIdentityAfterMatch = await captureGhostSnapshotTargetIdentity(targetPath);
+    if (!sameCapturedGhostSnapshotTargetIdentity(publishedIdentityAfterMatch, publishedIdentity)) {
+      throw new Error('snapshot target identity changed after publish match');
+    }
     send({ ok: true });
   } finally {
     if (await verifyParent(request.expectedParent, workingDir).then(() => true, () => false) &&
