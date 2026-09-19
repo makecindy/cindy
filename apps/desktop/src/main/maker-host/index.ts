@@ -199,6 +199,8 @@ import {
 } from './runtime-configs.js';
 import {
   getClaudeEndpoint,
+  getClaudeProxySessionAuth,
+  isAnthropicCompatProxyReady,
   setClaudeProxyGatewayKeyReader,
   setClaudeProxyOAuthSpawnChecker,
 } from './anthropic-compat-proxy-host.js';
@@ -1158,6 +1160,10 @@ export function getMaker(): Maker {
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
       binaryPath: claudePath,
       logger: desktopMakerLogger,
+      getClaudeProxySessionAuth: (sessionId, sessionInstanceId) =>
+        isAnthropicCompatProxyReady()
+          ? getClaudeProxySessionAuth(sessionId, sessionInstanceId)
+          : null,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
         noteOpaqueWrite: noteOpaqueTurnChange,

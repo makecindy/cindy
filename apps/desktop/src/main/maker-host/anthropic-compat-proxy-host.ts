@@ -43,6 +43,7 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
@@ -131,6 +132,95 @@ const log = createMakerLogger('cc-proxy');
 
 let _handle: ProxyHandle | null = null;
 let _initialized = false;
+
+// 路由证明走 Cookie,不走 `x-cindy-cc-*` 自定义头 —— 这是**落盘泄漏**的规避,不是风格选择:
+// 「设置 → About 的 Debug 日志开关」(XDT_CC_DEBUG_NET,dev 模式硬开)会让 env-builder 设
+// ANTHROPIC_LOG=debug,Anthropic SDK 随即把每个请求的**完整 headers** 写进该会话的
+// sessions/<id>/cc-debug.raw.log。而 SDK 的脱敏是按 header 名写死的白名单
+// (@anthropic-ai/sdk internal/utils/log 的 formatRequestDetails:x-api-key /
+// authorization / cookie / set-cookie → `***`),自定义头一律原样落盘。证明在会话存活期间
+// 一直有效,明文落盘 = 本机其它进程(或用户打包外发的排障日志)可直接重放、借用该会话的
+// 供应商路由。放进 cookie 即可复用 SDK 现成的脱敏,无需我们自己处理 SDK 日志。
+// ⚠ 改这两个名字前先确认 SDK 白名单仍含 `cookie`,否则证明会重新开始明文落盘。
+const CC_PROXY_SESSION_ID_COOKIE = 'cindy-cc-session';
+const CC_PROXY_SESSION_TOKEN_COOKIE = 'cindy-cc-token';
+// CC CLI 自身不发 cookie,Anthropic / 网关上游也不消费它,整头删除即可。
+const CC_PROXY_INTERNAL_HEADERS = ['cookie'];
+
+/** Read one cookie pair out of a raw `Cookie` header. */
+function cookieValue(header: string | null, name: string): string | null {
+  if (!header) return null;
+  for (const pair of header.split(';')) {
+    const separator = pair.indexOf('=');
+    if (separator < 0) continue;
+    if (pair.slice(0, separator).trim() !== name) continue;
+    return pair.slice(separator + 1).trim() || null;
+  }
+  return null;
+}
+interface ClaudeProxySessionRegistration {
+  sessionInstanceId?: string;
+  token: string;
+}
+
+const ccProxySessionTokens = new Map<string, ClaudeProxySessionRegistration>();
+
+/** Mint the per-process proof that lets a fresh CC request select its Cindy session route. */
+export function getClaudeProxySessionAuth(
+  sessionId: string,
+  sessionInstanceId?: string,
+): { sessionId: string; token: string; dispose: () => void } | null {
+  const id = sessionId.trim();
+  if (!id) return null;
+  // The proof is serialized into a Cookie header; a separator inside the id would
+  // split into an attacker-controllable second pair. Business ids never contain
+  // these, so refuse rather than escape.
+  if (/[;=,\s]/.test(id)) return null;
+  const registration: ClaudeProxySessionRegistration = {
+    ...(sessionInstanceId?.trim() ? { sessionInstanceId: sessionInstanceId.trim() } : {}),
+    token: randomBytes(32).toString('base64url'),
+  };
+  // One business session can be reopened with a new instance. Replacing the
+  // registration immediately revokes a delayed process from the old instance.
+  ccProxySessionTokens.set(id, registration);
+  return {
+    sessionId: id,
+    token: registration.token,
+    dispose: () => {
+      if (ccProxySessionTokens.get(id) === registration) ccProxySessionTokens.delete(id);
+    },
+  };
+}
+
+/** 401 for a Claude Code request whose loopback session identity cannot be trusted. */
+function refuseCcSessionRequest(code: string, message: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', code, message } }));
+    },
+  };
+}
+
+/** Internal proxy headers are only safe when this process owns the loopback hop. */
+export function isAnthropicCompatProxyReady(): boolean {
+  return _handle !== null;
+}
+
+function authenticateClaudeProxySession(sessionId: string | null, token: string | null): string | null {
+  if (!sessionId || !token) return null;
+  const registration = ccProxySessionTokens.get(sessionId);
+  const expected = registration?.token;
+  if (!expected) return null;
+  // Compare byte lengths, not JS string lengths: a same-UTF-16-length token with
+  // a different UTF-8 byte length would make timingSafeEqual throw, and a
+  // throwing routingTransform never reaches the 401 below (same guard as
+  // pi-proxy-session-auth.ts).
+  const expectedBytes = Buffer.from(expected);
+  const candidateBytes = Buffer.from(token);
+  if (expectedBytes.length !== candidateBytes.length) return null;
+  return timingSafeEqual(expectedBytes, candidateBytes) ? sessionId : null;
+}
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey),避免 proxy-host 直接 import
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
@@ -618,11 +708,38 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
+    const ccProxyCookie = headerValue(ctx.headers, 'cookie');
+    const claimedCcSessionId = cookieValue(ccProxyCookie, CC_PROXY_SESSION_ID_COOKIE);
+    const claimedCcSessionToken = cookieValue(ccProxyCookie, CC_PROXY_SESSION_TOKEN_COOKIE);
+    const authenticatedCcSessionId = authenticateClaudeProxySession(
+      claimedCcSessionId,
+      claimedCcSessionToken,
+    );
+    if ((claimedCcSessionId !== null || claimedCcSessionToken !== null) && !authenticatedCcSessionId) {
+      return refuseCcSessionRequest(
+        'invalid_cc_session_token',
+        'Invalid Claude Code proxy session token.',
+      );
+    }
     const sdkSessionId = ctx.headers['x-claude-code-session-id'];
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
-    const sessionId = piSessionId ?? ccSessionId;
+    // Two identities for the same request must agree. A host attestation bound to
+    // session A plus a resolvable SDK id for session B would route as A while the
+    // activity/billing observers below record B. Stale env, process reuse or a
+    // broken identity chain — fail closed before either side is written.
+    if (authenticatedCcSessionId && ccSessionId && authenticatedCcSessionId !== ccSessionId) {
+      log.warn('cc session identity mismatch; refusing request', {
+        attested: authenticatedCcSessionId,
+        resolved: ccSessionId,
+      });
+      return refuseCcSessionRequest(
+        'cc_session_identity_mismatch',
+        'Claude Code proxy session identity does not match the SDK session.',
+      );
+    }
+    const sessionId = piSessionId ?? authenticatedCcSessionId ?? ccSessionId;
     if (sdkSessionId) {
       recordClaudeApiActivity(
         sdkSessionId,
@@ -974,6 +1091,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       routingTransform: createModelRoutingTransform(),
       revalidateBeforeDispatch: (_decision, ctx) =>
         ownerBoundDispatchUnsafe(ctx) ? ownerBoundaryPendingRoute() : null,
+      // These attestations are meaningful only on the loopback hop. Keeping
+      // stripping in the proxy forwarding layer covers multipart/non-JSON
+      // requests, which intentionally bypass body routing transforms.
+      forwardHeaderDelete: CC_PROXY_INTERNAL_HEADERS,
       // 只读响应观察器(组合三个,互不感知):
       //   - fast mode 链路核验:tee SSE 抽上游 usage.speed(debug-gated);
       //   - 订阅余量旁路:读 anthropic-ratelimit-unified-* headers(仅订阅直连响应,
