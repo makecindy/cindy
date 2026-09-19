@@ -1596,12 +1596,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     }
     configPending = true;
-    deadlineTimer = setTimeout(() => {
-      if (g === generation && configPending) {
-        configPending = false;
-        void startRtc(g, iceServers);
-      }
-    }, 3500);
+    deadlineTimer = setTimeout(
+      () => {
+        if (g === generation && configPending) {
+          configPending = false;
+          void startRtc(g, iceServers);
+        }
+      },
+      (net.iceConfigMs ?? 8000) + (net.iceConfigBridgeMs ?? 500),
+    );
     return post({ type: "iceConfig", attemptId });
   }
   async function receiveIceConfig(message) {

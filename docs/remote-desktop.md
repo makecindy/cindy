@@ -167,8 +167,10 @@ labeled compatibility mode: JPEG at at most 1280 pixels per dimension, at most
 180 KB before base64, one frame in flight, and no more than four capture requests
 per second. Images are transient and pass through the authenticated TLS relay.
 This mode trades frame rate and clarity for reachability. It is suitable for
-ordinary desktop work, not game streaming. A production TURN service is the
-follow-up needed for consistently smooth video across restrictive networks.
+ordinary desktop work, not game streaming. Clients also support authenticated,
+short-lived TURN configuration as described in
+[connectivity](dev-rules/remote-desktop-connectivity.md); actual relay availability
+depends on the service deployment.
 
 ### Incremental ICE and media recovery
 
@@ -218,8 +220,9 @@ not repeatedly start media attempts.
 
 For mainland-China deployment, restrictive NAT and UDP-blocked networks still
 need authenticated regional TURN with short-lived credentials and UDP plus
-TCP/TLS fallback, tested across carriers. This change does not provision that
-infrastructure or add an unconfigured TURN option. Native ICE retains available
+TCP/TLS fallback, tested across carriers. Clients fetch deployed TURN configuration
+through the authenticated ICE endpoint; this does not itself provision relay
+infrastructure. Native ICE retains available
 LAN, IPv6 and overlay-network candidates; being on Tailscale does not itself
 prove that the media path is direct.
 

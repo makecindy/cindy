@@ -77,7 +77,11 @@ import {
 import { Text } from "@/components/AppText";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
-import { mobileDebugLog } from "@/debug/mobileDebugLog";
+import { mobileDebugEnabled, mobileDebugLog } from "@/debug/mobileDebugLog";
+import {
+  RTC_DIAGNOSTIC_REVISION,
+  rtcDiagnosticSummary,
+} from "./rtcDiagnostics";
 import {
   fontWeight,
   iconSize,
@@ -456,6 +460,7 @@ export function RemoteDesktopSession({
                       }
                     : REMOTE_DESKTOP_NETWORK,
                 iceServers: REMOTE_DESKTOP_ICE_SERVERS,
+                diagnostics: mobileDebugEnabled(),
               }
             : {}),
         })
@@ -520,13 +525,25 @@ export function RemoteDesktopSession({
       new RemoteDesktopViewerMedia({
         request,
         send,
-        loadIce: () =>
-          resolveDesktopIceServers(() =>
-            authRef.current.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
-              baseUrl: DEVICE_LINK_API_BASE_URL,
-              timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
-              cache: "no-store",
-            }),
+        loadIce: (attemptId) =>
+          resolveDesktopIceServers(
+            () =>
+              authRef.current.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
+                baseUrl: DEVICE_LINK_API_BASE_URL,
+                timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+                cache: "no-store",
+              }),
+            (result) =>
+              mobileDebugLog(
+                "info",
+                "device-link",
+                "remote desktop ICE config",
+                {
+                  revision: RTC_DIAGNOSTIC_REVISION,
+                  attempt: attemptId.slice(0, 8),
+                  ...result,
+                },
+              ),
           ),
         current: () => {
           const lease = active.current,
@@ -1544,6 +1561,17 @@ export function RemoteDesktopSession({
     )
       return;
     switch (message.type) {
+      case "rtcDiagnostic": {
+        const summary = rtcDiagnosticSummary(message);
+        if (summary)
+          mobileDebugLog(
+            "info",
+            "device-link",
+            "remote desktop RTC diagnostic",
+            summary,
+          );
+        break;
+      }
       case "nativeViewport":
         if (NativeRemoteDesktopView)
           void nativeViewer.current?.receive(message).catch(() => {});

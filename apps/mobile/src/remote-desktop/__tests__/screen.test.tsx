@@ -1355,7 +1355,10 @@ describe("remote desktop controls", () => {
       expect.objectContaining({
         type: "init",
         epoch: "lease",
-        net: expect.any(Object),
+        net: expect.objectContaining({
+          iceConfigMs: 8_000,
+          iceConfigBridgeMs: 500,
+        }),
       }),
     );
     await act(async () =>
@@ -1376,6 +1379,10 @@ describe("remote desktop controls", () => {
         attemptId: "native-1",
         iceServers: expect.any(Array),
       }),
+    );
+    expect(fixture.apiFetch).toHaveBeenCalledWith(
+      "/api/device-link/ice-servers",
+      expect.objectContaining({ timeoutMs: 8_000 }),
     );
     act(() => {
       AppState.currentState = "background";
@@ -1556,7 +1563,7 @@ describe("remote desktop controls", () => {
       "/api/device-link/ice-servers",
       {
         baseUrl: "https://relay.example.test",
-        timeoutMs: 3000,
+        timeoutMs: 8000,
         cache: "no-store",
       },
     );
