@@ -7182,6 +7182,7 @@
       "empty": "本任務暫無後臺作業",
       "stop": "停止",
       "stopping": "正在停止…",
+      "stopUnconfirmed": "停止未確認，任務可能仍在執行",
       "back": "返回",
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
@@ -8621,6 +8622,7 @@
         "stopped": "已停止"
       },
       "stop": "停止該任務",
+      "stopUnconfirmed": "停止未確認，任務可能仍在執行",
       "openInPanel": "在後臺任務面板中開啟",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
       "workflowProgressCount": "{{done}}/{{total}} Agent",
@@ -8790,6 +8792,9 @@
       "bashStatus_other": "後臺任務執行中（{{count}} 個）…",
       "stopAll": "全部停止",
       "stopAllTitle": "關閉該任務的後臺處理程序，停止全部後臺作業（任務可繼續使用）",
+      "stopUnconfirmed": "停止未確認：{{count}} 個任務可能仍在執行",
+      "stopUnconfirmed_one": "停止未確認：{{count}} 個任務可能仍在執行",
+      "stopUnconfirmed_other": "停止未確認：{{count}} 個任務可能仍在執行",
       "stopBashTitle": "停止該任務仍在執行的後臺作業（不關閉會話處理程序）",
       "stopping": "停止中…"
     },

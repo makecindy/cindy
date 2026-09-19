@@ -1,6 +1,7 @@
 /** Desktop item projection for the shared work-run grouping algorithm. No UI side effects. */
 import {
   deriveAgentTaskStatus,
+  isAgentTaskLaunchReceipt,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
   type AgentTaskTerminalStatus,
@@ -189,8 +190,7 @@ function isRunningAgentTask(it: RenderItem): boolean {
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
     persistedStatus: it.persistedStatus,
     resultIsLaunchReceipt:
-      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
-        undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
+      isAgentTaskLaunchReceipt(it.toolCall?.toolName, it.toolCall?.toolInput, it.result),
   });
   return status === 'running';
 }

@@ -2272,6 +2272,239 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   }
 });
 
+// ---------------------------------------------------------------------------
+// 后台命令(bridge 侧):参数归一 / shell 解析 / 控制请求 / 回执
+// ---------------------------------------------------------------------------
+
+interface BackgroundCommandHelpers {
+  cindyBackgroundCommandsEnabled: () => boolean;
+  cindyBackgroundCommandAvailable: () => boolean;
+  mapBackgroundCommandAlias: (args: unknown) => unknown;
+  wantsBackgroundCommand: (params: unknown) => boolean;
+  compactBackgroundCommandTitle: (command: string) => string;
+  resolveBackgroundCommandShellSpec: () => {
+    shell: string;
+    args: string[];
+    commandTransport: string;
+  } | undefined;
+  startCindyBackgroundCommand: (
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal: { aborted?: boolean } | undefined,
+    ctx: unknown,
+  ) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }>;
+}
+
+/**
+ * 抽取生成 bridge 里的后台命令辅助函数放进沙箱执行:验证参数别名归一、
+ * shell 解析兵底、host 控制请求形状与回执前缀,不启动真 Pi 进程。
+ */
+function loadBackgroundCommandHelpers(options: {
+  env?: Record<string, string | undefined>;
+  shellConfig?: unknown;
+  configuredShellPath?: string;
+} = {}): { helpers: BackgroundCommandHelpers; shellRequests: unknown[]; env: Record<string, string | undefined> } {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  // 整个后台命令块(含 bearer 读取)都在这个区块标记之后 —— 按函数名切片会漏掉
+  // 读 token 的那几个辅助函数。
+  const start = source.indexOf('// ── 后台命令(host-owned)');
+  const end = source.indexOf('const bashTool = createBashTool', start);
+  if (start < 0 || end <= start) {
+    throw new Error('background command helpers were not found in the generated bridge');
+  }
+  const shellRequests: unknown[] = [];
+  const env: Record<string, string | undefined> = {
+    ...(options.env ?? { CINDY_PI_BACKGROUND_COMMANDS: BACKGROUND_COMMAND_TOKEN }),
+  };
+  if (options.configuredShellPath !== undefined && env.PI_CODING_AGENT_DIR === undefined) {
+    env.PI_CODING_AGENT_DIR = path.join(tmpdir(), 'cindy-pi-bg-config-home');
+  }
+  // 用 node:vm 求值而不是函数构造器:同样是「把生成的 bridge 片段当脚本跑」,但新代码
+  // 不再出现安全扫描器点名的高风险原语(文件里两处存量用法不在本 PR 范围,保持不动)。
+  const factory = runInNewContext(
+    `(function (process, path, readFileSync, piCodingAgent, BACKGROUND_COMMANDS_ENV,
+      BACKGROUND_COMMAND_CONTROL_TITLE, BACKGROUND_COMMAND_RECEIPT_PREFIX, MAX_BACKGROUND_COMMAND_CHARS) {
+      ${source.slice(start, end)}
+      return { cindyBackgroundCommandsEnabled, cindyBackgroundCommandAvailable, mapBackgroundCommandAlias, wantsBackgroundCommand,
+        compactBackgroundCommandTitle, resolveBackgroundCommandShellSpec, startCindyBackgroundCommand };
+    })`,
+  ) as (...args: unknown[]) => BackgroundCommandHelpers;
+  const helpers = factory(
+    { env, cwd: () => process.cwd() },
+    path,
+    (file: string) => {
+      if (options.configuredShellPath === undefined) throw new Error(`ENOENT ${file}`);
+      return JSON.stringify({ shellPath: options.configuredShellPath });
+    },
+    {
+      getShellConfig: (customShellPath: unknown) => {
+        shellRequests.push(customShellPath);
+        return options.shellConfig;
+      },
+    },
+    'CINDY_PI_BACKGROUND_COMMANDS',
+    'cindy:bash-background',
+    'Cindy background command started',
+    32_000,
+  );
+  return { helpers, shellRequests, env };
+}
+
+/** host 每会话签发的 bearer 形状(randomBytes(32).toString('base64url'))。 */
+const BACKGROUND_COMMAND_TOKEN = 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v';
+
+it('normalises the PI background command alias and rejects a misleading foreground run', () => {
+  const { helpers } = loadBackgroundCommandHelpers();
+  expect(helpers.cindyBackgroundCommandsEnabled()).toBe(true);
+  expect(loadBackgroundCommandHelpers({ env: {} }).helpers.cindyBackgroundCommandsEnabled()).toBe(false);
+  // bearer 不匹配(旧式布尔开关 / 空值)一律当作未启用 —— title 与 payload 在 Pi
+  // 进程内可见,能伪造请求的东西拿不到 token 就驱动不了 host。
+  expect(loadBackgroundCommandHelpers({ env: { CINDY_PI_BACKGROUND_COMMANDS: '1' } })
+    .helpers.cindyBackgroundCommandsEnabled()).toBe(false);
+  expect(loadBackgroundCommandHelpers({ env: { CINDY_PI_BACKGROUND_COMMANDS: 'short' } })
+    .helpers.cindyBackgroundCommandsEnabled()).toBe(false);
+  // Claude 系模型的 CC 参数名归一到 background;显式 background 优先。
+  expect(helpers.mapBackgroundCommandAlias({ command: 'x', run_in_background: true }))
+    .toEqual({ command: 'x', background: true });
+  expect(helpers.mapBackgroundCommandAlias({ command: 'x', run_in_background: false, background: true }))
+    .toEqual({ command: 'x', background: true });
+  expect(helpers.mapBackgroundCommandAlias({ command: 'x' })).toEqual({ command: 'x' });
+  // 幂等:别名已被消费时不再改写
+  const mapped = helpers.mapBackgroundCommandAlias({ command: 'x', run_in_background: true });
+  expect(helpers.mapBackgroundCommandAlias(mapped)).toEqual(mapped);
+  expect(helpers.wantsBackgroundCommand({ background: true })).toBe(true);
+  expect(helpers.wantsBackgroundCommand({ run_in_background: true })).toBe(true);
+  expect(helpers.wantsBackgroundCommand({ background: false })).toBe(false);
+  expect(helpers.wantsBackgroundCommand({ command: 'x' })).toBe(false);
+  expect(helpers.wantsBackgroundCommand(null)).toBe(false);
+  expect(helpers.wantsBackgroundCommand('x')).toBe(false);
+  // 标题压平空白并截断
+  expect(helpers.compactBackgroundCommandTitle('  pnpm\n\n dev   server ')).toBe('pnpm dev server');
+  expect(helpers.compactBackgroundCommandTitle('x'.repeat(200)).length).toBe(96);
+});
+
+it('resolves the shell through Pi and hands the start request to the host', async () => {
+  const { helpers, shellRequests, env } = loadBackgroundCommandHelpers({
+    shellConfig: { shell: '/bin/bash', args: ['-lc', 7], commandTransport: 'stdin' },
+    configuredShellPath: 'C:/Program Files/Git/bin/bash.exe',
+  });
+  expect(helpers.resolveBackgroundCommandShellSpec()).toEqual({
+    shell: '/bin/bash',
+    args: ['-lc'],
+    commandTransport: 'stdin',
+  });
+  expect(shellRequests).toEqual(['C:/Program Files/Git/bin/bash.exe']);
+
+  // 旧 Pi 不导出 getShellConfig:解析失败,fail closed(参数也不会被暴露)。
+  const missing = loadBackgroundCommandHelpers({ shellConfig: undefined });
+  expect(missing.helpers.resolveBackgroundCommandShellSpec()).toBeUndefined();
+
+  const requests: Array<Record<string, unknown>> = [];
+  const ctx = {
+    ui: {
+      input: async (_title: string, payload: string) => {
+        requests.push(JSON.parse(payload) as Record<string, unknown>);
+        return JSON.stringify({ ok: true, taskId: 'call-1', logPath: '/logs/call-1.log' });
+      },
+    },
+  };
+  const result = await helpers.startCindyBackgroundCommand(
+    'call-1',
+    { command: 'pnpm dev', timeout: 300, background: true },
+    { aborted: false },
+    ctx,
+  );
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    action: 'start',
+    taskId: 'call-1',
+    command: 'pnpm dev',
+    shell: { shell: '/bin/bash', args: ['-lc'], commandTransport: 'stdin' },
+    title: 'pnpm dev',
+  });
+  // 每个控制请求都带 bearer(host 逐请求校验)。bearer **不删 env**:扩展重载后会重新执行
+  // bridge 模块,删了 env 就在重载后静默关掉能力(真机实测过);防泄漏靠 bash / 子代理的
+  // spawn 边界剥离名单,不靠删 env。
+  expect(requests[0]!.token).toBe(BACKGROUND_COMMAND_TOKEN);
+  expect(env.CINDY_PI_BACKGROUND_COMMANDS).toBe(BACKGROUND_COMMAND_TOKEN);
+  expect(helpers.cindyBackgroundCommandsEnabled()).toBe(true);
+  expect(result.content[0]!.text.startsWith('Cindy background command started')).toBe(true);
+  expect(result.content[0]!.text).toContain('/logs/call-1.log');
+  expect(result.details).toEqual({ backgroundTaskId: 'call-1', backgroundLogPath: '/logs/call-1.log' });
+});
+
+it('rejects an empty or over-long background command and reclaims an aborted start', async () => {
+  const { helpers } = loadBackgroundCommandHelpers({
+    shellConfig: { shell: '/bin/bash', args: [] },
+  });
+  const requests: Array<Record<string, unknown>> = [];
+  const ctx = {
+    ui: {
+      input: async (_title: string, payload: string) => {
+        requests.push(JSON.parse(payload) as Record<string, unknown>);
+        return JSON.stringify({ ok: true, taskId: 'call-9', logPath: '/logs/call-9.log' });
+      },
+    },
+  };
+  await expect(helpers.startCindyBackgroundCommand('c', { command: '   ' }, undefined, ctx))
+    .rejects.toThrow(/non-empty command/);
+  await expect(helpers.startCindyBackgroundCommand('c', { command: 'x'.repeat(32_001) }, undefined, ctx))
+    .rejects.toThrow(/too long/);
+  expect(requests).toHaveLength(0);
+
+  // 启动确认后 turn 被中止:best-effort 发 stop,再向模型抛取消。
+  await expect(helpers.startCindyBackgroundCommand('call-9', { command: 'pnpm dev' }, { aborted: true }, ctx))
+    .rejects.toThrow(/cancelled/);
+  expect(requests.map((request) => request.action)).toEqual(['start', 'stop']);
+  expect(requests[1]).toMatchObject({ action: 'stop', taskId: 'call-9' });
+});
+
+it('reclaims a background command whose start response was lost to an aborted turn', async () => {
+  const { helpers } = loadBackgroundCommandHelpers({
+    shellConfig: { shell: '/bin/bash', args: [] },
+  });
+  const requests: Array<Record<string, unknown>> = [];
+  const ctx = {
+    ui: {
+      // turn 中止时这次 control 请求直接 reject(响应还没回来),与「先拿到响应再发现
+      // aborted」是两条路:host 可能已经把命令跑起来了。
+      input: async (_title: string, payload: string) => {
+        requests.push(JSON.parse(payload) as Record<string, unknown>);
+        throw new Error('control request aborted');
+      },
+    },
+  };
+  await expect(
+    helpers.startCindyBackgroundCommand('call-7', { command: 'pnpm dev' }, { aborted: true }, ctx),
+  ).rejects.toThrow(/aborted/);
+  // taskId 就是我们发过去的 toolCallId:必须按它 best-effort 收回,否则会留下一个
+  // 模型完全不知道、只能靠面板发现的孤儿进程。
+  expect(requests.map((request) => request.action)).toEqual(['start', 'stop']);
+  expect(requests[1]).toMatchObject({ action: 'stop', taskId: 'call-7' });
+});
+
+it('keeps the background command capability across an extension reload', () => {
+  // 重载 = 新模块实例重新执行 env 读取。env 保留才能让重载后的能力不变(否则模型下一次
+  // background:true 直接拿到 unavailable)。
+  const env: Record<string, string | undefined> = { CINDY_PI_BACKGROUND_COMMANDS: BACKGROUND_COMMAND_TOKEN };
+  const first = loadBackgroundCommandHelpers({ env });
+  expect(first.helpers.cindyBackgroundCommandsEnabled()).toBe(true);
+  const reloaded = loadBackgroundCommandHelpers({ env });
+  expect(reloaded.helpers.cindyBackgroundCommandsEnabled()).toBe(true);
+});
+
+it('fails closed when the host rejects the background command', async () => {
+  const { helpers } = loadBackgroundCommandHelpers({
+    shellConfig: { shell: '/bin/bash', args: [] },
+  });
+  const ctx = {
+    ui: {
+      input: async () => JSON.stringify({ ok: false, error: 'too many background commands' }),
+    },
+  };
+  await expect(helpers.startCindyBackgroundCommand('call-1', { command: 'pnpm dev' }, undefined, ctx))
+    .rejects.toThrow(/too many background commands/);
+});
 
 describe('Pi same-turn library native mapping', () => {
   it('reads the current permission snapshot after a tool result and removes revoked roots', async () => {

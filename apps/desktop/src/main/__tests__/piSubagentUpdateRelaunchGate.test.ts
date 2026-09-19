@@ -51,11 +51,49 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     // A pass that succeeds is not the verdict; the re-scan after it is.
     expect(loop).toMatch(/if \(!await reclaimSubagentRunnersOnce\(agentHome\)\) return false;/);
     expect(loop).toContain('hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid })');
-    expect(loop).toMatch(/if \(!stillActive\) return true;/);
+    // 稳定的一次扫描才是结论。而 PI 后台命令的清扫必须在这一支里(确实要重启),
+    // 不能提到函数开头:上面任何一条 return false 都会取消重启,那时杀掉用户正在跑的
+    // dev server / 长构建是白杀。
+    const stableStart = loop.indexOf('if (!stillActive) {');
+    const stableEnd = loop.indexOf('return true;', stableStart);
+    expect(stableStart).toBeGreaterThan(-1);
+    expect(stableEnd).toBeGreaterThan(stableStart);
+    expect(loop.slice(stableStart, stableEnd)).toContain('stopAllPiBackgroundCommandsForExit(');
     // Out of rounds or out of time is a refusal, never a silent pass.
     const tail = loop.slice(loop.lastIndexOf('if (Date.now() >= deadline) break;'));
     expect(tail).toContain('return false;');
     expect(source).toContain('const SUBAGENT_RECLAIM_TOTAL_MS = 6_000;');
+  });
+
+  it('cancels the relaunch when background commands cannot be confirmed stopped', () => {
+    const reclaim = source.slice(
+      source.indexOf('async function reclaimSubagentRunnersForRelaunch()'),
+      source.indexOf('async function executeRelaunch('),
+    );
+    // 与 subagent 同口径 fail closed:确认不了退出就不放行重启 —— 那些是 detached
+    // 进程组,会带着旧版本 env 活到新版本旁边、占着端口与锁。
+    const sweepStart = reclaim.indexOf('stopAllPiBackgroundCommandsForExit(');
+    expect(sweepStart).toBeGreaterThan(-1);
+    const afterSweep = reclaim.slice(sweepStart);
+    expect(afterSweep).toMatch(/if \(unconfirmed > 0\)/);
+    expect(afterSweep).toContain('return false;');
+    // 读不到结果(sweep 抛错)同样按未确认处理:初值必须是"未确认",不能是 0。
+    expect(reclaim).toMatch(/let unconfirmed = 1;/);
+  });
+
+  it('sweeps PI background commands synchronously inside forceQuit', () => {
+    const forceQuitBody = source.slice(
+      source.indexOf('function forceQuit('),
+      source.indexOf('function executeUpdateMacOS('),
+    );
+    // forceQuit 绕过 lifecycle 的 before-quit 链,bootstrap 的异步清扫不会跑;
+    // 后台命令是 detached 进程组,父进程退出带不走它们。这里必须与 subagent 的
+    // requestStopAllPiSubagentRunsSync 一样做同步收口 —— 覆盖「reclaim 扫过之后、
+    // process.exit(0) 之前」那段父 Pi 会话仍活着、还能起新命令的窗口。
+    expect(forceQuitBody).toContain('requestStopAllPiSubagentRunsSync(');
+    expect(forceQuitBody).toContain('stopAllPiBackgroundCommandsForExitSync(');
+    // 同步收口不得 await(会卡住 updater 的 pid 轮询、拖延重启)。
+    expect(forceQuitBody).not.toMatch(/await stopAllPiBackgroundCommandsForExitSync\(/);
   });
 
   it('raises a cross-process fence before the first sweep and drops it on refusal', () => {
@@ -129,7 +167,12 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     const gate = relaunch.indexOf('if (!await reclaimSubagentRunnersForRelaunch())');
     const branch = relaunch.slice(gate, relaunch.indexOf('incrementApplyAttempts();', gate));
     // Propagated to the renderer as a failed update, so the user can retry.
-    expect(branch).toContain("handleApplyFailure('subagent_reclaim_unconfirmed')");
+    // 归因必须区分两条防线:后台命令清扫挡住时报 background,否则报 subagent
+    // (用户按错误码去查的时候不能指错地方)。
+    expect(branch).toContain("relaunchReclaimBlockedBy === 'background'");
+    expect(branch).toContain("'pi_background_commands_unconfirmed'");
+    expect(branch).toContain("'subagent_reclaim_unconfirmed'");
+    expect(source).toContain("relaunchReclaimBlockedBy = 'background';");
     expect(branch).toContain('return;');
     expect(branch).toMatch(/could not be confirmed stopped/);
   });

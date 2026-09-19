@@ -2229,7 +2229,10 @@ export function buildRenderItems(
     for (const m of messages) {
       if (
         m.role === 'tool_use' &&
-        m.toolName === 'Bash' &&
+        // Claude 的工具名是 `Bash`,PI 的是小写 `bash`(后台命令经 Cindy 覆盖的
+        // bash 工具 + background:true 发起)。两者共用同一条「父会话自己的后台命令
+        // 卡」归属判定。
+        (m.toolName === 'Bash' || m.toolName === 'bash') &&
         typeof m.toolUseId === 'string' &&
         m.toolUseId.length > 0
       ) {

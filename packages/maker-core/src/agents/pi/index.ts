@@ -108,6 +108,15 @@ import {
   CINDY_SUBAGENT_RUNNER_SOURCE,
 } from './cindy-subagent-runner-source.js';
 import {
+  CINDY_PI_BACKGROUND_COMMAND_CONTROL_TITLE,
+  CINDY_PI_BACKGROUND_COMMANDS_ENV,
+  PiBackgroundCommands,
+  buildPiBackgroundCommandEnv,
+  parsePiBackgroundCommandShellSpec,
+  piBackgroundCommandRoot,
+  type PiBackgroundCommandUpdate,
+} from './pi-background-commands.js';
+import {
   normalizePiToolForAutoReview,
 } from './auto-review-policy.js';
 import {
@@ -3116,6 +3125,17 @@ export class PiAgent extends BaseAgent {
       await writeFile(subagentExtensionPath, CINDY_SUBAGENT_EXTENSION_SOURCE);
       await writeFile(subagentRunnerPath, CINDY_SUBAGENT_RUNNER_SOURCE, 0o600);
     }
+    // 「后台命令」能力:与本地 subagent 同一能力面(本地、非 Review、非 Bot)。
+    // 不依赖 spawnPiSubagentRunner —— 命令由 host 自己的 child_process 跑,但同样
+    // 不能跑在 SSH 远端语义下(那会跑到控制端本机、工作区与路径都不对)。
+    // bridge 侧据 env 开关决定是否暴露 background 参数,未开启时显式拒绝。
+    const backgroundCommandsSupported = !reviewMode && !remote && !opts.botRuntimeProfile;
+    // 控制通道 bearer(与 Pi 包管理 token 同一口径):title + payload 在 Pi 进程内对所有
+    // 扩展可见,而这条通道会以父会话的 env/cwd spawn 进程,所以 host 只认自己签发过的 token。
+    // 不进 piSecretEnvNames 以外的面向模型清单,子代理 runner 另行剥离(见 runner 源)。
+    const backgroundCommandsToken = backgroundCommandsSupported
+      ? randomBytes(32).toString('base64url')
+      : undefined;
 
     // 权限档文件:extension 每次 tool_call 现读(热切换);读不到按 ask fail-closed。
     const runtimeDir = joinRemotePosixPath(agentHome, 'runtime');
@@ -3131,6 +3151,13 @@ export class PiAgent extends BaseAgent {
       ? piSubagentRunRoot(agentHome, sid)
       : path.join(runtimeDir, 'pi-subagent-runs', `anon-${process.pid}-${Date.now()}`);
     if (localSubagentSupported) await fs.mkdir(subagentRunRoot, { recursive: true, mode: 0o700 });
+    // 后台命令日志目录:与 subagent run root 同级、按 sessionId 分目录;
+    // 会话删除时一并回收(见 desktop 的 session 删除路径)。
+    const backgroundCommandLogRoot = backgroundCommandsSupported
+      ? sid
+        ? piBackgroundCommandRoot(agentHome, sid)
+        : path.join(runtimeDir, 'pi-bash-tasks', `anon-${process.pid}-${Date.now()}`)
+      : undefined;
     // 每运行时 nonce —— 与 configHome(`agentHome/run-tmp/<hex>`)同一套隔离思路。
     //
     // dev + 打包版共用同一个 userData、以及 `--passive` 任意多开,都是**明确支持**的工作流
@@ -4736,6 +4763,8 @@ export class PiAgent extends BaseAgent {
     const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
       runExclusivePiRpc(() => requestPiCompact(instructions));
     let sessionTransport: PiTransport | undefined;
+    /** 后台命令执行器;仅本地普通会话创建(见 backgroundCommandsSupported)。 */
+    let backgroundCommands: PiBackgroundCommands | undefined;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
     let piAgentLifecycleSequence = 0;
@@ -5061,6 +5090,7 @@ export class PiAgent extends BaseAgent {
         PI_SESSION_ID_ENV,
         PI_SESSION_TOKEN_ENV,
         ...(piPackageManagementToken ? [PI_PACKAGE_MANAGEMENT_ENV] : []),
+        ...(backgroundCommandsToken ? [CINDY_PI_BACKGROUND_COMMANDS_ENV] : []),
         PI_BASH_PACKAGE_HOME_ENV,
         ...(visionBridgeEnv ? Object.keys(visionBridgeEnv) : []),
         ...Object.keys(authEnv),
@@ -5128,6 +5158,8 @@ export class PiAgent extends BaseAgent {
           [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
           [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
         } : {}),
+        // 后台命令能力开关:本地普通会话才注入(常量值,不影响远端 envHash 稳定性)。
+        ...(backgroundCommandsToken ? { [CINDY_PI_BACKGROUND_COMMANDS_ENV]: backgroundCommandsToken } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。
         PI_OFFLINE: '1',
@@ -5164,6 +5196,49 @@ export class PiAgent extends BaseAgent {
       }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
+      // 后台命令执行器:host-owned 子进程。env 与前台 bash 同口径(剪秘密 +
+      // PI_CODING_AGENT_DIR 指向隔离 bash package home),输出落按会话分目录的日志。
+      // 状态 update 走统一 agent_task_update 事件流(与 subagent 同一通道)。
+      if (backgroundCommandsSupported && backgroundCommandLogRoot) {
+        const emitBackgroundCommandUpdate = (update: PiBackgroundCommandUpdate): void => {
+          const endedAt = update.endedAt ?? Date.now();
+          queue.push({
+            type: 'agent_task_update',
+            source: 'pi',
+            data: {
+              provider: 'pi',
+              taskId: update.taskId,
+              parentToolUseId: update.taskId,
+              status: update.status,
+              taskType: 'local_bash',
+              title: update.title,
+              // 命令正文进 description(卡片展开可读);长度有界,不把巨型脚本塞进事件流。
+              description:
+                update.command.length > 2_000 ? `${update.command.slice(0, 1_999)}…` : update.command,
+              createdAt: new Date(update.startedAt).toISOString(),
+              updatedAt: new Date(endedAt).toISOString(),
+              // 运行中帧不带 usage —— 与 CC 的后台 Bash 对齐:CC 的 task_started 不带 usage、
+              // local_bash 也没有 progress 帧,两边面板都只显示「运行中」。终止帧带总计时长
+              // (CC 的 task_notification 同样带 usage)。
+              ...(update.status === 'running'
+                ? {}
+                : { usage: { durationMs: Math.max(0, endedAt - update.startedAt) } }),
+              ...(update.summary ? { summary: update.summary } : {}),
+            },
+          });
+        };
+        backgroundCommands = new PiBackgroundCommands({
+          env: buildPiBackgroundCommandEnv({
+            spawnEnv,
+            dynamicSecretEnvNames: piSecretEnvNames,
+            bashPackageHome,
+          }),
+          defaultCwd: opts.workingDir,
+          logDir: backgroundCommandLogRoot,
+          logger: this.deps.logger,
+          onUpdate: emitBackgroundCommandUpdate,
+        });
+      }
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
       piSpawnStartedAt = Date.now();
       const { transport } = await this.createTransport(
@@ -5223,6 +5298,7 @@ export class PiAgent extends BaseAgent {
               remote: Boolean(opts.remoteHostId),
               allowPiPackageManagement,
               piPackageManagementToken,
+              backgroundCommandsToken,
               controlSubagentRunner: async (action, runId) => {
                 if (!localSubagentSupported || !PI_SUBAGENT_RUN_ID_RE.test(runId)) {
                   throw new Error('PI Subagent runner request is unavailable');
@@ -5278,6 +5354,55 @@ export class PiAgent extends BaseAgent {
                     );
                 }
                 return true;
+              },
+              /**
+               * 后台命令控制面:start 由 host spawn 并持有子进程(状态经
+               * agent_task_update 回放);stop 只杀自己持有的进程,未命中返回 ok:false。
+               */
+              controlBackgroundCommand: async (action, payload) => {
+                if (!backgroundCommands) {
+                  return {
+                    ok: false as const,
+                    error: 'Cindy background commands are unavailable in this session.',
+                  };
+                }
+                if (action === 'stop') {
+                  if (typeof payload.taskId !== 'string' || !payload.taskId) {
+                    return { ok: false as const, error: 'Invalid background command request.' };
+                  }
+                  const stopOutcome = await backgroundCommands.stop(payload.taskId);
+                  if (stopOutcome === 'stopped') {
+                    return { ok: true as const, taskId: payload.taskId };
+                  }
+                  // 两种失败必须分开报:not-running 是幂等成功面(它已经结束了),
+                  // unconfirmed 是「还在跑,但杀不动」—— 报成同一句会让模型/用户以为
+                  // 命令根本没起来。
+                  return {
+                    ok: false as const,
+                    error: stopOutcome === 'unconfirmed'
+                      ? 'Background command is still running after SIGKILL.'
+                      : 'Background command is not running.',
+                  };
+                }
+                const shell = parsePiBackgroundCommandShellSpec(payload.shell);
+                if (!shell) {
+                  return {
+                    ok: false as const,
+                    error: 'Cindy could not resolve a shell for the background command.',
+                  };
+                }
+                const started = await backgroundCommands.start({
+                  ...(typeof payload.taskId === 'string' && payload.taskId
+                    ? { taskId: payload.taskId }
+                    : {}),
+                  command: typeof payload.command === 'string' ? payload.command : '',
+                  ...(typeof payload.cwd === 'string' && payload.cwd ? { cwd: payload.cwd } : {}),
+                  shell,
+                  ...(typeof payload.title === 'string' && payload.title
+                    ? { title: payload.title }
+                    : {}),
+                });
+                return { ok: true as const, taskId: started.taskId, logPath: started.logPath };
               },
               emitExtensionNotification: (message, event) => {
                 const text = shouldRewriteContextModeDoctorNotification(
@@ -6913,7 +7038,24 @@ export class PiAgent extends BaseAgent {
 
       async stopBackgroundTask(taskId: string): Promise<void> {
         if (closed) return;
-        if (!localSubagentSupported) throw new Error('PI Subagent is available only in local PI sessions.');
+        // 后台命令优先:taskId 命中运行中的 host-owned 子进程就直接杀树木。
+        // 未命中(已终态 / 不是后台命令)继续走 subagent 控制面。
+        if (backgroundCommands) {
+          const stopOutcome = await backgroundCommands.stop(taskId);
+          if (stopOutcome === 'stopped') return;
+          // 杀不动时**抛错**,不能静默返回:renderer 的停止按钮只有靠这个才知道
+          // 「点了但没停掉」,从而把「停止未确认」显示出来并保留重试。
+          if (stopOutcome === 'unconfirmed') {
+            throw new Error(
+              `PI background command ${taskId} is still running after SIGKILL.`,
+            );
+          }
+        }
+        // 没有 subagent 控制面的会话(Review / Bot / 远端)里,走到这里只可能是
+        // 「这个 id 本来就不在跑」(后台命令已终态,或 taskId 根本不属于本会话)。
+        // 幂等成功返回,不能抛:会话已关 / 行其实已停的时候,抛错会让一条已经停掉的
+        // 行显示「停止未确认」(与 CC 的幂等 stopping 语义对齐)。
+        if (!localSubagentSupported) return;
         await controlPiSubagentRuns(subagentRunRoot, taskId, 'stop', {
           runtimeOwnerId: subagentRuntimeOwnerId,
         });
@@ -6958,15 +7100,25 @@ export class PiAgent extends BaseAgent {
 
       listBackgroundTasks() {
         if (closed) return [];
-        return Array.from(piSubagentStatuses.values())
-          .filter((status) => !isPiSubagentTerminal(status.state))
-          .map((status) => ({
-            taskId: status.taskId,
-            taskType: 'pi_subagent',
-            toolUseId: status.taskId,
-            title: status.title ?? status.description,
+        const commands = backgroundCommands?.list() ?? [];
+        return [
+          ...Array.from(piSubagentStatuses.values())
+            .filter((status) => !isPiSubagentTerminal(status.state))
+            .map((status) => ({
+              taskId: status.taskId,
+              taskType: 'pi_subagent',
+              toolUseId: status.taskId,
+              title: status.title ?? status.description,
+              provider: 'pi' as const,
+            })),
+          ...commands.map((command) => ({
+            taskId: command.taskId,
+            taskType: 'local_bash',
+            toolUseId: command.taskId,
+            ...(command.title ? { title: command.title } : {}),
             provider: 'pi' as const,
-          }));
+          })),
+        ];
       },
 
       async requestGracefulStop(): Promise<void> {
@@ -7039,6 +7191,10 @@ export class PiAgent extends BaseAgent {
         // Only meaningful when this really is an account boundary; ordinary
         // navigation still reads the fence as false throughout.
         if (accountBoundary) accountBoundaryTeardown = true;
+        // 后台命令属于 live 会话:关闭即杀全部子进程,并按 stopped 对 UI 收口
+        // (事件队列随 Pi 进程退出结束,迟到的真实退出事件到不了 renderer)。
+        // 位置必须在账号边界 fence 之后:close() 在 fence 前不得 await 任何东西。
+        await backgroundCommands?.dispose();
         // MCP route belongs to the root and closes immediately. Transfer the
         // proxy-token disposer first so detached children keep their gateway
         // lease until their durable statuses settle.
@@ -7778,10 +7934,30 @@ export class PiAgent extends BaseAgent {
       remote: boolean;
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
+      /**
+       * 后台命令控制通道的 bearer:由 startSession 每会话签发,仅当能力开启时存在。
+       * 控制请求必须携带匹配的 token —— 否则伪造 title 的第三方扩展/子代理转发就能
+       * 以本会话身份 spawn 进程。
+       */
+      backgroundCommandsToken?: string;
       controlSubagentRunner: (
         action: 'launch' | 'terminate' | 'status',
         runId: string,
       ) => Promise<boolean>;
+      /**
+       * 后台命令控制面(host-owned 子进程):start 返回回执;stop 幂等,未命中返回 false。
+       * 由 startSession 注入 —— 能力未启用时整个方法仍存在,统一由 start 抛可读错误。
+       */
+      controlBackgroundCommand: (
+        action: 'start' | 'stop',
+        payload: {
+          taskId?: unknown;
+          command?: unknown;
+          cwd?: unknown;
+          shell?: unknown;
+          title?: unknown;
+        },
+      ) => Promise<{ ok: true; taskId: string; logPath?: string } | { ok: false; error: string }>;
       emitExtensionNotification: (message: string, event?: PiRpcEvent) => AgentEvent;
       /**
        * 把一张挂起的权限卡登记进会话级表,返回注销函数。档位切换 / 关闭会话时由
@@ -7880,6 +8056,67 @@ export class PiAgent extends BaseAgent {
                 : { ok: false, error: 'PI Subagent runner control failed' },
             ),
           });
+        }
+      })();
+      return;
+    }
+
+    if (method === 'input' && event.title === CINDY_PI_BACKGROUND_COMMAND_CONTROL_TITLE) {
+      const context = getPermissionCtx();
+      const reply = (value: Record<string, unknown>): void => {
+        proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+      };
+      if (context.remote || context.isAccountBoundaryTornDown() || context.isPermissionContextClosed()) {
+        reply({ ok: false, error: 'Cindy background commands are unavailable in this session.' });
+        return;
+      }
+      void (async () => {
+        try {
+          const payload = JSON.parse(
+            typeof event.placeholder === 'string' ? event.placeholder : '{}',
+          ) as {
+            action?: unknown;
+            taskId?: unknown;
+            command?: unknown;
+            cwd?: unknown;
+            shell?: unknown;
+            title?: unknown;
+            token?: unknown;
+          };
+          // 通道认证:title 与 payload 在 Pi 进程内人人可见(包括子代理转发回来的
+          // 审批请求),只有持有 host 签发 token 的根 bridge 才能控制本会话的进程。
+          if (!context.backgroundCommandsToken || payload.token !== context.backgroundCommandsToken) {
+            this.deps.logger.warn('pi background command control rejected unauthenticated request', {
+              sessionId: context.sessionId,
+            });
+            reply({
+              ok: false,
+              error: 'Cindy background commands are unavailable in this session.',
+            });
+            return;
+          }
+          if (payload.action !== 'start' && payload.action !== 'stop') {
+            throw new Error('Invalid background command request.');
+          }
+          const result = await context.controlBackgroundCommand(payload.action, payload);
+          if (result.ok) {
+            reply({
+              ok: true,
+              taskId: result.taskId,
+              ...(result.logPath ? { logPath: result.logPath } : {}),
+            });
+            return;
+          }
+          reply({ ok: false, error: result.error });
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message.slice(0, 500)
+            : 'Cindy could not start the background command.';
+          this.deps.logger.warn('pi background command control failed', {
+            sessionId: context.sessionId,
+            message,
+          });
+          reply({ ok: false, error: message });
         }
       })();
       return;
