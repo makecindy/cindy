@@ -25,6 +25,11 @@
 
 import type { Session } from '@/lib/ccAgent.types';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
+import {
+  MACHINE_ALL,
+  MACHINE_LOCAL,
+  type MachineSelection,
+} from '@/features/device-link/selectedMachineStore';
 
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../../../shared/liveTaskPriority';
 import type { FilterProjectOrder, FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
@@ -488,6 +493,19 @@ export interface MainListDeviceSection {
   entries: MainListEntry[];
 }
 
+/** Online device headers remain visible independently of task filters. */
+export function onlineDeviceSectionIds(
+  devices: ReadonlyMap<string, { online: boolean }> | null | undefined,
+  selection: MachineSelection,
+): Array<string | null> {
+  const ids: Array<string | null> = [];
+  if (selection === MACHINE_ALL || selection.includes(MACHINE_LOCAL)) ids.push(null);
+  for (const [id, device] of devices ?? []) {
+    if (device.online && (selection === MACHINE_ALL || selection.includes(id))) ids.push(id);
+  }
+  return ids;
+}
+
 function entryDeviceId(entry: MainListEntry): string | null {
   if (entry.kind === 'project') return entry.project.deviceLinkDeviceId ?? null;
   if (entry.kind === 'session') return entry.session.deviceLinkDeviceId ?? null;
@@ -514,6 +532,7 @@ export function splitEntriesByDevice(
   entries: readonly MainListEntry[],
   deviceOrder: readonly string[],
   options: {
+    onlineDeviceIds?: readonly (string | null)[];
     sortBy?: FilterSortBy;
     projectOrder?: FilterProjectOrder;
     manualProjectOrder?: readonly string[];
@@ -545,7 +564,9 @@ export function splitEntriesByDevice(
     }
   }
 
-  const sections = new Map<string | null, MainListEntry[]>();
+  const sections = new Map<string | null, MainListEntry[]>(
+    (options.onlineDeviceIds ?? []).map((id) => [id, []]),
+  );
   for (const entry of flattened) {
     const key = entryDeviceId(entry);
     const list = sections.get(key);
@@ -557,7 +578,7 @@ export function splitEntriesByDevice(
   const result: MainListDeviceSection[] = [];
   for (const id of orderedIds) {
     const sectionEntries = sections.get(id);
-    if (sectionEntries && sectionEntries.length > 0) {
+    if (sectionEntries) {
       result.push({
         deviceId: id,
         entries: sortSectionEntries(sectionEntries, options),

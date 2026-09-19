@@ -73,6 +73,7 @@ import {
   CINDY_MAKE_GROUP_KEY,
   getMainListEntrySessions,
   holdViewedPriorityRank,
+  onlineDeviceSectionIds,
   splitEntriesByDevice,
   type MainListDeviceSection,
   type MainListEntry,
@@ -662,6 +663,7 @@ export function ProjectsSection({
     // review P1:此前先全局折叠再切段,排在前 N 名之外的设备连段头一起消失,
     // 看起来像"这台设备没有任务"——设备是最外层层级,折叠只能发生在段内)。
     return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {
+      onlineDeviceIds: onlineDeviceSectionIds(remoteDeviceIndex, selectedMachineId),
       sortBy: filter.sortBy,
       projectOrder: filter.projectOrder,
       manualProjectOrder: filter.manualProjectOrder,
@@ -672,6 +674,7 @@ export function ProjectsSection({
     visibleMixedEntries,
     mixedEntries,
     remoteDeviceIndex,
+    selectedMachineId,
     filter.sortBy,
     filter.projectOrder,
     filter.manualProjectOrder,
@@ -843,6 +846,7 @@ export function ProjectsSection({
   // 时仍画范围标题行(2026-08-13 第 4 轮 review P1:段头恒在),不画列表树。
   // 早退必须在全部 hooks 之后——rules of hooks。
   const hasMainListContent =
+    (deviceGroupingActive && deviceSections.length > 0) ||
     allProjectKeysForOrder.length > 0 ||
     unclassified.length > 0 ||
     dialogues.length > 0 ||

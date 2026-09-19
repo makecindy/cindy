@@ -431,6 +431,10 @@ dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值
 
 远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。
 
+### Display & Sound
+
+Remote desktop panel containing picture and audio settings; icon-only toolbar trigger.
+
 ### Lock screen control
 
 Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。

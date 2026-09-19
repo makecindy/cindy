@@ -37,6 +37,30 @@ typedef CGError (*StartStream)(CFTypeRef);
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error { _exit(5); }
 @end
 
+static NSString *standardCursorShape(NSCursor *cursor) {
+  NSArray<NSCursor *> *cursors = @[
+    NSCursor.arrowCursor, NSCursor.IBeamCursor, NSCursor.pointingHandCursor,
+    NSCursor.crosshairCursor, NSCursor.openHandCursor, NSCursor.closedHandCursor,
+    NSCursor.resizeLeftRightCursor, NSCursor.resizeUpDownCursor,
+    NSCursor.operationNotAllowedCursor, NSCursor.dragCopyCursor,
+    NSCursor.dragLinkCursor, NSCursor.IBeamCursorForVerticalLayout
+  ];
+  NSArray<NSString *> *shapes = @[
+    @"default", @"text", @"pointer", @"crosshair", @"grab", @"grabbing",
+    @"ew-resize", @"ns-resize", @"not-allowed", @"copy", @"alias", @"vertical-text"
+  ];
+  NSData *raster = nil;
+  for (NSUInteger i = 0; i < cursors.count; i++) {
+    NSCursor *candidate = cursors[i];
+    if ([cursor isEqual:candidate]) return shapes[i];
+    if (!NSEqualSizes(cursor.image.size, candidate.image.size) ||
+        !NSEqualPoints(cursor.hotSpot, candidate.hotSpot)) continue;
+    if (!raster) raster = cursor.image.TIFFRepresentation;
+    if (raster && [raster isEqualToData:candidate.image.TIFFRepresentation]) return shapes[i];
+  }
+  return @"default";
+}
+
 static NSDictionary *readCursor(CGDirectDisplayID display) {
   // Read on the main queue. currentSystemCursor returns the actual global shape,
   // including cursors supplied by other applications (not this helper's cursor).
@@ -67,7 +91,8 @@ static NSDictionary *readCursor(CGDirectDisplayID display) {
     @"width": @(size.width), @"height": @(size.height),
     @"hotX": @(fmax(0, fmin(size.width, hot.x))),
     @"hotY": @(fmax(0, fmin(size.height, hot.y))),
-    @"png": [png base64EncodedStringWithOptions:0]
+    @"png": [png base64EncodedStringWithOptions:0],
+    @"shape": standardCursorShape(cursor)
   };
 }
 

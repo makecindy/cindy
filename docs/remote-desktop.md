@@ -2,36 +2,61 @@
 
 ## Desktop viewer
 
+The desktop interaction hierarchy follows a canvas-first approach: device and
+connection status at the left, grouped zoom/fit/actual-size actions, then grouped
+icon-only Display & Sound, Clipboard and Security popovers. These are
+separate, short task panels rather than one scrolling checklist. Local fit never
+changes the host resolution; received audio and host mute have separate controls.
+Unavailable safety options remain visible with an explanation. Confirmed privacy
+and actionable failures remain visible outside the popovers.
+
+Popovers release held remote input, support Escape and outside dismissal, and
+return keyboard focus to their trigger. Switching panels does not restore focus
+to the previous trigger. Clicking the remote canvas while a panel is open only
+dismisses it; it does not send that click to the remote computer. Fullscreen keeps
+the toolbar visible while a panel is open, including its portalled controls.
+
 Desktop can open a same-account computer's remote desktop from its device card
 in Remote control settings, or the task-list machine menu's Remote desktop submenu.
 When the sidebar is grouped by machine, hovering or keyboard-focusing a remote
-machine reveals a desktop shortcut. A debounced, read-only capability check
-distinguishes available desktops from offline, disabled, revoked or unsupported
-targets; unavailable shortcuts show a crossed-out monitor with an explanation.
+machine reveals a desktop shortcut. A read-only capability check runs when an
+eligible device first appears, and is reused until presence, permission, platform
+or version changes. Unavailable shortcuts remain clickable and explain how to
+enable the required permission. Online devices remain listed without tasks.
 Hovering never starts desktop capture or takes over another viewer, and clicking
 the shortcut does not expand or collapse the machine group.
 It opens a clean, independent window with native mouse/keyboard input and a small
 toolbar. Reopening the same target focuses its existing window. Full screen,
-view-only/control, display selection, sound, video settings and text
+display selection, sound, video settings and portable
 clipboard shortcuts are available. Resolution changes appear only for a capable
 host and affect its actual monitor. Ctrl+Alt+Esc releases keyboard focus;
 Cmd/Ctrl+W requests closing this viewer, including while it owns keyboard focus.
-The toolbar exit, native window close and close shortcut share a confirmation
-dialog; cancelling keeps the connection and control lease. Confirmation belongs
+Native window close and the close shortcut share a confirmation
+dialog only after a connection is established; cancelling keeps the connection and control lease. Confirmation belongs
 to the current window generation and cannot close a later connection.
 
-While controlling, the local cursor is hidden inside the remote picture even
-when Windows embeds its cursor in the video rather than sending cursor metadata.
-Cursor hiding is scoped to the remote picture, not the system or window focus:
-moving outside it immediately restores the local cursor even if the viewer keeps
-focus. Local toolbar controls and dialogs retain their cursor. View-only mode
-also restores the local cursor inside the picture.
+Desktop uses the local system cursor inside the remote picture, with standard
+shape hints from the host. Pointer size is independent of remote resolution and zoom.
 With the picture focused, Cmd+C/V on macOS or Ctrl+C/V on Windows copies selected
-remote text to the local clipboard or pastes local text remotely. Transfers use
+remote content to the local clipboard or pastes local content remotely. Transfers use
 the existing authorized Main bridge, are ordered and user-triggered, and report
-failure without reconnecting. These Desktop keyboard shortcuts remain text-only;
-images, files and cut are not bridged by them. The opt-in Mobile clipboard sync
-described below is a separate, foreground-only operation.
+failure without reconnecting. Capable hosts support text, HTML, RTF, URLs and PNG;
+older hosts retain text-only behavior. Arbitrary files and cut are not bridged.
+Manual actions and progress are also available in the settings panel. Optional
+clipboard synchronization reuses Mobile's version, conflict and bounded-transfer
+logic, only while this viewer is focused and holds confirmed control. Contents
+stay in Main/native code and do not cross the viewer Renderer bridge.
+
+The settings panel also supports host privacy screen, host mute, lock-on-exit and
+macOS-to-macOS automatic unlock. Non-secret preferences are scoped to the local
+account and target computer; only explicit overrides are stored. Host effects
+are capability-gated and applied after control is confirmed. Privacy failures
+remain visible ahead of mute or clipboard notices, with explicit retry. Explicit
+exit waits for the requested lock; reconnect and display changes do not lock.
+See [native credential behavior](remote-desktop-credentials.md) for password storage.
+Video quality changes are coalesced while negotiation is pending. The toolbar
+shows receive rate and clears stale network samples, while resolution discovery
+shows loading/failure and offers retry and native-resolution labels.
 
 The shared viewer session marks recovery only when a start is attempted, so an
 initial capability-query timeout does not turn a retry against a legacy host into
@@ -975,6 +1000,14 @@ old RTC generations are discarded. Hidden cursors are not drawn. Unsupported
 cursor images fall back to the existing position indicator without killing video.
 Both Light and Dark use the source raster rather than tinting it.
 
+Desktop viewers use the local system pointer instead of drawing this raster.
+An optional `shape` hint selects a bounded standard cursor keyword (text, hand,
+resize, etc.); size, DPI and accessibility appearance remain owned by the local
+OS and do not follow the remote screen zoom. Missing, custom or unknown shapes
+fall back to the local arrow. Old viewers ignore the hint and Mobile retains the
+raster path. Desktop view-only mode shows the local arrow rather than a second
+remote pointer overlay.
+
 Checked: desktop/mobile types, native compilation, a bounded read-only native
 capture returning cursor geometry/raster metadata. Real phone gestures,
 application-by-application cursor transitions and sustained frame rate remain
@@ -1040,3 +1073,22 @@ connection. Actual backgrounding releases control unless system PiP is active.
 Reconnection retains the last picture but disables input until a fresh lease is
 ready. Touch/trackpad, mouse-button visibility and audio preferences are saved
 locally. Landscape hides the network status overlay to preserve picture space.
+
+Desktop zoom controls share one group: zoom out, fit to window, actual size (1:1),
+and zoom in. Fit follows the window size; actual size maps one remote logical
+screen unit to one local CSS pixel, independently of video encoding resolution
+and local display density. Actual size stays fixed when the window is resized.
+Clicking actual size also sizes the window to the remote desktop plus toolbar
+and native frame, within the window minimum and the local display work area.
+Fullscreen/maximized windows restore first; oversized desktops remain at 1:1
+and can be panned inside the screen-limited window.
+An overflowing picture can be panned with the middle mouse button or by hovering
+within 28 local pixels of a viewport edge. Edge panning accelerates toward the
+edge, supports diagonal movement, and stops at the desktop bounds, on pointer
+leave or focus loss. Remote hover/drag coordinates follow the moving picture;
+view-only sessions pan locally without sending input. Window maximization/fullscreen
+uses the native window controls.
+Zoom out can go below fit, down to 10% of the smaller of fit and actual size.
+Exposed margins use the same fixed-fit, three-segment ambient canvas as Mobile,
+with 16px blur, 1.12 overscan and 0.72 opacity. Same-aspect desktops also retain
+the backdrop when shrunk; covering the window stops its live redraw loop.

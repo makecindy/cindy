@@ -37,6 +37,7 @@ import { denyAppDesktopCapture } from './capturePermissions';
 import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/settings-store';
 import { throwIpcError } from '../utils/ipcValidate';
 import { RemoteDesktopController } from './controller';
+import { ClipboardCounter } from './clipboardCounter';
 import { onQuit } from '../lifecycle';
 import {
   createViewerDisplay,
@@ -78,7 +79,7 @@ import {
   readDesktopDisplayModes,
   setDesktopDisplayMode,
   readDesktopInputPermission,
-  readDesktopClipboardVersion,
+  resolveDesktopInputBinary,
   readDesktopLockState,
   lockDesktopScreen,
   requestDesktopInputPermission,
@@ -218,6 +219,7 @@ let pending: {
 // A dead input helper or a refused injection is an input failure, not a session
 // failure: release control and keep the lease, capture and media running.
 const input = new DesktopInputHost(() => remoteDesktop.releaseControl());
+const clipboardCounter = new ClipboardCounter(resolveDesktopInputBinary);
 function stopVideo(): void {
   offerGeneration++;
   portalReady = null;
@@ -633,7 +635,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       options,
     ),
   // Poll counters even for nonportable items; the content read owns format validation.
-  clipboardVersion: () => readDesktopClipboardVersion(),
+  clipboardVersion: () => clipboardCounter.read(),
+  stopClipboardVersion: () => clipboardCounter.stop(),
   privacyScreen: async (enabled, current) => {
     if (process.platform === 'linux') return linuxPrivacy.set(enabled, current);
     if (!supportsPrivacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');

@@ -174,6 +174,7 @@ import {
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
+import { onlineDeviceSectionIds } from './lib/mainListModel';
 import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
 import {
   holdSidebarViewedPriority,
@@ -1888,16 +1889,20 @@ function ExpandedView({
   );
 
   // D 期:按日期分组已删除(visibleDateSessions 随 DateGroupedSessionsSection 一并下线)。
-  const hasVisibleSidebarContent =
-    visiblePinnedEntries.length > 0 ||
-    visibleUnclassified.length > 0 ||
-    visibleProjectsWithVendor.length > 0 ||
-    visibleDialogues.length > 0;
   // 与 ProjectsSection.deviceGroupingAvailable 同一门控:范围收窄到单台机器时
   // 「按设备分组」选项隐藏。占位分支也要挂范围标题,不能各写一份。
   const deviceGroupingAvailable =
     (remoteDeviceIndex?.size ?? 0) > 0 &&
     !(selectedMachineId !== MACHINE_ALL && selectedMachineId.length === 1);
+
+  const hasVisibleSidebarContent =
+    (deviceGroupingAvailable &&
+      filter.groupDevice &&
+      onlineDeviceSectionIds(remoteDeviceIndex, selectedMachineId).length > 0) ||
+    visiblePinnedEntries.length > 0 ||
+    visibleUnclassified.length > 0 ||
+    visibleProjectsWithVendor.length > 0 ||
+    visibleDialogues.length > 0;
 
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);

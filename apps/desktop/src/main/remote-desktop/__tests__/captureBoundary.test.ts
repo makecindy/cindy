@@ -189,6 +189,7 @@ vi.mock('../nativeCapture', () => ({
   },
 }));
 vi.mock('../inputHost', () => ({
+  resolveDesktopInputBinary: vi.fn(async () => '/fake/desktop-input'),
   DesktopInputHost: class {
     constructor(onFailure: () => void) {
       h.inputFailure = onFailure;

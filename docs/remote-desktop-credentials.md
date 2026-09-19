@@ -8,8 +8,9 @@ Mobile places **Security** at the bottom of the remote desktop control panel,
 after display settings. Automatic unlock defaults off. Face ID only protects a
 saved password; turning automatic unlock off deletes the local saved password.
 
-Automatic unlock targets iOS controlling macOS or supported Linux lock screens
-(see the Linux integration and acceptance limits below). Android hides the unsupported
+Automatic unlock supports iOS controlling macOS or supported Linux lock screens
+(see the Linux integration and acceptance limits below), and macOS Desktop controlling
+macOS. Android and Windows viewers hide the unsupported
 automatic-unlock and biometric settings; its independent lock-on-exit setting
 remains available when the host advertises support. This does not add a new server,
 identity registry, database migration, or server deployment requirement. The existing
@@ -52,6 +53,20 @@ secrets device-only, with optional current-biometric-enrollment protection. Sett
 and pins are scoped to account, region, controller installation and target device;
 secrets additionally bind the Mac key fingerprint and OS user record.
 
+The Desktop controller reuses the native credential transaction in its own signed
+helper instance. AppKit owns password entry; only encrypted packets cross the
+dedicated viewer bridge. Its login Keychain items restrict access to the helper.
+Optional biometric protection wraps the saved password with a Secure Enclave
+key requiring the current biometric enrollment for key agreement. The Keychain
+then contains ciphertext and the hardware-wrapped key representation, never a
+biometric-protected password that can be retrieved using only a UI Boolean.
+This avoids requiring Data Protection Keychain entitlements on the standalone
+helper. Unsupported biometric hardware leaves the setting unavailable.
+
+An explicit exit cancels in-flight native authentication before requesting
+lock-on-exit. Ordinary media retries, display changes and window hiding never
+request a lock. A lock failure remains visible instead of silently closing.
+
 Biometric protection changes preserve the pin and replace the secret atomically.
 Offline deletion needs no network. Unavailable biometrics do not silently weaken
 existing protected items. When an invalidated secret no longer exists, setup can
@@ -72,11 +87,12 @@ identity without an account token or identity service. JS tests cover native
 pairing transport, ordinary desktop bypass, offline deletion, UI placement and
 focus cancellation.
 
-First setup on physical devices, Face ID success/cancellation, real locked-Mac unlock,
-Light/Dark visual inspection, and signed production-helper operation while locked
-remain acceptance work. Source tests and signed builds do not establish those facts.
-The earlier repository-wide gate still has recorded Desktop failures outside the
-remote-desktop targeted suites; no release-ready full gate is claimed.
+First setup on physical devices, Face ID/Touch ID success and cancellation, real
+locked-Mac unlock, and signed production-helper operation while locked remain
+acceptance work. Desktop Light/Dark renderer previews use synthetic connections;
+they do not validate Electron, native password UI or a real remote connection.
+Source tests, isolated native storage tests and signed builds do not establish
+those end-to-end facts.
 
 The abandoned companion-server experiment is not required and has not been deployed.
 

@@ -66,6 +66,19 @@
       "note": "Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。"
     },
     {
+      "id": "remote-desktop-display-sound",
+      "status": "proposed",
+      "en": "Display & Sound",
+      "translations": {
+        "zh-CN": "影音",
+        "zh-TW": "影音",
+        "ja": "画面とサウンド",
+        "ko": "화면 및 소리"
+      },
+      "checkCase": false,
+      "note": "Remote desktop panel containing picture and audio settings; icon-only toolbar trigger."
+    },
+    {
       "id": "local-session-scope",
       "status": "proposed",
       "en": "Local",

@@ -29,6 +29,7 @@ beforeEach(async () => {
     clipboard: async () => {},
     close: async () => {},
     fullscreen: async () => {},
+    resize: async () => {},
     rendererReady: async () => {},
     presentationReady: async () => {},
     inputFocus: async () => {},
@@ -49,13 +50,9 @@ beforeEach(async () => {
       return {};
     },
   } satisfies RemoteDesktopViewerApi;
-  controller = new DesktopViewerController(
-    api,
-    {} as HTMLElement,
-    (state) => {
-      snapshot = state;
-    },
-  );
+  controller = new DesktopViewerController(api, {} as HTMLElement, (state) => {
+    snapshot = state;
+  });
   await vi.advanceTimersByTimeAsync(0);
 });
 afterEach(() => {
