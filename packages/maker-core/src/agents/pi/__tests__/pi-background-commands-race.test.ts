@@ -16,7 +16,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -29,6 +29,8 @@ interface FakeEntry {
   exitNow: (code: number) => void;
   /** 控制 'spawn' 事件到达的时刻:窗口竞态的复现开关。 */
   emitSpawn: () => void;
+  /** 收到信号但故意不退出:用来复现「已收口、进程仍未确认退出」的残留窗口。 */
+  holdKill: boolean;
 }
 
 const fake = vi.hoisted(() => ({
@@ -51,9 +53,10 @@ vi.mock('node:child_process', async (importOriginal) => {
       let exited = false;
       const entry: FakeEntry = {
         killed: false,
+        holdKill: false,
         emitSpawn: () => child.emit('spawn'),
         exitNow: (code: number) => {
-          if (exited) return;
+          if (exited || entry.holdKill) return;
           exited = true;
           entry.killed = true;
           child.exitCode = code;
@@ -96,6 +99,7 @@ const managers: PiBackgroundCommands[] = [];
 function makeManager(): {
   manager: PiBackgroundCommands;
   updates: PiBackgroundCommandUpdate[];
+  logDir: string;
   fakeEntry: () => FakeEntry;
 } {
   const root = mkdtempSync(path.join(tmpdir(), 'pi-bg-race-'));
@@ -108,7 +112,15 @@ function makeManager(): {
     onUpdate: (update) => updates.push(update),
   });
   managers.push(manager);
-  return { manager, updates, fakeEntry: () => fake.pending.at(-1)! };
+  return { manager, updates, logDir: path.join(root, 'logs'), fakeEntry: () => fake.pending.at(-1)! };
+}
+
+/** 等一个条件成立(标记写/撤都是异步的 best-effort)。 */
+async function waitFor(predicate: () => boolean, timeoutMs = 8_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !predicate()) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 }
 
 /** 等运行表清空:管道的 'end' 是下一个 tick 才到,收口不是同步的。 */
@@ -185,5 +197,34 @@ describe('PI background command start/stop race', () => {
     expect(fakeEntry().killed).toBe(true);
     await waitForEmptyList(manager);
     expect(manager.list()).toEqual([]);
+  });
+
+  it('归属标记跟着「本实例还有没有进程在这个目录里」走', async () => {
+    const { manager, logDir } = makeManager();
+    const marker = path.join(logDir, `owner-${process.pid}.json`);
+    const starting = manager.start({
+      taskId: 'race-owner',
+      command: 'setInterval(function () {}, 1000);',
+      shell: NODE_EVAL_SHELL,
+    });
+    await waitForPending();
+    fake.pending.at(-1)!.emitSpawn();
+    await starting;
+    expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(marker, 'utf8')).toContain(String(process.pid));
+
+    // 进程收不到信号(顽固):dispose 已按 stopped 对 UI 收口,但进程还没确认退出 ——
+    // 它可能仍在写日志,所以标记必须留着,不能让另一个实例把目录删掉。
+    fake.pending.at(-1)!.holdKill = true;
+    await manager.dispose();
+    expect(manager.pendingKillCount).toBe(1);
+    expect(existsSync(marker)).toBe(true);
+
+    // 进程真退出:最后一个占用者销账,标记撤销。
+    fake.pending.at(-1)!.holdKill = false;
+    fake.pending.at(-1)!.exitNow(1);
+    await waitFor(() => manager.pendingKillCount === 0);
+    await waitFor(() => !existsSync(marker));
+    expect(existsSync(marker)).toBe(false);
   });
 });

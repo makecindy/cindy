@@ -255,6 +255,21 @@ async function writePiBackgroundCommandOwner(logDir: string): Promise<void> {
 }
 
 /**
+ * 收掉自己的归属标记(本实例在这个目录里已经没有活着的命令/残留进程了)。
+ *
+ * 必须真的收掉:标记的含义是「**现在**还有本实例的命令在往这个目录里写日志」。
+ * 只写不撤的话,一个早已用完这个会话、但进程还活着的实例会把标记一直挂在那里,删除侧
+ * 永远判定「另一个实例在用」-> 会话删掉后日志目录再也没人回收(启动期只扫 `anon-*`)。
+ */
+async function removePiBackgroundCommandOwner(logDir: string): Promise<void> {
+  try {
+    await fsp.unlink(path.join(logDir, piBackgroundCommandOwnerFileName(process.pid)));
+  } catch {
+    // 不存在 / 删不掉都无害:标记不存在时删除侧会走「无归属则保守保留」。
+  }
+}
+
+/**
  * 后台命令日志根目录:`<agentHome>/runtime/pi-bash-tasks/<sessionId>`。
  * 与 pi-subagent-runs 同级,理由相同:属于运行时产物,会话删除时一并回收。
  */
@@ -412,6 +427,13 @@ export function stopAllPiBackgroundCommandsForExitSync(): number {
 export class PiBackgroundCommands {
   private readonly running = new Map<string, RunningCommand>();
   /**
+   * 本实例是否已经把自己的归属标记写进日志目录。标记的含义是「**现在**还有本实例的命令
+   * 在往这个目录里写日志」,所以最后一个命令与最后一个残留进程都结清之后必须收掉它。
+   */
+  private ownerMarkerHeld = false;
+  /** 标记写/删的串行队列:与子进程的生死赛跑时,先写的不能盖掉后删的。 */
+  private ownerMarkerOps: Promise<void> = Promise.resolve();
+  /**
    * dispose 已按 stopped 收口、但 **尚未确认退出** 的进程。
    *
    * 它们已不在 `running` 里(UI 不该再看到 running),但进程可能还在跑;退出清扫只遍历
@@ -539,8 +561,11 @@ export class PiBackgroundCommands {
     this.running.set(taskId, record);
     try {
       await fsp.mkdir(this.options.logDir, { recursive: true, mode: 0o700 });
-      // 归属标记:删除侧靠它区分「这个目录可能是另一个活着的实例在用」。
-      await writePiBackgroundCommandOwner(this.options.logDir);
+      // 归属标记:删除侧靠它区分「这个目录可能是另一个活着的实例在用」。标记表示的是
+      // **现在**还有本实例的命令在这个目录里(见 updateOwnerMarker),所以它跟着
+      // running / pendingKills 清空而撤销,而不是只写不收。
+      this.updateOwnerMarker();
+      await this.ownerMarkerOps;
       const logStream = fs.createWriteStream(logPath, { flags: 'w', mode: 0o600 });
       record.logStream = logStream;
       // 打开失败必须在这里暴露(例如盘满 / 权限),不能等到写输出时静默丢日志。
@@ -550,6 +575,7 @@ export class PiBackgroundCommands {
       });
     } catch (error) {
       this.running.delete(taskId);
+      this.updateOwnerMarker();
       record.resolveNativeExited();
       try { record.logStream?.destroy(); } catch { /* 打不开的流无需处理 */ }
       throw toStartError(error);
@@ -571,6 +597,7 @@ export class PiBackgroundCommands {
       });
     } catch (error) {
       this.running.delete(taskId);
+      this.updateOwnerMarker();
       record.resolveNativeExited();
       try { record.logStream?.destroy(); } catch { /* 未打开的流无需处理 */ }
       throw toStartError(error);
@@ -621,6 +648,7 @@ export class PiBackgroundCommands {
         // 全部残留进程都已确认退出 → 本实例不再需要留在退出清扫登记表里。
         if (this.disposed && this.pendingKills.size === 0) liveManagers.delete(this);
       }
+      this.updateOwnerMarker();
       // 'exit' 只说明进程结束;stdio 里可能还有在途数据。正常情况两个流随后
       // 立刻 'end'(由 onStreamEnd 收口);这里再留一个兜底窗口 —— 后台孙进程
       // 占住管道时不能让任务永远停在 running。
@@ -817,9 +845,31 @@ export class PiBackgroundCommands {
       escalation.unref?.();
     }
     if (this.pendingKills.size === 0) liveManagers.delete(this);
+    // 已收口的记录不再持有目录;还有残留进程(pendingKills)时标记必须留着 —— 它们可能
+    // 仍在往日志里写。等队列落地,让调用方看到确定的最终状态。
+    this.updateOwnerMarker();
+    await this.ownerMarkerOps;
   }
 
   // ── 内部实现 ────────────────────────────────────────────────────────────
+
+  /**
+   * 把归属标记同步到「本实例现在是否还有命令/残留进程占着这个日志目录」。
+   *
+   * running 与 pendingKills 都空 => 本实例已经不再往这个目录里写任何东西,标记必须撤销,
+   * 否则删除侧会永远判定「另一个实例在用」,日志目录再也回收不掉。写/删走同一条串行队列:
+   * 「start 写标记」与「最后一条命令收口删标记」贴得很近时(刚起就停),乱序会留下一个
+   * 没人持的标记 —— 那正是本函数要避免的残留。
+   */
+  private updateOwnerMarker(): void {
+    const held = this.running.size > 0 || this.pendingKills.size > 0;
+    if (held === this.ownerMarkerHeld) return;
+    this.ownerMarkerHeld = held;
+    const logDir = this.options.logDir;
+    this.ownerMarkerOps = this.ownerMarkerOps
+      .then(() => (held ? writePiBackgroundCommandOwner(logDir) : removePiBackgroundCommandOwner(logDir)))
+      .catch(() => undefined);
+  }
 
   private consumeOutput(record: RunningCommand, chunk: Buffer): void {
     if (record.finalized) return;
@@ -883,6 +933,7 @@ export class PiBackgroundCommands {
     }
     this.running.delete(record.taskId);
     if (!record.exit) this.pendingKills.add(record);
+    this.updateOwnerMarker();
   }
 
   private finalizeFromExit(record: RunningCommand): void {
@@ -921,6 +972,7 @@ export class PiBackgroundCommands {
       // 流销毁失败不影响终态记账。
     }
     this.running.delete(record.taskId);
+    this.updateOwnerMarker();
     const summary = errorMessage ?? this.readTail(record);
     const update: PiBackgroundCommandUpdate = {
       taskId: record.taskId,

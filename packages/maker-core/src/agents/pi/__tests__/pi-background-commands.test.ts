@@ -93,6 +93,14 @@ async function waitForUpdate(
   throw new Error(`timed out waiting for update; saw ${JSON.stringify(updates)}`);
 }
 
+/** 等一个文件消失(标记撤销是异步的 best-effort)。 */
+async function waitForGone(filePath: string, timeoutMs = 8_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && existsSync(filePath)) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((manager) => manager.dispose().catch(() => undefined)));
   for (const root of tempRoots.splice(0)) {
@@ -211,18 +219,36 @@ describe('PiBackgroundCommands', () => {
     }
   });
 
-  it('records the owning process in the log dir so a foreign instance keeps it', async () => {
+  it('holds its ownership marker only while a command is running in the directory', async () => {
     const { manager, updates, logDir } = makeManager();
+    const marker = path.join(logDir, ownerFileName(process.pid));
     await manager.start({
       taskId: 'owner-1',
-      command: 'process.stdout.write("ok")',
+      command: 'setInterval(function () {}, 1000);',
       shell: NODE_EVAL_SHELL,
     });
-    await waitForUpdate(updates, (u) => u.taskId === 'owner-1' && u.status !== 'running');
-    const owner = JSON.parse(
-      readFileSync(path.join(logDir, ownerFileName(process.pid)), 'utf8'),
-    ) as { pid?: number };
+    await waitForUpdate(updates, (u) => u.taskId === 'owner-1' && u.status === 'running');
+    const owner = JSON.parse(readFileSync(marker, 'utf8')) as { pid?: number };
     expect(owner.pid).toBe(process.pid);
+    // 命令还在跑 => 标记在场(别的实例删会话时保留目录)。
+    expect(existsSync(marker)).toBe(true);
+
+    await manager.stop('owner-1');
+    // 命令收口、没有残留进程 => 标记必须撤销:否则一个已经用完这个会话、进程却还活着的
+    // 实例会把它一直挂在那里,目录再也没人回收。
+    await waitForGone(marker);
+    expect(existsSync(marker)).toBe(false);
+
+    // 同一目录再起一条:标记必须回来(撤销不是"一次性"的)。
+    await manager.start({
+      taskId: 'owner-2',
+      command: 'setInterval(function () {}, 1000);',
+      shell: NODE_EVAL_SHELL,
+    });
+    await waitForUpdate(updates, (u) => u.taskId === 'owner-2' && u.status === 'running');
+    expect(existsSync(marker)).toBe(true);
+    await manager.dispose();
+    await waitForGone(marker);
   });
 
   it('kills a command that was asked to stop while it was still starting', async () => {
