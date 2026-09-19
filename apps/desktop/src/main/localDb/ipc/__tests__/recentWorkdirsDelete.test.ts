@@ -58,6 +58,7 @@ function createDb(): void {
       status TEXT NOT NULL DEFAULT 'active',
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       remote_host_id TEXT,
+      orca_role TEXT,
       agent_kind TEXT NOT NULL DEFAULT 'cc'
     );
   `);
@@ -231,17 +232,26 @@ describe('local-db:recent-workdirs:list exists probe', () => {
     expect(list[13]?.path).toBe('/not-mounted/project-0');
   });
 
+  it('does not let hidden workers supply project agent-kind history', async () => {
+    seed('/workspace/shared', 1_786_500_000_000);
+    h.sqlite!.exec(`
+      INSERT INTO sessions (id, working_dir, agent_kind, orca_role)
+      VALUES ('ordinary', '/workspace/shared', 'cc', NULL),
+             ('worker', '/workspace/shared', 'codex', 'worker');
+    `);
+
+    expect(await invoke('local-db:recent-workdirs:list')).toEqual([
+      expect.objectContaining({ path: '/workspace/shared', knownAgentKinds: ['cc'] }),
+    ]);
+  });
+
   it('retains agent-kind history after the last project session is soft-deleted', async () => {
     seed('/workspace/codex-only', 1_786_500_000_000);
-    h.sqlite!
-      .prepare(
-        `INSERT INTO sessions (id, working_dir, status, workspace_kind, remote_host_id, agent_kind)
+    h.sqlite!.prepare(
+      `INSERT INTO sessions (id, working_dir, status, workspace_kind, remote_host_id, agent_kind)
          VALUES (?, ?, 'active', 'project', NULL, 'codex')`,
-      )
-      .run('codex-session', '/workspace/codex-only');
-    h.sqlite!
-      .prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?")
-      .run('codex-session');
+    ).run('codex-session', '/workspace/codex-only');
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-session');
 
     const list = (await invoke('local-db:recent-workdirs:list')) as Array<{
       path: string;

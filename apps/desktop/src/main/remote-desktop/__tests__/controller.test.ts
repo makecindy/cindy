@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { RemoteDesktopController, type DesktopControllerDeps } from '../controller';
 import { enumerateDesktopSources } from '../captureSource';
 import type { RemoteDesktopIceReply, RemoteDesktopLease } from '@cindy/device-link';
@@ -38,7 +39,182 @@ function harness() {
       controller.request('phone', { op: 'start', displayId: '1' }) as Promise<RemoteDesktopLease>,
   };
 }
+it('finishes native host setup before exposing a lease or allocating temporary displays', async () => {
+  const h = harness();
+  let done!: () => void;
+  h.deps.prepare = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        done = resolve;
+      }),
+  );
+  const starting = h.start();
+  await Promise.resolve();
+  expect(h.controller.state).toBeNull();
+  done();
+  const lease = await starting;
+  expect(lease.controlling).toBe(false);
+  await h.controller.request('phone', { op: 'start', displayId: '1', resume: true });
+  // Resume/takeover must not reload a compositor underneath an active capture.
+  expect(h.deps.prepare).toHaveBeenCalledOnce();
+});
+it('does not allocate a lease after host setup was cancelled', async () => {
+  const h = harness();
+  let done!: () => void;
+  let current!: () => boolean;
+  h.deps.prepare = (check) => {
+    current = check;
+    return new Promise<void>((resolve) => {
+      done = resolve;
+    });
+  };
+  const starting = h.start();
+  await Promise.resolve();
+  await h.controller.stop();
+  expect(current()).toBe(false);
+  done();
+  await expect(starting).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+  expect(h.controller.state).toBeNull();
+});
 describe('remote desktop authority and lifecycle', () => {
+  it('registers the returned stop promise with the awaited quit phase', () => {
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const registration = source.slice(
+      source.indexOf('onQuit('),
+      source.indexOf("  screen.on('display-removed'"),
+    );
+    const register = vi.fn();
+    const pending = new Promise<void>(() => {});
+    const stop = vi.fn();
+    const stopAndRestore = vi.fn(() => pending);
+    const dismiss = vi.fn();
+    const clear = vi.fn();
+    const clipboardStop = vi.fn();
+    new Function(
+      'stopLinuxClipboardWriter',
+      'onQuit',
+      'clearInterval',
+      'timer',
+      'permissions',
+      'remoteDesktop',
+      registration,
+    )(clipboardStop, register, clear, 1, { dismiss }, { stop, stopAndRestore });
+    expect(register).toHaveBeenCalledWith('remote-desktop-restore', expect.any(Function), 'async');
+    register.mock.calls.find(([name]) => name === 'remote-desktop-stop')![1]();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(register.mock.calls.find(([name]) => name === 'remote-desktop-restore')![1]()).toBe(
+      pending,
+    );
+    expect(clear).toHaveBeenCalledWith(1);
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+  it.each(['stop', 'stopAndRestore'] as const)(
+    'keeps %s pending until audio restoration finishes',
+    async (method) => {
+      const h = harness();
+      await h.start();
+      let finish!: () => void;
+      h.deps.stopHostMute = () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      let settled = false;
+      const stopped = h.controller[method]().then(() => {
+        settled = true;
+      });
+      expect(h.controller.state).toBeNull();
+      expect(h.deps.stopInput).toHaveBeenCalledOnce();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finish();
+      await stopped;
+      expect(settled).toBe(true);
+    },
+  );
+  it.each([false, true])(
+    'clears safety before a temporary resolution change, interrupted=%s',
+    async (interrupted) => {
+      const h = harness();
+      h.deps.displayModes = vi.fn(async () => [
+        { id: '1', width: 1920, height: 1080, current: true },
+        { id: '2', width: 3840, height: 2160, current: false },
+      ]);
+      h.deps.resolution = vi.fn(async (_display, _mode, before) => before());
+      h.deps.stopPrivacyScreen = vi.fn();
+      let finish!: () => void;
+      const safety = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      h.deps.stopHostMute = vi.fn(() => safety);
+      const { lease } = await h.start();
+      await h.controller.request('phone', { op: 'control', lease, enabled: true });
+      const pending = h.controller.request('phone', {
+        op: 'resolution',
+        lease,
+        modeId: '2',
+        temporary: true,
+      });
+      const rejected = interrupted
+        ? expect(pending).rejects.toThrow('DESKTOP_LEASE_EXPIRED')
+        : undefined;
+      expect(h.deps.stopInput).toHaveBeenCalled();
+      expect(h.deps.stopPrivacyScreen).toHaveBeenCalledOnce();
+      expect(h.deps.displayModes).not.toHaveBeenCalled();
+      if (interrupted) void h.controller.stop();
+      finish();
+      if (interrupted) {
+        await rejected;
+        expect(h.deps.resolution).not.toHaveBeenCalled();
+      } else {
+        await pending;
+        expect(h.deps.resolution).toHaveBeenCalledOnce();
+      }
+    },
+  );
+  it('keeps only a live view-only presentation across signaling loss', async () => {
+    const h = harness();
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+    h.controller.signalingLost('other-phone');
+    h.controller.signalingLost('phone');
+    h.controller.signalingLost();
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    for (let i = 0; i < 10; i++) {
+      h.advance(10_000);
+      h.controller.viewHeartbeat(lease);
+      h.controller.tick();
+    }
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    h.advance(12_000);
+    h.controller.tick();
+    expect(h.deps.stopVideo).toHaveBeenCalledOnce();
+  });
+
+  it('does not preserve foreground control or revoked presentations when signaling disappears', async () => {
+    const foreground = harness();
+    const { lease } = await foreground.start();
+    await foreground.controller.request('phone', { op: 'control', lease, enabled: true });
+    foreground.controller.signalingLost('phone');
+    expect(foreground.deps.stopVideo).toHaveBeenCalledOnce();
+    const revoked = harness();
+    const presentation = await revoked.start();
+    await revoked.controller.request('phone', { op: 'presentation', lease: presentation.lease, enabled: true });
+    revoked.revoke();
+    revoked.controller.signalingLost('phone');
+    revoked.controller.viewHeartbeat(presentation.lease);
+    expect(revoked.deps.stopVideo).toHaveBeenCalled();
+  });
+
+  it('explicit disconnect still stops a presentation after signaling loss', async () => {
+    const h = harness();
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+    h.controller.signalingLost('phone');
+    h.controller.stopByUser();
+    h.controller.viewHeartbeat(lease);
+    expect(h.deps.stopVideo).toHaveBeenCalledOnce();
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow('DESKTOP_STOPPED');
+  });
   it('does not publish selected geometry or resume control before it is observed', async () => {
     const h = harness();
     h.deps.displayModes = async () => [
@@ -280,6 +456,96 @@ describe('remote desktop authority and lifecycle', () => {
     expect(h.deps.stopVideo).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])('uses the current privacy exit lock preference (%s)', async (enabled) => {
+    const h = harness();
+    h.deps.privacyScreen = vi.fn(async () => {});
+    h.deps.lockScreen = vi.fn(async (current) => {
+      expect(current()).toBe(true);
+    });
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    await h.controller.request('phone', {
+      op: 'privacyScreen',
+      lease,
+      enabled: true,
+      lockOnExit: true,
+    });
+    await h.controller.request('phone', {
+      op: 'privacyScreen',
+      lease,
+      enabled: true,
+      lockOnExit: enabled,
+    });
+    await h.controller.stopPrivacyByUser();
+    expect(h.deps.lockScreen).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    expect(h.controller.state).toBeNull();
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow(
+      'DESKTOP_STOPPED',
+    );
+  });
+  it('ends privacy control even when locking fails', async () => {
+    const h = harness();
+    h.deps.privacyScreen = vi.fn(async () => {});
+    h.deps.lockScreen = vi.fn(async () => {
+      throw new Error('LOCK_FAILED');
+    });
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    await h.controller.request('phone', {
+      op: 'privacyScreen',
+      lease,
+      enabled: true,
+      lockOnExit: true,
+    });
+    await expect(h.controller.stopPrivacyByUser()).rejects.toThrow('LOCK_FAILED');
+    expect(h.controller.state).toBeNull();
+  });
+  it('requires owner control and opt-in for synchronization and invalidates a delayed read on disable', async () => {
+    const h = harness(),
+      { lease } = await h.start();
+    let finish!: (version: string) => void;
+    h.deps.clipboardVersion = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    await expect(
+      h.controller.request('phone', { op: 'clipboardSync', lease, enabled: true }),
+    ).rejects.toThrow('DESKTOP_CLIPBOARD_UNAVAILABLE');
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    await h.controller.request('phone', { op: 'clipboardSync', lease, enabled: true });
+    await expect(h.controller.request('other', { op: 'clipboardVersion', lease })).rejects.toThrow(
+      'DESKTOP_LEASE_EXPIRED',
+    );
+    const read = h.controller.request('phone', { op: 'clipboardVersion', lease });
+    await h.controller.request('phone', { op: 'clipboardSync', lease, enabled: false });
+    finish('12');
+    await expect(read).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+    h.controller.stop();
+  });
+  it('restores privacy on lease expiry and invalidates an older enable after disable', async () => {
+    const h = harness(),
+      { lease } = await h.start();
+    let finish!: () => void;
+    let oldCurrent!: () => boolean;
+    h.deps.stopPrivacyScreen = vi.fn();
+    h.deps.privacyScreen = async (enabled, current) => {
+      if (enabled) {
+        oldCurrent = current;
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      }
+    };
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    const enable = h.controller.request('phone', { op: 'privacyScreen', lease, enabled: true });
+    await h.controller.request('phone', { op: 'privacyScreen', lease, enabled: false });
+    expect(oldCurrent()).toBe(false);
+    finish();
+    await expect(enable).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+    h.advance(60000);
+    h.controller.tick();
+    expect(h.deps.stopPrivacyScreen).toHaveBeenCalled();
+  });
   it('locks only on explicit owner exit and blocks takeover until lock completes', async () => {
     const h = harness(),
       first = await h.start();
@@ -974,4 +1240,98 @@ describe('remote desktop authority and lifecycle', () => {
     expect(h.deps.stopVideo).not.toHaveBeenCalled();
     expect(h.controller.hasLease(lease.lease)).toBe(true);
   });
+});
+it.each(['control', 'presentation', 'failure', 'stop'] as const)(
+  'releases input before failing safety restoration on %s, without stopping replacement input',
+  async (kind) => {
+    const h = harness(),
+      { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    let rejectRestore!: (error: Error) => void;
+    h.deps.stopHostMute = vi.fn(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectRestore = reject;
+        }),
+    );
+    h.deps.stopPrivacyScreen = vi.fn();
+    let result: Promise<unknown> | undefined;
+    if (kind === 'failure') h.controller.releaseControl();
+    else if (kind === 'stop') h.controller.stop();
+    else
+      result = h.controller.request('phone', { op: kind, lease, enabled: kind === 'presentation' });
+    // Critical cleanup cannot wait for slow/failing operating-system restoration.
+    expect(h.deps.stopInput).toHaveBeenCalledOnce();
+    expect(h.deps.stopPrivacyScreen).toHaveBeenCalledOnce();
+    expect(h.controller.state?.controlling ?? false).toBe(false);
+    const next = kind === 'stop' ? (await h.start()).lease : lease;
+    await h.controller.request('phone', { op: 'control', lease: next, enabled: true });
+    const rejection = result ? expect(result).rejects.toThrow('restore failed') : Promise.resolve();
+    rejectRestore(new Error('restore failed'));
+    await rejection;
+    await Promise.resolve();
+    expect(h.deps.stopInput).toHaveBeenCalledOnce();
+    expect(h.controller.state?.controlling).toBe(true);
+  },
+);
+it.each(['control', 'presentation', 'failure'] as const)(
+  'revokes safety effects on %s control loss',
+  async (kind) => {
+    const h = harness(),
+      { lease } = await h.start();
+    h.deps.privacyScreen = vi.fn(async () => {});
+    h.deps.hostMute = vi.fn(async () => {});
+    h.deps.stopPrivacyScreen = vi.fn();
+    h.deps.stopHostMute = vi.fn();
+    for (const op of ['privacyScreen', 'hostMute'] as const)
+      await expect(h.controller.request('phone', { op, lease, enabled: true })).rejects.toThrow(
+        'DESKTOP_VIEW_ONLY',
+      );
+    expect(h.deps.privacyScreen).not.toHaveBeenCalled();
+    expect(h.deps.hostMute).not.toHaveBeenCalled();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    await h.controller.request('phone', { op: 'privacyScreen', lease, enabled: true });
+    await h.controller.request('phone', { op: 'hostMute', lease, enabled: true });
+    if (kind === 'failure') h.controller.releaseControl();
+    else await h.controller.request('phone', { op: kind, lease, enabled: kind === 'presentation' });
+    expect(h.deps.stopPrivacyScreen).toHaveBeenCalledOnce();
+    expect(h.deps.stopHostMute).toHaveBeenCalledOnce();
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+  },
+);
+it('joins duplicate privacy initialization and invalidates it on control loss', async () => {
+  const h = harness(),
+    { lease } = await h.start();
+  await h.controller.request('phone', { op: 'control', lease, enabled: true });
+  let ready!: () => void;
+  h.deps.privacyScreen = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+  );
+  const first = h.controller.request('phone', { op: 'privacyScreen', lease, enabled: true });
+  const second = h.controller.request('phone', {
+    op: 'privacyScreen',
+    lease,
+    enabled: true,
+    lockOnExit: true,
+  });
+  let settled = false;
+  void second.then(
+    () => {
+      settled = true;
+    },
+    () => {},
+  );
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  expect(h.deps.privacyScreen).toHaveBeenCalledOnce();
+  h.controller.releaseControl();
+  const errors = Promise.all([
+    expect(first).rejects.toThrow('DESKTOP_LEASE_EXPIRED'),
+    expect(second).rejects.toThrow('DESKTOP_LEASE_EXPIRED'),
+  ]);
+  ready();
+  await errors;
 });

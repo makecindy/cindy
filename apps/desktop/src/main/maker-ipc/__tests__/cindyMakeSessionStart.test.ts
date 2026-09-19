@@ -4,6 +4,11 @@ import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession';
 import { applyPersistedCindyMakeMarker } from '../cindyMakeSessionStart';
 
 describe('applyPersistedCindyMakeMarker', () => {
+  it('does not give an upstream merge task the personal-build harness', async () => {
+    const options: { id: string; vendorOptions?: Record<string, unknown> } = { id: 'merge' };
+    expect(await applyPersistedCindyMakeMarker(options, async () => 'cindy-make-merge')).toBe(false);
+    expect(options.vendorOptions?.[CINDY_MAKE_VENDOR_OPTION_KEY]).not.toBe(true);
+  });
   it('hydrates the marker only from a persisted cindy-make source', async () => {
     const readSource = vi.fn(async (id: string) => (id === 'make-1' ? 'cindy-make' : 'desktop'));
 

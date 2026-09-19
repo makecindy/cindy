@@ -3,6 +3,10 @@ import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ paths: new Set<string>(), links: new Set<string>() }));
+vi.mock('../sourceContent', () => ({
+  contentRef: async () => undefined,
+  taskContentRef: () => 'ref',
+}));
 vi.mock('node:fs/promises', () => ({
   lstat: vi.fn(async (p: string) => {
     if (!h.paths.has(p)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
@@ -67,7 +71,7 @@ function fixture() {
     return '';
   });
   const manage = (
-    action: 'finish' | 'delete' | 'archive',
+    action: 'end' | 'finish' | 'delete' | 'archive' | 'inspect',
     checkCurrent?: () => void,
     preparedWorkspace?: { path: string; branch: string },
   ) =>
@@ -92,15 +96,13 @@ beforeEach(() => {
   ]);
 });
 describe('managed task cleanup', () => {
-  it('merges committed work before removing the worktree and branch', async () => {
+  it('keeps unintegrated committed work on finish without merging or deleting it', async () => {
     const f = fixture();
-    await expect(f.manage('finish')).resolves.toBe(true);
-    const calls = f.git.mock.calls.map(([, args]) => args);
-    expect(calls.findIndex((args) => args.includes('merge'))).toBeLessThan(
-      calls.findIndex((args) => args.includes('remove')),
-    );
-    expect(calls.at(-1)).toEqual(['branch', '-d', branch]);
-    expect(h.paths.has(target)).toBe(false);
+    await expect(f.manage('finish')).resolves.toBe(false);
+    expect(
+      f.git.mock.calls.some(([, args]) => args.includes('merge') || args.includes('remove')),
+    ).toBe(false);
+    expect(h.paths.has(target)).toBe(true);
   });
   it.each(['dirty', 'unmerged', 'unchanged'] as const)(
     'retains %s work when merely archived',
@@ -113,20 +115,49 @@ describe('managed task cleanup', () => {
       expect(f.state.branchExists).toBe(true);
     },
   );
-  it('reclaims an archived task whose changes are already merged', async () => {
+  it('keeps an archived task even when its changes are already merged', async () => {
     const f = fixture();
     f.state.merged = true;
-    await expect(f.manage('archive')).resolves.toBe(true);
+    await expect(f.manage('archive')).resolves.toBe(false);
+    expect(h.paths.has(target)).toBe(true);
+    expect(f.git).not.toHaveBeenCalled();
     expect(f.git.mock.calls.some(([, args]) => args.includes('merge'))).toBe(false);
   });
-  it('refuses finish with uncommitted changes but explicit delete discards them', async () => {
+  it('retains finished uncommitted changes but explicit delete discards them', async () => {
     const f = fixture();
     f.state.dirty = true;
-    await expect(f.manage('finish')).rejects.toMatchObject({ code: 'dirty' });
+    await expect(f.manage('finish')).resolves.toBe(false);
     expect(h.paths.has(target)).toBe(true);
     await expect(f.manage('delete')).resolves.toBe(true);
     expect(f.git.mock.calls.at(-1)?.[1]).toEqual(['branch', '-D', branch]);
   });
+  it.each([true, false])(
+    'explicit end cleans integrated or unintegrated work (merged: %s)',
+    async (merged) => {
+      const f = fixture();
+      f.state.merged = merged;
+      f.state.dirty = !merged;
+      await expect(f.manage('end')).resolves.toBe(true);
+      expect(h.paths.has(target)).toBe(false);
+      expect(f.state.branchExists).toBe(false);
+      expect(
+        f.git.mock.calls.some(([, args]) => args.includes('merge') || args.includes('commit')),
+      ).toBe(false);
+    },
+  );
+  it.each([true, false])(
+    'inspection reports integration without cleaning (merged: %s)',
+    async (merged) => {
+      const f = fixture();
+      f.state.merged = merged;
+      await expect(f.manage('inspect')).resolves.toBe(merged);
+      expect(h.paths.has(target)).toBe(true);
+      expect(f.state.branchExists).toBe(true);
+      expect(
+        f.git.mock.calls.some(([, args]) => args.includes('remove') || args.includes('update-ref')),
+      ).toBe(false);
+    },
+  );
   it('retries after worktree removal succeeded but branch removal failed', async () => {
     const f = fixture();
     h.paths.delete(target);
@@ -203,14 +234,14 @@ describe('managed task cleanup', () => {
     expect(rm).toHaveBeenCalled();
     expect(f.state.branchExists).toBe(false);
   });
-  it('preserves work when merging fails', async () => {
+  it('never attempts a merge on finish', async () => {
     const f = fixture();
     const original = f.git.getMockImplementation()!;
     f.git.mockImplementation(async (...args) => {
       if (args[1].includes('merge')) throw new Error('conflict');
       return original(...args);
     });
-    await expect(f.manage('finish')).rejects.toMatchObject({ code: 'conflict' });
+    await expect(f.manage('finish')).resolves.toBe(false);
     expect(h.paths.has(target)).toBe(true);
     expect(f.state.branchExists).toBe(true);
   });

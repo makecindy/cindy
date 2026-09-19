@@ -32,6 +32,7 @@ import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { useRemoteBots } from './useRemoteBots';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
 import { BotAvatar } from './BotAvatar';
@@ -44,7 +45,7 @@ import {
   formatBotUnreadBadge,
 } from './botListDisplay';
 import { subscribeBotReadState } from './botReadState';
-import { partitionBotRoster } from './botRosterDisplay';
+import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
 import {
   canonicalBotSessionId,
   duplicateBotProfile,
@@ -75,6 +76,12 @@ function BotsSidebarContent() {
   const { pathname } = useLocation();
   const { botId, sessionId, deviceId } = useParams();
   const remoteBots = useRemoteBots();
+  const devices = useDeviceLinkDeviceList();
+  const self = devices?.find((device) => device.isSelf);
+  const rosterDevices = [
+    ...(self ? [self] : []),
+    ...remoteBots.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName })),
+  ];
   const bots = useBotProfiles();
   const unreadByBotId = useBotUnreadCounts();
   const rosterBots = bots.filter((bot) => bot.status !== 'archived');
@@ -118,14 +125,14 @@ function BotsSidebarContent() {
     完成、失败、待回复都没有系统通知。
   */
   const islandActivity = useAgentIslandActivityMap();
-  const isBotWorking = (bot: BotProfile): boolean => {
+  const botRunningActivity = (bot: BotProfile) => {
     // 委派干活发生在子任务,不在主任务。只看 canonical 的话,目标伙伴侧栏会一直是
     // 静默的,发起方却在等 —— 这正是「目标侧执行过程黑洞」在列表上的样子。
     const canonicalSessionId = canonicalBotSessionId(bot);
-    if (canonicalSessionId && islandActivity.get(canonicalSessionId)?.phase === 'running') {
-      return true;
-    }
-    return bot.sessions.some((session) => islandActivity.get(session.id)?.phase === 'running');
+    const canonicalActivity = canonicalSessionId ? islandActivity.get(canonicalSessionId) : undefined;
+    if (canonicalActivity?.phase === 'running') return canonicalActivity;
+    return bot.sessions.map((session) => islandActivity.get(session.id))
+      .find((activity) => activity?.phase === 'running');
   };
   const roster = partitionBotRoster(rosterBots, { query, showHidden });
   const showSearch = rosterBots.length + remoteBots.length >= 8 || query.trim().length > 0;
@@ -320,13 +327,15 @@ function BotsSidebarContent() {
               }).map((bot) => {
               if ('deviceId' in bot) {
                 const selected = bot.id === botId && bot.deviceId === deviceId;
+                const deviceName = botDeviceLabel({ deviceId: bot.deviceId, name: bot.deviceName }, rosterDevices);
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
                     className={cn('flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.online} deviceName={bot.deviceName} /></span>
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus online={bot.online} deviceName={deviceName} /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-14 leading-5">{bot.name}</span>
+                      <BotConnectionStatus inline online={bot.online} deviceName={deviceName} className={selected ? 'opacity-70' : 'text-[var(--text-secondary)]'} />
                       <span className="truncate text-12 leading-4 text-[var(--sidebar-list-muted)]">{bot.preview || bot.description || t('bots.list.startChat')}</span>
                     </span>
                     {!selected && isRemoteBotUnread(bot) ? <span aria-label={t('bots.list.unread', { count: 1 })} className="size-[7px] shrink-0 rounded-full bg-[var(--bot-unread-bg)]" /> : null}
@@ -340,9 +349,10 @@ function BotsSidebarContent() {
               // TA 正在回话时，第二行临时让位给「正在输入…」——聊天列表里这一行
               // 回答的是「TA 现在怎么样」，进行中比上一句说过什么更要紧。回合一
               // 结束就落回最新消息预览，不留痕。
-              const typing = isBotWorking(bot);
+              const activity = botRunningActivity(bot);
+              const typing = Boolean(activity);
               const subtitleText = typing
-                ? t('bots.list.typing')
+                ? activity?.compactDetail?.trim() || t('bots.list.typing')
                 : subtitle.kind === 'placeholder'
                   ? t('bots.list.startChat')
                   : subtitle.text;
@@ -392,9 +402,8 @@ function BotsSidebarContent() {
                     }}
                     className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
-                    {/* 40px。28px 会让两行式行高塌成一行的观感——头像撑不住两行文字,
-                        整行读起来像一条被拉高的单行列表。 */}
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus /></span>
+                    {/* Keep the existing avatar size alongside identity and message preview. */}
+                    <span className="relative shrink-0"><BotAvatar bot={bot} size="md" /><BotConnectionStatus activityLabel={typing ? subtitleText : undefined} /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         {bot.pinnedAt ? (
@@ -423,6 +432,7 @@ function BotsSidebarContent() {
                           />
                         ) : null}
                       </span>
+                      {!typing && <BotConnectionStatus inline className={selected ? 'opacity-70' : 'text-[var(--text-secondary)]'} />}
                       <span className="flex min-w-0 items-center gap-2">
                         {/* 未读只强调名字与数字，预览保持次级，避免整行同时争抢注意力。 */}
                         <span

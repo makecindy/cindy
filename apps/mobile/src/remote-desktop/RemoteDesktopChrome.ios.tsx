@@ -40,17 +40,22 @@ import {
 import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
 import { Text as AppText } from "@/components/AppText";
 import { RemoteDesktopPanelButton } from "./RemoteDesktopPanelButton";
-import { AllWindowsIcon, ShowDesktopIcon } from "./RemoteDesktopIcons";
+import {
+  AllWindowsIcon,
+  ShowDesktopIcon,
+  WorkspaceLeftIcon,
+  WorkspaceRightIcon,
+  OmarchyMenuIcon,
+} from "./RemoteDesktopIcons";
 import type {
   RemoteDesktopPanel as Panel,
   RemoteDesktopToolbar as Toolbar,
 } from "./RemoteDesktopChrome";
 
-// Four 44pt native hit targets with a 4pt inset inside one glass capsule.
+// 44pt native hit targets with a 4pt inset inside one glass capsule.
 const target = 44;
 const inset = 4;
 const breadth = target + inset * 2;
-const length = target * 4 + inset * 2;
 
 export function RemoteDesktopToolbar(props: ComponentProps<typeof Toolbar>) {
   const { colors, mode } = useTheme();
@@ -58,19 +63,30 @@ export function RemoteDesktopToolbar(props: ComponentProps<typeof Toolbar>) {
   const glass = useLiquidGlassAvailable();
   const actions = [
     {
-      key: "allWindows",
-      Icon: AllWindowsIcon,
-      onPress: props.onWindows,
+      key: props.onWorkspaceLeft ? "workspaceLeft" : "allWindows",
+      Icon: props.onWorkspaceLeft ? WorkspaceLeftIcon : AllWindowsIcon,
+      onPress: props.onWorkspaceLeft ?? props.onWindows,
       disabled: !props.canControl,
       selected: false,
     },
     {
-      key: "showDesktop",
-      Icon: ShowDesktopIcon,
-      onPress: props.onDesktop,
+      key: props.onWorkspaceRight ? "workspaceRight" : "showDesktop",
+      Icon: props.onWorkspaceRight ? WorkspaceRightIcon : ShowDesktopIcon,
+      onPress: props.onWorkspaceRight ?? props.onDesktop,
       disabled: !props.canControl,
       selected: false,
     },
+    ...(props.onOmarchyMenu
+      ? [
+          {
+            key: "omarchyMenu",
+            Icon: OmarchyMenuIcon,
+            onPress: props.onOmarchyMenu,
+            disabled: !props.canControl,
+            selected: false,
+          },
+        ]
+      : []),
     {
       key: "keyboard",
       Icon: Keyboard,
@@ -86,6 +102,7 @@ export function RemoteDesktopToolbar(props: ComponentProps<typeof Toolbar>) {
       selected: props.operations,
     },
   ];
+  const length = target * actions.length + inset * 2;
   const Stack = props.landscape ? VStack : HStack;
   return (
     <Host
@@ -165,6 +182,7 @@ export function RemoteDesktopPanel(props: ComponentProps<typeof Panel>) {
   const safe = useSafeAreaInsets();
   const visible = props.visible ?? true;
   const toolbarOnLeft = props.toolbarOnLeft ?? false;
+  const length = target * (props.toolbarActionCount ?? 4) + inset * 2;
   const railTop =
     safe.top + Math.max(0, (size.height - safe.top - safe.bottom - length) / 2);
   // Keep one RN surface for header and body. Changing SwiftUI siblings while

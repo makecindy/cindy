@@ -79,6 +79,11 @@ vi.mock('electron', () => ({
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: h.webContentsSend } }],
   },
 }));
+// These broadcast fixtures represent mounted, trusted app windows.
+vi.mock('../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
+  isTrustedAppRendererWindow: (w: { isDestroyed: () => boolean }) => !w.isDestroyed(),
+}));
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -157,6 +162,8 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
   });
 
   it.each([
+    { source: 'desktop', workspaceKind: 'project', remoteHostId: null, orcaRole: 'worker' },
+    { source: 'plugin', workspaceKind: 'project', remoteHostId: null, orcaRole: 'worker' },
     { source: 'scheduler', workspaceKind: 'project', remoteHostId: null },
     { source: 'desktop', workspaceKind: 'dialogue', remoteHostId: null },
     { source: 'desktop', workspaceKind: 'project', remoteHostId: 'ssh-host' },

@@ -28,7 +28,7 @@ const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
 const MIN_EXPECTED_BYTES = 1024;
 
 // kind → 本地落点 + 提供 ensurePlatform/readPinnedVersion 的下载模块
-// dirDist: 产物是"目录 + 主执行文件"（非单文件），sibling-worktree 单文件复用不适用
+// dirDist: 产物是"目录 + 主执行文件"，复用时必须复制并校验完整目录。
 const KINDS = {
   claude: { binDir: 'claude-code-bin', base: 'claude', module: '../tools/claude/update.mjs' },
   codex: {
@@ -217,9 +217,61 @@ export function tryReuseFromSiblingWorktree({ candidates, binFile, version, dest
 }
 
 /**
- * 确保 <kind> 在 <platformKey> 平台的二进制就位。已存在合法文件且非 force 时跳过。
- * 返回最终二进制的绝对路径。
+ * 复用同版本的完整目录分发；源与副本均须通过清单和必需资产校验。
  */
+export function tryReuseDirDistFromSiblingWorktree({
+  candidates, binaryRelativePath, requiredFiles, version, destDir,
+}) {
+  for (const candidateDir of candidates) {
+    let staging;
+    let previous;
+    try {
+      if (readInstalledVersion(path.join(candidateDir, '.version')) !== version) continue;
+      if (!isValidDirDist(candidateDir, path.join(candidateDir, binaryRelativePath), requiredFiles)) {
+        warn(`local directory cache invalid, skipping: ${candidateDir}`);
+        continue;
+      }
+      // 同一文件系统内落临时目录，完整校验后再替换；不合并旧安装残留。
+      fs.mkdirSync(path.dirname(destDir), { recursive: true });
+      staging = fs.mkdtempSync(`${destDir}.reuse-`);
+      const next = path.join(staging, 'next');
+      fs.cpSync(candidateDir, next, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+      if (readInstalledVersion(path.join(next, '.version')) !== version
+        || !isValidDirDist(next, path.join(next, binaryRelativePath), requiredFiles)) {
+        throw new Error('copied directory failed validation');
+      }
+      if (fs.existsSync(destDir)) {
+        const backup = path.join(staging, 'previous');
+        fs.renameSync(destDir, backup);
+        previous = backup;
+      }
+      try {
+        fs.renameSync(next, destDir);
+      } catch (err) {
+        if (previous) {
+          fs.renameSync(previous, destDir);
+          previous = undefined;
+        }
+        throw err;
+      }
+      previous = undefined;
+      return candidateDir;
+    } catch (err) {
+      // 回滚失败时保留旧安装，停止，不能继续下载覆盖证据。
+      if (previous && fs.existsSync(previous)) {
+        throw new Error(`Cannot restore previous runtime at ${previous}: ${err.message}`);
+      }
+      warn(`local directory reuse failed from ${candidateDir}: ${err.message}`);
+    } finally {
+      if (staging && !previous) {
+        try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* best effort */ }
+      }
+    }
+  }
+  return null;
+}
+
+/** 确保固定版本的运行包就位，返回主执行文件路径。 */
 export async function ensureBinary(kind, platformKey = currentPlatformKey(), { force = false } = {}) {
   const cfg = KINDS[kind];
   if (!cfg) throw new Error(`Unknown kind: ${kind} (known: ${Object.keys(KINDS).join(', ')})`);
@@ -256,16 +308,22 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   // 磁盘），弱网/断网时这是唯一不用等超时的路径。force 语义是"强制重新获取"，
   // 保持走正宗下载不复用。
   let reusedFrom = null;
-  // dirDist kind 的产物含主执行文件之外的运行时资产，单文件复用会产出缺资产的坏安装。
-  if (!force && !cfg.dirDist) {
-    reusedFrom = tryReuseFromSiblingWorktree({
+  if (!force) {
+    const reuseOptions = {
       candidates: listSiblingWorktreeRoots(ROOT).map((root) =>
         path.join(root, 'apps', cfg.binDir, platformKey),
       ),
       binFile,
       version,
       destDir: binDirPath,
-    });
+    };
+    reusedFrom = cfg.dirDist
+      ? tryReuseDirDistFromSiblingWorktree({
+        ...reuseOptions,
+        binaryRelativePath,
+        requiredFiles: requiredDirDistFilesFor(cfg, platformKey),
+      })
+      : tryReuseFromSiblingWorktree(reuseOptions);
     if (reusedFrom) {
       log(`${kind} ${platformKey}: reused local copy @ ${version} from ${reusedFrom}`);
     }

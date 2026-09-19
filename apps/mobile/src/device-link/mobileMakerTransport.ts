@@ -428,6 +428,14 @@ export type MobileWorktreeCreateResult =
     };
 
 export interface MobileMakerTransport {
+  /** 在被控端生成当前任务完成后的输入框推荐提示词。 */
+  predictNextPrompt(request: {
+    sessionId: string;
+    agentKind: MobileAgentKind;
+    turnGen: number;
+    completionRevision: number;
+    cacheOnly?: boolean;
+  }): Promise<{ prompt: string | null }>;
   createSession(opts: CreateSessionOptions): Promise<CreateSessionResult>;
   getCapabilities(agentKind: MobileAgentKind): Promise<unknown>;
   /**
@@ -1047,6 +1055,7 @@ export function createMobileMakerTransport({
       call("maker:apply-new-maker-draft-pref", [pref]),
     getNewMakerDefaults: (agentKind) =>
       call("maker:get-new-maker-defaults", [agentKind]),
+    predictNextPrompt: (request) => call('maker:predict-prompt', [request]),
     applyNewMakerWorktreePref: (worktreeEnabled) =>
       call("maker:apply-new-maker-worktree-pref", [{ worktreeEnabled }]),
     getNewMakerWorktreeBranchPref: (baseRepo) =>

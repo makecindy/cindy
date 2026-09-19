@@ -1,4 +1,12 @@
 {
+  "privacyExit": {
+    "status": "Cindy でリモート操作されています",
+    "hint": "クリックまたは任意のキーを押すと、切断を確認できます",
+    "title": "リモートデスクトップを切断しますか？",
+    "detail": "リモート操作を終了し、パソコンの画面を元に戻します。終了時のロックが有効な場合は、パソコンもロックされます。",
+    "cancel": "接続を維持",
+    "disconnect": "切断"
+  },
   "appBadge": {
     "attentionCount": "対応が必要なセッション：{{count}}"
   },
@@ -979,6 +987,18 @@
         "unknown": "不明"
       },
       "storage": {
+        "dialogueDirectoryTitle": "チャットワークスペース",
+        "dialogueDirectoryDescription": "新しいセッションにのみ適用されます。既存のファイルの場所は変わりません。",
+        "dialogueDirectoryOpen": "フォルダーを開く",
+        "dialogueDirectoryChoose": "フォルダーを変更",
+        "dialogueDirectoryReset": "既定の保存先に戻す",
+        "dialogueDirectoryFailed": "チャットワークスペースを更新できませんでした。選択したフォルダーに書き込めることを確認して、もう一度お試しください。",
+        "dialogueDirectoryDefault": "既定",
+        "dialogueDirectoryFullPath": "フルパス",
+        "dialogueDirectoryDetails": "プロジェクトフォルダーを指定していない新しいセッションで使用します。選択したフォルダー内に、このアカウント専用のサブフォルダーを作成します。",
+        "dialogueDirectoryCopy": "パスをコピー",
+        "dialogueDirectoryCopied": "パスをコピーしました",
+        "dialogueDirectoryCopyFailed": "パスをコピーできませんでした。パスを選択して手動でコピーしてください。",
         "mediaSectionTitle": "メディアファイル",
         "databaseSectionTitle": "データベース",
         "overviewTitle": "ローカルストレージ",
@@ -5738,7 +5758,11 @@
           "failed": "準備に失敗",
           "cancelled": "準備を停止",
           "cleaning": "クリーンアップ中",
-          "cleanup": "クリーンアップ待ち"
+          "cleanup": "クリーンアップ待ち",
+          "cleanupFailed": "クリーンアップに失敗",
+          "integrated": "取り込み済み",
+          "unintegrated": "未取り込み",
+          "unknown": "取り込み状態が未確認"
         },
         "errors": {
           "busy": "タスクまたはフォルダーは使用中です。停止して再試行してください。",
@@ -5747,7 +5771,42 @@
           "cleanupFailed": "クリーンアップは未完了です。記録を保持しているため再試行できます。",
           "directoryBusy": "開発フォルダー内のファイルが使用中か、削除できません。このフォルダーを使用しているターミナル、エディター、プレビューを閉じてから、クリーンアップを再試行してください。",
           "unavailable": "タスクまたは開発フォルダーが変更されました。更新して再試行してください。"
-        }
+        },
+        "end": "制作を終了",
+        "endHint": "制作を終了すると作業ディレクトリを削除し、制作履歴と保存済みの変更を保持します。",
+        "endConfirm": "「{{title}}」を終了して作業ディレクトリを削除しますか？制作履歴と保存済みの変更は保持されます。",
+        "cleanupDeletedConfirm": "「{{title}}」の残っている作業ディレクトリを削除しますか？保存済みの制作履歴は保持されます。",
+        "endUnintegrated": "個人版に取り込まれていない変更があります。制作を終了しても自動では取り込まれません。",
+        "endUnknown": "取り込み状態を確認できません。変更を確認してからクリーンアップしてください。"
+      },
+      "tabs": {
+        "versions": "バージョン管理",
+        "environment": "環境準備"
+      }
+    },
+    "worktreeRecycle": {
+      "title": "worktree のクリーンアップ",
+      "refresh": "更新",
+      "empty": "クリーンアップ待ちの worktree はありません",
+      "loadFailed": "状態を読み込めませんでした",
+      "actionFailed": "状態を更新できませんでした。更新して再試行してください",
+      "retry": "再試行",
+      "keep": "ディレクトリを保持",
+      "state": {
+        "retrying": "クリーンアップ待ち",
+        "waiting": "解放待ち",
+        "paused": "自動再試行を停止中",
+        "kept": "ディレクトリを保持"
+      },
+      "reason": {
+        "in-use": "使用中",
+        "changed": "内容が変更されました",
+        "kept": "保持が指定されています",
+        "integrity": "バックアップ検証に失敗",
+        "storage": "空き容量と権限を確認してください",
+        "identity": "ディレクトリの確認が必要",
+        "failed": "クリーンアップ未完了",
+        "pending": "待機中"
       }
     }
   },
@@ -5860,6 +5919,7 @@
   "login": {
     "title": "Cindy へようこそ",
     "subtitle": "安全なログイン方法を選択してください",
+    "savedLoginPreserved": "保存済みのログイン情報はこの端末に残っています",
     "phonePlaceholder": "電話番号を入力",
     "emailPlaceholder": "メールアドレスを入力",
     "invalidEmail": "正しいメールアドレスを入力してください",
@@ -5959,6 +6019,9 @@
       "fallback": "ログインに失敗しました。再試行してください。",
       "AUTH_SERVICE_UNAVAILABLE": "ログインサービスは一時的に利用できません。",
       "AUTH_REQUEST_FAILED": "ログインリクエストに失敗しました。",
+      "CREDENTIAL_STORE_UNAVAILABLE": "Cindy を完全に終了して開き直すと、ログインを復元できます。",
+      "BROWSER_OPEN_FAILED": "ブラウザを開けませんでした。再試行してください。",
+      "BROWSER_OPEN_TIMEOUT": "ブラウザの起動がタイムアウトしました。再試行してください。",
       "NETWORK_ERROR": "ネットワーク接続を確認してください。",
       "REQUEST_TIMEOUT": "リクエストがタイムアウトしました。",
       "INVALID_PARAMS": "入力内容を確認してください。",
@@ -7276,6 +7339,10 @@
       "downloadMobile": "Cindy モバイル版をダウンロード"
     },
     "accountSwitcher": {
+      "current": "現在のアカウント",
+      "switching": "アカウントを切り替え中…",
+      "adding": "ログインを準備中…",
+      "sharedDataRestriction": "この開発用ウィンドウは別の Cindy インスタンスとアカウントデータを共有しているため、アカウントの切り替えや追加はできません。元の Cindy ウィンドウで操作するか、独立したデータで開発版を起動してください。",
       "title": "アカウントを切り替え",
       "description": "このデバイスでログインしたアカウントを選択します",
       "syncing": "ログイン状態を確認中…",
@@ -8760,6 +8827,7 @@
     },
     "media": {
       "clickToZoom": "クリックして拡大",
+      "audioProgress": "再生位置",
       "audioPlay": "音声を再生",
       "audioPause": "音声を一時停止",
       "modelPreviewAlt": "3D モデルのプレビュー",
@@ -10274,7 +10342,7 @@
     },
     "empty": {
       "promptHeading": "自動化がまだありません",
-      "promptDescription": "cron 自動化を作成して、Claude Code または Codex にプロンプトをスケジュール実行させましょう。"
+      "promptDescription": "cron 自動化を作成して、Claude Code、Codex、または Pi にプロンプトをスケジュール実行させましょう。"
     },
     "usageLimitRecovery": {
       "name": "利用上限リセット後にタスクを続行",
@@ -10449,7 +10517,7 @@
         "titleCreate": "自動化を作成",
         "titleProjectCreate": "新しいプロジェクト自動化",
         "titleProjectEdit": "プロジェクト自動化を編集",
-        "subtitle": "Claude または Codex でプロンプトをスケジュール実行します。",
+        "subtitle": "Claude、Codex、または Pi でプロンプトをスケジュール実行します。",
         "subtitleFromGhost": "「{{name}}」が自動化の作成を求めています。モデルを選んで保存すると有効になります。",
         "save": "保存",
         "create": "作成",
@@ -12278,7 +12346,8 @@
     },
     "dialogs": {
       "subscription": {
-        "title": "サブスクリプションプランを選択"
+        "title": "サブスクリプションプランを選択",
+        "confirmTitle": "サブスクリプションを確認"
       },
       "topup": {
         "title": "残高チャージ"
@@ -12411,6 +12480,39 @@
       "targetLabel": "変更先プラン:{{name}}",
       "pendingDowngrade": "{{name}} へのダウングレードが {{date}} に予約されています。",
       "undo": "ダウングレードを取り消す"
+    },
+    "comparison": {
+      "select": "{{name}} を選択",
+      "topup": "チャージ",
+      "topupUnlock": "チャージすると追加利用分を解除できます。",
+      "rollover": "{{amount}} は{{period}}へ繰り越されます",
+      "changeUnavailable": "この変更はできません",
+      "upgrade": "アップグレード",
+      "downgrade": "ダウングレード",
+      "free": "無料",
+      "freeUsage": "従量課金",
+      "topupExpiry": "チャージ残高は使い切るまで有効",
+      "priceFromSuffix": "から",
+      "subscription": "サブスクリプション",
+      "includesFree": "無料プランの内容をすべて含みます",
+      "creditMultiple": "{{name}} の {{multiple}} 倍の付与額",
+      "credits": {
+        "MONTH": "毎月 {{amount}}",
+        "YEAR": "毎年 {{amount}}",
+        "OTHER": "{{amount}}"
+      },
+      "nextPeriod": {
+        "MONTH": "翌月",
+        "YEAR": "翌年",
+        "OTHER": "次の期間"
+      },
+      "agent": "Agent タスク",
+      "apiKey": "独自の API キーを利用",
+      "existingSubscription": "既存のサブスクリプションを利用",
+      "localModels": "ローカルモデル",
+      "basicModels": "基本モデル",
+      "advancedModels": "高度なモデル",
+      "managedService": "マネージドサービス"
     }
   },
   "fileAccess": {
@@ -12739,7 +12841,19 @@
         "mainCommit": "main のバージョン",
         "currentBranch": "プロジェクトの現在のブランチ",
         "detached": "ブランチなし（固定コミット）",
-        "unknown": "ソースを更新して確認"
+        "unknown": "ソースを更新して確認",
+        "latest": {
+          "dev": "最新の main",
+          "beta": "最新の beta",
+          "release": "最新の正式版",
+          "unavailable": "確認できませんでした。設定を開き直して再試行してください",
+          "same": "（同期済み）",
+          "behind_one": "（{{count}} コミット遅れ）",
+          "behind_other": "（{{count}} コミット遅れ）",
+          "ahead_one": "（{{count}} コミット先行）",
+          "ahead_other": "（{{count}} コミット先行）",
+          "difference": "（{{behind}} コミット遅れ、{{ahead}} コミット先行）"
+        }
       }
     },
     "code": {
@@ -12767,8 +12881,8 @@
       "projectClearing": "個人版のプロジェクトを削除中です。完了してからメッセージを送信してください。",
       "inputLocked": {
         "executing": "Cindy Make が初回のリクエストを実行中",
-        "hint": "初回の実行が終わると入力できます。質問への回答やプランの確認は引き続き行えます。",
-        "retry": "入力は一時的に無効です。上の準備カードから再試行してください。"
+        "hint": "準備が完了すると入力でき、編集を始められます。",
+        "retry": "準備が完了していません。再試行すると続行できます。"
       },
       "dependencyActivity": {
         "starting": "依存関係のインストールを開始中…",
@@ -12777,7 +12891,7 @@
       },
       "dependencyProgress": "解決 {{resolved}} · 再利用 {{reused}} · ダウンロード {{downloaded}} · 追加 {{added}}",
       "taskName": "Cindy Make 個人版",
-      "taskTitle": "[Cindy-Make] {{request}}",
+      "taskTitle": "[{{worktree}}] {{request}}",
       "workspace": "作業ディレクトリ {{branch}}"
     },
     "complete": {
@@ -12788,6 +12902,231 @@
       "changedFiles_other": "{{count}} 個のファイルを変更",
       "commit": "{{commit}} を基準",
       "branch": "{{branch}} にコミット済み"
+    },
+    "versions": {
+      "title": "マイバージョン",
+      "description": "このコンピューターで使う Cindy のバージョンを選びます。切り替えると再起動し、アカウント、設定、タスクを引き継ぎます。",
+      "original": "オリジナル版",
+      "personal": "個人版",
+      "development": "開発環境",
+      "current": "現在使用中",
+      "using": "使用中",
+      "switch": "切り替えて再起動",
+      "switchPersonal": "この個人版に切り替える",
+      "remove": "バージョンを削除",
+      "removeTitle": "この個人版を削除しますか？",
+      "removeDescription": "生成されたアプリのファイルだけを削除します。ソースコード、アカウント、設定、タスクは保持されます。",
+      "empty": "切り替え可能な個人版はまだありません。",
+      "unavailable": "このバージョンのアプリファイルを利用できません。",
+      "incompatible": "現在のデータと互換性がありません。現在のオリジナル版から再度ビルドしてください。",
+      "readyHint": "個人版の準備ができました。切り替えると Cindy が再起動し、アカウント、設定、タスクを引き継ぎます。",
+      "errors": {
+        "busy": "タスク、テスト、ビルドが実行中です。終了してから切り替えまたは削除してください。",
+        "incompatible": "データ構造が異なります。現在のオリジナル版から個人版を再度ビルドしてください。",
+        "unavailable": "このバージョンを読み込めません。再度ビルドしてお試しください。",
+        "launchFailed": "対象のバージョンを起動できませんでした。現在のバージョンは保持されています。",
+        "recovery": "選択したバージョンを起動できませんでした。オリジナル版を既定に戻しました。元の起動元から Cindy を開き直してください。データは保持されています。"
+      },
+      "localChanges": "ローカル変更あり"
+    },
+    "personal": {
+      "generate": "個人版をビルド",
+      "open": "インストーラーの場所を開く",
+      "description": "今回の変更を個人版にマージし、チェックとパッケージ化が完了してから新しい個人版として保存します。",
+      "readyHint": "インストーラー {{name}} を作成しました。保存先フォルダーを開けます。",
+      "checkStep": {
+        "dependencies": "ビルドに必要な依存関係をインストール中…",
+        "tests": "自動テストを実行中です。数分かかる場合があります…",
+        "types": "コードの型をチェック中…"
+      },
+      "status": {
+        "waiting": "個人版のビルド待ち…",
+        "merging": "変更をマージ中…",
+        "checking": "個人版を確認中…",
+        "packaging": "個人版をパッケージ化中…",
+        "publishing": "個人版を保存中…",
+        "ready": "個人版を作成しました",
+        "failed": "個人版を作成できませんでした"
+      },
+      "errors": {
+        "unavailable": "ビルド記録またはインストーラーを読み込めません。再度ビルドしてください。",
+        "changed": "作業ディレクトリまたはコードが変更されています。編集を完了してから再度ビルドしてください。",
+        "environment": "ビルドツールの準備ができていません。Cindy Make の環境を確認し、再試行してください。",
+        "missingShell": "自動チェックには Git Bash が必要です。Git for Windows をインストールして再試行してください。",
+        "checksFailed": "マージ後のコードがチェックに通りませんでした。編集を続けてから再度ビルドしてください。",
+        "conflict": "現在の個人版と変更が競合しています。編集を続けて競合を解決してください。",
+        "baselineChanged": "ビルド中に個人版が更新されました。最新の変更を含めるため、再度ビルドしてください。",
+        "buildFailed": "パッケージ化が完了しませんでした。再試行するか、編集を続けてください。",
+        "cancelled": "制作をキャンセルしました。もう一度生成できます。",
+        "cleanupFailed": "制作を停止しましたが、一部の一時ファイルを削除できませんでした。Cindyを再起動して再試行してください。",
+        "interrupted": "ビルドを停止しました。個人版を再度ビルドできます。"
+      }
+    },
+    "test": {
+      "resume": {
+        "title": "テストを続ける",
+        "description": "現在の変更を確認し、問題がなければテストと個人版の作成を選べるようにします。",
+        "action": "確認して続ける",
+        "failed": "確認を開始できませんでした。もう一度お試しください。",
+        "request": "現在の変更を確認し、完了したらテストと個人版の作成を選べるようにして、次の操作を選ぶまで待ってください。"
+      },
+      "title": "変更完了・次の操作を選択",
+      "description": "編集を続けるか、隔離テスト版を起動するか、個人版のインストーラーを作成できます。",
+      "readyHint": "テスト用ウィンドウで変更を確認してください。「編集を続ける」を選ぶとテスト版を閉じ、入力に戻ります。",
+      "start": "隔離テスト版を起動",
+      "started": "テスト版を起動済み",
+      "continue": "編集を続ける",
+      "status": {
+        "waiting": "変更完了・次の操作を選択",
+        "starting": "隔離テスト版を起動中…",
+        "ready": "テスト版の準備ができました",
+        "failed": "テスト版を起動できませんでした",
+        "stopped": "テスト版を再起動できます"
+      },
+      "errors": {
+        "unavailable": "変更の記録または作業ディレクトリが変更されました。編集を続け、もう一度完了を報告してください。",
+        "changed": "完了後にコードが変更されています。編集を完了してからテストしてください。",
+        "environment": "テスト環境の準備ができていません。設定の Cindy Make で環境を確認し、再試行してください。",
+        "launchFailed": "テスト版を起動できませんでした。再試行するか、編集に戻ってください。",
+        "timeout": "テスト版の起動がタイムアウトしました。再試行してください。",
+        "interrupted": "前回のテストは中断されました。隔離テスト版を再起動してください。"
+      },
+      "retry": "起動を再試行",
+      "startingHint": "起動が完了するまで編集は一時停止されます。現在の手順が完了するまでお待ちください。",
+      "currentStep": "現在の手順: {{step}}",
+      "failedStep": "中断した手順: {{step}}",
+      "steps": {
+        "waiting": "起動を待機",
+        "environment": "テスト環境を確認",
+        "workspace": "変更内容を検証",
+        "stopping": "隔離インスタンスを準備",
+        "dependencies": "依存関係を確認・準備",
+        "assets": "実行時リソースを確認・準備",
+        "launching": "コンパイルしてテスト用ウィンドウを開く"
+      }
+    },
+    "history": {
+      "title": "制作履歴",
+      "build": "個人版を生成",
+      "buildDescription": "現在の個人版ソースから新しいバージョンを生成します。未取り込みの過去の変更は含まれません。",
+      "building": "個人版を生成中…",
+      "stop": "制作を停止",
+      "stopping": "停止中…",
+      "progress": {
+        "waiting": "開始を待機中",
+        "merging": "変更を統合中",
+        "checking": "チェックを実行中",
+        "packaging": "個人版をパッケージ中",
+        "publishing": "個人版を保存中"
+      },
+      "noActions": {
+        "ended": "この制作は終了しているため、実行できる操作はありません。",
+        "sessionUnavailable": "この制作タスクの記録は利用できません。",
+        "completionUnavailable": "完了状態を確認できないため、安全な操作はありません。",
+        "sourceUnavailable": "個人用ソースを確認できないため、安全な操作はありません。",
+        "changedAfterCompletion": "完了時と現在のソースが一致しないため、安全な操作はありません。",
+        "busy": "別の制作またはチェックが実行中です。完了後に再試行してください。",
+        "checking": "この制作記録を確認中です。しばらくしてから再試行してください。"
+      },
+      "counts": "合計 {{total}} 件 · 未取り込み {{pending}} 件 · 取り込み済み {{integrated}} 件",
+      "filterLabel": "制作履歴を絞り込む",
+      "filters": {
+        "all": "すべての制作",
+        "pending": "未取り込み",
+        "integrated": "取り込み済み",
+        "ended": "終了済み"
+      },
+      "loadFailed": "制作履歴を読み込めませんでした。再試行してください。",
+      "loading": "制作履歴を読み込み中…",
+      "actionFailed": "操作を完了できませんでした。更新して再試行してください。",
+      "openInstaller": "インストーラーを表示",
+      "updated": "更新日時：{{time}}",
+      "needsBuild": "ソースが変更されています。個人版を生成すると変更を使えます。",
+      "built": "{{time}} に生成した個人版に含まれています",
+      "builtKnown": "生成済みの個人版に含まれています",
+      "conflict": "変更が競合しています。解決用タスクを開いて続行してください。",
+      "rounds": "編集 {{count}} 回",
+      "round": "{{number}} 回目 · {{time}}",
+      "files": "{{count}} ファイルを変更",
+      "working": "処理中…",
+      "endAndClean": "終了してクリーンアップ",
+      "endConfirm": "この制作を終了し、作業ディレクトリを削除しますか？制作履歴と保存済みの変更は保持されます。",
+      "revertConfirm": "この制作から個人ソースに取り込んだ変更を取り消しますか？他の制作と生成済みアプリは保持されます。",
+      "lifecycle": {
+        "preparing": "準備中",
+        "running": "変更中",
+        "editing": "編集中",
+        "ready": "次の操作を選択",
+        "failed": "準備に失敗",
+        "ended": "終了済み",
+        "cleanup": "クリーンアップ中"
+      },
+      "integration": {
+        "unintegrated": "未取り込み",
+        "integrated": "取り込み済み",
+        "changed": "新しい変更が未取り込み",
+        "reverted": "取り込みを取り消し済み",
+        "unknown": "取り込み状態が未確認",
+        "unchanged": "取り込む変更なし"
+      },
+      "actions": {
+        "open": "タスクを開く",
+        "continue": "編集を続ける",
+        "test": "隔離テスト版を起動",
+        "integrate": "個人版に取り込む",
+        "revert": "取り込みを取り消す",
+        "reapply": "再度取り込む",
+        "resolve": "競合を解決",
+        "retry": "再試行",
+        "build": "個人版を生成",
+        "retryBuild": "生成を再試行",
+        "end": "制作を終了",
+        "retry-prepare": "準備を再試行",
+        "retry-cleanup": "クリーンアップを再試行"
+      },
+      "buildStatus": {
+        "waiting": "個人版の生成を待機中…",
+        "checking": "個人版を確認中…",
+        "merging": "変更を取り込み中…",
+        "packaging": "個人版をパッケージ化中…",
+        "publishing": "個人版を保存中…",
+        "ready": "個人版を生成しました",
+        "failed": "個人版の生成に失敗しました",
+        "installerReady": "インストーラーの準備完了"
+      },
+      "rounds_other": "編集 {{count}} 回",
+      "files_other": "{{count}} ファイルを変更"
+    },
+    "merge": {
+      "getLatest": "最新ソースを取得",
+      "updateHint": "公式ソースを更新し、個人の変更を保持します。",
+      "confirmTitle": "最新ソースに更新しますか？",
+      "confirmDescription": "個人の変更は保持されます。競合が発生した場合は、専用タスクで解決を支援します。",
+      "confirm": "ソースを更新",
+      "openTask": "解決用タスクを開く",
+      "resolve": "競合を解決",
+      "resolveHint": "専用タスクで競合を解決し、結果を確認します。",
+      "otherAccount": "この操作は別のアカウントで開始されました。そのアカウントに切り替えて続行してください。",
+      "status": {
+        "fetching": "最新ソースを取得中…",
+        "merging": "ソースの変更を取り込み中…",
+        "conflict": "競合の解決が必要です",
+        "resolving": "競合を解決中",
+        "checking": "変更を確認中…",
+        "merged": "ソースの変更を取り込みました",
+        "failed": "ソースの取り込みに失敗しました"
+      },
+      "errors": {
+        "busy": "別の操作が実行中です。しばらくしてから再試行してください。",
+        "dirty": "ソースに未コミットの変更があります。保存してから再試行してください。",
+        "localMain": "main ブランチにローカルコミットがあります。確認してから更新してください。",
+        "unavailable": "ソースまたは操作記録を利用できません。更新して再試行してください。",
+        "gitFailed": "Git の操作を完了できませんでした。再試行してください。",
+        "baselineChanged": "個人ソースが変更されました。最新の状態で再試行してください。",
+        "checksFailed": "変更がチェックを通過しませんでした。解決用タスクを開いて続行してください。",
+        "interrupted": "操作が中断されました。変更は保持されています。再試行してください。",
+        "startFailed": "解決用タスクを開けませんでした。再試行してください。"
+      }
     }
   }
 }

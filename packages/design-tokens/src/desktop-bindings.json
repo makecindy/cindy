@@ -432,6 +432,14 @@
       "light": "semantic.defaults.search-match-fg.light",
       "dark": "semantic.defaults.search-match-fg.dark"
     },
+    "search-match-active-bg": {
+      "light": "semantic.defaults.search-match-active-bg.light",
+      "dark": "semantic.defaults.search-match-active-bg.dark"
+    },
+    "search-match-active-fg": {
+      "light": "semantic.defaults.search-match-active-fg.light",
+      "dark": "semantic.defaults.search-match-active-fg.dark"
+    },
     "update-btn-border": {
       "light": "semantic.defaults.update-btn-border.light",
       "dark": "semantic.defaults.update-btn-border.dark"
@@ -2095,6 +2103,46 @@
     "form-field-hint": {
       "light": "component.defaults.form-field-hint.light",
       "dark": "component.defaults.form-field-hint.dark"
+    },
+    "slider-track": {
+      "light": "component.defaults.slider-track.light",
+      "dark": "component.defaults.slider-track.dark"
+    },
+    "slider-fill": {
+      "light": "component.defaults.slider-fill.light",
+      "dark": "component.defaults.slider-fill.dark"
+    },
+    "slider-thumb": {
+      "light": "component.defaults.slider-thumb.light",
+      "dark": "component.defaults.slider-thumb.dark"
+    },
+    "slider-thumb-shadow": {
+      "light": "semantic.defaults.slider-thumb-shadow.light",
+      "dark": "semantic.defaults.slider-thumb-shadow.dark"
+    },
+    "segmented-track": {
+      "light": "semantic.defaults.segmented-track.light",
+      "dark": "semantic.defaults.segmented-track.dark"
+    },
+    "segmented-selected-shadow": {
+      "light": "semantic.defaults.segmented-selected-shadow.light",
+      "dark": "semantic.defaults.segmented-selected-shadow.dark"
+    },
+    "segmented-selected-bg": {
+      "light": "component.defaults.segmented-selected-bg.light",
+      "dark": "component.defaults.segmented-selected-bg.dark"
+    },
+    "segmented-selected-border": {
+      "light": "component.defaults.segmented-selected-border.light",
+      "dark": "component.defaults.segmented-selected-border.dark"
+    },
+    "segmented-option-fg": {
+      "light": "component.defaults.segmented-option-fg.light",
+      "dark": "component.defaults.segmented-option-fg.dark"
+    },
+    "segmented-hover-bg": {
+      "light": "component.defaults.segmented-hover-bg.light",
+      "dark": "component.defaults.segmented-hover-bg.dark"
     }
   },
   "retained": {
@@ -2401,7 +2449,14 @@
         "sidebar-nav-text": "themes.cindy-dark.sidebar-nav-text",
         "sidebar-user-card-bg-hover": "themes.cindy-dark.sidebar-user-card-bg-hover",
         "sidebar-user-card-border": "themes.cindy-dark.sidebar-user-card-border",
-        "sidebar-user-card-text": "themes.cindy-dark.sidebar-user-card-text"
+        "sidebar-user-card-text": "themes.cindy-dark.sidebar-user-card-text",
+        "slider-track": "themes.cindy-dark.slider-track",
+        "slider-fill": "themes.cindy-dark.slider-fill",
+        "slider-thumb": "themes.cindy-dark.slider-thumb",
+        "segmented-selected-bg": "themes.cindy-dark.segmented-selected-bg",
+        "segmented-selected-border": "themes.cindy-dark.segmented-selected-border",
+        "segmented-option-fg": "themes.cindy-dark.segmented-option-fg",
+        "segmented-hover-bg": "themes.cindy-dark.segmented-hover-bg"
       },
       "retained": {
         "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.dark"
@@ -2576,7 +2631,14 @@
         "completion-badge-fg": "themes.cindy-light.completion-badge-fg",
         "create-agent-control-bg-hover": "themes.cindy-light.create-agent-control-bg-hover",
         "create-agent-control-bg-pressed": "themes.cindy-light.create-agent-control-bg-pressed",
-        "create-agent-send-icon": "themes.cindy-light.create-agent-send-icon"
+        "create-agent-send-icon": "themes.cindy-light.create-agent-send-icon",
+        "slider-track": "themes.cindy-light.slider-track",
+        "slider-fill": "themes.cindy-light.slider-fill",
+        "slider-thumb": "themes.cindy-light.slider-thumb",
+        "segmented-selected-bg": "themes.cindy-light.segmented-selected-bg",
+        "segmented-selected-border": "themes.cindy-light.segmented-selected-border",
+        "segmented-option-fg": "themes.cindy-light.segmented-option-fg",
+        "segmented-hover-bg": "themes.cindy-light.segmented-hover-bg"
       },
       "retained": {
         "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.light"
@@ -3280,7 +3342,8 @@
         "tooltip-text": "themes.solarized-light.tooltip-text",
         "update-btn-border": "themes.solarized-light.update-btn-border",
         "update-btn-text": "themes.solarized-light.update-btn-text",
-        "form-field-hint": "themes.solarized-light.form-field-hint"
+        "form-field-hint": "themes.solarized-light.form-field-hint",
+        "search-match-bg": "themes.solarized-light.search-match-bg"
       },
       "retained": {},
       "type": "light"

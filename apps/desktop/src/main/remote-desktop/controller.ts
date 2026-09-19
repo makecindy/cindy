@@ -1,11 +1,13 @@
 import { ClipboardTransfer } from './clipboardTransfer';
 import { randomUUID } from 'node:crypto';
+import { createLogger } from '../logger';
 import type { ViewerDisplayHandle } from './viewerDisplay';
 import {
   parseRemoteDesktopRequest,
   REMOTE_DESKTOP_LEASE_MS,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
   type DesktopInput,
+  type RemoteDesktopWindow,
   type RemoteDesktopCursorFrame,
   type RemoteClipboardContent,
   type RemoteDesktopVideoSettings,
@@ -18,7 +20,18 @@ import {
   desktopPermissionReady,
 } from '@cindy/device-link';
 
+const log = createLogger('remote-desktop:controller');
+
 export interface DesktopControllerDeps {
+  /** Optional host setup before allocating the first lease or temporary output. */
+  prepare?(current: () => boolean): Promise<void>;
+  windowAction?(
+    action: 'list' | 'activate' | 'desktop' | 'workspaceLeft' | 'workspaceRight' | 'omarchyMenu',
+    id: string | undefined,
+    displayId: string,
+    current: () => boolean,
+  ): Promise<RemoteDesktopWindow[] | null>;
+  stopWindowActions?(): Promise<void>;
   authorized(peer: string): boolean;
   /**
    * Trusted host authentication provider, never a controller-supplied flag.
@@ -33,6 +46,7 @@ export interface DesktopControllerDeps {
   frame(
     displayId: string,
     cursorOverlay?: boolean,
+    lease?: string,
   ): Promise<string | RemoteDesktopCursorFrame | null>;
   startInput(displayId: string): Promise<void>;
   input(events: DesktopInput[]): void;
@@ -50,7 +64,7 @@ export interface DesktopControllerDeps {
   ice?(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceReply>;
   displayModes?(displayId: string): Promise<RemoteDesktopDisplayMode[]>;
   /** Local hardware presence; must not hide displays when remote access is revoked. */
-  displayPresent?(displayId: string): boolean;
+  displayPresent?(displayId: string): boolean | Promise<boolean>;
   resolution?(
     displayId: string,
     modeId: string,
@@ -77,7 +91,13 @@ export interface DesktopControllerDeps {
     action: 'copy' | 'paste',
     content: RemoteClipboardContent | undefined,
     isCurrent: () => boolean,
-  ): Promise<RemoteClipboardContent | void>;
+    options?: { sync?: boolean; version?: string },
+  ): Promise<RemoteClipboardContent | { version: string } | void>;
+  clipboardVersion?(): Promise<string>;
+  privacyScreen?(enabled: boolean, isCurrent: () => boolean): Promise<void>;
+  stopPrivacyScreen?(): void;
+  hostMute?(enabled: boolean): Promise<void>;
+  stopHostMute?(): Promise<void>;
   changed(): void;
   now?: () => number;
 }
@@ -92,6 +112,9 @@ export class RemoteDesktopController {
         sequence: number;
         authenticationSession: string | undefined;
         backgroundViewing?: boolean;
+        clipboardSync?: boolean;
+        hostMute?: boolean;
+        privacyLockOnExit?: boolean;
       })
     | null = null;
   private starting = false;
@@ -111,6 +134,33 @@ export class RemoteDesktopController {
   private startingPeer: string | null = null;
   private framePending = false;
   private clipboardPending = false;
+  private syncGeneration = 0;
+  private privacyGeneration = 0;
+  private privacyOperation: { enabled: boolean; promise: Promise<{ enabled: boolean }> } | null =
+    null;
+  private async clearSafety(): Promise<void> {
+    this.privacyGeneration++;
+    this.privacyOperation = null;
+    this.syncGeneration++;
+    if (this.active) this.active.clipboardSync = false;
+    try {
+      this.deps.stopPrivacyScreen?.();
+    } finally {
+      await Promise.all([this.deps.stopHostMute?.(), this.deps.stopWindowActions?.()]);
+    }
+  }
+  /** Revoke input synchronously; optional OS restoration must never retain it
+   * or stop a replacement helper after an asynchronous restore settles.
+   */
+  private revokeControl(): Promise<void> {
+    if (this.active) this.active.controlling = false;
+    this.controlGeneration++;
+    this.clipboardTransfer.reset();
+    this.deps.stopInput();
+    const restoring = this.clearSafety();
+    this.deps.changed();
+    return restoring;
+  }
   private clipboardTransfer = new ClipboardTransfer();
   private lastFrame = -Infinity;
   private controlGeneration = 0;
@@ -172,16 +222,29 @@ export class RemoteDesktopController {
     )
       this.stop();
   }
-  stop(peer?: string): void {
+  /** Losing the signaling socket is expected while the phone shows PiP.
+   * Only an authorized, view-only presentation may outlive it, and only while
+   * the media channel keeps renewing the existing bounded lease. */
+  signalingLost(peer?: string): void {
+    this.tick();
+    const active = this.active;
+    if (active && (!peer || active.peer === peer) && active.backgroundViewing && !active.controlling)
+      return;
+    this.stop(peer);
+  }
+  stop(peer?: string): Promise<void> {
     if (peer && this.active?.peer !== peer) {
       // Cancelling a takeover candidate must not revoke the current owner's work.
       if (this.startingPeer === peer) this.startingPeer = null;
-      return;
+      return Promise.resolve();
     }
     this.lockAbort?.abort();
     if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
     this.clipboardTransfer.reset();
     this.controlGeneration++;
+    const restoring = this.clearSafety().catch(() =>
+      log.warn('Safety restoration failed after stop'),
+    );
     this.active = null;
     this.deps.stopInput();
     this.deps.stopVideo();
@@ -193,6 +256,7 @@ export class RemoteDesktopController {
       void this.restoreStoppedDisplay().catch(() => {});
     this.viewerGeometryManaged = false;
     this.deps.changed();
+    return restoring;
   }
   private async temporaryResolution(
     peer: string,
@@ -216,6 +280,8 @@ export class RemoteDesktopController {
     try {
       this.deps.stopInput();
       this.deps.stopVideo();
+      await this.clearSafety();
+      requireCurrent();
       await this.deps.releaseInput?.();
       requireCurrent();
       // Remove the temporary mirror before enumerating the physical monitor.
@@ -274,7 +340,7 @@ export class RemoteDesktopController {
       if (this.viewerDisplay === handle) this.viewerDisplay = null;
       const original = this.originalResolution;
       if (original) {
-        if (this.deps.displayPresent?.(original.displayId) !== false)
+        if ((await this.deps.displayPresent?.(original.displayId)) !== false)
           await (this.deps.restoreResolution ?? this.deps.resolution)!(
             original.displayId,
             original.modeId,
@@ -297,8 +363,8 @@ export class RemoteDesktopController {
   }
   /** Join the same restoration used by disconnects before the process exits. */
   async stopAndRestore(): Promise<void> {
-    this.stop();
-    await this.restoreStoppedDisplay();
+    const safety = this.stop();
+    await Promise.all([safety, this.restoreStoppedDisplay()]);
   }
   /**
    * Input injection failed while the lease is still valid. Input belongs to the
@@ -311,17 +377,29 @@ export class RemoteDesktopController {
   releaseControl(): void {
     const active = this.active;
     if (!active || (!active.controlling && !this.inputStarting)) return;
-    active.controlling = false;
-    this.controlGeneration++;
-    this.clipboardTransfer.reset();
-    this.deps.stopInput();
-    this.deps.changed();
+    void this.revokeControl().catch(() => log.warn('Safety restoration failed after control loss'));
   }
   /** Explicit local disconnect must not be undone by the phone's recovery. */
   stopByUser(): void {
     const target = this.active ?? this.lastEnded;
     if (target) this.userStopped.set(target.peer, target.lease);
     this.stop();
+  }
+  async stopPrivacyByUser(): Promise<void> {
+    const active = this.active;
+    if (!active?.privacyLockOnExit) {
+      this.stopByUser();
+      return;
+    }
+    // Enter the existing lock/stop path before marking the lease stopped:
+    // subsequent phone input and recovery must be rejected while locking.
+    const ending = this.request(active.peer, { op: 'stop', lease: active.lease, lockScreen: true });
+    this.userStopped.set(active.peer, active.lease);
+    try {
+      await ending;
+    } finally {
+      if (this.active === active) this.stop(active.peer);
+    }
   }
   private require(peer: string, lease: string) {
     this.tick();
@@ -413,6 +491,16 @@ export class RemoteDesktopController {
       try {
         if (!this.active && (this.viewerDisplay || this.originalResolution))
           await this.restoreStoppedDisplay();
+        if (!this.active && this.deps.prepare) {
+          const current = () =>
+            this.startingPeer === peer &&
+            generation === this.controlGeneration &&
+            this.deps.authorized(peer) &&
+            this.authenticationCurrent(peer, authenticationSession);
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+          await this.deps.prepare(current);
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        }
         const caps = await this.deps.capabilities();
         if (!this.authenticationCurrent(peer, authenticationSession))
           throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
@@ -466,6 +554,79 @@ export class RemoteDesktopController {
     if (this.displayChanging && !['stop', 'heartbeat', 'frame', 'input'].includes(request.op))
       throw new Error('DESKTOP_DISPLAY_BUSY');
     switch (request.op) {
+      case 'windowAction': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.windowAction) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+        const generation = this.controlGeneration;
+        const current = () => {
+          this.tick();
+          return (
+            this.active === active && active.controlling && this.controlGeneration === generation
+          );
+        };
+        const result = await this.deps.windowAction(
+          request.action,
+          request.action === 'activate' ? request.id : undefined,
+          active.display.id,
+          current,
+        );
+        if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        return result;
+      }
+      case 'privacyScreen': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.privacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+        active.privacyLockOnExit = request.lockOnExit === true;
+        // Lock preference changes join the same mask/capture initialization.
+        if (this.privacyOperation?.enabled === request.enabled)
+          return this.privacyOperation.promise;
+        const generation = ++this.privacyGeneration;
+        const current = () => {
+          this.tick();
+          return (
+            this.active === active && active.controlling && generation === this.privacyGeneration
+          );
+        };
+        const promise = this.deps
+          .privacyScreen(request.enabled, current)
+          .then(() => {
+            if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+            return { enabled: request.enabled };
+          })
+          .catch((error) => {
+            if (generation === this.privacyGeneration) this.privacyOperation = null;
+            throw error;
+          });
+        this.privacyOperation = { enabled: request.enabled, promise };
+        return promise;
+      }
+      case 'clipboardSync': {
+        if (request.enabled && (!active.controlling || !this.deps.clipboardVersion))
+          throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+        if (active.clipboardSync !== request.enabled) {
+          this.syncGeneration++;
+          this.clipboardTransfer.resetSync();
+        }
+        active.clipboardSync = request.enabled;
+        return { enabled: request.enabled };
+      }
+      case 'hostMute': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.hostMute) throw new Error('DESKTOP_HOST_MUTE_UNAVAILABLE');
+        active.hostMute = request.enabled;
+        await this.deps.hostMute(request.enabled);
+        return { enabled: request.enabled };
+      }
+      case 'clipboardVersion': {
+        if (!active.controlling || !active.clipboardSync || !this.deps.clipboardVersion)
+          throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+        const generation = this.syncGeneration;
+        const version = await this.deps.clipboardVersion();
+        this.require(peer, request.lease);
+        if (!active.controlling || !active.clipboardSync || generation !== this.syncGeneration)
+          throw new Error('DESKTOP_LEASE_EXPIRED');
+        return { version };
+      }
       case 'restoreViewerDisplay':
       case 'viewerDisplay': {
         if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
@@ -484,6 +645,10 @@ export class RemoteDesktopController {
           // Wait for held keys/buttons to be released in the old coordinate space.
           this.deps.stopInput();
           this.deps.stopVideo();
+          // Safety effects belong to the old capture/control session, even though
+          // resizing retains its lease. Invalidate pending enables before waiting.
+          await this.clearSafety();
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
           if (this.deps.releaseInput) await this.deps.releaseInput();
           if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
           if (request.op === 'restoreViewerDisplay' && !this.viewerDisplay?.restore)
@@ -572,24 +737,23 @@ export class RemoteDesktopController {
       case 'presentation': {
         active.backgroundViewing = request.enabled;
         if (request.enabled) {
-          active.controlling = false;
-          this.clipboardTransfer.reset();
-          this.controlGeneration++;
-          this.deps.stopInput();
+          await this.revokeControl();
+        } else {
+          this.deps.changed();
         }
-        this.deps.changed();
         return { controlling: active.controlling };
       }
       case 'control': {
         if (this.locking) throw new Error('DESKTOP_BUSY');
         if (request.enabled) active.backgroundViewing = false;
         if (request.enabled && this.inputStarting) throw new Error('DESKTOP_INPUT_BUSY');
+        if (!request.enabled) {
+          await this.revokeControl();
+          return { controlling: active.controlling };
+        }
         this.clipboardTransfer.reset();
         const generation = ++this.controlGeneration;
-        if (!request.enabled) {
-          active.controlling = false;
-          this.deps.stopInput();
-        } else if (!active.controlling) {
+        if (!active.controlling) {
           this.inputStarting = true;
           try {
             await this.deps.startInput(active.display.id);
@@ -617,14 +781,24 @@ export class RemoteDesktopController {
       case 'clipboardContent':
       case 'clipboard': {
         if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (request.op === 'clipboardContent' && request.sync && !active.clipboardSync)
+          throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
         if (request.op === 'clipboard' ? !this.deps.clipboard : !this.deps.clipboardContent)
           throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
         if (this.clipboardPending) throw new Error('DESKTOP_CLIPBOARD_BUSY');
         const generation = this.controlGeneration;
+        const syncGeneration = this.syncGeneration;
         const isCurrent = () => {
           this.tick();
           return (
-            this.active === active && active.controlling && generation === this.controlGeneration
+            this.active === active &&
+            active.controlling &&
+            generation === this.controlGeneration &&
+            !(
+              request.op === 'clipboardContent' &&
+              request.sync &&
+              (!active.clipboardSync || syncGeneration !== this.syncGeneration)
+            )
           );
         };
         this.clipboardPending = true;
@@ -664,7 +838,11 @@ export class RemoteDesktopController {
         this.framePending = true;
         this.lastFrame = this.now();
         try {
-          const jpeg = await this.deps.frame(active.display.id, request.cursorOverlay);
+          const jpeg = await this.deps.frame(
+            active.display.id,
+            request.cursorOverlay,
+            active.lease,
+          );
           this.require(peer, request.lease); // revoke during capture must not leak the result
           if (this.displayChanging || active.display !== display) return { jpeg: null };
           const frame = typeof jpeg === 'object' && jpeg !== null ? jpeg : { jpeg };

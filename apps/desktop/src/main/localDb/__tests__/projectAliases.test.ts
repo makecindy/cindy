@@ -6,10 +6,11 @@ import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
 import { tx as runDbTx } from '../worker/opHandlers/tx.js';
+const send = vi.hoisted(() => vi.fn());
 
 vi.mock('electron', () => ({
   BrowserWindow: {
-    getAllWindows: () => [],
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send } }],
   },
   ipcMain: {
     handle: vi.fn(),
@@ -21,6 +22,7 @@ describe('projectAliases localDb helpers', () => {
   let rawDb: Database.Database | null = null;
 
   afterEach(() => {
+    send.mockClear();
     if (currentClient) {
       clearCurrentDbClient(currentClient);
       currentClient = null;
@@ -100,6 +102,24 @@ describe('projectAliases localDb helpers', () => {
     await upsertProjectAlias('local:D:/ÉCOLE/PROJECT-A', '', 'win32');
 
     expect(await listProjectAliases()).toEqual([]);
+  });
+
+  it('uses the captured client and checks ownership before writing and broadcasting', async () => {
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
+    const assertCurrent = vi.fn();
+    await upsertProjectAlias('local:/repo/app', 'App', process.platform, { client, assertCurrent });
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(await listProjectAliases(client)).toEqual([expect.objectContaining({ alias: 'App' })]);
+    send.mockClear();
+    const stale = () => { throw new Error('owner changed'); };
+    await expect(upsertProjectAlias('local:/repo/app', 'Wrong', process.platform, { client, assertCurrent: stale })).rejects.toThrow('owner changed');
+    expect((await listProjectAliases(client))[0].alias).toBe('App');
+    const changedDuringWrite = vi.fn().mockImplementationOnce(() => {}).mockImplementationOnce(stale);
+    await expect(upsertProjectAlias('local:/repo/app', 'Old account only', process.platform, { client, assertCurrent: changedDuringWrite })).rejects.toThrow('owner changed');
+    expect(send).not.toHaveBeenCalled();
   });
 
   function createTestDbClient(): DbClient {

@@ -218,3 +218,124 @@ describe('PiRpcProcess process observer', () => {
     ).not.toThrow();
   });
 });
+
+describe('PiRpcProcess startup failure diagnostics (#4625)', () => {
+  it('preserves extension failure and native recovery hint when startup exits', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    const rejected = expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      'Failed to load extension "placeholder"\nHint: Start without extensions using "pi -ne".',
+    );
+    child.stderr.emit('data', Buffer.from('Error: Failed to load extension "placeholder"\n'));
+    child.stderr.emit('data', Buffer.from('Hint: Start without extensions using "pi -ne".\n'));
+    child.emit('close', 1, null);
+    await rejected;
+    await expect(proc.request({ type: 'get_state' })).rejects.toThrow('Failed to load extension');
+  });
+
+  it('retains startup diagnostics if exit precedes the first request', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    child.stderr.emit('data', Buffer.from('Cannot find module placeholder\n'));
+    child.emit('close', 1, null);
+    await expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      'pi process exited (code=1, signal=null)\nPi startup stderr:\nCannot find module placeholder',
+    );
+  });
+
+  it('redacts complete stderr lines before bounding the diagnostic tail', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    const error = proc.request({ type: 'get_state' }).catch((err: Error) => err);
+    child.stderr.emit('data', Buffer.from('obsolete warning\n'));
+    child.stderr.emit('data', Buffer.from(`sessionToken=${'a'.repeat(4000)}\n`));
+    child.stderr.emit('data', Buffer.from(`${'x'.repeat(4000)}\n`));
+    // Split a synthetic credential across byte chunks, not logical stderr lines.
+    child.stderr.emit('data', Buffer.from('Error: Failed to load extension; api_key=sk-ant-'));
+    child.stderr.emit('data', Buffer.from('FAKEONLY0123456789\n'));
+    child.emit('close', 1, null);
+    const result = await error as Error;
+    expect(result.message).toContain('Failed to load extension');
+    expect(result.message).toContain('[REDACTED]');
+    expect(result.message).not.toContain('FAKEONLY');
+    expect(result.message).not.toContain('aaaa');
+    expect(result.message).not.toContain('obsolete warning');
+    expect(result.message.length).toBeLessThan(2200);
+  });
+
+  it('does not attach old startup warnings or running stderr after a valid RPC response', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    child.stderr.emit('data', Buffer.from('startup warning\n'));
+    const ready = proc.request({ type: 'get_state' });
+    child.stdout.emit('data', Buffer.from(JSON.stringify({
+      type: 'response', id: 'c1', command: 'get_state', success: true, data: {},
+    }) + '\n'));
+    await ready;
+    const rejected = expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      /^pi process exited \(code=1, signal=null\)$/,
+    );
+    child.stderr.emit('data', Buffer.from('running warning with unrelated content\n'));
+    child.emit('close', 1, null);
+    await rejected;
+  });
+
+  it('redacts raw transport diagnostics including headers and quoted secrets', async () => {
+    let stderr!: (line: string) => void;
+    let exit!: (info: { code: number | null; signal: NodeJS.Signals | null; reason: string }) => void;
+    const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
+      error: vi.fn(), fatal: vi.fn(), child: vi.fn() };
+    const proc = new PiRpcProcess({
+      transport: {
+        pid: undefined, isClosed: () => false, close: async () => {},
+        writeLine: async () => {}, onLine: () => () => {},
+        onStderr: (handler) => { stderr = handler; return () => {}; },
+        onClose: (handler) => { exit = handler; return () => {}; },
+      }, logger, onEvent: vi.fn(), onExit: vi.fn(),
+    });
+    const error = proc.request({ type: 'get_state' }).catch((err: Error) => err);
+    stderr('Error: Failed to load extension placeholder');
+    stderr('Cannot find module "/Users/fake user/private-project/node_modules/placeholder"');
+    stderr(String.raw`from 'C:\Users\fake user\private-project\pi.exe'`);
+    stderr('from /Users/fake user/private-project/pi.exe');
+    stderr('/Users/alice/acme,secret/[private](one)/node_modules/bad.js: no such file');
+    stderr(String.raw`C:\Users\alice\acme,secret\[private](one)\bad.js: permission denied`);
+    stderr('/config.json: no such file');
+    stderr('    at internalLoader (/private/build/internal.ts:123:4)');
+    stderr('Authorization: Basic FAKEBASE64VALUE');
+    stderr('password="fake spaced password"');
+    stderr('sessionToken=FAKECUSTOMOPAQUEVALUE');
+    exit({ code: 1, signal: null, reason: 'unused raw transport reason' });
+    const result = await error as Error;
+    expect(result.message).toContain('Failed to load extension placeholder');
+    expect(result.message).toContain('[REDACTED]');
+    expect(result.message).not.toContain('FAKE');
+    expect(result.message).not.toContain('fake spaced password');
+    expect(result.message).toContain('<path:placeholder>');
+    expect(result.message).toContain('<path:pi.exe>');
+    expect(result.message).not.toContain('fake user');
+    expect(result.message).not.toContain('private-project');
+    expect(result.message).not.toContain('internalLoader');
+    expect(result.message).not.toContain('acme');
+    expect(result.message).not.toContain('secret/');
+    expect(result.message).not.toContain('[private]');
+    expect(result.message).toContain('<path:bad.js>: no such file');
+    expect(result.message).toContain('<path:bad.js>: permission denied');
+    expect(result.message).toContain('<path:config.json>: no such file');
+  });
+
+  it('keeps the generic fallback for a fresh process with no stderr', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const proc = createProcess();
+    const rejected = expect(proc.request({ type: 'get_state' })).rejects.toThrow(
+      /^pi process exited \(code=1, signal=null\)$/,
+    );
+    child.emit('close', 1, null);
+    await rejected;
+  });
+});

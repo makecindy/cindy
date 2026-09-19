@@ -1,6 +1,12 @@
+import path from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { contentRef, taskCommitRef, taskContentRef, type ContentGit } from './sourceContent.js';
+import { commitLocalFiles } from './localHistory.js';
+import { makeTaskBranch, makeSourceCheckoutPath, isCindyMakeWorktreePath } from './sourcePaths.js';
 import type { AgentEvent } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+import { isSuccessfulAssistantReplyDoneData } from '../cindy-brain/assistantReplyHook.js';
 import type { CindyMakeCompletionMeta } from '../../shared/cindyMakeSession.js';
 
 /** The slice of a live maker Session the tracker needs; kept narrow for tests. */
@@ -11,7 +17,7 @@ export interface CindyMakeCompletionSession {
 
 export interface CindyMakeCompletionTrackerDeps {
   getSession: (sessionId: string) => CindyMakeCompletionSession | undefined;
-  /** Commit the task worktree and return code-verified facts; failures degrade to an empty object. */
+  /** Commit completed task files locally and return verified facts; failures degrade to an empty object. */
   collectFacts: (sessionId: string) => Promise<Omit<CindyMakeCompletionMeta, 'reportedAt'>>;
   persist: (sessionId: string, meta: CindyMakeCompletionMeta) => Promise<void>;
   logger: { warn: (msg: string, meta?: Record<string, unknown>) => void };
@@ -68,6 +74,11 @@ export function createCindyMakeCompletionTracker(
       }
       const off = session.onEvent((event) => {
         if (!isProductTurnEnd(event) || !pending.has(sessionId)) return;
+        if (event.type !== 'done' || !isSuccessfulAssistantReplyDoneData(event.data)) {
+          pending.get(sessionId)?.();
+          pending.delete(sessionId);
+          return;
+        }
         void finish(sessionId).catch((error) => {
           deps.logger.warn('cindy_make completion persist failed', {
             sessionId,
@@ -80,53 +91,44 @@ export function createCindyMakeCompletionTracker(
   };
 }
 
-export const CINDY_MAKE_COMMIT_AUTHOR = 'Cindy Make';
-export const CINDY_MAKE_COMMIT_EMAIL = 'cindy-make@localhost';
-
-const LINE_BREAK = /\r?\n/;
-
-/**
- * Commit everything the agent changed in the task worktree and return the facts
- * the completion card shows. The identity is fixed so the commit never depends
- * on the user's global Git configuration. Each Git answer is optional so one
- * failing command does not hide the others.
- */
-export async function commitCindyMakeChanges(
-  git: (args: string[]) => Promise<string>,
-  message: string,
+/** Finalize this managed task locally; personal/main branches are untouched. */
+export async function collectCindyMakeChanges(
+  git: ContentGit,
+  userData: string,
+  worktree: string,
 ): Promise<Omit<CindyMakeCompletionMeta, 'reportedAt'>> {
-  const facts: Omit<CindyMakeCompletionMeta, 'reportedAt'> = {};
-  try {
-    const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-    if (branch && branch !== 'HEAD') facts.branch = branch;
-  } catch {
-    // Reported without a branch.
-  }
-  try {
-    const status = await git(['status', '--porcelain', '--untracked-files=all']);
-    facts.changedFiles = status.split(LINE_BREAK).filter((line) => line.trim().length > 0).length;
-    if (facts.changedFiles > 0) {
-      await git(['add', '--all']);
-      await git([
-        '-c',
-        `user.name=${CINDY_MAKE_COMMIT_AUTHOR}`,
-        '-c',
-        `user.email=${CINDY_MAKE_COMMIT_EMAIL}`,
-        'commit',
-        '--quiet',
-        '--no-verify',
-        '--message',
-        message,
-      ]);
-    }
-  } catch {
-    // Reported without a count; HEAD below still tells which commit the task is on.
-  }
-  try {
-    const commit = (await git(['rev-parse', 'HEAD'])).trim();
-    if (/^[0-9a-f]{7,64}$/i.test(commit)) facts.commit = commit;
-  } catch {
-    // Reported without a commit.
-  }
-  return facts;
+  const runId = path.basename(worktree);
+  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree)).trim();
+  const samePath = (a: string, b: string) =>
+    process.platform === 'win32'
+      ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+      : path.resolve(a) === path.resolve(b);
+  if (
+    !isCindyMakeWorktreePath(userData, worktree) ||
+    branch !== makeTaskBranch(runId) ||
+    !samePath(await realpath(worktree), worktree) ||
+    !samePath(
+      (await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree)).trim(),
+      await realpath(path.join(makeSourceCheckoutPath(userData), '.git')),
+    )
+  )
+    throw new Error('Unexpected Cindy Make worktree');
+  const { commit, tree } = await commitLocalFiles(
+    git,
+    worktree,
+    'Cindy Make: complete personal change',
+  );
+  await git(['update-ref', taskContentRef(runId, 'complete'), tree], worktree);
+  await git(['update-ref', taskCommitRef(runId), commit], worktree);
+  const base = await contentRef(git, worktree, taskContentRef(runId, 'base'));
+  const changes = base
+    ? await git(['diff', '--name-only', '-z', '--no-renames', base, tree, '--'], worktree)
+    : await git(['status', '--porcelain', '-z', '--untracked-files=all'], worktree);
+  return {
+    branch,
+    commit,
+    tree,
+    ...(base ? { baseTree: base } : {}),
+    changedFiles: changes.split('\u0000').filter(Boolean).length,
+  };
 }

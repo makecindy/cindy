@@ -180,6 +180,13 @@ const GENERATED_OVERRIDES = {
   "create-agent-control-bg-hover": "var(--surface-hover)",
   "create-agent-control-bg-pressed": "var(--surface-hover-soft)",
   "create-agent-send-icon": "#FCFCFC",
+  "slider-track": "#A3A39E", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "slider-fill": "#3C3F43", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "slider-thumb": "#FDFDF8", // Slider 用户定稿 2026-09-17;与 Switch 独立
+  "segmented-selected-bg": "#FDFDF8",
+  "segmented-selected-border": "#F0F0EB",
+  "segmented-option-fg": "#6B6B67",
+  "segmented-hover-bg": "#E4E4DF",
 } as const;
 // END GENERATED DS-8: theme
 

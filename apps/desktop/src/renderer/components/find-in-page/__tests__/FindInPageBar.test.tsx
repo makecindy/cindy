@@ -27,6 +27,7 @@ vi.mock('@/components/find-in-page/findInPageOwnership', () => ({
 import { FindInPageBar } from '../FindInPageBar';
 
 class MockHighlight {
+  priority = 0;
   readonly ranges: AbstractRange[];
 
   constructor(...ranges: AbstractRange[]) {
@@ -105,6 +106,9 @@ describe('FindInPageBar', () => {
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges).toHaveLength(2);
     expect(getHighlight(MATCH_HIGHLIGHT_NAME)?.ranges[0].toString()).toBe('foo');
     expect(getHighlight(ACTIVE_HIGHLIGHT_NAME)?.ranges).toHaveLength(1);
+    expect(getHighlight(ACTIVE_HIGHLIGHT_NAME)?.priority).toBeGreaterThan(
+      getHighlight(MATCH_HIGHLIGHT_NAME)!.priority,
+    );
   });
 
   it('matches case-insensitively and keeps element-boundary matches explicit', async () => {

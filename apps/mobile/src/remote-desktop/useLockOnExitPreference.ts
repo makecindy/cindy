@@ -4,7 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // Non-secret, phone-local override for this computer. Absence follows default off.
 let writes: Promise<void> = Promise.resolve();
 export function useLockOnExitPreference(deviceId: string) {
-  const key = `cindy.mobile.remote-desktop.lock-on-exit.v1.${encodeURIComponent(deviceId)}`;
+  return useRemoteDesktopPreference(deviceId, "lock-on-exit", false);
+}
+export function useRemoteDesktopPreference(
+  deviceId: string,
+  feature: string,
+  defaultValue: boolean,
+) {
+  const key = `cindy.mobile.remote-desktop.${feature}.v1.${encodeURIComponent(deviceId)}`;
   const [state, setState] = useState({ key, enabled: false, loaded: false });
   const edited = useRef<string | null>(null);
   useEffect(() => {
@@ -14,7 +21,11 @@ export function useLockOnExitPreference(deviceId: string) {
       .then(() => AsyncStorage.getItem(key))
       .then((value) => {
         if (active && edited.current !== key)
-          setState({ key, enabled: value === "true", loaded: true });
+          setState({
+            key,
+            enabled: value === null ? defaultValue : value === "true",
+            loaded: true,
+          });
       })
       .catch(() => {
         if (active) setState({ key, enabled: false, loaded: true });
@@ -22,7 +33,7 @@ export function useLockOnExitPreference(deviceId: string) {
     return () => {
       active = false;
     };
-  }, [key]);
+  }, [key, defaultValue]);
   const update = useCallback(
     (enabled: boolean) => {
       edited.current = key;

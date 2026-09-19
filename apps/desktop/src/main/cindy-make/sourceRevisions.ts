@@ -38,9 +38,14 @@ export async function readSourceRevisions(
     const output = await query(args);
     return output && /^[0-9a-f]{7,64}$/i.test(output) ? output : undefined;
   };
-  const baseCommit = upstreamCommit
-    ? await readCommit(['merge-base', personalCommit, upstreamCommit])
-    : undefined;
+  const recordedUpstream = await readCommit([
+    'rev-parse',
+    '--verify',
+    'refs/cindy-make/personal-upstream^{commit}',
+  ]);
+  const baseCommit =
+    recordedUpstream ??
+    (upstreamCommit ? await readCommit(['merge-base', personalCommit, upstreamCommit]) : undefined);
   const mainCommit = await readCommit(['rev-parse', '--verify', 'refs/heads/main^{commit}']);
   const mainRemoteCommit = await readCommit([
     'rev-parse',

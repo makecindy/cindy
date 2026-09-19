@@ -65,7 +65,8 @@
       "react-native-webview@13.16.1": "dependency-patches/react-native-webview@13.16.1.patch",
       "expo-image-manipulator@57.0.14": "dependency-patches/expo-image-manipulator@57.0.14.patch",
       "expo-paste-input@0.2.2": "dependency-patches/expo-paste-input@0.2.2.patch",
-      "rollup@4.62.2": "dependency-patches/rollup@4.62.2.patch"
+      "rollup@4.62.2": "dependency-patches/rollup@4.62.2.patch",
+      "@expo/cli@57.0.25": "dependency-patches/@expo__cli@57.0.25.patch"
     },
     "allowUnusedPatches": true
   },
@@ -76,6 +77,7 @@
     "mobile:sim:start": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs",
     "mobile:sim:start:cn": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-start.mjs --region=cn",
     "mobile:sim:whoami": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-whoami.mjs",
+    "mobile:sim:open": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-open.mjs",
     "sync:mobile-rich-content-assets": "node apps/mobile/scripts/sync-rich-content-assets.mjs",
     "mobile:release:check": "node apps/mobile/scripts/release-with-env.mjs check",
     "mobile:release:prod": "node apps/mobile/scripts/release-with-env.mjs prod",

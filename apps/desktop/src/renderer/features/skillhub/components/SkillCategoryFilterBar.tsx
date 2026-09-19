@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import { Tip } from '@/components/ui/tooltip';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
 import { CATEGORY_ALL, type MarketCategory } from '../../../../shared/skillhubCategory';
@@ -101,28 +102,6 @@ export function SkillCategoryFilterBar({
     });
   };
 
-  const filterButton = (value: CategoryFilter, label: string) => {
-    const selected = selectedCategory === value;
-    return (
-      <button
-        key={value}
-        type="button"
-        aria-pressed={selected}
-        title={label}
-        onClick={() => onSelectCategory(value)}
-        className={cn(
-          'inline-flex h-7 max-w-40 shrink-0 items-center rounded-full px-3 text-12 leading-none',
-          'transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          selected
-            ? 'bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
-            : 'border border-[var(--border-default)] bg-[var(--surface-elevated)] font-normal text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-        )}
-      >
-        <span className="truncate">{label}</span>
-      </button>
-    );
-  };
-
   return (
     <div className={cn('flex min-w-0 items-center gap-1.5', className)}>
       {scrollState.overflow ? (
@@ -150,13 +129,27 @@ export function SkillCategoryFilterBar({
       <div
         ref={scrollRef}
         data-testid="skill-category-filter-scroller"
-        role="group"
-        aria-label={ariaLabel}
         onScroll={updateScrollState}
         className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {filterButton(CATEGORY_ALL, allLabel)}
-        {categories.map((category) => filterButton(category.slug, category.name))}
+        <SegmentedControl
+          className="cindy-segmented-nowrap shrink-0"
+          role="radiogroup"
+          aria-label={ariaLabel}
+          height={32}
+          optionHeight={28}
+          optionClassName="max-w-40 px-3 text-12"
+          value={selectedCategory}
+          onValueChange={onSelectCategory}
+          options={[
+            { value: CATEGORY_ALL, label: <span className="truncate">{allLabel}</span>, title: allLabel },
+            ...categories.map((category) => ({
+              value: category.slug as CategoryFilter,
+              label: <span className="truncate">{category.name}</span>,
+              title: category.name,
+            })),
+          ]}
+        />
       </div>
 
       {scrollState.overflow ? (

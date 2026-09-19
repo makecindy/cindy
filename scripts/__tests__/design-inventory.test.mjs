@@ -118,6 +118,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/bots/:botId/direct/:threadId BotDirectMessageView',
     '/bots/:botId/history/:sessionId BotHistorySessionView',
     '/bots/:botId/session/:sessionId BotSessionView',
+    '/bots/list BotsListView',
     '/bots/remote/:deviceId/:botId RemoteBotSessionView',
     '/bots/roster BotRosterView',
     '/cc-agent/:sessionId CCAgentSessionView',
@@ -141,7 +142,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
   ]);
 
   assert.deepEqual(redirects.map((row) => `${row.path} -> ${row.to}`), [
-    '/ -> /cc-agent',
+    '/ -> (runtime home entry redirect)',
     '/billing -> /settings?tab=billing',
     '/cc-agent -> (runtime session redirect)',
     '/cc-agent/new-dialogue -> /cc-agent/new',
@@ -1266,7 +1267,7 @@ test('Mobile actual route families and shared visible consumers are discoverable
   const coverage = mobileRouteCoverage(ROOT);
   assert.deepEqual(coverage.missing, []);
   assert.deepEqual(coverage.stale, []);
-  assert.equal(coverage.mapped.find(r=>r.path.endsWith('devices/desktop/[deviceId].tsx')).component, '@/remote-desktop/RemoteDesktopScreen');
+  assert.equal(coverage.mapped.find(r=>r.path.endsWith('devices/desktop/[deviceId].tsx')).component, 'RemoteDesktopRoute');
   const { surfaces } = buildGeneratedSurfaces(ROOT);
   for (const [id, ends] of [
     ['mobile.chat.session', ['MessageRenderer.tsx', 'CompanionMessageCard.tsx', 'AuthorizationMessageCard.tsx', 'FailedScheduleNotice.tsx']],

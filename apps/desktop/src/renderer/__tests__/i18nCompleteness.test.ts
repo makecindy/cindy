@@ -86,11 +86,10 @@ interface Scan {
 // A literal prefix followed by concatenation is not a complete static key.
 const STATIC_KEY_RE = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*(?=[,)])/g;
 
-async function scanSource(): Promise<Scan> {
+function scanText(txt: string): Scan {
   const used = new Set<string>();
   const withDefault = new Set<string>();
   let templateCount = 0;
-
 
   // 位置参默认:t('k', '默认')
   const posDefaultRe = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*,\s*['"]/g;
@@ -98,16 +97,53 @@ async function scanSource(): Promise<Scan> {
   const optDefaultRe = /\bt\(\s*['"]([A-Za-z0-9_][A-Za-z0-9_.]*)['"]\s*,\s*\{[^}]*defaultValue/g;
   const templateRe = /\bt\(\s*`/g;
 
-  for await (const entry of glob('**/*.{ts,tsx}', { cwd: RENDERER })) {
-    if (entry.includes('__tests__') || entry.startsWith('i18n/')) continue;
-    const txt = readFileSync(resolve(RENDERER, entry), 'utf8');
-    for (const m of txt.matchAll(STATIC_KEY_RE)) used.add(m[1]);
-    for (const m of txt.matchAll(posDefaultRe)) withDefault.add(m[1]);
-    for (const m of txt.matchAll(optDefaultRe)) withDefault.add(m[1]);
-    templateCount += [...txt.matchAll(templateRe)].length;
-  }
+  for (const m of txt.matchAll(STATIC_KEY_RE)) used.add(m[1]);
+  for (const m of txt.matchAll(posDefaultRe)) withDefault.add(m[1]);
+  for (const m of txt.matchAll(optDefaultRe)) withDefault.add(m[1]);
+  templateCount += [...txt.matchAll(templateRe)].length;
   return { used, withDefault, templateCount };
 }
+
+async function scanSource(): Promise<Scan> {
+  const result: Scan = { used: new Set(), withDefault: new Set(), templateCount: 0 };
+  for await (const entry of glob('**/*.{ts,tsx}', { cwd: RENDERER })) {
+    if (entry.includes('__tests__') || entry.startsWith('i18n/')) continue;
+    const scan = scanText(readFileSync(resolve(RENDERER, entry), 'utf8'));
+    for (const key of scan.used) result.used.add(key);
+    for (const key of scan.withDefault) result.withDefault.add(key);
+    result.templateCount += scan.templateCount;
+  }
+  return result;
+}
+
+describe('static translation key scanner', () => {
+  it('does not treat a dynamic concatenation prefix as a complete key', () => {
+    const scan = scanText(`
+      t('cindyMake.code.phases.' + phase);
+      t("settings.cindyMake.tasks." + action + 'Confirm', { count });
+      t('settings.cindyMake.tasks.status.'
+        + statusOf(selected, taskAction));
+      t('cindyMake.source.errors.' + code, 'Fallback');
+      t('cindyMakeDoctor.checks.' + check.id, { defaultValue: 'Fallback' });
+    `);
+    expect([...scan.used]).toEqual([]);
+    expect([...scan.withDefault]).toEqual([]);
+  });
+
+  it('retains complete static keys, options and inline defaults', () => {
+    const scan = scanText(`
+      t('missing.key');
+      t("plural.key", { count });
+      t('positional.key', 'Fallback');
+      t('options.key', { count, defaultValue: 'Fallback' });
+    `);
+    expect([...scan.used]).toEqual([
+      'missing.key', 'plural.key', 'positional.key', 'options.key',
+    ]);
+    expect([...scan.withDefault]).toEqual(['positional.key', 'options.key']);
+    expect(present({}, 'missing.key')).toBe(false);
+  });
+});
 
 describe('i18n completeness (static keys present in all locales)', () => {
   it('checks complete literal keys without treating dynamic prefixes as keys', () => {

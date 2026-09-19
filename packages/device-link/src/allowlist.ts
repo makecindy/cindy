@@ -404,6 +404,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 重生成标题(与 generate-title 同一 oneShot 通道)。老被控端无此 channel →
   // CHANNEL_NOT_ALLOWED → 控制端按生成失败提示。
   'maker:regenerate-title',
+  // 输入框推荐提示词：在被控端读取会话素材并使用被控端模型凭证生成。
+  'maker:predict-prompt',
   'maker:get-context-usage',
   // workflow 逐 agent 进度树(只读):handler 纯 fs 读 Claude Code workflow 记录文件,
   // 无 event.sender 依赖、无副作用;记录文件真相在被控端 HOME(控制端本机读必落空)。
@@ -734,6 +736,9 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 10min,压缩恰好到预算上限时会先 INVOKE_TIMEOUT,被误判为「设备无响应」并
   // 可能触发 peer-link 恢复(codex P2)——同 desktop-cmd:run 模式加 1min 余量。
   'maker:compact-session': 11 * 60_000,
+  // Persist drain + credentials refresh + 12s model request + return delivery.
+  // Shared by desktop/mobile; only this invoke gets the longer wait, no peer reset.
+  'maker:predict-prompt': 45_000,
   // 被控端先等 Lead history 最多 30s，再 resume/queue Worker；默认 30s 会与服务端
   // deadline 对撞，把边沿成功误报成 DEVICE_LINK_TIMEOUT。留出派发和回程余量。
   'maker:worker:dispatch-ui-assignment': 65_000,

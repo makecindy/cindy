@@ -714,12 +714,12 @@ describe('ProviderConnectionDialog accessibility', () => {
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
     await user.click(
-      screen.getByRole('button', { name: 'settings.providers.custom.authMode.none' }),
+      screen.getByRole('radio', { name: 'settings.providers.custom.authMode.none' }),
     );
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://old.example.test/v1');
     await user.click(
-      screen.getByRole('button', { name: 'settings.providers.custom.authMode.apiKey' }),
+      screen.getByRole('radio', { name: 'settings.providers.custom.authMode.apiKey' }),
     );
 
     const restoredApiKey = await screen.findByPlaceholderText(
@@ -910,7 +910,7 @@ describe('ProviderConnectionDialog accessibility', () => {
 
     // 切到无鉴权：none 模式剥凭证头，已存头不再有效，徽标隐藏。
     await user.click(
-      screen.getByRole('button', { name: 'settings.providers.custom.authMode.none' }),
+      screen.getByRole('radio', { name: 'settings.providers.custom.authMode.none' }),
     );
     await waitFor(() => expect(configuredBadge()).toBeNull());
     expect(document.body.textContent).not.toContain('configured-header-secret');

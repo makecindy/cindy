@@ -97,9 +97,12 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
 
 vi.mock('@/contexts/WorktreeContext', () => {
   const reportLiveness = vi.fn();
+  const refreshObserved = vi.fn();
   return {
     useWorktreeForSession: () => null,
     useReportWorktreeLiveness: () => reportLiveness,
+    useObservedWorktreeForSession: () => null,
+    useRefreshObservedWorktree: () => refreshObserved,
   };
 });
 
@@ -566,9 +569,16 @@ describe('父层 — 行级 handler 的引用稳定性', () => {
       resolve(__dirname, '..', 'AutomationSessionGroupItem.tsx'),
       'utf8',
     );
-    expect(sessionCard).toMatch(/export const SessionCard = memo\(/);
+    const navigationAdapter = readFileSync(
+      resolve(__dirname, '..', 'sidebarNavigation.tsx'),
+      'utf8',
+    );
+    expect(navigationAdapter).toMatch(/const Row = memo\(Component\)/);
+    expect(sessionCard).toMatch(/export const SessionCard = withSidebarNavigation</);
     expect(projectNode).toMatch(/export const ProjectNode = memo\(/);
-    expect(automationGroup).toMatch(/export const AutomationSessionGroupItem = memo\(/);
+    expect(automationGroup).toMatch(
+      /export const AutomationSessionGroupItem = withSidebarNavigation</,
+    );
   });
 
   it('runningSessionIds 必须 memo 化(否则每渲染 new Set 打穿整表)', () => {

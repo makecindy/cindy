@@ -115,6 +115,8 @@ export const sessionMetaWriteQueue = createSessionWriteQueue();
 
 export interface RemoteSessionRunStatus {
   isRunning: boolean;
+  /** Terminal failure remains sticky until the next run, even after read acknowledgement. */
+  hasTerminalError?: boolean;
   reconnectAttempt: RemoteSessionReconnectAttempt | null;
   sideTaskRunning: boolean;
   startedAt: number | null;
@@ -4538,6 +4540,7 @@ export const remoteSessionStore = {
       changed = writeSessionRunStatus(sessionId, {
         ...current,
         isRunning: false,
+        ...(phase === 'error' ? { hasTerminalError: true } : {}),
         reconnectAttempt: null,
         sideTaskRunning: false,
         startedAt: null,
@@ -4640,6 +4643,11 @@ export const remoteSessionStore = {
           }
         }
       }
+      const terminalErrorChanged = isTerminalMakerErrorEvent(event)
+        && writeSessionRunStatus(sessionId, {
+          ...readSessionRunStatus(sessionId),
+          hasTerminalError: true,
+        });
       this.setSessionRunning(
         sessionId,
         false,
@@ -4647,8 +4655,8 @@ export const remoteSessionStore = {
       );
       if (terminalPlanChanged) {
         bumpMessageVersion(sessionId);
-        emit();
       }
+      if (terminalPlanChanged || terminalErrorChanged) emit();
       return;
     }
 
@@ -4836,6 +4844,7 @@ export const remoteSessionStore = {
       }
       const next: RemoteSessionRunStatus = {
         isRunning,
+        ...(current.hasTerminalError !== undefined ? { hasTerminalError: current.hasTerminalError } : {}),
         reconnectAttempt: null,
         sideTaskRunning: isRunning ? data?.skipTurnReset === true : false,
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
@@ -5433,6 +5442,9 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
 
 function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus): boolean {
   const current = readSessionRunStatus(sessionId);
+  if (next.isRunning && !current.isRunning && current.hasTerminalError) {
+    next = { ...next, hasTerminalError: false };
+  }
   if (shallowRecordEqual(current as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>)) {
     return false;
   }

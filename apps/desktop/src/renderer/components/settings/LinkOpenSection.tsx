@@ -16,7 +16,7 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -64,7 +64,7 @@ function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
 
       <div className="flex shrink-0 items-center gap-2">
         <DefaultOverrideControls isCustomized={isCustomized} onReset={onReset} />
-        <SettingsSegmentedControl
+        <SegmentedControl
           aria-label={t(`settings.linkOpen.${kind}.ariaLabel`)}
           value={preference}
           onValueChange={setPreference}

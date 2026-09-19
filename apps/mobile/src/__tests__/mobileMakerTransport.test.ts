@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  FILE_INLINE_MAX_BYTES,
   REMOTE_INVOKE_ALLOWLIST,
 } from "@cindy/device-link";
 import {
@@ -11,7 +12,7 @@ import {
 } from "@/device-link/mobileMakerTransport";
 import type { RemoteInvoke } from "@/device-link/mobileMakerTransport";
 import { installPeerFileDownload } from "@/device-link/peerFileRegistry";
-import { resolveMobileRemoteMedia } from "@/session/remoteMedia";
+import { isDirectPreviewableMediaUrl, resolveMobileRemoteMedia } from "@/session/remoteMedia";
 import {
   setMobileAuthOwner,
   __testing as authOwnerTesting,
@@ -36,6 +37,63 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
+  describe.each([
+    ["video", "video/mp4", "mp4"],
+    ["audio", "audio/mpeg", "mp3"],
+  ] as const)("%s playback", (kind, mimeType, extension) => {
+    it.each([FILE_INLINE_MAX_BYTES - 1, FILE_INLINE_MAX_BYTES, FILE_INLINE_MAX_BYTES + 1])(
+      "resolves %i bytes to a URL accepted by the media player",
+      async (size) => {
+        const metadata = { ossKey: "", size, mimeType };
+        const prepared = size <= FILE_INLINE_MAX_BYTES
+          ? { ...metadata, inlineBase64: Buffer.alloc(size).toString("base64") }
+          : { ...metadata, transferRequired: true };
+        const uploaded = { ...metadata, ossKey: `media/playback.${extension}` };
+        const invoke = vi.fn(async (_device, _channel, args) => {
+          expect(args[0]).not.toHaveProperty("stream");
+          return args[0].prepareOnly ? prepared : uploaded;
+        });
+        const getUrl = `https://media.example.invalid/playback.${extension}`;
+        const presignGet = vi.fn(async () => ({ getUrl, expiresAt: "2099-01-01T00:00:00Z" }));
+        const maker = createMobileMakerTransport({ deviceId: "d", invoke: invoke as RemoteInvoke });
+        const resolved = await resolveMobileRemoteMedia(
+          { kind, url: `cindy-media://blobs/${"a".repeat(64)}.${extension}` },
+          { fetchRemoteMedia: maker.fetchRemoteMedia, presignGet },
+        );
+        expect(isDirectPreviewableMediaUrl(resolved.url)).toBe(true);
+        expect(resolved).toMatchObject({ url: getUrl, mimeType, size, previewable: true });
+        expect(resolved.inlineBase64).toBeUndefined();
+        expect(presignGet).toHaveBeenCalledExactlyOnceWith(uploaded.ossKey);
+        expect(invoke).toHaveBeenCalledTimes(2);
+      },
+    );
+    it.each([FILE_INLINE_MAX_BYTES - 1, FILE_INLINE_MAX_BYTES])(
+      "plays %i-byte inline media when an old host ignores prepareOnly",
+      async (size) => {
+        const metadata = { ossKey: "", size, mimeType };
+        const inline = { ...metadata, inlineBase64: Buffer.alloc(size).toString("base64") };
+        const invoke = vi.fn(async (_device, _channel, args) => {
+          expect(args[0]).not.toHaveProperty("stream");
+          return inline;
+        });
+        const presignGet = vi.fn();
+        const maker = createMobileMakerTransport({ deviceId: "d", invoke: invoke as RemoteInvoke });
+        const resolved = await resolveMobileRemoteMedia(
+          { kind, url: `cindy-media://blobs/${"a".repeat(64)}.${extension}` },
+          { fetchRemoteMedia: maker.fetchRemoteMedia, presignGet },
+        );
+        expect(isDirectPreviewableMediaUrl(resolved.url)).toBe(true);
+        expect(resolved).toMatchObject({
+          url: `data:${mimeType};base64,${inline.inlineBase64}`,
+          mimeType,
+          size,
+          previewable: true,
+        });
+        expect(presignGet).not.toHaveBeenCalled();
+        expect(invoke).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
   it.each(["audio/mpeg", "video/mp4", "image/png", "application/pdf", "application/octet-stream"])("retains %s previews while preserving peer for complete byte consumers", async (mimeType) => {
     const metadata = { ossKey: "", size: 70_000, mimeType, transferRequired: true };
     const direct = { ...metadata, transferRequired: false };
@@ -220,6 +278,7 @@ describe("mobile maker transport", () => {
       "local-db:messages:dismiss-error",
       "local-db:sessions:ack-interrupted",
       "maker:regenerate-title",
+      "maker:predict-prompt",
       "local-db:messages:list",
       "local-db:messages:view",
       "local-db:messages:work-details",

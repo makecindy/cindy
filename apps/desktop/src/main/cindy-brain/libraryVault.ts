@@ -124,6 +124,8 @@ export interface LibraryReadHandle {
 }
 
 export interface LibraryVaultDeps {
+  /** Host bookkeeping follows commit, abort, idle expiry and IO failure. */
+  onStreamClosed?(streamId: string): void;
   /** Library 根(生产 = 默认根或 binding 解析结果;每次现取,支持切换)。 */
   rootDir(): string;
   /** 归属插件 id(写进 meta 供设置页/回收站展示;缺省空串)。 */
@@ -896,6 +898,7 @@ export class LibraryVault {
         return fail('INTERNAL', '分块提交就位校验失败');
       }
       this.streams.delete(stream.streamId);
+      this.deps.onStreamClosed?.(stream.streamId);
       this.usage.bytes += stream.totalBytes - existedBytes;
       if (!prior) this.usage.files += 1;
       this.usage.mutations += 1;
@@ -917,6 +920,7 @@ export class LibraryVault {
     const stream = this.streams.get(streamId);
     if (!stream) return;
     this.streams.delete(streamId);
+    this.deps.onStreamClosed?.(streamId);
     await fs.promises.unlink(stream.tmpAbs).catch(() => {});
   }
 

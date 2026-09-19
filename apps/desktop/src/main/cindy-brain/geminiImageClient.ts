@@ -21,7 +21,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { GhostImageAspectRatio } from '../../shared/ghost.js';
+import { normalizeImageParameters, type ImageParameters } from '../cindy-media/imageParameters.js';
 import type { ImageChannel, ImageChannelResult } from './imageChannelRegistry.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -120,12 +120,13 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
     return key;
   }
 
-  async function callGenerateContent(params: {
+  async function callGenerateContent(params: ImageParameters & {
     model: string;
     prompt: string;
-    aspectRatio?: GhostImageAspectRatio;
     imagePaths?: string[];
+    signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
+    const options = normalizeImageParameters('gemini', params.model, params);
     const apiKey = requireApiKey();
     const upstream = upstreamModelId(params.model);
     const parts: Array<Record<string, unknown>> = [{ text: params.prompt }];
@@ -139,7 +140,10 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
       contents: [{ parts }],
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
-        ...(params.aspectRatio ? { imageConfig: { aspectRatio: params.aspectRatio } } : {}),
+        ...(options.aspectRatio || options.resolution ? { imageConfig: {
+          ...(options.aspectRatio ? { aspectRatio: options.aspectRatio } : {}),
+          ...(options.resolution ? { imageSize: options.resolution } : {}),
+        } } : {}),
       },
     };
     // 停用轴派发前重查:参考图 fs.readFile 是 await,窗口内被停用即拒(同 gatewayImageClient)。
@@ -151,6 +155,7 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: params.signal,
     });
     if (!res.ok) await humanizeGeminiHttpError(res, params.model);
     const parsed = (await res.json()) as GeminiGenerateContentResponse;
@@ -158,10 +163,9 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
   }
 
   return {
+    imageProtocol: 'gemini',
     ready: () => (opts.getApiKey()?.trim() ?? '') !== '',
-    generateImage: ({ model, prompt, aspectRatio }) =>
-      callGenerateContent({ model, prompt, aspectRatio }),
-    editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
-      callGenerateContent({ model, prompt, imagePaths, aspectRatio }),
+    generateImage: callGenerateContent,
+    editImage: callGenerateContent,
   };
 }

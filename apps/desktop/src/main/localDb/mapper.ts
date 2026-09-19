@@ -373,7 +373,7 @@ export function sessionCreateToRow(
          */
         providerId?: string | null;
         /** Main-owned purposes only; the renderer create IPC validates which values it accepts. */
-        source?: 'bot' | 'cindy-make';
+        source?: 'bot' | 'cindy-make' | 'cindy-make-merge';
         /**
          * 任务级工作上下文预算（tokens）。缺省 = 跟随模型路由默认；
          * 新建任务时用户在草稿里选定的档位在此透传，后续由 sessions:update 修改。

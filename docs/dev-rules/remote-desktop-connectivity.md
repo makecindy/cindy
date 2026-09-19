@@ -38,6 +38,106 @@ TURN; old viewer + new Desktop can use host-side TURN. Existing full-SDP and tri
 ICE capabilities stay unchanged. The desktop-video connectivity change adds no new wire kinds or native dependencies.
 The independent file transport below has its own authorized IPC channel.
 
+## iOS native video and Picture in Picture
+
+New iOS binaries expose `CindyRemotePresentation.nativeVideo`. They receive and
+decode WebRTC in `RemoteDesktopReceiver`, and display sample buffers through
+`RemoteDesktopVideoView` / AVKit. The WebView retains input, cursor and viewport
+geometry only. Older binaries and Android retain the browser receiver; JPEG
+compatibility frames remain available on every platform. The native receiver uses
+the same full-SDP/trickle-ICE signaling adapter, scoped TURN configuration and
+bounded retry policy. No protocol version or service endpoint changes.
+
+While system PiP is actually active and host presentation authorization is confirmed,
+the native DataChannel answers the existing
+viewing challenges without React or WebView JavaScript. Desktop preserves only
+an authorized, non-controlling presentation across transient signaling loss;
+ordinary subscriptions and file transfers still stop. The existing 12-second
+lease expires if media pongs stop. Explicit disconnect, revocation, disabling
+remote control and host shutdown still stop the presentation immediately.
+An offline event for a different peer cannot terminate the active viewer.
+The native receiver retains the host's single pending challenge if it arrives
+before PiP entry, and answers only after both AVKit active presentation and host
+authorization are confirmed.
+Voice-input cleanup releases only its own recording session; background entry
+and delayed prewarm cleanup must not deactivate PiP's playback session.
+
+Run in background is an explicit phone-local preference (default off), separate
+from the current AVKit presentation state and the user's control choice. Toggling
+it does not enter PiP or release control, and audio renegotiation does not disable
+the preference. Only actual entry uses the host's view-only presentation handoff;
+returning to an active, visible fullscreen viewer restores the previous control
+choice through normal host authorization. A cancelled Home gesture also restores
+that choice after any pending preparation settles. Restoring fullscreen does not clear
+the preference. While enabled, leaving the desktop route minimizes into PiP;
+the foreground viewer arms AVKit after its first frame. Home entry is owned by
+AVKit automatic entry: do not manually start from willResignActive, because the
+source UIScene may already be inactive even while UIApplication reports active.
+Explicit in-app entry requires the source scene to be foreground-active. The host
+handoff runs in parallel, without delaying AVKit for its network reply.
+The sample-buffer delegate reports no playable content until a frame is rendered.
+First-frame and teardown transitions invalidate AVKit's cached playback state;
+returning inline refreshes that state after the PiP stop completes. A cached old
+frame alone does not make a reconnecting receiver ready for PiP.
+Keep the AVKit sample-buffer projection at the native viewport's bounds, separate
+from the inline layer's fitted/panned/zoomed rectangle. Both renderers share one
+decoded sample buffer; their readiness must not block each other. Only the system
+projection receives frames while inline is hidden or the app is inactive. Restore
+replays the latest frame into the inline renderer before completing the visible
+source handoff. In physical-device A/B testing, a fitted or transformed source
+missed interactive Home entry even while AVKit reported PiP possible; a fixed
+viewport-sized source started successfully. This is an observed regression guard,
+not a claim about Apple's private eligibility rules. Test actual upward Home
+gestures after restore: an automation Home-button event does not cover that path.
+System readiness alone never authorizes viewing challenge replies.
+Both JS and native background cleanup bound an unfinished handoff to four seconds.
+The signaling connection's ordinary 2.5-second background grace must wait for an
+in-flight presentation handoff, capped at four seconds after background entry.
+Heavy subscriptions are still released immediately. Success, failure, cancellation
+and the handoff deadline release this wait; it never authorizes media or renews a lease.
+Rapid Home re-entry waits for pending fullscreen control restoration before sending
+a new presentation request; expired lease/generation results cannot revive it.
+Fullscreen restoration waits for signaling to be online before relinquishing its
+acknowledged background-viewing authorization or requesting input control. While
+reconnecting, the native stream keeps that authorization; another Home entry can
+reuse it. A stopped signaling socket alone must not destroy this authorized stream.
+One account-generation-scoped root host retains the same media surface across
+routes. A minimized desktop is removed from navigation history without changing
+the other pages or their parameters. Fullscreen restoration opens one desktop
+entry above the current page; Back returns to that page. Delayed PiP callbacks
+are bound to their source route and cannot pop a newly opened page. The retained
+surface only becomes visible once its desktop route is current. AVKit restore
+completion waits for JS route readiness and a visible, laid-out native source
+(including ancestor opacity), not merely attachment to a window. A generation-scoped
+check covers parent-only visibility commits and expires at the existing five-second
+restore deadline.
+Closing a detached PiP window or explicitly disconnecting ends the connection,
+but keeps the preference. Back-to-PiP does not run lock-on-exit; disconnect does.
+Preparation has a bounded deadline and never renews a controlling lease.
+
+Closing PiP in the background stops native media even if JS is suspended. Network
+changes that require a new SDP exchange recover after foreground signaling
+returns; continuous background renegotiation is not promised. Frames and ICE
+credentials stay in memory, with no recording or new media store.
+
+The WebRTC SDK and Swift module change require a rebuilt iOS binary (cold update),
+not OTA alone. Verify silent and audible streams, explicit stop/revoke, switching
+apps for several minutes, PiP close/restore, network loss, zoom/keyboard geometry,
+and Light/Dark on a physical phone. Unit tests and simulator builds do not establish
+background PiP acceptance. Roll out the Desktop signaling-loss fix with the native
+phone build; older Desktop hosts may still stop media when signaling disconnects.
+
+Run `node apps/mobile/scripts/test-remote-desktop-receiver.mjs` on macOS to
+compile and execute the production receiver against test-only UIKit/WebRTC doubles.
+It covers attempt isolation, late SDP/ICE/frame callbacks, idempotent stop,
+disconnect timer cancellation and presentation challenge authorization. The doubles
+control SDK callbacks; they do not validate framework ABI, decoding or AVKit behavior.
+
+iOS 27 SDK builds also require the scene lifecycle. Expo 57.0.23 or newer and
+`expo-build-properties`'s `ios.enableSceneSupport` generate Expo's scene delegate
+manifest and move window startup out of the legacy app delegate. Verify actual
+device launch: compilation alone does not detect UIKit's missing-scene launch trap.
+
 ## Verification
 
 Unit tests cover invalid/expired tickets, old/disabled backends, bounded requests,

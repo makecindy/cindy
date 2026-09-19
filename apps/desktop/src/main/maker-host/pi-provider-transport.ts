@@ -240,6 +240,26 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     if (!adapter) throw new Error('Native API is not supported by the bundled Pi adapter');
     const abort = new AbortController();
     const signal = init?.signal ? AbortSignal.any([init.signal, abort.signal]) : abort.signal;
+    // Keep diagnostics local to this invocation. Adapter error messages may contain
+    // response bodies, credentials or user content, so never forward those strings.
+    let httpStatus: number | undefined;
+    const diagnosticFetch: typeof fetch = async (input, init) => {
+      httpStatus = undefined;
+      const response = await options.fetchImpl(input, init);
+      httpStatus = response.status;
+      return response;
+    };
+    const failureMessage = (phase: 'adapter-event' | 'stream-read') => {
+      const category = httpStatus === 401 ? 'authentication'
+        : httpStatus === 403 ? 'permission'
+        : httpStatus === 429 ? 'rate_limit'
+        : httpStatus !== undefined && httpStatus >= 500 ? 'provider_unavailable'
+        : httpStatus !== undefined && httpStatus >= 400 ? 'request_rejected'
+        : 'unknown';
+      const status = httpStatus !== undefined && httpStatus >= 400 && httpStatus < 600
+        ? `; HTTP ${httpStatus}` : '';
+      return `Native provider request failed [phase=${phase}${status}; category=${category}; request=${responseId}]`;
+    };
     const cloudflareGateway = model.provider === 'cloudflare-ai-gateway';
     const events = adapter.streamSimple(model, context, {
       apiKey: cloudflareGateway ? undefined : options.apiKey, env: options.env,
@@ -247,7 +267,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
       // Pi's Google SDK rejects injected fetch. Its native transport must be used; all other
       // adapters that support injection use Cindy's existing outbound route.
       ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
-        ? { fetch: options.fetchImpl } : {}),
+        ? { fetch: diagnosticFetch } : {}),
       signal, maxRetries: 0,
       reasoning: request.reasoning?.effort && request.reasoning.effort !== 'none'
         ? request.reasoning.effort as ThinkingLevel : undefined,
@@ -298,11 +318,11 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
                   { type: 'response.output_item.done', output_index, item: historyItem }]);
               }
               emit(translator.finish(true)); ended = true;
-            } else if (event.type === 'error') { emit(translator.fail('Native provider request failed')); ended = true; }
+            } else if (event.type === 'error') { emit(translator.fail(failureMessage('adapter-event'))); ended = true; }
           }
           if (pending.length) controller.enqueue(pending.shift()!);
           else controller.close();
-        } catch { abort.abort(); controller.error(new Error('Native provider request failed')); }
+        } catch { abort.abort(); controller.error(new Error(failureMessage('stream-read'))); }
       },
       async cancel() { abort.abort(); await iterator.return?.(); },
     }), { headers: { 'content-type': 'text/event-stream' } });
