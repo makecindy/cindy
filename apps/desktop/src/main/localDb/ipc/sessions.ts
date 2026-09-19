@@ -2543,6 +2543,10 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
               log.warn('PI background command log kept: owned by another live instance', {
                 sessionId,
               });
+            } else if (logCleanup === 'kept-unowned') {
+              // 目录里一个归属标记都没有(写入失败 / 目录来自更早的构建):无法证明没有人在用,
+              // 同样保守保留。代价是残留一个目录,而不是可能误删活实例的日志。
+              log.warn('PI background command log kept: ownership unknown', { sessionId });
             }
           } catch (err) {
             log.warn('PI background command log cleanup failed', {

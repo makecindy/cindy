@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   PI_BACKGROUND_COMMAND_MAX_CHARS,
-  PI_BACKGROUND_COMMAND_OWNER_FILE,
+  PI_BACKGROUND_COMMAND_OWNER_FILE_PREFIX,
   PiBackgroundCommands,
   buildPiBackgroundCommandEnv,
   parsePiBackgroundCommandShellSpec,
@@ -35,6 +35,15 @@ const NODE_EVAL_SHELL = {
   args: ['-e'],
   commandTransport: 'standard' as const,
 };
+
+/** 归属标记:`owner-<pid>.json`(每实例一个文件,见 pi-background-commands.ts)。 */
+function ownerFileName(pid: number): string {
+  return `${PI_BACKGROUND_COMMAND_OWNER_FILE_PREFIX}${pid}.json`;
+}
+
+function isOwnerMarker(name: string): boolean {
+  return name.startsWith(PI_BACKGROUND_COMMAND_OWNER_FILE_PREFIX) && name.endsWith('.json');
+}
 const NODE_STDIN_SHELL = {
   shell: process.execPath,
   args: ['-'],
@@ -211,7 +220,7 @@ describe('PiBackgroundCommands', () => {
     });
     await waitForUpdate(updates, (u) => u.taskId === 'owner-1' && u.status !== 'running');
     const owner = JSON.parse(
-      readFileSync(path.join(logDir, PI_BACKGROUND_COMMAND_OWNER_FILE), 'utf8'),
+      readFileSync(path.join(logDir, ownerFileName(process.pid)), 'utf8'),
     ) as { pid?: number };
     expect(owner.pid).toBe(process.pid);
   });
@@ -372,9 +381,9 @@ describe('PiBackgroundCommands', () => {
     expect(path.basename(started.logPath)).toMatch(/^task-[0-9a-f]{32}\.log$/);
     const terminal = await waitForUpdate(updates, (u) => u.status !== 'running');
     expect(terminal.taskId).toBe(weirdId);
-    // 目录里只应有这一份日志(没有逃逸出去的 `evil id.log`);owner.json 是删除侧的
+    // 目录里只应有这一份日志(没有逃逸出去的 `evil id.log`);`owner-<pid>.json` 是删除侧的
     // 归属标记(见 removePiBackgroundCommandRoot),不算日志。
-    const listed = (await readdir(logDir)).filter((name) => name !== PI_BACKGROUND_COMMAND_OWNER_FILE);
+    const listed = (await readdir(logDir)).filter((name) => !isOwnerMarker(name));
     expect(listed).toEqual([path.basename(started.logPath)]);
   });
 
@@ -394,7 +403,7 @@ describe('PiBackgroundCommands', () => {
       shell: NODE_EVAL_SHELL,
     })).rejects.toThrow(/already running/);
     expect(manager.list().map((t) => t.taskId)).toEqual(['dup-1']);
-    expect((await readdir(logDir)).filter((n) => n !== PI_BACKGROUND_COMMAND_OWNER_FILE))
+    expect((await readdir(logDir)).filter((n) => !isOwnerMarker(n)))
       .toEqual(['dup-1.log']);
     expect(await manager.stop('dup-1')).toBe('stopped');
   });
@@ -563,18 +572,19 @@ describe('sweepStalePiBackgroundCommandAnonRoots', () => {
 });
 
 describe('removePiBackgroundCommandRoot owner 判定', () => {
-  function seedDir(ownerContent?: string): string {
+  function seedDir(ownerPids: Array<number | string> = [], content?: string): string {
     const root = makeTempRoot();
     mkdirSync(root, { recursive: true });
     writeFileSync(path.join(root, 'call-1.log'), 'x');
-    if (ownerContent !== undefined) {
-      writeFileSync(path.join(root, PI_BACKGROUND_COMMAND_OWNER_FILE), ownerContent);
+    for (const entry of ownerPids) {
+      const name = typeof entry === 'number' ? ownerFileName(entry) : entry;
+      writeFileSync(path.join(root, name), content ?? JSON.stringify({ pid: entry, at: Date.now() }));
     }
     return root;
   }
 
-  it('keeps a directory whose owner marker points at another live process', async () => {
-    const root = seedDir(JSON.stringify({ pid: 4242, at: Date.now() }));
+  it('keeps a directory whose ownership marker points at another live process', async () => {
+    const root = seedDir([4242]);
     await expect(
       removePiBackgroundCommandRoot(root, { isProcessAlive: () => true }),
     ).resolves.toBe('kept-foreign-owner');
@@ -582,29 +592,51 @@ describe('removePiBackgroundCommandRoot owner 判定', () => {
     expect(existsSync(path.join(root, 'call-1.log'))).toBe(true);
   });
 
-  it('removes it once that owner is gone', async () => {
-    const root = seedDir(JSON.stringify({ pid: 4242, at: Date.now() }));
+  it('keeps it when another live instance declared ownership next to ours', async () => {
+    // 单个 owner.json 会被后来者覆盖:实例 A、B 共用同一 sessionId 目录时,A 最后写入、
+    // 然后 A 删会话 —— 标记指向自己就会连 B 仍在写的日志一起删掉。每实例一个文件后,
+    // B 的标记不会被 A 覆盖,删除侧看到 B 还活着就保留。
+    const root = seedDir([process.pid, 4242]);
     await expect(
-      removePiBackgroundCommandRoot(root, { isProcessAlive: () => false }),
-    ).resolves.toBe('removed');
-    expect(existsSync(root)).toBe(false);
+      removePiBackgroundCommandRoot(root, { isProcessAlive: (pid) => pid === 4242 }),
+    ).resolves.toBe('kept-foreign-owner');
+    expect(existsSync(path.join(root, 'call-1.log'))).toBe(true);
   });
 
-  it('removes markers of this process and unparsable / missing markers', async () => {
-    for (const content of [undefined, 'not json', '{}', JSON.stringify({ pid: 0 })]) {
-      const root = seedDir(content);
+  it('still counts a marker whose content is truncated (pid comes from the file name)', async () => {
+    // 归属判据必须能容忍写了一半的 JSON:判死会让另一个实例的日志被删掉。
+    const root = seedDir([4242], '{"pid": 42');
+    await expect(
+      removePiBackgroundCommandRoot(root, { isProcessAlive: () => true }),
+    ).resolves.toBe('kept-foreign-owner');
+  });
+
+  it('removes it once every declared owner is gone or is this process', async () => {
+    for (const pids of [[4242], [4242, process.pid]]) {
+      const root = seedDir(pids);
       await expect(
-        removePiBackgroundCommandRoot(root, { isProcessAlive: () => true }),
+        removePiBackgroundCommandRoot(root, { isProcessAlive: () => false }),
       ).resolves.toBe('removed');
       expect(existsSync(root)).toBe(false);
     }
-    const mine = seedDir(JSON.stringify({ pid: process.pid, at: Date.now() }));
+  });
+
+  it('keeps an unowned directory by default and removes it only with positive evidence', async () => {
+    // 没有任何标记(写入失败 / 目录来自更早的构建):无法证明没人在用 → 保守保留;
+    // 有正面证据的调用方(启动期 sweep 手里是目录名里的死 pid)才关掉这一保守行为。
+    const unowned = seedDir();
+    await expect(removePiBackgroundCommandRoot(unowned)).resolves.toBe('kept-unowned');
+    expect(existsSync(unowned)).toBe(true);
     await expect(
-      removePiBackgroundCommandRoot(mine, { isProcessAlive: () => true }),
+      removePiBackgroundCommandRoot(unowned, { keepWhenUnowned: false }),
     ).resolves.toBe('removed');
+    expect(existsSync(unowned)).toBe(false);
+
+    // 名字不成形的标记文件(旧 owner.json / owner-abc.json)不算归属声明。
+    const shapeless = seedDir(['owner.json', 'owner-abc.json']);
+    await expect(removePiBackgroundCommandRoot(shapeless)).resolves.toBe('kept-unowned');
   });
 });
-
 describe('piBackgroundCommandRoot', () => {
   it('keeps the session id inside the runtime tree', () => {
     expect(piBackgroundCommandRoot('/home/user', 'sess-1'))

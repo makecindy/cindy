@@ -340,10 +340,16 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    跨实例边界（刻意）：后台命令进程只属 spawn 它的那个实例，**异实例删任务收不掉另一个实例
    的进程**（同一 userData 的 dev + 打包 / `--passive` 多开是受支持拓扑）；日志目录回收是
    best-effort，被别的实例占用时删除会失败或让存活实例的日志写入降级为 warn（不许升级成错误）。
-   为了让删除侧能**保守**一点，每个日志目录在 `start()` 时写一份 `owner.json`（`{pid, at}`）：
-   `removePiBackgroundCommandRoot` 看到 owner 是**另一个仍然存活**的进程时**故意保留目录**并回
-   `'kept-foreign-owner'`（调用方记 warn）—— 我们停不掉那边的进程，删日志只会让它连唯一的输出
-   与线索一起消失。owner 缺失 / 破损 / 指向已死进程或本进程时照常回收（没有任何判据说明还有人用）。
+   为了让删除侧能**保守**一点，每个日志目录在 `start()` 时写一份**本实例专属**的归属标记
+   `owner-<pid>.json`（`{pid, at}`，pid 以文件名为准，内容只作可读记录）。**必须每实例一个文件**：
+   多个实例可以打开同一个 sessionId（dev + 打包双开、`--passive` 多开），共享同一个日志目录 ——
+   单个 `owner.json` 会被后来者覆盖，于是「标记指向自己」的那次删除会连另一个实例**仍在写**的
+   日志一起删掉。`removePiBackgroundCommandRoot` 的判据（按此顺序）：
+   ① 有**任何一个**别的 pid 仍然存活 → 保留，回 `'kept-foreign-owner'`；② 一个标记都没有
+   （写入失败 / 目录来自更早的构建）→ **默认保守保留**，回 `'kept-unowned'`（`keepWhenUnowned`
+   默认 true，因为「无法证明没人在用」不能当作判死依据）；③ 其余（声明过的 pid 全是本进程或已死）
+   → 回收。两个保留分支调用方都记 warn。启动期 `anon-*` sweep 手里有目录名里的死 pid 这层
+   **正面证据**，所以显式传 `keepWhenUnowned: false`，否则崩溃残留永远收不掉。
    日志目录的生命周期：`<sessionId>/` 随会话删除回收；**无会话时的 `anon-<pid>-<ts>/` 没有其它
    回收路径**（会话删除需要 sessionId，退出清扫只杀进程），所以启动期做一次
    `sweepStalePiBackgroundCommandAnonRoots` —— 只删目录名里 owner pid 已不在的（活实例的目录

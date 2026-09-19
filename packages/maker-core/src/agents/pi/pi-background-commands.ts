@@ -224,19 +224,28 @@ export function buildPiBackgroundCommandEnv(input: {
 }
 
 /**
- * 日志目录的 owner 标记文件名。内容:`{"pid": <进程号>, "at": <毫秒时间戳>}`。
+ * 日志目录的归属标记:每实例一个文件 `owner-<pid>.json`,内容 `{"pid": <进程号>, "at": <时间戳>}`。
  *
- * 用途只有一个:**会话删除侧**判断这个目录是不是另一个仍然存活的实例在用。跨实例边界下
- * 我们杀不掉那边的进程(见 §4「跨实例边界(刻意)」),删日志只会让那条进程连唯一的输出
- * 与线索一起消失 —— 所以宁可把它留下,而不是按"任务已删除"顺手清掉。
+ * 为什么不是单个 `owner.json`:受支持的拓扑里多个 Cindy 实例能打开**同一个 sessionId**
+ * (dev + 打包双开、`--passive` 多开),它们共享同一个日志目录 —— 单文件会被后来者覆盖,
+ * 于是「标记指向自己」的那次删除会把另一个实例**仍在写**的日志连同目录一起删掉。
+ * 每实例一个文件后,所有声明过归属的实例都留下可读判据,删除侧只要看到**任何一个**
+ * 活着的异实例就保留目录(pid 复用最坏也只是多留一个目录,不会误删)。
+ *
+ * pid 从**文件名**读取(内容残缺不影响判据):归属判据必须能容忍写了一半的文件,
+ * 否则一个被截断的 JSON 就能让目录被当成"没人用"而删掉。
  */
-export const PI_BACKGROUND_COMMAND_OWNER_FILE = 'owner.json';
+export const PI_BACKGROUND_COMMAND_OWNER_FILE_PREFIX = 'owner-';
 
-/** best-effort 写 owner 标记:写不进去(只读盘 / 权限)不影响命令本身。 */
+function piBackgroundCommandOwnerFileName(pid: number): string {
+  return `${PI_BACKGROUND_COMMAND_OWNER_FILE_PREFIX}${pid}.json`;
+}
+
+/** best-effort 写自己的归属标记:写不进去(只读盘 / 权限)不影响命令本身。 */
 async function writePiBackgroundCommandOwner(logDir: string): Promise<void> {
   try {
     await fsp.writeFile(
-      path.join(logDir, PI_BACKGROUND_COMMAND_OWNER_FILE),
+      path.join(logDir, piBackgroundCommandOwnerFileName(process.pid)),
       JSON.stringify({ pid: process.pid, at: Date.now() }),
       { encoding: 'utf8', mode: 0o600 },
     );
@@ -264,10 +273,14 @@ export function piBackgroundCommandRoot(agentHome: string, sessionId: string): s
  * 它没有任何后续代码路径会回收 —— 会话删除的回收需要 sessionId,退出清扫只杀进程不删目录。
  * 于是这些目录会永久留在 userData 里(每次最多若干 8MiB 日志)。
  *
- * 判据是**目录名里的 owner pid**:那是 spawn 命令、写日志的那个 Cindy 主进程;它已经不在,
- * 这些日志就没有读者了(命令进程本身是 detached,可能还在跑 —— 但它的 manager 已随主进程
- * 消失,没人能再消费这些文件;Windows 上文件被占用时删除会失败,同样无害)。
- * pid 还活着的目录一律保留:`pi-agent-home` 与并发实例(dev --passive / 打包版双开)共享。
+ * 判据是**目录名里的 owner pid** 与目录内的归属标记:前者是 spawn 命令、写日志的那个
+ * Cindy 主进程(它已经不在,这些日志就没有读者了 —— 命令进程本身是 detached,可能还在跑,
+ * 但它的 manager 已随主进程消失,没人能再消费这些文件;Windows 上文件被占用时删除会失败,
+ * 同样无害);后者兜住「另一个实例正在同一目录里写」。名字里的 pid 还活着的目录一律保留:
+ * `pi-agent-home` 与并发实例(dev --passive / 打包版双开)共享。
+ *
+ * 名称里的死 pid 是**正面证据**,所以这里可以关掉「无归属就保留」的保守默认值
+ * (`keepWhenUnowned: false`):否则崩溃残留的 `anon-*` 目录永远收不掉。
  *
  * 返回尝试删除的目录数(删除本身是 best-effort,失败只记 debug)。
  */
@@ -289,7 +302,10 @@ export async function sweepStalePiBackgroundCommandAnonRoots(
     return !alive(pid);
   });
   const results = await Promise.all(
-    stale.map((entry) => removePiBackgroundCommandRoot(path.join(root, entry), { isProcessAlive: alive })),
+    stale.map((entry) => removePiBackgroundCommandRoot(path.join(root, entry), {
+      isProcessAlive: alive,
+      keepWhenUnowned: false,
+    })),
   );
   // owner 标记指向活进程的目录会被保留(理论上只可能是 pid 复用或竞态;不计入回收数)。
   return results.filter((result) => result === 'removed').length;
@@ -318,20 +334,23 @@ function defaultIsProcessAlive(pid: number): boolean {
 /**
  * 会话删除时回收日志目录(不存在视为成功)。
  *
- * 返回值区分两种结果:`'removed'` 已回收;`'kept-foreign-owner'` 目录的 owner 标记指向
- * **另一个仍然存活的进程**,因此**故意保留** —— 跨实例边界下我们无法停止那边的进程,
- * 删掉日志只会让它连输出与线索一起消失(调用方应记 warn)。owner 标记缺失 / 指向已死
- * 进程 / 指向本进程时照常回收(我们没有留下任何可读的判据说明它还有人用)。
+ * 三种结果:
+ * - `'removed'`:确实回收了(没有任何标记说明还有人用)。
+ * - `'kept-foreign-owner'`:目录里有**另一个仍然存活**实例的归属标记 —— 跨实例边界下我们
+ *   停不掉那边的进程,删日志只会让它连输出与线索一起消失(调用方应记 warn)。
+ * - `'kept-unowned'`:目录里**一个归属标记都没有**(写入失败 / 标记被清掉 / 目录来自更早的
+ *   构建)。判据缺失时**默认保守保留**(`keepWhenUnowned` 默认 true):我们无法证明没有人
+ *   在用,而删错的代价是另一个实例的进程还在跑、日志却没了。有正面证据的调用方(例如启动期
+ *   sweep 手里有目录名里的死 pid)可以显式关掉这一保守行为。
  */
 export async function removePiBackgroundCommandRoot(
   root: string,
-  opts?: { isProcessAlive?: (pid: number) => boolean },
-): Promise<'removed' | 'kept-foreign-owner'> {
-  const owner = await readPiBackgroundCommandOwner(root);
-  if (owner !== null && owner !== process.pid) {
-    const alive = opts?.isProcessAlive ?? defaultIsProcessAlive;
-    if (alive(owner)) return 'kept-foreign-owner';
-  }
+  opts?: { isProcessAlive?: (pid: number) => boolean; keepWhenUnowned?: boolean },
+): Promise<'removed' | 'kept-foreign-owner' | 'kept-unowned'> {
+  const owners = await readPiBackgroundCommandOwnerPids(root);
+  const alive = opts?.isProcessAlive ?? defaultIsProcessAlive;
+  if (owners.some((pid) => pid !== process.pid && alive(pid))) return 'kept-foreign-owner';
+  if (owners.length === 0 && (opts?.keepWhenUnowned ?? true)) return 'kept-unowned';
   // Windows:刚死的进程还占着 cwd / 打开的 .log,第一次 rmdir 会 EBUSY/EPERM —— 与
   // subagent 那边的 stopAndRemovePiSubagentRuns 同一补救(Node 自带重试)。
   await fsp
@@ -340,16 +359,22 @@ export async function removePiBackgroundCommandRoot(
   return 'removed';
 }
 
-/** 读 owner 标记;缺失 / 损坏 / pid 非法一律返回 null(按"无判据"处理)。 */
-async function readPiBackgroundCommandOwner(root: string): Promise<number | null> {
+/** 读目录里所有归属标记的 pid(来自**文件名**);目录不存在 / 名字不成形一律忽略。 */
+async function readPiBackgroundCommandOwnerPids(root: string): Promise<number[]> {
+  let entries: string[];
   try {
-    const raw = await fsp.readFile(path.join(root, PI_BACKGROUND_COMMAND_OWNER_FILE), 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    const pid = (parsed as { pid?: unknown } | null)?.pid;
-    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : null;
+    entries = await fsp.readdir(root);
   } catch {
-    return null;
+    return [];
   }
+  const pids: number[] = [];
+  for (const entry of entries) {
+    if (!entry.startsWith(PI_BACKGROUND_COMMAND_OWNER_FILE_PREFIX) || !entry.endsWith('.json')) continue;
+    const raw = entry.slice(PI_BACKGROUND_COMMAND_OWNER_FILE_PREFIX.length, -'.json'.length);
+    const pid = Number(raw);
+    if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+  }
+  return pids;
 }
 
 /**
@@ -514,7 +539,7 @@ export class PiBackgroundCommands {
     this.running.set(taskId, record);
     try {
       await fsp.mkdir(this.options.logDir, { recursive: true, mode: 0o700 });
-      // owner 标记:删除侧靠它区分「这个目录可能是另一个活着的实例在用」。
+      // 归属标记:删除侧靠它区分「这个目录可能是另一个活着的实例在用」。
       await writePiBackgroundCommandOwner(this.options.logDir);
       const logStream = fs.createWriteStream(logPath, { flags: 'w', mode: 0o600 });
       record.logStream = logStream;
