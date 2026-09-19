@@ -8074,8 +8074,11 @@
       },
       "unified": {
         "railFavorites": "Favorites",
+        "railRecent": "Recent",
         "railAll": "All",
         "favoritesGroup": "Favorites",
+        "recentGroup": "Recent",
+        "recentEmpty": "No recent models yet — pick a model and it will show up here",
         "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
         "addFavorite": "Save to favorites",
         "customize": "Customize",
