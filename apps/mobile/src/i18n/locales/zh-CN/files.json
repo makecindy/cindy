@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "后退",
+    "browserForward": "前进",
+    "browserMore": "更多操作",
+    "browserShowSource": "查看源码",
+    "browserShowPage": "返回网页",
+    "browserAddToTask": "添加到当前任务",
+    "browserFileInfo": "文件信息",
     "done": "完成",
     "a11yShare": "导出分享",
     "copyPath": "复制路径",
@@ -119,7 +126,13 @@
     "originalFailedThumb": "原图取回失败，当前为缩略图",
     "fetchingOriginalHint": "缩略图 · 正在取回原图…",
     "a11yExportShareFile": "导出分享原文件",
-    "exportShare": "导出 / 分享"
+    "exportShare": "导出 / 分享",
+    "browserAddress": "网址",
+    "browserCancelAddress": "取消编辑",
+    "browserReturnToFile": "返回文件",
+    "browserCopyAddress": "复制网址",
+    "browserInvalidAddress": "请输入有效的 http 或 https 网址。",
+    "browserWebsiteFailed": "无法打开网页，请尝试重新加载。"
   },
   "export": {
     "exportFailed": "导出失败",

@@ -43,7 +43,8 @@ describe('remote file preview pager wiring', () => {
     // 只有真的挂着 WebView 的那种组合才要横滑(资源还在取 → 页面是 spinner → 不禁滑);
     // cleanup 必须无条件归还。
     expect(source).toContain("visible && richKind === 'html' && richView === 'rendered'");
-    expect(source).toContain("htmlSnapshot.foreground && !!htmlSnapshot.preview && !htmlError");
+    expect(source).toContain("htmlSnapshot.foreground && (!!website || (!!htmlSnapshot.preview && !htmlError))");
+    expect(source).toContain("visible && richKind === 'html' && richView === 'rendered' && !website");
     expect(source).toContain('return () => onHtmlPanChange?.(item.key, false)');
   });
 
