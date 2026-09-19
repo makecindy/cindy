@@ -79,6 +79,22 @@ export class FilteredAgent extends BaseAgent<ParsedKey> {
   private readonly upstream: BaseAgent<ParsedKey>;
   /** Full `SHA256:...` forms, de-duplicated in OpenSSH configuration order. */
   private readonly allowedFingerprints: string[];
+  /**
+   * How many allowed identities the upstream agent actually held on the last
+   * `getIdentities` call (= how many keys ssh2 could offer). `null` until the
+   * agent has been enumerated, or when enumeration itself failed. Lets the
+   * connect failure path tell "nothing was offered (key not loaded)" apart
+   * from "the remote rejected what was offered" (#4201).
+   */
+  lastOfferedCount: number | null = null;
+  /**
+   * Sign outcomes since the last enumeration. An offered key only proves the
+   * agent held it; the remote has rejected it only if the agent also signed
+   * for it. A sign failure (agent locked, hardware-key touch refused, signer
+   * error) is a local problem, not a remote rejection.
+   */
+  signedCount = 0;
+  signFailureCount = 0;
 
   constructor(upstream: BaseAgent<ParsedKey>, allowedFingerprints: string | readonly string[]) {
     super();
@@ -94,7 +110,10 @@ export class FilteredAgent extends BaseAgent<ParsedKey> {
 
   getIdentities(cb: (err: Error | undefined, publicKeys?: ParsedKey[]) => void): void {
     this.upstream.getIdentities((err, keys) => {
-      if (err) return cb(err);
+      if (err) {
+        this.lastOfferedCount = null;
+        return cb(err);
+      }
       const byFingerprint = new Map<string, ParsedKey>();
       for (const item of keys ?? []) {
         const key = asParsedKey(item);
@@ -105,6 +124,9 @@ export class FilteredAgent extends BaseAgent<ParsedKey> {
       const matches = this.allowedFingerprints
         .map((fingerprint) => byFingerprint.get(fingerprint))
         .filter((key): key is ParsedKey => key !== undefined);
+      this.lastOfferedCount = matches.length;
+      this.signedCount = 0;
+      this.signFailureCount = 0;
       cb(undefined, matches);
     });
   }
@@ -118,10 +140,16 @@ export class FilteredAgent extends BaseAgent<ParsedKey> {
     cb?: SignCallback,
   ): void {
     // Defer to upstream. The signature for sign() varies — handle both arities.
+    const done: SignCallback = typeof optsOrCb === 'function' ? optsOrCb : cb!;
+    const track: SignCallback = (err, signature) => {
+      if (err) this.signFailureCount += 1;
+      else this.signedCount += 1;
+      done(err, signature);
+    };
     if (typeof optsOrCb === 'function') {
-      this.upstream.sign(pubKey, data, optsOrCb);
+      this.upstream.sign(pubKey, data, track);
     } else {
-      this.upstream.sign(pubKey, data, optsOrCb, cb);
+      this.upstream.sign(pubKey, data, optsOrCb, track);
     }
   }
 }
