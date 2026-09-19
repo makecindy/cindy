@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useMemo } from 'react';
-import ReactMarkdown, { type Components, type UrlTransform } from 'react-markdown';
+import ReactMarkdown, { type Components, type Options, type UrlTransform } from 'react-markdown';
 import type { Element } from 'hast';
 import type { PluggableList } from 'unified';
 
@@ -19,6 +19,8 @@ interface StreamingMarkdownChunkProps {
   sourceKey: string;
   content: string;
   remarkPlugins: PluggableList;
+  /** 与 MarkdownRenderer 主路径同源的 mdast→hast handler（审查修订的 ins/del）。 */
+  remarkRehypeOptions?: Options['remarkRehypeOptions'];
   rehypePlugins: PluggableList;
   components: Components;
   urlTransform?: UrlTransform;
@@ -40,6 +42,7 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
   sourceKey,
   content,
   remarkPlugins,
+  remarkRehypeOptions,
   rehypePlugins,
   components,
   urlTransform,
@@ -105,6 +108,7 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
   return (
     <ReactMarkdown
       remarkPlugins={remarkPlugins}
+      remarkRehypeOptions={remarkRehypeOptions}
       rehypePlugins={wordFade?.plugins ?? rehypePlugins}
       components={cachedComponents}
       urlTransform={urlTransform}

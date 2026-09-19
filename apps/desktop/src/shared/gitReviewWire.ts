@@ -344,6 +344,13 @@ export type ReviewMarkdownPreviewReason =
 export interface ReviewMarkdownPreviewData {
   diffId: string;
   content: string | null;
+  /**
+   * diff 基线（before）侧的完整 Markdown 内容，供富文本预览做块级改动对齐
+   * （高亮新增/修改块、以删除样式展示旧块）。可选字段，跨设备兼用：
+   * null 或缺省 = 没有基线（新增文件）或基线不可用（过大/读不到），
+   * 此时富文本预览按无改动标记渲染。旧被控端不写该字段，新端按 null 处理。
+   */
+  beforeContent?: string | null;
   size: number | null;
   baseDir: string | null;
   maxBytes: number;

@@ -15,25 +15,21 @@ import { Tip } from '@/components/ui/tooltip';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkCjkFriendly from 'remark-cjk-friendly';
-import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex';
-import rehypeSlug from 'rehype-slug';
 import 'katex/dist/katex.min.css';
-import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
-import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
-import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
-import remarkHtmlImages from './remarkHtmlImages';
-import remarkPreserveRawLocalDestinations, {
+import { BARE_PATH_ATTR } from './remarkLocalPathLinks';
+import {
   RAW_LOCAL_IMAGE_SRC_PROP,
   RAW_LOCAL_LINK_HREF_PROP,
 } from './remarkPreserveRawLocalDestinations';
-import remarkSessionLinks from './remarkSessionLinks';
-import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
-import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
+import { FENCED_CODE_PROP } from './rehypeFencedCodeMarker';
+import { remarkReviewAnnotations, REVIEW_REHYPE_HANDLERS } from './remarkReviewAnnotations';
+import {
+  MARKDOWN_REHYPE_PLUGINS,
+  MARKDOWN_REHYPE_PLUGINS_REVIEW,
+  MARKDOWN_REMARK_PLUGINS,
+  MARKDOWN_REMARK_PLUGINS_PRIVILEGED,
+} from './markdownPluginPipeline';
 import {
   getOrCreateWordFadeState,
   releaseWordFadeState,
@@ -48,7 +44,7 @@ import {
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
-import type { Components, UrlTransform } from 'react-markdown';
+import type { Components, Options as MarkdownOptions, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
 import { Check, Copy, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -169,85 +165,16 @@ function isMermaidCodeChild(child: ReactNode): boolean {
   return /\b(language-)?mermaid\b/.test(className);
 }
 
-// Module-level constants — defined once, never recreated across renders.
-// Passing inline arrays ([remarkGfm], [rehypeHighlight]) would create a new
-// array reference on every render, causing react-markdown to re-parse the
-// entire markdown AST every time even when content hasn't changed.
-// remarkTruncateCjkUrls 必须排在 remarkGfm 之后:gfm 的 autolink literal 会把
-// 「https://x.com/foo（中文」整体当成 url(spec 故意如此, 不修), 我们在 ast 层
-// 后处理一刀, 把误吞的 CJK / 全角字符切回 link 后面的 text 节点。
-// remarkHtmlImages 必须在 skipHtml 生效前把安全的单 <img> HTML 节点转成 mdast
-// image,否则模型在表格里输出的 `<img src="...">` 会被整段过滤掉。
-// remarkLocalPathLinks 排在 remarkGfm 之后:gfm 已把裸 URL autolink 成 link 节点,
-// 路径 tokenizer 只扫剩下的纯 text 节点,天然不会去碰已成链接的 URL。
-// remarkSessionLinks 只进受信任内容(privileged)的插件链:把正文裸写的
-// cindy://session/(+ 历史 xdt-maker://)深链切成 link 节点 → `a` 渲染器升级成 SessionLinkChip。
-// 顺序:在 remarkTruncateCjkUrls 之后(它只回收 gfm autolink 的 CJK 误吞,不碰
-// 之后生成的 link)、remarkLocalPathLinks 之前(session URL 先成 link,路径插件
-// 跳过 link 内 text,不会把 `session/<uuid>` 误当相对路径)。两个数组都是模块级
-// 常量,引用稳定,不破坏 react-markdown 的 re-parse 优化。
-// remarkMath: `$...$` / `$$...$$` → inlineMath / math 节点(micromark 语法扩展,
-// parse 阶段生效,与其它 transformer 的相对顺序无关)。`\(...\)` / `\[...\]` 定界
-// 符在 parse 前由 normalizeMathDelimiters 归一化成 dollar 形式(desktop / mobile
-// 共用实现,见 @cindy/maker-shared 的 mathMarkdown.ts)。remarkStrictInlineMath
-// 紧随其后,把松散配对的 inlineMath(货币文本、跨 code span)降级回原文,
-// 规则与 mobile parser 对齐。
-// remarkGfm singleTilde:false — 删除线只认标准 GFM 的 `~~text~~`,单个 `~` 保持
-// 字面量。默认 singleTilde:true 会把「4~6……4~6」这类区间写法中间整段划成删除线,
-// mobile 自研 parser(messageMarkdown.ts)本就只匹配 `~~`,此处对齐。
-// remarkCjkFriendly 紧随 remarkGfm 注册(官方示例顺序):放宽 CommonMark 加粗
-// 定界的侧翼(flanking)规则——CJK 全角标点(。：，“”（）等)不再被当作
-// 「标点」参与判定。原生规则下 `**` 内侧挨全角标点时开/闭侧翼不成立,整对
-// 星号退化成字面量(AI 高频写法「**小标题：**正文」「**“术语”**」「**（注）**」
-// 全中招);mobile 自研 parser 用正则配对本就能渲染这些写法,此处对齐。只放宽
-// emphasis/strong 的定界判定,不碰 `~~` 删除线(gfm strikethrough 有独立定界
-// 逻辑,行为不变),也不影响带空格的 `2 ** 3 ** 4` 这类本应保持字面量的写法。
-// remarkPreserveRawLocalDestinations 必须排在**链尾**:它给 image / link 节点存原始
-// 本地目的地(见该文件头部说明),必须在所有会新建这两类节点的插件之后运行——
-// remarkHtmlImages(<img> HTML → mdast image)与 remarkLocalPathLinks(正文裸路径
-// → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
-// 顺序无关。
-export const REMARK_PLUGINS: PluggableList = [
-  [remarkGfm, { singleTilde: false }],
-  remarkCjkFriendly,
-  remarkMath,
-  remarkStrictInlineMath,
-  remarkTruncateCjkUrls,
-  remarkHtmlImages,
-  remarkLocalPathLinks,
-  remarkPreserveRawLocalDestinations,
-];
-export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
-  [remarkGfm, { singleTilde: false }],
-  remarkCjkFriendly,
-  remarkMath,
-  remarkStrictInlineMath,
-  remarkTruncateCjkUrls,
-  remarkHtmlImages,
-  remarkSessionLinks,
-  remarkLocalPathLinks,
-  remarkPreserveRawLocalDestinations,
-];
-// rehypeSlug: assigns a slug-style `id` to every heading. Without it
-// in-document anchor links (`[Section](#section-name)`) hit dead targets.
-// Click-to-scroll behaviour is wired up at the document level below.
-// rehypeKatex 必须排在 rehypeHighlight 之前:remark-math 产出的 hast 是
-// `<code class="language-math ...">`,先让 katex 消费掉,否则 highlight 会往
-// 里面塞 hljs span 破坏纯文本结构。strict:'ignore' 静默非致命 LaTeX 告警;
-// 解析失败的公式回落为正文色原文,避免模型格式错误把普通聊天染成错误红。
-// rehypeMathBlockMarker 紧随 rehypeKatex:把裸 `<span class="katex-display">`
-// 包进 `<div data-math-block>`,让下方 div 渲染器能挂「复制为图片」工具栏
-// (components 映射只认 tagName,认不了 class)。
-// rehypeFencedCodeMarker 必须排在最后:katex 已消费掉 `$$…$$` 的 `<pre><code>`、
-// highlight 已注入 hljs span,此时剩下的 `pre > code` 就是真正的代码块,给它们
-// 打 data-fenced-code 供下方 code 渲染器按结构(而非语言标注)分派。
-const REHYPE_PLUGINS: PluggableList = [
-  rehypeSlug,
-  [rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }],
-  rehypeMathBlockMarker,
-  rehypeHighlight,
-  rehypeFencedCodeMarker,
-];
+// 插件链清单的单一事实源在 ./markdownPluginPipeline.ts：渲染链与修订校验链
+// 必须同源，否则会出现「校验认为能消费、渲染时变成字面量」（KaTeX 乱码事故）。
+// 这里保持同名导出，既有引用点不变。
+export const REMARK_PLUGINS: PluggableList = MARKDOWN_REMARK_PLUGINS;
+export const REMARK_PLUGINS_PRIVILEGED: PluggableList = MARKDOWN_REMARK_PLUGINS_PRIVILEGED;
+
+// rehype 侧的插件清单与顺序约束现在集中在 markdownPluginPipeline.ts（单一事实源）；
+// 审查页与聊天页只在是否插入 rehypeReviewMathMarks 上分叉。
+const REHYPE_PLUGINS: PluggableList = MARKDOWN_REHYPE_PLUGINS;
+const REHYPE_PLUGINS_WITH_REVIEW_MARKS: PluggableList = MARKDOWN_REHYPE_PLUGINS_REVIEW;
 
 /** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
 export function normalizeMarkdownRendererContent(
@@ -345,6 +272,12 @@ interface MarkdownRendererProps {
   currentSessionTitle?: string | null;
   /** 受信任内容可解析本地路径和 xdt-* 内部协议；外部 Market 内容必须关闭。 */
   allowPrivilegedLinks?: boolean;
+  /**
+   * 审查预览专用 opt-in：正文里的 `{++新增++}` / `{--删除--}`（CriticMarkup
+   * 风格）由 remarkReviewAnnotations 解析成 <ins> / <del>，呈 Word 修订观感。
+   * 默认 false → chat 渲染链与插件链零变化。
+   */
+  reviewAnnotations?: boolean;
   /**
    * doc 模式专用 opt-in: 在每个 block 元素根上写入 `data-source-line="<N>"`,
    * N = 该节点在源码里的 1-based 起始行号 (取自 mdast `node.position.start.line`)。
@@ -1667,6 +1600,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   currentSessionId,
   currentSessionTitle,
   allowPrivilegedLinks = true,
+  reviewAnnotations = false,
   emitSourceLines = false,
 }: MarkdownRendererProps) {
   // Cap markdown re-parse + syntax highlight cost during streaming.
@@ -1711,6 +1645,22 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         ? splitStreamingMarkdownChunks(renderedContent)
         : [{ start: 0, content: renderedContent }],
     [emitSourceLines, isStreaming, renderedContent],
+  );
+  // 审查预览的修订标记需要额外挂 remarkReviewAnnotations 与 ins/del handler。
+  // 两条渲染路径共用同一份数组；关闭时直接返回模块级常量（引用不变，
+  // react-markdown 的重解析优化不被破坏）。
+  const remarkPlugins = useMemo<PluggableList>(() => {
+    const base = allowPrivilegedLinks ? MARKDOWN_REMARK_PLUGINS_PRIVILEGED : MARKDOWN_REMARK_PLUGINS;
+    return reviewAnnotations ? [...base, remarkReviewAnnotations] : base;
+  }, [allowPrivilegedLinks, reviewAnnotations]);
+  const remarkRehypeOptions = useMemo(
+    () =>
+      reviewAnnotations
+        ? ({
+            handlers: REVIEW_REHYPE_HANDLERS,
+          } as unknown as NonNullable<MarkdownOptions['remarkRehypeOptions']>)
+        : undefined,
+    [reviewAnnotations],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
@@ -1910,10 +1860,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
             key={chunk.start}
             sourceKey={String(chunk.start)}
             content={chunk.content}
-            remarkPlugins={
-              allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
-            }
-            rehypePlugins={REHYPE_PLUGINS}
+            remarkPlugins={remarkPlugins}
+            remarkRehypeOptions={remarkRehypeOptions}
+            rehypePlugins={reviewAnnotations ? REHYPE_PLUGINS_WITH_REVIEW_MARKS : REHYPE_PLUGINS}
             components={components}
             urlTransform={
               allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform
@@ -1925,8 +1874,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         ))
       ) : (
         <ReactMarkdown
-          remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS}
+          remarkPlugins={remarkPlugins}
+          remarkRehypeOptions={remarkRehypeOptions}
+          rehypePlugins={reviewAnnotations ? REHYPE_PLUGINS_WITH_REVIEW_MARKS : REHYPE_PLUGINS}
           components={components}
           urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
           skipHtml

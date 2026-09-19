@@ -2217,3 +2217,29 @@ mark.doc-search-mark [class] {
     animation: none;
   }
 }
+
+/*
+ * 审查预览：公式内部的修订标记（**兜底规则**）。
+ * markdownMathRevision 用 KaTeX **内建**命令写一个哨兵色表达差异：
+ * 删除 = `\textcolor{#c0ffee}{\sout{..}}`、新增 = `\textcolor{#facade}{\underline{..}}`。
+ *
+ * ⚠️ 实际生效路径是 rehype 插件 rehypeReviewMathMarks —— 它在 rehype 阶段把这些带哨兵色的
+ * 元素直接换成带 diff token 类的 <del> / <ins>，不依赖本规则。下面两条属性选择器保留作兜底
+ * （插件未生效时至少颜色仍然正确），不要删。
+ *
+ * 为什么颜色要额外处理（历史坑）：
+ *  - KaTeX 把删除线画成**独立空 span**（`.stretchy.sout`），文字在外层 `.mord` 里 —— 
+ *    只选 `.sout` 的话线条变色、文字不变；用 `:has()` 上溯又会命中 `\frac` 外层容器，
+ *    把分子与分数线一起染色（实际踩过）。
+ *  - `\textcolor` 的内联 style 只落在**改动片段自己的包裹层**上（范围精确）；
+ *    属性选择器把它换成主题 token，light / dark 都能跟随（内联样式必须 `!important` 覆盖）。
+ *  - 不用 `\htmlClass`：它需要 KaTeX 的 trust，而 rehype-katex 不透传（会渲染成字面）。
+ *  - 不能用 `red` / `green` 关键字：作者自己写的 `\textcolor{red}{..}` 是合法 LaTeX，
+ *    会被误当成修订标记（哨兵色在真实文档里不可能出现）。
+ */
+.katex [style*='color:#c0ffee'] {
+  color: var(--diff-del-fg) !important;
+}
+.katex [style*='color:#facade'] {
+  color: var(--diff-add-fg) !important;
+}

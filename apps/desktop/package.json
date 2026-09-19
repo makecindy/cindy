@@ -175,6 +175,7 @@
     "remark-cjk-friendly": "^2.3.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
+    "remark-parse": "11.0.0",
     "semver": "^7.8.5",
     "sharp": "^0.35.0",
     "silk-wasm": "^3.7.1",
@@ -183,6 +184,7 @@
     "tailwind-merge": "^2.6.0",
     "tar": "^7.5.21",
     "undici": "^8.3.0",
+    "unified": "11.0.5",
     "unist-util-visit": "^5.1.0",
     "ws": "^8.18.3",
     "zod": "4.3.6"
@@ -219,12 +221,10 @@
     "jsdom": "^29.1.1",
     "postcss": "^8.4.49",
     "prettier": "^3.4.2",
-    "remark-parse": "11.0.0",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.0.0",
-    "unified": "11.0.5",
     "vite": "^6.4.3",
     "vitest": "^3.2.4"
   }
