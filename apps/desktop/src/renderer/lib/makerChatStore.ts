@@ -1,3 +1,5 @@
+import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
+import { normalizeTaskTags } from '@cindy/maker-shared';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 import { confirmRemoteUsers, reserveRemoteUser } from './remoteUserHandoff';
@@ -859,7 +861,8 @@ export interface PendingGhostGrantConfirm {
    * forge_source = Forge 打包/骨架/安装的源码目录在工作目录外;
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
-  lane: 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
+  lane:
+    | 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -8589,7 +8592,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         push.channel === 'local-db:messages:created' ||
         (push.channel === 'maker:event' && inboundHasPersistId);
       const inboundEvent = (push.payload as { event?: unknown } | null)?.event as
-        | { type?: unknown; data?: { isFinal?: unknown; isFullText?: unknown } }
+        { type?: unknown; data?: { isFinal?: unknown; isFullText?: unknown } }
         | null
         | undefined;
       const isOrdinaryStreamingTextDelta =
@@ -8708,6 +8711,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
               totalTokenUsage: p.totalTokens,
             });
           }
+          break;
+        }
+        case 'local-db:task-tags:changed': {
+          if (!push.deviceId) break;
+          const tags = normalizeTaskTags((push.payload as { tags?: unknown })?.tags, 256);
+          remoteProjectsStore.applyTagCatalog(push.deviceId, tags);
+          emitTaskTagCatalog(push.deviceId, tags);
           break;
         }
         case 'local-db:sessions:patched': {
@@ -15066,7 +15076,8 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
  */
 function insertSystemCard(
   sessionId: string,
-  cardType: 'help' | 'cost' | 'context' | 'pwd' | 'status' | 'compact' | 'cmd' | 'learn' | 'cindy-make-doctor' | 'cindy-make',
+  cardType:
+    | 'help' | 'cost' | 'context' | 'pwd' | 'status' | 'compact' | 'cmd' | 'learn' | 'cindy-make-doctor' | 'cindy-make',
   data?: Record<string, unknown>,
 ): string | null {
   if (!sessionId) return null;

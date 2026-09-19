@@ -1,3 +1,5 @@
+import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
+import type { TaskTagRequest } from '@cindy/maker-shared';
 import { FILE_PEER_CHANNEL } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { normalizeProviderOrder } from "../../shared/providerOrder.js";
@@ -356,7 +358,8 @@ export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void
 }
 
 /** set-* channel → 持久化的 session 字段名(args[0]=sessionId, args[1]=value)。 */
-const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs' | 'writableDirs'> = {
+const SET_CHANNEL_FIELD: Record<string,
+  | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs' | 'writableDirs'> = {
   'maker:set-model': 'model',
   'maker:set-effort': 'effort',
   'maker:set-permission-mode': 'permissionMode',
@@ -1625,7 +1628,7 @@ function drainSessionActivityStage(dst: string, stage: SessionActivityStage): vo
       return;
     }
     const next = stage.queue.entries().next().value as
-      | [string, { payload: unknown; ownerStamp?: PushOwnerStamp }]
+      [string, { payload: unknown; ownerStamp?: PushOwnerStamp }]
       | undefined;
     if (!next) return;
     const [key, item] = next;
@@ -3755,7 +3758,10 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
-      () => dispatchLocalInvoke(
+      () =>
+          payload.channel === TASK_TAG_CHANNEL
+            ? executeTaskTags(args[0] as TaskTagRequest)
+            : dispatchLocalInvoke(
         payload.channel,
         payload.channel === 'maker:provider:list' ? [] : args,
       ),

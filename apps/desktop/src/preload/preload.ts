@@ -3444,7 +3444,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uninstall: (
       absolutePath: string,
       skillId?: string,
-    ): Promise<{ success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }> =>
+    ): Promise<
+      | { success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }> =>
       ipcRenderer.invoke('skillhub:uninstall', { absolutePath, skillId }),
 
     retryUninstallCleanup: (token: string): Promise<{ complete: boolean }> =>
@@ -5430,6 +5431,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:transcript', input),
       /** Small invalidation push; consumers re-read through list/detail. */
       onChanged: createIpcFanOut('local-db:subagent-runs:changed'),
+    },
+    taskTags: {
+      onChanged: createIpcFanOut('local-db:task-tags:changed'),
+      execute: (
+        request: import('@cindy/maker-shared').TaskTagRequest,
+      ): Promise<import('@cindy/maker-shared').TaskTagResult> =>
+        ipcRenderer.invoke('local-db:task-tags:execute', request),
     },
     projectAliases: {
       list: (): Promise<unknown> => ipcRenderer.invoke('local-db:project-aliases:list'),

@@ -113,6 +113,7 @@ export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | 
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
   latestMessageContent?: string | null;
   latestMessageExtract?: string | null;
@@ -229,6 +230,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
   const base: Session = {
     id: row.id,
+    ...(row.tags ? { tags: row.tags } : {}),
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
     workingDir: row.workingDir,

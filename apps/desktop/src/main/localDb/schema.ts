@@ -2069,3 +2069,33 @@ export const hookGroupContextCursors = sqliteTable(
     byUpdatedAt: index('hook_group_context_cursors_updated_at_idx').on(t.updatedAt),
   }),
 );
+
+/** Finder-style task label directory; scoped by the profile database. */
+export const taskTags = sqliteTable(
+  'task_tags',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    color: text('color').notNull(),
+    favoriteOrder: integer('favorite_order'),
+    sortOrder: integer('sort_order'),
+    revision: integer('revision').notNull().default(1),
+  },
+  (t) => ({ nameUnique: uniqueIndex('task_tags_name_idx').on(t.name) }),
+);
+
+export const sessionTaskTags = sqliteTable(
+  'session_task_tags',
+  {
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    tagId: text('tag_id')
+      .notNull()
+      .references(() => taskTags.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sessionId, t.tagId] }),
+    byTag: index('session_task_tags_tag_idx').on(t.tagId),
+  }),
+);

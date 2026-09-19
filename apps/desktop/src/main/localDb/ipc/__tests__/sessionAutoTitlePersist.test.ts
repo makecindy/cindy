@@ -55,6 +55,19 @@ const SESSION_ID = 's1';
 function createDb(initialTitle: string): void {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL,
+      favorite_order INTEGER,
+      sort_order INTEGER,
+      revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (
+      session_id TEXT NOT NULL,
+      tag_id TEXT NOT NULL,
+      PRIMARY KEY (session_id, tag_id)
+    );
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Maker',

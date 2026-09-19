@@ -18,6 +18,7 @@ import {
   foregroundStyle,
   frame,
   labelStyle,
+  lineLimit,
   padding,
   presentationDetents,
   presentationDragIndicator,
@@ -41,6 +42,7 @@ export function SessionDetailsNative({
   onBack,
   children,
   footer,
+  contentPaddingTop = spacing.lg,
 }: SessionDetailsNativeProps) {
   const { colors, mode } = useTheme();
   const { bottom: bottomInset } = useSafeAreaInsets();
@@ -68,35 +70,7 @@ export function SessionDetailsNative({
             spacing={0}
             modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}
           >
-            <HStack
-              modifiers={[
-                padding({
-                  top: spacing.lg,
-                  bottom: spacing.sm,
-                  leading: spacing.lg,
-                  trailing: spacing.lg,
-                }),
-              ]}
-            >
-              {onBack ? (
-                <Button
-                  label={backLabel}
-                  systemImage="chevron.backward"
-                  onPress={onBack}
-                  modifiers={[
-                    labelStyle("iconOnly"),
-                    buttonStyle("glass"),
-                    frame({ width: 44, height: 44 }),
-                  ]}
-                />
-              ) : (
-                <Spacer modifiers={[frame({ width: 44 })]} />
-              )}
-              <Spacer />
-              <Text>{title}</Text>
-              <Spacer />
-              <Spacer modifiers={[frame({ width: 44, height: 44 })]} />
-            </HStack>
+            <SessionDetailsNativeHeading title={title} backLabel={backLabel} onBack={onBack} />
             {/* Extend the viewport through the sheet's bottom safe area. Keep the
                 inset inside scroll content, not as an empty strip below its clip. */}
             <Group modifiers={[padding({ bottom: footer ? 0 : -bottomInset })]}>
@@ -106,6 +80,7 @@ export function SessionDetailsNative({
                     keyboardShouldPersistTaps="handled"
                     contentContainerStyle={{
                       padding: spacing.lg,
+                      paddingTop: contentPaddingTop,
                       paddingBottom: spacing.xxl + (footer ? 0 : bottomInset),
                     }}
                   >
@@ -191,5 +166,43 @@ export function SessionDetailsNativeActions({
         </Host>
       ) : null}
     </View>
+  );
+}
+
+export function SessionDetailsNativeHeading({
+  title,
+  backLabel,
+  onBack,
+}: Pick<SessionDetailsNativeProps, 'title' | 'backLabel' | 'onBack'>) {
+  return (
+    <HStack
+      modifiers={[
+        padding({
+          top: spacing.lg,
+          bottom: spacing.sm,
+          leading: spacing.lg,
+          trailing: spacing.lg,
+        }),
+      ]}
+    >
+      {onBack ? (
+        <Button
+          label={backLabel}
+          systemImage="chevron.backward"
+          onPress={onBack}
+          modifiers={[
+            labelStyle('iconOnly'),
+            buttonStyle('glass'),
+            frame({ width: 44, height: 44 }),
+          ]}
+        />
+      ) : (
+        <Spacer modifiers={[frame({ width: 44 })]} />
+      )}
+      <Spacer />
+      <Text modifiers={[lineLimit(1)]}>{title}</Text>
+      <Spacer />
+      <Spacer modifiers={[frame({ width: 44, height: 44 })]} />
+    </HStack>
   );
 }

@@ -62,6 +62,10 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 > **Important — element-level vs. page-level:** The "flat Surface" rule in full-window layouts applies only to the **overall page structure**, not to individual widgets. Lifted widgets _within_ a full-window layout — inputs, chat input boxes, raised cards, modal overlays, panel popups — still use **Card** color per their component rules (see Section 4). A full-window chat interface can have a flat Surface page _and_ a Card-colored chat input box at the same time; those are two different scopes. "Surface flat" means "don't split the page into Page+Card layers," not "every element on the page must be Surface color."
 
+### Task tag identity colors
+
+用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。只用于标签色球与编辑色板，表示用户分类，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。
+
 ### Chip & Button Neutrals
 
 Small interactive chips (button backgrounds, tag pills, avatar fills, selected-nav pills) sit outside the layer system — they're foreground elements, not background layers.

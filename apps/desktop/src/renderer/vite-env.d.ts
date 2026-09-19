@@ -4816,6 +4816,17 @@ interface ElectronAPI {
         ) => void,
       ) => () => void;
     };
+    taskTags: {
+      onChanged: (
+        cb: (
+          payload: { tags: import('@cindy/maker-shared').TaskTag[] },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
+      execute: (
+        request: import('@cindy/maker-shared').TaskTagRequest,
+      ) => Promise<import('@cindy/maker-shared').TaskTagResult>;
+    };
     projectAliases: {
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
       set: (input: {

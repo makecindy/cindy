@@ -1,3 +1,4 @@
+import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
@@ -372,6 +373,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       logger: createLogger('mcp/cindy_helper'),
+      sessionTags: async (callerSessionId, request) => {
+        const result = await executeTaskTags(request, callerSessionId);
+        return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
+      },
       createProject,
       moveSession: createMoveSession(isSessionInTurn),
       projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },

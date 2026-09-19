@@ -11,6 +11,7 @@ import { Folder, Monitor, Pin, type LucideIcon } from "lucide-react-native";
 import { View } from "react-native";
 import { Text } from "@/components/AppText";
 import { QuietSyncIndicator } from "@/components/QuietSyncIndicator";
+import { TaskTagDots } from './TaskTags';
 import {
   accessibilityHint,
   accessibilityElement,
@@ -86,7 +87,10 @@ export function SessionHeaderNativeBlur({ height, edge = 'top', inset = 0 }: { h
   );
 }
 
-export function SessionHeaderNativeTitle({ title, pinned, syncing, syncingImmediately, notice }: SessionHeaderNativeTitleProps) {
+export function SessionHeaderNativeTitle({ title,
+  tags,
+  onTagsPress,
+  pinned, syncing, syncingImmediately, notice }: SessionHeaderNativeTitleProps) {
   const { colors } = useTheme();
   const style = {
     borderRadius: radius.pill,
@@ -119,6 +123,12 @@ export function SessionHeaderNativeTitle({ title, pinned, syncing, syncingImmedi
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
           {pinned ? <Pin color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
           {label}
+          <TaskTagDots
+            tags={tags}
+            maxVisible={7}
+            surfaceColor={colors.surfaceTranslucent}
+            onPress={onTagsPress}
+          />
           <QuietSyncIndicator active={syncing} immediate={syncingImmediately} />
         </View>
         {notice ? (

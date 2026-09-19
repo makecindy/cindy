@@ -6468,3 +6468,38 @@ describe('device-clock live row clamp (applyRemoteTextEvent createdAt, cross-clo
     }
   });
 });
+
+describe('task tag source isolation', () => {
+  beforeEach(() => remoteSessionStore.clear());
+  it('invalidates a first list response before a shard exists, only for the source device', () => {
+    const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-a');
+    const otherEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-b');
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', { tags: [] });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-a', epoch)).toBe(false);
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-b', otherEpoch)).toBe(true);
+    const replacementEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-a');
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-a', replacementEpoch)).toBe(true);
+  });
+  it('projects rename and deletion only into the source computer task memberships', () => {
+    const tag = {
+      id: 'default:red',
+      name: 'Red',
+      color: 'red' as const,
+      favoriteOrder: 0,
+      revision: 1,
+    };
+    remoteSessionStore.setDeviceSessions('dev-a', 'A', [session('a', { tags: [tag] })]);
+    remoteSessionStore.setDeviceSessions('dev-b', 'B', [session('b', { tags: [tag] })]);
+    const renamed = { ...tag, name: 'Work', revision: 2 };
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', {
+      tags: [renamed],
+    });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([renamed]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', {
+      tags: [],
+    });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
+  });
+});

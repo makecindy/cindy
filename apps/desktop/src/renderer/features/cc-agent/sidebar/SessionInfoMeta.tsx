@@ -35,6 +35,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Folders, GitPullRequest } from 'lucide-react';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { useTranslation } from 'react-i18next';
@@ -66,6 +67,7 @@ type TFunc = (key: string, options?: Record<string, unknown>) => string;
 export interface SessionInfoPiece {
   key: TaskInfoField;
   text: string;
+  tags?: Session['tags'];
   /** hover 提示(绝对时间 / 字段说明)。 */
   title?: string;
   /** time 片段:渲染成语义化 <time dateTime>(与旧时间槽一致)。 */
@@ -91,6 +93,10 @@ export function buildSessionInfoPieces(
 ): SessionInfoPiece[] {
   const pieces: SessionInfoPiece[] = [];
   for (const field of fields) {
+    if (field === 'tags') {
+      if (session.tags?.length) pieces.push({ key: 'tags', text: '', tags: session.tags });
+      continue;
+    }
     if (field === 'tokens') {
       if (session.totalTokenUsage > 0) {
         pieces.push({
@@ -313,7 +319,9 @@ export function SessionInfoMeta({
               ·
             </span>
           )}
-          {piece.key === 'pr' ? (
+          {piece.key === 'tags' ? (
+            <TaskTagDots tags={piece.tags} />
+          ) : piece.key === 'pr' ? (
             prRef ? (
               <PrNumberPiece prRef={prRef} isActive={isActive} />
             ) : null
