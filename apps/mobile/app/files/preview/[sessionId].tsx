@@ -198,8 +198,14 @@ export default function RemoteFilePreviewScreen() {
   // 渲染 / 源码的切换状态在子页里,所以由子页按页 key 上报;setter 用 key 比对而不是
   // 直接存布尔,避免翻页时「旧页报 false」与「新页报 true」的先后顺序决定结果。
   const [htmlPanPageKey, setHtmlPanPageKey] = useState<string | null>(null);
+  const [markdownPagerPageKey, setMarkdownPagerPageKey] = useState<string | null>(null);
   const reportHtmlPan = useCallback((key: string, wants: boolean) => {
     setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
+  }, []);
+  // Markdown WebView 的纵向滚动保留在内层；明确横滑由内层原生 GestureDetector
+  // 回调后在这里驱动同一个 pager，避免 WebView 与 FlatList 争抢触摸序列。
+  const reportMarkdownPager = useCallback((key: string, wants: boolean) => {
+    setMarkdownPagerPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
   }, []);
 
   const showNotice = useCallback((text: string) => {
@@ -339,6 +345,12 @@ export default function RemoteFilePreviewScreen() {
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);
+  const moveMarkdownPager = useCallback((key: string, direction: 'previous' | 'next') => {
+    if (key !== current?.key || !siblings) return;
+    const next = pageIndex + (direction === 'next' ? 1 : -1);
+    if (next < 0 || next >= siblings.length) return;
+    pagerRef.current?.scrollToOffset({ animated: true, offset: next * pageWidth });
+  }, [current?.key, pageIndex, pageWidth, siblings]);
   // 当前可见文件路径镜像(pager 重建锚定用;不能进上面 effect 的依赖,否则
   // 每次翻页都会重列目录)。
   const currentRelPathRef = useRef<string | null>(null);
@@ -569,6 +581,8 @@ export default function RemoteFilePreviewScreen() {
               // 对话界面之后继续跑脚本。screenFocused 翻假即卸载。
               visible={screenFocused && index === pageIndex}
               onHtmlPanChange={reportHtmlPan}
+              onMarkdownPagerChange={reportMarkdownPager}
+              onMarkdownPageSwipe={moveMarkdownPager}
               exportToUrl={exportToUrl}
               prepareHtmlPreview={prepareHtmlPreview}
               item={item}
@@ -613,7 +627,7 @@ export default function RemoteFilePreviewScreen() {
         // 超出视口的内容永远看不到。手势仲裁(区分内层平移与翻页)在 RN 上要自己写一套
         // 竞态裁决,属独立改动;这里沿用本文件对 PDF 已经采用的同一口径 —— 想翻页就切到
         // 「源码」态(源码是竖向列表,不冲突),或 Done 返回列表。
-        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key}
+        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}
         showsHorizontalScrollIndicator={false}
         windowSize={3}
       />
@@ -700,6 +714,8 @@ function FilePreviewPage({
   maker,
   onDownload,
   onHtmlPanChange,
+  onMarkdownPagerChange,
+  onMarkdownPageSwipe,
   onOpenLightbox,
   onQuoteSelection,
   readTextFile,
@@ -718,6 +734,8 @@ function FilePreviewPage({
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,仅文本页产出)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
+  onMarkdownPagerChange?: (key: string, wants: boolean) => void;
+  onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   onOpenLightbox(url: string): void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(仅文本页消费)。 */
   onQuoteSelection?: (text: string) => void;
@@ -760,6 +778,8 @@ function FilePreviewPage({
         htmlBrowserActions={htmlBrowserActions}
         onDownload={onDownload}
         onHtmlPanChange={onHtmlPanChange}
+        onMarkdownPagerChange={onMarkdownPagerChange}
+        onMarkdownPageSwipe={onMarkdownPageSwipe}
         onQuoteSelection={onQuoteSelection}
         readTextFile={readTextFile}
         targetLine={targetLine}
@@ -933,6 +953,8 @@ function TextPreviewPage({
   htmlBrowserActions,
   onDownload,
   onHtmlPanChange,
+  onMarkdownPagerChange,
+  onMarkdownPageSwipe,
   onQuoteSelection,
   readTextFile,
   targetLine,
@@ -950,6 +972,8 @@ function TextPreviewPage({
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
+  onMarkdownPagerChange?: (key: string, wants: boolean) => void;
+  onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(源码态暂不支持,见 PR 说明)。 */
   onQuoteSelection?: (text: string) => void;
   /** 屏级注入:readFile 带瞬断重试 + openLink(与列表/搜索/导出同路径)。 */
@@ -1067,6 +1091,12 @@ function TextPreviewPage({
     onHtmlPanChange?.(item.key, htmlPanWanted);
     return () => onHtmlPanChange?.(item.key, false);
   }, [htmlPanWanted, item.key, onHtmlPanChange]);
+  const markdownPagerWanted = visible && richKind === 'markdown' && richView === 'rendered'
+    && state.status === 'ready';
+  useEffect(() => {
+    onMarkdownPagerChange?.(item.key, markdownPagerWanted);
+    return () => onMarkdownPagerChange?.(item.key, false);
+  }, [item.key, markdownPagerWanted, onMarkdownPagerChange]);
 
   if (website) return visible ? <HtmlWebsiteBrowser
     visit={website}
@@ -1159,7 +1189,13 @@ function TextPreviewPage({
             />
           )
         ) : (
-          <MarkdownFileReader markdown={ready?.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
+          <MarkdownFileReader
+            markdown={ready?.content ?? ''}
+            onPageSwipe={onMarkdownPageSwipe ? (direction) => onMarkdownPageSwipe(item.key, direction) : undefined}
+            onQuoteSelection={onQuoteSelection}
+            targetLine={targetLine}
+            testID="filePreview.markdownRendered"
+          />
         )
       ) : state.status === 'loading' ? (
         <View style={styles.centerFill}><ActivityIndicator color={colors.textTertiary} /></View>
