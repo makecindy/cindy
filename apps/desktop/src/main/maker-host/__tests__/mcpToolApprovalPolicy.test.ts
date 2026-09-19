@@ -150,7 +150,6 @@ describe('desktop MCP approval policy', () => {
       'cindy_computer',
       'cindy_feishu_bot',
       'cindy_slack',
-      'cindy_scheduler',
       'cindy_memory',
       // worker → lead 回报通道:执行边界在工具内部 fail-closed, 逐次弹窗
       // 会让远端 daemon 等审批超时断链。
@@ -532,5 +531,21 @@ describe('Orca Worker directory authorization', () => {
     }
     expect(policy('create_workers', {})).toBe('prompt-each-time');
     expect(policy('create_workers', { workers: [null] })).toBe('prompt-each-time');
+  });
+});
+
+describe('official Telegram external-send approval', () => {
+  it.each([undefined, 'call_tool', 'schedule_telegram_send'])('requires per-call authorization with toolName %s', toolName => {
+    for (const toolParams of [{ name: 'schedule_telegram_send', args: {} }, JSON.stringify({ name: 'schedule_telegram_send', args: {} })]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName, toolParams })).toBe('prompt-each-time');
+    }
+  });
+  it('fails closed on unreadable progressive actions without changing known scheduler actions', () => {
+    for (const toolParams of [undefined, 'broken', [], {}]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool', toolParams })).toBe('prompt-each-time');
+    }
+    for (const name of ['schedule_telegram_status', 'schedule_telegram_receipt', 'schedule_list']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool', toolParams: { name } })).toBe('auto-approve');
+    }
   });
 });
