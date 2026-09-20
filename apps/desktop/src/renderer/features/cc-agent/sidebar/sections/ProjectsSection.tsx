@@ -116,7 +116,6 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
 import { loadManualSessionOrder, persistManualSessionOrder, reconcileManualSessionOrder } from '../sessionOrder';
-import { useAuth } from '@/contexts/AuthContext';
 
 /** 手动排序只从项目标题行起手。点击折叠仍走标题行；SortableJS 的
  *  fallbackTolerance + ignoreNextClick 把点击和拖拽分开。 */
@@ -197,6 +196,11 @@ export interface ProjectsSectionProps {
   allProjectKeysForOrder: readonly string[];
   /** F-PJ-10：filter 完整对象传给 Popover；段内不直接读取，仅透传给子组件。 */
   filter: UseSidebarFilterReturn;
+  /**
+   * 当前数据 owner（来自 sidebar settings snapshot）。
+   * 项目内手动排序按 owner 分区落 localStorage，与侧栏折叠态同源同口径。
+   */
+  dataOwnerId: string | null;
   collapsed: Set<string>;
   isAllCollapsed: boolean;
   activeSessionId?: string;
@@ -269,6 +273,7 @@ export function ProjectsSection({
   dialogueCount = 0,
   allProjectKeysForOrder,
   filter,
+  dataOwnerId,
   collapsed,
   activeSessionId,
   viewedSessionId,
@@ -302,7 +307,6 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
-  const { dataOwnerId } = useAuth();
   const localPlatform = window.electronAPI.platform;
   const projectComparisonKey = useCallback(
     (projectKey: string) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,

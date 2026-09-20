@@ -3727,6 +3727,7 @@ function ExpandedView({
                   dialogueCount={allGroups.dialogues.length}
                   allProjectKeysForOrder={gcProjectKeys}
                   filter={filter}
+                  dataOwnerId={sidebarSettingsSnapshot.dataOwnerId}
                   collapsed={collapse.collapsed}
                   isAllCollapsed={collapse.isAllCollapsed}
                   activeSessionId={activeSessionId}

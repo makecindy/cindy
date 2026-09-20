@@ -49,6 +49,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     dialogues: [],
     allKnownProjects: [],
     allProjectKeysForOrder: [],
+    dataOwnerId: null,
     bots: [],
     filter: {
       groupBy: 'project',
