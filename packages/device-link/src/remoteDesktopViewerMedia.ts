@@ -108,8 +108,9 @@ export class RemoteDesktopViewerMedia {
           /DESKTOP_(AUDIO_UNAVAILABLE|SCREEN_PERMISSION_REQUIRED|DISABLED|STOPPED|LEASE_EXPIRED)/.test(
             String(error),
           );
-        send({ type: "fallback", retry: !permanent });
-        if (valid()) this.deps.onOfferFailure?.();
+        const capturePending = /DESKTOP_CAPTURE_PENDING/.test(String(error));
+        send({ type: "fallback", retry: !permanent, capturePending });
+        if (valid() && !capturePending) this.deps.onOfferFailure?.();
       } finally {
         this.deps.onOfferSettled?.(current.lease);
       }

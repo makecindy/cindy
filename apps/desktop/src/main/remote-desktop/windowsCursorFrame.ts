@@ -68,6 +68,7 @@ export function decodeWindowsCursorFrame(
       hotX: hotX / scale,
       hotY: hotY / scale,
       png: png.toString('base64'),
+      ...(typeof raw.shape === 'string' && raw.shape.length <= 32 ? { shape: raw.shape } : {}),
     };
     if (isRemoteDesktopCursor(cursor)) result.cursor = cursor;
   } catch {

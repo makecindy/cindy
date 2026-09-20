@@ -19,6 +19,8 @@ import {
 } from './interactionCardModel';
 
 interface PendingEntry {
+  /** Runtime runner identity; never shared across channels or reconnect instances. */
+  owner?: symbol;
   resolve: (decision: InteractionDecision) => void;
   reject: (err: Error) => void;
   /** Card messageId we sent — orchestrator can patch it after resolve. */
@@ -59,6 +61,7 @@ export function registerPending(
   kind: InteractionDecision['kind'],
   messageId: string,
   extras?: {
+    owner?: symbol;
     toolName?: string;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
@@ -89,6 +92,7 @@ export function registerPendingExternal(
   resolve: (decision: InteractionDecision) => void,
   reject: (err: Error) => void,
   extras?: {
+    owner?: symbol;
     toolName?: string;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
@@ -103,6 +107,7 @@ export function registerPendingExternal(
     reject,
     messageId,
     kind,
+    owner: extras?.owner,
     toolName: extras?.toolName,
     permissionCard: extras?.permissionCard,
     askQuestions: extras?.askQuestions,
@@ -149,11 +154,15 @@ export function cancelPending(requestId: string, reason: string): { messageId: s
 }
 
 /** Reject all pending interactions (used on session close / error). */
-export function rejectAllPending(reason: string): void {
-  for (const [, entry] of pending) {
-    entry.reject(new Error(reason));
-  }
-  pending.clear();
+export function rejectAllPending(
+  reason: string,
+  owner?: symbol,
+): Array<{ requestId: string; messageId: string }> {
+  const entries = [...pending].filter(([, entry]) => owner === undefined || entry.owner === owner);
+  // Remove the selected entries before callbacks can register another request.
+  for (const [requestId] of entries) pending.delete(requestId);
+  for (const [, entry] of entries) entry.reject(new Error(reason));
+  return entries.map(([requestId, entry]) => ({ requestId, messageId: entry.messageId }));
 }
 
 export function getPendingCount(): number {

@@ -103,6 +103,8 @@ function expectPlatformSharedLink(systemAuth: string, localAuth: string): void {
   });
 }
 
+// The first dynamic import transforms the complete auth-adapter graph. On Linux
+// the cold transform can exceed the 5s default under the full desktop test pool.
 it('compares Codex hard-link identities without Windows number precision collisions', async () => {
   const { haveSameStableFileIdentity } = await import('../auth-adapters.js');
   expect(
@@ -113,7 +115,7 @@ it('compares Codex hard-link identities without Windows number precision collisi
   ).toBe(false);
   expect(haveSameStableFileIdentity({ dev: 0n, ino: 0n }, { dev: 0n, ino: 0n })).toBe(false);
   expect(haveSameStableFileIdentity({ dev: 7n, ino: 11n }, { dev: 7n, ino: 11n })).toBe(true);
-});
+}, 20_000);
 
 it.each([false, true])('preserves successful shared login and native files when presentation write fails=%s', async (failPresentation) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-mode-'));

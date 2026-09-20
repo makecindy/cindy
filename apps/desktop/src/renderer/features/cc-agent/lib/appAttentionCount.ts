@@ -1,9 +1,9 @@
 import type { Session } from '@/lib/ccAgent.types';
 import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
+import { resolveSessionRightStatus } from '@cindy/maker-shared/session-activity';
 import {
   projectSidebarSessionActivity,
-  resolveSidebarRightStatus,
   type SidebarRightStatusInput,
 } from '../sidebar/sidebarRightStatus';
 import { isAutomationGeneratedSession } from './scheduledSessionGrouping';
@@ -18,7 +18,7 @@ export interface AppAttentionCountInput {
   localSchedules: ReadonlyMap<string, ScheduleAttention>;
 }
 
-/** 与任务行的红/蓝/绿点同源，不随搜索、折叠或当前机器筛选改变。 */
+/** 系统角标仍统计错误；不随侧栏隐藏错误红点、搜索或折叠改变。 */
 export function countAppAttention(input: AppAttentionCountInput): number {
   const attentionIds = new Set<string>();
   for (const session of input.sessions) {
@@ -41,7 +41,7 @@ export function countAppAttention(input: AppAttentionCountInput): number {
       isRunning: input.runningSessionIds.has(session.id),
       hasAttentionNotification: input.attentionKinds.has(session.id),
     });
-    const status = resolveSidebarRightStatus(activity);
+    const status = resolveSessionRightStatus(activity);
     // heartbeat 绑普通任务时 runner 保留 desktop 来源，完成会写入 done；
     // 只压未读自动化 done，不连同之后的 awaiting / error 一起丢掉。
     if (status === 'done' && input.localSchedules.get(session.id)?.hasUnreadRun === true) {

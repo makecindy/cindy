@@ -187,3 +187,21 @@ describe('RunHistoryCard 费用展示', () => {
     expect(screen.getByText('scheduler.runs.runCost')).toBeTruthy();
   });
 });
+
+describe('RunHistoryCard 未读失败标记', () => {
+  it.each(['failed', 'interrupted'] as const)('%s 保留图标角标，已读后消失', (status) => {
+    const run = { id: 'run-unread', scheduleId: 'schedule-1', firedAt: 1, finishedAt: 11, status };
+    const view = renderRun(run);
+    const dot = () =>
+      Array.from(view.container.querySelectorAll('span')).find((node) =>
+        node.className.includes('bg-[var(--card-status-error)]'),
+      );
+    expect(dot()?.className).toContain('absolute -top-0.5 -right-0.5');
+    view.rerender(
+      <MemoryRouter>
+        <RunHistoryCard run={{ ...run, readAt: 12 }} agentKind="codex" />
+      </MemoryRouter>,
+    );
+    expect(dot()).toBeUndefined();
+  });
+});

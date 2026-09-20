@@ -23,6 +23,19 @@
 不得退回会留下系统分辨率变化的旧路径；不支持的选择返回“不支持”。旧控制端的无
 `temporary` 请求及响应保持兼容，其旧行为不代表新恢复能力已生效。此扩展不修改 relay。
 
+## 远程桌面窗口操作
+
+新增可选能力 `windowActions`，只在支持的主机上发送 `windowAction`：`list` 返回有界窗口
+列表，`activate` 只接受当前系统枚举的窗口 ID，`desktop` 切换临时空工作区并支持恢复。
+三种操作均要求当前同账号控制 lease；撤权后的迟到回复不得暴露窗口标题或继续操作。
+新手机对未声明能力的旧电脑保留原快捷键；旧手机仍可连接新电脑。本扩展只走既有业务
+隧道，不新增 relay 消息类型、不修改服务端授权或协议实现。
+
+可选能力 `workspaceNavigation` 与 `omarchyMenu` 分别声明左右桌面切换和 Omarchy 菜单。
+新控制端仅在能力为真时发送 `windowAction` 的 `workspaceLeft` / `workspaceRight` /
+`omarchyMenu`；缺省保留旧工具栏，不向旧主机发送新动作。旧端的 `desktop` 语义不变。
+工作区切换作用于采集屏幕，菜单使用本机固定入口，所有操作沿用控制 lease 与撤权检查。
+
 ## 自动化检查恢复投影
 
 运行状态和已读回执保留历史事实。当前警告只保留未被**同一自动化**更新成功运行恢复的失败；
@@ -260,3 +273,12 @@ X 快照有请求正文时，按原始 triggerMessageId 排除引用列表中的
 Seed 2.1 Pro 按火山方舟官方示例选择 Chat Completions 为 Cindy 的标准接入协议，
 依据与全路由覆盖验收见 model-catalog-maintenance.md。
 价格、窗口、推理档位不随此次协议补全修改；协议默认开启策略仍保留用户显式覆盖。
+
+### 远程桌面虚拟显示尺寸回执
+
+`viewerDisplay` 成功响应可附加 `viewerDisplayRequest: { width, height }`，回显本次请求。
+`display.width/height` 始终是系统实际逻辑尺寸，用于画面与输入坐标；macOS 可能选择同一比例的较小逻辑模式。
+客户端仅在回执匹配请求、实际尺寸为有效整数且比例一致时接受这种差异，仍校验 lease 与控制状态。
+缺少回执的旧服务端保持原来的精确尺寸判断；显式 `resolution` 模式不放宽。
+旧客户端仍可处理原来成功的精确尺寸响应；系统调整后的尺寸需要控制端和被控端同时更新。
+不修改请求格式、relay、IPC allowlist 或协议版本。

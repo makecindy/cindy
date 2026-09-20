@@ -25,6 +25,8 @@ import type {
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
 import { setMainLocale } from '../../../i18n';
+import { enqueueAskCardPatch } from '../askCardPatchQueue';
+import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
 
 const mocks = vi.hoisted(() => ({
   logger: {
@@ -69,7 +71,7 @@ const mocks = vi.hoisted(() => ({
   takePendingInteractionsForSession: vi.fn(),
   // 取消不到时返回 null(取消到了返回 { messageId }, 调用方据此收口卡片)。
   cancelPending: vi.fn(() => null),
-  rejectAllPending: vi.fn(),
+  rejectAllPending: vi.fn<(reason: string, owner?: symbol) => Array<{ requestId: string; messageId: string }>>(() => []),
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
   buildPermissionCard: vi.fn(),
@@ -3366,6 +3368,106 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await flushMicrotasks();
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds disposal when an expiry fails and another channel update stalls', async () => {
+    const stalled = deferred<void>();
+    const update = vi.fn()
+      .mockRejectedValueOnce(new Error('channel closing'))
+      .mockImplementationOnce(() => stalled.promise);
+    const card = { body: 'expired', buttons: [] };
+    const localRunner = createTurnRunner({
+      ...fakeAdapter,
+      interactionExpiredNotice: 'expired',
+      output: { kind: 'rich-card', im: { ...mocks.feishuIm, updateInteractiveCard: update } as unknown as ChannelIM },
+    }, fakeRepo, { ...fakeCards, buildResolvedCard: vi.fn(() => card) } as unknown as ImCardBuilders);
+    mocks.rejectAllPending.mockReturnValueOnce([
+      { requestId: 'dispose-first', messageId: 'first' },
+      { requestId: 'dispose-second', messageId: 'second' },
+    ]);
+    await localRunner.disposeAllSessions();
+    await flushMicrotasks();
+    expect(mocks.rejectAllPending).toHaveBeenLastCalledWith('session_disposed', expect.any(Symbol));
+    expect(update).toHaveBeenNthCalledWith(1, 'first', card);
+    expect(update).toHaveBeenNthCalledWith(2, 'second', card);
+    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('channel closing'));
+    stalled.resolve(undefined);
+    await flushMicrotasks();
+  });
+
+  it('finishes expiry before stopping the transport and allowing a reconnect', async () => {
+    const updating = deferred<void>();
+    let connected = false;
+    const events: string[] = [];
+    const update = vi.fn(async () => {
+      expect(connected).toBe(true);
+      events.push('expiry:start');
+      await updating.promise;
+      expect(connected).toBe(true);
+      events.push('expiry:end');
+    });
+    const localRunner = createTurnRunner({
+      ...fakeAdapter,
+      interactionExpiredNotice: 'expired',
+      output: { kind: 'rich-card', im: { ...mocks.feishuIm, updateInteractiveCard: update } as unknown as ChannelIM },
+    }, fakeRepo, fakeCards);
+    const lifecycle = createSerializedConnectionLifecycle({
+      startConnection: async () => { connected = true; events.push('connect'); },
+      beforeStopConnection: () => localRunner.disposeAllSessions(),
+      stopConnection: async () => { connected = false; events.push('disconnect'); },
+      onStartError: vi.fn(),
+    });
+    lifecycle.start();
+    await flushMicrotasks();
+    mocks.rejectAllPending.mockReturnValueOnce([{ requestId: 'order-expiry', messageId: 'old-card' }]);
+    const stopping = lifecycle.stop('logout');
+    lifecycle.start();
+    await waitForAssertion(() => expect(events).toEqual(['connect', 'expiry:start']));
+    updating.resolve(undefined);
+    await stopping;
+    await waitForAssertion(() => expect(events).toEqual(['connect', 'expiry:start', 'expiry:end', 'disconnect', 'connect']));
+    await lifecycle.stop();
+  });
+
+  it('skips an expiry still queued behind a patch when disposal times out', async () => {
+    vi.useFakeTimers();
+    const toggle = deferred<void>();
+    const previous = enqueueAskCardPatch('queued-expiry', () => toggle.promise);
+    const update = vi.fn(async () => undefined);
+    const localRunner = createTurnRunner({
+      ...fakeAdapter,
+      interactionExpiredNotice: 'expired',
+      output: { kind: 'rich-card', im: { ...mocks.feishuIm, updateInteractiveCard: update } as unknown as ChannelIM },
+    }, fakeRepo, fakeCards);
+    try {
+      mocks.rejectAllPending.mockReturnValueOnce([{ requestId: 'queued-expiry', messageId: 'old-card' }]);
+      let disposed = false;
+      const disposing = localRunner.disposeAllSessions().then(() => { disposed = true; });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(disposed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await disposing;
+      expect(disposed).toBe(true);
+      toggle.resolve(undefined);
+      await previous;
+      await flushMicrotasks();
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      toggle.resolve(undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains optional expiry capability and distinct runner identities', async () => {
+    const first = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    const second = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    mocks.rejectAllPending.mockReturnValueOnce([{ requestId: 'no-expiry', messageId: 'legacy' }]);
+    await first.disposeAllSessions();
+    await second.disposeAllSessions();
+    await flushMicrotasks();
+    const calls = mocks.rejectAllPending.mock.calls;
+    expect(calls.at(-2)?.[1]).not.toBe(calls.at(-1)?.[1]);
+    expect(mocks.feishuIm.updateInteractiveCard).not.toHaveBeenCalled();
   });
 
   it('disposeAllSessions aborts and awaits an IM-owned in-flight turn', async () => {

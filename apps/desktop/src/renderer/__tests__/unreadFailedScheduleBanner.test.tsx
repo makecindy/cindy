@@ -71,6 +71,23 @@ afterEach(() => {
 });
 
 describe('historical failed schedule notice', () => {
+  it('opens the failed run automation without dismissing the notice', () => {
+    const onViewDetails = vi.fn();
+    render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+      latestFailedRun={{ runId: 'failed', firedAt: 1, scheduleId: 'schedule-failed' }}
+      onViewDetails={onViewDetails} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.unreadFailedScheduleBanner.viewDetails' }));
+    expect(onViewDetails).toHaveBeenCalledWith('schedule-failed');
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('has no details action when the schedule identity is unavailable', () => {
+    render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+      latestFailedRun={{ runId: 'legacy', firedAt: 1 }} onViewDetails={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'chat.unreadFailedScheduleBanner.viewDetails' })).toBeNull();
+  });
+
   it('distinguishes precheck failures while preserving the warning', () => {
     render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
       latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'rate-limit', scheduleId: 'schedule' }} />);

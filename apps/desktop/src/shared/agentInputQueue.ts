@@ -338,6 +338,8 @@ export interface AgentInputQueuedMessage {
    * 旧队列快照缺省该字段(undefined = 不软删),向后兼容。
    */
   supersedesUserClientId?: string;
+  /** Stable retry provenance; unlike supersedes, never hides a user message. */
+  retrySourceClientId?: string;
 }
 
 export type AgentInputDelivery = 'turn' | 'steer';

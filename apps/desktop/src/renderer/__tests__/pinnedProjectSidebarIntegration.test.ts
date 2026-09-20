@@ -83,11 +83,12 @@ describe('pinned project sidebar integration', () => {
       'const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);',
     );
     expect(sidebarSource).toContain('collectRestorableProjectKeys({');
-    expect(sidebarSource).toContain('collectRestorableProjectKeysRef.current = () =>');
+    expect(sidebarSource).toContain('const restorableProjectKeys = useMemo(');
+    expect(sidebarSource).toContain('restorableProjectKeysRef.current = restorableProjectKeys;');
     expect(sidebarSource).toContain('sessions: scopedSidebarSessions,');
     expect(sidebarSource).toContain('const restored = await restoreHiddenProjectIfPresent({');
     expect(sidebarSource).toContain(
-      'getCurrentProjectKeys: () => collectRestorableProjectKeysRef.current(),',
+      'getCurrentProjectKeys: () => restorableProjectKeysRef.current,',
     );
     expect(sidebarSource).toContain('ensureProjectIncluded: filter.ensureProjectIncluded,');
     expect(sidebarSource).toContain('localPlatform,');

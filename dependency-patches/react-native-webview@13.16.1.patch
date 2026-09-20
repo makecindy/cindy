@@ -1,5 +1,53 @@
+diff --git a/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java b/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java
+index 4709e2822499067cef3a4ce571991b96f844e085..11bc92ed798f5830e0abfa3f65a4bc2098248df2 100644
+--- a/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java
++++ b/android/src/newarch/com/reactnativecommunity/webview/RNCWebViewManager.java
+@@ -369,6 +369,10 @@ public class RNCWebViewManager extends ViewGroupManager<RNCWebViewWrapper>
+     @Override
+     public void setContentInset(RNCWebViewWrapper view, @Nullable ReadableMap value) {}
+ 
++    // iOS 26-only WebKit layout API; Android retains its existing layout.
++    @Override
++    public void setObscuredContentInsets(RNCWebViewWrapper view, @Nullable ReadableMap value) {}
++
+     @Override
+     public void setContentInsetAdjustmentBehavior(RNCWebViewWrapper view, @Nullable String value) {}
+ 
+diff --git a/apple/RNCWebView.mm b/apple/RNCWebView.mm
+index c0816b6320820a8586f3735b7971790cac8704fa..544752a537fd57e3bb76d44d13ce8bbf6706ee74 100644
+--- a/apple/RNCWebView.mm
++++ b/apple/RNCWebView.mm
+@@ -379,6 +379,16 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+         [_view setContentInset: edgesInsets];
+     }
+ 
++    if (oldViewProps.obscuredContentInsets.top != newViewProps.obscuredContentInsets.top || oldViewProps.obscuredContentInsets.left != newViewProps.obscuredContentInsets.left || oldViewProps.obscuredContentInsets.right != newViewProps.obscuredContentInsets.right || oldViewProps.obscuredContentInsets.bottom != newViewProps.obscuredContentInsets.bottom) {
++        UIEdgeInsets edgesInsets = {
++            .top = newViewProps.obscuredContentInsets.top,
++            .left = newViewProps.obscuredContentInsets.left,
++            .right = newViewProps.obscuredContentInsets.right,
++            .bottom = newViewProps.obscuredContentInsets.bottom
++        };
++        [_view setObscuredContentInsets: edgesInsets];
++    }
++
+     if (oldViewProps.basicAuthCredential.username != newViewProps.basicAuthCredential.username || oldViewProps.basicAuthCredential.password != newViewProps.basicAuthCredential.password) {
+         [_view setBasicAuthCredential: @{
+             @"username": RCTNSStringFromString(newViewProps.basicAuthCredential.username),
+diff --git a/apple/RNCWebViewImpl.h b/apple/RNCWebViewImpl.h
+index 1f6bbfd697a4e0b0aef2db344386b786839a1969..c1f8ccbdef2fd47aca016fcd2ddc35a0a75dccb4 100644
+--- a/apple/RNCWebViewImpl.h
++++ b/apple/RNCWebViewImpl.h
+@@ -86,6 +86,7 @@ shouldStartLoadForRequest:(NSMutableDictionary<NSString *, id> *)request
+ @property (nonatomic, assign) BOOL bounces;
+ @property (nonatomic, assign) BOOL mediaPlaybackRequiresUserAction;
+ @property (nonatomic, assign) UIEdgeInsets contentInset;
++@property (nonatomic, assign) UIEdgeInsets obscuredContentInsets;
+ @property (nonatomic, assign) BOOL automaticallyAdjustContentInsets;
+ @property (nonatomic, assign) BOOL keyboardDisplayRequiresUserAction;
+ @property (nonatomic, assign) BOOL hideKeyboardAccessoryView;
 diff --git a/apple/RNCWebViewImpl.m b/apple/RNCWebViewImpl.m
-index 7f5c24d6e2cfb26eddbc513bf17a81c24a7273e2..dedcaf5488cbf04796adad2606a698c8307d3493 100644
+index 7f5c24d6e2cfb26eddbc513bf17a81c24a7273e2..654619d783eeaccc6f581f8f8e1ccb46f179e0ca 100644
 --- a/apple/RNCWebViewImpl.m
 +++ b/apple/RNCWebViewImpl.m
 @@ -52,6 +52,9 @@ @interface RNCWKWebView : WKWebView
@@ -96,3 +144,114 @@ index 7f5c24d6e2cfb26eddbc513bf17a81c24a7273e2..dedcaf5488cbf04796adad2606a698c8
      _webView.scrollView.delegate = self;
  #endif // !TARGET_OS_OSX
      _webView.UIDelegate = self;
+@@ -546,6 +591,7 @@ - (void)didMoveToWindow
+ 
+     _webView.scrollView.directionalLockEnabled = _directionalLockEnabled;
+ #endif // !TARGET_OS_OSX
++    [self setObscuredContentInsets:_obscuredContentInsets];
+     _webView.allowsLinkPreview = _allowsLinkPreview;
+     [_webView addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionOld | NSKeyValueObservingOptionNew context:nil];
+     _webView.allowsBackForwardNavigationGestures = _allowsBackForwardNavigationGestures;
+@@ -813,6 +859,21 @@ - (void)setAllowingReadAccessToURL:(NSString *)allowingReadAccessToURL
+   }
+ }
+ 
++// Browser chrome may overlap the WebView while WebKit positions fixed/sticky content safely.
++- (void)setObscuredContentInsets:(UIEdgeInsets)insets
++{
++  insets.top = MAX(0, insets.top);
++  insets.left = MAX(0, insets.left);
++  insets.bottom = MAX(0, insets.bottom);
++  insets.right = MAX(0, insets.right);
++  _obscuredContentInsets = insets;
++#if !TARGET_OS_OSX && defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
++  if (@available(iOS 26.0, *)) {
++    _webView.obscuredContentInsets = insets;
++  }
++#endif
++}
++
+ - (void)setContentInset:(UIEdgeInsets)contentInset
+ {
+ #if !TARGET_OS_OSX
+diff --git a/apple/RNCWebViewManager.mm b/apple/RNCWebViewManager.mm
+index f8f375f23b12039b64b7900034c8978e0235a8e7..d4e55ea72f13de8565c3a1eca34d10fa8ef836f3 100644
+--- a/apple/RNCWebViewManager.mm
++++ b/apple/RNCWebViewManager.mm
+@@ -68,6 +68,7 @@ - (RNCView *)view
+ RCT_EXPORT_VIEW_PROPERTY(mediaPlaybackRequiresUserAction, BOOL)
+ RCT_EXPORT_VIEW_PROPERTY(dataDetectorTypes, WKDataDetectorTypes)
+ RCT_EXPORT_VIEW_PROPERTY(contentInset, UIEdgeInsets)
++RCT_EXPORT_VIEW_PROPERTY(obscuredContentInsets, UIEdgeInsets)
+ RCT_EXPORT_VIEW_PROPERTY(automaticallyAdjustContentInsets, BOOL)
+ RCT_EXPORT_VIEW_PROPERTY(autoManageStatusBarEnabled, BOOL)
+ RCT_EXPORT_VIEW_PROPERTY(hideKeyboardAccessoryView, BOOL)
+diff --git a/lib/RNCWebViewNativeComponent.d.ts b/lib/RNCWebViewNativeComponent.d.ts
+index 8dd6cef93c86f32c0358b5762a20d2f5f65a8cee..272e5d18e6e87ddac2b72e74de0b2548cb2b8d65 100644
+--- a/lib/RNCWebViewNativeComponent.d.ts
++++ b/lib/RNCWebViewNativeComponent.d.ts
+@@ -153,6 +153,12 @@ export interface NativeProps extends ViewProps {
+         bottom?: Double;
+         right?: Double;
+     }>;
++    obscuredContentInsets?: Readonly<{
++        top?: Double;
++        left?: Double;
++        bottom?: Double;
++        right?: Double;
++    }>;
+     contentInsetAdjustmentBehavior?: WithDefault<'never' | 'automatic' | 'scrollableAxes' | 'always', 'never'>;
+     contentMode?: WithDefault<'recommended' | 'mobile' | 'desktop', 'recommended'>;
+     dataDetectorTypes?: WithDefault<ReadonlyArray<'address' | 'link' | 'calendarEvent' | 'trackingNumber' | 'flightNumber' | 'lookupSuggestion' | 'phoneNumber' | 'all' | 'none'>, 'phoneNumber'>;
+diff --git a/lib/RNCWebViewNativeComponent.js b/lib/RNCWebViewNativeComponent.js
+index 25d09e9e702ce752832c2a3a64b34150e3f579cc..6407494e98276c144830204abc2affd79c52623a 100644
+--- a/lib/RNCWebViewNativeComponent.js
++++ b/lib/RNCWebViewNativeComponent.js
+@@ -1 +1 @@
+-var _interopRequireDefault=require("@babel/runtime/helpers/interopRequireDefault");Object.defineProperty(exports,"__esModule",{value:true});exports.default=exports.__INTERNAL_VIEW_CONFIG=exports.Commands=void 0;var _codegenNativeComponent=_interopRequireDefault(require("react-native/Libraries/Utilities/codegenNativeComponent"));var _codegenNativeCommands=_interopRequireDefault(require("react-native/Libraries/Utilities/codegenNativeCommands"));var NativeComponentRegistry=require('react-native/Libraries/NativeComponent/NativeComponentRegistry');var _require=require('react-native/Libraries/NativeComponent/ViewConfigIgnore'),ConditionallyIgnoredEventHandlers=_require.ConditionallyIgnoredEventHandlers;var _require2=require("react-native/Libraries/ReactNative/RendererProxy"),dispatchCommand=_require2.dispatchCommand;var nativeComponentName='RNCWebView';var __INTERNAL_VIEW_CONFIG=exports.__INTERNAL_VIEW_CONFIG={uiViewClassName:'RNCWebView',directEventTypes:{topContentSizeChange:{registrationName:'onContentSizeChange'},topRenderProcessGone:{registrationName:'onRenderProcessGone'},topContentProcessDidTerminate:{registrationName:'onContentProcessDidTerminate'},topCustomMenuSelection:{registrationName:'onCustomMenuSelection'},topFileDownload:{registrationName:'onFileDownload'},topLoadingError:{registrationName:'onLoadingError'},topLoadingSubResourceError:{registrationName:'onLoadingSubResourceError'},topLoadingFinish:{registrationName:'onLoadingFinish'},topLoadingProgress:{registrationName:'onLoadingProgress'},topLoadingStart:{registrationName:'onLoadingStart'},topHttpError:{registrationName:'onHttpError'},topMessage:{registrationName:'onMessage'},topOpenWindow:{registrationName:'onOpenWindow'},topScroll:{registrationName:'onScroll'},topShouldStartLoadWithRequest:{registrationName:'onShouldStartLoadWithRequest'}},validAttributes:Object.assign({allowFileAccess:true,allowsProtectedMedia:true,allowsFullscreenVideo:true,androidLayerType:true,cacheMode:true,domStorageEnabled:true,downloadingMessage:true,forceDarkOn:true,geolocationEnabled:true,lackPermissionToDownloadMessage:true,messagingModuleName:true,minimumFontSize:true,mixedContentMode:true,nestedScrollEnabled:true,overScrollMode:true,saveFormDataDisabled:true,scalesPageToFit:true,setBuiltInZoomControls:true,setDisplayZoomControls:true,setSupportMultipleWindows:true,textZoom:true,thirdPartyCookiesEnabled:true,hasOnScroll:true,allowingReadAccessToURL:true,allowsBackForwardNavigationGestures:true,allowsInlineMediaPlayback:true,allowsPictureInPictureMediaPlayback:true,allowsAirPlayForMediaPlayback:true,allowsLinkPreview:true,automaticallyAdjustContentInsets:true,autoManageStatusBarEnabled:true,bounces:true,contentInset:true,contentInsetAdjustmentBehavior:true,contentMode:true,dataDetectorTypes:true,decelerationRate:true,directionalLockEnabled:true,enableApplePay:true,hideKeyboardAccessoryView:true,keyboardDisplayRequiresUserAction:true,limitsNavigationsToAppBoundDomains:true,mediaCapturePermissionGrantType:true,pagingEnabled:true,pullToRefreshEnabled:true,refreshControlLightMode:true,scrollEnabled:true,sharedCookiesEnabled:true,textInteractionEnabled:true,useSharedProcessPool:true,menuItems:true,suppressMenuItems:true,hasOnFileDownload:true,fraudulentWebsiteWarningEnabled:true,allowFileAccessFromFileURLs:true,allowUniversalAccessFromFileURLs:true,applicationNameForUserAgent:true,basicAuthCredential:true,cacheEnabled:true,incognito:true,injectedJavaScript:true,injectedJavaScriptBeforeContentLoaded:true,injectedJavaScriptForMainFrameOnly:true,injectedJavaScriptBeforeContentLoadedForMainFrameOnly:true,javaScriptCanOpenWindowsAutomatically:true,javaScriptEnabled:true,webviewDebuggingEnabled:true,mediaPlaybackRequiresUserAction:true,messagingEnabled:true,hasOnOpenWindowEvent:true,showsHorizontalScrollIndicator:true,showsVerticalScrollIndicator:true,indicatorStyle:true,newSource:true,userAgent:true,injectedJavaScriptObject:true,paymentRequestEnabled:true},ConditionallyIgnoredEventHandlers({onContentSizeChange:true,onRenderProcessGone:true,onContentProcessDidTerminate:true,onCustomMenuSelection:true,onFileDownload:true,onLoadingError:true,onLoadingSubResourceError:true,onLoadingFinish:true,onLoadingProgress:true,onLoadingStart:true,onHttpError:true,onMessage:true,onOpenWindow:true,onScroll:true,onShouldStartLoadWithRequest:true}))};var _default=exports.default=NativeComponentRegistry.get(nativeComponentName,function(){return __INTERNAL_VIEW_CONFIG;});var Commands=exports.Commands={goBack:function goBack(ref){dispatchCommand(ref,"goBack",[]);},goForward:function goForward(ref){dispatchCommand(ref,"goForward",[]);},reload:function reload(ref){dispatchCommand(ref,"reload",[]);},stopLoading:function stopLoading(ref){dispatchCommand(ref,"stopLoading",[]);},injectJavaScript:function injectJavaScript(ref,javascript){dispatchCommand(ref,"injectJavaScript",[javascript]);},requestFocus:function requestFocus(ref){dispatchCommand(ref,"requestFocus",[]);},postMessage:function postMessage(ref,data){dispatchCommand(ref,"postMessage",[data]);},loadUrl:function loadUrl(ref,url){dispatchCommand(ref,"loadUrl",[url]);},clearFormData:function clearFormData(ref){dispatchCommand(ref,"clearFormData",[]);},clearCache:function clearCache(ref,includeDiskFiles){dispatchCommand(ref,"clearCache",[includeDiskFiles]);},clearHistory:function clearHistory(ref){dispatchCommand(ref,"clearHistory",[]);}};
+\ No newline at end of file
++var _interopRequireDefault=require("@babel/runtime/helpers/interopRequireDefault");Object.defineProperty(exports,"__esModule",{value:true});exports.default=exports.__INTERNAL_VIEW_CONFIG=exports.Commands=void 0;var _codegenNativeComponent=_interopRequireDefault(require("react-native/Libraries/Utilities/codegenNativeComponent"));var _codegenNativeCommands=_interopRequireDefault(require("react-native/Libraries/Utilities/codegenNativeCommands"));var NativeComponentRegistry=require('react-native/Libraries/NativeComponent/NativeComponentRegistry');var _require=require('react-native/Libraries/NativeComponent/ViewConfigIgnore'),ConditionallyIgnoredEventHandlers=_require.ConditionallyIgnoredEventHandlers;var _require2=require("react-native/Libraries/ReactNative/RendererProxy"),dispatchCommand=_require2.dispatchCommand;var nativeComponentName='RNCWebView';var __INTERNAL_VIEW_CONFIG=exports.__INTERNAL_VIEW_CONFIG={uiViewClassName:'RNCWebView',directEventTypes:{topContentSizeChange:{registrationName:'onContentSizeChange'},topRenderProcessGone:{registrationName:'onRenderProcessGone'},topContentProcessDidTerminate:{registrationName:'onContentProcessDidTerminate'},topCustomMenuSelection:{registrationName:'onCustomMenuSelection'},topFileDownload:{registrationName:'onFileDownload'},topLoadingError:{registrationName:'onLoadingError'},topLoadingSubResourceError:{registrationName:'onLoadingSubResourceError'},topLoadingFinish:{registrationName:'onLoadingFinish'},topLoadingProgress:{registrationName:'onLoadingProgress'},topLoadingStart:{registrationName:'onLoadingStart'},topHttpError:{registrationName:'onHttpError'},topMessage:{registrationName:'onMessage'},topOpenWindow:{registrationName:'onOpenWindow'},topScroll:{registrationName:'onScroll'},topShouldStartLoadWithRequest:{registrationName:'onShouldStartLoadWithRequest'}},validAttributes:Object.assign({allowFileAccess:true,allowsProtectedMedia:true,allowsFullscreenVideo:true,androidLayerType:true,cacheMode:true,domStorageEnabled:true,downloadingMessage:true,forceDarkOn:true,geolocationEnabled:true,lackPermissionToDownloadMessage:true,messagingModuleName:true,minimumFontSize:true,mixedContentMode:true,nestedScrollEnabled:true,overScrollMode:true,saveFormDataDisabled:true,scalesPageToFit:true,setBuiltInZoomControls:true,setDisplayZoomControls:true,setSupportMultipleWindows:true,textZoom:true,thirdPartyCookiesEnabled:true,hasOnScroll:true,allowingReadAccessToURL:true,allowsBackForwardNavigationGestures:true,allowsInlineMediaPlayback:true,allowsPictureInPictureMediaPlayback:true,allowsAirPlayForMediaPlayback:true,allowsLinkPreview:true,automaticallyAdjustContentInsets:true,autoManageStatusBarEnabled:true,bounces:true,contentInset:true,obscuredContentInsets:true,contentInsetAdjustmentBehavior:true,contentMode:true,dataDetectorTypes:true,decelerationRate:true,directionalLockEnabled:true,enableApplePay:true,hideKeyboardAccessoryView:true,keyboardDisplayRequiresUserAction:true,limitsNavigationsToAppBoundDomains:true,mediaCapturePermissionGrantType:true,pagingEnabled:true,pullToRefreshEnabled:true,refreshControlLightMode:true,scrollEnabled:true,sharedCookiesEnabled:true,textInteractionEnabled:true,useSharedProcessPool:true,menuItems:true,suppressMenuItems:true,hasOnFileDownload:true,fraudulentWebsiteWarningEnabled:true,allowFileAccessFromFileURLs:true,allowUniversalAccessFromFileURLs:true,applicationNameForUserAgent:true,basicAuthCredential:true,cacheEnabled:true,incognito:true,injectedJavaScript:true,injectedJavaScriptBeforeContentLoaded:true,injectedJavaScriptForMainFrameOnly:true,injectedJavaScriptBeforeContentLoadedForMainFrameOnly:true,javaScriptCanOpenWindowsAutomatically:true,javaScriptEnabled:true,webviewDebuggingEnabled:true,mediaPlaybackRequiresUserAction:true,messagingEnabled:true,hasOnOpenWindowEvent:true,showsHorizontalScrollIndicator:true,showsVerticalScrollIndicator:true,indicatorStyle:true,newSource:true,userAgent:true,injectedJavaScriptObject:true,paymentRequestEnabled:true},ConditionallyIgnoredEventHandlers({onContentSizeChange:true,onRenderProcessGone:true,onContentProcessDidTerminate:true,onCustomMenuSelection:true,onFileDownload:true,onLoadingError:true,onLoadingSubResourceError:true,onLoadingFinish:true,onLoadingProgress:true,onLoadingStart:true,onHttpError:true,onMessage:true,onOpenWindow:true,onScroll:true,onShouldStartLoadWithRequest:true}))};var _default=exports.default=NativeComponentRegistry.get(nativeComponentName,function(){return __INTERNAL_VIEW_CONFIG;});var Commands=exports.Commands={goBack:function goBack(ref){dispatchCommand(ref,"goBack",[]);},goForward:function goForward(ref){dispatchCommand(ref,"goForward",[]);},reload:function reload(ref){dispatchCommand(ref,"reload",[]);},stopLoading:function stopLoading(ref){dispatchCommand(ref,"stopLoading",[]);},injectJavaScript:function injectJavaScript(ref,javascript){dispatchCommand(ref,"injectJavaScript",[javascript]);},requestFocus:function requestFocus(ref){dispatchCommand(ref,"requestFocus",[]);},postMessage:function postMessage(ref,data){dispatchCommand(ref,"postMessage",[data]);},loadUrl:function loadUrl(ref,url){dispatchCommand(ref,"loadUrl",[url]);},clearFormData:function clearFormData(ref){dispatchCommand(ref,"clearFormData",[]);},clearCache:function clearCache(ref,includeDiskFiles){dispatchCommand(ref,"clearCache",[includeDiskFiles]);},clearHistory:function clearHistory(ref){dispatchCommand(ref,"clearHistory",[]);}};
+\ No newline at end of file
+diff --git a/lib/WebViewTypes.d.ts b/lib/WebViewTypes.d.ts
+index 998cc88f03f3fbcd0a47f227c01f738dbf4c58bf..d5f2ad0462d35b4ff20d707fb309284f3113ea5c 100644
+--- a/lib/WebViewTypes.d.ts
++++ b/lib/WebViewTypes.d.ts
+@@ -322,6 +322,8 @@ export interface IOSWebViewProps extends WebViewSharedProps {
+      * "never". Available on iOS 11 and later.
+      */
+     contentInsetAdjustmentBehavior?: ContentInsetAdjustmentBehavior;
++    /** iOS 26+: overlapping browser chrome; WebKit adjusts fixed/sticky layout. Defaults to zero. */
++    obscuredContentInsets?: ContentInsetProp;
+     /**
+      * The amount by which the web view content is inset from the edges of
+      * the scroll view. Defaults to {top: 0, left: 0, bottom: 0, right: 0}.
+diff --git a/src/RNCWebViewNativeComponent.ts b/src/RNCWebViewNativeComponent.ts
+index 7f4e6c4f73506efa9517314a3ff89f91b097763e..a6f8afd006c7334dd9792263c6f208af033461e2 100644
+--- a/src/RNCWebViewNativeComponent.ts
++++ b/src/RNCWebViewNativeComponent.ts
+@@ -194,6 +194,12 @@ export interface NativeProps extends ViewProps {
+     bottom?: Double;
+     right?: Double;
+   }>;
++  obscuredContentInsets?: Readonly<{
++    top?: Double;
++    left?: Double;
++    bottom?: Double;
++    right?: Double;
++  }>;
+   contentInsetAdjustmentBehavior?: WithDefault<
+     'never' | 'automatic' | 'scrollableAxes' | 'always',
+     'never'
+diff --git a/src/WebViewTypes.ts b/src/WebViewTypes.ts
+index eca81415ab48676da18fc2be13b84e60fe5cb3f5..e01e4c6cd9a2a79f5654e98b0a7d56c0e830f298 100644
+--- a/src/WebViewTypes.ts
++++ b/src/WebViewTypes.ts
+@@ -455,6 +455,8 @@ export interface IOSWebViewProps extends WebViewSharedProps {
+    * "never". Available on iOS 11 and later.
+    */
+   contentInsetAdjustmentBehavior?: ContentInsetAdjustmentBehavior;
++  /** iOS 26+: overlapping browser chrome; WebKit adjusts fixed/sticky layout. Defaults to zero. */
++  obscuredContentInsets?: ContentInsetProp;
+ 
+   /**
+    * The amount by which the web view content is inset from the edges of

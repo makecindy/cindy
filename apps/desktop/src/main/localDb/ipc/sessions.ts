@@ -69,7 +69,7 @@ import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import {
   DESKTOP_VISIBLE_SESSION_SOURCES,
-  isRetainableProjectSessionSource,
+  isRetainableProjectSession,
 } from '../../../shared/sessionSource.js';
 import {
   normalizeWorkingDirForProjectSettings,
@@ -925,6 +925,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       workspaceKind: sessions.workspaceKind,
       remoteHostId: sessions.remoteHostId,
       source: sessions.source,
+      orcaRole: sessions.orcaRole,
     })
     .from(sessions)
     .where(and(eq(sessions.id, id), eq(sessions.userSendAt, ts)))
@@ -954,7 +955,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
     row.workspaceKind === 'project' &&
     row.workingDir &&
     !row.remoteHostId &&
-    isRetainableProjectSessionSource(row.source)
+    isRetainableProjectSession(row)
   ) {
     const projectDir = normalizeWorkingDirForProjectSettings(row.workingDir);
     const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
@@ -1404,7 +1405,12 @@ export function registerSessionIpc(
     // 路径写进去,后续 New Maker 项目下拉选中它时会丢失 host、按本机路径创建出一个
     // 错误的本地会话(指向本机不存在的同名目录)。在 host-aware 最近项目(给该表加
     // remote_host_id 列 + picker 区分 local/remote)落地前,remote 项目一律不进最近列表。
-    if (insertRow.workspaceKind === 'project' && insertRow.workingDir && !insertRow.remoteHostId) {
+    if (
+      insertRow.workspaceKind === 'project' &&
+      insertRow.workingDir &&
+      !insertRow.remoteHostId &&
+      isRetainableProjectSession(insertRow)
+    ) {
       void upsertRecentWorkdir(insertRow.workingDir, now);
     }
     // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
@@ -1941,7 +1947,7 @@ export async function updateSessionInDb(
       row.workspaceKind === 'project' &&
       row.workingDir &&
       !row.remoteHostId &&
-      isRetainableProjectSessionSource(row.source)
+      isRetainableProjectSession(row)
     ) {
       const touched = await upsertRecentWorkdir(
         row.workingDir,

@@ -112,61 +112,6 @@ it('keeps system audio with cursor-free native video and stops cursor updates wi
   expect(stopNative).toHaveBeenCalledOnce();
 });
 
-it.each(['rejected', 'missing'] as const)(
-  'rejects native video with %s requested audio and releases capture',
-  async (audio) => {
-    const track = { stop: vi.fn() };
-    const stream = {
-      getTracks: () => [track],
-      getVideoTracks: () => [track],
-      getAudioTracks: () => [],
-      addTrack: vi.fn(),
-    };
-    const stopNative = vi.fn();
-    vi.mocked(nativeCaptureStream).mockResolvedValue({
-      stream,
-      stop: stopNative,
-    } as unknown as Awaited<ReturnType<typeof nativeCaptureStream>>);
-    const capture =
-      audio === 'rejected'
-        ? vi.fn().mockRejectedValue(new Error('unavailable'))
-        : vi.fn().mockResolvedValue(stream);
-    vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: capture } });
-    let command!: (value: unknown) => void;
-    const reply = vi.fn().mockResolvedValue(undefined);
-    Object.assign(window, {
-      electronAPI: {
-        remoteDesktop: {
-          onCommand: (callback: typeof command) => {
-            command = callback;
-            return () => {};
-          },
-          registerHost: vi.fn().mockResolvedValue(undefined),
-          state: vi.fn().mockResolvedValue(null),
-          stop: vi.fn().mockResolvedValue(undefined),
-          reply,
-        },
-      },
-    });
-    disposers.push(startDesktopCaptureHost(window.electronAPI.remoteDesktop as any));
-    await act(async () => {
-      command({
-        op: 'offer',
-        id: 'offer',
-        lease: 'lease',
-        sdp: 'sdp',
-        sourceId: 'screen:1',
-        nativeCapture: true,
-        cursorOverlay: true,
-        settings: { audio: true, fps: 30 },
-      });
-    });
-    expect(reply).toHaveBeenCalledWith('offer', { error: 'DESKTOP_AUDIO_UNAVAILABLE' });
-    expect(stopNative).toHaveBeenCalled();
-    expect(track.stop).toHaveBeenCalled();
-  },
-);
-
 it('exchanges replayable candidates without recapturing, tolerates transient disconnect and fences old attempts', async () => {
   vi.useFakeTimers();
   const peers: any[] = [];

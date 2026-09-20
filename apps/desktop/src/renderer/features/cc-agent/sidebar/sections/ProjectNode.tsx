@@ -50,6 +50,7 @@ import type {
   AutomationSessionGroup,
 } from '../../lib/automationSidebarGrouping';
 import { getProjectSessionCollapseLimit } from '../../lib/sidebarCollapseConfig';
+import type { SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import type { FilterStatus } from '../../hooks/useSidebarFilter';
@@ -92,6 +93,14 @@ export interface ProjectNodeProps {
    * 不重复归属信息。置顶区不受分组影响,照常显示。
    */
   hideRemoteMachineLabel?: boolean;
+  /**
+   * 项目行运行灯:仅收起时文件夹图标呼吸橙,展开后由子任务提示运行状态。
+   * 未读仍走右侧状态槽;待回复蓝点由 lamp 补齐,不在标题旁重复显示。
+   * 聚合集合由父层按实际渲染的会话提供。
+   */
+  lamp?: SessionLampAggregate;
+  /** 透传给项目内 SessionEntryList 的折叠豁免追加集合(语义见其 prop 注释)。 */
+  foldExemptSessionIds?: ReadonlySet<string>;
   onToggle: (projectKey: string) => void;
   /** Project pin is independent from conversation pin state. */
   isProjectPinned: boolean;
@@ -138,6 +147,8 @@ export const ProjectNode = memo(function ProjectNode({
   selectedSessionIds,
   disableSessionCollapse,
   hideRemoteMachineLabel = false,
+  lamp,
+  foldExemptSessionIds,
   onToggle,
   isProjectPinned,
   onToggleProjectPin,
@@ -175,6 +186,7 @@ export const ProjectNode = memo(function ProjectNode({
         isCollapsed={isCollapsed}
         collapsedAttentionTone={collapsedAttentionTone}
         hideRemoteMachineLabel={hideRemoteMachineLabel}
+        lamp={lamp}
         onToggle={onToggle}
         isProjectPinned={isProjectPinned}
         onToggleProjectPin={onToggleProjectPin}
@@ -214,6 +226,7 @@ export const ProjectNode = memo(function ProjectNode({
             collapsible
             collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}
+            foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={isCollapsed || parentSectionCollapsed}
             onSessionClick={onSessionClick}
             onAction={onAction}
@@ -238,6 +251,7 @@ type ProjectHeaderProps = Pick<
   | 'isCollapsed'
   | 'collapsedAttentionTone'
   | 'hideRemoteMachineLabel'
+  | 'lamp'
   | 'onToggle'
   | 'isProjectPinned'
   | 'onToggleProjectPin'
@@ -253,6 +267,7 @@ type ProjectHeaderProps = Pick<
 >;
 
 const ProjectHeader = memo(function ProjectHeader({
+  lamp,
   project,
   statusFilter,
   isCollapsed,
@@ -285,6 +300,13 @@ const ProjectHeader = memo(function ProjectHeader({
   // 常驻在标题左侧;展开/收起指示箭头移到标题右侧、hover 才渐显(见下方 Chevron)。
   const FolderIcon = isCollapsed ? Folder : FolderOpen;
   const Chevron = isCollapsed ? ChevronRight : ChevronDown;
+  // 错误不显示红点，也不能遮住待回复或成功未读提示。
+  const collapsedStatusTone =
+    lamp?.dotTone === 'awaiting'
+      ? 'awaiting'
+      : collapsedAttentionTone === 'error'
+        ? null
+        : collapsedAttentionTone;
   // 右键菜单：参照 ChatImageView 的 controlled DropdownMenu + 隐形定位 trigger 模式，
   // 鼠标点击位置即菜单出现位置。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -413,11 +435,17 @@ const ProjectHeader = memo(function ProjectHeader({
           !isEditingName && 'hover:bg-sidebar-item-hover',
         )}
       >
-        <FolderIcon
-          size={15}
-          strokeWidth={1.8}
-          className="shrink-0 text-[var(--sidebar-list-muted)]"
-        />
+        {/* 仅收起时汇总运行态,避免与展开的子任务同时呼吸(动画挂 wrapper)。 */}
+        <span
+          className={cn(
+            'inline-flex shrink-0',
+            isCollapsed && lamp?.running
+              ? 'text-[var(--status-bar-accent)] session-status-breathing'
+              : 'text-[var(--sidebar-list-muted)]',
+          )}
+        >
+          <FolderIcon size={15} strokeWidth={1.8} aria-hidden />
+        </span>
         {/* 名字 + remote identity 同组占据 flex-1。远程项目常态展示机器身份,
             避免相同 workingDir 的项目只能靠 hover 才能区分。 */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -491,7 +519,7 @@ const ProjectHeader = memo(function ProjectHeader({
         {!isEditingName && (
           <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
             <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
-              {isCollapsed && collapsedAttentionTone ? (
+              {isCollapsed && collapsedStatusTone ? (
                 <div
                   className={cn(
                     'col-start-1 row-start-1 flex items-center gap-1',
@@ -500,7 +528,7 @@ const ProjectHeader = memo(function ProjectHeader({
                     menuPos !== null && 'opacity-0',
                   )}
                 >
-                  <SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />
+                  <SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />
                 </div>
               ) : null}
               <div

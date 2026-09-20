@@ -230,7 +230,7 @@
         "plan-toolbar-btn-hover-bg": "#eee8d5",
         "popover": "46 42% 88%",
         "primary-foreground": "0 0% 100%",
-        "search-match-fg": "0 0% 46%",
+        "search-match-fg": "0 0% 35%",
         "secondary": "46 42% 88%",
         "settings-btn-primary-text": "#FFFFFF",
         "settings-btn-secondary-hover-bg": "#eee8d5",
@@ -252,7 +252,8 @@
         "tooltip-text": "#fdf6e3",
         "update-btn-border": "#859900",
         "update-btn-text": "#859900",
-        "form-field-hint": "#686868"
+        "form-field-hint": "#686868",
+        "search-match-bg": "45 100% 62%"
       }
     },
     "cindy-light": {
@@ -430,7 +431,11 @@
         "create-agent-send-icon": "#FCFCFC",
         "slider-track": "#A3A39E",
         "slider-fill": "#3C3F43",
-        "slider-thumb": "#FDFDF8"
+        "slider-thumb": "#FDFDF8",
+        "segmented-selected-bg": "#FDFDF8",
+        "segmented-selected-border": "#F0F0EB",
+        "segmented-option-fg": "#6B6B67",
+        "segmented-hover-bg": "#E4E4DF"
       }
     },
     "cindy-dark": {
@@ -608,7 +613,11 @@
         "sidebar-user-card-text": "#D4D4D4",
         "slider-track": "#626262",
         "slider-fill": "#EEEEEE",
-        "slider-thumb": "#FCFCFC"
+        "slider-thumb": "#FCFCFC",
+        "segmented-selected-bg": "#353535",
+        "segmented-selected-border": "#3B3B3B",
+        "segmented-option-fg": "#AAAAAA",
+        "segmented-hover-bg": "#292929"
       }
     },
     "default-dark": {

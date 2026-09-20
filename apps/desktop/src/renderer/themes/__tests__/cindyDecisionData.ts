@@ -9,6 +9,10 @@
 // 2026-07-20、switch-track-off 2026-08-05);没有带日期用户裁决的手编仍然禁止。
 
 export const CINDY_REQUIRED_COLOR_IDS = [
+  'segmented-option-fg',
+  'segmented-hover-bg',
+  'segmented-selected-bg',
+  'segmented-selected-border',
   'surface',
   'surface-hsl',
   'surface-elevated',
@@ -192,6 +196,11 @@ export const HSL_FORMAT_IDS = [
 ] as const;
 
 export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string }> = {
+  // 用户裁决 2026-09-18: Segmented v8 低对比选中药丸。
+  'segmented-option-fg': { light: '#6B6B67', dark: '#AAAAAA' },
+  'segmented-hover-bg': { light: '#E4E4DF', dark: '#292929' },
+  'segmented-selected-bg': { light: '#FDFDF8', dark: '#353535' },
+  'segmented-selected-border': { light: '#F0F0EB', dark: '#3B3B3B' },
   surface: { light: '#F2F2ED', dark: '#181818' },
   'surface-hsl': { light: '60.0 16.1% 93.9%', dark: '0 0% 9.4%' },
   'surface-elevated': { light: '#FDFDF8', dark: '#1F1F1F' },

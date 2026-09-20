@@ -7,7 +7,6 @@ import type { AttentionKind } from '@/lib/sessionAttentionStore';
 import type { RemoteSessionActivityPhase } from '@/features/device-link/remoteSessionActivityStore';
 import {
   resolveCollapsedAttention,
-  resolveCollapsedGroupHeaderSessionId,
   resolveCollapsedGroupRightStatus,
   resolveCollapsedProjectAttentionTone,
 } from '../features/cc-agent/sidebar/projectCollapsedAttention';
@@ -88,15 +87,15 @@ describe('collapsed project attention tone', () => {
     expect(resolve({ remotePhases: [['session-1', 'completed']] })).toBe('done');
   });
 
-  it('shows red for local errors, urgent schedules, and remote errors', () => {
+  it('does not show dots for local errors, urgent schedules, or remote errors', () => {
     expect(
       resolve({ notifications: ['session-1'], attentionKinds: [['session-1', 'error']] }),
-    ).toBe('error');
-    expect(resolve({ urgent: ['session-1'] })).toBe('error');
-    expect(resolve({ remotePhases: [['session-1', 'error']] })).toBe('error');
+    ).toBe(null);
+    expect(resolve({ urgent: ['session-1'] })).toBe(null);
+    expect(resolve({ remotePhases: [['session-1', 'error']] })).toBe(null);
   });
 
-  it('gives red priority when red and green children coexist', () => {
+  it('keeps successful unread results visible alongside errors', () => {
     expect(
       resolve({
         ids: ['done', 'error'],
@@ -106,7 +105,7 @@ describe('collapsed project attention tone', () => {
           ['error', 'error'],
         ],
       }),
-    ).toBe('error');
+    ).toBe('done');
   });
 
   it('treats a remote running state as authoritative over stale local attention', () => {
@@ -131,7 +130,7 @@ describe('collapsed project attention tone', () => {
 });
 
 describe('collapsed attention alert ids', () => {
-  it('names every child that contributes the red dot, across all three sources', () => {
+  it('keeps failed children discoverable without a red dot', () => {
     const summary = summarize({
       ids: ['local-error', 'urgent-schedule', 'remote-error', 'done-child', 'idle-child'],
       notifications: ['local-error', 'done-child'],
@@ -142,7 +141,7 @@ describe('collapsed attention alert ids', () => {
       urgent: ['urgent-schedule'],
       remotePhases: [['remote-error', 'error']],
     });
-    expect(summary.tone).toBe('error');
+    expect(summary.tone).toBe('done');
     expect([...summary.errorSessionIds]).toEqual([
       'local-error',
       'urgent-schedule',
@@ -210,9 +209,9 @@ describe('collapsed project attention wiring', () => {
   it('renders the aggregate status on the trailing slot while the project is collapsed', () => {
     const slotChrome = 'group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end';
     const gridChrome = 'grid h-6 grid-cols-[max-content] items-center justify-items-end';
-    expect(projectNodeSource).toContain('isCollapsed && collapsedAttentionTone ? (');
+    expect(projectNodeSource).toContain('isCollapsed && collapsedStatusTone ? (');
     expect(projectNodeSource).toContain(
-      '<SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />',
+      '<SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />',
     );
     expect(projectNodeSource).not.toContain('AttentionDot');
     expect(projectNodeSource).toContain(slotChrome);
@@ -224,7 +223,7 @@ describe('collapsed project attention wiring', () => {
     );
     const trailingSlot = projectNodeSource.indexOf(slotChrome);
     const indicator = projectNodeSource.indexOf(
-      '<SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />',
+      '<SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />',
     );
     expect(nameSpan).toBeGreaterThan(0);
     expect(trailingSlot).toBeGreaterThan(nameSpan);
@@ -232,11 +231,9 @@ describe('collapsed project attention wiring', () => {
   });
 
   it('feeds the automation group header and its collapsed rows from the same summary', () => {
-    // 组头红点与收起态提上来的告警行必须同源 —— 判据分家就会重演「项目行有红点、
-    // 展开后哪一行都没有」。
+    // 汇总仅补完成绿点；错误子行仍由同一份汇总记录决定。
     expect(automationGroupSource).toContain('resolveCollapsedAttention({');
     expect(automationGroupSource).toContain('resolveCollapsedGroupRightStatus({');
-    expect(automationGroupSource).toContain('resolveCollapsedGroupHeaderSessionId({');
     expect(automationGroupSource).toMatch(/tone:\s*collapsedAttention\.tone/);
     expect(automationGroupSource).toMatch(/new Set\(collapsedAttention\.errorSessionIds\)/);
     expect(automationGroupSource).toContain('alertSessionIds,');
@@ -254,31 +251,6 @@ describe('collapsed project attention wiring', () => {
     expect(automationGroupSource).toMatch(/useSessionsAttentionKindMap\(groupSessionIds\)/);
     expect(automationGroupSource).toMatch(/useSessionsAttentionUrgencyIdSet\(groupSessionIds\)/);
     expect(automationGroupSource).toMatch(/useRemoteSessionsPhaseMap\(group.sessions\)/);
-  });
-
-  it('opens the unread-failed session from a collapsed red group header', () => {
-    const attention = { tone: 'error' as const, errorSessionIds: ['run-old'] };
-    expect(
-      resolveCollapsedGroupHeaderSessionId({
-        collapsed: true,
-        latestSessionId: 'run-new',
-        attention,
-      }),
-    ).toBe('run-old');
-    expect(
-      resolveCollapsedGroupHeaderSessionId({
-        collapsed: false,
-        latestSessionId: 'run-new',
-        attention,
-      }),
-    ).toBe('run-new');
-    expect(
-      resolveCollapsedGroupHeaderSessionId({
-        collapsed: true,
-        latestSessionId: 'run-new',
-        attention: { tone: 'done', errorSessionIds: [] },
-      }),
-    ).toBe('run-new');
   });
 
   it('feeds both regular and pinned project rows from their displayed children', () => {

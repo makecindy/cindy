@@ -2243,10 +2243,14 @@ pub(crate) fn capture_install_dir_identity(path: &Path) -> io::Result<InstallDir
             format!("install path is not a directory: {}", path.display()),
         ));
     }
+    #[cfg(unix)]
+    let (device, inode) = (file_device(&meta), file_inode(&meta));
+    #[cfg(windows)]
+    let (device, inode) = file_identity(path)?;
     Ok(InstallDirIdentity {
         is_reparse: is_reparse_point(path),
-        device: file_device(&meta),
-        inode: file_inode(&meta),
+        device,
+        inode,
     })
 }
 
@@ -2589,15 +2593,52 @@ fn file_inode(meta: &fs::Metadata) -> u64 {
 }
 
 #[cfg(windows)]
-fn file_device(meta: &fs::Metadata) -> u64 {
-    use std::os::windows::fs::MetadataExt;
-    meta.volume_serial_number().unwrap_or(0) as u64
-}
+fn file_identity(path: &Path) -> io::Result<(u64, u64)> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, CreateFileW, GetFileInformationByHandle,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
 
-#[cfg(windows)]
-fn file_inode(meta: &fs::Metadata) -> u64 {
-    use std::os::windows::fs::MetadataExt;
-    meta.file_index().unwrap_or(0)
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    let result = unsafe { GetFileInformationByHandle(handle, info.as_mut_ptr()) };
+    if result == 0 {
+        let error = io::Error::last_os_error();
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Err(error);
+    }
+    let info = unsafe { info.assume_init() };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+
+    let file_index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+    Ok((info.dwVolumeSerialNumber as u64, file_index))
 }
 
 #[cfg(windows)]
@@ -2605,11 +2646,10 @@ fn directory_owned_by_current_user_windows(app_dir: &Path) -> Option<bool> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+        TokenUser,
     };
-    use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
-    };
+    use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let wide: Vec<u16> = app_dir

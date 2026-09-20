@@ -40,6 +40,11 @@ import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
 import {
+  prepareBuiltInSkills,
+  refreshBuiltInClaudeSkillLinks,
+  resolveBundledSystemSkillsRoot,
+} from './built-in-skills.js';
+import {
   copyCodexAuthSnapshot,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
@@ -599,11 +604,42 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   private async runEnsureSharedGlobalSkills(): Promise<void> {
     try {
       const ownerId = getActiveAppSession().dataOwnerId;
-      const result = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
-        prepareSharedGlobalSkillLinks({
+      const result = await withSharedGlobalSkillProjectionMutation(ownerId, async () => {
+        // Bundle publication keeps every managed Agent link on one stable
+        // active pointer. The stable-owner boundary prevents a passive profile
+        // from participating in that transaction.
+        const preparedBuiltIns = await prepareBuiltInSkills({
+          bundledRoot: resolveBundledSystemSkillsRoot({
+            isPackaged: app.isPackaged,
+            appPath: app.getAppPath(),
+            resourcesPath: process.resourcesPath,
+          }),
+          userDataDir: app.getPath('userData'),
+          appDataDir: app.getPath('appData'),
+        });
+        const sharedProjection = await prepareSharedGlobalSkillLinks({
           assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-        }),
-      );
+        });
+        // Publication already established a usable Claude projection before
+        // switching the active pointer. Reconcile once more after the generic
+        // palette sync so a newly surfaced user-owned ~/.claude winner keeps
+        // precedence; atomic link replacement preserves the usable projection
+        // if this optional refinement fails.
+        const claudePaletteProjection = preparedBuiltIns.projectionSafe
+          ? await refreshBuiltInClaudeSkillLinks({
+              userDataDir: app.getPath('userData'),
+              appDataDir: app.getPath('appData'),
+              descriptors: preparedBuiltIns.descriptors,
+            })
+          : { warnings: [] };
+        return {
+          warnings: [
+            ...preparedBuiltIns.warnings,
+            ...sharedProjection.warnings,
+            ...claudePaletteProjection.warnings,
+          ],
+        };
+      });
       for (const warning of result.warnings) {
         assetPrepLog.warn('shared global skill warning', { warning });
       }

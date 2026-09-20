@@ -8,6 +8,7 @@
  */
 
 import type { AutoReviewUserIntent } from './shared/auto-review-decision.js';
+import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
 
 import type {
@@ -73,6 +74,7 @@ import type {
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
+  ListRuntimeSkillsOptions,
 } from '../types/palette.js';
 import type {
   ListCustomizationsOptions,
@@ -1882,6 +1884,8 @@ export interface StartSessionOptions {
    * 跟 model/effort 同语义: 启动时快照 + 由 setExtraDirs 热更新 closure。
    */
   extraDirs?: string[];
+  /** Current task library root, supplied only by the Host and included in extraDirs. */
+  [LIBRARY_READ_ROOT]?: string | null;
   /**
    * 附加可读写目录列表(绝对路径)。这是用户逐目录授予的会话级权限，不能从
    * extraDirs 自动推导；启动时快照，并可由 setWritableDirs 热更新。
@@ -1910,6 +1914,17 @@ export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
 /** Main-only selection from the original input for a retained-history continuation. */
 export const INHERITED_CAPABILITY_SELECTION = Symbol('cindy.inherited-capability-selection');
 
+/**
+ * Main-attested Skill winner for this exact send. Symbol keys cannot cross the
+ * Renderer/device-link boundary, so only a Host dispatcher can pin a path.
+ */
+export const PINNED_SKILL_INVOCATION = Symbol('cindy.pinned-skill-invocation');
+
+export interface PinnedSkillInvocation {
+  readonly name: string;
+  readonly path: string;
+}
+
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
@@ -1924,6 +1939,8 @@ export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
   readonly [INHERITED_CAPABILITY_SELECTION]?: string;
+  /** Exact Skill selected by a Host authorization check for this send. */
+  readonly [PINNED_SKILL_INVOCATION]?: PinnedSkillInvocation;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
@@ -2320,7 +2337,7 @@ export interface AgentSessionHandle {
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
    */
-  setExtraDirs?(dirs: string[]): Promise<void>;
+  setExtraDirs?(dirs: string[], libraryRoot?: string | null): Promise<void>;
 
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
   setWritableDirs?(dirs: string[]): Promise<void>;
@@ -2516,6 +2533,11 @@ export abstract class BaseAgent {
   async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
     void opts;
     return { skills: [] };
+  }
+
+  /** Runtime-accurate Skill discovery for host-side authorization checks. */
+  async listRuntimeSkills(opts: ListRuntimeSkillsOptions): Promise<ListAgentSkillsResult> {
+    return this.listAgentSkills(opts);
   }
 
   /**

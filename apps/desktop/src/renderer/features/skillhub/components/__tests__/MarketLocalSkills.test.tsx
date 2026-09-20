@@ -85,6 +85,15 @@ describe('market Skill details', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'skillhub.detail.uninstall' }));
     await waitFor(() => expect(mocks.uninstall).toHaveBeenCalledWith(local.absolutePath, local.id));
   });
+
+  it('disables Learn this skill when the built-in Learn Skill is disabled', async () => {
+    render(<MemoryRouter><SkillhubMarketPreviewPanel skill={market} open onClose={vi.fn()}
+      primaryAction="clone" onClone={vi.fn()} learnSkillEnabled={false} /></MemoryRouter>);
+
+    const learn = await screen.findByRole('button', { name: 'learn.hub.learnButton' });
+    expect((learn as HTMLButtonElement).disabled).toBe(true);
+    expect(learn.getAttribute('title')).toBe('learn.hub.disabledHint');
+  });
 });
 
 describe('market installed location matching', () => {

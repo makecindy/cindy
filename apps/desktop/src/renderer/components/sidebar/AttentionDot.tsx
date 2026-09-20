@@ -10,7 +10,8 @@
  *       不再区分颜色)。
  *     • awaiting   → TapTap 蓝 `--card-status-awaiting`:等待用户回复/选择(Claude
  *       权限 / AskUserQuestion / 计划审阅;Codex 无此态)。与灵动岛 needs-interaction 同色。
- *     • error      → 红 `--card-status-error`:任务出错(终止错误)。红专职表示出错。
+ *     • error      → 红 `--card-status-error`：运行历史等调用方的失败未读。
+ *       任务入口是否显示错误点由调用方决定。
  *   running 不走本组件:橙(Thinking Orange)专职表达"正在跑"(vendor mark 呼吸 /
  *   spinner),不再用于任何"完成"语义。不用黑/前景色。
  *

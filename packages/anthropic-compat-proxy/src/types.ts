@@ -16,6 +16,11 @@ import type { ServerResponse } from "node:http";
 import type { Transform } from "node:stream";
 
 import type { OutboundProxyResolver } from "./outbound-proxy.js";
+import type { OversizedBody } from './oversized-attachments.js';
+
+/** Capture request ownership synchronously; only overflow invokes the returned recovery. */
+export type OversizedRequestRecovery = (ctx: RequestTransformCtx) =>
+  ((body: OversizedBody, targetBytes: number) => Promise<Buffer | null>) | null;
 
 /**
  * A bounded, request-local compactor used only when the inbound body is over
@@ -274,12 +279,15 @@ export interface ProxyOptions {
   /** 监听 host,默认 127.0.0.1 (loopback only;不要改成 0.0.0.0) */
   host?: string;
   /**
-   * 可选: 单条请求 body 上限(字节),超限回 413。默认 32MB(Claude Code 场景足够)。
+   * 可选: 单条上游请求 body 上限(字节)。默认 32 MiB；无法恢复的超限请求回 413。
    * Codex 走 Responses API 每轮全量重发 thread 历史,长会话(贴图 base64 / 加密
    * reasoning blob)会越过默认值,desktop 侧对 codex proxy 显式调大。
-   * 注意: body 会整段缓冲进内存并 JSON.parse,该值同时就是单请求的内存 / 解析停顿预算。
+   * 正常 body 整段缓冲并 JSON.parse；启用附件恢复后，超限部分先落临时文件，
+   * 恢复到此上限以内才进入普通解析和转发。
    */
   maxRequestBodyBytes?: number;
+  /** Disk-backed, attachment-preserving recovery, only after the normal byte limit is exceeded. */
+  oversizedRequestRecovery?: OversizedRequestRecovery;
   /**
    * Optional compactor for bodies that exceed maxRequestBodyBytes.  Enabling
    * this also permits a bounded ingress window so the compactor can inspect a

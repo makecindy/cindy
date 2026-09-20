@@ -279,6 +279,8 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // 会话菜单重命名的「自动起名」:被控端读该会话素材重新生成标题(与桌面 Magic 按钮
   // 同一 handler;老被控端 CHANNEL_NOT_ALLOWED → 手机端展示失败提示,不阻塞手动改名)。
   'maker:regenerate-title',
+  // 输入框推荐提示词：由被控端读取真实会话素材生成。
+  'maker:predict-prompt',
   'local-db:messages:list',
   'local-db:messages:view',
   'local-db:messages:work-details',

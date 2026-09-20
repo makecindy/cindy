@@ -47,7 +47,6 @@ import {
 } from './sidebarRightStatus';
 import {
   resolveCollapsedAttention,
-  resolveCollapsedGroupHeaderSessionId,
   resolveCollapsedGroupRightStatus,
 } from './projectCollapsedAttention';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
@@ -72,6 +71,8 @@ export interface AutomationSessionGroupItemProps {
   /** 平铺列表由段头批量折叠状态机控制时传入；其它场景继续使用组件自身持久化状态。 */
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
+  /** 远程活动镜像提供的子运行折叠豁免集合。 */
+  foldExemptSessionIds?: ReadonlySet<string>;
   indented?: boolean;
   /**
    * 展开的子 SessionItem 行 hover 时右侧浮层展示的"项目来源"标签映射(sessionId →
@@ -118,6 +119,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     onScheduleAction,
     collapsed: controlledCollapsed,
     onCollapsedChange,
+    foldExemptSessionIds,
     indented = false,
     sourceLabelMap,
     matchMap,
@@ -189,10 +191,22 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
         runningSessionIds,
       ],
     );
-    const alertSessionIds = useMemo(
-      () => new Set(collapsedAttention.errorSessionIds),
-      [collapsedAttention],
-    );
+    // 收起组还需露出等待回复的旧运行,承接上层展开后下放的提示;组头仍代理最新运行。
+    const alertSessionIds = useMemo(() => {
+      const ids = new Set(collapsedAttention.errorSessionIds);
+      for (const session of group.sessions) {
+        const remotePhase = groupRemotePhases.get(session.id);
+        if (
+          remotePhase === 'needs-interaction' ||
+          (!remotePhase &&
+            notifications.has(session.id) &&
+            groupAttentionKinds.get(session.id) === 'awaiting')
+        ) {
+          ids.add(session.id);
+        }
+      }
+      return ids;
+    }, [collapsedAttention, group.sessions, groupRemotePhases, notifications, groupAttentionKinds]);
     // 与组头红/绿未读点同源:没有未读就不提供「标为已读」,避免空操作占菜单。
     const canMarkRead = collapsedAttention.tone != null;
     // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
@@ -209,6 +223,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       nowMs: Date.now(),
       collapsed,
       alertSessionIds,
+      foldExemptSessionIds,
     });
     // 轴 1 收起时只留组头 + 被提上来的告警行;展开时交给轴 2 的「前 5 / 显示全部」。
     // 两种形态都由 getAutomationGroupChildView 一处决定(见该函数的 ⚠️)。
@@ -425,14 +440,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       [countdownText, runCountText, stoppedText],
     );
 
-    // 点击空白行区域 = 点击标题。展开态打开最新一条;收起且整组是红时打开
-    // 贡献红点的那条。行内控件各自 stopPropagation,不会误触发。
+    // 点击空白行区域或标题都打开最新运行；旧错误通过独立子行打开。
+    // 行内控件各自 stopPropagation，不会误触发。
     const openLatestSession = () => {
-      const targetId = resolveCollapsedGroupHeaderSessionId({
-        collapsed,
-        latestSessionId,
-        attention: collapsedAttention,
-      });
+      const targetId = latestSessionId;
       if (!targetId) return;
       // 仅在展开 + 前 5 条态下冻结当前布局;收起态无子项可冻结。
       if (!collapsed && !showAll) freezeCurrentLayout(targetId);

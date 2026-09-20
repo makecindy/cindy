@@ -7,6 +7,12 @@ import {
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  it('gives predictions the host budget on both controllers without automatic link retries', () => {
+    expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'mobile')).toBe(45_000);
+    expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'desktop')).toBe(45_000);
+    expect(isPeerResetRetryableReadChannel('maker:predict-prompt')).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel('maker:predict-prompt')).toBe(false);
+  });
   it.each(['local-db:sessions:list', 'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:interrupted-pending', 'maker:list-active'])(
     'explicitly permits retrying completed %s reads', (channel) => {
       expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(true);

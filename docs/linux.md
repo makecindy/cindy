@@ -5,7 +5,7 @@
 | Environment | Installation | How updates are applied |
 | --- | --- | --- |
 | Ubuntu 22.04 / 24.04 | Official system `.deb` via apt | In-app download, explicit restart, polkit authorization |
-| Arch Linux / Omarchy (Hyprland), x86_64 | Managed user installation below | In-app download, explicit restart, atomic user-owned version switch |
+| Arch Linux / Omarchy (Hyprland), x86_64 | One-command managed user installation below | In-app download, explicit restart, atomic user-owned version switch |
 | Other glibc Linux desktops | Same user installer, with compatible runtime dependencies | Same transaction; not a claim that every distribution is tested |
 | pacman/AUR or another third-party package | That package manager | Use that package manager, not the in-app installer |
 
@@ -28,7 +28,7 @@ Keep the distribution fully updated (Arch does not support partial upgrades).
 Install the runtime libraries and integration tools if absent:
 
 ```sh
-sudo pacman -Syu --needed libarchive coreutils util-linux findutils procps-ng \
+sudo pacman -Syu --needed curl jq libarchive coreutils util-linux findutils procps-ng \
   gtk3 nss alsa-lib libxss libxtst libnotify libdrm mesa \
   gnome-keyring libsecret desktop-file-utils xdg-utils
 ```
@@ -51,7 +51,70 @@ Electron's selection. Desktop identity uses the first non-empty value from
 `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, and `DESKTOP_SESSION`.
 An explicit `--password-store` always wins and survives an in-app update restart.
 
-## Install
+## Install on Arch / Omarchy
+
+After the website operator publishes the bootstrap at the addresses below, quit
+Cindy fully and run the command shown on your download page as your desktop user,
+**without sudo**. The command downloads the latest stable `.deb` automatically;
+you do not need to download a package or a second script yourself.
+
+For [cindy.app](https://cindy.app/download/):
+
+```sh
+curl -fsSL https://hotfix.cindy.app/cindy/install-omarchy.sh | bash
+```
+
+For the Mainland China download page:
+
+```sh
+curl -fsSL https://hotfix.cindy.com.cn/cindy/install-omarchy.sh | bash -s -- --region cn
+```
+
+Both websites serve the **same** [bootstrap source](../apps/desktop/resources/linux/install-omarchy.sh).
+The download page supplies its build's region; the script does not infer it from
+IP address or locale. No region argument means `global`. Despite its name,
+`install-omarchy.sh` also supports ordinary Arch. Ubuntu, Debian and Mint exit
+before downloading or changing anything: keep using the website's `.deb` with
+apt. pacman/AUR-owned Cindy installations must use their package manager.
+
+The bootstrap reads `manifest-linux-x64.json` or `manifest-linux-arm64.json` from
+the selected region's existing CDN on **every invocation**. It pins the version,
+file, size and SHA-256 from that one response for the entire installation, checks
+the downloaded bytes, then checks the packaged build identity. It executes
+`install-user.sh` and `register-desktop.sh` taken from that verified `.deb`, never
+from Git HEAD. A newer release appearing during a download is picked up on the
+next run or by Cindy's normal in-app update. Beta/canary channels are not used.
+
+The menu entry and `cindy://` login links are registered automatically. Cindy is
+not launched automatically; open it from the menu or use the printed launcher.
+Missing dependencies produce a `pacman` command for you to run; the bootstrap
+does not install system packages or run sudo itself. A working, unlocked keyring
+and desktop session remain prerequisites.
+
+Repeating the command upgrades the managed installation or repairs its launcher
+and desktop registration if that exact package is already active. It rejects
+a release older than the installed stable version. Keep Cindy closed until the
+command finishes. Only one bootstrap per prefix can run at a time; a concurrent
+command exits with a busy message and can be retried after the first finishes.
+The persistent sibling `PREFIX.bootstrap.lock` serializes the bootstrap from
+manifest lookup through desktop registration; it does not replace the app
+updater's separate installation lock. Do not delete it while a command is running.
+The default prefix is
+`$HOME/.local/opt/cindy` (`cindy-cn` for a new Mainland China install); existing
+v1 Mainland China installs at `cindy` are reused when their marker matches. An
+unmarked directory, symlink or another region's installation is preserved: the
+bootstrap chooses a free `-managed` neighbor and reuses it on subsequent runs.
+A malformed installation marker is reported for repair, not overwritten.
+
+For a custom prefix, append `--prefix /absolute/path` using `bash -s --`, and
+supply the same prefix on later runs. An explicitly supplied occupied, unmarked
+prefix is rejected. Existing accounts and data stay in their original
+region-specific userData directory; see the migration notes below.
+
+### Manual / offline installation
+
+For other compatible glibc distributions, or to review and run the installer
+offline, the existing manual route remains available:
 
 1. Download the matching official Linux package from
    [Cindy downloads](https://cindy.app/download/). Obtain its **trusted SHA-256**
@@ -146,7 +209,9 @@ their disk usage and retain a suitable backup before cleaning them.
 
 ## Maintenance and validation
 
-- Forge writes build identity outside ASAR and bundles both Linux scripts.
+- Forge writes build identity outside ASAR and bundles the Linux resources
+  directory. The bootstrap is served separately for first installation; its
+  incidental packaged copy is not called by the app or updater.
   The in-app update helper embeds the same installer source at build time;
   it does not execute a mutable script from the installation directory.
 - Keep `install-user.sh`, the marker schema, `linuxInstallation.ts`, and
@@ -157,8 +222,57 @@ their disk usage and retain a suitable backup before cleaning them.
   activation, retry, stable desktop registration, and exact package ownership.
   They run on Linux with libarchive/binutils/desktop-file-utils/xdg-utils; all
   other platform-selection and UI tests also run on Windows.
+- The bootstrap's standalone native smoke uses the real two helper scripts
+  and small synthetic DEBs, with fake HTTP, distro identity and desktop MIME
+  writes. It covers region routing, two upgrades, repeated installation, legacy
+  paths, rejected distro/package ownership, bad metadata/digest/build identity,
+  older releases, concurrent installation/retry and truncated piped input. Run as a non-root Linux user with
+  the integration tools above, Node.js, `binutils` and ShellCheck installed:
+
+  ```sh
+  node --test apps/desktop/scripts/__tests__/install-omarchy.smoke.mjs
+  bash -n apps/desktop/resources/linux/install-omarchy.sh
+  shellcheck apps/desktop/resources/linux/install-omarchy.sh
+  ```
+
+  This standalone smoke is not part of `pnpm test:unit`; run it when changing
+  the bootstrap. It does not launch Electron or validate a live keyring.
 - Before broad rollout, test two **real release** upgrades on both a fresh and
   migrated Omarchy profile, cold-start login retention, locked-keyring recovery,
   deep links, notifications, file dialogs and Wayland screen sharing. Repeat
   Debian system updates and native GNOME/KDE login checks. Synthetic packages
   are not a substitute for these release acceptance checks.
+
+## Website / OSS publication
+
+1. Upload `apps/desktop/resources/linux/install-omarchy.sh`, with LF line endings
+   and no HTML wrapper, to `install-omarchy.sh` under **each** CDN's `/cindy`
+   directory. It must be publicly readable over HTTPS without authentication.
+   A private bucket is fine when the CDN provides public access. Serve it as
+   plain text with revalidation or a short cache lifetime. Uploading this entry
+   point does not require rebuilding the app; its prerequisite is a published
+   Linux package containing the v1 build identity and both helpers. If the
+   current release predates that support, publish a new Linux release first.
+2. Continue publishing each region's own official `.deb` and the existing
+   `manifest-linux-<arch>.json`. Its `app.version` and `app.installer` fields
+   (`file`, `sha256`, `size`) are the bootstrap's source of truth. `file` is a
+   relative path under the same regional CDN, as it is for in-app updates. Do
+   not put the other region's bytes under that path. No second latest-version
+   JSON or independently uploaded helper scripts are needed.
+3. Publish the immutable, versioned `.deb` first; check its public availability
+   and digest, then replace the corresponding stable manifest last. Invalidate
+   the manifest's CDN cache / require revalidation. A failed fetch or checksum
+   mismatch stops the bootstrap without activating a new installation. Keep
+   the preceding version's asset available for downloads already in flight.
+4. Keep Ubuntu / Debian's existing `.deb` button. For Arch / Omarchy, show the
+   matching one-line command above instead of two download buttons. Optionally
+   expose a website `/install-omarchy` redirect to its region's CDN script; the
+   Mainland China command must still pass `--region cn`.
+5. Subsequent app releases only need the usual `.deb` + manifest publication.
+   Re-upload the bootstrap when the bootstrap itself changes. The installed
+   app continues using the existing in-app update service and manifest format.
+
+The URLs above are publication targets, not a claim that the script is already
+online. Validate both commands on Arch / Omarchy after upload, including an
+existing installation. Publishing or changing website/OSS content is separate
+from checking this source into the client repository.

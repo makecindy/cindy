@@ -122,6 +122,7 @@ describe('automation-generated sessions', () => {
       'plugin',
       // /cindy-make 制作个人版创建的代码任务:按源码 workingDir 归入项目分组。
       'cindy-make',
+      'cindy-make-merge',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
@@ -595,6 +596,77 @@ describe('automation-generated sessions', () => {
     ).toEqual(['jira-3', 'jira-2', 'jira-1']);
   });
 
+  // review P2(#2938):上层聚合灯为远程活动点亮的子运行,不能藏在「显示全部」后。
+  // 远程 running / 未读不在本地 notifications / runningSessionIds 里,父层通过
+  // foldExemptSessionIds 并入,自动化组的展开态折叠也要认这份豁免。
+  it('keeps remote-lamp exempt automation children visible in the expanded fold', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
+    );
+    const group = { id: 'schedule:sched-remote', title: 'Remote', sessions, attentionSessionIds: [] };
+
+    const withoutExempt = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      showAll: false,
+    });
+    expect(withoutExempt.visibleSessions.map((session) => session.id)).not.toContain('run-6');
+
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      foldExemptSessionIds: new Set(['run-6']),
+      showAll: false,
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toContain('run-6');
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(1);
+  });
+
+  it('merges newly exempt remote runs into a frozen layout without moving its clicked rows', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      makeSession({ id: `run-${index}`, source: 'scheduler' }),
+    );
+    const group = { id: 'schedule:remote-frozen', title: 'Remote', sessions, attentionSessionIds: [] };
+    const options = { notifications: new Set<string>(), showAll: false,
+      frozenVisibleSessionIds: ['run-2', 'run-0'], activeSessionId: 'run-2' };
+    const before = getAutomationGroupChildView(group, options);
+    expect(before.visibleSessions.map((session) => session.id)).toEqual(['run-2', 'run-0']);
+    const view = getAutomationGroupChildView(group, {
+      ...options, foldExemptSessionIds: new Set(['run-0', 'run-6', 'other-group']),
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-2', 'run-0', 'run-6']);
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(4);
+    expect(view.totalCount).toBe(7);
+    expect(getAutomationGroupChildView(group, { ...options, showAll: true }).visibleSessions)
+      .toEqual(sessions);
+  });
+
+  it.each(['unread', 'running'])('keeps newly %s local runs visible in frozen layouts without remote exemptions', (activity) => {
+    const sessions = ['clicked', 'idle', 'active'].map((id) => makeSession({ id, source: 'scheduler' }));
+    const group = { id: 'schedule:local-frozen', title: 'Local', sessions, attentionSessionIds: [] };
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(activity === 'unread' ? ['clicked', 'active', 'other-group'] : []),
+      runningSessionIds: new Set(activity === 'running' ? ['clicked', 'active', 'other-group'] : []),
+      showAll: false, frozenVisibleSessionIds: ['clicked'],
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toEqual(['clicked', 'active']);
+    expect(view.hiddenCount).toBe(1);
+    expect(view.isOverflowing).toBe(true);
+  });
+
+  it('keeps overflow available when a frozen layout still hides idle runs', () => {
+    const sessions = ['visible', 'hidden'].map((id) => makeSession({ id, source: 'scheduler' }));
+    const group = { id: 'schedule:frozen-overflow', title: 'Frozen', sessions, attentionSessionIds: [] };
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(), showAll: false, frozenVisibleSessionIds: ['visible', 'removed'],
+    });
+    expect(view.visibleSessions).toEqual([sessions[0]]);
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(1);
+  });
+
   it('caps collapsed automation children at five and overflows the rest like the dialogue list', () => {
     const sessions = Array.from({ length: 7 }, (_, index) =>
       makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
@@ -794,7 +866,7 @@ describe('automation-generated sessions', () => {
         activeSessionId: 'manual',
         frozenVisibleSessionIds: ['jira-1'],
       }).map((session) => session.id),
-    ).toEqual(['jira-1']);
+    ).toEqual(['jira-1', 'jira-2']);
     expect(
       getAutomationGroupPrimarySession(group, new Set(['jira-2']), {
         preferredSessionId: 'jira-2',
@@ -808,7 +880,7 @@ describe('automation-generated sessions', () => {
         activeSessionId: 'jira-1',
         frozenVisibleSessionIds: ['jira-1'],
       }).map((session) => session.id),
-    ).toEqual(['jira-1']);
+    ).toEqual(['jira-1', 'jira-2']);
   });
 
   it('freezes the group primary while the clicked automation session is active', () => {
@@ -890,8 +962,8 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.resume');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.delete');
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
-    // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
-    expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
+    // 组头始终打开最新运行，错误运行通过独立子行打开。
+    expect(source).toContain('const targetId = latestSessionId;');
     expect(source).toContain('onSessionClick(targetId)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');

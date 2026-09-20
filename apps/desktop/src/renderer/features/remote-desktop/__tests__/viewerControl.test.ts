@@ -55,6 +55,7 @@ async function fixture(
     clipboard,
     close: async () => {},
     fullscreen: async () => {},
+    resize: async () => {},
     rendererReady: async () => {},
     presentationReady: async () => {},
     inputFocus: async () => {},
@@ -106,7 +107,7 @@ async function fixture(
     snapshot = state;
   });
   await vi.advanceTimersByTimeAsync(0);
-  return { control, heartbeat, clipboard, resolution };
+  return { control, heartbeat, clipboard, resolution, api };
 }
 const present = () => runtime.post?.({ type: 'streaming', epoch: 'lease' });
 const inputEnabled = () =>
@@ -293,4 +294,117 @@ it('does not re-enable input when a failed release is followed by another video 
   await vi.advanceTimersByTimeAsync(3000);
   expect(f.control).toHaveBeenLastCalledWith(false);
   expect(inputEnabled()).toBe(false);
+});
+
+it('coalesces rapid quality changes and waits for the current negotiation to present', async () => {
+  await fixture();
+  present();
+  runtime.receive.mockClear();
+  controller.settings({ bitrate: 2000000 });
+  controller.settings({ bitrate: 20000000 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
+  ).toHaveLength(1);
+  controller.settings({ bitrate: 8000000 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
+  ).toHaveLength(1);
+  present();
+  expect(
+    runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
+  ).toHaveLength(2);
+  expect(snapshot.settings.bitrate).toBe(8000000);
+});
+
+it('expires stale bitrate and latency samples', async () => {
+  await fixture();
+  present();
+  runtime.post?.({
+    type: 'network',
+    epoch: 'lease',
+    transport: 'direct',
+    bytesPerSecond: 2048,
+    latencyMs: 12,
+  });
+  expect(snapshot.receiveRate).toBe(2048);
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(snapshot.receiveRate).toBeNull();
+  expect(snapshot.latency).toBeNull();
+});
+
+it('does not let a fallback screenshot interrupt a pending video-settings negotiation', async () => {
+  await fixture();
+  runtime.post?.({ type: 'framePresented', epoch: 'lease' });
+  runtime.receive.mockClear();
+  controller.settings({ bitrate: 2000000 });
+  await vi.advanceTimersByTimeAsync(0);
+  controller.settings({ bitrate: 8000000 });
+  await vi.advanceTimersByTimeAsync(0);
+  runtime.post?.({ type: 'framePresented', epoch: 'lease' });
+  expect(
+    runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
+  ).toHaveLength(1);
+  runtime.post?.({ type: 'fallback', epoch: 'lease' });
+  expect(
+    runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
+  ).toHaveLength(2);
+});
+
+it.each(['enable', 'biometric'] as const)(
+  'retries the failed %s action rather than silently switching to automatic unlock',
+  async (action) => {
+    const { api } = await fixture();
+    present();
+    const credential = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('CREDENTIAL_UNAVAILABLE'))
+      .mockResolvedValue({
+        available: true,
+        autoUnlock: true,
+        biometricAvailable: true,
+        biometricVerification: true,
+      });
+    Object.assign(api, { credential });
+    await controller.credential(action, true);
+    controller.retryCredential();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(credential).toHaveBeenNthCalledWith(2, 1, action, true);
+    expect(snapshot.credentialNotice).toBeNull();
+  },
+);
+
+it('requests window content sized for the actual desktop plus toolbar', async () => {
+  const { api } = await fixture();
+  present();
+  const resize = vi.spyOn(api, 'resize');
+  controller.actualSize();
+  expect(runtime.receive).toHaveBeenCalledWith({ type: 'actualSize' });
+  expect(resize).toHaveBeenCalledWith(1, 1280, 780);
+});
+
+it('passes actual logical geometry to rendering and reacquires control after fitting', async () => {
+  const f = await fixture();
+  const original = f.api.request;
+  vi.spyOn(f.api, 'request').mockImplementation(async (generation, request) =>
+    request.op === 'viewerDisplay'
+      ? {
+          lease: 'lease',
+          controlling: false,
+          display: { id: 'viewer', width: 960, height: 710 },
+          viewerDisplayRequest: { width: request.width, height: request.height },
+        }
+      : original(generation, request),
+  );
+  present();
+  await controller.fitDisplay(1920, 1420);
+  expect(runtime.receive).toHaveBeenCalledWith({
+    type: 'videoSettings',
+    width: 960,
+    height: 710,
+    audio: false,
+  });
+  expect(snapshot.controlling).toBe(true);
+  expect(f.control).toHaveBeenLastCalledWith(true);
 });

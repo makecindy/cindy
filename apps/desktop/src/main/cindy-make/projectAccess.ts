@@ -3,13 +3,13 @@ import path from 'node:path';
 import { t } from '../i18n.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { cindyMakeManager } from './manager.js';
-import { isCindyMakeWorktreePath, makeSourceCheckoutPath, makeSourceRoot } from './sourcePaths.js';
+import { isCindyMakeManagedWorktreePath, makeSourceCheckoutPath, makeSourceRoot } from './sourcePaths.js';
 
 export async function assertCindyMakeWorkspace(
   userData: string,
   workingDir: string,
 ): Promise<void> {
-  if (!isCindyMakeWorktreePath(userData, workingDir)) return;
+  if (!isCindyMakeManagedWorktreePath(userData, workingDir)) return;
   try {
     const [directory, worktreeGit, sourceGit] = await Promise.all([
       lstat(workingDir),
@@ -32,7 +32,7 @@ export async function withCindyMakeProjectUse<T>(
   workingDir: string | null | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  if (!workingDir || !isCindyMakeWorktreePath(userData, workingDir)) return run();
+  if (!workingDir || !isCindyMakeManagedWorktreePath(userData, workingDir)) return run();
   try {
     return await cindyMakeManager.withProjectUse(makeSourceRoot(userData), async () => {
       await assertCindyMakeWorkspace(userData, workingDir);

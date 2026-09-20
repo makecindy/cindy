@@ -25,6 +25,7 @@ import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import fsSync from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -54,8 +55,12 @@ import { listCustomMcpRuntimeGenerations } from './custom-mcp-store.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { createCindyMakeMcpProvider } from '../cindy-make/mcpProvider.js';
+import { captureMakeHistoryStore } from '../cindy-make/historyOwner.js';
+import { captureMakeHistoryCompletion } from '../cindy-make/historyCapture.js';
+import { broadcastMakeRemoteChanged } from '../cindy-make/remoteBroadcast.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 import {
-  commitCindyMakeChanges,
+  collectCindyMakeChanges,
   createCindyMakeCompletionTracker,
 } from '../cindy-make/completion.js';
 import { isCindyMakeWorktreePath } from '../cindy-make/taskWorkspace.js';
@@ -338,7 +343,7 @@ import {
   getSessionProvider,
   hydrateSessionProvider,
 } from './session-provider-store.js';
-import { prepareLocalCodexCredentialModeSwitch } from './codex-credential-switch.js';
+import { CodexCredentialModeSwitchBusyError, prepareLocalCodexCredentialModeSwitch } from './codex-credential-switch.js';
 import { createDesktopOrcaTeamStoreAdapter } from './orcaTeamStoreAdapter.js';
 import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
 import {
@@ -930,6 +935,17 @@ export function getMaker(): Maker {
       pluginRegistry,
       resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
+      isCurrentLocalSessionInstance: (
+        sessionId: string,
+        sessionInstanceId: string | undefined,
+      ) => {
+        const session = _maker?.getSession(sessionId);
+        return Boolean(sessionInstanceId
+          && session
+          && session.instanceId === sessionInstanceId
+          && session.getStatus() === 'active'
+          && !session.remoteHostId);
+      },
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
       // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
@@ -1067,28 +1083,39 @@ export function getMaker(): Maker {
       collectFacts: async (sessionId) => {
         const userData = app.getPath('userData');
         const meta = await _maker?.getSessionMeta(sessionId);
-        // Only a worktree Cindy created for this task may be committed on the
-        // task's behalf; anything else is not a Cindy Make workspace.
+        // Finalize only the managed task branch; official/personal integration is a separate action.
         if (!meta?.workDir || !isCindyMakeWorktreePath(userData, meta.workDir)) {
           throw new Error('session working directory is not a Cindy Make worktree');
         }
         const env = await createMakeToolchainEnvironment(userData);
-        const title = meta.title?.trim();
         return cindyMakeManager.withProject(makeSourceRoot(userData), () =>
-          commitCindyMakeChanges(
-            (args) =>
-              runSourceGit(env.processEnvironment(), args, meta.workDir, AbortSignal.timeout(60_000)),
-            `Cindy Make: ${title || sessionId}`,
+          collectCindyMakeChanges(
+            (args, cwd, indexFile) =>
+              runSourceGit(
+                { ...env.processEnvironment(), ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) },
+                args, cwd, AbortSignal.timeout(60_000),
+              ),
+            userData,
+            meta.workDir,
           ),
         );
       },
-      persist: (sessionId, meta) =>
-        createMessage(sessionId, {
-          clientId: randomUUID(),
+      persist: async (sessionId, meta) => {
+        const scope = captureDataOwnerBroadcastScope();
+        const history = captureMakeHistoryStore();
+        const session = await _maker?.getSessionMeta(sessionId);
+        if (!isDataOwnerBroadcastScopeCurrent(scope)) return;
+        const clientId = randomUUID();
+        await createMessage(sessionId, {
+          clientId,
           role: 'assistant',
           content: '',
           agentMeta: { cindyMakeCompletion: meta },
-        }).then(() => undefined),
+        });
+        if (isDataOwnerBroadcastScopeCurrent(scope) && session?.workDir)
+          captureMakeHistoryCompletion(history, path.basename(session.workDir), clientId, meta);
+        broadcastMakeRemoteChanged(sessionId, scope);
+      },
       logger: desktopMakerLogger,
     });
     const cindyMakeProvider = createCindyMakeMcpProvider({
@@ -2908,12 +2935,15 @@ export async function waitForInitialCustomMcpRefresh(): Promise<void> {
  *
  * null-safe: getMaker() 还没构造过 codexAgent 时直接 no-op (此时也没进程要收)。
  */
-export async function prepareCodexForAuthModeChange(): Promise<void> {
+export async function prepareCodexForAuthModeChange(options: { allLocalHosts?: boolean } = {}): Promise<void> {
   if (_codexCredentialChangeGuard) {
     throw new Error('Codex credential mode change is already in progress');
   }
   const guard = _codexAgent
-    ? await _codexAgent.beginLocalHostCredentialChange('Codex desktop auth mode changed')
+    ? await _codexAgent.beginLocalHostCredentialChange('Codex desktop auth mode changed', {
+      ...options,
+      busyError: () => new CodexCredentialModeSwitchBusyError([]),
+    })
     : null;
   let prepared = false;
   // 软重启存活的本地 codex 会话。busy session 直接 fail closed，调用方据此避免先改持久化状态。
@@ -2936,6 +2966,9 @@ export async function prepareCodexForAuthModeChange(): Promise<void> {
       }
     }
     guard?.assertIdle();
+    // MCP invalidation can run before finalize (settings applyRuntime). Keep
+    // the reservation held, but retire every old bridge consumer first.
+    if (options.allLocalHosts) await guard?.retireActiveHost();
     _codexCredentialChangeGuard = guard;
     prepared = true;
   } finally {
@@ -2977,12 +3010,26 @@ export function cancelCodexAuthModeChange(): void {
   guard?.release();
 }
 
-export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
+export async function finalizeCodexAfterAuthModeChange(options: { prepareMcpEnvironment?: boolean } = {}): Promise<void> {
   // 只 dispose 本地 app-server, 让下一次本地 send 按新模式重新 spawn。
   // 远端 Codex host 使用远端 daemon / 远端用户配置,不能被本地 key / OAuth 变化误关。
   const guard = _codexCredentialChangeGuard;
-  _codexCredentialChangeGuard = null;
   const agent = _codexAgent;
+  try {
+    if (options.prepareMcpEnvironment && _mcpProviders.codex) {
+      // Bridge preparation does not acquire a host; model backfill below does.
+      await getCodexExtraSpawnConfig({ mcpProviders: _mcpProviders.codex, logger: desktopMakerLogger });
+    }
+  } catch (error) {
+    if (_codexCredentialChangeGuard === guard) _codexCredentialChangeGuard = null;
+    guard?.release();
+    throw error;
+  }
+  if (_codexCredentialChangeGuard !== guard || _codexAgent !== agent) {
+    guard?.release();
+    return;
+  }
+  _codexCredentialChangeGuard = null;
   if (guard || agent) {
     try {
       if (guard) {
@@ -3015,9 +3062,20 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
   await broadcastCodexAuthStateChanged();
 }
 
-export async function restartCodexAfterAuthModeChange(): Promise<void> {
-  await prepareCodexForAuthModeChange();
-  await finalizeCodexAfterAuthModeChange();
+export async function restartCodexAfterAuthModeChange(
+  refreshEnvironment?: () => Promise<void | boolean>,
+): Promise<void> {
+  await prepareCodexForAuthModeChange({ allLocalHosts: !!refreshEnvironment });
+  const ownedGuard = _codexCredentialChangeGuard;
+  try {
+    if (refreshEnvironment) {
+      if (await refreshEnvironment() === false) return;
+    }
+    if (_codexCredentialChangeGuard !== ownedGuard) return;
+    await finalizeCodexAfterAuthModeChange({ prepareMcpEnvironment: !!refreshEnvironment });
+  } finally {
+    if (_codexCredentialChangeGuard === ownedGuard) cancelCodexAuthModeChange();
+  }
 }
 
 /**

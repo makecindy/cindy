@@ -42,6 +42,7 @@ import {
   makerChatStore,
   type HistoryChatMessage,
 } from '@/lib/makerChatStore';
+import { isCindyMakeCompletionMessage, isCindyMakePreparationMessage } from '@/lib/cindyMakeComposer';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
@@ -83,7 +84,6 @@ import type {
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
-import { BrandLoadingMark } from '@/components/branding/BrandLoadingMark';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
@@ -243,8 +243,6 @@ export const RENDER_WINDOW_INITIAL_ITEMS = 80;
 export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 15;
 const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
-/** shell-first mount 的首帧空窗口。模块级常量保证引用稳定,不触发下游 memo 重算。 */
-const EMPTY_RENDER_ITEMS: RenderItem[] = [];
 
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
@@ -428,6 +426,9 @@ interface MessageStreamProps {
   /** Bot read position captured before entry marks the conversation read. */
   botUnreadBoundaryAt?: number | null;
   messages: ChatMessage[];
+  /** This task's preparation card is shown in the composer, including after history reload. */
+  cindyMakeSessionId?: string;
+  cindyMakeCompletionInComposer?: boolean;
   historyLoaded: boolean;
   /** The task shell remains, but all prior message content was intentionally cleared. */
   historyCleared?: boolean;
@@ -1497,6 +1498,9 @@ export function buildRenderItems(
     botSessionId?: string;
     /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
     markdownImageTargetCache?: MarkdownImageTargetCache;
+    /** Keep the stored preparation report out of its own task's visible timeline. */
+    cindyMakeSessionId?: string;
+    cindyMakeCompletionInComposer?: boolean;
   },
 ): {
   items: RenderItem[];
@@ -1504,7 +1508,12 @@ export function buildRenderItems(
 } {
   // Modal-only Cindy Make cards are transient UI state. They stay in the
   // shared store for the dialog to observe, but never enter the chat timeline.
-  allMessages = allMessages.filter((message) => message.systemCardData?.modalOnly !== true);
+  allMessages = allMessages.filter(
+    (message) =>
+      message.systemCardData?.modalOnly !== true &&
+      !(opts?.cindyMakeCompletionInComposer && isCindyMakeCompletionMessage(message)) &&
+      !isCindyMakePreparationMessage(message, opts?.cindyMakeSessionId),
+  );
   if (opts?.botSessionId) {
     allMessages = placeBotTaskCardsAfterIntroduction(allMessages, (message) => {
       if (message.role === 'user') {
@@ -2575,6 +2584,8 @@ export function MessageStream({
   simplifiedBotConversation = false,
   botUnreadBoundaryAt = null,
   messages,
+  cindyMakeSessionId,
+  cindyMakeCompletionInComposer,
   historyLoaded,
   historyCleared = false,
   taskUpdates,
@@ -2740,17 +2751,9 @@ export function MessageStream({
   const [firstVisibleItemKey, setFirstVisibleItemKey] = useState<string | null>(() => {
     return resolveRestoredRenderWindow(restoreSnapshotRef.current).anchor;
   });
-  // 两段式默认窗口的当前尺寸(FIRST_PAINT → 空闲期扩到 INITIAL)。只影响
-  // firstVisibleItemKey === null 的"默认窗口"分支;锚点窗口不看它。
-  // "默认窗口 + 非贴底"快照已在上面转为锚点窗口,不再进本分支;仅
-  // viewportTopKey 缺失的降级路径仍需全量 INITIAL 保命中率。
-  const [defaultWindowItems, setDefaultWindowItems] = useState(() => {
-    const snap = restoringRef.current ? restoreSnapshotRef.current : null;
-    if (snap && snap.windowAnchorKey === null && !snap.isNearBottom && !snap.viewportTopKey) {
-      return RENDER_WINDOW_INITIAL_ITEMS;
-    }
-    return RENDER_WINDOW_FIRST_PAINT_ITEMS;
-  });
+  // 默认尾窗首个提交就使用最终容量。若先画 15 条、再在空闲期扩到 80 条，
+  // 切换任务时会把更早消息插入视口上方并触发一次可见的滚动补偿。
+  const defaultWindowItems = RENDER_WINDOW_INITIAL_ITEMS;
   /**
    * 锚点窗口向后的 item 上界（render-window-bidirectional 要点 1）。
    * 仅 firstVisibleItemKey !== null 时生效；null（默认窗口）时不参与 slice。
@@ -2839,6 +2842,8 @@ export function MessageStream({
       workingDir,
       botSessionId: simplifiedBotConversation ? sessionId : undefined,
       markdownImageTargetCache: markdownImageTargetCacheRef.current,
+      cindyMakeSessionId,
+      cindyMakeCompletionInComposer,
     });
     if (historyView && historySnapshot?.ready) {
       const results = new Map(built.singleResultMap);
@@ -2861,6 +2866,8 @@ export function MessageStream({
             workingDir,
             botSessionId: simplifiedBotConversation ? sessionId : undefined,
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
+            cindyMakeSessionId,
+            cindyMakeCompletionInComposer,
           });
           for (const [key, value] of chunk.singleResultMap) results.set(key, value);
           return groupWorkRuns(chunk.items, isSessionStreaming);
@@ -2908,6 +2915,8 @@ export function MessageStream({
     };
   }, [
     displayMessages,
+    cindyMakeSessionId,
+    cindyMakeCompletionInComposer,
     historyView,
     historySnapshot,
     historyLiveMessages,
@@ -3020,39 +3029,19 @@ export function MessageStream({
    * `slice(startIdx, startIdx + anchoredForwardItems)`，配合向下扩窗（要点 1）。
    * 同时导出 startIdx 供 windowAtTop 判定使用（要点 2）。
    */
-  // ── 切换立即响应(shell-first mount)──
-  // 旧行为:点击切 session → 首个提交同步构建整个消息树 → 期间界面冻结(压测
-  // session 实测 ~380ms 无响应),体感是"卡住才切过去"。
-  // 新行为:首个提交只渲染外壳(标题栏/输入框/空消息区 + spinner),消息树推迟
-  // 到外壳绘制后的下一帧 —— 点击零冻结,先切进去再看到内容浮现(对齐 Codex
-  // Desktop 的加载体感)。挂载后的滚动定位不受影响:pin-to-bottom 与 applyRestore
-  // 都由 ResizeObserver 在内容真正挂载时驱动,首帧空内容它们自然 no-op。
-  // 各 auto-fill effect 均有 `visibleRenderItems.length === 0` 早退守卫,空帧不误触发。
-  // Warm history already has a bounded first-paint window. An empty shell adds
-  // another render and frame to every switch without doing any useful loading.
-  const [firstMountDeferred, setFirstMountDeferred] = useState(() => !historyLoaded);
-  useEffect(() => {
-    if (!firstMountDeferred) return;
-    const raf = requestAnimationFrame(() => setFirstMountDeferred(false));
-    return () => cancelAnimationFrame(raf);
-  }, [firstMountDeferred]);
+
+  // ── 切换首帧 ──
+  // 首个提交直接渲染有界的首屏窗口，保留首屏成本控制；滚动锚点恢复仍由
+  // layout effect 和 ResizeObserver 处理。
+
 
   const { items: visibleRenderItems, startIdx: visibleStartIdx } = useMemo(() => {
-    if (firstMountDeferred) return { items: EMPTY_RENDER_ITEMS, startIdx: 0 };
     if (allRenderItems.length === 0) return { items: allRenderItems, startIdx: 0 };
     if (firstVisibleItemKey === null) {
-      // 首帧阶段(defaultWindowItems 还没被空闲扩窗抬到 INITIAL)叠加内容预算:
-      // 条数上限防"多而小",字节预算防"少而大"(单条 12KB 表格 × 15 条 = ~380ms)。
-      // 顺序:先 snap(边界吸附向前扩)再按预算收 —— 预算是硬上界,否则 snap 会把
-      // 刚裁掉的大条目又吸回来。预算收窄后的起点可能不在 turn 边界上(顶部短暂出现
-      // 无上下文卡片),空闲扩窗(→INITIAL)会在 ~1s 内带着正常 snap 重建窗口。
+      // 默认尾窗固定使用 INITIAL 容量；字节预算只在明确的首屏窗口策略中使用。
       const countStartIdx = Math.max(0, allRenderItems.length - defaultWindowItems);
       const snappedStartIdx = snapRenderWindowStartIdx(allRenderItems, countStartIdx);
-      const defaultStartIdx =
-        defaultWindowItems < RENDER_WINDOW_INITIAL_ITEMS
-          ? clampTailWindowStartByBudget(allRenderItems, snappedStartIdx)
-          : snappedStartIdx;
-      return { items: allRenderItems.slice(defaultStartIdx), startIdx: defaultStartIdx };
+      return { items: allRenderItems.slice(snappedStartIdx), startIdx: snappedStartIdx };
     }
     let idx = allRenderItems.findIndex((it) => it.key === firstVisibleItemKey);
     if (idx < 0) {
@@ -3084,41 +3073,7 @@ export function MessageStream({
     firstVisibleItemKey,
     defaultWindowItems,
     anchoredForwardItems,
-    firstMountDeferred,
   ]);
-
-  // 两段式默认窗口第二段:首帧(非空)提交后,空闲期把默认窗口扩回 INITIAL。
-  // 只在仍钉底时扩(prepend 在视口上方,pin-to-bottom layout effect 同帧重钉,
-  // 无跳动);已向上滚离底部 / 已切到锚点窗口的,交给既有 expandWindow 路径。
-  // requestIdleCallback 带 1s timeout 兜底;测试等无 ric 环境退化为 setTimeout。
-  useEffect(() => {
-    if (firstVisibleItemKey !== null) return;
-    if (visibleRenderItems.length === 0) return;
-    // 不能只比较 allItems <= defaultWindowItems。短会话的声明窗口容量可能已
-    // 覆盖全量，但首帧字节预算仍会把实际 DOM 起点向后裁；此时 visible.length
-    // 才是窗口是否完整的事实源。只要实际可见数 < 全量，就要在空闲期 boost，
-    // 将 defaultWindowItems 升到 INITIAL（预算仅在 <INITIAL 阶段生效），恢复全部 item。
-    if (
-      !shouldBoostDefaultWindow({
-        allItemCount: allRenderItems.length,
-        visibleItemCount: visibleRenderItems.length,
-        defaultWindowItems,
-      })
-    ) {
-      return;
-    }
-    const boost = () => {
-      if (isNearBottomRef.current) {
-        setDefaultWindowItems(RENDER_WINDOW_INITIAL_ITEMS);
-      }
-    };
-    if (typeof window.requestIdleCallback === 'function') {
-      const id = window.requestIdleCallback(boost, { timeout: 1000 });
-      return () => window.cancelIdleCallback(id);
-    }
-    const id = window.setTimeout(boost, 200);
-    return () => window.clearTimeout(id);
-  }, [defaultWindowItems, firstVisibleItemKey, visibleRenderItems.length, allRenderItems.length]);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
   const visibleRenderItemsRef = useRef(visibleRenderItems);
@@ -3133,16 +3088,18 @@ export function MessageStream({
     const cTop = container.getBoundingClientRect().top;
     const children = items.children;
     for (let i = 0; i < children.length; i++) {
-      const rect = (children[i] as HTMLElement).getBoundingClientRect();
+      const itemElement = children[i] as HTMLElement;
+      const rect = itemElement.getBoundingClientRect();
       // 第一条「底边还在容器顶边下方」的 item = 正好跨过视口顶边的那条。
       if (rect.height > 0 && rect.bottom - cTop > 0) {
         const key = children[i].getAttribute('data-render-item-key');
         if (!key) return null;
         const snapshot: ViewportTopSnapshot = {
           viewportTopKey: key,
+          // Negative offsets retain top padding or a gap above the first visible
+          // row; clamping to zero pulls that row to the viewport edge on prepend.
           offset: cTop - rect.top,
         };
-        const itemElement = children[i] as HTMLElement;
         const childAnchor = pickIntersectingChildAnchor(
           Array.from(
             [itemElement, ...itemElement.querySelectorAll<HTMLElement>('[data-message-client-id]')],
@@ -3175,7 +3132,24 @@ export function MessageStream({
   }, []);
   // 量测并写入「删除前快照」，返回结果供同帧复用。用户滚动、非贴底程序化跳转与
   // focus 落定经它刷新；贴底态由 auto-follow 接管，无需快照。
-  const refreshViewportAnchor = useCallback((): ViewportTopSnapshot | null => {
+  const refreshViewportAnchor = useCallback((preserveAligned = false): ViewportTopSnapshot | null => {
+    const previous = lastViewportTopRef.current;
+    const container = scrollRef.current;
+    if (preserveAligned && previous && container) {
+      const target = previous.messageClientId
+        ? queryMessageElement(container, previous.messageClientId)
+        : findRenderItemElement(itemsRef.current, previous.viewportTopKey);
+      const rect = target?.getBoundingClientRect();
+      const viewport = container.getBoundingClientRect();
+      const offset = previous.messageClientId ? previous.messageOffset ?? 0 : previous.offset;
+      // Native anchoring also emits scroll events during prepend/size settling.
+      // An already aligned reading row must not be replaced by a new offscreen
+      // row whose content-visibility estimate temporarily crosses the top edge.
+      if (
+        rect && rect.height > 0 && rect.bottom > viewport.top && rect.top < viewport.bottom
+        && viewportAnchorCorrection(viewport.top, rect.top, offset) === 0
+      ) return previous;
+    }
     const measured = measureViewportTop();
     if (measured) lastViewportTopRef.current = measured;
     return measured;
@@ -3819,7 +3793,7 @@ export function MessageStream({
   // not first display the clamped position and then expand on a later frame.
   // Reuse the store's bounded, epoch-guarded local/remote history lookup.
   useLayoutEffect(() => {
-    if (!restoringRef.current || !historyLoaded || firstMountDeferred) return;
+    if (!restoringRef.current || !historyLoaded) return;
     if (restoreCancelledRef.current) {
       restoringRef.current = false;
       return;
@@ -3866,7 +3840,6 @@ export function MessageStream({
     visibleRenderItems,
     historyLoaded,
     historyCleared,
-    firstMountDeferred,
     sessionId,
     restoreRevision,
   ]);
@@ -3878,7 +3851,7 @@ export function MessageStream({
     (includeHeights = false) => {
       // Do not overwrite the reading position with the temporary tail while loading it.
       if (restoringRef.current && restoreLoadRef.current !== 'settled') return;
-      const measured = refreshViewportAnchor();
+      const measured = refreshViewportAnchor(true);
       if (!sessionId || !measured) return;
       const items = itemsRef.current;
       let itemHeights: SessionScrollSnapshot['itemHeights'];
@@ -4300,7 +4273,7 @@ export function MessageStream({
       if (chipJumpGenerationRef.current !== null) return;
       if (!programmaticScrollRef.current) return;
       const generation = programmaticScrollGenerationRef.current;
-      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor(true);
     };
     root.addEventListener('scrollend', onScrollEnd);
     return () => root.removeEventListener('scrollend', onScrollEnd);
@@ -5086,7 +5059,9 @@ export function MessageStream({
         const rebased: ViewportTopSnapshot = {
           ...snapshot,
           viewportTopKey: recoveredKey,
-          offset: 0,
+          // A prepended page can rename a surviving work group. Preserve its
+          // measured offset instead of treating it as a newly selected row.
+          offset: snapshot.offset,
           ...(recoverableMessageExists
             ? {
                 messageClientId: recoverableMessageClientId,
@@ -5096,7 +5071,7 @@ export function MessageStream({
         };
         lastViewportTopRef.current = rebased;
         if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) {
-          restoreViewportSnapshot(rebased, 0);
+          restoreViewportSnapshot(rebased);
         }
       }
       if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) return;
@@ -5759,10 +5734,6 @@ export function MessageStream({
       onInlinePlanVisibilityChange(null);
       return;
     }
-    // shell-first 的首帧故意不挂消息树。此时保持“未知”而不是误报不可见，避免
-    // 品牌 loading 帧里 composer 胶囊抢先闪一下。
-    if (firstMountDeferred) return;
-
     const root = scrollRef.current;
     const card = root
       ? [...root.querySelectorAll<HTMLElement>('[data-inline-plan-key]')].find(
@@ -5816,7 +5787,6 @@ export function MessageStream({
       resizeObserver?.disconnect();
     };
   }, [
-    firstMountDeferred,
     latestInlinePlanKey,
     latestInlinePlanRendered,
     onInlinePlanVisibilityChange,
@@ -5844,16 +5814,6 @@ export function MessageStream({
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <ImageGalleryContext.Provider value={sessionImageSrcs}>
           <div className="relative h-full w-full">
-            {/* shell-first mount:外壳帧(消息树推迟一帧挂载)的品牌加载指示。
-                挂在滚动容器外的 overlay 层,视口正中(absolute inset-0 center),
-                不随滚动内容移动,也不参与 contentH / pin-to-bottom 计算。
-                只在确有内容待挂时挂载;指示器自带延迟浮现(CSS animation-delay)
-                —— 小会话下一帧就挂载完,指示器从未可见,不闪 loading。 */}
-            {firstMountDeferred && messages.length > 0 && (
-              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-                <BrandLoadingMark />
-              </div>
-            )}
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
@@ -5878,7 +5838,7 @@ export function MessageStream({
             >
               <div
                 ref={contentRef}
-                className="mx-auto w-full pt-7"
+                className="relative mx-auto w-full pt-7"
                 style={{
                   paddingBottom: resolvedBottomPadding,
                   // Match the input overlay's width so chat content + input box
@@ -5888,9 +5848,10 @@ export function MessageStream({
                 }}
               >
                 {historyLoaded && historyCleared && <HistoryClearedMarker />}
-                {/* F-SYNC-2: Loading spinner at top */}
+                {/* Keep pagination feedback inside the existing top padding so
+                    toggling it never changes message positions or scrollHeight. */}
                 {isLoadingMore && (
-                  <div className="flex items-center justify-center pb-4">
+                  <div className="pointer-events-none absolute inset-x-0 top-1 flex items-center justify-center">
                     <Spinner size={20} className="text-[var(--msg-tool-text)]" />
                   </div>
                 )}

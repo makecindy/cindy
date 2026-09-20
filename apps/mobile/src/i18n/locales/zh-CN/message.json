@@ -1,4 +1,13 @@
 {
+  "pluginInvocation": {
+    "listSeparator": "、",
+    "status": {
+      "running": "调用中…",
+      "called": "已调用",
+      "done": "已完成",
+      "selected": "已选择"
+    }
+  },
   "renderer": {
     "moreActions": "更多消息操作",
     "previousQuestionJump": "跳到上一条提问：{{preview}}",

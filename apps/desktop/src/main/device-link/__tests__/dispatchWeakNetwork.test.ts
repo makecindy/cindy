@@ -59,6 +59,7 @@ import {
   wireInboundDispatch,
 } from '../dispatch';
 import * as subscriptions from '../subscriptions';
+import { remoteDesktop } from '../../remote-desktop';
 
 function mkClient(
   over: Partial<{
@@ -232,6 +233,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
@@ -649,6 +651,8 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
 
 describe('[6] active controller 生命周期与故障半径', () => {
   it('真实双 peer 链路中 A 的 DEVICE_OFFLINE 不清 B，B 的在途请求仍能完成', async () => {
+    const lost = vi.spyOn(remoteDesktop, 'signalingLost');
+    const stop = vi.spyOn(remoteDesktop, 'stop');
     vi.useRealTimers();
     const relay = new DispatchTestRelay();
     const target = makeDispatchTestClient(relay, 'target');
@@ -697,9 +701,14 @@ describe('[6] active controller 生命周期与故障半径', () => {
     // 模拟 relay 对 target→A 的真实路由错误:DeviceLinkClient 先发 typed offline,
     // 再由 host 接入唯一的 deactivateController 状态转换。
     relay.offline.add('ctrl-a');
+    lost.mockClear();
+    stop.mockClear();
     target.sendInvokeResult('ctrl-a', 'offline-probe', { ok: true, result: null });
 
     expect(routeChanges).toContain('ctrl-a:offline');
+    expect(lost).toHaveBeenCalledWith('ctrl-a');
+    expect(lost).not.toHaveBeenCalledWith('ctrl-b');
+    expect(stop).not.toHaveBeenCalledWith('ctrl-b');
     expect(__testing.getActiveControllers().map((controller) => controller.deviceId).sort()).toEqual([
       'ctrl-b',
     ]);

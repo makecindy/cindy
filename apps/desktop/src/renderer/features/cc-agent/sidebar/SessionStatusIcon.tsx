@@ -8,7 +8,7 @@
  *   - orca-lead(协同)   → UsersRound（与「+」菜单协同项同款）
  *   - 其余              → VendorIcon(Claude Code 像素脸 / Codex CLI 花形+`>_`)
  *   running:图标切 Thinking Orange + 呼吸;需关注:右上叠状态点(全端统一色表:
- *   error 红 / awaiting TapTap 蓝 / 完成未读绿,tone 按行精准订阅 attention store);
+ *   awaiting TapTap 蓝 / 完成未读绿,tone 按行精准订阅 attention store);
  *   有未发送内容(草稿/暂停队列)且未选中:右下叠铅笔。
  * idle 时图标照常显示——让用户一眼看出"这是哪一个 agent"。
  *
@@ -26,6 +26,7 @@ import { useGhostSessionBusy } from '@/cindy-brain/ghostSessionActivityStore';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import { resolveSidebarAttentionTone } from './sidebarRightStatus';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { useCindyMakePreparing } from './useCindyMakePreparing';
 
@@ -78,18 +79,15 @@ export function SessionStatusIcon({
   const vendor = agentKindToVendor(session.agentKind);
   const isOrcaLead = isOrcaLeadSession(session);
   const isArchived = session.status === 'archived';
-  // 角标 tone:error(含定时任务失败的 urgency context)红 > awaiting 蓝 > 完成未读绿。
+  // 任务入口只显示 awaiting 蓝 / 完成未读绿，旧错误不能遮住待回复。
   // 两个 hook 都是按 sessionId 的 primitive 精准订阅(性能不变量,见 SessionItem 头注),
   // 本组件也被逐行挂载,禁止退回整表订阅。
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
-  const attentionTone =
-    attentionToneOverride ??
-    (isUrgentFromContext || attentionKind === 'error'
-      ? 'error'
-      : attentionKind === 'awaiting'
-        ? 'awaiting'
-        : 'done');
+  const attentionTone = resolveSidebarAttentionTone(
+    attentionToneOverride ?? attentionKind,
+    isUrgentFromContext,
+  );
   // 有"未发送内容"(输入框草稿 或 被暂停的待发队列)且当前未选中 → 右下铅笔提示。
   const hasDraft = useComposerDraftPresence(session.id);
   const hasPausedQueue = useSessionPausedQueue(session.id);
@@ -150,7 +148,7 @@ export function SessionStatusIcon({
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
         />
       )}
-      {showAttentionDot && hasAttentionNotification && (
+      {showAttentionDot && hasAttentionNotification && attentionTone && (
         <AttentionDot size={6} tone={attentionTone} className="absolute -top-0.5 -right-0.5" />
       )}
       {showDraftIndicator && (

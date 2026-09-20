@@ -18,6 +18,7 @@ export function SidebarRightStatusIndicator({
   className?: string;
 }) {
   const { t } = useTranslation();
+  if (kind === 'error') return null;
 
   if (kind === 'running') {
     return (
@@ -38,17 +39,10 @@ export function SidebarRightStatusIndicator({
   }
 
   const label =
-    kind === 'error'
-      ? t('ccAgent.sidebar.status.error', 'Failed — click to view')
-      : kind === 'awaiting'
-        ? t('ccAgent.sidebar.status.needsAttention', 'Awaiting your input')
-        : t('ccAgent.sidebar.status.done', 'Completed — click to view');
-  const color =
-    kind === 'error'
-      ? 'var(--card-status-error)'
-      : kind === 'awaiting'
-        ? 'var(--card-status-awaiting)'
-        : 'var(--card-status-done)';
+    kind === 'awaiting'
+      ? t('ccAgent.sidebar.status.needsAttention', 'Awaiting your input')
+      : t('ccAgent.sidebar.status.done', 'Completed — click to view');
+  const color = kind === 'awaiting' ? 'var(--card-status-awaiting)' : 'var(--card-status-done)';
 
   return (
     <span

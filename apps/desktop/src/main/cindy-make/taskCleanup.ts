@@ -1,5 +1,7 @@
-import { lstat, realpath, rm } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
+import originalFs from 'original-fs';
 import path from 'node:path';
+import { contentRef, snapshotContent, taskContentRef } from './sourceContent.js';
 import { runSourceGit } from './sourceGit.js';
 import type { CindyMakeTaskError } from '../../shared/cindyMakeDoctor.js';
 import {
@@ -11,7 +13,7 @@ import {
   makeWorktreesRoot,
 } from './sourcePaths.js';
 
-export type MakeTaskAction = 'finish' | 'delete';
+export type MakeTaskAction = 'end' | 'finish' | 'delete';
 export type MakeTaskError = CindyMakeTaskError;
 export function taskError(code: MakeTaskError): Error & { code: MakeTaskError } {
   return Object.assign(new Error('Cindy Make task ' + code), { code });
@@ -31,7 +33,7 @@ async function exists(target: string): Promise<boolean> {
 export async function manageCindyMakeWorkspace(
   userData: string,
   runId: string,
-  action: MakeTaskAction | 'archive',
+  action: MakeTaskAction | 'archive' | 'inspect',
   env: NodeJS.ProcessEnv,
   signal: AbortSignal,
   options: {
@@ -43,13 +45,21 @@ export async function manageCindyMakeWorkspace(
   } = {},
 ): Promise<boolean> {
   if (!CINDY_MAKE_RUN_ID_PATTERN.test(runId)) throw taskError('unavailable');
+  // Archiving alone never authorizes deleting a working directory.
+  if (action === 'archive') return false;
+  const discard = action === 'delete' || action === 'end';
   const source = makeSourceCheckoutPath(userData);
   const target = makeTaskWorktreePath(userData, runId);
   const branch = makeTaskBranch(runId);
   const check = options.checkCurrent ?? (() => {});
-  const git = async (args: string[], cwd = source) => {
+  const git = async (args: string[], cwd = source, indexFile?: string) => {
     check();
-    return (options.git ?? runSourceGit)(env, args, cwd, signal);
+    return (options.git ?? runSourceGit)(
+      { ...env, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) },
+      args,
+      cwd,
+      signal,
+    );
   };
   const targetExists = await exists(target);
   const samePath = (left: string, right: string) =>
@@ -75,12 +85,13 @@ export async function manageCindyMakeWorkspace(
   };
   await assertManagedPaths();
   if (!(await exists(path.join(source, '.git')))) {
-    if (!targetExists && action === 'delete') return true;
+    if (!targetExists && discard) return true;
     throw taskError('unavailable');
   }
   const gitDirectory = await lstat(path.join(source, '.git'));
   if (!gitDirectory.isDirectory() || gitDirectory.isSymbolicLink()) throw taskError('unavailable');
   const branchExists = !!(await git(['branch', '--list', branch])).trim();
+  if (action === 'inspect' && (!targetExists || !branchExists)) throw taskError('unavailable');
   if (!targetExists && !branchExists) return true;
   const registrations = async () =>
     (await git(['worktree', 'list', '--porcelain', '-z'])).split('\0\0').map((entry) => {
@@ -95,8 +106,7 @@ export async function manageCindyMakeWorkspace(
     options.preparedWorkspace?.branch === branch &&
     samePath(options.preparedWorkspace.path, target);
   const canRemoveResidue = async () => {
-    if (action !== 'delete' || !verifiedWorkspace || !branchExists || (await exists(gitMarker)))
-      return false;
+    if (!discard || !verifiedWorkspace || !branchExists || (await exists(gitMarker))) return false;
     return !(await registrations()).some(
       (entry) =>
         (entry.directory && samePath(entry.directory, target)) ||
@@ -124,57 +134,48 @@ export async function manageCindyMakeWorkspace(
       verifiedWorkspace = true;
     }
   }
-  if (action !== 'delete') {
+  let integrated: string | undefined;
+  const integratedFilesMatch = async () => {
+    if (!integrated || (await snapshotContent(git, target)) !== integrated) return false;
+    const index = (await git(['write-tree'], target)).trim();
+    const headTree = (await git(['rev-parse', 'HEAD^{tree}'], target)).trim();
+    // Preserve staged-only edits that are absent from the integrated file tree.
+    return index === headTree || index === integrated;
+  };
+  if (!discard) {
     if (!branchExists) throw taskError('unavailable');
-    if (
-      targetExists &&
-      (await git(['status', '--porcelain', '--untracked-files=all'], target)).trim()
-    ) {
-      if (action === 'archive') return false;
-      throw taskError('dirty');
-    }
-    const head = (await git(['rev-parse', branch])).trim();
-    if (action === 'archive' && (!options.baseCommit || head === options.baseCommit)) return false;
-    let merged = false;
-    try {
-      await git(['merge-base', '--is-ancestor', branch, CINDY_PERSONAL_BRANCH]);
-      merged = true;
-    } catch (error) {
-      if ((error as { exitCode?: number }).exitCode !== 1) throw error;
-    }
-    if (!merged && action === 'archive') return false;
-    if (!merged) {
-      if (await exists(path.join(source, '.git', 'MERGE_HEAD'))) throw taskError('dirty');
+    integrated = targetExists
+      ? await contentRef(git, source, taskContentRef(runId, 'integrated'))
+      : undefined;
+    if (integrated) {
+      if (!(await integratedFilesMatch())) return false;
+    } else {
       if (
-        (await git(['status', '--porcelain', '--untracked-files=all'])).trim() ||
-        (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim() !== CINDY_PERSONAL_BRANCH
+        targetExists &&
+        (await git(['status', '--porcelain', '--untracked-files=all'], target)).trim()
       )
-        throw taskError('dirty');
+        return false;
       try {
-        await git([
-          '-c',
-          'user.name=Cindy Make',
-          '-c',
-          'user.email=cindy-make@localhost',
-          'merge',
-          '--no-edit',
-          '--signoff',
-          branch,
-        ]);
-      } catch {
-        // The source was clean before our merge. Abort only a merge that Git
-        // actually started; a pre-existing merge is never touched.
-        if (await exists(path.join(source, '.git', 'MERGE_HEAD'))) await git(['merge', '--abort']);
-        throw taskError('conflict');
+        await git(['merge-base', '--is-ancestor', branch, CINDY_PERSONAL_BRANCH]);
+      } catch (error) {
+        if ((error as { exitCode?: number }).exitCode === 1) return false;
+        throw error;
       }
     }
-    // Recheck after merge: external edits must not be discarded by --force.
+    if (action === 'inspect') return true;
+    // Closing a task never integrates files or creates commits. Only reclaim proven content.
     if (
       targetExists &&
-      (await git(['status', '--porcelain', '--untracked-files=all'], target)).trim()
+      (integrated
+        ? !(await integratedFilesMatch())
+        : (await git(['status', '--porcelain', '--untracked-files=all'], target)).trim())
     )
       throw taskError('dirty');
+    if (integrated)
+      await git(['update-ref', 'refs/cindy-make/tasks/' + runId + '/history', branch]);
   }
+  if (action === 'end' && branchExists)
+    await git(['update-ref', 'refs/cindy-make/tasks/' + runId + '/history', branch]);
   if (targetExists && registered) {
     try {
       // pnpm paths routinely exceed Win32's legacy MAX_PATH.
@@ -191,7 +192,14 @@ export async function manageCindyMakeWorkspace(
     check();
     signal.throwIfAborted();
     try {
-      await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      // Electron's patched fs opens nested ASARs (including default_app.asar),
+      // locking the files it is trying to remove on Windows. Delete physical files.
+      await originalFs.promises.rm(target, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(code ?? ''))
@@ -200,6 +208,6 @@ export async function manageCindyMakeWorkspace(
     }
   }
   if (!targetExists) await git(['worktree', 'prune']);
-  if (branchExists) await git(['branch', action === 'delete' ? '-D' : '-d', branch]);
+  if (branchExists) await git(['branch', discard || integrated ? '-D' : '-d', branch]);
   return true;
 }

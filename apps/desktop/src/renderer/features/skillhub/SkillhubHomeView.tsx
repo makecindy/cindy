@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -29,6 +31,10 @@ import {
   PluginManagementPage,
 } from '@/features/plugin/PluginManagementLayout';
 import { buildLocalSkillRoute, findLocalSkillByPath } from './lib/localRoutes';
+import {
+  builtInSkillDescriptionKey,
+  prioritizeCindyBuiltInSkills,
+} from './lib/builtInSkillPresentation';
 import { refresh as refreshSkillhub, useSkillhub } from './hooks/useSkillhub';
 import {
   MARKET_PAGE_SIZE,
@@ -52,7 +58,7 @@ import { InstallTargetPicker, type InstallTargetSkill } from './components/Insta
 import { SkillCategoryFilterBar } from './components/SkillCategoryFilterBar';
 import { HomeMarketCard } from './components/HomeMarketCard';
 import { SkillIcon } from './components/SkillIcon';
-import { SkillTagList } from './components/SkillTagList';
+import { OfficialSkillBadge } from './components/OfficialSkillBadge';
 import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 
@@ -76,7 +82,7 @@ export function SkillhubHomeView({
 } = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { skills, projects, bootstrapped, syncResults } = useSkillhub();
+  const { skills, projects, bootstrapped, learnSkillEnabled, syncResults } = useSkillhub();
   const [query, setQuery] = useState('');
   const normalizedQuery = query.trim().toLocaleLowerCase();
 
@@ -142,15 +148,22 @@ export function SkillhubHomeView({
   // 本地技能:global 一组 + 每个 project 一组(displayName 取自 store.projects,兜底 basename)。
   const globalSkills = useMemo(
     () =>
-      skills.filter(
-        (skill) =>
-          skill.scope === 'global' &&
-          includesSkillQuery(
-            [skill.name, skill.description, skill.kind, skill.engine],
-            normalizedQuery,
-          ),
+      prioritizeCindyBuiltInSkills(
+        skills.filter(
+          (skill) => {
+            const descriptionKey = builtInSkillDescriptionKey(skill);
+            const displayDescription = descriptionKey ? t(descriptionKey) : skill.description;
+            return (
+              skill.scope === 'global' &&
+              includesSkillQuery(
+                [skill.name, displayDescription, skill.description, skill.kind, skill.engine],
+                normalizedQuery,
+              )
+            );
+          },
+        ),
       ),
-    [normalizedQuery, skills],
+    [normalizedQuery, skills, t],
   );
   const projectGroups = useMemo(() => {
     const byRoot = new Map<string, SkillhubSkill[]>();
@@ -167,16 +180,18 @@ export function SkillhubHomeView({
         return {
           root,
           label,
-          skills: list.filter((skill) =>
-            includesSkillQuery(
-              [skill.name, skill.description, skill.kind, skill.engine, label],
+          skills: list.filter((skill) => {
+            const descriptionKey = builtInSkillDescriptionKey(skill);
+            const displayDescription = descriptionKey ? t(descriptionKey) : skill.description;
+            return includesSkillQuery(
+              [skill.name, displayDescription, skill.description, skill.kind, skill.engine, label],
               normalizedQuery,
-            ),
-          ),
+            );
+          }),
         };
       })
       .filter((group) => group.skills.length > 0);
-  }, [normalizedQuery, skills, projects]);
+  }, [normalizedQuery, skills, projects, t]);
   const visibleLocalCount = useMemo(
     () =>
       globalSkills.length + projectGroups.reduce((count, group) => count + group.skills.length, 0),
@@ -299,34 +314,27 @@ export function SkillhubHomeView({
                   {t('skillhub.home.description')}
                 </p>
               </div>
-              <div
-                className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1"
-                role="group"
-                aria-label={t('skillhub.home.catalogFiltersAria')}
-              >
-                  {homeCatalogTabs.map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      aria-pressed={catalogTab === tab}
-                      onClick={() => {
-                        setPreviewSkill(null);
-                        setCatalogTab(tab);
-                      }}
-                      className={cn(
-                        'shrink-0 select-none rounded-full px-3.5 py-2 text-12 transition-colors duration-150',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        catalogTab === tab
-                          ? 'bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-                      )}
-                    >
-                      {tab === 'local'
+              <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1" style={WINDOW_NO_DRAG_STYLE}>
+                <SegmentedControl
+                  role="radiogroup"
+                  aria-label={t('skillhub.home.catalogFiltersAria')}
+                  height={32}
+                  optionHeight={28}
+                  optionClassName="px-3.5 text-12"
+                  value={catalogTab}
+                  onValueChange={(tab) => {
+                    setPreviewSkill(null);
+                    setCatalogTab(tab);
+                  }}
+                  options={homeCatalogTabs.map((tab) => ({
+                    value: tab,
+                    label:
+                      tab === 'local'
                         ? t('skillhub.home.local')
-                        : t(`skillhub.home.catalogFilter.${tab}`)}
-                    </button>
-                  ))}
-                  <button
+                        : t(`skillhub.home.catalogFilter.${tab}`),
+                  }))}
+                />
+                <button
                     type="button"
                     onClick={openMarket}
                     className={cn(
@@ -337,7 +345,7 @@ export function SkillhubHomeView({
                   >
                     {t('skillhub.home.catalogMore')}
                     <ChevronRight size={13} strokeWidth={1.8} aria-hidden="true" />
-                  </button>
+                </button>
               </div>
             </header>
 
@@ -468,6 +476,7 @@ export function SkillhubHomeView({
           }
           onClone={handleClone}
           onManageAction={management.handleManageAction}
+          learnSkillEnabled={learnSkillEnabled}
         />
         <MarketManagementDialogs controller={management} />
         <InstallTargetPicker
@@ -559,6 +568,8 @@ function LocalGroup({
       <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
         {skills.map((s) => {
           const Icon = KIND_ICON[s.kind] ?? Package;
+          const descriptionKey = builtInSkillDescriptionKey(s);
+          const displayDescription = descriptionKey ? t(descriptionKey) : s.description;
           // 来源:'skillhub' = 从市场安装的副本(填充徽标);'local' = 自己开发/发布、
           // 没走 SkillHub 安装的本地副本(弱化文字,不与 SkillHub 抢视觉)。
           // origin 缺失的历史 registry 靠 server isMine 兜底判定(见 deriveSkillSource)。
@@ -595,15 +606,19 @@ function LocalGroup({
                   <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
                     {s.name}
                   </span>
-                  <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
-                    {source === 'skillhub'
-                      ? t('skillhub.home.sourceSkillhub')
-                      : t('skillhub.home.sourceLocal')}
-                  </span>
+                  {s.builtIn ? (
+                    <OfficialSkillBadge />
+                  ) : (
+                    <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
+                      {source === 'skillhub'
+                        ? t('skillhub.home.sourceSkillhub')
+                        : t('skillhub.home.sourceLocal')}
+                    </span>
+                  )}
                 </span>
-                {s.description && (
+                {displayDescription && (
                   <span className="line-clamp-1 text-12 leading-4 text-[var(--text-secondary)]">
-                    {s.description}
+                    {displayDescription}
                   </span>
                 )}
               </span>

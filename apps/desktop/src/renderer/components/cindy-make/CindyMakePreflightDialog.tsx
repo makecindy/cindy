@@ -94,6 +94,7 @@ export function CindyMakePreflightDialog({
         runId: report.runId,
         request,
         title: t('cindyMake.code.taskTitle', {
+          worktree: report.runId.slice(0, 4),
           request: chars.slice(0, 60).join('') + (chars.length > 60 ? '…' : ''),
         }),
         createOptions,
@@ -155,11 +156,7 @@ export function CindyMakePreflightDialog({
               report={report}
               request={request}
               startingCode={starting}
-              onChoose={(choice) => {
-                if (submitting.current) return;
-                if (choice === 'wait') onOpenChange(false);
-                else void start();
-              }}
+              showUpstreamActions={false}
               onRecheck={() => {
                 if (!submitting.current && current()) {
                   setFailed(false);
@@ -179,12 +176,24 @@ export function CindyMakePreflightDialog({
               {t('cindyMake.code.preparationFailed')}
             </p>
           )}
-          <div className="flex justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
             <Dialog.Close asChild>
               <Button variant="secondary" disabled={starting}>
                 {t('settings.cindyMake.create.cancel')}
               </Button>
             </Dialog.Close>
+            {report?.status === 'completed' &&
+              ['found', 'notFound'].includes(report.upstream?.status ?? '') && (
+                <Button
+                  variant="primary"
+                  className="border-[var(--border-default)] enabled:hover:border-[var(--button-primary-hover)] enabled:active:border-[var(--button-primary-pressed)]"
+                  disabled={starting}
+                  loading={starting}
+                  onClick={() => void start()}
+                >
+                  {t('cindyMake.upstream.personal')}
+                </Button>
+              )}
           </div>
         </Dialog.Content>
       </Dialog.Portal>

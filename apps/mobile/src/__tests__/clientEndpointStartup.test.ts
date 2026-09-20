@@ -2,13 +2,17 @@
  * 远程端点清单启动解析(clientEndpointStartup)+ env live binding 回写单测。
  *
  * 关键覆盖:
- *  - 正式包只认 CDN 清单;字段缺失/空白不阻断,拉取失败或清单非法仍阻断;
- *  - 不使用包内 endpoint.json 做字段合并或整份回退;
+ *  - 自定义源无官方随包兜底；字段缺失/空白不阻断，配置错误仍阻断；
+ *  - 官方源的缓存/随包恢复见 endpointManifestLoader.test.ts，不做字段合并;
  *  - applyResolvedClientEndpoints 重赋值后,跨模块 ESM live binding 立即可见。
  */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ManifestFetchResult } from '@/config/clientEndpointStartup';
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: async () => null, setItem: async () => undefined },
+}));
 
 type FetchManifest = (timeoutMs: number) => Promise<ManifestFetchResult>;
 

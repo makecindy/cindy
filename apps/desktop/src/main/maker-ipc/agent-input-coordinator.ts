@@ -494,6 +494,7 @@ export interface AgentInputCoordinatorDeps {
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
+    restoredFromSnapshot?: boolean,
   ) => void | Promise<void>;
   /**
    * Awaited only after vendor dispatch is irreversible (`accepted=true`).
@@ -1037,6 +1038,7 @@ export class AgentInputCoordinator {
    * emit 会因"未恢复"跳过持久化,旧快照删不掉,下次打开会话又诈尸。
    */
   private readonly restoredQueueSessions = new Set<string>();
+  private readonly restoredQueueItems = new WeakSet<AgentInputQueuedMessage>();
   private readonly restoreAttempted = new Set<string>();
   private readonly queueRestorePromises = new Map<string, Promise<void>>();
   private readonly lastQueueSnapshotJson = new Map<string, string>();
@@ -1348,6 +1350,7 @@ export class AgentInputCoordinator {
       state.activeTurn === null &&
       state.steeringQueueClientIds.length === 0 &&
       !this.deps.isTurnRunning(sessionId);
+    for (const item of restored) this.restoredQueueItems.add(item);
     state.pendingQueue = [...restored, ...state.pendingQueue];
     if (wasQuiet) {
       state.queuePaused = true;
@@ -2815,6 +2818,7 @@ export class AgentInputCoordinator {
           // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
           // 一并误藏(窗口从更早的行一直铺到本条)。
+          retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
           supersedesUserClientId: undefined,
           // 自动恢复不是计划批准：保留原 Plan/权限选项，不能因隐藏 CONTINUE
           // 降到 Full access。人工 Retry 仍沿用既有合成 UI 动作策略。
@@ -2878,6 +2882,7 @@ export class AgentInputCoordinator {
           autoResumeInfo: opts?.auto ? (previousAutoResumeInfo ?? undefined) : undefined,
           // 自动 clone 自身会被 renderer 隐藏，不能再软删原始可见 user 行；人工 Retry
           // 才用可见克隆取代旧行。显式覆盖也避免继承上一轮的隐藏标记。
+          retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
           supersedesUserClientId: opts?.auto ? undefined : recovery.item.clientId,
           chatMessage: {
             ...(retryItem ?? recovery.item).chatMessage,
@@ -3008,9 +3013,9 @@ export class AgentInputCoordinator {
         delete updated.sessionReferencesRequireTrustedSnapshot;
         delete updated.trustedSessionReferenceContexts;
       }
-      return finalizeUpdatedMessage && newText !== entry.text
+      return this.preserveRestoredQueueProvenance(entry, finalizeUpdatedMessage && newText !== entry.text
         ? finalizeUpdatedMessage(updated)
-        : updated;
+        : updated);
     });
     this.emit(sessionId);
     return this.getProjection(sessionId);
@@ -3061,12 +3066,21 @@ export class AgentInputCoordinator {
       || updated.sessionRefs !== current.sessionRefs
       || updated.agentReferences !== current.agentReferences;
     const nextQueue = [...state.pendingQueue];
-    nextQueue[index] = finalizeUpdatedMessage && authorizationContentChanged
+    nextQueue[index] = this.preserveRestoredQueueProvenance(current, finalizeUpdatedMessage && authorizationContentChanged
       ? finalizeUpdatedMessage(updated)
-      : updated;
+      : updated);
     state.pendingQueue = nextQueue;
     this.emit(sessionId);
     return { projection: this.getProjection(sessionId), updated: true };
+  }
+
+  private preserveRestoredQueueProvenance(current: AgentInputQueuedMessage, replacement: AgentInputQueuedMessage): AgentInputQueuedMessage {
+    if (current.clientId === replacement.clientId) {
+      if (this.restoredQueueItems.has(current)) this.restoredQueueItems.add(replacement);
+      // Editing content cannot erase or forge the host's stable retry lineage.
+      replacement.retrySourceClientId = current.retrySourceClientId;
+    }
+    return replacement;
   }
 
   /**
@@ -3099,7 +3113,7 @@ export class AgentInputCoordinator {
     if (current.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
     else replacement.hostAcceptedAtMs = current.hostAcceptedAtMs;
     const nextQueue = [...state.pendingQueue];
-    nextQueue[index] = replacement;
+    nextQueue[index] = this.preserveRestoredQueueProvenance(current, replacement);
     state.pendingQueue = nextQueue;
     this.emit(sessionId);
     return true;
@@ -3154,7 +3168,7 @@ export class AgentInputCoordinator {
     const removed = presentTargets.slice(1);
     state.pendingQueue = [
       ...state.pendingQueue.slice(0, firstIndex),
-      replacement,
+      this.preserveRestoredQueueProvenance(survivor, replacement),
       ...state.pendingQueue.slice(firstIndex + presentTargets.length),
     ];
     const removedIds = new Set(removed.map((item) => item.clientId));
@@ -4503,7 +4517,11 @@ export class AgentInputCoordinator {
             // host 把排队 orca 消息的 accepted 副作用挂在这个 hook 上(置 running /
             // autoBridgePending), 必须 await 完才能放行 vendor turn —— fire-and-forget
             // 会让快 worker 在状态可见前结束 turn, 桥接被 turn-end handler 误跳过。
-            await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+            if (this.restoredQueueItems.has(head)) {
+              await this.deps.onAcceptedQueuedMessage?.(sessionId, head, true);
+            } else {
+              await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+            }
             if (!this.isActiveTurnCurrent(sessionId, active)) {
               throw new Error(
                 '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { MAKE_DOCTOR_CHECK_IDS, type MakeDoctorReport } from '../../../../shared/cindyMakeDoctor';
@@ -17,7 +17,12 @@ const h = vi.hoisted(() => ({
   remote: false,
   publish: undefined as undefined | ((report: MakeDoctorReport) => void),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, values?: { worktree: string; request: string }) =>
+      key === 'cindyMake.code.taskTitle' && values ? `[${values.worktree}] ${values.request}` : key,
+  }),
+}));
 vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
 vi.mock('@/lib/cindyMakeDoctor', () => ({ startMakeDoctor: h.start, cancelMakeDoctor: h.cancel }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { setSessionRuntime: h.runtime } }));
@@ -82,6 +87,21 @@ afterEach(() => {
 });
 
 describe('Make preflight confirmation boundary', () => {
+  it('names the created task after the first four characters of its worktree run', async () => {
+    open();
+    await finishChecks();
+    act(() => h.publish!({ ...ready, runId: 'f428ca8b-242b-43c6-b2e5-e54bdd915f62' }));
+    fireEvent.click(continueButton());
+    await waitFor(() =>
+      expect(h.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'f428ca8b-242b-43c6-b2e5-e54bdd915f62',
+          title: '[f428] Keep my request',
+        }),
+      ),
+    );
+  });
+
   it('starts checks once under StrictMode without cancelling them on the rehearsal mount', async () => {
     render(
       <StrictMode>
@@ -108,21 +128,24 @@ describe('Make preflight confirmation boundary', () => {
         originSessionId: sessionId,
         runId: 'run',
         request: '  Keep my request  ',
-        title: 'cindyMake.code.taskTitle',
+        title: '[run] Keep my request',
         createOptions: { agentKind: 'codex', model: 'selected' },
       });
       expect(h.runtime).toHaveBeenCalledWith('code-task', { autoTitleDisabled: true });
     },
   );
 
-  it.each(['cancel', 'wait'])('creates no task on %s', async (choice) => {
+  it('closes to wait for upstream without creating a task', async () => {
     const view = open();
     await finishChecks();
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: choice === 'wait' ? 'cindyMake.upstream.wait' : 'settings.cindyMake.create.cancel',
-      }),
-    );
+    expect(screen.queryByRole('button', { name: 'cindyMake.upstream.wait' })).toBeNull();
+    const card = screen.getByRole('region', { name: 'cindyMake.title' });
+    expect(within(card).queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
+    const buttons = screen.getAllByRole('button');
+    const cancel = screen.getByRole('button', { name: 'settings.cindyMake.create.cancel' });
+    const personal = screen.getByRole('button', { name: 'cindyMake.upstream.personal' });
+    expect(buttons.indexOf(cancel)).toBeLessThan(buttons.indexOf(personal));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.cindyMake.create.cancel' }));
     expect(view.close).toHaveBeenCalledWith(false);
     expect(h.create).not.toHaveBeenCalled();
   });

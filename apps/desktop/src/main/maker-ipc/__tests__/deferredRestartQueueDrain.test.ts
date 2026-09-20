@@ -26,6 +26,7 @@ import type {
   AgentInputSendResult,
 } from '../agent-input-coordinator.js';
 import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
+import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import {
   createDeferredRestartAppliedWake,
   createDeferredRestartQueueGate,
@@ -150,6 +151,7 @@ function sendSuccess(source = 'test'): AgentInputSendResult {
  */
 function createRestartHarness() {
   let running = false;
+  let live = true;
   let busyOtherSession = false;
   const projections: AgentInputProjection[] = [];
   let loadQueueSnapshot: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null = null;
@@ -168,11 +170,12 @@ function createRestartHarness() {
   let coordinator: AgentInputCoordinator;
 
   const service = new DeferredCodexRestartService({
-    restart: async () => {
+    restart: async (applyRuntime) => {
+      if (!await applyRuntime()) return;
       await restartImpl();
     },
     hasBusyLocalCodexSession: () => busyOtherSession,
-    listLocalCodexSessionIds: () => [SID],
+    listLocalCodexSessionIds: () => live ? [SID] : [],
     onApplied: createDeferredRestartAppliedWake({
       wakeSession: (sessionId, reason) => coordinator.wakeSession(sessionId, reason),
     }),
@@ -201,7 +204,7 @@ function createRestartHarness() {
     hasPendingCredentialSwitch: createDeferredRestartQueueGate({
       hasPendingCredentialSwitchEntry: () => false,
       isDeferredRestartPending: () => service.isPending(),
-      listActiveSessions: () => [{ id: SID, agentKind: 'codex', remoteHostId: null }],
+      listActiveSessions: () => live ? [{ id: SID, agentKind: 'codex', remoteHostId: null }] : [],
     }),
     emitProjection: (projection) => {
       projections.push(projection);
@@ -221,6 +224,9 @@ function createRestartHarness() {
     projections,
     setRunning(value: boolean) {
       running = value;
+    },
+    setLive(value: boolean) {
+      live = value;
     },
     setBusyOtherSession(value: boolean) {
       busyOtherSession = value;
@@ -298,6 +304,37 @@ describe('deferred Codex restart × input queue drain (#2506)', () => {
     expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
   });
+
+  it.each(['busy', 'bridge-failure', 'new-runtime', 'new-mcp-config'])(
+    'wakes a preserved queue after a closed session disappears during %s retry', async (failure) => {
+      const h = createRestartHarness();
+      await h.coordinator.ensureQueueRestored(h.SID);
+      h.service.schedule('memory-change');
+      h.coordinator.enqueue(h.SID, makeItem('retry-message', 'resume after retry'));
+      await flush();
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+      let first = true;
+      h.setRestartImpl(async () => {
+        h.coordinator.onSessionClosed(h.SID);
+        h.setLive(false);
+        if (!first) return;
+        first = false;
+        if (failure === 'busy') throw new CodexCredentialModeSwitchBusyError([]);
+        if (failure === 'bridge-failure') throw new Error('bridge preparation failed');
+        h.service.schedule(failure, failure === 'new-runtime' ? async () => {} : undefined);
+      });
+      await h.service.flushBeforeLocalCodexSessionStart();
+      expect(h.service.isPending()).toBe(true);
+      expect(h.service.listGatedSessionIds()).toEqual([h.SID]);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+      await h.service.flushBeforeLocalCodexSessionStart();
+      await flush();
+      expect(h.service.isPending()).toBe(false);
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
+    },
+  );
 
   it('竞态 a:wake 在队列恢复读取期间到达 → 被 gate 挡下并留痕;安静恢复进入暂停态同样可诊断', async () => {
     const h = createRestartHarness();

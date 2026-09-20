@@ -5,7 +5,7 @@
  *
  * 设计:
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
- *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现,分五类:
+ *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
  *                  list_sessions / list_session_queue / get_chat_history /
@@ -14,6 +14,7 @@
  *                  archive_sessions / unarchive_sessions)
  *    - 'feedback': 官方反馈提交 (submit_github_issue)
  *    - 'handoff' : session 间 handoff 原语 (send_to_session),供 skill 跨会话路由
+ *    - 'skills'  : Cindy 宿主管理的 Skill 工作流
  *  - send_to_session 曾经直接顶层注册;现归入 handoff 类目走 call_tool,与改名工具
  *    隔离(不同 category),避免 LLM 在"改 session 名"意图下误选它(见 issue #287)。
  *  - 协同 team 工具(start_team / create_worker / …)已拆到独立的 `cindy_orca` server
@@ -56,12 +57,17 @@ import {
   registerGetChatHistoryTool,
   registerSearchChatHistoryTool,
   registerSubmitGithubIssueTool,
+  registerStartSkillLearningTool,
 } from './xdt-helper/index.js';
 import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
+import type {
+  AuthorizeSkillLearningCallback,
+  StartSkillLearningCallback,
+} from './xdt-helper/start_skill_learning.js';
 import {
   registerBotSkillTools,
   type BotSkillCallbacks,
@@ -111,7 +117,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'bots'] as const;
+const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
@@ -634,6 +640,10 @@ export interface XdtHelperMcpDeps {
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
    */
   sendToSession?: SendToSessionCallback;
+  /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
+  skillLearning?: StartSkillLearningCallback;
+  /** Host-owned, one-shot authorization for the current direct Learn invocation. */
+  authorizeSkillLearning?: AuthorizeSkillLearningCallback;
   /** Register an existing local directory as a Cindy project without starting a task. */
   createProject?: CreateProjectCallback;
   moveSession?: MoveSessionCallback;
@@ -799,6 +809,13 @@ export function createXdtHelperMcpServer(
     registerSendToSessionTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       sendToSession: deps.sendToSession,
+    });
+  }
+  if (deps.skillLearning && deps.authorizeSkillLearning) {
+    registerStartSkillLearningTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      authorizeSkillLearning: deps.authorizeSkillLearning,
+      startSkillLearning: deps.skillLearning,
     });
   }
   // 伙伴消息与 Session 任务控制统一进入 bots 类目，由调用时的任务身份限制发现与执行。

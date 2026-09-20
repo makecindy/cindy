@@ -95,12 +95,18 @@ vi.mock("@expo/ui/swift-ui/modifiers", () =>
   ),
 );
 vi.mock("lucide-react-native", () => ({
+  ArrowLeft: () => null,
+  ArrowRight: () => null,
+  Menu: () => null,
   Keyboard: () => null,
   SlidersHorizontal: () => null,
 }));
 vi.mock("../RemoteDesktopIcons", () => ({
   AllWindowsIcon: () => null,
   ShowDesktopIcon: () => null,
+  WorkspaceLeftIcon: () => <span data-icon="workspace-left" />,
+  WorkspaceRightIcon: () => <span data-icon="workspace-right" />,
+  OmarchyMenuIcon: () => <span data-icon="omarchy" />,
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -169,6 +175,58 @@ it("keeps operations usable without control, with compact landscape order", () =
   expect(desktop).not.toHaveBeenCalled();
   v.close();
 });
+
+it.each([false, true])(
+  "shows Omarchy desktop navigation with five accessible targets (landscape=%s)",
+  (landscape) => {
+    const left = vi.fn(),
+      right = vi.fn(),
+      menu = vi.fn();
+    const props = {
+      landscape,
+      canControl: true,
+      keyboard: false,
+      operations: false,
+      onWindows: vi.fn(),
+      onDesktop: vi.fn(),
+      onKeyboard: vi.fn(),
+      onOperations: vi.fn(),
+      onWorkspaceLeft: left,
+      onWorkspaceRight: right,
+      onOmarchyMenu: menu,
+    };
+    const v = mount(<RemoteDesktopToolbar {...props} />);
+    for (const icon of ["workspace-left", "workspace-right", "omarchy"])
+      expect(v.host.querySelector(`[data-icon="${icon}"]`)).not.toBeNull();
+    for (const key of ["workspaceLeft", "workspaceRight", "omarchyMenu"])
+      act(() =>
+        v.host
+          .querySelector<HTMLButtonElement>(
+            `[data-testid="remoteDesktop.${key}"]`,
+          )!
+          .click(),
+      );
+    expect(left).toHaveBeenCalledOnce();
+    expect(right).toHaveBeenCalledOnce();
+    expect(menu).toHaveBeenCalledOnce();
+    expect(v.host.querySelectorAll("button")).toHaveLength(5);
+    const surface = v.host.firstElementChild as HTMLElement;
+    expect(landscape ? surface.style.height : surface.style.width).toBe(
+      "228px",
+    );
+    expect(
+      v.host.querySelector('[data-testid="remoteDesktop.showDesktop"]'),
+    ).toBeNull();
+    v.render(<RemoteDesktopToolbar {...props} canControl={false} />);
+    for (const key of ["workspaceLeft", "workspaceRight", "omarchyMenu"])
+      expect(
+        v.host.querySelector<HTMLButtonElement>(
+          `[data-testid="remoteDesktop.${key}"]`,
+        )!.disabled,
+      ).toBe(true);
+    v.close();
+  },
+);
 
 it.each([false, true])(
   "keeps one hosted surface while navigating and updating the header (landscape=%s)",
@@ -267,5 +325,7 @@ it("anchors the popover to the centered rail and opens inward after either rotat
       islandRight ? "leading" : "trailing",
     );
   }
+  v.render(<RemoteDesktopPanel {...props} toolbarActionCount={5} />);
+  expect((v.host.firstElementChild as HTMLElement).style.top).toBe("80.5px");
   v.close();
 });

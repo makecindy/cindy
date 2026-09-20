@@ -203,6 +203,19 @@ unsafe fn raster(handle: HCURSOR) -> Option<(i32, i32, u32, u32, Vec<u8>)> {
     ))
 }
 
+fn standard_shape(handle: HCURSOR) -> &'static str {
+    for (id, shape) in [
+        (IDC_ARROW, "default"), (IDC_IBEAM, "text"), (IDC_HAND, "pointer"),
+        (IDC_CROSS, "crosshair"), (IDC_WAIT, "wait"), (IDC_APPSTARTING, "progress"),
+        (IDC_SIZEWE, "ew-resize"), (IDC_SIZENS, "ns-resize"),
+        (IDC_SIZENWSE, "nwse-resize"), (IDC_SIZENESW, "nesw-resize"),
+        (IDC_SIZEALL, "move"), (IDC_NO, "not-allowed"), (IDC_HELP, "help"),
+    ] {
+        if unsafe { LoadCursorW(ptr::null_mut(), id) } == handle { return shape; }
+    }
+    "default"
+}
+
 pub fn read(rect: [i32; 4]) -> Option<serde_json::Value> {
     unsafe {
         let mut cursor: CURSORINFO = mem::zeroed();
@@ -218,7 +231,8 @@ pub fn read(rect: [i32; 4]) -> Option<serde_json::Value> {
             "visible": cursor.flags == CURSOR_SHOWING && (0.0..1.0).contains(&cx) && (0.0..1.0).contains(&cy),
             "x": cx.clamp(0.0, 1.0), "y": cy.clamp(0.0, 1.0),
             "width": width, "height": height, "hotX": hot_x, "hotY": hot_y,
-            "bgra": base64::engine::general_purpose::STANDARD.encode(pixels)
+            "bgra": base64::engine::general_purpose::STANDARD.encode(pixels),
+            "shape": standard_shape(cursor.hCursor)
         }))
     }
 }
@@ -226,6 +240,16 @@ pub fn read(rect: [i32; 4]) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identifies_standard_native_shapes() {
+        for (id, expected) in [(IDC_ARROW, "default"), (IDC_IBEAM, "text"),
+            (IDC_HAND, "pointer"), (IDC_SIZEWE, "ew-resize")] {
+            let handle = unsafe { LoadCursorW(ptr::null_mut(), id) };
+            assert!(!handle.is_null());
+            assert_eq!(standard_shape(handle), expected);
+        }
+    }
 
     #[test]
     fn preserves_transparency_opaque_color_and_premultiplied_alpha() {

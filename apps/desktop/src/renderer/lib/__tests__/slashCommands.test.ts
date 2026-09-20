@@ -1,11 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkills';
 
 import {
+  commandsForHelpCard,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
+  isCindyOfficialSlashCommand,
   isSlashCommandUnavailable,
+  loadAllCommands,
   mergeCommands,
   nextAvailableSlashCommandIndex,
   rebaseInlineRangesAfterSlashCommandRewrite,
@@ -23,6 +27,62 @@ const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' 
   name: 'demo',
   source: 'skill' as const,
   ...overrides,
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedCommand[] }) {
+  vi.stubGlobal('window', {
+    electronAPI: {
+      maker: {
+        listDesktopCommands: vi.fn(async () => ({
+          success: true,
+          commands: [{ kind: 'desktop', name: 'learn', description: 'Learn' }],
+        })),
+        listAgentCommands: vi.fn(async () => ({ success: true, commands: [] })),
+        listAgentSkills: vi.fn(async () => skillResult),
+      },
+    },
+  });
+}
+
+describe('loadAllCommands Learn fallback', () => {
+  it.each([
+    ['the Skill query fails', { success: false }],
+    ['Learn is not discovered yet', { success: true, skills: [] }],
+  ])('keeps the Desktop Learn command when %s', async (_label, result) => {
+    stubCommandLists(result as { success: boolean; skills?: UnifiedCommand[] });
+
+    await expect(loadAllCommands('claude-code', null)).resolves.toEqual([
+      { kind: 'desktop', name: 'learn', description: 'Learn' },
+    ]);
+  });
+
+  it('uses an available Agent Skill instead of the Desktop Learn fallback', async () => {
+    const learnSkill = skill({ name: 'learn', builtIn: true });
+    stubCommandLists({ success: true, skills: [learnSkill] });
+
+    await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+describe('commandsForHelpCard', () => {
+  it('preserves only the Main-attested built-in marker needed for localized descriptions', () => {
+    expect(commandsForHelpCard([
+      skill({ name: 'learn', builtIn: true, description: CINDY_LEARN_SOURCE_DESCRIPTION }),
+      skill({ name: 'custom', description: 'Custom description' }),
+    ])).toEqual([
+      {
+        name: 'learn',
+        description: CINDY_LEARN_SOURCE_DESCRIPTION,
+        source: 'skill',
+        builtIn: true,
+      },
+      { name: 'custom', description: 'Custom description', source: 'skill' },
+    ]);
+  });
 });
 
 describe('rewriteAgentSkillInvocationForDispatch', () => {
@@ -116,6 +176,62 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 });
 
 describe('filterSlashCommands', () => {
+  it('places Cindy official entries before ordinary commands in the initial palette', () => {
+    const commands = [
+      { kind: 'desktop' as const, name: 'help', description: 'Help' },
+      {
+        kind: 'agent-skill' as const,
+        name: 'cindy-skill-creator',
+        description: 'Create or update a Cindy Skill',
+        builtIn: true,
+        source: 'skill' as const,
+      },
+      {
+        kind: 'agent-skill' as const,
+        name: 'learn',
+        description: CINDY_LEARN_SOURCE_DESCRIPTION,
+        builtIn: true,
+        source: 'skill' as const,
+      },
+      { kind: 'agent-skill' as const, name: 'release-notes', source: 'skill' as const },
+    ];
+
+    expect(filterSlashCommands(commands, '').map((command) => command.name)).toEqual([
+      'cindy-skill-creator',
+      'learn',
+      'help',
+      'release-notes',
+    ]);
+  });
+
+  it('recognizes the Cindy Learn Skill but not a same-name desktop command or user Skill', () => {
+    expect(isCindyOfficialSlashCommand({
+      kind: 'desktop',
+      name: 'learn',
+      description: 'Learn',
+    })).toBe(false);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: CINDY_LEARN_SOURCE_DESCRIPTION,
+      builtIn: true,
+      source: 'skill',
+    })).toBe(true);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: 'Distill a reusable Skill with Cindy',
+      builtIn: true,
+      source: 'skill',
+    })).toBe(true);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: CINDY_LEARN_SOURCE_DESCRIPTION,
+      source: 'skill',
+    })).toBe(false);
+  });
+
   it('matches command names by case-insensitive containment', () => {
     const commands = [
       { kind: 'desktop' as const, name: 'lark-drive', description: 'Drive' },
