@@ -35,9 +35,8 @@ export interface TextChannelIM {
   onStatusChange(handler: (s: IMStatus) => void): () => void;
 
   // ── outbound ───────────────────────────────────────────────────────────────
-  // 末位 opts.threadTs: thread 能力渠道(slack)把消息发进指定 thread;
-  // 无 thread 概念的渠道(feishu)的实现可省略该参数(结构类型兼容), 调用方
-  // 传了也只是被忽略。
+  // opts.threadTs identifies the reply root: Slack timestamp or Feishu private-topic root message id.
+  // Unsupported channels may omit it; Feishu group lanes retain their existing lane anchors.
 
   /** 纯文本消息(不渲染 markdown 标记)。 */
   sendText(

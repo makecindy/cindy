@@ -24,19 +24,25 @@ const vitestBin = (...args) => ({ type: 'packageBin', bin: 'vitest', args });
 // which a worker cannot see because `process.env` there is a thread-local copy
 // while `os.homedir()` reads the real environment through libuv.
 //
-// win32 opts desktop out wholesale: on Windows (Node 24.14.1, 2026-07-30) the
-// desktop suite under threads segfaulted the whole vitest process (exit 139)
-// on 2 of 2 runs — same native-addon-finalizer-in-isolate-teardown crash
-// class node-webstorage.mjs documents, only without execArgv in play — while
-// forks passed 15651 tests twice in a row. The churn this pool exists to
-// avoid is a LaunchServices problem; Windows has no launchservicesd, so forks
-// costs it nothing.
+// Node 24+ opts desktop out of threads: the suite segfaults during native-addon
+// finalization on macOS as well as Windows, even without the webstorage
+// execArgv. Older Node 22 macOS runs stay on threads to avoid process churn;
+// Windows has no launchservicesd, so it stays on forks regardless of version.
 //
 // Keep every opt-out listed in the pool regression test, and keep the list
 // short: at 1330 of this tier's 1845 files, desktop alone decides whether the
 // churn is a trickle or back to where it started.
 const UNIT_POOL_DEFAULT = 'threads';
 const UNIT_TEST_SHARD_ENV = 'XDT_UNIT_TEST_SHARD';
+
+export function desktopUnitPool(
+  platform = process.platform,
+  nodeVersion = process.versions.node,
+  webstorageEnabled = nodeWebstorageEnabled(),
+) {
+  const nodeMajor = Number.parseInt(nodeVersion, 10);
+  return webstorageEnabled || platform === 'win32' || nodeMajor >= 24 ? 'forks' : 'threads';
+}
 
 /**
  * Split every Vitest workspace by the same CI shard so the two Windows jobs
@@ -146,9 +152,7 @@ export default {
           // at the top of this file).
           command: unitVitestCommand(
             desktopUnitWorkerCount(),
-            nodeWebstorageEnabled() || process.platform === 'win32'
-              ? 'forks'
-              : 'threads',
+            desktopUnitPool(),
           ),
           exclude: [
             '**/*.git-integration.test.ts',

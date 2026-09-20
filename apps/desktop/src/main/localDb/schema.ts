@@ -37,6 +37,7 @@ const SESSION_SOURCES = [
   'plugin',
   'bot',
   'cindy-make',
+  'cindy-make-merge',
 ] as const satisfies readonly SessionSource[];
 
 export const sessions = sqliteTable(
@@ -470,13 +471,9 @@ export const botDirectMessageThreads = sqliteTable(
   'bot_direct_message_threads',
   {
     id: text('id').primaryKey(),
-    /** Pair ids are always stored in lexical order so one pair has one active thread. */
-    botAId: text('bot_a_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
-    botBId: text('bot_b_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Lifecycle deletion guards shared history. */
+    botAId: text('bot_a_id').notNull(),
+    botBId: text('bot_b_id').notNull(),
     status: text('status', { enum: ['active', 'closed'] })
       .notNull()
       .default('active'),
@@ -506,12 +503,8 @@ export const botDirectMessages = sqliteTable(
       .notNull()
       .references(() => botDirectMessageThreads.id, { onDelete: 'cascade' }),
     sequence: integer('sequence').notNull(),
-    senderBotId: text('sender_bot_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
-    recipientBotId: text('recipient_bot_id')
-      .notNull()
-      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    senderBotId: text('sender_bot_id').notNull(),
+    recipientBotId: text('recipient_bot_id').notNull(),
     senderSessionId: text('sender_session_id').references(() => sessions.id, {
       onDelete: 'set null',
     }),
@@ -523,6 +516,10 @@ export const botDirectMessages = sqliteTable(
     })
       .notNull()
       .default('pending'),
+    senderName: text('sender_name'),
+    recipientName: text('recipient_name'),
+    // Remote conversation captured before a legacy send; never a local Session FK.
+    bridgeSessionId: text('bridge_session_id'),
     content: text('content').notNull(),
     createdAt: integer('created_at').notNull(),
   },
@@ -892,6 +889,21 @@ export const accountUsageSnapshots = sqliteTable('account_usage_snapshots', {
   snapshot: text('snapshot').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
+
+/** Provider notification receipts. Retain the source id after session deletion to reject stale replies. */
+export const imNotificationOrigins = sqliteTable(
+  'im_notification_origins',
+  {
+    channel: text('channel').notNull(),
+    botContextId: text('bot_context_id').notNull(),
+    userId: text('user_id').notNull(),
+    messageId: text('message_id').notNull(),
+    chatId: text('chat_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.botContextId, t.userId, t.messageId] }) }),
+);
 
 /**
  * IM 身份 → desktop session 的接管绑定表 (feishu /ctr 流程产物)。
@@ -2055,5 +2067,36 @@ export const hookGroupContextCursors = sqliteTable(
     pk: primaryKey({ columns: [t.provider, t.cursorKey] }),
     /** 消息命名空间已清空后，惰性 sweep 按最后活跃时间回收孤儿游标。 */
     byUpdatedAt: index('hook_group_context_cursors_updated_at_idx').on(t.updatedAt),
+  }),
+);
+
+/** Finder-style task label directory; scoped by the profile database. */
+export const taskTags = sqliteTable(
+  'task_tags',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    nameCustomized: integer('name_customized', { mode: 'boolean' }).notNull().default(false),
+    color: text('color').notNull(),
+    favoriteOrder: integer('favorite_order'),
+    sortOrder: integer('sort_order'),
+    revision: integer('revision').notNull().default(1),
+  },
+  (t) => ({ nameUnique: uniqueIndex('task_tags_name_idx').on(t.name) }),
+);
+
+export const sessionTaskTags = sqliteTable(
+  'session_task_tags',
+  {
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    tagId: text('tag_id')
+      .notNull()
+      .references(() => taskTags.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sessionId, t.tagId] }),
+    byTag: index('session_task_tags_tag_idx').on(t.tagId),
   }),
 );

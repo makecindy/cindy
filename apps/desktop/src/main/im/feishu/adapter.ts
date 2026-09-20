@@ -22,6 +22,7 @@ import { captureImContext } from '../../../shared/imMessageSource';
  *     (飞书有拉历史 API, 不需要 telegram 那样的本地群消息池)。
  */
 
+import { resolveFeishuNotificationReply } from './notificationOrigin';
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
@@ -243,6 +244,11 @@ export function buildFeishuAdapter(
   return {
     channel: 'feishu',
     messageSourceIm: () => feishuIm.getService(),
+    resolveNotificationReply: (event) => resolveFeishuNotificationReply(feishuIm, event),
+    notificationReplyText: {
+      unavailable: '暂时无法继续这条通知对应的任务，请在 Cindy 中确认任务仍可用后重试。',
+      commands: '本话题用于继续通知对应的任务。停止请用 !stop；其他命令请在主聊天中操作。',
+    },
     im: feishuIm,
     output: { kind: 'rich-card', im: feishuIm },
     config,

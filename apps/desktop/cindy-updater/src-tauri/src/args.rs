@@ -19,6 +19,11 @@ pub struct CliArgs {
     #[arg(long = "exe-name")]
     pub exe_name: String,
 
+    /// Metadata identity forwarded only when this updater elevates itself.
+    /// Electron uses an environment variable so old updater binaries still work.
+    #[arg(long = "install-key")]
+    pub install_key: Option<String>,
+
     /// PID of the main Electron process to wait for before swapping files.
     #[arg(long)]
     pub pid: u32,
@@ -53,6 +58,19 @@ pub struct CliArgs {
     /// only by the updater itself during self-elevation.
     #[arg(long, default_value_t = false)]
     pub elevated: bool,
+
+    /// Manifest SHA-256 supplied by the Electron main process. Elevation and
+    /// retry pass the same digest so a later replacement of the TEMP file
+    /// cannot be extracted by a still-elevated child.
+    #[arg(long = "zip-sha256")]
+    pub zip_sha256: Option<String>,
+
+    /// First-attempt medium-integrity writability of `app_dir`. Retry must not
+    /// re-probe: a same-login process can change the DACL after failure. The
+    /// unelevated parent forwards this across UAC so `--elevated` is not treated
+    /// as proof that a per-user install is protected.
+    #[arg(long = "install-writable", num_args = 0..=1, default_missing_value = "true")]
+    pub install_writable: Option<bool>,
 }
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]

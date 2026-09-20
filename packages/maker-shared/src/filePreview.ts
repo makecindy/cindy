@@ -247,3 +247,5 @@ export function formatByteSize(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
+
+export { HTML_PREVIEW_CSP, HTML_SNAPSHOT_CSP, withHtmlPreviewCsp, withSnapshotHtmlCsp } from './htmlPreviewCsp.js';

@@ -46,9 +46,12 @@ export interface RpcRequest {
   args?: unknown;
 }
 
-export type RpcResponse =
+/** Epoch-aligned monotonic timestamps; never includes SQL or parameters. */
+export interface RpcTiming { startedAt: number; finishedAt: number }
+
+export type RpcResponse = (
   | { id: number; ok: true; result: unknown }
-  | { id: number; ok: false; error: { code: string; message: string; stack?: string } };
+  | { id: number; ok: false; error: { code: string; message: string; stack?: string } }) & { timing?: RpcTiming };
 
 export type WorkerEvent =
   { event: 'log'; payload: LogEvent } | { event: 'vec-status'; payload: VecStatusEvent };
@@ -56,7 +59,7 @@ export type WorkerEvent =
 export type WorkerMessage = RpcResponse | WorkerEvent;
 
 export type LogEvent = {
-  level: 'info' | 'warn' | 'error';
+  level: 'debug' | 'info' | 'warn' | 'error';
   scope: string;
   payload: unknown;
 };

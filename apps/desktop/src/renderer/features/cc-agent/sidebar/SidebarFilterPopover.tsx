@@ -16,6 +16,7 @@
  * --text-tertiary/--text-secondary,hover 时比邻居暗一档、视觉不齐。
  */
 
+import { MountedMenuContent } from './MountedMenuContent';
 import type { ReactNode } from 'react';
 import {
   AlignJustify,
@@ -25,6 +26,7 @@ import {
   createLucideIcon,
   GripVertical,
   Layers,
+  ListChecks,
   ListOrdered,
   MessageSquare,
   Monitor,
@@ -45,6 +47,7 @@ import {
   Info,
   LayoutList,
   SlidersHorizontal,
+  Tags,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
@@ -77,7 +80,6 @@ import {
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import { getRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
 import type {
-  FilterGroupBy,
   FilterLastActivity,
   FilterProjectOrder,
   FilterSortBy,
@@ -86,6 +88,7 @@ import type {
   UseSidebarFilterReturn,
 } from '../hooks/useSidebarFilter';
 import { DIALOGUE_FILTER_KEY, projectFilterIncludes } from '../hooks/helpers/sidebarFilterCore';
+import { DEFAULT_TASK_INFO_FIELDS } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
 import {
   MENU_CONTENT_CLASS,
@@ -172,6 +175,7 @@ const PROJECT_ORDER_OPTIONS: ReadonlyArray<Option<FilterProjectOrder>> = [
  * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
+  { value: 'tags', labelKey: 'taskTags.title', Icon: Tags },
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
   { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },
@@ -529,7 +533,8 @@ export function SidebarFilterPopover({
           )
           .join(t('ccAgent.sidebar.taskInfoSummarySeparator'))
       : t('ccAgent.sidebar.taskInfoSummaryNone');
-  const taskInfoIsDefault = taskInfoFields.length === 1 && taskInfoFields[0] === 'time';
+  const taskInfoIsDefault = taskInfoFields.length === DEFAULT_TASK_INFO_FIELDS.length &&
+    DEFAULT_TASK_INFO_FIELDS.every((field, index) => taskInfoFields[index] === field);
 
   const ariaLabel = t('ccAgent.sidebar.filterAria', {
     status: statusValue,
@@ -606,275 +611,288 @@ export function SidebarFilterPopover({
             纵向滚动；禁止横向滚动，避免分隔线的负边距撑出底部滚动条占位。
             滚动容器放内层(与下方项目列表同款做法),不与 content 的
             overflow-hidden 抢同一属性。减 0.75rem 让出 content 的 p-1 与边框。 */}
-        <div className="max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-x-hidden overflow-y-auto">
-          <MenuSubRow
-            label={t('ccAgent.sidebar.filterGroupByHeading')}
-            value={groupByValue}
-            Icon={SidebarGroupsIcon}
-          >
-            <CheckMenuItem
-              label={t('ccAgent.sidebar.filterGroupBy.project')}
-              checked={groupBy === 'project'}
-              onToggle={() => setGroupBy(groupBy === 'project' ? 'flat' : 'project')}
-              Icon={Folder}
-            />
-            <CheckMenuItem
-              label={t('ccAgent.sidebar.filterGroupBy.dialogue')}
-              checked={groupDialogue}
-              onToggle={() => setGroupDialogue(!groupDialogue)}
-              Icon={MessageSquare}
-            />
-            {hasRemoteDevices && (
-              <CheckMenuItem
-                label={t('ccAgent.sidebar.filterGroupBy.device')}
-                checked={groupDevice}
-                onToggle={() => setGroupDevice(!groupDevice)}
-                Icon={Monitor}
-              />
-            )}
-          </MenuSubRow>
-          <MenuSubRow
-            label={t('ccAgent.sidebar.filterTaskSortHeading')}
-            value={sortByValue}
-            Icon={ArrowDownWideNarrow}
-          >
-            {SORT_BY_OPTIONS.map((option) => (
-              <SelectMenuItem
-                key={option.value}
-                label={t(option.menuLabelKey ?? option.labelKey)}
-                selected={sortBy === option.value}
-                Icon={option.Icon}
-                onSelect={() => setSortBy(option.value)}
-                tip={option.tipKey ? t(option.tipKey) : undefined}
-              />
-            ))}
-          </MenuSubRow>
-          {groupBy === 'project' && (
-            <MenuSubRow
-              label={t('ccAgent.sidebar.filterProjectOrderHeading')}
-              value={optionLabel(PROJECT_ORDER_OPTIONS, scopedProjectOrder, t)}
-              Icon={ListOrdered}
-            >
-              {PROJECT_ORDER_OPTIONS.map((option) => (
-                <SelectMenuItem
-                  key={option.value}
-                  label={t(option.labelKey)}
-                  selected={scopedProjectOrder === option.value}
-                  Icon={option.Icon}
-                  onSelect={() => setProjectOrder(option.value)}
-                  tip={option.tipKey ? t(option.tipKey) : undefined}
-                />
-              ))}
-            </MenuSubRow>
-          )}
-          <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-          <MenuSubRow
-            label={t('ccAgent.sidebar.taskStatusHeading')}
-            value={statusValue}
-            Icon={CircleDot}
-          >
-            {STATUS_OPTIONS.map((option) => (
-              <SelectMenuItem
-                key={option.value}
-                label={t(option.labelKey)}
-                selected={status === option.value}
-                Icon={option.Icon}
-                onSelect={() => setStatus(option.value)}
-              />
-            ))}
-          </MenuSubRow>
-          <MenuSubRow
-            label={t('ccAgent.sidebar.filterHeading')}
-            value={filterSummary}
-            valueEmphasized={activeFilterCount > 0}
-            Icon={Filter}
-          >
-            <MenuSubRow
-              label={t('ccAgent.sidebar.filterProjectsHeading')}
-              value={projectValue}
-              Icon={Folder}
-            >
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  setProjectsAll();
-                }}
-                className={MENU_ITEM_CLASS}
+        <MountedMenuContent>
+          {() => (
+            <div className="max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-x-hidden overflow-y-auto">
+              <MenuSubRow
+                label={t('ccAgent.sidebar.filterGroupByHeading')}
+                value={groupByValue}
+                Icon={SidebarGroupsIcon}
               >
-                <MenuItemIcon Icon={Folders} />
-                <span className="truncate">{t('ccAgent.sidebar.filterAllProjects')}</span>
-                {projects === 'all' && (
-                  <Check size={15} className="ml-auto shrink-0 text-[var(--msg-assistant-text)]" />
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterGroupBy.project')}
+                  checked={groupBy === 'project'}
+                  onToggle={() => setGroupBy(groupBy === 'project' ? 'flat' : 'project')}
+                  Icon={Folder}
+                />
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterGroupBy.dialogue')}
+                  checked={groupDialogue}
+                  onToggle={() => setGroupDialogue(!groupDialogue)}
+                  Icon={MessageSquare}
+                />
+                {hasRemoteDevices && (
+                  <CheckMenuItem
+                    label={t('ccAgent.sidebar.filterGroupBy.device')}
+                    checked={groupDevice}
+                    onToggle={() => setGroupDevice(!groupDevice)}
+                    Icon={Monitor}
+                  />
                 )}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-              <div className="max-h-[256px] overflow-y-auto">
-                <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault();
-                    toggleProject(DIALOGUE_FILTER_KEY);
-                  }}
-                  className={MENU_ITEM_CLASS}
+              </MenuSubRow>
+              <MenuSubRow
+                label={t('ccAgent.sidebar.filterTaskSortHeading')}
+                value={sortByValue}
+                Icon={ArrowDownWideNarrow}
+              >
+                {SORT_BY_OPTIONS.map((option) => (
+                  <SelectMenuItem
+                    key={option.value}
+                    label={t(option.menuLabelKey ?? option.labelKey)}
+                    selected={sortBy === option.value}
+                    Icon={option.Icon}
+                    onSelect={() => setSortBy(option.value)}
+                    tip={option.tipKey ? t(option.tipKey) : undefined}
+                  />
+                ))}
+              </MenuSubRow>
+              {groupBy === 'project' && (
+                <MenuSubRow
+                  label={t('ccAgent.sidebar.filterProjectOrderHeading')}
+                  value={optionLabel(PROJECT_ORDER_OPTIONS, scopedProjectOrder, t)}
+                  Icon={ListOrdered}
                 >
-                  <MenuItemIcon Icon={MessageSquare} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{t('ccAgent.sidebar.dialogues')}</span>
-                  </span>
-                  <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                    {dialogueCount}
-                  </span>
-                  {(projects === 'all' || (projectsAsSet?.has(DIALOGUE_FILTER_KEY) ?? false)) && (
-                    <Check size={15} className="shrink-0 text-[var(--msg-assistant-text)]" />
-                  )}
-                </DropdownMenuItem>
-                {allKnownProjects.map((project) => {
-                  const selected =
-                    projects === 'all' ||
-                    (projectsAsSet != null &&
-                      projectFilterIncludes(projectsAsSet, project.projectKey, localPlatform));
-                  const remoteIdentity = getRemoteProjectMachineIdentity(project);
-                  return (
+                  {PROJECT_ORDER_OPTIONS.map((option) => (
+                    <SelectMenuItem
+                      key={option.value}
+                      label={t(option.labelKey)}
+                      selected={scopedProjectOrder === option.value}
+                      Icon={option.Icon}
+                      onSelect={() => setProjectOrder(option.value)}
+                      tip={option.tipKey ? t(option.tipKey) : undefined}
+                    />
+                  ))}
+                </MenuSubRow>
+              )}
+              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <MenuSubRow
+                label={t('ccAgent.sidebar.taskStatusHeading')}
+                value={statusValue}
+                Icon={ListChecks}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <SelectMenuItem
+                    key={option.value}
+                    label={t(option.labelKey)}
+                    selected={status === option.value}
+                    Icon={option.Icon}
+                    onSelect={() => setStatus(option.value)}
+                  />
+                ))}
+              </MenuSubRow>
+              <MenuSubRow
+                label={t('ccAgent.sidebar.filterHeading')}
+                value={filterSummary}
+                valueEmphasized={activeFilterCount > 0}
+                Icon={Filter}
+              >
+                <MenuSubRow
+                  label={t('ccAgent.sidebar.filterProjectsHeading')}
+                  value={projectValue}
+                  Icon={Folder}
+                >
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      setProjectsAll();
+                    }}
+                    className={MENU_ITEM_CLASS}
+                  >
+                    <MenuItemIcon Icon={Folders} />
+                    <span className="truncate">{t('ccAgent.sidebar.filterAllProjects')}</span>
+                    {projects === 'all' && (
+                      <Check
+                        size={15}
+                        className="ml-auto shrink-0 text-[var(--msg-assistant-text)]"
+                      />
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                  <div className="max-h-[256px] overflow-y-auto">
                     <DropdownMenuItem
-                      key={project.projectKey}
                       onSelect={(event) => {
                         event.preventDefault();
-                        toggleProject(project.projectKey);
+                        toggleProject(DIALOGUE_FILTER_KEY);
                       }}
                       className={MENU_ITEM_CLASS}
                     >
-                      {project.scope === 'remote' ? (
-                        <Tip text={remoteIdentity?.displayLabel ?? project.remoteHostId ?? ''}>
-                          <Globe
-                            size={14}
-                            strokeWidth={2}
-                            className="shrink-0 text-[var(--folder-item-icon)]"
-                          />
-                        </Tip>
-                      ) : (
-                        <MenuItemIcon Icon={Folder} />
-                      )}
+                      <MenuItemIcon Icon={MessageSquare} />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate">{project.displayName}</span>
-                        {remoteIdentity ? (
-                          <span className="block truncate text-xs text-[var(--cmd-palette-item-meta)]">
-                            {remoteIdentity.displayLabel}
-                          </span>
-                        ) : null}
+                        <span className="block truncate">{t('ccAgent.sidebar.dialogues')}</span>
                       </span>
                       <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                        {project.sessions.length}
+                        {dialogueCount}
                       </span>
-                      {selected && (
+                      {(projects === 'all' ||
+                        (projectsAsSet?.has(DIALOGUE_FILTER_KEY) ?? false)) && (
                         <Check size={15} className="shrink-0 text-[var(--msg-assistant-text)]" />
                       )}
                     </DropdownMenuItem>
-                  );
-                })}
-              </div>
-            </MenuSubRow>
+                    {allKnownProjects.map((project) => {
+                      const selected =
+                        projects === 'all' ||
+                        (projectsAsSet != null &&
+                          projectFilterIncludes(projectsAsSet, project.projectKey, localPlatform));
+                      const remoteIdentity = getRemoteProjectMachineIdentity(project);
+                      return (
+                        <DropdownMenuItem
+                          key={project.projectKey}
+                          onSelect={(event) => {
+                            event.preventDefault();
+                            toggleProject(project.projectKey);
+                          }}
+                          className={MENU_ITEM_CLASS}
+                        >
+                          {project.scope === 'remote' ? (
+                            <Tip text={remoteIdentity?.displayLabel ?? project.remoteHostId ?? ''}>
+                              <Globe
+                                size={14}
+                                strokeWidth={2}
+                                className="shrink-0 text-[var(--folder-item-icon)]"
+                              />
+                            </Tip>
+                          ) : (
+                            <MenuItemIcon Icon={Folder} />
+                          )}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">{project.displayName}</span>
+                            {remoteIdentity ? (
+                              <span className="block truncate text-xs text-[var(--cmd-palette-item-meta)]">
+                                {remoteIdentity.displayLabel}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+                            {project.sessions.length}
+                          </span>
+                          {selected && (
+                            <Check
+                              size={15}
+                              className="shrink-0 text-[var(--msg-assistant-text)]"
+                            />
+                          )}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </div>
+                </MenuSubRow>
 
-            <MenuSubRow
-              label={t('ccAgent.sidebar.filterAgentHeading')}
-              value={vendorValue}
-              Icon={Bot}
-            >
-              {VENDOR_OPTIONS.map((option) => (
-                <SelectMenuItem
-                  key={option.value}
-                  label={t(option.labelKey)}
-                  selected={vendor === option.value}
-                  Icon={option.Icon}
-                  onSelect={() => setVendor(option.value)}
-                />
-              ))}
-            </MenuSubRow>
+                <MenuSubRow
+                  label={t('ccAgent.sidebar.filterAgentHeading')}
+                  value={vendorValue}
+                  Icon={Bot}
+                >
+                  {VENDOR_OPTIONS.map((option) => (
+                    <SelectMenuItem
+                      key={option.value}
+                      label={t(option.labelKey)}
+                      selected={vendor === option.value}
+                      Icon={option.Icon}
+                      onSelect={() => setVendor(option.value)}
+                    />
+                  ))}
+                </MenuSubRow>
 
-            <MenuSubRow
-              label={t('ccAgent.sidebar.filterLastActivityHeading')}
-              value={lastActivityValue}
-              Icon={CalendarClock}
-            >
-              {LAST_ACTIVITY_OPTIONS.map((option) => (
-                <SelectMenuItem
-                  key={option.value}
-                  label={t(option.labelKey)}
-                  selected={lastActivity === option.value}
-                  Icon={option.Icon}
-                  onSelect={() => setLastActivity(option.value)}
-                />
-              ))}
-            </MenuSubRow>
+                <MenuSubRow
+                  label={t('ccAgent.sidebar.filterLastActivityHeading')}
+                  value={lastActivityValue}
+                  Icon={CalendarClock}
+                >
+                  {LAST_ACTIVITY_OPTIONS.map((option) => (
+                    <SelectMenuItem
+                      key={option.value}
+                      label={t(option.labelKey)}
+                      selected={lastActivity === option.value}
+                      Icon={option.Icon}
+                      onSelect={() => setLastActivity(option.value)}
+                    />
+                  ))}
+                </MenuSubRow>
 
-            <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
-                resetContentFilters();
-              }}
-              disabled={activeFilterCount === 0}
-              className={MENU_ITEM_CLASS}
-            >
-              <MenuItemIcon Icon={RotateCcw} />
-              <span className="truncate text-[var(--text-secondary)]">
-                {t('ccAgent.sidebar.filterReset')}
-              </span>
-            </DropdownMenuItem>
-          </MenuSubRow>
+                <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    resetContentFilters();
+                  }}
+                  disabled={activeFilterCount === 0}
+                  className={MENU_ITEM_CLASS}
+                >
+                  <MenuItemIcon Icon={RotateCcw} />
+                  <span className="truncate text-[var(--text-secondary)]">
+                    {t('ccAgent.sidebar.filterReset')}
+                  </span>
+                </DropdownMenuItem>
+              </MenuSubRow>
 
-          <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
 
-          <MenuSubRow
-            label={t('ccAgent.sidebar.displayHeading')}
-            value={mainViewValue}
-            Icon={MainViewIcon}
-          >
-            {MAIN_VIEW_OPTIONS.map((option) => (
-              <SelectMenuItem
-                key={option.value}
-                label={t(option.labelKey)}
-                selected={mainViewMode === option.value}
-                onSelect={() => setMainViewMode(option.value)}
-                Icon={option.Icon}
-              />
-            ))}
-          </MenuSubRow>
-          <MenuSubRow
-            label={t('ccAgent.sidebar.taskInfoHeading')}
-            value={taskInfoSummary}
-            Icon={Info}
-            valueNode={
-              taskInfoFields.length > 0 ? (
-                // 已选项用图标串表示,不再罗列短词。顺序 = 用户勾选顺序(遍历
-                // taskInfoFields 而非选项表),与列表行的渲染顺序一致。
-                <span className="flex items-center justify-end gap-1">
-                  {taskInfoFields.map((field) => {
-                    const Icon = TASK_INFO_OPTIONS.find((option) => option.value === field)?.Icon;
-                    return Icon ? (
-                      <Icon
-                        key={field}
-                        size={13}
-                        strokeWidth={1.8}
-                        className="shrink-0"
-                        aria-hidden
-                      />
-                    ) : null;
-                  })}
-                </span>
-              ) : undefined
-            }
-            valueEmphasized={!taskInfoIsDefault}
-          >
-            {TASK_INFO_OPTIONS.map((option) => (
-              <CheckMenuItem
-                key={option.value}
-                label={t(option.labelKey)}
-                checked={taskInfoFields.includes(option.value)}
-                onToggle={() => toggleTaskInfoField(option.value)}
-                Icon={option.Icon}
-              />
-            ))}
-          </MenuSubRow>
-        </div>
+              <MenuSubRow
+                label={t('ccAgent.sidebar.displayHeading')}
+                value={mainViewValue}
+                Icon={MainViewIcon}
+              >
+                {MAIN_VIEW_OPTIONS.map((option) => (
+                  <SelectMenuItem
+                    key={option.value}
+                    label={t(option.labelKey)}
+                    selected={mainViewMode === option.value}
+                    onSelect={() => setMainViewMode(option.value)}
+                    Icon={option.Icon}
+                  />
+                ))}
+              </MenuSubRow>
+              <MenuSubRow
+                label={t('ccAgent.sidebar.taskInfoHeading')}
+                value={taskInfoSummary}
+                Icon={Info}
+                valueNode={
+                  taskInfoFields.length > 0 ? (
+                    // 已选项用图标串表示,不再罗列短词。顺序 = 用户勾选顺序(遍历
+                    // taskInfoFields 而非选项表),与列表行的渲染顺序一致。
+                    <span className="flex items-center justify-end gap-1">
+                      {taskInfoFields.map((field) => {
+                        const Icon = TASK_INFO_OPTIONS.find(
+                          (option) => option.value === field,
+                        )?.Icon;
+                        return Icon ? (
+                          <Icon
+                            key={field}
+                            size={13}
+                            strokeWidth={1.8}
+                            className="shrink-0"
+                            aria-hidden
+                          />
+                        ) : null;
+                      })}
+                    </span>
+                  ) : undefined
+                }
+                valueEmphasized={!taskInfoIsDefault}
+              >
+                {TASK_INFO_OPTIONS.map((option) => (
+                  <CheckMenuItem
+                    key={option.value}
+                    label={t(option.labelKey)}
+                    checked={taskInfoFields.includes(option.value)}
+                    onToggle={() => toggleTaskInfoField(option.value)}
+                    Icon={option.Icon}
+                  />
+                ))}
+              </MenuSubRow>
+            </div>
+          )}
+        </MountedMenuContent>
       </DropdownMenuContent>
     </DropdownMenu>
   );

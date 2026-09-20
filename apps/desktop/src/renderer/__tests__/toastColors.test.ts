@@ -29,7 +29,7 @@ describe('E5D Toast 四色定稿(2026-07-17,豁免解除)', () => {
     });
   }
 
-  it('Toast 四变体齐全(info/success/warning/error),无遗漏', () => {
-    expect(Object.keys(VARIANT_MAP).sort()).toEqual(['error', 'info', 'success', 'warning']);
+  it('Toast 包含中性 loading 与四种状态提示', () => {
+    expect(Object.keys(VARIANT_MAP).sort()).toEqual(['error', 'info', 'loading', 'success', 'warning']);
   });
 });

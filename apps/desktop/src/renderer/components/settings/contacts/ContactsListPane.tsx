@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { Building2, Plus, Search, Sparkles, User } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import type { ContactGroupWithCount, ContactSummary } from '@/lib/contactsService';
 
 export type ContactsFilter = 'all' | 'person' | 'org' | 'pending';
@@ -133,26 +134,27 @@ export function ContactsListPane(props: Props) {
 
       {/* 过滤 chips + 分组筛选 */}
       <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
-        {filters.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => props.onFilterChange(f.id)}
-            className={cn(
-              'flex h-6 items-center gap-1 rounded-full px-2.5 text-12 transition-colors',
-              props.filter === f.id
-                ? 'bg-[var(--settings-menu-bg-selected)] font-medium text-[var(--settings-menu-text-selected)] border border-[var(--settings-menu-border-selected)]'
-                : 'border border-transparent bg-[var(--settings-input-bg)] text-[var(--settings-section-desc)] hover:text-[var(--settings-section-title)]',
-            )}
-          >
-            {f.label}
-            {f.id === 'pending' && (f.badge ?? 0) > 0 && (
-              <span className="rounded-full bg-[var(--status-bar-accent)] px-1.5 text-11 leading-[1.455] text-[var(--status-badge-fg)]">
-                {f.badge}
-              </span>
-            )}
-          </button>
-        ))}
+        <SegmentedControl
+          aria-label={t('settings.contacts.title')}
+          value={props.filter}
+          onValueChange={props.onFilterChange}
+          height={28}
+          optionHeight={24}
+          optionClassName="gap-1 px-2.5"
+          options={filters.map((filter) => ({
+            value: filter.id,
+            label: (
+              <>
+                {filter.label}
+                {filter.id === 'pending' && (filter.badge ?? 0) > 0 && (
+                  <span className="rounded-full bg-[var(--status-bar-accent)] px-1.5 text-11 leading-[1.455] text-[var(--status-badge-fg)]">
+                    {filter.badge}
+                  </span>
+                )}
+              </>
+            ),
+          }))}
+        />
         {props.groups.length > 0 && (
           <select
             value={props.groupFilter ?? ''}

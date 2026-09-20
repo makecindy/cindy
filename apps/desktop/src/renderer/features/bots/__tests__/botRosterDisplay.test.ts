@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BotProfile } from '../botStore';
 import {
   botRosterActivityAt,
+  botDeviceLabel,
   filterBotRoster,
   partitionBotRoster,
   sortBotRoster,
@@ -42,6 +43,12 @@ function bot(
 }
 
 describe('Hermes-style Bot roster display', () => {
+  it('distinguishes missing and duplicate host names by their actual device IDs', () => {
+    const device = { deviceId: 'mac-1', name: ' Studio ' };
+    expect(botDeviceLabel(device, [device, device])).toBe('Studio');
+    expect(botDeviceLabel(device, [device, { deviceId: 'mac-2', name: 'studio' }])).toBe('Studio (mac-1)');
+    expect(botDeviceLabel({ deviceId: 'mac-2', name: ' ' }, [])).toBe('mac-2');
+  });
   it('sorts pinned Bots first and keeps recency ordering inside both groups', () => {
     const rows = sortBotRoster([
       bot('recent', { lastMessageAt: 90 }),

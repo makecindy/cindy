@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
@@ -72,6 +72,13 @@ export interface SessionEntryListProps {
   collapseLimit?: number;
   /** collapsible 时临时禁用(如按内容搜索/筛选中,应展开全部命中)。 */
   disableCollapse?: boolean;
+  /**
+   * 折叠豁免的追加会话集合(只影响折叠,不影响行内视觉)。基础豁免 =
+   * notifications ∪ runningSessionIds;展开态父层用它并入 device-link 远程
+   * 活动镜像(远程 running/未读不在上面两个本地集合里),保证上层聚合灯
+   * 点亮的会话不被折进「显示全部」。
+   */
+  foldExemptSessionIds?: ReadonlySet<string>;
   /** 父级 SectionCollapse 的折叠态;用于收起动画结束后复位「显示全部」。 */
   sectionCollapsed?: boolean;
   /** 项目置顶到列表模式时，项目内会话复用满宽列表卡片；其它场景保持紧凑文字行。 */
@@ -123,6 +130,7 @@ export function SessionEntryRows({
   sessionOrderHandle = false,
   automationGroupCollapsed,
   onAutomationGroupCollapsedChange,
+  foldExemptSessionIds,
 }: SessionEntryRowsProps) {
   return (
     <>
@@ -187,6 +195,7 @@ export function SessionEntryRows({
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
             collapsed={automationGroupCollapsed?.(entry.group.id)}
+            foldExemptSessionIds={foldExemptSessionIds}
             onCollapsedChange={
               onAutomationGroupCollapsedChange
                 ? (collapsed) => onAutomationGroupCollapsedChange(entry.group.id, collapsed)
@@ -212,6 +221,7 @@ export function SessionEntryList({
   collapseLimit,
   disableCollapse = false,
   sectionCollapsed = false,
+  foldExemptSessionIds,
   manualOrder,
   initialOrder,
   onReorder,
@@ -236,7 +246,10 @@ export function SessionEntryList({
   }, [manualOrder, notifications, scheduleSessionIndex, sessions]);
 
   // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
-  // 需关注 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
+  // 需关注 / 运行中 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
+  // running 豁免与上层聚合灯同口径(Greptile P1):项目行/设备段头的呼吸灯为
+  // running 会话点亮,该会话就不能折进「显示全部」——灯亮进去必须找得到行。
+  // foldExemptSessionIds 供父层追加口径(如展开态并入 device-link 远程镜像)。
   const { visibleEntries, isOverflowing, totalCount } = getSessionListCollapseView({
     entries,
     minVisibleCount: collapseLimit,
@@ -246,11 +259,21 @@ export function SessionEntryList({
     nowMs: Date.now(),
     getActivityMs: getEntryActivityMs,
     isActiveEntry: (entry) => entryIsActive(entry, props.activeSessionId),
-    hasAttentionEntry: (entry) => entryHasAttention(entry, notifications),
+    hasAttentionEntry: (entry) =>
+      entryHasAttention(entry, notifications) ||
+      entryHasAttention(entry, props.runningSessionIds) ||
+      (foldExemptSessionIds != null && entryHasAttention(entry, foldExemptSessionIds)),
   });
 
   const displayEntries = collapsible ? visibleEntries : entries;
-  const rows = <SessionEntryRows entries={displayEntries} notifications={notifications} {...props} />;
+  const rows = (
+    <SessionEntryRows
+      entries={displayEntries}
+      notifications={notifications}
+      foldExemptSessionIds={foldExemptSessionIds}
+      {...props}
+    />
+  );
   if (onReorder) {
     const currentBaseOrder = manualOrder?.length
       ? manualOrder
@@ -300,6 +323,7 @@ export function SessionEntryList({
               entries={[entry]}
               notifications={notifications}
               sessionOrderHandle
+              foldExemptSessionIds={foldExemptSessionIds}
               {...props}
             />
           )}

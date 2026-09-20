@@ -57,6 +57,7 @@ import {
 } from '@cindy/maker-shared';
 
 import { cn, basename } from '@/lib/utils';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { Spinner } from '@/components/ui/spinner';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
@@ -296,16 +297,7 @@ function isToolAudioUrl(url: string): boolean {
  * renderer 据此从 ghostCardStore 取卡渲染;取不到令牌 = 走今日 generic 路径。
  */
 export function extractGhostCardId(toolResult: string): string | null {
-  if (!toolResult || typeof toolResult !== 'string') return null;
-  if (!toolResult.includes('xdt_card_id')) return null;
-  try {
-    const parsed = JSON.parse(toolResult) as { xdt_card_id?: unknown };
-    return typeof parsed.xdt_card_id === 'string' && parsed.xdt_card_id.length > 0
-      ? parsed.xdt_card_id
-      : null;
-  } catch {
-    return null;
-  }
+  return getToolResultMetadata(toolResult).cardId;
 }
 
 /**
@@ -316,19 +308,73 @@ export function extractGhostCardId(toolResult: string): string | null {
  * 采纳,锚不上回退本调用位置渲染(老意识/坏锚零影响)。
  */
 export function extractAnchorCardId(toolResult: string): string | null {
-  if (!toolResult || typeof toolResult !== 'string') return null;
-  if (!toolResult.includes('xdt_anchor_card_id')) return null;
-  try {
-    const parsed = JSON.parse(toolResult) as { xdt_anchor_card_id?: unknown };
-    return typeof parsed.xdt_anchor_card_id === 'string' && parsed.xdt_anchor_card_id.length > 0
-      ? parsed.xdt_anchor_card_id
-      : null;
-  } catch {
-    return null;
-  }
+  return getToolResultMetadata(toolResult).anchorId;
 }
 
 export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
+  // Callers may filter/append their own list; never lend out the cached array.
+  return getToolResultMetadata(toolResult).media.slice();
+}
+
+interface ToolResultMetadata {
+  cardId: string | null;
+  anchorId: string | null;
+  media: ToolMediaItem[];
+}
+
+const EMPTY_TOOL_METADATA: ToolResultMetadata = { cardId: null, anchorId: null, media: [] };
+// Bound both count and retained text. Large historical tool outputs must not turn
+// a small entry-count cache into unbounded retention. Parsed JSON is never kept.
+const TOOL_METADATA_MAX_ENTRIES = 512;
+const TOOL_METADATA_MAX_CHARACTERS = 32 * 1024 * 1024;
+const toolMetadataCache = new Map<string, ToolResultMetadata>();
+let toolMetadataCharacters = 0;
+let toolMetadataOwner = getDataOwnerGeneration();
+
+function getToolResultMetadata(toolResult: string): ToolResultMetadata {
+  const owner = getDataOwnerGeneration();
+  if (owner !== toolMetadataOwner) {
+    toolMetadataCache.clear();
+    toolMetadataCharacters = 0;
+    toolMetadataOwner = owner;
+  }
+  if (!toolResult || typeof toolResult !== 'string') return EMPTY_TOOL_METADATA;
+  const cached = toolMetadataCache.get(toolResult);
+  if (cached) {
+    toolMetadataCache.delete(toolResult);
+    toolMetadataCache.set(toolResult, cached);
+    return cached;
+  }
+  let metadata = EMPTY_TOOL_METADATA;
+  if (/xdt_(?:card_id|anchor_card_id|image_url|video_url|audio_url)/.test(toolResult)) {
+    try {
+      const parsed = JSON.parse(toolResult) as Record<string, unknown> | null;
+      if (parsed && typeof parsed === 'object') {
+        metadata = {
+          cardId: toolResult.includes('xdt_card_id') && typeof parsed.xdt_card_id === 'string' && parsed.xdt_card_id.length > 0
+            ? parsed.xdt_card_id : null,
+          anchorId: toolResult.includes('xdt_anchor_card_id') && typeof parsed.xdt_anchor_card_id === 'string' && parsed.xdt_anchor_card_id.length > 0
+            ? parsed.xdt_anchor_card_id : null,
+          media: extractParsedToolResultMedia(toolResult, parsed),
+        };
+      }
+    } catch {
+      // Malformed and ordinary text results have no media/card metadata.
+    }
+  }
+  if (toolResult.length <= TOOL_METADATA_MAX_CHARACTERS) {
+    toolMetadataCache.set(toolResult, metadata);
+    toolMetadataCharacters += toolResult.length;
+    while (toolMetadataCache.size > TOOL_METADATA_MAX_ENTRIES || toolMetadataCharacters > TOOL_METADATA_MAX_CHARACTERS) {
+      const oldest = toolMetadataCache.keys().next().value!;
+      toolMetadataCache.delete(oldest);
+      toolMetadataCharacters -= oldest.length;
+    }
+  }
+  return metadata;
+}
+
+function extractParsedToolResultMedia(toolResult: string, parsed: Record<string, unknown>): ToolMediaItem[] {
   if (!toolResult || typeof toolResult !== 'string') return [];
   // 快速否定:不含任何 xdt_*_url 字面量直接 short-circuit。
   if (
@@ -339,19 +385,6 @@ export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
     return [];
   }
   try {
-    const parsed = JSON.parse(toolResult) as {
-      xdt_image_url?: unknown;
-      xdt_image_urls?: unknown;
-      xdt_video_url?: unknown;
-      xdt_video_urls?: unknown;
-      xdt_audio_urls?: unknown;
-      xdt_audio_tracks?: unknown;
-      xdt_audio_in_card?: unknown;
-      xdt_images_in_card?: unknown;
-      _xdt_render_image?: unknown;
-      _xdt_model_files?: unknown;
-      _xdt_audio_tracks?: unknown;
-    };
     if (parsed._xdt_render_image === false) return [];
     const modelFiles = parseModelFiles(parsed._xdt_model_files);
     // Track which image index we're at across xdt_image_url + xdt_image_urls

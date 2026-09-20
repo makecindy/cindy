@@ -61,3 +61,19 @@ export function interceptHtmlNavigation(
   if (!documentSettled && (url === '' || url === 'about:blank')) return true;
   return false;
 }
+
+/** A snapshot may navigate only to its guarded HTML documents on its exact origin. */
+export function interceptSnapshotNavigation(url: string, bootstrap: string, documents: readonly string[], onDemand = false): boolean {
+  try {
+    const target = new URL(url);
+    const initial = new URL(bootstrap);
+    if (target.origin !== initial.origin || target.username || target.password) return false;
+    if (onDemand) {
+      const path = decodeURIComponent(target.pathname).slice(1);
+      if (/[\\:\0\r\n]/.test(path) || path.replace(/\/$/, '').split('/').some((part) => part.startsWith('.'))) return false;
+      return target.pathname === initial.pathname || target.pathname.endsWith('/') || /\.html?$/i.test(path);
+    }
+    return target.pathname === initial.pathname
+      || documents.some((path) => decodeURIComponent(path) === decodeURIComponent(target.pathname));
+  } catch { return false; }
+}

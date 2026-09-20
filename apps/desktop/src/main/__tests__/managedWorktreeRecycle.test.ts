@@ -1,3 +1,8 @@
+// These suites exercise real archive I/O in Node; Electron worker isolation is covered separately.
+vi.mock('../worktree/recoveryArchiveWorkerClient', async () => {
+  const { executeRecoveryArchiveTask } = await import('../worktree/recoveryArchiveTask');
+  return { runRecoveryArchiveTask: executeRecoveryArchiveTask };
+});
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -6,14 +11,14 @@ import path from 'node:path';
 import type { WorktreeMeta } from '../worktree/types';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
 
-const state = vi.hoisted(() => ({ root: '', refs: [] as LocalWorktreeReference[], runtimes: new Set<string>(), registry: new Map<string, WorktreeMeta>() }));
+const state = vi.hoisted(() => ({ root: '', userData: '', refs: [] as LocalWorktreeReference[], runtimes: new Set<string>(), registry: new Map<string, WorktreeMeta>() }));
 const snapshot = vi.hoisted(() => vi.fn());
 const baselineMatches = vi.hoisted(() => vi.fn());
 const archive = vi.hoisted(() => vi.fn());
 const query = vi.hoisted(() => vi.fn());
 const git = vi.hoisted(() => vi.fn());
 
-vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
+vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
 vi.mock('../worktree/worktreeStore', () => ({
   get: (id: string) => state.registry.get(id) ?? null,
   getAll: () => [...state.registry.values()], getAllPaths: () => [...state.registry.values()].map((m) => m.path),
@@ -21,7 +26,10 @@ vi.mock('../worktree/worktreeStore', () => ({
   del: async (id: string) => { state.registry.delete(id); },
 }));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ readLocalWorktreeReferences: query }) }));
-vi.mock('../worktree/runtimeLeases', () => ({ readWorktreeRuntimePaths: async () => state.runtimes }));
+vi.mock('../worktree/runtimeLeases', async (original) => ({
+  ...await original<typeof import('../worktree/runtimeLeases')>(),
+  readWorktreeRuntimePaths: vi.fn(async () => state.runtimes),
+}));
 vi.mock('../worktree/contentSnapshot', () => ({ captureWorktreeContent: snapshot, worktreeContentBaselineMatches: baselineMatches }));
 vi.mock('../worktree/gitExec', () => ({ gitExec: git }));
 vi.mock('../worktree/recoveryArchive', async (original) => ({
@@ -29,22 +37,27 @@ vi.mock('../worktree/recoveryArchive', async (original) => ({
   createRecoveryArchive: archive, verifyRecoveryArchive: async () => {},
 }));
 
-import { recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
+import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
 import { readRecycleRecord } from '../worktree/recycleJournal';
 import { inventoryWorktree } from '../worktree/recoveryArchive';
 import { physicalWorktreeKey } from '../worktree/resourceLock';
+import { readWorktreeRuntimePaths } from '../worktree/runtimeLeases';
+import { acquireIOSSimulatorProjectUse } from '../mcp-integrations/ios-simulator-project-source';
+import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
 
 describe('shared worktree recycling', () => {
   let meta: WorktreeMeta;
   let removable: boolean;
   beforeEach(async () => {
     state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-recycle-test-'));
+    state.userData = '';
     meta = { sessionId: 'owner', generation: 'generation-one', name: 'one', path: path.join(state.root, 'repo', '.cindy-worktrees', 'one'), baseRepo: path.join(state.root, 'repo'), branch: 'cindy/one', sourceBranch: 'main', createdAt: '2026-09-08T00:00:00Z' };
     await fs.mkdir(meta.path, { recursive: true });
-    await fs.writeFile(path.join(meta.path, '.git'), 'gitdir: unused-test-link');
+    await createLinkedWorktreeMetadata(meta.path);
     await fs.writeFile(path.join(meta.path, 'draft.txt'), 'uncommitted contents');
     state.registry.clear(); state.registry.set(meta.sessionId, meta);
     state.runtimes.clear();
+    vi.mocked(readWorktreeRuntimePaths).mockReset().mockImplementation(async () => state.runtimes);
     state.refs = [{ id: meta.sessionId, status: 'archived', source: 'desktop', workingDir: meta.path, worktreePath: meta.path, currentDatabase: true }];
     removable = true;
     query.mockReset().mockImplementation(async () => state.refs);
@@ -64,6 +77,17 @@ describe('shared worktree recycling', () => {
     await fs.rm(state.root, { recursive: true, force: true });
   });
   const recycle = () => recycleManagedWorktree(meta, { canRemove: async () => removable });
+
+  it('does not rebuild failed archives after the durable budget is exhausted', async () => {
+    archive.mockRejectedValue(new Error('temporary filesystem failure'));
+    for (let attempt = 0; attempt < 5; attempt++) expect(await recycle()).toBe(false);
+    expect(archive).toHaveBeenCalledTimes(3);
+    expect((await readRecycleRecord(meta.path))?.retryPolicy?.state).toBe('paused');
+    await expect(checkpointWorktreeForReuse(meta)).rejects.toThrow('recycling is paused');
+    expect(archive).toHaveBeenCalledTimes(3);
+    expect((await fs.stat(meta.path)).isDirectory()).toBe(true);
+    expect(state.registry.has(meta.sessionId)).toBe(true);
+  });
 
   it('limits simultaneous recycling of distinct resources to one', async () => {
     let release!: () => void;
@@ -114,6 +138,57 @@ describe('shared worktree recycling', () => {
     state.runtimes.add(await physicalWorktreeKey(meta.path));
     expect(await recycle()).toBe(false);
     expect(archive).not.toHaveBeenCalled();
+  });
+  it('protects a simulator source borrowed by another isolated profile until release', async () => {
+    const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
+    vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
+    const borrowerProfile = path.join(state.root, 'profile-a');
+    const ownerProfile = path.join(state.root, 'profile-b');
+    for (const profile of [borrowerProfile, ownerProfile]) {
+      await fs.mkdir(path.join(profile, '.dev-instances'), { recursive: true });
+    }
+    state.userData = borrowerProfile;
+    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    expect(release).not.toBeNull();
+    try {
+      // The recycler has a different userData and no active database reference.
+      state.userData = ownerProfile;
+      expect(await recycle()).toBe(false);
+      expect(archive).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(meta.path)]));
+      // Retain the profile-local evidence that existing readers already consume.
+      expect(await fs.readdir(path.join(borrowerProfile, 'worktree-runtime-leases'))).toHaveLength(1);
+
+      await release!();
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+      expect(await recycle()).toBe(true);
+      await expect(fs.stat(meta.path)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await release?.();
+    }
+  });
+  it('protects borrowed source when the owner still reads only profile-local leases', async () => {
+    const borrowerProfile = path.join(state.root, 'profile-a');
+    const ownerProfile = path.join(state.root, 'legacy-profile');
+    // Match the pre-change reader: the owner never scans the shared registry.
+    vi.mocked(readWorktreeRuntimePaths).mockImplementation(async () => {
+      const directory = path.join(state.userData, 'worktree-runtime-leases');
+      const names = await fs.readdir(directory).catch(() => [] as string[]);
+      return new Set(await Promise.all(names.filter((name) => name.endsWith('.json')).map(async (name) =>
+        JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).path as string)));
+    });
+    state.userData = borrowerProfile;
+    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    try {
+      state.userData = ownerProfile;
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+      expect(await recycle()).toBe(false);
+      expect(archive).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+      await release!();
+      expect(await recycle()).toBe(true);
+    } finally { await release?.(); }
   });
   it('protects a borrower running in a subdirectory', async () => {
     state.refs.push({ ...state.refs[0], id: 'borrower', status: 'active', workingDir: path.join(meta.path, 'src'), worktreePath: null });
@@ -185,7 +260,13 @@ describe('shared worktree recycling', () => {
     expect(await recycle()).toBe(false);
     expect((await readRecycleRecord(meta.path))?.reason).toBe('directory-replaced');
   });
-  it('partial EBUSY deletion retains evidence and retries only unchanged surviving bytes', async () => {
+  it('partial EBUSY deletion rejects cross-profile borrowing and retries unchanged surviving bytes', async () => {
+    const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
+    vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
+    const borrowerProfile = path.join(state.root, 'borrower-profile');
+    for (const profile of [state.root, borrowerProfile]) {
+      await fs.mkdir(path.join(profile, '.dev-instances'), { recursive: true });
+    }
     const rm = fs.rm;
     const fail = vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
       if (String(target) === meta.path) throw Object.assign(new Error('locked'), { code: 'EBUSY' });
@@ -201,6 +282,19 @@ describe('shared worktree recycling', () => {
     expect(await recycle()).toBe(false);
     expect((await readRecycleRecord(meta.path))?.phase).toBe('removing');
     expect(state.registry.has(meta.sessionId)).toBe(true);
+    await expect(fs.stat(path.join(meta.path, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
+    state.userData = borrowerProfile;
+    let release: (() => Promise<void>) | null = null;
+    try {
+      await expect(acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController()).then((value) => {
+        release = value; return value;
+      })).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+    } finally {
+      await (release as (() => Promise<void>) | null)?.();
+      state.userData = '';
+    }
     fail.mockRestore();
     expect(await recycle()).toBe(true);
     expect(snapshot).toHaveBeenCalledTimes(1);

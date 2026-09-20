@@ -240,6 +240,7 @@ function harness() {
   });
   const activity = new SessionTurnActivityTracker();
   const deps = {
+    onSuccessfulProductTurn: vi.fn(async () => {}),
     log,
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
@@ -389,6 +390,16 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'runs the upstream-merge follow-up only for a successful product boundary: %s', async (status) => {
+      const h = harness();
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('done', { status }));
+      await microtasks();
+      expect(h.deps.onSuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 1 : 0);
+      await h.dispose();
+    },
+  );
   it.each([
     ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
     ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
@@ -451,6 +462,7 @@ describe('production Session event pipeline', () => {
     effects.fn('consumeLastAssistantPersistId').mockReturnValueOnce('segment-row');
     vi.setSystemTime(3000);
     h.emit(event('done', {}, { source, turnContinuationId: 0 }));
+    expect(h.deps.onSuccessfulProductTurn).not.toHaveBeenCalled();
     expect(h.activity.isSessionInTurn('task')).toBe(true);
     expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
     expect(effects.fn('turn-drain')).not.toHaveBeenCalled();
@@ -831,6 +843,80 @@ describe('provider turn observer on real Session.send', () => {
       },
     };
   }
+  it('holds the send reservation while waiting for the local project boundary', async () => {
+    const harnessState = harness();
+    const gate = deferred();
+    const onAccepted = vi.fn();
+    const beforeLocalProviderStart = vi.fn(async (session: Session) => {
+      expect(session.isTurnRunning()).toBe(true);
+      await gate.promise;
+      effects.calls.push('project-ready');
+    });
+    const dispose = installSessionTurnObserver(
+      { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
+    );
+    const sending = harnessState.session.send('test', { onAccepted });
+    try {
+      await microtasks();
+      expect(beforeLocalProviderStart).toHaveBeenCalledWith(harnessState.session);
+      expect(harnessState.session.isTurnRunning()).toBe(true);
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(harnessState.handle.send).not.toHaveBeenCalled();
+      expect(effects.fn('verdictForModelRoute')).not.toHaveBeenCalled();
+      gate.resolve();
+      await sending;
+      ordered('project-ready', 'lease-start');
+      expect(effects.fn('verdictForModelRoute')).toHaveBeenCalledOnce();
+      expect(onAccepted).toHaveBeenCalledOnce();
+      expect(harnessState.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await sending;
+      dispose();
+      await harnessState.dispose();
+    }
+  });
+
+  it('rejects unavailable local projects before persistence, lease and provider dispatch', async () => {
+    const harnessState = harness();
+    const deps = observerDeps();
+    const onAccepted = vi.fn();
+    const beforeLocalProviderStart = vi.fn(async () => {
+      throw new Error('project unavailable');
+    });
+    const dispose = installSessionTurnObserver(
+      { ...deps, beforeLocalProviderStart }, harnessState.session,
+    );
+    try {
+      await expect(harnessState.session.send('test', { onAccepted })).rejects.toThrow('project unavailable');
+      expect(beforeLocalProviderStart).toHaveBeenCalledOnce();
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(harnessState.handle.send).not.toHaveBeenCalled();
+      expect(harnessState.session.isTurnRunning()).toBe(false);
+    } finally {
+      dispose();
+      await harnessState.dispose();
+    }
+  });
+
+  it('does not apply the local project boundary to a remote session', async () => {
+    const harnessState = harness();
+    Object.defineProperty(harnessState.session, 'remoteHostId', { value: 'ssh-host' });
+    const beforeLocalProviderStart = vi.fn(async () => {});
+    const dispose = installSessionTurnObserver(
+      { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
+    );
+    try {
+      await harnessState.session.send('test');
+      expect(beforeLocalProviderStart).not.toHaveBeenCalled();
+      expect(harnessState.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      dispose();
+      await harnessState.dispose();
+    }
+  });
+
   it.each(['reject', 'reroute'] as const)(
     'stops a paid-model %s before lease and provider dispatch',
     async (kind) => {

@@ -7,6 +7,22 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile session header desktop-first surface', () => {
+  it('preserves title status in the iOS branch, not only in the legacy header', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const start = source.indexOf('{nativeHeader ? <SessionHeaderNativeTitle');
+    const nativeBranch = source.slice(start, source.indexOf('/> : (', start));
+    expect(start).toBeGreaterThan(-1);
+    for (const prop of ['syncing={syncing}', 'syncingImmediately={syncingImmediately}',
+      'pinned={!messageOnly && !!currentSession?.pinnedAt}', 'notice={notice}']) {
+      expect(nativeBranch).toContain(prop);
+    }
+    const native = readTextLf(resolve(process.cwd(), 'src/session/SessionHeaderNativeControls.ios.tsx'), 'utf8');
+    expect(native).toContain('<QuietSyncIndicator active={syncing} immediate={syncingImmediately} />');
+    expect(native).toContain('{pinned ? <Pin');
+    expect(native).toContain('testID="session.headerNotice"');
+    expect(native).toContain('flexShrink: 1');
+  });
+
   it('releases the new-session handoff heavy topic when the session screen unmounts', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
@@ -47,12 +63,17 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).not.toContain('<SafeAreaView style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
     expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
-    expect(source).toContain("function TranslucentBackdrop()");
-    expect(source).toContain("<TranslucentBackdrop />");
-    expect(source).toContain('return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;');
+    // iOS floats individual glass capsules over the message canvas.
+    expect(source).not.toContain('<TranslucentBackdrop />');
+    expect(source).not.toContain('colors.chatHeaderSurface');
+    expect(source).toContain('safeArea: { flex: 1, backgroundColor: colors.surface }');
+    const chromeStyle = source.slice(source.indexOf('  sessionChrome: {'), source.indexOf('  sessionChromeContent: {'));
+    expect(chromeStyle).toContain("backgroundColor: Platform.OS === 'ios' ? 'transparent' : colors.surface");
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>');
-    expect(source).toContain("sessionChrome: {\n    left: 0,\n    overflow: 'hidden',\n    position: 'absolute',");
+    expect(chromeStyle).toContain("position: 'absolute'");
+    // Let native glass press feedback extend beyond the 44pt iOS header.
+    expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");
     expect(source).toContain('sessionChromeContent: {');
     expect(source).not.toContain("colors.glassTint");
     expect(source).not.toContain("colors.glassHighlight");
@@ -156,7 +177,9 @@ describe('mobile session header desktop-first surface', () => {
     expect(boundary).toContain('setAttachments([]);');
     expect(boundary).toContain('setAttachmentPreviews({});');
     expect(boundary).toContain('setMediaAssetAttachments({});');
-    expect(boundary).toContain('setPendingMediaAssets([]);');
+    // Thumbnail selections are committed immediately; task switches clear the
+    // canonical attachment collection instead of a separate pending-media list.
+    expect(boundary).toContain('attachmentsRef.current = [];');
     expect(boundary).toContain('setComposerPreviewAttachmentId(null);');
     expect(boundary).toContain('composerAnnotationsRef.current?.forgetAllAttachments();');
     expect(boundary).toContain('discardMobileUploadedAttachment(attachment');

@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import {
   DeviceLinkClient,
+  PeerRecoveryScheduler,
   DeviceLinkError,
   PROTOCOL_VERSION,
   type DeviceLinkTiming,
@@ -8,7 +9,6 @@ import {
   type InvokePayload,
   type LinkOpenPayload,
 } from "../../packages/device-link/src/index";
-import { PeerRecoveryScheduler } from "../../apps/mobile/src/device-link/peerRecoveryScheduler";
 import { rehydrateDeviceLinkPeer } from "../../apps/mobile/src/device-link/rehydrate";
 import { DeviceLinkTopicRegistry } from "../../apps/mobile/src/device-link/topicRegistry";
 

@@ -1,4 +1,12 @@
 {
+  "privacyExit": {
+    "status": "This computer is being remotely controlled through Cindy",
+    "hint": "Click or press any key to disconnect…",
+    "title": "Disconnect remote desktop?",
+    "detail": "This will end remote control and restore this computer’s screen. The computer will lock if lock on exit is enabled.",
+    "cancel": "Keep connected",
+    "disconnect": "Disconnect"
+  },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
   },
@@ -56,7 +64,10 @@
     "pan": "Move view",
     "keyboard": "Keyboard",
     "rightClick": "Right click",
-    "fit": "Fit",
+    "actualSize": "Actual size (1:1)",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to window",
     "display": "Display",
     "gestureHint": "Pinch to zoom. Two fingers scroll; Move view pans. Hold, then move to drag.",
     "textPlaceholder": "Type on the computer",
@@ -65,10 +76,11 @@
     "showDesktop": "Desktop",
     "allWindows": "All windows",
     "reconnecting": "Reconnecting…",
+    "connectionTimeout": "Connection timed out. Check your network and that the computer is online, then reconnect.",
     "connectionBusy": "Another device is connected to this remote desktop. Exit remote desktop on that device, then try connecting again.",
     "takeoverConnection": "Take over connection",
     "connectionBusyTakeover": "Another device is connected to this desktop. Taking over will disconnect that device.",
-    "remoteDisabled": "Remote control is disabled on the computer.",
+    "remoteDisabled": "On the remote computer, open Cindy Settings → Remote control and enable remote control.",
     "accessRevoked": "Access to this computer was revoked.",
     "directConnection": "Direct to computer",
     "videoRelay": "Server video relay",
@@ -79,12 +91,18 @@
       "opening": "Opening remote desktop…",
       "unavailable": "Remote desktop unavailable: {{reason}}",
       "offline": "This computer is offline.",
-      "controlDisabled": "Allow control of this computer in Remote control settings.",
+      "controlDisabled": "On the remote computer, open Cindy Settings → Remote control and allow control of this computer.",
       "unsupported": "This device does not support remote desktop.",
-      "checkFailed": "Could not check this computer. Hover again to retry.",
+      "checkFailed": "Could not check this computer. Check its network connection.",
+      "screenRecordingRequired": "On the remote Mac, open System Settings → Privacy & Security and allow screen recording for Cindy. Reopen Cindy if prompted.",
       "noDisplay": "No available display on this computer."
     },
     "viewer": {
+      "displayPanel": "Display & Sound",
+      "clipboardPanel": "Clipboard",
+      "securityPanel": "Security",
+      "controlGroup": "Remote control",
+      "controlMode": "Control",
       "settings": "Controls",
       "sound": "Sound",
       "fullscreen": "Full screen",
@@ -96,17 +114,57 @@
       "balanced": "Balanced",
       "clear": "Clear",
       "resolution": "Computer resolution",
-      "clipboardFailed": "Could not transfer text. Check control access and keep text under 16,384 characters.",
-      "settingsFailed": "Could not change the display setting.",
+      "clipboardFailed": "Could not transfer clipboard content. Check control access and try again.",
+      "settingsFailed": "Could not save this setting. Try again.",
       "inputHint": "Click the picture to type. Ctrl+Alt+Esc releases keyboard focus; Cmd/Ctrl+W closes this window.",
       "controlPending": "Requesting control…",
-      "controlRequired": "View only. Take control to use the clipboard and desktop actions.",
+      "controlRequired": "View only. Take control to interact with the remote computer.",
       "confirmDisconnect": "Disconnect from this computer?",
       "confirmDisconnectHint": "The remote desktop connection will end. Apps on the computer will keep running.",
       "disconnectFailed": "Could not disconnect. Try again.",
-      "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste text between computers. Images and files are not supported yet.",
+      "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste. Supported content depends on the remote computer; files are not transferred.",
+      "fitViewerDisplay": "Match Current View",
+      "fitViewerDisplayHint": "Temporarily adjusts the computer desktop to this view’s aspect ratio, keeping its contents. Disconnect to restore the original resolution.",
       "resolutionHint": "Resolution changes affect the actual remote monitor."
-    }
+    },
+    "settingUnsupported": "This computer does not support this setting yet",
+    "privacyScreen": "Computer privacy screen",
+    "privacyScreenHint": "Cover the computer’s screens. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
+    "privacyActive": "Privacy screen is on. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
+    "privacyFailed": "Privacy screen could not be enabled. The computer’s screens may still be visible.",
+    "hostMute": "Mute controlled computer",
+    "hostMuteHint": "Mute the controlled computer while connected",
+    "hostMuteFailed": "Unable to change controlled computer mute state",
+    "clipboardSync": "Clipboard sync",
+    "clipboardSyncConflict": "Both clipboards changed. Both copies were kept. Copy again on either device to sync.",
+    "clipboardSyncFailed": "Sync temporarily failed. Retrying automatically; your setting stays on.",
+    "clipboardSyncSkipped": "This content could not be synced and was skipped. Check paste access, or copy text or an image to try again.",
+    "clipboardSyncPermission": "Sync is paused. Allow paste access, then retry. Your setting stays on.",
+    "lockingOnExit": "Locking computer…",
+    "lockOnExit": "Lock Computer on Exit",
+    "lockOnExitHint": "Locks when you leave remote desktop. Reconnecting or switching apps does not lock the computer.",
+    "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
+    "nativeResolution": "Native",
+    "autoUnlock": "Automatically unlock computer",
+    "autoUnlockHint": "Save your Mac login password on this device to unlock the computer when connecting.",
+    "autoUnlockStorageHint": "The password is stored encrypted on this device only. Settings and passwords do not sync with your account.",
+    "autoUnlockUnavailable": "Automatic unlock is unavailable. You can still connect and unlock the Mac manually.",
+    "biometricVerification": "Biometric verification",
+    "biometricVerificationHint": "Verify your identity before using the saved password.",
+    "loadingSettings": "Loading…",
+    "credentialSigningRequired": "The Mac development build is missing its signing configuration. Restart Cindy on the Mac with signing configured, then try again.",
+    "credentialPasswordRejected": "The Mac login password was not accepted. Enter it again.",
+    "credentialIdentityChanged": "The computer identity could not be verified. No password was sent to an unverified device.",
+    "credentialAccessibilityRequired": "Allow Cindy in System Settings → Privacy & Security → Accessibility on the Mac, then reconnect.",
+    "credentialUnlockUnavailable": "Could not safely unlock this Mac. Select your account on its lock screen, then reconnect; if it still fails, unlock the Mac locally.",
+    "disconnecting": "Disconnecting…",
+    "loadingDisplayModes": "Loading resolutions…",
+    "displayModesFailed": "Could not load resolutions. Try again.",
+    "retry": "Retry",
+    "copy": "Copy to this computer",
+    "paste": "Paste to remote computer",
+    "clipboardSyncHint": "Sync text, images and rich text both ways while this window is in the foreground.",
+    "credentialRequired": "Complete Mac password verification. If unavailable, update Cindy on both computers."
   },
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
@@ -678,6 +736,15 @@
       "wecomGroupClearFailed": "Could not remove the Webhook"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "Start Cindy at Login",
+        "hint": "Open Cindy automatically when you sign in to your computer. Off by default.",
+        "requiresApproval": "Allow Cindy in Login Items in macOS System Settings to finish enabling startup.",
+        "loading": "Reading system settings…",
+        "loadFailed": "Could not read startup settings. Reopen this settings page to retry.",
+        "saveFailed": "Could not save startup settings. Retry or check your system startup items.",
+        "notApplied": "The system did not apply this setting. Check your system startup items and retry."
+      },
       "title": "App Behavior",
       "closeBehavior": {
         "label": "When closing the main window",
@@ -870,10 +937,10 @@
       },
       "linuxUpdates": {
         "title": "Linux install and updates",
-        "description": "Linux currently ships as a .deb for Ubuntu 22.04 / 24.04. When a newer build is available, the app downloads it and asks for your system password to install.",
-        "item1": "First install with sudo apt install ./cindy-<version>-<arch>.deb (amd64 on x64, arm64 on arm64).",
-        "item2": "In-app updates download the .deb. After you choose Update, a system prompt installs it over the current package.",
-        "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Neither architecture supports idle auto-install because installation requires system authorization."
+        "description": "Ubuntu uses system .deb packages. Arch Linux and Omarchy use the managed user installer with the same verified .deb payload, without a Debian package manager.",
+        "item1": "Ubuntu: use sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: follow the user-install guide in docs/linux.md.",
+        "item2": "After choosing Update, system .deb installs request authorization; managed user installs switch versions without a system password. Other package-managed installs use their package manager.",
+        "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Linux updates are applied only when you choose to restart, never automatically while idle."
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
@@ -934,7 +1001,7 @@
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
-      "linuxUpdateDescription": "When a newer build is available, Cindy downloads the .deb in the app. Installing it asks for your system password, so updates are not applied while idle.",
+      "linuxUpdateDescription": "Updates require a restart you choose. System .deb installs request your system password; managed user installs do not. Other installations use their package manager.",
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
@@ -967,6 +1034,18 @@
         "unknown": "Unknown"
       },
       "storage": {
+        "dialogueDirectoryTitle": "Chat workspace",
+        "dialogueDirectoryDescription": "For new sessions only. Existing files stay where they are.",
+        "dialogueDirectoryOpen": "Open directory",
+        "dialogueDirectoryChoose": "Change directory",
+        "dialogueDirectoryReset": "Restore default location",
+        "dialogueDirectoryFailed": "Could not update the chat workspace. Check that the selected folder is writable and try again.",
+        "dialogueDirectoryDefault": "Default",
+        "dialogueDirectoryFullPath": "Full path",
+        "dialogueDirectoryDetails": "New sessions without a project folder use this location. Cindy creates an account-specific subfolder inside the selected folder.",
+        "dialogueDirectoryCopy": "Copy path",
+        "dialogueDirectoryCopied": "Path copied",
+        "dialogueDirectoryCopyFailed": "Could not copy the path. Select it and copy it manually.",
         "mediaSectionTitle": "Media files",
         "databaseSectionTitle": "Database",
         "overviewTitle": "Local storage overview",
@@ -2152,7 +2231,11 @@
         "endpointLabel": "{{agent}} base URL",
         "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
         "signIn": "Sign in",
-        "setupLink": {"apiKey": "Get an API key", "account": "Sign up or sign in", "setup": "Setup help"},
+        "setupLink": {
+          "apiKey": "Get an API key",
+          "account": "Sign up or sign in",
+          "setup": "Setup help"
+        },
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
         "manualModelHint": "No models were discovered. Enter the exact model ID exposed by this proxy.",
@@ -3754,6 +3837,12 @@
           "statusPendingSuffix_other": " ({{count}} pending)",
           "statusOffKept_one": "Off · {{count}} workspace binding kept",
           "statusOffKept_other": "Off · {{count}} workspace bindings kept",
+          "removeCommunicationsConfirmDescription": "Remove this device's communications access to this workspace. Other devices and Bot reception settings are not affected.",
+          "localCommunications": "Slack Communications on This Device",
+          "communicationsActive": "Slack Communications On",
+          "communicationsInactive": "Slack Communications Off",
+          "botNotReceiving": "Not Receiving Bot Chats",
+          "receiveBot": "Receive Bot Chats",
           "displaced": "Bound on another device",
           "rebind": "Rebind",
           "removeAria": "Unlink this workspace",
@@ -5652,20 +5741,27 @@
       "permissionModeDisabled": "This permission mode is unavailable because remote IM uses Cindy Desktop's confirmation policy."
     },
     "cindyMake": {
+      "create": {
+        "title": "Create a Personal Build",
+        "cancel": "Cancel",
+        "description": "Describe what you want to change in Cindy. A task will open with the same workflow to check your environment, prepare the source, and continue making your build.",
+        "requestLabel": "What would you like to change?",
+        "requestHint": "Up to {{max}} characters. Follow progress in the task after submitting. Leaving Settings will not stop preparation.",
+        "placeholder": "For example: add a filter button to show only unfinished tasks in the task list.",
+        "continue": "Start Making",
+        "failed": "Could not start making your build. Your request is still here; please try again."
+      },
       "title": "Cindy Make",
       "openToolsDir": "Open tools folder",
       "source": {
         "title": "Personal build source",
         "openDir": "Open source folder",
         "prepare": "Prepare source",
+        "retry": "Retry Preparation",
         "reset": "Clear source",
         "update": "Update source",
         "preparingAction": "Preparing source",
         "path": "Path",
-        "channel": "Channel",
-        "version": "Version",
-        "ref": "Ref",
-        "commit": "Commit",
         "status": {
           "missing": "No personal source has been prepared",
           "pending": "Preparing source checkout",
@@ -5680,8 +5776,6 @@
           "confirm": "Clear source",
           "cancel": "Cancel"
         },
-        "branch": "Personal branch",
-        "baseCommit": "Baseline",
         "description": "The source copy behind your personal Cindy build. Each build task gets its own workspace branched from the personal branch, and tested changes merge back; this folder itself is never edited directly.",
         "stop": "Stop"
       },
@@ -5693,6 +5787,75 @@
         "ariaLabel": "Test Installation: Ignore System Tools",
         "enabledHint": "The card below can test downloading and installing missing Windows tools. Existing Cindy-managed tools are reused. This takes effect immediately and resets on reload or restart; system tools stay unchanged.",
         "reportHint": "Installation test is on: portable tools use Cindy-managed copies. Windows compiler tools are shown as missing to test the official installation guide; turn off the switch to check their real status."
+      },
+      "tasks": {
+        "title": "Unfinished builds",
+        "search": "Search build sessions",
+        "noResults": "No matching build sessions",
+        "restore": "Restore and open session",
+        "finish": "Finish build",
+        "delete": "Delete build",
+        "retryCleanup": "Retry cleanup",
+        "finishHint": "After reviewing the changes, finish to merge them into your personal version and clean up the development folder. Conversation history stays in the archived session.",
+        "finishConfirm": "Finish “{{title}}”? Committed changes will be merged into your personal version, the development folder and build branch removed, and the session archived. Uncommitted changes or merge conflicts will prevent cleanup.",
+        "deleteConfirm": "Delete “{{title}}”? This stops the build, deletes the session, and removes its development folder, installed project dependencies, and build branch. Changes not merged into your personal version will be permanently discarded.",
+        "status": {
+          "preparing": "Preparing",
+          "running": "Building",
+          "ready": "Awaiting completion",
+          "archived": "Archived · Can resume",
+          "failed": "Preparation failed",
+          "cancelled": "Preparation stopped",
+          "cleaning": "Cleaning up",
+          "cleanup": "Cleanup pending",
+          "cleanupFailed": "Cleanup failed",
+          "integrated": "Integrated",
+          "unintegrated": "Not integrated",
+          "unknown": "Integration status unverified"
+        },
+        "errors": {
+          "busy": "The session or folder is still in use. Stop it and try again.",
+          "dirty": "There are uncommitted changes. Open the session and save them before finishing.",
+          "conflict": "The merge did not finish. Your changes are preserved. Open the session to resolve conflicts and retry.",
+          "cleanupFailed": "Cleanup did not finish. The record is kept so you can retry.",
+          "directoryBusy": "Files in the development folder are in use or cannot be removed. Close terminals, editors, or previews using this folder, then retry cleanup.",
+          "unavailable": "The session or development folder changed. Refresh and try again."
+        },
+        "end": "End build",
+        "endHint": "End the build to clean up its working directory. Make history and retained changes will be kept.",
+        "endConfirm": "End “{{title}}” and clean up its working directory? Make history and retained changes will be kept.",
+        "cleanupDeletedConfirm": "Clean up the remaining working directory for “{{title}}”? Retained make history will be kept.",
+        "endUnintegrated": "Some changes have not been integrated into your personal version. Ending the build will not integrate them automatically.",
+        "endUnknown": "The integration status could not be verified. Check your changes before cleaning up."
+      },
+      "tabs": {
+        "versions": "Version Control",
+        "environment": "Environment"
+      }
+    },
+    "worktreeRecycle": {
+      "title": "Worktree cleanup",
+      "refresh": "Refresh",
+      "empty": "No worktrees awaiting cleanup",
+      "loadFailed": "Could not load cleanup status",
+      "actionFailed": "Could not update cleanup. Refresh and try again.",
+      "retry": "Retry cleanup",
+      "keep": "Keep directory",
+      "state": {
+        "retrying": "Awaiting cleanup",
+        "waiting": "Waiting for release",
+        "paused": "Automatic retries paused",
+        "kept": "Directory retained"
+      },
+      "reason": {
+        "in-use": "Still in use",
+        "changed": "Contents changed",
+        "kept": "Kept by request",
+        "integrity": "Backup verification failed",
+        "storage": "Check disk space and permissions",
+        "identity": "Directory identity needs review",
+        "failed": "Cleanup could not finish",
+        "pending": "Queued"
       }
     }
   },
@@ -5805,6 +5968,7 @@
   "login": {
     "title": "Welcome to Cindy",
     "subtitle": "Choose a secure way to sign in",
+    "savedLoginPreserved": "Your saved sign-in is still on this device",
     "phonePlaceholder": "Enter your phone number",
     "emailPlaceholder": "Enter your email",
     "invalidEmail": "Please enter a valid email address",
@@ -5845,6 +6009,11 @@
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
     "realmConsent": {
+      "personalTitle": "Enterprise sign-in available",
+      "personalBodyCn": "Enterprise found in Mainland China.\nUse SSO or continue with your account.",
+      "personalBodyGlobal": "Enterprise found in the Global region.\nUse SSO or continue with your account.",
+      "enterpriseLogin": "Enterprise SSO",
+      "continuePersonal": "Continue personal",
       "title": "Connect to your enterprise region",
       "bodyCn": "Your enterprise is in Mainland China.\nContinue to connect Cindy to this region.",
       "bodyGlobal": "Your enterprise is in the Global region.\nContinue to connect Cindy to this region.",
@@ -5899,6 +6068,9 @@
       "fallback": "Sign-in failed. Please try again.",
       "AUTH_SERVICE_UNAVAILABLE": "The sign-in service is temporarily unavailable.",
       "AUTH_REQUEST_FAILED": "The sign-in request failed. Please try again.",
+      "CREDENTIAL_STORE_UNAVAILABLE": "Quit Cindy completely, then reopen it to restore sign-in.",
+      "BROWSER_OPEN_FAILED": "Could not open the browser. Please try again.",
+      "BROWSER_OPEN_TIMEOUT": "The browser did not start in time. Please try again.",
       "NETWORK_ERROR": "Could not connect. Check your network and try again.",
       "REQUEST_TIMEOUT": "The request timed out. Please try again.",
       "INVALID_PARAMS": "Check the value you entered.",
@@ -6142,6 +6314,7 @@
     "loadFailed": "Unable to load usage history. Reopen Settings to try again.",
     "range": {
       "label": "Time range",
+      "date": "Date",
       "ariaLabel": "Filter usage time range",
       "all": "All time",
       "30d": "Last 30 days",
@@ -6260,7 +6433,7 @@
       "ready": "New version ready — click the sidebar to apply",
       "manifestFailed": "Update check failed, please check your network",
       "downloadFailed": "New version download failed, try again later",
-      "manualDownload": "Download the update in the app. Installing it requires your system password."
+      "manualDownload": "Download in the app, then choose when to restart. Only system .deb installs require a system password."
     },
     "closeConfirm": {
       "title": "Confirm exit?",
@@ -7101,7 +7274,7 @@
       "sortBy": "Sort by {{column}}",
       "loading": "Reading processes…",
       "remoteUnavailableTitle": "Unavailable for remote sessions",
-      "remoteUnavailableDescription": "This panel only reads processes on this device. It is available only for local sessions running on this device.",
+      "remoteUnavailableDescription": "Activity Monitor is available only for local sessions.",
       "selectHint": "Select a process",
       "readOnlyHint": "Only Agent processes used for tasks can be stopped",
       "terminate": "Stop Process",
@@ -7157,6 +7330,13 @@
       "move": "Move Now (Recommended)",
       "download": "Download manually"
     },
+    "linuxInstallation": {
+      "title": "This installation cannot update itself",
+      "description": "Use your package manager, or follow the Linux user-install guide. A managed install may need missing tools or write access restored. Cindy and the downloaded update have been kept.",
+      "guide": "Open Linux guide",
+      "retry": "Check again",
+      "later": "Later"
+    },
     "windowsRuntimeMissing": {
       "title": "Microsoft Visual C++ Runtime Required",
       "description": "This PC is missing the Microsoft Visual C++ Runtime required by the updater. The downloaded update will be kept. Install Microsoft's official x64 Runtime, then check again.",
@@ -7208,6 +7388,10 @@
       "downloadMobile": "Download Cindy Mobile"
     },
     "accountSwitcher": {
+      "current": "Current account",
+      "switching": "Switching accounts…",
+      "adding": "Preparing sign-in…",
+      "sharedDataRestriction": "This development window shares account data with another Cindy instance, so it cannot switch or add accounts. Use the original Cindy window, or start the development app with separate data.",
       "title": "Switch account",
       "description": "Choose an account used on this device",
       "syncing": "Checking sign-in status…",
@@ -7952,7 +8136,8 @@
         "effortEndFast": "Faster",
         "effortEndSmart": "Smarter",
         "railSameEngine": "{{agent}} only",
-        "crossEngineWarning": "Switching engines rebuilds context and may lose content"
+        "crossEngineWarning": "Switching engines rebuilds context and may lose content",
+        "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update."
       }
     },
     "permissionSelector": {
@@ -8560,8 +8745,15 @@
       }
     },
     "runningStatus": {
+      "currentRate": "Latest speed",
+      "waitingSample": "Sampling",
+      "averageRate": "Turn average",
+      "rateHistory": "Generation speed history",
+      "outputTotal": "Output",
+      "observedPeak": "Peak",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "The main Agent’s average generation speed for this turn, including thinking and excluding tool execution and approval waits. Updated with reported usage; the adjacent timer shows total turn time.",
+      "tokenRateUnit": "tok/s",
+      "tokenRateDescription": "Latest generation interval. Excludes tools and waits.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8688,6 +8880,7 @@
     },
     "media": {
       "clickToZoom": "Click to zoom",
+      "audioProgress": "Playback position",
       "audioPlay": "Play audio",
       "audioPause": "Pause audio",
       "modelPreviewAlt": "3D model preview",
@@ -8786,6 +8979,11 @@
       "closeHint": "or click backdrop to close"
     },
     "remoteFile": {
+      "previewFailed": "Could not prepare the web preview. Check the directory and connection, then try again.",
+      "previewNotFound": "The HTML file was not found. Check that it still exists.",
+      "previewFetching": "Preparing Web Preview…",
+      "previewTooLarge": "Too many previews are being prepared. Please try again shortly.",
+      "previewUnsupported": "Update Cindy on the remote device to preview this directory.",
       "fetching": "Fetching file from remote…",
       "fetchFailed": "Failed to fetch file from remote",
       "notFound": "File not found on remote",
@@ -9313,6 +9511,22 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "readingMemory": "Reading memory…",
+      "savingMemory": "Saving memory…",
+      "deletingMemory": "Deleting memory…",
+      "organizingMemory": "Organizing memory…",
+      "readingFile": "Reading files…",
+      "savingFile": "Updating files…",
+      "readingWeb": "Reading web pages…",
+      "searchingFiles": "Searching files…",
+      "testing": "Running tests…",
+      "checking": "Checking code…",
+      "reviewingMemory": "Checking memory…",
+      "reviewingFiles": "Reviewing files…",
+      "reviewingSources": "Checking web sources…",
+      "reviewingChecks": "Reviewing check results…",
+      "replying": "Replying…",
+      "processing": "Working…",
       "thinking": "Thinking…",
       "generating": "Generating…",
       "editingFiles": "Editing files…",
@@ -9474,7 +9688,7 @@
     "sidebar": {
       "machineSwitcher": {
         "allMachines": "All",
-        "localMachine": "This device",
+        "localMachine": "Local",
         "connecting": "Connecting…",
         "tasksLoading": "Loading sessions from {{device}}…",
         "tasksLoadFailed": "Can't reach sessions on {{device}} right now — retrying automatically…",
@@ -9484,8 +9698,8 @@
         "multiSelect": "Multi-select",
         "deselect": "Deselect",
         "menuTrigger": "Session scope",
-        "selectedCount_one": "{{count}} machine",
-        "selectedCount_other": "{{count}} machines"
+        "selectedCount_one": "{{count}} device",
+        "selectedCount_other": "{{count}} devices"
       },
       "pinned": "Pinned",
       "pinnedToggleExpand": "Expand pinned",
@@ -9503,7 +9717,7 @@
       },
       "showAllSessions": "Show all {{count}}",
       "allSessions": "All sessions",
-      "scopeLocalSessions": "This device’s sessions",
+      "scopeLocalSessions": "Local",
       "dialogues": "Chat",
       "newDialogue": "New session",
       "creationInProgress": "Creation is already in progress",
@@ -9524,8 +9738,8 @@
       "createProjectFailed": "Failed to create project",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
-      "filterAria": "Sidebar display settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
-      "organizeSidebar": "Sidebar display settings",
+      "filterAria": "Sidebar settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
+      "organizeSidebar": "Sidebar settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
       "filterStatus": {
@@ -9540,14 +9754,14 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "By project",
+        "project": "Project",
         "flat": "Flat list",
-        "device": "By device",
-        "dialogue": "By chat"
+        "device": "Device",
+        "dialogue": "Chat"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
-        "local": "This device",
+        "local": "Local",
         "offline": "Offline",
         "collapse": "Collapse this device",
         "expand": "Expand this device"
@@ -9566,7 +9780,7 @@
         "all": "All"
       },
       "filterSortBy": {
-        "created": "Created Time",
+        "created": "Creation Time",
         "activity": "Recent Activity",
         "recency": "By time",
         "manual": "Manual",
@@ -9843,9 +10057,9 @@
         "all": "All"
       },
       "sortTaskBy": {
-        "priority": "By priority",
-        "activity": "By recent activity",
-        "created": "By creation time"
+        "priority": "Priority",
+        "activity": "Recent Activity",
+        "created": "Creation Time"
       }
     },
     "rename": {
@@ -10178,7 +10392,7 @@
     },
     "empty": {
       "promptHeading": "No Automations yet",
-      "promptDescription": "Create a cron Automation to let Claude Code or Codex run your prompt on a schedule."
+      "promptDescription": "Create a cron Automation to let Claude Code, Codex, or Pi run your prompt on a schedule."
     },
     "usageLimitRecovery": {
       "name": "Continue Task After Usage Resets",
@@ -10353,7 +10567,7 @@
         "titleCreate": "Create Automation",
         "titleProjectCreate": "New project automation",
         "titleProjectEdit": "Edit project automation",
-        "subtitle": "Run a prompt on a schedule with Claude or Codex.",
+        "subtitle": "Run a prompt on a schedule with Claude, Codex, or Pi.",
         "subtitleFromGhost": "\"{{name}}\" is asking you to create an automation. Pick a model and save to enable it.",
         "save": "Save",
         "create": "Create",
@@ -10922,6 +11136,7 @@
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
       "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+      "relatedLogsHint": "This submission includes the related client logs shown above. They are filtered, redacted, and length-limited before publication.",
       "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
       "submissionMethodLabel": "Submission Identity",
       "identityGithubUser": "My GitHub account @{{login}}",
@@ -10970,6 +11185,13 @@
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
+      "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
+      "descriptionForgeScaffold": "The directory below is outside this session's working directory. If you allow, Forge will create plugin source files there.",
+      "descriptionForgePack": "The directory below is outside this session's working directory. If you allow, Forge will pack the plugin there and write a .cindy artifact.",
+      "descriptionForgeInstall": "The directory below is outside this session's working directory. If you allow, Forge will pack this plugin and install and enable it on this computer.",
+      "descriptionOutsideWorkdir": "The path below is outside this session's working directory. If you allow, the current tool can read or write there.",
+      "descriptionOutsideRead": "The path below is outside this session's working directory. If you allow, the current tool can read there.",
+      "descriptionOutsideWrite": "The path below is outside this session's working directory. If you allow, the current tool can write there.",
       "dirMeta": "{{count}} files · {{size}}",
       "directory": "Directory",
       "allowDirs": "Also allow their folders (media files in the same folders won't ask again this session)",
@@ -11009,6 +11231,7 @@
       "installed": "Installed",
       "globalScope": "Global",
       "sourceSkillhub": "SkillHub",
+      "sourceBuiltIn": "Built-in",
       "sourceLocal": "Local",
       "import": "Import skill",
       "importAria": "Import a skill from a local zip or SKILL.md",
@@ -11016,6 +11239,16 @@
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} imported{{suffix}}",
       "importFailed": "Failed to import skill"
+    },
+    "builtIn": {
+      "official": "Official",
+      "officialDetail": "Included and maintained by Cindy.",
+      "skillCreator": {
+        "description": "Create or update a Cindy Skill with clear instructions and supporting resources."
+      },
+      "learn": {
+        "description": "Distill a reusable Skill from this task, a described workflow, or a SkillHub Skill through Cindy's review flow."
+      }
     },
     "common": {
       "openFolderFailed": "Failed to open folder",
@@ -11560,6 +11793,7 @@
       "unlinkDescription": "Only the local skill entry will be removed. Original files and edits will be kept.",
       "sharedImpact": "Other Agents sharing this skill will also be affected. Published versions and installations elsewhere are unaffected.",
       "managedElsewhere": "This Skill belongs to another package or shared directory. Remove it at its source.",
+      "builtInManaged": "This Skill is included with Cindy and cannot be uninstalled.",
       "managedByPlugin": "This skill is provided by a plugin. Manage it on that plugin’s page.",
       "cleanupIncomplete": "Uninstall cleanup for “{{name}}” is unfinished. Retry now or reopen Skills later to continue. Reinstallation is paused until cleanup completes.",
       "retryCleanup": "Retry cleanup",
@@ -11963,7 +12197,8 @@
       "INTERNAL": "Internal error. Please try again later."
     },
     "hub": {
-      "learnButton": "Learn this skill"
+      "learnButton": "Learn this skill",
+      "disabledHint": "Enable the built-in Learn Skill in Local Skills to use this action."
     }
   },
   "planMode": {
@@ -12176,7 +12411,8 @@
     },
     "dialogs": {
       "subscription": {
-        "title": "Choose a subscription plan"
+        "title": "Choose a subscription plan",
+        "confirmTitle": "Confirm subscription"
       },
       "topup": {
         "title": "Add Funds"
@@ -12309,6 +12545,39 @@
       "targetLabel": "Target plan: {{name}}",
       "pendingDowngrade": "Downgrade to {{name}} is scheduled for {{date}}.",
       "undo": "Undo downgrade"
+    },
+    "comparison": {
+      "free": "FREE",
+      "freeUsage": "Free to use",
+      "priceFromSuffix": "and up",
+      "topup": "Top up as needed",
+      "topupExpiry": "Top-up balance never expires",
+      "agent": "Full Agent features",
+      "apiKey": "Bring your own API key",
+      "existingSubscription": "Connect existing subscriptions",
+      "localModels": "Use local models",
+      "basicModels": "Access some models",
+      "subscription": "Subscription plan",
+      "rollover": "Keep up to {{amount}} in unused balance for {{period}}",
+      "nextPeriod": {
+        "MONTH": "next month",
+        "YEAR": "next year",
+        "OTHER": "the next period"
+      },
+      "includesFree": "Everything in FREE",
+      "advancedModels": "Unlock more models",
+      "managedService": "Managed service, no setup",
+      "topupUnlock": "Pay as you go to <models>unlock more models</models>",
+      "select": "Choose {{name}}",
+      "upgrade": "Upgrade to {{name}}",
+      "downgrade": "Downgrade to {{name}}",
+      "changeUnavailable": "Unavailable",
+      "creditMultiple": "{{multiple}}× the included amount per period of {{name}}",
+      "credits": {
+        "MONTH": "Includes {{amount}} each month",
+        "YEAR": "Includes {{amount}} each year",
+        "OTHER": "{{amount}}"
+      }
     }
   },
   "fileAccess": {
@@ -12491,6 +12760,7 @@
     }
   },
   "cindyMake": {
+    "beta": "Beta",
     "description": "Check and prepare local tools for a personal Cindy build. Usage: /cindy-make [request]",
     "localOnly": "/cindy-make currently supports local desktop sessions only. Switch to this device to use it.",
     "usage": "Use /cindy-make or /cindy-make request. Environment checks do not yet accept attachments, references or comments. Your input is preserved.",
@@ -12530,20 +12800,22 @@
       "needRequest": "Describe the change, including a feature name or error, to search upstream.",
       "placeholder": "For example: fix message stream flickering",
       "search": "Search upstream",
-      "searching": "Searching upstream Issues and PRs…",
-      "found": "Found potentially related upstream work",
-      "notFound": "No matching upstream work found",
+      "searching": "Searching related upstream PRs…",
+      "found": "Found potentially related PRs",
+      "notFound": "No additional matching PRs found",
       "failed": "Upstream search failed",
       "cancelled": "Upstream search stopped",
       "terms": "Keywords: {{terms}}",
       "author": "by {{author}}",
       "updated": "updated {{date}}",
-      "notFoundHint": "No public Issue or PR matched these keywords. Different wording may return other results.",
-      "resultHint": "Review the links to judge relevance. Results include only currently open Issues and PRs.",
+      "expand": "Show results",
+      "collapse": "Hide results",
+      "notFoundHint": "No additional candidates were found in this keyword search. Different wording may return other PRs.",
+      "resultHint": "Results include open and merged PRs. PRs confirmed in your running build are excluded. Review the links to judge relevance; merged does not mean released.",
       "wait": "Wait for upstream",
       "personal": "Continue with a personal version",
       "retry": "Recheck and search again",
-      "count": "Found {{count}} potentially related open Issues or PRs",
+      "count": "{{count}} potentially related PRs to review",
       "kind": {
         "issue": "Issue",
         "pr": "PR"
@@ -12567,6 +12839,22 @@
         "rateLimit": "GitHub is limiting requests. Wait a moment and retry.",
         "timeout": "The search timed out. Please retry.",
         "invalidResponse": "GitHub returned an incomplete or unreadable result. Please retry."
+      },
+      "runtimeUnknown": "The running source version is uncertain (for example, a modified Dev build). Candidates are kept for review.",
+      "excludedIncluded": "{{count}} PRs already in the running version were excluded.",
+      "limitedHint": "Only a limited set of results was checked. Refine the request to search more precisely.",
+      "runtimeVersion": "Running build: {{channel}} {{version}} · {{commit}}",
+      "unknownCommit": "unknown commit",
+      "draft": "Draft",
+      "channel": {
+        "dev": "Dev",
+        "beta": "Beta",
+        "release": "Release"
+      },
+      "inclusion": {
+        "included": "Included in the running version",
+        "notIncluded": "Not in the running version",
+        "unknown": "Inclusion in the running version is unverified"
       }
     },
     "title": "Cindy Make",
@@ -12576,12 +12864,19 @@
     "source": {
       "preparing": "Preparing source checkout…",
       "phase": {
-        "checking": "Checking Git and source",
+        "waiting": "Waiting for other project operations to finish…",
+        "checking": "Checking Git…",
+        "checkingRemote": "Checking the upstream version…",
+        "checkingLocal": "Checking local source…",
         "cloning": "Downloading source",
         "fetching": "Refreshing repository",
         "checkingOut": "Selecting version",
-        "preparingBranch": "Preparing personal branch"
+        "preparingBranch": "Preparing personal branch",
+        "caching": "Preparing dependency cache",
+        "installing": "Installing dependencies"
       },
+      "cacheProgress": "Resolved {{resolved}} · Reused {{reused}} · Downloaded {{downloaded}}",
+      "pending": "Waiting to prepare source",
       "ready": "Source is ready",
       "failed": "Source preparation failed",
       "cancelled": "Source preparation stopped",
@@ -12594,7 +12889,7 @@
         "localCommits": "The source contains local commits or stashes not included upstream. Keep or back them up before clearing.",
         "environmentNotReady": "The build environment is not ready. Check the required tools.",
         "gitUnavailable": "Git is unavailable. Check and install Git in the environment card, then retry.",
-        "installFailed": "Dependency install failed. Please retry.",
+        "installFailed": "Dependency preparation failed. Please retry.",
         "locked": "Some files are in use by another program and could not be removed. Close it or restart Cindy, then retry."
       },
       "gitProgress": {
@@ -12605,8 +12900,20 @@
         "checkingOut": "Updating files"
       },
       "missing": "No source is prepared",
-      "personalBranch": "Personal branch {{branch}}",
-      "baseCommit": "Based on {{ref}} {{commit}}"
+      "details": {
+        "unknown": "Update source to check",
+        "latest": {
+          "dev": "Online main",
+          "beta": "Latest Beta",
+          "release": "Latest Release",
+          "same": "(up to date)",
+          "behind_one": "({{count}} commit behind)",
+          "behind_other": "({{count}} commits behind)",
+          "ahead_one": "({{count}} commit ahead)",
+          "ahead_other": "({{count}} commits ahead)",
+          "difference": "({{behind}} behind, {{ahead}} ahead)"
+        }
+      }
     },
     "code": {
       "starting": "Opening personal build task",
@@ -12615,7 +12922,35 @@
       "start": "Start personal build",
       "open": "Open personal build task",
       "sendFailed": "Could not send the request to the personal build task",
-      "preparingWorkspace": "Creating an isolated workspace and installing dependencies",
+      "preparingWorkspace": "Creating an isolated workspace",
+      "preparingDependencies": "Preparing dependencies for the personal task",
+      "preparingNpmDependencies": "Preparing npm dependencies",
+      "phases": {
+        "waiting": "Waiting for project preparation",
+        "environment": "Preparing the environment",
+        "source": "Preparing personal project source",
+        "workspace": "Creating the task branch and worktree",
+        "dependencies": "Installing task dependencies",
+        "starting": "Starting your request",
+        "completed": "Preparation complete"
+      },
+      "prepared": "Preparation complete. Your request has started automatically.",
+      "preparationFailed": "Preparation failed. Your request has not started; retry to continue.",
+      "workspaceUnavailable": "The personal-build workspace is missing or incomplete. Create a new build task, or restore the original worktree before continuing.",
+      "projectClearing": "The personal-build project is being cleared. Wait before sending another message.",
+      "inputLocked": {
+        "executing": "Cindy Make is running your first request",
+        "hint": "Input becomes available when preparation finishes.",
+        "retry": "Preparation is incomplete. Retry to continue."
+      },
+      "dependencyActivity": {
+        "starting": "Starting dependency installation…",
+        "packages": "Downloading and installing dependencies…",
+        "scripts": "Running installation scripts…"
+      },
+      "dependencyProgress": "Resolved {{resolved}} · reused {{reused}} · downloaded {{downloaded}} · added {{added}}",
+      "taskName": "Cindy Make personal build",
+      "taskTitle": "[{{worktree}}] {{request}}",
       "workspace": "Workspace {{branch}}"
     },
     "complete": {
@@ -12626,6 +12961,311 @@
       "changedFiles_other": "{{count}} files changed",
       "commit": "Based on {{commit}}",
       "branch": "Committed to {{branch}}"
+    },
+    "overview": {
+      "description": "View personal source, switch app versions, and manage Make history.",
+      "title": "Version overview",
+      "switchVersion": "Switch version",
+      "personalCode": "Personal source",
+      "localMain": "Local main",
+      "lookupUnavailable": "Could not check the latest version. Sync latest source to check again.",
+      "comparisonUnavailable": "(comparison unavailable)",
+      "comparison": {
+        "same": "Personal source matches local main",
+        "personalAhead": "Includes local main · personal commits: {{ahead}}",
+        "mainAhead": "Commits ahead on local main: {{behind}}",
+        "diverged": "Commits ahead on local main: {{behind}} · personal commits: {{ahead}}",
+        "unknown": "Commit comparison unavailable. Sync latest source to try again."
+      }
+    },
+    "versions": {
+      "title": "My Versions",
+      "description": "Choose the Cindy version to use on this computer. Switching restarts the app and keeps your accounts, settings and tasks.",
+      "original": "Original",
+      "personal": "Personal Version",
+      "development": "Development Environment",
+      "current": "Current",
+      "using": "In Use",
+      "switch": "Switch and Restart",
+      "switchPersonal": "Switch to This Personal Version",
+      "remove": "Delete Version",
+      "removeTitle": "Delete this personal version?",
+      "removeDescription": "Only the generated application files are deleted. Source code, accounts, settings and tasks are kept.",
+      "empty": "No switchable personal versions have been built yet.",
+      "unavailable": "The application files for this version are unavailable.",
+      "incompatible": "This version is incompatible with the current data. Rebuild it from the current original version.",
+      "readyHint": "Your personal version is ready. Switching restarts Cindy and keeps your accounts, settings and tasks.",
+      "errors": {
+        "busy": "Tasks, tests or builds are still running. Finish them before switching or deleting a version.",
+        "incompatible": "The data structures differ. Rebuild your personal version from the current original version before switching.",
+        "unavailable": "This version could not be read. Rebuild it and try again.",
+        "launchFailed": "The target version could not start. The current version has been kept.",
+        "recovery": "The selected version could not start. The original version is now the default. Reopen Cindy from its original entry point. Your data has been kept."
+      },
+      "localChanges": "Local changes"
+    },
+    "personal": {
+      "generate": "Build Personal Version",
+      "open": "Show Installer",
+      "description": "Merge these changes with your personal version, then save the new version after checks and packaging pass.",
+      "readyHint": "Installer {{name}} is ready. Open its folder to install it.",
+      "checkStep": {
+        "dependencies": "Installing build dependencies…",
+        "tests": "Running automated tests; this may take several minutes…",
+        "types": "Checking code types…"
+      },
+      "status": {
+        "waiting": "Waiting to Build Personal Version…",
+        "merging": "Merging Changes…",
+        "checking": "Checking Personal Version…",
+        "packaging": "Packaging Personal Version…",
+        "publishing": "Saving Personal Version…",
+        "ready": "Personal Version Built",
+        "failed": "Personal Version Could Not Be Built"
+      },
+      "errors": {
+        "unavailable": "The build record or installer is unavailable. Build the personal version again.",
+        "changed": "The task directory or code has changed. Finish editing before building again.",
+        "environment": "Build tools are not ready. Check the Cindy Make environment and retry.",
+        "missingShell": "Automated checks require Git Bash. Install Git for Windows and retry.",
+        "checksFailed": "The merged code did not pass checks. Continue editing before building again.",
+        "conflict": "These changes conflict with the current personal version. Continue editing to resolve the conflict.",
+        "baselineChanged": "The personal version changed during the build. Build again to include the latest changes.",
+        "buildFailed": "Packaging did not finish. Retry or continue editing before building again.",
+        "cancelled": "Generation cancelled. You can generate again.",
+        "cleanupFailed": "Generation stopped, but temporary files could not all be cleaned. Restart Cindy and try again.",
+        "interrupted": "The build stopped. You can build the personal version again."
+      }
+    },
+    "test": {
+      "resume": {
+        "title": "Continue testing",
+        "description": "Check the current changes to restore the test and personal build options.",
+        "action": "Check and continue",
+        "failed": "Could not start the checks. Please try again.",
+        "request": "Check the current changes, then restore the test and personal build options and wait for me to choose the next step."
+      },
+      "title": "Changes Complete — Choose Next Step",
+      "description": "Continue editing, try an isolated test build, or build your personal installer.",
+      "readyHint": "Try the changes in the test window. Continue Editing closes it and restores input.",
+      "start": "Launch Isolated Test Build",
+      "started": "Test Build Launched",
+      "continue": "Continue Editing",
+      "status": {
+        "waiting": "Changes Complete — Choose Next Step",
+        "starting": "Launching Isolated Test Build…",
+        "ready": "Test Build Ready to Try",
+        "failed": "Test Build Could Not Start",
+        "stopped": "Ready to Launch Again"
+      },
+      "errors": {
+        "unavailable": "The saved changes or working directory are no longer available. Continue editing and report completion again.",
+        "changed": "The code has changed since completion. Finish editing before testing again.",
+        "environment": "The test environment is not ready. Check Cindy Make in Settings and retry.",
+        "launchFailed": "The test build could not start. Retry or return to editing.",
+        "timeout": "The test build took too long to start. Retry the launch.",
+        "interrupted": "The previous test was interrupted. Launch the isolated build again."
+      },
+      "retry": "Retry Launch",
+      "startingHint": "Editing is paused until startup finishes. Wait for the current step to complete.",
+      "currentStep": "Current step: {{step}}",
+      "failedStep": "Interrupted step: {{step}}",
+      "steps": {
+        "waiting": "Waiting to start",
+        "environment": "Checking the test environment",
+        "workspace": "Verifying the changes",
+        "stopping": "Preparing the isolated instance",
+        "dependencies": "Checking and preparing dependencies",
+        "assets": "Checking and preparing runtime assets",
+        "launching": "Compiling and opening the test window"
+      }
+    },
+    "history": {
+      "title": "Make history",
+      "build": "Generate personal version",
+      "buildDescription": "Generate a new version from the current personal source. Changes not yet integrated are excluded.",
+      "building": "Generating personal version…",
+      "stop": "Stop making",
+      "stopping": "Stopping…",
+      "progress": {
+        "waiting": "Waiting to start",
+        "merging": "Merging changes",
+        "checking": "Running checks",
+        "packaging": "Packaging personal version",
+        "publishing": "Saving personal version"
+      },
+      "noActions": {
+        "ended": "This making task has ended; no actions are available.",
+        "sessionUnavailable": "This task record is no longer available.",
+        "completionUnavailable": "The completion could not be verified, so no safe action is available.",
+        "sourceUnavailable": "The personal source could not be verified, so no safe action is available.",
+        "changedAfterCompletion": "The recorded completion no longer matches the source, so no safe action is available.",
+        "busy": "Another making operation or check is running. Try again when it finishes.",
+        "checking": "This making record is still being checked. Try again shortly."
+      },
+      "counts": "{{total}} total · {{pending}} pending integration · {{integrated}} integrated",
+      "filterLabel": "Filter make history",
+      "filters": {
+        "all": "All builds",
+        "pending": "Pending integration",
+        "integrated": "Integrated",
+        "ended": "Ended"
+      },
+      "loadFailed": "Could not load make history. Please retry.",
+      "loading": "Loading make history…",
+      "actionFailed": "The operation did not finish. Refresh and retry.",
+      "openInstaller": "Show installer",
+      "updated": "Updated {{time}}",
+      "needsBuild": "The source has changed. Generate a personal version to use these changes.",
+      "versionReady": "Personal version generated",
+      "versionPending": "Personal version pending",
+      "built": "Included in the personal version generated {{time}}",
+      "builtKnown": "Included in a generated personal version",
+      "conflict": "The changes conflict. Open the resolution task to continue.",
+      "rounds": "{{count}} editing rounds",
+      "round": "Round {{number}} · {{time}}",
+      "files": "{{count}} files changed",
+      "working": "Working…",
+      "endAndClean": "End and clean up",
+      "clean": "Hide history",
+      "cleanTask": "Clean task",
+      "cleanTitle": "Clean up this task?",
+      "cleanConfirm": "This entry will be hidden from Make history and the session will be archived. Conversation history will be kept.",
+      "cleanWorkspace": "Any remaining task branch and worktree will be removed. Uncommitted changes will be lost.",
+      "cleanKeep": "Changes already integrated into your personal version and generated app versions will be kept.",
+      "endConfirm": "End this build and remove its working directory? Make history and retained changes will remain available.",
+      "revertConfirm": "Undo the changes from this build in the personal source? Other builds and generated applications will be kept.",
+      "lifecycle": {
+        "preparing": "Preparing",
+        "running": "Making changes",
+        "editing": "Editing",
+        "ready": "Ready for next step",
+        "failed": "Preparation failed",
+        "ended": "Ended",
+        "cleanup": "Cleaning up"
+      },
+      "integration": {
+        "unintegrated": "Not integrated",
+        "integrated": "Integrated",
+        "changed": "New changes to integrate",
+        "reverted": "Integration undone",
+        "unknown": "Integration status unverified",
+        "unchanged": "No changes to integrate"
+      },
+      "actions": {
+        "open": "Open task",
+        "continue": "Continue editing",
+        "test": "Launch isolated test build",
+        "integrate": "Integrate into personal version",
+        "revert": "Undo integration",
+        "reapply": "Reapply integration",
+        "resolve": "Resolve conflicts",
+        "retry": "Retry",
+        "build": "Generate personal version",
+        "retryBuild": "Retry generation",
+        "end": "End build",
+        "retry-prepare": "Retry preparation",
+        "retry-cleanup": "Retry cleanup"
+      },
+      "buildStatus": {
+        "waiting": "Waiting to generate personal version…",
+        "checking": "Checking personal version…",
+        "merging": "Integrating changes…",
+        "packaging": "Packaging personal version…",
+        "publishing": "Saving personal version…",
+        "ready": "Personal version generated",
+        "failed": "Personal version generation failed",
+        "installerReady": "Installer ready"
+      },
+      "rounds_one": "{{count}} editing round",
+      "rounds_other": "{{count}} editing rounds",
+      "files_one": "{{count}} file changed",
+      "files_other": "{{count}} files changed"
+    },
+    "merge": {
+      "getLatest": "Sync latest source",
+      "updateHint": "Update official source and reapply your personal changes.",
+      "confirmTitle": "Update to the latest source?",
+      "confirmDescription": "Your personal changes will be kept. If conflicts occur, a separate task will help resolve them.",
+      "confirm": "Update source",
+      "openTask": "Open resolution task",
+      "resolve": "Resolve conflicts",
+      "resolveHint": "Open a separate task to resolve conflicts and check the result.",
+      "otherAccount": "Another account started this operation. Switch back to that account to continue.",
+      "status": {
+        "fetching": "Fetching latest source…",
+        "merging": "Integrating source changes…",
+        "conflict": "Conflicts need attention",
+        "resolving": "Resolving conflicts",
+        "checking": "Checking changes…",
+        "merged": "Source changes integrated",
+        "failed": "Source integration failed"
+      },
+      "errors": {
+        "busy": "Another operation is running. Wait and retry.",
+        "dirty": "The source has uncommitted changes. Save them before retrying.",
+        "localMain": "The main branch has local commits. Check them before updating.",
+        "unavailable": "The source or operation record is unavailable. Refresh and retry.",
+        "gitFailed": "Git could not finish the operation. Please retry.",
+        "baselineChanged": "The personal source has changed. Retry using its latest state.",
+        "checksFailed": "The changes did not pass checks. Open the resolution task to continue.",
+        "interrupted": "The operation was interrupted. Your changes are kept; please retry.",
+        "startFailed": "Could not open the resolution task. Please retry."
+      }
     }
+  },
+  "taskTags": {
+    "loadFailed": "Could not load tags. Try again.",
+    "retry": "Retry",
+    "editLabel": "Edit “{{name}}”",
+    "reorderLabel": "Reorder “{{name}}”",
+    "reorderHint": "Drag to reorder, or use the up and down arrow keys",
+    "addLabel": "Add “{{name}}”",
+    "removeLabel": "Remove “{{name}}”",
+    "title": "Tags",
+    "more": "More tags",
+    "settings": "Tag settings",
+    "name": "Name",
+    "color": "Color",
+    "favorite": "Favorite (up to 7)",
+    "create": "Create",
+    "save": "Save",
+    "done": "Done",
+    "back": "Back",
+    "delete": "Delete tag",
+    "cancel": "Cancel",
+    "deleteConfirm": "Delete “{{name}}” from {{count}} tasks? Tasks and messages will be kept.",
+    "loading": "Loading…",
+    "unavailable": "This computer needs an update to support tags.",
+    "offline": "Connect to the source computer to edit tags.",
+    "failed": "Could not save. Please try again.",
+    "conflict": "Tags changed elsewhere. Reload and try again.",
+    "favoritesFull": "Only seven favorite tags are allowed.",
+    "alreadyExists": "A tag with this name already exists.",
+    "empty": "No tags yet.",
+    "red": "Red",
+    "orange": "Orange",
+    "yellow": "Yellow",
+    "green": "Green",
+    "blue": "Blue",
+    "purple": "Purple",
+    "gray": "Gray",
+    "none": "No color",
+    "pink": "Pink",
+    "coral": "Coral",
+    "teal": "Teal",
+    "indigo": "Indigo",
+    "white": "White",
+    "add": "Add tag",
+    "editTitle": "Edit tag",
+    "editHint": "Changes apply to all tasks using this tag.",
+    "addHint": "Added tags are selected for this task.",
+    "selectedCount": "{{count}} selected",
+    "presetImportant": "Important",
+    "presetFollowUp": "Follow up",
+    "presetWork": "Work",
+    "presetLife": "Life",
+    "presetIdeas": "Ideas",
+    "presetReference": "Reference"
   }
 }

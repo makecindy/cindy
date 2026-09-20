@@ -185,6 +185,7 @@ describe('mobile native app config', () => {
     const regular = buildConfig({ config: appJson.expo });
     // 账号绑定改为 env 注入后,app.json 不再带 updates;env 未设 → 无 OTA 配置。
     expect(regular.updates).toBeUndefined();
+    expect(regular.android.permissions).not.toContain('android.permission.REQUEST_INSTALL_PACKAGES');
 
     const configDir = mkdtempSync(join(tmpdir(), 'cindy-selfhost-regions-'));
     temporaryDirs.push(configDir);
@@ -225,6 +226,7 @@ describe('mobile native app config', () => {
     // 自建 app 身份按 region 从 self-host-regions.json(.example 回落)取,而非写死。
     expect(selfHosted.ios.bundleIdentifier).toBe('com.xd.cindycn');
     expect(selfHosted.android.package).toBe('com.xd.cindycn');
+    expect(selfHosted.android.permissions).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
     expect(selfHosted.extra.cindy.tapdb).toEqual({
       clientId: 'json-id',
       clientToken: 'json-token',
@@ -239,6 +241,7 @@ describe('mobile native app config', () => {
     const selfHostedGlobal = buildConfig({ config: appJson.expo });
     expect(selfHostedGlobal.ios.bundleIdentifier).toBe('com.xd.cindy');
     expect(selfHostedGlobal.android.package).toBe('com.xd.cindy');
+    expect(selfHostedGlobal.android.permissions).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
     expect(selfHostedGlobal.extra.cindy.tapdb.region).toBe('global');
     expect(selfHostedGlobal.extra.cindy.google).toEqual({
       webClientId: 'web.apps.googleusercontent.com',
@@ -516,6 +519,17 @@ describe('mobile native app config', () => {
     // app.config.js 不得剥离该键:以 resolved config 为准再断言一次。
     const cn = buildConfig({ config: appJson.expo });
     expect(cn.ios.infoPlist.UIViewControllerBasedStatusBarAppearance).toBe(true);
+  });
+
+  it('enables the scene lifecycle required to launch iOS 27 SDK builds', () => {
+    const appJson = JSON.parse(readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'));
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    for (const config of [appJson.expo, buildConfig({ config: appJson.expo })]) {
+      const properties = config.plugins.find(
+        (plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-build-properties',
+      );
+      expect(properties?.[1]?.ios?.enableSceneSupport).toBe(true);
+    }
   });
 
   it('keeps audio capture foreground-only in native builds', () => {

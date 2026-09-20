@@ -11,6 +11,43 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## 任务列表标签目录
+
+`sessions:list` 第三个参数可追加 `tagCatalog: 1`。支持的主机仅对该请求返回
+`{ format: 'session-tag-catalog-v1', sessions, tags }`；任务行的 `tagIds` 是响应内
+目录索引，保留全部任务、标签与顺序。共享 DeviceLinkClient 解包后，上层仍读取原数组。
+新控制端兼容旧主机的数组回复；旧控制端不声明此字段，新主机仍返回数组。
+缓存／outbox 重发先解包并重新检查任务可见性，再从可见行生成目录，不能残留隐藏任务的标签。
+此扩展不改变 relay、帧限制或服务器权限，也不靠截断数据降低体积。
+
+标签的可选 `nameCustomized` 标记区分显式改名与预设本地化。新版更新请求仅在明确改名时
+提交 `nameCustomized: true`；旧端换色时携带相同原名不会误置标记。缺省字段沿用旧显示规则。
+
+## 远程桌面临时分辨率
+
+被控端以可选能力 `resolutionRestore` 声明系统分辨率的连接级恢复支持。
+新版控制端仅在该能力为真时发送 `resolution { temporary: true }`；响应为原 lease
+及更新后的显示器尺寸、`controlling: false`，控制端刷新画面并重新取得操作权，不结束连接。
+被控端在首次调整前保存原模式，多次调整不覆盖；结束、超时、撤权或接管后先恢复，
+恢复失败保留原值，下次连接前重试。在途原生写入完成前不得开始恢复。
+
+旧被控端缺少该能力时，新控制端只允许已有 `viewerDisplayRestore` 能力覆盖的临时调整，
+不得退回会留下系统分辨率变化的旧路径；不支持的选择返回“不支持”。旧控制端的无
+`temporary` 请求及响应保持兼容，其旧行为不代表新恢复能力已生效。此扩展不修改 relay。
+
+## 远程桌面窗口操作
+
+新增可选能力 `windowActions`，只在支持的主机上发送 `windowAction`：`list` 返回有界窗口
+列表，`activate` 只接受当前系统枚举的窗口 ID，`desktop` 切换临时空工作区并支持恢复。
+三种操作均要求当前同账号控制 lease；撤权后的迟到回复不得暴露窗口标题或继续操作。
+新手机对未声明能力的旧电脑保留原快捷键；旧手机仍可连接新电脑。本扩展只走既有业务
+隧道，不新增 relay 消息类型、不修改服务端授权或协议实现。
+
+可选能力 `workspaceNavigation` 与 `omarchyMenu` 分别声明左右桌面切换和 Omarchy 菜单。
+新控制端仅在能力为真时发送 `windowAction` 的 `workspaceLeft` / `workspaceRight` /
+`omarchyMenu`；缺省保留旧工具栏，不向旧主机发送新动作。旧端的 `desktop` 语义不变。
+工作区切换作用于采集屏幕，菜单使用本机固定入口，所有操作沿用控制 lease 与撤权检查。
+
 ## 自动化检查恢复投影
 
 运行状态和已读回执保留历史事实。当前警告只保留未被**同一自动化**更新成功运行恢复的失败；
@@ -25,14 +62,14 @@
 
 ## 事实来源
 
-| 内容 | 权威来源 |
-|---|---|
-| hook 双工任务协议 | 客户端 `packages/slack-hook-protocol`；服务端仓同名本地 package，desktop hook-control 与 slack／telegram／x hook server 分别消费本仓实现 |
-| device-link relay 层定义 | 客户端 `packages/device-link-protocol`；服务端仓同名本地 package，客户端重连、IPC allowlist、隧道 payload 在 `packages/device-link` |
-| Plugin 交付与 manifest | 客户端 `packages/plugin-protocol`；服务端仓同名本地 package，desktop、`packages/cindy-tools` 与 plugin-server 分别消费本仓实现 |
-| 模型目录 | 客户端由 `packages/model-providers/src/modelAccessBean.ts` 与 `modelAccessValidator.ts` 维护；model-access-server 在服务端仓维护对应 Bean／validator，双方只共享稳定 wire 语义，不共享实现 |
-| Skill Hub | Desktop 的 `apps/desktop/src/main/skillhub` 与 `shared/skillhubCatalog.ts`；服务端仓 `packages/skill-hub-protocol` 与 `cindy-skill-hub-server` |
-| 插件来源 | 客户端不预装插件；一律通过 SkillHub 或用户手动安装 `.cindy` 包 |
+| 内容                     | 权威来源                                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| hook 双工任务协议        | 客户端 `packages/slack-hook-protocol`；服务端仓同名本地 package，desktop hook-control 与 slack／telegram／x hook server 分别消费本仓实现                                                   |
+| device-link relay 层定义 | 客户端 `packages/device-link-protocol`；服务端仓同名本地 package，客户端重连、IPC allowlist、隧道 payload 在 `packages/device-link`                                                        |
+| Plugin 交付与 manifest   | 客户端 `packages/plugin-protocol`；服务端仓同名本地 package，desktop、`packages/cindy-tools` 与 plugin-server 分别消费本仓实现                                                             |
+| 模型目录                 | 客户端由 `packages/model-providers/src/modelAccessBean.ts` 与 `modelAccessValidator.ts` 维护；model-access-server 在服务端仓维护对应 Bean／validator，双方只共享稳定 wire 语义，不共享实现 |
+| Skill Hub                | Desktop 的 `apps/desktop/src/main/skillhub` 与 `shared/skillhubCatalog.ts`；服务端仓 `packages/skill-hub-protocol` 与 `cindy-skill-hub-server`                                             |
+| 插件来源                 | 客户端不预装插件；一律通过 SkillHub 或用户手动安装 `.cindy` 包                                                                                                                             |
 
 ## 1. 两仓本地协议演进
 
@@ -217,7 +254,6 @@ X 快照有请求正文时，按原始 triggerMessageId 排除引用列表中的
 协议改动按 [`desktop-development.md`](desktop-development.md) 跑相关测试，并与服务端确认
 兼容。
 
-
 ## Model Registry V3：权威协议与旧端下发
 
 - 权威协议位于 `model-registry.json` 的逐模型 `nativeApi`，与窗口、参考价和输出上限同目录维护。`nativeApiRules` 仅按指定 providerId + modelIdPrefix 覆盖未来家族成员；精确声明优先，显式 null 表示待核实，退役项禁止继承家族规则。跨厂商不根据同名猜测。
@@ -235,17 +271,26 @@ X 快照有请求正文时，按原始 triggerMessageId 排除引用列表中的
 核实后写入 Registry，不在 UI 中反推 Pi 配置。Gateway 的 `perAgent.pi.wireProtocol`
 仅是末级执行提示，不能覆盖本地已声明的原生协议，也不能填充 UI 的原生协议字段。
 
-| 已核对的本地模型家族 | Cindy 原生协议基线 | 本地参考 |
-| --- | --- | --- |
-| Claude、MiniMax | Anthropic Messages | Pi 原生 provider 表、现有 Cindy 直连配置 |
-| GPT、Grok | OpenAI Responses | Pi 原生 provider 表、现有 Cindy 直连配置 |
-| Gemini | Google Gemini | Pi 原生 Google provider 表 |
-| DeepSeek、Qwen、Kimi、GLM | Chat Completions | Pi 本地目录对应 provider；不使用同名聚合商条目 |
-| 腾讯 HY | Chat Completions | Cindy 原有 HY3 协议声明；Pi HY4 的协议记录交叉核对 |
-| Muse Spark | OpenAI Responses | Cindy 原有 Muse Spark 1.2 声明；Pi 同型号协议记录交叉核对 |
+| 已核对的本地模型家族      | Cindy 原生协议基线 | 本地参考                                                  |
+| ------------------------- | ------------------ | --------------------------------------------------------- |
+| Claude、MiniMax           | Anthropic Messages | Pi 原生 provider 表、现有 Cindy 直连配置                  |
+| GPT、Grok                 | OpenAI Responses   | Pi 原生 provider 表、现有 Cindy 直连配置                  |
+| Gemini                    | Google Gemini      | Pi 原生 Google provider 表                                |
+| DeepSeek、Qwen、Kimi、GLM | Chat Completions   | Pi 本地目录对应 provider；不使用同名聚合商条目            |
+| 腾讯 HY                   | Chat Completions   | Cindy 原有 HY3 协议声明；Pi HY4 的协议记录交叉核对        |
+| Muse Spark                | OpenAI Responses   | Cindy 原有 Muse Spark 1.2 声明；Pi 同型号协议记录交叉核对 |
 
 新增家族规则仅匹配指定 provider 路由与命名空间，不能扩到任意 BYOM 或同名聚合商。
 精确条目可覆盖家族规则。当前本地维护的 Registry 条目均有显式协议声明；
 Seed 2.1 Pro 按火山方舟官方示例选择 Chat Completions 为 Cindy 的标准接入协议，
 依据与全路由覆盖验收见 model-catalog-maintenance.md。
 价格、窗口、推理档位不随此次协议补全修改；协议默认开启策略仍保留用户显式覆盖。
+
+### 远程桌面虚拟显示尺寸回执
+
+`viewerDisplay` 成功响应可附加 `viewerDisplayRequest: { width, height }`，回显本次请求。
+`display.width/height` 始终是系统实际逻辑尺寸，用于画面与输入坐标；macOS 可能选择同一比例的较小逻辑模式。
+客户端仅在回执匹配请求、实际尺寸为有效整数且比例一致时接受这种差异，仍校验 lease 与控制状态。
+缺少回执的旧服务端保持原来的精确尺寸判断；显式 `resolution` 模式不放宽。
+旧客户端仍可处理原来成功的精确尺寸响应；系统调整后的尺寸需要控制端和被控端同时更新。
+不修改请求格式、relay、IPC allowlist 或协议版本。

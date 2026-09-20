@@ -35,6 +35,7 @@ function run(status: ScheduleRun['status']): ScheduleRun {
 }
 
 function createNotifier(opts?: {
+  sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
   isAgentIslandEnabled?: () => boolean;
@@ -49,6 +50,7 @@ function createNotifier(opts?: {
   const warn = vi.fn();
   const publishMarkdown = opts?.publishMarkdown ?? vi.fn(async () => undefined);
   const notifier = new DesktopNotifier({
+    sendFeishuSessionNotification: opts?.sendFeishuSessionNotification,
     getMainWindow: () => null as BrowserWindow | null,
     feishuIm: {
       getOwnerOpenId: vi.fn(() => 'ou_owner'),
@@ -252,5 +254,25 @@ describe('DesktopNotifier desktop status mapping', () => {
     expect(published).not.toContain('xdt-file://');
     expect(published).not.toContain('cindy-media://');
     expect(published).not.toContain('C:/private/report.txt');
+  });
+});
+
+
+describe('Feishu notification origin receipt', () => {
+  it('passes the original run session to the receipt writer', async () => {
+    const sendFeishuSessionNotification = vi.fn(async () => undefined);
+    const { notifier, sendMarkdownText } = createNotifier({ sendFeishuSessionNotification });
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'));
+    expect(sendFeishuSessionNotification).toHaveBeenCalledWith('session-1', expect.any(String));
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('does not resend a notification if receipt persistence fails', async () => {
+    const sendFeishuSessionNotification = vi.fn(async () => { throw new Error('receipt write failed'); });
+    const { notifier, sendMarkdownText, warn } = createNotifier({ sendFeishuSessionNotification });
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'));
+    expect(sendFeishuSessionNotification).toHaveBeenCalledTimes(1);
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
   });
 });

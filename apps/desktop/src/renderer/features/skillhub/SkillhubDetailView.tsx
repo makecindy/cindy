@@ -1,4 +1,5 @@
 import { LocalSkillControls } from './components/LocalSkillControls';
+import { OfficialSkillBadge } from './components/OfficialSkillBadge';
 /**
  * SkillhubDetailView — route for /skillhub/{kind}/{global|project}/[hash]/:name.
  *
@@ -53,6 +54,7 @@ import {
   findLocalSkillByPath,
   findLocalSkillRouteEntry,
 } from './lib/localRoutes';
+import { builtInSkillDescriptionKey } from './lib/builtInSkillPresentation';
 import { isMarketDeleted as checkMarketDeleted, getCachedInfo, invalidate as invalidateInfo, refreshInfo } from './lib/infoDedupe';
 import {
   activePublishedReviewFromVersions,
@@ -227,16 +229,22 @@ function FrontmatterPanel({ entry }: { entry: SkillhubSkill }) {
             // description gets the clamp-with-show-more treatment; every
             // other field is rendered inline since they're short enough
             // (name, version, category, ...).
-            const isLongTextField = k === 'description' && typeof v === 'string';
+            const descriptionKey = k === 'description'
+              ? builtInSkillDescriptionKey(entry)
+              : undefined;
+            const displayValue = descriptionKey ? t(descriptionKey) : v;
+            const isLongTextField = k === 'description' && typeof displayValue === 'string';
             return (
               <div key={k} className="flex flex-col gap-1">
                 <dt className="text-xs text-[var(--cmd-palette-item-meta)]">{k}</dt>
                 <dd>
                   {isLongTextField ? (
-                    <ClampedText value={v as string} />
+                    <ClampedText value={displayValue as string} />
                   ) : (
                     <span className="whitespace-pre-wrap break-words text-sm text-[var(--msg-assistant-text)]">
-                      {typeof v === 'string' ? v : JSON.stringify(v)}
+                      {typeof displayValue === 'string'
+                        ? displayValue
+                        : JSON.stringify(displayValue)}
                     </span>
                   )}
                 </dd>
@@ -1305,10 +1313,10 @@ export function SkillhubDetailView() {
       registryEntry,
       localFolderHash,
       publishedStatus,
-      identityPolicy.canWrite,
+      identityPolicy.canWrite && entry?.builtIn !== true,
       publishDetailState,
     ),
-    [detailState, registryEntry, localFolderHash, publishedStatus, identityPolicy.canWrite, publishDetailState],
+    [detailState, registryEntry, localFolderHash, publishedStatus, identityPolicy.canWrite, entry?.builtIn, publishDetailState],
   );
   const detailAction = detailActionState?.status ?? null;
   const isOutdated = detailActionState?.isOutdated ?? false;
@@ -1351,7 +1359,7 @@ export function SkillhubDetailView() {
   const { confirm } = useConfirmDialog();
 
   const openPublish = useCallback(async () => {
-    if (entry?.kind !== 'skill' || !identityPolicy.canWrite) return;
+    if (entry?.kind !== 'skill' || entry.builtIn || !identityPolicy.canWrite) return;
 
     if (isPublishedReviewing) {
       const shouldProceed = await confirm({
@@ -1701,6 +1709,9 @@ export function SkillhubDetailView() {
     if (entry.kind === 'agent') {
       return { hidden: true, disabled: true, tip: '' };
     }
+    if (entry.builtIn) {
+      return { hidden: true, disabled: true, tip: '' };
+    }
     // 装的别人技能不允许编辑
     if (detailState?.isMine === false && detailState.origin === 'installed') {
       return { hidden: true, disabled: true, tip: '' };
@@ -1870,6 +1881,7 @@ export function SkillhubDetailView() {
             <h2 className="min-w-0 truncate text-lg font-medium leading-none text-[var(--msg-assistant-text)]">
               {(entry.frontmatter?.displayName as string) || (entry.frontmatter?.name as string) || entry.name}
             </h2>
+            {entry.builtIn && <OfficialSkillBadge />}
             <KindChip kind={entry.kind} />
             <ScopeChip scope={entry.scope} />
             {entry.linkedEngines.map(le => {

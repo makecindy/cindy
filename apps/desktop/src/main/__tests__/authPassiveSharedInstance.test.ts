@@ -30,6 +30,10 @@ describe('passive shared-userData instance auth isolation', () => {
     resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const authAdapterSource = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-host/auth-adapters.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   const sliceBody = (startAnchor: string, endAnchor: string): string => {
     const start = authSource.indexOf(startAnchor);
@@ -224,6 +228,27 @@ describe('passive shared-userData instance auth isolation', () => {
       adoptionFailure,
     );
     expect(beforeEnsureReady).not.toContain('continuing with cloud database');
+  });
+
+  it('启动期共享 Skill 投影通过 owner 边界保护入口执行', () => {
+    expect(bootstrapSource).toContain(
+      'await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();',
+    );
+    expect(bootstrapSource).not.toContain('prepareBuiltInSkills({');
+    expect(bootstrapSource).not.toContain('await prepareSharedGlobalSkillLinks();');
+    expect(bootstrapSource).not.toContain('refreshBuiltInSharedSkillLinks');
+
+    const start = authAdapterSource.indexOf('private async runEnsureSharedGlobalSkills():');
+    const end = authAdapterSource.indexOf('\n  async getState(', start);
+    const body = authAdapterSource.slice(start, end);
+    const ownerBoundary = body.indexOf('withSharedGlobalSkillProjectionMutation(ownerId');
+    expect(ownerBoundary).toBeGreaterThan(-1);
+    expect(body.indexOf('prepareBuiltInSkills({')).toBeGreaterThan(ownerBoundary);
+    expect(body.indexOf('prepareSharedGlobalSkillLinks({')).toBeGreaterThan(ownerBoundary);
+    expect(body).not.toContain('refreshBuiltInSharedSkillLinks({');
+    expect(body.indexOf('refreshBuiltInClaudeSkillLinks({')).toBeGreaterThan(
+      body.indexOf('prepareSharedGlobalSkillLinks({'),
+    );
   });
 
   it('relogin marker:passive 不消费整机一份的 marker,也不删 primary 的 token', () => {

@@ -35,3 +35,20 @@ export function providerDisplayNameById(
   const key = PROVIDER_TITLE_KEY[providerId];
   return key ? t(key) : providerId;
 }
+
+/** Append recognized account identity without repeating generated connection names. */
+export function providerAccountLabel(label: string, identity?: string): string {
+  if (!identity || label === identity) return label;
+  // Independent logins already name the connection "Provider · identity".
+  // OpenAI also truncates that generated name to 50 characters and may add (2).
+  const baseLabel = label.replace(/ \(\d+\)$/, '');
+  if (baseLabel.endsWith(` · ${identity}`)) return label;
+  const separator = baseLabel.indexOf(' · ');
+  if (
+    separator >= 0 &&
+    baseLabel.length === 50 &&
+    `${baseLabel.slice(0, separator)} · ${identity}`.slice(0, 50) === baseLabel
+  )
+    return label;
+  return `${label} · ${identity}`;
+}

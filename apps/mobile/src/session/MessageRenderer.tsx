@@ -1,3 +1,8 @@
+import { PluginInvocationHeader } from './PluginInvocationHeader';
+import { useAuth } from '@/auth/AuthContext';
+import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
+import { usePluginResultCard } from './usePluginResultCard';
+import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -94,6 +99,7 @@ import { isShareableMessage } from '@/session/shareSelectionStore';
 import {
   ShareMessageCheckbox,
   useCancelShareSelectionRowTap,
+  MessageBodyText,
 } from '@/session/ShareMessageCheckbox';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import { selectableTextVerticalOffset } from '@/session/selectableTextAlignment';
@@ -605,6 +611,10 @@ export interface ShareableMessageViewport {
 }
 
 interface MessageActions {
+  /** Partner chats keep the user's bubble plain; result and authorization cards remain independent. */
+  showPluginInvocations?: boolean;
+  /** Device hosting plugin results; independent of a filesystem workdir. */
+  remoteDeviceId?: string;
   /** 长按/操作条「复制消息链接」:复制该消息的会话深链(带 ?message= 锚点)。 */
   onCopyMessageLink?: (clientId: string) => void;
   /** Insert this message's anchored link as an atom in the active composer. */
@@ -654,6 +664,8 @@ interface MessageActions {
 }
 
 export function MessageRenderer({
+  showPluginInvocations = true,
+  remoteDeviceId,
   topOverlayHeight,
   focusedItemKey,
   followLatestRequestKey,
@@ -686,6 +698,7 @@ export function MessageRenderer({
   canLoadEarlier,
   emptyTestID,
   bottomOverlayHeight,
+  contentBottomInset,
   isSessionStreaming,
   makerTurnRunning,
   continuationTurnClientId,
@@ -701,6 +714,8 @@ export function MessageRenderer({
   devRecycleItems = false,
 }: {
   bottomOverlayHeight?: number;
+  /** Floating composers reserve a stable tail gap while their expanded surface overlays history. */
+  contentBottomInset?: number;
   /** 顶部 chrome(绝对定位半透明工具栏)实测高度:内容顶部按此让位,详见 mobileMessageListTopPadding。 */
   topOverlayHeight?: number;
   focusedItemKey?: string | null;
@@ -1517,7 +1532,7 @@ export function MessageRenderer({
     lightboxImagesRef.current = next;
     return next;
   }, [galleryImages, imageLightboxOpen, payload]);
-  const bottomPadding = mobileMessageListBottomPadding(bottomOverlayHeight);
+  const bottomPadding = mobileMessageListBottomPadding(contentBottomInset ?? bottomOverlayHeight);
   const topPadding = mobileMessageListTopPadding(topOverlayHeight);
   listBottomPaddingRef.current = bottomPadding;
   listTopPaddingRef.current = topPadding;
@@ -1551,6 +1566,8 @@ export function MessageRenderer({
     if (shareSelectionActiveRef.current) scheduleStickyShareCheckRef.current?.(true);
   }, []);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
+    showPluginInvocations,
+    remoteDeviceId,
     onAddMessageToComposer,
     onCopyMessageLink,
     onForkMessage,
@@ -1580,6 +1597,8 @@ export function MessageRenderer({
     isSessionStreaming,
     screenWidth: viewportLayout.contentWidth,
   }), [
+    showPluginInvocations,
+    remoteDeviceId,
     busyClientId,
     busyAction,
     continuationInFlightProjectionCapability,
@@ -3256,8 +3275,10 @@ function MessageBubble({
       onResolveRemoteMedia={actions.onResolveRemoteMedia}
     />
   ) : null;
+  const hasPluginInvocations = isUser && actions.showPluginInvocations !== false
+    && Boolean(item.message.pluginInvocations?.length);
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody
+    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || hasPluginInvocations
   );
   // 气泡是纯 View,不承接任何手势:文本选择走正文原生 Text selectable(长按文字就地选择复制),
   // 气泡上不能挂 Pressable——它会参与触摸协商,干扰正文里表格/代码块横向 ScrollView 的拖动。
@@ -3272,6 +3293,15 @@ function MessageBubble({
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
+      {hasPluginInvocations ? (
+        <PluginInvocationHeader
+          key={clientId}
+          plugins={item.message.pluginInvocations!}
+          deviceId={actions.remoteDeviceId}
+          sessionId={item.message.source.sessionId}
+          running={actions.isSessionStreaming === true && clientId === actions.lastUserInputClientId}
+        />
+      ) : null}
       {hookSource ? (
         <View style={styles.hookSourceHeader} testID="message.hookSource">
           <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
@@ -5583,7 +5613,7 @@ function renderInline(
     streaming?: boolean;
   } = {},
 ): ReactNode {
-  const SpanText = ctx.SpanText ?? Text;
+  const SpanText = ctx.SpanText ?? MessageBodyText;
   const openImage = ctx.onOpenImage ?? (ctx.onOpenPayload
     ? (url: string, alt?: string) => {
         const title = mobileMarkdownImageTitle(url, alt);
@@ -5888,12 +5918,18 @@ function ToolMediaBlock({
     [item.tools],
   );
   const openPayload = actions.onOpenPayload;
-  if (media.length === 0) return null;
+  const files = [...new Map(item.tools.flatMap((tool) => tool.files ?? []).map((file) => [file.url, file])).values()];
+  const cards = [...new Map(item.tools.flatMap((tool) => (tool.cardIds ?? []).map((callId) => ({ callId, sessionId: tool.source.sessionId }))).map((card) => [card.callId, card])).values()];
+  if (media.length === 0 && files.length === 0 && cards.length === 0) return null;
   return (
     <View
       style={[styles.toolMediaBlock, { gap: contentLayout.attachmentGap }]}
       testID="message.toolMediaBlock"
     >
+      {cards.map((card) => <PluginResultCard key={card.callId} {...card} actions={actions}
+        excludedUrls={[...item.tools.flatMap((tool) => extractPayloadToolResultMedia(tool.secondaryBody ?? '').map((entry) => entry.url)), ...files.map((file) => file.url)]} />)}
+      {files.map((file) => <FileChip key={file.url} name={file.title} path={file.url} layout={contentLayout}
+        onOpen={openPayload ? () => openPayload(buildFilePayload(file.title, file.url)) : undefined} />)}
       {media.map((entry, index) => (
         <MediaPreview
           key={`${entry.kind}:${entry.url}:${index}`}
@@ -5909,6 +5945,41 @@ function ToolMediaBlock({
       ))}
     </View>
   );
+}
+
+/** Read-only fallback for desktop plugin cards. Reuse native text/media/file
+ * components rather than executing plugin HTML or pretending its buttons work. */
+function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
+  callId: string; sessionId: string; excludedUrls: string[]; actions: MessageActions;
+}) {
+  const { blocks, error, retry } = usePluginResultCard(actions.remoteDeviceId, sessionId, callId);
+  const layout = buildMessageContentLayout({ screenWidth: actions.screenWidth });
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
+  return <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
+    {blocks?.map((block) => {
+      const url = (block.data as { url?: unknown } | undefined)?.url;
+      const kind = managedToolMediaKind(url);
+      if (typeof url === 'string' && excludedUrls.includes(url)) return null;
+      if (kind && typeof url === 'string') {
+        const media = { kind, url, previewable: false };
+        return <MediaPreview key={block.id} label={mediaLabel(media)} layout={layout} media={media}
+          onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildMediaPayload(media, mediaLabel(media))) : undefined}
+          onResolveRemoteMedia={actions.onResolveRemoteMedia} variant={kind === 'image' ? 'attachment' : 'card'} />;
+      }
+      if (block.primitive === 'file' && typeof url === 'string' && /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb$/.test(url)) {
+        const name = url.split('/').pop()!;
+        return <FileChip key={block.id} name={name} path={url} layout={layout}
+          onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildFilePayload(name, url)) : undefined} />;
+      }
+      return <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
+        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />;
+    })}
+    {!blocks && !error ? <Text style={styles.detailText}>{t('message.renderer.loading')}</Text> : null}
+    {error ? <MessageContentOpenButton onPress={retry} accessibilityLabel={t('message.renderer.retryPreview')}>
+      <Text style={styles.detailText}>{t('message.renderer.retryPreview')}</Text>
+    </MessageContentOpenButton> : null}
+  </View>;
 }
 
 /**
@@ -6930,6 +7001,7 @@ function MessagePayloadBody({
   if (payload.kind === 'file') {
     return (
       <FilePayloadBody
+        onResolveRemoteMedia={onResolveRemoteMedia}
         layout={payloadLayout}
         onReadTextFilePreview={onReadTextFilePreview}
         payload={payload}
@@ -7148,10 +7220,12 @@ function DiffPayloadPane({
 }
 
 function FilePayloadBody({
+  onResolveRemoteMedia,
   layout,
   payload,
   onReadTextFilePreview,
 }: {
+  onResolveRemoteMedia?: ResolveRemoteMediaFn;
   layout: PayloadBodyLayout;
   payload: Extract<MessagePayload, { kind: 'file' }>;
   onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
@@ -7160,6 +7234,40 @@ function FilePayloadBody({
   const { t, i18n: i18nInstance } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const sourcePath = payload.sourcePath ?? '';
+  const { accountGeneration } = useAuth();
+  const fileContext = useContext(ChatFilePathContext);
+  const [exporting, setExporting] = useState(false);
+  const exportIdentity = JSON.stringify([accountGeneration, fileContext?.deviceId, fileContext?.sessionId, sourcePath]);
+  const exportCurrent = useRef(exportIdentity); exportCurrent.current = exportIdentity;
+  const exportBusy = useRef(false);
+  const exportGeneration = useRef(0);
+  useLayoutEffect(() => {
+    exportCurrent.current = exportIdentity;
+    exportGeneration.current += 1;
+    exportBusy.current = false;
+    setExporting(false);
+    return () => { exportGeneration.current += 1; exportCurrent.current = ''; };
+  }, [exportIdentity, onResolveRemoteMedia]);
+  const exportFile = async () => {
+    if (!onResolveRemoteMedia || exportBusy.current) return;
+    const identity = exportIdentity;
+    const generation = exportGeneration.current;
+    const valid = () => exportCurrent.current === identity && exportGeneration.current === generation;
+    exportBusy.current = true; setExporting(true);
+    try {
+      const resolved = await onResolveRemoteMedia({ kind: 'file', url: sourcePath, previewable: false }, { front: true });
+      if (!valid()) return;
+      const localUri = resolved.url.startsWith('file://') ? resolved.url : await downloadRemoteMediaShareTemp(resolved.url, resolved.mimeType, payload.title);
+      if (!valid()) return;
+      if (!localUri) throw new Error('download failed');
+      const sharing = await import('expo-sharing');
+      if (valid()) await sharing.shareAsync(localUri, { mimeType: resolved.mimeType });
+    } catch {
+      if (valid()) Alert.alert(t('files.browser.shareFailed'));
+    } finally {
+      if (valid()) { exportBusy.current = false; setExporting(false); }
+    }
+  };
   const bodyPresentation = useMemo(
     () => summarizeMessagePayloadBody(payload),
     [i18nInstance.language, payload],
@@ -7184,6 +7292,10 @@ function FilePayloadBody({
           {textPreviewStatusText(previewState, canPreview, previewKind)}
         </Text>
         <PayloadPathActions layout={layout} path={sourcePath}>
+          {onResolveRemoteMedia && isDesktopLocalMediaUrl(sourcePath) ? <PayloadActionButton
+            accessibilityLabel={t('files.browser.exportShare')} label={t(exporting ? 'files.browser.exporting' : 'files.browser.exportShare')}
+            layout={layout} disabled={exporting} onPress={() => { void exportFile(); }} testID="message.fileExportButton" /> : null}
+
           {canPreview && previewState.status !== 'ready' ? (
             <PayloadActionButton
               accessibilityLabel={t('message.renderer.loadRemoteTextPreview')}

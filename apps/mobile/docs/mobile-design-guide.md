@@ -145,14 +145,14 @@ function Foo() {
 
 ### iOS 外壳 vs Cindy 内容
 
-界面分两层,不要混为一谈:
+iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-rules/ios-native-design.md)。该规范区分系统容器、原生控件和 Cindy 业务内容；取代原先“复杂内容面板一律使用 SheetSurface”的规定。
 
-- **外壳(iOS 交给系统)**:首页顶栏走系统导航栏,底色跟列表同一块 surface。触发器(汉堡 / 标题簇 / `···`)仍是原来的按钮,点开后挂系统 UIMenu。尚未冷更编进 `MenuView` 时自动退回自绘面板。底部 ActionSheet 只留给没有附着点的确认/破坏性询问。Android 继续自绘。
-- **内容(继续 Cindy)**:消息和 Markdown、输入框、模型 / 权限 / 任务等带搜索或两级结构的面板、登录品牌画布、首页会话列表。这些仍走 token、lucide、`SheetSurface`。
-
-左滑「选项」在 iOS 用 Expo UI 的系统 `BottomSheet` + `List`(SwiftUI grouped rows)。Android 继续自绘 `SessionActionSheet`。无附着点的其它纯动作菜单仍走 `showActionMenu`。内容面板(模型选择、会话菜单、任务 Context)继续 `SheetSurface`。
-
-简单页(设置、账号删除、设备详情、自动化)在 iOS 打开系统导航栏,返回锚点 `settings.backButton` 等 testID 仍要保留。首页顶栏在 iOS 也走系统导航栏,底色跟列表同一块 surface;会话页和文件浏览顶栏仍是自绘。左侧抽屉仍是自绘面板,iOS 用 `FullWindowOverlay` 盖住系统顶栏;Android 继续树内 overlay。搜索筛选钮收起时仍是原来的图标,iOS 点开挂系统 UIMenu;尚未冷更或 Android 继续自绘面板。
+- 首页和简单页继续使用系统导航栏。任务页采用原生操作控件与透明标题布局，按首页实际导航中心对齐；保留返回锚点及 testID。
+- iOS 弹层优先使用系统 BottomSheet，表单和操作分组优先原生 Form / Section 或分组 List。左滑任务选项已有 BottomSheet + List，可参考其关闭生命周期。任务详情与搜索的高度、材质及入口顺序见新规范。
+- 消息、Markdown、代码和复杂业务内容可继续用 RN 与主题 token；业务图标保留原有 Lucide。系统导航符号由原生控件提供。不得用“原生外壳”概括成“整页已原生化”。
+- 系统管理的圆角、字体、材质与反馈保留系统默认，不强制套自绘圆角档位或零阴影约束；自绘内容继续遵守本文 token 规则。
+- 模型／权限、Context、账号切换等存量自绘面板列为渐进迁移项，不因本规范批量重写。Android 与必要兼容回退继续复用现有基础组件，不降低业务能力。
+- 首页筛选继续使用原生 UIMenu；左侧抽屉和文件浏览顶部的存量实现不代表已经迁移，需分别审查。
 
 首页「所有任务」下拉只负责范围筛选：点设备名直接切换到该设备的任务，不得为补充管理动作改成设备子菜单或增加一次确认。设备详情、重命名与删除集中在左侧抽屉的「设备管理」页；列表不画进入箭头或重命名图标。所有设备无论在线、离线或未开启远程控制，都能点进资料详情，再重命名或删除；右滑显示重命名、左滑显示删除，删除需系统确认。iOS 使用系统原生列表与滑动操作。删除使用服务端接口，在线设备当前需先离线才能删除，不以本地隐藏代替删除。iOS 原生菜单与自绘回退、Android 遵守同一交互边界。
 
@@ -180,7 +180,7 @@ function Foo() {
 - `strokeWidth` 统一约 2。
 - 颜色走 token(`colors.textPrimary` / `textSecondary` / `statusAccent` / `permAutoAccent` 等),不写死。
 - 会话 Agent 身份图标走 `MobileVendorIcon`；provider / model 厂牌图标分别走 `MobileProviderMark` / `MobileModelIconMark`。
-- **底部浮窗统一走 SheetSurface 模式**:可拖动底部浮窗(把手 half/full/下拉 dismiss)的「面板表面」抽在 `src/session/SheetSurface.tsx`(grabber + header + pinnedTop/footer 插槽 + 滚动区 + `useContextSheetDrag` 拖动编排,snap 受控)。单层浮窗 = Modal + backdrop + 一层 Surface(`ContextSheet` 即此薄壳);需要「浮窗上再叠一层」时**不要嵌套 Modal**(iOS 同级双 Modal 第二个不显示、Android 每个 Modal 是独立原生 Dialog、返回键派发不可控),在**同一个 Modal 里叠第二层 Surface**(translateY 滑入 + 自带加深 backdrop + 返回两段式),先例见 `ModelPickerSheet`(模型列表一级 + 模型选项/权限二级,视图状态机在 `modelPickerSheetModel.ts` 可单测)。**内容面板**新浮窗一律复用 SheetSurface。纯动作菜单除外:iOS 走 `showActionMenu`,见 §4「iOS 外壳 vs Cindy 内容」。
+- **底部浮窗按平台承载**：iOS 新增与迁移优先系统 sheet，详情默认中等高度、短工具按内容高度，具体见 iOS 规范。Android 和尚未迁移的兼容实现继续复用 `SheetModal` / `SheetSurface`，不另造自绘外壳；其二级内容保留单 Modal 内导航。不同面板之间等待关闭回调后再呈现，避免叠加遮罩。
 
 ---
 

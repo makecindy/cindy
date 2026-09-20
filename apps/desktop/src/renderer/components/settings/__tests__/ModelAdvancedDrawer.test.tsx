@@ -484,9 +484,9 @@ describe('model advanced editor', () => {
       drawer({ ...model, contextWindow: 700_000, efforts: ['high', 'max'], defaultEffort: 'max' }),
     );
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700');
-    expect(screen.queryByRole('button', { name: 'effortLevels.low' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'effortLevels.low' })).toBeNull();
     expect(
-      screen.getByRole('button', { name: 'effortLevels.max' }).getAttribute('aria-pressed'),
+      screen.getByRole('radio', { name: 'effortLevels.max' }).getAttribute('aria-checked'),
     ).toBe('true');
   });
 
@@ -513,7 +513,7 @@ describe('model advanced editor', () => {
     expect(
       screen.queryByText(/settings.providers.models.advanced.engineDefaultEffort/),
     ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'effortLevels.high' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.high' }));
     expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', 'gpt-6', 'high');
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'high');
   });
@@ -521,9 +521,9 @@ describe('model advanced editor', () => {
   it('shows one selected depth when another harness needs a supported-level mapping', () => {
     render(drawer(model, 'low', ['low']));
     expect(screen.queryByText('settings.providers.models.advanced.effortMixed')).toBeNull();
-    expect(screen.getByRole('button', { name: 'effortLevels.high' }).getAttribute('aria-pressed'))
+    expect(screen.getByRole('radio', { name: 'effortLevels.high' }).getAttribute('aria-checked'))
       .toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'effortLevels.high' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.high' }));
     expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', 'gpt-6', 'high');
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'low');
   });
@@ -541,24 +541,24 @@ it('shows closed Gateway tiers disabled and re-enables them on catalog refresh',
     ...model, efforts: ['high'], defaultEffort: 'high', displayEfforts: ['low', 'high', 'max'],
   };
   const view = render(drawer(restricted));
-  const low = screen.getByRole('button', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  const low = screen.getByRole('radio', { name: 'effortLevels.low' }) as HTMLButtonElement;
   expect(low.disabled).toBe(true);
   fireEvent.click(low);
   expect(setProviderModelEffort).not.toHaveBeenCalled();
   view.rerender(drawer({ ...restricted, efforts: ['low', 'high'] }));
-  const enabledLow = screen.getByRole('button', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  const enabledLow = screen.getByRole('radio', { name: 'effortLevels.low' }) as HTMLButtonElement;
   expect(enabledLow.disabled).toBe(false);
   fireEvent.click(enabledLow);
   expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', model.id, 'low');
-  expect((screen.getByRole('button', { name: 'effortLevels.max' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('radio', { name: 'effortLevels.max' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it('keeps the tier row visible when Gateway closes every tier', () => {
   draw({ ...model, efforts: [], defaultEffort: null, displayEfforts: ['low', 'high'] });
   for (const effort of ['low', 'high']) {
-    const button = screen.getByRole('button', { name: `effortLevels.${effort}` }) as HTMLButtonElement;
+    const button = screen.getByRole('radio', { name: `effortLevels.${effort}` }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.getAttribute('aria-checked')).toBe('false');
   }
 });
 
@@ -586,7 +586,7 @@ it('limits context and effort reads, writes and resets to the chat runtime', () 
   expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
   expect(screen.queryByText('settings.providers.models.advanced.effortMixed')).toBeNull();
   expect(vi.mocked(getProviderModelEffort).mock.calls.every(([agent]) => agent === 'codex')).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'effortLevels.low' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.low' }));
   expect(setProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared', 'low');
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
   expect(clearProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared');

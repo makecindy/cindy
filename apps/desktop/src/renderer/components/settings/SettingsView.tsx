@@ -27,6 +27,7 @@ import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
 import { AboutSection } from './AboutSection';
+import { WorktreeRecycleCard } from './WorktreeRecycleCard';
 import { StorageManagementCard } from './StorageManagementCard';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
@@ -55,6 +56,7 @@ import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSec
 import { canAccessBillingSettings } from './billingVisibility';
 import { canAccessUsageSettings } from './usageVisibility';
 import { canAccessCindyMakeSettings } from './cindyMakeVisibility';
+import { useCindyVersions } from '@/lib/useCindyVersions';
 import { UsageHistorySection } from './usage/UsageHistorySection';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
@@ -86,7 +88,8 @@ export function SettingsView() {
   // 用量历史对所有**已登录**身份开放 (local / cloud personal / cloud org),
   // 与 billing 的 canAccessBillingSettings 无关 —— #2785 维护者裁决。
   const canAccessUsage = canAccessUsageSettings({ mode });
-  const canAccessCindyMake = canAccessCindyMakeSettings(import.meta.env.DEV);
+  const versions = useCindyVersions(!import.meta.env.DEV);
+  const canAccessCindyMake = canAccessCindyMakeSettings(import.meta.env.DEV, versions.state);
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;
@@ -363,7 +366,6 @@ export function SettingsView() {
                     >
                       <BotsGlobalSettingsSection />
                     </section>
-
 
                     {/* Section — App Behavior(「应用行为」)
                         「保持电脑唤醒」跨平台生效,故 section 常驻;其中
@@ -661,6 +663,7 @@ export function SettingsView() {
               >
                 <section aria-label={t('settings.about.storage.title')}>
                   <StorageManagementCard />
+                  <WorktreeRecycleCard />
                 </section>
               </div>
             )}

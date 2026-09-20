@@ -82,6 +82,7 @@ import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
+import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 
 const log = createLogger('SessionContentHeader');
 
@@ -184,6 +185,21 @@ export function SessionContentHeader({
   /* ---- 行内重命名（与 SessionItem 同交互：双击进入，Enter 提交 / Esc 取消 / Blur 提交，
           输入框本体 + Magic AI 改名按钮统一在 SessionRenameInput） ---- */
   const [isEditing, setIsEditing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  useEffect(() => {
+    setMenuOpen(false);
+    setTagEditorOpen(false);
+  }, [session.id, session.deviceLinkDeviceId]);
+  const tagMenu = (
+    <TaskTagMenuSection
+      session={session}
+      onMore={() => {
+        setMenuOpen(false);
+        setTagEditorOpen(true);
+      }}
+    />
+  );
   const [editValue, setEditValue] = useState(displayTitle);
   // Enter 提交后 input 卸载又触发 onBlur 的二次提交，用 ref 拦掉。
   const committedRef = useRef(false);
@@ -582,11 +598,22 @@ export function SessionContentHeader({
         </span>
       )}
 
+      {!isEditing && !!session.tags?.length && (
+        <span
+          className="mx-1 shrink-0 [--task-tag-ring-bg:hsl(var(--content-area))]"
+          style={WINDOW_NO_DRAG_STYLE}
+        >
+          <TaskTagDots tags={session.tags} />
+        </span>
+      )}
+
       {!isEditing && !readOnly && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
         <DropdownMenu
+          open={menuOpen}
           onOpenChange={(open) => {
+            setMenuOpen(open);
             if (open) prefetchDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId);
           }}
         >
@@ -656,6 +683,7 @@ export function SessionContentHeader({
                     {t('ccAgent.sidebar.sessionMenu.sessionBranches')}
                   </DropdownMenuItem>
                 )}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -680,6 +708,7 @@ export function SessionContentHeader({
                 >
                   {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
                 </DropdownMenuItem>
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -767,6 +796,7 @@ export function SessionContentHeader({
                     {t('ccAgent.sidebar.sessionMenu.exportShare')}
                   </DropdownMenuItem>
                 )}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -790,6 +820,8 @@ export function SessionContentHeader({
 
       {/* session-git-pr-context:当前分支 + 关联 PR 徽标(非 git 目录 / dialogue 会话自动隐藏) */}
       <GitContextBadge session={session} />
+
+      {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
 
       {/* 导出 .cshare 弹窗:仅打开时挂载,与 SessionItem 同款。 */}
       {shareExportOpen && (

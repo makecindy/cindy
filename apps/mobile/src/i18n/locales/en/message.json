@@ -1,4 +1,13 @@
 {
+  "pluginInvocation": {
+    "listSeparator": ", ",
+    "status": {
+      "running": "Calling…",
+      "called": "Called",
+      "done": "Finished",
+      "selected": "Selected"
+    }
+  },
   "renderer": {
     "moreActions": "More message actions",
     "previousQuestionJump": "Jump to previous question: {{preview}}",

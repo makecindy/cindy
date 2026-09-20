@@ -10,6 +10,8 @@ const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
 const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
 const SEARCH_MATCH_BACKGROUND = 'hsl(var(--search-match-bg))';
 const SEARCH_MATCH_FOREGROUND = 'hsl(var(--search-match-fg))';
+const SEARCH_ACTIVE_BACKGROUND = 'hsl(var(--search-match-active-bg))';
+const SEARCH_ACTIVE_FOREGROUND = 'hsl(var(--search-match-active-fg))';
 const SEARCH_REFRESH_DEBOUNCE_MS = 120;
 
 interface TextMatch {
@@ -44,6 +46,7 @@ function applyFindHighlights(matches: readonly TextMatch[], activeIndex: number)
   const activeMatch = matches[activeIndex];
   if (activeMatch) {
     const activeHighlight = new Highlight();
+    activeHighlight.priority = 1;
     activeHighlight.add(activeMatch.range);
     registry.set(ACTIVE_HIGHLIGHT_NAME, activeHighlight);
   }
@@ -669,10 +672,10 @@ export function FindInPageBar() {
           color: ${SEARCH_MATCH_FOREGROUND};
         }
         ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
-          background-color: ${SEARCH_MATCH_BACKGROUND};
-          color: ${SEARCH_MATCH_FOREGROUND};
+          background-color: ${SEARCH_ACTIVE_BACKGROUND};
+          color: ${SEARCH_ACTIVE_FOREGROUND};
           text-decoration: underline;
-          text-decoration-color: ${SEARCH_MATCH_FOREGROUND};
+          text-decoration-color: ${SEARCH_ACTIVE_FOREGROUND};
           text-decoration-thickness: 2px;
         }
       `}</style>

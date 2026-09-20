@@ -25,15 +25,22 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   **不得**用凭证路径 / `/proc/*/environ` 文本硬拦拒绝原生允许的读、搜、bash。Ask/Auto
   仍把这类调用升级为审批;Full access 选择即接受父进程环境里的代理 token / 网关 key /
   BYOM key / 外部 MCP header **可能被读取**。允许保留的机械隔离仅限 Cindy 自身运行所必需:
-  模型不得写 agent home(`models.json` / 权限档),Extra Dirs 的结构化写工具保持只读。
+  模型写 agent home(`models.json` / 权限档 / subagent 快照)必须强制用户确认,即使
+  Full Access 也不得静默放行或静默拒绝。Extra Dirs 的结构化写跟随会话权限:本地
+  Full Access 放行,Auto 交审阅,Ask 确认,禁止再在 bridge 里悄悄硬断。
   bash 写入 Extra Dirs 仍非 OS 强制。真正的强隔离需要 OS 级手段(macOS `sandbox-exec`、
   Linux 只读 bind mount / seccomp),**本阶段未接入**。需要硬边界时用 ask/auto 档,或等 OS
   沙箱落地。改动权限相关代码时不要再堆「看起来能拦」的正则并当成安全边界。
   与 Claude Code／Codex 一致，Pi 会话的 Full Access 也会让插件 `ghost_call` 的
-  `attachments`／`dir`／`save_dir` 在 Host 侧免去额外过户确认；实现必须现读活跃 Session
+  `attachments`／`dir`／`save_dir`，以及 Forge 在工作目录外的 scaffold／pack／install
+  在 Host 侧免去额外确认；实现必须现读活跃 Session
   的稳定状态并同时匹配其 runtime instance identity；权限切换或关闭在途、远程／缺会话／
   实例不匹配／查询失败均 fail closed。工作区草稿、工作目录写入和媒体路径揭示等操作审批
-  同样沿用会话权限；MCP 逐次审批标记不得覆盖 Full Access。Setup、OAuth、Secret 的信息
+  同样沿用会话权限；MCP 逐次审批标记不得覆盖 Full Access。Host 已按当前档位放行后，
+  不得再因「不在会话工作目录内」悄悄硬断，把 Agent 晾在空转里。  cindy-docs 与电脑截图 /
+  录制路径同样走这条会话权限，不得在工具层再静默 PATH_NOT_ALLOWED。  授权卡片与后续
+  I/O 绑定已解析的规范路径，工作目录里的 symlink 不能把越界目标藏成相对路径。电脑
+  驱动契约只丢掉 Cindy 后加的兼容字段（目前是 `delivery_mode`），其它未知参数仍拒。Setup、OAuth、Secret 的信息
   输入与安装／更新策略保持原边界。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
   注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
   instance，使 Full Access 自动交接保持 fail closed。
@@ -58,7 +65,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
-  时从 `get_entries` 校正。
+  时从本机 session JSONL 校正（只打开启动时 `--session-dir` 真身内的普通文件，
+  并有字节/时间预算，超限回退 RPC）；远端仍走 `get_entries`。
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
@@ -173,9 +181,11 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 2. **凭证路径判定三处同步**:`shared/auto-review.ts CREDENTIAL_PATH_PATTERNS`、
    `cindy-bridge-source.ts touchesCredentialPath`、`auto-review-policy.ts` 只读分支全字段扫描
    必须同口径。bridge 自包含不能 import,改一处记得改三处。
-3. **斜杠命令转义**:`escapeLeadingSlashCommand` 对 `/` 开头用户输入前置空格转字面(仅放行
-   `/skill:`)—— pi RPC prompt 会执行扩展命令(`/plan` 被 plan-mode 吃掉且不留痕),不转义会让
-   Cindy 状态镜像脱同步并暴露未来扩展命令攻击面。
+3. **斜杠命令转义**:`escapeLeadingSlashCommand` 对 `/` 开头用户输入前置空格转字面。仅放行
+   `/skill:`、本次 `get_commands` 证明 provenance 落在 Cindy-managed package 根内的命令，以及
+   本次显式传入的项目 Skill/prompt/extension 路径所证明的命令。`/` 面板用同一套
+   `authorizedSlashCommandNames`，不单看 managed package。其余扩展命令(如 `/plan`)
+   转义成字面，避免 Cindy 状态镜像脱同步，也堵住未装配来源的命令攻击面。
 4. **auto 档 dispatcher fail-closed**:分类抛错 / 无 resolver 一律不放行。
 5. **成本计量**:models.json 的 cost 来自 host 模型目录(`ModelDescriptor.cost`),缺省按 0;
    派生链 `catalog-to-descriptors.ts` → `capabilities.availableModels` → `writeModelsJson`。
@@ -187,19 +197,18 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 8. **项目资源显式装配**:root、只读 subagent 与离线 fork 启动 Pi 时都必须显式传
    `--no-approve`;没有 Cindy-managed 本机用户包根时同时传 `--no-extensions`。本机普通 runtime
    存在明确安装且未停用的用户包根时，为保留 Pi 原生 package discovery 可以只省略
-   `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍是项目
-   `.pi/extensions` / `.pi/settings.json` 的硬门，不得因此传 `--approve` 或读取项目设置。root
-   仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent 与 pinned plan-mode，并仅用重复
-   `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
-   的项目 skill 目录。eligible canonical 目录必须先完整物化到当前会话 `configHome` 的非自动
-   扫描目录，再把隔离快照路径交给 Pi；不得把仍可变化的项目原路径直接放进 argv。复制期间
-   任一越界 symlink、特殊文件或路径替换会使整组 skills fail closed。不得读取/复制项目
-   `.pi/settings.json`，不得传 `--approve`，
-   不得依赖 `PI_OFFLINE=1` 代替 packages/extensions 硬门。root 不传 `--no-skills`，以保留现有
-   user/global skill 行为；项目 skill 的 `loaded` 只能由当前会话 `get_commands` 对隔离快照路径
-   的 exact temporary/local provenance 证明。approval 真源缺失、异常、撤销、失效、路径消失
-   或快照失败时，新会话
-   一律不带项目 `--skill`，并在 per-session runtime manifest 记录诊断原因。
+   `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍禁止
+   读取项目 `.pi/settings.json` 与自动安装项目 packages，不得因此传 `--approve`。
+   本地非 Review、非 Bot、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
+   `--extension` 把仓库原路径交给 Pi：`.pi/skills` 与 cwd→git root 内 `.agents/skills`
+   的目录型 Skill、`.pi/prompts/*.md`、`.pi/extensions/*.ts` 与 `*/index.ts`。越界 symlink
+   不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode。Review、Bot、子代理、
+   离线 `forkSdkSession` 克隆进程与远端会话不带这些项目资源。随后以 `resumeSessionId`
+   恢复的本地根任务（含 fork 之后的恢复）与普通本地任务相同，加载项目资源。
+   不得读取/复制项目 `.pi/settings.json`，不得传 `--approve`，
+   不得依赖 `PI_OFFLINE=1` 代替该 settings 硬门。root 不传 `--no-skills`，以保留现有
+   user/global skill 行为；项目 skill 的 `loaded` 由当前会话 `get_commands` 对原路径 provenance
+   证明。
 9. **Pi bash bounded timeout**:Cindy 覆盖的模型可调 `bash` 在 execute 入口强制默认
    `300s`、上限 `1800s`。缺省或非正数用默认;大于上限或非有限数字 fail-fast(参数错误,
    不是 `Command timed out`);合法秒数原样交给 Pi 原生执行器。不另起 timer / AbortController。
@@ -278,9 +287,9 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - 自动化安全网:maker-core PI 定向 + 端到端集成(真 pi 二进制 + 真 bridge + 假模型工具调用)
   覆盖安全命令静默执行 / 危险命令升级并 deny 拦截 / 区内写落盘 / 凭证读升级 / 普通读直通 /
   斜杠转义 / models.json 计费透传。
-- PR4 项目资源桥:只装配 Cindy 明确批准的 `.pi/skills` 与 cwd→git root 范围内
-  `.agents/skills`；真实 pinned Pi RPC 夹具覆盖未批准/显式 skills、重复名、并发隔离，以及
-  项目声明 npm/git/local packages 与 extensions 时零 install/clone/第三方执行。
+- PR4 项目资源桥(2026-07,已废止):当时只装配 Cindy 明确批准的 Skill，项目 packages/extensions
+  不执行。现行口径见 §8：本地根任务用 `--skill` / `--prompt-template` / `--extension` 原地加载
+  仓库原路径，不走批准快照；项目 `.pi/extensions` 会进入该会话。项目 packages 仍不自动安装。
 
 ### SSH 远端能力(2026-08 里程碑,轮 39 补记)
 
@@ -373,7 +382,8 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
   user-provider 派生 → pi-host `resolvePiNativeProviders` → PiAgent writeModelsJson 原生块 +
   provider 感知 setModel。真二进制测试证明直连原生端点、网关零请求。
 - ✅ **统一会话树**(已交付):Cindy session fork 与 Pi append-only entry tree 的后端/
-  对话框实现仍在。头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
-  `agentKind=pi` 露出。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
+  对话框实现仍在。桌面头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
+  `agentKind=pi` 露出；手机版暂隐 Pi「任务分支」入口，保留树组件与 transport 能力。
+  入口呈现见 `apps/mobile/src/session/SessionMenuSheet.tsx`。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
   SQLite 可见时间线原子重投影与上下文 usage 恢复;device-link / mobile transport
   contract 同步开放。切换不回滚工作区文件。

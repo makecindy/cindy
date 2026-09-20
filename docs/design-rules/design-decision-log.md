@@ -12,6 +12,14 @@
 
 ## 2026-09
 
+- **09-18 搜索命中层级（Issue #4650，用户授权实施）**：全局 Ctrl+F 普通与当前命中原本同色，且两模式底色与内容表面接近。增强普通命中，新增当前命中的独立金色背景与深色文字；全局保留下划线，文件预览与编辑器保留描边，统一消费搜索语义 token。旧 ID 与显式主题覆盖保留。方向授权不等于最终实机验收。落点：`DESIGN.md §10`、`themes/colors.ts`、颜色冻结快照与 `searchHighlightContrast.test.ts`。
+
+- **09-17（撤销 CINDY placeholder 降对比度）**：用户明确要求撤销提交 `7bf645447cf9ae8feeffb781220d44aab79cde45`。CINDY Light / Dark 的 `text-placeholder` 恢复为 `#6B6B67` / `#C1C1C1`，DTCG 数值源、内置主题与独立冻结预期同步恢复；取代 09-16 降低占位文字显著程度的决定。09-16 原记录作为历史保留，Cindy Make 与后续 Switch 改动不受影响。现行规则见 `DESIGN.md §4 / §15`；本条不代表 Light/Dark 实机视觉验收。
+
+- **09-16（Switch 亮滑块与轻微形变）**：用户确认 HTML 并要求应用到当前 Cindy Switch。CINDY Dark 的开/关滑块统一为 `#FCFCFC`，开启轨道沿用蓝色 `#417CDD`；新增 `switch-thumb-on`，默认跟随旧 `background`，保留其他主题与用户覆盖。参考 Fluid Functionalism 后，用户认为压缩过大，将按压由 20×12 收敛到 18×14、悬停由 18×16 收敛到 17×16，静止仍为 16×16；沿用 Cindy 150ms 缓动和 80ms 轨道变色，无过冲、无阴影。共享 Desktop 组件支持拖动，保留 Radix 的 ref、checked/defaultChecked、键盘与表单回调；禁用与减少动态效果适配。规范见 `DESIGN.md §14.4 / §15.17`。本次为独立有意可见变化，DS-10 #4427 已合并，DS-11 #4455 的远端内容不在本次修改范围。
+
+- **09-15（CINDY 开关开启态改蓝）**：用户查看浅深模式 HTML 对比后明确要求「把开关打开状态改成蓝色 #417CDD 应用到 Cindy UI」。Desktop CINDY Light / Dark 的 `switch-track-on` 同为 `#417CDD`，取代 2026-08-05 的 Light `#4A4D51` / Dark `#EEEEEE`。关闭轨道、滑块、禁用透明度、尺寸与焦点处理沿用既有合同；普通主操作保持中性，其他主题与 Mobile 不扩展。蓝色与光标、焦点、自动批准同色但不互相绑定。现行规范见 `DESIGN.md §2 / §10 / §15.17`；DTCG 主题源生成生产值，`cindyDecisionData.ts` 与内置主题快照独立锁定新预期。此裁决独立于仍待合并的 DS-10 / DS-11，不将旧截图或其验收结论当作本次改色的实机证据。
+
 - **09-12 IM 上下文卡片的轻量折叠入口（#4367，补记已确认方向）**：用户看过深浅 HTML 示意后确认统一所有 IM bot 的折叠分组与数字展示。本轮补齐组件登记：仅 `HookTaskCard` 的长正文和附带上下文开关使用无背景、无边框的文字控件；不将其他聊天操作豁免为裸文字按钮。两处共用点击留白与独立键盘焦点处理，分组不套背景框；规范落点为 `DESIGN.md §4`。本条记录既有需求与展示方向，不表示真实客户端双模式或真实 IM 端到端已经验收。
 
 - **09-12** **侧栏整理菜单收为子菜单**——用户逐轮确认 HTML 后授权实施：一级为分组、任务排序、项目排序、任务状态、筛选、显示、任务信息，右侧均显示当前选择。任务排序直接并列优先级、最近活动、创建时间；优先级列首不改变默认值。筛选维度名为 Harness，补 Pi；任务状态独立于内容筛选的计数和重置。所有菜单行配图标，分组入口按真实侧栏的组标题与缩进任务行绘制，取代网格及 FolderTree 候选。替代旧菜单的平铺区块、嵌套时间排序及部分行刻意无图标的处理。现行行为见 `docs/product-rules/sidebar-redesign-plan.md §3`，实现为 `SidebarFilterPopover.tsx`；本条记录设计批准，不代表客户端实机验收通过。
@@ -732,6 +740,17 @@ BORDER_BG → border-default，TEXT_PRIMARY/SECONDARY/TERTIARY → 对应 text �
 接管前 globals.css 已明确：默认代码字体使用系统等宽字体（macOS 的 SF Mono 不以该字体名暴露给网页，实际命中 Menlo；Windows 命中 Consolas），CJK 显式回退 PingFang / 微软雅黑。JetBrains Mono 已降级为可选预设、不再是默认。DS-8 将这条依据保存在 reference/foundations.json 的 app-font-code-default.$description，字体家族、顺序和用户选字体逻辑均不变。DESIGN.md §3 的 JetBrains Mono 排版样本是历史设计样本，不能据此把默认代码字体改回 JetBrains Mono；当前默认来源为该 DTCG token，运行期字体选择仍由原适配器负责。
 
 
+## 2026-09-16 · Settings placeholder and Cindy Make task list
+
+- 用户指出设置中的 placeholder 看起来与普通文字相同，要求降低其显著程度。CINDY Light/Dark
+  的 `text-placeholder` 改为沿用 DESIGN §4 的空输入色阶（Light `#C4C4C4` / Dark `#525252`），
+  不再复用三级文字；修改 DTCG 正本并生成内置主题，同时更新独立预期。其它文字色阶不变。
+- 用户要求多个未完成制作可容纳、可重新打开，归档可恢复，完成与放弃后清理。Settings 采用
+  搜索＋列表／详情双栏，560px 以下改为上下布局；只显示当前选中项详情，列表与详情内容
+  分别滚动，底部操作不随长需求滚出。全部表面、边框、文字与焦点使用语义 token，按钮复用
+  标准组件。完成、归档和删除的具体合同见 [Cindy Make](../cindy-make-upstream.md)。
+- 这是根据用户反馈完成的实现决定，不代表用户已经对最终视觉签字验收。
+
 ## 2026-09-11 · DS-9 Desktop 范围与授权呈现
 
 - **决定人：用户/设计师。** 用户将本期余项合为 DS-9（桌面聊天、跨入口、桌面授权）与 DS-10（成熟保护、维护、最终验收），Mobile 以后独立做；内部工序不另编号或拆批。
@@ -739,3 +758,30 @@ BORDER_BG → border-default，TEXT_PRIMARY/SECONDARY/TERTIARY → 对应 text �
 - Desktop Allow once 沿用 perm-allow 局部色为主，其余为次；没有可信风险字段，不从命令名或 autoReviewUnavailable 推断高风险；保留输入区内的位置、信息顺序与密度。已有胶囊按钮、键帽 4px 决定直接实施，不重投票。授权含义、默认、顺序、快捷键、提交与恢复行为不变，Mobile 对应视觉决定后续独立处理。
 - 同批聊天按 DESIGN §5 / §14 复用现有数值链、消息与活动行呈现，补图标 Tip、键盘可见焦点、代码与附件操作一致性；业务状态仍由原组件持有。
 - 用户授权交付到本地实现与视觉测试环境，并明确免本地双审；此记录不表示提交、合并或最终人工视觉已验收。实施证据见 `docs/design-evidence/2026-09-11/ds9-desktop-core.md`。
+
+## 2026-09-15 — DS-11 复核收尾，以 Cindy 皮肤效果为准
+
+- 决定人：用户在本次实施指令中授权全部已确认修复、逐项前后审核，并指定 Cindy Light / Dark 效果优先于相冲突的外观描述；不是旧主题兼容或业务权限的豁免。
+- 保留：字号公开别名、已裁决标题角色/控件尺寸、历史无单位行高、CINDY/U2 原色与用户局部覆盖。FormField hint 消费 text-secondary-mid，Cindy 两模式默认色与原 hint 相同。
+- 修订：标准 Button 固定高度垂直居中；普通确认默认 Cancel；选择即安装的 InstallTargetPicker 初始 Cancel、闲时 Esc/遮罩可关闭、安装忙碌期阻止重复与关闭；MarketCard 标题登记为卡内容内的无框文字入口，焦点指示独立，不改变整卡/管理动作。
+- 用量页补 36px 任意日期输入，与图表共用 day 筛选；保留已登记数据标记形状及密度。
+- 实施、验证与用户逐项视觉验收分别记录；代码修复和截图自审不记为用户已批准最终结果。
+
+DS-11 补充分类：实际文字或动作换行的 Toast 外框按 §5 内容容器取 12px；短通知仍为 pill。依据同日用户明确要求以 Cindy 实际 UI 效果为先，消除长通知被撑成大椭圆的效果；颜色与默认停留时长不改。最终亮暗截图供用户逐项验收，不把实现裁决写成最终验收通过。
+
+DS-11 帮助文字补验：新增 `form-field-hint`，默认保持 `text-secondary-mid` 运行期 alias，Cindy 原色不变。One Dark Pro 的帮助角色为 #8b909a，Solarized Light 为 #686868，仅修说明文字，不调整原 secondary/tertiary 或用户主题文件。独立冻结预期只添加此 ID 和两项覆盖，不自动刷全部快照。
+
+## 2026-09-17 — Slider 三变体统一
+
+用户要求在一个 PR 中落地 Design Lab v6，并统一调用入口。普通数值 Slider 原先轨道与滑块在
+暗色中不易分辨，改成独立中性色 token、无描边浅阴影滑块；hover 放大、按压成为真正药丸形、
+左右箭头光标。推理强度是明确例外：保留原彩色圆块的面板描边与外晕，只增加同族交互。
+媒体进度条保留细轨道，增加透明点击区、拖动与键盘定位。原生播放器不改。
+
+入口：外观的界面字号/代码字号，压缩阈值 Claude/Pi，Work Louder 键盘亮度；模型配置推理强度；
+音频卡、音效卡、插件音频插槽。键盘亮度原使用 Switch token，导致预览曾误用蓝色；现在与
+Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖动实现。规范见 DESIGN §15.18。
+
+## 2026-09-18 — Desktop Segmented v8
+
+用户确认将 Design Lab v8 落到 Desktop，全量复用共享 `SegmentedControl`；仅自审和 E2E，不做本地双审。轨道用浅色黑 6% / 暗色黑 25% 透明叠加，选中药丸用低对比描边和两层轻阴影。保留各场景密度、业务回调及独立分离式选项；Mobile / iOS 延后。规范见 DESIGN.md §4 Desktop segmented controls，精确颜色/阴影进入 DTCG。实施与实际验证另见本次证据，不把线上设计预览等同客户端验收。

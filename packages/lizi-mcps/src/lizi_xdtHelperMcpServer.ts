@@ -1,3 +1,4 @@
+import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
 /**
  * lizi_xdtHelperMcpServer.ts
  * ---------------------------------------------------------------------------
@@ -5,7 +6,7 @@
  *
  * 设计:
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
- *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现,分五类:
+ *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
  *    - 'history' : 只读查询本地数据库聊天历史与输入队列 (list_workdirs /
  *                  list_sessions / list_session_queue / get_chat_history /
@@ -14,6 +15,7 @@
  *                  archive_sessions / unarchive_sessions)
  *    - 'feedback': 官方反馈提交 (submit_github_issue)
  *    - 'handoff' : session 间 handoff 原语 (send_to_session),供 skill 跨会话路由
+ *    - 'skills'  : Cindy 宿主管理的 Skill 工作流
  *  - send_to_session 曾经直接顶层注册;现归入 handoff 类目走 call_tool,与改名工具
  *    隔离(不同 category),避免 LLM 在"改 session 名"意图下误选它(见 issue #287)。
  *  - 协同 team 工具(start_team / create_worker / …)已拆到独立的 `cindy_orca` server
@@ -33,6 +35,9 @@ import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
+import { registerCreateProjectTool, type CreateProjectCallback } from './xdt-helper/create_project.js';
+import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/move_session.js';
+import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
   registerGetCurrentSessionIdTool,
@@ -53,12 +58,17 @@ import {
   registerGetChatHistoryTool,
   registerSearchChatHistoryTool,
   registerSubmitGithubIssueTool,
+  registerStartSkillLearningTool,
 } from './xdt-helper/index.js';
 import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
+import type {
+  AuthorizeSkillLearningCallback,
+  StartSkillLearningCallback,
+} from './xdt-helper/start_skill_learning.js';
 import {
   registerBotSkillTools,
   type BotSkillCallbacks,
@@ -108,7 +118,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'bots'] as const;
+const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
@@ -145,6 +155,13 @@ interface SessionTaskCallbacks {
 }
 
 interface BotMessagingCallbacks {
+  checkMessage?(params: { callerSessionId: string; messageId: string }): Promise<
+    { ok: true } | { ok: false; errorCode: string; message: string }>;
+  listAgents?(params: { callerSessionId: string;
+  }): Promise<
+    | { ok: true; agents: unknown[]; unavailableDevices: unknown[] }
+    | { ok: false; errorCode: string; message: string }>;
+
   messageAgent(params: {
     callerSessionId: string;
     targetBotId: string;
@@ -155,13 +172,17 @@ interface BotMessagingCallbacks {
         targetBotId: string;
         targetBotName: string;
         targetSessionId: string;
-        wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
+        wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' | 'unknown';
+        messageId?: string;
+        delivered?: boolean;
+        transport?: 'remote-conversation';
       }
     | {
         ok: false;
         errorCode: string;
         message: string;
         availableBots?: Array<{ id: string; name: string }>;
+        messageId?: string;
       }
   >;
 }
@@ -346,6 +367,28 @@ function registerSendToAgentEntry(
   sessionCtx: XdtHelperMcpSessionCtx,
 ): void {
   if (!deps.botMessaging) return;
+  if (deps.botMessaging.checkMessage) registry.register({
+    name: 'check_agent_message', category: 'bots',
+    description: 'Check your own remote message: read native acceptance receipts or ordinary replies from an older teammate conversation. Use the message_id returned by send_to_agent when its transport is remote-conversation, or after uncertain delivery. This does not send or retry. It returns native acceptance or persisted ordinary reply text, not proof of engine delivery, a remote tool call, or a completed turn. Check when following up; do not poll.',
+    inputShape: { message_id: z.string().min(1).max(80) },
+    handler: async ({ message_id }) => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
+      const result = await deps.botMessaging!.checkMessage!({ callerSessionId, messageId: message_id });
+      return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.botMessaging.listAgents) registry.register({
+    name: 'list_agents', category: 'bots',
+    description: 'Discover teammates on this device and other authorized devices. Use the exact returned id with send_to_agent; device names distinguish namesakes. unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
+    inputShape: {},
+    handler: async () => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
+      const result = await deps.botMessaging!.listAgents!({ callerSessionId });
+      return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+    },
+  });
   registry.register({
     name: 'send_to_agent',
     category: 'bots',
@@ -354,10 +397,11 @@ function registerSendToAgentEntry(
       'Use it for a brief question, discussion, or information transfer. It does not create a task, status, progress, cancellation, or a completion contract.',
       "The message remains visible in both teammates' timelines. The recipient may answer in a later turn. Do not poll or send acknowledgement-only replies.",
       'For independently tracked development or deliverable work, use start_session_task instead.',
-      'When a structured @Bot reference is present, use its Bot ID directly. Do not list the roster first.',
+      'Use the exact stable id from list_agents (deviceId::botId for a remote teammate) or a structured @Bot reference. Never route by name.',
     ].join('\n'),
     inputShape: {
-      target_id: z.string().min(1).max(128),
+      // deviceId (80) + separator (2) + existing Bot profile ID (128).
+      target_id: z.string().min(1).max(210),
       message: z.string().min(1).max(12_000),
     },
     handler: async ({ target_id, message }) => {
@@ -372,6 +416,7 @@ function registerSendToAgentEntry(
       });
       if (!result.ok) {
         return errorPayload(result.errorCode, result.message, {
+          ...(result.messageId ? { message_id: result.messageId } : {}),
           ...(result.availableBots
             ? { available_agents: result.availableBots }
             : {}),
@@ -379,12 +424,18 @@ function registerSendToAgentEntry(
       }
       return okPayload({
         action: 'send_to_agent',
-        delivered: true,
+        accepted: true,
+        delivered: result.delivered ?? result.wakeKind !== 'queued',
+        replied: false,
+        ...(result.transport ? { transport: result.transport } : {}),
+        ...(result.messageId ? { message_id: result.messageId } : {}),
         target_id: result.targetBotId,
         target_name: result.targetBotName,
         wake_kind: result.wakeKind,
         guidance:
-          'Delivery is confirmed. End this turn without polling; a useful reply may arrive in a later turn.',
+          result.transport === 'remote-conversation'
+            ? 'The older host accepted a clearly attributed message in its ordinary conversation. Use check_agent_message with message_id to read its reply on follow-up; do not resend or poll. The older teammate does not actively send cross-device replies.'
+            : 'The host accepted this message. Queued acceptance is not delivery or a reply. End this turn; only an actual incoming message proves a reply.',
       });
     },
   });
@@ -591,6 +642,15 @@ export interface XdtHelperMcpDeps {
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
    */
   sendToSession?: SendToSessionCallback;
+  /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
+  skillLearning?: StartSkillLearningCallback;
+  /** Host-owned, one-shot authorization for the current direct Learn invocation. */
+  authorizeSkillLearning?: AuthorizeSkillLearningCallback;
+  /** Register an existing local directory as a Cindy project without starting a task. */
+  createProject?: CreateProjectCallback;
+  moveSession?: MoveSessionCallback;
+  sessionTags?: SessionTagsCallback;
+  projectManagement?: ProjectManagementCallbacks;
   /** Cindy Bot-only background Session-task controls. Host validates the caller Session. */
   sessionTasks?: SessionTaskCallbacks;
   botRoutines?: BotRoutineCallbacks;
@@ -670,10 +730,33 @@ export function createXdtHelperMcpServer(
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
   });
 
+  if (deps.sessionTags)
+    registerSessionTagTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      execute: deps.sessionTags,
+    });
   if (deps.setCurrentSessionTitle) {
     registerSetCurrentSessionTitleTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       setCurrentSessionTitle: deps.setCurrentSessionTitle,
+    });
+  }
+  if (deps.createProject) {
+    registerCreateProjectTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      createProject: deps.createProject,
+    });
+  }
+  if (deps.projectManagement) {
+    registerProjectManagementTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.projectManagement,
+    });
+  }
+  if (deps.moveSession) {
+    registerMoveSessionTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      moveSession: deps.moveSession,
     });
   }
   if (deps.renameSessions) {
@@ -734,6 +817,13 @@ export function createXdtHelperMcpServer(
     registerSendToSessionTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       sendToSession: deps.sendToSession,
+    });
+  }
+  if (deps.skillLearning && deps.authorizeSkillLearning) {
+    registerStartSkillLearningTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      authorizeSkillLearning: deps.authorizeSkillLearning,
+      startSkillLearning: deps.skillLearning,
     });
   }
   // 伙伴消息与 Session 任务控制统一进入 bots 类目，由调用时的任务身份限制发现与执行。

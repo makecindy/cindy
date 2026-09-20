@@ -22,6 +22,7 @@ import {
   type IssueConfirmDraft,
 } from '@/lib/issueConfirmDraftStore';
 import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { ISSUE_PUBLIC_NAME_MAX, normalizeIssuePublicName } from '../../../shared/issuePublicName';
@@ -76,6 +77,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
     );
   });
   const { title, body, type, publicName = '' } = draft;
+  const hasRelatedLogs = body.includes('## 相关日志');
   const selectedIdentity =
     legacyFixedGithubIdentity ??
     (draft.submissionIdentityKind === 'github-user' && pending.githubUserIdentity
@@ -168,22 +170,6 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
     return () => window.removeEventListener('keydown', handler);
   }, [handleSubmit, handleCancel]);
 
-  const typeButton = (value: 'bug' | 'feature', label: string) => (
-    <button
-      type="button"
-      aria-pressed={type === value}
-      onClick={() => updateDraft({ type: value })}
-      className={cn(
-        'rounded-[6px] border px-2.5 py-[3px] text-12 font-medium transition-colors',
-        type === value
-          ? 'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]'
-          : 'border-[var(--chat-input-border)] bg-transparent text-[var(--status-bar-meta)] hover:bg-[var(--perm-code-bg)]',
-      )}
-    >
-      {label}
-    </button>
-  );
-
   const identityButton = (identity: PendingIssueConfirm['submissionIdentity'], label: string) => {
     const selected =
       selectedIdentity.kind === identity.kind && selectedIdentity.login === identity.login;
@@ -216,10 +202,18 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
         <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
           {t('issueAgent.confirm.title')}
         </p>
-        <div className="flex items-center gap-1.5">
-          {typeButton('bug', t('issueAgent.confirm.typeBug'))}
-          {typeButton('feature', t('issueAgent.confirm.typeFeature'))}
-        </div>
+        <SegmentedControl
+          aria-label={[t('issueAgent.confirm.typeBug'), t('issueAgent.confirm.typeFeature')].join(' / ')}
+          value={type}
+          onValueChange={(next) => updateDraft({ type: next })}
+          height={28}
+          optionHeight={24}
+          optionClassName="px-2.5"
+          options={[
+            { value: 'bug', label: t('issueAgent.confirm.typeBug') },
+            { value: 'feature', label: t('issueAgent.confirm.typeFeature') },
+          ]}
+        />
       </div>
 
       {/* Issue title input */}
@@ -266,6 +260,11 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
         {t('issueAgent.confirm.privacyHint')}
       </p>
+      {hasRelatedLogs && (
+        <p className="mt-1 text-12 leading-snug text-[var(--status-bar-meta)]">
+          {t('issueAgent.confirm.relatedLogsHint')}
+        </p>
+      )}
 
       {/*
         新版 Main:平台 Bot 默认 + 可选 GitHub 用户。旧版 Main 可能已固定为 GitHub

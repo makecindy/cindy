@@ -25,6 +25,8 @@ export const MAKER_INVOKE = {
    */
   SESSION_ENABLE_ORCA: 'maker:session:enable-orca',
   SESSION_DISABLE_ORCA: 'maker:session:disable-orca',
+  /** renderer 回填「该会话是否真的在 turn 中」的权威运行态(#4513 中断横幅假阳性)。 */
+  SESSION_TURN_ACTIVE: 'maker:session:turn-active',
   CLOSE_SESSION: 'maker:close-session',
   /**
    * 单条 user / assistant 消息本地内容删除。保留后续可见消息，但清当前原生
@@ -280,6 +282,7 @@ export const MAKER_INVOKE = {
   REGENERATE_TITLE: 'maker:regenerate-title',
   /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
   PREDICT_PROMPT: 'maker:predict-prompt',
+  WORKING_STATUS: 'maker:working-status',
   HELP_ASK: 'maker:help:ask',
   /**
    * Help-assistant 反馈草稿 (Phase 1):用户对某条回答不满时,点 👎 → 弹小表单 →
@@ -909,6 +912,8 @@ export const MAKER_PUSH = {
    * 分支处理; payload 还带 ctx (sessionId / workingDir / args) 让 renderer 知道在哪触发的。
    */
   DESKTOP_COMMAND_TRIGGERED: 'maker:desktop-command-triggered',
+  /** Main-owned Cindy Make operation snapshots, broadcast to every trusted renderer. */
+  CINDY_MAKE_STATE_CHANGED: 'maker:cindy-make:state-changed',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
   /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */

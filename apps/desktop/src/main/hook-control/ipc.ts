@@ -54,6 +54,7 @@ import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
+  dialogueWorkspaceRoots,
   ensureDialogueWorkspaceDir,
 } from '../localDb/dialogueWorkspace.js';
 import * as authManager from '../authManager.js';
@@ -108,6 +109,7 @@ import { resetTelegramSpeakerRegistrationCache } from '../im/telegram/contactsAu
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { setLifecycleAnnouncementFromIpc } from './lifecycleAnnouncementIpc.js';
+import { setSlackCommunicationsFromIpc } from './slackCommunicationsIpc.js';
 
 const log = createLogger('hook-control');
 
@@ -193,8 +195,7 @@ async function drainCodexMcpRefreshForSlackAvailability(): Promise<void> {
     while (codexMcpRefreshPending) {
       codexMcpRefreshPending = false;
       try {
-        await restartCodexAfterAuthModeChange();
-        await shutdownCodexEnvironment();
+        await restartCodexAfterAuthModeChange(shutdownCodexEnvironment);
         log.info('Codex MCP environment refreshed after Slack provider availability changed', {
           enabled: latestSlackToolProviderEnabled,
         });
@@ -515,6 +516,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 内置「对话」伪目录(chat): 与桌面端无项目对话同一套 app 托管目录
       dialogue: {
         rootDir: dialogueWorkspaceRootDir,
+        rootDirs: dialogueWorkspaceRoots,
         allocateDir: async (sessionId) => ensureDialogueWorkspaceDir(sessionId, Date.now()),
       },
       // task.cancel 的中断出口: 与用户手动 Stop 同一条 session.abort() 路径
@@ -913,14 +915,18 @@ export function registerHookControlIpc(): void {
     return runMultiTeamAction((mgr) => mgr.rebindTeam(teamId));
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.REVOKE_TEAM, (_e, payload) => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_SLACK_COMMUNICATIONS, (_e, payload) => {
+    requireHookControl();
+    return setSlackCommunicationsFromIpc(ensureInstances().manager, payload);
+  });
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.REVOKE_TEAM, async (_e, payload) => {
     requireHookControl();
     const p = requireObject(payload);
     const teamId = requireString(p.teamId, 'teamId');
-    // displaced 行的删除是纯本地操作, 离线也要能删 —— 不做 multi-team 能力
-    // 前置检查(manager 内部区分 displaced/活跃行)
+    // manager 区分旧 server 本地缓存清理、新 server 通讯 grant 撤销和 Bot 解绑。
     const mgr = ensureInstances().manager;
-    if (!mgr.revokeTeam(teamId)) {
+    if (!await mgr.revokeTeam(teamId)) {
       throwIpcError('HOOK_NOT_CONNECTED', 'slack hook is not connected');
     }
     return { hook: mgr.snapshot() };

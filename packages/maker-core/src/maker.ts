@@ -29,6 +29,7 @@ import type {
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
+  ListRuntimeSkillsOptions,
 } from './types/palette.js';
 import type {
   ListCustomizationsOptions,
@@ -294,21 +295,21 @@ async function mergePiRuntimeSkillStatuses(
     const baseDir = command.sourceInfo.baseDir;
     if (command.source !== 'skill' || !command.name.startsWith('skill:')) continue;
     const skillName = command.name.slice('skill:'.length);
+    // Explicit --skill is `project` on Windows and `temporary` on macOS.
+    // Match that provenance by path first so frontmatter aliases still load.
+    const explicitPath = piExplicitSkillRuntimePath(command);
+    if (explicitPath) {
+      loadedExplicitSkills.set(canonicalPiRuntimePath(explicitPath), command.name);
+      if (typeof command.sourceInfo.path === 'string') {
+        loadedExplicitSkills.set(canonicalPiRuntimePath(command.sourceInfo.path), command.name);
+      }
+      continue;
+    }
     if (command.sourceInfo.scope === 'project' && typeof baseDir === 'string') {
       loadedLegacyProjectSkills.set(
         [skillName, canonicalPiRuntimePath(baseDir)].join('\0'),
         command.name,
       );
-      continue;
-    }
-    // Pinned Pi reports explicit --skill with a paired baseDir + SKILL.md path.
-    // The shared helper rejects partial/mismatched provenance before a
-    // user/global collision can mark a project scanner result loaded. Match
-    // explicit resources by path because frontmatter names need not equal
-    // their containing folder names.
-    const explicitPath = piExplicitSkillRuntimePath(command);
-    if (explicitPath) {
-      loadedExplicitSkills.set(canonicalPiRuntimePath(explicitPath), command.name);
     }
   }
   if (
@@ -328,7 +329,8 @@ async function mergePiRuntimeSkillStatuses(
         const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
         if (!changedProjectSkills.has(canonicalSkillPath)) {
           runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath)
-            ?? [skill.path, path.dirname(path.dirname(skill.path))]
+            ?? loadedExplicitSkills.get(canonicalPiRuntimePath(path.dirname(skill.path)))
+            ?? [skill.path, path.dirname(skill.path), path.dirname(path.dirname(skill.path))]
               .map(canonicalPiRuntimePath)
               .map((skillPath) => loadedLegacyProjectSkills.get([skill.name, skillPath].join('\0')))
               .find((commandName) => commandName !== undefined);
@@ -1393,6 +1395,22 @@ export class Maker {
       return result;
     }
     return filter(await mergePiRuntimeSkillStatuses(result, session.getRuntimeCapabilities()));
+  }
+
+  /** Host-only runtime view used when a capability must match the live engine winner. */
+  async listAgentRuntimeSkills(
+    agentKind: AgentKind,
+    opts: ListRuntimeSkillsOptions & { sessionId?: string },
+  ): Promise<ListAgentSkillsResult> {
+    const { sessionId, ...agentOpts } = opts;
+    const agent = this.requireAgent(agentKind);
+    const session = sessionId ? this.getSession(sessionId) : undefined;
+    const result = await agent.listRuntimeSkills(agentOpts);
+    return agent.filterActiveSkillCommands(
+      result,
+      agentOpts.remoteHostId ?? session?.remoteHostId ?? undefined,
+      session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined,
+    );
   }
 
   /** ChatInput `@` palette entries, routed by agent kind. */

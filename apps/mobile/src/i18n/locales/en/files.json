@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "Back",
+    "browserForward": "Forward",
+    "browserMore": "More actions",
+    "browserShowSource": "View source",
+    "browserShowPage": "Back to webpage",
+    "browserAddToTask": "Add to current task",
+    "browserFileInfo": "File information",
     "done": "Done",
     "a11yShare": "Export and share",
     "copyPath": "Copy Path",
@@ -99,6 +106,11 @@
     "readFailed": "Read failed",
     "truncated2mb": "File exceeds 2 MB; showing the first 2 MB only",
     "truncatedLines": "Showing the first {{lines}} lines only",
+    "htmlUpdateMobile": "Update Cindy on this phone to preview webpages. You can still view the source.",
+    "htmlUpdateDesktop": "Update Cindy on the connected computer to preview this webpage.",
+    "htmlSnapshotTooLarge": "This folder is too large to preview. Move the webpage and its assets into a smaller folder.",
+    "htmlSnapshotFailed": "Could not load this webpage. Check the connection and try again.",
+    "htmlReload": "Reload webpage",
     "fetchingHtmlResources": "Fetching page resources…",
     "htmlResourcesMissing": "{{count}} page resource(s) could not be fetched; images or styles may be missing",
     "htmlResourcesTruncated": "Too many page resources; only the first {{limit}} were attempted",
@@ -114,7 +126,13 @@
     "originalFailedThumb": "Couldn't fetch the original; showing the thumbnail",
     "fetchingOriginalHint": "Thumbnail · fetching the original…",
     "a11yExportShareFile": "Export and share the original file",
-    "exportShare": "Export / Share"
+    "exportShare": "Export / Share",
+    "browserAddress": "Address",
+    "browserCancelAddress": "Cancel editing",
+    "browserReturnToFile": "Return to file",
+    "browserCopyAddress": "Copy address",
+    "browserInvalidAddress": "Enter a valid http or https address.",
+    "browserWebsiteFailed": "Unable to open this webpage. Try reloading."
   },
   "export": {
     "exportFailed": "Export failed",

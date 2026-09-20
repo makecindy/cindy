@@ -141,6 +141,7 @@ export async function withCrossProcessLock<T>(
   lockPath: string,
   opts: FileLockOptions,
   task: (status: LockStatus) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
   let held = false;
@@ -149,6 +150,7 @@ export async function withCrossProcessLock<T>(
   let ownLock: AdvisoryPublishedLock | null = null;
 
   for (;;) {
+    signal?.throwIfAborted();
     await recoverPendingAdvisoryLock(lockPath);
     if (await ordinaryReclaimInProgress(lockPath)) {
       reason = 'busy';
@@ -204,6 +206,9 @@ export async function withCrossProcessLock<T>(
   heartbeat?.unref?.();
 
   try {
+    // Cancellation can race the final acquisition or timeout. Check inside the
+    // release scope so a just-published lock is never abandoned on cancellation.
+    signal?.throwIfAborted();
     return await task(held ? { held: true } : { held: false, reason });
   } finally {
     if (heartbeat) clearInterval(heartbeat);

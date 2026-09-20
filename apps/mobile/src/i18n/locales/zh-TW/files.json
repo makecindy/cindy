@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "上一頁",
+    "browserForward": "下一頁",
+    "browserMore": "更多操作",
+    "browserShowSource": "檢視原始碼",
+    "browserShowPage": "返回網頁",
+    "browserAddToTask": "加入目前任務",
+    "browserFileInfo": "檔案資訊",
     "done": "完成",
     "a11yShare": "匯出分享",
     "copyPath": "複製路徑",
@@ -99,6 +106,11 @@
     "readFailed": "讀取失敗",
     "truncated2mb": "檔案超過 2 MB，僅顯示前 2 MB 內容",
     "truncatedLines": "僅顯示前 {{lines}} 行",
+    "htmlUpdateMobile": "請更新手機版 Cindy 後預覽網頁，仍可切換到原始碼查看。",
+    "htmlUpdateDesktop": "請更新所連接電腦上的 Cindy 後預覽網頁。",
+    "htmlSnapshotTooLarge": "資料夾過大，請將網頁及其資源放到較小的資料夾後重試。",
+    "htmlSnapshotFailed": "網頁載入失敗，請檢查連線後重試。",
+    "htmlReload": "重新載入網頁",
     "fetchingHtmlResources": "正在取回頁面資源…",
     "htmlResourcesMissing": "{{count}} 項頁面資源沒取到，可能缺圖或缺樣式",
     "htmlResourcesTruncated": "頁面資源過多，只處理了前 {{limit}} 項",
@@ -114,7 +126,13 @@
     "originalFailedThumb": "原圖取回失敗，當前為縮圖",
     "fetchingOriginalHint": "縮圖 · 正在取回原圖…",
     "a11yExportShareFile": "匯出分享原檔案",
-    "exportShare": "匯出 / 分享"
+    "exportShare": "匯出 / 分享",
+    "browserAddress": "網址",
+    "browserCancelAddress": "取消編輯",
+    "browserReturnToFile": "返回檔案",
+    "browserCopyAddress": "複製網址",
+    "browserInvalidAddress": "請輸入有效的 http 或 https 網址。",
+    "browserWebsiteFailed": "無法開啟網頁，請嘗試重新載入。"
   },
   "export": {
     "exportFailed": "匯出失敗",

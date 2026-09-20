@@ -280,10 +280,6 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       : []);
   }
 
-  function stagedSkillPath(configHome: string, index: number, sourcePath: string): string {
-    return path.join(configHome, 'project-resources', 'skills', String(index), path.basename(sourcePath));
-  }
-
   const opts = () => ({
     sessionId: 's1',
     sessionInstanceId: 'pi-instance-1',
@@ -2201,6 +2197,74 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
+  it('passes original project skill, prompt and extension paths without --approve', async () => {
+    const skillDir = path.join(cwd, '.pi', 'skills', 'demo');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path.join(skillDir, 'SKILL.md'), '# demo\n');
+    mkdirSync(path.join(cwd, '.pi', 'prompts'), { recursive: true });
+    writeFileSync(path.join(cwd, '.pi', 'prompts', 'review.md'), '# review\n');
+    mkdirSync(path.join(cwd, '.pi', 'extensions'), { recursive: true });
+    writeFileSync(path.join(cwd, '.pi', 'extensions', 'hook.ts'), 'export default () => {};\n');
+
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    const args = knobs.spawnedArgs[0]!;
+    const configHome = knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!;
+    expect(args).toContain('--no-approve');
+    expect(args).not.toContain('--approve');
+    expect(repeatedArgValues(args, '--skill')).toEqual([realpathSync(skillDir)]);
+    expect(repeatedArgValues(args, '--prompt-template')).toEqual([
+      realpathSync(path.join(cwd, '.pi', 'prompts', 'review.md')),
+    ]);
+    expect(repeatedArgValues(args, '--extension')).toEqual([
+      path.posix.join(configHome, 'internal-extensions', 'cindy-bridge.ts'),
+      path.posix.join(configHome, 'internal-extensions', 'cindy-subagent.ts'),
+      realpathSync(path.join(cwd, '.pi', 'extensions', 'hook.ts')),
+    ]);
+    await handle.close();
+
+    knobs.spawnedArgs = [];
+    knobs.spawnedEnvs = [];
+    const reviewHandle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      sessionId: 'review-project-resources',
+      reviewMode: true,
+    });
+    const reviewArgs = knobs.spawnedArgs[0]!;
+    expect(repeatedArgValues(reviewArgs, '--skill')).toEqual([]);
+    expect(repeatedArgValues(reviewArgs, '--prompt-template')).toEqual([]);
+    expect(repeatedArgValues(reviewArgs, '--extension')).toEqual([
+      path.posix.join(
+        knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!,
+        'internal-extensions',
+        'cindy-bridge.ts',
+      ),
+    ]);
+    await reviewHandle.close();
+  });
+
+  it('still loads project resources when a local root session resumes a fork jsonl', async () => {
+    const skillDir = path.join(cwd, '.pi', 'skills', 'demo');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path.join(skillDir, 'SKILL.md'), '# demo\n');
+    mkdirSync(path.join(cwd, '.pi', 'extensions'), { recursive: true });
+    writeFileSync(path.join(cwd, '.pi', 'extensions', 'hook.ts'), 'export default () => {};\n');
+    const resumeFile = path.join(cwd, 'forked.jsonl');
+    writeFileSync(resumeFile, '{}');
+
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      sessionId: 'resume-fork',
+      resumeSessionId: resumeFile,
+    });
+    const args = knobs.spawnedArgs[0]!;
+    expect(args).toContain('--no-approve');
+    expect(repeatedArgValues(args, '--skill')).toEqual([realpathSync(skillDir)]);
+    expect(repeatedArgValues(args, '--extension')).toContain(
+      realpathSync(path.join(cwd, '.pi', 'extensions', 'hook.ts')),
+    );
+    await handle.close();
+  });
+
   it('freezes approval per new session and fails closed after revocation', async () => {
     const skillPath = path.join(cwd, '.pi', 'skills', 'approved-skill');
     mkdirSync(skillPath, { recursive: true });
@@ -2217,10 +2281,10 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const approvedHandle = await agent.startSession({ sessionId: 'approved', workingDir: cwd, model: 'm' });
     const revokedHandle = await agent.startSession({ sessionId: 'revoked', workingDir: cwd, model: 'm' });
 
-    expect(repeatedArgValues(knobs.spawnedArgs[0]!, '--skill')).toEqual([
-      stagedSkillPath(knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!, 0, skillPath),
-    ]);
-    expect(repeatedArgValues(knobs.spawnedArgs[1]!, '--skill')).toEqual([]);
+    expect(repeatedArgValues(knobs.spawnedArgs[0]!, '--skill')).toEqual([realpathSync(skillPath)]);
+    expect(repeatedArgValues(knobs.spawnedArgs[1]!, '--skill')).toEqual([realpathSync(skillPath)]);
+    expect(existsSync(path.join(knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!, 'project-resources'))).toBe(false);
+    expect(existsSync(path.join(knobs.spawnedEnvs[1]!.PI_CODING_AGENT_DIR!, 'project-resources'))).toBe(false);
     await vi.waitFor(() => {
       expect(approvedHandle.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
         status: 'approved', approvalRevision: 'rev-approved', requestedSkillCount: 1,
@@ -2447,12 +2511,10 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     writeFileSync(path.join(home3, 'AGENTS.md'), 'runtime edit');
     expect(readFileSync(path.join(nativeHome, 'AGENTS.md'), 'utf8')).toBe('global rules v2');
     await h3.close();
-    expect(repeatedArgValues(knobs.spawnedArgs[s1Index]!, '--skill')).toEqual([
-      stagedSkillPath(home1, 0, skillOne),
-    ]);
-    expect(repeatedArgValues(knobs.spawnedArgs[s2Index]!, '--skill')).toEqual([
-      stagedSkillPath(home2, 0, skillTwo),
-    ]);
+    const expectedProjectSkills = [realpathSync(skillOne), realpathSync(skillTwo)]
+      .sort((left, right) => left.localeCompare(right));
+    expect(repeatedArgValues(knobs.spawnedArgs[s1Index]!, '--skill')).toEqual(expectedProjectSkills);
+    expect(repeatedArgValues(knobs.spawnedArgs[s2Index]!, '--skill')).toEqual(expectedProjectSkills);
     await vi.waitFor(() => {
       expect(h1.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
         approvalRevision: 'rev-s1', requestedSkillCount: 1,
@@ -2561,7 +2623,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       knobs.spawnedEnvs[reviewIndex]!.CINDY_PI_PERMISSION_FILE,
     );
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--skill')).toEqual([
-      stagedSkillPath(approvedHome, 0, skillPath),
+      realpathSync(skillPath),
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
@@ -2774,7 +2836,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }
   });
 
-  it('starts a new session while stale config-home cleanup is blocked and finishes the backlog later', async () => {
+  it.each([0, 650])('starts a new session with %i ms setup delay while stale config-home cleanup is blocked and finishes the backlog later', async (setupDelayMs) => {
     const { promises: fs } = await import('node:fs');
     const originalRm = fs.rm.bind(fs);
     const staleHomes = Array.from({ length: 10 }, (_, index) => {
@@ -2820,7 +2882,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       }
       return originalRm(target, options);
     });
-    const startPromise = new PiAgent(buildDeps()).startSession({
+    const deps = buildDeps();
+    const prepareSpawn = deps.preparePiExtraSpawnConfig!;
+    const startPromise = new PiAgent({
+      ...deps,
+      preparePiExtraSpawnConfig: async (...args) => {
+        await removalStarted;
+        await new Promise((resolve) => setTimeout(resolve, setupDelayMs));
+        return prepareSpawn(...args);
+      },
+    }).startSession({
       sessionId: 'bounded-stale-sweep',
       workingDir: cwd,
       model: 'm',
@@ -2832,8 +2903,12 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         () => expect(knobs.spawnedEnvs.some(
           (env) => env.CINDY_PI_SESSION_ID === 'bounded-stale-sweep',
         )).toBe(true),
-        { timeout: 500 },
+        // The contract is progress while deletion is blocked, not a 500 ms
+        // startup benchmark. Windows CI can spend longer in unrelated setup.
+        { timeout: 3_000 },
       );
+      expect(removalReleased).toBe(false);
+      expect(staleHomes.every((home) => existsSync(home))).toBe(true);
       unblockRemoval();
       handle = await startPromise;
       await waitFor(() => staleHomes.every((home) => !existsSync(home)));

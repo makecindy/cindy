@@ -1574,6 +1574,23 @@ body.resizing-pane [data-ghost-webview] {
   background-color: var(--msg-scrollbar-hover);
 }
 
+/* workdir-browse FileTreeView 的横向滚动条 —— 常显,不参与 `.is-scrolling` 自动隐藏
+   体系。
+   why:文件树行宽由内容决定(行 min-w-max:深层缩进 + 完整文件名/输入框),窄面板里
+   必须横滚才能看到深层目标;横向溢出没有“被截断”的视觉线索,thumb 默认透明时用户会认为
+   这里没有滚动条(2026-09-14 用户反馈「文件树缺少横向滚动条,层级过深看不见目标层级」)。
+   槽厚 12px 与全局纵向槽宽对齐,thumb 同样靠 3px 透明 border 收成可见 6px;
+   `:horizontal` 让规则只吃横向条,纵向条继续走 auto-hide。 */
+.tree-hscroll::-webkit-scrollbar:horizontal {
+  height: 12px;
+}
+.tree-hscroll::-webkit-scrollbar-thumb:horizontal {
+  background-color: var(--msg-scrollbar);
+}
+.tree-hscroll::-webkit-scrollbar-thumb:horizontal:hover {
+  background-color: var(--msg-scrollbar-hover);
+}
+
 /* F-QUEUE-DEFER · PendingQueuePanel — slim 4px scrollbar so the
    `scrollbar-gutter: stable both-edges` reserved slot is small
    (4px each side instead of 12px). Without this, the chip-bg rows
@@ -1852,12 +1869,12 @@ body.resizing-pane [data-ghost-webview] {
 
 /* FileBodyView Ctrl+F — local search highlight inside doc preview.
    Two states:
-     .doc-search-mark              → normal match (淡黄底, text inherit)
-     .doc-search-mark[data-active] → currently focused match (中黄实底 + 1px 琥珀内描边)
-   Color spec follows the GitHub Primer attention family. */
+     .doc-search-mark              → normal match
+     .doc-search-mark[data-active] → currently focused match + inset outline
+   Share the theme tokens with global find and the file editor. */
 .doc-search-mark {
-  background-color: #fff8c5; /* Primer attention-muted */
-  color: inherit;
+  background-color: hsl(var(--search-match-bg));
+  color: hsl(var(--search-match-fg));
   /* font / line-height 显式继承 —— <mark> 是 phrasing element,Chromium UA
      默认不改字号,但跨主题 / 跨 reset 时把字体属性钉在 inherit 最稳,避免
      把 code block 里那段被高亮的字渲染得跟周围尺寸不一致。 */
@@ -1867,18 +1884,12 @@ body.resizing-pane [data-ghost-webview] {
   border-radius: 2px;
 }
 .doc-search-mark[data-active] {
-  background-color: #fae17d;
+  background-color: hsl(var(--search-match-active-bg));
+  color: hsl(var(--search-match-active-fg));
   font-weight: 500;
   /* 用 inset box-shadow 模拟外框 —— 比 outline 好在不会在盒子外多画
      1px,高亮块严格等于行高,视觉上不会觉得"字变大了"。 */
-  box-shadow: inset 0 0 0 1px #d4a72c;
-}
-.dark .doc-search-mark {
-  background-color: #362d1b; /* ≈ #bb8009 @ 15% on dark bg */
-}
-.dark .doc-search-mark[data-active] {
-  background-color: #9e6a03;
-  box-shadow: inset 0 0 0 1px #d4a72c;
+  box-shadow: inset 0 0 0 1px hsl(var(--search-match-active-fg));
 }
 
 /* CodeMirror search highlight (PlaintextEditor — code 模式 + plain 模式都
@@ -1887,24 +1898,26 @@ body.resizing-pane [data-ghost-webview] {
    the active match IN ADDITION TO .cm-doc-search-match — second selector
    wins via source order, no specificity tricks needed. */
 .cm-doc-search-match {
-  background-color: #fff8c5;
+  background-color: hsl(var(--search-match-bg));
+  color: hsl(var(--search-match-fg));
   border-radius: 2px;
 }
 .cm-doc-search-active {
-  background-color: #fae17d;
+  background-color: hsl(var(--search-match-active-bg));
+  color: hsl(var(--search-match-active-fg));
   font-weight: 500;
   /* outline 而不是 inset box-shadow:CodeMirror 的 .cm-line 自己用
      box-shadow 画选区背景层,inset 会被它的层级压掉,outline 走的是
      完全独立的绘制通道,稳定可见。1px 外描边在等宽字体里几乎不会让
      字符看起来变大。 */
-  outline: 1px solid #d4a72c;
+  outline: 1px solid hsl(var(--search-match-active-fg));
 }
-.dark .cm-doc-search-match {
-  background-color: #362d1b;
-}
-.dark .cm-doc-search-active {
-  background-color: #9e6a03;
-  outline: 1px solid #d4a72c;
+
+/* Syntax decorations may sit inside search marks. Keep their text on the
+   mark's foreground instead of repainting pale syntax colors on a gold fill. */
+.cm-editor .cm-content .cm-doc-search-match *,
+mark.doc-search-mark [class] {
+  color: inherit;
 }
 
 @layer utilities {

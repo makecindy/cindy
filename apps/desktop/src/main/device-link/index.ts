@@ -11,6 +11,7 @@
  */
 
 import os from 'node:os';
+import { deviceName, initializeDeviceName } from './deviceName';
 import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
@@ -38,7 +39,7 @@ import {
   type Envelope,
   type PushPayload,
   DeviceLinkError,
-  INVOKE_TIMEOUT_OVERRIDES_MS,
+  resolveRemoteInvokeTimeoutMs,
 } from '@cindy/device-link';
 import { DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
 import * as authManager from '../authManager';
@@ -589,12 +590,6 @@ function recoverFromRelayAuthFailure(): void {
     });
 }
 
-/** Windows 历史主机名可能带尾部空白/全大写,统一 trim;空值兜底 'Unknown Device' */
-function deviceName(): string {
-  const name = os.hostname().trim();
-  return name || 'Unknown Device';
-}
-
 function buildDeviceInfo(): DeviceInfo {
   const info: DeviceInfo = {};
   const cpuLabel = normalizeDeviceInfoText(os.cpus()[0]?.model);
@@ -643,6 +638,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     return;
   }
 
+  const deviceNameReady = initializeDeviceName();
   remoteCredentialHost.currentToken = () => {
     const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
     return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
@@ -650,6 +646,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   client = new DeviceLinkClient({
     getWsUrl: wsUrl,
     getToken: async () => {
+      // Prepare the name before the first hello without blocking Electron's main thread.
+      await deviceNameReady;
       const token = authManager.getAccessToken();
       if (token) return token;
       // 无现值(冷启动竞态/过期被清):尝试 refresh 一次,失败则跳过本轮重连
@@ -700,7 +698,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     probeInvoke: (deviceId, channel, args) => {
       if (!client)
         throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-      return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+      return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'));
     },
     onUnresponsiveChanged: (deviceId, unresponsive) => {
       broadcast(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, { deviceId, unresponsive });
@@ -1703,7 +1701,7 @@ export async function remoteInvoke(
     assertLinkNotClosedSinceStart();
     options?.preSend?.();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'));
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(

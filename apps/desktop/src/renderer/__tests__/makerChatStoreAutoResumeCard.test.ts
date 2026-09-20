@@ -278,6 +278,52 @@ describe('applyInputProjection 自愈进行中提示', () => {
     expect(snapshot.error).toBeNull();
   });
 
+  it('keeps recovery running until a pre-dispatch failure settles as error', () => {
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(false);
+    inputProjectionCb!(projection({ autoResumePending: PENDING_INFO }));
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(true);
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
+    inputProjectionCb!(projection({ pendingQueue: [{ clientId: 'retry', autoResume: true }] }));
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).agentStatus.isRunning).toBe(false);
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
+    inputProjectionCb!(projection({ error: 'Selected model is at capacity.' }));
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(false);
+    expect(makerChatStore.hasSessionTerminalError(SID)).toBe(true);
+    expect(makerChatStore.getRunningSnapshot().get(SID)).toMatchObject({
+      isRunning: false, hasError: true,
+    });
+  });
+
+  it('does not classify a normal Continue as recovery when it finishes before projection cleanup', () => {
+    makerEventCb!({ sessionId: SID, event: { type: 'status', data: { isRunning: true } } });
+    inputProjectionCb!(projection({ continuationInFlightClientId: 'manual-continue' }));
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(false);
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
+    makerEventCb!({ sessionId: SID, event: { type: 'done', data: {} } });
+    expect(makerChatStore.getSnapshot(SID).continuationInFlightClientId).toBe('manual-continue');
+    expect(makerChatStore.getRunningSnapshot().get(SID)).toMatchObject({
+      isRunning: false, hasError: false,
+    });
+    inputProjectionCb!(projection());
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(false);
+  });
+
+  it('does not mark a paused or restored auto-resume queue as running', () => {
+    const pendingQueue = [{ clientId: 'retry', autoResume: true }];
+    inputProjectionCb!(projection({ pendingQueue, queuePaused: true }));
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(false);
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning ?? false).toBe(false);
+    inputProjectionCb!(projection({ pendingQueue }));
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
+    inputProjectionCb!(projection({ pendingQueue, queuePaused: true }));
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(false);
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning ?? false).toBe(false);
+    // Pausing the remaining queue does not cancel an already-drained retry.
+    inputProjectionCb!(projection({ queuePaused: true, autoResumePending: PENDING_INFO }));
+    expect(makerChatStore.getRunningSnapshot().get(SID)?.isRunning).toBe(true);
+  });
+
   it('进度更新时同一张卡的 systemCardData 必须跟着变(1/5 → 2/5)', () => {
     inputProjectionCb!(projection({ autoResumePending: { ...PENDING_INFO, attempt: 1 } }));
     const first = makerChatStore
@@ -349,6 +395,7 @@ describe('applyInputProjection 自愈进行中提示', () => {
         .getSnapshot(SID)
         .messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
     ).toBe(true);
+    expect(makerChatStore.hasSessionRecoveryPending(SID)).toBe(true);
   });
 
   it('无关 projection 不误删原生重连行,接管 projection 到达时才交棒', () => {
@@ -849,6 +896,24 @@ describe('同一次中断事件的多次重连折叠成一行', () => {
         ...(outcome ? { autoResumeOutcome: outcome } : {}),
       } as Message['agentMeta'],
     });
+
+  it('keeps separate resume groups with substantive boundaries and trailing normal rows', async () => {
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      resumeRow('r1', 1), resumeRow('r2', 2),
+      serverMessage({ clientId: 'boundary', role: 'assistant', content: 'visible', createdAt: '2026-06-12T00:00:05.000Z' }),
+      resumeRow('r3', 1, undefined, '2026-06-12T00:00:1'),
+      resumeRow('r4', 2, undefined, '2026-06-12T00:00:1'),
+      serverMessage({ clientId: 'tail', role: 'assistant', content: 'done', createdAt: '2026-06-12T00:00:20.000Z' }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+    expect(makerChatStore.getSnapshot(SID).messages.filter((m) => m.systemCardType === 'auto-resume')
+      .map((m) => m.clientId)).toEqual(['r2', 'r4']);
+    const messages = makerChatStore.getSnapshot(SID).messages;
+    inputProjectionCb!(projection());
+    expect(makerChatStore.getSnapshot(SID).messages).toBe(messages);
+  });
 
   it('连续三次重连只渲染最后一条(带最新计数),前两条退回隐藏占位', async () => {
     vi.mocked(messageService.list).mockResolvedValueOnce([

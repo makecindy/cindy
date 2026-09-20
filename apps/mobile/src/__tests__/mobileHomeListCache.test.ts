@@ -376,3 +376,21 @@ describe('utf8ByteLength', () => {
     expect(utf8ByteLength('')).toBe(0);
   });
 });
+
+it('preserves valid task tags across offline cache reads and drops invalid colors', async () => {
+  const { cacheHomeListSnapshot, getCachedHomeListSnapshot } =
+    await import('@/session/mobileHomeListCache');
+  const tag = {
+    id: 'work',
+    name: 'Work',
+    color: 'blue' as const,
+    favoriteOrder: null,
+    revision: 1,
+  };
+  await cacheHomeListSnapshot(USER_ID, [
+    makeSession('tagged', 'dev-a', {
+      tags: [tag, { ...tag, id: 'invalid', color: 'invalid' } as never],
+    }),
+  ]);
+  expect((await getCachedHomeListSnapshot(USER_ID))[0].sessions[0].tags).toEqual([tag]);
+});

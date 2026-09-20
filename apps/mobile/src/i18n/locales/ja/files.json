@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "戻る",
+    "browserForward": "進む",
+    "browserMore": "その他の操作",
+    "browserShowSource": "ソースを表示",
+    "browserShowPage": "ウェブページに戻る",
+    "browserAddToTask": "現在のタスクに追加",
+    "browserFileInfo": "ファイル情報",
     "done": "完了",
     "a11yShare": "書き出して共有",
     "copyPath": "パスをコピー",
@@ -99,6 +106,11 @@
     "readFailed": "読み込みに失敗しました",
     "truncated2mb": "ファイルが 2 MB を超えています。先頭 2 MB のみ表示します",
     "truncatedLines": "先頭 {{lines}} 行のみ表示します",
+    "htmlUpdateMobile": "ウェブページをプレビューするには、このスマートフォンの Cindy を更新してください。ソースは引き続き表示できます。",
+    "htmlUpdateDesktop": "ウェブページをプレビューするには、接続先のコンピューターの Cindy を更新してください。",
+    "htmlSnapshotTooLarge": "フォルダーが大きすぎます。ウェブページと必要なファイルを小さなフォルダーに移して再試行してください。",
+    "htmlSnapshotFailed": "ウェブページを読み込めませんでした。接続を確認して再試行してください。",
+    "htmlReload": "ウェブページを再読み込み",
     "fetchingHtmlResources": "ページリソースを取得中…",
     "htmlResourcesMissing": "{{count}} 件のページリソースを取得できませんでした。画像やスタイルが欠ける場合があります",
     "htmlResourcesTruncated": "ページリソースが多すぎます。先頭 {{limit}} 件のみ処理しました",
@@ -114,7 +126,13 @@
     "originalFailedThumb": "オリジナルの取得に失敗しました。現在はサムネイルです",
     "fetchingOriginalHint": "サムネイル · オリジナルを取得中…",
     "a11yExportShareFile": "オリジナルファイルを書き出して共有",
-    "exportShare": "書き出し / 共有"
+    "exportShare": "書き出し / 共有",
+    "browserAddress": "アドレス",
+    "browserCancelAddress": "編集をキャンセル",
+    "browserReturnToFile": "ファイルに戻る",
+    "browserCopyAddress": "アドレスをコピー",
+    "browserInvalidAddress": "有効な http または https アドレスを入力してください。",
+    "browserWebsiteFailed": "ウェブページを開けません。再読み込みしてください。"
   },
   "export": {
     "exportFailed": "書き出しに失敗しました",

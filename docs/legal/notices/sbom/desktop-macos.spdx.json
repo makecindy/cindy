@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/d799ad932fdc7e8a168718a7b476d6237889df037757f88057baa5d4c334b050",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/7067d9251098807b40652f7a53024262a1af8638a76dd2f10f4df388cd105500",
   "creationInfo": {
-    "created": "2026-09-13T03:14:43Z",
+    "created": "2026-09-18T02:10:31Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -112,6 +112,16 @@
       "copyrightText": "NOASSERTION"
     },
     {
+      "name": "OpenAI Codex skill-creator (adapted)",
+      "SPDXID": "SPDXRef-Package-670f3c5f091a0b1c",
+      "versionInfo": "977193486dfe7a88c4dab24abeafe9b754f5b13f",
+      "downloadLocation": "https://github.com/openai/codex/tree/977193486dfe7a88c4dab24abeafe9b754f5b13f/codex-rs/skills/src/assets/samples/skill-creator",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
       "name": "openclaw fs-safe sources (vendored)",
       "SPDXID": "SPDXRef-Package-4e840ef8561a058f",
       "versionInfo": "vendored",
@@ -136,6 +146,16 @@
       "SPDXID": "SPDXRef-Package-e7ecfd34000fcb76",
       "versionInfo": "0.85.1",
       "downloadLocation": "https://github.com/earendil-works/pi",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "PyYAML (vendored pure-Python runtime)",
+      "SPDXID": "SPDXRef-Package-bf01cf3b3b399efc",
+      "versionInfo": "6.0.3",
+      "downloadLocation": "https://github.com/yaml/pyyaml/tree/6.0.3",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -15733,12 +15753,27 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-670f3c5f091a0b1c"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4e840ef8561a058f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-fa0d2644b7f5bf42"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-bf01cf3b3b399efc"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20319,11 +20354,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0f1fa15d8e8fb256"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
     }
   ],
   "hasExtractedLicensingInfos": [

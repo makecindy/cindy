@@ -1032,10 +1032,10 @@ describe('pickNewSessionDefaultDevice', () => {
 // 之间 deviceExplicit 路由参数的存在性——用全文件唯一字符串断言,不做函数体切片定位,
 // 避免锚点(如 deps 数组)变化时 indexOf 失效产生误导性报错。
 describe('new session default device follows the home device filter', () => {
-  it('sends the deviceExplicit flag only when the home list is filtered to one device', () => {
+  it('sends deviceExplicit for a home device filter or a checked recommendation target', () => {
     const homeSource = readTextLf(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
-    // 筛选某台电脑时带显式标记;"所有任务"(selectedDeviceId=null)不带,保留记忆回落。
-    expect(homeSource).toContain("...(selectedDeviceId ? { deviceExplicit: '1' } : {})");
+    // 筛选电脑或推荐指定电脑时带显式标记;普通新建保留记忆回落。
+    expect(homeSource).toContain("...(selectedDeviceId || explicitDeviceId ? { deviceExplicit: '1' } : {})");
   });
 
   it('treats the deviceExplicit route flag as an explicit device on the new-session screen', () => {
@@ -1641,7 +1641,9 @@ describe('new session composer surface', () => {
     expect(newSource).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
     expect(newSource).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';");
     expect(newSource).toContain('const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;');
-    expect(newSource).toContain('firstMessage: visualInitialDraft ?? DEFAULT_NEW_SESSION_DRAFT.firstMessage');
+    expect(newSource).toContain('firstMessage: visualInitialDraft ?? (isRemoteTaskSuggestionId(params.suggestion)');
+    expect(newSource).toContain('t(`devices.list.taskSuggestions.items.${params.suggestion}.prompt`)');
+    expect(newSource).toContain(': DEFAULT_NEW_SESSION_DRAFT.firstMessage)');
     expect(newComposerSource).toContain('inputTestID="newSession.firstMessageInput"');
     expect(newComposerSource).toContain('autoFocus={visualFocusComposer}');
     expect(newComposerSource).toContain('maxHeight={composerResize.inputMaxHeight}');
@@ -1656,7 +1658,7 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
     expect(newComposerSource).toContain('inputOverlay={renderComposerInputOverlay()}');
-    expect(newComposerSource).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
+    expect(newComposerSource).toContain("inputStyle={voiceIsListening && Platform.OS !== 'ios' ? styles.inputVoiceHidden : undefined}");
     expect(newComposerSource).toContain('setFirstMessageDraft(text);');
     expect(newComposerSource).toContain('onContentSizeChange={handleFirstMessageInputContentSizeChange}');
     expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
@@ -1809,7 +1811,7 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('testID="newSession.voiceStatus"');
     expect(newSource).toContain('testID="newSession.voiceSettingsButton"');
     expect(newSource).toContain('testID="newSession.voiceMicCaret"');
-    expect(newSource).toContain('const renderComposerInputOverlay = () => voiceIsListening ? (');
+    expect(newSource).toContain("const renderComposerInputOverlay = () => voiceIsListening && Platform.OS !== 'ios' ? (");
     expect(newSource).toContain("import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';");
     expect(newSource).toContain('const composerListeningPlaceholder = buildSessionComposerLayout({');
     expect(newSource).toContain('<Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>');
@@ -2085,7 +2087,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(newSource).not.toContain('return false;\n            }\n          },\n          shouldDefer:');
   });
 
-  it('applies the protocol timeout override map to mobile invokes (worktree:create needs 60s)', () => {
+  it('applies the protocol timeout override map to mobile invokes (worktree:create needs 60s)', async () => {
     // 2026-07-29 与 main 合并后,移动端逐通道超时统一走 invokeTimeouts 的
     // resolveMobileInvokeTimeoutMs(mobile 专属表 → 协议契约表 INVOKE_TIMEOUT_OVERRIDES_MS
     // 兜底),worktree:create 的 60s 预算经协议表兜底生效——两层缺一都会让
@@ -2095,11 +2097,8 @@ describe('new session worktree wiring (source locks)', () => {
       'utf8',
     );
     expect(contextSource).toContain('resolveMobileInvokeTimeoutMs(channel, args)');
-    const timeoutsSource = readTextLf(
-      resolve(process.cwd(), 'src/device-link/invokeTimeouts.ts'),
-      'utf8',
-    );
-    expect(timeoutsSource).toContain('INVOKE_TIMEOUT_OVERRIDES_MS[channel]');
+    const { resolveMobileInvokeTimeoutMs } = await import('@/device-link/invokeTimeouts');
+    expect(resolveMobileInvokeTimeoutMs('worktree:create')).toBe(60_000);
   });
 });
 

@@ -16,6 +16,7 @@ import {
   REVIEW_MODE,
 } from '@/config/env';
 import { fetchLatestRelease } from './fetchLatestRelease';
+import { androidInstaller } from './androidInstaller';
 import {
   evaluateBundleUpdate,
   preferredInstallUrl,
@@ -42,19 +43,23 @@ async function openInstall(url: string): Promise<void> {
     await Linking.openURL(url);
     // itms-services 安装全程由 iOS 系统接管:App 内没有任何回调/进度 UI,唯一反馈是
     // 桌面图标上的进度环。不提示的话用户点完"安装"会以为没反应(平台限制,无法在
-    // App 内展示进度),所以这里补一句引导;Android 走 APK 下载页,不需要这条提示。
+    // App 内展示进度),所以这里补一句引导;Android 的浏览器回退不需要这条提示。
     // 注意 openURL 在系统接下 URL 时即 resolve,早于用户在系统弹框里点「安装/取消」,
     // 无法得知用户的选择,措辞必须是条件引导式,不能断言"安装已开始"。
     if (url.startsWith('itms-services://')) {
       Alert.alert(i18n.t('update.installHintTitle'), i18n.t('update.installHintBody'));
     }
   } catch {
-    Alert.alert(i18n.t('update.openInstallFailedTitle'), i18n.t('update.openInstallFailedBody'));
+    Alert.alert(i18n.t('update.openInstallFailedTitle'), i18n.t(
+      Platform.OS === 'android' ? 'update.android.browserFailed' : 'update.openInstallFailedBody',
+    ));
   }
 }
 
-/** 阻断屏的「去更新」出口:解析安装地址并交给系统。无可用地址则 no-op。 */
-export function openBundleInstall(target: { itmsUrl?: string; installUrl?: string }): void {
+/** 普通更新与强更共用的安装出口；旧 Android 包及网页地址保留浏览器回退。 */
+export function openBundleInstall(target: { version?: string; itmsUrl?: string; installUrl?: string }): void {
+  if (Platform.OS === 'android' && target.version && target.installUrl
+    && androidInstaller.start({ version: target.version, installUrl: target.installUrl })) return;
   const url = preferredInstallUrl(target);
   if (url) void openInstall(url);
 }
@@ -85,7 +90,7 @@ export function promptBundleUpdate(evaluation: ReturnType<typeof evaluateBundleU
   ].join('');
   Alert.alert(i18n.t('update.newVersionTitle'), message, [
     { text: i18n.t('update.later'), style: 'cancel' },
-    { text: i18n.t('update.goUpdate'), onPress: () => void openInstall(url) },
+    { text: i18n.t('update.goUpdate'), onPress: () => openBundleInstall(evaluation.target!) },
   ]);
 }
 

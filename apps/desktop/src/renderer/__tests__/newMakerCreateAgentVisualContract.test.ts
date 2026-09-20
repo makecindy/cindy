@@ -260,10 +260,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(sendButtonSource).toContain('function CreateAgentSendIcon');
     expect(sendButtonSource).toContain('fill="currentColor"');
 
-    // Claude|Codex 分段切换是新建对话框独有控件,不在统一范围,仍用 create-agent 分段 token
-    expect(vendorSwitcherSource).toContain('bg-[var(--create-agent-segment-track-bg)]');
-    expect(vendorSwitcherSource).toContain('text-[var(--create-agent-segment-inactive-text)]');
-    expect(vendorSwitcherSource).toContain('border-[var(--create-agent-control-border)]');
+    // Segmented v8 now owns both Agent selector densities; legacy tokens remain theme-compatible.
+    expect(vendorSwitcherSource).toContain('<SegmentedControl');
+    expect(vendorSwitcherSource).not.toContain('create-agent-segment-track-bg');
 
     // 引擎下拉:trigger 是描边控件(与协同按钮同族,区别于裸态的权限/模型 trigger),
     // 面板走 model dropdown 规格;定宽 h-30,引擎数量增加不改工具条布局。

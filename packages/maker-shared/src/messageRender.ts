@@ -106,6 +106,8 @@ export interface MessageRenderNormalizedMessage<
   turnCompleted?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
   media?: readonly MessageRenderToolMediaLike[];
+  files?: readonly { url: string; title: string }[];
+  cardIds?: readonly string[];
 }
 
 export interface MessageRenderOptions {
@@ -323,8 +325,9 @@ function buildLinearItems<
     // tool 产出媒体(agent 出图等)提为独立 tool_media 项,紧跟所属 tool_group,
     // 跳出折叠卡可见(对齐桌面 MessageStream flushSegment)。key 派生自组首 tool
     // 的 clientId(与 tool_group 同源、prefix 不同),流式中组内新增 tool 时稳定。
-    const mediaTools = pendingTools.filter((tool) => (tool.media?.length ?? 0) > 0);
-    if (dedupeToolMediaByUrl(mediaTools.flatMap((tool) => tool.media ?? [])).length > 0) {
+    const mediaTools = pendingTools.filter((tool) => (tool.media?.length ?? 0) > 0 || (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0);
+    if (dedupeToolMediaByUrl(mediaTools.flatMap((tool) => tool.media ?? [])).length > 0
+      || mediaTools.some((tool) => (tool.files?.length ?? 0) > 0 || (tool.cardIds?.length ?? 0) > 0)) {
       items.push({
         type: 'tool_media',
         key: `media-${messageClientId(pendingTools[0])}`,

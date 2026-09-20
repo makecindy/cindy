@@ -20,8 +20,11 @@ export async function nativeCaptureStream(
     const current = epoch;
     const frame = await read();
     const jpeg = typeof frame === 'string' ? frame : frame?.jpeg;
-    if (!jpeg || stopped || !alive() || current !== epoch) return false;
-    const bytes = Uint8Array.from(atob(jpeg), (value) => value.charCodeAt(0));
+    if (!frame || !jpeg || stopped || !alive() || current !== epoch) return false;
+    const binary = atob(jpeg);
+    const bytes = new Uint8Array(binary.length);
+    // Avoid Uint8Array.from's per-character iterator/callback on large frames.
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
     try {
       if (stopped || !alive() || current !== epoch) return false;
@@ -30,7 +33,9 @@ export async function nativeCaptureStream(
         canvas.height = bitmap.height;
       }
       context.drawImage(bitmap, 0, 0);
-      if (frame && typeof frame !== 'string') cursor(frame.cursor);
+      // A fallback frame includes the pointer in its pixels. Clear the last
+      // independent cursor so switching backends cannot leave two pointers.
+      cursor(typeof frame === 'string' ? null : frame.cursor);
       lastFrame = performance.now();
       return true;
     } finally {
@@ -50,10 +55,15 @@ export async function nativeCaptureStream(
       stop();
       return;
     }
+    const started = performance.now();
     try {
       await draw();
       if (performance.now() - lastFrame > 5000) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
-      if (!stopped && alive()) timer = setTimeout(() => void pull(), Math.round(1000 / fps));
+      if (!stopped && alive())
+        timer = setTimeout(
+          () => void pull(),
+          Math.max(0, 1000 / fps - (performance.now() - started)),
+        );
       else stop();
     } catch {
       stop();

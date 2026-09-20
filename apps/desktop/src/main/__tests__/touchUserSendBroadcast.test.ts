@@ -53,6 +53,9 @@ const h = vi.hoisted(() => {
   };
 
   return {
+    upsertRecentWorkdir: vi.fn(async () => true),
+    ownerCurrent: true,
+    captureOwnerScope: false,
     tapWindowBroadcast: vi.fn(),
     webContentsSend: vi.fn(),
     broadcastSubagentRunsInvalidated: vi.fn(),
@@ -76,6 +79,11 @@ vi.mock('electron', () => ({
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: h.webContentsSend } }],
   },
 }));
+// These broadcast fixtures represent mounted, trusted app windows.
+vi.mock('../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
+  isTrustedAppRendererWindow: (w: { isDestroyed: () => boolean }) => !w.isDestroyed(),
+}));
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -84,11 +92,13 @@ vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.
 vi.mock('../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
+vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
 vi.mock('../device-link/broadcast-tap', () => ({
-  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  captureDataOwnerBroadcastScope: vi.fn(() =>
+    h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
+  ),
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
-  isDataOwnerBroadcastScopeCurrent: vi.fn(() => true),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => h.ownerCurrent),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
@@ -112,12 +122,91 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.ownerCurrent = true;
+  h.captureOwnerScope = false;
+  h.upsertRecentWorkdir.mockResolvedValue(true);
   h.updateSetCalls.length = 0;
   h.selectResults.length = 0;
   h.updateErrors.length = 0;
 });
 
 describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收敛)', () => {
+  it.each([
+    ['desktop', '/repo', '/repo'],
+    ['plugin', '/plugin-repo', '/plugin-repo'],
+    ['desktop', '/repo/.cindy-worktrees/task-a', '/repo'],
+    ['desktop', '/repo/.xdt-worktrees/task-a', '/repo'],
+    ['desktop', 'D:/repo/.cindy-worktrees/task-a', 'D:/repo'],
+  ])('persists %s project activity for %s at send time', async (source, workingDir, projectDir) => {
+    const atMs = 1_700_000_000_000;
+    h.selectResults.push([
+      {
+        userSendAt: atMs,
+        updatedAt: atMs,
+        source,
+        workingDir,
+        workspaceKind: 'project',
+        remoteHostId: null,
+      },
+    ]);
+    await touchUserSendInDb('sess-project', atMs);
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      projectDir,
+      atMs,
+      process.platform,
+      expect.objectContaining({ drizzle: h.fakeDb }),
+    );
+    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+      path: projectDir,
+    });
+  });
+
+  it.each([
+    { source: 'desktop', workspaceKind: 'project', remoteHostId: null, orcaRole: 'worker' },
+    { source: 'plugin', workspaceKind: 'project', remoteHostId: null, orcaRole: 'worker' },
+    { source: 'scheduler', workspaceKind: 'project', remoteHostId: null },
+    { source: 'desktop', workspaceKind: 'dialogue', remoteHostId: null },
+    { source: 'desktop', workspaceKind: 'project', remoteHostId: 'ssh-host' },
+  ])('does not retain unrelated workdirs: %j', async (fields) => {
+    const atMs = 1_700_000_000_000;
+    h.selectResults.push([
+      {
+        userSendAt: atMs,
+        updatedAt: atMs,
+        workingDir: '/repo',
+        ...fields,
+      },
+    ]);
+    await touchUserSendInDb('sess-other', atMs);
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+  });
+
+  it('suppresses project refresh after an owner switch during persistence', async () => {
+    h.captureOwnerScope = true;
+    const atMs = 1_700_000_000_000;
+    h.selectResults.push([
+      {
+        userSendAt: atMs,
+        updatedAt: atMs,
+        workingDir: '/repo',
+        source: 'desktop',
+        workspaceKind: 'project',
+        remoteHostId: null,
+      },
+    ]);
+    h.upsertRecentWorkdir.mockImplementationOnce(async () => {
+      h.ownerCurrent = false;
+      return true;
+    });
+    await touchUserSendInDb('sess-project', atMs);
+    expect(h.upsertRecentWorkdir).toHaveBeenCalled();
+    expect(
+      h.webContentsSend.mock.calls.filter(
+        ([channel]) => channel === 'local-db:recent-workdirs:changed',
+      ),
+    ).toHaveLength(0);
+  });
+
   it('显式 atMs:UPDATE 落地后广播 ISO userSendAt(本机窗口 + device-link tap)', async () => {
     const atMs = 1_700_000_000_000;
     // auto-fill 默认行为（selectResults 为空，makeUpdateChain 自动填充 UPDATE 成功行）。
@@ -167,6 +256,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     expect(h.updateSetCalls).toHaveLength(1); // UPDATE 调用了，但 WHERE 阻止了写入
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
     expect(h.webContentsSend).not.toHaveBeenCalled();
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
   });
 
   it('MAX updatedAt: 广播使用 SELECT 读回的实际 updatedAt，防止 finishedAt 被 firedAt 回退', async () => {

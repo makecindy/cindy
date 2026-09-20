@@ -176,7 +176,8 @@ export type ForgePackResult =
         | 'INTERNAL'
         // Forge 打包出口的会话 workdir 门 + 受管根禁区(C-4 + #7)。
         | 'SOURCE_OUTSIDE_WORKDIR'
-        | 'SOURCE_IS_INSTALLED_PLUGIN';
+        | 'SOURCE_IS_INSTALLED_PLUGIN'
+        | 'PERMISSION_DENIED';
       message: string;
     };
 
@@ -199,7 +200,7 @@ export type ForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'PERMISSION_DENIED' | 'INTERNAL';
       message: string;
     };
 
@@ -228,11 +229,28 @@ export interface ForgeScaffoldWriteRequest {
 }
 
 export type ForgeScaffoldWriteResult =
-  { ok: true } | { ok: false; errorCode: 'TARGET_EXISTS' | 'INTERNAL'; message: string };
+  { ok: true } | { ok: false; errorCode: 'TARGET_EXISTS' | 'INTERNAL' | 'PERMISSION_DENIED'; message: string };
 
 export type ForgeScaffoldWriter = (
   request: ForgeScaffoldWriteRequest,
 ) => Promise<ForgeScaffoldWriteResult>;
+
+const FORGE_OUTSIDE_GRANT_STALE_MESSAGE =
+  'Task or Plan permissions changed; retry with the current scope.';
+
+type ForgeOutsideGrantOptions = {
+  allowOutsideWorkdir?: boolean;
+  authorizedDir?: string;
+  isCurrent?: () => boolean;
+};
+
+function staleOutsideForgeGrant(
+  options?: ForgeOutsideGrantOptions,
+): { ok: false; errorCode: 'PERMISSION_DENIED'; message: string } | null {
+  if (!options?.allowOutsideWorkdir || !options.authorizedDir) return null;
+  if (options.isCurrent?.() === true) return null;
+  return { ok: false, errorCode: 'PERMISSION_DENIED', message: FORGE_OUTSIDE_GRANT_STALE_MESSAGE };
+}
 
 /** 生成插件清单；先走正式校验，再允许任何文件落盘。 */
 function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
@@ -558,6 +576,9 @@ export async function scaffoldGhostDir(
     sessionWorkdir?: string | null;
     forbiddenRootDirs?: readonly string[];
     writeScaffold?: ForgeScaffoldWriter;
+    allowOutsideWorkdir?: boolean;
+    authorizedDir?: string;
+    isCurrent?: () => boolean;
   },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
@@ -592,6 +613,8 @@ export async function scaffoldGhostDir(
       message: '会话工作目录不存在,无法确定骨架输出位置',
     };
   }
+  const staleGrant = staleOutsideForgeGrant(options);
+  if (staleGrant) return staleGrant;
   let realTarget: string;
   try {
     realTarget = await resolveThroughExistingAncestor(resolved);
@@ -602,8 +625,18 @@ export async function scaffoldGhostDir(
       message: err instanceof Error ? err.message : String(err),
     };
   }
-  if (!realTarget.startsWith(`${realWorkdir}${path.sep}`) && realTarget !== realWorkdir) {
-    return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
+  if (
+    !realTarget.startsWith(`${realWorkdir}${path.sep}`)
+    && realTarget !== realWorkdir
+  ) {
+    if (
+      !options?.allowOutsideWorkdir
+      || !options.authorizedDir
+      || !isPathInsideDir(options.authorizedDir, realTarget)
+      || !isPathInsideDir(realTarget, options.authorizedDir)
+    ) {
+      return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
+    }
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     let resolvedForbiddenRoot: string;
@@ -631,7 +664,9 @@ export async function scaffoldGhostDir(
       };
     }
   }
-  const targetDir = path.resolve(input.dir);
+  const targetDir = options?.allowOutsideWorkdir && options.authorizedDir
+    ? path.resolve(options.authorizedDir)
+    : path.resolve(input.dir);
   const files = scaffoldFiles(input);
   const manifestRaw = files[GHOST_MANIFEST_FILE];
   if (typeof manifestRaw !== 'string') {
@@ -676,15 +711,21 @@ export async function scaffoldGhostDir(
       return {
         ok: false,
         errorCode: 'INVALID_INPUT',
-        message: 'dir 的父目录必须是工作目录内已存在的普通目录',
+        message: options?.allowOutsideWorkdir
+          ? 'dir 的父目录必须是已存在的普通目录'
+          : 'dir 的父目录必须是工作目录内已存在的普通目录',
       };
     }
     parentRealPath = await realpathNative(parentDir);
-    if ((await pathHasLinkSegment(parentDir)) || !isPathInsideDir(realWorkdir, parentRealPath)) {
+    const parentHasLinkAncestor = await pathHasLinkSegment(parentDir);
+    const parentOutsideWorkdir = !isPathInsideDir(realWorkdir, parentRealPath);
+    if (parentHasLinkAncestor || (parentOutsideWorkdir && !options?.allowOutsideWorkdir)) {
       return {
         ok: false,
         errorCode: 'INVALID_INPUT',
-        message: 'dir 的父目录必须是工作目录内已存在且没有链接祖先的普通目录',
+        message: parentHasLinkAncestor
+          ? 'dir 的父目录必须是没有链接祖先的普通目录'
+          : 'dir 的父目录必须是工作目录内已存在且没有链接祖先的普通目录',
       };
     }
   } catch (err) {
@@ -692,7 +733,9 @@ export async function scaffoldGhostDir(
       return {
         ok: false,
         errorCode: 'INVALID_INPUT',
-        message: 'dir 的父目录必须先创建，并且必须位于当前工作目录内',
+        message: options?.allowOutsideWorkdir
+          ? 'dir 的父目录必须先创建'
+          : 'dir 的父目录必须先创建，并且必须位于当前工作目录内',
       };
     }
     return {
@@ -710,6 +753,8 @@ export async function scaffoldGhostDir(
       message: 'Forge scaffold stable-directory capability is unavailable',
     };
   }
+  const staleBeforeWrite = staleOutsideForgeGrant(options);
+  if (staleBeforeWrite) return staleBeforeWrite;
   const writeResult = await options.writeScaffold({
     parentDir,
     targetName: path.basename(targetDir),
@@ -1309,11 +1354,26 @@ export async function packGhostDir(
     sessionWorkdir?: string | null;
     forbiddenRootDirs?: readonly string[];
     iconPng?: Buffer;
+    /**
+     * Host already authorized this source via the session permission path
+     * (Full Access / auto-review / user confirm). Forbidden managed roots
+     * still apply. `authorizedDir` is the granted canonical identity and is
+     * required whenever `allowOutsideWorkdir` is true.
+     */
+    allowOutsideWorkdir?: boolean;
+    authorizedDir?: string;
+    /**
+     * Host grant generation captured at authorize time. Required whenever
+     * `allowOutsideWorkdir` is used with `authorizedDir`; rechecked after the
+     * long pack and immediately before the `.cindy` write.
+     */
+    isCurrent?: () => boolean;
   },
 ): Promise<ForgePackResult> {
-  // Forge 打包出口专属安全门(C-4 + #7):source 必须在会话 workdir 内、且不得是受管根
-  //(已装插件 / 批准状态根 / seed 根,双向判定)。算出的 realSourceDir 作为
-  // buildGhostPackage 的 expectedRealDir 上游锚点——正是它要求"由上游校验后传入"的那份。
+  // Forge 打包出口专属安全门(C-4 + #7):source 默认必须在会话 workdir 内;Host 已按
+  // 当前会话权限放行后可带 allowOutsideWorkdir。受管根(已装插件 / 批准状态根 /
+  // seed 根)始终双向拒绝。算出的 realSourceDir 作为 buildGhostPackage 的
+  // expectedRealDir 上游锚点——正是它要求"由上游校验后传入"的那份。
   const workdir = options?.sessionWorkdir;
   if (!workdir) {
     return {
@@ -1332,6 +1392,8 @@ export async function packGhostDir(
       message: 'The current session workdir does not exist',
     };
   }
+  const staleGrant = staleOutsideForgeGrant(options);
+  if (staleGrant) return staleGrant;
   let realSourceDir: string;
   try {
     realSourceDir = await realpathNative(dir);
@@ -1339,11 +1401,18 @@ export async function packGhostDir(
     return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `目录不存在:${dir}` };
   }
   if (!isPathInsideDir(realWorkdir, realSourceDir)) {
-    return {
-      ok: false,
-      errorCode: 'SOURCE_OUTSIDE_WORKDIR',
-      message: 'Forge source must be inside the current session workdir',
-    };
+    if (
+      !options?.allowOutsideWorkdir
+      || !options.authorizedDir
+      || !isPathInsideDir(options.authorizedDir, realSourceDir)
+      || !isPathInsideDir(realSourceDir, options.authorizedDir)
+    ) {
+      return {
+        ok: false,
+        errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+        message: 'Forge source must be inside the current session workdir',
+      };
+    }
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
@@ -1380,6 +1449,8 @@ export async function packGhostDir(
     realSourceDir,
     `${built.manifest.id}-${built.manifest.version}.cindy`,
   );
+  const staleBeforeWrite = staleOutsideForgeGrant(options);
+  if (staleBeforeWrite) return staleBeforeWrite;
   try {
     await fs.promises.writeFile(cindyPath, built.buf);
   } catch (err) {
@@ -1550,8 +1621,9 @@ Cindy 会默认把自身版本写进这份具体插件的 \`minCindyVersion\`；
   配置和结果呈现，生成请求由当前 Agent 调用 Core media 工具(§2、§4.0.4)。
 
 问完后把选择复述成一份简短设计小结(要解决的问题/目标用户/交互流程/所选形态/
-权限边界/验收标准),并顺带说明源码会放在工作目录的哪个文件夹——位置不需要用户选
-(骨架只能建在会话工作目录内,装入后归主机统一管理),让用户知情即可。用户确认
+权限边界/验收标准),并顺带说明源码会放在工作目录的哪个文件夹——工作目录内直接建;
+工作目录外(例如相邻 worktree)走当前会话权限,不因目录边界悄悄失败。位置不需要用户选
+(装入后归主机统一管理),让用户知情即可。用户确认
 小结后再动手。**修改现有意识同样适用**:先读现有 ghost.json 与源码,列出改动会
 影响哪些已选形态,再让用户确认。
 
@@ -2021,6 +2093,11 @@ Manual 的归属不按篇幅长短判断。它对标 Skill 正文与 references,
 都必须是普通 \`.md\` 文件,单文件不超过 64KB。Markdown 不写 frontmatter;二进制、非法
 UTF-8、符号链接和其它扩展名都会在打包与装入两侧拒绝。
 
+**Manual-only 插件**可以只声明非空 \`manual.items\`,不需要声明虚假工具。
+已启用、账号可用且当前工作目录未停用时,它同样进入花名册、\`ghost_list\` 和
+\`ghost_info\`;返回的 \`tools\` 可以为空。\`ghost_manual\` 读取手册不启动插件运行时,
+\`ghost_call\` 仍只能调用实际声明的工具。既无工具也无手册的插件不进入发现清单。
+
 四层信息各司其职:
 
 - \`whenToUse\`:只放系统提示词区插件花名册需要的召回场景;
@@ -2049,6 +2126,8 @@ Cindy 先发布，确认首个支持它的**正式版本号**后，再把 \`minC
 \`skill.items\` 的迁移版本也必须设置上述 \`minCindyVersion\`，并遵守 Cindy 先发、插件
 后发的顺序；服务端还要保留上一份带 Skill 的历史 release，使旧客户端能通过历史版本回退
 继续取得兼容包。
+Manual-only 插件还必须等首个支持 Manual-only 发现与读取的 Cindy 正式版本发布,
+并将 \`minCindyVersion\` 设为不低于该版本;不能只以最早提供 \`ghost_manual\` 的版本为准。
 
 ## 4. main.js 电子脑(沙箱后台逻辑)
 
@@ -4270,8 +4349,11 @@ if (r.ok && r.confirmed) {
 要给插件提供内置 iOS 模拟器的状态入口或工作流面板时,声明 \`"iosSimulator": true\`。
 电子脑只能读取**当前台前任务**的公开状态,并请求主机打开 Cindy 自己的模拟器面板:
 
-标准产品形态只需 \`skill + iosSimulator\`:Host 会在任务右侧栏提供手动入口,
-Agent 通过 Skill 调 Host MCP。不要为了重复同一状态再声明 \`panel\`;插件停靠面板的关闭
+标准产品形态只需 \`manual + iosSimulator\`:Host 会在任务右侧栏提供手动入口,
+Agent 按需读取 \`ghost_manual({ ghost_id: "ios-simulator", path: "ios-simulator" })\`
+获取跨工具工作流,再调用 Host 注册的 \`cindy_ios_simulator\` MCP。插件无需声明 \`tools\`,
+Manual 的发现与读取仍受安装、启用、账号与工作目录门禁约束。
+不要为了重复同一状态再声明 \`panel\`;插件停靠面板的关闭
 语义是停用整份插件,不适合作为模拟器 viewer 的替身。只有确实存在 Host viewer 没有的独立
 工作流 UI 时才额外声明 panel。
 
@@ -4312,13 +4394,13 @@ const opened = await cindy.iosSimulator.request({
   在 Host 面板里选择设备;连续请求会限速;
 - panel.html 保持零桥。面板要使用本能力时,按 §5 先 \`/wake\`,再用同源
   BroadcastChannel 把请求交给 main.js,由 main.js 调 \`cindy.iosSimulator.request\`;
-- 插件 Skill 选择内嵌路线后,Agent 构建、安装、启动与 UI 操作调用 Host 注册的
+- Agent 按 Manual 指引选择内嵌路线后,构建、安装、启动与 UI 操作调用 Host 注册的
   \`cindy_ios_simulator\` MCP,不要重复打包一份 WDA/Sidecar。内嵌能力不存在或不可用时,
-  Skill 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
+  Agent 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
   Computer Use;Host 不会把这些外部操作自动转换为内嵌调用;
 - 本能力仅存在于支持并授权 \`iosSimulator\` 字段的 Cindy Desktop。未知 v3 顶层字段会被
   保留，但不会因此获得 Host 权限；依赖新字段的插件必须用 \`minCindyVersion\` 标明最低版本。
-  Skill 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
+  Agent 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
   可以继续使用正常的外部工具链,否则再引导用户升级 Cindy。
 
 ## 4.20 一级主视图(mainView 能力)
@@ -4503,19 +4585,21 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
 
 ### 7.2 打包、安装与验证
 
-1. 新插件先调 \`ghost_forge_scaffold\` 生成骨架，或把已有源码放在用户工作目录下的
-   一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件，
-   其父目录必须是工作目录内已存在的普通目录；也不能落在已安装插件目录或 Host 状态目录内(会被拒，理由同下一条)；
-   **Forge 源码必须是当前会话工作目录里的独立作者目录**。已安装插件目录以及
-   Host 管理的状态目录都不是源码区，禁止直接修改、打包或用路径别名绕过；若要继续
-   开发已有插件，先把源码复制/迁出到工作目录中的新目录，再从该副本制作;
+1. 新插件先调 \`ghost_forge_scaffold\` 生成骨架，或指向已有源码目录(如 \`my-ghost/\`)；
+   脚手架目标必须是新目录，绝不覆盖已有文件，其父目录必须已存在且是普通目录；
+   也不能落在已安装插件目录或 Host 状态目录内(会被拒，理由同下一条)；
+   **Forge 源码必须是独立作者目录，不能是已安装插件或 Host 状态目录**。
+   会话工作目录内直接建/打包；工作目录外(例如相邻 worktree)走当前会话权限:
+   本地 Full Access 自动放行,Auto 交审阅,Ask 向用户确认,远程或无法核验的会话仍拒绝。
+   已安装插件目录以及 Host 管理的状态目录都不是源码区，禁止直接修改、打包或用路径别名绕过；
+   若要继续开发已有插件，先把源码复制/迁出到独立作者目录，再从该副本制作;
 2. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——只做校验和打包，不安装或更新插件；
    产物落在源码目录里(\`<id>-<version>.cindy\`,同版本覆盖,下次打包自动跳过);
    macOS / Linux 源文件的普通 Unix 权限会原样进入包(特殊位会剥除)，所以随包本机
    可执行程序必须在打包前就设好执行位(例如 \`chmod 755 path/to/program\`)，不要靠
    文件扩展名或 \`bin/\` 目录让宿主猜测;
    若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`,不要重试或换大小写、软链接、junction 绕过,
-   按上一步迁出源码后再打包;也可能返回 \`SOURCE_OUTSIDE_WORKDIR\`(源码不在会话工作目录内);
+   按上一步迁出源码后再打包;未获会话权限时也可能返回 \`SOURCE_OUTSIDE_WORKDIR\`;
 3. 用户明确要求当前 Agent 安装或更新这份源码时，调用
    \`ghost_forge_install({ dir: '<绝对路径>' })\`。它会重新校验并打包当前源码，再把这次
    产生的确切包直接安装；首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、

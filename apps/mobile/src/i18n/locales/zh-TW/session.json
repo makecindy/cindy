@@ -7,6 +7,7 @@
   },
   "common": {
     "cancel": "取消",
+    "dismissRecommendation": "關閉推薦",
     "delete": "刪除",
     "openContextPanel": "開啟上下文面板",
     "groupMode": "模式",
@@ -360,6 +361,7 @@
     "worktreeCleanupPending": "上一次 worktree 仍待回收，請重新連線裝置後再試。"
   },
   "menu": {
+    "details": "任務詳情",
     "chipPinned": "已置頂",
     "chipArchived": "已歸檔",
     "chipReadOnly": "只讀",
@@ -422,7 +424,6 @@
       "today": "今日已用",
       "unavailable": "暫未取得",
       "quotaUnavailable": "暫未取得帳號配額",
-      "accountOnly": "ChatGPT 帳號配額，尚未確認本任務使用此方案",
       "lastUpdated": "上次更新 {{time}}",
       "taskUsage": "本任務用量",
       "taskValue": "本任務價值",

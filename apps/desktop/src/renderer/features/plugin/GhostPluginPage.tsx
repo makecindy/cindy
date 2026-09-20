@@ -65,6 +65,7 @@ import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { installGhostFromFile, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
 import { Spinner } from '@/components/ui/spinner';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -1815,42 +1816,36 @@ export function GhostPluginPage({
                   <h2 className="shrink-0 whitespace-nowrap text-20 font-medium text-[var(--text-primary)]">
                     {t('settings.ghosts.page.recommendedSection')}
                   </h2>
-                  <div
-                    className="plugin-catalog-filters flex min-w-0 max-w-full items-center gap-1"
-                    role="group"
+                  <SegmentedControl
+                    className="plugin-catalog-filters"
+                    role="radiogroup"
                     aria-label={t('settings.ghosts.page.filtersAria')}
                     style={WINDOW_NO_DRAG_STYLE}
-                  >
-                    {recommendedFilters.map((filter) => {
-                      const selected = effectiveOriginFilter === filter;
+                    height={32}
+                    optionHeight={28}
+                    optionClassName="px-3.5 text-12"
+                    value={effectiveOriginFilter}
+                    onValueChange={setOriginFilter}
+                    options={recommendedFilters.map((filter) => {
                       const count =
                         filter === 'all'
                           ? searchedAvailableMarketItems.length
                           : recommendedCounts[filter];
-                      return (
-                        <button
-                          key={filter}
-                          type="button"
-                          aria-pressed={selected}
-                          onClick={() => setOriginFilter(filter)}
-                          className={cn(
-                            'shrink-0 select-none rounded-full border border-transparent px-3.5 py-2 text-12 transition-colors duration-150',
-                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                            selected
-                              ? 'plugin-motion-selected text-[var(--text-primary)]'
-                              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-                          )}
-                        >
-                          {filter === 'all'
-                            ? t('settings.ghosts.page.filterAll')
-                            : t(`settings.ghosts.page.origin.${filter}`)}
-                          <span className="ml-1.5 tabular-nums text-[var(--text-tertiary)]">
-                            {count}
-                          </span>
-                        </button>
-                      );
+                      return {
+                        value: filter,
+                        label: (
+                          <>
+                            {filter === 'all'
+                              ? t('settings.ghosts.page.filterAll')
+                              : t(`settings.ghosts.page.origin.${filter}`)}
+                            <span className="ml-1.5 tabular-nums text-[var(--text-tertiary)]">
+                              {count}
+                            </span>
+                          </>
+                        ),
+                      };
                     })}
-                  </div>
+                  />
                 </div>
 
                 {marketSnapshot?.unavailableReason ? (

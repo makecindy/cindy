@@ -1,3 +1,4 @@
+import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
  * ReviewTabBody — unified workspace and recorded-message review panel.
  *
@@ -2938,7 +2939,7 @@ export function countEagerExpandedDiffRows(
   return count;
 }
 
-function DiffList({
+export function DiffList({
   diffs,
   expandedSet,
   onToggleDiff,
@@ -3177,9 +3178,10 @@ function DiffList({
     if (diff) scrollToFile(diff);
   }, [diffs, jumpRequest, scrollToFile]);
 
-  const handleImagePreviewLoad = useCallback(() => {
-    requestAnimationFrame(() => fileVirtualizer.measure());
-  }, [fileVirtualizer]);
+  // 不要恢复成 fileVirtualizer.measure(): 那会清空全部已测行高且不回填,整列退回
+  // estimateSize(45/360),卡片互相压叠。异步内容变高由 item wrapper 的
+  // ResizeObserver 兜住。
+  const handleImagePreviewLoad = useCallback(() => undefined, []);
 
   const renderFileRow = (diff: FileDiff) => (
     <FileRow
@@ -3714,26 +3716,23 @@ function DiffViewModeToggle({
     { mode: 'split', label: t('rightSidebar.review.viewMode.split') },
   ];
   return (
-    <div
-      className="inline-flex h-6 shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--surface)] p-0.5"
+    <SegmentedControl
       aria-label={t('rightSidebar.review.viewMode.aria')}
-    >
-      <SlidersHorizontal size={11} className="ml-1 self-center text-[var(--text-tertiary)]" />
-      {options.map((option) => (
-        <button
-          key={option.mode}
-          type="button"
-          onClick={() => onChange(option.mode)}
-          className={cn(
-            'rounded-full px-2 text-10 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-            option.mode === mode &&
-              'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)]',
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+      value={mode}
+      onValueChange={onChange}
+      height={24}
+      optionHeight={18}
+      optionClassName="px-2 text-10"
+      className="shrink-0"
+      prefix={
+        <SlidersHorizontal
+          size={11}
+          aria-hidden="true"
+          className="ml-1 self-center text-[var(--text-tertiary)]"
+        />
+      }
+      options={options.map((option) => ({ value: option.mode, label: option.label }))}
+    />
   );
 }
 

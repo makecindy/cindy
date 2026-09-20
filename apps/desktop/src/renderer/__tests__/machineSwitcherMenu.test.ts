@@ -332,9 +332,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(pinnedProjectsBlock).not.toContain('filter.projectsAsSet');
     expect(pinnedProjectsBlock).not.toContain('allowedProjects');
     // 「最近活跃」本就豁免:置顶取 allGroups(未经活跃时间收窄),不是 activityFilteredSessions。
-    expect(sidebarUpperSource).toMatch(
-      /const allGroups = useProjectGroups\(\s*sidebarSessions/,
-    );
+    expect(sidebarUpperSource).toMatch(/const allGroups = useProjectGroups\(\s*sidebarSessions/);
   });
 
   // 2026-08-12 用户裁决:任务信息按用户勾选顺序显示(先勾时间再勾费用 → 时间在前)。
@@ -373,7 +371,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).toContain('Icon={Filter}');
     expect(filterSource).toContain('toggleProject(DIALOGUE_FILTER_KEY)');
     expect(filterSource).toContain("t('ccAgent.sidebar.dialogues')");
-    expect(filterSource).toContain('Icon={CircleDot}');
+    expect(filterSource).toContain('Icon={ListChecks}');
     expect(filterSource).toContain('Icon={Folder}');
     expect(filterSource).toContain('Icon={Bot}');
     expect(filterSource).toContain('Icon={CalendarClock}');
