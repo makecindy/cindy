@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -9,6 +9,10 @@ vi.mock('react-i18next', () => ({
 
 import { FileTreeView } from '../FileTreeView';
 import type { DirEntry, UseFileTreeReturn } from '../hooks/useFileTree';
+import { installTreeViewportStub, resetTestViewportSize } from './treeViewportStub';
+
+// jsdom 无布局：不装视口替身的话虚拟器产出 0 行（见 treeViewportStub 注释）。
+beforeAll(installTreeViewportStub);
 
 const entries: DirEntry[] = [
   { name: 'cat.png', relPath: 'cat.png', type: 'file', size: 10, mtimeMs: 1 },
@@ -23,6 +27,8 @@ function makeTree(): UseFileTreeReturn {
     loadingPaths: new Set(),
     initialLoading: false,
     loadError: null,
+    showIgnoredDirsSupported: true,
+    storeKey: 'test-store',
     toggleFolder: vi.fn(),
     collapseAll: vi.fn(),
     refresh: vi.fn(async () => undefined),
@@ -30,7 +36,10 @@ function makeTree(): UseFileTreeReturn {
   };
 }
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  resetTestViewportSize();
+});
 
 describe('FileTreeView image preview action', () => {
   it('shows the eye action only for lightbox-compatible images', () => {
@@ -38,6 +47,7 @@ describe('FileTreeView image preview action', () => {
     const { container } = render(
       <FileTreeView
         tree={makeTree()}
+        scrollScope="test-tab"
         selectedPath={null}
         onSelectFile={vi.fn()}
         onPreviewImage={onPreviewImage}
@@ -71,6 +81,7 @@ describe('FileTreeView image preview action', () => {
     const { container } = render(
       <FileTreeView
         tree={makeTree()}
+        scrollScope="test-tab"
         selectedPath={null}
         onSelectFile={onSelectFile}
         onPreviewImage={onPreviewImage}
@@ -93,6 +104,7 @@ describe('FileTreeView image preview action', () => {
     const { container } = render(
       <FileTreeView
         tree={makeTree()}
+        scrollScope="test-tab"
         selectedPath={null}
         onSelectFile={onSelectFile}
         onPreviewImage={vi.fn()}
@@ -110,6 +122,7 @@ describe('FileTreeView image preview action', () => {
     const { container } = render(
       <FileTreeView
         tree={makeTree()}
+        scrollScope="test-tab"
         selectedPath={null}
         onSelectFile={onSelectFile}
         onPreviewImage={vi.fn()}
