@@ -38,7 +38,7 @@ export async function stabilizePreRunHookForCreate(
 ): Promise<CreateScheduleInput> {
   if (!input.preRunHook?.command?.trim()) return input;
   const workingDir = await resolveEffectiveWorkingDir(
-    input.targetSessionId,
+    input.executionMode === 'script' ? undefined : input.targetSessionId,
     input.workingDir,
     deps.resolveSessionWorkDir,
   );
@@ -78,12 +78,12 @@ export async function stabilizePreRunHookForUpdate(
   const commandChanged = patchHasHook && nextHook.command !== existing.preRunHook?.command;
   const workingDir = commandChanged
     ? await resolveEffectiveWorkingDir(
-        nextTargetSessionId,
+        (patch.executionMode ?? existing.executionMode) === 'script' ? undefined : nextTargetSessionId,
         nextWorkingDir,
         deps.resolveSessionWorkDir,
       )
     : await resolveEffectiveWorkingDir(
-        existing.targetSessionId,
+        existing.executionMode === 'script' ? undefined : existing.targetSessionId,
         existing.workingDir,
         deps.resolveSessionWorkDir,
       );

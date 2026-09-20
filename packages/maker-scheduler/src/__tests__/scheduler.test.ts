@@ -515,11 +515,15 @@ describe('Scheduler', () => {
     });
 
     await expect(h.scheduler.update(script.id, { useWorktree: true })).rejects.toThrow(
-      'does not support worktrees or bound sessions',
+      'does not support worktrees or persistent sessions',
     );
     await expect(h.scheduler.update(script.id, { silentWhenIdle: true })).rejects.toThrow(
       'does not support silentWhenIdle',
     );
+
+    const bound = await h.scheduler.update(script.id, { targetSessionId: 'owner-session' });
+    expect(bound.targetSessionId).toBe('owner-session');
+    expect(bound.executionMode).toBe('script');
 
     // 堵 update 逃逸:script 任务(prompt 合法为空)只切 executionMode='agent'
     // 不带 prompt → 会落库空提示词的 agent 任务,必须拒;带 prompt 一起切才放行。
