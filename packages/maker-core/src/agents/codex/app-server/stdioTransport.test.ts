@@ -62,6 +62,18 @@ afterEach(() => {
 });
 
 describe('createStdioTransport process observer', () => {
+  it.each(['exit', 'pending', 'stdout', 'signal', 'other-error', 'different-path'])('classifies only a confirmed pre-protocol SQLite exit (%s)', (scenario) => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const transport = createStdioTransport({ binaryPath: 'codex' });
+    const error = scenario === 'other-error' ? 'Error: failed to load configuration: revoked'
+      : `Error: failed to initialize sqlite state runtime under /synthetic: failed to initialize state runtime at ${scenario === 'different-path' ? '/other' : '/synthetic'}`;
+    child.stderr.emit('data', `${error}\n`);
+    if (scenario === 'stdout') child.stdout.emit('data', '{}');
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(false);
+    if (scenario !== 'pending') child.emit('exit', 1, scenario === 'signal' ? 'SIGTERM' : null);
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(scenario === 'exit');
+  });
   it('starts the app-server without a visible Windows console', () => {
     mocks.spawn.mockReturnValue(makeChild());
 

@@ -194,7 +194,7 @@ import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
-import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
+import { AppServerHost, CodexNativeInitializationStoppedError, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError } from './app-server/client.js';
 import { useCodexHistoryHome, type CodexExternalAuth } from './app-server/external-auth.js';
 import {
@@ -3522,7 +3522,7 @@ assertRouteCurrent();
         }, startup);
       } catch (error) {
         if (!startup.threadDispatched
-          && (error instanceof CodexRouteSelectionChangedError || signal.aborted)) {
+          && (error instanceof CodexRouteSelectionChangedError || error instanceof CodexNativeInitializationStoppedError || signal.aborted)) {
           // No thread was submitted. Release this startup's lease and retire only
           // an unused host; another live handle's process belongs to that handle.
           await startup.cleanup?.();
@@ -5123,6 +5123,9 @@ assertRouteCurrent();
       assertCurrentHost('initialize');
     } catch (error) {
       releaseHostBindingLeaseIfNeeded();
+      // Exhaustion/cancellation of native startup is terminal for this request;
+      // a simultaneous route change must not multiply the three-process budget.
+      if (error instanceof CodexNativeInitializationStoppedError) throw error;
       // A provider transaction may close initialize while no thread exists yet.
       // Preserve route reselection instead of surfacing the transport's close error.
       assertCurrentHost('initialize failed');

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { AppServerHost } from './host.js';
+import { AppServerHost, CodexNativeInitializationStoppedError } from './host.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 
@@ -488,6 +488,100 @@ const logger: Logger = {
   fatal: vi.fn(),
   child: () => logger,
 };
+
+describe('native SQLite initialization recovery', () => {
+  class FailedNativeTransport extends NotificationTransport {
+    failed = false;
+    closeGate: Promise<void> = Promise.resolve();
+    override async writeLine(line: string) {
+      this.lines.push(line);
+      this.failed = true;
+      await super.close('native SQLite exited');
+    }
+    nativeSqliteInitializationFailed() { return this.failed; }
+    override async close(reason?: string) { await this.closeGate; await super.close(reason); }
+  }
+
+  it('shares recovery, waits for close, and sends the task only to the replacement', async () => {
+    const failed = new FailedNativeTransport();
+    let release!: () => void;
+    failed.closeGate = new Promise(resolve => { release = resolve; });
+    const healthy = new NotificationTransport();
+    const createTransport = vi.fn().mockReturnValueOnce(failed).mockReturnValue(healthy);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      const first = host.ensureStarted();
+      expect(host.ensureStarted()).toBe(first);
+      await vi.waitFor(() => expect(failed.failed).toBe(true));
+      expect(createTransport).toHaveBeenCalledTimes(1);
+      release();
+      await first;
+      await host.request('thread/start', {});
+      expect(createTransport).toHaveBeenCalledTimes(2);
+      expect(failed.lines.map(line => JSON.parse(line).method)).toEqual(['initialize']);
+      expect(healthy.lines.map(line => JSON.parse(line).method)).toEqual(['initialize', 'thread/start']);
+    } finally { release(); await host.retire(); }
+  });
+
+  it.each(['exhaust', 'shutdown', 'retire', 'timeout', 'close-failure'] as const)('stops recovery on %s', async mode => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const failed = new FailedNativeTransport();
+    if (mode !== 'exhaust') failed.closeGate = gate;
+    if (mode === 'close-failure') failed.close = vi.fn(async () => { await gate; throw new Error('exit unconfirmed'); });
+    const createTransport = vi.fn(() => mode === 'exhaust' ? new FailedNativeTransport() : failed);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    const started = mode === 'timeout' ? host.ensureStartedWithTimeout(10, 'fixture') : host.ensureStarted();
+    const rejection = expect(started).rejects.toThrow(mode === 'timeout' ? /timed out/ : mode === 'close-failure' ? /exit unconfirmed/ : /initialization stopped/);
+    if (mode === 'exhaust') {
+      await rejection;
+      expect(createTransport).toHaveBeenCalledTimes(3);
+    } else {
+      await vi.waitFor(() => expect(failed.failed).toBe(true));
+      const stopped = mode === 'shutdown' ? host.shutdown() : mode === 'retire' ? host.retire() : undefined;
+      if (mode === 'timeout') await rejection;
+      release();
+      await rejection;
+      await stopped;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(createTransport).toHaveBeenCalledTimes(1);
+    }
+    await host.retire();
+  });
+
+  it('does not retry an initialize RPC rejection', async () => {
+    const createTransport = vi.fn(() => new RejectedInitializeTransport());
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    await expect(host.ensureStarted()).rejects.not.toBeInstanceOf(CodexNativeInitializationStoppedError);
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    await host.retire();
+  });
+
+  it('does not retry credential installation after native initialization', async () => {
+    const transport = new NotificationTransport(() => ({ config: { cli_auth_credentials_store: 'ephemeral' } }));
+    const createTransport = vi.fn(() => transport);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' },
+      externalAuth: { readTokens: async () => { throw new Error('synthetic official account rejected'); } },
+    });
+    await expect(host.request('thread/start', {})).rejects.toThrow('Codex account authentication is unavailable or has changed');
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    expect(transport.lines.map(line => JSON.parse(line).method)).not.toContain('thread/start');
+    await host.retire();
+  });
+
+  it('never replays a task RPC failure after initialize', async () => {
+    const transport = new NotificationTransport(method => {
+      if (method === 'thread/start') throw new Error('synthetic task write failed');
+      return {};
+    });
+    const createTransport = vi.fn(() => transport);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    await expect(host.request('thread/start', {})).rejects.toThrow();
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    expect(transport.lines.filter(line => JSON.parse(line).method === 'thread/start')).toHaveLength(1);
+    await host.retire();
+  });
+});
 
 describe('AppServerHost.request startup timeout', () => {
   it.each([undefined, 1000])('checks dispatch after the final startup await (timeout=%s)', async (timeoutMs) => {

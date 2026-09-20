@@ -60,6 +60,9 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   let closed = false;
   let closePromise: Promise<void> | null = null;
   let exited = false;
+  let sawStdout = false;
+  let sqliteInitializationError = false;
+  let nativeSqliteInitializationFailed = false;
   let resolveExit!: () => void;
   const exitPromise = new Promise<void>((resolve) => { resolveExit = resolve; });
 
@@ -89,6 +92,7 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
 
   // stdout NDJSON 增量解析: readline 处理 \r\n / \n / EOF, 单行触发 callback。
   child.stdout.setEncoding('utf8');
+  child.stdout.on('data', () => { sawStdout = true; });
   const rl: Interface = createInterface({
     input: child.stdout,
     crlfDelay: Infinity,
@@ -103,7 +107,8 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     for (const cb of lineHandlers) cb(line);
   });
 
-  // stderr 当诊断信息流, 不参与协议。按行 fan-out, client 层做 ANSI 剥除/分级。
+  // stderr 不参与任务/认证协议；仅识别本机原生启动失败，且必须再有自然退出证据。
+  // 其它内容仍按诊断行 fan-out，client 层做 ANSI 剥除/分级。
   child.stderr.setEncoding('utf8');
   let stderrBuffer = '';
   child.stderr.on('data', (chunk: string) => {
@@ -115,6 +120,10 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     for (const line of lines) {
       const trimmed = line.replace(/\r$/, '');
       if (!trimmed) continue;
+      // This is the 0.153.4 fatal error emitted before the app-server starts its
+      // protocol loop. It is NOT an auth error, a model error or a generic SQL log.
+      const match = /^Error: failed to initialize sqlite state runtime under (.+): failed to initialize state runtime at (.+)$/.exec(trimmed);
+      if (match && match[1] === match[2]) sqliteInitializationError = true;
       for (const cb of stderrHandlers) cb(trimmed);
     }
   });
@@ -146,6 +155,8 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   });
   child.stdin.on('error', (err) => fireClose(`child stdin error: ${err.message}`));
   child.on('exit', (code, signal) => {
+    nativeSqliteInitializationFailed = code === 1 && signal === null
+      && !closed && !sawStdout && sqliteInitializationError;
     const reason = signal ? `signal=${signal}` : `exit code=${code ?? 'null'}`;
     finishProcess(`child exited (${reason})`);
   });
@@ -165,6 +176,7 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   };
 
   return {
+    nativeSqliteInitializationFailed: () => nativeSqliteInitializationFailed,
     writeLine(line: string): Promise<void> {
       if (closed || !child.stdin.writable) {
         return Promise.reject(new Error('StdioTransport.writeLine after close'));

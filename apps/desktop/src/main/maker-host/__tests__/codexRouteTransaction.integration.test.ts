@@ -6,6 +6,8 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getTableColumns } from 'drizzle-orm';
+import { createCodexPickerHarness } from './codexPickerHarness.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { sessions } from '../../localDb/schema.js';
 import { commitCodexThreadTransfer, relinkCodexProviderThread, type CodexThreadTransferSnapshot } from '../../maker-ipc/codexProviderThreadRelink.js';
@@ -29,7 +31,7 @@ const logger: Logger = {
 };
 
 describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-server', () => {
-  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy', 'transfer-retire-resolve-success', 'transfer-retire-resolve-failure', 'transfer-retire-list-success', 'transfer-retire-list-failure'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
+  it.each([...['A', 'B', 'C', 'initialize', 'capability', 'resume', 'transfer'].flatMap((window) => [false, true].map((reviewMode) => ({ window, reviewMode }))), ...['skills', 'config'].map((window) => ({ window, reviewMode: true })), ...['restricted', 'bot', 'local-skill', 'transfer-fork-failure', 'transfer-cas-failure', 'transfer-resume-failure', 'transfer-busy', 'transfer-retire-resolve-success', 'transfer-retire-resolve-failure', 'transfer-retire-list-success', 'transfer-retire-list-failure', 'transfer-picker', 'transfer-picker-shared', 'transfer-picker-resume-failure', 'transfer-picker-shared-resume-failure'].map((window) => ({ window, reviewMode: false }))])('waits for Desktop window $window with Review=$reviewMode before start and switch', async ({ window, reviewMode }) => {
     const releases: Array<() => void> = [];
     const beginMutation = () => { const finish = beginProviderRouteMutation('cprov-fixture'); releases.push(finish); return finish; };
     const lateWindow = ['initialize', 'capability', 'resume', 'skills', 'config', 'restricted', 'bot', 'local-skill'].includes(window);
@@ -91,6 +93,7 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
     let rejectResumeRequest = false;
     const agent = new CodexAgent({
       binaryPath: binaryPath!, logger, runtimeConfig: {},
+      ...(window.includes('picker') && !window.includes('shared') ? { isolateCodexAccountSessions: true } : {}),
       resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
       ...(window === 'restricted' ? { capabilityRouting: { overrides: [{ capabilityId: 'computer-use', source: { kind: 'harness-plugin' as const, harness: 'codex' as const, surface: 'skill' as const, id: 'computer-use:computer-use', artifactId: 'computer-use', containerId: 'computer-use@openai-bundled' }, invocation: 'disabled' as const }] } } : {}),
       ...(window === 'local-skill' ? { getDisabledSkillPaths: () => [path.join(root, 'disabled-skill')] } : {}),
@@ -113,12 +116,20 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
       if (window.startsWith('transfer')) {
         const sqlite = new Database(':memory:');
         sqlite.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, agent_kind TEXT, remote_host_id TEXT, sdk_session_id TEXT, model TEXT, provider_id TEXT, effort TEXT, fast_mode INTEGER, updated_at INTEGER)');
+        if (window.includes('picker')) {
+          const existing = new Set((sqlite.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>).map(column => column.name));
+          for (const column of Object.values(getTableColumns(sessions))) {
+            if (!existing.has(column.name)) sqlite.exec(`ALTER TABLE sessions ADD COLUMN "${column.name}" ${column.getSQLType()}`);
+          }
+          sqlite.exec('CREATE TABLE picker_messages (client_id TEXT PRIMARY KEY, session_id TEXT, content TEXT)');
+        }
         const db = { drizzle: drizzle(sqlite) } as unknown as Pick<DbClient, 'drizzle'>;
         const rows = new Map<string, SessionMeta>();
         const storage: SessionStorage = {
           create: async (meta) => {
             const row = { ...meta, createdAt: 1, updatedAt: 1 }; rows.set(row.id, row);
-            sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)').run(row.id, 'active', 'codex', row.sdkSessionId ?? null, row.model, 'openai', 'high', 0, 1);
+            sqlite.prepare('INSERT INTO sessions (id,status,agent_kind,remote_host_id,sdk_session_id,model,provider_id,effort,fast_mode,updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)').run(row.id, 'active', 'codex', row.sdkSessionId ?? null, row.model, 'openai', 'high', 0, 1);
+            if (window.includes('picker')) sqlite.prepare('UPDATE sessions SET working_dir = ?, context_tokens = 1, context_window = 258400 WHERE id = ?').run(workingDir, row.id);
             return row;
           },
           get: async (id) => {
@@ -165,8 +176,46 @@ describe.skipIf(!binaryPath)('Desktop route transactions with real Codex app-ser
           let source = await maker.createSession({ id: 'source', agentKind: 'codex', providerId: 'openai', model: 'fixture-model', workingDir, ...(reviewMode ? { reviewMode: true as const } : {}) });
           await send(source);
           const hostMap = (agent as unknown as { hosts: Map<string, AppServerHost> }).hosts;
-          const siblingHost = hostMap.get(retirementWindow ? 'local:external-auth' : 'local')!;
+          const siblingHost = hostMap.get(sibling.codexHostKey ?? (retirementWindow ? 'local:external-auth' : 'local'))!;
           const connection = siblingHost.getConnectionId();
+          if (window.includes('picker')) {
+            const picker = createCodexPickerHarness({ maker, db, workingDir, createMessage: async (id, message) => {
+              sqlite.prepare('INSERT INTO picker_messages VALUES (?, ?, ?)').run(message.clientId, id, JSON.stringify(message.content));
+            } });
+            for (const [index, providerId] of ['xd', 'openai', 'cprov-fixture', 'openai'].entries()) {
+              const original = (await storage.get('source'))!.sdkSessionId;
+              const originalPath = await (agent as unknown as { findRolloutPath(id: string): Promise<string> }).findRolloutPath(original!);
+              const originalHistory = await readFile(originalPath, 'utf8');
+              const forksBefore = acceptedForks.length;
+              const requestsBefore = calls.filter(call => call === 'POST /provider/responses').length;
+              expect(await picker.pick('source', providerId)).toMatchObject({ deferred: true, pendingUntilSend: true });
+              expect((await storage.get('source'))!.sdkSessionId).toBe(original);
+              expect(maker.getSession('source')).toBe(source);
+              expect(acceptedForks).toHaveLength(forksBefore);
+              expect(sqlite.prepare('SELECT orca_role FROM sessions WHERE id = ?').get('source')).toEqual({ orca_role: null });
+              if (window.endsWith('resume-failure') && index === 0) {
+                rejectResumeRequest = true;
+                await expect(picker.send('source', `picker-${index}`)).rejects.toThrow(/provider/i);
+                expect(sqlite.prepare('SELECT count(*) AS n FROM picker_messages').get()).toEqual({ n: 0 });
+                expect(calls.filter(call => call === 'POST /provider/responses')).toHaveLength(requestsBefore);
+              }
+              expect(await picker.send('source', `picker-${index}`)).toMatchObject({ accepted: true });
+              source = maker.getSession('source')!;
+              await expect.poll(() => source.isTurnRunning()).toBe(false);
+              expect(calls.filter(call => call === 'POST /provider/responses')).toHaveLength(requestsBefore + 1);
+              expect(sqlite.prepare('SELECT count(*) AS n FROM picker_messages').get()).toEqual({ n: index + 1 });
+              expect(picker.pending.get('source')).toBeUndefined();
+              expect(sqlite.prepare('SELECT provider_id FROM sessions WHERE id = ?').get('source')).toEqual({ provider_id: providerId });
+              expect(acceptedForks.length - forksBefore).toBe(window.includes('shared') ? 1 : 0);
+              const currentHistory = await readFile(originalPath, 'utf8');
+              if (window.includes('shared')) expect(currentHistory).toBe(originalHistory);
+              else expect(currentHistory.startsWith(originalHistory)).toBe(true);
+              expect([...hostMap.keys()].some(key => key.startsWith('local-fork:'))).toBe(false);
+              expect(siblingHost.getConnectionId()).toBe(connection);
+              await send(sibling);
+            }
+            return;
+          }
           if (retirementWindow) {
             await maker.closeSession('source');
             const sourceRow = (await db.drizzle.select({ id: sessions.id, sdkSessionId: sessions.sdkSessionId, model: sessions.model, providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode, updatedAt: sessions.updatedAt }).from(sessions)).find((row) => row.id === 'source')!;

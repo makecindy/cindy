@@ -329,6 +329,9 @@ interface BufferedNotification {
   ts: number;
 }
 
+/** All native attempts have exited before this error is exposed to a task startup. */
+export class CodexNativeInitializationStoppedError extends Error {}
+
 export class AppServerHost {
   private readonly externalAuth: CodexExternalAuthSession | undefined;
   private readonly connectionId = randomUUID();
@@ -339,6 +342,7 @@ export class AppServerHost {
   private client: AppServerClient | null = null;
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
   private startPromise: Promise<InitializeResponse> | null = null;
+  private nativeInitializationEpoch = 0;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
@@ -624,6 +628,7 @@ export class AppServerHost {
         started,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
+            this.nativeInitializationEpoch++;
             reject(new Error(`app-server startup (for ${label}) timed out after ${timeoutMs}ms`));
           }, timeoutMs);
           timer.unref?.();
@@ -637,11 +642,19 @@ export class AppServerHost {
     }
   }
 
-  private async bootstrap(capabilities?: InitializeCapabilities): Promise<InitializeResponse> {
+  private async bootstrap(
+    capabilities?: InitializeCapabilities,
+    nativeAttempt = 0,
+    nativeEpoch = this.nativeInitializationEpoch,
+  ): Promise<InitializeResponse> {
     const client = new AppServerClient({
       createTransport: this.opts.createTransport,
       logger: this.opts.logger,
-      onTransportError: (err) => this.handleTransportError(err),
+      onTransportError: (err) => {
+        // Keep the shared startPromise while recovering this one pre-protocol
+        // failure. Every other transport error retains the normal host lifecycle.
+        if (!client.nativeSqliteInitializationFailed()) this.handleTransportError(err);
+      },
       onAuthInvalidated: this.opts.onAuthInvalidated,
       captureCredentialGeneration: this.opts.captureCredentialGeneration,
     });
@@ -834,7 +847,21 @@ export class AppServerHost {
       optOutNotificationMethods: NOTIFICATIONS_TO_OPT_OUT,
       ...capabilities,
     };
-    const resp = await client.initialize(this.opts.clientInfo, mergedCapabilities);
+    let resp: InitializeResponse;
+    try {
+      resp = await client.initialize(this.opts.clientInfo, mergedCapabilities);
+    } catch (error) {
+      if (!client.nativeSqliteInitializationFailed()) throw error;
+      // No task/config/authentication RPC has been submitted. The transport
+      // proves natural exit; still use the existing strict close barrier.
+      await client.close({ reason: 'native SQLite initialization failed', throwOnTransportError: true });
+      if (nativeAttempt >= 2 || nativeEpoch !== this.nativeInitializationEpoch
+        || this.retired || this.shuttingDown || this.client !== client) {
+        throw new CodexNativeInitializationStoppedError('Codex native SQLite initialization stopped', { cause: error });
+      }
+      this.logger.warn('retrying exited native SQLite initialization', { attempt: nativeAttempt + 2, maxAttempts: 3 });
+      return this.bootstrap(capabilities, nativeAttempt + 1, nativeEpoch);
+    }
     if (this.opts.requireEphemeralAuth || this.externalAuth) {
       // Requirements can override CLI configuration. Reject before any task RPC
       // or token installation; initialization has already loaded native config.
@@ -882,6 +909,7 @@ export class AppServerHost {
           started,
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => {
+              this.nativeInitializationEpoch++;
               reject(new Error(`app-server startup (for ${method}) timed out after ${opts.timeoutMs}ms`));
             }, opts.timeoutMs);
             timer.unref?.();
@@ -932,6 +960,7 @@ export class AppServerHost {
     reason = 'AppServerHost.shutdown()',
     opts?: { throwOnTransportError?: boolean },
   ): Promise<void> {
+    this.nativeInitializationEpoch++;
     if (!this.shutdownPromise) {
       this.shuttingDown = true;
       const client = this.client;
