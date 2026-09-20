@@ -1,0 +1,25 @@
+{
+  "id": "cindy-production-codex",
+  "version": 1,
+  "agentBackend": "codex",
+  "agentBinaryPath": "/opt/cindy-headless/bin/codex",
+  "agentBinaryVersion": "0.145.0",
+  "supportedModelIds": ["gpt-5.4-mini"],
+  "model": {
+    "provider": "openai",
+    "requestedId": "gpt-5.4-mini",
+    "routeId": "codex-authenticated-account",
+    "effort": "high"
+  },
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "prompt.md",
+  "expectedSystemPromptDigest": "003c2a8c1ab15422c50156880ca2301ff049ebecd1f666ac19057b1d12ae0c07",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

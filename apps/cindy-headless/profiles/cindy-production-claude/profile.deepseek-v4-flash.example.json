@@ -1,0 +1,24 @@
+{
+  "id": "cindy-production-claude-deepseek-v4-flash",
+  "version": 1,
+  "agentBackend": "claude-code",
+  "agentBinaryPath": "/opt/cindy-headless/bin/claude",
+  "agentBinaryVersion": "2.1.259",
+  "supportedModelIds": ["deepseek/deepseek-v4-flash"],
+  "model": {
+    "provider": "deepseek",
+    "requestedId": "deepseek/deepseek-v4-flash",
+    "routeId": "configured-proxy",
+    "contextLimit": 1048576,
+    "thinkingBudget": "gateway-default",
+    "effort": "xhigh",
+    "maxOutputTokens": 32000
+  },
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "prompt.md",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "compaction": { "enabled": true, "thresholdPct": 80 }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "cindy-production-pi-byom-example",
+  "version": 1,
+  "parentProfile": "cindy-production-pi",
+  "changedDimensions": ["modelRoute", "nativeProviders"],
+  "agentBackend": "pi",
+  "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
+  "agentBinaryVersion": "0.85.1",
+  "supportedModelIds": ["qwen3-coder"],
+  "model": {
+    "provider": "local-openai",
+    "requestedId": "qwen3-coder",
+    "routeId": "frozen-byom-endpoint",
+    "contextLimit": 262144,
+    "maxOutputTokens": 32768
+  },
+  "nativeProviders": [
+    {
+      "id": "local-openai",
+      "name": "Local OpenAI-compatible provider",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "api": "openai-completions",
+      "apiKeyEnvVar": "CINDY_BYOM_API_KEY",
+      "models": [
+        {
+          "id": "qwen3-coder",
+          "contextWindow": 262144,
+          "maxTokens": 32768,
+          "reasoning": true,
+          "input": ["text"]
+        }
+      ]
+    }
+  ],
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "prompt.md",
+  "expectedSystemPromptDigest": "cf79194d42a19e1a00d018efbb2bc893ce746a7bcd3e022378a3b2dd77c06874",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "inputPolicy": {
+    "attachments": true,
+    "workspaceOnly": true,
+    "maxFiles": 16,
+    "maxFileBytes": 26214400
+  },
+  "mcpServers": [],
+  "piProjectSkills": {
+    "enabled": true,
+    "roots": [".pi/skills", ".agents/skills"]
+  },
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

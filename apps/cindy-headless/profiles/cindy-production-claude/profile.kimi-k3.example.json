@@ -1,0 +1,27 @@
+{
+  "id": "cindy-production-kimi-k3",
+  "version": 1,
+  "parentProfile": "cindy-production-claude",
+  "changedDimensions": ["model-route"],
+  "agentBackend": "claude-code",
+  "agentBinaryPath": "/opt/cindy-headless/bin/claude",
+  "agentBinaryVersion": "2.1.259",
+  "supportedModelIds": ["moonshot/kimi-k3"],
+  "model": {
+    "provider": "moonshot",
+    "requestedId": "moonshot/kimi-k3",
+    "routeId": "company-gateway-anthropic",
+    "contextLimit": 1048576,
+    "thinkingBudget": "gateway-default"
+  },
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "prompt.md",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

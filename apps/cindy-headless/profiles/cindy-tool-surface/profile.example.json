@@ -1,0 +1,18 @@
+{
+  "id": "cindy-tool-surface",
+  "version": 1,
+  "parentProfile": "cindy-production-claude",
+  "changedDimensions": ["cindyToolSurface"],
+  "agentBackend": "claude-code",
+  "agentBinaryPath": "/opt/cindy-headless/bin/claude",
+  "agentBinaryVersion": "2.1.259",
+  "supportedModelIds": ["claude-sonnet-4-6"],
+  "model": { "provider": "anthropic", "requestedId": "claude-sonnet-4-6", "routeId": "configured-proxy" },
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "../cindy-production-claude/prompt.md",
+  "makerMemory": false,
+  "nativeMemory": false,
+  "projectContext": false,
+  "containerSandbox": true,
+  "compaction": { "enabled": true, "thresholdPct": 80 }
+}

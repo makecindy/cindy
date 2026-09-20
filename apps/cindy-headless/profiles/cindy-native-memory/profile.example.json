@@ -1,0 +1,25 @@
+{
+  "id": "cindy-native-memory",
+  "version": 1,
+  "parentProfile": "cindy-production-claude",
+  "changedDimensions": ["memoryMode"],
+  "agentBackend": "claude-code",
+  "agentBinaryPath": "/opt/cindy-headless/bin/claude",
+  "agentBinaryVersion": "2.1.259",
+  "supportedModelIds": ["claude-sonnet-4-6"],
+  "model": {
+    "provider": "anthropic",
+    "requestedId": "claude-sonnet-4-6",
+    "routeId": "configured-proxy"
+  },
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "../cindy-production-claude/prompt.md",
+  "makerMemory": false,
+  "nativeMemory": true,
+  "projectContext": true,
+  "containerSandbox": true,
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

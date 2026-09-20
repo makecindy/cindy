@@ -1,0 +1,25 @@
+{
+  "id": "cindy-planning",
+  "version": 1,
+  "parentProfile": "cindy-production-claude",
+  "changedDimensions": ["permissionMode"],
+  "agentBackend": "claude-code",
+  "agentBinaryPath": "/opt/cindy-headless/bin/claude",
+  "agentBinaryVersion": "2.1.259",
+  "supportedModelIds": ["claude-sonnet-4-6"],
+  "model": {
+    "provider": "anthropic",
+    "requestedId": "claude-sonnet-4-6",
+    "routeId": "configured-proxy"
+  },
+  "permissionMode": "plan",
+  "systemPromptFile": "../cindy-production-claude/prompt.md",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

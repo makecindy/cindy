@@ -129,6 +129,7 @@ const requiredUnitWorkspace = (name, cwd, { workers = 1, execution, pool, exclud
 
 export default {
   workspaces: [
+    requiredUnitWorkspace('cindy-headless', 'apps/cindy-headless'),
     {
       name: 'desktop',
       cwd: 'apps/desktop',
