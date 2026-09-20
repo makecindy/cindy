@@ -494,6 +494,29 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
+  it('keeps a new conversation model pick on the draft path', () => {
+    const draftStart = chatInputSource.indexOf('const handleUnifiedDraftSelect = useCallback(');
+    const draftEnd = chatInputSource.indexOf(
+      '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+      draftStart,
+    );
+    const draftHandler = chatInputSource.slice(draftStart, draftEnd);
+
+    expect(draftHandler).toContain('if (sessionId || settingsLocked) return;');
+    expect(draftHandler).toContain('onUnifiedDraftSelect?.({');
+    expect(draftHandler).not.toContain('maker.setModel(');
+    expect(draftHandler).not.toContain('confirmModelSwitchContextGuard(');
+
+    const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
+    const selectorBlock = chatInputSource.slice(
+      selectorStart,
+      chatInputSource.indexOf('/>', selectorStart) + 2,
+    );
+    expect(selectorBlock).toContain(
+      '!sessionId && unifiedPanelActive && onUnifiedDraftSelect\n                        ? handleUnifiedDraftSelect',
+    );
+  });
+
   it('feeds the selector the session/draft wire id as the selected model', () => {
     const selectorStart = chatInputSource.lastIndexOf('<ModelSelector');
     const selectorBlock = chatInputSource.slice(
