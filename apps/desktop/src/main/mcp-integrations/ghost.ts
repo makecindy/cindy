@@ -1693,13 +1693,49 @@ export function getCindyGhostsMcpDeps(
       searchMarket: (query: string) => marketTools.search(query),
       installMarket: (request: { pluginId: string; releaseId: string }, signal?: AbortSignal) => marketTools.install(request, signal),
     } : {}),
-    connectAccount: async (target) => {
+    connectAccount: async (target, signal) => {
       const context = resolveSessionContext();
       const sessionId = ghostSetupInteractionSessionId(context);
       if (!sessionId) return { ok: false, errorCode: 'NO_SESSION_CONTEXT' };
-      const service = getBotAuthorizationService();
-      if (!service) return { ok: false, errorCode: 'HOST_NOT_READY' };
-      return service.request(sessionId, target);
+      if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
+      // The persistent teammate service retains its own session/policy checks.
+      // Ordinary tasks use the same setup gate as ghost_call, without dispatching
+      // a business tool or granting files merely to obtain a connection card.
+      if (target.kind === 'host' || await isBotAuthorizationSession(sessionId)) {
+        if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
+        const service = getBotAuthorizationService();
+        if (!service) return { ok: false, errorCode: 'HOST_NOT_READY' };
+        return service.request(sessionId, target);
+      }
+      const workingDir = context?.workingDir ?? null;
+      const visible = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps);
+      if (!visible.ok) return visible;
+      const assessment = getGhostSetupAssessment(target.id);
+      if (assessment.state === 'ready' && assessment.groups.length === 0) {
+        // gh-cli and other Host-derived sources deliberately have no synchronous
+        // setup requirement. An empty assessment is not proof of platform login.
+        return {
+          ok: false,
+          errorCode: 'PLUGIN_CONNECTION_METHOD_REQUIRED',
+          ghostId: target.id,
+          settingsAvailable: Boolean(visible.ghost.manifest.settingsHtml),
+          message: 'This plugin has no Host setup action. Use its existing plugin settings or documented login tool on the machine running this task. Do not request or copy tokens in chat; setup readiness does not verify platform access.',
+        };
+      }
+      const coordinator = getGhostSetupCoordinator();
+      if (!coordinator) return { ok: false, errorCode: 'HOST_NOT_READY' };
+      const result = await coordinator.ensureReady({
+        sessionId, ghostId: target.id, workingDir, signal,
+        ...(target.reauthorize ? { reauthorize: true } : {}),
+      });
+      if (!result.ok) return result;
+      if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
+      const current = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps);
+      if (!current.ok) return current;
+      const final = getGhostSetupAssessment(target.id);
+      if (final.state !== 'ready') return { ok: false, errorCode: 'SETUP_REQUIRED' };
+      return { ok: true, status: 'ready', ghostId: target.id,
+        message: 'Host setup is ready. No plugin business operation was executed. Platform permissions are verified only by the requested operation.' };
     },
     callMedia: async (request) => {
       const sessionContext = resolveSessionContext();
@@ -1843,6 +1879,7 @@ export function getCindyGhostsMcpDeps(
       agentToolUseId,
       grantOnly,
       setupPlan,
+      signal,
     }) {
       const sessionContext = resolveSessionContext();
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
@@ -2221,6 +2258,8 @@ export function getCindyGhostsMcpDeps(
         tool,
         args: mergedArgs,
         callId,
+        signal,
+        sessionId: callSessionContext?.sessionId,
       });
       // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层

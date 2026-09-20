@@ -285,6 +285,94 @@ function makeAutoReplyProcess(methods?: string[], emitSpawn = true) {
   return process;
 }
 
+describe('nodeRuntimeBroker protected manual input', () => {
+  function manualHarness() {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.entries = ['node/account.cjs'];
+    ghost.manifest.node!.secretBindings = [{ key: 'manual_token', label: 'Manual Token',
+      entry: 'node/account.cjs', methods: ['account/import'] }];
+    const abort = new AbortController();
+    let saved: string | null = null;
+    let sessionId: string | null = 'task';
+    let child: FakeNodeProcess;
+    const spawnProcess = vi.fn(() => { child = makeAutoReplyProcess(); return child; });
+    const readSecret = vi.fn(() => saved);
+    const openSecretInput = vi.fn(async (input: import('../nodeSecretSetup').NodeSecretSetupInput) => {
+      input.assertCurrent(); saved = 'synthetic-manual-secret'; return true;
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess,
+      getCallSignal: (_, id) => id === 'live-call' ? abort.signal : null,
+      getCallSessionId: () => sessionId, readSecret, secretSaved: () => saved !== null,
+      openSecretInput, log });
+    const request = { type: 'node-request', entry: 'node/account.cjs', method: 'account/import',
+      params: {}, callId: 'live-call', promptSecrets: true };
+    return { ghost, broker, get child() { return child; }, request, abort, readSecret, openSecretInput, spawnProcess, log,
+      changeSession: () => { sessionId = 'another-task'; } };
+  }
+
+  it('waits for the card before spawning and privately injects its saved value', async () => {
+    const h = manualHarness();
+    h.openSecretInput.mockImplementationOnce(async input => {
+      expect(h.spawnProcess).not.toHaveBeenCalled();
+      expect(h.readSecret).not.toHaveBeenCalled();
+      expect(input).toMatchObject({ entry: 'node/account.cjs', method: 'account/import', force: true });
+      h.readSecret.mockReturnValue('synthetic-manual-secret');
+      return true;
+    });
+    try {
+      const result = await h.broker.handleRequest('node-ghost', h.request);
+      expect(result).toMatchObject({ ok: true });
+      expect(h.child.received[0]).toMatchObject({ params: {},
+        cindy: { secretInputCompleted: true, secrets: { manual_token: 'synthetic-manual-secret' } } });
+      expect(JSON.stringify(result)).not.toContain('synthetic-manual-secret');
+      expect(JSON.stringify(h.log)).not.toContain('synthetic-manual-secret');
+    } finally { h.broker.destroyAll(); }
+  });
+
+  it('can collect a missing optional binding without changing global plugin setup', async () => {
+    const h = manualHarness(); h.ghost.manifest.setup = { requires: [] };
+    try {
+      expect(await h.broker.handleRequest('node-ghost', { ...h.request, promptSecrets: false }))
+        .toMatchObject({ ok: true });
+      expect(h.openSecretInput).toHaveBeenCalledWith(expect.objectContaining({ force: false }));
+      expect(h.ghost.manifest.setup).toEqual({ requires: [] });
+    } finally { h.broker.destroyAll(); }
+  });
+
+  it('allows only one pending password card per call and releases it after cancellation', async () => {
+    const h = manualHarness();
+    let release!: (value: boolean) => void;
+    h.openSecretInput.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    try {
+      const pending = h.broker.handleRequest('node-ghost', h.request);
+      await vi.waitFor(() => expect(h.openSecretInput).toHaveBeenCalledTimes(1));
+      expect(await h.broker.handleRequest('node-ghost', h.request)).toMatchObject({ ok: false, errorCode: 'RATE_LIMITED' });
+      release(false);
+      expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+      expect(await h.broker.handleRequest('node-ghost', h.request)).toMatchObject({ ok: true });
+    } finally { h.broker.destroyAll(); }
+  });
+
+  it.each(['cancel', 'owner', 'package', 'missing-method', 'background'])('refuses %s before Node dispatch', async failure => {
+    const h = manualHarness();
+    h.openSecretInput.mockImplementationOnce(async input => {
+      if (failure === 'cancel') return false;
+      if (failure === 'owner') h.changeSession();
+      if (failure === 'package') h.ghost.manifest.version = '2.0.0';
+      input.assertCurrent(); return true;
+    });
+    const request = { ...h.request,
+      ...(failure === 'missing-method' ? { method: 'account/status' } : {}),
+      ...(failure === 'background' ? { callId: undefined } : {}) };
+    try {
+      expect(await h.broker.handleRequest('node-ghost', request)).toMatchObject({ ok: false });
+      expect(h.spawnProcess).not.toHaveBeenCalled();
+      expect(h.readSecret).not.toHaveBeenCalled();
+    } finally { h.broker.destroyAll(); }
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
@@ -1971,7 +2059,7 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       method: 'mail/action',
       params: { action: 'search' },
       // main.js 自报的同名字段不可信；broker 必须忽略并重铸。
-      cindy: { secrets: { mail_code: 'attacker-value' } },
+      cindy: { secretInputCompleted: true, secrets: { mail_code: 'attacker-value' } },
     });
     expect(result).toMatchObject({ ok: true });
     expect(readSecret).toHaveBeenCalledWith('node-ghost', 'mail_code');
@@ -1980,6 +2068,7 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       params: { action: 'search' },
       cindy: { secrets: { mail_code: 'fake-secret-value' } },
     });
+    expect(child.received[0].cindy).not.toHaveProperty('secretInputCompleted');
 
     await broker.handleRequest('node-ghost', rpcRequest('account/status', {}));
     expect(readSecret).toHaveBeenCalledTimes(1);

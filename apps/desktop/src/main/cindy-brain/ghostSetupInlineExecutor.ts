@@ -6,6 +6,7 @@ import type {
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost.js';
 import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
 import { t } from '../i18n.js';
+import { getRemoteOauthContext } from '../plugin-oauth/context.js';
 
 export interface GhostSetupInlineExecutorDeps {
   getAssessment: (ghostId: string) => GhostSetupAssessment;
@@ -30,6 +31,8 @@ export function executeGhostSetupInlineSubmission(
     value: string;
   },
 ): GhostSetupActionResult {
+  const remote = getRemoteOauthContext();
+  remote?.assertCurrent();
   const trimmed = args.value.trim();
   if (trimmed.length === 0 || trimmed.length > GHOST_SECRET_VALUE_MAX_CHARS) {
     return { ok: false, errorCode: 'INLINE_INVALID', message: t('newChat.pluginSetup.inlineSecretInvalid') };
@@ -87,9 +90,13 @@ export function executeGhostSetupInlineSubmission(
       message: t('newChat.pluginSetup.inlineSecretDeclChanged'),
     };
   }
+  remote?.assertCurrent();
   if (!deps.storeSecret(args.ghostId, secretKey, trimmed)) {
     return { ok: false, errorCode: 'SAVE_FAILED', message: t('newChat.pluginSetup.inlineSecretStoreFailed') };
   }
+  // The current target is now stored. Seal before synchronous change listeners
+  // can retire the card. This promises configuration, not provider account access.
+  remote?.finish(true);
   deps.emitChange(args.ghostId, secretKey);
   try {
     deps.onSaved?.(args.ghostId, decl.label);

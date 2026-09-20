@@ -5193,6 +5193,7 @@ export function CCAgentSessionView({
                 ) : pendingPluginSetup ? (
                   <PluginSetupPrompt
                     pending={pendingPluginSetup}
+                    remoteDeviceId={remoteDeviceId ?? undefined}
                     viewerState={pluginSetupViewerState}
                     commandInFlight={pluginSetupCommandInFlight}
                     remote={!!remoteDeviceId}

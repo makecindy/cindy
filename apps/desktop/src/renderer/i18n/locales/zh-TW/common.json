@@ -8017,6 +8017,23 @@
       "stop": "停止生成"
     },
     "pluginSetup": {
+      "account": {
+        "opening": "正在開啟授權頁",
+        "connected": "帳號已連接",
+        "cancelled": "已取消連接",
+        "expired": "本次授權已過期",
+        "ended": "本次授權已結束",
+        "failed": "無法連接帳號",
+        "waiting": "等待瀏覽器授權",
+        "verifying": "正在確認授權結果",
+        "continue": "任務將繼續。",
+        "reconnectHint": "重新連接以繼續授權。",
+        "waitingHint": "請在瀏覽器中完成授權，完成後任務會自動繼續。",
+        "remoteHint": "在本機瀏覽器中授權，帳號將供遠端裝置上的 Cindy 使用。",
+        "codeInstructions": "在 {{host}} 輸入驗證碼",
+        "remaining": "{{time}} 後過期",
+        "reconnect": "重新連接"
+      },
       "reopen": "重新開啟",
       "title": "{{name}} 設定",
       "assessmentReadFailed": "無法讀取插件配置狀態。",
@@ -8025,6 +8042,16 @@
       "chooseOne": "選擇一種配置方式",
       "restoreAria": "展開 {{name}} 設定",
       "minimizeAria": "收起 {{name}} 設定",
+      "remoteOauthHint": "在這台電腦的瀏覽器中授權，帳號將連接到目前的遠端裝置。其他設定仍需在遠端裝置上完成。",
+      "connection": {
+        "host": "執行個體地址",
+        "hostHint": "填寫服務的 HTTPS 地址，使用預設連接埠。",
+        "hostInvalid": "請填寫單個 HTTPS 網域，不含路徑、查詢參數或自訂連接埠。",
+        "token": "存取權杖",
+        "tokenInvalid": "請填寫有效的存取權杖，最多 4096 個字元。",
+        "hint": "僅儲存到目前遠端裝置的這個插件。權杖僅用於你填寫的地址，不會進入對話記錄。"
+      },
+      "remoteSecretHint": "在此填寫，僅儲存到目前遠端裝置的這個插件。內容不會進入對話記錄。",
       "completeOnDesktop": "請在遠端電腦完成設定，本卡片會自動更新狀態。",
       "cancel": "取消",
       "cancelling": "正在取消…",
@@ -8085,7 +8112,20 @@
       "inlineSecretStoreFailed": "憑證儲存失敗",
       "targetNotFound": "目標插件已解除安裝或當前不可用",
       "targetDisabled": "目標插件已被停用",
-      "targetDisabledInWorkdir": "使用者已在當前工作目錄停用該插件；不要重試。"
+      "targetDisabledInWorkdir": "使用者已在當前工作目錄停用該插件；不要重試。",
+      "deviceCode": {
+        "label": "裝置驗證碼",
+        "copied": "驗證碼已複製",
+        "copiedHint": "驗證碼已自動複製，也可在這裡再次複製",
+        "instructions": "在 {{host}} 選擇帳號後，將此 驗證碼貼到輸入框，再繼續授權。",
+        "copyAgain": "再次複製驗證碼",
+        "reopen": "重新開啟授權頁",
+        "remaining": "等待授權，本次操作剩餘 {{time}}",
+        "completed": "帳號已連接，驗證碼已清除",
+        "expired": "本次授權已過期，請在任務中重新發起連接以取得新碼",
+        "ended": "本次授權已結束，請在任務中重新發起連接",
+        "actionFailed": "操作未完成，請重試；若授權已結束，請重新發起連接"
+      }
     },
     "createAgent": {
       "quickStart": "快速開始",
@@ -13479,5 +13519,9 @@
     "presetLife": "生活",
     "presetIdeas": "靈感",
     "presetReference": "資料"
+  },
+  "pluginDeviceAuthorization": {
+    "title": "授權插件登入",
+    "description": "在這台裝置開啟 {{host}}，為執行此任務的插件授權。憑證保存在發起授權的裝置上。"
   }
 }

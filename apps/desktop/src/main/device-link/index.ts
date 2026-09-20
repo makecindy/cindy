@@ -153,6 +153,7 @@ import {
   setContactsDeviceLinkOwnerActive,
 } from '../contacts-sync/driver';
 import { invokeWithClosedLinkRecovery, requiresSessionLink } from './linkRecovery';
+import { invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import {
   createResponsivenessTracker,
   isDeviceResponsivenessProbeEligible,
@@ -772,10 +773,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   client.onPeerRouteStateChanged((change) => {
     if (change.state === 'offline') {
+      invalidatePluginOauth(change.deviceId);
       handleControllerOffline(change.deviceId, change);
     }
   });
   client.onPeerTransportReset(({ deviceId }) => {
+    invalidatePluginOauth(deviceId);
     // Mutual control shares one peer link: a locally exhausted inbound stream
     // also invalidates this Desktop's remote view, without reopening other peers.
     broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId });
@@ -783,6 +786,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
 
   client.onStatusChange((status) => {
     if (status !== 'online') {
+      invalidatePluginOauth();
       // The shared relay connection is a larger fault domain than one peer:
       // release every active controller projection, but keep remembered topics
       // so reconnect recovery can still replay them explicitly.
@@ -1296,6 +1300,7 @@ export function getMobileNotifyGeneration(): number {
  * 同进程换账号登录还会把上一账号的控制端串到新账号。
  */
 function teardownActiveLink(): void {
+  invalidatePluginOauth();
   void stopSharedTaskRuntime().catch((error) => log.warn('sharedTask runtime teardown failed', error));
   remoteCredentialHost.dispose();
   stopNetworkWatch?.();
@@ -1439,6 +1444,7 @@ export function disconnectAllControllers(): void {
  * 直到 restoreController 恢复。
  */
 export async function revokeController(deviceId: string): Promise<void> {
+  invalidatePluginOauth(deviceId);
   // 先消化并 enforce 盘上的外部变化,避免快照刷新吞掉别的实例刚写入的撤销(见 setRemoteControlEnabled)
   pollExternalSettingsChange();
   // updater 在写锁内基于盘上最新名单追加,不能锁外算好整数组再整值写
@@ -1686,13 +1692,15 @@ export async function openRemoteLink(
 
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
+  invalidatePluginOauth(deviceId);
   // 取消义务清单(不变量 6):用户显式断开必须终止该设备**全部** per-device
   // 恢复机制,漏一个就是「刚关又被自动建回」。当前全量:
   //   1. transportTimeoutReopen 重开循环;
   //   2. pendingPeerLinkReopens 重开队列;
   //   3. 订阅重放收敛循环(翻代 + 清定时器);
   //   4. 在途建链(登记删除 + closeEpochs 翻代拦 park 中的等待);
-  //   5. remoteInvoke / remoteSubscribe 在途调用(经 4 的代次在发送/重开前自败)。
+  //   5. remoteInvoke / remoteSubscribe 在途调用(经 4 的代次在发送/重开前自败);
+  //   6. OAuth 授权事务与本机回调监听(翻代后在后续操作前自败)。
   // 新增任何 per-device 重试/恢复机制时必须同步登记到本清单。
   transportTimeoutReopen.cancel(deviceId);
   cancelSubscriptionReplay(deviceId);

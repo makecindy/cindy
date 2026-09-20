@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { readBotAuthorizationCard } from '../../../shared/botAuthorization';
-import { isRemoteSessionSticky, makerApiForSticky } from '@/lib/makerTransport';
+import { assistRemotePluginOauth, isRemoteSessionSticky, makerApiForSticky } from '@/lib/makerTransport';
 import type { PluginSetupCommandInFlight } from '@/lib/makerChatStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 
 /** Same composable form for Host and plugin accounts, rendered in the transcript. */
 export function BotAuthorizationCardView({
@@ -36,12 +37,18 @@ function AuthorizationBody({
         viewerState="expanded"
         onViewerStateChange={() => {}}
         remote={remote}
+        remoteDeviceId={getStickySessionDeviceId(card.sessionId) ?? undefined}
         commandInFlight={busy}
         onCommand={(requestId, action, actionId, values) => {
-          if (busy || (isRemoteSessionSticky(card.sessionId) && action !== 'cancel')) return;
+          const remoteOauth = remote && card.snapshot.remoteOauth && action === 'run_action' && actionId &&
+            card.snapshot.steps.some(s => s.action?.id === actionId && s.action.kind === 'oauth_connect');
+          const cancelRemoteOauth = action === 'cancel' && remote && card.snapshot.remoteOauth && busy?.action === 'run_action';
+          if ((busy && !cancelRemoteOauth) || (remote && action !== 'cancel' && !remoteOauth)) return;
           setFailed(false);
-          setBusy({ requestId, action, actionId });
+          const pending = { requestId, action, actionId };
+          setBusy(pending);
           const command =
+            remoteOauth && actionId ? assistRemotePluginOauth(card.sessionId, { ghostId: card.snapshot.ghost.id, requestId, actionId, expectedRevision: card.snapshot.revision }) :
             action === 'submit_form' && actionId && values && !remote
               ? window.electronAPI.maker.submitPluginSetupInline({
                   requestId,
@@ -60,7 +67,7 @@ function AuthorizationBody({
               if (result && 'accepted' in result && !result.accepted) setFailed(true);
             })
             .catch(() => setFailed(true))
-            .finally(() => setBusy(null));
+            .finally(() => setBusy(current => current === pending ? null : current));
         }}
       />
       {failed ? (

@@ -5995,6 +5995,11 @@ interface ElectronAPI {
       decision: Record<string, unknown>,
     ) => Promise<{ accepted: boolean }>;
 
+    assistPluginOauth: (request: import('../shared/pluginOauth').LocalPluginOauthRequest) => Promise<{ accepted: boolean }>;
+    submitRemotePluginSecret: (request: import('../shared/pluginOauth').LocalPluginSecretRequest) => Promise<{ accepted: boolean }>;
+    submitRemotePluginConnection: (request: import('../shared/pluginOauth').LocalPluginConnectionRequest) => Promise<{ accepted: boolean }>;
+    pluginOauthDeviceCode: (request: import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeRequest) => Promise<import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeView | null>;
+
     /** Submit one inline plugin Secret through the local trusted-frame-only IPC. */
     submitPluginSetupInline: (request: {
       requestId: string;

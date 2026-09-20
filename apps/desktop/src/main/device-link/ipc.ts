@@ -6,7 +6,16 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { ipcMain } from 'electron';
+import { ipcMain, shell, clipboard } from 'electron';
+import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
+import { resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
+import { getDeviceId } from '../authManager.js';
+import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
+import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL } from '@cindy/device-link';
+import { handleAssistPluginOauth, handleSubmitPluginSecret, handleSubmitPluginConnection } from '../plugin-oauth/localIpc.js';
+import { LocalDeviceCodeSessions } from '../plugin-oauth/deviceCodeSessions.js';
+import { PLUGIN_OAUTH_DEVICE_CODE_CHANNEL } from '../../shared/pluginOauthDeviceCode.js';
+import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   DeviceLinkError,
@@ -576,6 +585,8 @@ export async function handleInvoke(
   if (typeof channel !== 'string' || !channel.trim()) {
     throwIpcError('INVALID_PARAMS', 'channel is required');
   }
+  if (channel === PLUGIN_OAUTH_CHANNEL || channel === PLUGIN_SECRET_LOCAL_CHANNEL || channel === PLUGIN_CONNECTION_LOCAL_CHANNEL)
+    throwIpcError('PERMISSION_DENIED', 'Authorization transport is Host-only');
   let callArgs = Array.isArray(args) ? args : [];
 
   // Resolve controller-relative references first. If the source session is
@@ -1268,6 +1279,52 @@ export async function retryUnsubscribeAfterWindowGone(
 // ─── 注册(Electron adapter)──────────────────────────────────────────────────
 
 export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): void {
+  const deviceCodes = new LocalDeviceCodeSessions();
+  const deviceCodeScope = (event: import('electron').IpcMainInvokeEvent): string => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    if (isAppSessionBoundaryPending() || getActiveAppSession().mode !== 'cloud' || event.sender.isDestroyed())
+      throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable');
+    const frame = event.senderFrame!;
+    return JSON.stringify([activeOwnerScopeKey(), event.sender.id, frame.processId, frame.routingId]);
+  };
+  // Local-only reads from the initiating frame; never a broadcast, mirror or remote invoke.
+  ipcMain.handle(PLUGIN_OAUTH_DEVICE_CODE_CHANNEL, async (event, raw: unknown) => {
+    const scope = deviceCodeScope(event);
+    try { return await deviceCodes.handle(scope, raw); }
+    catch { throwIpcError('PRECONDITION_FAILED', 'Authorization code unavailable; retry from the current card'); }
+  });
+  const authorizationHandler = (mode: 'oauth' | 'secret' | 'connection') => async (event: import('electron').IpcMainInvokeEvent, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    requireDeviceLinkCapability();
+    try {
+      return await (mode === 'connection' ? handleSubmitPluginConnection : mode === 'secret' ? handleSubmitPluginSecret : handleAssistPluginOauth)({
+        owner: () => !isAppSessionBoundaryPending() && getActiveAppSession().mode === 'cloud' ? activeOwnerScopeKey() : null,
+        assertTarget: deviceId => {
+          if (event.sender.isDestroyed()) throw new Error('OAUTH_BRIDGE_UNAVAILABLE');
+          assertTrustedAppRendererEvent(event);
+          assertControlTargetEnabled(deps, deviceId);
+        },
+        invoke: deps.invoke,
+        localDeviceId: getDeviceId,
+        identity: (deviceId, assertCurrent) => resolveOauthPeerIdentity({scope: currentOauthIdentityScope, invoke: deps.invoke}, deviceId, assertCurrent),
+        trustIdentity: trustOauthPeer,
+        openExternal: url => shell.openExternal(url),
+        copyDeviceCode: code => copyPrivateDeviceCode(clipboard, code),
+        presentBrowserAuthorization: (target, expiresAt, assertCurrent, reopen) =>
+          deviceCodes.presentBrowser(deviceCodeScope(event), target, expiresAt, assertCurrent, reopen),
+        presentDeviceCode: (target, prompt, assertCurrent, clearClipboard) => deviceCodes.present(deviceCodeScope(event), target, prompt, {
+          assertCurrent,
+          clearClipboard,
+          copy: code => { copyPrivateDeviceCode(clipboard, code); },
+          openExternal: url => shell.openExternal(url),
+        }),
+      }, raw);
+    } catch { throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable; retry from the current card'); }
+  };
+  ipcMain.handle(PLUGIN_OAUTH_LOCAL_CHANNEL, authorizationHandler('oauth'));
+  ipcMain.handle(PLUGIN_SECRET_LOCAL_CHANNEL, authorizationHandler('secret'));
+  ipcMain.handle(PLUGIN_CONNECTION_LOCAL_CHANNEL, authorizationHandler('connection'));
   const gated =
     <T extends unknown[]>(handler: (...args: T) => unknown) =>
     (...args: T) => {

@@ -8019,6 +8019,23 @@
       "stop": "Stop generating"
     },
     "pluginSetup": {
+      "account": {
+        "opening": "Opening authorization page",
+        "connected": "Account connected",
+        "cancelled": "Connection cancelled",
+        "expired": "Authorization expired",
+        "ended": "Authorization ended",
+        "failed": "Could not connect account",
+        "waiting": "Waiting for browser authorization",
+        "verifying": "Confirming authorization",
+        "continue": "The task will continue.",
+        "reconnectHint": "Reconnect to continue authorization.",
+        "waitingHint": "Complete authorization in your browser. The task will then continue automatically.",
+        "remoteHint": "Authorize in this computer’s browser to let Cindy on the remote device use this account.",
+        "codeInstructions": "Enter the code at {{host}}",
+        "remaining": "Expires in {{time}}",
+        "reconnect": "Reconnect"
+      },
       "reopen": "Reopen",
       "title": "{{name}} Settings",
       "assessmentReadFailed": "Couldn't read the plugin setup status.",
@@ -8027,6 +8044,16 @@
       "chooseOne": "Choose one setup method",
       "restoreAria": "Restore {{name}} settings",
       "minimizeAria": "Minimize {{name}} settings",
+      "remoteOauthHint": "Authorize in this computer’s browser to connect the account on the current remote device. Complete other settings on the remote device.",
+      "connection": {
+        "host": "Instance address",
+        "hostHint": "Enter the service’s HTTPS address, using its default port.",
+        "hostInvalid": "Enter one HTTPS domain without a path, query, or custom port.",
+        "token": "Access token",
+        "tokenInvalid": "Enter a valid access token (up to 4096 characters).",
+        "hint": "Saved only for this plugin on the current remote device. The token is sent only to the address you enter and is not included in chat history."
+      },
+      "remoteSecretHint": "Enter the key here to save it only for this plugin on the current remote device. It will not appear in chat history.",
       "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
       "cancel": "Cancel",
       "cancelling": "Cancelling…",
@@ -8087,7 +8114,20 @@
       "inlineSecretStoreFailed": "Failed to save credential",
       "targetNotFound": "The target plugin was uninstalled or is currently unavailable",
       "targetDisabled": "The target plugin has been disabled",
-      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry."
+      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry.",
+      "deviceCode": {
+        "label": "Device Code",
+        "copied": "Device code copied",
+        "copiedHint": "Device code copied automatically. You can copy it again here.",
+        "instructions": "After choosing your account on {{host}}, paste this code into the code field and continue authorizing.",
+        "copyAgain": "Copy Code Again",
+        "reopen": "Reopen Authorization Page",
+        "remaining": "Waiting for authorization · {{time}} remaining for this attempt",
+        "completed": "Account connected. Device code cleared.",
+        "expired": "This authorization attempt expired. Start a new connection in the task to get a new code.",
+        "ended": "This authorization attempt ended. Start a new connection in the task.",
+        "actionFailed": "The action did not complete. Retry, or start a new connection if authorization has ended."
+      }
     },
     "createAgent": {
       "quickStart": "Quick start",
@@ -13498,5 +13538,9 @@
     "presetLife": "Life",
     "presetIdeas": "Ideas",
     "presetReference": "Reference"
+  },
+  "pluginDeviceAuthorization": {
+    "title": "Authorize Plugin Login",
+    "description": "Open {{host}} on this device to authorize the plugin running this task. Its credentials stay on the originating device."
   }
 }

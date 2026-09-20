@@ -100,6 +100,10 @@ import {
 } from '../appSessionState.js';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
+import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
+import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
+import { readDeviceLinkSettings } from '../device-link/settings-store.js';
+import { getDeviceLinkStatus } from '../device-link/index.js';
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
@@ -155,7 +159,9 @@ import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import {
   executeGhostSetupAction,
   executeGhostSetupInlineAction,
+  bindGhostSetupConnectionAction,
   getGhostManager,
+  getGhostPipeDispatcher,
   getGhostSetupAssessment,
   getIOSSimulatorPluginAccessDecision,
   isGhostAvailableForActiveSession,
@@ -2424,6 +2430,7 @@ const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
 });
 
 initGhostSetupCoordinator({
+  remoteConnection: true,
   changeBus: getGhostSetupChangeBus(),
   bridge: ghostSetupInteractionBridge,
   assess: (ghostId) => getGhostSetupAssessment(ghostId),
@@ -2469,6 +2476,19 @@ initGhostSetupCoordinator({
     executeGhostSetupInlineAction({ sessionId, ghostId, action, value }),
   timeoutMessage: () => t('newChat.pluginSetup.timeout'),
   logger: log,
+});
+
+initializePluginOauthCards({
+  bindConnection: bindGhostSetupConnectionAction,
+  identity: currentOauthIdentityScope,
+  loadKey: loadOauthSigningKey,
+  bridge: ghostSetupInteractionBridge,
+  bots: getBotAuthorizationService,
+  owner: () => currentOauthIdentityScope() ? activeOwnerScopeKey() : null,
+  available: peer => {
+    const settings = readDeviceLinkSettings();
+    return getDeviceLinkStatus() === 'online' && settings.remoteControlEnabled && !settings.revokedControllers.includes(peer);
+  },
 });
 
 function clearPendingInteraction(requestId: string): PendingInteractionEntry | null {
@@ -15286,6 +15306,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
     // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
     notePromptPredictionSessionStopped(sid);
+    getGhostPipeDispatcher().cancelSessionCalls(sid);
     // 这三类续跑撤销都是同步操作，必须早于 goal/DB await；
     // 否则退避 timer 能在用户已点 Stop 后抢先发出下一轮。
     resetAutomaticRecoveryForExplicitStop(sid);

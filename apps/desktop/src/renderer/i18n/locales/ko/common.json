@@ -8017,6 +8017,23 @@
       "stop": "생성 중지"
     },
     "pluginSetup": {
+      "account": {
+        "opening": "인증 페이지 여는 중",
+        "connected": "계정 연결됨",
+        "cancelled": "연결 취소됨",
+        "expired": "인증 시간이 만료되었습니다",
+        "ended": "인증이 종료되었습니다",
+        "failed": "계정에 연결하지 못했습니다",
+        "waiting": "브라우저 인증 대기 중",
+        "verifying": "인증 결과 확인 중",
+        "continue": "작업이 계속됩니다.",
+        "reconnectHint": "다시 연결하여 인증을 계속하세요.",
+        "waitingHint": "브라우저에서 인증을 완료하면 작업이 자동으로 계속됩니다.",
+        "remoteHint": "이 컴퓨터의 브라우저에서 인증하여 원격 기기의 Cindy가 이 계정을 사용하도록 허용합니다.",
+        "codeInstructions": "{{host}}에서 코드 입력",
+        "remaining": "{{time}} 후 만료",
+        "reconnect": "다시 연결"
+      },
       "reopen": "다시 열기",
       "title": "{{name}} 설정",
       "assessmentReadFailed": "플러그인 설정 상태를 읽을 수 없습니다.",
@@ -8025,6 +8042,16 @@
       "chooseOne": "설정 방법을 하나 선택하세요",
       "restoreAria": "{{name}} 설정 펼치기",
       "minimizeAria": "{{name}} 설정 접기",
+      "remoteOauthHint": "이 컴퓨터의 브라우저에서 인증하면 현재 원격 기기에 계정이 연결됩니다. 다른 설정은 원격 기기에서 완료하세요.",
+      "connection": {
+        "host": "인스턴스 주소",
+        "hostHint": "서비스의 HTTPS 주소를 기본 포트로 입력하세요.",
+        "hostInvalid": "경로, 쿼리 또는 사용자 지정 포트가 없는 HTTPS 도메인을 입력하세요.",
+        "token": "액세스 토큰",
+        "tokenInvalid": "올바른 액세스 토큰을 입력하세요(최대 4096자).",
+        "hint": "현재 원격 기기의 이 플러그인에만 저장됩니다. 토큰은 입력한 주소에만 전송되며 채팅 기록에 남지 않습니다."
+      },
+      "remoteSecretHint": "여기에 입력한 키는 현재 원격 기기의 이 플러그인에만 저장됩니다. 채팅 기록에는 남지 않습니다.",
       "completeOnDesktop": "원격 컴퓨터에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
       "cancel": "취소",
       "cancelling": "취소 중…",
@@ -8085,7 +8112,20 @@
       "inlineSecretStoreFailed": "자격 증명 저장에 실패했습니다",
       "targetNotFound": "대상 플러그인이 제거되었거나 현재 사용할 수 없습니다",
       "targetDisabled": "대상 플러그인이 비활성화되었습니다",
-      "targetDisabledInWorkdir": "사용자가 현재 작업 디렉토리에서 이 플러그인을 비활성화했습니다. 재시도하지 마세요."
+      "targetDisabledInWorkdir": "사용자가 현재 작업 디렉토리에서 이 플러그인을 비활성화했습니다. 재시도하지 마세요.",
+      "deviceCode": {
+        "label": "기기 코드",
+        "copied": "기기 코드를 복사했습니다",
+        "copiedHint": "기기 코드를 자동으로 복사했습니다. 여기에서 다시 복사할 수 있습니다.",
+        "instructions": "{{host}}에서 계정을 선택한 후 이 코드를 입력란에 붙여넣고 인증을 계속하세요.",
+        "copyAgain": "코드 다시 복사",
+        "reopen": "인증 페이지 다시 열기",
+        "remaining": "인증을 기다리는 중… 이번 시도 남은 시간 {{time}}",
+        "completed": "계정이 연결되어 기기 코드를 지웠습니다",
+        "expired": "이번 인증이 만료되었습니다. 작업에서 연결을 다시 시작하여 새 코드를 받으세요.",
+        "ended": "이번 인증이 종료되었습니다. 작업에서 연결을 다시 시작하세요.",
+        "actionFailed": "작업을 완료하지 못했습니다. 다시 시도하세요. 인증이 종료되었다면 연결을 다시 시작하세요."
+      }
     },
     "createAgent": {
       "quickStart": "빠른 시작",
@@ -13479,5 +13519,9 @@
     "presetLife": "생활",
     "presetIdeas": "아이디어",
     "presetReference": "자료"
+  },
+  "pluginDeviceAuthorization": {
+    "title": "플러그인 로그인 인증",
+    "description": "이 기기에서 {{host}}를 열어 이 작업을 실행하는 플러그인을 인증하세요. 인증 정보는 인증을 시작한 기기에 저장됩니다."
   }
 }

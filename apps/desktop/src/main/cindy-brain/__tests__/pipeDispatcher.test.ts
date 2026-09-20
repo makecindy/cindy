@@ -80,6 +80,60 @@ function makeHarness(opts: {
 
 const CALL = { ghostId: 'art', tool: 'gen_image', args: { prompt: '一只猫' } };
 
+describe('caller cancellation', () => {
+  it('Host Stop cancels only its session, including work awaiting sandbox startup', async () => {
+    const h = makeHarness({ state: 'stopped' as GhostRuntimeState });
+    const gate = deferred();
+    h.deps.spawn.mockImplementation(async () => { await gate.promise; return { ok: true }; });
+    const stopped = h.dispatcher.callGhostTool({ ...CALL, callId: 'stopped', sessionId: 'session-a' });
+    const kept = h.dispatcher.callGhostTool({ ...CALL, callId: 'kept', sessionId: 'session-b' });
+    h.dispatcher.cancelSessionCalls('session-a');
+    gate.resolve();
+    expect(await stopped).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(h.sent.map(call => call.callId)).toEqual(['kept']);
+    h.dispatcher.cancelSessionCalls('session-b');
+    expect(await kept).toMatchObject({ ok: false });
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+
+  it('cancels one call without ending another call to the same plugin', async () => {
+    const h = makeHarness();
+    const a = new AbortController();
+    const first = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-1', signal: a.signal });
+    const second = h.dispatcher.callGhostTool({ ...CALL, callId: 'call-2' });
+    const firstLifetime = h.dispatcher.getPendingCallSignal('art', 'call-1')!;
+    const secondLifetime = h.dispatcher.getPendingCallSignal('art', 'call-2')!;
+    expect(h.dispatcher.getPendingCallSignal('other-plugin', 'call-1')).toBeNull();
+    expect(h.dispatcher.getPendingCallSessionId('other-plugin', 'call-1')).toBeNull();
+    expect(h.dispatcher.getPendingCallSessionId('art', 'missing')).toBeNull();
+    a.abort();
+    expect(await first).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(firstLifetime.aborted).toBe(true);
+    expect(secondLifetime.aborted).toBe(false);
+    expect(h.dispatcher.pendingCount()).toBe(1);
+    expect(h.dispatcher.handleToolResult('art', { callId: 'call-1', ok: true, result: 'late' }).accepted).toBe(false);
+    h.dispatcher.handleToolResult('art', { callId: 'call-2', ok: true, result: 'kept' });
+    expect(await second).toEqual({ ok: true, result: 'kept' });
+    expect(secondLifetime.aborted).toBe(true);
+  });
+
+  it('does not dispatch an already cancelled request or one cancelled during startup', async () => {
+    const h = makeHarness({ state: 'stopped' as GhostRuntimeState });
+    const a = new AbortController();
+    a.abort();
+    await h.dispatcher.callGhostTool({ ...CALL, signal: a.signal });
+    expect(h.deps.spawn).not.toHaveBeenCalled();
+    const b = new AbortController();
+    const gate = deferred();
+    h.deps.spawn.mockImplementation(async () => { await gate.promise; return { ok: true }; });
+    const pending = h.dispatcher.callGhostTool({ ...CALL, signal: b.signal });
+    b.abort();
+    gate.resolve();
+    expect(await pending).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(h.sent).toEqual([]);
+  });
+});
+
 describe('资格审(结构化错误分类)', () => {
   it('未装入 → GHOST_NOT_FOUND', async () => {
     const h = makeHarness({ ghost: null });
