@@ -64,6 +64,22 @@ export type GhostSetupActionResult =
       message?: string;
     };
 
+/** Main-only capability for one card submission; never serialized to an IPC or model. */
+export interface GhostSetupInlineCommit {
+  readonly replaceExisting: boolean;
+  assertCurrent(ghostId: string, actionId: string, requirementRef: string): void;
+  /** Called only after the vault write, before readiness/change broadcasts. */
+  onCommitted(): void;
+}
+
+export interface GhostSetupInlineActionInput {
+  sessionId: string;
+  ghostId: string;
+  action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
+  value: string;
+  commit?: GhostSetupInlineCommit;
+}
+
 export interface GhostSetupCoordinatorDeps {
   remoteConnection?: true;
   changeBus: GhostSetupChangeBus;
@@ -85,12 +101,7 @@ export interface GhostSetupCoordinatorDeps {
     action: GhostSetupAllowedAction;
     responseTarget?: GhostSetupInteractionResponseTarget;
   }) => Promise<GhostSetupActionResult>;
-  executeInlineAction?: (args: {
-    sessionId: string;
-    ghostId: string;
-    action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
-    value: string;
-  }) => Promise<GhostSetupActionResult>;
+  executeInlineAction?: (args: GhostSetupInlineActionInput) => Promise<GhostSetupActionResult>;
   timeoutMs?: number;
   terminalGraceMs?: number;
   timeoutMessage?: () => string;
@@ -108,7 +119,7 @@ export interface GhostSetupEnsureRequest {
   /** Captured call scope; revalidated after every setup/policy change. */
   workingDir?: string | null;
   plan?: GhostSetupPlan;
-  /** Explicit connection-only reconnect; never removes the existing account. */
+  /** Explicit credential reconfiguration; never removes the existing value first. */
   reauthorize?: boolean;
   /** The original MCP call owns this waiter, including while its card is open. */
   signal?: AbortSignal;
@@ -498,9 +509,29 @@ export class GhostSetupCoordinator {
           await verify();
           return;
         }
+        const boundItem = assessment.groups.flatMap(group => group.items)
+          .find(item => item.actions.some(candidate => candidate.id === action.id));
+        if (!boundItem) return;
         inlineSubmitting = true;
         activeActionId = action.id;
         publish(assessment, 'action_running');
+        let committed = false;
+        const commit: GhostSetupInlineCommit = {
+          replaceExisting: request.reauthorize === true && reauthMode,
+          assertCurrent: (ghostId, actionId, requirementRef) => {
+            if (settled || committed || request.signal?.aborted || !inlineSubmitting ||
+                activeActionId !== action.id || ghostId !== request.ghostId ||
+                actionId !== action.id || requirementRef !== boundItem.ref ||
+                !this.deps.validateTarget(request.ghostId, request.tool, request.workingDir).ok) {
+              throw new Error('PLUGIN_SETUP_INLINE_STALE');
+            }
+          },
+          onCommitted: () => {
+            committed = true;
+            reconnectedActions.add(action.id);
+            assessmentDirty = true;
+          },
+        };
         let result: GhostSetupActionResult;
         try {
           result = this.deps.executeInlineAction
@@ -510,6 +541,7 @@ export class GhostSetupCoordinator {
                   ghostId: request.ghostId,
                   action,
                   value: submit.value,
+                  commit,
                 }),
               )
             : {
@@ -701,7 +733,7 @@ export function toReauthInteractionAssessment(
   };
 }
 
-/** A user-requested reconnect exposes only current OAuth/connection actions, without deleting credentials. */
+/** Reopen current credential actions without deleting the previously stored values. */
 function toExplicitReauthInteractionAssessment(
   assessment: GhostSetupAssessment,
   completedActions: ReadonlySet<string>,
@@ -712,7 +744,8 @@ function toExplicitReauthInteractionAssessment(
     const items = group.items.flatMap(item => {
       const actions = item.actions.filter(action => !completedActions.has(action.id) &&
         ((item.kind === 'oauth' && action.kind === 'oauth_connect') ||
-          (item.kind === 'connection' && action.kind === 'manage_connection')));
+          (item.kind === 'connection' && action.kind === 'manage_connection') ||
+          (item.kind === 'secret' && action.kind === 'inline_form')));
       return actions.length ? [{ ...item, state: 'expired' as const, actions }] : [];
     });
     return items.length ? [{ ...group, items }] : [];

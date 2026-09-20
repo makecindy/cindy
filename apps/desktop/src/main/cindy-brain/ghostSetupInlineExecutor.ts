@@ -4,7 +4,7 @@ import type {
   GhostSetupAssessment,
 } from '../../shared/ghost.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost.js';
-import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
+import type { GhostSetupActionResult, GhostSetupInlineCommit } from './ghostSetupCoordinator.js';
 import { t } from '../i18n.js';
 import { getRemoteOauthContext } from '../plugin-oauth/context.js';
 
@@ -29,6 +29,7 @@ export function executeGhostSetupInlineSubmission(
     ghostId: string;
     action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
     value: string;
+    commit?: GhostSetupInlineCommit;
   },
 ): GhostSetupActionResult {
   const remote = getRemoteOauthContext();
@@ -50,10 +51,11 @@ export function executeGhostSetupInlineSubmission(
   const assessment = deps.getAssessment(args.ghostId);
   let boundRef: string | null = null;
   for (const group of assessment.groups) {
-    if (group.items.some((item) => item.state === 'satisfied')) continue;
+    if (!args.commit?.replaceExisting && group.items.some((item) => item.state === 'satisfied')) continue;
     for (const item of group.items) {
       if (
-        item.state !== 'satisfied' &&
+        item.kind === 'secret' &&
+        (item.state !== 'satisfied' || args.commit?.replaceExisting) &&
         item.actions.some(
           (action) => action.id === args.action.id && action.kind === 'inline_form',
         )
@@ -90,12 +92,14 @@ export function executeGhostSetupInlineSubmission(
       message: t('newChat.pluginSetup.inlineSecretDeclChanged'),
     };
   }
+  args.commit?.assertCurrent(args.ghostId, args.action.id, boundRef);
   remote?.assertCurrent();
   if (!deps.storeSecret(args.ghostId, secretKey, trimmed)) {
     return { ok: false, errorCode: 'SAVE_FAILED', message: t('newChat.pluginSetup.inlineSecretStoreFailed') };
   }
   // The current target is now stored. Seal before synchronous change listeners
   // can retire the card. This promises configuration, not provider account access.
+  args.commit?.onCommitted();
   remote?.finish(true);
   deps.emitChange(args.ghostId, secretKey);
   try {

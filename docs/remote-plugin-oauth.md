@@ -137,6 +137,12 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
 不能让新卡片提前结束。同地址保留原连接 ID/默认选择；提交前取消保留旧凭据。保存成功
 表示配置写入，第三方验证失败不会自动恢复被替换的 Token，也不能宣称已登录。
 
+已保存的 user Secret/API Key/PAT 同样支持显式重配。协调器只为当前提交创建 Main 内
+的写入能力，绑定插件、卡片动作及声明的 Secret；最终 executor 重新检查当前声明、
+任务取消与工作目录准入，再覆盖该值。保存失败保留旧值，成功回执先于 change 事件，
+才能解除本卡片的重填要求。该能力不进入 wire DTO，Renderer 不能提交 force 标记或
+自行选择存储 key；一般 readiness 检查仍复用已有值，不重复要求用户授权。
+
 输入在提交、取消、换卡/设备及卸载时清空。设备用户码仅在发起授权的本机卡片显示，
 可重复复制/重开 Main 保管的页面；不包含 callback code、device_code、token、state 或
 完整 URL。它不进入聊天 store、历史、镜像、日志或模型。结束/过期清内存，剪贴板仍为
@@ -153,8 +159,21 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
 - 两端 Desktop 必须支持 v3。旧版仍可使用原本的远控及执行设备本地设置；新授权动作
   不走旧通道/明文降级，不会替用户清空已有凭据。
 - Mobile 当前只可查看/取消既有卡片，未实现本机回调与保密输入；在连接该设备的新版
-  Desktop 完成。SSH 工作区不因此获得本机凭据。网站 Cookie/全量 vault 同步不在范围。
+  Desktop 完成。网站 Cookie/全量 vault 同步不在范围。
 - Auth、relay、CIS、Model Access 不需要本功能的新服务接口或部署；双方客户端需升级。
+
+### 各端范围与后续门禁
+
+| 场景 | 本 PR 的处理 |
+| --- | --- |
+| Desktop → Desktop Device Link | 已适配：新私有通道经同账号授权、卡片绑定及签名握手；原有 invoke/push 规则不放宽。 |
+| Mobile → Desktop Device Link | 保留既有只读配置状态、取消和完成状态。手机侧保密输入、设备码操作与浏览器回调尚未适配，必须在 PR 链接专门的跟踪 issue 后才能满足上游延期要求，不能把这三项写成已支持。 |
+| SSH 工作区 | 本 PR 不新增 SSH 凭据转发或远端插件安装。SSH 的 Agent/workdir 仍经 maker-remote-ssh、cc-manager 与 remote-file-service；插件由提供 MCP 的 Desktop Host 管理，授权仅改变该 Host 的连接。SSH 主机没有本桥的 Desktop 身份、OS 密钥存储和 Device Link peer，不能把它当作另一个被控 Desktop，也不向其 HOME/workdir 复制本机凭据。原有远端文件、网络与 Forge 限制保留。 |
+
+故障范围：单卡片取消/超时只收口该事务；单 peer 失效只取消该 peer 的事务；账号退出
+或整条 relay 失效才取消全部。桥不强拆或重建全局 relay。自动化多 peer 用例见
+`plugin-oauth/__tests__/lifecycle.test.ts` 与 `transport.test.ts`：两个控制端同时授权，
+其中一个断链后另一个仍能完成；这些是本地传输测试，不是生产 relay 验收。
 
 ## Agent 指引与验证
 
@@ -162,7 +181,15 @@ Claude/Codex/Pi Host 追加同一静态段 `PLUGIN_AUTHORIZATION_PROMPT`：发�
 发起现有卡片、明确重配、等待真实状态、最小权限检查。普通与远程任务使用同一段，文本
 说明设备归属及能力限制；不宣称每个平台都有卡片。原 system 前缀保留，Pi 原生 prompt
 保持追加模式；无动态身份/时间戳/账号状态，不改变工具批准策略。首次升级改变 prompt
-长度及缓存键，此后文本稳定；真实模型行为、usage 和延时仍需发布验收。
+长度及缓存键，此后文本稳定。
+
+可用显式 opt-in 的 `scripts/eval-plugin-authorization.mts` 对比上游基线：使用三种 Host
+实际提示词片段、真实 MCP schema/handler 和真实模型，覆盖必要安装、首次授权、已保存
+Secret 重配、取消、无关任务及相同前缀重复请求，记录行为、usage/cache、首事件与总耗时。
+插件安装/账号结果为合成数据，不操作真实账户；现有模型登录仅在内存只读使用，不刷新或
+复制授权文件，结果写系统临时目录。该脚本评估 Host prompt profiles，不启动原生
+Claude/Codex/Pi 二进制，也不能证明 Anthropic 原生缓存、真实双 Desktop 或第三方登录
+通过。PR 必须附实际结果及此范围说明，不用字符串单测替代指标实测。
 
 自动测试以虚构身份/凭据及临时目录覆盖持久密钥/peer pin、跨身份拒绝、签名绑定、旧端
 拒绝、加密重放、真实本地 WebSocket/TCP 回调、Host coordinator/executor 写入、取消及

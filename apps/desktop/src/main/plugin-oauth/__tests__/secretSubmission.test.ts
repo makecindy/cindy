@@ -36,10 +36,10 @@ const inline: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }> = {
   },
 };
 
-async function harness(options: { failStore?: boolean; holdStore?: boolean } = {}) {
+async function harness(options: { failStore?: boolean; holdStore?: boolean; saved?: boolean } = {}) {
   let owner: string | null = 'membership';
   let source: 'user' | 'oauth' = 'user';
-  const values = new Map<string, string>();
+  const values = new Map<string, string>(options.saved ? [['demo:api_key', 'synthetic-old']] : []);
   const messages: unknown[] = [],
     wire: Array<{ request: unknown; response: unknown }> = [];
   const changes = new GhostSetupChangeBus();
@@ -67,7 +67,7 @@ async function harness(options: { failStore?: boolean; holdStore?: boolean } = {
   const assess = (): GhostSetupAssessment => ({
     state: values.size ? 'ready' : 'required',
     revision: changes.currentRevision('demo'),
-    groups: values.size
+    groups: values.size && !options.saved
       ? []
       : [
           {
@@ -78,7 +78,7 @@ async function harness(options: { failStore?: boolean; holdStore?: boolean } = {
                 ref: 'secret:api_key',
                 kind: 'secret',
                 label: 'API Key',
-                state: 'missing',
+                state: values.size ? 'satisfied' : 'missing',
                 actions: [inline],
               },
             ],
@@ -136,6 +136,7 @@ async function harness(options: { failStore?: boolean; holdStore?: boolean } = {
     sessionId: 'task',
     ghostId: 'demo',
     signal: abort.signal,
+    reauthorize: options.saved,
   });
   cleanups.push(() => {
     abort.abort();
@@ -211,8 +212,8 @@ async function harness(options: { failStore?: boolean; holdStore?: boolean } = {
 }
 
 describe('signed remote inline setup through the actual Host executor', () => {
-  it('stores only the bound plugin key and resumes setup without exposing plaintext on the wire or cards', async () => {
-    const h = await harness();
+  it.each([false, true])('stores only the bound plugin key without exposing plaintext (reconfigure: %s)', async saved => {
+    const h = await harness({ saved });
     await expect(h.submit()).resolves.toEqual({ accepted: true });
     await expect(h.ready).resolves.toMatchObject({ ok: true });
     expect(h.values).toEqual(new Map([['demo:api_key', input]]));
@@ -286,7 +287,7 @@ describe('signed remote inline setup through the actual Host executor', () => {
   it.each(['session', 'peer', 'owner', 'declaration'] as const)(
     'rejects a late store after %s changes',
     async (reason) => {
-      const h = await harness({ holdStore: true });
+      const h = await harness({ holdStore: true, saved: true });
       const submitting = h.submit();
       const rejected = expect(submitting).rejects.toThrow();
       await vi.waitFor(() => expect(h.attempted()).toBe(true));
@@ -297,14 +298,14 @@ describe('signed remote inline setup through the actual Host executor', () => {
       h.release();
       await rejected;
       expect(h.store).not.toHaveBeenCalled();
-      expect(h.values.size).toBe(0);
+      expect(h.values.get('demo:api_key')).toBe('synthetic-old');
     },
   );
 
   it('reports a vault write failure and leaves the card retryable', async () => {
-    const h = await harness({ failStore: true });
+    const h = await harness({ failStore: true, saved: true });
     await expect(h.submit()).rejects.toThrow();
-    expect(h.values.size).toBe(0);
+    expect(h.values.get('demo:api_key')).toBe('synthetic-old');
     expect(h.bridge.pendingSnapshots()[0].request.steps[0]).toMatchObject({
       phase: 'failed',
       errorCode: 'SAVE_FAILED',

@@ -2472,8 +2472,7 @@ initGhostSetupCoordinator({
       action,
       ...(responseTarget ? { responseTarget } : {}),
     }),
-  executeInlineAction: ({ sessionId, ghostId, action, value }) =>
-    executeGhostSetupInlineAction({ sessionId, ghostId, action, value }),
+  executeInlineAction: executeGhostSetupInlineAction,
   timeoutMessage: () => t('newChat.pluginSetup.timeout'),
   logger: log,
 });
