@@ -18,7 +18,7 @@ describe('headless capability inputs', () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), 'headless-input-'));
     await writeFile(path.join(workspace, 'fixture.txt'), 'fixture');
     const turns = await resolveTurns([{ text: 'inspect', attachments: [{ type: 'file', path: 'fixture.txt' }] }], workspace, { attachments: true, workspaceOnly: true });
-    expect(turns[0]).toMatchObject({ type: 'user', content: [{ type: 'text' }, { type: 'file', path: path.join(workspace, 'fixture.txt') }] });
+    expect(turns[0]).toMatchObject({ type: 'user', content: [{ type: 'text' }, { type: 'file', path: await realpath(path.join(workspace, 'fixture.txt')) }] });
     expect(() => validateTurnInput({ text: 'bad', attachments: [{ type: 'file', path: '../outside' }] })).toThrow(/workspace-relative/);
   });
 

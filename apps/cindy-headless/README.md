@@ -226,6 +226,19 @@ node apps/cindy-headless/dist/cli.cjs report --manifest <manifest.json> --result
 
 Reports include per-agent and per-benchmark pass rates, paired outcomes, four-state statuses, tokens, cost, duration, provider routing, unsupported combinations and Wilson 95% intervals. A hard-30 list is publishable only after freezing at least 30 independent historical task records with `freeze-hard-30`.
 
+Report input is checked against the manifest's supported variant/model/task/repetition
+cells. Duplicate cells, conflicting arm indices, rewards outside [0, 1], and invalid
+usage/cost values are rejected before aggregation. Missing arm indices follow the
+manifest's variant order. Paired outcome counts apply only to a two-variant manifest;
+other reports retain per-agent totals without inventing binary comparisons. Pair IDs
+are JSON-encoded task/model/repetition tuples so colons inside IDs cannot collide.
+
+Headless waits for Session's product-turn terminal for the current attempt, including
+automatic continuations; an intermediate SDK `done` or idle status does not end a run.
+Low-level packaging requires the bundle's digest-matched CLI files and uses its frozen
+profiles. It never falls back to the separate development `dist/` directory.
+
+
 The adapter is intentionally maintained in Harbor, not here. To run a local
 smoke from a source checkout:
 

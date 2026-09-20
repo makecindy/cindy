@@ -13,6 +13,18 @@ import { assertSafeExecutionProfile, CINDY_HEADLESS_VERSION, CINDY_UPSTREAM_COMM
 import { buildCodexGatewayArgs } from './gateway-config.js';
 import { HeadlessRemoteMcpProvider, inspectPiProjectWorkspaceResources, piProjectResourcesEvidence, piProjectSkillDenials, resolveNativeProviders, resolvePiProjectTrust, resolveTurns, type HeadlessTurnInput, type PiProjectWorkspaceResources } from './headless-integrations.js';
 
+/** Use Session's product-turn boundary, not an intermediate SDK done/idle. */
+export function isHeadlessTerminalEvent(
+  event: AgentEvent,
+  session: { getObservedCurrentTurnTerminal(): { kind: 'none' | 'done' | 'error' } },
+  turnAttemptToken: number | undefined,
+): boolean {
+  if (turnAttemptToken === undefined || event.turnScope === 'background') return false;
+  // Session tags the current foreground attempt; untagged tails may belong to the previous turn.
+  if (event.turnAttemptToken !== turnAttemptToken) return false;
+  return isTerminalTurnEvent(event) && session.getObservedCurrentTurnTerminal().kind !== 'none';
+}
+
 let environmentQueue = Promise.resolve();
 
 const MIN_TURN_STALL_MS = 1_000;
@@ -550,16 +562,25 @@ async function runTaskWithIsolatedEnvironment(resolved: ResolvedProfile, task: s
     session = await runtime.maker.createSession({ agentKind: profile.agentBackend, workingDir: absoluteWorkingDir, model: profile.model.requestedId, providerId: profile.model.provider, effort: profile.model.effort, permissionMode: profile.permissionMode, makerMemoryEnabled: profile.makerMemory, userPrompt: projectContext.content, vendorOptions: { onStderrLine: (line: string) => { void appendFile(path.join(absoluteOutputDir, 'stderr.log'), `${line}\n`, 'utf8'); } }, id: `headless-${Date.now()}` });
     let resolveTerminal: (() => void) | undefined;
     let terminal = Promise.resolve();
-    session.onEvent((event) => { events.push(event); if (event.type === 'error' && isTerminalTurnEvent(event)) terminalError = event; if (isTerminalTurnEvent(event)) resolveTerminal?.(); });
+    let activeTurnAttemptToken: number | undefined;
+    session.onEvent((event) => {
+      events.push(event);
+      if (!session || !isHeadlessTerminalEvent(event, session, activeTurnAttemptToken)) return;
+      if (event.type === 'error') terminalError = event;
+      resolveTerminal?.();
+    });
     for (const [turnIndex, turn] of resolvedTurns.entries()) {
+      activeTurnAttemptToken = turnIndex + 1;
       terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
-      await session.send(turn, { turnAttemptToken: turnIndex + 1 });
+      const sent = await session.send(turn, { turnAttemptToken: turnIndex + 1 });
+      if (!sent.accepted) throw new Error(terminationSignal ? `HEADLESS_TERMINATED_${terminationSignal}` : `HEADLESS_SEND_NOT_ACCEPTED: ${sent.reason}`);
       const completion: Promise<void>[] = [terminal, termination];
       if (timeoutMs !== null) completion.push(new Promise<void>((_, reject) => {
         timer = setTimeout(() => reject(new Error('HEADLESS_DEADLINE_EXCEEDED')), timeoutMs);
       }));
       await Promise.race(completion);
       if (timer) { clearTimeout(timer); timer = undefined; }
+      if (terminalError) break;
     }
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);

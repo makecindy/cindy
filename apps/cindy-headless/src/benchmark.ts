@@ -119,7 +119,7 @@ export function schedulePlan(cells: BenchmarkCell[], manifest: BenchmarkManifest
   const ordered = manifest.agentOrder?.length ? [...manifest.agentOrder, ...manifest.variants.map((v) => v.id).filter((id) => !manifest.agentOrder?.includes(id))] : manifest.variants.map((v) => v.id);
   const rank = new Map(ordered.map((id, index) => [id, index]));
   const grouped = new Map<string, BenchmarkCell[]>();
-  for (const cell of cells) { const key = `${cell.taskId}:${cell.modelId}:${cell.repetition}`; grouped.set(key, [...(grouped.get(key) ?? []), cell]); }
+  for (const cell of cells) { const key = pairKey(cell); grouped.set(key, [...(grouped.get(key) ?? []), cell]); }
   const pairs = seededShuffle([...grouped.values()], manifest.seed);
   return pairs.flatMap((pair) => [...pair].sort((a, b) => (rank.get(a.variantId) ?? 999) - (rank.get(b.variantId) ?? 999)));
 }
@@ -146,6 +146,9 @@ export function validateManifest(value: unknown): BenchmarkManifest {
   if (manifest.budget?.stopAfterFailures !== undefined && (!Number.isInteger(manifest.budget.stopAfterFailures) || manifest.budget.stopAfterFailures < 1)) throw new Error('budget.stopAfterFailures must be positive');
   if (manifest.throughputCap && (!Number.isFinite(manifest.throughputCap.outputTokensPerSecond) || manifest.throughputCap.outputTokensPerSecond <= 0)) throw new Error('throughputCap rate must be positive');
   if (!Array.isArray(manifest.modelIds) || manifest.modelIds.length === 0 || !Array.isArray(manifest.variants) || manifest.variants.length < 1) throw new Error('modelIds and variants must be non-empty');
+  if (manifest.modelIds.some((id) => typeof id !== 'string' || !id.trim()) || new Set(manifest.modelIds).size !== manifest.modelIds.length) throw new Error('modelIds must contain unique non-empty strings');
+  if (manifest.dataset.taskIds.some((id) => typeof id !== 'string' || !id.trim())) throw new Error('taskIds must contain non-empty strings');
+  if (manifest.variants.some((variant) => !variant || !Array.isArray(variant.supportedModelIds))) throw new Error('variant supportedModelIds must be an array');
   const variantIds = manifest.variants.map((variant) => variant.id);
   if (variantIds.some((id) => typeof id !== 'string' || id.trim() === '')) throw new Error('variant IDs must be non-empty');
   if (new Set(variantIds).size !== variantIds.length) throw new Error('variants contains duplicate IDs');
@@ -171,7 +174,7 @@ export function expandPairedPlan(manifest: BenchmarkManifest): { schemaVersion: 
     manifest.variants.forEach((variant, armIndex) => {
       if (variant.supportedModelIds.includes(modelId)) {
         const cellId = sha256(JSON.stringify({ dataset: manifest.dataset, taskId, variant: variant.id, modelId, repetition }));
-        cells.push({ cellId, pairId: `${taskId}:${modelId}:${repetition}`, armIndex, variantId: variant.id, modelId, taskId, repetition });
+        cells.push({ cellId, pairId: pairKey({ taskId, modelId, repetition }), armIndex, variantId: variant.id, modelId, taskId, repetition });
       }
     });
   }
@@ -182,7 +185,59 @@ function passed(result: PairedRunResult | undefined): boolean {
   return result?.reward === 1;
 }
 
-export function summarizePairedResults(results: PairedRunResult[]): PairedSummary {
+function pairKey(result: Pick<PairedRunResult, 'taskId' | 'modelId' | 'repetition'>): string {
+  return JSON.stringify([result.taskId, result.modelId, result.repetition]);
+}
+
+function validateResultRows(results: PairedRunResult[]): void {
+  if (!Array.isArray(results)) throw new Error('results must be an array');
+  const seen = new Set<string>();
+  const variantArms = new Map<string, number>();
+  const armVariants = new Map<number, string>();
+  for (const result of results) {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('result must be an object');
+    if ([result.variantId, result.modelId, result.taskId].some((id) => typeof id !== 'string' || !id.trim())) throw new Error('result IDs must be non-empty strings');
+    if (!Number.isSafeInteger(result.repetition) || result.repetition < 1) throw new Error('invalid result repetition');
+    if (!Number.isFinite(result.reward) || result.reward < 0 || result.reward > 1) throw new Error(`invalid reward for ${result.taskId}`);
+    for (const field of ['costUsd', 'durationMs', 'inputTokens', 'cacheTokens', 'outputTokens'] as const) {
+      const value = result[field];
+      if (value != null && (!Number.isFinite(value) || value < 0)) throw new Error(`invalid result ${field}`);
+    }
+    for (const field of ['benchmark', 'upstreamProvider'] as const) {
+      if (result[field] != null && typeof result[field] !== 'string') throw new Error(`invalid result ${field}`);
+    }
+    if (result.resultClass !== undefined && !['PASSED', 'FAILED_AGENT', 'ERRORED_INFRA', 'INVALID_TASK'].includes(result.resultClass)) throw new Error('invalid result class');
+    if (result.usageStatus !== undefined && !['COMPLETE', 'PARTIAL', 'MISSING'].includes(result.usageStatus)) throw new Error('invalid usage status');
+    if (result.usageCompleteness !== undefined && !['exact', 'lower-bound', 'incomplete'].includes(result.usageCompleteness)) throw new Error('invalid usage completeness');
+    const key = JSON.stringify([result.variantId, result.taskId, result.modelId, result.repetition]);
+    if (seen.has(key)) throw new Error('duplicate result cell');
+    seen.add(key);
+    if (result.armIndex !== undefined) {
+      if (!Number.isSafeInteger(result.armIndex) || result.armIndex < 0) throw new Error('invalid arm index');
+      if ((variantArms.has(result.variantId) && variantArms.get(result.variantId) !== result.armIndex)
+        || (armVariants.has(result.armIndex) && armVariants.get(result.armIndex) !== result.variantId)) throw new Error('conflicting result arms');
+      variantArms.set(result.variantId, result.armIndex);
+      armVariants.set(result.armIndex, result.variantId);
+    }
+  }
+}
+
+function validateReportResults(manifest: BenchmarkManifest, results: PairedRunResult[]): PairedRunResult[] {
+  validateResultRows(results);
+  const tasks = new Set(manifest.dataset.taskIds);
+  const models = new Set(manifest.modelIds);
+  return results.map((result) => {
+    const armIndex = manifest.variants.findIndex((variant) => variant.id === result.variantId);
+    if (!tasks.has(result.taskId) || !models.has(result.modelId) || result.repetition > manifest.repetitions || armIndex < 0
+      || !manifest.variants[armIndex].supportedModelIds.includes(result.modelId)) throw new Error('result does not belong to a supported manifest cell');
+    if (result.armIndex !== undefined && result.armIndex !== armIndex) throw new Error('result arm does not match manifest variant');
+    return { ...result, armIndex };
+  });
+}
+
+export function summarizePairedResults(results: PairedRunResult[], paired = true): PairedSummary {
+  validateResultRows(results);
+  if (paired && (new Set(results.map((result) => result.variantId)).size > 2 || results.some((result) => (result.armIndex ?? 0) > 1))) throw new Error('paired results require at most two distinct arms');
   const pairs = new Map<string, PairedRunResult[]>();
   let knownCostUsd = 0;
   let costKnownCount = 0;
@@ -191,15 +246,15 @@ export function summarizePairedResults(results: PairedRunResult[]): PairedSummar
   let totalCacheTokens = 0;
   let totalOutputTokens = 0;
   let totalDurationMs = 0;
-  const byBenchmark: PairedSummary['byBenchmark'] = {};
-  const byAgent: PairedSummary['byAgent'] = {};
+  const byBenchmark: PairedSummary['byBenchmark'] = Object.create(null);
+  const byAgent: PairedSummary['byAgent'] = Object.create(null);
   const resultClasses: PairedSummary['resultClasses'] = { PASSED: 0, FAILED_AGENT: 0, ERRORED_INFRA: 0, INVALID_TASK: 0 };
-  const upstreamProviders: Record<string, number> = {};
-  const confidenceIntervals: PairedSummary['confidenceIntervals'] = {};
+  const upstreamProviders: Record<string, number> = Object.create(null);
+  const confidenceIntervals: PairedSummary['confidenceIntervals'] = Object.create(null);
   const usageCompleteness: PairedSummary['usageCompleteness'] = { exact: 0, 'lower-bound': 0, incomplete: 0 };
   for (const result of results) {
     if (!Number.isFinite(result.reward)) throw new Error(`invalid reward for ${result.taskId}`);
-    const key = `${result.taskId}:${result.modelId}:${result.repetition}`;
+    const key = pairKey(result);
     const pair = pairs.get(key) ?? [];
     pair.push(result);
     pairs.set(key, pair);
@@ -229,7 +284,7 @@ export function summarizePairedResults(results: PairedRunResult[]): PairedSummar
   let bothFail = 0;
   let firstArmOnlyPass = 0;
   let secondArmOnlyPass = 0;
-  for (const pair of pairs.values()) {
+  for (const pair of paired ? pairs.values() : []) {
     const ordered = [...pair].sort((a, b) => (a.armIndex ?? Number.MAX_SAFE_INTEGER) - (b.armIndex ?? Number.MAX_SAFE_INTEGER) || a.variantId.localeCompare(b.variantId));
     if (ordered.length !== 2) continue;
     completePairCount += 1;
@@ -242,7 +297,7 @@ export function summarizePairedResults(results: PairedRunResult[]): PairedSummar
   }
   for (const [agent, stats] of Object.entries(byAgent)) confidenceIntervals[agent] = { successes: stats.passed, trials: stats.trials, ...wilson(stats.passed, stats.trials) };
   const totalCostUsd = costMissingCount === 0 ? knownCostUsd : null;
-  return { pairCount: pairs.size, completePairCount, incompletePairCount: pairs.size - completePairCount, bothPass, bothFail, firstArmOnlyPass, secondArmOnlyPass, totalCostUsd, knownCostUsd, costKnownCount, costMissingCount, totalInputTokens, totalCacheTokens, totalOutputTokens, byBenchmark, byAgent, resultClasses, totalDurationMs, upstreamProviders, usageCompleteness, confidenceIntervals };
+  return { pairCount: paired ? pairs.size : 0, completePairCount, incompletePairCount: paired ? pairs.size - completePairCount : 0, bothPass, bothFail, firstArmOnlyPass, secondArmOnlyPass, totalCostUsd, knownCostUsd, costKnownCount, costMissingCount, totalInputTokens, totalCacheTokens, totalOutputTokens, byBenchmark, byAgent, resultClasses, totalDurationMs, upstreamProviders, usageCompleteness, confidenceIntervals };
 }
 
 export function expandPlan(manifest: BenchmarkManifest): { schemaVersion: 1; manifestDigest: string; cells: BenchmarkCell[] } {
@@ -259,7 +314,9 @@ export function expandScheduledPlan(manifest: BenchmarkManifest): { schemaVersio
 }
 
 export function createEvaluationReport(manifest: BenchmarkManifest, results: PairedRunResult[]): EvaluationReport {
-  const summary = summarizePairedResults(results);
+  validateManifest(manifest);
+  const validatedResults = validateReportResults(manifest, results);
+  const summary = summarizePairedResults(validatedResults, manifest.variants.length === 2);
   const supported = new Set(manifest.variants.flatMap((variant) => manifest.modelIds.filter((model) => variant.supportedModelIds.includes(model)).map((model) => `${variant.id}:${model}`)));
   const unsupported = manifest.variants.flatMap((variant) => manifest.modelIds.filter((model) => !supported.has(`${variant.id}:${model}`)).map((model) => ({ variantId: variant.id, modelId: model, reason: 'variant does not declare support for exact model' })));
   return {

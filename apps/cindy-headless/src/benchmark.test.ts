@@ -15,7 +15,7 @@ describe('benchmark plan', () => {
     const plan = expandPairedPlan(validatePairedManifest(validateManifest(manifest)));
     expect(plan.cells).toHaveLength(20);
     expect(new Set(plan.cells.map((cell) => cell.pairId)).size).toBe(10);
-    expect(plan.cells.filter((cell) => cell.pairId === 'a:model-1:1')).toHaveLength(2);
+    expect(plan.cells.filter((cell) => cell.pairId === JSON.stringify(['a', 'model-1', 1]))).toHaveLength(2);
     expect(plan.cells[0].cellId).toMatch(/^[a-f0-9]{64}$/);
     expect(plan.cells[0].cellId).toBe(expandPairedPlan(validatePairedManifest(validateManifest(manifest))).cells[0].cellId);
   });
@@ -63,3 +63,46 @@ describe('benchmark plan', () => {
 });
 
 function results(taskId: string) { return { variantId: 'raw', modelId: 'model-1', taskId, repetition: 1, reward: 0 }; }
+
+
+describe('benchmark report input validation', () => {
+  it.each([
+    { taskId: 'outside' }, { modelId: 'outside' }, { variantId: 'outside' },
+    { repetition: 0 }, { repetition: 3 }, { repetition: 1.5 },
+    { armIndex: 1 }, { armIndex: -1 }, { reward: -0.1 }, { reward: 1.1 },
+    { reward: Number.NaN }, { reward: Number.POSITIVE_INFINITY }, { costUsd: -1 },
+    { inputTokens: Number.NaN }, { durationMs: -1 },
+  ])('rejects a malformed or foreign result cell: %j', (change) => {
+    expect(() => createEvaluationReport(validateManifest(manifest), [{ ...results('a'), ...change }])).toThrow();
+  });
+  it('rejects duplicate trials and conflicting arm ownership before aggregation', () => {
+    expect(() => createEvaluationReport(validateManifest(manifest), [results('a'), results('a')])).toThrow(/duplicate result cell/);
+    expect(() => summarizePairedResults([{ ...results('a'), armIndex: 0 }, { ...results('a'), variantId: 'cindy', armIndex: 0 }])).toThrow(/conflicting result arms/);
+    expect(() => summarizePairedResults([{ ...results('a'), armIndex: 0 }, { ...results('b'), armIndex: 1 }])).toThrow(/conflicting result arms/);
+  });
+  it('assigns omitted arms from manifest order without mutating input', () => {
+    const input = [{ ...results('a'), variantId: 'cindy', reward: 0 }, { ...results('a'), reward: 1 }];
+    const report = createEvaluationReport(validateManifest(manifest), input);
+    expect(report.paired).toMatchObject({ completePairCount: 1, firstArmOnlyPass: 1, secondArmOnlyPass: 0 });
+    expect(input[0]).not.toHaveProperty('armIndex');
+  });
+  it('rejects unsupported product-board cells and does not invent pairs across three variants', () => {
+    const product = validateManifest({ ...manifest, board: 'default-model-product', variants: [{ id: 'raw', supportedModelIds: [] }] });
+    expect(() => createEvaluationReport(product, [results('a')])).toThrow(/supported manifest cell/);
+    const multi = validateManifest({ ...manifest, variants: [...manifest.variants, { id: 'third', supportedModelIds: ['model-1'] }] });
+    const report = createEvaluationReport(multi, multi.variants.map((v) => ({ ...results('a'), variantId: v.id })));
+    expect(report.trialCount).toBe(3);
+    expect(report.paired).toMatchObject({ pairCount: 0, completePairCount: 0 });
+  });
+  it('keeps colon-containing pair keys distinct', () => {
+    const rows = [{ ...results('a:b'), modelId: 'c' }, { ...results('a'), modelId: 'b:c' }];
+    expect(summarizePairedResults(rows).pairCount).toBe(2);
+  });
+  it('supports reserved property names without corrupting counters', () => {
+    const m = validateManifest({ ...manifest, variants: [{ id: '__proto__', supportedModelIds: ['model-1'] }] });
+    const report = createEvaluationReport(m, [{ ...results('a'), variantId: '__proto__', benchmark: '__proto__' }]);
+    expect(report.byAgent['__proto__'].trials).toBe(1);
+    expect(report.byBenchmark['__proto__'].trials).toBe(1);
+    expect(Object.prototype).not.toHaveProperty('trials');
+  });
+});

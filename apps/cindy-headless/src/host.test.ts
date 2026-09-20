@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classifyFailure, codexMcpArgs, deriveTurnStallMs, extractProviderUsage, modelCapabilityAdditions, normalizeTraceEvents, piProjectSkillsEvidence } from './host.js';
+import { classifyFailure, isHeadlessTerminalEvent, codexMcpArgs, deriveTurnStallMs, extractProviderUsage, modelCapabilityAdditions, normalizeTraceEvents, piProjectSkillsEvidence } from './host.js';
 import { HeadlessRemoteMcpProvider } from './headless-integrations.js';
 import type { HeadlessProfile } from './profile.js';
 
@@ -144,5 +144,30 @@ describe('Headless result classification', () => {
       delete process.env.TEST_MCP_TOKEN;
       delete process.env.TEST_MCP_HEADER;
     }
+  });
+});
+
+
+describe('Headless product-turn completion', () => {
+  it('waits across SDK done, idle and cancelled claims until the product terminal', () => {
+    let kind: 'none' | 'done' | 'error' = 'none';
+    const session = { getObservedCurrentTurnTerminal: () => ({ kind }) };
+    const event = { type: 'done' as const, data: {}, turnAttemptToken: 1, turnContinuationId: 7 };
+    expect(isHeadlessTerminalEvent(event, session, 1)).toBe(false);
+    expect(isHeadlessTerminalEvent({ type: 'status', data: { isRunning: false }, turnAttemptToken: 1 }, session, 1)).toBe(false);
+    // Even a cancelled claim keeps its SDK boundary nonterminal until Core's ordered terminal.
+    expect(isHeadlessTerminalEvent(event, session, 1)).toBe(false);
+    kind = 'done';
+    expect(isHeadlessTerminalEvent({ type: 'done', data: {}, turnAttemptToken: 1 }, session, 1)).toBe(true);
+  });
+  it('ignores background and old-turn terminals, and distinguishes retrying errors', () => {
+    const done = { getObservedCurrentTurnTerminal: () => ({ kind: 'done' as const }) };
+    expect(isHeadlessTerminalEvent({ type: 'done', data: {}, turnScope: 'background' }, done, 2)).toBe(false);
+    expect(isHeadlessTerminalEvent({ type: 'done', data: {}, turnAttemptToken: 1 }, done, 2)).toBe(false);
+    expect(isHeadlessTerminalEvent({ type: 'status', data: { isRunning: false } }, done, 2)).toBe(false);
+    expect(isHeadlessTerminalEvent({ type: 'done', data: {} }, done, undefined)).toBe(false);
+    const error = { getObservedCurrentTurnTerminal: () => ({ kind: 'error' as const }) };
+    expect(isHeadlessTerminalEvent({ type: 'error', data: { willRetry: true }, turnAttemptToken: 2 }, error, 2)).toBe(false);
+    expect(isHeadlessTerminalEvent({ type: 'error', data: { isTerminal: true }, turnAttemptToken: 2 }, error, 2)).toBe(true);
   });
 });

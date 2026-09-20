@@ -1,6 +1,7 @@
+import { requireBundleDist } from './bundle-dist.mjs';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -21,7 +22,7 @@ const bundleManifest = JSON.parse(await readFile(path.join(bundleDir, 'bundle-ma
 const version = packageJson.version;
 if (bundleManifest.cindyHeadlessVersion !== version) throw new Error('bundle manifest version does not match package version; rebuild the bundle first');
 if (bundleManifest.cindyUpstreamCommit !== packageJson.cindyUpstreamCommit) throw new Error('bundle manifest Cindy upstream commit does not match package metadata; rebuild the bundle first');
-const bundleDist = await access(path.join(bundleDir, 'dist')).then(() => path.join(bundleDir, 'dist'), () => path.join(appDir, 'dist'));
+const bundleDist = await requireBundleDist(bundleDir, bundleManifest);
 
 async function sha(file) {
   const hash = createHash('sha256');
@@ -45,7 +46,7 @@ await cp(bundleDist, path.join(runtimeRoot, 'dist'), { recursive: true });
 await mkdir(path.join(runtimeRoot, 'bin'), { recursive: true });
 await cp(path.join(bundleDir, 'bin', 'node'), path.join(runtimeRoot, 'bin', 'node'));
 for (const item of ['prompt.md', 'codex-prompt.md', 'pi-prompt.md', 'bundle-manifest.json', 'capability-registry.json']) await cp(path.join(bundleDir, item), path.join(runtimeRoot, item), { recursive: true });
-await cp(path.join(appDir, 'profiles'), path.join(runtimeRoot, 'profiles'), { recursive: true });
+await cp(path.join(bundleDir, 'profiles'), path.join(runtimeRoot, 'profiles'), { recursive: true });
 await cp(path.join(appDir, 'README.md'), path.join(runtimeRoot, 'README.md'));
 await cp(path.join(appDir, 'CINDY_FEATURE_PARITY.md'), path.join(runtimeRoot, 'CINDY_FEATURE_PARITY.md'));
 await cp(path.join(appDir, 'UPDATE_AND_PACKAGE.zh-CN.md'), path.join(runtimeRoot, 'UPDATE_AND_PACKAGE.zh-CN.md'));
