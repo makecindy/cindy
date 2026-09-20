@@ -1531,8 +1531,10 @@ import {
   keepRecentSessionCcDebugSync,
   createLogger,
   writeCcDebugLine,
+  onSessionCcDebugFileResolved,
   type LogLevel,
 } from './logger.js';
+import { CcDebugRawTailer } from './cc-debug-raw-tailer.js';
 initLogger();
 const dbClientLog = createLogger('DbClient');
 const authBoundaryLog = createLogger('auth-boundary');
@@ -5490,79 +5492,21 @@ const registerIpcHandlers = () => {
   // 逐行调 writeCcDebugLine() 解析行首 UTC-ISO 时间戳后归一化写入当天 agent 流,
   // 跟 maker / proxy 两源合并、共用按天 rotate + 保留策略。
   //
-  // - 轮询 2s: cc-debug 不是高频热点, 不需要 fs.watch 的实时性 (排序按解析出的 ts,
-  //   不受 2s 轮询延迟影响, 延迟只影响"多久可见")
+  // - 只在 Debug 日志开启时轮询已注册的 raw 文件。session 启动时
+  //   resolveSessionCcDebugFile 主动注册,不再每 2s 枚举全部历史 session 目录
+  // - 每轮每文件读取有界并分块,避免一次巨量 NODE_DEBUG 输出制造同尺寸 Buffer
   // - cc 持有 fd 期间我们 rotate 不掉 raw 文件 (Windows rename 失败, Linux truncate
   //   留稀疏空洞, 都不安全), 所以反向走 ─ 读出内容汇入 agent 流, raw 仅启动期 trim
   // - 检测到文件 size 倒退 (truncate / 启动 rename), 重置 read offset 从 0 开始
   // - 跨读保留尾部不完整行, 跟下一段拼起来再切, 不切坏 multi-line 信息
   // - timer.unref() 防止进程关闭时被卡住
-  // per-file tail 状态: filePath → { offset, leftover }。同时 tail 全局 fallback raw
-  // (无 sessionId 的 cc, 罕见) + 各 sessions/<id>/cc-debug.raw.log; sessionId 从路径
-  // 提取后传给 writeCcDebugLine, 让 cc 网络 debug 归到对应 session 的 <date>.ndjson。
-  const ccLogRootDir = path.dirname(ccDebugLogPath);
-  const ccTailState = new Map<string, { offset: number; leftover: string }>();
-
-  function tailOneCcFile(filePath: string, sessionId: string): void {
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(filePath);
-    } catch {
-      return;
-    }
-    const st = ccTailState.get(filePath);
-    if (!st) {
-      // 首次发现: 从当前末尾开始, 跳过已有内容 (避免 app 重启后把旧 session 的 raw 重复
-      // 灌进 ndjson)。代价是漏掉文件被发现前 ≤ 轮询间隔 的几行初始 cc 日志, 可接受。
-      ccTailState.set(filePath, { offset: stat.size, leftover: '' });
-      return;
-    }
-    if (stat.size < st.offset) {
-      st.offset = 0;
-      st.leftover = '';
-    }
-    if (stat.size === st.offset) return;
-    let fd: number;
-    try {
-      fd = fs.openSync(filePath, 'r');
-    } catch {
-      return;
-    }
-    try {
-      const len = stat.size - st.offset;
-      const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, st.offset);
-      st.offset = stat.size;
-      st.leftover += buf.toString('utf8');
-      const lines = st.leftover.split('\n');
-      st.leftover = lines.pop() ?? '';
-      for (const line of lines) {
-        if (line.length > 0) writeCcDebugLine(line, sessionId);
-      }
-    } finally {
-      try {
-        fs.closeSync(fd);
-      } catch {
-        /* ignore */
-      }
-    }
+  const ccDebugRawTailer = new CcDebugRawTailer(writeCcDebugLine);
+  onSessionCcDebugFileResolved((filePath, sessionId) => {
+    ccDebugRawTailer.register(filePath, sessionId);
+  });
+  if (process.env.XDT_CC_DEBUG_NET === '1') {
+    ccDebugRawTailer.start(ccDebugLogPath);
   }
-
-  function tailCcDebugOnce(): void {
-    tailOneCcFile(ccDebugLogPath, ''); // 全局 fallback (无 sessionId 的 cc)
-    const sessionsBase = path.join(ccLogRootDir, 'sessions');
-    let dirs: fs.Dirent[];
-    try {
-      dirs = fs.readdirSync(sessionsBase, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const d of dirs) {
-      if (!d.isDirectory()) continue;
-      tailOneCcFile(path.join(sessionsBase, d.name, 'cc-debug.raw.log'), d.name);
-    }
-  }
-  setInterval(tailCcDebugOnce, 2000).unref();
 
   // dev 模式不再启动期硬开(2026-07-11 Lizi 定案):NODE_DEBUG=http,https,net,tls
   // 会顺着 cc 子进程继承进 agent 的 Bash 子命令——所有命令输出被调试日志刷屏,
@@ -5578,6 +5522,7 @@ const registerIpcHandlers = () => {
   ipcMain.handle('cc:set-debug-net', (_event, enabled: boolean): { ok: true } => {
     if (enabled) {
       process.env.XDT_CC_DEBUG_NET = '1';
+      ccDebugRawTailer.start(ccDebugLogPath);
       // release: 抬级。dev: 已经是 trace, 跳过。
       if (app.isPackaged) {
         const cur = getLogLevel();
@@ -5590,6 +5535,7 @@ const registerIpcHandlers = () => {
       }
     } else {
       delete process.env.XDT_CC_DEBUG_NET;
+      ccDebugRawTailer.stop();
       if (app.isPackaged && levelBeforeDebugNet) {
         setLogLevel(levelBeforeDebugNet);
         ccDebugNetLog.info(`restored main/maker logger → ${levelBeforeDebugNet}`);

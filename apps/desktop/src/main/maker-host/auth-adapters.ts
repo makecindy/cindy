@@ -39,6 +39,7 @@ import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
+import { SuccessfulPreparationCache } from './successful-preparation-cache.js';
 import {
   prepareBuiltInSkills,
   refreshBuiltInClaudeSkillLinks,
@@ -134,6 +135,27 @@ const log = createLogger('auth-adapters');
  * （见 `log-upload/sourceAllowlist` 的 `DENIED_SUB_SCOPES`）。本机日志照常写全，只是不上报。
  */
 const assetPrepLog = createLogger('auth-adapters:asset-prep');
+const GLOBAL_ASSET_PREPARATION_CACHE_TTL_MS = 30_000;
+
+interface AssetPreparationScope {
+  key: string;
+  ownerId: string | null;
+  generation: number;
+}
+
+function captureAssetPreparationScope(scope: string): AssetPreparationScope {
+  const owner = getActiveAppSession();
+  return {
+    key: JSON.stringify([scope, owner.generation, owner.dataOwnerId, app.getPath('userData')]),
+    ownerId: owner.dataOwnerId,
+    generation: owner.generation,
+  };
+}
+
+function isAssetPreparationScopeCurrent(scope: AssetPreparationScope): boolean {
+  const owner = getActiveAppSession();
+  return owner.generation === scope.generation && owner.dataOwnerId === scope.ownerId;
+}
 /**
  * 凭证文件的落盘 / 权限 / 硬链操作失败诊断。这些消息(icacls/chmod 的 `{ file }`、`fsp.rm` 与
  * `relinkSharedCodexAuth` 的 `error.message`)会带 `auth.json` / `models_cache.json` 等**凭证文件
@@ -545,7 +567,9 @@ export const CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS = 12_000;
 
 /** Claude AuthAdapter —— 只回鉴权 env, endpoint / behavior flag 走 runtime-configs.ts。 */
 export class DesktopClaudeAuthAdapter implements AuthAdapter {
-  private pendingSharedSkillsPrep: Promise<void> | null = null;
+  private readonly sharedSkillsPrepCache = new SuccessfulPreparationCache(
+    GLOBAL_ASSET_PREPARATION_CACHE_TTL_MS,
+  );
 
   /** invalidate() 触发时把 auth state 推给 renderer(maker-host 装配注入,对齐 codex)。 */
   private onInvalidatedBroadcast?: (reason: string) => void;
@@ -594,16 +618,15 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   async ensureSharedGlobalSkills(): Promise<void> {
-    if (this.pendingSharedSkillsPrep) return this.pendingSharedSkillsPrep;
-    this.pendingSharedSkillsPrep = this.runEnsureSharedGlobalSkills().finally(() => {
-      this.pendingSharedSkillsPrep = null;
+    const scope = captureAssetPreparationScope('claude-shared-skills');
+    return this.sharedSkillsPrepCache.ensure(scope.key, async () => {
+      const prepared = await this.runEnsureSharedGlobalSkills(scope.ownerId);
+      return prepared && isAssetPreparationScopeCurrent(scope);
     });
-    return this.pendingSharedSkillsPrep;
   }
 
-  private async runEnsureSharedGlobalSkills(): Promise<void> {
+  private async runEnsureSharedGlobalSkills(ownerId: string | null): Promise<boolean> {
     try {
-      const ownerId = getActiveAppSession().dataOwnerId;
       const result = await withSharedGlobalSkillProjectionMutation(ownerId, async () => {
         // Bundle publication keeps every managed Agent link on one stable
         // active pointer. The stable-owner boundary prevents a passive profile
@@ -643,10 +666,12 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       for (const warning of result.warnings) {
         assetPrepLog.warn('shared global skill warning', { warning });
       }
+      return true;
     } catch (error) {
       assetPrepLog.warn('prepare shared global skills failed', {
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
   }
 
@@ -969,12 +994,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
 
   /**
-   * 进行中的 ensureGlobalCodexAssets 调用 —— 同一时刻并发进入直接复用同一 Promise,
-   * 避免重复 stat / copy。每次 codex session start 都会过一遍 getAuthEnv → ensure,
-   * 没有缓存时连续启动会触发并发竞态 (功能正确但浪费 io)。结束后置 null 不做长期缓存,
-   * 因为源文件 (~/.codex/AGENTS.md) 随时可能被用户改, 仍需要后续调用触发新一轮检查。
+   * 全局资产准备会递归检查 Skill / plugin 投影。短时间内每个 session start 都重跑会
+   * 制造大量 readdir 对象和 GC 压力，因此只复用同 owner 的成功完成态。失败不缓存，
+   * owner 切换使用独立 key，外部文件变更最多延迟一个有界 TTL 后重新检查。
    */
-  private pendingAssetsPrep: Promise<void> | null = null;
+  private readonly globalAssetsPrepCache = new SuccessfulPreparationCache(
+    GLOBAL_ASSET_PREPARATION_CACHE_TTL_MS,
+  );
+  /**
+   * 插件 overlay 是 explicit-only 能力的 fail-closed 边界。TTL=0 只合并真正并发的
+   * session start，每次后续调用仍重新核验 isolated cache / config / marker。
+   */
+  private readonly globalPluginPrepCache = new SuccessfulPreparationCache(0);
 
   /**
    * 进行中的 reconcileWithSystemCodex 调用 —— 多个调用点 (构造 / getState / getAuthEnv /
@@ -1410,17 +1441,20 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async ensureGlobalCodexAssets(): Promise<void> {
-    if (this.pendingAssetsPrep) return this.pendingAssetsPrep;
-    this.pendingAssetsPrep = this.runEnsureGlobalCodexAssets().finally(() => {
-      this.pendingAssetsPrep = null;
+    const scope = captureAssetPreparationScope(`codex-global-assets:${this.codexHome}`);
+    await this.globalAssetsPrepCache.ensure(scope.key, async () => {
+      const prepared = await this.runEnsureGlobalCodexAssets(scope.ownerId);
+      return prepared && isAssetPreparationScopeCurrent(scope);
     });
-    return this.pendingAssetsPrep;
+    await this.globalPluginPrepCache.ensure(
+      scope.key,
+      () => this.runEnsureGlobalCodexPluginBridge(),
+    );
   }
 
-  private async runEnsureGlobalCodexAssets(): Promise<void> {
+  private async runEnsureGlobalCodexAssets(ownerId: string | null): Promise<boolean> {
     // Load-bearing order: Codex skill linking scans ~/.agents/skills, so shared
     // links must populate that directory before prepareCodexGlobalSkillsLinks runs.
-    const ownerId = getActiveAppSession().dataOwnerId;
     const sharedOutcome = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
       prepareSharedGlobalSkillLinks({
         assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
@@ -1430,7 +1464,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       (err: Error) => ({ ok: false as const, label: 'shared-skills' as const, err }),
     );
 
-    const [skillsOutcome, rulesOutcome, pluginsOutcome] = await Promise.all([
+    const [skillsOutcome, rulesOutcome] = await Promise.all([
       prepareCodexGlobalSkillsLinks(this.codexHome).then(
         (r) => ({ ok: true as const, label: 'skills' as const, warnings: r.warnings }),
         (err: Error) => ({ ok: false as const, label: 'skills' as const, err }),
@@ -1439,20 +1473,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         (r) => ({ ok: true as const, label: 'rules' as const, warnings: r.warnings }),
         (err: Error) => ({ ok: false as const, label: 'rules' as const, err }),
       ),
-      prepareCodexGlobalPluginsBridge(this.codexHome, {
-        capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
-      }).then(
-        (r) => ({
-          ok: true as const,
-          label: 'plugins' as const,
-          warnings: r.warnings,
-          routingFailures: r.routingFailures,
-        }),
-        (err: Error) => ({ ok: false as const, label: 'plugins' as const, err }),
-      ),
     ]);
 
-    for (const outcome of [sharedOutcome, skillsOutcome, rulesOutcome, pluginsOutcome]) {
+    for (const outcome of [sharedOutcome, skillsOutcome, rulesOutcome]) {
       if (!outcome.ok) {
         assetPrepLog.warn('prepare Codex global asset failed', {
           asset: outcome.label,
@@ -1464,7 +1487,26 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         assetPrepLog.warn('Codex global asset warning', { asset: outcome.label, warning });
       }
     }
+    return sharedOutcome.ok && skillsOutcome.ok && rulesOutcome.ok;
+  }
+
+  private async runEnsureGlobalCodexPluginBridge(): Promise<boolean> {
+    const pluginsOutcome = await prepareCodexGlobalPluginsBridge(this.codexHome, {
+      capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
+    }).then(
+      (r) => ({
+        ok: true as const,
+        warnings: r.warnings,
+        routingFailures: r.routingFailures,
+      }),
+      (err: Error) => ({ ok: false as const, err }),
+    );
+
     if (!pluginsOutcome.ok) {
+      assetPrepLog.warn('prepare Codex global asset failed', {
+        asset: 'plugins',
+        error: pluginsOutcome.err.message,
+      });
       // Expected cache/config I/O failures are normalized by the bridge and
       // gated against the isolated plugin enablement. A rejection here is an
       // unexpected invariant failure, so it must remain fail-closed.
@@ -1472,7 +1514,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         `Cannot start Codex safely because Cindy could not inspect downstream plugin capabilities: ${pluginsOutcome.err.message}`,
       );
     }
-    if (pluginsOutcome.ok && pluginsOutcome.routingFailures.length > 0) {
+    for (const warning of pluginsOutcome.warnings) {
+      assetPrepLog.warn('Codex global asset warning', { asset: 'plugins', warning });
+    }
+    if (pluginsOutcome.routingFailures.length > 0) {
       for (const failure of pluginsOutcome.routingFailures) {
         // failure 串可能带下游插件能力 / marketplace 身份,同资产准备告警一并不上报。
         assetPrepLog.error('Codex capability routing enforcement failed', { failure });
@@ -1481,6 +1526,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         `Cannot start Codex safely because Cindy could not isolate a downstream plugin capability: ${pluginsOutcome.routingFailures.join('; ')}`,
       );
     }
+    return true;
   }
 
   /** maker-host 在构造完 codexAgent 后调一次, 注入 dispose 回调。 */

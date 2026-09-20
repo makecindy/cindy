@@ -238,9 +238,19 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(bootstrapSource).not.toContain('await prepareSharedGlobalSkillLinks();');
     expect(bootstrapSource).not.toContain('refreshBuiltInSharedSkillLinks');
 
-    const start = authAdapterSource.indexOf('private async runEnsureSharedGlobalSkills():');
+    const ensureStart = authAdapterSource.indexOf('async ensureSharedGlobalSkills():');
+    const start = authAdapterSource.indexOf(
+      'private async runEnsureSharedGlobalSkills(ownerId:',
+      ensureStart,
+    );
     const end = authAdapterSource.indexOf('\n  async getState(', start);
+    const ensureBody = authAdapterSource.slice(ensureStart, start);
     const body = authAdapterSource.slice(start, end);
+    expect(ensureBody).toContain(
+      "captureAssetPreparationScope('claude-shared-skills')",
+    );
+    expect(ensureBody).toContain('runEnsureSharedGlobalSkills(scope.ownerId)');
+    expect(ensureBody).toContain('isAssetPreparationScopeCurrent(scope)');
     const ownerBoundary = body.indexOf('withSharedGlobalSkillProjectionMutation(ownerId');
     expect(ownerBoundary).toBeGreaterThan(-1);
     expect(body.indexOf('prepareBuiltInSkills({')).toBeGreaterThan(ownerBoundary);

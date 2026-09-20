@@ -119,6 +119,8 @@ import {
   listPiSubagentRunDiagnostics,
   listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
+  PI_SUBAGENT_ACTIVE_REFRESH_MS,
+  piSubagentRefreshDelay,
   piSubagentRunRoot,
   piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
@@ -4031,6 +4033,8 @@ export class PiAgent extends BaseAgent {
       }
     };
     let piSubagentRefreshInFlight = false;
+    let piSubagentNextRefreshAt = 0;
+    let piSubagentRefreshRequestGeneration = 0;
     // Approval delivery belongs to the *detached run* lifecycle, not to the
     // parent handle. After a navigation close the foreground refresh timer is
     // gone, but `deferProxyDisposalForDetachedRuns` keeps polling durable status
@@ -4623,9 +4627,12 @@ export class PiAgent extends BaseAgent {
     };
     const refreshPiSubagentRuns = async (): Promise<void> => {
       if (closed || piSubagentRefreshInFlight) return;
+      const requestGeneration = piSubagentRefreshRequestGeneration;
       piSubagentRefreshInFlight = true;
+      let nextDelay = piSubagentRefreshDelay([...piSubagentStatuses.values()]);
       try {
         const statuses = await listPiSubagentRuns(subagentRunRoot);
+        nextDelay = piSubagentRefreshDelay(statuses);
         if (closed) return;
         const newestTaskIds = new Set<string>();
         for (const status of statuses) {
@@ -4677,12 +4684,24 @@ export class PiAgent extends BaseAgent {
         });
       } finally {
         piSubagentRefreshInFlight = false;
+        // A launch/control request can arrive while this scan is in flight.
+        // Preserve its immediate wake instead of letting the older result push
+        // the next disk read out to the idle cadence.
+        if (requestGeneration === piSubagentRefreshRequestGeneration) {
+          piSubagentNextRefreshAt = Date.now() + nextDelay;
+        }
       }
+    };
+    const requestPiSubagentRefresh = async (): Promise<void> => {
+      piSubagentRefreshRequestGeneration += 1;
+      piSubagentNextRefreshAt = 0;
+      await refreshPiSubagentRuns();
     };
     const piSubagentRefreshTimer = localSubagentSupported
       ? setInterval(() => {
+          if (Date.now() < piSubagentNextRefreshAt) return;
           void refreshPiSubagentRuns();
-        }, 500)
+        }, PI_SUBAGENT_ACTIVE_REFRESH_MS)
       : null;
     let piSubagentRefreshTimerCleared = false;
     const clearPiSubagentRefreshTimer = (): void => {
@@ -4691,7 +4710,7 @@ export class PiAgent extends BaseAgent {
       if (piSubagentRefreshTimer) clearInterval(piSubagentRefreshTimer);
     };
     piSubagentRefreshTimer?.unref?.();
-    if (localSubagentSupported) void refreshPiSubagentRuns();
+    if (localSubagentSupported) void requestPiSubagentRefresh();
     // Cindy 侧对 pi plan 模式的镜像态;setPlanMode 经 /plan toggle 驱动,与 pi 内部
     // planModeEnabled 保持一致(RPC 下 Execute/Refine 选择框被 auto-cancel,pi 不会自行
     // 翻转,故镜像不漂移)。
@@ -5271,6 +5290,7 @@ export class PiAgent extends BaseAgent {
                 } finally {
                   inFlightSubagentLaunches.delete(launching);
                 }
+                await requestPiSubagentRefresh();
                 if (accountBoundaryTeardown) {
                   const confirmed = await this.terminateSubagentRunner(runId, runDir);
                   throw confirmed
@@ -6926,7 +6946,7 @@ export class PiAgent extends BaseAgent {
         await controlPiSubagentRuns(subagentRunRoot, taskId, 'stop', {
           runtimeOwnerId: subagentRuntimeOwnerId,
         });
-        await refreshPiSubagentRuns();
+        await requestPiSubagentRefresh();
       },
 
       async resumeBackgroundTask(taskId: string, message: string, childId?: string): Promise<void> {
@@ -6955,7 +6975,7 @@ export class PiAgent extends BaseAgent {
             runtimeSnapshot: { modelsJson, bridgeSource, runnerSource },
           }, childId);
           if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
-          await refreshPiSubagentRuns();
+          await requestPiSubagentRefresh();
         })();
         // close() waits for every resume that entered while this handle was
         // live before inspecting durable runs and transferring the proxy-token

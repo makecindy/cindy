@@ -16,7 +16,8 @@
  * 注意: cc 子进程的内部 debug 由 cc 二进制通过 SDK debugFile 选项直接 fopen 写入一个
  * raw 中转文件 (sessions/<id>/cc-debug.raw.log, 路径由 resolveSessionCcDebugFile 给出;
  * 无 session 时回退全局 cc-debug.raw.log), **不经过本 logger 的 emit**。bootstrap 的
- * tailer 扫描这些 raw 文件, 逐行调 writeCcDebugLine() 归一化汇入对应 session 的 agent 流。
+ * tailer 只跟踪当前进程明确启用调试的 raw 文件, 逐行调 writeCcDebugLine() 归一化汇入
+ * 对应 session 的 agent 流。
  *
  * 旧的 maker.log / cc-proxy.log / cc-debug.log 已并入, 启动期由 purgeLegacyAgentLogs()
  * 清掉, 不再生成 (旧 main.log 保留作历史归档, 不删)。
@@ -118,6 +119,8 @@ const SESSIONS_DIR = 'sessions';
 const MAX_OPEN_SESSION_SLOTS = 32;
 const sessionSlots = new Map<string, DailySlot>();
 let logRootDir = '';
+type SessionCcDebugFileListener = (filePath: string, sessionId: string) => void;
+const sessionCcDebugFileListeners = new Set<SessionCcDebugFileListener>();
 
 // scope 路由: maker-host adapter 用 'maker' / 'maker/xxx' 作为根 scope,
 // renderer 转发会被加 'r:' 前缀, 所以 'r:maker' / 'r:maker/xxx' 也算。
@@ -458,13 +461,28 @@ export function getLogDir(): string {
   return logRootDir;
 }
 
+export function onSessionCcDebugFileResolved(
+  listener: SessionCcDebugFileListener,
+): () => void {
+  sessionCcDebugFileListeners.add(listener);
+  return () => sessionCcDebugFileListeners.delete(listener);
+}
+
 // host 用: 拼某 session 的 cc-debug raw 落盘路径 + mkdir, 给 ClaudeCodeAgent 的
 // resolveCcDebugFile 注入用。无 sessionId / 未 init → undefined (agent 回退全局 raw)。
 export function resolveSessionCcDebugFile(sessionId?: string): string | undefined {
   if (!logRootDir || !sessionId) return undefined;
   const dir = path.join(logRootDir, SESSIONS_DIR, sessionId);
   try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best effort */ }
-  return path.join(dir, 'cc-debug.raw.log');
+  const filePath = path.join(dir, 'cc-debug.raw.log');
+  for (const listener of sessionCcDebugFileListeners) {
+    try {
+      listener(filePath, sessionId);
+    } catch {
+      /* diagnostic tail registration must never block an agent start */
+    }
+  }
+  return filePath;
 }
 
 function shouldLog(level: LogLevel): boolean {

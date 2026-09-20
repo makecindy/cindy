@@ -772,6 +772,17 @@ export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
   return state === 'completed' || state === 'failed' || state === 'stopped';
 }
 
+export const PI_SUBAGENT_ACTIVE_REFRESH_MS = 500;
+export const PI_SUBAGENT_IDLE_REFRESH_MS = 2_000;
+
+export function piSubagentRefreshDelay(
+  statuses: readonly Pick<PiSubagentRunStatus, 'state'>[],
+): number {
+  return statuses.some((status) => !isPiSubagentTerminal(status.state))
+    ? PI_SUBAGENT_ACTIVE_REFRESH_MS
+    : PI_SUBAGENT_IDLE_REFRESH_MS;
+}
+
 /**
  * Read the live command line for `pid`, or null when it cannot be established.
  *

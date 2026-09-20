@@ -24,6 +24,9 @@ import {
   piSubagentLaunchFencePath,
   piSubagentOwnerHostPid,
   piSubagentOwnerIdentity,
+  PI_SUBAGENT_ACTIVE_REFRESH_MS,
+  PI_SUBAGENT_IDLE_REFRESH_MS,
+  piSubagentRefreshDelay,
   piSubagentRunRoot,
   piSubagentRuntimeOwnerId,
   requestStopAllPiSubagentRunsSync,
@@ -191,6 +194,14 @@ afterEach(async () => {
 });
 
 describe('PI durable subagent run store', () => {
+  it('backs off durable polling when no run can still change', () => {
+    expect(piSubagentRefreshDelay([])).toBe(PI_SUBAGENT_IDLE_REFRESH_MS);
+    expect(piSubagentRefreshDelay([{ state: 'completed' }, { state: 'failed' }]))
+      .toBe(PI_SUBAGENT_IDLE_REFRESH_MS);
+    expect(piSubagentRefreshDelay([{ state: 'completed' }, { state: 'running' }]))
+      .toBe(PI_SUBAGENT_ACTIVE_REFRESH_MS);
+  });
+
   it('records a host-observed runner failure without rewriting completed child results', async () => {
     const root = await makeRoot();
     const runId = '123e4567-e89b-42d3-a456-4266141740ab';

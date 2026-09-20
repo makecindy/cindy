@@ -28,7 +28,12 @@ import {
   MAIN_LOG_RECORD_HEAD_RE,
   RECORD_FORMAT_SENTINEL_MSG,
 } from '../../shared/mainLogRecordFormat';
-import { createLogger, initLogger } from '../logger';
+import {
+  createLogger,
+  initLogger,
+  onSessionCcDebugFileResolved,
+  resolveSessionCcDebugFile,
+} from '../logger';
 
 let logDir = '';
 
@@ -75,6 +80,18 @@ function recordScopes(content: string): string[] {
 }
 
 describe('main 日志的记录边界（写侧）', () => {
+  it('announces only the session raw file explicitly resolved by the host', () => {
+    const listener = vi.fn();
+    const unsubscribe = onSessionCcDebugFileResolved(listener);
+    try {
+      const file = resolveSessionCcDebugFile('debug-session');
+      expect(file).toBe(path.join(logDir, 'sessions', 'debug-session', 'cc-debug.raw.log'));
+      expect(listener).toHaveBeenCalledWith(file, 'debug-session');
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('打开当天文件时写下格式哨兵，且哨兵本身是一条合法记录', async () => {
     const content = await readMainLogContaining(RECORD_FORMAT_SENTINEL_MSG);
 
