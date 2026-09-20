@@ -8,6 +8,7 @@ import { type OrcaTeamService } from './orcaTeamService.js';
 import {
   isContextOverflowErrorData,
   isOversizedHistoryErrorData,
+  isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
 import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
 import { DeferredCodexRestartService } from './deferredCodexRestart.js';
@@ -96,7 +97,12 @@ export function deliverSessionEvent(
     !session.remoteHostId &&
     event.type === 'error' &&
     isTerminalTurnErrorEvent(event) &&
-    (isContextOverflowErrorData(event.data) || isOversizedHistoryErrorData(event.data));
+    (isContextOverflowErrorData(event.data) ||
+      isOversizedHistoryErrorData(event.data) ||
+      // 与 sessionEventTerminal 的 overflowClaim 判据保持一致：PI compat 自愈的终态错误
+      // 也要先压住广播并预留 persistId，否则自愈失败时 surfaceOverflowFailure 拿不到
+      // 预留 id（dedup 已被吃掉），错误行不落库、后台任务历史里看不到失败。
+      isUnsupportedRequestOptionErrorData(event.data));
   if (
     event.type === 'error' &&
     isTerminalTurnErrorEvent(event) &&

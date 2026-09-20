@@ -10,6 +10,9 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
   isRemoteCompactEncryptedContentError,
+  isUnsupportedRequestOptionErrorMessage,
+  unsupportedRequestOptionCompatOverride,
+  UNSUPPORTED_REQUEST_OPTION_REASON,
 } from '@cindy/maker-core';
 import {
   projectAgentFacingText,
@@ -57,6 +60,28 @@ export function isContextOverflowErrorData(data: unknown): boolean {
       typeof value === 'string' &&
       (isContextOverflowErrorMessage(value) || isRemoteCompactEncryptedContentError(value)),
   );
+}
+
+/**
+ * 上游拒收「可选请求增强字段」的终态错误（PI 专属自愈对象）。
+ * 只认结构化 reason，或「被点名字段 + not supported + 替代字段建议」的错误文案；
+ * 普通 400 / 鉴权失败不满足，不得拿来自愈。
+ */
+export function isUnsupportedRequestOptionErrorData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { reason?: unknown; message?: unknown; sdkError?: unknown };
+  if (rec.reason === UNSUPPORTED_REQUEST_OPTION_REASON) return true;
+  return [rec.message, rec.sdkError].some(
+    (value) => typeof value === 'string' && isUnsupportedRequestOptionErrorMessage(value),
+  );
+}
+
+function unsupportedRequestOptionErrorText(data: unknown): string {
+  if (!data || typeof data !== 'object') return '';
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].find(
+    (value): value is string => typeof value === 'string' && value.length > 0,
+  ) ?? '';
 }
 
 export function isOversizedHistoryErrorData(data: unknown): boolean {
@@ -381,6 +406,21 @@ export interface ContextOverflowRolloverDeps {
     },
   ): Promise<{ accepted: boolean }>;
   getRecoveryAbortSignal?(sessionId: string): AbortSignal;
+  /**
+   * PI provider compat 自愈：读取已学到的 per-model compat 修正。
+   * 已存在 = 这台机器已经学过这个 provider/model 的拒收，不再自动重试（避免循环）。
+   */
+  readPiNativeCompatOverride?(
+    providerId: string,
+    modelId: string,
+  ): Record<string, unknown> | undefined;
+  /** PI provider compat 自愈：把本次学习到的 compat 修正落盘，供重建的 models.json 合并。
+   *  返回 true 仅当条目确实落盘；false 时调用方不得重放（否则闩锁永远是假、无限重试）。 */
+  recordPiNativeCompatOverride?(
+    providerId: string,
+    modelId: string,
+    compat: Record<string, unknown>,
+  ): Promise<boolean> | boolean;
   /** Synchronous: external dispatch may release its turn marker on this same terminal event. */
   hasExternalRecoveryOwner?(sessionId: string): boolean;
   onRebuilt?(sessionId: string): void;
@@ -494,7 +534,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   ): Promise<boolean> => {
     if (signal?.aborted) return true;
     const oversized = isOversizedHistoryErrorData(errorData);
-    if (!isContextOverflowErrorData(errorData) && !oversized) return false;
+    const unsupportedOption = isUnsupportedRequestOptionErrorData(errorData);
+    if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     signal?.throwIfAborted();
@@ -502,6 +543,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
     if (oversized && sessionRow.source !== 'desktop') return false;
+    // compat 自愈同样只服务本机桌面会话（与 replayUserMessage 的 resumeRetainedHistory 一致）。
+    if (unsupportedOption && sessionRow.source !== 'desktop') return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
@@ -512,6 +555,111 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       const tokens: 'violated' | 'unknown' = isContextOverflowErrorData(errorData)
         ? 'violated'
         : 'unknown';
+      // ── PI provider compat 自愈：上游拒收可选请求字段（如 prompt_cache_retention）──
+      // 失败轮零产出，学习该 provider/model 的 compat 修正后关会话重建（新 models.json
+      // 不再带该字段），并重放同一轮用户消息。只做一次：已学过的 (provider, model)
+      // 再失败就交给常规错误面，绝不循环重试。
+      if (unsupportedOption) {
+        const compat = unsupportedRequestOptionCompatOverride(
+          unsupportedRequestOptionErrorText(errorData),
+        );
+        const providerId = sessionRow.providerId ?? null;
+        const modelId = sessionRow.model ?? null;
+        // providerId 为 null（老会话/远端控制端未持久化）时无法确定学习键，不自愈。
+        if (
+          !compat ||
+          !providerId ||
+          !modelId ||
+          !deps.recordPiNativeCompatOverride
+        ) {
+          return false;
+        }
+        const source = await deps.listMessages(sessionId);
+        signal?.throwIfAborted();
+        const plan = planContextOverflowRollover(source, null);
+        // 同一轮重复终态 error：上一次自愈已经重放并续跑过，这次直接丢弃（不重放、
+        // 不落错误行），否则用户会在已自动继续的任务里看到一张 400 错误卡。
+        const sourceUser =
+          plan.action === 'rebuild'
+            ? { clientId: plan.sourceUserClientId }
+            : [...source].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message));
+        if (sourceUser && continuedInputs.get(sessionId) === sourceUser.clientId) {
+          return true;
+        }
+        // 已学过（包括用户在别处已修好）→ 不再自动重试，交常规错误面。
+        if (deps.readPiNativeCompatOverride?.(providerId, modelId)) {
+          return false;
+        }
+        // 外部派单方（Orca / scheduler / IM / ghost setup）拥有自己的重试语义：不能代它
+        // 重放用户消息 —— 派单正文经 wire 投影可能退化为空，重复发送还可能让两方各跑一次。
+        const externalOwner =
+          plan.action !== 'stop' &&
+          (plan.skipGenericReplay || (deps.hasExternalRecoveryOwner?.(sessionId) ?? false));
+        // 先关掉旧 runtime，再置学习闩锁：闩锁置了而 runtime 没换掉的话，后续同 pair 的
+        // 请求会命中闩锁直接放弃，永久停在旧 models.json 上反复 400。
+        if (live) await deps.closeSession(sessionId);
+        signal?.throwIfAborted();
+        const learned = await deps.recordPiNativeCompatOverride(providerId, modelId, compat);
+        signal?.throwIfAborted();
+        if (!learned) {
+          // 没学到就不重放：否则闩锁永远为假，同一个 400 会被无上限重放。
+          deps.log.warn('pi provider compat was not persisted; leaving the error to surface', {
+            sessionId,
+            providerId,
+            modelId,
+          });
+          return false;
+        }
+        // 零产出守卫判定不能重放（无用户消息/已有副作用）或外部 owner：只学不重放，
+        // 让下一次发送用修好的 models.json 重建。
+        if (plan.action === 'stop' || externalOwner) {
+          deps.log.info('pi provider compat learned without replay', {
+            sessionId,
+            providerId,
+            modelId,
+            compat,
+            ...(plan.action === 'stop' ? { stopReason: plan.reason } : { externalOwner: true }),
+          });
+          return false;
+        }
+        const sourceWire = persistedUserContentToWireMessage(
+          plan.sourceUserAgentFacingWireContent ?? plan.sourceUserContent,
+        );
+        const sourceText = typeof sourceWire === 'string' ? sourceWire : sourceWire.content;
+        const replay = await deps.replayUserMessage(
+          sessionId,
+          plan.sourceUserContent,
+          plan.sourceUserAgentFacingWireContent,
+          {
+            signal,
+            // 保留同一 Pi 会话历史：失败轮的 error assistant 会被 pi-ai 序列化时
+            // 跳过，模型看到的仍是同一条用户请求，重放即重试。
+            resumeRetainedHistory: true,
+            sourceUserContent: plan.sourceUserContent,
+            sourceUserClientId: plan.sourceUserClientId,
+            sourceCapabilitySelectionText:
+              typeof sourceText === 'string' ? sourceText : extractPlainText(sourceText),
+          },
+        );
+        signal?.throwIfAborted();
+        if (!replay.accepted) {
+          deps.log.warn('pi provider compat replay was not accepted', {
+            sessionId,
+            providerId,
+            modelId,
+          });
+          return false;
+        }
+        deps.onRebuilt?.(sessionId);
+        continuedInputs.set(sessionId, plan.sourceUserClientId);
+        deps.log.info('pi provider compat learned; replayed the user message', {
+          sessionId,
+          providerId,
+          modelId,
+          compat,
+        });
+        return true;
+      }
       let action = decideCindyCompression({
         local: true,
         bytes: oversized ? 'violated' : 'unknown',
