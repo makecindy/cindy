@@ -97,6 +97,33 @@ export function assessRuntimeModelSwitchGate(
   return { skipRebuild: false, defer: false };
 }
 
+/**
+ * 冷 Pi 会话在路由变化前需要哪种窗口核实。
+ *  - `live-runtime`:有活进程，直接按实际窗口核验，无需冷启动；
+ *  - `rehydrate-cold-runtime`:冷会话但有原生会话，可拉起运行时核实当前窗口；
+ *  - `skip-without-native-session`:没有原生会话(删消息 / clear / resume 回落留下的
+ *    context rebuild 待重建态) —— 没有 native 上下文可核实，也没有旧窗口要保护，
+ *    下一轮发送必然按目标窗口全量重建，与 prepareModelWindowSwitch 对
+ *    `!sdkSessionId` 直接返回 'not-needed' 同口径；
+ *  - `reject-cold-remote`:冷远端，本机拉不起远端运行时，维持 fail closed。
+ */
+export type ColdPiWindowVerificationPlan =
+  | 'live-runtime'
+  | 'rehydrate-cold-runtime'
+  | 'skip-without-native-session'
+  | 'reject-cold-remote';
+
+export function planColdPiWindowVerification(input: {
+  hasLiveSession: boolean;
+  remoteHostId: string | null | undefined;
+  nativeSessionId: string | null | undefined;
+}): ColdPiWindowVerificationPlan {
+  if (input.hasLiveSession) return 'live-runtime';
+  if (input.remoteHostId) return 'reject-cold-remote';
+  if (!input.nativeSessionId) return 'skip-without-native-session';
+  return 'rehydrate-cold-runtime';
+}
+
 /** 回合中登记 pending 时写入的运行时快照:必须带上点选时的 effort / Fast,不能等结算再猜。 */
 export function buildDeferredRuntimeSelectionProfile<
   TAgent extends string,

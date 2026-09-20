@@ -5,6 +5,7 @@ import {
   applyWithVerifiedModelWindow,
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
+  planColdPiWindowVerification,
 } from '../runtimeModelSwitchGate';
 
 const million = 1_000_000;
@@ -210,6 +211,49 @@ describe('assessRuntimeModelSwitchGate', () => {
     },
   ])('$name', ({ input, want }) => {
     expect(assessRuntimeModelSwitchGate(input)).toEqual(want);
+  });
+});
+
+describe('planColdPiWindowVerification', () => {
+  const cold = {
+    hasLiveSession: false,
+    remoteHostId: null,
+    nativeSessionId: 'pi-native-session',
+  } as const;
+
+  it.each([
+    {
+      name: 'live runtime verifies the actual window, no cold start',
+      input: { ...cold, hasLiveSession: true },
+      want: 'live-runtime',
+    },
+    {
+      name: 'cold runtime with a resumable native session is rehydrated',
+      input: cold,
+      want: 'rehydrate-cold-runtime',
+    },
+    {
+      name: 'cold remote runtime stays fail closed',
+      input: { ...cold, remoteHostId: 'ssh-remote-1' },
+      want: 'reject-cold-remote',
+    },
+    {
+      name: 'cleared native context is not verified (next send rebuilds on target)',
+      input: { ...cold, nativeSessionId: null },
+      want: 'skip-without-native-session',
+    },
+    {
+      name: 'live runtime wins even while the native session is being cleared',
+      input: { ...cold, hasLiveSession: true, nativeSessionId: null },
+      want: 'live-runtime',
+    },
+    {
+      name: 'cold remote without native session still rejects',
+      input: { ...cold, remoteHostId: 'ssh-remote-1', nativeSessionId: null },
+      want: 'reject-cold-remote',
+    },
+  ])('$name', ({ input, want }) => {
+    expect(planColdPiWindowVerification(input)).toBe(want);
   });
 });
 

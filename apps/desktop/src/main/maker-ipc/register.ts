@@ -118,6 +118,7 @@ import {
   applyWithVerifiedModelWindow,
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
+  planColdPiWindowVerification,
   planUserRuntimeModelSwitch,
 } from '../../shared/runtimeModelSwitchGate.js';
 import type { DesktopCommandContext } from '../commands/index.js';
@@ -15928,6 +15929,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       let liveSessionBeforeRouteChange = maker.getSession(sessionId);
       let rehydratedColdPiRuntime: typeof liveSessionBeforeRouteChange = undefined;
+      // 冷 Pi 但没有可 resume 的原生会话(删消息 / clear / resume 回落留下的 context
+      // rebuild 待重建态):没有当前窗口可核实,目标 route 落库后由下一次发送按目标
+      // 窗口懒创建,终态核验同样跳过。
+      let coldPiRuntimeWithoutNativeSession = false;
       const targetProviderId =
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
@@ -15987,13 +15992,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (isSessionInTurn(sessionId)) {
           return deferLockedSelection();
         }
-        if (!liveSessionBeforeRouteChange && runtimeStatus.remoteHostId) {
+        const coldPiWindowVerification = planColdPiWindowVerification({
+          hasLiveSession: liveSessionBeforeRouteChange !== undefined,
+          remoteHostId: runtimeStatus.remoteHostId,
+          nativeSessionId: runtimeStatus.sdkSessionId,
+        });
+        if (coldPiWindowVerification === 'reject-cold-remote') {
           throwIpcError(
             localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
             'cold remote Pi runtime cannot verify the target window; runtime selection was not changed',
           );
         }
-        if (!liveSessionBeforeRouteChange) {
+        // 没有原生会话 = 下一轮发送必然走 context rebuild,由目标窗口从头重建;
+        // 不能拿「核实不到当前窗口」把切换挡住(与 prepareModelWindowSwitch 的
+        // '!sdkSessionId → not-needed' 同口径)。
+        coldPiRuntimeWithoutNativeSession =
+          coldPiWindowVerification === 'skip-without-native-session';
+        if (coldPiWindowVerification === 'rehydrate-cold-runtime') {
           try {
             await rehydrateColdPiRuntimeForWindowVerification(sessionId);
           } catch {
@@ -16397,11 +16412,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return { deferred: false, superseded: true };
         }
         const piSessionAfterRouteChange = maker.getSession(sessionId);
+        // 无原生会话的冷 Pi 没有活进程可读终态窗口:route 已提交,下一次发送按
+        // 目标窗口懒创建,这里跳过活进程快照核验(与 runtimeRetired 同语义)。
         if (
           runtimeAgentKind === 'pi' &&
           runtimeRouteChanged &&
           result.status !== 'deferred' &&
-          !modelWindowRebuilt
+          !modelWindowRebuilt &&
+          !coldPiRuntimeWithoutNativeSession
         ) {
           if (!piSessionAfterRouteChange) {
             restoreControlStores();

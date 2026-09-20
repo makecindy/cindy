@@ -993,6 +993,46 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('Pi current runtime could not be verified');
   });
 
+  it('applies Pi route changes without failing closed when the native context was cleared', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 删消息 / clear / resume 回落会清空 sdk_session_id。此时没有原生会话可 resume,
+    // 没有当前窗口可核实,也没有旧窗口要保护:选择必须落到目标 route,由下一次发送
+    // 按目标窗口懒创建,不能拿 MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN fail closed
+    // (与 prepareModelWindowSwitch 的 '!sdkSessionId → not-needed' 同口径)。
+    const plan = setModel.indexOf('planColdPiWindowVerification({');
+    const coldRemoteReject = setModel.indexOf(
+      'cold remote Pi runtime cannot verify the target window',
+    );
+    const skipNoNative = setModel.indexOf(
+      "coldPiWindowVerification === 'skip-without-native-session'",
+    );
+    const rehydrate = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(plan).toBeGreaterThan(-1);
+    expect(setModel).toContain('nativeSessionId: runtimeStatus.sdkSessionId,');
+    expect(plan).toBeLessThan(coldRemoteReject);
+    expect(coldRemoteReject).toBeLessThan(skipNoNative);
+    expect(skipNoNative).toBeLessThan(rehydrate);
+    expect(rehydrate).toBeLessThan(apply);
+    // 终态活进程核验必须同步跳过,否则只是换成 'Pi target runtime could not be verified'。
+    const finalBlockStart = setModel.indexOf('const piSessionAfterRouteChange =');
+    const finalVerification = setModel.indexOf(
+      'Pi target runtime could not be verified',
+      finalBlockStart,
+    );
+    expect(finalBlockStart).toBeGreaterThan(-1);
+    expect(finalVerification).toBeGreaterThan(finalBlockStart);
+    expect(setModel.slice(finalBlockStart, finalVerification)).toContain(
+      '!coldPiRuntimeWithoutNativeSession',
+    );
+  });
+
   it('closes a cold Pi runtime when route persistence fails after rehydrate', () => {
     const setModel = handlerBody(
       registerSource,
