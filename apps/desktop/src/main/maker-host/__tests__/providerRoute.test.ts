@@ -144,9 +144,9 @@ describe('Codex local auth policy', () => {
     expect((await captureCodexLocalAuthPolicy('pending-key', 'pending-model')).isCurrent()).toBe(true);
   });
 
-  it('keeps official subscriptions and gateway compatibility distinct from provider OAuth', async () => {
+  it('isolates gateway routes while retaining official and third-party OAuth compatibility', async () => {
     expect(await resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
-    expect(await resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('legacy-shared');
+    expect(await resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('isolated');
     expect(await resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
   });
 });

@@ -313,14 +313,14 @@ export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ acc
 }
 
 /** A deferred child request must revalidate both credential and authorization at dispatch/retry. */
-export async function getChatgptBridgeAuthForDispatch(): Promise<{
+export async function getChatgptBridgeAuthForDispatch(providerId = 'openai'): Promise<{
   accessToken: string; accountId: string | null; canDispatch(): boolean;
 }> {
   const ownerScope = activeOwnerScopeKey();
   for (let attempt = 0; attempt < 2; attempt++) {
-    const auth = await getChatgptBridgeAuth();
+    const auth = await getChatgptBridgeAuth(providerId);
     throwIfOwnerBoundDispatchUnsafe(ownerScope);
-    const proof = desktopCodexAuthAdapter.captureOAuthDispatchProof(auth.accessToken, auth.accountId);
+    const proof = desktopCodexAuthAdapter.captureOAuthDispatchProof(auth.accessToken, auth.accountId, providerId);
     if (proof) return {
       ...auth,
       canDispatch: () => ownerScope === activeOwnerScopeKey()

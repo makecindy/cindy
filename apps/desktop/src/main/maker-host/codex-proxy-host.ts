@@ -104,6 +104,8 @@ import {
   buildRouteDecision,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
+  getProviderRouteCredentialRevision,
+  isProviderRouteMutationInProgress,
   isUserProviderSession,
   getUserProviderIdForSession,
   readProviderOAuthToken,
@@ -370,10 +372,10 @@ type CodexSubagentOAuth = {
   accountId: string | null;
   canDispatch(): boolean;
 };
-let readSubagentOAuth: (() => Promise<CodexSubagentOAuth>) | undefined;
+let readSubagentOAuth: ((providerId?: string) => Promise<CodexSubagentOAuth>) | undefined;
 
 /** Only an explicitly routed official child may request host-owned OAuth credentials. */
-export function setCodexSubagentOAuthReader(reader: () => Promise<CodexSubagentOAuth>): void {
+export function setCodexSubagentOAuthReader(reader: (providerId?: string) => Promise<CodexSubagentOAuth>): void {
   readSubagentOAuth = reader;
 }
 
@@ -2847,12 +2849,13 @@ export function createModelRoutingTransform(
         selectedRouting?.authStrategy === 'oauth-passthrough'
         && authInjection !== 'oauth-bearer'
       ) {
-        if (authInjection !== 'provider-oauth' || subagentRoute.providerId !== 'openai' || !readSubagentOAuth) {
+        if (!readSubagentOAuth) {
           return unresolvedCollabSpawnRouteDecision();
         }
         // The parent stays ephemeral. Fetch subscription credentials only when
         // an explicit child route actually dispatches to the official backend.
-        return readSubagentOAuth().then((auth) => ({
+        const credentialRevision = getProviderRouteCredentialRevision(subagentRoute.providerId);
+        return readSubagentOAuth(subagentRoute.providerId).then((auth) => ({
           upstreamOverride: CODEX_OAUTH_UPSTREAM,
           headerOverride: {
             authorization: `Bearer ${auth.accessToken}`,
@@ -2860,6 +2863,8 @@ export function createModelRoutingTransform(
           },
           ...(!auth.accountId ? { headerDelete: ['chatgpt-account-id'] } : {}),
           dispatchGenerationValid: () => sourceHostAlive()
+            && !isProviderRouteMutationInProgress(subagentRoute.providerId)
+            && getProviderRouteCredentialRevision(subagentRoute.providerId) === credentialRevision
             && threadToSession.get(threadId) === sessionId
             && subagentRouteByThread.get(threadId) === subagentRoute
             && auth.canDispatch(),

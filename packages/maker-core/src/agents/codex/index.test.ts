@@ -70,7 +70,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
       error?: { code: number; message: string; data?: unknown };
     }>();
 
-    constructor() {
+    constructor(private readonly spawnArgs: string[] = []) {
       MockCodexTransport.onCreate?.(this);
     }
 
@@ -189,7 +189,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
       if (req.method === 'config/read') {
         this.emitLine({
           id: req.id,
-          result: { config: { features: { memories: this.memoryEnabled } } },
+          result: { config: { cli_auth_credentials_store: this.spawnArgs.includes('cli_auth_credentials_store="ephemeral"') ? "ephemeral" : "file", features: { memories: this.memoryEnabled } } },
         });
         return;
       }
@@ -280,7 +280,7 @@ vi.mock('./app-server/stdioTransport.js', () => ({
   }) => {
     createdStdioOptions.push(opts);
     opts.onProcessSpawned?.(7_000 + createdStdioOptions.length);
-    const transport = new MockCodexTransport();
+    const transport = new MockCodexTransport(opts.extraArgs);
     createdTransports.push(transport);
     return transport;
   },
@@ -372,12 +372,34 @@ describe('Codex official OAuth host isolation', () => {
   function isolatedDeps() {
     return createDeps({}, {
       resolveCodexLocalAuthPolicy: (providerId) =>
-        providerId === 'cprov-test' ? 'isolated' : 'legacy-shared',
+        providerId === 'cprov-test' || providerId === 'xd' ? 'isolated' : 'legacy-shared',
       prepareCodexExtraSpawnConfig: async () => ({
         extraArgs: [], extraEnv: {}, codexProxyActive: true,
       }),
     });
   }
+
+  it.each([false, true])('keeps gateway authentication independent of an OAuth host (oauthFirst=%s)', async (oauthFirst) => {
+    const deps = isolatedDeps();
+    const authState = vi.fn(async (opts?: { credentialMode?: string }) => ({ authenticated: true, authSource: opts?.credentialMode === 'gateway-key' ? 'api-key' as const : 'oauth' as const }));
+    deps.auth.getState = authState;
+    const agent = new CodexAgent(deps);
+    const start = (providerId: string) => agent.startSession({ sessionId: providerId, providerId, model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      const first = await start(oauthFirst ? 'openai' : 'xd');
+      const second = await start(oauthFirst ? 'xd' : 'openai');
+      const gatewayIndex = oauthFirst ? 1 : 0;
+      expect(createdTransports).toHaveLength(2);
+      expect(createdTransports.every((transport) => !transport.closed)).toBe(true);
+      expect(createdStdioOptions[gatewayIndex].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
+      expect(createdStdioOptions[1 - gatewayIndex].extraArgs).not.toContain('cli_auth_credentials_store="ephemeral"');
+      expect(authState.mock.calls.every(([opts]) => opts?.credentialMode !== undefined)).toBe(true);
+      await agent.forceDisposeLocalHostForAuthChange('expired OAuth', { preserveExternalAuth: true });
+      expect(createdTransports[gatewayIndex].closed).toBe(false);
+      expect(createdTransports[1 - gatewayIndex].closed).toBe(true);
+      await first.close(); await second.close();
+    } finally { await agent.dispose(); }
+  });
 
   it.each(['openai', 'cprov-test'])('detects a retained native writer only across hosts from %s', async (providerId) => {
     const agent = new CodexAgent(isolatedDeps());
@@ -605,7 +627,7 @@ describe('Codex official OAuth host isolation', () => {
       await agent.forceDisposeLocalHostForAuthChange('revoked OAuth', { preserveExternalAuth: true });
       expect(createdTransports[0].closed).toBe(true);
       expect(createdTransports[1].closed).toBe(false);
-      const guard = await agent.beginLocalHostCredentialChange();
+      const guard = await agent.beginLocalHostCredentialChange('provider snapshot changed', { allLocalHosts: true, forceRetire: true });
       try {
         await guard.retireActiveHost();
         expect(createdTransports[1].closed).toBe(true);
@@ -647,14 +669,14 @@ describe('Codex official OAuth host isolation', () => {
 
   it.each([false, true])('retires scoped snapshots and blocks new hosts during configuration persistence (review=%s)', async (reviewMode) => {
     if (reviewMode) MockCodexTransport.userAgent = 'mock-codex/0.145.0';
-    if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
+    if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral', mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
     const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-change-'));
     const deps = isolatedDeps();
     deps.resolveCodexThreadContextWindow = () => 700_000;
     const agent = new CodexAgent(deps);
     try {
       await agent.startSession({ sessionId: 'old-config', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
-      const guard = await agent.beginLocalHostCredentialChange();
+      const guard = await agent.beginLocalHostCredentialChange('provider snapshot changed', { allLocalHosts: true, forceRetire: true });
       try {
         await guard.retireActiveHost();
         expect(createdTransports[0].closed).toBe(true);
@@ -680,7 +702,7 @@ describe('Codex official OAuth host isolation', () => {
 
   it.each([false, true])('supersedes an in-flight scoped creation at the configuration boundary (review=%s)', async (reviewMode) => {
     MockCodexTransport.userAgent = 'mock-codex/0.145.0';
-    if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
+    if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral', mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
     const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-inflight-'));
     const deps = isolatedDeps();
     deps.resolveCodexThreadContextWindow = () => 700_000;
@@ -693,7 +715,7 @@ describe('Codex official OAuth host isolation', () => {
     try {
       const pending = agent.startSession({ sessionId: 'creating-scope', ...(reviewMode ? { reviewMode: true as const } : {}), providerId: 'cprov-test', model: 'gpt-5.4', workingDir });
       await started;
-      const guard = await agent.beginLocalHostCredentialChange();
+      const guard = await agent.beginLocalHostCredentialChange('provider snapshot changed', { allLocalHosts: true, forceRetire: true });
       try {
         const retired = guard.retireActiveHost();
         resume();
@@ -780,7 +802,7 @@ describe('Codex official OAuth host isolation', () => {
 
   it('cancels a startup waiting for the configuration barrier without reserving a host', async () => {
     const agent = new CodexAgent(isolatedDeps());
-    const guard = await agent.beginLocalHostCredentialChange();
+    const guard = await agent.beginLocalHostCredentialChange('provider snapshot changed', { allLocalHosts: true, forceRetire: true });
     try {
       const pending = agent.startSession({ sessionId: 'cancelled-barrier', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
       const rejection = expect(pending).rejects.toThrow(/cancelled/);
@@ -801,7 +823,7 @@ describe('Codex official OAuth host isolation', () => {
     try {
       const pending = agent.startSession({ sessionId: 'stale-policy', providerId: 'cprov-test', model: 'gpt-5.4', workingDir: '/repo' });
       await waitForExpectation(() => expect(resolveDependency).toHaveBeenCalledOnce());
-      const guard = await agent.beginLocalHostCredentialChange();
+      const guard = await agent.beginLocalHostCredentialChange('provider snapshot changed', { allLocalHosts: true, forceRetire: true });
       await guard.finalize();
       releaseResolution();
       const handle = await pending;
@@ -24522,7 +24544,7 @@ describe('CodexAgent.forkSdkSession', () => {
     })).resolves.toMatchObject({ newSdkSessionId: 'child', usedNativeForkAnchor: true });
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
       path: '/account-a/sessions/source.jsonl', lastTurnId: 'boundary',
-    }));
+    }), expect.objectContaining({ beforeDispatch: expect.any(Function) }));
     expect(recordCodexThreadLocation).toHaveBeenCalledWith('child', '/account-a', '/account-a/sessions/child.jsonl');
   });
 

@@ -756,6 +756,6 @@ describe('Codex host-scoped credential coordination', () => {
       },
     });
     expect(result.closedSessionIds).toEqual(['target']);
-    expect(closeSession).toHaveBeenCalledExactlyOnceWith('target');
+    expect(closeSession).toHaveBeenCalledExactlyOnceWith('target', 'runtime-refresh');
   });
 });

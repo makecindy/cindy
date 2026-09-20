@@ -8190,7 +8190,7 @@ describe('official Subagents on external credential Hosts', () => {
     } finally { await host.disposeCodexProxy(); }
   });
 
-  it.each([false, true])('reads host OAuth only for an explicit official child (revoked=%s)', async (revoked) => {
+  it.each(['env-key', 'provider-oauth'].flatMap((mode) => [false, true].map((revoked) => ({ mode, revoked }))))('reads host OAuth only for an explicit official child ($mode revoked=$revoked)', async ({ mode, revoked }) => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
@@ -8211,7 +8211,7 @@ describe('official Subagents on external credential Hosts', () => {
         capabilities: {}, responseModels: ['custom-parent-model'], credentialRevision: 0,
         routing: { upstream: 'https://example.invalid', authStrategy: 'api-key-header' as const }, responseRoutingByModel: {},
       }];
-      const transform = host.createModelRoutingTransform('provider-oauth', parentRoutes);
+      const transform = host.createModelRoutingTransform(mode as 'env-key' | 'provider-oauth', parentRoutes);
       await transform({ model: 'custom-parent-model' }, {
         reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'external-parent-thread' },
       });

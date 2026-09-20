@@ -2793,6 +2793,62 @@ describe('local Codex account display identity', () => {
 });
 
 describe('deferred Codex OAuth dispatch proof', () => {
+  it('binds an independent account child to its real credential and authorization record', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-multi-reader-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'data');
+    h.dataOwnerId = 'reader-owner';
+    vi.spyOn(os, 'homedir').mockReturnValue(path.join(root, 'home'));
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const catalog = await import('../active-catalog.js');
+    catalog.setCustomProviders([buildUserProvider({
+      id: 'openai-child', name: 'Synthetic child account', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.4', name: 'Fixture' }] } },
+    })]);
+    const accounts = await import('../codex-account-auth.js');
+    const home = accounts.codexAccountHome('openai-child');
+    fs.mkdirSync(home, { recursive: true });
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+    const write = (account: string) => {
+      const raw = JSON.stringify({ tokens: { access_token: idToken({ exp: expiry, sub: account }), account_id: account } });
+      fs.writeFileSync(path.join(home, 'auth.json'), raw);
+      fs.writeFileSync(path.join(home, 'account.json'), JSON.stringify(accounts.parseCodexAccountIdentity(raw)));
+    };
+    const reader = await import('../anthropic-responses-bridge-host.js');
+    const proxy = await import('../codex-proxy-host.js');
+    const routes = await import('../provider-route.js');
+    write('synthetic-a');
+    proxy.setCodexSubagentOAuthReader(reader.getChatgptBridgeAuthForDispatch);
+    proxy.registerComposed('multi-parent', 'multi-parent-thread', 'fixture', {
+      subagentRoute: { providerId: 'openai-child', catalogModel: 'gpt-5.4', reasoningEffort: 'high' },
+    });
+    const transform = proxy.createModelRoutingTransform('env-key', []);
+    const context = { reqId: 1, method: 'POST', url: '/responses', headers: {
+      'thread-id': 'multi-child', 'x-openai-subagent': 'collab_spawn', 'x-codex-parent-thread-id': 'multi-parent-thread',
+    } };
+    try {
+      const first = await transform({ model: 'gpt-5.4' }, context);
+      expect(first?.headerOverride?.['chatgpt-account-id']).toBe('synthetic-a');
+      expect(first?.dispatchGenerationValid?.()).toBe(true);
+      write('synthetic-b');
+      expect(first?.dispatchGenerationValid?.()).toBe(false);
+      const next = await transform({ model: 'gpt-5.4' }, context);
+      expect(next?.headerOverride?.['chatgpt-account-id']).toBe('synthetic-b');
+      expect(next?.dispatchGenerationValid?.()).toBe(true);
+      const finish = routes.beginProviderRouteMutation('openai-child');
+      expect(next?.dispatchGenerationValid?.()).toBe(false);
+      finish.commit(); finish();
+      expect(next?.dispatchGenerationValid?.()).toBe(false);
+      const current = await reader.getChatgptBridgeAuthForDispatch('openai-child');
+      await accounts.invalidateCodexAccount('openai-child', 'synthetic-invalidated', current.accessToken);
+      expect(current.canDispatch()).toBe(false);
+      await expect(reader.getChatgptBridgeAuthForDispatch('openai-child')).rejects.toThrow();
+    } finally {
+      proxy.unregister('multi-parent');
+      catalog.setCustomProviders([]);
+    }
+  });
+
   it('reads and freezes the real bridge credential across same-owner account replacement', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-reader-proof-'));
     dirs.push(root);

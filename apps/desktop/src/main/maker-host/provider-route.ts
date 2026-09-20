@@ -666,11 +666,12 @@ export async function captureCodexLocalAuthPolicy(
   }
   const source = providerId ?? inferProviderIdForModel(modelId, 'codex');
   const routing = getProviderRoutingDescriptor(source, 'codex', modelId);
-  // Keep legacy reuse for gateway, third-party OAuth and unknown routes. This
+  // Keep legacy reuse for third-party OAuth and unknown routes. This
   // is compatibility policy, not a claim that they need official Codex OAuth.
   const revision = nextProviderRouteCredentialRevision;
   return {
-    policy: routing?.authStrategy === 'api-key-header' ? 'isolated' : 'legacy-shared',
+    policy: routing?.authStrategy === 'api-key-header' || routing?.authStrategy === 'gateway-key'
+      ? 'isolated' : 'legacy-shared',
     isCurrent: () => revision === nextProviderRouteCredentialRevision,
   };
 }

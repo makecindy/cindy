@@ -501,6 +501,25 @@ export function codexLocalAuthHostIdentity(key: string, policy?: 'isolated' | 'l
   return policy === 'isolated' ? `${key}:external-auth` : key;
 }
 
+/** One identity calculation for initial creation, route reselection and writer handoff. */
+function localSessionHostIdentity(input: {
+  sessionId: string;
+  remoteHostId?: string;
+  accountSessionHost: boolean;
+  accountProviderId?: string;
+  reviewMode: boolean;
+  customContext: boolean;
+  storage?: { sqliteHome: string; historyHome: string };
+  policy: 'isolated' | 'legacy-shared';
+}): string {
+  const base = input.accountSessionHost
+    ? `local-account:${input.accountProviderId ?? 'openai'}:session:${input.sessionId}`
+    : input.reviewMode ? localReviewHostKey(input.sessionId)
+      : input.customContext ? localCustomContextHostKey(input.sessionId) : hostKey(input.remoteHostId);
+  return codexLocalAuthHostIdentity(base + (input.storage
+    ? `:storage:${input.storage.sqliteHome}:history:${input.storage.historyHome}` : ''), input.policy);
+}
+
 const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
 // One bridge is shared by every local host, including account and utility hosts.
 const LOCAL_MCP_REFRESH_KEY = 'local-mcp-refresh';
@@ -2266,7 +2285,7 @@ export class CodexAgent extends BaseAgent {
 
   async beginLocalHostCredentialChange(
     reason = 'CodexAgent local credential state changed',
-    options: { allLocalHosts?: boolean; busyError?: () => Error } = {},
+    options: { allLocalHosts?: boolean; forceRetire?: boolean; busyError?: () => Error } = {},
   ): Promise<{
     assertIdle(): void;
     retireActiveHost(): Promise<void>;
@@ -2319,7 +2338,7 @@ export class CodexAgent extends BaseAgent {
     const retire = async (): Promise<void> => {
       for (const candidate of affectedKeys()) {
         await this.retireHostKey(candidate, reason, {
-          failIfActive: options.allLocalHosts === true,
+          failIfActive: options.allLocalHosts === true && options.forceRetire !== true,
           logPrefix: 'codex local credential hard cut',
           throwOnShutdownFailure: true,
         });
@@ -2345,7 +2364,7 @@ export class CodexAgent extends BaseAgent {
         try {
           if (!hostRetired) {
             if (options.allLocalHosts) {
-              if (activeUseCount() > 0) throw options.busyError?.() ?? new Error('Cannot refresh MCP while local Codex hosts are active or starting');
+              if (!options.forceRetire && activeUseCount() > 0) throw options.busyError?.() ?? new Error('Cannot refresh MCP while local Codex hosts are active or starting');
               await retire();
             } else {
               await this.disposeLocalHostForCredentialChangeUnlocked(key, reason);
@@ -2806,7 +2825,10 @@ assertRouteCurrent();
     const credentialMode = options?.credentialMode;
     if (!credentialMode) return this.refreshLocalModelsWithinDeadline(options);
 
-    const key = options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode);
+    const key = codexLocalAuthHostIdentity(
+      options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
+      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+    );
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -2837,14 +2859,17 @@ assertRouteCurrent();
     const credentialMode = options?.credentialMode;
     // 显式 provider 刷新使用独立 control-plane app-server。不能为了发一次 model/list
     // 切换共享 local host 的凭证形态：切换协调器会关闭空闲会话，忙碌会话则直接拒绝。
-    const key = options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
-      ? localControlPlaneHostKey(credentialMode)
-      : hostKey();
+    const key = codexLocalAuthHostIdentity(
+      options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
+        ? localControlPlaneHostKey(credentialMode) : hostKey(),
+      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+    );
     return this.withHostOperation(async () => ({
       key: credentialMode ? key : hostKey(),
       host: credentialMode
         ? await this.getHost(undefined, credentialMode, {
           providerId: options?.providerId,
+          ...(credentialMode === 'gateway-key' ? { localAuthPolicy: 'isolated' as const } : {}),
           keyOverride: key,
           hostPurpose: 'control-plane',
         })
@@ -3155,7 +3180,8 @@ assertRouteCurrent();
     }
     if (!remoteHostId && sqliteHome) extraArgs.push('-c', `sqlite_home=${JSON.stringify(sqliteHome)}`);
     let externalAuth: CodexExternalAuth | undefined;
-    const requireEphemeralAuth = !remoteHostId && !!historyHome && path.resolve(historyHome) !== path.resolve(env.CODEX_HOME ?? '');
+    const requireEphemeralAuth = !remoteHostId && (localAuthPolicy === 'isolated'
+      || (!!historyHome && path.resolve(historyHome) !== path.resolve(env.CODEX_HOME ?? '')));
     if (!remoteHostId && hostPurpose === 'control-plane' && effectiveMode === 'oauth-bearer' && env.CODEX_HOME) {
       // Managed refresh must read the selected account's file, not an inherited identity.
       env = useCodexHistoryHome(env, env.CODEX_HOME);
@@ -3164,7 +3190,7 @@ assertRouteCurrent();
       // Extra spawn configuration above intentionally uses the TARGET credential
       // home (proxy auth, model catalogs and account controls). Only the native
       // runtime uses the canonical history home, including lineage/writer locks.
-      env = useCodexHistoryHome(env, historyHome!);
+      env = useCodexHistoryHome(env, historyHome ?? env.CODEX_HOME);
       extraArgs.push('-c', 'cli_auth_credentials_store="ephemeral"');
       if (effectiveMode === 'oauth-bearer') {
         if (!readAccountTokens) {
@@ -3189,14 +3215,6 @@ assertRouteCurrent();
           },
         };
       }
-    }
-    // Custom API-key routes must not let Codex preload shared OAuth credentials.
-    // Keep official OAuth hosts unchanged; the override is scoped to this process only.
-    if (
-      !remoteHostId
-      && localAuthPolicy === 'isolated'
-    ) {
-      extraArgs.push('-c', 'cli_auth_credentials_store="ephemeral"');
     }
     if (baseExtraArgs.length > 0) {
       this.deps.logger.info('Codex plugin runtime disabled for local app-server', {
@@ -4952,17 +4970,15 @@ assertRouteCurrent();
         if (attempt >= 7) throw new CodexRouteSelectionChangedError('Codex route changed repeatedly during model switch');
       }
     };
-    const baseSessionHostKey = reviewMode
-      ? localReviewHostKey(sid)
-      : usesCustomContextHost
-        ? localCustomContextHostKey(sid)
-        : hostKey(opts.remoteHostId);
     const sessionStorage = !opts.remoteHostId && opts.resumeSessionId
       ? await this.deps.resolveCodexThreadStorage?.(opts.resumeSessionId)
       : undefined;
     const sessionSqliteHome = sessionStorage?.sqliteHome;
-    let currentHostKey = codexLocalAuthHostIdentity((accountSessionHost ? `local-account:${accountProviderId ?? 'openai'}:session:${sid}` : baseSessionHostKey)
-      + (sessionStorage ? `:storage:${sessionSqliteHome}:history:${sessionStorage.historyHome}` : ''), localAuthPolicy);
+    const resolveSessionHostKey = (): string => localSessionHostIdentity({
+      sessionId: sid, remoteHostId: opts.remoteHostId, accountSessionHost, accountProviderId,
+      reviewMode, customContext: usesCustomContextHost, storage: sessionStorage, policy: localAuthPolicy,
+    });
+    let currentHostKey = resolveSessionHostKey();
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -5022,10 +5038,7 @@ assertRouteCurrent();
             ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null : null;
           initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.model, initialCustomContextWindow);
           usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
-          currentHostKey = codexLocalAuthHostIdentity(
-            reviewMode ? localReviewHostKey(sid) : usesCustomContextHost ? localCustomContextHostKey(sid) : hostKey(),
-            localAuthPolicy,
-          );
+          currentHostKey = resolveSessionHostKey();
         }
       }
     })();
@@ -5110,6 +5123,9 @@ assertRouteCurrent();
       assertCurrentHost('initialize');
     } catch (error) {
       releaseHostBindingLeaseIfNeeded();
+      // A provider transaction may close initialize while no thread exists yet.
+      // Preserve route reselection instead of surfacing the transport's close error.
+      assertCurrentHost('initialize failed');
       throw error;
     }
     const sessionCodexHome = initResp.codexHome ?? null;
@@ -14599,10 +14615,15 @@ assertRouteCurrent();
       const selection = await this.resolveLocalAuthSelection(opts.providerId, opts.model);
       const contextWindow = opts.reviewMode ? null
         : await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model);
-      const baseKey = opts.reviewMode ? localReviewHostKey(opts.sessionId ?? '')
-        : typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
-          ? localCustomContextHostKey(opts.sessionId ?? '') : hostKey();
-      const targetKey = codexLocalAuthHostIdentity(baseKey, selection.policy);
+      const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
+      const storage = await this.deps.resolveCodexThreadStorage?.(opts.threadId);
+      const targetKey = localSessionHostIdentity({
+        sessionId: opts.sessionId ?? '', accountProviderId,
+        accountSessionHost: accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true,
+        reviewMode: opts.reviewMode === true,
+        customContext: typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0,
+        storage, policy: selection.policy,
+      });
       if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
       for (const [key, host] of hosts) {
         if (!registryCurrent()) break;
