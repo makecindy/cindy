@@ -63,6 +63,13 @@ sequenceDiagram
 
 私有外层通道为 `device-link:plugin-oauth:v3`。独立于实验云分支的 v2，不降级回它。
 
+控制端和执行端都必须实现 v3；设备已连接、可创建任务或能投影旧授权卡片，不代表授权桥兼容。
+执行端返回 `CHANNEL_NOT_ALLOWED` 时，本机授权 IPC 以 `UNSUPPORTED_CAPABILITY` 拒绝，
+卡片明确提示更新远程设备上的 Cindy。其它前置失败只显示受控的失败提示，不展示原始异常、
+provider 响应或凭据。提示仅保存在控制端内存，并绑定账号代次、当前请求与 revision；重试、
+取消或新卡片不能被迟到的旧失败覆盖。它不改变 Host 的权威卡片 phase，也不进入任务历史。
+
+
 ```ts
 type IdentityRequest = { op: 'identity'; version: 3 };
 type PeerIdentity = {

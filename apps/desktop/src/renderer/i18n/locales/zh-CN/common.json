@@ -8059,6 +8059,8 @@
       "saveConfiguration": "保存配置",
       "saving": "保存中…",
       "error": {
+        "REMOTE_UNSUPPORTED": "远程设备上的 Cindy 尚不支持此授权方式，请更新该设备的 Cindy 后重试",
+        "REMOTE_FAILED": "未能发起远程授权，请确认两端在线后重试",
         "ACTION_FAILED": "设置操作未完成，请重试。",
         "ACTION_STALE": "设置已更新，请重新选择配置操作。",
         "AUTH_CANCELLED": "授权已取消，您可以重新授权。",

@@ -8061,6 +8061,8 @@
       "saveConfiguration": "Save Configuration",
       "saving": "Saving…",
       "error": {
+        "REMOTE_UNSUPPORTED": "Cindy on the remote device does not support this authorization method yet. Update it and try again.",
+        "REMOTE_FAILED": "Could not start remote authorization. Check that both devices are online and try again.",
         "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
         "ACTION_STALE": "This setup changed. Choose the setup action again.",
         "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",

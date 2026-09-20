@@ -1739,6 +1739,7 @@ export function CCAgentSessionView({
     pendingPluginSetup,
     pluginSetupViewerState,
     pluginSetupCommandInFlight,
+    pluginSetupCommandError,
     setPluginSetupViewerState,
     respondToPluginSetup,
     askUserViewerState,
@@ -5196,6 +5197,7 @@ export function CCAgentSessionView({
                     remoteDeviceId={remoteDeviceId ?? undefined}
                     viewerState={pluginSetupViewerState}
                     commandInFlight={pluginSetupCommandInFlight}
+                    commandError={pluginSetupCommandError}
                     remote={!!remoteDeviceId}
                     onViewerStateChange={setPluginSetupViewerState}
                     onCommand={respondToPluginSetup}

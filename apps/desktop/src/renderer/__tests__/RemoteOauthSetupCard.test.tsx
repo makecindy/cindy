@@ -182,3 +182,23 @@ it('distinguishes opening the browser from verifying an authorization result', a
   );
   expect(screen.getByRole('heading', { name: 'Confirming authorization' })).toBeTruthy();
 });
+
+
+it.each([false, true])('shows a persistent failure only for the current remote card (compact=%s)', async (compact) => {
+  api.mockResolvedValue(null);
+  const current = { ...pending, steps: [{ ...pending.steps[0], phase: 'pending' as const }] };
+  const error = { requestId: pending.requestId, revision: pending.revision, code: 'REMOTE_UNSUPPORTED' as const };
+  const r = render(<PluginSetupPrompt {...props} compact={compact} pending={current} commandInFlight={null} commandError={error} />);
+  await settle();
+  expect(screen.getByRole('alert').textContent).toContain('Update it and try again');
+  fireEvent.click(screen.getByRole('button', { name: 'Connect account' }));
+  expect(command).toHaveBeenCalledWith('card-test', 'run_action', 'connect');
+  r.rerender(<PluginSetupPrompt {...props} compact={compact} pending={current} commandError={error} />);
+  expect(screen.queryByRole('alert')).toBeNull();
+  r.rerender(<PluginSetupPrompt {...props} pending={{ ...current, revision: 2 }} commandInFlight={null} commandError={error} />);
+  expect(screen.queryByRole('alert')).toBeNull();
+  r.rerender(<PluginSetupPrompt {...props} pending={{ ...current, requestId: 'another-card' }} commandInFlight={null} commandError={error} />);
+  expect(screen.queryByRole('alert')).toBeNull();
+  r.rerender(<PluginSetupPrompt {...props} pending={current} remote={false} commandInFlight={null} commandError={error} />);
+  expect(screen.queryByRole('alert')).toBeNull();
+});

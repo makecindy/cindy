@@ -8,7 +8,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain, shell, clipboard } from 'electron';
 import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
-import { resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
+import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
 import { getDeviceId } from '../authManager.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL } from '@cindy/device-link';
@@ -1320,7 +1320,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
           openExternal: url => shell.openExternal(url),
         }),
       }, raw);
-    } catch { throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable; retry from the current card'); }
+    } catch (error) {
+      if (error instanceof RemotePluginOauthUnsupportedError)
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Update Cindy on the remote device to use remote plugin authorization');
+      throwIpcError('PRECONDITION_FAILED', 'Remote authorization unavailable; retry from the current card');
+    }
   };
   ipcMain.handle(PLUGIN_OAUTH_LOCAL_CHANNEL, authorizationHandler('oauth'));
   ipcMain.handle(PLUGIN_SECRET_LOCAL_CHANNEL, authorizationHandler('secret'));

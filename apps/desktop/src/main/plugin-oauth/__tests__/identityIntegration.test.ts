@@ -8,7 +8,7 @@ import {
   AuthenticatedOauthHost,
   OauthHostIdentity,
 } from '../authentication.js';
-import { resolveOauthPeerIdentity } from '../identityResolver.js';
+import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../identityResolver.js';
 import { oauthSecureStorageAvailable, type OauthIdentityScope } from '../identityStore.js';
 import {
   initializePluginOauthHost,
@@ -217,7 +217,7 @@ describe('ordinary Desktop identity admission without CIS', () => {
     );
     await expect(
       resolveOauthPeerIdentity({ scope: () => scope, invoke }, remote.deviceId, () => {}),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(RemotePluginOauthUnsupportedError);
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls[0]?.[1]).toBe(PLUGIN_OAUTH_CHANNEL);
   });

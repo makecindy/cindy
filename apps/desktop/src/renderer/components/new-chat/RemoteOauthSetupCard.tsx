@@ -10,6 +10,7 @@ interface Props {
   compact: boolean;
   remoteDeviceId?: string;
   commandInFlight: PluginSetupCommandInFlight | null;
+  errorMessage?: string;
   onCommand: (requestId: string, action: 'run_action' | 'cancel', actionId?: string) => void;
 }
 
@@ -49,6 +50,7 @@ function AccountCard({
   commandInFlight,
   onCommand,
   presentation,
+  errorMessage,
 }: Props & { presentation?: PluginOauthPresentation }) {
   const { t } = useTranslation();
   const step = pending.steps[0];
@@ -204,6 +206,9 @@ function AccountCard({
             </Button>
           </div>
         </div>
+      ) : null}
+      {!terminal && errorMessage ? (
+        <p role="alert" className="mt-3 text-13 text-[var(--error-fg)]">{errorMessage}</p>
       ) : null}
       {!terminal ? (
         <div className={`${compact ? 'mt-4' : 'mt-5'} flex flex-wrap items-center gap-2`}>

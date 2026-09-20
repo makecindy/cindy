@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import type {
   PendingPluginSetup,
   PluginSetupCommandInFlight,
+  PluginSetupCommandError,
   PluginSetupInlineFormValues,
   PluginSetupViewerState,
 } from '@/lib/makerChatStore';
@@ -22,6 +23,7 @@ interface PluginSetupPromptProps {
   pending: PendingPluginSetup;
   viewerState: PluginSetupViewerState;
   commandInFlight: PluginSetupCommandInFlight | null;
+  commandError?: PluginSetupCommandError | null;
   remote: boolean;
   onViewerStateChange: (next: PluginSetupViewerState) => void;
   onCommand: (
@@ -60,6 +62,7 @@ function PluginSetupPromptStateful({
   compact = false,
   viewerState,
   commandInFlight,
+  commandError,
   remote,
   remoteDeviceId,
   onViewerStateChange,
@@ -99,6 +102,9 @@ function PluginSetupPromptStateful({
     pending.steps.some((step) => step.phase === 'cancelled') &&
     pending.steps.every((step) => isTerminalPhase(step.phase));
   const terminal = pending.terminal === true || allSatisfied || cancelledTerminal;
+  const commandErrorMessage = remote && !terminal && !commandInFlight &&
+    commandError?.requestId === pending.requestId && commandError.revision === pending.revision
+    ? t(`newChat.pluginSetup.error.${commandError.code}`) : undefined;
   const busy = !!commandInFlight || (!compact && !!currentStep && RUNNING_PHASES.has(currentStep.phase));
   const blockedRemoteAction = (step = currentStep): boolean =>
     remote && !((pending.remoteOauth && step?.action?.kind === 'oauth_connect') ||
@@ -461,7 +467,7 @@ function PluginSetupPromptStateful({
   if (remote && pending.remoteOauth && pending.steps.length === 1 &&
       (currentStep?.action?.kind === 'oauth_connect' || (terminal && !currentStep?.action))) {
     return <RemoteOauthSetupCard pending={pending} compact={compact} remoteDeviceId={remoteDeviceId}
-      commandInFlight={commandInFlight} onCommand={onCommand} />;
+      commandInFlight={commandInFlight} errorMessage={commandErrorMessage} onCommand={onCommand} />;
   }
 
   const Shell = compact ? AuthorizationShell : InteractionPromptCardShell;
@@ -493,6 +499,7 @@ function PluginSetupPromptStateful({
       footer={terminal ? undefined : footer}
     >
       <div className="flex flex-col gap-[10px]" role="status" aria-live="polite" aria-label={title}>
+        {commandErrorMessage ? <p role="alert" className="text-13 text-[var(--error-fg)]">{commandErrorMessage}</p> : null}
         {!compactInlineForm && pending.intro ? (
           <p className="text-14 leading-5 text-[var(--ask-option-desc)]">{pending.intro}</p>
         ) : null}
