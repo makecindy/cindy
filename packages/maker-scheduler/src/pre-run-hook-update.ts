@@ -55,7 +55,9 @@ export async function stabilizePreRunHookForCreate(
  *
  * An unchanged relative command belongs to the pre-update workdir, so it is
  * resolved there before a session/workdir rebind. A newly supplied command is
- * resolved against the post-update workdir instead.
+ * resolved against the post-update workdir instead. Switching from agent to
+ * script also resolves relative hooks in the new script project: the owner
+ * binding no longer supplies the execution directory in that mode.
  */
 export async function stabilizePreRunHookForUpdate(
   existing: Schedule,
@@ -76,7 +78,8 @@ export async function stabilizePreRunHookForUpdate(
     : existing.targetSessionId;
   const nextWorkingDir = hasOwn(patch, 'workingDir') ? patch.workingDir : existing.workingDir;
   const commandChanged = patchHasHook && nextHook.command !== existing.preRunHook?.command;
-  const workingDir = commandChanged
+  const switchingToScript = existing.executionMode !== 'script' && patch.executionMode === 'script';
+  const workingDir = commandChanged || switchingToScript
     ? await resolveEffectiveWorkingDir(
         (patch.executionMode ?? existing.executionMode) === 'script' ? undefined : nextTargetSessionId,
         nextWorkingDir,

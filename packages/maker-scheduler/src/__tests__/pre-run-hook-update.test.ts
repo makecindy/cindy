@@ -131,6 +131,27 @@ describe('stabilizePreRunHookForCreate', () => {
 
 
 describe('script lifecycle bindings keep hook cwd independent', () => {
+  it.each([undefined, 'agent'] as const)(
+    'resolves retained relative hooks in the new script project when switching from %s',
+    async (executionMode) => {
+      const existing = schedule({ executionMode, targetSessionId: 'owner' });
+      const resolveSessionWorkDir = vi.fn(async () => '/owner-project');
+      // MCP may omit the hook; the desktop editor resubmits its unchanged value.
+      for (const hookPatch of [{}, { preRunHook: existing.preRunHook }]) {
+        const result = await stabilizePreRunHookForUpdate(existing, {
+          executionMode: 'script', workingDir: '/script-project', ...hookPatch,
+        }, {
+          resolveSessionWorkDir,
+          stabilizeCommand: async ({ command, workingDir }) => `${command}@${workingDir}`,
+        });
+        expect(result.preRunHook).toEqual({
+          command: 'node scripts/check.mjs@/script-project', timeoutMs: 5_000,
+        });
+      }
+      expect(resolveSessionWorkDir).not.toHaveBeenCalled();
+    },
+  );
+
   it('resolves create and update hooks in the script project', async () => {
     const deps = { resolveSessionWorkDir: vi.fn(async () => '/owner'),
       stabilizeCommand: vi.fn(async ({ command, workingDir }) => `${command}@${workingDir}`) };
