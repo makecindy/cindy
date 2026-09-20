@@ -3915,7 +3915,8 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
 \`\`\`js
 const response = await cindy.node.request({
   method: 'taptap/connect',
-  callId: msg.callId, // tool-call 内透传；取消或交卷时结束本请求与其子进程
+  callId: msg.callId, // tool-call 内透传
+  cancelWithCall: true, // 显式启用授权卡和随调用结束的生命周期
   params: { projectId: 'demo' },
   timeoutMs: 30000 // 可选 1000–120000，缺省 30000
 });
@@ -3923,10 +3924,11 @@ if (!response.ok) throw new Error(response.message);
 const result = response.result;
 \`\`\`
 
-当前工具触发的登录等前台请求应透传主机下发的 \`callId\`。主机只接受当前插件的
-在途调用；取消、超时或交卷后，该 Node 请求及由它启动的子进程一并结束，晚到的
-子进程启动会被拒绝。不传 \`callId\` 保持既有独立后台生命周期；设置页等无
-tool-call 的入口不能伪造或复用调用编号。
+当前工具触发的登录等前台请求应同时传入 \`cancelWithCall: true\` 和主机下发的
+\`callId\`。显式启用后，主机只接受当前插件的在途调用；取消、超时或交卷后，该
+Node 请求及其子进程一并结束，晚到的授权或子进程启动会被拒绝。只传旧 \`callId\`
+或不启用开关都保持既有独立 RPC 生命周期，不自动弹授权卡、不回收后台进程；
+设置页等无 tool-call 的入口不能伪造或复用调用编号。
 
 #### Node Worker 的持久化凭证绑定
 
@@ -3963,9 +3965,9 @@ const authorizationCode = request.cindy.secrets.mail_code;
 
 - \`secretBindings\` 最多 4 条，每条 \`methods\` 1–16 个；省略 \`entry\`
   只绑定主入口，不能借同名方法把凭证送去其它入口；
-- 在途工具调用携带 \`callId\` 时，缺少本次方法/入口声明的手动凭证会先显示既有保密输入卡，
+- 在途工具调用显式携带 \`cancelWithCall: true\` 和 \`callId\` 时，缺少本次方法/入口声明的手动凭证会先显示既有保密输入卡，
   远程任务复用签名加密输入桥；用户提交后才进入 Worker。显式登录或更换 Token 可带
-  \`promptSecrets: true\`，即使已保存也重新显示卡片；取消不清除原凭证。
+  \`promptSecrets: true\`（要求上述显式生命周期开关），即使已保存也重新显示卡片；取消不清除原凭证。
   没有在途调用或旧 Host 不支持此接线时仍返回 \`PERMISSION_DENIED\`，不会回退到聊天收取
   Token。设置页继续使用 \`/secrets\`，不要把输入放入业务 RPC 或 BroadcastChannel；
   完成本次卡片提交后，Host 在 Worker 私有 \`request.cindy.secretInputCompleted\` 标记
@@ -4119,8 +4121,8 @@ const maker = require('@taptap/maker'); // 之后它的自启动全部走了正�
 ### 4.12.5 随包 CLI 的登录授权卡片
 
 优先调用通用 \`globalThis.__CINDY_NODE__.bindAuthorization()\`。在**当前 JSON-RPC 请求处理函数内**
-同步捕获返回的 authorize 函数，再交给 CLI 输出/浏览器启动回调；它只绑定这一次仍在途的
-\`callId\`，不允许后台启动或复用。可传入的请求为：
+同步捕获返回的 authorize 函数，再交给 CLI 输出/浏览器启动回调。调用方必须以
+\`cancelWithCall: true\` 显式启用；它只绑定这一次仍在途的 \`callId\`，不允许后台启动或复用。可传入的请求为：
 
 \`\`\`ts
 type AuthorizationRequest =
@@ -4159,7 +4161,7 @@ callbackUrl 必须与 redirect_uri 精确相等，且为 localhost、127.0.0.1 �
 当第三方 CLI 使用「浏览器授权、发起端轮询」时，Node worker 可在**当前请求处理函数内**
 捕获 \`globalThis.__CINDY_NODE__.bindDeviceAuthorization()\` 返回的函数，再在 CLI 输出回调
 里调用 \`await authorize(httpsUrl)\`。同一请求只接受一个链接。Node 请求必须带来自当前
-\`tool-call\` 的 \`callId\`；宿主反查插件、任务和 owner，插件不能自选任务。无绑定时返回
+\`tool-call\` 的 \`callId\`，并显式设置 \`cancelWithCall: true\`；宿主反查插件、任务和 owner，插件不能自选任务。无绑定时返回
 undefined；不支持时明确报错，远程流程不能回退到在执行设备开浏览器或把链接交给模型。
 
 宿主创建含真实授权域名的卡片，用户点击后由当前设备的可信 Host 打开链接。远程链接只走既有

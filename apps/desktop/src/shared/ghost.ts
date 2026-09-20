@@ -6367,8 +6367,10 @@ export interface GhostPipeNodeRequest {
   type: 'node-request';
   /** OAuth 注入的本插件账号 id；缺省使用对应 OAuth 槽的默认账号。 */
   authAccount?: string;
-  /** Optional live tool-call binding: cancellation/completion stops its Node work. */
+  /** Live tool-call identity; only cancelWithCall opts in to the new lifecycle. */
   callId?: string;
+  /** Explicit opt-in: cancellation/completion stops this RPC and its children. */
+  cancelWithCall?: boolean;
   /** JSON-RPC 方法名；mcp-stdio 时使用 tools/list、tools/call 等 MCP 方法。 */
   method: string;
   /** Live call only: show the existing protected card for this RPC's manual Node bindings. */

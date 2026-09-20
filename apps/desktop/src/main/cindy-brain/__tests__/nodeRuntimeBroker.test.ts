@@ -301,15 +301,31 @@ describe('nodeRuntimeBroker protected manual input', () => {
       input.assertCurrent(); saved = 'synthetic-manual-secret'; return true;
     });
     const log = { info: vi.fn(), warn: vi.fn() };
+    const secretSaved = vi.fn(() => saved !== null);
     const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess,
       getCallSignal: (_, id) => id === 'live-call' ? abort.signal : null,
-      getCallSessionId: () => sessionId, readSecret, secretSaved: () => saved !== null,
+      getCallSessionId: () => sessionId, readSecret, secretSaved,
       openSecretInput, log });
     const request = { type: 'node-request', entry: 'node/account.cjs', method: 'account/import',
-      params: {}, callId: 'live-call', promptSecrets: true };
-    return { ghost, broker, get child() { return child; }, request, abort, readSecret, openSecretInput, spawnProcess, log,
+      params: {}, callId: 'live-call', cancelWithCall: true, promptSecrets: true };
+    return { ghost, broker, get child() { return child; }, request, abort, readSecret, secretSaved, openSecretInput, spawnProcess, log,
       changeSession: () => { sessionId = 'another-task'; } };
   }
+
+  it.each([false, true])('leaves legacy manual credentials unchanged (saved: %s)', async saved => {
+    const h = manualHarness();
+    h.secretSaved.mockImplementation(() => { throw new Error('New card state must not be probed'); });
+    h.readSecret.mockReturnValue(saved ? 'synthetic-existing' : null);
+    try {
+      const result = await h.broker.handleRequest('node-ghost', {
+        ...h.request, callId: 'old-metadata', cancelWithCall: undefined, promptSecrets: undefined,
+      });
+      expect(result).toMatchObject(saved ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(h.secretSaved).not.toHaveBeenCalled();
+      expect(h.openSecretInput).not.toHaveBeenCalled();
+      if (saved) expect(h.child.received[0]).toMatchObject({ cindy: { secrets: { manual_token: 'synthetic-existing' } } });
+    } finally { h.broker.destroyAll(); }
+  });
 
   it('waits for the card before spawning and privately injects its saved value', async () => {
     const h = manualHarness();

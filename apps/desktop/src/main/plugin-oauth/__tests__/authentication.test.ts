@@ -6,7 +6,7 @@ import {
   OauthHostIdentity,
 } from '../authentication.js';
 import { OauthBox } from '../box.js';
-import type { PluginOauthAction, PluginOauthPeerIdentity } from '@cindy/device-link';
+import { parsePluginOauthHelloReply, type PluginOauthAction, type PluginOauthPeerIdentity } from '@cindy/device-link';
 
 const action: PluginOauthAction = {
   requestId: 'card-1',
@@ -91,6 +91,33 @@ describe('signed OAuth transport with explicit peer trust', () => {
     ).rejects.toThrow();
     await expect(f.host.request('desktop', { op: 'capabilities' })).rejects.toThrow();
     expect(f.request).not.toHaveBeenCalled();
+  });
+  it('rejects reuse of an authenticated nonce with a different ciphertext before dispatch', async () => {
+    const f = fixture(), key = new OauthBox();
+    const reply = parsePluginOauthHelloReply(await f.host.request('desktop', {
+      op: 'hello', version: 3, nonce: randomBytes(32).toString('base64url'),
+      publicKey: key.publicKey, action,
+    }));
+    const payload = { nonce: randomBytes(32).toString('base64url'), request: { op: 'capabilities' } };
+    const frame = () => ({
+      op: 'exchange', id: reply.id,
+      box: key.seal(reply.publicKey, `authenticated-plugin-oauth-v3:${reply.id}`, 'callback', payload),
+    });
+    const first = frame();
+    const result = await f.host.request('desktop', first);
+    expect(await f.host.request('desktop', first)).toEqual(result);
+    await expect(f.host.request('desktop', frame())).rejects.toThrow();
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a mutated authenticated envelope without invoking the transaction', async () => {
+    const f = fixture(), call = await authenticateOauthController(f.options);
+    await call({ op: 'capabilities' });
+    const frame = f.invoke.mock.calls[1][0] as { op: string; id: string; box: string };
+    const ciphertext = Buffer.from(frame.box, 'base64url');
+    ciphertext[16] ^= 1;
+    await expect(f.host.request('desktop', { ...frame, box: ciphertext.toString('base64url') })).rejects.toThrow();
+    expect(f.request).toHaveBeenCalledTimes(1);
   });
   it('rejects relay substitution of the client ephemeral key, before provider or browser work', async () => {
     const f = fixture(),

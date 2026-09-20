@@ -836,8 +836,14 @@ export class GhostNodeRuntimeBroker {
       return errorResult('INVALID_REQUEST', 'node-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.cancelWithCall !== undefined && typeof request.cancelWithCall !== 'boolean') {
+      return errorResult('INVALID_REQUEST', 'cancelWithCall must be a boolean');
+    }
     if (request.promptSecrets !== undefined && typeof request.promptSecrets !== 'boolean') {
       return errorResult('INVALID_REQUEST', 'promptSecrets must be a boolean');
+    }
+    if (request.promptSecrets === true && request.cancelWithCall !== true) {
+      return errorResult('INVALID_REQUEST', 'Protected credential input requires cancelWithCall');
     }
     if (request.authAccount !== undefined &&
       (typeof request.authAccount !== 'string' || request.authAccount.length === 0 || request.authAccount.length > 64)) {
@@ -847,7 +853,9 @@ export class GhostNodeRuntimeBroker {
       return errorResult('INVALID_REQUEST', '请求类型必须是 node-request');
     }
     let signal: AbortSignal | undefined;
-    if (request.callId !== undefined) {
+    // callId alone was ignored by older Hosts. Only the new explicit contract
+    // changes a legacy RPC's lifetime or grants access to authorization cards.
+    if (request.cancelWithCall === true) {
       if (typeof request.callId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(request.callId)) {
         return errorResult('INVALID_REQUEST', 'callId must identify the current tool call');
       }
@@ -939,7 +947,7 @@ export class GhostNodeRuntimeBroker {
     // call. No account, key or URL can be selected by the plugin's params.
     let needsSecretInput = request.promptSecrets === true;
     try {
-      if (!needsSecretInput && this.deps.openSecretInput && this.deps.secretSaved) {
+      if (signal && !needsSecretInput && this.deps.openSecretInput && this.deps.secretSaved) {
         needsSecretInput = manualBindings.some(binding => !this.deps.secretSaved!(ghostId, binding.key));
       }
     } catch {
@@ -1079,7 +1087,7 @@ export class GhostNodeRuntimeBroker {
         hostSecrets,
         ownerScopeSnapshot,
         signal,
-        request.callId as string | undefined,
+        signal ? request.callId as string : undefined,
         secretInputCompleted,
       );
       // writeLine/JSON.stringify 在 sendRpc 内同步完成；随即抹掉本次临时对象，
@@ -1140,7 +1148,7 @@ export class GhostNodeRuntimeBroker {
       this.replyToWorker(entry, message.type === 'device-authorize'
         ? { type: 'device-authorize-result', reqId: message.reqId, ok }
         : { type: 'plugin-authorize-result', reqId: message.reqId, ok, ...(result ? { result } : {}) });
-    const sessionId = pending?.callId
+    const sessionId = pending?.signal && pending.callId
       ? this.deps.getCallSessionId?.(ghostId, pending.callId)
       : null;
     if (

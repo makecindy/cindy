@@ -78,6 +78,8 @@ interface PendingCall {
   /** 在途代办 hold 计数(同一卷可并发多单代办,全部收工才收窗)。 */
   holds: number;
   lifetime: AbortController;
+  sourceSignal?: AbortSignal;
+  cancellationBound?: boolean;
   detachAbort?: () => void;
 }
 
@@ -144,6 +146,8 @@ export class GhostPipeDispatcher {
    * 永不 reject——一切失败都折叠成结构化 GhostToolCallResult。
    */
   async callGhostTool(request: Parameters<GhostPipeDispatcher['dispatchCall']>[0]): Promise<GhostToolCallResult> {
+    // Remember Stop even while a sandbox starts, without changing legacy RPC
+    // completion. Only an explicit Node opt-in consumes this cancellation gate.
     const controller = new AbortController();
     const abort = () => controller.abort();
     request.signal?.addEventListener('abort', abort, { once: true });
@@ -166,11 +170,6 @@ export class GhostPipeDispatcher {
     }
   }
 
-  /** Authenticated Host Stop, independent of vendor MCP cancellation support. */
-  cancelSessionCalls(sessionId: string): void {
-    for (const controller of this.sessionCalls.get(sessionId) ?? []) controller.abort();
-  }
-
   private async dispatchCall(request: {
     ghostId: string;
     tool: string;
@@ -188,10 +187,6 @@ export class GhostPipeDispatcher {
     sessionId?: string;
   }): Promise<GhostToolCallResult> {
     const { ghostId, tool, args } = request;
-    const cancelled = (): GhostToolCallResult => ({
-      ok: false, errorCode: 'INTERNAL', message: 'Plugin tool call cancelled',
-    });
-    if (request.signal?.aborted) return cancelled();
 
     // ── 资格审 ─────────────────────────────────────────────────────────
     const ghost = this.deps.getGhost(ghostId);
@@ -225,7 +220,6 @@ export class GhostPipeDispatcher {
     if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();
     }
-    if (request.signal?.aborted) return cancelled();
 
     // ── 派发 + 配对等待 ────────────────────────────────────────────────
     const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
@@ -248,16 +242,10 @@ export class GhostPipeDispatcher {
         deadlineAt: startedAt + baseTimeoutMs,
         holds: 0,
         lifetime: new AbortController(),
+        sourceSignal: request.signal,
       };
       this.pending.set(callId, entry);
       this.armTimer(callId, entry);
-      const abort = () => this.settle(callId, cancelled());
-      request.signal?.addEventListener('abort', abort, { once: true });
-      entry.detachAbort = () => request.signal?.removeEventListener('abort', abort);
-      if (request.signal?.aborted) {
-        abort();
-        return;
-      }
 
       if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
         this.settle(callId, this.ownerBoundaryResult());
@@ -270,16 +258,37 @@ export class GhostPipeDispatcher {
     });
   }
 
-  /** Only the exact live tool call may bind cancellable Node work. */
+  /** Cancel opt-in work and deny late opt-in; legacy completion remains unchanged. */
+  cancelSessionCalls(sessionId: string): void {
+    for (const controller of this.sessionCalls.get(sessionId) ?? []) controller.abort();
+  }
+
+  private cancelBoundCall(callId: string): void {
+    this.settle(callId, { ok: false, errorCode: 'INTERNAL', message: 'Plugin tool call cancelled' });
+  }
+
+  /** Called only for an explicit cancelWithCall Node request. Legacy tools keep their lifetime. */
   getPendingCallSignal(ghostId: string, callId: string): AbortSignal | null {
     const entry = this.pending.get(callId);
     if (!entry || entry.ghostId !== ghostId || !this.ownerScopeUsable(ghostId, entry.ownerScopeSnapshot)) return null;
+    if (!entry.cancellationBound) {
+      entry.cancellationBound = true;
+      const abort = () => this.cancelBoundCall(callId);
+      entry.sourceSignal?.addEventListener('abort', abort, { once: true });
+      entry.detachAbort = () => entry.sourceSignal?.removeEventListener('abort', abort);
+    }
+    if (entry.sourceSignal?.aborted) {
+      this.cancelBoundCall(callId);
+      return null;
+    }
     return entry.lifetime.signal;
   }
 
   getPendingCallSessionId(ghostId: string, callId: string): string | null {
-    if (!this.getPendingCallSignal(ghostId, callId)) return null;
-    return this.pending.get(callId)?.sessionId ?? null;
+    const entry = this.pending.get(callId);
+    if (!entry?.cancellationBound || entry.ghostId !== ghostId || entry.lifetime.signal.aborted ||
+      entry.sourceSignal?.aborted || !this.ownerScopeUsable(ghostId, entry.ownerScopeSnapshot)) return null;
+    return entry.sessionId ?? null;
   }
 
 

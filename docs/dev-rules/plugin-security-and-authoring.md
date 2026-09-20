@@ -287,6 +287,9 @@
   通用设备码、浏览器确认和 CLI PKCE 回调由同一类型化适配层承接，仍须精确任务/插件/目标
   绑定；可信 Node 的私有 CLI callback 只回 bootstrap Promise，不经 stdout、沙箱或模型。
   Node 本来拥有系统用户权限，这不是隔离恶意 Node 的保证；不放开任意端口/URL 转发。
+  新 Node 授权卡须以 `cancelWithCall:true` 和当前 `callId` 显式启用；只带旧调用编号
+  不取得授权能力，也不改变旧 RPC/后台子进程生命周期。任务 Stop 后不得迟到启用，
+  取消只回收该调用所属子进程，不停止同一 Worker 中其它调用。
   普通 user Secret 可由 `remoteSecret:true` 卡片通过专用本机 `plugin-oauth:submit-secret`
   加密送到目标 Host；必须先签名握手，并比较原 Host 的完整字段展示与用户看到的字段，绑定
   设备/插件/action/revision，在最新声明与写入边界复验。只允许写既有 executor 解析出的

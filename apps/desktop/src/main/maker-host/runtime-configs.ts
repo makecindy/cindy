@@ -23,7 +23,6 @@ import { readClaudeAccountOAuth } from './subscription-account-auth.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
-import { appendPluginAuthorizationPrompt } from '../plugin-oauth/prompt.js';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
 import { readCompactionPct } from './compaction-settings-store.js';
 import { readMemorySettings } from './memory-settings-store.js';
@@ -181,9 +180,7 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
       ...(ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
     }),
     // 产品身份 + Skill 来源优先级 + Claude 专属段，按顺序拼接后给 maker-core append。
-    get systemPrompt() {
-      return appendPluginAuthorizationPrompt(composeHostPrompt(claudeSystemPrompt));
-    },
+    systemPrompt: composeHostPrompt(claudeSystemPrompt),
     // Maker Memory 需要的 user-data 绝对路径 (maker-core 没 Electron 依赖, 必须 host 注入)。
     userDataPath: app.getPath('userData'),
     get memoryEnabled() {
@@ -300,9 +297,7 @@ export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
   // 这种会过期的假设(对抗式预审发现)。
   behaviorFlags: (ctx) => (ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
   // 产品身份 + Skill 来源优先级 + Codex 专属段。
-  get systemPrompt() {
-    return appendPluginAuthorizationPrompt(composeHostPrompt(codexSystemPrompt));
-  },
+  systemPrompt: composeHostPrompt(codexSystemPrompt),
   // lazy getter(与 endpoint/memoryEnabled 同一惯用法,issue #1956):import 期
   // 不探测 bundled ripgrep,纯 node / vitest 环境 import 本模块不再炸;真正的
   // fail-fast 由 maker-host 启动期的 ensureBundledRipgrepReady() 承担,此处 getter

@@ -86,7 +86,7 @@ function harness(autoSpawn = true, extra: Partial<GhostNodeRuntimeBrokerDeps> = 
       type: 'node-request',
       method: 'tools/call',
       params: { name: 'login' },
-      ...(callId ? { callId } : {}),
+      ...(callId ? { callId, cancelWithCall: true } : {}),
     });
   const spawn = (rpcId: string | undefined, reqId: string) =>
     worker.listener?.({
@@ -158,6 +158,20 @@ describe('Node cancellation boundaries', () => {
     expect(h.worker.requests).toEqual([]);
   });
 
+  it.each([undefined, false])('keeps legacy callId metadata nonbinding (opt-in: %s)', async cancelWithCall => {
+    const h = harness();
+    const result = h.broker.handleRequest('test-plugin', {
+      type: 'node-request', method: 'background/start', callId: 'obsolete-call', cancelWithCall,
+    });
+    await until(() => h.worker.requests.length === 1);
+    expect(h.worker.requests[0].cindy).toBeUndefined();
+    h.spawn(undefined, 'background');
+    await until(() => h.children.length === 1);
+    h.worker.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: h.worker.requests[0].id, result: true }) + '\n');
+    expect(await result).toEqual({ ok: true, result: true });
+    expect(h.children[0].killed).toBe(false);
+  });
+
   it('does not stop legacy autonomous children when an unbound RPC returns', async () => {
     const h = harness();
     const result = h.request();
@@ -173,6 +187,25 @@ describe('Node cancellation boundaries', () => {
 });
 
 describe('Node private authorization bridge', () => {
+  it('cannot promote legacy callId metadata into an authorization capability', async () => {
+    const open = vi.fn(), session = vi.fn(() => 'trusted-session');
+    const h = harness(true, { getCallSessionId: session, openAuthorization: open });
+    const result = h.broker.handleRequest('test-plugin', {
+      type: 'node-request', method: 'legacy', callId: 'call-a',
+    });
+    await until(() => h.worker.requests.length === 1);
+    const id = h.worker.requests[0].id;
+    h.worker.listener?.({
+      type: 'plugin-authorize', reqId: 'forged-opt-in', rpcId: id,
+      request: { kind: 'browser', url: 'https://provider.example/activate' },
+    });
+    expect(h.worker.controls.find(x => x.reqId === 'forged-opt-in')).toMatchObject({ ok: false });
+    expect(session).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    h.worker.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: 'original-completion' }) + '\n');
+    expect(await result).toEqual({ ok: true, result: 'original-completion' });
+  });
+
   it('routes generic device codes privately and keeps setup completion tied to the Node result', async () => {
     const finish = vi.fn(),
       dispose = vi.fn();

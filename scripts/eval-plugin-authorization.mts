@@ -17,7 +17,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createCindyGhostsMcpServer } from '../packages/cindy-tools/src/ghost/mcpServer.js';
 import type { CindyGhostsMcpDeps, CindyGhostInfo } from '../packages/cindy-tools/src/types.js';
-import { appendPluginAuthorizationPrompt } from '../apps/desktop/src/main/plugin-oauth/prompt.js';
 
 const { values } = parseArgs({ options: {
   live: { type: 'boolean' }, 'codex-home': { type: 'string' }, base: { type: 'string' },
@@ -62,14 +61,22 @@ for (const profile of ['claude', 'codex', 'pi']) {
   const original = (await Promise.all(sections.map(file => readFile(path.join(hostRoot, file), 'utf8'))))
     .map(section => section.trim()).filter(Boolean).join('\n\n');
   for (const variant of ['before', 'after'] as const) {
-    const started = performance.now();
-    let instructions = original;
-    for (let i = 0; i < 10_000; i++) instructions = variant === 'after' ? appendPluginAuthorizationPrompt(original) : original;
+    // Normal Desktop system instructions stay byte-identical; compare tool guidance only.
+    const instructions = original;
     manifests.push({ profile, variant, bytes: Buffer.byteLength(instructions), sha256: sha(instructions),
-      assemblyMicros: (performance.now() - started) * 1000 / 10_000,
       preservesPrefix: instructions.startsWith(original) });
     for (const sample of cases) {
       let installed = sample.id !== 'install', configured = sample.id === 'reconfigure', cancelled = false;
+      let setupAttempts = 0, successfulReads = 0;
+      const completeSetup = async () => {
+        setupAttempts++;
+        if (sample.id === 'cancel') {
+          cancelled = true;
+          return { ok: false, errorCode: 'SETUP_CANCELLED', message: 'User cancelled the card. Do not retry or run the plugin.' };
+        }
+        configured = true;
+        return { ok: true, status: 'ready', message: 'The card was submitted. Provider access still needs a read-only check.' };
+      };
       const calls: Array<{ name: string; arguments: Record<string, any> }> = [];
       const ghost = (): CindyGhostInfo => ({ id: 'demo-reports', name: 'Demo Reports', command: 'demo-reports',
         recall: 'Read report counts', tools: [{ name: 'count', description: 'Read the number of reports', parameters: { type: 'object', properties: {} } }],
@@ -86,12 +93,18 @@ for (const profile of ['claude', 'codex', 'pi']) {
           if (pluginId !== 'fixture-catalog/demo-reports' || releaseId !== 'fixture-release-1') return { ok: false };
           installed = true; return { ok: true, ghost_id: 'demo-reports', status: 'installed' };
         },
-        connectAccount: async () => {
-          if (sample.id === 'cancel') { cancelled = true; return { ok: false, errorCode: 'SETUP_CANCELLED', message: 'User cancelled the card. Do not retry or run the plugin.' }; }
-          configured = true; return { ok: true, status: 'ready', message: 'The card was submitted. Provider access still needs a read-only check.' };
+        connectAccount: completeSetup,
+        callGhostTool: async () => {
+          if (cancelled) return { ok: false, errorCode: 'SETUP_CANCELLED', message: 'User cancelled' };
+          // The existing Host also opens setup before a business tool. This
+          // fixture must not falsely require a separate connect_account call.
+          if (!configured) {
+            const setup = await completeSetup();
+            if (!setup.ok) return setup;
+          }
+          successfulReads++;
+          return { ok: true, result: { count: 7 } };
         },
-        callGhostTool: async () => cancelled ? { ok: false, errorCode: 'SETUP_CANCELLED', message: 'User cancelled' } :
-          configured ? { ok: true, result: { count: 7 } } : { ok: false, errorCode: 'SETUP_REQUIRED', message: 'Use the Host setup card', setup: ghost().setup },
       } as CindyGhostsMcpDeps;
       const server = (variant === 'before' ? baselineFactory : createCindyGhostsMcpServer)(deps);
       const client = new Client({ name: 'plugin-authorization-eval', version: '1' });
@@ -160,13 +173,16 @@ for (const profile of ['claude', 'codex', 'pi']) {
         error = failure instanceof Error && /^HTTP \d+$/.test(failure.message) ? failure.message : 'Evaluation request failed';
       } finally { await client.close(); await server.close(); }
       const connections = calls.filter(call => call.name === 'connect_account');
-      const countRead = calls.some(call => call.name === 'ghost_call' && call.arguments.tool === 'count');
+      const countRead = successfulReads > 0;
+      const cancelIndex = calls.findIndex(call => call.name === 'connect_account' || call.name === 'ghost_call');
+      const retriedAfterCancel = calls.slice(cancelIndex + 1)
+        .some(call => call.name === 'connect_account' || call.name === 'ghost_call');
       const pass = !error && complete && (sample.id.startsWith('unrelated') ? calls.length === 0 && answer.trim() === '323' :
-        sample.id === 'cancel' ? connections.length === 1 && !countRead :
+        sample.id === 'cancel' ? setupAttempts === 1 && cancelled && !countRead && !retriedAfterCancel :
         sample.id === 'reconfigure' ? connections.some(call => call.arguments.reauthorize === true) && countRead :
-        sample.id === 'install' ? calls.some(call => call.name === 'ghost_market_install') && connections.length === 1 && countRead :
-        connections.length === 1 && countRead);
-      results.push({ profile, variant, case: sample.id, pass, error, calls, answer, requests,
+        sample.id === 'install' ? calls.some(call => call.name === 'ghost_market_install') && setupAttempts === 1 && countRead :
+        setupAttempts === 1 && countRead);
+      results.push({ profile, variant, case: sample.id, pass, error, calls, answer, requests, setupAttempts, successfulReads,
         toolsSha256: sha(JSON.stringify(tools)), durationMs: performance.now() - turnStart });
       await writeFile(path.join(output, 'results.json'), JSON.stringify({ base: values.base, model: values.model,
         environment: 'Live OpenAI model, actual MCP schemas/handlers, synthetic plugin state; Host prompt profiles, not native CLI sessions',

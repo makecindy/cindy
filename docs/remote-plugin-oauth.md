@@ -45,6 +45,8 @@ sequenceDiagram
 - 使用上游同账号 Device Link 准入，执行端仍检查远程控制开关和 controller 撤权。
   **首次公钥登记信任账号服务与 relay**；验签证明持有对应私钥，但首次登记时不能防止
   恶意 relay 同时替换描述符及握手。不得称为独立身份认证、双向设备证明或 CIS 验证。
+  执行端对控制端的身份和准入仍依赖既有 Device Link 链路；持久 pin 保护控制端所认的
+  执行设备，不把它解释成可抵御账号服务或 relay 冒充控制端的双向独立认证。
 - 执行端使用独立用途的持久 Ed25519 密钥；控制端验签成功后才固定对端公钥。两端
   按 realm/membership/local device 分域，使用 Electron safeStorage 加密落盘，原子写入
   和跨进程锁；不复用通讯录密钥，不在启动/能力投影时访问钥匙串。
@@ -155,7 +157,9 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
 - 事务最长五分钟，只在内存；每 Host 最多 16 个握手、每 peer 最多 4 个。相同 nonce/
   密文重试复用回执，不重复交换，复用 nonce 搭配不同密文拒绝。
 - 单 peer 断链仅取消该 peer；共享 relay/账号退出取消全部。不开全局重连、不动别的
-  peer。Node 子调用随 task stop/abort 取消并终止所属进程，不让登录进程在后台悬挂。
+  peer。Node 请求显式传入 `cancelWithCall:true` 和当前 `callId`，才启用授权卡及
+  随 task stop/abort 回收所属进程的生命周期。单独携带旧 `callId` 或省略开关都
+  保持上游独立 RPC 行为，不自动弹卡或结束后台进程。已停止的调用不能迟到启用新授权。
 - 两端 Desktop 必须支持 v3。旧版仍可使用原本的远控及执行设备本地设置；新授权动作
   不走旧通道/明文降级，不会替用户清空已有凭据。
 - Mobile 当前只可查看/取消既有卡片，未实现本机回调与保密输入；在连接该设备的新版
@@ -177,14 +181,14 @@ gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其�
 
 ## Agent 指引与验证
 
-Claude/Codex/Pi Host 追加同一静态段 `PLUGIN_AUTHORIZATION_PROMPT`：发现/必要安装、
-发起现有卡片、明确重配、等待真实状态、最小权限检查。普通与远程任务使用同一段，文本
-说明设备归属及能力限制；不宣称每个平台都有卡片。原 system 前缀保留，Pi 原生 prompt
-保持追加模式；无动态身份/时间戳/账号状态，不改变工具批准策略。首次升级改变 prompt
-长度及缓存键，此后文本稳定。
+普通 Desktop 的 Claude/Codex/Pi system prompt 与上游一致，不注入全局授权提示词。
+本 PR 只在相关工具的 schema/description 中说明发现、必要安装、发起卡片和显式重配；
+原有工具批准策略不变。工具描述有增量，不能声称整个模型请求或缓存键完全不变。
+云实例的全局指引保留在独立云分支，由云运行环境启用，不属于此 PR，也不加入普通
+Desktop 的 system 段。
 
-可用显式 opt-in 的 `scripts/eval-plugin-authorization.mts` 对比上游基线：使用三种 Host
-实际提示词片段、真实 MCP schema/handler 和真实模型，覆盖必要安装、首次授权、已保存
+可用显式 opt-in 的 `scripts/eval-plugin-authorization.mts` 对比上游基线：两组均使用三种 Host
+原有提示词片段，只切换真实 MCP schema/handler，通过真实模型覆盖必要安装、首次授权、已保存
 Secret 重配、取消、无关任务及相同前缀重复请求，记录行为、usage/cache、首事件与总耗时。
 插件安装/账号结果为合成数据，不操作真实账户；现有模型登录仅在内存只读使用，不刷新或
 复制授权文件，结果写系统临时目录。该脚本评估 Host prompt profiles，不启动原生
