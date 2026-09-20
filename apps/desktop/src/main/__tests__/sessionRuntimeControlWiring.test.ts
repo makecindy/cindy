@@ -1020,6 +1020,14 @@ describe('session runtime control wiring', () => {
     expect(coldRemoteReject).toBeLessThan(skipNoNative);
     expect(skipNoNative).toBeLessThan(rehydrate);
     expect(rehydrate).toBeLessThan(apply);
+    // rehydrate 必须锁在 plan 明确要求的分支里:退回无条件的冷会话核实会重新把
+    // 无原生会话的冷 Pi 拖进 rehydrate 并报错。
+    const rehydrateGuard = setModel.indexOf(
+      "if (coldPiWindowVerification === 'rehydrate-cold-runtime') {",
+    );
+    expect(rehydrateGuard).toBeGreaterThan(-1);
+    expect(rehydrateGuard).toBeLessThan(rehydrate);
+    expect(rehydrate - rehydrateGuard).toBeLessThan(200);
     // 终态活进程核验必须同步跳过,否则只是换成 'Pi target runtime could not be verified'。
     const finalBlockStart = setModel.indexOf('const piSessionAfterRouteChange =');
     const finalVerification = setModel.indexOf(
