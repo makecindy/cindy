@@ -63,7 +63,30 @@ describe('CcDebugRawTailer', () => {
     ]);
   });
 
-  it('drops tracked files when stopped', () => {
+  it('isolates read failures to one target', () => {
+    const failingFile = makeFile();
+    const healthyFile = makeFile();
+    const writeLine = vi.fn();
+    const tailer = new CcDebugRawTailer(writeLine);
+    tailer.register(failingFile, 'session-failing');
+    tailer.register(healthyFile, 'session-healthy');
+    tailer.pollNow();
+    fs.appendFileSync(failingFile, 'unreadable\n');
+    fs.appendFileSync(healthyFile, 'healthy\n');
+
+    const readSync = vi.spyOn(fs, 'readSync').mockImplementationOnce(() => {
+      throw new Error('simulated read failure');
+    });
+    try {
+      expect(() => tailer.pollNow()).not.toThrow();
+    } finally {
+      readSync.mockRestore();
+    }
+
+    expect(writeLine.mock.calls).toEqual([['healthy', 'session-healthy']]);
+  });
+
+  it('stops polling while disabled', () => {
     vi.useFakeTimers();
     try {
       const file = makeFile();
@@ -75,6 +98,29 @@ describe('CcDebugRawTailer', () => {
 
       vi.advanceTimersByTime(20);
       expect(writeLine).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves session targets across stop and restarts them at EOF', () => {
+    vi.useFakeTimers();
+    try {
+      const globalFile = makeFile();
+      const sessionFile = makeFile();
+      const writeLine = vi.fn();
+      const tailer = new CcDebugRawTailer(writeLine, { pollIntervalMs: 10 });
+      tailer.register(sessionFile, 'session-3');
+      tailer.start(globalFile);
+      tailer.stop();
+
+      fs.appendFileSync(sessionFile, 'while disabled\n');
+      tailer.start(globalFile);
+      fs.appendFileSync(sessionFile, 'after restart\n');
+      tailer.pollNow();
+      tailer.stop();
+
+      expect(writeLine.mock.calls).toEqual([['after restart', 'session-3']]);
     } finally {
       vi.useRealTimers();
     }

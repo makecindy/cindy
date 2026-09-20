@@ -4035,6 +4035,7 @@ export class PiAgent extends BaseAgent {
     let piSubagentRefreshInFlight = false;
     let piSubagentNextRefreshAt = 0;
     let piSubagentRefreshRequestGeneration = 0;
+    const piSubagentRunsPendingVisibility = new Set<string>();
     // Approval delivery belongs to the *detached run* lifecycle, not to the
     // parent handle. After a navigation close the foreground refresh timer is
     // gone, but `deferProxyDisposalForDetachedRuns` keeps polling durable status
@@ -4629,10 +4630,16 @@ export class PiAgent extends BaseAgent {
       if (closed || piSubagentRefreshInFlight) return;
       const requestGeneration = piSubagentRefreshRequestGeneration;
       piSubagentRefreshInFlight = true;
-      let nextDelay = piSubagentRefreshDelay([...piSubagentStatuses.values()]);
+      let nextDelay = piSubagentRefreshDelay(
+        [...piSubagentStatuses.values()],
+        piSubagentRunsPendingVisibility.size,
+      );
       try {
         const statuses = await listPiSubagentRuns(subagentRunRoot);
-        nextDelay = piSubagentRefreshDelay(statuses);
+        for (const status of statuses) {
+          piSubagentRunsPendingVisibility.delete(status.runId);
+        }
+        nextDelay = piSubagentRefreshDelay(statuses, piSubagentRunsPendingVisibility.size);
         if (closed) return;
         const newestTaskIds = new Set<string>();
         for (const status of statuses) {
@@ -5290,6 +5297,7 @@ export class PiAgent extends BaseAgent {
                 } finally {
                   inFlightSubagentLaunches.delete(launching);
                 }
+                piSubagentRunsPendingVisibility.add(runId);
                 await requestPiSubagentRefresh();
                 if (accountBoundaryTeardown) {
                   const confirmed = await this.terminateSubagentRunner(runId, runDir);
@@ -6975,6 +6983,7 @@ export class PiAgent extends BaseAgent {
             runtimeSnapshot: { modelsJson, bridgeSource, runnerSource },
           }, childId);
           if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
+          piSubagentRunsPendingVisibility.add(runId);
           await requestPiSubagentRefresh();
         })();
         // close() waits for every resume that entered while this handle was

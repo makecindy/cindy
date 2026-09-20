@@ -60,7 +60,6 @@ export class CcDebugRawTailer {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    this.targets.clear();
     this.states.clear();
   }
 
@@ -112,7 +111,12 @@ export class CcDebugRawTailer {
       while (remaining > 0) {
         const wanted = Math.min(READ_CHUNK_BYTES, remaining);
         const buffer = Buffer.allocUnsafe(wanted);
-        const bytesRead = fs.readSync(fd, buffer, 0, wanted, state.offset);
+        let bytesRead: number;
+        try {
+          bytesRead = fs.readSync(fd, buffer, 0, wanted, state.offset);
+        } catch {
+          return;
+        }
         if (bytesRead <= 0) break;
         state.offset += bytesRead;
         remaining -= bytesRead;

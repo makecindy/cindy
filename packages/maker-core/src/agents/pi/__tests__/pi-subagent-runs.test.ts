@@ -196,6 +196,7 @@ afterEach(async () => {
 describe('PI durable subagent run store', () => {
   it('backs off durable polling when no run can still change', () => {
     expect(piSubagentRefreshDelay([])).toBe(PI_SUBAGENT_IDLE_REFRESH_MS);
+    expect(piSubagentRefreshDelay([], 1)).toBe(PI_SUBAGENT_ACTIVE_REFRESH_MS);
     expect(piSubagentRefreshDelay([{ state: 'completed' }, { state: 'failed' }]))
       .toBe(PI_SUBAGENT_IDLE_REFRESH_MS);
     expect(piSubagentRefreshDelay([{ state: 'completed' }, { state: 'running' }]))

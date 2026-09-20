@@ -777,8 +777,10 @@ export const PI_SUBAGENT_IDLE_REFRESH_MS = 2_000;
 
 export function piSubagentRefreshDelay(
   statuses: readonly Pick<PiSubagentRunStatus, 'state'>[],
+  pendingVisibilityCount = 0,
 ): number {
-  return statuses.some((status) => !isPiSubagentTerminal(status.state))
+  return pendingVisibilityCount > 0
+    || statuses.some((status) => !isPiSubagentTerminal(status.state))
     ? PI_SUBAGENT_ACTIVE_REFRESH_MS
     : PI_SUBAGENT_IDLE_REFRESH_MS;
 }
