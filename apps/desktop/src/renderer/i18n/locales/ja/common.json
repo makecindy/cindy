@@ -7229,6 +7229,7 @@
       "empty": "このセッションにバックグラウンドタスクはまだありません",
       "stop": "停止",
       "stopping": "停止中…",
+      "stopUnconfirmed": "停止を確認できません。タスクはまだ実行中の可能性があります",
       "back": "戻る",
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
@@ -8669,6 +8670,7 @@
         "stopped": "停止済み"
       },
       "stop": "このタスクを停止",
+      "stopUnconfirmed": "停止を確認できません。タスクはまだ実行中の可能性があります",
       "openInPanel": "バックグラウンドタスクパネルで開く",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
       "workflowProgressCount": "{{done}}/{{total}} Agent",
@@ -8838,6 +8840,9 @@
       "bashStatus_other": "バックグラウンドタスク実行中（{{count}} 件）…",
       "stopAll": "すべて停止",
       "stopAllTitle": "このセッションのバックグラウンドプロセスを終了し、すべてのサブタスクを停止します（セッションは引き続き使用できます）",
+      "stopUnconfirmed": "停止を確認できません：{{count}} 件のタスクがまだ実行中の可能性があります",
+      "stopUnconfirmed_one": "停止を確認できません：{{count}} 件のタスクがまだ実行中の可能性があります",
+      "stopUnconfirmed_other": "停止を確認できません：{{count}} 件のタスクがまだ実行中の可能性があります",
       "stopBashTitle": "このセッションで実行中のバックグラウンドタスクを停止します（セッションのプロセスは終了しません）",
       "stopping": "停止中…"
     },

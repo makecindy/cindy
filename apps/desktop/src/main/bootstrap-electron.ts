@@ -506,6 +506,10 @@ import {
   hasActivePiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
+import {
+  stopAllPiBackgroundCommandsForExit,
+  sweepStalePiBackgroundCommandAnonRoots,
+} from '@cindy/maker-core/pi-background-commands';
 
 import { onQuit, installQuitHandler } from './lifecycle';
 import {
@@ -2116,6 +2120,15 @@ void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agen
     piSubagentLog.warn('stale Subagent launch fence cleanup failed (non-fatal):', err);
   },
 );
+
+// 无会话的后台命令日志目录(`pi-bash-tasks/anon-*`)是唯一没有其它回收路径的运行时产物
+// (会话删除的回收需要 sessionId,退出清扫只杀进程)。启动时按目录名里的 owner pid 清一次:
+// 主进程已死(崩溃 / 被强杀 / 更新重启异常)留下的那些日志不会再有人读。
+// 只清 pid 已死的目录 —— pi-agent-home 与并发实例共享,活实例自己的目录必须保留。
+void sweepStalePiBackgroundCommandAnonRoots(path.join(app.getPath('userData'), 'pi-agent-home'))
+  .catch((err: unknown) => {
+    piSubagentLog.warn('stale PI background command log cleanup failed (non-fatal):', err);
+  });
 
 try {
   reapClaudeOrphansSync();
@@ -9855,6 +9868,19 @@ onQuit(
       // sweep retries before it scans, so the fenceless window is confined to
       // this phase rather than lasting the whole quit.
       piSubagentLog.warn('could not raise the Subagent launch fence before the quit sweep:', err);
+    }
+    {
+      // PI 后台命令是**本进程** spawn 的子进程(与 durable runner 不同,不跨实例),
+      // 退出前全量杀树即可。stopAll 会 SIGTERM → 等 2s → SIGKILL → 再等确认;
+      // 确实杀不掉的会在 manager 里记 warn(stop unconfirmed),不阻断退出 ——
+      // 但 dispose 留下的残留进程仍在这个清扫表里,这也是它们唯一的回收时机。
+      // 正常路径(会话 close → PiAgent.dispose)已经杀过一轮,这里是兜底。
+      // 预算:本段最多约 4s(2s 宽限 + 2s 确认),排在下述 subagent 预算**之前** ——
+      // 退出阶段的 async 相位预算 16s(installQuitHandler)、watchdog 20s,余量仍够,
+      // 但下面那段注释里的 "half a second of headroom" 只描述 subagent 那一段。
+      await stopAllPiBackgroundCommandsForExit(2_000).catch((err) => {
+        piSubagentLog.warn('PI background command quit sweep failed:', err);
+      });
     }
     {
       // Budget arithmetic against the 6s async phase: 2.5s waiting for the stop

@@ -4,7 +4,9 @@ import {
   buildAgentTaskCardModel,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
+  isAgentTaskLaunchReceipt,
   isAgentTaskToolName,
+  isBackgroundCommandLaunchReceipt,
   isSubagentSpawnToolName,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
@@ -69,6 +71,45 @@ describe('subagentSpawnResultIndicatesRunning', () => {
   });
 });
 
+const BACKGROUND_COMMAND_RECEIPT =
+  'Cindy background command started: call-1\nOutput: /tmp/pi-bash-tasks/call-1.log\n'
+  + 'The command keeps running after this call returns.';
+
+describe('isBackgroundCommandLaunchReceipt', () => {
+  it('matches only the PI bash tool with the shared receipt prefix', () => {
+    expect(isBackgroundCommandLaunchReceipt('bash', BACKGROUND_COMMAND_RECEIPT)).toBe(true);
+    // 必须钉死前缀来源:字面量漂移后状态会被错误收口成 completed。
+    expect(BACKGROUND_COMMAND_RECEIPT.startsWith('Cindy background command started')).toBe(true);
+    // 前缀相同但没有 `Output: ` 第二行(例如前台 bash 的输出恰好这么开头)→ 不是回执,
+    // 否则历史行会被误判成「已停止」。
+    expect(isBackgroundCommandLaunchReceipt('bash', 'Cindy background command started nicely')).toBe(false);
+        expect(isBackgroundCommandLaunchReceipt('bash', 'Cindy background command started\nno marker here')).toBe(false);
+    // 首尾空白不影响判定
+    expect(isBackgroundCommandLaunchReceipt('bash', `\n  ${BACKGROUND_COMMAND_RECEIPT}`)).toBe(true);
+    // CC 的工具名是大写 Bash,不走这条判据
+    expect(isBackgroundCommandLaunchReceipt('Bash', BACKGROUND_COMMAND_RECEIPT)).toBe(false);
+    // 前台 bash 的普通输出 / 缺结果 / 缺工具名不命中
+    expect(isBackgroundCommandLaunchReceipt('bash', 'total 48\ndrwxr-xr-x')).toBe(false);
+    expect(isBackgroundCommandLaunchReceipt('bash', undefined)).toBe(false);
+    expect(isBackgroundCommandLaunchReceipt(undefined, BACKGROUND_COMMAND_RECEIPT)).toBe(false);
+  });
+});
+
+describe('isAgentTaskLaunchReceipt', () => {
+  it('aggregates subagent and background command launch receipts', () => {
+    expect(isAgentTaskLaunchReceipt(
+      'subagent',
+      undefined,
+      'Cindy subagent launched. The agent is working in the background.',
+    )).toBe(true);
+    expect(isAgentTaskLaunchReceipt('bash', { background: true }, BACKGROUND_COMMAND_RECEIPT)).toBe(true);
+    expect(isAgentTaskLaunchReceipt('Agent', undefined, 'Async agent launched successfully.')).toBe(true);
+    // 普通结果(含 CC 后台命令回执)不是启动回执 —— CC 的卡片/面板不依赖本判据。
+    expect(isAgentTaskLaunchReceipt('bash', { background: true }, 'hello')).toBe(false);
+    expect(isAgentTaskLaunchReceipt('Bash', { run_in_background: true }, 'Command running in background with ID: bash_1')).toBe(false);
+  });
+});
+
 describe('normalizeAgentTaskUpdate', () => {
   it('returns null without a taskId or parentToolUseId', () => {
     expect(normalizeAgentTaskUpdate(null)).toBeNull();
@@ -113,11 +154,30 @@ describe('deriveAgentTaskStatus', () => {
       persistedStatus: 'cancelled' as never,
     })).toBe('completed');
   });
+
+  it('reports a background command receipt without a live update as stopped, not completed', () => {
+    // 历史重放:后台命令不落库,重载后只有启动回执。报 completed(绿)会把一条可能在
+    // 上次退出时被 stopped 杀掉的命令说成成功;有 live update 时完全按 update 走。
+    expect(deriveAgentTaskStatus(undefined, BACKGROUND_COMMAND_RECEIPT, {
+      resultIsLaunchReceipt: true,
+      backgroundCommandReceipt: true,
+    })).toBe('stopped');
+    expect(deriveAgentTaskStatus('running', BACKGROUND_COMMAND_RECEIPT, {
+      resultIsLaunchReceipt: true,
+      backgroundCommandReceipt: true,
+    })).toBe('running');
+    expect(deriveAgentTaskStatus('completed', BACKGROUND_COMMAND_RECEIPT, {
+      resultIsLaunchReceipt: true,
+      backgroundCommandReceipt: true,
+    })).toBe('completed');
+    // 子代理回执不走这条规则(它们有持久化终态)。
+    expect(deriveAgentTaskStatus(undefined, BACKGROUND_COMMAND_RECEIPT, {
+      resultIsLaunchReceipt: true,
+    })).toBe('completed');
+  });
 });
 
-describe('mergeAgentTaskUpdate', () => {
-  it('lets newer non-empty fields win but preserves the original createdAt', () => {
-    const prev: AgentTaskUpdate = { provider: 'codex', taskId: 't1', status: 'running', title: 'old', createdAt: 'c0' };
+describe('mergeAgentTaskUpdate', () => {  it('lets newer non-empty fields win but preserves the original createdAt', () => {    const prev: AgentTaskUpdate = { provider: 'codex', taskId: 't1', status: 'running', title: 'old', createdAt: 'c0' };
     const next: AgentTaskUpdate = { provider: 'codex', taskId: 't1', status: 'completed', summary: 'done', updatedAt: 'u1' };
     expect(mergeAgentTaskUpdate(prev, next)).toMatchObject({
       status: 'completed',
@@ -342,6 +402,21 @@ describe('findAgentTaskUpdate', () => {
 });
 
 describe('buildAgentTaskCardModel', () => {
+  it('marks a replayed PI background command receipt as stopped', () => {
+    expect(buildAgentTaskCardModel({
+      toolName: 'bash',
+      toolInput: { command: 'pnpm dev', background: true },
+      result: BACKGROUND_COMMAND_RECEIPT,
+    }).status).toBe('stopped');
+    // 有 live update(含 running)时仍以 update 为准。
+    expect(buildAgentTaskCardModel({
+      toolName: 'bash',
+      toolInput: { command: 'pnpm dev', background: true },
+      result: BACKGROUND_COMMAND_RECEIPT,
+      update: { provider: 'pi', taskId: 'call-1', status: 'running', taskType: 'local_bash' },
+    }).status).toBe('running');
+  });
+
   it('REPRO: treats a paired final result as terminal when the live update is stale running', () => {
     const model = buildAgentTaskCardModel({
       toolName: 'collab:spawnAgent',

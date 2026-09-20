@@ -441,6 +441,101 @@ describe('listSessionTasks 后台 Bash', () => {
     expect(running).toHaveLength(0);
     expect(completed).toHaveLength(0);
   });
+
+  it('PI 后台命令(bash + background:true)进列表;run_in_background 别名同样命中,前台 bash 不命', () => {
+    const { running } = listSessionTasks({
+      messages: [
+        toolUse('p1', 'pi-1', 'bash', { background: true, command: 'pnpm dev' }),
+        toolUse('p2', 'pi-2', 'bash', { run_in_background: true, command: 'pnpm build' }),
+        // 前台 PI bash(没带后台参数)不是后台任务
+        toolUse('p3', 'pi-3', 'bash', { command: 'ls' }),
+      ],
+      taskUpdates: aliasedMap(makeUpdate({
+        provider: 'pi',
+        taskId: 'pi-1',
+        parentToolUseId: 'pi-1',
+        taskType: 'local_bash',
+        title: 'dev server',
+      })),
+      isSessionStreaming: true,
+    });
+    expect(running.map((it) => [it.key, it.provider, it.kind, it.title])).toEqual([
+      ['pi-1', 'pi', 'bash', 'dev server'],
+      // 无 update 时(水合前)provider 按工具名兵底为 pi,不能误判成 claude-code
+      ['pi-2', 'pi', 'bash', 'pnpm build'],
+    ]);
+  });
+
+  it('PI 后台命令的启动回执不把 running 收口成 completed', () => {
+    const { running, completed } = listSessionTasks({
+      messages: [
+        toolUse('p1', 'pi-1', 'bash', { background: true, command: 'pnpm dev' }),
+        toolResult(
+          'r1',
+          'pi-1',
+          'Cindy background command started: pi-1\nOutput: /tmp/pi-bash-tasks/pi-1.log',
+        ),
+      ],
+      taskUpdates: aliasedMap(makeUpdate({
+        provider: 'pi',
+        taskId: 'pi-1',
+        parentToolUseId: 'pi-1',
+        taskType: 'local_bash',
+      })),
+      isSessionStreaming: false,
+    });
+    expect(running.map((it) => it.taskId)).toEqual(['pi-1']);
+    expect(completed).toEqual([]);
+  });
+
+  it('历史重放(只有启动回执、无 update):按 stopped 呈现,不报成 completed', () => {
+    const { running, completed } = listSessionTasks({
+      messages: [
+        toolUse('p1', 'pi-1', 'bash', { background: true, command: 'pnpm dev' }),
+        toolResult(
+          'r1',
+          'pi-1',
+          'Cindy background command started: pi-1\nOutput: /tmp/pi-bash-tasks/pi-1.log',
+        ),
+      ],
+      taskUpdates: new Map(),
+      isSessionStreaming: false,
+    });
+    expect(running).toEqual([]);
+    // 无 update 就没有 taskId(行身份用 toolUseId),但状态不得报成 completed。
+    expect(completed.map((it) => [it.key, it.taskId, it.status]))
+      .toEqual([['pi-1', undefined, 'stopped']]);
+  });
+  it('pi_subagent / pi_subagent_diagnostic 的 taskType 归 kind=agent', () => {
+    const { running, completed } = listSessionTasks({
+      messages: [
+        toolUse('s1', 'pi-s1', 'subagent', { task: 'review auth' }),
+      ],
+      taskUpdates: aliasedMap(makeUpdate({
+        provider: 'pi',
+        taskId: 'pi-s1',
+        parentToolUseId: 'pi-s1',
+        taskType: 'pi_subagent',
+        title: 'review auth',
+      })),
+      isSessionStreaming: false,
+    });
+    expect(running.map((it) => it.kind)).toEqual(['agent']);
+    expect(completed).toEqual([]);
+
+    const diagnostic = listSessionTasks({
+      messages: [],
+      taskUpdates: aliasedMap(makeUpdate({
+        provider: 'pi',
+        taskId: 'pi-d1',
+        status: 'failed',
+        taskType: 'pi_subagent_diagnostic',
+        title: 'unavailable run',
+      })),
+      isSessionStreaming: true,
+    });
+    expect(diagnostic.completed.map((it) => it.kind)).toEqual(['agent']);
+  });
 });
 
 // ---------------------------------------------------------------------------

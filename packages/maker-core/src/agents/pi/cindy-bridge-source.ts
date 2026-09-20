@@ -33,7 +33,14 @@ import {
   SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS,
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
+import { PI_BASH_STATIC_SECRET_ENV_NAMES } from "./pi-bash-secret-envs.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import {
+  CINDY_PI_BACKGROUND_COMMAND_CONTROL_TITLE,
+  CINDY_PI_BACKGROUND_COMMANDS_ENV,
+  PI_BACKGROUND_COMMAND_MAX_CHARS,
+} from "./pi-background-commands.js";
+import { PI_BACKGROUND_COMMAND_RECEIPT_PREFIX } from "@cindy/maker-shared/agent-task";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -98,6 +105,12 @@ function isCindyShellTool(toolName: unknown): boolean {
 }
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR';
+// 后台命令(host-owned):开关 env、控制通道 title、回执前缀与长度上限全部由
+// host 侧单一来源插值,避免 bridge 与 host / maker-shared 各自维护字面量。
+const BACKGROUND_COMMANDS_ENV = ${JSON.stringify(CINDY_PI_BACKGROUND_COMMANDS_ENV)};
+const BACKGROUND_COMMAND_CONTROL_TITLE = ${JSON.stringify(CINDY_PI_BACKGROUND_COMMAND_CONTROL_TITLE)};
+const BACKGROUND_COMMAND_RECEIPT_PREFIX = ${JSON.stringify(PI_BACKGROUND_COMMAND_RECEIPT_PREFIX)};
+const MAX_BACKGROUND_COMMAND_CHARS = ${PI_BACKGROUND_COMMAND_MAX_CHARS};
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
@@ -109,16 +122,7 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 // 按请求解析，但绝不能继承进 LLM 可调用的 bash 子进程。名单由 host 按本次会话
 // 实际注入的动态 BYOM env 生成；permission file 同样隐藏，避免一次获批的 bash
 // 通过改写权限档给后续工具永久提权。
-const SECRET_ENV_NAMES = new Set<string>([
-  'CINDY_PI_SECRET_ENV_NAMES',
-  'CINDY_PI_PERMISSION_FILE',
-  'CINDY_PI_TURN_TOOL_POLICY',
-  PI_PACKAGE_MANAGEMENT_ENV,
-  PI_BASH_PACKAGE_HOME_ENV,
-  MANAGED_RG_PATH_ENV,
-  SUBAGENT_RUN_DIR_ENV,
-  'PI_CODING_AGENT_DIR',
-]);
+const SECRET_ENV_NAMES = new Set<string>(${JSON.stringify(PI_BASH_STATIC_SECRET_ENV_NAMES)});
 try {
   const names = JSON.parse(process.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]');
   if (Array.isArray(names)) {
@@ -3727,6 +3731,179 @@ export default async function cindyBridge(pi: any) {
       '. Values above the maximum are rejected as invalid.'
     );
   }
+  // ── 后台命令(host-owned)────────────────────────────────────────────
+  // 模型侧开关 + 控制通道 bearer:host 只对「本地普通会话」注入
+  // CINDY_PI_BACKGROUND_COMMANDS=<每会话签发的随机 token>(SSH 远端不注入 —— 命令会跑在
+  // 控制端本机,路径与工作区都不对)。这条通道会以 **父会话的 env 与 cwd** spawn 进程、
+  // shell 路径也由请求方指定,而 extension_ui_request 的 title/payload 在 Pi 进程内对
+  // 所有扩展可见 —— 只凭 title 伪造不出 host 认的请求(同 Pi 包管理 token 口径)。
+  //
+  // 与包管理 token **不同的一点**:读入后不删 env。扩展重载(#3070;同处 bash home 就
+  // 因此加了 stash)会重新执行本模块,删了 env 就等于把能力在小到不可见的地方偷偷关掉:
+  // 模型下一次 background:true 会直接拿到「Background commands are unavailable」
+  // (2026-09-18 真机实测)。读取面已经封住,不必靠删 env 防泄漏 —— 该键在
+  // PI_BASH_STATIC_SECRET_ENV_NAMES 与 piSecretEnvNames 里,前台/后台 bash 的 spawn 边界
+  // 都会剥掉,子代理 runner 也另行剥离;子进程(也就是模型能控的那侧)拿不到它。
+  function isCindyBackgroundCommandToken(value) {
+    // 形状与 host 侧签发一致:randomBytes(32).toString('base64url')。
+    return typeof value === 'string' && /^[A-Za-z0-9_-]{40,256}$/.test(value);
+  }
+  var cindyBackgroundCommandTokenMemo = null;
+  function cindyBackgroundCommandToken() {
+    if (cindyBackgroundCommandTokenMemo === null) {
+      var raw = process.env[BACKGROUND_COMMANDS_ENV];
+      cindyBackgroundCommandTokenMemo = isCindyBackgroundCommandToken(raw) ? raw : '';
+    }
+    return cindyBackgroundCommandTokenMemo;
+  }
+  function cindyBackgroundCommandsEnabled() {
+    return cindyBackgroundCommandToken() !== '';
+  }
+  /**
+   * 参数面是否真的能用:能力开关 **且** 能解析出 shell。旧 Pi 不导出 getShellConfig
+   * 时没有后台执行通道 —— 那就连参数都不暴露(否则模型按 schema 调下去必定失败)。
+   */
+  function cindyBackgroundCommandAvailable() {
+    return cindyBackgroundCommandsEnabled() && resolveBackgroundCommandShellSpec() !== undefined;
+  }
+  function cindyBackgroundCommandDescription() {
+    return (
+      'Run this command in the background. Cindy starts it and returns a task id immediately; ' +
+      'the process keeps running while you continue. Use it for long-running work you do not need ' +
+      'to wait for (dev servers, watchers, long builds). The user sees it in the background tasks ' +
+      'panel and can stop it there. timeout does not apply to background commands.'
+    );
+  }
+  function cindyBashToolDescription() {
+    return cindyBackgroundCommandAvailable()
+      ? ' Set background:true to run a command in the background; Cindy starts it, shows it in ' +
+        'the background tasks panel, and the user can stop it there.'
+      : '';
+  }
+  /**
+   * shell 解析走 Pi 自己的 getShellConfig(与前台 bash 同一条解析链:settings.json
+   * 的 shellPath → Windows Git Bash → PATH),并把结果原样交给 host。旧 Pi 不导出
+   * 该函数时返回 undefined —— 后台参数不暴露,fail closed。
+   */
+  function readConfiguredShellPath() {
+    try {
+      const home = process.env.PI_CODING_AGENT_DIR;
+      if (!home || !path.isAbsolute(home)) return undefined;
+      const parsed = JSON.parse(readFileSync(path.join(home, 'settings.json'), 'utf8'));
+      const value = parsed && typeof parsed.shellPath === 'string' ? parsed.shellPath.trim() : '';
+      return value || undefined;
+    } catch (err) {
+      return undefined;
+    }
+  }
+  function resolveBackgroundCommandShellSpec() {
+    const resolveShellConfig = piCodingAgent.getShellConfig;
+    if (typeof resolveShellConfig !== 'function') return undefined;
+    try {
+      const spec = resolveShellConfig(readConfiguredShellPath());
+      if (!spec || typeof spec.shell !== 'string' || !spec.shell) return undefined;
+      return {
+        shell: spec.shell,
+        args: Array.isArray(spec.args)
+          ? spec.args.filter(function (arg) { return typeof arg === 'string'; })
+          : [],
+        commandTransport: spec.commandTransport === 'stdin' ? 'stdin' : 'standard',
+      };
+    } catch (err) {
+      return undefined;
+    }
+  }
+  /**
+   * bridge → host 控制请求(同 subagent runner 的 ctx.ui.input 通道)。
+   * 响应是 host 写入的 JSON 字符串;任何非 ok 都转成可读错误交给模型。
+   */
+  async function requestBackgroundCommand(payload, ctx) {
+    if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') {
+      throw new Error('Cindy background commands are unavailable in this session.');
+    }
+    const raw = await ctx.ui.input(
+      BACKGROUND_COMMAND_CONTROL_TITLE,
+      JSON.stringify(Object.assign({ token: cindyBackgroundCommandToken() }, payload)),
+    );
+    let response = null;
+    try { response = JSON.parse(typeof raw === 'string' ? raw : '{}'); } catch (err) { response = null; }
+    if (!response || response.ok !== true) {
+      throw new Error(response && typeof response.error === 'string' && response.error
+        ? response.error
+        : 'Cindy could not start the background command.');
+    }
+    return response;
+  }
+  function compactBackgroundCommandTitle(command) {
+    const oneLine = String(command).replace(/\s+/g, ' ').trim();
+    return oneLine.length > 96 ? oneLine.slice(0, 95) + '\u2026' : oneLine;
+  }
+  function backgroundCommandReceiptText(response) {
+    return (
+      BACKGROUND_COMMAND_RECEIPT_PREFIX + ': ' + response.taskId + '\n' +
+      'Output: ' + response.logPath + '\n' +
+      'The command keeps running after this call returns. The user can stop it from the ' +
+      'background tasks panel; timeout does not apply to background commands.'
+    );
+  }
+  async function startCindyBackgroundCommand(toolCallId, params, signal, ctx) {
+    const command = typeof params.command === 'string' ? params.command : '';
+    if (!command.trim()) throw new Error('A background command requires a non-empty command.');
+    if (command.length > MAX_BACKGROUND_COMMAND_CHARS) {
+      throw new Error(
+        'Background command is too long (limit ' + MAX_BACKGROUND_COMMAND_CHARS + ' characters).',
+      );
+    }
+    const shell = resolveBackgroundCommandShellSpec();
+    if (!shell) throw new Error('Cindy could not resolve a shell for the background command.');
+
+    const requestedTaskId = String(toolCallId || '');
+    let response;
+    try {
+      response = await requestBackgroundCommand({
+        action: 'start',
+        taskId: requestedTaskId,
+        command: command,
+        cwd: process.cwd(),
+        shell: shell,
+        title: compactBackgroundCommandTitle(command),
+      }, ctx);
+    } catch (error) {
+      // turn 被中止时这次 control 请求会直接 reject —— 但 host 可能已经把命令跑起来了
+      // (响应在返程丢了)。taskId 就是我们发过去的 toolCallId,按它 best-effort 收回:
+      // 否则会留下一个模型完全不知道、只能靠面板发现的孤儿进程。
+      if (signal && signal.aborted) {
+        void requestBackgroundCommand({ action: 'stop', taskId: requestedTaskId }, ctx)
+          .catch(function () {});
+      }
+      throw error;
+    }
+    if (signal && signal.aborted) {
+      // 启动确认后、工具回执交付前 turn 被中止:best-effort 收回刚起的进程,
+      // 不让一个模型已经拿不到回执的命令留在后台。
+      void requestBackgroundCommand({ action: 'stop', taskId: response.taskId }, ctx)
+        .catch(function () {});
+      throw new Error('Background command was cancelled before it was reported.');
+    }
+    return {
+      content: [{ type: 'text', text: backgroundCommandReceiptText(response) }],
+      details: { backgroundTaskId: response.taskId, backgroundLogPath: response.logPath },
+    };
+  }
+  /** Claude 系模型习惯带 CC 的参数名 run_in_background;归一化成 background 后走同一路径。 */
+  function mapBackgroundCommandAlias(args) {
+    if (!args || typeof args !== 'object') return args;
+    if (args.run_in_background === undefined) return args;
+    const next = Object.assign({}, args);
+    if (next.background === undefined) next.background = args.run_in_background;
+    delete next.run_in_background;
+    return next;
+  }
+  function wantsBackgroundCommand(params) {
+    return Boolean(params)
+      && typeof params === 'object'
+      && (params.background === true || params.run_in_background === true);
+  }
   const bashTool = createBashTool(process.cwd(), {
     // PI_SESSION_FILE 会暴露 agentHome，继而让一次获批的 shell 定位并篡改
     // permission file；其余 PI_SESSION_* 元数据对完成编码任务也不是必需能力。
@@ -3742,11 +3919,22 @@ export default async function cindyBridge(pi: any) {
     bashParameters &&
     typeof bashParameters === 'object' &&
     bashParameters.properties &&
-    typeof bashParameters.properties === 'object' &&
-    bashParameters.properties.timeout &&
-    typeof bashParameters.properties.timeout === 'object'
+    typeof bashParameters.properties === 'object'
   ) {
-    bashParameters.properties.timeout.description = cindyBashTimeoutDescription();
+    if (
+      bashParameters.properties.timeout &&
+      typeof bashParameters.properties.timeout === 'object'
+    ) {
+      bashParameters.properties.timeout.description = cindyBashTimeoutDescription();
+    }
+    if (cindyBackgroundCommandAvailable()) {
+      // 公开 schema 只保留 background;run_in_background 是 execute 前的别名归一
+      // (prepareArguments),不当作 deprecated 字段写进 schema。
+      bashParameters.properties.background = {
+        type: 'boolean',
+        description: cindyBackgroundCommandDescription(),
+      };
+    }
   }
   if (typeof bashTool.description === 'string') {
     bashTool.description =
@@ -3755,16 +3943,26 @@ export default async function cindyBridge(pi: any) {
       CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS +
       's default and a ' +
       CINDY_PI_BASH_MAX_TIMEOUT_SECONDS +
-      's maximum.';
+      's maximum.' +
+      cindyBashToolDescription();
   }
   pi.registerTool({
     ...bashTool,
-    execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) => {
+    prepareArguments: mapBackgroundCommandAlias,
+    execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: unknown) => {
       const nextParams = applyCindyBashTimeoutParams(params);
       if (bashCommandMutatesPiPackages(nextParams)) {
         throw new Error(
           'Direct Pi management changes are routed through the host. Use cindy_pi_command to run the Pi command through Cindy.',
         );
+      }
+      if (wantsBackgroundCommand(nextParams)) {
+        if (!cindyBackgroundCommandsEnabled()) {
+          throw new Error(
+            'Background commands are unavailable in this session. Run the command in the foreground.',
+          );
+        }
+        return startCindyBackgroundCommand(id, nextParams, signal, ctx);
       }
       return bashTool.execute(id, nextParams as any, signal, onUpdate as any);
     },
@@ -3809,6 +4007,13 @@ export default async function cindyBridge(pi: any) {
         if (bashCommandMutatesPiPackages(nextParams)) {
           throw new Error(
             'Direct Pi management changes are routed through the host. Use cindy_pi_command to run the Pi command through Cindy.',
+          );
+        }
+        if (wantsBackgroundCommand(nextParams)) {
+          // powershell 没有 host 侧后台执行通道:显式拒绝,避免未知参数被忽略后
+          // 静默变成前台等待(模型以为已后台运行)。
+          throw new Error(
+            'Background execution is supported by the bash tool only in this session. Run the command in the foreground.',
           );
         }
         return powershellTool.execute(id, nextParams as any, signal, onUpdate as any);

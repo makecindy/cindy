@@ -17,10 +17,12 @@
  */
 
 import {
+  PI_BASH_TOOL_NAME,
+  agentTaskProviderForToolName,
   deriveAgentTaskStatus,
+  isAgentTaskLaunchReceipt,
   isAgentTaskToolName,
-  subagentSpawnReceiptName,
-  subagentSpawnResultIndicatesRunning,
+  isBackgroundCommandLaunchReceipt,
 } from '@cindy/maker-shared/agent-task';
 
 import type { Message } from '@/lib/ccAgent.types';
@@ -61,6 +63,9 @@ const KNOWN_TASK_TYPE_KIND: Readonly<Record<string, SessionTaskItem['kind']>> = 
   local_workflow: 'workflow',
   local_agent: 'agent',
   local_bash: 'bash',
+  // PI:async durable subagent 与它的失败投影都归 agent 区(与卡片同一视觉类)。
+  pi_subagent: 'agent',
+  pi_subagent_diagnostic: 'agent',
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -90,6 +95,20 @@ interface ToolCallShape {
   toolName: string;
   toolInput: unknown;
   toolUseId: string | undefined;
+}
+
+/**
+ * 后台命令 tool_use 判据:
+ * - Claude:`Bash` + `run_in_background:true`;
+ * - PI:Cindy 覆盖的 `bash` + `background:true`(`run_in_background` 是 bridge 侧
+ *   兼容别名 —— Claude 系模型习惯带 CC 的参数名,execute 里会归一化)。
+ * 前台 bash(含 Pi 普通 `bash`)一律不是后台任务,不进列表。
+ */
+function isBackgroundBashToolCall(toolName: string, toolInput: unknown): boolean {
+  if (!isRecord(toolInput)) return false;
+  if (toolName === 'Bash') return toolInput.run_in_background === true;
+  return toolName === PI_BASH_TOOL_NAME
+    && (toolInput.background === true || toolInput.run_in_background === true);
 }
 
 /**
@@ -125,7 +144,9 @@ function deriveKind(toolName: string | undefined, update: AgentTaskUpdate | unde
   const taskType = update?.taskType;
   if (taskType) return KNOWN_TASK_TYPE_KIND[taskType] ?? 'other';
   if (toolName === 'Workflow') return 'workflow';
-  if (toolName === 'Bash') return 'bash';
+  // Claude 的 `Bash` 与 PI 的小写 `bash` 都是后台命令卡;漏了后者会让 PI 后台
+  // 命令在未水合窗口里落到 'agent'(图标/标题全错)。
+  if (toolName === 'Bash' || toolName === PI_BASH_TOOL_NAME) return 'bash';
   return 'agent';
 }
 
@@ -293,8 +314,7 @@ export function listSessionTasks(input: {
 
     const isTaskTool = isAgentTaskToolName(toolName);
     const isWorkflowTool = toolName === 'Workflow';
-    const isBackgroundBash =
-      toolName === 'Bash' && isRecord(toolInput) && toolInput.run_in_background === true;
+    const isBackgroundBash = isBackgroundBashToolCall(toolName, toolInput);
     // 其余工具(含前台 Bash)不是后台任务,不进列表。
     if (!isTaskTool && !isWorkflowTool && !isBackgroundBash) continue;
 
@@ -334,17 +354,24 @@ export function listSessionTasks(input: {
     // 的死任务(同步 Task 没有启动回执,永远不会有结果),断言 running 会让它
     // 永久转圈且无任何收口路径,按 stopped(被中断)呈现。
     const resultText = typeof resultContent === 'string' ? resultContent : undefined;
+    const resultIsLaunchReceipt = isAgentTaskLaunchReceipt(toolName, toolInput, resultText);
     const status: AgentTaskStatus = isWorkflowTool
       ? update?.status ?? (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped')
       : update
         ? deriveAgentTaskStatus(update.status, resultText, {
-            resultIsLaunchReceipt:
-              subagentSpawnReceiptName(toolName, toolInput, resultText) !== undefined
-              || subagentSpawnResultIndicatesRunning(toolName, resultText),
+            // 回执只是启动回执(子代理 / PI 后台命令),不得收口成 completed。
+            resultIsLaunchReceipt,
           })
-        : (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
+        : settled
+          ? // 重载后的历史行:回执只说明**启动过**,任务已不在运行快照里。后台命令没有
+            // 终态 update(local_bash 不落库),把它当 completed 会给出绿勾 —— 而它完全
+            // 可能是在上次退出时被当作 stopped 杀掉的那一个。
+            isBackgroundCommandLaunchReceipt(toolName, resultText) ? 'stopped' : 'completed'
+          : isSessionStreaming
+            ? 'running'
+            : 'stopped';
     const provider: SessionTaskItem['provider'] =
-      update?.provider ?? (toolName.startsWith('collab:') ? 'codex' : 'claude-code');
+      update?.provider ?? agentTaskProviderForToolName(toolName);
 
     const taskId = update?.taskId ?? derivedTaskId;
     const resultPreview = kind === 'workflow' ? clipResultText(resultContent) : undefined;

@@ -23,6 +23,7 @@ import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
+import { makerChatStore } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
@@ -37,7 +38,9 @@ import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { formatCompactTokens } from '@/lib/usageFormat';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
 import {
-  PI_SUBAGENT_TOOL_NAME,
+  agentTaskProviderForToolName,
+  isAgentTaskLaunchReceipt,
+  isBackgroundCommandLaunchReceipt,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
 } from '@cindy/maker-shared/agent-task';
@@ -237,8 +240,9 @@ export function AgentTaskCard({
     : deriveAgentTaskStatus(update?.status, result, {
         persistedStatus,
         resultIsLaunchReceipt:
-          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
-          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
+          isAgentTaskLaunchReceipt(toolCall?.toolName, toolCall?.toolInput, result),
+        // 历史行(重载后没有 live update):启动回执不是终态,按 stopped 呈现。
+        backgroundCommandReceipt: isBackgroundCommandLaunchReceipt(toolCall?.toolName, result),
       });
   const StatusIcon = statusIcon(status);
   const statusIconClassName = cn(
@@ -251,9 +255,7 @@ export function AgentTaskCard({
   const isBash = update?.taskType === 'local_bash';
   const isSubagent = !isWorkflow && !isBash;
   const provider = update?.provider
-    ?? (toolCall?.toolName?.startsWith('collab:')
-      ? 'codex'
-      : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME ? 'pi' : 'claude-code');
+    ?? agentTaskProviderForToolName(toolCall?.toolName);
   const AvatarIcon = isWorkflow ? Workflow : isBash ? SquareTerminal : Bot;
   const title = compactText(
     formatAgentTaskTitle(provider, (isWorkflow ? update?.workflowName : undefined) ??
@@ -299,14 +301,18 @@ export function AgentTaskCard({
           ? t('chat.agentTask.provider.pi')
           : t('chat.agentTask.provider.claude');
 
-  // 停止按钮:Claude 后台任务沿用 SDK stopTask；PI 只开放 Cindy durable runner
-  // 明确标成 taskType=pi_subagent 的异步任务。普通 PI 前台委派没有 durable 控制面，
-  // 不能仅凭 provider 猜测可停止。Codex 仍无 stopTask 通道。
+  // 停止按钮:Claude 后台任务沿用 SDK stopTask;PI 只开放有 durable 控制面的任务:
+  // 后台命令(host-owned 子进程)与 async durable subagent。普通 PI 前台委派没有
+  // 控制面,不能仅凭 provider 猜测可停止。Codex 仍无 stopTask 通道。
   // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
   // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
+  // 「点了停止但没停掉」:host 只有在 SIGKILL 之后仍未确认退出时才会让 stop 失败,
+  // 其余失败(会话已关、IPC 出错)同样归到这里 —— 两种情况对用户是同一句话。
+  const [stopFailed, setStopFailed] = useState(false);
   const providerCanStop = update?.provider === 'claude-code'
-    || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
+    || (update?.provider === 'pi'
+      && (update.taskType === 'pi_subagent' || update.taskType === 'local_bash'));
   const canStop =
     status === 'running' &&
     Boolean(sessionId) &&
@@ -321,11 +327,23 @@ export function AgentTaskCard({
     setStopping(true);
     void api
       .stopAgentTask(sessionId, update.taskId)
+      .then(() => {
+        // 停止对「main 侧其实已不在」的 id 是**静默成功**的(两套控制面都查无此任务,
+        // 例如终态事件丢包)。点完立刻对一次账:行要么很快翻成已停止(它本就结束了),
+        // 要么证明它确实还在跑。不做乐观收口 —— 那会伪造一个不存在的终态。
+        makerChatStore.requestBackgroundTaskReconcile(sessionId);
+      })
       .catch(() => {
-        // 静默:失败时卡片仍显示 running,用户可重试;不弹打断式错误。
+        // 不弹打断式错误,但也不能装作成功:行上给一句「停止未确认」,按钮留着可重试。
+        setStopFailed(true);
       })
       .finally(() => setStopping(false));
   }, [sessionId, update?.taskId]);
+
+  // 任务状态一变(真停了 / 换成另一条任务)就把提示收掉:它描述的是上一次点击。
+  useEffect(() => {
+    setStopFailed(false);
+  }, [update?.status, update?.taskId]);
 
   // workflow 卡整卡点击 → 打开右栏后台任务面板并定位本任务(workflowTaskId 在
   // 组件顶部与状态修正共用同一次推导)。三者缺一就退回传统展开交互,让
@@ -541,6 +559,14 @@ export function AgentTaskCard({
           </button>
         )}
         </div>
+        {stopFailed && (
+          <p
+            data-agent-task-stop-unconfirmed="true"
+            className="mt-1 text-13 leading-5 text-[var(--text-secondary)]"
+          >
+            {t('chat.agentTask.stopUnconfirmed')}
+          </p>
+        )}
 
         {/* live workflow 卡不渲染展开区(详情在后台任务面板);历史 workflow 卡
             (无 live taskId,面板无数据)保留展开区兜底展示 description/summary。 */}

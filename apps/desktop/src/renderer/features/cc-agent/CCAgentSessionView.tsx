@@ -113,7 +113,7 @@ import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedSchedu
 import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
 import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
-import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
+import { useBackgroundSessionTasks } from '@/hooks/useBackgroundSessionTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
 import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
@@ -1974,14 +1974,15 @@ export function CCAgentSessionView({
   // 消耗用量)。main 侧按 proxy 活动信号判定并推送;消费点是 RunningStatusBar 的
   // 后台模式(呼吸 + 「全部停止」);「全部停止」= 关闭常驻子进程(会话可续)。
   const backgroundActivity = useSessionBackgroundActivity(sessionId);
-  // 后台 Bash 任务(run_in_background 的 Bash,taskType=local_bash):不调模型,
-  // proxy 活动信号覆盖不到 —— 从 taskUpdates 事件流折算,并在挂载/重载后用 main
-  // 快照补回存量。与上面的 proxy 信号一起点亮状态栏后台模式。
-  const backgroundBash = useBackgroundBashTasks(sessionId, taskUpdates, historyLoaded);
+  // 后台 Bash / 后台命令与 PI 后台任务:CC 的 run_in_background 与 PI 的
+  // background:true / async subagent 都不调模型(或没有 proxy 信号),从
+  // taskUpdates 事件流折算,并在挂载/重载后用 main 快照补回存量。
+  // 与上面的 proxy 信号一起点亮状态栏后台模式;stopAll 是逐个精确停止任务。
+  const backgroundSessionTasks = useBackgroundSessionTasks(sessionId, taskUpdates, historyLoaded);
   // 与运行态互斥(turn 一开跑 main 即广播熄灭,这里再加一道渲染守卫防瞬时竞态):
   // 只在「无 turn 在跑」时才把状态栏切到后台子任务模式。
   const backgroundTasksActive =
-    (backgroundActivity.active || backgroundBash.tasks.length > 0) &&
+    (backgroundActivity.active || backgroundSessionTasks.tasks.length > 0) &&
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
@@ -4822,17 +4823,24 @@ export function CCAgentSessionView({
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
                   workflowStatus={runningWorkflow ? composerStatus : undefined}
-                  // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
+                  // 仅后台命令在跑(无模型调用、无子代理)时换专属文案 + 温和停止语义:
                   // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
                   // (关子进程止损,bash 任务随之终止,无需再逐个停)。
+                  // PI durable subagent 也在同一条逐任务停止路径上,但不算「后台命令」,
+                  // 计数归零使文案回落到通用「后台任务运行中」。
                   backgroundBashOnlyCount={
-                    backgroundActivity.active ? 0 : backgroundBash.tasks.length
+                    backgroundActivity.active || backgroundSessionTasks.subagentCount > 0
+                      ? 0
+                      : backgroundSessionTasks.bashCount
                   }
-                  backgroundStopping={backgroundActivity.stopping || backgroundBash.stopping}
+                  backgroundStopping={backgroundActivity.stopping || backgroundSessionTasks.stopping}
+                  // 「全部停止」停下不来的条数(host 只在 SIGKILL 后仍未确认退出时让 stop
+                  // 失败):状态栏按钮的悬浮说明里明确点出来,不再静默当作全部成功。
+                  backgroundStopUnconfirmedCount={backgroundSessionTasks.stopUnconfirmedCount}
                   suppressContent={Boolean(pendingPlanReview)}
                   onStopBackgroundTasks={() => {
                     if (backgroundActivity.active) void backgroundActivity.stopAll();
-                    else void backgroundBash.stopAll();
+                    else void backgroundSessionTasks.stopAll();
                   }}
                   rightLeadingSlot={
                     hasControlledBanner && controlledBannerCollapsed ? (
@@ -5666,6 +5674,7 @@ function RunningStatusBar({
   workflowStatus,
   backgroundBashOnlyCount = 0,
   backgroundStopping = false,
+  backgroundStopUnconfirmedCount = 0,
   onStopBackgroundTasks,
   rightLeadingSlot = null,
   suppressContent = false,
@@ -5704,6 +5713,12 @@ function RunningStatusBar({
   backgroundBashOnlyCount?: number;
   /** 全停请求在飞(按钮禁用,防连点)。 */
   backgroundStopping?: boolean;
+  /**
+   * 上一轮「全部停止」里 host 未能确认停掉的条数(0 = 全部确认)。
+   * 不能吞:host 只在 SIGKILL 之后仍未确认退出时才让单条 stop 失败,静默当成功会让
+   * 用户以为全部停掉了,而那条进程还在跑。
+   */
+  backgroundStopUnconfirmedCount?: number;
   /** 「全部停止」入口(关闭常驻 CC 子进程,会话可续)。 */
   onStopBackgroundTasks?: () => void;
   /** 独立于运行态淡出的右侧前置槽位；折叠后的被控呼吸灯固定在 token 统计左侧。 */
@@ -5758,6 +5773,23 @@ function RunningStatusBar({
 
   const isHidden = suppressContent || (!showContent && !visible);
   const workflowWaiting = workflowStatus !== undefined;
+
+  // 「全部停止」的说明:未确认残留时**追加**在操作说明之后,不覆盖操作名 ——
+  // 读屏与悬浮都要先说清这个按钮是干什么的(它仍是可重试的「全部停止」)。
+  const stopAllAction = backgroundBashOnlyCount > 0
+    ? t('chat.backgroundActivity.stopBashTitle')
+    : t('chat.backgroundActivity.stopAllTitle');
+  const stopAllUnconfirmedNote = backgroundStopUnconfirmedCount > 0
+    ? t('chat.backgroundActivity.stopUnconfirmed', {
+        count: backgroundStopUnconfirmedCount,
+      })
+    : null;
+  const stopAllTitle = stopAllUnconfirmedNote
+    ? `${stopAllAction} · ${stopAllUnconfirmedNote}`
+    : stopAllAction;
+  const stopAllAriaLabel = stopAllUnconfirmedNote
+    ? `${stopAllAction} · ${stopAllUnconfirmedNote}`
+    : undefined;
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
@@ -5974,11 +6006,10 @@ function RunningStatusBar({
                   'text-[var(--text-primary)] hover:opacity-70 transition-opacity',
                   'disabled:opacity-50 disabled:cursor-not-allowed',
                 )}
-                title={t(
-                  backgroundBashOnlyCount > 0
-                    ? 'chat.backgroundActivity.stopBashTitle'
-                    : 'chat.backgroundActivity.stopAllTitle',
-                )}
+                aria-label={
+                  backgroundStopUnconfirmedCount > 0 ? stopAllAriaLabel : undefined
+                }
+                title={stopAllTitle}
               >
                 <Square size={12} />
                 {backgroundStopping
