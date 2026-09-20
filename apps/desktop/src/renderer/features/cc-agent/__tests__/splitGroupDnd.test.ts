@@ -3,14 +3,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  SPLIT_GROUP_PANE_MIME,
   SPLIT_GROUP_SESSION_MIME,
   SPLIT_GROUP_SESSION_LINK_MIME,
+  hasSplitGroupPaneType,
+  hasSplitGroupDragType,
   hasSplitGroupSessionType,
   isSplitGroupComposerDropTarget,
   isSplitGroupDragSource,
   needsDedicatedSplitGroupDragHandle,
   resolveSplitDropSide,
   shouldStartSplitGroupDrag,
+  writeSplitGroupPaneDragData,
   finishSessionDrag,
   startSessionDrag,
   writeSplitGroupSessionDragData,
@@ -49,6 +53,9 @@ describe('splitGroupDnd', () => {
   it('只接受 Cindy 任务拖拽 MIME', () => {
     expect(hasSplitGroupSessionType([SPLIT_GROUP_SESSION_MIME])).toBe(true);
     expect(hasSplitGroupSessionType(['Files', 'text/plain'])).toBe(false);
+    expect(hasSplitGroupDragType([SPLIT_GROUP_SESSION_MIME])).toBe(true);
+    expect(hasSplitGroupDragType([SPLIT_GROUP_PANE_MIME])).toBe(true);
+    expect(hasSplitGroupDragType(['Files', 'text/plain'])).toBe(false);
   });
 
   it('只写入 Cindy 专用 MIME，避免系统把任务拖拽落成桌面文件', () => {
@@ -78,6 +85,29 @@ describe('splitGroupDnd', () => {
       'cindy://session/session-remote?device=device-b',
     );
     expect(writeSplitGroupSessionDragData(dataTransfer, '   ')).toBe(false);
+  });
+
+  it('向目标 pane 拖拽写入独立 MIME，避免误创建新 pane', () => {
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: 'none',
+      clearData: (format?: string) => {
+        if (format === undefined) values.clear();
+        else values.delete(format);
+      },
+      setData: (format: string, data: string) => values.set(format, data),
+    };
+
+    values.set('text/plain', 'stale-text');
+    values.set('text/uri-list', 'https://example.com/dragged');
+    expect(writeSplitGroupPaneDragData(dataTransfer, ' session-a ')).toBe(true);
+    expect(dataTransfer.effectAllowed).toBe('move');
+    expect(values.get(SPLIT_GROUP_PANE_MIME)).toBe('session-a');
+    expect(values.has('text/plain')).toBe(false);
+    expect(values.has('text/uri-list')).toBe(false);
+    expect(hasSplitGroupPaneType([SPLIT_GROUP_PANE_MIME])).toBe(true);
+    expect(hasSplitGroupPaneType([SPLIT_GROUP_SESSION_MIME])).toBe(false);
+    expect(writeSplitGroupPaneDragData(dataTransfer, '   ')).toBe(false);
   });
 
   it('共享原生拖拽 helper 保留任务 payload 并在结束时请求窗口外判定', () => {
