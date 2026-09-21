@@ -18,6 +18,7 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import {
   getCachedProvidersSnapshot,
+  hasProvidersSnapshotLoadFailed,
   subscribeProvidersSnapshot,
   type ProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
@@ -27,6 +28,8 @@ export interface UseProvidersReturn {
   providerOrder: string[];
   ownerGeneration: number | null;
   loading: boolean;
+  /** A refresh failed; loading still means no usable snapshot for existing readiness guards. */
+  loadFailed: boolean;
   refetch: () => Promise<boolean>;
 }
 
@@ -44,9 +47,9 @@ export interface UseProvidersReturn {
  */
 export function useProviders(): UseProvidersReturn {
   const { dataOwnerId } = getDataOwnerGeneration();
-  const [snapshot, setSnapshot] = useState<ProvidersSnapshot | null>(() =>
-    getCachedProvidersSnapshot(),
-  );
+  const [{ snapshot }, setSnapshotState] = useState(() => ({
+    snapshot: getCachedProvidersSnapshot(),
+  }));
 
   // AuthContext 会先同步切换全局 data owner 代际、再提交 React state。owner 改变后的
   // 首次 render 不能继续暴露旧 state；只接受同 owner state 或 owner-scoped 模块缓存。
@@ -60,8 +63,9 @@ export function useProviders(): UseProvidersReturn {
   }, []);
 
   useEffect(() => {
-    setSnapshot(getCachedProvidersSnapshot());
-    const onRefresh = (next: ProvidersSnapshot | null): void => setSnapshot(next);
+    setSnapshotState({ snapshot: getCachedProvidersSnapshot() });
+    // Status-only notifications must render even when the snapshot is still null.
+    const onRefresh = (next: ProvidersSnapshot | null): void => setSnapshotState({ snapshot: next });
     return subscribeProvidersSnapshot(onRefresh);
   }, [dataOwnerId]);
 
@@ -70,6 +74,7 @@ export function useProviders(): UseProvidersReturn {
     providerOrder: currentSnapshot?.providerOrder ?? [],
     ownerGeneration: currentSnapshot?.ownerGeneration ?? null,
     loading: currentSnapshot == null,
+    loadFailed: hasProvidersSnapshotLoadFailed(),
     refetch,
   };
 }

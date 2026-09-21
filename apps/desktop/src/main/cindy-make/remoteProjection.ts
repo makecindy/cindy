@@ -114,6 +114,8 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       buildMode && personal
         ? personal.stopping
           ? 'cindyMake.history.stopping'
+          : personal.status === 'waiting' && personal.preparationStep
+            ? 'cindyMake.personal.preparationStep.' + personal.preparationStep
           : personal.status === 'checking' && personal.checkStep
             ? 'cindyMake.personal.checkStep.' + personal.checkStep
             : 'cindyMake.personal.status.' + personal.status
@@ -140,14 +142,21 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       details.push(
         t((buildMode ? 'cindyMake.personal.errors.' : 'cindyMake.test.errors.') + error),
       );
+    if (buildMode && personal?.logs?.length)
+      details.push(
+        t('cindyMake.personal.buildLog.title') +
+          ': ' +
+          personal.logs
+            .slice(-8)
+            .map((entry) => t('cindyMake.personal.buildLog.steps.' + entry.step))
+            .join(' · '),
+      );
     action(`test:${id}:continue`, 'cindyMake.test.continue', starting || building);
     action(
       `test:${id}:start`,
       testStatus === 'ready'
         ? 'cindyMake.test.started'
-        : ['failed', 'stopped'].includes(testStatus)
-          ? 'cindyMake.test.retry'
-          : 'cindyMake.test.start',
+        : 'cindyMake.test.start',
       starting || building || testStatus === 'ready' || !meta.commit,
     );
     action(`test:${id}:build`, 'cindyMake.personal.generate', starting || building || !meta.commit);

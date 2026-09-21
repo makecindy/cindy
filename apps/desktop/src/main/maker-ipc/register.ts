@@ -974,6 +974,7 @@ import {
   deferSessionRuntimeAxisMutation,
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
+  projectSessionRuntimeControl,
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
@@ -1174,26 +1175,6 @@ const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
 });
 let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
   null;
-
-function projectSessionRuntimeControl(
-  sessionId: string,
-  baseline: SessionRuntimeProfile,
-): Partial<RendererSession> {
-  const control = getSessionRuntimeControlSnapshot(sessionId);
-  const effective = control.effectiveOverride ?? baseline;
-  return {
-    model: effective.model,
-    providerId: effective.providerId,
-    // Keep the legacy top-level wire axis string-compatible while explicitly
-    // clearing stale effort; runtimeEffective retains the semantic null.
-    effort: effective.effort ?? '',
-    fastMode: effective.fastMode,
-    runtimeGeneration: control.generation,
-    runtimeBaseline: baseline,
-    runtimeEffective: effective,
-    runtimePending: control.pending,
-  };
-}
 
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」

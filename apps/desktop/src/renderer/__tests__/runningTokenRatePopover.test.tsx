@@ -218,7 +218,7 @@ it('keeps the pinned card across turns while awaiting a fresh rate', async () =>
   expect(nextLine?.match(/[ML]/g)).toHaveLength(3);
 });
 
-it('keeps a clicked panel open through outside clicks, focus changes and repeated trigger clicks', async () => {
+it('keeps a clicked panel open through outside clicks and focus changes, and closes from the trigger', async () => {
   const onPinnedChange = vi.fn();
   render(
     <>
@@ -254,10 +254,8 @@ it('keeps a clicked panel open through outside clicks, focus changes and repeate
   expect(screen.getByRole('dialog')).toBe(dialog);
   fireEvent.click(trigger);
   fireEvent.pointerLeave(trigger);
-  expect(screen.getByRole('dialog')).toBe(dialog);
-  expect(screen.queryByRole('tooltip')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(screen.queryByRole('tooltip')).toBeNull();
   expect(onPinnedChange).toHaveBeenLastCalledWith(false);
 });
 

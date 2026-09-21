@@ -80,8 +80,8 @@ function validateScheduleExecutionShape(
   if (schedule.workspaceKind !== 'project' || !schedule.workingDir?.trim()) {
     throw new Error('script execution requires a local project workspace');
   }
-  if (schedule.useWorktree || schedule.targetSessionId || schedule.persistentSession) {
-    throw new Error('script execution does not support worktrees or bound sessions');
+  if (schedule.useWorktree || schedule.persistentSession) {
+    throw new Error('script execution does not support worktrees or persistent sessions');
   }
   // silentWhenIdle 的静默协议依赖 agent 在会话里调 silence 工具,script 任务无
   // agent、该语义整体不适用;显式传入按不支持字段拒绝(UI 提交层恒为 false)。

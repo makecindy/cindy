@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
+import { useNewMakerPrefsOwnerResync } from '@/hooks/useNewMakerPrefsOwnerResync';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
@@ -193,11 +194,12 @@ function MakerBootstrap() {
   // Auth 广播的多个 listener 没有顺序契约；等 AuthContext 提交新 owner 后再预热一次，
   // 保证 provider 快照与 capabilities 不会沿用或提交前一个 owner 的在途结果。
   useEffect(() => {
-    // Early fire-and-forget sends can precede maker IPC registration. Repeat only
-    // after the ready/owner boundary, using the same persisted preference snapshot.
-    syncNewMakerPrefs();
     void preloadLocalCatalogSnapshot();
   }, [dataOwnerId, dataOwnerRecoveryEpoch]);
+  // Early fire-and-forget sends can precede maker IPC registration. Repeat after
+  // the ready/owner boundary and after every owner generation change (same-owner
+  // repairs included, #4469), using the same persisted preference snapshot.
+  useNewMakerPrefsOwnerResync(syncNewMakerPrefs);
   return null;
 }
 

@@ -163,6 +163,26 @@ export class ScriptScheduleRunner {
     }
   }
 
+  private async retireUnavailableOwner(schedule: Schedule, ctx: FireContext): Promise<FireResult | null> {
+    // The owner is a lifecycle binding, not an agent execution mode. Check before
+    // hooks so idle scripts stop too, even when they have no event to dispatch.
+    if (schedule.targetSessionId) {
+      if (!this.deps.getDb || !this.deps.scheduler) {
+        throw new Error('bound script execution requires session storage and scheduler');
+      }
+      const [owner] = await this.deps.getDb()
+        .select({ status: sessions.status }).from(sessions)
+        .where(eq(sessions.id, schedule.targetSessionId)).limit(1);
+      if (!owner || owner.status === 'archived' || owner.status === 'deleted') {
+        await this.deps.scheduler.pause(schedule.id, { exemptRunId: ctx.runId });
+        return { sessionId: '', skipped: true,
+          resultText: `Script stopped: target session ${owner?.status ?? 'missing'}` };
+      }
+    }
+
+    return null;
+  }
+
   private async fireInner(schedule: Schedule, ctx: FireContext): Promise<FireResult> {
     const config = schedule.scriptConfig;
     if (schedule.executionMode !== 'script' || !config?.command.trim()) {
@@ -171,8 +191,13 @@ export class ScriptScheduleRunner {
     if (schedule.workspaceKind !== 'project' || !schedule.workingDir?.trim()) {
       throw new Error('script execution requires a local project workspace');
     }
-    if (schedule.useWorktree || schedule.targetSessionId || schedule.persistentSession) {
-      throw new Error('script execution does not support worktrees or bound sessions');
+    if (schedule.useWorktree || schedule.persistentSession) {
+      throw new Error('script execution does not support worktrees or persistent sessions');
+    }
+
+    if (schedule.targetSessionId) {
+      const retired = await this.retireUnavailableOwner(schedule, ctx);
+      if (retired) return retired;
     }
 
     if (schedule.preRunHook?.command?.trim()) {
@@ -363,7 +388,22 @@ export class ScriptScheduleRunner {
             : result;
         writeFrame({ type: 'call_result', id: frame.id, ok: true, result: responseResult });
       } catch (error) {
-        writeFrame({ type: 'call_result', id: frame.id, ok: false, error: safeError(error) });
+        // The owner may be archived after the pre-run check. Only a typed
+        // dispatch rejection for this bound owner retires the schedule; transient
+        // failures and unbound multi-target scripts keep their normal lifecycle.
+        const failure = safeError(error);
+        if (schedule.targetSessionId && frame.method === 'sessions.dispatch'
+          && (!frame.params?.target_session_id || frame.params.target_session_id === schedule.targetSessionId)
+          && ['ARCHIVED', 'DELETED', 'NOT_FOUND'].includes(failure.code)) {
+          try {
+            // Re-read durable state: NOT_FOUND can also mean a temporary runtime
+            // lookup failure, which must not permanently pause a live owner.
+            await this.retireUnavailableOwner(schedule, ctx);
+          } catch (pauseError) {
+            deferredCallFailure = pauseError instanceof Error ? pauseError : new Error(String(pauseError));
+          }
+        }
+        writeFrame({ type: 'call_result', id: frame.id, ok: false, error: failure });
         if (completeReceived && !deferredCallFailure) {
           deferredCallFailure = error instanceof Error ? error : new Error(safeError(error).message);
         }
@@ -479,6 +519,7 @@ export class ScriptScheduleRunner {
         runId: ctx.runId,
         firedAt: ctx.firedAt,
         workingDir: schedule.workingDir,
+        ...(schedule.targetSessionId ? { targetSessionId: schedule.targetSessionId } : {}),
       },
     });
 

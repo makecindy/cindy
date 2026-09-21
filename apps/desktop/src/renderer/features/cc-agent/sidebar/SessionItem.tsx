@@ -511,8 +511,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         ? 'cindyMake.code.taskName'
         : 'ccAgent.common.unnamedSession',
     ),
+    t,
   );
-  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const titleContent =
     matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
       ? highlightSegments(session.title, matchIndices, {

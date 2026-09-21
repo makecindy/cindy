@@ -219,8 +219,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         ? 'cindyMake.code.taskName'
         : 'ccAgent.common.unnamedSession',
     ),
+    t,
   );
-  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
   // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;

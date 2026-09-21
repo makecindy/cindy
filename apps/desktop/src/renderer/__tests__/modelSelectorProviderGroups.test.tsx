@@ -24,6 +24,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.xd.title': 'Cindy AI',
         'settings.providers.xd.accountTier.free': '免费版',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
+        'newChat.modelSelector.trigger.loading': '正在读取模型…',
+        'newChat.modelSelector.trigger.unresolved': '模型信息暂不可用',
         'newChat.modelSelector.trigger.aria': `Select model. Current: ${options?.model ?? ''}`,
         'newChat.modelSelector.trigger.ariaWithEffort': `Select model. Current: ${options?.model ?? ''}, effort: ${options?.effort ?? ''}`,
         'newChat.modelSelector.modelListAria': '模型列表',
@@ -221,10 +223,10 @@ const providersRef = vi.hoisted(() => {
       },
     },
   ] as unknown[];
-  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS };
+  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS, loading: false, loadFailed: false };
 });
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers, providerOrder: [] }),
+  useProviders: () => ({ providers: providersRef.providers, providerOrder: [], loading: providersRef.loading, loadFailed: providersRef.loadFailed }),
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
@@ -278,6 +280,8 @@ beforeEach(() => {
   floatingUiMocks.size.mockClear();
   floatingUiMocks.useFloating.mockClear();
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+  providersRef.loading = false;
+  providersRef.loadFailed = false;
   modelAccessState.accountTier = null;
   visibleModelsRef.models = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -409,13 +413,61 @@ describe('model selector display identity during switches', () => {
     expect(trigger().textContent).not.toContain(change.modelId ?? props.modelId);
   });
 
-  it.each([false, true])('uses the placeholder for an unknown saved model (disconnected=%s)', (sourceDisconnected) => {
+  it.each([false, true])('distinguishes an unknown saved model from an empty selection (disconnected=%s)', (sourceDisconnected) => {
     providersRef.providers = [];
     render(<ModelSelector {...props} sourceDisconnected={sourceDisconnected} />);
-    expect(trigger().textContent).toContain('选择模型');
+    expect(trigger().textContent).toContain('模型信息暂不可用');
+    expect(trigger().textContent).not.toContain('选择模型');
     expect(trigger().textContent).not.toContain(props.modelId);
     expect(trigger().getAttribute('title')).not.toContain(props.modelId);
     expect(trigger().getAttribute('aria-label')).not.toContain(props.modelId);
+  });
+
+  it('shows loading for a selected model until its catalog arrives, and keeps the name through refresh', () => {
+    providersRef.providers = [];
+    providersRef.loading = true;
+    const { rerender } = render(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('正在读取模型…');
+    providersRef.providers = [provider];
+    providersRef.loading = false;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+    providersRef.providers = [];
+    providersRef.loading = true;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+    expect(trigger().textContent).not.toContain('正在读取模型…');
+  });
+
+  it('still prompts for a model when there is no selection', () => {
+    render(<ModelSelector {...props} modelId="" />);
+    expect(trigger().textContent).toContain('选择模型');
+  });
+
+  it('settles a failed first catalog load, then recovers through retry without clearing the selection', () => {
+    providersRef.providers = [];
+    providersRef.loading = true;
+    const { rerender } = render(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('正在读取模型…');
+
+    providersRef.loadFailed = true;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('模型信息暂不可用');
+    expect(trigger().textContent).not.toContain('正在读取模型…');
+    expect(trigger().textContent).not.toContain('选择模型');
+
+    providersRef.loadFailed = false;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('正在读取模型…');
+    providersRef.providers = [provider];
+    providersRef.loading = false;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+
+    providersRef.providers = [];
+    providersRef.loadFailed = true;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
   });
 
   it('preserves an explicitly supplied diagnostic label', () => {

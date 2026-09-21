@@ -92,11 +92,17 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeProjector = (session: Session) => Partial<Session>;
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'>;
+type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
   sessionRuntimeProjector = projector;
+}
+
+/** Full reads and committed route patches must publish the same runtime snapshot. */
+export function projectSessionRuntimeFields(session: SessionRuntimeFields): Partial<Session> {
+  return sessionRuntimeProjector?.(session) ?? {};
 }
 
 /**
@@ -292,7 +298,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     hasPendingSessionInterruption(candidate)
       ? base.activeTurnStartedAt
       : null;
-  return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
+  return { ...base, ...projectSessionRuntimeFields(base) };
 }
 
 export function messageToCamel(row: MessageRow): Message {

@@ -16,6 +16,10 @@ import type {
   CindyMakePersonalBuildState,
 } from '../../../shared/cindyMakeSession';
 import { CindyMakeCompleteCard } from './CindyMakeCompleteCard';
+import { CindyMakeBuildLog } from './CindyMakeBuildLog';
+import { CindyMakeBuildProgress } from './CindyMakeBuildProgress';
+import { CindyMakeBuildFailure } from './CindyMakeBuildFailure';
+import { cindyMakeBuildStatusKey } from './cindyMakeBuildStatus';
 import { CindyMakeTestStep } from './CindyMakeTestStep';
 
 type CompletedTestProps = {
@@ -225,10 +229,16 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       }
     } catch (error) {
       if (current()) {
-        const code = extractIpcError(error)?.message;
+        const code = extractIpcError(error)?.message.replace(/^\[PRECONDITION_FAILED\]\s*/, '');
         setError({
-          mode: action === 'build' || action === 'open-build' ? 'build' : 'test',
-          code: code === 'changed' || code === 'environment' ? code : 'unavailable',
+          mode:
+            code !== 'stopFailed' && (action === 'build' || action === 'open-build')
+              ? 'build'
+              : 'test',
+          code:
+            code === 'changed' || code === 'environment' || code === 'stopFailed'
+              ? code
+              : 'unavailable',
         });
       }
     } finally {
@@ -237,7 +247,9 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
     }
   };
   const testStatus = pending === 'start' ? 'starting' : (meta.test?.status ?? 'waiting');
-  const buildStatus = pending === 'build' ? 'waiting' : personal?.status;
+  const displayBuild: CindyMakePersonalBuildState | undefined =
+    pending === 'build' ? { status: 'waiting' } : personal;
+  const buildStatus = displayBuild?.status;
   const building = ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
     buildStatus ?? '',
   );
@@ -248,9 +260,7 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       pending === 'build' ||
       pending === 'open-build' ||
       (error?.mode ?? meta.lastAction ?? (meta.personal ? 'build' : 'test')) === 'build');
-  const retryTest =
-    !starting && (testStatus === 'failed' || testStatus === 'stopped' || error?.mode === 'test');
-  const stopping = building && (stoppingBuild || personal?.stopping === true);
+  const stopping = building && (stoppingBuild || displayBuild?.stopping === true);
   const stopBuild = async () => {
     if (!personal?.buildId || stopping || !current()) return;
     setStoppingBuild(true);
@@ -278,14 +288,10 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       composer
       data={{ ...meta }}
       busy={working}
-      failed={Boolean(errorCode)}
+      failed={Boolean(errorCode) || (buildMode && buildStatus === 'failed')}
       heading={t(
-        buildMode && buildStatus
-          ? stopping
-            ? 'cindyMake.history.stopping'
-            : buildStatus === 'checking' && personal?.checkStep
-              ? 'cindyMake.personal.checkStep.' + personal.checkStep
-              : 'cindyMake.personal.status.' + buildStatus
+        buildMode && displayBuild
+          ? cindyMakeBuildStatusKey(displayBuild, stopping)
           : 'cindyMake.test.status.' + testStatus,
       )}
       description={t(
@@ -303,11 +309,17 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
         { name: personal?.artifactName ?? '' },
       )}
       detail={
-        !buildMode ? (
+        buildMode ? (
+          <div className="mt-3 space-y-3">
+            <CindyMakeBuildProgress build={displayBuild} />
+            <CindyMakeBuildFailure build={displayBuild} error={errorCode} />
+            <CindyMakeBuildLog build={displayBuild} />
+          </div>
+        ) : (
           <CindyMakeTestStep
             test={pending === 'start' ? { status: 'starting', step: 'waiting' } : meta.test}
           />
-        ) : undefined
+        )
       }
     >
       {versions.error && (
@@ -315,9 +327,9 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
           {t('cindyMake.versions.errors.' + versions.error)}
         </p>
       )}
-      {errorCode && (
+      {errorCode && !buildMode && (
         <p role="alert" className="text-12 text-[var(--status-danger)]">
-          {t((buildMode ? 'cindyMake.personal.errors.' : 'cindyMake.test.errors.') + errorCode)}
+          {t('cindyMake.test.errors.' + errorCode)}
         </p>
       )}
       <div className="flex flex-wrap justify-end gap-2">
@@ -347,13 +359,7 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
           loading={starting}
           onClick={() => void act('start')}
         >
-          {t(
-            testStatus === 'ready'
-              ? 'cindyMake.test.started'
-              : retryTest
-                ? 'cindyMake.test.retry'
-                : 'cindyMake.test.start',
-          )}
+          {t(testStatus === 'ready' ? 'cindyMake.test.started' : 'cindyMake.test.start')}
         </Button>
         <Button
           variant="secondary"

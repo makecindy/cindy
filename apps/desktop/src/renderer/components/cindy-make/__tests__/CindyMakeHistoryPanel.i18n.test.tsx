@@ -97,7 +97,7 @@ beforeEach(() => {
         versions: [],
         lifecycle: 'ready',
         integration: 'unintegrated',
-        actions: ['continue', 'test', 'integrate', 'end'],
+        actions: ['continue', 'test', 'integrate', 'end', 'build'],
       },
     ],
   };
@@ -132,12 +132,14 @@ describe('Cindy Make history with real translations', () => {
       );
       expect(await screen.findByText(resource.cindyMake.personal.checkStep.tests)).toBeTruthy();
       expect(screen.getByRole('button', { name: resource.cindyMake.history.stop })).toBeTruthy();
-      state.build = { status: 'failed', error: 'checksFailed' };
       state.busy = false;
       state.canBuild = true;
-      fireEvent(window, new Event('focus'));
-      expect(await screen.findByText(resource.cindyMake.personal.errors.checksFailed)).toBeTruthy();
-      expect(view.container.textContent).not.toMatch(/cindyMake\.|\{\{|\?{2,}|\uFFFD/);
+      for (const error of ['checksFailed', 'cleanupFailed'] as const) {
+        state.build = { status: 'failed', error };
+        fireEvent(window, new Event('focus'));
+        expect(await screen.findByText(resource.cindyMake.personal.errors[error])).toBeTruthy();
+        expect(view.container.textContent).not.toMatch(/cindyMake\.|\{\{|\?{2,}|\uFFFD/);
+      }
     },
   );
   it.each(cases)(
@@ -159,12 +161,13 @@ describe('Cindy Make history with real translations', () => {
         </MemoryRouter>,
       );
       expect(await screen.findByRole('heading', { name: title + ' · 1' })).toBeTruthy();
-      expect(screen.queryByRole('button', { name: build })).toBeNull();
-      expect(screen.getByRole('button', { name: integrate })).toBeTruthy();
+      expect(screen.getByRole('button', { name: build })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: integrate })).toBeNull();
       expect(screen.getByText(counts)).toBeTruthy();
       for (const [key, value] of strings({
         history: resource.cindyMake.history,
         checkStep: resource.cindyMake.personal.checkStep,
+        personalErrors: resource.cindyMake.personal.errors,
         merge: resource.cindyMake.merge,
         tabs: resource.settings.cindyMake.tabs,
         localChanges: resource.cindyMake.versions.localChanges,
@@ -182,7 +185,10 @@ describe('Cindy Make history with real translations', () => {
       state.items[0].lifecycle = 'ended';
       state.items[0].build = { status: 'failed' };
       state.items[0].actions = ['build'];
-      state.items[0].completions = [{ id: 'round-a', reportedAt: 1, changedFiles: 2 }];
+      state.items[0].completions = [
+        { id: 'round-a', reportedAt: 1, changedFiles: 2 },
+        { id: 'round-b', reportedAt: 60_001, changedFiles: 3 },
+      ];
       vi.stubGlobal('electronAPI', {
         getCindyMakeHistory: async () => state,
         getCindyVersions: async () => ({
@@ -233,7 +239,7 @@ describe('Cindy Make history with real translations', () => {
         </MemoryRouter>,
       );
       expect(
-        await screen.findByRole('button', { name: resource.cindyMake.history.actions.retryBuild }),
+        await screen.findByRole('button', { name: resource.cindyMake.history.actions.build }),
       ).toBeTruthy();
       expect(
         await screen.findByText(
@@ -242,10 +248,25 @@ describe('Cindy Make history with real translations', () => {
             resource.cindyMake.versions.localChanges,
         ),
       ).toBeTruthy();
-      expect(screen.getByText(resource.cindyMake.history.buildStatus.failed)).toBeTruthy();
+      expect(screen.getAllByText(resource.cindyMake.personal.status.failed)).toHaveLength(2);
       expect(
         screen.getByText(i18n.t('cindyMake.history.files', { count: 2 }), { exact: false }),
       ).toBeTruthy();
+      const rounds = Array.from(view.container.querySelectorAll('ol > li'));
+      const date = (value: number) =>
+        new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(value);
+      expect(rounds.map((round) => round.textContent)).toEqual([
+        i18n.t('cindyMake.history.round', { number: 2, time: date(60_001) }) +
+          ' · ' +
+          i18n.t('cindyMake.history.files', { count: 3 }),
+        i18n.t('cindyMake.history.round', { number: 1, time: date(1) }) +
+          ' · ' +
+          i18n.t('cindyMake.history.files', { count: 2 }),
+      ]);
+      expect(state.items[0].completions.map((completion) => completion.id)).toEqual([
+        'round-a',
+        'round-b',
+      ]);
       expect(screen.getByRole('button', { name: resource.cindyMake.merge.resolve })).toBeTruthy();
       expect(i18n.t('settings.cindyMake.tabs.versions')).toBe(
         resource.settings.cindyMake.tabs.versions,

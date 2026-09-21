@@ -119,6 +119,9 @@ import {
   listPiSubagentRunDiagnostics,
   listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
+  scanPiSubagentRuns,
+  PI_SUBAGENT_ACTIVE_POLL_MS,
+  PI_SUBAGENT_IDLE_POLL_MS,
   piSubagentRunRoot,
   piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
@@ -3973,7 +3976,9 @@ export class PiAgent extends BaseAgent {
      * approvals.
      */
     let piProcessExited = false;
-    const piSubagentStatuses = new Map<string, PiSubagentRunStatus>();
+    type PiSubagentStatusSummary = Pick<PiSubagentRunStatus,
+      'runId' | 'taskId' | 'state' | 'startedAt' | 'updatedAt' | 'title' | 'description'>;
+    const piSubagentStatuses = new Map<string, PiSubagentStatusSummary>();
     const piSubagentFingerprints = new Map<string, string>();
     const piSubagentApprovalRequests = new Set<string>();
     const piSubagentApprovalDeliveries = new Set<string>();
@@ -4031,6 +4036,8 @@ export class PiAgent extends BaseAgent {
       }
     };
     let piSubagentRefreshInFlight = false;
+    let piSubagentNextRefreshAt = 0;
+    let piSubagentRefreshGeneration = 0;
     // Approval delivery belongs to the *detached run* lifecycle, not to the
     // parent handle. After a navigation close the foreground refresh timer is
     // gone, but `deferProxyDisposalForDetachedRuns` keeps polling durable status
@@ -4074,7 +4081,7 @@ export class PiAgent extends BaseAgent {
       const taskId = status.taskId;
       const projectedStatus = status.state === 'queued' ? 'running' : status.state;
       if (isPiSubagentTerminal(status.state)) clearPiSubagentApprovalState(status.runId);
-      const fingerprint = JSON.stringify([
+      const fingerprint = createHash('sha256').update(JSON.stringify([
         status.runId,
         status.state,
         status.totalTokens,
@@ -4088,7 +4095,7 @@ export class PiAgent extends BaseAgent {
           task.error,
           task.pendingApproval?.id,
         ]),
-      ]);
+      ])).digest('hex');
       if (piSubagentFingerprints.get(taskId) === fingerprint) return;
       piSubagentFingerprints.set(taskId, fingerprint);
       const taskModels = new Set(status.tasks.map((task) => task.model ?? null));
@@ -4164,7 +4171,7 @@ export class PiAgent extends BaseAgent {
      * that is merely unreadable is held, not buried.
      */
     const emitPiSubagentDiagnostic = (
-      previous: PiSubagentRunStatus,
+      previous: PiSubagentStatusSummary,
       diagnostic: PiSubagentRunDiagnostic,
     ): void => {
       queue.push({
@@ -4623,16 +4630,28 @@ export class PiAgent extends BaseAgent {
     };
     const refreshPiSubagentRuns = async (): Promise<void> => {
       if (closed || piSubagentRefreshInFlight) return;
+      const generation = piSubagentRefreshGeneration;
+      const refreshStartedAt = Date.now();
       piSubagentRefreshInFlight = true;
+      let active = false;
+      let succeeded = false;
       try {
-        const statuses = await listPiSubagentRuns(subagentRunRoot);
-        if (closed) return;
-        const newestTaskIds = new Set<string>();
-        for (const status of statuses) {
+        const seenRunIds = new Set<string>();
+        for await (const status of scanPiSubagentRuns(subagentRunRoot, { latestPerTask: true })) {
           if (closed) break;
-          if (newestTaskIds.has(status.taskId)) continue;
-          newestTaskIds.add(status.taskId);
-          piSubagentStatuses.set(status.taskId, status);
+          seenRunIds.add(status.runId);
+          const previous = piSubagentStatuses.get(status.taskId);
+          if (previous && (previous.startedAt > status.startedAt
+            || (previous.startedAt === status.startedAt && previous.runId.localeCompare(status.runId) > 0))) continue;
+          const terminal = isPiSubagentTerminal(status.state);
+          if (!terminal) active = true;
+          // Disk/DB remain the history source. Output is delivered below, but
+          // never pinned by this live handle's discovery or fingerprint cache.
+          piSubagentStatuses.set(status.taskId, {
+            runId: status.runId, taskId: status.taskId, state: status.state,
+            startedAt: status.startedAt, updatedAt: status.updatedAt,
+            ...(!terminal ? { title: status.title, description: status.description } : {}),
+          });
           emitPiSubagentStatus(status);
           for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
         }
@@ -4642,7 +4661,7 @@ export class PiAgent extends BaseAgent {
         // deleted the approval dedupe state, so the same pendingApproval was
         // offered again the instant the file parsed and two decisions raced for
         // one request. Ask the directory set what actually happened.
-        const missing = [...piSubagentStatuses].filter(([taskId]) => !newestTaskIds.has(taskId));
+        const missing = [...piSubagentStatuses].filter(([, status]) => !seenRunIds.has(status.runId));
         if (missing.length > 0) {
           const [runIds, diagnostics] = await Promise.all([
             listPiSubagentRunDirectoryIds(subagentRunRoot),
@@ -4671,18 +4690,31 @@ export class PiAgent extends BaseAgent {
             if (stale) emitPiSubagentDiagnostic(previous, stale);
           }
         }
+        // Unreadable statuses are not proof that a previously active run ended.
+        active ||= [...piSubagentStatuses.values()].some((status) => !isPiSubagentTerminal(status.state));
+        succeeded = true;
       } catch (error) {
         deps.logger.warn('pi subagent durable status refresh failed', {
           message: error instanceof Error ? error.message : String(error),
         });
       } finally {
         piSubagentRefreshInFlight = false;
+        if (generation === piSubagentRefreshGeneration) {
+          piSubagentNextRefreshAt = refreshStartedAt + (succeeded && !active
+            ? PI_SUBAGENT_IDLE_POLL_MS : PI_SUBAGENT_ACTIVE_POLL_MS);
+        }
       }
+    };
+    const requestPiSubagentRefresh = async (): Promise<void> => {
+      piSubagentRefreshGeneration++;
+      piSubagentNextRefreshAt = 0;
+      await refreshPiSubagentRuns();
     };
     const piSubagentRefreshTimer = localSubagentSupported
       ? setInterval(() => {
+          if (Date.now() < piSubagentNextRefreshAt) return;
           void refreshPiSubagentRuns();
-        }, 500)
+        }, PI_SUBAGENT_ACTIVE_POLL_MS)
       : null;
     let piSubagentRefreshTimerCleared = false;
     const clearPiSubagentRefreshTimer = (): void => {
@@ -4691,7 +4723,7 @@ export class PiAgent extends BaseAgent {
       if (piSubagentRefreshTimer) clearInterval(piSubagentRefreshTimer);
     };
     piSubagentRefreshTimer?.unref?.();
-    if (localSubagentSupported) void refreshPiSubagentRuns();
+    if (localSubagentSupported) void requestPiSubagentRefresh();
     // Cindy 侧对 pi plan 模式的镜像态;setPlanMode 经 /plan toggle 驱动,与 pi 内部
     // planModeEnabled 保持一致(RPC 下 Execute/Refine 选择框被 auto-cancel,pi 不会自行
     // 翻转,故镜像不漂移)。
@@ -4968,19 +5000,26 @@ export class PiAgent extends BaseAgent {
           // cannot rule out a launch already in flight inside it, even if the
           // process exits before the scan returns.
           const scanFollowsExit = piProcessExited;
-          const [directoryCount, statuses] = await Promise.all([
+          const [directoryCount, inspected] = await Promise.all([
             countPiSubagentRunDirectories(subagentRunRoot),
-            listPiSubagentRuns(subagentRunRoot),
+            (async () => {
+              let readable = 0;
+              const activeStatuses: PiSubagentRunStatus[] = [];
+              for await (const status of scanPiSubagentRuns(subagentRunRoot)) {
+                readable++;
+                if (!isPiSubagentTerminal(status.state)) activeStatuses.push(status);
+              }
+              return { readable, activeStatuses };
+            })(),
           ]);
-          const active = statuses.some((status) => !isPiSubagentTerminal(status.state));
-          const allDirectoriesReadable = statuses.length === directoryCount;
+          const active = inspected.activeStatuses.length > 0;
+          const allDirectoriesReadable = inspected.readable === directoryCount;
           settleInitialInspection();
           // Approval delivery keeps running while any detached run is live. The
           // decision/delivery dedupe sets are the same ones the foreground timer
           // used, so a request already answered before close is never re-asked.
           if (localSubagentSupported && !leaseDisposed) {
-            for (const status of statuses) {
-              if (isPiSubagentTerminal(status.state)) continue;
+            for (const status of inspected.activeStatuses) {
               for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
             }
           }
@@ -5279,6 +5318,7 @@ export class PiAgent extends BaseAgent {
                       'PI Subagent runner request is unavailable',
                     );
                 }
+                void requestPiSubagentRefresh();
                 return true;
               },
               emitExtensionNotification: (message, event) => {
@@ -5294,8 +5334,13 @@ export class PiAgent extends BaseAgent {
                 }
                 const notification: AgentEvent = {
                   type: 'text',
-                  data: { text, isFinal: false },
+                  data: { text, isFinal: true },
                   source: 'pi',
+                  standaloneText: true,
+                  turnScope: 'background',
+                  // Freeze the notice's origin before the async queue: a later
+                  // /clear must discard it even when delivery happens afterward.
+                  backgroundTurnStartedAt: Date.now(),
                 };
                 queue.push(notification);
                 return notification;
@@ -6926,7 +6971,7 @@ export class PiAgent extends BaseAgent {
         await controlPiSubagentRuns(subagentRunRoot, taskId, 'stop', {
           runtimeOwnerId: subagentRuntimeOwnerId,
         });
-        await refreshPiSubagentRuns();
+        await requestPiSubagentRefresh();
       },
 
       async resumeBackgroundTask(taskId: string, message: string, childId?: string): Promise<void> {
@@ -6955,7 +7000,7 @@ export class PiAgent extends BaseAgent {
             runtimeSnapshot: { modelsJson, bridgeSource, runnerSource },
           }, childId);
           if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
-          await refreshPiSubagentRuns();
+          await requestPiSubagentRefresh();
         })();
         // close() waits for every resume that entered while this handle was
         // live before inspecting durable runs and transferring the proxy-token

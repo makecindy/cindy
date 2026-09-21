@@ -3025,9 +3025,9 @@ interface ElectronAPI {
     runId: string,
     action: import('../shared/cindyMakeHistory').MakeHistoryAction,
   ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
-  generateCindyMakePersonal: () => Promise<
-    import('../shared/cindyMakeHistory').CindyMakeHistoryState
-  >;
+  generateCindyMakePersonal: (
+    selection?: import('../shared/cindyMakeHistory').MakeHistoryBuildSelection[],
+  ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
   cancelCindyMakePersonal: (
     buildId: string,
   ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
@@ -3463,6 +3463,10 @@ interface ElectronAPI {
       error?: string;
       errorCode?: string;
     }>;
+    comparePublished: (
+      params: import('../shared/skillhubPublishComparison').SkillhubPublishComparisonParams,
+    ) => Promise<import('../shared/skillhubPublishComparison').SkillhubPublishComparison>;
+
     getFolderHash: (absolutePath: string) => Promise<{
       success: boolean;
       error?: string;
@@ -7097,13 +7101,14 @@ type SkillhubSyncResult =
       catalogScope?: 'market' | 'team';
       exists: true;
       isMine: boolean;
+      isCreator?: boolean;
       canManage: boolean;
       /** server 权威 authorId,用于本地 registry 回填及离线归属判定。 */
       authorId?: string;
       authorName?: string;
       publisherName?: string;
       latestVersion: string;
-      folderHash: string;
+      folderHash?: string;
       visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
       marketVersion?: string;
       pendingVersion?: {
@@ -7125,9 +7130,10 @@ interface SkillhubInfoResult {
   authorName: string;
   publisherName?: string;
   isMine: boolean;
+  isCreator?: boolean;
   canManage: boolean;
   latestVersion: string;
-  folderHash: string;
+  folderHash?: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
   publishedVisibility?: 'private' | 'shared' | 'public';
   ownerType?: string;

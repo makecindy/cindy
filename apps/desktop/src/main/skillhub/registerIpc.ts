@@ -21,9 +21,12 @@ import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../se
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSkillhubCatalogScope } from '../../shared/skillhubCatalog.js';
 import { computeFolderHashDetailed } from './folderHash';
+import { comparePublishedSkill } from './publishedComparison';
+import type { SkillhubPublishComparisonParams, SkillhubPublishComparison } from '../../shared/skillhubPublishComparison';
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
 import * as importLocalSkill from './importLocalSkill';
 import * as installService from './installService';
+import { ServerApiError } from '../serverApiClient';
 import { SkillhubMarketService, skillhubIpcError } from './marketService';
 import type { PublishParams, PublishProgressEvent } from './publishService';
 import { SkillPublishService } from './publishService';
@@ -891,6 +894,38 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       return { success: true };
     },
   );
+
+  ipcMain.handle('skillhub:compare-published', async (event, params: SkillhubPublishComparisonParams): Promise<SkillhubPublishComparison> => {
+    assertTrustedAppRendererEvent(event);
+    if (!params || typeof params !== 'object' || typeof params.absolutePath !== 'string'
+      || params.absolutePath.length > 32768 || (params.skillId !== undefined && (typeof params.skillId !== 'string' || params.skillId.length > 512))
+      || (params.includeDiff !== undefined && typeof params.includeDiff !== 'boolean')) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Skill comparison request');
+    }
+    const owner = activeOwnerScopeKey();
+    const record = await requireLocalSkill(event, params.absolutePath, params.skillId);
+    assertReviewOwnerCurrent(owner);
+    if (record.skill.kind !== 'skill' || record.skill.builtIn) return { status: 'not-owner' };
+    let result: SkillhubPublishComparison;
+    try {
+      result = await comparePublishedSkill(record.skill, marketService, params.includeDiff);
+    } catch (error) {
+      // Local filesystem/identity/manifest failures must not throttle unrelated skills.
+      const serviceFailure = error instanceof ServerApiError
+        && (error.statusCode === 0 || error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500);
+      result = { status: 'unavailable', ...(serviceFailure ? { reason: 'service' as const } : {}) };
+    }
+    assertReviewOwnerCurrent(owner);
+    const current = await requireLocalSkill(event, params.absolutePath, params.skillId);
+    assertReviewOwnerCurrent(owner);
+    if (current.physicalIdentity !== record.physicalIdentity
+      || current.skill.kind !== record.skill.kind || current.skill.builtIn !== record.skill.builtIn
+      || (current.skill.registrySkillName ?? current.skill.name) !== (record.skill.registrySkillName ?? record.skill.name)
+      || current.skill.registryEntry?.catalogScope !== record.skill.registryEntry?.catalogScope) {
+      return { status: 'unavailable' };
+    }
+    return result;
+  });
 
   // 计算本地 skill 文件夹 hash（进入 DetailView 时触发）
   // 返回 hash + manifest（文件清单 + 各自 sha256），manifest 用于 renderer 端

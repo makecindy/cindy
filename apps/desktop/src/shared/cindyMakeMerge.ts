@@ -27,10 +27,19 @@ export type CindyMakeMergeError =
   | 'baselineChanged'
   | 'checksFailed'
   | 'interrupted'
-  | 'startFailed';
+  | 'startFailed'
+  | 'cancelFailed';
 export interface CindyMakeMergeState {
   id: string;
-  status: 'fetching' | 'merging' | 'conflict' | 'resolving' | 'checking' | 'merged' | 'failed';
+  status:
+    | 'fetching'
+    | 'merging'
+    | 'conflict'
+    | 'resolving'
+    | 'checking'
+    | 'merged'
+    | 'failed'
+    | 'cancelled';
   ref: string;
   upstreamCommit: string;
   baselineCommit?: string;
@@ -47,11 +56,15 @@ export interface CindyMakeMergeState {
   sessionId?: string;
   /** A retained candidate must not be removed by source preparation/reset. */
   hasWorkspace?: boolean;
+  /** Persisted before cleanup so interruption retries cancellation, never starts a resolution task. */
+  cancellationRequested?: boolean;
   ownedByAnotherAccount?: boolean;
   error?: CindyMakeMergeError;
 }
-export type CindyMakeMergeAction = 'update' | 'resolve' | 'status';
+export type CindyMakeMergeAction = 'update' | 'resolve' | 'cancel' | 'status';
 export interface CindyMakeMergeRequest {
   action: CindyMakeMergeAction;
+  /** Required for cancellation; binds a conflict decision to the operation the user saw. */
+  operationId?: string;
   createOptions?: CindyMakeTaskOptions;
 }

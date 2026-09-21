@@ -8061,6 +8061,8 @@
       "trigger": {
         "currentAndNext": "現在：{{current}}\n次のメッセージ：{{next}}",
         "placeholder": "モデルを選択",
+        "loading": "モデルを読み込み中…",
+        "unresolved": "モデル情報を取得できません",
         "aria": "モデルを選択。現在：{{model}}",
         "ariaWithEffort": "モデルを選択。現在：{{model}}、推論強度：{{effort}}",
         "pendingAria": "モデルを選択。次のメッセージ：{{agent}} · {{model}}",
@@ -11188,6 +11190,21 @@
     "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
+    "unifiedDetail": {
+      "contentSource": "表示する内容",
+      "local": "ローカル",
+      "market": "マーケット",
+      "marketUnavailable": "マーケット情報を読み込めません。ローカルのコピーは引き続き使用できます。",
+      "retry": "再試行"
+    },
+    "publishComparison": {
+      "updateAvailable": "更新を公開できます",
+      "pendingChanges": "審査への提出後にローカルの変更があります",
+      "unavailable": "公開済みの内容と比較できません",
+      "diffTitle": "オンラインの v{{version}} との差分",
+      "summaryBadge": "概要",
+      "summaryNote": "バイナリ、大きなファイル、または全文を取得できないため、ファイルサイズのみ表示します。"
+    },
     "home": {
       "title": "スキル",
       "description": "ローカルスキルを管理し、Skill Hub から新しいスキルを見つけてインストールできます。",
@@ -11415,6 +11432,8 @@
       "installError": "不明なエラー"
     },
     "marketCard": {
+      "updateAvailable": "更新を取得",
+      "updateFailed": "更新に失敗しました。もう一度お試しください。",
       "visibilityPublic": "公開",
       "visibilityDept": "チーム",
       "visibilityPrivate": "個人",
@@ -12744,6 +12763,19 @@
   },
   "cindyMake": {
     "beta": "Beta",
+    "preflight": {
+      "closeTitle": "Cindy Make を閉じますか？",
+      "closeConfirm": "Cindy Make を閉じる",
+      "keepOpen": "表示を続ける",
+      "creating": "制作セッションを作成中です。しばらくお待ちください…",
+      "closeDescription": {
+        "environment": "環境の準備が進行中です。閉じると準備が停止し、設定画面に表示されている同じ準備も停止します。インストール済みのツールは保持されます。",
+        "source": "ソースコードの準備が進行中です。閉じると準備が停止し、設定画面に表示されている同じ準備も停止します。準備済みの環境とソースコードは保持されます。",
+        "upstream": "上流 PR を検索中です。閉じると検索が停止します。準備済みの環境とソースコードは保持されます。",
+        "ready": "準備は完了していますが、制作はまだ始まっていません。閉じると制作セッションは作成されません。準備済みの環境とソースコードは保持されます。",
+        "incomplete": "準備は完了しておらず、制作もまだ始まっていません。閉じると制作セッションは作成されません。準備済みの環境とソースコードは保持されます。"
+      }
+    },
     "description": "ローカルのツールを確認・準備して個人版 Cindy を作成します。使い方: /cindy-make [変更内容]",
     "localOnly": "/cindy-make は現在、ローカルのデスクトップセッションでのみ使用できます。このデバイスに切り替えてください。",
     "usage": "/cindy-make または /cindy-make 要望 を使用してください。環境チェックは添付ファイル、参照、コメントにまだ対応していません。入力内容は保持されます。",
@@ -12884,17 +12916,18 @@
       },
       "missing": "ソースはまだ準備されていません",
       "details": {
-        "unknown": "ソースを更新して確認",
+        "unknown": "未取得",
         "latest": {
           "dev": "オンラインの main",
           "beta": "最新の beta",
           "release": "最新の正式版",
-          "same": "（同期済み）",
-          "behind_one": "（{{count}} コミット遅れ）",
-          "behind_other": "（{{count}} コミット遅れ）",
-          "ahead_one": "（{{count}} コミット先行）",
-          "ahead_other": "（{{count}} コミット先行）",
-          "difference": "（{{behind}} コミット遅れ、{{ahead}} コミット先行）"
+          "same": "{{target}} と一致、変更履歴の遅れは 0 件",
+          "behind_one": "ローカル main は変更履歴が {{count}} 件遅れ",
+          "behind_other": "ローカル main は変更履歴が {{count}} 件遅れ",
+          "ahead_one": "ローカル main は変更履歴が {{count}} 件先行",
+          "ahead_other": "ローカル main は変更履歴が {{count}} 件先行",
+          "difference": "ローカル main は変更履歴が {{behind}} 件遅れ、{{ahead}} 件先行",
+          "unknown": "オンラインのバージョン"
         }
       }
     },
@@ -12951,15 +12984,17 @@
       "switchVersion": "バージョンを切り替え",
       "personalCode": "個人版のソース",
       "localMain": "ローカル main",
-      "lookupUnavailable": "確認できませんでした。最新ソースを同期すると再確認します。",
-      "comparisonUnavailable": "（コミットを比較できません）",
+      "lookupUnavailable": "取得できませんでした",
+      "comparisonUnavailable": "ローカル main との差分は未取得",
       "comparison": {
-        "same": "個人版とローカル main のコミットは一致しています",
-        "personalAhead": "ローカル main を含み、個人版に {{ahead}} 件の追加コミットがあります",
-        "mainAhead": "ローカル main が {{behind}} コミット先行しています",
-        "diverged": "ローカル main が {{behind}} コミット先行し、個人版に {{ahead}} 件の追加コミットがあります",
-        "unknown": "コミットを比較できません。最新ソースを同期して再試行してください。"
-      }
+        "same": "ローカル main と同じ SHA",
+        "personalAhead": "ローカル main を含み、個人版の変更履歴が {{ahead}} 件追加",
+        "mainAhead": "ローカル main の変更履歴が {{behind}} 件未反映",
+        "diverged": "ローカル main の変更履歴が {{behind}} 件未反映、個人版の変更履歴が {{ahead}} 件追加",
+        "different": "ローカル main と SHA が異なり、差分は不明",
+        "unknown": "ローカル main との差分は不明"
+      },
+      "personal": "cindy-personal"
     },
     "versions": {
       "title": "マイバージョン",
@@ -12992,6 +13027,11 @@
       "open": "インストーラーの場所を開く",
       "description": "今回の変更を個人版にマージし、チェックとパッケージ化が完了してから新しい個人版として保存します。",
       "readyHint": "インストーラー {{name}} を作成しました。保存先フォルダーを開けます。",
+      "failedStep": "失敗したステップ：{{step}}",
+      "preparationStep": {
+        "environment": "ビルド環境を準備中…",
+        "original": "現在のバージョンを確認中…"
+      },
       "checkStep": {
         "dependencies": "ビルドに必要な依存関係をインストール中…",
         "tests": "自動テストを実行中です。数分かかる場合があります…",
@@ -13006,6 +13046,22 @@
         "ready": "個人版を作成しました",
         "failed": "個人版を作成できませんでした"
       },
+      "buildLog": {
+        "title": "ビルド記録",
+        "steps": {
+          "environment": "ビルド環境を準備",
+          "original": "現在のバージョンを確認",
+          "merging": "変更を統合",
+          "checking-dependencies": "ビルドの依存関係をインストール",
+          "checking-tests": "自動テストを実行",
+          "checking-types": "コードの型を確認",
+          "packaging": "個人版をパッケージ化",
+          "publishing": "個人版を保存",
+          "ready": "個人版を作成",
+          "failed": "ビルドに失敗",
+          "cancelled": "ビルドを停止"
+        }
+      },
       "errors": {
         "unavailable": "ビルド記録またはインストーラーを読み込めません。再度ビルドしてください。",
         "changed": "作業ディレクトリまたはコードが変更されています。編集を完了してから再度ビルドしてください。",
@@ -13016,7 +13072,7 @@
         "baselineChanged": "ビルド中に個人版が更新されました。最新の変更を含めるため、再度ビルドしてください。",
         "buildFailed": "パッケージ化が完了しませんでした。再試行するか、編集を続けてください。",
         "cancelled": "制作をキャンセルしました。もう一度生成できます。",
-        "cleanupFailed": "制作を停止しましたが、一部の一時ファイルを削除できませんでした。Cindyを再起動して再試行してください。",
+        "cleanupFailed": "自動クリーンアップが完了していません。「個人版を生成」から再試行してください。",
         "interrupted": "ビルドを停止しました。個人版を再度ビルドできます。"
       }
     },
@@ -13047,9 +13103,9 @@
         "environment": "テスト環境の準備ができていません。設定の Cindy Make で環境を確認し、再試行してください。",
         "launchFailed": "テスト版を起動できませんでした。再試行するか、編集に戻ってください。",
         "timeout": "テスト版の起動がタイムアウトしました。再試行してください。",
-        "interrupted": "前回のテストは中断されました。隔離テスト版を再起動してください。"
+        "interrupted": "前回のテストは中断されました。隔離テスト版を再起動してください。",
+        "stopFailed": "テスト版がまだ終了していません。テスト用ウィンドウを閉じてから、もう一度お試しください。"
       },
-      "retry": "起動を再試行",
       "startingHint": "起動が完了するまで編集は一時停止されます。現在の手順が完了するまでお待ちください。",
       "currentStep": "現在の手順: {{step}}",
       "failedStep": "中断した手順: {{step}}",
@@ -13065,6 +13121,18 @@
     },
     "history": {
       "title": "制作履歴",
+      "batch": {
+        "make": "個人版を作成",
+        "selected": "選択した {{count}} 件で作成",
+        "selectAll": "この一覧をすべて選択",
+        "selectItem": "{{title}} を選択",
+        "hint": "古い順にマージし、最後に新しいバージョンを1つ作成します。",
+        "confirmTitle": "{{count}} 件の変更を含む個人版を作成しますか？",
+        "confirmDescription": "選択した変更を以下の順序でマージし、すべて成功したら新しいバージョンを1つ作成します。選択した変更の隔離版が起動中の場合は先に停止します。競合が発生した場合は停止し、マージ済みの変更を保持します。競合を解消してから、再度作成を開始してください。未解決の競合がない場合、キャンセルや失敗時は保存済みバージョンに含まれていないマージを取り消し、各セッションの元の変更を保持します。",
+        "start": "作成を確定",
+        "progress": "マージ中 {{current}} / {{total}}: {{title}}",
+        "restartTest": "隔離版を再起動"
+      },
       "build": "個人版を生成",
       "buildDescription": "現在の個人版ソースから新しいバージョンを生成します。未取り込みの過去の変更は含まれません。",
       "building": "個人版を生成中…",
@@ -13088,6 +13156,8 @@
       },
       "counts": "合計 {{total}} 件 · 未取り込み {{pending}} 件 · 取り込み済み {{integrated}} 件",
       "filterLabel": "制作履歴を絞り込む",
+      "mergeTaskTitle": "取り込み時の競合を解決",
+      "revertTaskTitle": "取り込み取り消し時の競合を解決",
       "filters": {
         "all": "すべての制作",
         "pending": "未取り込み",
@@ -13145,7 +13215,6 @@
         "resolve": "競合を解決",
         "retry": "再試行",
         "build": "個人版を生成",
-        "retryBuild": "生成を再試行",
         "end": "制作を終了",
         "retry-prepare": "準備を再試行",
         "retry-cleanup": "クリーンアップを再試行"
@@ -13165,12 +13234,20 @@
     },
     "merge": {
       "getLatest": "最新ソースを同期",
+      "taskTitle": "ソース更新時の競合を解決",
       "updateHint": "公式ソースを更新し、個人の変更を保持します。",
       "confirmTitle": "最新ソースに更新しますか？",
-      "confirmDescription": "個人の変更は保持されます。競合が発生した場合は、専用タスクで解決を支援します。",
+      "confirmDescription": "個人の変更は保持されます。競合が発生した場合は、解決用セッションを開始する前に確認します。",
+      "conflictConfirm": {
+        "title": "ソース更新で競合が発生しました",
+        "description": "確認すると独立したセッションを作成し、Agent が競合を自動で解決します。キャンセルすると今回の取り込みを中止し、現在の個人版を保持します。",
+        "confirm": "確認して解決",
+        "cancel": "更新をキャンセル"
+      },
       "confirm": "ソースを更新",
       "openTask": "解決用タスクを開く",
       "resolve": "競合を解決",
+      "retryCancel": "キャンセルを再試行",
       "resolveHint": "専用タスクで競合を解決し、結果を確認します。",
       "otherAccount": "この操作は別のアカウントで開始されました。そのアカウントに切り替えて続行してください。",
       "status": {
@@ -13180,7 +13257,8 @@
         "resolving": "競合を解決中",
         "checking": "変更を確認中…",
         "merged": "ソースの変更を取り込みました",
-        "failed": "ソースの取り込みに失敗しました"
+        "failed": "ソースの取り込みに失敗しました",
+        "cancelled": "ソース更新をキャンセルしました"
       },
       "errors": {
         "busy": "別の操作が実行中です。しばらくしてから再試行してください。",
@@ -13191,7 +13269,8 @@
         "baselineChanged": "個人ソースが変更されました。最新の状態で再試行してください。",
         "checksFailed": "変更がチェックを通過しませんでした。解決用タスクを開いて続行してください。",
         "interrupted": "操作が中断されました。変更は保持されています。再試行してください。",
-        "startFailed": "解決用タスクを開けませんでした。再試行してください。"
+        "startFailed": "解決用タスクを開けませんでした。再試行してください。",
+        "cancelFailed": "更新をキャンセルできませんでした。再試行してください。個人ソースは保持されています。"
       }
     }
   },

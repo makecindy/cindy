@@ -8061,6 +8061,8 @@
       "trigger": {
         "currentAndNext": "当前：{{current}}\n下条消息：{{next}}",
         "placeholder": "选择模型",
+        "loading": "正在读取模型…",
+        "unresolved": "模型信息暂不可用",
         "aria": "选择模型。当前：{{model}}",
         "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}",
         "pendingAria": "选择模型。下条消息：{{agent}} · {{model}}",
@@ -11188,6 +11190,21 @@
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
+    "unifiedDetail": {
+      "contentSource": "内容来源",
+      "local": "本地",
+      "market": "市场",
+      "marketUnavailable": "暂时无法读取市场信息，本地副本仍可使用。",
+      "retry": "重试"
+    },
+    "publishComparison": {
+      "updateAvailable": "可发布更新",
+      "pendingChanges": "提交审核后，本地又有改动",
+      "unavailable": "暂时无法检查发布更新",
+      "diffTitle": "与线上 v{{version}} 的差异",
+      "summaryBadge": "摘要",
+      "summaryNote": "文件为二进制、过大或无法完整预览，仅显示文件大小。"
+    },
     "home": {
       "title": "技能",
       "description": "管理本地技能，或从 Skill Hub 发现并安装更多技能。",
@@ -11415,6 +11432,8 @@
       "installError": "未知错误"
     },
     "marketCard": {
+      "updateAvailable": "获取更新",
+      "updateFailed": "更新失败，请重试",
       "visibilityPublic": "公开",
       "visibilityDept": "团队",
       "visibilityPrivate": "个人",
@@ -12744,6 +12763,19 @@
   },
   "cindyMake": {
     "beta": "Beta",
+    "preflight": {
+      "closeTitle": "关闭 Cindy Make？",
+      "closeConfirm": "关闭 Cindy Make",
+      "keepOpen": "继续查看",
+      "creating": "正在创建制作任务，请稍候…",
+      "closeDescription": {
+        "environment": "环境准备尚未完成。关闭将停止当前准备，设置页中的同一准备也会停止；已安装的工具会保留。",
+        "source": "源码准备尚未完成。关闭将停止当前准备，设置页中的同一准备也会停止；已准备好的环境和源码会保留。",
+        "upstream": "正在查询上游 PR。关闭将停止查询，已准备好的环境和源码会保留。",
+        "ready": "准备已完成，尚未开始制作。关闭后不会创建制作任务，已准备好的环境和源码会保留。",
+        "incomplete": "本次准备未完成，尚未开始制作。关闭后不会创建制作任务，已准备好的环境和源码会保留。"
+      }
+    },
     "description": "检查并准备本机工具，开始制作个人版 Cindy。用法：/cindy-make [修改需求]",
     "localOnly": "/cindy-make 暂仅支持本机桌面任务。请切回本机后使用。",
     "usage": "请在 /cindy-make 后填写要修改的内容，例如 /cindy-make 修复消息流闪烁。空指令不会开始环境检查。环境检查暂不支持附件、引用或批注。",
@@ -12884,17 +12916,18 @@
       },
       "missing": "尚未准备源码",
       "details": {
-        "unknown": "更新源码后查看",
+        "unknown": "未读取",
         "latest": {
           "dev": "线上 main",
           "beta": "最新 beta",
           "release": "最新正式版",
-          "same": "（已同步）",
-          "behind_one": "（落后 {{count}} 个提交）",
-          "behind_other": "（落后 {{count}} 个提交）",
-          "ahead_one": "（领先 {{count}} 个提交）",
-          "ahead_other": "（领先 {{count}} 个提交）",
-          "difference": "（落后 {{behind}}，领先 {{ahead}} 个提交）"
+          "same": "与{{target}} 一致，落后 0 条修改记录",
+          "behind_one": "本地 main 落后 {{count}} 条修改记录",
+          "behind_other": "本地 main 落后 {{count}} 条修改记录",
+          "ahead_one": "本地 main 领先 {{count}} 条修改记录",
+          "ahead_other": "本地 main 领先 {{count}} 条修改记录",
+          "difference": "本地 main 落后 {{behind}} 条修改记录，领先 {{ahead}} 条修改记录",
+          "unknown": "线上版本"
         }
       }
     },
@@ -12951,15 +12984,17 @@
       "switchVersion": "切换版本",
       "personalCode": "个人版代码",
       "localMain": "本地 main",
-      "lookupUnavailable": "暂未查到，同步最新源码时会重新检查。",
-      "comparisonUnavailable": "（暂时无法比较提交）",
+      "lookupUnavailable": "查询失败",
+      "comparisonUnavailable": "本地 main 的差距未读取",
       "comparison": {
-        "same": "个人版与本地 main 提交一致",
-        "personalAhead": "已包含本地 main，另有 {{ahead}} 个个人提交",
-        "mainAhead": "本地 main 领先 {{behind}} 个提交",
-        "diverged": "本地 main 领先 {{behind}} 个提交，个人版另有 {{ahead}} 个提交",
-        "unknown": "暂时无法比较提交，请同步最新源码重试。"
-      }
+        "same": "与本地 main 的 SHA 相同",
+        "personalAhead": "已包含本地 main，另有 {{ahead}} 条个人修改记录",
+        "mainAhead": "尚缺本地 main 的 {{behind}} 条修改记录",
+        "diverged": "尚缺本地 main 的 {{behind}} 条修改记录，另有 {{ahead}} 条个人修改记录",
+        "different": "SHA 与本地 main 不同，差距未知",
+        "unknown": "与本地 main 的差距未知"
+      },
+      "personal": "cindy-personal"
     },
     "versions": {
       "title": "我的版本",
@@ -12992,6 +13027,11 @@
       "open": "查看安装包",
       "description": "将本次修改与个人版合并，检查和打包通过后保存为新个人版。",
       "readyHint": "安装包 {{name}} 已生成，可打开所在目录。",
+      "failedStep": "失败步骤：{{step}}",
+      "preparationStep": {
+        "environment": "正在准备生成环境…",
+        "original": "正在检查当前版本…"
+      },
       "checkStep": {
         "dependencies": "正在安装构建依赖…",
         "tests": "正在运行自动测试，可能需要数分钟…",
@@ -13006,6 +13046,22 @@
         "ready": "个人版已生成",
         "failed": "个人版未能生成"
       },
+      "buildLog": {
+        "title": "生成记录",
+        "steps": {
+          "environment": "准备生成环境",
+          "original": "检查当前版本",
+          "merging": "合入修改",
+          "checking-dependencies": "安装构建依赖",
+          "checking-tests": "运行自动测试",
+          "checking-types": "检查代码类型",
+          "packaging": "打包个人版",
+          "publishing": "保存个人版",
+          "ready": "个人版已生成",
+          "failed": "生成失败",
+          "cancelled": "已停止生成"
+        }
+      },
       "errors": {
         "unavailable": "无法读取生成记录或安装包，请重新生成。",
         "changed": "制作目录或代码已有变化，请完成修改后重新生成。",
@@ -13016,7 +13072,7 @@
         "baselineChanged": "生成期间个人版已有更新，请重新生成以包含最新修改。",
         "buildFailed": "打包未完成，请重试，或继续修改后再生成。",
         "cancelled": "制作已取消，可以重新生成个人版。",
-        "cleanupFailed": "制作已停止，但部分临时内容未能清理。请重启 Cindy 后再试。",
+        "cleanupFailed": "自动清理尚未完成，请再次点击“生成个人版”重试。",
         "interrupted": "生成已停止，可以重新生成个人版。"
       }
     },
@@ -13031,7 +13087,7 @@
       "title": "修改已完成，选择下一步",
       "description": "可以继续修改、启动隔离版测试，或直接生成个人版安装包。",
       "readyHint": "请在测试窗口体验修改。点击“继续修改”会关闭测试版并恢复输入。",
-      "start": "启动隔离版测试",
+      "start": "启动隔离测试版",
       "started": "测试版已启动",
       "continue": "继续修改",
       "status": {
@@ -13047,9 +13103,9 @@
         "environment": "测试环境尚未就绪，请在设置中检查 Cindy Make 环境后重试。",
         "launchFailed": "未能启动隔离版，请重试；仍失败可返回继续修改。",
         "timeout": "隔离版启动超时，请重试。",
-        "interrupted": "上次测试已中断，请重新启动隔离版。"
+        "interrupted": "上次测试已中断，请重新启动隔离版。",
+        "stopFailed": "测试版尚未退出，请关闭测试窗口后重试。"
       },
-      "retry": "重试启动",
       "startingHint": "启动完成前暂时不能继续修改，请等待当前步骤完成。",
       "currentStep": "当前步骤：{{step}}",
       "failedStep": "中断步骤：{{step}}",
@@ -13065,6 +13121,18 @@
     },
     "history": {
       "title": "制作历史",
+      "batch": {
+        "make": "制作个人版",
+        "selected": "制作所选 {{count}} 项",
+        "selectAll": "全选当前列表",
+        "selectItem": "选择 {{title}}",
+        "hint": "按从老到新的顺序合入，统一生成一个新版本。",
+        "confirmTitle": "制作包含 {{count}} 项改动的个人版？",
+        "confirmDescription": "所选改动将按以下顺序逐条合入，全部成功后只生成一个新版本。已启动的所选隔离版会先停止。遇到冲突时停止制作并保留已合入改动，处理后可重新发起制作。没有待处理冲突时，取消或生成失败会撤回尚未生成成功版本的合入，保留各任务的原始改动。",
+        "start": "确认制作",
+        "progress": "正在合入 {{current}} / {{total}}：{{title}}",
+        "restartTest": "重新启动隔离版"
+      },
       "build": "生成个人版",
       "buildDescription": "将当前个人源码生成新版本，未合入的历史改动不会包含在内。",
       "building": "正在生成个人版…",
@@ -13088,6 +13156,8 @@
       },
       "counts": "共 {{total}} 次 · 待合入 {{pending}} 次 · 已合入 {{integrated}} 次",
       "filterLabel": "筛选制作历史",
+      "mergeTaskTitle": "处理合入冲突",
+      "revertTaskTitle": "处理撤销合入冲突",
       "filters": {
         "all": "全部制作",
         "pending": "待合入",
@@ -13145,7 +13215,6 @@
         "resolve": "处理冲突",
         "retry": "重试",
         "build": "生成个人版",
-        "retryBuild": "重新生成",
         "end": "结束制作",
         "retry-prepare": "重试准备",
         "retry-cleanup": "重试清理"
@@ -13165,12 +13234,20 @@
     },
     "merge": {
       "getLatest": "同步最新源码",
+      "taskTitle": "处理源码更新冲突",
       "updateHint": "更新官方源码，并保留个人改动。",
       "confirmTitle": "更新到最新源码？",
-      "confirmDescription": "会保留你的个人改动。如有冲突，将通过独立任务协助处理。",
+      "confirmDescription": "会保留你的个人改动。如有冲突，会先询问是否创建任务处理。",
+      "conflictConfirm": {
+        "title": "源码更新遇到冲突",
+        "description": "确认后会创建独立任务，由 Agent 自动处理冲突。取消将放弃本次合入，保留现有个人版。",
+        "confirm": "确认并解决",
+        "cancel": "取消更新"
+      },
       "confirm": "更新源码",
       "openTask": "打开处理任务",
       "resolve": "处理冲突",
+      "retryCancel": "重试取消",
       "resolveHint": "在独立任务中处理冲突并检查结果。",
       "otherAccount": "这项操作由其他账号发起，请切回该账号继续。",
       "status": {
@@ -13180,7 +13257,8 @@
         "resolving": "正在处理冲突",
         "checking": "正在检查改动…",
         "merged": "源码改动已合入",
-        "failed": "源码合入失败"
+        "failed": "源码合入失败",
+        "cancelled": "已取消源码更新"
       },
       "errors": {
         "busy": "其他操作正在进行，请稍后重试。",
@@ -13191,7 +13269,8 @@
         "baselineChanged": "个人源码已发生变化，请基于最新状态重试。",
         "checksFailed": "改动未通过检查，请打开处理任务继续。",
         "interrupted": "操作已中断，改动已保留，请重试。",
-        "startFailed": "无法打开处理任务，请重试。"
+        "startFailed": "无法打开处理任务，请重试。",
+        "cancelFailed": "未能取消本次更新，请重试。个人版源码已保留。"
       }
     }
   },

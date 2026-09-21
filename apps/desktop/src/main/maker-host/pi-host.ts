@@ -1645,14 +1645,21 @@ export function resolvePiCindyGatewayModelSpec(
   const api = resolvePiCindyGatewayModelApi(_selectedProviderId, modelId, context);
   if (api === undefined || api === null) return api;
   const bundled = resolveBundledPiGatewayModelProfile(modelId);
+  const probed = context?.remote ? undefined : resolveProbedPiGatewayModel(modelId);
+  const compatibleBundled = bundled?.api === api ? bundled : undefined;
+  const compatibleProbed = probed?.api === api ? probed : undefined;
+  let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  // Gateway routing needs Pi's native session identity on every Chat/Messages request.
+  // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.
+  if (api === 'openai-completions' || api === 'anthropic-messages') {
+    compat = { ...compat, sendSessionAffinityHeaders: true };
+  }
   // Remote execution never receives metadata from the Desktop binary probe. The version-matched
   // static client profile remains the second authority and is injected only when its API matches.
   if (context?.remote) {
     return {
       api,
-      ...(bundled?.api === api && bundled.compat
-        ? { compat: structuredClone(bundled.compat) }
-        : {}),
+      ...(compat ? { compat: structuredClone(compat) } : {}),
       ...(bundled?.api === api && bundled.samplingParams
         ? { samplingParams: structuredClone(bundled.samplingParams) }
         : {}),
@@ -1661,17 +1668,12 @@ export function resolvePiCindyGatewayModelSpec(
         : {}),
     };
   }
-  const probed = resolveProbedPiGatewayModel(modelId);
   // Provider quirks are API-specific. Local metadata may fill omissions only when it agrees with
   // the final API; never apply stale compat across a protocol change. The exact current binary
   // probe takes precedence over the checked-in snapshot when both match that API.
-  const compatibleBundled = bundled?.api === api ? bundled : undefined;
-  const compatibleProbed = probed?.api === api ? probed : undefined;
   return {
     api,
-    ...(compatibleProbed?.compat ?? compatibleBundled?.compat
-      ? { compat: structuredClone(compatibleProbed?.compat ?? compatibleBundled?.compat) }
-      : {}),
+    ...(compat ? { compat: structuredClone(compat) } : {}),
     ...(compatibleProbed?.samplingParams ?? compatibleBundled?.samplingParams
       ? {
           samplingParams: structuredClone(

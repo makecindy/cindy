@@ -8,86 +8,120 @@ import type {
 export function CindyMakeSourceDetails({
   source,
   latestVersion,
+  showComparison = true,
 }: {
   source: MakeSourcePreparation;
   latestVersion?: MakeSourceLatestVersion;
+  /** Progress and errors may occupy the status area while version facts remain visible. */
+  showComparison?: boolean;
 }) {
   const { t } = useTranslation();
   const unknown = t('cindyMake.source.details.unknown');
   const { personalAhead: ahead, personalBehind: behind } = source;
   const comparison =
-    ahead === undefined || behind === undefined
+    !source.commit || !source.mainCommit
       ? 'unknown'
-      : ahead === 0 && behind === 0
+      : source.commit === source.mainCommit
         ? 'same'
-        : behind === 0
-          ? 'personalAhead'
-          : ahead === 0
-            ? 'mainAhead'
-            : 'diverged';
+        : ahead === undefined || behind === undefined || (ahead === 0 && behind === 0)
+          ? 'different'
+          : behind === 0
+            ? 'personalAhead'
+            : ahead === 0
+              ? 'mainAhead'
+              : 'diverged';
+  const latestChannel = latestVersion?.channel ?? source.channel;
+  const latestLabel = latestChannel ?? (source.ref === 'main' ? 'dev' : 'unknown');
+  const onlineLabel = t('cindyMake.source.details.latest.' + latestLabel);
+  const mainMatchesOnline =
+    latestVersion?.status === 'ready' && source.mainCommit === latestVersion.commit;
   let upstreamDifference: string | undefined;
-  if (
+  if (mainMatchesOnline) {
+    upstreamDifference = t('cindyMake.source.details.latest.same', { target: onlineLabel });
+  } else if (
     latestVersion?.status === 'ready' &&
+    source.mainCommit &&
     latestVersion.ahead !== undefined &&
-    latestVersion.behind !== undefined
+    latestVersion.behind !== undefined &&
+    (latestVersion.ahead !== 0 || latestVersion.behind !== 0)
   ) {
     const { ahead, behind } = latestVersion;
     upstreamDifference =
-      ahead === 0 && behind === 0
-        ? t('cindyMake.source.details.latest.same')
-        : ahead === 0
-          ? t('cindyMake.source.details.latest.behind', { count: behind })
-          : behind === 0
-            ? t('cindyMake.source.details.latest.ahead', { count: ahead })
-            : t('cindyMake.source.details.latest.difference', { ahead, behind });
+      ahead === 0
+        ? t('cindyMake.source.details.latest.behind', { count: behind })
+        : behind === 0
+          ? t('cindyMake.source.details.latest.ahead', { count: ahead })
+          : t('cindyMake.source.details.latest.difference', { ahead, behind });
   }
 
   return (
-    <div className="space-y-2 text-13 text-[var(--text-secondary)]">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <dl className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-          <dt>{t('cindyMake.versions.personal')}</dt>
-          <dd className="font-mono" title={source.commit}>
-            {source.commit?.slice(0, 12) ?? unknown}
-          </dd>
-        </dl>
-        <div className="flex min-w-0 items-center gap-3">
-          <ArrowRight size={14} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-          <dl className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-            <dt>{t('cindyMake.overview.localMain')}</dt>
-            <dd className="font-mono" title={source.mainCommit}>
-              {source.mainCommit?.slice(0, 12) ?? unknown}
-            </dd>
-          </dl>
-        </div>
-      </div>
-      <p role="status" className="text-12">
-        {t('cindyMake.overview.comparison.' + comparison, { ahead, behind })}
-      </p>
-      {latestVersion && (
-        <dl className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-12">
-          <dt>{t('cindyMake.source.details.latest.' + latestVersion.channel)}</dt>
-          <dd className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-            {latestVersion.status === 'ready' ? (
-              <>
-                <span
-                  className="font-mono text-[var(--status-success)]"
-                  title={latestVersion.commit}
-                >
+    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2 text-13 text-[var(--text-secondary)]">
+      <dt className={mainMatchesOnline ? 'text-[var(--status-success)]' : undefined}>
+        {t('cindyMake.overview.localMain')}
+      </dt>
+      <dd className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span
+          className={mainMatchesOnline ? 'font-mono text-[var(--status-success)]' : 'font-mono'}
+          title={source.mainCommit}
+        >
+          {source.mainCommit?.slice(0, 12) ?? unknown}
+        </span>
+        {!mainMatchesOnline && (
+          <span className="inline-flex min-w-0 items-baseline gap-x-3">
+            <ArrowRight
+              size={14}
+              className="shrink-0 self-center text-[var(--text-tertiary)]"
+              aria-hidden
+            />
+            <span
+              className={
+                latestVersion?.status === 'ready'
+                  ? 'inline-flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[var(--status-success)]'
+                  : 'inline-flex flex-wrap items-baseline gap-x-2 gap-y-1'
+              }
+            >
+              <span>{onlineLabel}</span>
+              {latestVersion?.status === 'ready' ? (
+                <span className="font-mono" title={latestVersion.commit}>
                   {latestVersion.commit.slice(0, 12)}
                 </span>
-                {latestVersion.ref !== 'main' && <span>{latestVersion.ref}</span>}
-                <span className={upstreamDifference ? 'text-[var(--status-success)]' : undefined}>
-                  {t('cindyMake.overview.localMain')}{' '}
-                  {upstreamDifference ?? t('cindyMake.overview.comparisonUnavailable')}
+              ) : (
+                <span>
+                  {latestVersion?.status === 'unavailable'
+                    ? t('cindyMake.overview.lookupUnavailable')
+                    : unknown}
                 </span>
-              </>
-            ) : (
-              t('cindyMake.overview.lookupUnavailable')
+              )}
+            </span>
+          </span>
+        )}
+        {latestVersion?.status === 'ready' && (
+          <>
+            {latestVersion.ref !== 'main' && (
+              <span className="text-[var(--status-success)]">{latestVersion.ref}</span>
             )}
-          </dd>
-        </dl>
-      )}
-    </div>
+            <span
+              className={mainMatchesOnline ? 'text-12 text-[var(--status-success)]' : 'text-12'}
+            >
+              {upstreamDifference ?? t('cindyMake.overview.comparisonUnavailable')}
+            </span>
+          </>
+        )}
+      </dd>
+      <dt>{t('cindyMake.overview.personal')}</dt>
+      <dd className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="font-mono" title={source.commit}>
+          {source.commit?.slice(0, 12) ?? unknown}
+        </span>
+        {showComparison && (
+          <span
+            role="status"
+            className={comparison === 'same' ? 'text-12 text-[var(--status-success)]' : 'text-12'}
+          >
+            {t('cindyMake.overview.comparison.' + comparison, { ahead, behind })}
+          </span>
+        )}
+      </dd>
+    </dl>
   );
 }

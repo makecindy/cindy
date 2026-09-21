@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { posix, win32 } from 'node:path';
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
@@ -14,6 +14,7 @@ import {
 
 const UNNAMED = '未命名任务';
 const MAKE_RUN = 'f428ca8b-242b-43c6-b2e5-e54bdd915f62';
+const MAKE_CREATED_AT = new Date(2026, 8, 20, 14, 7).toISOString();
 
 function session(over: Partial<Session> = {}): Session {
   return {
@@ -29,6 +30,81 @@ function session(over: Partial<Session> = {}): Session {
 }
 
 describe('getSessionDisplayTitle', () => {
+  it.each([
+    win32.join('C:/managed', 'merge-worktrees', MAKE_RUN),
+    posix.join('/managed', 'merge-worktrees', MAKE_RUN),
+  ])('recovers persisted conflict title keys without rewriting data for %s', (workingDir) => {
+    for (const [key, label] of [
+      ['cindyMake.merge.taskTitle', '处理源码更新冲突'],
+      ['cindyMake.history.mergeTaskTitle', '处理合入冲突'],
+      ['cindyMake.history.revertTaskTitle', '处理撤销合入冲突'],
+    ]) {
+      for (const title of [key, `[f428] ${key}`, `[Cindy-Make] ${key}`]) {
+        const s = session({
+          source: 'cindy-make-merge',
+          title,
+          workingDir,
+          createdAt: MAKE_CREATED_AT,
+        });
+        const translate = vi.fn(() => label);
+        expect(getSessionDisplayTitle(s, UNNAMED, translate)).toBe(`[f428] 09-20 14:07 ${label}`);
+        expect(translate).toHaveBeenCalledWith(key);
+        expect(canHighlightSessionDisplayTitle(s)).toBe(false);
+        expect(s.title).toBe(title);
+      }
+    }
+  });
+
+  it('uses the current language for old keys and preserves renamed or ordinary titles', () => {
+    const key = 'cindyMake.merge.taskTitle';
+    const s = session({ source: 'cindy-make-merge', title: key, createdAt: MAKE_CREATED_AT });
+    expect(getSessionDisplayTitle(s, UNNAMED, () => '处理源码更新冲突')).toBe(
+      '09-20 14:07 处理源码更新冲突',
+    );
+    expect(getSessionDisplayTitle(s, UNNAMED, () => 'Resolve Source Update Conflicts')).toBe(
+      '09-20 14:07 Resolve Source Update Conflicts',
+    );
+    const translate = vi.fn(() => 'unexpected');
+    for (const custom of [
+      session({ title: key }),
+      session({ source: 'cindy-make', title: key }),
+      session({ source: 'cindy-make-merge', title: 'My merge notes' }),
+      session({ source: 'cindy-make-merge', title: `Investigate ${key}` }),
+    ]) {
+      translate.mockClear();
+      expect(getSessionDisplayTitle(custom, UNNAMED, translate)).toBe(custom.title);
+      expect(canHighlightSessionDisplayTitle(custom, translate)).toBe(true);
+      if (custom.source === 'cindy-make-merge') {
+        expect(translate).not.toHaveBeenCalledWith(custom.title);
+      } else {
+        expect(translate).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('keeps an existing title timestamp stable when displayed again or after the task changes', () => {
+    const title = '[f428] 09-19 09:00 处理合入冲突';
+    const s = session({
+      source: 'cindy-make-merge',
+      title,
+      workingDir: '/managed/merge-worktrees/' + MAKE_RUN,
+      createdAt: MAKE_CREATED_AT,
+      updatedAt: new Date(2026, 8, 21, 16, 30).toISOString(),
+    });
+    const translate = (key: string) => key;
+    expect(getSessionDisplayTitle(s, UNNAMED, translate)).toBe(title);
+    expect(canHighlightSessionDisplayTitle(s, translate)).toBe(true);
+  });
+
+  it('does not invent a time for a retained task whose creation date is unavailable', () => {
+    const s = session({
+      source: 'cindy-make-merge',
+      title: 'cindyMake.merge.taskTitle',
+      createdAt: '',
+    });
+    expect(getSessionDisplayTitle(s, UNNAMED, () => '处理源码更新冲突')).toBe('处理源码更新冲突');
+  });
+
   it.each([
     win32.join('C:/managed', 'worktrees', MAKE_RUN),
     posix.join('/managed', 'worktrees', MAKE_RUN),

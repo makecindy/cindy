@@ -112,9 +112,12 @@ export async function readCurrentCindySourceStatus(
     const sourcePath = path.resolve(root, 'source');
     if (env && (await exists(path.join(sourcePath, '.git')))) {
       const signal = new AbortController().signal;
-      const personalCommit = await git(env, ['rev-parse', 'HEAD'], sourcePath, signal).catch(
-        () => '',
-      );
+      const personalCommit = await git(
+        env,
+        ['rev-parse', '--verify', `refs/heads/${CINDY_PERSONAL_BRANCH}^{commit}`],
+        sourcePath,
+        signal,
+      ).catch(() => '');
       const upstreamRef = status.ref
         ? status.ref === 'main'
           ? 'refs/remotes/origin/main^{commit}'
@@ -532,7 +535,8 @@ async function prepareCindySourceInternal(
       const dirty = await git(env, ['status', '--porcelain'], sourcePath, signal);
       if (
         dirty &&
-        (await git(env, ['branch', '--show-current'], sourcePath, signal)).trim() !== CINDY_PERSONAL_BRANCH
+        (await git(env, ['branch', '--show-current'], sourcePath, signal)).trim() !==
+          CINDY_PERSONAL_BRANCH
       )
         throw Object.assign(new Error('dirty'), { code: 'dirty' });
     }

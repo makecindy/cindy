@@ -4,6 +4,8 @@ import { lstat, realpath } from 'node:fs/promises';
 import { defaultPtySpawn, type PtySpawnFn } from '../terminal/ptyFactory.js';
 import { snapshotContent } from './sourceContent.js';
 import { runSourceGit } from './sourceGit.js';
+import { createMakeTestTempDirectory } from './testTempDirectory.js';
+import { stopMakeTestProcess } from './testProcess.js';
 import {
   CINDY_MAKE_RUN_ID_PATTERN,
   makeSourceCheckoutPath,
@@ -199,14 +201,15 @@ const WRAPPER_FAILURE_CODES = new Set([
 export interface MakeTestDiagnostic {
   event: 'spawn' | 'step' | 'ready' | 'failed' | 'exit';
   step?: CindyMakeTestStep;
-  reason?: 'wrapperFailed' | 'earlyExit' | 'identityMismatch' | 'timeout';
+  reason?:
+    'wrapperFailed' | 'earlyExit' | 'identityMismatch' | 'timeout' | 'cleanupFailed' | 'stopFailed';
   wrapperCode?: string;
   exitCode?: number;
   elapsedMs: number;
 }
 
 /** The existing restart pipeline keeps its TTY runner without opening a terminal window. */
-export function launchMakeTest(
+export async function launchMakeTest(
   task: MakeTestWorkspace,
   tools: { node: string; pnpm: string },
   environment: NodeJS.ProcessEnv,
@@ -215,7 +218,7 @@ export function launchMakeTest(
   spawn: PtySpawnFn = defaultPtySpawn,
   onStep?: (step: CindyMakeTestStep) => void,
   onDiagnostic?: (diagnostic: MakeTestDiagnostic) => void,
-): MakeTestProcess {
+): Promise<MakeTestProcess> {
   signal.throwIfAborted();
   const startedAt = Date.now();
   const diagnostic = (value: Omit<MakeTestDiagnostic, 'elapsedMs'>) =>
@@ -226,30 +229,52 @@ export function launchMakeTest(
       .update(task.userData + ':' + task.runId)
       .digest('hex')
       .slice(0, 20);
-  const child = spawn(
-    tools.node,
-    [
-      path.join(task.workingDir, 'scripts', 'desktop-restart-runner.mjs'),
-      '--wait-ready',
-      '--region=' + region,
-      '--isolated=' + sandbox,
-      '--passive',
-    ],
-    {
-      cwd: task.workingDir,
-      env: {
-        ...makeTestEnvironment(environment),
-        // Use the probed entry, not the host's npm_execpath. On Windows, the
-        // restart runner's bare pnpm fallback can give .cmd shims the task cwd
-        // as %~dp0, so they look for pnpm.cjs outside their installation.
-        npm_execpath: tools.pnpm,
+  const temporary = await createMakeTestTempDirectory();
+  const clean = async () => {
+    try {
+      await temporary.clean();
+    } catch {
+      diagnostic({ event: 'failed', reason: 'cleanupFailed' });
+    }
+  };
+  let child: ReturnType<PtySpawnFn>;
+  try {
+    signal.throwIfAborted();
+    child = spawn(
+      tools.node,
+      [
+        path.join(task.workingDir, 'scripts', 'desktop-restart-runner.mjs'),
+        '--wait-ready',
+        '--region=' + region,
+        '--isolated=' + sandbox,
+        '--passive',
+      ],
+      {
+        cwd: task.workingDir,
+        env: {
+          ...makeTestEnvironment(environment),
+          // Use the probed entry, not the host's npm_execpath. On Windows, the
+          // restart runner's bare pnpm fallback can give .cmd shims the task cwd
+          // as %~dp0, so they look for pnpm.cjs outside their installation.
+          npm_execpath: tools.pnpm,
+          // The child activates its ready window and exits when that window closes.
+          XDT_CINDY_MAKE_TEST: '1',
+          // Existing launchers already use os.tmpdir(). Keep their startup and
+          // relaunch markers (including those from older task sources) together.
+          TMPDIR: temporary.directory,
+          TMP: temporary.directory,
+          TEMP: temporary.directory,
+        },
+        // Keep the machine-readable identity lines intact even with long profile paths.
+        cols: 4096,
+        rows: 30,
+        name: 'xterm-256color',
       },
-      // Keep the machine-readable identity lines intact even with long profile paths.
-      cols: 4096,
-      rows: 30,
-      name: 'xterm-256color',
-    },
-  );
+    );
+  } catch (error) {
+    await clean();
+    throw error;
+  }
   let resolveReady!: () => void;
   let rejectReady!: (error: Error) => void;
   let resolveClosed!: () => void;
@@ -279,7 +304,9 @@ export function launchMakeTest(
       settled = true;
       rejectReady(makeTestError('interrupted'));
     }
-    resolveClosed();
+    // The controller retains its workspace lease until temporary cleanup settles,
+    // so Continue Editing and Generate Personal Version cannot overtake it.
+    void clean().then(resolveClosed);
   };
   const stop = () => {
     if (stopped || stopping) return;
@@ -291,9 +318,11 @@ export function launchMakeTest(
       rejectReady(makeTestError('interrupted'));
     }
     try {
-      child.kill();
+      stopMakeTestProcess(child);
     } catch {
-      finish();
+      // A failed stop is not an exit receipt. Do not delete files still in use.
+      diagnostic({ event: 'failed', reason: 'stopFailed' });
+      stopping = false;
     }
   };
   const fail = (

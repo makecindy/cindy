@@ -13,9 +13,16 @@ export function parseSavedUpstreamMerge(raw: string, userData: string): SavedUps
   if (
     !state ||
     typeof state.id !== 'string' ||
-    !['fetching', 'merging', 'conflict', 'resolving', 'checking', 'merged', 'failed'].includes(
-      state.status,
-    ) ||
+    ![
+      'fetching',
+      'merging',
+      'conflict',
+      'resolving',
+      'checking',
+      'merged',
+      'failed',
+      'cancelled',
+    ].includes(state.status) ||
     typeof state.ref !== 'string' ||
     typeof state.upstreamCommit !== 'string' ||
     (state.upstreamCommit !== '' && !/^[0-9a-f]{40}$/i.test(state.upstreamCommit)) ||
@@ -23,6 +30,8 @@ export function parseSavedUpstreamMerge(raw: string, userData: string): SavedUps
     (state.strategy !== undefined && state.strategy !== 'rebase') ||
     (state.rebaseBase !== undefined && !/^[0-9a-f]{40}$/i.test(state.rebaseBase)) ||
     (state.rebaseReview !== undefined && typeof state.rebaseReview !== 'boolean') ||
+    (state.cancellationRequested !== undefined &&
+      typeof state.cancellationRequested !== 'boolean') ||
     (state.feature !== undefined && (!validFeaturePlan(state.feature) || !saved.sessionOwner)) ||
     (state.tree !== undefined && !/^[0-9a-f]{40,64}$/i.test(state.tree)) ||
     (state.baselineCommit !== undefined && !/^[0-9a-f]{40}$/i.test(state.baselineCommit)) ||
@@ -89,6 +98,7 @@ export interface UpstreamMergeDependencies {
   running: (sessionId: string) => boolean;
   refresh: () => Promise<void>;
   cleanup: (state: CindyMakeMergeState) => Promise<void>;
+  cancel: (state: CindyMakeMergeState, isCurrent: () => boolean) => Promise<void>;
 }
 const errors = new Set([
   'busy',
@@ -100,6 +110,7 @@ const errors = new Set([
   'checksFailed',
   'interrupted',
   'startFailed',
+  'cancelFailed',
 ]);
 
 /** Device-local Git operation, with an account-bound resolution task. Never resumes writes on boot. */
@@ -113,9 +124,11 @@ export class UpstreamMergeController {
       const recovered = {
         ...state,
         hasWorkspace: deps.hasWorkspace(state),
-        ...(['fetching', 'merging', 'checking'].includes(state.status)
-          ? { status: 'failed' as const, error: 'interrupted' as const }
-          : {}),
+        ...(state.cancellationRequested
+          ? { status: 'failed' as const, error: 'cancelFailed' as const }
+          : ['fetching', 'merging', 'checking'].includes(state.status)
+            ? { status: 'failed' as const, error: 'interrupted' as const }
+            : {}),
       };
       // A completed merge removes its candidate worktree. Recompute this bit on
       // every restore so an older state file cannot keep the UI looking busy.
@@ -199,27 +212,39 @@ export class UpstreamMergeController {
     }
     return this.status();
   }
-  async update(options?: CindyMakeTaskOptions): Promise<CindyMakeMergeState | undefined> {
+  async update(_options?: CindyMakeTaskOptions): Promise<CindyMakeMergeState | undefined> {
     const owner = this.deps.owner();
     return this.run(async () => {
-      if (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged') return;
-      this.saved = undefined;
-      this.save({ id: randomUUID(), status: 'fetching', ref: '', upstreamCommit: '' });
+      if (
+        this.saved?.state.cancellationRequested ||
+        (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged')
+      )
+        return;
+      this.saved = {
+        sessionOwner: owner || undefined,
+        state: { id: randomUUID(), status: 'fetching', ref: '', upstreamCommit: '' },
+      };
+      this.save(this.saved.state);
       const latest = await this.deps.latest();
       this.save({ ...this.saved!.state, ref: latest.ref, upstreamCommit: latest.commit });
       const result = await this.deps.prepare(this.saved!.state, async (next) => this.save(next));
       this.save(result);
-      if (result.status === 'conflict' && owner && this.deps.owner() === owner) {
-        await this.createResolutionTask(options, owner);
-      }
+      // Conflicts wait for an explicit resolve/cancel decision before any Agent task exists.
       if (result.status === 'merged') await this.cleanupCompleted(result);
       await this.deps.refresh().catch(() => undefined);
     });
   }
-  async resolve(options?: CindyMakeTaskOptions): Promise<CindyMakeMergeState | undefined> {
+  async resolve(
+    options?: CindyMakeTaskOptions,
+    operationId?: string,
+  ): Promise<CindyMakeMergeState | undefined> {
     const owner = this.deps.owner();
+    if (operationId !== undefined && this.saved?.state.id !== operationId) throw mergeError('busy');
+    if (this.saved?.state.status === 'cancelled' || this.saved?.state.cancellationRequested)
+      throw mergeError('busy');
     if (this.saved?.sessionOwner && this.saved.sessionOwner !== owner) throw mergeError('busy');
     return this.run(async () => {
+      if (this.deps.owner() !== owner) throw mergeError('busy');
       if (this.saved?.state.feature && !this.saved.state.feature.awaitingResolution) {
         const isCurrent = () => this.deps.owner() === owner;
         let result: CindyMakeMergeState;
@@ -252,6 +277,40 @@ export class UpstreamMergeController {
       await this.createResolutionTask(options, owner);
     });
   }
+  async cancel(operationId: string): Promise<CindyMakeMergeState | undefined> {
+    const state = this.saved?.state;
+    const owner = this.deps.owner();
+    if (
+      this.active ||
+      !state ||
+      state.id !== operationId ||
+      state.feature ||
+      state.sessionId ||
+      !['conflict', 'failed', 'cancelled'].includes(state.status) ||
+      (this.saved?.sessionOwner && this.saved.sessionOwner !== owner)
+    )
+      throw mergeError('busy');
+    return this.run(async () => {
+      const isCurrent = () => this.saved?.state.id === operationId && this.deps.owner() === owner;
+      if (!isCurrent()) throw mergeError('busy');
+      if (state.status === 'cancelled' && !state.hasWorkspace) return;
+      this.save({ ...state, cancellationRequested: true });
+      try {
+        await this.deps.cancel(state, isCurrent);
+      } catch {
+        // Retain the decision and recovery entry if Git could not reclaim the candidate.
+        throw mergeError('cancelFailed');
+      }
+      this.save({
+        ...state,
+        status: 'cancelled',
+        hasWorkspace: false,
+        cancellationRequested: undefined,
+        error: undefined,
+      });
+      await this.deps.refresh().catch(() => undefined);
+    });
+  }
   async feature(
     plan: MakeFeatureMergePlan,
     options?: CindyMakeTaskOptions,
@@ -261,6 +320,7 @@ export class UpstreamMergeController {
     if (
       !owner ||
       this.active ||
+      this.saved?.state.cancellationRequested ||
       (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged')
     )
       throw mergeError('busy');
@@ -297,7 +357,8 @@ export class UpstreamMergeController {
     owner: string,
   ): Promise<void> {
     const state = this.saved?.state;
-    if (!state?.hasWorkspace || state.status === 'merged') throw mergeError('unavailable');
+    if (!state?.hasWorkspace || ['merged', 'cancelled'].includes(state.status))
+      throw mergeError('unavailable');
     const isCurrent = () => this.deps.owner() === owner;
     if (!isCurrent()) throw mergeError('busy');
     const id = await this.deps.session(

@@ -24,7 +24,7 @@ import type { MarketSkill } from '../../hooks/useMarketList';
 import { MarketCard } from '../MarketCard';
 import { HomeMarketCard } from '../HomeMarketCard';
 import { MarketLocalSkills } from '../MarketLocalSkills';
-import { SkillhubMarketPreviewPanel } from '../../SkillhubMarketPreviewPanel';
+import { SkillhubMarketDetailView } from '../../SkillhubMarketDetailView';
 
 const market: MarketSkill = {
   name: 'gws-calendar', latestVersion: '1.0.2', isMine: false, catalogScope: 'market',
@@ -72,7 +72,7 @@ describe.each(['home', 'card'] as const)('market %s list', (surface) => {
 
 describe('market Skill details', () => {
   it('shows gws-calendar 1.0.2 controls and targets the scanned local copy', async () => {
-    render(<MemoryRouter><SkillhubMarketPreviewPanel skill={market} open onClose={vi.fn()}
+    render(<MemoryRouter><SkillhubMarketDetailView skill={market} open onClose={vi.fn()}
       primaryAction="clone" onClone={vi.fn()} /></MemoryRouter>);
     expect(screen.queryByText('skillhub.sidebar.marketInstalledHeading')).toBeNull();
     const clone = screen.getByRole('button', { name: 'skillhub.marketCard.clone' });
@@ -87,7 +87,7 @@ describe('market Skill details', () => {
   });
 
   it('disables Learn this skill when the built-in Learn Skill is disabled', async () => {
-    render(<MemoryRouter><SkillhubMarketPreviewPanel skill={market} open onClose={vi.fn()}
+    render(<MemoryRouter><SkillhubMarketDetailView skill={market} open onClose={vi.fn()}
       primaryAction="clone" onClone={vi.fn()} learnSkillEnabled={false} /></MemoryRouter>);
 
     const learn = await screen.findByRole('button', { name: 'learn.hub.learnButton' });

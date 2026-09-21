@@ -51,7 +51,14 @@ export interface CindyMakeTestState {
   status: 'starting' | 'ready' | 'failed' | 'stopped';
   /** Optional startup detail; older completions retain the broad status. */
   step?: CindyMakeTestStep;
-  error?: 'unavailable' | 'changed' | 'environment' | 'launchFailed' | 'timeout' | 'interrupted';
+  error?:
+    | 'unavailable'
+    | 'changed'
+    | 'environment'
+    | 'launchFailed'
+    | 'timeout'
+    | 'interrupted'
+    | 'stopFailed';
 }
 
 export type CindyMakeTestStep =
@@ -59,8 +66,12 @@ export type CindyMakeTestStep =
 
 export interface CindyMakePersonalBuildState {
   status: 'waiting' | 'checking' | 'merging' | 'packaging' | 'publishing' | 'ready' | 'failed';
+  /** Optional preparation detail; older clients still display waiting. */
+  preparationStep?: 'environment' | 'original';
   /** Optional detail within checking; old records/clients retain the broad status. */
   checkStep?: 'dependencies' | 'tests' | 'types';
+  /** Bounded, structured progress records; raw process output never crosses into the UI. */
+  logs?: CindyMakeBuildLogEntry[];
   /** Cancellation is pending until owned processes and disposable outputs are cleaned. */
   stopping?: boolean;
   startedAt?: number;
@@ -89,6 +100,84 @@ export interface CindyMakePersonalBuildState {
     | 'cancelled'
     | 'cleanupFailed'
     | 'interrupted';
+}
+
+export type CindyMakeBuildLogStep =
+  | 'environment'
+  | 'original'
+  | 'merging'
+  | 'checking-dependencies'
+  | 'checking-tests'
+  | 'checking-types'
+  | 'packaging'
+  | 'publishing'
+  | 'ready'
+  | 'failed'
+  | 'cancelled';
+
+export interface CindyMakeBuildLogEntry {
+  step: CindyMakeBuildLogStep;
+  at: number;
+}
+
+const CINDY_MAKE_BUILD_LOG_STEPS = new Set<CindyMakeBuildLogStep>([
+  'environment',
+  'original',
+  'merging',
+  'checking-dependencies',
+  'checking-tests',
+  'checking-types',
+  'packaging',
+  'publishing',
+  'ready',
+  'failed',
+  'cancelled',
+]);
+
+/** Validate persisted log entries before they cross the Main/Renderer boundary. */
+export function parseCindyMakeBuildLogs(value: unknown): CindyMakeBuildLogEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const logs = value
+    .filter(
+      (entry): entry is { step: unknown; at: unknown } => !!entry && typeof entry === 'object',
+    )
+    .filter(
+      (entry): entry is CindyMakeBuildLogEntry =>
+        typeof entry.step === 'string' &&
+        CINDY_MAKE_BUILD_LOG_STEPS.has(entry.step as CindyMakeBuildLogStep) &&
+        typeof entry.at === 'number' &&
+        Number.isFinite(entry.at),
+    )
+    .map((entry) => ({ step: entry.step, at: entry.at }))
+    .slice(-80);
+  return logs.length ? logs : undefined;
+}
+
+/** Add one stable, localizable entry when a build crosses a visible stage. */
+export function appendCindyMakeBuildLog(
+  previous: CindyMakePersonalBuildState | undefined,
+  next: CindyMakePersonalBuildState,
+  at = Date.now(),
+): CindyMakePersonalBuildState {
+  const step: CindyMakeBuildLogStep | undefined =
+    next.status === 'waiting'
+      ? next.preparationStep
+      : next.status === 'checking'
+        ? next.checkStep
+          ? (('checking-' + next.checkStep) as CindyMakeBuildLogStep)
+          : 'checking-dependencies'
+        : next.status === 'failed'
+          ? next.error === 'cancelled'
+            ? 'cancelled'
+            : 'failed'
+          : next.status;
+  if (!step) return next;
+  const logs = previous?.logs ?? next.logs ?? [];
+  if (logs.at(-1)?.step === step) return { ...next, logs };
+  return {
+    ...next,
+    logs: [...logs, { step, at }].slice(-80),
+  };
 }
 
 /** Only known failure codes may cross from build processes or saved records into UI. */

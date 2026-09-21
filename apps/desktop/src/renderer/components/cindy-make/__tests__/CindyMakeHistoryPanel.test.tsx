@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
+import type { SelectProps } from '@/components/ui/select';
 import type {
   CindyMakeHistoryItem,
   CindyMakeHistoryState,
@@ -29,6 +30,22 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: h.confirm }),
 }));
 vi.mock('@/lib/toast', () => ({ toast: { error: h.error } }));
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ label, value, options, onValueChange, disabled }: SelectProps) => (
+    <select
+      aria-label={label}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onValueChange(event.target.value)}
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
 function item(patch: Partial<CindyMakeHistoryItem> = {}): CindyMakeHistoryItem {
   return {
     schema: 1,
@@ -43,7 +60,7 @@ function item(patch: Partial<CindyMakeHistoryItem> = {}): CindyMakeHistoryItem {
     versions: [],
     lifecycle: 'ready',
     integration: 'unintegrated',
-    actions: ['open', 'continue', 'test', 'integrate', 'end'],
+    actions: ['open', 'continue', 'test', 'integrate', 'end', 'build'],
     canHide: true,
     ...patch,
   };
@@ -54,7 +71,7 @@ function harness(items = [item()]) {
   const execute = vi.fn(async () => state);
   const build = vi.fn(async () => state);
   const cancel = vi.fn(async () => state);
-  let onMessage: (() => void) | undefined;
+  let onMessage: ((event?: { sessionId?: string; message?: unknown }) => void) | undefined;
   const unsubscribe = vi.fn();
   vi.stubGlobal('electronAPI', {
     getCindyMakeHistory: read,
@@ -76,7 +93,7 @@ function harness(items = [item()]) {
     build,
     cancel,
     changed: () =>
-      (onMessage as any)?.({
+      onMessage?.({
         sessionId: items[0]?.sessionId,
         message: { agentMeta: { cindyMakeCompletion: {} } },
       }),
@@ -109,11 +126,49 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('Make history controls', () => {
+  it('keeps the running test visible when its stop fails', async () => {
+    const f = harness([item({ test: { status: 'ready' }, actions: ['continue'] })]);
+    f.execute.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] stopFailed'));
+    render(<CindyMakeHistoryPanel />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'cindyMake.history.actions.continue' }),
+    );
+    await waitFor(() => expect(h.error).toHaveBeenCalledWith('cindyMake.test.errors.stopFailed'));
+    expect(h.navigate).not.toHaveBeenCalled();
+    expect(screen.getAllByText('cindyMake.test.status.ready')).not.toHaveLength(0);
+  });
+
+  it('shows the prompt inside each round and removes the duplicate task request', async () => {
+    const firstPrompt = 'Make the background blue';
+    const f = harness([
+      item({
+        request: firstPrompt,
+        completions: [
+          { id: 'round-a', reportedAt: 1, prompt: firstPrompt },
+          { id: 'round-b', reportedAt: 2, prompt: 'Make the background red' },
+        ],
+      }),
+    ]);
+    render(<CindyMakeHistoryPanel />);
+    await screen.findByText('cindyMake.history.rounds');
+    expect(screen.queryByRole('heading', { name: firstPrompt })).toBeNull();
+    expect(screen.getAllByText(firstPrompt, { exact: true })).toHaveLength(1);
+    expect(screen.getByText('Make the background red', { exact: true })).toBeTruthy();
+    expect(f.read).toHaveBeenCalled();
+  });
+
+  it('uses Generate Personal Version for a failed integration too', async () => {
+    const f = harness([item({ actions: ['open', 'retry'], operationError: 'checksFailed' })]);
+    render(<CindyMakeHistoryPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'cindyMake.history.actions.build' }));
+    await waitFor(() => expect(f.execute).toHaveBeenCalledWith('aaaa', 'retry'));
+    expect(screen.queryByRole('button', { name: 'cindyMake.history.actions.retry' })).toBeNull();
+  });
   it('shares test failure, retry, live progress and exit state with the completion broadcast', async () => {
     const failed = item({ test: { status: 'failed', step: 'launching', error: 'launchFailed' } });
     const f = harness([failed]);
     const view = render(<CindyMakeHistoryPanel />);
-    const retry = await screen.findByRole('button', { name: 'cindyMake.test.retry' });
+    const retry = await screen.findByRole('button', { name: 'cindyMake.test.start' });
     expect(screen.getByRole('alert').textContent).toBe('cindyMake.test.errors.launchFailed');
     expect(screen.getByText('cindyMake.test.failedStep')).toBeTruthy();
     expect(screen.queryByText('cindyMake.history.lifecycle.ready')).toBeNull();
@@ -139,7 +194,7 @@ describe('Make history controls', () => {
     expect(screen.queryByText('cindyMake.test.currentStep')).toBeNull();
     f.set({ items: [item({ test: { status: 'stopped' } })], busy: false, canBuild: true });
     act(() => f.changed());
-    await screen.findByRole('button', { name: 'cindyMake.test.retry' });
+    await screen.findByRole('button', { name: 'cindyMake.test.start' });
     view.unmount();
     expect(f.unsubscribe).toHaveBeenCalled();
   });
@@ -177,7 +232,9 @@ describe('Make history controls', () => {
       'cindyMake.personal.errors.checksFailed',
     );
     fireEvent.click(screen.getByRole('button', { name: 'cindyMake.history.actions.build' }));
-    await waitFor(() => expect(f.build).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(f.execute).toHaveBeenCalledTimes(2));
+    expect(f.execute).toHaveBeenLastCalledWith('aaaa', 'build');
+    expect(f.build).not.toHaveBeenCalled();
   });
   it('shows the actual task build stage while removing mutation controls', async () => {
     const building = item({
@@ -188,14 +245,14 @@ describe('Make history controls', () => {
     const f = harness([building]);
     f.set({ items: [building], busy: true, canBuild: false });
     render(<CindyMakeHistoryPanel />);
-    expect(await screen.findByText('cindyMake.history.buildStatus.packaging')).toBeTruthy();
+    expect(await screen.findAllByText('cindyMake.personal.status.packaging')).toHaveLength(2);
     expect(screen.queryByRole('button', { name: 'cindyMake.history.build' })).toBeNull();
     expect(
       screen.queryByRole('button', { name: 'cindyMake.history.actions.integrate' }),
     ).toBeNull();
     expect(screen.queryByRole('button', { name: 'cindyMake.history.actions.end' })).toBeNull();
   });
-  it('exposes retry generation from a failed ended record', async () => {
+  it('keeps Generate Personal Version as the action on a failed ended record', async () => {
     const failed = item({
       lifecycle: 'ended',
       integration: 'integrated',
@@ -204,10 +261,8 @@ describe('Make history controls', () => {
     });
     const f = harness([failed]);
     render(<CindyMakeHistoryPanel />);
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'cindyMake.history.actions.retryBuild' }),
-    );
-    await waitFor(() => expect(f.build).toHaveBeenCalledOnce());
+    fireEvent.click(await screen.findByRole('button', { name: 'cindyMake.history.actions.build' }));
+    await waitFor(() => expect(f.execute).toHaveBeenCalledWith('aaaa', 'build'));
   });
   it('offers the verified installer fallback when the source cannot produce a managed switchable version', async () => {
     const f = harness([]);
@@ -225,15 +280,15 @@ describe('Make history controls', () => {
     expect(screen.getByText('cindyMake.history.buildStatus.installerReady')).toBeTruthy();
     expect(screen.queryByText('cindyMake.history.buildStatus.ready')).toBeNull();
   });
-  it('shows only operations admitted for the selected record and changes them after integration', async () => {
+  it('uses one generation action and one failure explanation without integration controls or duplicate navigation', async () => {
     const f = harness();
     render(<CindyMakeHistoryPanel />);
     expect(screen.getByRole('combobox', { name: 'cindyMake.history.filterLabel' })).toBeTruthy();
     expect((await screen.findByRole('button', { name: /Blue background/ })).className).toContain(
       'settings-menu-bg-selected',
     );
-    const integrate = await screen.findByRole('button', {
-      name: 'cindyMake.history.actions.integrate',
+    const generate = await screen.findByRole('button', {
+      name: 'cindyMake.history.actions.build',
     });
     f.set({
       items: [
@@ -242,25 +297,39 @@ describe('Make history controls', () => {
           actions: ['open', 'continue', 'test', 'build', 'end', 'revert'],
           canHide: true,
           needsBuild: true,
+          build: { status: 'failed', error: 'checksFailed', buildId: 'failed-build' },
+          title: '[aaaa] Blue background',
+          request: 'Blue background',
         }),
       ],
       busy: false,
       canBuild: true,
+      build: { status: 'failed', error: 'checksFailed', buildId: 'failed-build' },
     });
-    fireEvent.click(integrate);
-    expect(f.execute).toHaveBeenCalledWith('aaaa', 'integrate');
-    expect(
-      await screen.findByRole('button', { name: 'cindyMake.history.actions.revert' }),
-    ).toBeTruthy();
+    fireEvent.click(generate);
+    expect(f.execute).toHaveBeenCalledWith('aaaa', 'build');
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'cindyMake.personal.errors.checksFailed',
+    );
+    expect(screen.queryByText('Blue background')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'cindyMake.history.actions.revert' })).toBeNull();
     expect(
       screen.queryByRole('button', { name: 'cindyMake.history.actions.integrate' }),
     ).toBeNull();
     expect(screen.queryByRole('button', { name: 'cindyMake.history.actions.reapply' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'cindyMake.history.actions.open' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'cindyMake.history.actions.test' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'cindyMake.history.actions.open' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'cindyMake.history.actions.continue' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'cindyMake.test.start' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'cindyMake.history.actions.build' })).toBeTruthy();
-    expect(screen.getAllByText(/cindyMake.history.versionPending/)).toHaveLength(2);
-    expect(screen.getByText('cindyMake.history.needsBuild')).toBeTruthy();
+    expect(screen.queryByText(/cindyMake.history.versionPending/)).toBeNull();
+    expect(screen.queryByText('cindyMake.history.needsBuild')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'cindyMake.history.actions.retryBuild' }),
+    ).toBeNull();
+    await waitFor(() => expect(generate.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(generate);
+    await waitFor(() => expect(f.execute).toHaveBeenCalledTimes(2));
+    expect(f.execute).toHaveBeenLastCalledWith('aaaa', 'build');
   });
   it('hands off the selected completion only after Main accepts Continue Editing', async () => {
     const f = harness([item({ completionId: 'done-a' })]);
@@ -313,7 +382,7 @@ describe('Make history controls', () => {
     expect(h.navigate).toHaveBeenCalledWith('/cc-agent/task-a');
     expect(f.execute).not.toHaveBeenCalled();
   });
-  it('retains finished history and exposes retained undo without edit, test, or repeated cleanup actions', async () => {
+  it('keeps finished history with navigation and cleanup, without technical integration controls', async () => {
     harness([
       item({
         lifecycle: 'ended',
@@ -323,22 +392,14 @@ describe('Make history controls', () => {
       }),
     ]);
     render(<CindyMakeHistoryPanel />);
-    expect(
-      await screen.findByRole('button', { name: 'cindyMake.history.actions.revert' }),
-    ).toBeTruthy();
+    await screen.findByRole('button', { name: 'cindyMake.history.actions.open' });
     expect(screen.getByRole('heading', { name: 'cindyMake.history.title · 1' })).toBeTruthy();
-    for (const action of ['end', 'test', 'continue', 'integrate'])
+    for (const action of ['end', 'test', 'continue', 'integrate', 'revert', 'reapply'])
       expect(
         screen.queryByRole('button', { name: 'cindyMake.history.actions.' + action }),
       ).toBeNull();
     expect(screen.getByRole('button', { name: 'cindyMake.history.actions.open' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'cindyMake.history.cleanTask' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.history.actions.revert' }));
-    await waitFor(() =>
-      expect(h.confirm).toHaveBeenCalledWith(
-        expect.objectContaining({ description: 'cindyMake.history.revertConfirm' }),
-      ),
-    );
   });
   it('opens the dedicated resolution task and does not offer unrelated integration actions during a conflict', async () => {
     const f = harness([
@@ -416,9 +477,7 @@ describe('Make history controls', () => {
         expect(screen.getByRole('button', { name: /Next task/ }).getAttribute('aria-pressed')).toBe(
           'true',
         );
-        expect(
-          await screen.findByRole('button', { name: 'cindyMake.history.actions.test' }),
-        ).toBeTruthy();
+        expect(await screen.findByRole('button', { name: 'cindyMake.test.start' })).toBeTruthy();
       } else {
         expect(screen.getByText('settings.cindyMake.tasks.noResults')).toBeTruthy();
         expect(screen.queryByRole('button', { name: 'cindyMake.history.cleanTask' })).toBeNull();
@@ -496,5 +555,130 @@ describe('Make history controls', () => {
       old({ items: [item({ title: 'Private previous owner' })], busy: false, canBuild: true }),
     );
     expect(screen.queryByText(/Private previous owner/)).toBeNull();
+  });
+});
+
+function selectableItem(runId: string, createdAt: number) {
+  return item({
+    runId,
+    createdAt,
+    title: runId,
+    sessionId: 'task-' + runId,
+    canSelectForBuild: true,
+    completionId: 'done-' + runId,
+    completions: [
+      { id: 'done-' + runId, reportedAt: createdAt, commit: 'a'.repeat(40), tree: 'b'.repeat(40) },
+    ],
+  });
+}
+async function beginSelection() {
+  fireEvent.change(await screen.findByRole('combobox', { name: 'cindyMake.history.filterLabel' }), {
+    target: { value: 'pending' },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'cindyMake.history.batch.make' }));
+}
+
+describe('pending history selection', () => {
+  it('selects multiple pending records and confirms the chronological list before one build', async () => {
+    const newer = selectableItem('newer', 20);
+    const older = selectableItem('older', 10);
+    const f = harness([
+      newer,
+      older,
+      item({ runId: 'busy', actions: ['open'] }),
+      item({ runId: 'merged', integration: 'integrated' }),
+    ]);
+    render(<CindyMakeHistoryPanel />);
+    await beginSelection();
+    expect(
+      screen
+        .getByRole('button', { name: 'cindyMake.history.batch.selected' })
+        .hasAttribute('disabled'),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'cindyMake.history.batch.selectAll' }));
+    const checks = screen.getAllByRole('checkbox', {
+      name: 'cindyMake.history.batch.selectItem',
+    }) as HTMLInputElement[];
+    expect(checks.map((checkbox) => checkbox.checked)).toEqual([true, true, false]);
+    expect(checks[2].disabled).toBe(true);
+    // Multi-select can also remove and re-add one entry without losing the others.
+    fireEvent.click(checks[0]);
+    expect(checks[1].checked).toBe(true);
+    fireEvent.click(checks[0]);
+    let approve!: (accepted: boolean) => void;
+    h.confirm.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          approve = resolve;
+        }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.history.batch.selected' }));
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledOnce());
+    expect(f.build).not.toHaveBeenCalled();
+    const confirmation = h.confirm.mock.calls[0][0];
+    expect(confirmation).toMatchObject({
+      description: 'cindyMake.history.batch.confirmDescription',
+    });
+    const preview = render(<>{confirmation.content}</>);
+    expect(preview.container.textContent!.indexOf('older')).toBeLessThan(
+      preview.container.textContent!.indexOf('newer'),
+    );
+    preview.unmount();
+    await act(async () => approve(true));
+    expect(f.build).toHaveBeenCalledOnce();
+    expect(f.build).toHaveBeenCalledWith(
+      [older, newer].map((record) => ({
+        runId: record.runId,
+        completionId: record.completionId,
+        commit: record.completions[0].commit,
+        tree: record.completions[0].tree,
+      })),
+    );
+    expect(f.execute).not.toHaveBeenCalled();
+  });
+  it('keeps selections after cancelling the second dialog and does not build', async () => {
+    const f = harness([selectableItem('one', 1)]);
+    h.confirm.mockResolvedValueOnce(false);
+    render(<CindyMakeHistoryPanel />);
+    await beginSelection();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'cindyMake.history.batch.selectAll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.history.batch.selected' }));
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledOnce());
+    expect(f.build).not.toHaveBeenCalled();
+    expect(
+      (
+        screen.getByRole('checkbox', {
+          name: 'cindyMake.history.batch.selectItem',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+  });
+  it("does not submit another owner's selections after confirmation", async () => {
+    const f = harness([selectableItem('one', 1)]);
+    let approve!: (accepted: boolean) => void;
+    h.confirm.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          approve = resolve;
+        }),
+    );
+    render(<CindyMakeHistoryPanel />);
+    await beginSelection();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'cindyMake.history.batch.selectAll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.history.batch.selected' }));
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledOnce());
+    setDataOwnerGeneration('other-history-owner');
+    await act(async () => approve(true));
+    expect(f.build).not.toHaveBeenCalled();
+  });
+  it('offers restart for the selected running isolated version', async () => {
+    const f = harness([
+      item({ test: { status: 'ready' }, actions: ['test', 'continue', 'build'] }),
+    ]);
+    render(<CindyMakeHistoryPanel />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'cindyMake.history.batch.restartTest' }),
+    );
+    await waitFor(() => expect(f.execute).toHaveBeenCalledWith('aaaa', 'test'));
   });
 });

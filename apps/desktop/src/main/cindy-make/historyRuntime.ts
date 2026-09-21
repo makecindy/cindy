@@ -16,10 +16,11 @@ import { cindyMakeManager } from './manager.js';
 import { captureMakeHistoryStore } from './historyOwner.js';
 import { captureMakeHistoryCompletion, captureMakeHistoryReport } from './historyCapture.js';
 import { planFeatureChange } from './featurePlan.js';
-import { taskCommitRef } from './sourceContent.js';
+import { snapshotContent, taskCommitRef } from './sourceContent.js';
 import { readLegacyFeatureReceipts } from './historyLegacy.js';
 import { integrateMakeHistory, actUpstreamMerge } from './upstreamMergeRuntime.js';
 import { manageCindyMakeTask } from './taskManagement.js';
+import { historyBuildRollback } from './buildRollback.js';
 import { actCindyMakeTest, cindyMakeTestController } from './testRuntime.js';
 import {
   makeSourceCheckoutPath,
@@ -37,10 +38,13 @@ import {
   buildCindyPersonal,
   personalArtifactPath,
   personalBuildEnvironment,
+  personalBuildError,
   type PersonalArtifact,
 } from './personalBuild.js';
 import { currentVersionProfile, rememberOriginalVersion } from './versionStartup.js';
+import { hasPublishedPersonalVersionCommit } from './versionStore.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
   makeHistoryActions,
   activeFeatureReceipts,
@@ -49,23 +53,70 @@ import {
   type MakeHistoryAction,
   type MakeHistoryLifecycle,
   type MakeHistoryIntegration,
+  type MakeHistoryBuildSelection,
 } from '../../shared/cindyMakeHistory.js';
 import type { CindyMakePersonalBuildState } from '../../shared/cindyMakeSession.js';
-import { parseCindyMakeBuildError } from '../../shared/cindyMakeSession.js';
+import {
+  appendCindyMakeBuildLog,
+  parseCindyMakeBuildError,
+} from '../../shared/cindyMakeSession.js';
 
 const ID = /^[A-Za-z0-9-]{1,128}$/;
 const HASH = /^[a-f0-9]{40,64}$/i;
 const log = createLogger('cindy-make');
 let running: (id: string) => boolean = () => true;
-let buildJob:
-  | {
-      id: string;
-      current: () => boolean;
-      abort: AbortController;
-      cancelled: boolean;
-      done: Promise<void>;
+/** Owns a source build, including its ordered history merges, independently of Settings. */
+interface HistoryBuildJob {
+  id: string;
+  current: () => boolean;
+  abort: AbortController;
+  cancelled: boolean;
+  done: Promise<void>;
+  batch?: CindyMakeHistoryState['batch'];
+}
+let buildJob: HistoryBuildJob | undefined;
+type MakeHistoryCard = Pick<
+  typeof messages.$inferSelect,
+  'id' | 'sessionId' | 'clientId' | 'role' | 'content' | 'agentMeta' | 'createdAt'
+>;
+
+function chronologicalMessageOrder(a: MakeHistoryCard, b: MakeHistoryCard): number {
+  return a.createdAt - b.createdAt || String(a.id).localeCompare(String(b.id));
+}
+
+/** Decode the user-authored text stored in a message's JSON content column. */
+function decodeUserPrompt(raw: string): string | undefined {
+  if (!raw) return;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'string') return parsed.trim() ? parsed : undefined;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as { text?: unknown }).text === 'string'
+    ) {
+      const text = (parsed as { text: string }).text;
+      return text.trim() ? text : undefined;
     }
-  | undefined;
+  } catch {
+    return raw.trim() ? raw : undefined;
+  }
+  return;
+}
+
+function latestUserPromptBefore(
+  userMessages: MakeHistoryCard[],
+  completion: MakeHistoryCard,
+): string | undefined {
+  for (let index = userMessages.length - 1; index >= 0; index -= 1) {
+    const message = userMessages[index];
+    if (chronologicalMessageOrder(message, completion) >= 0) continue;
+    const prompt = decodeUserPrompt(message.content);
+    if (prompt !== undefined && !isSyntheticTriggerText(prompt)) return prompt;
+  }
+  return;
+}
+
 export function configureMakeHistory(probe: typeof running): void {
   running = probe;
 }
@@ -137,6 +188,14 @@ async function toolEnvironment(userData: string, signal: AbortSignal, build = fa
 
 /** Hydrate old installations once from their own task facts; ended tasks are deliberately included. */
 export async function getCindyMakeHistory(selectedRunId?: string): Promise<CindyMakeHistoryState> {
+  return readCindyMakeHistory(selectedRunId);
+}
+
+/** Only the current build may verify candidates while holding its own build reservation. */
+async function readCindyMakeHistory(
+  selectedRunId?: string,
+  ownBuild?: HistoryBuildJob,
+): Promise<CindyMakeHistoryState> {
   const h = context();
   const rows = (
     await h.client.drizzle.select().from(sessions).where(eq(sessions.source, 'cindy-make'))
@@ -145,12 +204,7 @@ export async function getCindyMakeHistory(selectedRunId?: string): Promise<Cindy
       !row.remoteHostId && row.workingDir && isCindyMakeWorktreePath(h.userData, row.workingDir),
   );
   h.check();
-  const cards: Array<
-    Pick<
-      typeof messages.$inferSelect,
-      'id' | 'sessionId' | 'clientId' | 'role' | 'content' | 'agentMeta' | 'createdAt'
-    >
-  > = [];
+  const cards: MakeHistoryCard[] = [];
   for (let start = 0; start < rows.length; start += 100) {
     cards.push(
       ...(await h.client.drizzle
@@ -161,7 +215,7 @@ export async function getCindyMakeHistory(selectedRunId?: string): Promise<Cindy
           role: messages.role,
           createdAt: messages.createdAt,
           agentMeta: messages.agentMeta,
-          content: sql<string>`CASE WHEN ${messages.clientId} LIKE 'cindy-make-preparation-%' THEN ${messages.content} ELSE '' END`,
+          content: messages.content,
         })
         .from(messages)
         .where(
@@ -207,15 +261,35 @@ export async function getCindyMakeHistory(selectedRunId?: string): Promise<Cindy
       createdAt: row.createdAt,
       updatedAt: row.updatedAt ?? row.createdAt,
     });
-    const knownCompletions = new Map(
-      h.store.read(runId)!.completions.map((entry) => [entry.id, entry]),
-    );
-    for (const card of cards.filter((entry) => entry.sessionId === row.id)) {
+    const record = h.store.read(runId)!;
+    const knownCompletions = new Map(record.completions.map((entry) => [entry.id, entry]));
+    const sessionCards = cards
+      .filter((entry) => entry.sessionId === row.id)
+      .sort(chronologicalMessageOrder);
+    const userMessages = sessionCards.filter((entry) => entry.role === 'user');
+    const completionCards = sessionCards.filter((entry) => {
+      try {
+        const value = JSON.parse(entry.agentMeta ?? '{}').cindyMakeCompletion;
+        return !!value && Number.isFinite(value.reportedAt);
+      } catch {
+        return false;
+      }
+    });
+    for (const [completionIndex, card] of completionCards.entries()) {
       try {
         const completion = JSON.parse(card.agentMeta ?? '{}').cindyMakeCompletion;
         if (completion && Number.isFinite(completion.reportedAt)) {
           const known = knownCompletions.get(card.clientId);
-          const next = { ...completion, id: card.clientId };
+          const prompt = latestUserPromptBefore(userMessages, card);
+          const next = {
+            ...completion,
+            id: card.clientId,
+            ...(prompt !== undefined
+              ? { prompt }
+              : completionIndex === 0 && record.request.trim()
+                ? { prompt: record.request }
+                : {}),
+          };
           // A legacy tree was verified against this exact commit; an older card cannot erase it.
           if (!next.tree && next.commit === known?.commit && known?.tree) next.tree = known.tree;
           if (!next.baseTree && next.commit === known?.commit && known?.baseTree)
@@ -235,11 +309,13 @@ export async function getCindyMakeHistory(selectedRunId?: string): Promise<Cindy
   const pendingMerge =
     state.upstreamMerge &&
     state.upstreamMerge.status !== 'merged' &&
-    state.upstreamMerge.hasWorkspace
+    (state.upstreamMerge.hasWorkspace || state.upstreamMerge.cancellationRequested)
       ? state.upstreamMerge
       : undefined;
+  const ownsBuild = !!ownBuild && buildJob === ownBuild && ownBuild.current();
   const globalBusy =
-    !!buildJob || cindyMakeTestController.hasActiveJobs() || cindyMakeManager.hasActiveWork();
+    cindyMakeTestController.hasActiveJobs() ||
+    (!ownsBuild && (!!buildJob || cindyMakeManager.hasActiveWork()));
   const items: CindyMakeHistoryItem[] = [];
   for (const record of h.store.list()) {
     if (record.hiddenAt !== undefined) continue;
@@ -535,6 +611,15 @@ export async function getCindyMakeHistory(selectedRunId?: string): Promise<Cindy
                       ? 'sourceUnavailable'
                       : 'ended'
           : undefined,
+      canSelectForBuild:
+        completed &&
+        lifecycle === 'ready' &&
+        workspaceAvailable &&
+        verifiedSource &&
+        !operation &&
+        !taskBuilding &&
+        test?.status !== 'starting' &&
+        ['unintegrated', 'changed', 'reverted'].includes(integration),
       canHide: !targetBusy && !['starting', 'ready'].includes(test?.status ?? ''),
     });
   }
@@ -545,6 +630,7 @@ export async function getCindyMakeHistory(selectedRunId?: string): Promise<Cindy
     busy: globalBusy || !!pendingMerge,
     canBuild: buildSourceAvailable && !globalBusy && !pendingMerge,
     build,
+    batch: buildJob?.current() ? buildJob.batch : undefined,
   };
 }
 
@@ -559,7 +645,12 @@ export function readCindyMakeBuildState(): CindyMakePersonalBuildState | undefin
     !(activeBuild?.buildId && activeBuild.buildId === build.buildId) &&
     !['ready', 'failed'].includes(build.status)
   ) {
-    build = { ...build, status: 'failed', stopping: undefined, error: 'interrupted' };
+    build = appendCindyMakeBuildLog(build, {
+      ...build,
+      status: 'failed',
+      stopping: undefined,
+      error: 'interrupted',
+    });
     h.store.saveBuild(build);
   }
   h.check();
@@ -577,15 +668,36 @@ export async function actCindyMakeHistory(
   h.check();
   const item = state.items.find((entry) => entry.runId === runId);
   const canHide = action === 'hide' && item?.canHide === true;
-  // Keep a stale cleanup button harmless when this record itself is still
-  // running, preparing, being tested, or already cleaning.  The snapshot
-  // carries the stable reason so Renderer can show the actionable busy tip
-  // immediately instead of reporting a generic unavailable action.
-  if (item?.actionReason === 'busy' && ['end', 'retry-cleanup', 'hide'].includes(action))
-    throwIpcError('PRECONDITION_FAILED', 'busy');
-  if (!item || (!item.actions.includes(action as MakeHistoryAction) && !canHide))
+  if (!item || (!item.actions.includes(action as MakeHistoryAction) && !canHide)) {
+    // The reason may describe another task blocking source operations while
+    // this record is still safe to hide. Use it only after this action is denied;
+    // a stale cleanup button for an occupied task still reports busy.
+    if (item?.actionReason === 'busy' && ['end', 'retry-cleanup', 'hide'].includes(action))
+      throwIpcError('PRECONDITION_FAILED', 'busy');
     throwIpcError('PRECONDITION_FAILED', 'unavailable');
-  if (action === 'build') return generateHistoryPersonalVersion();
+  }
+  if (['build', 'integrate', 'reapply'].includes(action) && h.store.readBuildRollback().length) {
+    await recoverHistoryBuildRollback();
+    h.check();
+    return actCindyMakeHistory(runId, action);
+  }
+  if (action === 'build') {
+    if (item.lifecycle === 'ready' && item.completionId) {
+      await actCindyMakeTest(item.sessionId, item.completionId, 'build');
+      return getCindyMakeHistory(runId);
+    }
+    const integration = item.actions.includes('integrate')
+      ? 'integrate'
+      : item.actions.includes('reapply')
+        ? 'reapply'
+        : undefined;
+    if (integration) {
+      const integrated = await actCindyMakeHistory(runId, integration);
+      if (integrated.items.find((entry) => entry.runId === runId)?.integration !== 'integrated')
+        return integrated;
+    }
+    return generateHistoryPersonalVersion();
+  }
   if (action === 'hide') {
     // An ended record has already gone through the canonical task cleanup path.
     // Active/cleanup records must finish that path before they become dismissible.
@@ -593,94 +705,195 @@ export async function actCindyMakeHistory(
     h.store.hide(runId);
   } else if (action === 'end' || action === 'retry-cleanup')
     await manageCindyMakeTask(item.sessionId, 'end');
-  else if (action === 'test' || action === 'continue')
+  else if (action === 'test' || action === 'continue') {
+    if (action === 'test' && item.test?.status === 'ready') {
+      await cindyMakeTestController.stopTestForBuild(item.sessionId);
+      h.check();
+    }
     await actCindyMakeTest(
       item.sessionId,
       item.completionId,
       action === 'test' ? 'start' : 'continue',
     );
-  else if (action === 'resolve' || action === 'retry')
+  } else if (action === 'resolve' || action === 'retry') {
     await actUpstreamMerge({ action: 'resolve' });
-  else if (action === 'integrate' || action === 'revert' || action === 'reapply') {
-    await withSessionRouteLock(item.sessionId, async () => {
+    if (action === 'retry') {
       h.check();
-      if (running(item.sessionId) || cindyMakeManager.isTaskPreparing(item.sessionId))
-        throwIpcError('PRECONDITION_FAILED', 'busy');
-      if (buildJob || cindyMakeTestController.hasActiveJobs() || cindyMakeManager.hasActiveWork())
-        throwIpcError('PRECONDITION_FAILED', 'busy');
-      const [row] = await h.client.drizzle
-        .select()
-        .from(sessions)
-        .where(eq(sessions.id, item.sessionId))
-        .limit(1);
-      h.check();
-      const record = h.store.read(runId)!;
-      if (record.receipts.at(-1)?.id !== item.receipts.at(-1)?.id)
-        throwIpcError('PRECONDITION_FAILED', 'busy');
-      const completion = record.completions.find((entry) => entry.id === item.completionId);
-      if (action === 'integrate') {
-        if (!completion) throwIpcError('PRECONDITION_FAILED', 'unavailable');
-        const signal = AbortSignal.timeout(15000);
-        const { env } = await toolEnvironment(h.userData, signal);
-        const workspaceExists = !!row?.workingDir && existsSync(path.join(row.workingDir, '.git'));
-        if (workspaceExists) {
-          await verifyMakeTestWorkspace(
-            {
-              userData: h.userData,
-              workingDir: row!.workingDir!,
-              runId,
-              commit: completion.commit!,
-              tree: completion.tree,
-            },
-            env,
-            signal,
-          );
-        } else {
-          const savedCommit = (
-            await runSourceGit(
-              env,
-              ['rev-parse', '--verify', taskCommitRef(runId) + '^{commit}'],
-              makeSourceCheckoutPath(h.userData),
-              signal,
-            )
-          ).trim();
-          const savedTree = (
-            await runSourceGit(
-              env,
-              ['rev-parse', savedCommit + '^{tree}'],
-              makeSourceCheckoutPath(h.userData),
-              signal,
-            )
-          ).trim();
-          if (savedCommit !== completion.commit || savedTree !== completion.tree)
-            throwIpcError('PRECONDITION_FAILED', 'unavailable');
-        }
-        h.check();
-      }
-      const plan = planFeatureChange(record, action, completion);
-      if (action === 'integrate' && !plan.mergeCommit && plan.steps.length === 0) return;
-      await integrateMakeHistory(
-        plan,
-        row
-          ? {
-              agentKind: row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'cc',
-              model: row.model ?? undefined,
-              providerId: row.providerId,
-              effort: row.effort ?? undefined,
-              permissionMode: row.permissionMode ?? undefined,
-            }
-          : undefined,
-      );
-    });
+      const next = await getCindyMakeHistory(runId);
+      if (next.items.find((entry) => entry.runId === runId)?.actions.includes('build'))
+        return actCindyMakeHistory(runId, 'build');
+      return next;
+    }
+  } else if (action === 'integrate' || action === 'revert' || action === 'reapply') {
+    await integrateHistoryItem(h, item, action);
   } else throwIpcError('INVALID_PARAMS', 'This action is handled by task navigation');
   h.check();
   return getCindyMakeHistory(runId);
 }
 
+/** Shared by single-item actions and batches; retains route and source locks. */
+async function integrateHistoryItem(
+  h: ReturnType<typeof context>,
+  item: CindyMakeHistoryItem,
+  action: 'integrate' | 'revert' | 'reapply',
+  ownBuild?: HistoryBuildJob,
+): Promise<void> {
+  const runId = item.runId;
+  await withSessionRouteLock(item.sessionId, async () => {
+    h.check();
+    if (ownBuild) {
+      ownBuild.abort.signal.throwIfAborted();
+      if (buildJob !== ownBuild) throwIpcError('PRECONDITION_FAILED', 'unavailable');
+      const fresh = (await readCindyMakeHistory(item.runId, ownBuild)).items.find(
+        (entry) => entry.runId === item.runId,
+      );
+      if (
+        !fresh ||
+        !fresh.actions.includes(action) ||
+        fresh.completionId !== item.completionId ||
+        fresh.completions.at(-1)?.commit !== item.completions.at(-1)?.commit ||
+        fresh.completions.at(-1)?.tree !== item.completions.at(-1)?.tree
+      )
+        throw personalBuildError('changed');
+    }
+    if (running(item.sessionId) || cindyMakeManager.isTaskPreparing(item.sessionId))
+      throwIpcError('PRECONDITION_FAILED', 'busy');
+    if (
+      cindyMakeTestController.hasActiveJobs() ||
+      (!ownBuild && (buildJob || cindyMakeManager.hasActiveWork()))
+    )
+      throwIpcError('PRECONDITION_FAILED', 'busy');
+    const [row] = await h.client.drizzle
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, item.sessionId))
+      .limit(1);
+    h.check();
+    const record = h.store.read(runId)!;
+    if (record.receipts.at(-1)?.id !== item.receipts.at(-1)?.id)
+      throwIpcError('PRECONDITION_FAILED', 'busy');
+    const completion = record.completions.find((entry) => entry.id === item.completionId);
+    if (action === 'integrate') {
+      if (!completion) throwIpcError('PRECONDITION_FAILED', 'unavailable');
+      const signal = AbortSignal.timeout(15000);
+      const { env } = await toolEnvironment(h.userData, signal);
+      const workspaceExists = !!row?.workingDir && existsSync(path.join(row.workingDir, '.git'));
+      if (workspaceExists) {
+        await verifyMakeTestWorkspace(
+          {
+            userData: h.userData,
+            workingDir: row!.workingDir!,
+            runId,
+            commit: completion.commit!,
+            tree: completion.tree,
+          },
+          env,
+          signal,
+        );
+      } else {
+        const savedCommit = (
+          await runSourceGit(
+            env,
+            ['rev-parse', '--verify', taskCommitRef(runId) + '^{commit}'],
+            makeSourceCheckoutPath(h.userData),
+            signal,
+          )
+        ).trim();
+        const savedTree = (
+          await runSourceGit(
+            env,
+            ['rev-parse', savedCommit + '^{tree}'],
+            makeSourceCheckoutPath(h.userData),
+            signal,
+          )
+        ).trim();
+        if (savedCommit !== completion.commit || savedTree !== completion.tree)
+          throwIpcError('PRECONDITION_FAILED', 'unavailable');
+      }
+      h.check();
+    }
+    const plan = planFeatureChange(record, action, completion);
+    if (action === 'integrate' && !plan.mergeCommit && plan.steps.length === 0) return;
+    await integrateMakeHistory(
+      plan,
+      row
+        ? {
+            agentKind: row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'cc',
+            model: row.model ?? undefined,
+            providerId: row.providerId,
+            effort: row.effort ?? undefined,
+            permissionMode: row.permissionMode ?? undefined,
+          }
+        : undefined,
+    );
+  });
+}
+
 /** A source build has no synthetic task. It packages the current personal branch under the existing project lock. */
-export async function generateHistoryPersonalVersion(): Promise<CindyMakeHistoryState> {
+export async function generateHistoryPersonalVersion(
+  rawSelection?: unknown,
+): Promise<CindyMakeHistoryState> {
+  let selection: MakeHistoryBuildSelection[] | undefined;
+  if (rawSelection !== undefined) {
+    if (!Array.isArray(rawSelection) || !rawSelection.length || rawSelection.length > 500)
+      throwIpcError('INVALID_PARAMS', 'Invalid build selection');
+    selection = rawSelection.map((entry: unknown) => {
+      if (!entry || typeof entry !== 'object')
+        throwIpcError('INVALID_PARAMS', 'Invalid build selection');
+      const value = entry as Record<string, unknown>;
+      if (
+        typeof value.runId !== 'string' ||
+        !ID.test(value.runId) ||
+        typeof value.completionId !== 'string' ||
+        !ID.test(value.completionId) ||
+        typeof value.commit !== 'string' ||
+        !HASH.test(value.commit) ||
+        typeof value.tree !== 'string' ||
+        !HASH.test(value.tree)
+      )
+        throwIpcError('INVALID_PARAMS', 'Invalid build selection');
+      return {
+        runId: value.runId,
+        completionId: value.completionId,
+        commit: value.commit,
+        tree: value.tree,
+      };
+    });
+    if (new Set(selection.map((entry) => entry.runId)).size !== selection.length)
+      throwIpcError('INVALID_PARAMS', 'Duplicate build selection');
+  }
   const h = context();
-  const state = await getCindyMakeHistory();
+  let state = await getCindyMakeHistory();
+  h.check();
+  const matches = (item: CindyMakeHistoryItem | undefined, pin: MakeHistoryBuildSelection) =>
+    item?.canSelectForBuild &&
+    item.completionId === pin.completionId &&
+    item.completions.at(-1)?.commit === pin.commit &&
+    item.completions.at(-1)?.tree === pin.tree;
+  if (selection) {
+    // Validate every identity before stopping any selected test. Never substitute a newer round.
+    if (
+      selection.some(
+        (pin) =>
+          !matches(
+            state.items.find((item) => item.runId === pin.runId),
+            pin,
+          ),
+      )
+    )
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    selection.sort((a, b) => {
+      const left = state.items.find((item) => item.runId === a.runId)!;
+      const right = state.items.find((item) => item.runId === b.runId)!;
+      return left.createdAt - right.createdAt || left.runId.localeCompare(right.runId);
+    });
+    for (const pin of selection) {
+      const item = state.items.find((entry) => entry.runId === pin.runId)!;
+      await cindyMakeTestController.stopTestForBuild(item.sessionId);
+      h.check();
+    }
+    state = await getCindyMakeHistory();
+  }
   h.check();
   if (
     !state.canBuild ||
@@ -697,9 +910,17 @@ export async function generateHistoryPersonalVersion(): Promise<CindyMakeHistory
     h.check();
     // A late step notification must not erase a requested stop.
     if (job.cancelled && !['ready', 'failed'].includes(build.status)) return;
-    h.store.saveBuild({ ...build, buildId, startedAt });
+    h.store.saveBuild(
+      appendCindyMakeBuildLog(h.store.readBuild(), { ...build, buildId, startedAt }),
+    );
   };
-  const job = { id: buildId, current: h.current, abort, cancelled: false, done: Promise.resolve() };
+  const job: HistoryBuildJob = {
+    id: buildId,
+    current: h.current,
+    abort,
+    cancelled: false,
+    done: Promise.resolve(),
+  };
   buildJob = job;
   try {
     await publish({ status: 'waiting' });
@@ -713,12 +934,64 @@ export async function generateHistoryPersonalVersion(): Promise<CindyMakeHistory
       const watcher = setInterval(() => {
         if (!h.current()) abort.abort();
       }, 1000);
+      let enteredBuilder = false;
+      let canRollback = !selection;
       try {
+        if (selection) {
+          if (h.store.readBuildRollback().length) await recoverHistoryBuildRollback();
+          const candidates: CindyMakeHistoryItem[] = [];
+          for (const pin of selection) {
+            abort.signal.throwIfAborted();
+            const fresh = await readCindyMakeHistory(pin.runId, job);
+            h.check();
+            const item = fresh.items.find((entry) => entry.runId === pin.runId);
+            if (
+              !matches(item, pin) ||
+              !(item!.actions.includes('integrate') || item!.actions.includes('reapply'))
+            )
+              throw personalBuildError('changed');
+            candidates.push(item!);
+          }
+          // All candidates are checked before the first merge; each is rechecked under its route lock.
+          for (const [index, item] of candidates.entries()) {
+            abort.signal.throwIfAborted();
+            job.batch = {
+              current: index + 1,
+              total: candidates.length,
+              runId: item.runId,
+              title: item.title,
+            };
+            await publish({ status: 'merging' });
+            await integrateHistoryItem(
+              h,
+              item,
+              item.actions.includes('reapply') ? 'reapply' : 'integrate',
+              job,
+            );
+            canRollback = true;
+            h.check();
+            abort.signal.throwIfAborted();
+            const next = await readCindyMakeHistory(item.runId, job);
+            if (
+              next.items.find((entry) => entry.runId === item.runId)?.integration !==
+                'integrated' ||
+              next.items.some(
+                (entry) => entry.runId === item.runId && (entry.conflict || entry.operationError),
+              )
+            )
+              throw personalBuildError('conflict');
+          }
+          job.batch = undefined;
+        }
+        await publish({ status: 'waiting', preparationStep: 'environment' });
         const { tools, env } = await toolEnvironment(h.userData, abort.signal, true);
         const node = await tools.probe('node', ['--version'], abort.signal);
         const git = await tools.probe('git', ['--version'], abort.signal);
         if (!node.path || node.status !== 'ok') throw new Error('environment');
+        await publish({ status: 'waiting', preparationStep: 'original' });
         await rememberOriginalVersion(node.path);
+        const buildEnvironment = await personalBuildEnvironment(env, git.path);
+        enteredBuilder = true;
         const artifact = await buildCindyPersonal(
           {
             mode: 'personal',
@@ -728,13 +1001,16 @@ export async function generateHistoryPersonalVersion(): Promise<CindyMakeHistory
             profile: currentVersionProfile(),
           },
           node.path,
-          await personalBuildEnvironment(env, git.path),
+          buildEnvironment,
           CURRENT_CINDY_REGION,
           abort.signal,
           publish,
           h.check,
           (run) => cindyMakeManager.withProject(makeSourceRoot(h.userData), run),
           {
+            ...historyBuildRollback(h.store, makeSourceCheckoutPath(h.userData), (commit) =>
+              hasPublishedPersonalVersionCommit(h.userData, commit),
+            ),
             features: () =>
               h.store.list().flatMap((record) => {
                 const last = record.receipts.at(-1);
@@ -746,6 +1022,21 @@ export async function generateHistoryPersonalVersion(): Promise<CindyMakeHistory
         recordHistoryBuild(h.store, artifact);
         await publish({ status: 'ready', ...artifact, generatedAt: Date.now() });
       } catch (error) {
+        // A cancelled/failed batch follows the same unbuilt-prefix recovery as a single build.
+        // Admission failures before the first merge must not undo unrelated earlier work.
+        if (!enteredBuilder && canRollback && h.current()) {
+          const merge = cindyMakeManager.getState().upstreamMerge;
+          // A live conflict candidate is based on the already merged prefix. Keep that baseline
+          // until its resolution is adopted; rolling it back would invalidate the recovery task.
+          const awaitingMerge = selection && merge?.hasWorkspace && merge.status !== 'merged';
+          if (!awaitingMerge) {
+            try {
+              await recoverHistoryBuildRollback(true);
+            } catch (cleanupError) {
+              error = cleanupError;
+            }
+          }
+        }
         if (h.current())
           await publish({
             status: 'failed',
@@ -770,6 +1061,48 @@ export async function generateHistoryPersonalVersion(): Promise<CindyMakeHistory
       releaseBuild();
     });
   return getCindyMakeHistory();
+}
+
+/** Finish an interrupted cleanup before reintegration, or undo an early build failure. */
+export async function recoverHistoryBuildRollback(rollbackUnbuilt = false): Promise<void> {
+  const h = context();
+  const source = makeSourceCheckoutPath(h.userData);
+  try {
+    if (
+      !h.store.readBuildRollback().length &&
+      (!rollbackUnbuilt ||
+        !h.store.list().some((record) => {
+          const receipt = record.receipts.at(-1);
+          return receipt && !record.versions.some((version) => version.operationId === receipt.id);
+        }))
+    )
+      return;
+    const signal = AbortSignal.timeout(120_000);
+    const { env } = await toolEnvironment(h.userData, signal);
+    await cindyMakeManager.withProject(makeSourceRoot(h.userData), async () => {
+      h.check();
+      const git = (args: string[], cwd: string, indexFile?: string) => {
+        h.check();
+        return runSourceGit(
+          { ...env, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) },
+          args,
+          cwd,
+          signal,
+        );
+      };
+      const rollback = historyBuildRollback(h.store, source, (commit) =>
+        hasPublishedPersonalVersionCommit(h.userData, commit),
+      );
+      await rollback.recoverRollback(git);
+      if (rollbackUnbuilt) {
+        const commit = (await git(['rev-parse', 'HEAD'], source)).trim();
+        const tree = await snapshotContent(git, source);
+        await rollback.prepareRollback({ commit, tree }, git)();
+      }
+    });
+  } catch {
+    throw personalBuildError('cleanupFailed');
+  }
 }
 export function recordHistoryBuild(
   store: ReturnType<typeof captureMakeHistoryStore>,

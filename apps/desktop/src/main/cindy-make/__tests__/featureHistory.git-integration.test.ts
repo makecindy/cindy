@@ -17,6 +17,7 @@ import {
 import { makeSourceCheckoutPath } from '../sourcePaths';
 import { planFeatureChange } from '../featurePlan';
 import { CindyMakeHistoryStore } from '../historyStore';
+import { historyBuildRollback } from '../buildRollback';
 import type { MakeFeatureAction } from '../../../shared/cindyMakeHistory';
 import type { CindyMakeMergeState } from '../../../shared/cindyMakeMerge';
 
@@ -116,6 +117,40 @@ async function fixture() {
   }
 }
 
+it('restores a failed build to the saved version and can generate the same task changes again', async () => {
+  const h = await fixture();
+  try {
+    const first = await h.task('aaaa', 'a.txt', 'saved-feature\n');
+    const saved = await h.action('aaaa', 'integrate');
+    h.store.version('aaaa', { operationId: saved.id, commit: saved.commit! });
+    await writeFile(path.join(first.path, 'a.txt'), 'next-round\n');
+    h.store.completion('aaaa', {
+      ...(await collectCindyMakeChanges(h.git, h.userData, first.path)),
+      id: randomUUID(),
+      reportedAt: Date.now(),
+    });
+    await h.action('aaaa', 'integrate');
+    const second = await h.task('bbbb', 'b.txt', 'new-feature\n');
+    const pending = await h.action('bbbb', 'integrate');
+    const rollback = historyBuildRollback(h.store, h.source);
+    await rollback.prepareRollback({ commit: pending.commit!, tree: pending.tree! }, h.git)();
+    expect(await h.git(['rev-parse', 'HEAD'])).toBe(saved.commit);
+    expect(await readFile(path.join(h.source, 'a.txt'), 'utf8')).toBe('saved-feature\n');
+    expect(await readFile(path.join(h.source, 'b.txt'), 'utf8')).toBe('base-b\n');
+    expect(await readFile(path.join(first.path, 'a.txt'), 'utf8')).toBe('next-round\n');
+    expect(await readFile(path.join(second.path, 'b.txt'), 'utf8')).toBe('new-feature\n');
+    expect(h.store.read('aaaa')?.receipts).toHaveLength(1);
+    expect(h.store.read('bbbb')?.receipts).toEqual([]);
+    expect((await h.action('aaaa', 'integrate')).status).toBe('merged');
+    expect((await h.action('bbbb', 'integrate')).status).toBe('merged');
+    expect(await readFile(path.join(h.source, 'a.txt'), 'utf8')).toBe('next-round\n');
+    expect(await readFile(path.join(h.source, 'b.txt'), 'utf8')).toBe('new-feature\n');
+    expect(await h.git(['status', '--porcelain'])).toBe('');
+  } finally {
+    await h.clean();
+  }
+}, 120000);
+
 it('keeps history and undoable changes after ending a worktree, preserves another feature, and reapplies explicitly', async () => {
   const h = await fixture();
   try {
@@ -179,6 +214,33 @@ it('undoes all rounds of one make after an official rebase without removing the 
     await h.clean();
   }
 }, 120000);
+
+it('adopts a later conflicting selection against the preserved unbuilt prefix', async () => {
+  const h = await fixture();
+  try {
+    await h.task('aaaa', 'a.txt', 'first-selection\n');
+    await h.task('bbbb', 'a.txt', 'second-selection\n');
+    const first = await h.action('aaaa', 'integrate');
+    expect(first.status).toBe('merged');
+    const pending = await h.action('bbbb', 'integrate');
+    expect(pending).toMatchObject({ status: 'conflict', baselineCommit: first.commit });
+    expect(h.store.read('aaaa')?.versions).toEqual([]);
+    expect(await h.git(['rev-parse', 'HEAD'])).toBe(first.commit);
+    const worktree = mergeWorktree(h.userData, pending.id);
+    await writeFile(path.join(worktree, 'a.txt'), 'both-selections\n');
+    await h.git(['add', '.'], worktree);
+    const resolved = await applyFeatureMerge(h.userData, pending, h.git);
+    expect(resolved.status).toBe('merged');
+    h.record(resolved);
+    expect(h.store.read('aaaa')?.receipts).toHaveLength(1);
+    expect(h.store.read('bbbb')?.receipts).toHaveLength(1);
+    expect(await h.git(['merge-base', '--is-ancestor', first.commit!, 'HEAD'])).toBe('');
+    expect(await readFile(path.join(h.source, 'a.txt'), 'utf8')).toBe('both-selections\n');
+    expect(await h.git(['status', '--porcelain'])).toBe('');
+  } finally {
+    await h.clean();
+  }
+}, 90000);
 
 it('isolates an undo conflict and adopts the resolved delta once without resetting later history', async () => {
   const h = await fixture();

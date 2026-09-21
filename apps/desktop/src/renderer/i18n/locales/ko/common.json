@@ -8061,6 +8061,8 @@
       "trigger": {
         "currentAndNext": "현재: {{current}}\n다음 메시지: {{next}}",
         "placeholder": "모델 선택",
+        "loading": "모델을 불러오는 중…",
+        "unresolved": "모델 정보를 사용할 수 없음",
         "aria": "모델 선택. 현재: {{model}}",
         "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
         "pendingAria": "모델 선택. 다음 메시지: {{agent}} · {{model}}",
@@ -11188,6 +11190,21 @@
     "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
   },
   "skillhub": {
+    "unifiedDetail": {
+      "contentSource": "콘텐츠 출처",
+      "local": "로컬",
+      "market": "마켓",
+      "marketUnavailable": "마켓 정보를 불러올 수 없습니다. 로컬 사본은 계속 사용할 수 있습니다.",
+      "retry": "다시 시도"
+    },
+    "publishComparison": {
+      "updateAvailable": "업데이트를 게시할 수 있습니다",
+      "pendingChanges": "검토 제출 후 로컬 변경 사항이 있습니다",
+      "unavailable": "게시된 내용과 비교할 수 없습니다",
+      "diffTitle": "온라인 v{{version}}과의 차이",
+      "summaryBadge": "요약",
+      "summaryNote": "바이너리, 큰 파일 또는 전체 내용을 미리 볼 수 없는 파일은 크기만 표시합니다."
+    },
     "home": {
       "title": "스킬",
       "description": "로컬 스킬을 관리하거나 Skill Hub에서 새로운 스킬을 찾아 설치하세요.",
@@ -11415,6 +11432,8 @@
       "installError": "알 수 없는 오류"
     },
     "marketCard": {
+      "updateAvailable": "업데이트 받기",
+      "updateFailed": "업데이트하지 못했습니다. 다시 시도해 주세요.",
       "visibilityPublic": "공개",
       "visibilityDept": "팀",
       "visibilityPrivate": "개인",
@@ -12744,6 +12763,19 @@
   },
   "cindyMake": {
     "beta": "Beta",
+    "preflight": {
+      "closeTitle": "Cindy Make를 닫을까요?",
+      "closeConfirm": "Cindy Make 닫기",
+      "keepOpen": "계속 보기",
+      "creating": "제작 세션을 만드는 중입니다. 잠시 기다려 주세요…",
+      "closeDescription": {
+        "environment": "환경을 준비하고 있습니다. 닫으면 준비가 중지되며 설정 화면에 표시된 동일한 준비도 중지됩니다. 설치된 도구는 유지됩니다.",
+        "source": "소스 코드를 준비하고 있습니다. 닫으면 준비가 중지되며 설정 화면에 표시된 동일한 준비도 중지됩니다. 준비된 환경과 소스 코드는 유지됩니다.",
+        "upstream": "업스트림 PR을 검색하고 있습니다. 닫으면 검색이 중지됩니다. 준비된 환경과 소스 코드는 유지됩니다.",
+        "ready": "준비가 완료되었지만 제작은 아직 시작되지 않았습니다. 닫으면 제작 세션이 생성되지 않습니다. 준비된 환경과 소스 코드는 유지됩니다.",
+        "incomplete": "준비가 완료되지 않았으며 제작도 아직 시작되지 않았습니다. 닫으면 제작 세션이 생성되지 않습니다. 준비된 환경과 소스 코드는 유지됩니다."
+      }
+    },
     "description": "로컬 도구를 확인하고 준비하여 개인 버전 Cindy 제작을 시작합니다. 사용법: /cindy-make [변경 요청]",
     "localOnly": "/cindy-make는 현재 로컬 데스크톱 세션에서만 사용할 수 있습니다. 이 기기로 전환해 주세요.",
     "usage": "/cindy-make 또는 /cindy-make 요청 을 사용하세요. 환경 검사는 아직 첨부 파일, 참조, 댓글을 지원하지 않습니다. 입력 내용은 유지됩니다.",
@@ -12884,17 +12916,18 @@
       },
       "missing": "아직 소스가 준비되지 않았습니다",
       "details": {
-        "unknown": "소스를 업데이트해 확인하세요",
+        "unknown": "미확인",
         "latest": {
           "dev": "온라인 main",
           "beta": "최신 beta",
           "release": "최신 정식 버전",
-          "same": "(동기화됨)",
-          "behind_one": "({{count}}개 커밋 뒤)",
-          "behind_other": "({{count}}개 커밋 뒤)",
-          "ahead_one": "({{count}}개 커밋 앞)",
-          "ahead_other": "({{count}}개 커밋 앞)",
-          "difference": "({{behind}}개 커밋 뒤, {{ahead}}개 커밋 앞)"
+          "same": "최신 상태 ({{target}}), 뒤처진 변경 기록 0개",
+          "behind_one": "로컬 main이 변경 기록 {{count}}개 뒤처짐",
+          "behind_other": "로컬 main이 변경 기록 {{count}}개 뒤처짐",
+          "ahead_one": "로컬 main이 변경 기록 {{count}}개 앞섬",
+          "ahead_other": "로컬 main이 변경 기록 {{count}}개 앞섬",
+          "difference": "로컬 main이 변경 기록 {{behind}}개 뒤처지고 {{ahead}}개 앞섬",
+          "unknown": "온라인 버전"
         }
       }
     },
@@ -12951,15 +12984,17 @@
       "switchVersion": "버전 전환",
       "personalCode": "개인 버전 소스",
       "localMain": "로컬 main",
-      "lookupUnavailable": "확인하지 못했습니다. 최신 소스를 동기화할 때 다시 확인합니다.",
-      "comparisonUnavailable": "(커밋 비교 불가)",
+      "lookupUnavailable": "조회 실패",
+      "comparisonUnavailable": "로컬 main의 차이 미확인",
       "comparison": {
-        "same": "개인 버전과 로컬 main의 커밋이 같습니다",
-        "personalAhead": "로컬 main을 포함하며 개인 커밋이 {{ahead}}개 더 있습니다",
-        "mainAhead": "로컬 main이 {{behind}}개 커밋 앞서 있습니다",
-        "diverged": "로컬 main이 {{behind}}개 커밋 앞서 있으며 개인 커밋이 {{ahead}}개 더 있습니다",
-        "unknown": "커밋을 비교할 수 없습니다. 최신 소스를 동기화한 후 다시 시도하세요."
-      }
+        "same": "로컬 main과 SHA가 같음",
+        "personalAhead": "로컬 main을 포함하며 개인 변경 기록 {{ahead}}개 추가",
+        "mainAhead": "로컬 main의 변경 기록 {{behind}}개가 아직 반영되지 않음",
+        "diverged": "로컬 main의 변경 기록 {{behind}}개 미반영, 개인 변경 기록 {{ahead}}개 추가",
+        "different": "로컬 main과 SHA가 다름, 차이 알 수 없음",
+        "unknown": "로컬 main과의 차이 알 수 없음"
+      },
+      "personal": "cindy-personal"
     },
     "versions": {
       "title": "내 버전",
@@ -12992,6 +13027,11 @@
       "open": "설치 파일 위치 열기",
       "description": "이번 수정 사항을 개인 버전에 병합하고, 검사와 패키징을 통과한 후 새 개인 버전으로 저장합니다.",
       "readyHint": "설치 파일 {{name}}이 준비되었습니다. 저장된 폴더를 열 수 있습니다.",
+      "failedStep": "실패한 단계: {{step}}",
+      "preparationStep": {
+        "environment": "빌드 환경 준비 중…",
+        "original": "현재 버전 확인 중…"
+      },
       "checkStep": {
         "dependencies": "빌드 의존성 설치 중…",
         "tests": "자동 테스트 실행 중입니다. 몇 분 정도 걸릴 수 있습니다…",
@@ -13006,6 +13046,22 @@
         "ready": "개인 버전 생성 완료",
         "failed": "개인 버전을 생성하지 못했습니다"
       },
+      "buildLog": {
+        "title": "빌드 기록",
+        "steps": {
+          "environment": "빌드 환경 준비",
+          "original": "현재 버전 확인",
+          "merging": "수정 사항 병합",
+          "checking-dependencies": "빌드 의존성 설치",
+          "checking-tests": "자동 테스트 실행",
+          "checking-types": "코드 타입 검사",
+          "packaging": "개인 버전 패키징",
+          "publishing": "개인 버전 저장",
+          "ready": "개인 버전 생성 완료",
+          "failed": "빌드 실패",
+          "cancelled": "빌드 중지"
+        }
+      },
       "errors": {
         "unavailable": "빌드 기록이나 설치 파일을 읽을 수 없습니다. 개인 버전을 다시 빌드하세요.",
         "changed": "작업 디렉터리나 코드가 변경되었습니다. 수정을 완료한 후 다시 빌드하세요.",
@@ -13016,7 +13072,7 @@
         "baselineChanged": "빌드 중에 개인 버전이 변경되었습니다. 최신 수정 사항을 포함하려면 다시 빌드하세요.",
         "buildFailed": "패키징이 완료되지 않았습니다. 다시 시도하거나 수정을 계속하세요.",
         "cancelled": "제작이 취소되었습니다. 다시 생성할 수 있습니다.",
-        "cleanupFailed": "제작을 중지했지만 일부 임시 파일을 정리하지 못했습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
+        "cleanupFailed": "자동 정리가 완료되지 않았습니다. 개인 버전 생성을 눌러 다시 시도하세요.",
         "interrupted": "빌드가 중지되었습니다. 개인 버전을 다시 빌드할 수 있습니다."
       }
     },
@@ -13047,9 +13103,9 @@
         "environment": "테스트 환경이 준비되지 않았습니다. 설정의 Cindy Make에서 환경을 확인한 후 다시 시도하세요.",
         "launchFailed": "테스트 버전을 실행하지 못했습니다. 다시 시도하거나 편집으로 돌아가세요.",
         "timeout": "테스트 버전 실행 시간이 초과되었습니다. 다시 시도하세요.",
-        "interrupted": "이전 테스트가 중단되었습니다. 격리 테스트 버전을 다시 실행하세요."
+        "interrupted": "이전 테스트가 중단되었습니다. 격리 테스트 버전을 다시 실행하세요.",
+        "stopFailed": "테스트 버전이 아직 종료되지 않았습니다. 테스트 창을 닫은 후 다시 시도하세요."
       },
-      "retry": "실행 다시 시도",
       "startingHint": "실행 준비가 끝날 때까지 수정이 일시 중지됩니다. 현재 단계가 완료될 때까지 기다려 주세요.",
       "currentStep": "현재 단계: {{step}}",
       "failedStep": "중단된 단계: {{step}}",
@@ -13065,6 +13121,18 @@
     },
     "history": {
       "title": "제작 기록",
+      "batch": {
+        "make": "개인 버전 만들기",
+        "selected": "선택한 변경 {{count}}개로 만들기",
+        "selectAll": "이 목록 모두 선택",
+        "selectItem": "{{title}} 선택",
+        "hint": "오래된 변경부터 병합한 뒤 새 버전 하나를 생성합니다.",
+        "confirmTitle": "변경 {{count}}개를 포함한 개인 버전을 만들까요?",
+        "confirmDescription": "선택한 변경을 아래 순서대로 병합하고 모두 성공하면 새 버전 하나를 생성합니다. 선택한 변경의 격리 버전이 실행 중이면 먼저 중지합니다. 충돌이 발생하면 중단하고 이미 병합된 변경은 유지합니다. 충돌을 해결한 뒤 다시 만들 수 있습니다. 해결되지 않은 충돌이 없을 때 취소하거나 실패하면 저장된 버전에 포함되지 않은 병합을 되돌리고 각 세션의 원래 변경은 유지합니다.",
+        "start": "만들기 확인",
+        "progress": "병합 중 {{current}} / {{total}}: {{title}}",
+        "restartTest": "격리 버전 다시 시작"
+      },
       "build": "개인 버전 생성",
       "buildDescription": "현재 개인 소스로 새 버전을 생성합니다. 아직 반영하지 않은 이전 변경 사항은 포함되지 않습니다.",
       "building": "개인 버전 생성 중…",
@@ -13088,6 +13156,8 @@
       },
       "counts": "전체 {{total}}회 · 반영 대기 {{pending}}회 · 반영 완료 {{integrated}}회",
       "filterLabel": "제작 기록 필터",
+      "mergeTaskTitle": "반영 충돌 해결",
+      "revertTaskTitle": "반영 취소 충돌 해결",
       "filters": {
         "all": "전체 제작",
         "pending": "반영 대기",
@@ -13145,7 +13215,6 @@
         "resolve": "충돌 해결",
         "retry": "다시 시도",
         "build": "개인 버전 생성",
-        "retryBuild": "생성 다시 시도",
         "end": "제작 종료",
         "retry-prepare": "준비 다시 시도",
         "retry-cleanup": "정리 다시 시도"
@@ -13165,12 +13234,20 @@
     },
     "merge": {
       "getLatest": "최신 소스 동기화",
+      "taskTitle": "소스 업데이트 충돌 해결",
       "updateHint": "공식 소스를 업데이트하고 개인 변경 사항을 유지합니다.",
       "confirmTitle": "최신 소스로 업데이트할까요?",
-      "confirmDescription": "개인 변경 사항은 유지됩니다. 충돌이 발생하면 별도 작업에서 해결을 도와드립니다.",
+      "confirmDescription": "개인 변경 사항은 유지됩니다. 충돌이 발생하면 해결 세션을 시작하기 전에 확인을 요청합니다.",
+      "conflictConfirm": {
+        "title": "소스 업데이트 중 충돌 발생",
+        "description": "확인하면 별도 세션을 만들고 Agent가 충돌을 자동으로 해결합니다. 취소하면 이번 반영을 중단하고 현재 개인 버전을 유지합니다.",
+        "confirm": "확인 및 해결",
+        "cancel": "업데이트 취소"
+      },
       "confirm": "소스 업데이트",
       "openTask": "해결 작업 열기",
       "resolve": "충돌 해결",
+      "retryCancel": "취소 다시 시도",
       "resolveHint": "별도 작업에서 충돌을 해결하고 결과를 확인합니다.",
       "otherAccount": "다른 계정에서 시작한 작업입니다. 해당 계정으로 전환해 계속해 주세요.",
       "status": {
@@ -13180,7 +13257,8 @@
         "resolving": "충돌 해결 중",
         "checking": "변경 사항 확인 중…",
         "merged": "소스 변경 사항 반영 완료",
-        "failed": "소스 반영 실패"
+        "failed": "소스 반영 실패",
+        "cancelled": "소스 업데이트 취소됨"
       },
       "errors": {
         "busy": "다른 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요.",
@@ -13191,7 +13269,8 @@
         "baselineChanged": "개인 소스가 변경되었습니다. 최신 상태에서 다시 시도해 주세요.",
         "checksFailed": "변경 사항이 검사를 통과하지 못했습니다. 해결 작업을 열어 계속해 주세요.",
         "interrupted": "작업이 중단되었습니다. 변경 사항은 유지됩니다. 다시 시도해 주세요.",
-        "startFailed": "해결 작업을 열지 못했습니다. 다시 시도해 주세요."
+        "startFailed": "해결 작업을 열지 못했습니다. 다시 시도해 주세요.",
+        "cancelFailed": "업데이트를 취소하지 못했습니다. 다시 시도해 주세요. 개인 소스는 유지됩니다."
       }
     }
   },

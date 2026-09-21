@@ -298,6 +298,7 @@ import {
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
+import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { hasInlineOverloadRetry } from './lib/inlineRetryError';
 import { createSessionSnapshotPatchBuffer } from './lib/sessionSnapshotPatchBuffer';
@@ -2012,6 +2013,23 @@ export function CCAgentSessionView({
     () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
     [isRemoteSession, remoteDeviceId, taskUpdates],
   );
+  const activeReconnect = useMemo(
+    () => findActiveReconnect({
+      messages,
+      sessionRunning: agentStatus.isRunning || isStreaming,
+      continuationTurnClientId,
+      projectionCapability: continuationInFlightProjectionCapability,
+    }),
+    [messages, agentStatus.isRunning, isStreaming, continuationTurnClientId, continuationInFlightProjectionCapability],
+  );
+  const reconnectStatus = activeReconnect
+    ? activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
+      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
+          attempt: activeReconnect.attempt,
+          total: activeReconnect.maxAttempts,
+        })
+      : t('chat.systemCard.autoResumePending.label')
+    : null;
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
@@ -4841,12 +4859,13 @@ export function CCAgentSessionView({
                   key={sessionId}
                   sessionKey={sessionId ?? null}
                   status={composerStatus}
+                  reconnectStatus={reconnectStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
                   startedAt={agentStatus.startedAt}
-                  visible={composerRuntimeVisible}
+                  visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
@@ -5702,6 +5721,7 @@ const CONTROLLED_BANNER_MAX_WIDTH = 420;
 
 function RunningStatusBar({
   status,
+  reconnectStatus = null,
   tokenUsage,
   outputTokens = 0,
   generationDurationMs = 0,
@@ -5721,6 +5741,8 @@ function RunningStatusBar({
   className,
 }: {
   status: string;
+  /** Same pending row / continuation owner as the message stream; overrides stale agent status. */
+  reconnectStatus?: string | null;
   tokenUsage: number;
   outputTokens?: number;
   generationDurationMs?: number;
@@ -5770,6 +5792,10 @@ function RunningStatusBar({
   const [showContent, setShowContent] = useState(visible);
   const [fading, setFading] = useState(false);
   const [ratePanelPinned, setRatePanelPinned] = useState(false);
+  const reconnecting = reconnectStatus !== null;
+  useEffect(() => {
+    if (reconnecting) setRatePanelPinned(false);
+  }, [reconnecting]);
 
   useEffect(() => {
     if (visible) {
@@ -5809,11 +5835,12 @@ function RunningStatusBar({
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
-  const isDone = status === 'Done' && !sideTaskRunning && !backgroundTasksRunning;
+  const isDone = status === 'Done' && !reconnecting && !sideTaskRunning && !backgroundTasksRunning;
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
   // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
   const displayStatus =
+    reconnectStatus ??
     workflowStatus ??
     (backgroundTasksRunning
       ? backgroundBashOnlyCount > 0
@@ -5851,7 +5878,7 @@ function RunningStatusBar({
     // suppressContent 或 reduced-motion 期间 shimmer 类/动画被摘，
     // onAnimationEnd 不会到来。立即清零播放态，确保运行期关闭减弱动效后
     // 下一次真实动静能重新触发呼吸，不必等 visible 先变 false。
-    if (!visible || suppressContent || reducedMotion) {
+    if (!visible || suppressContent || reducedMotion || reconnecting) {
       // 运行结束把播放态清零,下一轮 turn 的首次动静立即触发而不是误判在播。
       shimmerPlayingRef.current = false;
       shimmerPendingRef.current = false;
@@ -5867,6 +5894,7 @@ function RunningStatusBar({
     visible,
     suppressContent,
     reducedMotion,
+    reconnecting,
     status,
     tokenUsage,
     outputTokens,
@@ -5887,6 +5915,7 @@ function RunningStatusBar({
     generationDurationMs,
     generationReliable:
       generationReliable &&
+      !reconnecting &&
       !sideTaskRunning &&
       !backgroundTasksRunning &&
       !workflowWaiting,
@@ -5901,7 +5930,7 @@ function RunningStatusBar({
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
   const rateText =
-    !isHidden && usageMeta.kind === 'rate'
+    !isHidden && !reconnecting && usageMeta.kind === 'rate'
       ? latestRateText !== null
         ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
         : t('chat.runningStatus.waitingSample')
@@ -5917,12 +5946,13 @@ function RunningStatusBar({
     pointerEvents: isHidden ? 'none' : 'auto',
   };
   const showRatePanel =
-    ratePanelPinned ||
-    (!workflowWaiting &&
-      !sideTaskRunning &&
-      !backgroundTasksRunning &&
-      Boolean(rateText) &&
-      usageMeta.kind === 'rate');
+    !reconnecting &&
+    (ratePanelPinned ||
+      (!workflowWaiting &&
+        !sideTaskRunning &&
+        !backgroundTasksRunning &&
+        Boolean(rateText) &&
+        usageMeta.kind === 'rate'));
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
   // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
@@ -5949,6 +5979,7 @@ function RunningStatusBar({
           // min-w-0(非 shrink-0):让内部 status span 的 truncate 真正生效 —— status 可变长
           // (turn-start 带用户名 / tool 进度长串),窄宽时左段截断而非把右段顶出界。
           'flex min-w-0 items-center gap-[6px]',
+          reconnecting && 'text-[var(--status-bar-accent)]',
           // 隐藏时一律摘所有动画类:动画即便 visibility:hidden 不画也照算样式/合成层，
           // 长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
           // 非隐藏时 done 与 shimmer 区别对待:
@@ -5957,12 +5988,14 @@ function RunningStatusBar({
           // - done 是 0.4s 一次性 pop(keyframe 已去掉 opacity、只动 transform)，turn
           //   结束那一刻(isDone 必伴随 !visible)要弹一下，故保持 !isHidden gate;
           //   不动 opacity 所以不会盖 fade。
-          isHidden ? '' : isDone ? 'status-bar-done' : visible ? 'status-bar-shimmer' : '',
+          isHidden ? '' : isDone ? 'status-bar-done' : visible && !reconnecting ? 'status-bar-shimmer' : '',
         )}
         style={fadeStyle}
         aria-hidden={isHidden}
       >
-        {isDone ? (
+        {reconnecting ? (
+          <Spinner size={14} />
+        ) : isDone ? (
           <Check size={14} className="shrink-0" strokeWidth={2.5} />
         ) : // 后台子任务模式换 Activity 图标(与 Compacting 换 Layers 同一设计逻辑:
         // 图标回答"现在在干嘛")。优先于 isCompacting —— 后者按残留 status 文本
@@ -6038,7 +6071,7 @@ function RunningStatusBar({
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}
                 </span>
-                {!sideTaskRunning && usageMeta.kind !== 'none' && (
+                {!reconnecting && !sideTaskRunning && usageMeta.kind !== 'none' && (
                   <>
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       &middot;

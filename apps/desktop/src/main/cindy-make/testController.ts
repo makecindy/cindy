@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { appendCindyMakeBuildLog } from '../../shared/cindyMakeSession.js';
 import type {
   CindyMakeCompletionMeta,
   CindyMakeTestAction,
@@ -63,13 +64,33 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
     job.controller.abort();
     job.process?.stop();
   };
+  const waitForStopped = async (job: TestJob) => {
+    if (job.kind !== 'test') return job.finished;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        job.finished,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(makeTestError('stopFailed')), 10_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+    // A timeout only rejects the action; execute retains the workspace lease and
+    // temporary files until the real process exit. A later action may retry stopping.
+  };
   const saveBuild = (job: TestJob, state: CindyMakePersonalBuildState) => {
     const pending = job.persistence.then(async () => {
       if (!job.context.isCurrent()) throw makeTestError('unavailable');
       if (state.stopping && ['ready', 'failed'].includes(job.context.meta.personal?.status ?? ''))
         return;
       if (job.cancelled && !state.stopping && !['ready', 'failed'].includes(state.status)) return;
-      const next = { ...state, buildId: job.buildId, startedAt: job.startedAt };
+      const next = appendCindyMakeBuildLog(job.context.meta.personal, {
+        ...state,
+        buildId: job.buildId,
+        startedAt: job.startedAt,
+      });
       job.context.meta = await deps.save(job.context, { lastAction: 'build', personal: next });
       deps.onBuildState?.(job.context, next);
     });
@@ -201,13 +222,23 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
       if (!job.context.isCurrent()) throw makeTestError('unavailable');
       stop(job);
       await job.accepted.catch(() => {});
-      await job.finished;
+      await waitForStopped(job);
     },
     isUsingWorkspace(workingDir: string): boolean {
       return [...jobs.values()].some((job) => job.context.workingDir === workingDir);
     },
     stopAll(): void {
       for (const job of jobs.values()) stop(job);
+    },
+    async stopAllAndWait(): Promise<void> {
+      const active = [...jobs.values()];
+      for (const job of active) stop(job);
+      await Promise.all(
+        active.map(async (job) => {
+          await job.accepted.catch(() => {});
+          await waitForStopped(job);
+        }),
+      );
     },
     async act(
       sessionId: string,
@@ -224,7 +255,7 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
           throw makeTestError('unavailable');
         if (previous && previous.context.isCurrent()) {
           stop(previous);
-          if (previous.kind === 'test') await previous.finished;
+          if (previous.kind === 'test') await waitForStopped(previous);
         }
         return deps.save(context, { continuedAt: (deps.now ?? Date.now)() });
       }
@@ -238,12 +269,12 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
             context.meta.personal?.status ?? '',
           )
         )
-          patch.personal = {
+          patch.personal = appendCindyMakeBuildLog(context.meta.personal, {
             ...context.meta.personal,
             status: 'failed',
             stopping: undefined,
             error: 'interrupted',
-          };
+          });
         if (Object.keys(patch).length) return deps.save(context, patch);
         return context.meta;
       }
@@ -274,7 +305,7 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
           return previous.accepted.then(() => previous!.context.meta);
         stop(previous);
         await previous.accepted.catch(() => {});
-        await previous.finished;
+        await waitForStopped(previous);
         context = await deps.load(sessionId, completionId);
         if (!context.isCurrent() || context.meta.continuedAt) throw makeTestError('unavailable');
         previous = jobs.get(sessionId);
