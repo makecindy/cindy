@@ -159,6 +159,9 @@ export interface MakeSourcePreparation {
   mainRemoteCommit?: string;
   mainBehind?: number;
   mainAhead?: number;
+  /** Commits unique to cindy-personal / main, respectively. */
+  personalBehind?: number;
+  personalAhead?: number;
   error?:
     | 'unsupportedVersion'
     | 'tagNotFound'
@@ -224,6 +227,9 @@ export interface MakeSourceStatus {
   mainRemoteCommit?: string;
   mainBehind?: number;
   mainAhead?: number;
+  /** Commits unique to cindy-personal / main, respectively. */
+  personalBehind?: number;
+  personalAhead?: number;
   latestVersion?: MakeSourceLatestVersion;
   error?: MakeSourcePreparation['error'];
   phase?: MakeSourcePreparation['phase'];

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { StrictMode } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode, useState } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { MAKE_DOCTOR_CHECK_IDS, type MakeDoctorReport } from '../../../../shared/cindyMakeDoctor';
@@ -43,22 +43,35 @@ const ready: MakeDoctorReport = {
   upstream: { status: 'notFound', items: [] },
 };
 const continueButton = () => screen.getByRole('button', { name: 'cindyMake.upstream.personal' });
+const clickOutside = () => {
+  // Dialog defers dismissal until the click following a primary pointer press.
+  fireEvent.pointerDown(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.pointerUp(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.click(document.body);
+};
 const finishChecks = async () => {
   await waitFor(() => expect(h.publish).toBeTypeOf('function'));
   act(() => h.publish!(ready));
 };
 function open(sessionId?: string) {
   const close = vi.fn();
-  return {
-    close,
-    ...render(
+  function Host() {
+    const [isOpen, setOpen] = useState(true);
+    return isOpen ? (
       <CindyMakePreflightDialog
         request="  Keep my request  "
         sessionId={sessionId}
         createOptions={{ agentKind: 'codex', model: 'selected' }}
-        onOpenChange={close}
-      />,
-    ),
+        onOpenChange={(next) => {
+          close(next);
+          setOpen(next);
+        }}
+      />
+    ) : null;
+  }
+  return {
+    close,
+    ...render(<Host />),
   };
 }
 beforeEach(() => {
@@ -135,16 +148,125 @@ describe('Make preflight confirmation boundary', () => {
     },
   );
 
-  it.each(['cancel', 'wait'])('creates no task on %s', async (choice) => {
+  it.each(['found', 'notFound'] as const)(
+    'keeps Continue in the footer and confirms closing after a %s upstream result',
+    async (status) => {
+      const view = open();
+      await finishChecks();
+      act(() => h.publish!({ ...ready, upstream: { status, items: [] } }));
+      const card = screen.getByRole('region', { name: 'cindyMake.title' });
+      expect(
+        within(card).queryByRole('button', { name: 'cindyMake.upstream.personal' }),
+      ).toBeNull();
+      expect(screen.getAllByRole('button', { name: 'cindyMake.upstream.personal' })).toHaveLength(
+        1,
+      );
+      expect(screen.queryByRole('button', { name: 'cindyMake.upstream.wait' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'settings.cindyMake.create.cancel' })).toBeNull();
+      const proceed = continueButton();
+      fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+      expect((proceed as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(proceed);
+      expect(view.close).not.toHaveBeenCalled();
+      expect(h.create).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'cindyMake.preflight.closeConfirm' }));
+      expect(view.close).toHaveBeenCalledExactlyOnceWith(false);
+      expect(h.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('replaces the footer cancel with a close icon and keeps checks running when staying', async () => {
     const view = open();
-    await finishChecks();
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: choice === 'wait' ? 'cindyMake.upstream.wait' : 'settings.cindyMake.create.cancel',
-      }),
-    );
-    expect(view.close).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(h.start).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'settings.cindyMake.create.cancel' })).toBeNull();
+    const close = screen.getByRole('button', { name: 'common.dismiss' });
+    fireEvent.click(close);
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(h.cancel).not.toHaveBeenCalled();
+    expect(view.close).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.preflight.keepOpen' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(h.cancel).not.toHaveBeenCalled();
+    expect(view.close).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(close));
+  });
+
+  it.each<{ stage: string; report: MakeDoctorReport }>([
+    {
+      stage: 'environment',
+      report: { ...ready, status: 'running', source: undefined, upstream: undefined },
+    },
+    {
+      stage: 'source',
+      report: { ...ready, status: 'running', source: { status: 'preparing', path: '/source' } },
+    },
+    {
+      stage: 'upstream',
+      report: { ...ready, status: 'running', upstream: { status: 'searching', items: [] } },
+    },
+    { stage: 'ready', report: ready },
+    { stage: 'ready', report: { ...ready, upstream: { status: 'found', items: [] } } },
+    { stage: 'incomplete', report: { ...ready, status: 'failed' } },
+    { stage: 'incomplete', report: { ...ready, status: 'cancelled' } },
+    { stage: 'incomplete', report: { ...ready, upstream: { status: 'failed', items: [] } } },
+    {
+      stage: 'incomplete',
+      report: { ...ready, source: undefined, upstream: { status: 'pending', items: [] } },
+    },
+  ])('confirms the $stage state before closing ($report.status)', async ({ stage, report }) => {
+    const view = open();
+    await waitFor(() => expect(h.publish).toBeTypeOf('function'));
+    act(() => h.publish!(report));
+    fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    expect(screen.getByText(`cindyMake.preflight.closeDescription.${stage}`)).toBeTruthy();
+    expect(view.close).not.toHaveBeenCalled();
+    expect(h.cancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.preflight.closeConfirm' }));
+    expect(view.close).toHaveBeenCalledExactlyOnceWith(false);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    if (report.status === 'running')
+      expect(h.cancel).toHaveBeenCalledExactlyOnceWith('run', 'prepare');
+    else expect(h.cancel).not.toHaveBeenCalled();
     expect(h.create).not.toHaveBeenCalled();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it('updates the confirmation when checks finish while it is open', async () => {
+    open();
+    await waitFor(() => expect(h.start).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    expect(screen.getByText('cindyMake.preflight.closeDescription.environment')).toBeTruthy();
+    act(() => h.publish!(ready));
+    expect(screen.queryByText('cindyMake.preflight.closeDescription.environment')).toBeNull();
+    expect(screen.getByText('cindyMake.preflight.closeDescription.ready')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.preflight.closeConfirm' }));
+    expect(h.cancel).not.toHaveBeenCalled();
+  });
+
+  it('confirms Escape, and a second Escape only dismisses the confirmation', async () => {
+    const view = open();
+    await waitFor(() => expect(h.start).toHaveBeenCalledOnce());
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(view.close).not.toHaveBeenCalled();
+    expect(h.cancel).not.toHaveBeenCalled();
+  });
+
+  it('confirms clicking outside the dialog and cannot dismiss confirmation through its overlay', async () => {
+    const view = open();
+    await waitFor(() => expect(h.start).toHaveBeenCalledOnce());
+    // Radix installs its document pointer listener on the next timer tick.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    clickOutside();
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    clickOutside();
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(view.close).not.toHaveBeenCalled();
+    expect(h.cancel).not.toHaveBeenCalled();
   });
 
   it('cancels unfinished checks when dismissed', async () => {
@@ -179,9 +301,14 @@ describe('Make preflight confirmation boundary', () => {
     await finishChecks();
     fireEvent.click(continueButton());
     fireEvent.click(continueButton());
+    const close = screen.getByRole('button', { name: 'cindyMake.preflight.creating' });
+    expect((close as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(close);
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    clickOutside();
     expect(h.create).toHaveBeenCalledTimes(1);
     expect(view.close).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     view.unmount();
     await act(async () => done('code-task'));
     expect(h.prepend).toHaveBeenCalledWith({ id: 'code-task' });

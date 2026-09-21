@@ -241,7 +241,9 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).toContain(
       '!isEditing && !archivePending && ordinalBadgeLabel != null',
     );
-    expect(sessionCardSource).toContain("archivePending && 'invisible opacity-0'");
+    expect(sessionCardSource).toContain(
+      "archivePending && 'invisible opacity-0 w-0 overflow-hidden'",
+    );
   });
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {

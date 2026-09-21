@@ -395,6 +395,15 @@ import {
   readClaudeApiKey,
 } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
+import {
+  activeCindyBuiltInAgentSkills,
+  builtInSkillDescriptors,
+} from '../maker-host/built-in-skills.js';
+import { isCindySkillEnabled } from '../skillhub/activationPreferences.js';
+import {
+  parseDirectLearnInvocation,
+  type CindyLearnInvocationGrant,
+} from '../learn-host/invocationGrant.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -968,6 +977,7 @@ import {
   deferSessionRuntimeAxisMutation,
   getPendingSessionRuntimeMutation,
   getSessionRuntimeControlSnapshot,
+  projectSessionRuntimeControl,
   isPendingSessionRuntimeRouteExplicit,
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
@@ -1168,26 +1178,6 @@ const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
 });
 let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
   null;
-
-function projectSessionRuntimeControl(
-  sessionId: string,
-  baseline: SessionRuntimeProfile,
-): Partial<RendererSession> {
-  const control = getSessionRuntimeControlSnapshot(sessionId);
-  const effective = control.effectiveOverride ?? baseline;
-  return {
-    model: effective.model,
-    providerId: effective.providerId,
-    // Keep the legacy top-level wire axis string-compatible while explicitly
-    // clearing stale effort; runtimeEffective retains the semantic null.
-    effort: effective.effort ?? '',
-    fastMode: effective.fastMode,
-    runtimeGeneration: control.generation,
-    runtimeBaseline: baseline,
-    runtimeEffective: effective,
-    runtimePending: control.pending,
-  };
-}
 
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」
@@ -6008,8 +5998,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Desktop / agent-builtin / agent-skill 各一条 list 接口 + desktop 自家的
   // execute 接口。renderer 通过 mergeCommands 把三路 list 合并展示, dispatch
   // 时按 kind 分流: desktop → executeDesktopCommand IPC; agent-* → 当 prompt 前缀 send。
-  ipcMain.handle(MAKER_INVOKE.LIST_DESKTOP_COMMANDS, () => {
-    return { success: true, commands: getDesktopCommandRegistry().list() };
+  ipcMain.handle(MAKER_INVOKE.LIST_DESKTOP_COMMANDS, (_event, ctx?: unknown) => {
+    const deviceId = ctx && typeof ctx === 'object' && !Array.isArray(ctx)
+      && typeof (ctx as { deviceId?: unknown }).deviceId === 'string'
+      && (ctx as { deviceId: string }).deviceId.length > 0
+      ? (ctx as { deviceId: string }).deviceId
+      : undefined;
+    return {
+      success: true,
+      commands: getDesktopCommandRegistry().list(deviceId ? { deviceId } : undefined),
+    };
   });
 
   ipcMain.handle(MAKER_INVOKE.EXECUTE_DESKTOP_COMMAND, async (e, name: unknown, ctx: unknown) => {
@@ -6137,7 +6135,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
         }
         const result = await maker.listAgentSkills(kind, skillParams);
-        return { success: true, ...result };
+        return {
+          success: true,
+          ...result,
+          skills: activeCindyBuiltInAgentSkills(
+            result.skills,
+            builtInSkillDescriptors(app.getPath('userData'), app.getPath('appData')),
+            isCindySkillEnabled,
+          ),
+        };
       } catch (err) {
         return toAgentSkillListFailure(err, {
           reportError: (error) => {
@@ -12366,6 +12372,64 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prepareSendUserMessage: (sessionId, message) =>
       prepareUserMessageForAgent(sessionId, message, 'send'),
     materializeDirectSendOssAttachments,
+    captureCindyLearnInvocation: async (session, persistedContent, dispatchedText) => {
+      const invocationText = visibleMessageTextForConversationSearch(
+        'user',
+        typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),
+      );
+      const persistedInvocation = parseDirectLearnInvocation(invocationText);
+      const dispatchedInvocation = parseDirectLearnInvocation(dispatchedText);
+      if (
+        !persistedInvocation
+        || !dispatchedInvocation
+        || JSON.stringify(persistedInvocation) !== JSON.stringify(dispatchedInvocation)
+      ) return null;
+      if (
+        session.remoteHostId
+        || maker.getSession(session.id) !== session
+        || (session.getStatus && session.getStatus() !== 'active')
+      ) return null;
+
+      const descriptors = builtInSkillDescriptors(
+        app.getPath('userData'),
+        app.getPath('appData'),
+      );
+      const learnDescriptor = descriptors.find((descriptor) => descriptor.name === 'learn');
+      if (!learnDescriptor || !isCindySkillEnabled(learnDescriptor.absolutePath)) return null;
+
+      const result = session.agentKind === 'claude-code'
+        ? await maker.listAgentRuntimeSkills(session.agentKind, {
+          workingDir: session.workDir,
+          sessionId: session.id,
+          runtimeConfigDir: process.env.CLAUDE_CONFIG_DIR?.trim() || (
+            process.env.XDT_USER_DATA_DIR && !app.isPackaged
+              ? path.join(app.getPath('userData'), 'claude-home')
+              : path.join(os.homedir(), '.claude')
+          ),
+        })
+        : await maker.listAgentSkills(session.agentKind, {
+          workingDir: session.workDir,
+          sessionId: session.id,
+        });
+      if (result.errors?.length || maker.getSession(session.id) !== session) return null;
+      const learnCandidates = activeCindyBuiltInAgentSkills(
+        result.skills,
+        descriptors,
+        isCindySkillEnabled,
+      ).filter((skill) => skill.name.toLowerCase() === 'learn');
+      if (
+        learnCandidates.length !== 1
+        || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)
+      ) return null;
+
+      const resolvedSkillPath = await fsp.realpath(learnCandidates[0]!.path!);
+      if (maker.getSession(session.id) !== session) return null;
+      return {
+        version: 1,
+        sessionInstanceId: session.instanceId,
+        resolvedSkillPath,
+      } satisfies CindyLearnInvocationGrant;
+    },
     createDbMessage: createUserMessageDurably,
     rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>

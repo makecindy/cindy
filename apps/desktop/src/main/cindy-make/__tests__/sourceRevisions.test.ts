@@ -19,6 +19,7 @@ beforeEach(() => {
     'rev-parse --verify refs/remotes/origin/main^{commit}': remoteMain,
     'rev-parse --abbrev-ref HEAD': 'main',
     ['rev-list --left-right --count ' + localMain + '...' + remoteMain]: '0	4',
+    ['rev-list --left-right --count ' + personal + '...' + localMain]: '1	2',
   };
   vi.mocked(runSourceGit)
     .mockReset()
@@ -42,8 +43,10 @@ describe('source revision snapshot', () => {
       mainRemoteCommit: remoteMain,
       mainBehind: 4,
       mainAhead: 0,
+      personalAhead: 1,
+      personalBehind: 2,
     });
-    expect(runSourceGit).toHaveBeenCalledTimes(6);
+    expect(runSourceGit).toHaveBeenCalledTimes(7);
     expect(vi.mocked(runSourceGit).mock.calls.every(([, , cwd]) => cwd === 'managed-source')).toBe(
       true,
     );
@@ -68,7 +71,7 @@ describe('source revision snapshot', () => {
       expect(result.mainBehind).toBeUndefined();
       expect(result.mainAhead).toBeUndefined();
       expect(result[ref === 'refs/heads/main' ? 'mainCommit' : 'mainRemoteCommit']).toBeUndefined();
-      expect(runSourceGit).toHaveBeenCalledTimes(5);
+      expect(runSourceGit).toHaveBeenCalledTimes(ref === 'refs/heads/main' ? 5 : 6);
     },
   );
 

@@ -15,6 +15,7 @@ import {
   type CindyMakeMergeState,
 } from '../../shared/cindyMakeMerge.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { formatCindyMakeMergeTitle } from '../../shared/cindyMakeMergeTitle.js';
 import { dispatchCindyMakeMergeTask } from './taskRuntime.js';
 import { mergeError, mergeWorktree } from './upstreamMerge.js';
 import { t } from '../i18n.js';
@@ -100,6 +101,7 @@ export async function ensureUpstreamMergeSession(
   }
   // Bind the ID before INSERT, so retries after a crash never create a second task.
   bind(id);
+  const createdAt = Date.now();
   const row =
     existing ??
     sessionCreateToRow(
@@ -107,18 +109,21 @@ export async function ensureUpstreamMergeSession(
       {
         ...options,
         agentKind: normalizeDbAgentKind(options?.agentKind),
-        title: t(
-          state.feature
-            ? state.feature.action === 'revert'
-              ? 'cindyMake.history.revertTaskTitle'
-              : 'cindyMake.history.mergeTaskTitle'
-            : 'cindyMake.merge.taskTitle',
+        title: formatCindyMakeMergeTitle(
+          t(
+            state.feature
+              ? state.feature.action === 'revert'
+                ? 'cindyMake.history.revertTaskTitle'
+                : 'cindyMake.history.mergeTaskTitle'
+              : 'cindyMake.merge.taskTitle',
+          ),
+          createdAt,
         ),
         workingDir,
         workspaceKind: 'project',
         source: CINDY_MAKE_MERGE_SESSION_SOURCE,
       },
-      Date.now(),
+      createdAt,
     );
   if (!existing) {
     await db.insert(sessions).values(row);

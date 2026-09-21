@@ -3021,6 +3021,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       skills?: import('../main/skillhub/scanner').Skill[];
       sources?: import('../main/skillhub/scanner').SourceReport[];
       pendingCleanups?: Array<{ token: string; name: string }>;
+      learnSkillEnabled?: boolean;
     }> => ipcRenderer.invoke('skillhub:scan', params),
 
     readSkill: (params: {
@@ -3306,6 +3307,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 计算本地 skill 文件夹 hash（30s 缓存在 renderer 侧）
     // manifest 是参与 hash 的文件清单(path + sha256),用于 dirty 排查
+    comparePublished: (params: import('../shared/skillhubPublishComparison').SkillhubPublishComparisonParams): Promise<import('../shared/skillhubPublishComparison').SkillhubPublishComparison> => ipcRenderer.invoke('skillhub:compare-published', params),
+
     getFolderHash: (
       absolutePath: string,
     ): Promise<{
@@ -3444,7 +3447,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uninstall: (
       absolutePath: string,
       skillId?: string,
-    ): Promise<{ success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }> =>
+    ): Promise<
+      | { success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }> =>
       ipcRenderer.invoke('skillhub:uninstall', { absolutePath, skillId }),
 
     retryUninstallCleanup: (token: string): Promise<{ complete: boolean }> =>
@@ -5431,6 +5435,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Small invalidation push; consumers re-read through list/detail. */
       onChanged: createIpcFanOut('local-db:subagent-runs:changed'),
     },
+    taskTags: {
+      onChanged: createIpcFanOut('local-db:task-tags:changed'),
+      execute: (
+        request: import('@cindy/maker-shared').TaskTagRequest,
+      ): Promise<import('@cindy/maker-shared').TaskTagResult> =>
+        ipcRenderer.invoke('local-db:task-tags:execute', request),
+    },
     projectAliases: {
       list: (): Promise<unknown> => ipcRenderer.invoke('local-db:project-aliases:list'),
       set: (input: { projectKey: string; alias: string }): Promise<unknown> =>
@@ -6120,11 +6131,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Renderer 通过这四个调用合并三路数据 + 触发 desktop 命令 execute。
     // 老 scanSlashCommands 已下线 —— 数据等价于 listAgentSkills, 改名是为了和
     // listAgentCommands / listDesktopCommands 形成清晰的 "三源 + execute" 命名族。
-    listDesktopCommands: (): Promise<{
+    listDesktopCommands: (ctx?: { deviceId?: string }): Promise<{
       success: boolean;
       error?: string;
       commands?: Array<{ kind: 'desktop'; name: string; description: string }>;
-    }> => ipcRenderer.invoke('maker:list-desktop-commands'),
+    }> => ipcRenderer.invoke('maker:list-desktop-commands', ctx),
 
     executeDesktopCommand: (
       name: string,

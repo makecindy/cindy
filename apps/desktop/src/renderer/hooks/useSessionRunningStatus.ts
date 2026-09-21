@@ -271,6 +271,7 @@ export function useSessionRunningStatus(
             !isRunning &&
             !hasTerminalError &&
             !stillPending &&
+            getSessionAttentionKind(sessionId) !== 'error' &&
             !ownedNow
           ) {
             addSessionAttention(sessionId, 'done');

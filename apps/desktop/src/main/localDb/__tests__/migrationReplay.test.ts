@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { listMigrations, runMigrationReplay } from '../migrationRunner';
+import { initializeTaskTagPresets } from '../taskTagPresets';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
@@ -102,6 +103,24 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  it('commits the complete fresh schema and task presets in one outer transaction', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.transaction(() => {
+        runMigrationReplay(db, { drizzleDir: drizzleDir() });
+        initializeTaskTagPresets(db);
+      })();
+      expect(
+        db.prepare("SELECT value FROM migration_meta WHERE key='schema_version'").pluck().get(),
+      ).toBe(String(maxMigrationSeq()));
+      expect(
+        db.prepare("SELECT count(*) FROM task_tags WHERE id LIKE 'preset:%'").pluck().get(),
+      ).toBe(6);
+      expect(db.prepare('SELECT count(*) FROM task_tags').pluck().get()).toBe(12);
+    } finally {
+      cleanup();
+    }
+  });
   it('adds runtime provenance without certifying or changing legacy context values', () => {
     const { db, cleanup } = createTempDb();
     const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-context-provenance-'));
@@ -238,6 +257,29 @@ describeMigrationReplay('migration replay', () => {
           .pluck()
           .all(),
       ).toEqual(['m-cjk']);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('replays the guarded 0114 companion over an existing column as a no-op', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      runMigrationReplay(db, { drizzleDir: drizzleDir() });
+
+      db.prepare('DELETE FROM migration_history WHERE seq = 114').run();
+      db.prepare("UPDATE migration_meta SET value = '113' WHERE key = 'schema_version'").run();
+
+      expect(() => runMigrationReplay(db, { drizzleDir: drizzleDir() })).not.toThrow();
+      expect(
+        columnNames(db, 'sessions').filter((name) => name === 'context_window_budget'),
+      ).toEqual(['context_window_budget']);
+      expect(
+        db.prepare("SELECT value FROM migration_meta WHERE key='schema_version'").pluck().get(),
+      ).toBe('114');
+      expect(
+        db.prepare('SELECT COUNT(*) FROM migration_history WHERE seq = 114').pluck().get(),
+      ).toBe(1);
     } finally {
       cleanup();
     }

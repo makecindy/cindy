@@ -1,8 +1,14 @@
 import path from 'node:path';
-import { rm } from 'node:fs/promises';
+import originalFs from 'original-fs';
 import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ paths: new Set<string>(), links: new Set<string>() }));
+const h = vi.hoisted(() => ({
+  paths: new Set<string>(),
+  links: new Set<string>(),
+  patchedRm: vi.fn(async () => {
+    throw new Error('Electron ASAR-aware removal must not be used');
+  }),
+}));
 vi.mock('../sourceContent', () => ({
   contentRef: async () => undefined,
   taskContentRef: () => 'ref',
@@ -13,10 +19,18 @@ vi.mock('node:fs/promises', () => ({
     return { isSymbolicLink: () => h.links.has(p), isDirectory: () => true };
   }),
   realpath: vi.fn(async (p: string) => p),
-  rm: vi.fn(async (p: string) => {
-    h.paths.delete(p);
-  }),
+  rm: h.patchedRm,
 }));
+vi.mock('original-fs', () => ({
+  default: {
+    promises: {
+      rm: vi.fn(async (p: string) => {
+        h.paths.delete(p);
+      }),
+    },
+  },
+}));
+const { rm } = originalFs.promises;
 import { manageCindyMakeWorkspace } from '../taskCleanup.js';
 import {
   makeSourceCheckoutPath,
@@ -85,6 +99,7 @@ function fixture() {
 }
 beforeEach(() => {
   vi.mocked(rm).mockClear();
+  h.patchedRm.mockClear();
   h.links.clear();
   h.paths = new Set([
     profile,
@@ -191,6 +206,7 @@ describe('managed task cleanup', () => {
     expect(rm).toHaveBeenCalledWith(target, expect.objectContaining({ recursive: true }));
     expect(h.paths.has(target)).toBe(false);
     expect(f.state.branchExists).toBe(false);
+    expect(h.patchedRm).not.toHaveBeenCalled();
   });
   it.each(['wrong-path', 'wrong-branch', 'git-marker', 'junction', 'no-branch'])(
     'rejects unsafe residual recovery: %s',

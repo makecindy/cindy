@@ -18,6 +18,17 @@ const cursor = {
 const frame = (value: unknown = cursor) => JSON.stringify({ jpeg: 'anBlZw==', cursor: value });
 
 describe('Windows local cursor frames', () => {
+  it('preserves optional native shape hints without requiring them from older helpers', () => {
+    expect(
+      decodeWindowsCursorFrame(frame({ ...cursor, shape: 'text' }), 2, () => png),
+    ).toMatchObject({ cursor: { shape: 'text' } });
+    expect(
+      decodeWindowsCursorFrame(frame({ ...cursor, shape: 'future-shape' }), 2, () => png),
+    ).toMatchObject({ cursor: { shape: 'future-shape' } });
+    expect(
+      decodeWindowsCursorFrame(frame({ ...cursor, shape: 'x'.repeat(33) }), 2, () => png),
+    ).toMatchObject({ cursor: { png: png.toString('base64') } });
+  });
   it.each([1, 1.25, 1.5, 2])(
     'preserves raster and position while converting %s DPI geometry to points',
     (scale) => {

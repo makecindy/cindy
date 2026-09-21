@@ -1,10 +1,12 @@
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { expect, it } from 'vitest';
 import {
   applyUpstreamMerge,
+  cleanupMergedCandidate,
+  cancelUpstreamMerge,
   prepareUpstreamMerge,
   mergeWorktree,
   mergeBranch,
@@ -109,6 +111,73 @@ it('rebases locally committed personal changes onto the latest official main and
     expect(
       await h.git(['rev-parse', 'refs/cindy-make/backups/' + h.state.id + '/personal'], h.source),
     ).toBe(result.baselineCommit);
+    expect(await cleanupMergedCandidate(h.userData, result, h.git)).toBe(true);
+    await expect(h.git(['rev-parse', mergeBranch(h.state.id)], h.source)).rejects.toBeTruthy();
+    await expect(stat(mergeWorktree(h.userData, h.state.id))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(await h.git(['rev-parse', 'cindy-personal'], h.source)).toBe(result.commit);
+    expect(
+      await h.git(['rev-parse', 'refs/cindy-make/backups/' + h.state.id + '/personal'], h.source),
+    ).toBe(result.baselineCommit);
+  } finally {
+    await h.clean();
+  }
+}, 30_000);
+
+it('preserves unfinished or session-owned candidates, new files and commits added after adoption', async () => {
+  const h = await fixture(false);
+  try {
+    const result = await prepareUpstreamMerge(h.userData, h.state, h.git, async () => {});
+    const worktree = mergeWorktree(h.userData, h.state.id);
+    expect(await cleanupMergedCandidate(h.userData, { ...result, status: 'conflict' }, h.git)).toBe(
+      false,
+    );
+    expect(
+      await cleanupMergedCandidate(h.userData, { ...result, sessionId: 'active-task' }, h.git),
+    ).toBe(false);
+    await writeFile(path.join(worktree, 'later.txt'), 'new work\n');
+    expect(await cleanupMergedCandidate(h.userData, result, h.git)).toBe(false);
+    expect(await readFile(path.join(worktree, 'later.txt'), 'utf8')).toBe('new work\n');
+    await h.commit(worktree, 'later work');
+    const later = await h.git(['rev-parse', 'HEAD'], worktree);
+    expect(await cleanupMergedCandidate(h.userData, result, h.git)).toBe(false);
+    expect(await h.git(['rev-parse', mergeBranch(h.state.id)], h.source)).toBe(later);
+  } finally {
+    await h.clean();
+  }
+}, 30_000);
+
+it('finishes branch cleanup after directory removal but preserves a branch checked out elsewhere', async () => {
+  const h = await fixture(false);
+  try {
+    const result = await prepareUpstreamMerge(h.userData, h.state, h.git, async () => {});
+    await h.git(['worktree', 'remove', mergeWorktree(h.userData, h.state.id)], h.source);
+    const other = path.join(h.userData, 'other-worktree');
+    await h.git(['worktree', 'add', other, mergeBranch(h.state.id)], h.source);
+    expect(await cleanupMergedCandidate(h.userData, result, h.git)).toBe(false);
+    expect(await h.git(['rev-parse', 'HEAD'], other)).toBe(result.commit);
+    await h.git(['worktree', 'remove', other], h.source);
+    expect(await cleanupMergedCandidate(h.userData, result, h.git)).toBe(true);
+    expect(await h.git(['branch', '--list', mergeBranch(h.state.id)], h.source)).toBe('');
+  } finally {
+    await h.clean();
+  }
+}, 30_000);
+
+it('refuses to delete a branch moved between cleanup verification and ref deletion', async () => {
+  const h = await fixture(false);
+  try {
+    const result = await prepareUpstreamMerge(h.userData, h.state, h.git, async () => {});
+    const ref = 'refs/heads/' + mergeBranch(h.state.id);
+    const racingGit: typeof h.git = async (args, cwd, indexFile) => {
+      if (args[0] === 'update-ref' && args.includes('-d') && args.includes(ref))
+        await h.git(['update-ref', ref, h.baselineCommit], h.source);
+      return h.git(args, cwd, indexFile);
+    };
+    await expect(cleanupMergedCandidate(h.userData, result, racingGit)).rejects.toBeTruthy();
+    expect(await h.git(['rev-parse', ref], h.source)).toBe(h.baselineCommit);
+    expect(await h.git(['rev-parse', 'cindy-personal'], h.source)).toBe(result.commit);
   } finally {
     await h.clean();
   }
@@ -125,6 +194,47 @@ it('moves a personal branch with no custom changes exactly to the official commi
     expect(await h.git(['rev-parse', 'cindy-personal'], h.source)).toBe(h.state.upstreamCommit);
     expect(await h.git(['status', '--porcelain'], h.source)).toBe('');
     expect(await readFile(path.join(h.source, 'upstream.txt'), 'utf8')).toBe('upstream fix\n');
+  } finally {
+    await h.clean();
+  }
+}, 30_000);
+
+it('cancels a conflicting update without merging or losing personal edits and can update again', async () => {
+  const h = await fixture(true);
+  try {
+    const result = await prepareUpstreamMerge(h.userData, h.state, h.git, async () => {});
+    expect(result.status).toBe('conflict');
+    const worktree = mergeWorktree(h.userData, result.id);
+    await writeFile(path.join(h.source, 'new-personal.txt'), 'work added while deciding\n');
+    await writeFile(path.join(worktree, 'keep.txt'), 'unexpected work\n');
+    // Ordinary worktree removal must refuse unexpected files, with no force-delete fallback.
+    await expect(cancelUpstreamMerge(h.userData, result, h.git)).rejects.toBeTruthy();
+    expect(await readFile(path.join(worktree, 'keep.txt'), 'utf8')).toBe('unexpected work\n');
+    await rm(path.join(worktree, 'keep.txt'));
+    await cancelUpstreamMerge(h.userData, result, h.git);
+    await expect(stat(worktree)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await h.git(['branch', '--list', mergeBranch(result.id)], h.source)).toBe('');
+    expect(await h.git(['rev-parse', 'HEAD'], h.source)).toBe(result.baselineCommit);
+    expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('local feature\n');
+    expect(await readFile(path.join(h.source, 'new-personal.txt'), 'utf8')).toBe(
+      'work added while deciding\n',
+    );
+    expect(await h.git(['rev-parse', 'main'], h.source)).toBe(result.upstreamCommit);
+    expect(
+      await h.git(['rev-parse', 'refs/cindy-make/backups/' + result.id + '/personal'], h.source),
+    ).toBe(result.baselineCommit);
+    // A retry after a crash between deletion and saving the cancelled state is harmless.
+    await cancelUpstreamMerge(h.userData, result, h.git);
+    const next = await prepareUpstreamMerge(
+      h.userData,
+      { ...h.state, id: randomUUID() },
+      h.git,
+      async () => {},
+    );
+    expect(next.status).toBe('conflict');
+    expect(await readFile(path.join(h.source, 'new-personal.txt'), 'utf8')).toBe(
+      'work added while deciding\n',
+    );
   } finally {
     await h.clean();
   }

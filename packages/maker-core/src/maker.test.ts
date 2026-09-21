@@ -138,6 +138,35 @@ function createAgent(
 }
 
 describe('Maker Pi managed-package skill boundary', () => {
+  it('uses the runtime Skill view for host authorization checks', async () => {
+    const agent = createAgent(async () => {
+      throw new Error('not used');
+    }, 'claude-code');
+    agent.listRuntimeSkills = vi.fn(async () => ({ skills: [{
+      kind: 'agent-skill' as const,
+      name: 'learn',
+      source: 'skill' as const,
+      path: '/repo/.claude/skills/learn/SKILL.md',
+    }] }));
+    const maker = new Maker({
+      agents: { 'claude-code': agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+
+    const result = await maker.listAgentRuntimeSkills('claude-code', {
+      workingDir: '/repo/src',
+      runtimeConfigDir: '/runtime/claude-home',
+    });
+
+    expect(result.skills.map((skill) => skill.name)).toEqual(['learn']);
+    expect(agent.listRuntimeSkills).toHaveBeenCalledWith({
+      workingDir: '/repo/src',
+      runtimeConfigDir: '/runtime/claude-home',
+    });
+    await maker.shutdown();
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s live palettes on their startup Skill snapshot', async (agentKind) => {
     const source = '/fixture/disabled-skill';
     let disabled: string[] = [source];

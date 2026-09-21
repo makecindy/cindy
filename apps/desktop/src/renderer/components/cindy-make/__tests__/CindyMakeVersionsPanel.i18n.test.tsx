@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
@@ -79,7 +79,7 @@ afterEach(() => {
 describe('Cindy Make versions with real translations', () => {
   it.each(cases)(
     'renders $locale labels without missing translations or damaged characters',
-    async ({ locale, resource, title, switchLabel, remove }) => {
+    async ({ locale, resource, switchLabel, remove }) => {
       const i18n = createInstance();
       await i18n.use(initReactI18next).init({
         lng: locale,
@@ -93,8 +93,11 @@ describe('Cindy Make versions with real translations', () => {
           <CindyMakeVersionsPanel />
         </I18nextProvider>,
       );
+      fireEvent.click(
+        await screen.findByRole('button', { name: resource.cindyMake.overview.switchVersion }),
+      );
       expect(await screen.findByRole('button', { name: switchLabel })).toBeTruthy();
-      expect(screen.getByRole('heading', { name: title })).toBeTruthy();
+      expect(screen.getByRole('region', { name: resource.cindyMake.overview.title })).toBeTruthy();
       expect(screen.getByRole('button', { name: remove })).toBeTruthy();
       expect(screen.getByText(resource.cindyMake.versions.personal)).toBeTruthy();
       expect(container.textContent).not.toMatch(/cindyMake\.|\{\{|\?{2,}|\uFFFD/);

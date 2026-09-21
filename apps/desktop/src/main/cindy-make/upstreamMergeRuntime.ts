@@ -8,7 +8,7 @@ import { readAtomicFileSync, atomicWriteFileSync } from '../utils/atomicWriteFil
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger.js';
-import { makeSourceRoot, makeSourceCheckoutPath } from './sourcePaths.js';
+import { makeSourceRoot } from './sourcePaths.js';
 import {
   createMakeToolchainEnvironment,
   resolveMakeToolEnvironment,
@@ -16,7 +16,6 @@ import {
 import { readCurrentCindySourceStatus } from './sourcePreparation.js';
 import { createLatestSourceVersionReader } from './latestSourceVersion.js';
 import { runSourceGit } from './sourceGit.js';
-import { snapshotContent } from './sourceContent.js';
 import { cindyMakeManager } from './manager.js';
 import { validateCindyMakeTaskStart } from './taskRuntime.js';
 import { ensureUpstreamMergeSession, assertUpstreamMergeSession } from './upstreamMergeSession.js';
@@ -30,6 +29,8 @@ import {
   mergeError,
   prepareFeatureMerge,
   applyFeatureMerge,
+  cleanupMergedCandidate,
+  cancelUpstreamMerge,
   type MergeGit,
 } from './upstreamMerge.js';
 
@@ -150,21 +151,13 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
       },
       running: isRunning,
       refresh,
+      cancel: async (state, isCurrent) =>
+        cancelUpstreamMerge(userData, state, await git(), isCurrent),
       cleanup: async (state) => {
         if (state.sessionId) return;
         // Only reclaim the exact file tree already adopted by the personal checkout.
         try {
-          const run = await git();
-          await verifyMergeWorktree(userData, state, run);
-          if (
-            !state.tree ||
-            (await snapshotContent(run, mergeWorktree(userData, state.id))) !== state.tree
-          )
-            return;
-          await run(
-            ['worktree', 'remove', '--force', mergeWorktree(userData, state.id)],
-            makeSourceCheckoutPath(userData),
-          );
+          await cleanupMergedCandidate(userData, state, await git());
         } catch {
           log.warn('Upstream merge completed; worktree cleanup deferred', {
             operationId: state.id,
@@ -190,9 +183,16 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
 export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeState | undefined> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
     throwIpcError('INVALID_PARAMS', 'Invalid upstream merge request');
-  const { action, createOptions } = raw as Record<string, unknown>;
-  if (!['update', 'resolve', 'status'].includes(String(action)))
+  const { action, createOptions, operationId } = raw as Record<string, unknown>;
+  if (!['update', 'resolve', 'cancel', 'status'].includes(String(action)))
     throwIpcError('INVALID_PARAMS', 'Invalid upstream merge action');
+  if (
+    (operationId !== undefined &&
+      (typeof operationId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operationId))) ||
+    (action === 'cancel' && operationId === undefined)
+  )
+    throwIpcError('INVALID_PARAMS', 'Invalid upstream merge operation');
   const options = validateCindyMakeTaskStart({
     runId: 'merge',
     request: 'merge',
@@ -205,8 +205,10 @@ export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeStat
     return action === 'update'
       ? await controller.update(options)
       : action === 'resolve'
-        ? await controller.resolve(options)
-        : controller.status();
+        ? await controller.resolve(options, operationId as string | undefined)
+        : action === 'cancel'
+          ? await controller.cancel(operationId as string)
+          : controller.status();
   } catch {
     throwIpcError('PRECONDITION_FAILED', 'Upstream merge is unavailable');
   }

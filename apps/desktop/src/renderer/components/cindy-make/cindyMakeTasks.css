@@ -2,6 +2,20 @@
   container-type: inline-size;
 }
 
+.cindy-make-history-layout {
+  /* Five 80px entries, four 4px gaps, and 16px list padding. */
+  height: 432px;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.cindy-make-history-layout:not(:has(> div)) {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.cindy-make-history-row {
+  height: 80px;
+}
+
 @container (min-width: 560px) {
   .cindy-make-tasks-search {
     width: 224px;
@@ -15,5 +29,21 @@
     max-height: 420px;
     border-bottom-width: 0;
     border-right-width: 1px;
+  }
+
+  .cindy-make-history-layout {
+    grid-template-columns: minmax(180px, 2fr) minmax(0, 3fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .cindy-make-history-list {
+    border-bottom-width: 0;
+    border-right-width: 1px;
+  }
+
+  .cindy-make-history-detail {
+    flex: 1 1 0%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 }

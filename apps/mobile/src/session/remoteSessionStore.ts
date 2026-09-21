@@ -1,3 +1,4 @@
+import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
   createContext,
   createElement,
@@ -2174,12 +2175,10 @@ function reanchorPendingLiveAssistantRows(
       messageIdentityMatches(message, row.message)
     )));
     if (groupedRows.length === 0) continue;
-    const withoutPending = next.filter((message) => !group.pendingRows.some((row) => (
-      messageIdentityMatches(message, row.message)
-    )));
-    const anchorIndex = withoutPending.findIndex((message) => (
-      messageIdentityMatches(message, group.afterMessage)
+    const withoutPending = next.filter((message) => !group.pendingRows.some((row) => messageIdentityMatches(message, row.message)
     ));
+    const anchorIndex = withoutPending.findIndex((message) =>
+      messageIdentityMatches(message, group.afterMessage));
     if (anchorIndex < 0) continue;
     next = [
       ...withoutPending.slice(0, anchorIndex + 1),
@@ -4253,6 +4252,18 @@ export const remoteSessionStore = {
       // 被控端会话「非选中模型」effort/fast 变更(被控端本地改 / 应用了任一控制端写穿)→
       // 刷新会话模型列表镜像(payload 自带 sessionId,镜像按会话隔离,非法 payload 静默忽略)。
       applySessionModelPrefPush(payload);
+      return;
+    }
+    if (channel === 'local-db:task-tags:changed' && isRecord(payload)) {
+      bumpDeviceSessionListMutationEpoch(deviceId);
+      const shard = shards.get(deviceId);
+      if (!shard) return;
+      const catalog = normalizeTaskTags(payload.tags, 256);
+      shard.sessions = shard.sessions.map((session) => ({
+        ...session,
+        tags: reconcileTaskTags(session.tags, catalog),
+      }));
+      recomputeSessions();
       return;
     }
     if (channel === 'local-db:sessions:patched' && isRecord(payload)) {

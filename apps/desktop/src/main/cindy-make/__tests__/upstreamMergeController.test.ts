@@ -16,10 +16,10 @@ const candidate: CindyMakeMergeState = {
   baselineCommit: 'b'.repeat(40),
   hasWorkspace: true,
 };
-function harness(initial?: SavedUpstreamMerge) {
+function harness(initial?: SavedUpstreamMerge, actualWorkspace = !!initial?.state.hasWorkspace) {
   let saved = initial ? structuredClone(initial) : undefined;
   let owner = 'alice';
-  let workspace = !!initial?.state.hasWorkspace;
+  let workspace = actualWorkspace;
   const deps: UpstreamMergeDependencies = {
     read: () => saved,
     write: vi.fn((next) => {
@@ -49,6 +49,9 @@ function harness(initial?: SavedUpstreamMerge) {
     running: vi.fn(() => false),
     refresh: vi.fn(async () => {}),
     cleanup: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {
+      workspace = false;
+    }),
   };
   const controller = new UpstreamMergeController(deps);
   return {
@@ -57,6 +60,9 @@ function harness(initial?: SavedUpstreamMerge) {
     saved: () => saved,
     setOwner: (next: string) => {
       owner = next;
+    },
+    setWorkspace: (next: boolean) => {
+      workspace = next;
     },
   };
 }
@@ -135,27 +141,170 @@ describe('upstream merge lifecycle', () => {
   });
   it('automatically applies a clean update and never creates an agent task', async () => {
     const h = harness();
-    expect(await h.controller.update()).toMatchObject({ status: 'merged' });
+    h.deps.cleanup = vi.fn(async () => h.setWorkspace(false));
+    expect(await h.controller.update()).toMatchObject({ status: 'merged', hasWorkspace: false });
     expect(h.deps.session).not.toHaveBeenCalled();
     expect(h.saved()?.state.commit).toBe('c'.repeat(40));
     expect(h.deps.cleanup).toHaveBeenCalledOnce();
   });
-  it('deduplicates simultaneous updates and opens one independent conflict task with the chosen model', async () => {
+  it('normalizes a completed merge whose candidate worktree was already removed', () => {
+    const h = harness(
+      {
+        state: {
+          ...candidate,
+          status: 'merged',
+          hasWorkspace: true,
+          commit: 'c'.repeat(40),
+        },
+      },
+      false,
+    );
+    expect(h.controller.status()).toMatchObject({ status: 'merged', hasWorkspace: false });
+    expect(h.saved()).toMatchObject({
+      state: { status: 'merged', hasWorkspace: false },
+    });
+  });
+  it('deduplicates updates, waits at a conflict, and starts one task only after explicit confirmation', async () => {
     const h = harness();
     h.deps.prepare = vi.fn(async (state) => ({ ...state, ...candidate }));
     const options = { agentKind: 'codex' as const, model: 'test-model' };
     const results = await Promise.all([h.controller.update(options), h.controller.update(options)]);
     expect(h.deps.prepare).toHaveBeenCalledOnce();
-    expect(results.map((r) => r?.status)).toEqual(['resolving', 'resolving']);
-    expect(h.deps.session).toHaveBeenCalledOnce();
-    expect(vi.mocked(h.deps.session).mock.calls[0][1]).toEqual(options);
+    expect(results.map((r) => r?.status)).toEqual(['conflict', 'conflict']);
+    expect(h.deps.session).not.toHaveBeenCalled();
     await h.controller.update();
     expect(h.deps.prepare).toHaveBeenCalledOnce();
+    expect(h.deps.session).not.toHaveBeenCalled();
+    await Promise.all([
+      h.controller.resolve(options, candidate.id),
+      h.controller.resolve(options, candidate.id),
+    ]);
     expect(h.deps.session).toHaveBeenCalledOnce();
+    expect(vi.mocked(h.deps.session).mock.calls[0][1]).toEqual(options);
     expect(h.saved()).toMatchObject({
       sessionOwner: 'alice',
       state: { sessionId: 'merge-session', status: 'resolving' },
     });
+  });
+  it('cancels an unassigned conflict, persists that result, and permits a later update', async () => {
+    const h = harness({ state: candidate, sessionOwner: 'alice' });
+    expect(await h.controller.cancel(candidate.id)).toMatchObject({
+      status: 'cancelled',
+      hasWorkspace: false,
+      error: undefined,
+    });
+    expect(h.saved()?.state.sessionId).toBeUndefined();
+    expect(h.deps.session).not.toHaveBeenCalled();
+    expect(h.deps.apply).not.toHaveBeenCalled();
+    expect(h.deps.cancel).toHaveBeenCalledOnce();
+    const reopened = harness(parseSavedUpstreamMerge(JSON.stringify(h.saved()), '/user-data'));
+    expect(reopened.controller.status()).toMatchObject({
+      status: 'cancelled',
+      hasWorkspace: false,
+    });
+    await reopened.controller.cancel(candidate.id);
+    expect(reopened.deps.cancel).not.toHaveBeenCalled();
+    await expect(reopened.controller.resolve(undefined, candidate.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    expect(reopened.saved()?.state.status).toBe('cancelled');
+    expect(await reopened.controller.update()).toMatchObject({ status: 'merged' });
+    expect(reopened.deps.prepare).toHaveBeenCalledOnce();
+  });
+  it('retains a failed cancellation for retry, including after the directory has been removed', async () => {
+    const h = harness({ state: candidate, sessionOwner: 'alice' });
+    vi.mocked(h.deps.cancel).mockImplementationOnce(async () => {
+      expect(h.saved()?.state.cancellationRequested).toBe(true);
+      h.setWorkspace(false);
+      throw new Error('ref lock');
+    });
+    expect(await h.controller.cancel(candidate.id)).toMatchObject({
+      status: 'failed',
+      error: 'cancelFailed',
+      hasWorkspace: false,
+      cancellationRequested: true,
+    });
+    const reopened = harness(h.saved());
+    expect(await reopened.controller.cancel(candidate.id)).toMatchObject({
+      status: 'cancelled',
+      error: undefined,
+      hasWorkspace: false,
+    });
+    expect(reopened.deps.cancel).toHaveBeenCalledOnce();
+    expect(reopened.deps.session).not.toHaveBeenCalled();
+  });
+  it.each([true, false])(
+    'restores interrupted cancellation for explicit retry (workspace=%s)',
+    async (workspace) => {
+      const h = harness(
+        { state: { ...candidate, cancellationRequested: true }, sessionOwner: 'alice' },
+        workspace,
+      );
+      expect(h.saved()?.state).toMatchObject({
+        status: 'failed',
+        error: 'cancelFailed',
+        hasWorkspace: workspace,
+        cancellationRequested: true,
+      });
+      expect(h.deps.cancel).not.toHaveBeenCalled();
+      await h.controller.update();
+      await expect(h.controller.resolve(undefined, candidate.id)).rejects.toMatchObject({
+        code: 'busy',
+      });
+      expect(h.deps.prepare).not.toHaveBeenCalled();
+      expect(h.deps.session).not.toHaveBeenCalled();
+      expect(await h.controller.cancel(candidate.id)).toMatchObject({
+        status: 'cancelled',
+        hasWorkspace: false,
+        cancellationRequested: undefined,
+      });
+      expect(h.deps.cancel).toHaveBeenCalledOnce();
+    },
+  );
+  it('rejects a stale decision and another account before cancelling or starting a task', async () => {
+    const h = harness({ state: candidate, sessionOwner: 'alice' });
+    await expect(h.controller.cancel('previous-update')).rejects.toMatchObject({ code: 'busy' });
+    await expect(h.controller.resolve(undefined, 'previous-update')).rejects.toMatchObject({
+      code: 'busy',
+    });
+    h.setOwner('bob');
+    await expect(h.controller.cancel(candidate.id)).rejects.toMatchObject({ code: 'busy' });
+    await expect(h.controller.resolve(undefined, candidate.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    expect(h.deps.cancel).not.toHaveBeenCalled();
+    expect(h.deps.session).not.toHaveBeenCalled();
+    expect(h.saved()?.state.status).toBe('conflict');
+  });
+  it.each(['resolving', 'checking', 'merged'] as const)(
+    'cannot cancel an assigned %s task',
+    async (status) => {
+      const h = harness({
+        state: { ...candidate, status, sessionId: 'existing-task' },
+        sessionOwner: 'alice',
+      });
+      await expect(h.controller.cancel(candidate.id)).rejects.toMatchObject({ code: 'busy' });
+      expect(h.deps.cancel).not.toHaveBeenCalled();
+    },
+  );
+  it('never turns a late resolve into a task after cancellation has started', async () => {
+    const h = harness({ state: candidate, sessionOwner: 'alice' });
+    let finish!: () => void;
+    h.deps.cancel = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const cancelling = h.controller.cancel(candidate.id);
+    await Promise.resolve();
+    await expect(h.controller.resolve(undefined, candidate.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    finish();
+    await cancelling;
+    expect(h.deps.session).not.toHaveBeenCalled();
+    expect(h.saved()?.state.status).toBe('cancelled');
   });
   it('retains a conflict without starting a task for an account that changed during the update', async () => {
     const h = harness();

@@ -14,7 +14,7 @@ it('uses real ancestry for a running Dev build, including unmerged heads, branch
     HOME: root,
     USERPROFILE: root,
     XDG_CONFIG_HOME: root,
-    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_GLOBAL: path.join(root, '.git', 'empty.gitconfig'),
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'Runtime Test',
     GIT_AUTHOR_EMAIL: 'runtime@example.invalid',
@@ -46,6 +46,7 @@ it('uses real ancestry for a running Dev build, including unmerged heads, branch
     );
   try {
     await run(['init', '--initial-branch=main']);
+    await writeFile(environment.GIT_CONFIG_GLOBAL, '');
     await run(['commit', '--allow-empty', '--no-gpg-sign', '-m', 'base']);
     const base = await run(['rev-parse', 'HEAD']);
     await run(['checkout', '-b', 'feature']);

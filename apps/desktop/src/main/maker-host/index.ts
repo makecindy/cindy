@@ -25,6 +25,7 @@ import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import fsSync from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -133,7 +134,7 @@ import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-im
 import * as blobStore from '../cindy-media/blobStore.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
 import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
-import { resolveSessionCcDebugFile } from '../logger.js';
+import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
 import { getSessionFastMode } from './session-effort-store.js';
@@ -935,6 +936,17 @@ export function getMaker(): Maker {
       pluginRegistry,
       resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
+      isCurrentLocalSessionInstance: (
+        sessionId: string,
+        sessionInstanceId: string | undefined,
+      ) => {
+        const session = _maker?.getSession(sessionId);
+        return Boolean(sessionInstanceId
+          && session
+          && session.instanceId === sessionInstanceId
+          && session.getStatus() === 'active'
+          && !session.remoteHostId);
+      },
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
       // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
@@ -1156,6 +1168,7 @@ export function getMaker(): Maker {
       // 每个 session 的 cc 子进程 debug 写到 sessions/<id>/cc-debug.raw.log (logger 拼路径
       // + mkdir), tailer 再归一化汇入该 session 的 <date>.ndjson。
       resolveCcDebugFile: resolveSessionCcDebugFile,
+      trackCcDebugFile: trackSessionCcDebugFile,
       mcpProviders: claudeMcpProviders,
       capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
       makerMemory: makerMemoryManager,
@@ -1920,7 +1933,7 @@ export function getMaker(): Maker {
       prepareCodexResumeSession: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
         const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
-        return await locations.read(threadId) ?? await prepareExternalCodexSessionForResume(threadId);
+        return locations.prepareResume(threadId, prepareExternalCodexSessionForResume);
       },
       resolveCodexThreadStorage: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return;

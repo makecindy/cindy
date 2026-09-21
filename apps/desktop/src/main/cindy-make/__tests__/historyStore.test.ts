@@ -32,6 +32,25 @@ it('preserves real checking stages and known failures while filtering private or
   store.saveBuild({ status: 'checking' });
   expect(store.readBuild()).toEqual({ status: 'checking' });
 });
+it('keeps only bounded known build log entries and preparation stages', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'make-build-log-'));
+  dirs.push(dir);
+  const store = new CindyMakeHistoryStore(dir);
+  store.saveBuild({
+    status: 'waiting',
+    preparationStep: 'environment',
+    logs: [
+      { step: 'environment', at: 1 },
+      { step: 'private-output' as never, at: 2 },
+      { step: 'ready', at: Number.NaN },
+      ...Array.from({ length: 90 }, (_, index) => ({ step: 'packaging' as const, at: index + 3 })),
+    ],
+  });
+  const build = store.readBuild();
+  expect(build?.preparationStep).toBe('environment');
+  expect(build?.logs).toHaveLength(80);
+  expect(build?.logs?.every((entry) => entry.step === 'packaging')).toBe(true);
+});
 it('keeps ended history, deduplicates operation receipts, and does not confuse build state with a task record', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'make-history-store-'));
   dirs.push(dir);
@@ -64,6 +83,7 @@ it('keeps ended history, deduplicates operation receipts, and does not confuse b
     tree: 'e'.repeat(40),
   });
   store.end('aaaa', 4);
+  store.hide('aaaa', 5);
   store.seed({ ...record, endedAt: 99 });
   writeFileSync(path.join(dir, 'build-state.json'), JSON.stringify({ status: 'ready' }));
   store.saveBuild({ status: 'ready', commit: 'b'.repeat(40), generatedAt: 4 });
@@ -84,7 +104,8 @@ it('keeps ended history, deduplicates operation receipts, and does not confuse b
   expect(new CindyMakeHistoryStore(dir).list()).toEqual(restored);
   expect(restored[0]).toMatchObject({
     endedAt: 4,
-    updatedAt: 4,
+    hiddenAt: 5,
+    updatedAt: 5,
     receipts: [receipt],
     completions: [{ id: 'turn' }],
   });

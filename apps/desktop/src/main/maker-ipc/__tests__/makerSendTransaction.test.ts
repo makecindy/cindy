@@ -5,6 +5,7 @@ import {
   INHERITED_CAPABILITY_SELECTION,
   appendAutoReviewUserIntent,
   MAIN_OWNED_SEND_CONTEXT,
+  PINNED_SKILL_INVOCATION,
   type AgentKind,
   type SessionSendOptions,
   type SessionSendResult,
@@ -33,6 +34,7 @@ import { createPreflightHarness, filesystemError } from './helpers/workingDirect
 function createSession(overrides: Partial<MakerSendTransactionSession> = {}): MakerSendTransactionSession {
   return {
     id: 'session-1',
+    instanceId: 'session-instance-1',
     agentKind: 'codex',
     workDir: 'C:\\repo',
     remoteHostId: null,
@@ -260,6 +262,113 @@ describe('maker SEND transaction', () => {
     expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
+  });
+
+  it('persists the main-attested Learn winner on the exact accepted user turn', async () => {
+    const grant = {
+      version: 1 as const,
+      sessionInstanceId: 'session-instance-1',
+      resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
+    };
+    const captureCindyLearnInvocation = vi.fn(async () => grant);
+    const { deps, session } = createDeps({ captureCindyLearnInvocation });
+
+    await createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/learn release flow' },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'learn-1',
+          content: '{"text":"/learn release flow","slashCommandRanges":[{"start":0,"end":6}]}',
+        },
+      },
+    );
+
+    expect(captureCindyLearnInvocation).toHaveBeenCalledWith(
+      session,
+      '{"text":"/learn release flow","slashCommandRanges":[{"start":0,"end":6}]}',
+      '/learn release flow',
+    );
+    const sendOptions = vi.mocked(session.send).mock.calls[0]?.[1];
+    expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
+      name: 'learn',
+      path: grant.resolvedSkillPath,
+    });
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        clientId: 'learn-1',
+        agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
+      }),
+      undefined,
+    );
+  });
+
+  it('does not mint a Learn grant when a colliding custom Skill won at dispatch', async () => {
+    const captureCindyLearnInvocation = vi.fn(async () => null);
+    const { deps } = createDeps({ captureCindyLearnInvocation });
+
+    await createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/learn release flow' },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'custom-learn-1',
+          content: '{"text":"/learn release flow","slashCommandRanges":[{"start":0,"end":6}]}',
+        },
+      },
+    );
+
+    expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        agentMeta: expect.not.objectContaining({ cindyLearnInvocation: expect.anything() }),
+      }),
+      undefined,
+    );
+  });
+
+  it('forwards the exact Learn pin to Claude for provider-boundary expansion', async () => {
+    const grant = {
+      version: 1 as const,
+      sessionInstanceId: 'session-instance-1',
+      resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
+    };
+    const captureCindyLearnInvocation = vi.fn(async () => grant);
+    const claudeSession = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => claudeSession),
+      captureCindyLearnInvocation,
+    });
+
+    await createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/learn release flow' },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'claude-learn-1',
+          content: '/learn release flow',
+        },
+      },
+    );
+
+    expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
+    const sendOptions = vi.mocked(claudeSession.send).mock.calls[0]?.[1];
+    expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
+      name: 'learn',
+      path: grant.resolvedSkillPath,
+    });
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
+      }),
+      undefined,
+    );
   });
 
   it('restamps a trusted local queue edit for the existing Desktop command route', async () => {

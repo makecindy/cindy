@@ -1,5 +1,8 @@
+import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
+import { normalizeTaskTags } from '@cindy/maker-shared';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
+import { applyCindyMakeCardAttention } from './cindyMakeAttention';
 import { confirmRemoteUsers, reserveRemoteUser } from './remoteUserHandoff';
 import { readRemoteHistoryCache, remoteHistoryCacheWriter } from './remoteHistoryCache';
 /**
@@ -859,7 +862,8 @@ export interface PendingGhostGrantConfirm {
    * forge_source = Forge 打包/骨架/安装的源码目录在工作目录外;
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
-  lane: 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
+  lane:
+    | 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -8332,6 +8336,20 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     clearRemoteOptimisticSend(sessionId, mapped.clientId);
     const current = getOrCreateState(sessionId);
     const existing = current.messages.find((candidate) => candidate.clientId === mapped.clientId);
+    if (mapped.systemCardType?.startsWith('cindy-make')) {
+      // A late update to an older preparation card must not replace the current result.
+      const existingIndex = existing ? current.messages.indexOf(existing) : -1;
+      const newerMessage = current.messages.some(
+        (candidate, index) =>
+          candidate.clientId !== mapped.clientId &&
+          candidate.createdAt &&
+          mapped.createdAt &&
+          (candidate.createdAt > mapped.createdAt ||
+            (candidate.createdAt === mapped.createdAt && existingIndex >= 0 && index > existingIndex)),
+      );
+      if (!newerMessage)
+        applyCindyMakeCardAttention(sessionId, existing, mapped, _activeViewSessions.has(sessionId));
+    }
     const isLiveToolEcho =
       existing?.role === mapped.role &&
       (mapped.role === 'tool_use' || mapped.role === 'tool_result');
@@ -8589,7 +8607,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         push.channel === 'local-db:messages:created' ||
         (push.channel === 'maker:event' && inboundHasPersistId);
       const inboundEvent = (push.payload as { event?: unknown } | null)?.event as
-        | { type?: unknown; data?: { isFinal?: unknown; isFullText?: unknown } }
+        { type?: unknown; data?: { isFinal?: unknown; isFullText?: unknown } }
         | null
         | undefined;
       const isOrdinaryStreamingTextDelta =
@@ -8708,6 +8726,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
               totalTokenUsage: p.totalTokens,
             });
           }
+          break;
+        }
+        case 'local-db:task-tags:changed': {
+          if (!push.deviceId) break;
+          const tags = normalizeTaskTags((push.payload as { tags?: unknown })?.tags, 256);
+          remoteProjectsStore.applyTagCatalog(push.deviceId, tags);
+          emitTaskTagCatalog(push.deviceId, tags);
           break;
         }
         case 'local-db:sessions:patched': {
@@ -15066,7 +15091,8 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
  */
 function insertSystemCard(
   sessionId: string,
-  cardType: 'help' | 'cost' | 'context' | 'pwd' | 'status' | 'compact' | 'cmd' | 'learn' | 'cindy-make-doctor' | 'cindy-make',
+  cardType:
+    | 'help' | 'cost' | 'context' | 'pwd' | 'status' | 'compact' | 'cmd' | 'learn' | 'cindy-make-doctor' | 'cindy-make',
   data?: Record<string, unknown>,
 ): string | null {
   if (!sessionId) return null;
@@ -16318,6 +16344,7 @@ function mirrorSessionFields(
         fastMode?: unknown;
         planModeEnabled?: unknown;
         agentKind?: unknown;
+        runtimeEffective?: unknown;
         providerId?: unknown;
         agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
@@ -16339,7 +16366,11 @@ function mirrorSessionFields(
   if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi') {
     const nextKind = dbToMakerAgentKind(patch.agentKind);
     setState(sessionId, (s) => {
-      const intentApplied = s.agentSwitchIntent?.target === nextKind;
+      // New hosts publish the full runtime snapshot before explicitly clearing
+      // the consumed intent with CAS. An agent-kind match alone may belong to
+      // an older switch to the same engine, not the user's latest model choice.
+      const intentApplied = !('runtimeEffective' in patch) &&
+        !('agentSwitchIntent' in patch) && s.agentSwitchIntent?.target === nextKind;
       if (s.agentKind === nextKind && !intentApplied) return s;
       return {
         ...s,

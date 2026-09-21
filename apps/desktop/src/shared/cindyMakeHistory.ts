@@ -1,4 +1,8 @@
-import type { CindyMakeCompletionMeta, CindyMakePersonalBuildState } from './cindyMakeSession';
+import type {
+  CindyMakeCompletionMeta,
+  CindyMakePersonalBuildState,
+  CindyMakeTestState,
+} from './cindyMakeSession';
 
 export type MakeFeatureAction = 'integrate' | 'revert' | 'reapply';
 export interface MakeFeatureReceipt {
@@ -13,6 +17,8 @@ export interface MakeFeatureReceipt {
 }
 export interface MakeHistoryCompletion extends CindyMakeCompletionMeta {
   id: string;
+  /** The user prompt that led to this completed editing round. */
+  prompt?: string;
 }
 export interface MakeHistoryVersion {
   operationId: string;
@@ -30,6 +36,8 @@ export interface CindyMakeHistoryRecord {
   createdAt: number;
   updatedAt: number;
   endedAt?: number;
+  /** User dismissed this record from Settings; durable facts remain for builds and undo. */
+  hiddenAt?: number;
   completions: MakeHistoryCompletion[];
   receipts: MakeFeatureReceipt[];
   versions: MakeHistoryVersion[];
@@ -44,7 +52,8 @@ export type MakeHistoryAction =
   | 'build'
   | 'end'
   | 'retry-prepare'
-  | 'retry-cleanup';
+  | 'retry-cleanup'
+  | 'hide';
 export type MakeHistoryLifecycle =
   'preparing' | 'running' | 'editing' | 'ready' | 'failed' | 'ended' | 'cleanup';
 export type MakeHistoryIntegration =
@@ -68,8 +77,12 @@ export interface CindyMakeHistoryItem extends CindyMakeHistoryRecord {
   operationError?: string;
   needsBuild?: boolean;
   build?: CindyMakePersonalBuildState;
+  /** The current completion card's test receipt, reconciled by the same Main controller. */
+  test?: CindyMakeTestState;
   /** Why the action area is empty; derived from Main facts, never guessed by Renderer. */
   actionReason?: MakeHistoryActionReason;
+  /** Main-owned permission to hide this entry after its workspace is reclaimed. */
+  canHide?: boolean;
 }
 export interface CindyMakeHistoryState {
   items: CindyMakeHistoryItem[];
@@ -99,15 +112,34 @@ export function makeHistoryActions(facts: {
   needsBuild?: boolean;
   buildSourceAvailable?: boolean;
   canEdit?: boolean;
+  /** A different task owns the global project lock, but this task can still be ended safely. */
+  allowCleanupWhileBusy?: boolean;
+  /** Use the completion controller's receipt for admission as well as presentation. */
+  test?: CindyMakeTestState;
 }): MakeHistoryAction[] {
   const actions: MakeHistoryAction[] = facts.sessionAvailable ? ['open'] : [];
-  if (facts.busy) return actions;
+  if (facts.test?.status === 'starting') return actions;
+  // Continue is the one action that stops a ready test through its controller.
+  // Do not depend on a global busy snapshot taken before the latest receipt.
+  if (facts.test?.status === 'ready')
+    return facts.completed &&
+      facts.sessionAvailable &&
+      facts.workspaceAvailable &&
+      facts.lifecycle === 'ready' &&
+      !facts.conflict
+      ? [...actions, 'continue']
+      : actions;
+  if (facts.busy) {
+    if (!facts.allowCleanupWhileBusy) return actions;
+    if (facts.conflict || facts.lifecycle === 'preparing' || facts.lifecycle === 'running')
+      return actions;
+    if (facts.lifecycle === 'cleanup') return [...actions, 'retry-cleanup'];
+    if (facts.lifecycle === 'ended' || !facts.sessionAvailable) return actions;
+    if (facts.integration === 'unknown' && !(facts.sourceAvailable || !facts.workspaceAvailable))
+      return actions;
+    return [...actions, 'end'];
+  }
   if (facts.recoverableFailure) return [...actions, 'retry'];
-  if (
-    (facts.buildFailed || facts.needsBuild) &&
-    (facts.buildSourceAvailable ?? facts.sourceAvailable)
-  )
-    actions.push('build');
   if (facts.conflict) return [...actions, 'resolve'];
   if (facts.lifecycle === 'cleanup') return [...actions, 'retry-cleanup'];
   if (facts.lifecycle === 'preparing' || facts.lifecycle === 'running') return actions;
@@ -121,7 +153,6 @@ export function makeHistoryActions(facts: {
     return [...actions, 'retry-prepare', 'end'];
   if (facts.lifecycle !== 'ended' && facts.sessionAvailable) {
     if (facts.workspaceAvailable && facts.completed) {
-      actions.splice(actions.indexOf('open'), actions.includes('open') ? 1 : 0);
       actions.push('continue');
       if (facts.sourceAvailable && facts.integration !== 'unchanged') actions.push('test');
     }
@@ -143,5 +174,13 @@ export function makeHistoryActions(facts: {
     } else if (facts.integration === 'integrated' || facts.integration === 'changed')
       actions.push('revert');
   }
+  if (
+    (facts.buildSourceAvailable ?? facts.sourceAvailable) &&
+    (actions.includes('integrate') ||
+      actions.includes('reapply') ||
+      ((facts.buildFailed || facts.needsBuild) && facts.integration !== 'changed') ||
+      (facts.completed && facts.integration === 'integrated'))
+  )
+    actions.push('build');
   return actions;
 }

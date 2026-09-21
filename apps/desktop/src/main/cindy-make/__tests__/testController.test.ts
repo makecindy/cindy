@@ -92,6 +92,69 @@ function harness(initial: Partial<CindyMakeCompletionMeta> = {}) {
 afterEach(() => vi.useRealTimers());
 
 describe('Main-owned Cindy Make test lifecycle', () => {
+  it.each(['continue', 'build', 'stop-for-build'] as const)(
+    'bounds a missing stop receipt for %s without releasing the live workspace',
+    async (action) => {
+      vi.useFakeTimers();
+      const h = harness();
+      h.stop.mockImplementation(() => {});
+      await h.controller.act('session', 'completion', 'start');
+      h.ready.resolve();
+      await vi.waitFor(() => expect(h.meta().test?.status).toBe('ready'));
+      const pending =
+        action === 'stop-for-build'
+          ? h.controller.stopTestForBuild('session')
+          : h.controller.act('session', 'completion', action);
+      const failed = expect(pending).rejects.toMatchObject({ code: 'stopFailed' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failed;
+      expect(h.leased()).toBe(true);
+      expect(h.controller.isUsingSession('session')).toBe(true);
+      expect(h.meta().continuedAt).toBeUndefined();
+      expect(h.build).not.toHaveBeenCalled();
+      // A retry may succeed once the test window really exits; no false exit receipt.
+      const continued = h.controller.act('session', 'completion', 'continue');
+      h.closed.resolve();
+      await continued;
+      expect(h.leased()).toBe(false);
+      expect(h.meta().continuedAt).toBe(123);
+    },
+  );
+
+  it('waits for test shutdown and temporary cleanup before starting a personal build', async () => {
+    const h = harness();
+    h.stop.mockImplementation(() => {});
+    await h.controller.act('session', 'completion', 'start');
+    h.ready.resolve();
+    await vi.waitFor(() => expect(h.meta().test?.status).toBe('ready'));
+    const pending = h.controller.act('session', 'completion', 'build');
+    await vi.waitFor(() => expect(h.stop).toHaveBeenCalled());
+    expect(h.build).not.toHaveBeenCalled();
+    expect(h.leased()).toBe(true);
+    h.closed.resolve();
+    await pending;
+    expect(h.build).toHaveBeenCalledOnce();
+    h.artifact.resolve(installer);
+    await vi.waitFor(() => expect(h.controller.hasActiveJobs()).toBe(false));
+  });
+
+  it('awaits test cleanup when the host quits', async () => {
+    const h = harness();
+    h.stop.mockImplementation(() => {});
+    await h.controller.act('session', 'completion', 'start');
+    h.ready.resolve();
+    await vi.waitFor(() => expect(h.meta().test?.status).toBe('ready'));
+    const done = vi.fn();
+    const shutdown = h.controller.stopAllAndWait().then(done);
+    await Promise.resolve();
+    expect(h.stop).toHaveBeenCalled();
+    expect(done).not.toHaveBeenCalled();
+    h.closed.resolve();
+    await shutdown;
+    expect(h.leased()).toBe(false);
+    expect(done).toHaveBeenCalledOnce();
+  });
+
   it('blocks Continue Editing during startup, then allows it once the test is ready', async () => {
     const h = harness();
     await h.controller.act('session', 'completion', 'start');
@@ -314,6 +377,15 @@ describe('personal build completion choices', () => {
     });
     await h.controller.act('session', 'completion', 'open-build');
     expect(h.openBuild).toHaveBeenCalledOnce();
+  });
+  it('records visible build stages without persisting process output', async () => {
+    const h = harness();
+    await h.controller.act('session', 'completion', 'build');
+    await vi.waitFor(() => expect(h.meta().personal?.status).toBe('packaging'));
+    expect(h.meta().personal?.logs?.map((entry) => entry.step)).toEqual(['packaging']);
+    h.artifact.resolve(installer);
+    await vi.waitFor(() => expect(h.meta().personal?.status).toBe('ready'));
+    expect(h.meta().personal?.logs?.map((entry) => entry.step)).toEqual(['packaging', 'ready']);
   });
   it('closes a running test before building the personal installer', async () => {
     const h = harness();

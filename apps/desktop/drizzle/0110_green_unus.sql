@@ -1,1 +1,0 @@
-ALTER TABLE `sessions` ADD `context_window_budget` integer;

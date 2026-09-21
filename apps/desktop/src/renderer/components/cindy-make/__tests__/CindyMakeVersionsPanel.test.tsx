@@ -44,8 +44,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('Cindy Make local versions', () => {
+  it('leads with the running version and reveals alternatives only on request', async () => {
+    h.get.mockResolvedValue({ ...versions, currentId: 'personal', selectedId: 'personal' });
+    render(<CindyMakeVersionsPanel />);
+    expect(await screen.findByText('Blue background')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.versions.original')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'cindyMake.versions.using' })).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'cindyMake.overview.switchVersion' });
+    fireEvent.click(toggle);
+    expect(screen.getByText('cindyMake.versions.original')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'cindyMake.versions.remove' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.versions.switch' }));
+    await waitFor(() => expect(h.act).toHaveBeenCalledWith('switch', 'original'));
+  });
   it('shows Dev inside the original row and switches through the shared native operation', async () => {
     render(<CindyMakeVersionsPanel />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'cindyMake.overview.switchVersion' }),
+    );
     await screen.findByText('Blue background');
     expect(screen.getByText('cindyMake.versions.original')).toBeDefined();
     expect(
@@ -56,6 +72,9 @@ describe('Cindy Make local versions', () => {
   });
   it('requires explicit deletion confirmation and never offers deleting the running version', async () => {
     render(<CindyMakeVersionsPanel />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'cindyMake.overview.switchVersion' }),
+    );
     const remove = await screen.findByRole('button', { name: 'cindyMake.versions.remove' });
     fireEvent.click(remove);
     await waitFor(() => expect(h.confirm).toHaveBeenCalledOnce());
@@ -72,6 +91,9 @@ describe('Cindy Make local versions', () => {
       ),
     });
     render(<CindyMakeVersionsPanel />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'cindyMake.overview.switchVersion' }),
+    );
     await screen.findByText('cindyMake.versions.incompatible');
     expect(
       (screen.getByRole('button', { name: 'cindyMake.versions.switch' }) as HTMLButtonElement)

@@ -250,6 +250,7 @@ export function MakeDoctorReportCard({
   showSource = true,
   compactPrepare = false,
   readOnly = false,
+  showUpstreamActions = true,
 }: {
   report: MakeDoctorReport;
   request?: string;
@@ -272,6 +273,8 @@ export function MakeDoctorReportCard({
   showSource?: boolean;
   compactPrepare?: boolean;
   readOnly?: boolean;
+  /** Settings preflight places the personal-version action beside Cancel. */
+  showUpstreamActions?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
@@ -716,7 +719,8 @@ export function MakeDoctorReportCard({
         {!readOnly &&
           (upstream?.status === 'found' || upstream?.status === 'notFound') &&
           !decision &&
-          !searching && (
+          !searching &&
+          showUpstreamActions && (
             <div className="flex shrink-0 flex-wrap justify-end gap-2">
               <Button
                 variant="secondary"

@@ -83,6 +83,8 @@ import type {
   ChatMessage,
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
+import { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
+export { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
 import { Spinner } from '@/components/ui/spinner';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
@@ -823,51 +825,6 @@ export function findLastUserMessageClientId(messages: readonly ChatMessage[]): s
     if (messages[i].role === 'user' && !messages[i].isSyntheticTrigger) return messages[i].clientId;
   }
   return null;
-}
-
-/**
- * 最后一条「用户侧输入」的 clientId —— **含**合成行（自动续跑指令本身）。
- *
- * 与上面的 `findLastUserMessageClientId` 的区别就在这里：那份服务于「编辑最后一条消息」
- * 这个**可见** affordance，刻意跳过渲染成 null 的合成行；本份要回答的是「此刻正在跑的
- * 这个 turn 是不是自动续跑发起的」——合成行恰恰是那个 turn 的发起者，跳过就答不了。
- *
- * 用途：自愈重连行判断自己是不是"仍在飞"。用户在续跑之后又自己发了消息时，最后一条用户
- * 侧输入就换成他那条，旧的重连行随之停转（正在跑的已经是另一个 turn 了）。
- */
-export function findLastUserInputClientId(messages: readonly ChatMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    // **插话（`delivery === 'steer'`）不算新 turn 的发起者** —— 它是同一个正在跑的 turn 内
-    // 的追加输入。算进来的话，用户在自愈 turn 里插一句，正在跑的重连行会立刻被"夺走归属"、
-    // 提前停转退回静态（codex P2 / greptile P1）。本文件里其它 turn 边界判断（见上方
-    // `hasFollowingUserTurn` 等）也都显式排除 steer，此处保持一致。
-    //
-    // 首选判据直接使用 main 投影的 vendor-turn owner；旧被控端缺省 owner 字段时，
-    // 才由下面的兼容分支按最后一条非 steer 用户输入兜底。
-    if (messages[i].role === 'user' && messages[i].delivery !== 'steer') {
-      return messages[i].clientId;
-    }
-  }
-  return null;
-}
-
-/**
- * 自愈落库行是否仍属于当前运行中的续跑 turn。
- *
- * 新端以 main 持有的 vendor-turn owner 做精确关联；只有 wire 上确实缺省 owner 字段的旧
- * 被控端才恢复历史启发式。旧端无法区分自动续跑与不落 user 行的 Goal turn，这是协议信息
- * 不足时的兼容降级，不能扩散到 supported / unknown 两种状态。
- */
-export function isAutoResumeRowInFlight(args: {
-  isContinuationTurnOwner: boolean;
-  sessionRunning: boolean;
-  isLastUserInput: boolean;
-  projectionCapability: ContinuationInFlightProjectionCapability;
-}): boolean {
-  return (
-    args.isContinuationTurnOwner ||
-    (args.projectionCapability === 'legacy' && args.sessionRunning && args.isLastUserInput)
-  );
 }
 
 export function shouldBlockAssistantFork(

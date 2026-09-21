@@ -106,9 +106,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     image = find("image"),
     video = find("video"),
     cursor = find("cursor");
-  // Ambient three-segment backdrop (mobile markup only; desktop keeps its
-  // solid surface because its stage has no #bg subtree, so every entry may
-  // be missing and all backdrop work below must tolerate that).
+  // Shared ambient backdrop. Minimal viewer embeds may omit its subtree.
   const bg = find("bg") || null,
     bgCanvas = find("bg-canvas") || null,
     bgContext = bgCanvas ? bgCanvas.getContext("2d") : null;
@@ -116,6 +114,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     dh = 1080,
     viewerSized = false,
     zoom = 1,
+    desktopScale = null,
+    reportedScaleMode = null,
+    desktopPan = null,
+    edgePointer = null,
+    edgeFrame = null,
+    edgeTime = 0,
     fx = 0.5,
     fy = 0.5,
     mode = "pointer",
@@ -274,16 +278,23 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           Math.max(0, (viewportHeight() - height) / 2),
         ));
   const layout = () => {
-    const r = transform(
-      viewportWidth(),
-      viewportHeight(),
-      dw,
-      dh,
-      zoom,
-      fx,
-      fy,
-      fillHeight && !viewerSized,
-    );
+    const r =
+      config.desktop && desktopScale !== null
+        ? {
+            scale: desktopScale,
+            width: dw * desktopScale,
+            height: dh * desktopScale,
+          }
+        : transform(
+            viewportWidth(),
+            viewportHeight(),
+            dw,
+            dh,
+            zoom,
+            fx,
+            fy,
+            fillHeight && !viewerSized,
+          );
     return {
       ...r,
       x: viewportLeft() + viewportWidth() / 2 - fx * r.width,
@@ -295,17 +306,18 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   // to fill the remaining space, horizontally or vertically as needed.
   // Zoom and pan never move the backdrop: where the picture covers it, the
   // opaque picture simply occludes it, so input mapping stays uniform. Returns
-  // null when the fitted picture already covers the stage (nothing to fill).
+  // null when the fitted picture already covers the stage, unless a Desktop
+  // viewer has shrunk its foreground below fit and still needs the backdrop.
   const bgEdgeFraction = 0.05;
   const bgCenterFraction = 1 - 2 * bgEdgeFraction;
-  function backgroundSegments(vw, vh, dw, dh, fill) {
+  function backgroundSegments(vw, vh, dw, dh, fill, includeFitted = false) {
     if (!(vw > 0 && vh > 0 && dw > 0 && dh > 0)) return null;
     const s = fill
       ? vh / Math.max(1, dh)
       : Math.min(vw / dw, vh / Math.max(1, dh));
     const w = dw * s,
       h = dh * s;
-    if (w < vw) {
+    if (w < vw || (includeFitted && w === vw && h === vh)) {
       const centerW = w * bgCenterFraction,
         centerX = vw / 2 - centerW / 2,
         sideW = centerX,
@@ -329,7 +341,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!bg || !bgCanvas || !bgContext) return;
     const vw = stage.clientWidth,
       vh = stage.clientHeight;
-    const seg = backgroundSegments(vw, vh, dw, dh, fillHeight);
+    const picture = config.desktop ? layout() : null;
+    const coversStage =
+      picture &&
+      picture.x <= 0 &&
+      picture.y <= 0 &&
+      picture.x + picture.width >= vw &&
+      picture.y + picture.height >= vh;
+    const seg = coversStage
+      ? null
+      : backgroundSegments(vw, vh, dw, dh, fillHeight, config.desktop);
     if (!seg) {
       bg.style.display = "none";
       bgRects = null;
@@ -627,6 +648,18 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         width: r.width,
         height: r.height,
       });
+    if (config.desktop && epoch) {
+      const scaleMode =
+        desktopScale === null
+          ? "fit"
+          : desktopScale === 1
+            ? "actual"
+            : "custom";
+      if (reportedScaleMode !== scaleMode) {
+        reportedScaleMode = scaleMode;
+        post({ type: "scaleMode", mode: scaleMode });
+      }
+    }
     const touchFeedback = control && mode === "touch" && touchCursorVisible;
     const cursorX = mode === "touch" && touchCursor ? touchCursor.x : cx;
     const cursorY = mode === "touch" && touchCursor ? touchCursor.y : cy;
@@ -674,7 +707,36 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           ? "block"
           : "none";
     }
-    if (config.desktop) stage.style.cursor = control ? "none" : "default";
+    if (config.desktop) {
+      // Let the local OS own pointer size, DPI and accessibility preferences.
+      // Never use a remote URL or bitmap as the desktop's native cursor.
+      cursor.style.display = "none";
+      const shape = remoteCursor?.shape;
+      stage.style.cursor =
+        control &&
+        [
+          "default",
+          "text",
+          "vertical-text",
+          "pointer",
+          "crosshair",
+          "grab",
+          "grabbing",
+          "ew-resize",
+          "ns-resize",
+          "nwse-resize",
+          "nesw-resize",
+          "move",
+          "not-allowed",
+          "copy",
+          "alias",
+          "wait",
+          "progress",
+          "help",
+        ].includes(shape)
+          ? shape
+          : "default";
+    }
   }
   // Literal source is required: Hermes function.toString() yields bytecode.
   function validCursor(v) {
@@ -790,6 +852,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }, 33);
   cleanups.push(() => clearInterval(inputTimer));
   function release() {
+    stopEdgePan();
+    desktopPan = null;
     deferredClipboardModifier = null;
     clearTimeout(hold);
     if (gestureFrame !== null) cancelAnimationFrame(gestureFrame);
@@ -917,6 +981,82 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     const bounds = stage.getBoundingClientRect();
     return { x: e.clientX - bounds.left, y: e.clientY - bounds.top };
   };
+  function stopEdgePan() {
+    if (edgeFrame !== null) cancelAnimationFrame(edgeFrame);
+    edgeFrame = null;
+    edgePointer = null;
+  }
+  function edgePanTick(now) {
+    edgeFrame = null;
+    if (!edgePointer || desktopPan || !epoch) return;
+    const r = layout(),
+      vw = viewportWidth(),
+      vh = viewportHeight();
+    const p = edgePointer;
+    const dt = Math.min(32, Math.max(0, now - edgeTime)) / 1000;
+    edgeTime = now;
+    // rAF timestamps describe the frame start and can precede the pointer
+    // handler's performance.now(). A zero-time first frame is not a boundary.
+    if (dt === 0) {
+      edgeFrame = requestAnimationFrame(edgePanTick);
+      return;
+    }
+    // A narrow edge band accelerates smoothly to 720 local pixels per second.
+    const velocity = (position, extent) => {
+      const band = Math.min(28, extent / 4);
+      return position < band
+        ? -(1 - position / band)
+        : position > extent - band
+          ? (position - extent + band) / band
+          : 0;
+    };
+    const x =
+      r.width > vw
+        ? bounded(
+            r.x - velocity(p.x - viewportLeft(), vw) * 720 * dt,
+            viewportLeft() + vw - r.width,
+            viewportLeft(),
+          )
+        : r.x;
+    const y =
+      r.height > vh
+        ? bounded(r.y - velocity(p.y, vh) * 720 * dt, vh - r.height, 0)
+        : r.y;
+    if (Math.abs(x - r.x) < 0.001 && Math.abs(y - r.y) < 0.001) return;
+    stopPanAnimation();
+    manualViewMoved = true;
+    place(x, y, r);
+    // Keep remote hover/drag attached to the local pointer as the picture moves.
+    if (control) {
+      const next = point(p);
+      cx = next.x;
+      cy = next.y;
+      queue({ kind: "move", x: cx, y: cy });
+    }
+    render();
+    edgeFrame = requestAnimationFrame(edgePanTick);
+  }
+  function trackEdgePointer(e) {
+    const p = desktopPoint(e);
+    if (
+      !epoch ||
+      desktopPan ||
+      p.x < viewportLeft() ||
+      p.x > viewportLeft() + viewportWidth() ||
+      p.y < 0 ||
+      p.y > viewportHeight() ||
+      !insideDesktop(p)
+    ) {
+      stopEdgePan();
+      return;
+    }
+    edgePointer = p;
+    if (edgeFrame === null) {
+      edgeTime = performance.now();
+      edgeFrame = requestAnimationFrame(edgePanTick);
+    }
+  }
+  listen(stage, "pointerleave", stopEdgePan);
   function mouse(e, down) {
     if (!control || ![0, 1, 2].includes(e.button)) return;
     const local = desktopPoint(e);
@@ -1044,6 +1184,22 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   listen(stage, "pointerdown", (e) => {
     if (config.desktop) {
       e.preventDefault();
+      if (
+        e.button === 1 &&
+        (layout().width > viewportWidth() || layout().height > viewportHeight())
+      ) {
+        stopEdgePan();
+        stopPanAnimation();
+        desktopPan = {
+          id: e.pointerId,
+          x: e.clientX,
+          y: e.clientY,
+          start: e,
+          moved: false,
+        };
+        stage.setPointerCapture(e.pointerId);
+        return;
+      }
       mouse(e, true);
       return;
     }
@@ -1092,6 +1248,17 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   });
   listen(stage, "pointermove", (e) => {
     if (config.desktop) {
+      if (desktopPan?.id === e.pointerId) {
+        const dx = e.clientX - desktopPan.x,
+          dy = e.clientY - desktopPan.y;
+        if (!desktopPan.moved && Math.hypot(dx, dy) < 3) return;
+        desktopPan.moved = true;
+        desktopPan.x = e.clientX;
+        desktopPan.y = e.clientY;
+        pan(dx, dy);
+        return;
+      }
+      trackEdgePointer(e);
       if (!control) return;
       const local = desktopPoint(e);
       if (!heldMouse.size && !insideDesktop(local)) return;
@@ -1138,6 +1305,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   });
   function up(e) {
     if (config.desktop) {
+      if (desktopPan?.id === e.pointerId) {
+        const gesture = desktopPan;
+        desktopPan = null;
+        if (gesture.moved) settlePan();
+        else {
+          mouse(gesture.start, true);
+          mouse(e, false);
+        }
+        return;
+      }
       mouse(e, false);
       return;
     }
@@ -1182,6 +1359,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     settlePan();
   });
   listen(stage, "lostpointercapture", () => {
+    desktopPan = null;
     if (config.desktop && heldMouse.size) release();
   });
   if (config.desktop)
@@ -1596,12 +1774,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     }
     configPending = true;
-    deadlineTimer = setTimeout(() => {
-      if (g === generation && configPending) {
-        configPending = false;
-        void startRtc(g, iceServers);
-      }
-    }, 3500);
+    deadlineTimer = setTimeout(
+      () => {
+        if (g === generation && configPending) {
+          configPending = false;
+          void startRtc(g, iceServers);
+        }
+      },
+      (net.iceConfigMs ?? 8000) + (net.iceConfigBridgeMs ?? 500),
+    );
     return post({ type: "iceConfig", attemptId });
   }
   async function receiveIceConfig(message) {
@@ -1811,6 +1992,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           stopPanAnimation();
           viewerSized = message.restore !== true;
           zoom = 1;
+          desktopScale = null;
           fx = fy = 0.5;
           followRest = null;
           dw = message.width;
@@ -2002,6 +2184,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       case "init":
         nativeVideoActive = false;
         image.style.visibility = "visible";
+        desktopScale = null;
+        reportedScaleMode = null;
+        if (config.desktop) {
+          zoom = 1;
+          fx = 0.5;
+          fy = 0.5;
+        }
         viewerSized = false;
         followRest = null;
         cursorNeedsEntry = true;
@@ -2087,7 +2276,48 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         mode = message.mode;
         render();
         break;
+      case "zoom":
+        stopEdgePan();
+        if (
+          !config.desktop ||
+          !Number.isFinite(message.factor) ||
+          message.factor <= 0
+        )
+          break;
+        followRest = null;
+        cursorNeedsEntry = true;
+        manualViewMoved = true;
+        stopPanAnimation();
+        const fitScale = Math.min(viewportWidth() / dw, viewportHeight() / dh);
+        // Include actual size even when it lies outside the fit-relative range.
+        desktopScale = Math.max(
+          Math.min(fitScale, 1) * 0.1,
+          Math.min(Math.max(5 * fitScale, 5), layout().scale * message.factor),
+        );
+        if (Math.abs(desktopScale - fitScale) < 1e-9) desktopScale = null;
+        if (desktopScale === null) {
+          fx = 0.5;
+          fy = 0.5;
+          manualViewMoved = false;
+        }
+        render();
+        settlePan();
+        break;
+      case "actualSize":
+        stopEdgePan();
+        if (!config.desktop) break;
+        followRest = null;
+        cursorNeedsEntry = true;
+        manualViewMoved = true;
+        stopPanAnimation();
+        desktopScale = 1;
+        fx = 0.5;
+        fy = 0.5;
+        render();
+        break;
       case "fit":
+        stopEdgePan();
+        desktopScale = null;
         followRest = null;
         cursorNeedsEntry = true;
         manualViewMoved = false;

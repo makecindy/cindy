@@ -3,7 +3,14 @@ import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IPty } from 'node-pty';
 import type { PtySpawnFn } from '../../terminal/ptyFactory';
-const h = vi.hoisted(() => ({ links: new Set<string>(), files: new Set<string>(), git: vi.fn() }));
+const h = vi.hoisted(() => ({
+  links: new Set<string>(),
+  files: new Set<string>(),
+  git: vi.fn(),
+  createTemp: vi.fn(),
+  cleanTemp: vi.fn(),
+}));
+vi.mock('../testTempDirectory.js', () => ({ createMakeTestTempDirectory: h.createTemp }));
 vi.mock('node:fs/promises', () => ({
   lstat: async (file: string) => ({
     isSymbolicLink: () => h.links.has(file),
@@ -23,7 +30,7 @@ const task = {
   runId: 'abcd-test',
   commit: 'a'.repeat(40),
 };
-function processHarness() {
+async function processHarness() {
   let data: (value: string) => void = () => {};
   let exit: () => void = () => {};
   const kill = vi.fn(() => exit());
@@ -43,14 +50,16 @@ function processHarness() {
   );
   const controller = new AbortController();
   const progress = vi.fn();
-  const process = launchMakeTest(
+  const diagnostics = vi.fn();
+  const process = await launchMakeTest(
     task,
-    path.join(profile, 'node'),
-    { PATH: '/tools', XDT_USER_DATA_DIR: '/host' },
+    { node: path.join(profile, 'node'), pnpm: path.join(profile, 'tools', 'pnpm.cmd') },
+    { PATH: '/tools', XDT_USER_DATA_DIR: '/host', npm_execpath: '/host/pnpm.cjs' },
     'global',
     controller.signal,
     spawn,
     progress,
+    diagnostics,
   );
   void process.ready.catch(() => {});
   const verdict = (extra: Partial<Record<string, string>> = {}) => {
@@ -74,6 +83,7 @@ function processHarness() {
   return {
     process,
     progress,
+    diagnostics,
     spawn,
     kill,
     controller,
@@ -87,6 +97,11 @@ beforeEach(() => {
   h.links.clear();
   h.files.clear();
   h.git.mockReset();
+  h.cleanTemp.mockReset().mockResolvedValue(undefined);
+  h.createTemp.mockReset().mockResolvedValue({
+    directory: path.join(profile, 'launch-temporary'),
+    clean: h.cleanTemp,
+  });
   h.files.add(path.join(task.workingDir, '.git'));
   h.files.add(path.join(task.workingDir, 'scripts', 'desktop-restart-runner.mjs'));
   h.git.mockImplementation(async (_env, args) => {
@@ -100,8 +115,141 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('isolated Make test runner', () => {
+  it('keeps persistent isolation stable but directs disposable files to a per-launch directory', async () => {
+    const first = await processHarness();
+    const secondDirectory = path.join(profile, 'another-launch');
+    h.createTemp.mockResolvedValueOnce({ directory: secondDirectory, clean: h.cleanTemp });
+    const second = await processHarness();
+    expect(first.spawn.mock.calls[0][1]).toEqual(second.spawn.mock.calls[0][1]);
+    expect(first.spawn.mock.calls[0][2].env).toMatchObject({
+      TMPDIR: path.join(profile, 'launch-temporary'),
+      TMP: path.join(profile, 'launch-temporary'),
+      TEMP: path.join(profile, 'launch-temporary'),
+    });
+    expect(second.spawn.mock.calls[0][2].env?.TEMP).toBe(secondDirectory);
+    first.exit();
+    second.exit();
+    await Promise.all([first.process.closed, second.process.closed]);
+  });
+
+  it.each(['exit', 'stop', 'failure'] as const)(
+    'waits for cleanup after %s before releasing the process',
+    async (mode) => {
+      let cleaned!: () => void;
+      h.cleanTemp.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            cleaned = resolve;
+          }),
+      );
+      const run = await processHarness();
+      const closed = vi.fn();
+      void run.process.closed.then(closed);
+      if (mode === 'failure') run.emit('DESKTOP_DEV_VERDICT=failed\r\ncode=STARTUP_FAILED\r\n');
+      else {
+        run.emit(run.verdict());
+        await run.process.ready;
+        if (mode === 'stop') run.process.stop();
+        else run.exit();
+      }
+      expect(h.cleanTemp).toHaveBeenCalledOnce();
+      expect(closed).not.toHaveBeenCalled();
+      run.process.stop();
+      expect(h.cleanTemp).toHaveBeenCalledOnce();
+      cleaned();
+      await run.process.closed;
+      expect(closed).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('cleans a cancelled preparation before any process is spawned', async () => {
+    const controller = new AbortController();
+    h.createTemp.mockImplementationOnce(async () => {
+      controller.abort();
+      return { directory: path.join(profile, 'cancelled'), clean: h.cleanTemp };
+    });
+    const spawn = vi.fn<PtySpawnFn>();
+    await expect(
+      launchMakeTest(task, { node: 'node', pnpm: 'pnpm' }, {}, 'global', controller.signal, spawn),
+    ).rejects.toBeTruthy();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(h.cleanTemp).toHaveBeenCalledOnce();
+  });
+
+  it('cleans an unsuccessful spawn and reports a bounded cleanup failure without file contents', async () => {
+    const spawn = vi.fn<PtySpawnFn>(() => {
+      throw new Error('spawn failed');
+    });
+    await expect(
+      launchMakeTest(
+        task,
+        { node: 'node', pnpm: 'pnpm' },
+        {},
+        'global',
+        new AbortController().signal,
+        spawn,
+      ),
+    ).rejects.toThrow('spawn failed');
+    expect(h.cleanTemp).toHaveBeenCalledOnce();
+    h.cleanTemp.mockRejectedValueOnce(new Error('private path and contents'));
+    const run = await processHarness();
+    run.exit();
+    await run.process.closed;
+    expect(run.diagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'failed', reason: 'cleanupFailed' }),
+    );
+    expect(JSON.stringify(run.diagnostics.mock.calls)).not.toMatch(/private|contents/);
+  });
+
+  it('does not mistake a failed stop for a confirmed process exit', async () => {
+    const run = await processHarness();
+    run.kill.mockImplementationOnce(() => {
+      throw new Error('stop failed');
+    });
+    run.process.stop();
+    expect(h.cleanTemp).not.toHaveBeenCalled();
+    expect(run.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ reason: 'stopFailed' }));
+    run.exit();
+    await run.process.closed;
+    expect(h.cleanTemp).toHaveBeenCalledOnce();
+  });
+
+  it('records a wrapper failure code across chunks without raw output or free-form messages', async () => {
+    const h = await processHarness();
+    h.emit(
+      'compiler output with private data\r\nDESKTOP_DEV_STEP=launching\r\nDESKTOP_DEV_VERDICT=failed\r\n',
+    );
+    expect(h.kill).not.toHaveBeenCalled();
+    h.emit('co');
+    h.emit('de=DEV_PROCESS_EXITED\r\nmessage=private credentials and paths\r\n');
+    await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
+    expect(h.diagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'failed',
+        reason: 'wrapperFailed',
+        step: 'launching',
+        wrapperCode: 'DEV_PROCESS_EXITED',
+      }),
+    );
+    expect(JSON.stringify(h.diagnostics.mock.calls)).not.toMatch(/private|credentials|compiler/);
+    expect(h.kill).toHaveBeenCalledOnce();
+  });
+  it('bounds incomplete failure verdicts and rejects unknown diagnostic codes', async () => {
+    vi.useFakeTimers();
+    const h = await processHarness();
+    h.emit('DESKTOP_DEV_VERDICT=failed\r\n');
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
+    const next = await processHarness();
+    next.emit('DESKTOP_DEV_VERDICT=failed\r\ncode=PRIVATE_SECRET\r\n');
+    await expect(next.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
+    expect(next.diagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({ wrapperCode: 'UNKNOWN' }),
+    );
+    expect(JSON.stringify(next.diagnostics.mock.calls)).not.toContain('PRIVATE_SECRET');
+  });
   it('reports bounded known steps across PTY chunks and ignores raw output and late progress', async () => {
-    const h = processHarness();
+    const h = await processHarness();
     h.emit('DESKTOP_DEV_ST');
     h.emit('EP=dependencies\r\nDESKTOP_DEV_STEP=dependencies\r\n');
     h.emit('DESKTOP_DEV_STEP=/private/path\r\ncompiler output\r\n');
@@ -115,7 +263,7 @@ describe('isolated Make test runner', () => {
     await h.process.closed;
   });
   it('supports the fixed stage prefixes from older source checkouts', async () => {
-    const h = processHarness();
+    const h = await processHarness();
     h.emit('[ensure-deps] checking\r\n[ensure-deps] done\r\n');
     h.emit('[ensure-dev-runtime-assets] checking\r\n==> Starting desktop remote dev...\r\n');
     expect(h.progress.mock.calls).toEqual([['dependencies'], ['assets'], ['launching']]);
@@ -162,7 +310,7 @@ describe('isolated Make test runner', () => {
     ).toEqual({ PATH: '/tools', HOME: '/user', TERM: 'xterm-256color', FORCE_COLOR: '0' });
   });
   it('uses the existing wrapper, explicit isolation and a real PTY without a shell command', async () => {
-    const h = processHarness();
+    const h = await processHarness();
     expect(h.spawn.mock.calls[0][1]).toEqual([
       path.join(task.workingDir, 'scripts', 'desktop-restart-runner.mjs'),
       '--wait-ready',
@@ -172,6 +320,10 @@ describe('isolated Make test runner', () => {
     ]);
     expect(h.spawn.mock.calls[0][2].cwd).toBe(task.workingDir);
     expect(h.spawn.mock.calls[0][2].env).not.toHaveProperty('XDT_USER_DATA_DIR');
+    expect(h.spawn.mock.calls[0][2].env?.npm_execpath).toBe(
+      path.join(profile, 'tools', 'pnpm.cmd'),
+    );
+    expect(h.spawn.mock.calls[0][2].env?.XDT_CINDY_MAKE_TEST).toBe('1');
     const text = h.verdict();
     h.emit(text.slice(0, 17));
     h.emit(text.slice(17));
@@ -182,24 +334,24 @@ describe('isolated Make test runner', () => {
   it.each([{ root: profile }, { commit: 'b'.repeat(40) }, { mode: 'shared' }, { region: 'cn' }])(
     'rejects a ready verdict for the wrong launch %j',
     async (extra) => {
-      const h = processHarness();
+      const h = await processHarness();
       h.emit(h.verdict(extra));
       await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
       expect(h.kill).toHaveBeenCalledOnce();
     },
   );
   it('fails on an early exit and aborts only its own process', async () => {
-    const h = processHarness();
+    const h = await processHarness();
     h.exit();
     await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
-    const next = processHarness();
+    const next = await processHarness();
     next.controller.abort();
     await expect(next.process.ready).rejects.toMatchObject({ code: 'interrupted' });
     expect(next.kill).toHaveBeenCalledOnce();
   });
   it('bounds startup even if the wrapper never returns a verdict', async () => {
     vi.useFakeTimers();
-    const h = processHarness();
+    const h = await processHarness();
     await vi.advanceTimersByTimeAsync(25 * 60_000);
     await expect(h.process.ready).rejects.toMatchObject({ code: 'timeout' });
     expect(h.kill).toHaveBeenCalledOnce();

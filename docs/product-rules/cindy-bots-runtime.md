@@ -378,6 +378,14 @@ Session 任务遵守同一套机制与呈现契约：
 - Bot 表全部只增量；旧代码打开含 Bot 表的库时按既有 migration compatibility 守卫失败关闭，
   不得强行降级。
 
+Codex 切模型重建时，线程索引里的路径不等于文件已经落盘。缺文件时仍保留原历史根与
+数据库根，先用原生 `thread/read` 核实有无已存线程，再走 `thread/resume`；只有原生明确
+没有线程元数据且无法找到 rollout，才在同一伙伴主任务内重建未开始的线程。
+原生 `no rollout` 错误本身不能证明线程未开始：已有历史文件丢失时也会返回它。
+已有线程元数据、读取异常或迟到落盘不得触发空白重建；不得换用旧副本，也不得重放已接受的输入。
+实现见 `codex-thread-locations.ts` 与 Codex adapter；原生契约回归见
+`packages/maker-core/src/agents/codex/app-server/external-auth.native.test.ts`。
+
 ## 8. 验收最低集
 
 - 单模型旧 Profile 可无损读成一项链；新 Profile 可保存并恢复 1–5 项顺序。

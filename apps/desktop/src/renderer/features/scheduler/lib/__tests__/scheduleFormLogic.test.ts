@@ -295,7 +295,7 @@ describe('canSubmitSessionBinding', () => {
     })).toBe(false);
   });
 
-  it('allows script mode to clear an unavailable stale binding', () => {
+  it('allows script edits while the host handles unavailable lifecycle owners', () => {
     expect(canSubmitSessionBinding('script', 'bound', undefined)).toBe(true);
     expect(
       canSubmitSessionBinding('script', 'bound', { sessionId: 'session-1', state: 'deleted' }),
@@ -882,5 +882,19 @@ describe('scheduleToUserCreateInput', () => {
     expect(input).not.toHaveProperty('targetSessionId');
     expect(input).not.toHaveProperty('projectConfigId');
     expect(original.agentKind).toBe('codex');
+  });
+});
+
+
+describe('script lifecycle serialization', () => {
+  it('preserves owner and installed gate while keeping script cwd', () => {
+    const input = buildScheduleInput(makeForm({ executionMode: 'script',
+      targetSessionId: 'owner', workingDir: '/watcher', scriptCommand: 'node run.mjs',
+      preRunHookEnabled: true, preRunHookCommand: 'node /watcher/gate.mjs',
+    }));
+    expect(input.targetSessionId).toBe('owner');
+    expect(input.workingDir).toBe('/watcher');
+    expect(input.preRunHook?.command).toBe('node /watcher/gate.mjs');
+    expect(buildScheduleInput(makeForm({ executionMode: 'script', targetSessionId: '__pending__' })).targetSessionId).toBeUndefined();
   });
 });

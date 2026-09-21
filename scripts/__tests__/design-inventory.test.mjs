@@ -134,11 +134,15 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/plugins GhostPluginPage',
     '/settings SettingsView',
     '/sidebar-window SidebarWindowLayout',
-    '/skillhub/local SkillhubHomeView',
-    '/skillhub/local/:kind/global/:name SkillhubDetailView',
-    '/skillhub/local/:kind/project/:projectHash/:name SkillhubDetailView',
-    '/skillhub/local/by-path SkillhubDetailView',
+    '/skillhub SkillhubLocalLayout',
+    '/skillhub/detail SkillhubDetailRoute',
+    '/skillhub/local/:kind/global/:name LegacySkillDetailRedirect',
+    '/skillhub/local/:kind/project/:projectHash/:name LegacySkillDetailRedirect',
+    '/skillhub/local/by-path LegacySkillDetailRedirect',
     '/skillhub/market SkillhubMarketListView',
+    '/skillhub/market/:kind/:name LegacySkillDetailRedirect',
+    '/skillhub/market/:name LegacySkillDetailRedirect',
+    '/skillhub/market/manage/:name LegacySkillDetailRedirect',
   ]);
 
   assert.deepEqual(redirects.map((row) => `${row.path} -> ${row.to}`), [
@@ -148,9 +152,6 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/cc-agent/new-dialogue -> /cc-agent/new',
     '/cc-agent/orca/new -> /cc-agent/new',
     '/skillhub -> /skillhub/local',
-    '/skillhub/market/:kind/:name -> /skillhub/market',
-    '/skillhub/market/:name -> /skillhub/market',
-    '/skillhub/market/manage/:name -> /skillhub/market',
   ]);
 
   assert.deepEqual(layouts.map((row) => `${row.path} ${row.component}`), [
@@ -312,11 +313,11 @@ test('router.tsx 每条生产路由都能映射到 surface,布局壳在排除清
   const mappedPaths = coverage.mapped.map((row) => row.path);
   assert.ok(mappedPaths.includes('/issues'));
   assert.ok(mappedPaths.includes('/login'));
-  assert.ok(mappedPaths.includes('/skillhub/local'));
+  // Unlike the pure feature shell, the retained layout renders the catalog itself.
+  assert.ok(mappedPaths.includes('/skillhub'));
   assert.ok(mappedPaths.includes('/skillhub/market'));
   assert.equal(mappedPaths.includes('/'), false);
   assert.equal(mappedPaths.includes('/cc-agent'), false);
-  assert.equal(mappedPaths.includes('/skillhub'), false);
   assert.equal(mappedPaths.includes('/billing'), false);
 
   const layoutPaths = new Set(listLayoutExclusions(routerSource).map((row) => row.path));
@@ -691,7 +692,7 @@ test('市场页直接渲染的子组件纳入样式统计', () => {
   const catalog = catalogSurfaces();
   const market = catalog.find((surface) => surface.id === 'desktop.skillhub.market');
   assert.ok(market);
-  for (const component of ['MarketCard', 'InstallTargetPicker', 'SkillhubMarketPreviewPanel', 'MarketInfoEditDialog', 'VisibilityEditorDialog']) {
+  for (const component of ['MarketCard', 'InstallTargetPicker', 'SkillhubMarketDetailView', 'MarketInfoEditDialog', 'VisibilityEditorDialog']) {
     assert.ok(
       market.reachableComponents.includes(component),
       `${component} 必须列入市场页可达组件`,
@@ -799,11 +800,11 @@ test('CSS 文件同样剥块注释后统计,globals.css 注释色值不进基线
   assert.ok(shell.bareColors > 0, '真实规则色值仍应计入');
 });
 
-test('skillhub.local 纳入直接渲染子组件的样式事实', () => {
+test('skillhub.local 纳入保留列表布局及直接渲染子组件的样式事实', () => {
   const catalog = catalogSurfaces();
   const local = catalog.find((surface) => surface.id === 'desktop.skillhub.local');
   assert.ok(local);
-  for (const component of ['PluginManagementLayout', 'SkillhubMarketPreviewPanel', 'InstallTargetPicker']) {
+  for (const component of ['SkillhubLocalLayout', 'SkillhubHomeView', 'PluginManagementLayout', 'SkillhubMarketDetailView', 'InstallTargetPicker']) {
     assert.ok(
       local.reachableComponents.includes(component),
       `${component} 必须列入 skillhub.local 可达组件`,
@@ -814,6 +815,8 @@ test('skillhub.local 纳入直接渲染子组件的样式事实', () => {
   );
   const { surfaces } = buildGeneratedSurfaces(ROOT, {});
   const generated = surfaces.find((surface) => surface.id === 'desktop.skillhub.local');
+  assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubLocalLayout.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubHomeView.tsx')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('PluginManagementLayout.tsx')));
   assert.ok(generated.tokenCount > 33, `子组件并入后 token 数应高于只扫路由组件(实际 ${generated.tokenCount})`);
 });

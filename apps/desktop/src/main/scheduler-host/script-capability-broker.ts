@@ -356,6 +356,11 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         const service = tryGetOrcaCollabService();
         if (!service) fail('HOST_NOT_READY', 'session dispatch service is not ready');
         const schedule = context.schedule;
+        const requestedTarget = typeof params.target_session_id === 'string'
+          && params.target_session_id.trim() ? params.target_session_id : undefined;
+        if (schedule.targetSessionId && requestedTarget && requestedTarget !== schedule.targetSessionId) {
+          fail('INVALID_ARGS', 'bound scripts can only dispatch to their target session');
+        }
         const explicitProviderId = schedule.providerId?.trim() || null;
         const dynamicDefaultRoute = !schedule.model?.trim() && schedule.agentKind === 'pi'
           ? await this.deps.resolveDefaultModelRoute?.(
@@ -368,10 +373,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           || defaultModelFor(schedule.agentKind);
         if (!model) fail('PRECONDITION_FAILED', 'Pi has no connected model source');
         const result = await service.sendToSession({
-          targetSessionId:
-            typeof params.target_session_id === 'string' && params.target_session_id.trim()
-              ? params.target_session_id
-              : undefined,
+          targetSessionId: schedule.targetSessionId ?? requestedTarget,
           message: requireString(params, 'message'),
           title: typeof params.title === 'string' ? params.title : undefined,
           useWorktree: false,

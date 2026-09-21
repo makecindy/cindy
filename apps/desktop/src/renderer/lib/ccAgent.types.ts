@@ -253,6 +253,7 @@ export interface CcMeta {
 export type AgentMeta = CcMeta;
 
 export interface Session {
+  tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;
   title: string;
@@ -414,7 +415,8 @@ export interface SessionRuntimePendingProjection {
 // 内存(coordinator projection + store.error),事后点进会话毫无痕迹,红点无从追溯。
 // 'agent_switch':session 内 agent 引擎切换边界行(session-agent-switch,main 落库)。
 // content 为 AgentSwitchContent;渲染成分隔条(可展开查看交接摘要),不是对话正文。
-export type MessageRole = 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'ask_user' | 'plan_review' | 'thinking' | 'error' | 'agent_switch';
+export type MessageRole =
+  | 'user' | 'assistant' | 'tool_use' | 'tool_result' | 'ask_user' | 'plan_review' | 'thinking' | 'error' | 'agent_switch';
 
 /**
  * role='agent_switch' 行的 content 结构(JSON 存于 messages.content)。

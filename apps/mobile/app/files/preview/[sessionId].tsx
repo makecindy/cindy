@@ -9,7 +9,8 @@
  * 切换文件通过 Done 返回列表完成。
  * 文本 = readFile(acceptGzip,pako 解码)+ 行号列表;图片 = 缩略图立即显示,
  * OSS 导出原图就绪后无缝换源(不出 loading 态,规则 7);其它 = 占位 + 下载。
- * markdown 与 HTML 额外有「渲染 / 源码」双态,默认渲染。markdown 复用已读文本;
+ * markdown 与 HTML 额外有「渲染 / 源码」双态,默认渲染。HTML 使用浮动浏览器控件,
+ * 源码和文件操作收进更多菜单;markdown 保留原来的切换栏并复用已读文本。
  * HTML 渲染完整目录快照,源码仍走文本通道与原有大小限制。
  *
  * absPath 单文件模式(route 参 absPath,与 relPath 互斥):聊天 chip 指向
@@ -25,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowDownToLine, Copy, Database, File as FileIcon, Info, MessageSquarePlus, Share as ShareIcon } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Pressable,
@@ -32,8 +34,9 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
+import type { WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 import { Text } from '@/components/AppText';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
@@ -54,6 +57,11 @@ import { getCachedPreviewText, storeCachedPreviewText } from '@/session/fileBrow
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import type { RemoteMediaSshContext } from '@/session/fileBrowserGallery';
 import { HtmlSnapshotReader } from '@/session/HtmlFileReader';
+import { HtmlBrowserChrome } from '@/session/HtmlBrowserChrome';
+import { HtmlWebsiteBrowser, type WebsiteVisit } from '@/session/HtmlWebsiteBrowser';
+import { normalizeBrowserAddress } from '@/session/browserAddress';
+import { HTML_BROWSER_CONTROL_SIZE, type HtmlBrowserChromeProps } from '@/session/HtmlBrowserChrome.types';
+import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import { prepareMobileHtmlPreview, type PrepareMobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import { useHtmlSnapshot } from '@/session/useHtmlSnapshot';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -92,6 +100,9 @@ type TextPreviewState =
  * 转成我们自己的 HTML,HTML 生成物则原样进 WebView。
  */
 type RichTextKind = 'markdown' | 'html';
+
+type HtmlBrowserActions = Pick<HtmlBrowserChromeProps,
+  'busy' | 'notice' | 'onClose' | 'onShare' | 'onCopyPath' | 'onAddToTask'>;
 
 interface SiblingListing {
   key: string;
@@ -494,8 +505,10 @@ export default function RemoteFilePreviewScreen() {
     );
   }
 
+  const htmlBrowser = richTextKindOf(current.relPath) === 'html';
   return (
-    <SafeAreaView style={styles.safeArea} testID="filePreview.screen">
+    <SafeAreaView edges={htmlBrowser ? [] : undefined} style={styles.safeArea} testID="filePreview.screen">
+      {!htmlBrowser ? <>
       <PreviewNav
         meta={[
           `${pageIndex + 1} / ${siblings.length}`,
@@ -507,6 +520,7 @@ export default function RemoteFilePreviewScreen() {
         title={current.name}
       />
       <View style={styles.navHairline} />
+      </> : null}
 
       <FlatList
         data={siblings}
@@ -542,6 +556,14 @@ export default function RemoteFilePreviewScreen() {
               item={item}
               maker={maker}
               onDownload={() => void downloadAndShare(item)}
+              htmlBrowserActions={{
+                busy: !!busyLabel,
+                notice: busyLabel ?? notice,
+                onClose: () => goBackGuarded(router),
+                onShare: () => void downloadAndShare(item),
+                onCopyPath: () => void copyPath(item),
+                onAddToTask: () => sendToSession(item),
+              }}
               // chat-text-quote:markdown 渲染态选中文字 → 引用进会话草稿
               // (携带当前文件路径,— source: 行),随即切回对话界面——与
               // 「发送到会话」(sendToSession)的图片/路径处理一致(产品决策);
@@ -578,6 +600,7 @@ export default function RemoteFilePreviewScreen() {
         windowSize={3}
       />
 
+      {!htmlBrowser ? <>
       <View style={styles.toolbarHairline} />
       <View style={styles.toolbar}>
         <ToolbarButton
@@ -598,6 +621,7 @@ export default function RemoteFilePreviewScreen() {
       {busyLabel || notice ? (
         <Text style={styles.noticeText} testID="filePreview.notice">{busyLabel ?? notice}</Text>
       ) : null}
+      </> : null}
 
       {lightboxImages.length > 0 ? (
         <ImageLightbox
@@ -652,6 +676,7 @@ function FilePreviewPage({
   exportToUrl,
   prepareHtmlPreview,
   item,
+  htmlBrowserActions,
   maker,
   onDownload,
   onHtmlPanChange,
@@ -668,6 +693,7 @@ function FilePreviewPage({
   exportToUrl(relPath: string, mtimeMs: number): Promise<string>;
   prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
+  htmlBrowserActions: HtmlBrowserActions;
   maker: Pick<MobileMakerTransport, 'fileBrowser'>;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,仅文本页产出)。 */
@@ -711,6 +737,7 @@ function FilePreviewPage({
         active={active}
         prepareHtmlPreview={prepareHtmlPreview}
         item={item}
+        htmlBrowserActions={htmlBrowserActions}
         onDownload={onDownload}
         onHtmlPanChange={onHtmlPanChange}
         onQuoteSelection={onQuoteSelection}
@@ -874,6 +901,7 @@ function TextPreviewPage({
   active,
   prepareHtmlPreview,
   item,
+  htmlBrowserActions,
   onDownload,
   onHtmlPanChange,
   onQuoteSelection,
@@ -889,6 +917,7 @@ function TextPreviewPage({
   /** 下载完整目录并返回受控网页预览,签名地址不进入页面。 */
   prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
+  htmlBrowserActions: HtmlBrowserActions;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
@@ -905,6 +934,16 @@ function TextPreviewPage({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const richKind = richTextKindOf(item.relPath);
+  const insets = useSafeAreaInsets();
+  // Sit directly against the safe-area edges; only a small gap separates page content.
+  const browserTop = insets.top;
+  const browserBottom = insets.bottom;
+  const browserContentInset = { top: browserTop + HTML_BROWSER_CONTROL_SIZE + spacing.xs, bottom: browserBottom + HTML_BROWSER_CONTROL_SIZE + spacing.xs };
+  const browserRef = useRef<WebView>(null);
+  const [website, setWebsite] = useState<WebsiteVisit | null>(null);
+  const [browserNavigation, setBrowserNavigation] = useState<{
+    preview: MobileHtmlPreview; state: WebViewNavigation;
+  } | null>(null);
   // absPath 单文件模式(item.relPath 为绝对路径)没有可靠 mtime(恒 0),
   // 缓存键无法随文件覆写失效,读写一律跳过缓存。
   const cacheable = !!workdir && !isAbsolutePathShape(item.relPath);
@@ -926,6 +965,7 @@ function TextPreviewPage({
   // 可切源码;其余文本恒为源码态。
   const [richView, setRichView] = useState<'rendered' | 'source'>(richKind ? 'rendered' : 'source');
   const loadedRef = useRef(state.status === 'ready');
+  const [textReloadEpoch, setTextReloadEpoch] = useState(0);
   const codeListRef = useRef<FlatList<string>>(null);
   const scrolledToTargetRef = useRef(false);
 
@@ -974,11 +1014,11 @@ function TextPreviewPage({
     return () => {
       cancelled = true;
     };
-  }, [active, cacheable, cacheScope, item.relPath, richKind, readTextFile, t, workdir]);
+  }, [active, cacheable, cacheScope, item.relPath, richKind, readTextFile, t, workdir, textReloadEpoch]);
 
   const htmlSnapshot = useHtmlSnapshot(
     absolutePathOf(item.relPath),
-    visible && richKind === 'html' && richView === 'rendered',
+    visible && richKind === 'html' && richView === 'rendered' && !website,
     prepareHtmlPreview,
   );
   const [htmlLoadError, setHtmlLoadError] = useState(false);
@@ -993,11 +1033,18 @@ function TextPreviewPage({
         ? t('files.preview.htmlSnapshotTooLarge')
         : t('files.preview.htmlSnapshotFailed');
   const htmlPanWanted = visible && richKind === 'html' && richView === 'rendered'
-    && htmlSnapshot.foreground && !!htmlSnapshot.preview && !htmlError;
+    && htmlSnapshot.foreground && (!!website || (!!htmlSnapshot.preview && !htmlError));
   useEffect(() => {
     onHtmlPanChange?.(item.key, htmlPanWanted);
     return () => onHtmlPanChange?.(item.key, false);
   }, [htmlPanWanted, item.key, onHtmlPanChange]);
+
+  if (website) return visible ? <HtmlWebsiteBrowser
+    visit={website}
+    insets={{ ...browserContentInset, left: insets.left, right: insets.right }}
+    chrome={{ top: browserTop, bottom: browserBottom, left: insets.left + spacing.md, right: insets.right + spacing.md, onClose: htmlBrowserActions.onClose }}
+    onReturn={() => { setBrowserNavigation(null); setWebsite(null); }}
+  /> : <View style={styles.textPage} />;
 
   if (state.status === 'loading' && richKind !== 'html') {
     return (
@@ -1016,8 +1063,14 @@ function TextPreviewPage({
   const clipped = ready && (ready.truncated || ready.totalLines > ready.lines.length) && !(richKind === 'html' && richView === 'rendered');
   const canRenderRich = richKind === 'html' || (richKind !== null && typeof ready?.content === 'string');
   const showRendered = canRenderRich && richView === 'rendered';
+  // State belongs to the mounted snapshot, never to a previous file/source/foreground lifetime.
+  const navigation = htmlPanWanted && browserNavigation && browserNavigation.preview === htmlSnapshot.preview ? browserNavigation.state : null;
   return (
     <View style={styles.textPage}>
+      <View style={[styles.textPage, richKind === 'html' && richView === 'source' && {
+        paddingTop: browserContentInset.top, paddingBottom: browserContentInset.bottom,
+        paddingLeft: insets.left, paddingRight: insets.right,
+      }]}>
       {clipped ? (
         <View style={styles.truncBar} testID="filePreview.truncBanner">
           <Info color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
@@ -1026,9 +1079,8 @@ function TextPreviewPage({
           </Text>
         </View>
       ) : null}
-      {/* 切换胶囊的 `md*` 样式与 i18n key 是 markdown 独占时期留下的命名,现在两类
-          渲染态共用;文案本身("渲染 / 源码")与载体无关,不为改名动四份 locale。 */}
-      {canRenderRich ? (
+      {/* HTML 的模式切换在浮动浏览器菜单中;Markdown 保留原有胶囊。 */}
+      {canRenderRich && richKind !== 'html' ? (
         <View style={styles.mdToggleRow}>
           {([['rendered', t('files.preview.mdRendered')], ['source', t('files.preview.mdSource')]] as const).map(([value, label]) => (
             <Pressable
@@ -1066,7 +1118,11 @@ function TextPreviewPage({
             </View>
           ) : (
             // 只有完整下载并加固过的目录快照才能进入 WebView。
-            <HtmlSnapshotReader preview={htmlSnapshot.preview} onError={() => setHtmlLoadError(true)} />
+            <HtmlSnapshotReader preview={htmlSnapshot.preview} onError={() => setHtmlLoadError(true)}
+              webViewRef={browserRef}
+              viewportInsets={{ ...browserContentInset, left: insets.left, right: insets.right }}
+              onNavigationStateChange={(preview, state) => setBrowserNavigation({ preview, state })}
+            />
           )
         ) : (
           <MarkdownFileReader markdown={ready?.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
@@ -1107,6 +1163,43 @@ function TextPreviewPage({
         style={styles.codeList}
       />
       )}
+      </View>
+      {richKind === 'html' && visible ? (
+        <HtmlBrowserChrome
+          {...htmlBrowserActions}
+          title={item.name}
+          path={absolutePathOf(item.relPath)}
+          address={absolutePathOf(item.relPath)}
+          onNavigate={(input) => {
+            if (input.trim() === absolutePathOf(item.relPath)) return true;
+            const url = normalizeBrowserAddress(input);
+            if (!url) { Alert.alert(t('files.preview.browserInvalidAddress')); return false; }
+            // Start closing before disabling the snapshot hook; wait for this exact promise.
+            const snapshotClosed = htmlSnapshot.preview?.close() ?? Promise.resolve();
+            setRichView('rendered');
+            setWebsite({ url, snapshotClosed });
+            return true;
+          }}
+          top={browserTop}
+          bottom={browserBottom}
+          left={insets.left + spacing.md}
+          right={insets.right + spacing.md}
+          source={richView === 'source'}
+          loading={richView === 'rendered' && !htmlError && (!htmlSnapshot.preview || navigation?.loading === true)}
+          canGoBack={richView === 'source' || navigation?.canGoBack === true}
+          canGoForward={navigation?.canGoForward === true}
+          onBack={() => { if (richView === 'source') setRichView('rendered'); else if (navigation?.canGoBack) browserRef.current?.goBack(); }}
+          onForward={() => { if (navigation?.canGoForward) browserRef.current?.goForward(); }}
+          onReload={() => {
+            // Reload means fresh remote bytes in both views, not a reload of the cached local URL.
+            loadedRef.current = false;
+            setState({ status: 'loading' });
+            setTextReloadEpoch((value) => value + 1);
+            htmlSnapshot.retry();
+          }}
+          onToggleSource={() => setRichView((value) => value === 'rendered' ? 'source' : 'rendered')}
+        />
+      ) : null}
     </View>
   );
 }

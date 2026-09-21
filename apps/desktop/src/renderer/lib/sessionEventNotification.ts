@@ -1,8 +1,34 @@
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 export type SessionEventNotificationKind = 'done' | 'error' | 'needs-reply';
+
+/** Find a session in the snapshots available to a notification owner. */
+export function findSessionNotificationSession<T extends { id: string; title?: unknown }>(
+  sessionId: string,
+  sources: readonly (readonly T[])[],
+): T | null {
+  let fallback: T | null = null;
+  for (const source of sources) {
+    const session = source.find((candidate) => candidate.id === sessionId);
+    if (!session) continue;
+    fallback ??= session;
+
+    // A stale visible snapshot can still contain the session with its initial
+    // placeholder title. Keep looking for a complete or remote snapshot with
+    // a title that can be shown in the notification.
+    if (
+      typeof session.title === 'string'
+      && session.title.trim()
+      && !isDefaultDraftSessionTitle(session.title)
+    ) {
+      return session;
+    }
+  }
+  return fallback;
+}
 
 /** Resolve Bot-owned tasks omitted from the ordinary desktop session list. */
 export async function botOwnedSessionNotificationTitle(

@@ -45,6 +45,8 @@ async function fixture() {
     await writeFile(path.join(source, '.gitignore'), 'apps/desktop/release/\n');
     await git(['add', '.']);
     await git(['commit', '-s', '-m', 'base']);
+    // A tag checkout has origin/main but no local main branch.
+    await git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
     await createCindyMakeWorktree(userData, 'run', signal, { processEnvironment: env });
     await writeFile(path.join(workingDir, 'feature.txt'), 'task change');
 
@@ -136,27 +138,37 @@ async function fixture() {
   }
 }
 
-it('merges task commits before packaging in personal, preserving integration on failure and avoiding duplicate commits on retry', async () => {
+it('rolls back failed generations, preserves concurrent edits and keeps successful retries idempotent', async () => {
   const h = await fixture();
   try {
     const baseline = await h.git(['rev-parse', 'HEAD']);
     h.pnpm.mockRejectedValueOnce(new Error('checks failed'));
     await expect(h.run()).rejects.toMatchObject({ code: 'checksFailed' });
-    const integratedCommit = await h.git(['rev-parse', 'HEAD']);
-    expect(integratedCommit).not.toBe(baseline);
-    expect(await h.git(['merge-base', '--is-ancestor', h.task.commit, integratedCommit])).toBe('');
-    expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('task change');
+    const personalCommit = await h.git(['rev-parse', 'HEAD']);
+    // Existing uncommitted personal edits are saved before integrating the task.
+    expect(personalCommit).not.toBe(baseline);
+    expect(await h.git(['show', 'HEAD:personal.txt'])).toBe('existing personal change');
+    await expect(
+      h.git(['merge-base', '--is-ancestor', h.task.commit, personalCommit]),
+    ).rejects.toThrow();
+    await expect(access(path.join(h.source, 'feature.txt'))).rejects.toThrow();
     expect(await readFile(path.join(h.workingDir, 'feature.txt'), 'utf8')).toBe('task change');
-    expect(await h.git(['rev-parse', 'refs/cindy-make/tasks/run/integrated'])).toBe(h.task.tree);
+    expect(
+      await h.git(['for-each-ref', '--format=%(refname)', 'refs/cindy-make/tasks/run/integrated']),
+    ).toBe('');
+    const failedCommit = (
+      await h.git(['for-each-ref', '--format=%(objectname)', 'refs/cindy-make/failed-builds/'])
+    ).split('\n')[0];
+    expect(await h.git(['show', failedCommit + ':feature.txt'])).toBe('task change');
     h.packageCommand.mockRejectedValueOnce(new Error('packaging failed'));
     await expect(h.run()).rejects.toThrow('packaging failed');
-    expect(await h.git(['rev-parse', 'HEAD'])).toBe(integratedCommit);
-    expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('task change');
+    expect(await h.git(['rev-parse', 'HEAD'])).toBe(personalCommit);
+    await expect(access(path.join(h.source, 'feature.txt'))).rejects.toThrow();
     h.packageCommand.mockImplementationOnce(async (...args) => {
       await h.pack(args[0], args[1], args[2]);
       await writeFile(path.join(h.source, 'concurrent.txt'), 'another completed personal change');
     });
-    await expect(h.run()).rejects.toMatchObject({ code: 'baselineChanged' });
+    await expect(h.run()).rejects.toMatchObject({ code: 'cleanupFailed' });
     expect(await readFile(path.join(h.source, 'concurrent.txt'), 'utf8')).toBe(
       'another completed personal change',
     );
@@ -265,7 +277,7 @@ it('rejects files edited after the completion snapshot before packaging or integ
   }
 }, 90_000);
 
-it('keeps integrated source and task files on cancellation, then retries without losing later edits', async () => {
+it('rolls back an interrupted generation and retries without losing task or personal edits', async () => {
   const h = await fixture();
   try {
     const abort = new AbortController();
@@ -278,9 +290,14 @@ it('keeps integrated source and task files on cancellation, then retries without
       code: 'interrupted',
     });
     expect(h.packageCommand).not.toHaveBeenCalled();
-    expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('task change');
+    await expect(access(path.join(h.source, 'feature.txt'))).rejects.toThrow();
+    expect(await readFile(path.join(h.source, 'personal.txt'), 'utf8')).toBe(
+      'existing personal change',
+    );
     expect(await readFile(path.join(h.workingDir, 'feature.txt'), 'utf8')).toBe('task change');
-    expect(await h.git(['rev-parse', 'refs/cindy-make/tasks/run/integrated'])).toBe(h.task.tree);
+    expect(
+      await h.git(['for-each-ref', '--format=%(refname)', 'refs/cindy-make/tasks/run/integrated']),
+    ).toBe('');
     await writeFile(path.join(h.workingDir, 'continued.txt'), 'continued after cancellation');
     Object.assign(h.task, await collectCindyMakeChanges(h.git, h.userData, h.workingDir));
     await h.run();

@@ -85,11 +85,13 @@ function activity(phase: typeof phases[number]) {
 }
 
 describe.each([false, true])('Bot groups with device grouping %s', (groupDevice) => {
-  it.each(phases)('renders the Bot header lamp for remote %s', (phase) => {
+  it.each(phases)('renders the collapsed Bot header lamp for remote %s', (phase) => {
     activity(phase);
     render(<ProjectsSection {...props(groupDevice)} />);
     expect(Boolean(screen.queryByText('Remote device'))).toBe(groupDevice);
     const header = screen.getByText('Demo Bot').closest('[role="button"]')!;
+    expectLamp(header, null);
+    fireEvent.click(header);
     if (phase === 'running') {
       expect(header.querySelector('.session-status-breathing')).not.toBeNull();
       // 伙伴头像不吃 wrapper 的 currentColor,运行色必须以静态描边落在 wrapper 上,
@@ -113,18 +115,20 @@ describe.each([false, true])('Bot groups with device grouping %s', (groupDevice)
     expect(screen.getByText('ccAgent.sidebar.showAllSessions')).toBeTruthy();
   });
 
-  it('updates the rendered group on remote activity and retains its lamp across collapse/expand', () => {
+  it('updates the rendered group on remote activity and shows its header lamp only while collapsed', () => {
     render(<ProjectsSection {...props(groupDevice)} />);
     expect(screen.queryByTestId('row-lit')).toBeNull();
     const header = screen.getByText('Demo Bot').closest('[role="button"]')!;
     expect(header.querySelector('.session-status-breathing')).toBeNull();
     act(() => activity('running'));
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
+    expectLamp(header, null);
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('false');
     expect(header.querySelector('.session-status-breathing')).not.toBeNull();
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('true');
+    expectLamp(header, null);
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
     act(() => clearRemoteSessionActivity());
     expect(screen.queryByTestId('row-lit')).toBeNull();
@@ -158,12 +162,16 @@ describe.each([false, true])('Bot starting lifecycle, device grouping %s', (grou
       remoteProjectsStore.pinSessionOrigin('remote', 'lit');
       markSessionStarting('lit');
       render(<StartingSidebar {...p} />);
+      expectLamp(botHeader(), null);
+      fireEvent.click(botHeader());
       expectLamp(botHeader(), 'running');
       act(() => activity(first));
       expect.soft(getStartingSessionIds().has('lit')).toBe(false);
       act(() => activity(terminal));
       expectLamp(botHeader(), terminal);
       if (groupDevice) expectLamp(deviceHeader('Remote device'), null);
+      fireEvent.click(botHeader());
+      expectLamp(botHeader(), null);
       expect(screen.getByTestId('row-lit')).toBeTruthy();
       // No timer advancement: the terminal UI must be correct immediately.
     });
@@ -178,6 +186,7 @@ describe.each([false, true])('Bot starting lifecycle, device grouping %s', (grou
     expect(getStartingSessionIds().has('lit')).toBe(true);
     view.rerender(<StartingSidebar {...p} />);
     expect(getStartingSessionIds().has('lit')).toBe(false);
+    fireEvent.click(botHeader());
     act(() => activity('completed'));
     expectLamp(botHeader(), 'completed');
   });
@@ -247,7 +256,11 @@ describe('Bot groups across devices', () => {
     const b = deviceHeader('Device B').parentElement!;
     expectLamp(deviceHeader('Device B'), null);
     expectLamp(botHeader(a), null);
+    expectLamp(botHeader(b), null);
+    fireEvent.click(botHeader(b));
     expectLamp(botHeader(b), phase);
+    fireEvent.click(botHeader(b));
+    expectLamp(botHeader(b), null);
     expect(within(a).queryByTestId('row-lit')).toBeNull();
     expect(within(b).getByTestId('row-lit')).toBeTruthy();
     expect(screen.getAllByText('Demo Bot')).toHaveLength(2);
