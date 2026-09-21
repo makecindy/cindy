@@ -19,7 +19,9 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
   assertOutputExtension,
+  commitDocsOutput,
   describeOutput,
+  docsReadOptions,
   DocsPathError,
   prepareInputPath,
   prepareOutputPath,
@@ -78,6 +80,7 @@ const LOCAL_RESOURCE_MIME_TYPES: Record<string, string> = {
 
 interface ResourceSnapshotContext {
   root: string;
+  sessionCtx?: DocsMcpSessionCtx;
   totalBytes: number;
   resourceReferences: number;
   cache: Map<string, string>;
@@ -804,7 +807,8 @@ async function snapshotLocalResource(
   const lexicalCacheKey = `${path.resolve(absPath)}\0${mimeOverride ?? ''}`;
   const lexicalCached = context.lexicalCache.get(lexicalCacheKey);
   if (lexicalCached) return `${lexicalCached}${fragment}`;
-  const preparedPath = await prepareInputPath(context.root, absPath);
+  const prepared = await prepareInputPath(context.root, absPath, context.sessionCtx, 'render_pdf');
+  const preparedPath = prepared.abs;
   const cacheKey = `${path.resolve(preparedPath)}\0${mimeOverride ?? ''}`;
   const cached = context.cache.get(cacheKey);
   if (cached) return `${cached}${fragment}`;
@@ -823,6 +827,7 @@ async function snapshotLocalResource(
         `本地资源过大: ${preparedPath}`,
         `这份本地资源有 ${(size / 1024 / 1024).toFixed(1)} MB,超过单个资源上限(8 MB)。请压缩或改成更小的 data URI。`,
       ),
+    docsReadOptions(prepared),
   );
   const afterDirectory = await captureDirectorySnapshot(resourceDirectory);
   if (!sameDirectorySnapshot(beforeDirectory, afterDirectory)) {
@@ -865,9 +870,11 @@ async function inlineLocalResources(
   html: string,
   expectedSourceDirectory?: DirectorySnapshot,
   initialDirectorySnapshots?: Map<string, DirectorySnapshot>,
+  sessionCtx?: DocsMcpSessionCtx,
 ): Promise<string> {
   const context: ResourceSnapshotContext = {
     root,
+    sessionCtx,
     totalBytes: 0,
     resourceReferences: 0,
     cache: new Map(),
@@ -1067,8 +1074,10 @@ export function registerRenderPdfTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.pdf');
-        const abs = await prepareOutputPath(root, outPath, overwrite);
-        const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx, 'render_pdf');
+        const abs = prepared.abs;
+        const sourcePrepared = hasPath ? await prepareInputPath(root, htmlPath!, sessionCtx, 'render_pdf') : undefined;
+        const sourcePath = sourcePrepared?.abs;
         const sourceDirectory = sourcePath
           ? await captureDirectorySnapshot(path.dirname(sourcePath))
           : undefined;
@@ -1083,6 +1092,7 @@ export function registerRenderPdfTool(
         // the resource base between the HTML snapshot and inlining.
         const sourceSnapshotPath = sourcePath
           ? await (async () => {
+              if (sourcePrepared?.authorizedOutsideWorkdir) return sourcePath;
               const [realRoot, realSource] = await Promise.all([
                 fs.realpath(root),
                 fs.realpath(sourcePath),
@@ -1109,6 +1119,7 @@ export function registerRenderPdfTool(
                   `HTML 过大: ${bytes} 字节`,
                   `这份 HTML 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出 PDF 渲染上限(16 MB)。请压缩内联图片/字体或拆分文档后重试。`,
                 ),
+              sourcePrepared ? docsReadOptions(sourcePrepared) : undefined,
             )
           : undefined;
         const sourceHtml = sourceBytes ? decodeUnicodeText(sourceBytes, 'HTML') : html!;
@@ -1128,6 +1139,7 @@ export function registerRenderPdfTool(
           sourceHtml,
           sourceDirectory,
           initialDirectorySnapshots,
+          sessionCtx,
         );
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
         const wrapped = applyReportTemplate(snapshotHtml, palette, template);
@@ -1173,7 +1185,7 @@ export function registerRenderPdfTool(
             {},
           );
         }
-        await writeDocsOutput({ root, path: abs, data: buffer, overwrite });
+        await commitDocsOutput(writeDocsOutput, root, prepared, buffer, overwrite);
 
         const described = describeOutput(root, abs, buffer.byteLength);
         const warnings: string[] = [];

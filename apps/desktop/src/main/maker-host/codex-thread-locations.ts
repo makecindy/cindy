@@ -2,6 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+interface ThreadLocation {
+  threadId: string;
+  path: string;
+  sqliteHome?: string;
+}
+
 /** A native thread has one durable rollout, regardless of the account resuming it. */
 export class CodexThreadLocations {
   constructor(private readonly directory: string) {}
@@ -11,7 +17,7 @@ export class CodexThreadLocations {
     return path.join(this.directory, `${threadId}.json`);
   }
 
-  async read(threadId: string): Promise<string | undefined> {
+  private async readLocation(threadId: string): Promise<ThreadLocation | undefined> {
     let raw: string;
     try {
       raw = await fs.readFile(this.file(threadId), 'utf8');
@@ -23,37 +29,66 @@ export class CodexThreadLocations {
     if (
       value.threadId !== threadId ||
       typeof value.path !== 'string' ||
-      !path.isAbsolute(value.path)
+      !path.isAbsolute(value.path) ||
+      (value.sqliteHome !== undefined &&
+        (typeof value.sqliteHome !== 'string' || !path.isAbsolute(value.sqliteHome)))
     ) {
       throw new Error('Invalid Codex thread location');
     }
-    // A missing canonical file must not silently select an older copy.
-    const stat = await fs.lstat(value.path);
-    if (!stat.isFile()) throw new Error('Codex thread history is unavailable');
+    return value;
+  }
+
+  private async rolloutExists(rollout: string): Promise<boolean> {
+    try {
+      const stat = await fs.lstat(rollout);
+      if (!stat.isFile()) throw new Error('Codex thread history is unavailable');
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+
+  async read(threadId: string): Promise<string | undefined> {
+    const value = await this.readLocation(threadId);
+    if (!value) return;
+    if (!await this.rolloutExists(value.path)) throw new Error('Codex thread history is unavailable');
     return value.path;
+  }
+
+  /** Missing indexed paths are resolved by native resume in their original home.
+   * Never search legacy homes or silently substitute an older rollout for them. */
+  async prepareResume(
+    threadId: string,
+    prepareLegacy: (threadId: string) => Promise<string | undefined>,
+  ): Promise<string | undefined> {
+    const value = await this.readLocation(threadId);
+    if (!value) return prepareLegacy(threadId);
+    return await this.rolloutExists(value.path) ? value.path : undefined;
   }
 
   async readStorage(
     threadId: string,
     legacy?: { home: string; prepare: (threadId: string) => Promise<string | undefined> },
-  ): Promise<{ historyHome: string; sqliteHome: string } | undefined> {
-    const rollout = await this.read(threadId);
-    if (!rollout) {
+  ): Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined> {
+    const value = await this.readLocation(threadId);
+    if (!value) {
       // Pre-multi-account threads have no location record. Resolve their native
       // storage before an account-specific host starts, without moving history.
       const legacyRollout = await legacy?.prepare(threadId);
       if (!legacy || !legacyRollout) return;
       await this.record(threadId, legacyRollout, legacy.home);
-      return { historyHome: historyHomeForRollout(legacyRollout), sqliteHome: legacy.home };
+      return { historyHome: historyHomeForRollout(legacyRollout), sqliteHome: legacy.home, rolloutPath: legacyRollout };
     }
-    const value = JSON.parse(await fs.readFile(this.file(threadId), 'utf8'));
-    if (value.sqliteHome !== undefined) {
-      if (typeof value.sqliteHome !== 'string' || !path.isAbsolute(value.sqliteHome)) throw new Error('Invalid Codex history storage');
-      return { historyHome: historyHomeForRollout(rollout), sqliteHome: value.sqliteHome };
-    }
-    // Compatibility with locations written before native database ownership was recorded.
-    const historyHome = historyHomeForRollout(rollout);
-    return { historyHome, sqliteHome: historyHome };
+    const historyHome = historyHomeForRollout(value.path);
+    // thread/start returns a future path before the first turn materializes it.
+    // Keep storage ownership even then, so native resume can distinguish an unused
+    // thread from unreadable history without looking in the newly selected account.
+    return {
+      historyHome,
+      sqliteHome: value.sqliteHome ?? historyHome,
+      rolloutPath: value.path,
+    };
   }
 
   async record(threadId: string, rolloutPath: string, sqliteHome?: string): Promise<void> {

@@ -3,19 +3,51 @@ import ApplicationServices
 import AppKit
 import IOKit.graphics
 import Security
+import Darwin
 
 #if !DESKTOP_INPUT_TEST
 // This guard precedes every entrypoint, including selection and permission UI.
 guard let inputCaller = DesktopInputCaller.authenticate() else { exit(77) }
 #endif
 
+// Both one-shot and persistent queries recheck the OS session on every read.
+func clipboardCounter(portable: Bool) -> String {
+  let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+  guard let session = session, !(session["CGSSessionScreenIsLocked"] as? Bool ?? false) else { return "unavailable" }
+  if portable && (NSPasteboard.general.pasteboardItems?.count ?? 0) > 1 { return "unsupported" }
+  return String(NSPasteboard.general.changeCount)
+}
+#if !DESKTOP_INPUT_TEST
+if CommandLine.arguments == [CommandLine.arguments[0], "--clipboard-counter"] {
+  // Bounded input and idle exit also release the process if Main disappears.
+  var bytes: [UInt8] = []
+  while true {
+    var descriptor = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+    guard poll(&descriptor, 1, 5000) > 0 else { exit(0) }
+    var byte: UInt8 = 0
+    guard read(STDIN_FILENO, &byte, 1) == 1 else { exit(0) }
+    if byte != 10 {
+      bytes.append(byte)
+      if bytes.count > 32 { exit(2) }
+      continue
+    }
+    autoreleasepool {
+      guard inputCaller.code() != nil else { exit(77) }
+      let parts = String(bytes: bytes, encoding: .utf8)?.split(separator: " ") ?? []
+      guard parts.count == 2, parts[0].count <= 16, UInt64(parts[0]) != nil,
+        parts[1] == "0" || parts[1] == "1" else { exit(2) }
+      print("\(parts[0]) \(clipboardCounter(portable: parts[1] == "1"))"); fflush(stdout)
+    }
+    bytes.removeAll(keepingCapacity: true)
+  }
+}
+#endif
 // Expose only the clipboard change counter, never clipboard content on stdout.
 if CommandLine.arguments.count == 2 && ["--clipboard-version", "--clipboard-content-version"].contains(CommandLine.arguments[1]) {
-  let session = CGSessionCopyCurrentDictionary() as? [String: Any]
-  guard let session = session, !(session["CGSSessionScreenIsLocked"] as? Bool ?? false) else { exit(2) }
-  if CommandLine.arguments[1] == "--clipboard-content-version",
-    (NSPasteboard.general.pasteboardItems?.count ?? 0) > 1 { exit(3) }
-  print(NSPasteboard.general.changeCount); exit(0)
+  let value = clipboardCounter(portable: CommandLine.arguments[1] == "--clipboard-content-version")
+  if value == "unavailable" { exit(2) }
+  if value == "unsupported" { exit(3) }
+  print(value); exit(0)
 }
 
 // Read the actual accessibility selection instead of attributing arbitrary
@@ -185,6 +217,37 @@ func apply(_ event: [String: Any]) {
     }
   }
 }
+
+// Armed -> draining -> confirming. Draining lets the input helper release its
+// pressed keys/buttons before Main opens a dialog; confirming rejects injection.
+// Held initiating keys/buttons are consumed through release (including repeats).
+struct PrivacyInputGate {
+  var phase = 0
+  var swallowed = Set<Int64>()
+  mutating func consume(physical: Bool, press: Int64?, down: Bool, trigger: Bool, scroll: Bool = false) -> (Bool, Bool) {
+    if !physical { return (phase == 2, false) }
+    if scroll {
+      let notify = phase == 0
+      if notify { phase = 1 }
+      return (true, notify)
+    }
+    if let press = press, swallowed.contains(press) {
+      if !down { swallowed.remove(press) }
+      return (true, false)
+    }
+    if phase == 0 && trigger {
+      phase = 1
+      if let press = press, down { swallowed.insert(press) }
+      return (true, true)
+    }
+    if phase == 1 {
+      if let press = press, down { swallowed.insert(press) }
+      return (true, false)
+    }
+    return (false, false)
+  }
+}
+
 #if !DESKTOP_INPUT_TEST
 if CommandLine.arguments.contains("--check") {
   print(AXIsProcessTrusted() ? "ready" : "permission"); exit(0)
@@ -221,6 +284,69 @@ if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-scree
   exit(2)
 }
 guard AXIsProcessTrusted() else { print("permission"); fflush(stdout); exit(2) }
+if CommandLine.arguments == [CommandLine.arguments[0], "--privacy-input"] {
+  var heartbeat = Date()
+  var previousApp: NSRunningApplication?
+  let events: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp,
+    .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .mouseMoved,
+    .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
+  let mask = events.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+  // Context remains alive on this run loop until process exit; callbacks never
+  // wait on stdin, Main or network and never print event contents.
+  let context = UnsafeMutablePointer<PrivacyInputGate>.allocate(capacity: 1)
+  context.initialize(to: PrivacyInputGate())
+  guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+    options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, info in
+      if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        print("error"); fflush(stdout); exit(2)
+      }
+      let state = info!.assumingMemoryBound(to: PrivacyInputGate.self)
+      let physical = event.getIntegerValueField(.eventSourceUnixProcessID) == 0
+        && event.getIntegerValueField(.eventSourceStateID) == Int64(CGEventSourceStateID.hidSystemState.rawValue)
+      let key = type == .keyDown || type == .keyUp
+      let mouseDown = [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type)
+      let mouseUp = [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(type)
+      let press: Int64? = key ? event.getIntegerValueField(.keyboardEventKeycode)
+        : (mouseDown || mouseUp ? 100000 + event.getIntegerValueField(.mouseEventButtonNumber) : nil)
+      let (consume, notify) = state.pointee.consume(physical: physical, press: press,
+        down: type == .keyDown || mouseDown, trigger: type == .keyDown || mouseDown || type == .flagsChanged, scroll: type == .scrollWheel)
+      if notify { print("local-input"); fflush(stdout) }
+      return consume ? nil : Unmanaged.passUnretained(event)
+    }, userInfo: context), let runSource = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
+      print("error"); fflush(stdout); exit(2)
+    }
+  CFRunLoopAddSource(CFRunLoopGetMain(), runSource, .commonModes)
+  CGEvent.tapEnable(tap: tap, enable: true)
+  print("ready"); fflush(stdout)
+  DispatchQueue.global().async {
+    while let command = readLine() {
+      guard command.utf8.count <= 16 else { exit(2) }
+      DispatchQueue.main.async {
+        heartbeat = Date()
+        switch command {
+        case "ping": break
+        case "confirm":
+          previousApp = NSWorkspace.shared.frontmostApplication
+          context.pointee.phase = 2; print("confirmed"); fflush(stdout)
+        case "resume":
+          _ = previousApp?.activate(options: [.activateIgnoringOtherApps])
+          previousApp = nil
+          context.pointee.phase = 0; print("ready"); fflush(stdout)
+        default: exit(2)
+        }
+      }
+    }
+    exit(0) // Process exit removes the tap, even if Main died with a dialog up.
+  }
+  let timer = DispatchSource.makeTimerSource(queue: .main)
+  timer.schedule(deadline: .now() + 1, repeating: 1)
+  timer.setEventHandler {
+    if Date().timeIntervalSince(heartbeat) > 5 || inputCaller.code() == nil || !AXIsProcessTrusted() { exit(2) }
+  }
+  timer.resume()
+  CFRunLoopRun()
+  exit(0)
+}
 print("ready"); fflush(stdout)
 let watchdog = DispatchSource.makeTimerSource(queue: .global())
 watchdog.schedule(deadline: .now() + 1, repeating: 1)
@@ -241,6 +367,7 @@ while let line = readLine() {
   lock.lock(); lastSeen = Date()
   for event in events { apply(event) }
   lock.unlock()
+  print("ok"); fflush(stdout)
 }
 lock.lock(); releaseAll(); lock.unlock()
 #endif

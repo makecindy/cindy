@@ -17,6 +17,7 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
   DocsPathError,
+  docsReadOptions,
   prepareInputPath,
   readInputFileWithinLimit,
   resolveSessionRoot,
@@ -55,7 +56,7 @@ const DESCRIPTION = [
   'csv / tsv 支持 UTF-8，以及带 BOM 的 UTF-16LE / UTF-16BE 导出文件。',
   'xlsx 会先检查文件大小与 ZIP 解压比,再在受限 worker 中解析(15 秒超时);超限会返回 FILE_TOO_LARGE/READ_TIMEOUT。',
   '',
-  '【读不到时】文件不在工作目录内会返回 PATH_NOT_ALLOWED,不存在返回 NOT_A_FILE。',
+  '【读不到时】未获授权的工作目录外路径返回 PATH_NOT_ALLOWED,不存在返回 NOT_A_FILE。',
   '.xls(老二进制格式)不支持,先让用户另存为 .xlsx。',
 ].join('\n');
 
@@ -323,8 +324,15 @@ async function readXlsx(
   maxRows: number,
   startColumn: number,
   maxColumns: number,
+  readOptions?: ReturnType<typeof docsReadOptions>,
 ): Promise<SheetRead> {
-  const archive = await readInputFileWithinLimit(root, absPath, MAX_XLSX_BYTES, xlsxTooLarge);
+  const archive = await readInputFileWithinLimit(
+    root,
+    absPath,
+    MAX_XLSX_BYTES,
+    xlsxTooLarge,
+    readOptions,
+  );
   return readXlsxInWorker(archive, sheetSelector, startRow, maxRows, startColumn, maxColumns);
 }
 
@@ -336,6 +344,7 @@ async function readTextTable(
   maxRows: number,
   startColumn: number,
   maxColumns: number,
+  readOptions?: ReturnType<typeof docsReadOptions>,
 ): Promise<SheetRead> {
   const bytes = await readInputFileWithinLimit(
     root,
@@ -347,6 +356,7 @@ async function readTextTable(
         `文本表格过大: ${size} 字节`,
         `这个文件有 ${(size / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先让用户拆分文件,或改用命令行工具处理。`,
       ),
+    readOptions,
   );
   const text = decodeUnicodeText(bytes, '文本表格');
   const parsed = parseDelimitedWindow(text, {
@@ -415,14 +425,21 @@ export function registerReadSheetTool(
     handler: async ({ path: inputPath, sheet, startRow, maxRows, startColumn, maxColumns }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
-        const abs = await prepareInputPath(root, inputPath);
+        const prepared = await prepareInputPath(root, inputPath, sessionCtx, 'read_sheet');
+        const abs = prepared.abs;
         const ext = path.extname(abs).toLowerCase();
 
         let result: SheetRead;
         if (ext === '.xlsx' || ext === '.xlsm') {
-          result = await readXlsx(root, abs, sheet, startRow, maxRows, startColumn, maxColumns);
+          result = await readXlsx(
+            root, abs, sheet, startRow, maxRows, startColumn, maxColumns,
+            docsReadOptions(prepared),
+          );
         } else if (ext === '.csv' || ext === '.tsv' || ext === '.tab' || ext === '.txt') {
-          result = await readTextTable(root, abs, ext, startRow, maxRows, startColumn, maxColumns);
+          result = await readTextTable(
+            root, abs, ext, startRow, maxRows, startColumn, maxColumns,
+            docsReadOptions(prepared),
+          );
         } else if (ext === '.xls') {
           return errorPayload(
             'UNSUPPORTED_FORMAT',

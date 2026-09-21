@@ -133,7 +133,7 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
     });
   });
 
-  it('maps Hub fileHash to folderHash when provided', () => {
+  it('does not confuse archive bytes with a local folder digest', () => {
     const info = mapHubSkillInfoToDesktopInfo({
       slug: 'review-helper',
       displayName: 'Review Helper',
@@ -147,6 +147,6 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
       categories: [],
     });
 
-    expect(info.folderHash).toBe('server-folder-hash');
+    expect(info.folderHash).toBeUndefined();
   });
 });

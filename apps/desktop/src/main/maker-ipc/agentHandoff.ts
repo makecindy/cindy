@@ -50,6 +50,8 @@ export interface BuildHandoffOptions {
    * 会话过期等不可检测场景),增量交接也保有全局工作现场,不至于失明。
    */
   workStateMessages?: HandoffSourceMessage[];
+  /** 图片历史恢复要保留工具结果摘要，不能把调用记录误当作已经成功执行。 */
+  includeToolResults?: boolean;
   /**
    * 交接触发原因。message-deletion 表示同一引擎因本地消息被删除而重建原生
    * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
@@ -318,8 +320,29 @@ function extractWorkState(messages: HandoffSourceMessage[]): WorkState {
   };
 }
 
+/** Tool JSON is evidence too; the user-text projector intentionally drops unknown JSON shapes. */
+function toolResultText(content: unknown): string {
+  let value = content;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return value as string; }
+  }
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, (_key, item: unknown) => {
+      if (item && typeof item === 'object') {
+        const block = item as Record<string, unknown>;
+        if (block.type === 'image' || block.type === 'input_image' || block.type === 'image_url' ||
+          (typeof block.mimeType === 'string' && block.mimeType.startsWith('image/'))) {
+          return '[image omitted]';
+        }
+      }
+      return item;
+    }) ?? '';
+  } catch { return '(result could not be summarized)'; }
+}
+
 /** 把消息流按 user 行切成轮次。首个 user 行之前的孤儿行并入首轮 detail。 */
-function splitTurns(messages: HandoffSourceMessage[]): Turn[] {
+function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
   for (const msg of messages) {
@@ -352,7 +375,20 @@ function splitTurns(messages: HandoffSourceMessage[]): Turn[] {
         } catch {
           inputDigest = '';
         }
-        current.detailLines.push(`[Tool] ${name}${inputDigest ? `: ${truncate(inputDigest, TOOL_INPUT_CAP)}` : ''}`);
+        const id = includeToolResults ? toolUseIdOf(msg, c) : '';
+        current.detailLines.push(`[Tool] ${name}${id ? ` (id=${id})` : ''}${inputDigest ? `: ${truncate(inputDigest, TOOL_INPUT_CAP)}` : ''}`);
+        break;
+      }
+      case 'tool_result': {
+        if (!includeToolResults) break;
+        const c = msg.content && typeof msg.content === 'object' && !Array.isArray(msg.content)
+          ? msg.content as Record<string, unknown> : undefined;
+        const id = toolUseIdOf(msg, c);
+        // Only text: never serialize image blocks/base64 into the fresh context.
+        const text = toolResultText(c?.fullText ?? c?.output ?? c?.content ?? msg.content)
+          .replace(/data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/g, '[image omitted]');
+        const status = c?.isError === true ? 'failed' : 'recorded; verify outcome from result';
+        current.detailLines.push(`[Tool result${id ? ` id=${id}` : ''}; ${status}]\n${truncate(text || '(no text result retained)', 1000)}`);
         break;
       }
       case 'error': {
@@ -369,7 +405,7 @@ function splitTurns(messages: HandoffSourceMessage[]): Turn[] {
         break;
       }
       default:
-        // thinking / agent_switch / tool_result 等不进交接正文
+        // thinking / agent_switch 等不进交接正文
         break;
     }
   }
@@ -399,7 +435,7 @@ export function buildHandoffText(
   messages: HandoffSourceMessage[],
   opts: BuildHandoffOptions,
 ): string {
-  const turns = splitTurns(messages);
+  const turns = splitTurns(messages, opts.includeToolResults);
   // 超出硬上限时逐档收缩逐字区(4→3→2→1 轮)重组——绝不能从尾部硬切:
   // 检索指引与结束标记在尾部,是最不能丢的段。收缩到 1 轮仍超限才走最后的
   // 尾部截断保险。

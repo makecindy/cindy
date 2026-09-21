@@ -1,3 +1,6 @@
+vi.mock('@/session/SessionOptionsExpoSheet', () => ({ SessionOptionsPresenter: () => null }));
+vi.mock('@/session/RenameSessionModal', () => ({ RenameSessionModal: () => null }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
 // @vitest-environment jsdom
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";

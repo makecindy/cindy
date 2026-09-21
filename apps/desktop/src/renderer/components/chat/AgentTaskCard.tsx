@@ -46,6 +46,7 @@ import {
 const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
 
 interface AgentTaskCardProps {
+  renderItemKey?: string;
   toolCall?: ChatMessage;
   update?: AgentTaskUpdate;
   result?: string;
@@ -151,6 +152,7 @@ function readHistoryFileStatus(
 }
 
 export function AgentTaskCard({
+  renderItemKey,
   toolCall,
   update,
   result,
@@ -408,6 +410,7 @@ export function AgentTaskCard({
     // 搜索跳转)靠该锚点滚动定位 —— 普通消息行有,任务卡也必须有,否则面板点
     // Agent/Bash 行会静默无反应。
     <div
+      data-render-item-key={renderItemKey}
       className="flex w-full justify-start"
       {...(toolCall?.clientId ? { 'data-message-client-id': toolCall.clientId } : {})}
     >

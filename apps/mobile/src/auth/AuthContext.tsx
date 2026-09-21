@@ -121,7 +121,7 @@ import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
-import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
@@ -853,7 +853,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshSavedAccountsSnapshot]);
 
   const clearAccountScopedRuntimeForSwitch = useCallback(async () => {
-    setMobileAuthOwner(null);
+    invalidateMobileAuthOwnerForSwitch();
     await Promise.all([
       unregisterPushTokenBestEffort(
         accessTokenRef.current,

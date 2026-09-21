@@ -21,6 +21,9 @@ import {
 import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { registerMcpHandlers, type McpHandlerDeps } from '../mcpHandlers.js';
+import { refreshCodexMcpEnvironment } from '../codexMcpRefresh.js';
+import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
+import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomMcpToken: () => null }));
@@ -224,6 +227,52 @@ describe('mcp:custom:* CRUD handlers', () => {
     });
     expect(await listCustomMcpServers()).toHaveLength(1);
     expect(deps.invalidateCodex).toHaveBeenCalledOnce();
+  });
+
+  it('retains persisted MCP edits during a control RPC and refreshes the latest config before next start', async () => {
+    mountDb();
+    let rpcBusy = true;
+    let bridgeConfig: CustomMcpConfig[] = [];
+    const shutdown = vi.fn(async () => { bridgeConfig = await listCustomMcpServers(); });
+    const restart = async (refresh: () => Promise<void>) => {
+      if (rpcBusy) throw new CodexCredentialModeSwitchBusyError([]);
+      await refresh();
+    };
+    const deferred = new DeferredCodexRestartService({
+      hasBusyLocalCodexSession: () => false,
+      listLocalCodexSessionIds: () => [],
+      restart: (applyRuntime) => restart(async () => {
+        if (await applyRuntime()) await shutdown();
+      }),
+    });
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps({
+      invalidateCodex: async () => {
+        await refreshCodexMcpEnvironment({
+          restartCodex: restart,
+          shutdownCodexEnvironment: shutdown,
+          onDeferred: () => deferred.schedule('Custom MCP configuration changed'),
+        });
+      },
+    }));
+    try {
+      await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig);
+      const updated = { ...validConfig, url: 'https://updated.example.com/mcp' };
+      await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, updated);
+      expect(await listCustomMcpServers()).toEqual([expect.objectContaining(updated)]);
+      await deferred.flushBeforeLocalCodexSessionStart();
+      expect(deferred.isPending()).toBe(true);
+      expect(shutdown).not.toHaveBeenCalled();
+      expect(bridgeConfig).toEqual([]);
+
+      rpcBusy = false;
+      await deferred.flushBeforeLocalCodexSessionStart();
+      expect(deferred.isPending()).toBe(false);
+      expect(shutdown).toHaveBeenCalledOnce();
+      expect(bridgeConfig).toEqual([expect.objectContaining(updated)]);
+    } finally {
+      deferred.clear();
+    }
   });
 
   it('rejects invalid config (bad url) with INVALID_PARAMS and does not write', async () => {

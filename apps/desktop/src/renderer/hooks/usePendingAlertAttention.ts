@@ -19,7 +19,8 @@
  *    sessions:patched 里的 lastTurnEndedAt(用户点「继续 / 忽略」、其它窗口或
  *    device-link 控制端的 ack)。查询本身带 startedAt < bootAt 守卫,即使被运行时
  *    调用也不会把正在跑的 turn 算进来。
- *  - **错误尾行腿**(errorTailPending):参与每轮重算。它与 turn 是否在跑无关 ——
+ *  - **错误尾行腿**(errorTailPending):参与每轮重算，也包含末尾 Make 卡片的原生失败。
+ *    它与 turn 是否在跑无关 ——
  *    turn 一跑起来就插入新的 user 行,error 行不再是尾行,自然不命中。
  *
  * 两个账本因此独立:重算只差分错误尾行那本,不会顺手清掉中断点。
@@ -42,6 +43,7 @@
 
 import { useEffect } from 'react';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { getCindyMakeMessageAttention } from '../../shared/cindyMakeAttention';
 import {
   addSessionAttention,
   clearSessionAttention,
@@ -267,13 +269,21 @@ export function usePendingAlertAttention(): void {
   //
   // user 行:只在本 hook 仍认领该会话的错误尾行时重算。文件头不变量是「新 turn
   // 的 user 行会让 error 不再是尾行」;自动续跑的 UI_ACTION_TRIGGER 也是 user 行,
-  // 若不订这条,横幅已灭、任务已在跑,红点却一直亮。其它会话 / 非 user 行不打 IPC。
+  // 若不订这条,横幅已灭、任务已在跑,红点却一直亮。Make 直接更新同一张卡片,
+  // 没有新 error/user 行；失败、重试、继续的元数据广播也必须触发同一查询。
   useEffect(() => {
     const onCreated = window.electronAPI?.localDb?.messages?.onCreated;
     if (!onCreated) return;
     return onCreated(({ sessionId, message }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
-      if (message?.role === 'error') {
+      const makeAttention = message && getCindyMakeMessageAttention(message);
+      // Preparation can push many progress frames. Recheck running state only when
+      // retiring a failure, including a failure query that has not returned yet.
+      if (
+        message?.role === 'error' ||
+        (makeAttention &&
+          (makeAttention.kind !== 'running' || _errorTailOwned.has(sessionId) || _refreshInFlight))
+      ) {
         void refreshPendingAlerts();
         return;
       }

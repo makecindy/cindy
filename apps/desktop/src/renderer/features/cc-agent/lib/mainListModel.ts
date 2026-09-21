@@ -24,12 +24,15 @@
  */
 
 import type { Session } from '@/lib/ccAgent.types';
+import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
+import {
+  MACHINE_ALL,
+  MACHINE_LOCAL,
+  type MachineSelection,
+} from '@/features/device-link/selectedMachineStore';
 
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../../../shared/liveTaskPriority';
-import type {
-  FilterProjectOrder,
-  FilterSortBy,
-} from '../hooks/helpers/sidebarFilterCore';
+import type { FilterProjectOrder, FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import {
   groupAutomationSidebarEntries,
@@ -42,6 +45,7 @@ import type { BotGroupNode, ProjectNode } from './projectGrouping';
 export type MainListEntry =
   | { kind: 'project'; project: ProjectNode }
   | { kind: 'dialogue-group'; sessions: Session[] }
+  | { kind: 'cindy-make-group'; sessions: Session[] }
   /** 一个伙伴名下的全部任务。与项目行并列 —— 项目是实体目录,伙伴名是用户起的。 */
   | { kind: 'bot-group'; bot: BotGroupNode }
   | SidebarSessionEntry;
@@ -101,10 +105,7 @@ export function naturalPriorityRankForId(
   });
 }
 
-export function sessionNaturalPriorityRank(
-  session: Session,
-  ctx: MainListPriorityContext,
-): number {
+export function sessionNaturalPriorityRank(session: Session, ctx: MainListPriorityContext): number {
   return naturalPriorityRankForId(session.id, ctx);
 }
 
@@ -174,7 +175,7 @@ export function holdViewedPriorityRank(
 }
 
 export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriorityContext): number {
-  if (sessionNaturalPriorityRank(session, ctx) !== LIVE_TASK_PRIORITY.rest) {
+  if (sessionPriorityRank(session, ctx) !== LIVE_TASK_PRIORITY.rest) {
     return sessionActivityMs(session);
   }
   const viewedAt = ctx.recentlyViewedAtMs?.get(session.id) ?? 0;
@@ -183,7 +184,7 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
 
 export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
   if (entry.kind === 'project') return entry.project.sessions;
-  if (entry.kind === 'dialogue-group') return entry.sessions;
+  if (entry.kind === 'dialogue-group' || entry.kind === 'cindy-make-group') return entry.sessions;
   if (entry.kind === 'bot-group') return entry.bot.sessions;
   if (entry.kind === 'automation-group') return entry.group.sessions;
   return [entry.session];
@@ -243,11 +244,18 @@ export function sortSessionsForMainList(
       );
   }
   if (sortBy === 'created') {
-    return sessions.slice().sort((a, b) =>
-      sessionCreatedMs(b) - sessionCreatedMs(a) || a.id.localeCompare(b.id),
-    );
+    return sessions
+      .map((session, index) => ({ session, index, createdAt: sessionCreatedMs(session) }))
+      .sort(
+        (a, b) =>
+          b.createdAt - a.createdAt || a.session.id.localeCompare(b.session.id) || a.index - b.index,
+      )
+      .map(({ session }) => session);
   }
-  return sessions.slice().sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a));
+  return sessions
+    .map((session, index) => ({ session, index, activityAt: sessionActivityMs(session) }))
+    .sort((a, b) => b.activityAt - a.activityAt || a.index - b.index)
+    .map(({ session }) => session);
 }
 
 export interface BuildMainListEntriesInput {
@@ -272,6 +280,45 @@ export interface BuildMainListEntriesInput {
 }
 
 const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set<string>();
+
+export const CINDY_MAKE_GROUP_KEY = 'cindy-make';
+
+/** Group by the task's source, never by a title or a guessed worktree path. */
+export function partitionCindyMakeSessions({
+  projects,
+  dialogues,
+  unclassified,
+}: {
+  projects: readonly ProjectNode[];
+  dialogues: readonly Session[];
+  unclassified: readonly Session[];
+}): {
+  projects: ProjectNode[];
+  dialogues: Session[];
+  unclassified: Session[];
+  cindyMake: Session[];
+} {
+  const cindyMake = new Map<string, Session>();
+  const regular = (sessions: readonly Session[]) =>
+    sessions.filter((session) => {
+      if (!isCindyMakeFamilySource(session.source)) return true;
+      cindyMake.set(session.id, session);
+      return false;
+    });
+  const regularProjects = projects.flatMap((project) => {
+    const sessions = regular(project.sessions);
+    if (sessions.length === project.sessions.length) return [project];
+    return sessions.length ? [{ ...project, sessions }] : [];
+  });
+  const regularDialogues = regular(dialogues);
+  const regularUnclassified = regular(unclassified);
+  return {
+    projects: regularProjects,
+    dialogues: regularDialogues,
+    unclassified: regularUnclassified,
+    cindyMake: [...cindyMake.values()],
+  };
+}
 
 function buildFlatSessionEntries(
   sessions: readonly Session[],
@@ -301,6 +348,16 @@ export function buildMainListEntries({
 }: BuildMainListEntriesInput): MainListEntry[] {
   const ctx = priorityContext;
   const entries: MainListEntry[] = [];
+  const partitioned = partitionCindyMakeSessions({ projects, dialogues, unclassified });
+  projects = partitioned.projects;
+  dialogues = partitioned.dialogues;
+  unclassified = partitioned.unclassified;
+  if (partitioned.cindyMake.length) {
+    entries.push({
+      kind: 'cindy-make-group',
+      sessions: sortSessionsForMainList(partitioned.cindyMake, sortBy, ctx),
+    });
+  }
 
   if (groupBy === 'flat') {
     const flatEntries = buildFlatSessionEntries(
@@ -436,19 +493,30 @@ export interface MainListDeviceSection {
   entries: MainListEntry[];
 }
 
+/** Online device headers remain visible independently of task filters. */
+export function onlineDeviceSectionIds(
+  devices: ReadonlyMap<string, { online: boolean }> | null | undefined,
+  selection: MachineSelection,
+): Array<string | null> {
+  const ids: Array<string | null> = [];
+  if (selection === MACHINE_ALL || selection.includes(MACHINE_LOCAL)) ids.push(null);
+  for (const [id, device] of devices ?? []) {
+    if (device.online && (selection === MACHINE_ALL || selection.includes(id))) ids.push(id);
+  }
+  return ids;
+}
+
 function entryDeviceId(entry: MainListEntry): string | null {
   if (entry.kind === 'project') return entry.project.deviceLinkDeviceId ?? null;
   if (entry.kind === 'session') return entry.session.deviceLinkDeviceId ?? null;
   if (entry.kind === 'automation-group') {
     return entry.group.sessions[0]?.deviceLinkDeviceId ?? null;
   }
-  // 伙伴组:同样按组内首条会话归属。伙伴本身不绑设备 —— 它的任务可以分布在
-  // 本机与远端,设备切段只看会话自己在哪。
+  // 对话组与伙伴组已经按成员设备拆分,此时首条会话代表整个片段。
   if (entry.kind === 'bot-group') {
     return entry.bot.sessions[0]?.deviceLinkDeviceId ?? null;
   }
-  // 对话组条目:按组内首条会话归属(散排对话在设备分组下由调用方按设备切分后
-  // 再分别成组,这里只是兜底)。
+  // 对话组同样已拆成单设备片段。
   return entry.sessions[0]?.deviceLinkDeviceId ?? null;
 }
 
@@ -457,39 +525,48 @@ function entryDeviceId(entry: MainListEntry): string | null {
  *   - 段顺序:本机在前,远程设备按 deviceOrder(设备切换栏同序);
  *     不在 deviceOrder 里的设备(断线缓存等)按段内最新活动排在其后。
  *   - 段内按当前 sortBy 重排(跨设备对话组拆开后,不能再沿用整组位置)。
- *   - 「对话归为一组」开启时,跨设备的对话组会被拆成每设备一组——调用方无需
- *     预切分,这里对 dialogue-group 条目按成员设备拆分。
+ *   - 「对话归为一组」开启时,跨设备的对话组和伙伴组会被拆成每设备一组——调用方无需
+ *     预切分,分组身份不变,成员只保留本设备的任务。
  */
 export function splitEntriesByDevice(
   entries: readonly MainListEntry[],
   deviceOrder: readonly string[],
   options: {
+    onlineDeviceIds?: readonly (string | null)[];
     sortBy?: FilterSortBy;
     projectOrder?: FilterProjectOrder;
     manualProjectOrder?: readonly string[];
     priorityContext?: MainListPriorityContext;
   } = {},
 ): MainListDeviceSection[] {
-  // 先把跨设备对话组拆开(组内成员可能来自不同设备)。
+  // 先把跨设备会话组拆开,再按每个片段的成员计算排序和设备聚合灯。
   const flattened: MainListEntry[] = [];
   for (const entry of entries) {
-    if (entry.kind !== 'dialogue-group') {
+    if (
+      entry.kind !== 'dialogue-group' &&
+      entry.kind !== 'cindy-make-group' &&
+      entry.kind !== 'bot-group'
+    ) {
       flattened.push(entry);
       continue;
     }
     const byDevice = new Map<string | null, Session[]>();
-    for (const s of entry.sessions) {
+    for (const s of getMainListEntrySessions(entry)) {
       const key = s.deviceLinkDeviceId ?? null;
       const list = byDevice.get(key);
       if (list) list.push(s);
       else byDevice.set(key, [s]);
     }
     for (const sessions of byDevice.values()) {
-      flattened.push({ kind: 'dialogue-group', sessions });
+      if (entry.kind === 'bot-group')
+        flattened.push({ kind: 'bot-group', bot: { ...entry.bot, sessions } });
+      else flattened.push({ kind: entry.kind, sessions });
     }
   }
 
-  const sections = new Map<string | null, MainListEntry[]>();
+  const sections = new Map<string | null, MainListEntry[]>(
+    (options.onlineDeviceIds ?? []).map((id) => [id, []]),
+  );
   for (const entry of flattened) {
     const key = entryDeviceId(entry);
     const list = sections.get(key);
@@ -501,7 +578,7 @@ export function splitEntriesByDevice(
   const result: MainListDeviceSection[] = [];
   for (const id of orderedIds) {
     const sectionEntries = sections.get(id);
-    if (sectionEntries && sectionEntries.length > 0) {
+    if (sectionEntries) {
       result.push({
         deviceId: id,
         entries: sortSectionEntries(sectionEntries, options),

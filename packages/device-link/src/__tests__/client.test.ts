@@ -725,6 +725,40 @@ describe('DeviceLinkClient', () => {
     await expect(p).resolves.toMatchObject({ ok: true, result: ['s1'] });
     h.client.stop();
   });
+  it("negotiates a tag catalog and returns the original session array to callers", async () => {
+    const h = makeHarness();
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const p = h.client.invoke("dev-b", {
+      channel: 'local-db:sessions:list',
+      args: [200, "active", { includePinned: true }],
+    });
+    const sent = h.current().sent.find((e) => e.kind === 'invoke')!;
+    expect(sent.payload).toMatchObject({
+      args: [200, "active", { includePinned: true, tagCatalog: 1 }],
+    });
+    const tag = { id: "work", name: "Work" };
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: "invoke-result",
+      id: sent.id,
+      src: "dev-b",
+      payload: {
+        ok: true,
+        result: {
+          format: "session-tag-catalog-v1",
+          sessions: [{ id: "s1", tagIds: [0] }],
+          tags: [tag],
+        },
+      },
+    });
+    await expect(p).resolves.toEqual({
+      ok: true,
+      result: [{ id: "s1", tags: [tag] }],
+    });
+    h.client.stop();
+  });
 
   it('双方协商可靠传输后，大 invoke-result 分片并在累计 ACK 后停止重发', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 10_000 } });
@@ -1262,6 +1296,56 @@ describe('DeviceLinkClient', () => {
       if (mode === 'closed') expect(acks).toEqual([]);
       else expect(acks.at(-1)).toMatchObject({ ackSeq: mode === 'failure' ? 1 : 2 });
     } finally { h.client.stop(); }
+  });
+
+  it('separates fragment assembly from ordered delivery wait without logging payloads', async () => {
+    const debug = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 },
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    let now = 100;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      await establishInboundReliableLink(h, 'timing-stream');
+      const received = vi.fn();
+      h.client.onFrame(received);
+      const tail = encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-b', id: 'timing-request',
+        payload: { ok: true, result: 'PRIVATE-PAYLOAD'.repeat(12_000) },
+      }, 'timing-stream', 2);
+      expect(tail.length).toBeGreaterThan(1);
+      h.current().push(tail[0]);
+      now += 300;
+      tail.slice(1).forEach(frame => h.current().push(frame));
+      await tick();
+      expect(received).not.toHaveBeenCalled();
+      now += 400;
+      encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'invoke', src: 'dev-b', id: 'head',
+        payload: { channel: 'local-db:sessions:list', args: [] },
+      }, 'timing-stream', 1).forEach(frame => h.current().push(frame));
+      await tick();
+      expect(received).toHaveBeenCalledTimes(2);
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('assemblyMs=300 orderedWaitMs=400'));
+      expect(debug.mock.calls.flat().join(' ')).not.toContain('PRIVATE-PAYLOAD');
+    } finally { h.client.stop(); clock.mockRestore(); }
+  });
+
+  it('records first socket write separately from the response wait for legacy peers', async () => {
+    const debug = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 },
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    let now = 100;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      const result = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+      const request = h.current().sent.at(-1)!;
+      now += 1500;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-b', id: request.id,
+        payload: { ok: true, result: [] } });
+      await result;
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('firstWriteWaitMs=0 afterFirstWriteMs=1500'));
+    } finally { h.client.stop(); clock.mockRestore(); wall.mockRestore(); }
   });
 
   it('bounds recovery stage logs, measures with monotonic time and records a fresh outbound handshake', async () => {
@@ -2601,7 +2685,7 @@ describe('DeviceLinkClient', () => {
     expect(sentListing).toMatchObject({
       kind: 'invoke',
       dst: 'dev-b',
-      payload: { channel: 'local-db:sessions:list', args: [] },
+      payload: { channel: 'local-db:sessions:list', args: [null, null, { tagCatalog: 1 }] },
     });
     expect(parseTransportPayload(sentListing.payload)).toBeNull();
     h.current().push({
@@ -2731,7 +2815,7 @@ describe('DeviceLinkClient', () => {
     expect(sentListing).toMatchObject({
       kind: 'invoke',
       dst: 'dev-b',
-      payload: { channel: 'local-db:sessions:list', args: [] },
+      payload: { channel: 'local-db:sessions:list', args: [null, null, { tagCatalog: 1 }] },
     });
     expect(parseTransportPayload(sentListing.payload)).toBeNull();
 
@@ -6728,6 +6812,83 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       h.client.sendInvokeResult('b', 'healthy', { ok: true, result: 'ok' });
       expect(socket.sent.some((env) => env.dst === 'b' && env.kind === 'invoke-result')).toBe(true);
       expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('paces a slow socket before any 1013 while another peer and control ACKs keep progressing', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      for (const peer of ['a', 'b']) {
+        const opened = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+      }
+      const socket = h.current();
+      socket.sent.length = 0;
+      const send = socket.send.bind(socket);
+      let peak = 0;
+      socket.send = (data) => {
+        socket.bufferedAmount += Buffer.byteLength(data);
+        peak = Math.max(peak, socket.bufferedAmount);
+        send(data);
+      };
+      // Repeat the incident's ~300KB catalog replies; a deliberately never ACKs.
+      for (let i = 0; i < 12; i++) h.client.sendInvokeResult('a', `catalog-${i}`, { ok: true, result: 'x'.repeat(295_000) });
+      const firstBurst = socket.sent.length;
+      h.client.sendInvokeResult('b', 'healthy-result', { ok: true, result: 'ok' });
+      socket.push(encodeReliableFrames({ v: 1, kind: 'push', src: 'a', payload: { channel: 'maker:event', payload: {} } }, 'stream-a', 1)[0]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.sent.some((env) => (env.payload as { channel?: string })?.channel === DEVICE_LINK_TRANSPORT_ACK_CHANNEL)).toBe(true);
+      expect(firstBurst).toBeLessThan(12);
+      for (let window = 0; window < 24; window++) {
+        socket.bufferedAmount = Math.max(0, socket.bufferedAmount - 128 * 1024);
+        await vi.advanceTimersByTimeAsync(250);
+        if (window === 3) expect(socket.sent.some((env) => env.id === 'healthy-result')).toBe(true);
+      }
+      const ids = new Set(socket.sent.filter((env) => env.dst === 'a' && env.kind === 'invoke-result').map((env) => env.id));
+      expect(ids.size).toBe(12);
+      expect(peak).toBeLessThan(1024 * 1024);
+      expect(h.client.getStatus()).toBe('online');
+      expect(socket.closed).toBeNull();
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('admits an atomic maximum-size reply after draining without pacing a fast empty socket', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const opened = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+      const socket = h.current();
+      socket.sent.length = 0;
+      socket.bufferedAmount = 600 * 1024;
+      h.client.sendInvokeResult('a', 'max-reply', { ok: true, result: 'x'.repeat(4 * 1024 * 1024 - 1024) });
+      expect(socket.sent).toHaveLength(0);
+      socket.bufferedAmount = 0;
+      await vi.advanceTimersByTimeAsync(250);
+      const large = socket.sent.filter((env) => env.id === 'max-reply');
+      expect(large.length).toBeGreaterThan(1);
+      const last = parseTransportPayload(large.at(-1)!.payload)!;
+      expect(large.length).toBe(last.meta.segment!.total);
+      socket.push({ v: 1, kind: 'push', src: 'a', payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: last.meta.streamId, ackSeq: last.meta.seq },
+      } });
+      const beforeLarge = socket.sent.length;
+      h.client.sendInvokeResult('a', 'fast-large', { ok: true, result: 'x'.repeat(4 * 1024 * 1024 - 1024) });
+      expect(socket.sent.length - beforeLarge).toBe(large.length);
+      const before = socket.sent.length;
+      for (let i = 0; i < 10; i++) h.client.sendInvokeResult('a', `fast-${i}`, { ok: true, result: 'ok' });
+      expect(socket.sent.length - before).toBe(10);
+      expect(socket.closed).toBeNull();
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 

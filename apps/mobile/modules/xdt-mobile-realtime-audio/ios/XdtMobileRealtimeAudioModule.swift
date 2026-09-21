@@ -7,6 +7,7 @@ private let onAudioError = "onAudioError"
 public class XdtMobileRealtimeAudioModule: Module {
   private let engine = AVAudioEngine()
   private var isCapturing = false
+  private var ownsAudioSession = false
   private var targetSampleRate = 16_000.0
   private var chunkIndex = 0
   private var interruptionObserver: NSObjectProtocol?
@@ -91,6 +92,7 @@ public class XdtMobileRealtimeAudioModule: Module {
     do {
       try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
       try session.setActive(true)
+      ownsAudioSession = true
       // Deliberately do NOT touch the engine here: engine.prepare() with no
       // attached nodes raises an uncatchable NSException (AVAudioEngineGraph
       // Initialize: inputNode != nullptr || outputNode != nullptr). Session
@@ -113,7 +115,7 @@ public class XdtMobileRealtimeAudioModule: Module {
       if self.isCapturing {
         return
       }
-      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      self.deactivateOwnedSessionLocked()
     }
     deactivateWorkItem = workItem
     sessionStateQueue.asyncAfter(deadline: .now() + sessionKeepAliveSeconds, execute: workItem)
@@ -122,6 +124,19 @@ public class XdtMobileRealtimeAudioModule: Module {
   private func cancelScheduledDeactivateLocked() {
     deactivateWorkItem?.cancel()
     deactivateWorkItem = nil
+  }
+
+  // AVAudioSession is shared with remote desktop PiP and other playback. A
+  // background notification is not ownership: never release a session we did
+  // not activate, or one whose configuration has since been taken over.
+  private func deactivateOwnedSessionLocked() {
+    guard ownsAudioSession else { return }
+    ownsAudioSession = false
+    let session = AVAudioSession.sharedInstance()
+    // iOS may add mixWithOthers implicitly when duckOthers is requested.
+    guard session.category == .playAndRecord, session.mode == .measurement,
+          session.categoryOptions.subtracting(.mixWithOthers) == [.duckOthers, .defaultToSpeaker] else { return }
+    try? session.setActive(false, options: .notifyOthersOnDeactivation)
   }
 
   private func startCapture(options: [String: Any]?) throws {
@@ -154,6 +169,7 @@ public class XdtMobileRealtimeAudioModule: Module {
     do {
       try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
       try session.setActive(true)
+      ownsAudioSession = true
     } catch {
       scheduleDeactivateLocked()
       throw Exception(name: "ERR_AUDIO_SESSION", description: "Failed to configure audio session: \(error.localizedDescription)")
@@ -200,7 +216,7 @@ public class XdtMobileRealtimeAudioModule: Module {
       // holding a keep-alive claim on a session the system just reclaimed (or
       // while the module is being destroyed) serves nobody.
       cancelScheduledDeactivateLocked()
-      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      deactivateOwnedSessionLocked()
     } else {
       scheduleDeactivateLocked()
     }

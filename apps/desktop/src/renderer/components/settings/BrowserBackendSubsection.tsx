@@ -6,14 +6,14 @@
  * (ComputerUseSection) 拿。父组件根据 `active` 决定整张卡片其它 cell 是否
  * 渲染(外部 backend 才显示 Chrome 探测 + 打开登录入口)。
  *
- * 使用统一的 SettingsSegmentedControl 呈现设置单选状态。
+ * 使用统一的 SegmentedControl 呈现设置单选状态。
  */
 
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import type {
   BrowserBackendHealth,
   BrowserBackendHealthReason,
@@ -68,7 +68,7 @@ export function BrowserBackendSubsection({
             {t('settings.computerUse.browserBackend.description')}
           </p>
         </div>
-        <SettingsSegmentedControl<BackendKind>
+        <SegmentedControl<BackendKind>
           value={active}
           disabled={pending}
           onValueChange={onSelect}

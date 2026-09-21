@@ -96,6 +96,8 @@ export {
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   extractAutoReviewUserIntent,
   appendAutoReviewUserIntent,
+  normalizeAutoReviewUserIntent,
+  type AutoReviewUserIntent,
   getAutoReviewActionTextLength,
   getAutoReviewDelegateHardCeilingMs,
   isAutoReviewConfirmUndeliveredNotice,
@@ -109,6 +111,7 @@ export {
   type AutoReviewTimeoutPolicy,
 } from './shared/auto-review-decision.js';
 export { toolAutoReviewAction } from './shared/auto-review-decision.js';
+export { AUTO_REVIEW_CONTINUATION_POLICY } from './shared/continuation-policy.js';
 export type { ReviewableAction } from './shared/auto-review.js';
 export {
   ORCA_NESTED_REPORT_DENIAL_REASON,

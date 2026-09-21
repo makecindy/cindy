@@ -258,7 +258,10 @@ describe('reply before user echo', () => {
     const slots = reserve();
     expect(reconcileOptimisticUserMessages(slots, [], NO_IDS, NO_IDS)).toEqual([]);
     expect(reconcileOptimisticUserMessages(slots, [], new Set(['sent']), NO_IDS)).toBe(slots);
-    expect(reconcileOptimisticUserMessages(slots, [row('sent', 'user', 2)], NO_IDS, NO_IDS)).toBe(slots);
+    const echo = row('sent', 'user', 2);
+    const echoedSlots = reconcileOptimisticUserMessages(slots, [echo], NO_IDS, NO_IDS);
+    expect(echoedSlots).toEqual([{ ...slots[0], message: echo }]);
+    expect(reconcileOptimisticUserMessages(echoedSlots, [echo], NO_IDS, NO_IDS)).toBe(echoedSlots);
     expect(reconcileOptimisticUserMessages(slots, [row('sent', 'user', 2)], NO_IDS, new Set(['sent']))).toEqual([]);
   });
 
@@ -436,7 +439,7 @@ describe('pending_send 渲染接线', () => {
     expect(bubbleSource).toContain('interactiveAtoms={false}');
     expect(bubbleSource).toContain('maxVisibleLines={collapsedLines}');
     expect(bubbleSource).toContain('LONG_USER_MESSAGE_COLLAPSED_LINES');
-    // 队列操作仅由状态徽标承接，Markdown 横向滚动不嵌套在 Pressable 中。
+    // 状态徽标保留独立入口和定位，气泡正文通过 touch end 展开队列操作；移动手势不触发菜单。
     const badgeStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
     const badgeEnd = bubbleSource.indexOf('\n        </Pressable>', badgeStart);
     expect(badgeStart).toBeGreaterThan(-1);
@@ -448,6 +451,7 @@ describe('pending_send 渲染接线', () => {
     expect(bubbleSource).toContain('event.nativeEvent.layout.x - 28 - spacing.sm');
     expect(bubbleSource).toContain('onLayout={hasAttachments ? undefined : measureBadgeAnchor}');
     expect(bubbleSource.indexOf('testID={`pendingSend.bubble.${item.clientId}`}')).toBeGreaterThan(badgeEnd);
+    expect(bubbleSource).toContain('onTouchEnd={interactive ? handleBubbleTouchEnd : undefined}');
     expect(bubbleSource).toContain('const collapseLatched = collapseLatchBody === displayBody;');
     expect(bubbleSource).toContain('if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);');
     expect(bubbleSource).toContain('(measureBody && collapseLatched) || collapseResolved');

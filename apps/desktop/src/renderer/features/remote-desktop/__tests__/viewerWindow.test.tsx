@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
 import { RemoteDesktopViewerWindow } from '../RemoteDesktopViewerWindow';
@@ -10,17 +10,28 @@ const lifecycle = vi.hoisted(() => ({
   disposed: vi.fn(),
   releaseInput: vi.fn(),
   setControl: vi.fn(),
+  zoom: vi.fn(),
+  fit: vi.fn(),
+  actualSize: vi.fn(),
   update: null as ((state: ViewerSnapshot) => void) | null,
 }));
 vi.mock('../viewerController', () => ({
   DesktopViewerController: class {
-    constructor(_api: unknown, _root: HTMLElement, update: typeof lifecycle.update) {
+    constructor(
+      private _api: { close(generation: number): Promise<void> },
+      _root: HTMLElement,
+      update: typeof lifecycle.update,
+    ) {
       lifecycle.created();
       lifecycle.update = update;
     }
     dispose = lifecycle.disposed;
     releaseInput = lifecycle.releaseInput;
     setControl = lifecycle.setControl;
+    zoom = lifecycle.zoom;
+    fit = lifecycle.fit;
+    actualSize = lifecycle.actualSize;
+    close = () => this._api.close(1);
   },
 }));
 vi.mock('@/hooks/useMacFullscreen', () => ({
@@ -60,7 +71,60 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
   });
   render(<RemoteDesktopViewerWindow />);
   await act(async () => {});
-  fireEvent.click(screen.getByRole('button', { name: i18n.t('remoteDesktop.disconnect') }));
+  // The window can be closed before the first controller snapshot arrives.
+  act(() => closeRequested(1));
+  expect(close).toHaveBeenCalledExactlyOnceWith(1);
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  close.mockClear();
+  const connected: ViewerSnapshot = {
+    target: null,
+    status: 'live',
+    error: null,
+    controlling: false,
+    controlPending: false,
+    caps: null,
+    displayId: '',
+    transport: 'direct',
+    latency: null,
+    settings: { fps: 30, bitrate: 0, audio: true },
+    ready: true,
+    preferences: {
+      audio: true,
+      privacyScreen: false,
+      hostMute: false,
+      clipboardSync: false,
+      lockOnExit: false,
+    },
+    safety: { privacyActive: false, notice: null, clipboardProgress: null },
+    receiveRate: null,
+    closing: false,
+    credential: null,
+    credentialBusy: false,
+    credentialNotice: null,
+  };
+  for (const status of ['connecting', 'reconnecting']) {
+    act(() => lifecycle.update?.({ ...connected, ready: false, status }));
+    expect(screen.queryByRole('button', { name: i18n.t('remoteDesktop.disconnect') })).toBeNull();
+    act(() => closeRequested(1));
+    expect(close).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    close.mockClear();
+  }
+  act(() => lifecycle.update?.(connected));
+  expect(screen.queryByRole('button', { name: i18n.t('remoteDesktop.takeControl') })).toBeNull();
+  expect(screen.queryByRole('button', { name: i18n.t('remoteDesktop.releaseControl') })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '放大' }));
+  fireEvent.click(screen.getByRole('button', { name: '缩小' }));
+  fireEvent.click(screen.getByRole('button', { name: '适应窗口' }));
+  expect(lifecycle.zoom.mock.calls).toEqual([['in'], ['out']]);
+  expect(lifecycle.fit).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: '实际大小（1:1）' }));
+  expect(lifecycle.actualSize).toHaveBeenCalledOnce();
+  expect(
+    screen.queryByRole('button', { name: i18n.t('remoteDesktop.viewer.fullscreen') }),
+  ).toBeNull();
+  expect(screen.queryByRole('button', { name: i18n.t('remoteDesktop.disconnect') })).toBeNull();
+  act(() => closeRequested(1));
   expect(close).not.toHaveBeenCalled();
   expect(lifecycle.releaseInput).toHaveBeenCalled();
   const dialog = within(screen.getByRole('alertdialog'));
@@ -105,6 +169,19 @@ it('explains view-only actions and enables the same actions when control is conf
   });
   render(<RemoteDesktopViewerWindow />);
   const state: ViewerSnapshot = {
+    preferences: {
+      audio: true,
+      privacyScreen: false,
+      hostMute: false,
+      clipboardSync: false,
+      lockOnExit: false,
+    },
+    safety: { privacyActive: false, notice: null, clipboardProgress: null },
+    receiveRate: null,
+    closing: false,
+    credential: null,
+    credentialBusy: false,
+    credentialNotice: null,
     target: { deviceId: 'host', name: 'Windows' },
     ready: true,
     controlling: false,
@@ -125,14 +202,21 @@ it('explains view-only actions and enables the same actions when control is conf
     },
   };
   await act(async () => lifecycle.update?.(state));
-  fireEvent.click(screen.getByRole('button', { name: '操作' }));
-  const panel = within(screen.getByRole('complementary', { name: '操作' }));
-  expect(panel.getByText(i18n.t('remoteDesktop.viewer.controlRequired'))).toBeDefined();
-  expect(panel.queryByText('文字剪贴板')).toBeNull();
+  const openPanel = (label: string) => {
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    return within(screen.getByRole('dialog', { name: label }));
+  };
+  let panel = openPanel('剪贴板');
   expect(
-    panel.getByText(i18n.t('remoteDesktop.viewer.clipboardShortcutHint', { modifier: '⌘' })),
-  ).toBeDefined();
-  const desktop = panel.getByRole('button', {
+    (
+      panel.getByRole('switch', {
+        name: i18n.t('remoteDesktop.clipboardSync'),
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect(panel.getByText(i18n.t('remoteDesktop.settingUnsupported'))).toBeDefined();
+  expect(panel.getByText(i18n.t('remoteDesktop.viewer.controlRequired'))).toBeDefined();
+  const desktop = screen.getByRole('button', {
     name: i18n.t('remoteDesktop.showDesktop'),
   }) as HTMLButtonElement;
   expect(desktop.disabled).toBe(true);
@@ -140,10 +224,61 @@ it('explains view-only actions and enables the same actions when control is conf
   expect(lifecycle.setControl).toHaveBeenCalledWith(true);
   await act(async () => lifecycle.update?.({ ...state, controlPending: true }));
   expect(panel.getByText(i18n.t('remoteDesktop.viewer.controlPending'))).toBeDefined();
-  expect(desktop.disabled).toBe(true);
-  await act(async () => lifecycle.update?.({ ...state, controlling: true }));
+  const supported = {
+    ...state,
+    controlling: true,
+    caps: {
+      ...state.caps!,
+      privacyScreen: true,
+      hostMute: true,
+      clipboardSync: true,
+      lockOnExit: true,
+    },
+  };
+  await act(async () => lifecycle.update?.(supported));
   expect(desktop.disabled).toBe(false);
-  expect(panel.queryByText(i18n.t('remoteDesktop.viewer.controlRequired'))).toBeNull();
+  expect(
+    (
+      panel.getByRole('switch', {
+        name: i18n.t('remoteDesktop.clipboardSync'),
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+  panel = openPanel('安全');
+  expect(screen.queryByRole('dialog', { name: '剪贴板' })).toBeNull();
+  expect(panel.queryByRole('switch', { name: i18n.t('remoteDesktop.clipboardSync') })).toBeNull();
+  expect(
+    (
+      panel.getByRole('switch', {
+        name: i18n.t('remoteDesktop.privacyScreen'),
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+  expect(lifecycle.releaseInput).toHaveBeenCalled();
+  await act(async () => lifecycle.update?.({ ...supported, ready: false }));
+  panel = within(screen.getByRole('dialog', { name: '安全' }));
+  expect(
+    (
+      panel.getByRole('switch', {
+        name: i18n.t('remoteDesktop.privacyScreen'),
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect(panel.getAllByText(i18n.t('remoteDesktop.loadingSettings'))).toHaveLength(2);
+  fireEvent.keyDown(screen.getByRole('dialog', { name: '安全' }), { key: 'Escape' });
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '安全' })),
+  );
+  openPanel('安全');
+  const remotePointer = vi.fn();
+  const stage = document.getElementById('stage')!;
+  stage.addEventListener('pointerdown', remotePointer);
+  fireEvent.pointerDown(stage);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(remotePointer).not.toHaveBeenCalled();
+  stage.removeEventListener('pointerdown', remotePointer);
+  expect(lifecycle.disposed).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -167,6 +302,19 @@ it.each([
   const view = render(<RemoteDesktopViewerWindow />);
   await act(async () =>
     lifecycle.update?.({
+      preferences: {
+        audio: true,
+        privacyScreen: false,
+        hostMute: false,
+        clipboardSync: false,
+        lockOnExit: false,
+      },
+      safety: { privacyActive: false, notice: null, clipboardProgress: null },
+      receiveRate: null,
+      closing: false,
+      credential: null,
+      credentialBusy: false,
+      credentialNotice: null,
       target: null,
       ready: true,
       controlling: true,
@@ -209,7 +357,10 @@ it('updates translated controls without ending or recreating the viewer connecti
   await act(async () => {
     for (const listener of [...listeners]) listener('zh-CN');
   });
-  expect(screen.getByRole('button', { name: '操作' })).toBeDefined();
+  const display = screen.getByRole('button', { name: '影音' });
+  expect(display.textContent).toBe('');
+  expect(screen.getByRole('button', { name: '剪贴板' }).textContent).toBe('');
+  expect(screen.getByRole('button', { name: '安全' }).textContent).toBe('');
   expect(lifecycle.disposed).not.toHaveBeenCalled();
   expect(lifecycle.created).toHaveBeenCalledOnce();
   expect(rendererReady).toHaveBeenCalledOnce();

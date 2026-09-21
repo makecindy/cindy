@@ -1,3 +1,4 @@
+import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -16,6 +17,7 @@ import {
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
 // 这段只作为打包路径回滚口保留，后续验证 macOS / Windows packaged 后删除。
 const { parentPort, workerData } = require('node:worker_threads');
@@ -453,6 +455,7 @@ function dispatchTx(readyDb, payload) {
       return recentWorkdirsMergeWindowsIdentity(readyDb, request.args);
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(readyDb, request.args);
+    case 'taskTags.execute': return runTaskTagsTransaction(readyDb, request.args);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(readyDb, request.args);
     case 'toolResults.compactSession':
@@ -2492,16 +2495,21 @@ async function dispatch(op, args) {
 setDatabase(workerData || {});
 
 parentPort.on('message', async (req) => {
+  const startedAt = performance.timeOrigin + performance.now();
+  const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     const result = await dispatch(req.op, req.args);
-    parentPort.postMessage({ id: req.id, ok: true, result });
+    parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
-    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err) });
+    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
 `;
 
 interface PendingRpc {
+  op: string;
+  enqueuedAt: number;
+  dispatchedAt: number;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -2511,6 +2519,7 @@ interface PendingRpc {
 }
 
 interface QueuedRpc {
+  enqueuedAt: number;
   req: RpcRequest;
   transferList: unknown[];
   resolve: (value: unknown) => void;
@@ -2613,6 +2622,7 @@ export class WorkerThreadTransport implements DbTransport {
     const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
       const queued: QueuedRpc = {
+        enqueuedAt: performance.timeOrigin + performance.now(),
         req,
         transferList: transferList ?? [],
         resolve: resolve as (value: unknown) => void,
@@ -2798,6 +2808,9 @@ export class WorkerThreadTransport implements DbTransport {
     const remainingBudgetMs = Math.max(1, this.rpcTimeoutMs - budgetElapsedMs);
     const timeout = setTimeout(onTimeout, remainingBudgetMs);
     this.pending.set(id, {
+      op,
+      enqueuedAt: item.enqueuedAt,
+      dispatchedAt: performance.timeOrigin + performance.now(),
       resolve: item.resolve,
       reject: item.reject,
       timeout,
@@ -2898,6 +2911,29 @@ export class WorkerThreadTransport implements DbTransport {
       if (!pending) return;
       this.pending.delete(msg.id);
       clearTimeout(pending.timeout);
+      const receivedAt = performance.timeOrigin + performance.now();
+      const totalMs = receivedAt - pending.enqueuedAt;
+      if (totalMs >= 250) {
+        // Local debug only: operation class and durations, never query/args/results.
+        // Delivery includes result transfer and main event-loop scheduling; execution
+        // includes a whole worker operation (possibly a transaction), not only SQL.
+        const ms = (value: number) => Math.round(Math.max(0, value));
+        try {
+          this.emitClientLog('debug', {
+            event: 'rpc.slow', id: msg.id, totalMs: ms(totalMs),
+            op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(pending.op) ? pending.op : 'other',
+            queueMs: ms(pending.dispatchedAt - pending.enqueuedAt),
+            ...(msg.timing ? {
+              workerWaitMs: ms(msg.timing.startedAt - pending.dispatchedAt),
+              workerExecutionMs: ms(msg.timing.finishedAt - msg.timing.startedAt),
+              deliveryMs: ms(receivedAt - msg.timing.finishedAt),
+            } : {}),
+            inFlight: this.pending.size, queued: this.queued.length, ok: msg.ok,
+          });
+        } catch {
+          // Debug sinks must not prevent settling the RPC or draining the queue.
+        }
+      }
       if (msg.ok) {
         pending.resolve(msg.result);
       } else {

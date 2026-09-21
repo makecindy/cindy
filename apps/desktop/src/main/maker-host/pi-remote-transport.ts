@@ -27,6 +27,8 @@
 import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+
 import type { RemoteHost, ExecStreamHandle } from '@cindy/maker-remote-ssh';
 import { probeRemoteAgent, probePiManager } from '@cindy/maker-remote-ssh';
 
@@ -36,6 +38,7 @@ import type {
   PiTransportCloseInfo,
   PiLineHandler,
   PiCloseHandler,
+  PiOversizedFrameHandler,
   PiRemoteFileOps,
 } from '@cindy/maker-core';
 
@@ -64,6 +67,7 @@ export interface SshPiTransportOptions {
 }
 
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
+const MAX_STDERR_LINE_CHARS = 16 * 1024;
 
 // 轮 40-w4-t5 CRITICAL:key-aware 敏感字段名 —— 值形状正则覆盖不了 64-hex
 // sessionToken / 自定义 MCP header 值, 字段名命中即整体替换。
@@ -84,8 +88,8 @@ export function redactCredentialText(text: string): string {
     `${pre}${quote}[REDACTED]${sep}[REDACTED]`);
   return out;
 }
-// 轮 40-w1 HIGH:SSH stdout JSONL 缓冲上限 —— 与本地 attachJsonlReader 的
-// MAX_JSONL_BUFFER_CHARS(16MB)对齐, 防远端异常输出无换行流导致 OOM。
+// SSH stdout JSONL 缓冲上限 —— 与本地 attachJsonlReader 的
+// MAX_JSONL_BUFFER_CHARS(16MB)对齐。超限resync 到下一行,不关 transport。
 const SSH_JSONL_MAX_BUFFER_CHARS = 16 * 1024 * 1024;
 // 轮 40-w4 MEDIUM-1:写队列(pendingWrites)硬上限 —— SSH channel 建立阶段
 // (execStream 挂住/极慢)时每次 writeLine 都会 push 闭包, 无上限会无界增长
@@ -521,15 +525,19 @@ function createSshPiChannelTransport(
   let envWritten = false;
 
   const lineHandlers = new Set<PiLineHandler>();
+  const oversizedHandlers = new Set<PiOversizedFrameHandler>();
   const closeHandlers = new Set<PiCloseHandler>();
   const stderrHandlers = new Set<(line: string) => void>();
   const pendingWrites: Array<{ line: string; resolve: () => void; reject: (err: Error) => void }> = [];
+  let stderrBuffer = '';
+  let skippingOversizedStderr = false;
   /** stdout 行切分缓冲(ssh channel 文本块可能跨行/半行)。 */
   let stdoutBuffer = '';
+  let skippingOversizedLine = false;
   // 轮 8 发现 5:ExecStreamHandle.onStdout 用 chunk.toString('utf8') 逐块解码,
   // 跨 chunk 的多字节 UTF-8 字符会被切成 U+FFFD。改用 onStdoutBytes +
   // StringDecoder(与 attachJsonlReader 同款), 保证 JSONL 帧内中文/emoji 不损坏。
-  const stdoutDecoder = new StringDecoder('utf8');
+  let stdoutDecoder = new StringDecoder('utf8');
 
   /** stdout 尾部 flush(幂等):channel 关闭/主动 close 前把 stdoutBuffer 里
    *  残留的未换行尾帧(pi 崩溃前输出半行 / 最后一行无 \n)吐给 lineHandlers,
@@ -542,7 +550,7 @@ function createSshPiChannelTransport(
     flushedTail = true;
     const tail = stdoutBuffer + stdoutDecoder.end();
     stdoutBuffer = '';
-    if (tail.trim().length > 0) {
+    if (!skippingOversizedLine && tail.trim().length > 0 && tail.length <= SSH_JSONL_MAX_BUFFER_CHARS) {
       fireLine(tail.endsWith('\r') ? tail.slice(0, -1) : tail);
     }
   };
@@ -551,6 +559,8 @@ function createSshPiChannelTransport(
     if (closed) return;
     closed = true;
     flushStdoutTail();
+    if (!skippingOversizedStderr && stderrBuffer) emitStderrLine(stderrBuffer);
+    stderrBuffer = '';
     if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null; }
     clearBackpressureTimer();
     drainListenerAttached = false;
@@ -567,8 +577,44 @@ function createSshPiChannelTransport(
     for (const handler of lineHandlers) handler(line);
   };
 
+  const fireOversizedFrame = (): void => {
+    for (const handler of oversizedHandlers) {
+      try { handler(); } catch { /* handler should not throw */ }
+    }
+  };
+
   const fireStderr = (line: string): void => {
     for (const handler of stderrHandlers) handler(line);
+  };
+
+  // SSH callbacks deliver chunks, whereas PiTransport promises complete lines.
+  // Redact only after framing; never expose a truncated secret from an oversized line.
+  const emitStderrLine = (line: string): void => {
+    if (!line.trim()) return;
+    const redacted = redactCredentialText(redactSensitiveText(line.replace(/\r$/, '')));
+    logger.warn('pi ssh stderr', { line: redacted.slice(0, 500) });
+    fireStderr(redacted);
+  };
+  const consumeStderr = (chunk: string): void => {
+    if (closed) return;
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf('\n', start);
+      const end = newline === -1 ? chunk.length : newline;
+      if (!skippingOversizedStderr) {
+        if (stderrBuffer.length + end - start > MAX_STDERR_LINE_CHARS) {
+          stderrBuffer = '';
+          skippingOversizedStderr = true;
+        } else {
+          stderrBuffer += chunk.slice(start, end);
+        }
+      }
+      if (newline === -1) break;
+      if (!skippingOversizedStderr) emitStderrLine(stderrBuffer);
+      stderrBuffer = '';
+      skippingOversizedStderr = false;
+      start = newline + 1;
+    }
   };
 
   /** 轮 23-H4 HIGH:背压感知的写入 —— channel.write 返回 false(ssh2 缓冲满)
@@ -705,21 +751,43 @@ function createSshPiChannelTransport(
         if (closed) return;
         if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null; }
         stdoutBuffer += stdoutDecoder.write(chunk);
-        // 轮 40-w1 HIGH:SSH stdout 缓冲无 OOM 上限(本地 attachJsonlReader 有
-        // 16MB guard, 双实现契约不一致)。远端路径更不可信 —— 超限丢弃缓冲并
-        // 关闭(继续解析已无意义, 且防 OOM)。
-        if (stdoutBuffer.length > SSH_JSONL_MAX_BUFFER_CHARS) {
-          logger.warn('pi ssh stdout buffer exceeded limit — closing transport', {
-            hostId: opts.remoteHost.id,
-            bytes: stdoutBuffer.length,
-          });
-          stdoutBuffer = '';
-          fireClose({ code: null, signal: null, reason: 'pi ssh stdout buffer overflow (no newline in stream)' });
-          return;
-        }
+        // 与本地 attachJsonlReader 对齐:超限丢掉当前行并resync 到下一个 \n。
+        // 合法 get_entries 带图历史可以超过 16MB;关 transport 会把整段会话打死。
         while (true) {
+          if (skippingOversizedLine) {
+            const newlineIndex = stdoutBuffer.indexOf('\n');
+            if (newlineIndex === -1) {
+              stdoutBuffer = '';
+              stdoutDecoder = new StringDecoder('utf8');
+              break;
+            }
+            stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+            skippingOversizedLine = false;
+            continue;
+          }
           const newlineIndex = stdoutBuffer.indexOf('\n');
-          if (newlineIndex === -1) break;
+          if (newlineIndex === -1) {
+            if (stdoutBuffer.length > SSH_JSONL_MAX_BUFFER_CHARS) {
+              logger.warn('pi ssh stdout buffer exceeded limit — discarding until next newline', {
+                hostId: opts.remoteHost.id,
+                bytes: stdoutBuffer.length,
+              });
+              skippingOversizedLine = true;
+              fireOversizedFrame();
+              stdoutBuffer = '';
+              stdoutDecoder = new StringDecoder('utf8');
+            }
+            break;
+          }
+          if (newlineIndex > SSH_JSONL_MAX_BUFFER_CHARS) {
+            logger.warn('pi ssh stdout discarded oversized JSONL frame', {
+              hostId: opts.remoteHost.id,
+              bytes: newlineIndex,
+            });
+            fireOversizedFrame();
+            stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+            continue;
+          }
           let line = stdoutBuffer.slice(0, newlineIndex);
           stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
           if (line.endsWith('\r')) line = line.slice(0, -1);
@@ -730,16 +798,7 @@ function createSshPiChannelTransport(
       });
       envWritten = true;
       drainPending();
-      ch.onStderr((s) => {
-        const trimmed = s.trim();
-        if (trimmed) {
-          // 轮 40-w4-t5 CRITICAL:direct fallback 的 stderr 绕过 daemon 侧 scrub,
-          // 进桌面日志前 key-aware 脱敏(env 凭证/64-hex sessionToken)。
-          const redacted = redactCredentialText(trimmed);
-          logger.warn('pi ssh stderr', { line: redacted.slice(0, 500) });
-          fireStderr(redacted);
-        }
-      });
+      ch.onStderr(consumeStderr);
       ch.onClose((info) => {
         // 尾部 flush 统一由 fireClose 里的 flushStdoutTail 执行(幂等)——
         // 这里不再自己 flush:fireClose 可能已被其它路径(队列溢出/缓冲超限/
@@ -834,6 +893,11 @@ function createSshPiChannelTransport(
     onClose(handler: PiCloseHandler): () => void {
       closeHandlers.add(handler);
       return () => { closeHandlers.delete(handler); };
+    },
+
+    onOversizedFrame(handler: PiOversizedFrameHandler): () => void {
+      oversizedHandlers.add(handler);
+      return () => { oversizedHandlers.delete(handler); };
     },
 
     async close(reason = 'pi ssh transport close()'): Promise<void> {

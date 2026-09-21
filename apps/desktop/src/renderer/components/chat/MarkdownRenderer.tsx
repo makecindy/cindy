@@ -699,10 +699,9 @@ const baseComponents: Components = {
     return <h6 className="text-[var(--md-h6-fg)]" {...props}>{children}</h6>;
   },
 
-  // 加粗:同上,只接颜色 token。font-weight 仍由 Tailwind preflight 的
-  // `b, strong { font-weight: bolder }` 提供,这里不覆盖。
+  // Content strong is absolute 700: nested emphasis must not accumulate to 900.
   strong({ children, ...props }) {
-    return <strong className="text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
+    return <strong className="font-bold text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
   },
 
   // Blockquote
@@ -1029,17 +1028,8 @@ function FileTargetChip({
     // 与输入附件一致：点击打开 lightbox 前先撤掉 hover 层，避免关闭大图后残留。
     setImagePreviewOpen(false);
     if (htmlWithSession) {
-      if (chipRemoteOrigin) {
-        void (async () => {
-          const cachePath = await fetchChatFileWithToasts(chipRemoteOrigin, fileCtx.workingDir, resolvedAbsPath);
-          if (cachePath && sidebarTargetSessionId) {
-            await openHtmlFileByPreference(sidebarTargetSessionId, cachePath, t);
-          }
-        })();
-        return;
-      }
       if (sidebarTargetSessionId) {
-        void openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t);
+        void openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
       }
       return;
     }
@@ -1136,7 +1126,6 @@ function ResolvedLocalLink({
   // 同 FileTargetChip:html + 有会话上下文时左键按偏好直开,「查看源文件」
   // 与「在侧边栏浏览器中打开」并入右键菜单;其余文件左键直开预览。
   const fileCtx = useChatSessionFile();
-  const linkRemoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
   const htmlWithSession =
     localKind !== 'directory' && isHtmlFilePath(resolvedAbsPath) && sessionId ? sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
@@ -1157,15 +1146,8 @@ function ResolvedLocalLink({
         onClick={async (e) => {
           e.preventDefault();
           if (htmlWithSession) {
-            if (linkRemoteOrigin) {
-              const cachePath = await fetchChatFileWithToasts(linkRemoteOrigin, fileCtx.workingDir, resolvedAbsPath);
-              if (cachePath && sidebarTargetSessionId) {
-                await openHtmlFileByPreference(sidebarTargetSessionId, cachePath, t);
-              }
-              return;
-            }
             if (sidebarTargetSessionId) {
-              await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t);
+              await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
             }
             return;
           }

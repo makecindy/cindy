@@ -6,7 +6,8 @@
  * intact; callers can then report that the persisted setting is deferred.
  */
 export async function refreshCodexMcpEnvironment(deps: {
-  restartCodex: () => Promise<void>;
+  /** Hold all local host startup reservations through the supplied refresh. */
+  restartCodex: (refreshEnvironment: () => Promise<void>) => Promise<void>;
   shutdownCodexEnvironment: () => Promise<void>;
   /** Schedule the same refresh for the next idle boundary when the host is busy. */
   onDeferred?: () => void;
@@ -14,20 +15,16 @@ export async function refreshCodexMcpEnvironment(deps: {
     warn: (message: string, meta?: Record<string, unknown>) => void;
   };
 }): Promise<{ codexMcpRefreshed: boolean }> {
+  let refreshingBridge = false;
   try {
-    await deps.restartCodex();
-  } catch (err) {
-    deps.logger?.warn('Codex MCP refresh deferred because the shared host could not restart', {
-      error: err instanceof Error ? err.message : String(err),
+    await deps.restartCodex(async () => {
+      refreshingBridge = true;
+      await deps.shutdownCodexEnvironment();
     });
-    deps.onDeferred?.();
-    return { codexMcpRefreshed: false };
-  }
-
-  try {
-    await deps.shutdownCodexEnvironment();
   } catch (err) {
-    deps.logger?.warn('Codex MCP refresh deferred because the old bridge could not shut down', {
+    deps.logger?.warn(refreshingBridge
+      ? 'Codex MCP refresh deferred because the old bridge could not shut down'
+      : 'Codex MCP refresh deferred because the shared host could not restart', {
       error: err instanceof Error ? err.message : String(err),
     });
     deps.onDeferred?.();

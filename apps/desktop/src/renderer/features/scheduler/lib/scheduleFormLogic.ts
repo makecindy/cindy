@@ -167,8 +167,8 @@ export type RunMode = 'fresh' | 'persistent' | 'bound';
  * Agent-mode bound schedules may only be persisted after the selected session
  * has resolved as available and active. Archived sessions remain openable, so
  * their reference state is still `available`, but the runner cannot use them as
- * ordinary heartbeat targets. Script mode intentionally clears targetSessionId,
- * so a stale binding must not block that mode conversion.
+ * ordinary heartbeat targets. Script bindings are lifecycle owners: editing them remains allowed,
+ * and the runner pauses unavailable owners before executing hooks or scripts.
  */
 export function canSubmitSessionBinding(
   executionMode: ScheduleFormState['executionMode'],
@@ -536,7 +536,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     useWorktree: !isScript && form.workspaceKind === 'project' && form.useWorktree,
     persistentSession: !isScript && form.persistentSession,
     silentWhenIdle: !isScript && form.silentWhenIdle,
-    targetSessionId: !isScript ? (form.targetSessionId.trim() || undefined) : undefined,
+    targetSessionId: hasRealBinding(form) ? form.targetSessionId.trim() : undefined,
     preRunHook: buildPreRunHook(form),
     notify: {
       desktop: form.notifyDesktop,
@@ -549,9 +549,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     base.workspaceKind = 'project';
     base.workingDir = form.workingDir.trim();
     base.useWorktree = false;
-    // script 模式不叠前置检查(任务本体就是脚本,UI 也不展示该区块);保留 key,
-    // 编辑保存时按 hasKey + undefined = 写 NULL 契约把历史 hook 清列。
-    base.preRunHook = undefined;
+    // Preserve installed script gates when editing; hidden controls must not erase them.
     return base;
   }
 

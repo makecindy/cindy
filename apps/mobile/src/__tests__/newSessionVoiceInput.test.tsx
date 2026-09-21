@@ -40,7 +40,12 @@ vi.mock('expo-constants', () => ({
 vi.mock('expo-paste-input', () => ({
   TextInputWrapper: ({ children }: { children: ReactNode }) => createElement('div', null, children),
 }));
+vi.mock('expo-glass-effect', () => ({
+  isLiquidGlassAvailable: () => true,
+  GlassView: () => null,
+}));
 vi.mock('@/theme', () => ({
+  useTheme: () => ({ mode: native.mode, colors: palettes[native.mode] }),
   useThemedStyles: (make: (colors: typeof palettes.light) => unknown) => make(palettes[native.mode]),
 }));
 
@@ -400,12 +405,12 @@ describe.each(['light', 'dark'] as const)('new-session dictation input (%s)', (m
     expect(input.finishVoiceRecording).toHaveBeenCalledOnce();
   });
 
-  it('retains transparent text on iOS without hiding the view from native hit testing', () => {
+  it('keeps iOS dictation text in the same visible native input', () => {
     native.platform = 'ios';
     native.mode = mode;
     const input = mountInput();
     input.render(true, 'dictation');
-    expect(input.inputStyle().color).toBe('transparent');
+    expect(input.inputStyle().color).toBe(palettes[mode].textPrimary);
     expect(input.inputStyle().opacity ?? 1).toBe(1);
     input.render(false, 'dictation');
     expect(input.inputStyle().color).toBe(palettes[mode].textPrimary);

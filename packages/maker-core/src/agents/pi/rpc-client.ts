@@ -13,13 +13,14 @@
  * 本类只做 JSONL framing 之上的请求/响应关联与事件分发, 不感知字节流来源。
  */
 
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { Logger } from '../../interfaces/logger.js';
 
 import type { PiTransport } from './transport.js';
 
 export { attachJsonlReader } from './transport.js';
 export { createPiStdioTransport } from './transport.js';
-export type { PiTransport, PiTransportCloseInfo, PiLineHandler, PiCloseHandler } from './transport.js';
+export type { PiTransport, PiTransportCloseInfo, PiLineHandler, PiCloseHandler, PiOversizedFrameHandler } from './transport.js';
 
 /** pi RPC 响应帧。 */
 export interface PiRpcResponse {
@@ -36,6 +37,9 @@ export interface PiRpcEvent {
   type: string;
   [key: string]: unknown;
 }
+
+export const PI_RPC_OVERSIZED_FRAME_ERROR =
+  'RPC response exceeded 16 MiB and was discarded.';
 
 export class PiRpcRequestTimeoutError extends Error {
   readonly code = 'PI_RPC_TIMEOUT';
@@ -61,6 +65,7 @@ export interface PiRpcSpawnOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_STARTUP_STDERR_CHARS = 2000;
 
 // 轮 40-w4-t5 CRITICAL:key-aware 敏感字段名 —— 值形状正则覆盖不了 64-hex
 // sessionToken / 自定义 MCP header 值, 字段名命中即整体替换。
@@ -83,6 +88,20 @@ function redactCredentialText(text: string): string {
   out = out.replace(SENSITIVE_KEY_RE, (_m, pre: string, quote: string, _k1: string, _k2: string, _k3: string, sep: string) =>
     `${pre}${quote}[REDACTED]${sep}[REDACTED]`);
   return out;
+}
+
+/** Error surfaces need the failing module name, not machine paths or stacks. */
+function sanitizeStartupDiagnostic(line: string): string {
+  if (/^\s*at(?:\s|$)/.test(line)) return '';
+  const pathLabel = (value: string): string => {
+    const name = value.split(/[\\/]/).filter(Boolean).pop() ?? '';
+    return `<path:${name}>`;
+  };
+  return line
+    .replace(/(["'])((?:file:\/\/\/|[A-Za-z]:[\\/]|\/|\\\\)[^"'\r\n]*)\1/g,
+      (_match, quote: string, value: string) => `${quote}${pathLabel(value)}${quote}`)
+    .replace(/(?<![\w:/\\])(?:file:\/\/\/|[A-Za-z]:[\\/]|\/|\\\\)[^\r\n"'<>]+?(?=:\s|["'<>\r\n]|$)/g,
+      (value) => pathLabel(value));
 }
 
 /**
@@ -110,6 +129,11 @@ export class PiRpcProcess {
     commandType: string;
   }>();
   private closed = false;
+  // Extension loading can fail before the first RPC response. Keep only a
+  // redacted, bounded tail until RPC becomes responsive, never running output.
+  private startupStderr = '';
+  private receivedRpcResponse = false;
+  private exitError: Error | null = null;
   /**
    * In-flight/successful close is shared. A failed close clears the gate so a
    * later call can retry remote termination instead of reporting a false
@@ -134,18 +158,37 @@ export class PiRpcProcess {
       if (line.trim().length === 0) return;
       // 轮 40-w4-t5 CRITICAL:stderr 可能含 env 凭证(崩溃 dump/依赖 debug 输出),
       // 进桌面日志前 key-aware 脱敏(值形状正则覆盖不了 64-hex sessionToken)。
-      this.logger.warn('pi stderr', { line: redactCredentialText(line).slice(0, 2000) });
-      opts.onStderrLine?.(redactCredentialText(line));
+      const redacted = redactCredentialText(redactSensitiveText(line));
+      this.logger.warn('pi stderr', { line: redacted.slice(0, 2000) });
+      if (!this.receivedRpcResponse && !this.closed) {
+        // Redact the whole line before truncating, so a credential straddling
+        // the tail boundary cannot lose its identifying prefix and leak.
+        const diagnostic = sanitizeStartupDiagnostic(redacted);
+        if (diagnostic) {
+          this.startupStderr = `${this.startupStderr}${this.startupStderr ? '\n' : ''}${diagnostic}`
+            .slice(-MAX_STARTUP_STDERR_CHARS);
+        }
+      }
+      opts.onStderrLine?.(redacted);
     });
     this.transport.onClose((info) => {
       this.closed = true;
-      this.failAllPending(new Error(`pi process exited (code=${info.code}, signal=${info.signal})`));
+      this.exitError = this.createExitError(`pi process exited (code=${info.code}, signal=${info.signal})`);
+      this.startupStderr = '';
+      this.failAllPending(this.exitError);
       opts.onExit({ code: info.code, signal: info.signal });
     });
+    this.transport.onOversizedFrame?.(() => this.failOversizedPending());
   }
 
   get pid(): number | undefined {
     return this.transport.pid;
+  }
+
+  private createExitError(message: string): Error {
+    return new Error(this.startupStderr
+      ? `${message}\nPi startup stderr:\n${this.startupStderr}`
+      : message);
   }
 
   get isClosed(): boolean {
@@ -163,7 +206,7 @@ export class PiRpcProcess {
       refreshTimeoutOnEvent?: (event: PiRpcEvent) => boolean;
     } = {},
   ): Promise<PiRpcResponse> {
-    if (this.isClosed) throw new Error('pi process already exited');
+    if (this.isClosed) throw this.exitError ?? this.createExitError('pi process already exited');
     const id = `c${this.nextRequestId++}`;
     const payload = JSON.stringify({ ...command, id });
 
@@ -298,6 +341,8 @@ export class PiRpcProcess {
         }
         clearTimeout(entry.timer);
         this.pending.delete(id);
+        this.receivedRpcResponse = true;
+        this.startupStderr = '';
         entry.resolve(resp);
       } else {
         // 无 id 的响应(如 parse error)或迟到响应 —— 记日志不丢语义。
@@ -375,6 +420,27 @@ export class PiRpcProcess {
         frames: Object.fromEntries(this.eventFrameCounts),
       });
       this.eventFrameCounts.clear();
+    }
+  }
+
+  private failOversizedPending(): void {
+    // 超限通知不带帧 type / 响应 id。事件帧(如 message_end)也可能超限;
+    // 只能结束能确定归属的 get_entries,不能把唯一 pending 的 steer/abort 猜成受害者。
+    const victims = [...this.pending.entries()].filter(([, entry]) => entry.commandType === 'get_entries');
+    if (victims.length === 0) {
+      this.logger.warn('pi rpc: discarded oversized JSONL frame with no matching pending get_entries');
+      return;
+    }
+    for (const [id, entry] of victims) {
+      clearTimeout(entry.timer);
+      this.pending.delete(id);
+      entry.resolve({
+        type: 'response',
+        id,
+        command: entry.commandType,
+        success: false,
+        error: PI_RPC_OVERSIZED_FRAME_ERROR,
+      });
     }
   }
 

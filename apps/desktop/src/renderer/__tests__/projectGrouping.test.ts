@@ -28,6 +28,7 @@ import {
   pinnedSidebarEntryComparisonKey,
 } from '@/features/cc-agent/lib/pinnedSidebarOrder';
 import type { Session } from '@/lib/ccAgent.types';
+import { findProjectRepresentativeKey } from '@/features/cc-agent/lib/sidebarProjectVisibility';
 
 /* ---------------- helpers ---------------- */
 
@@ -323,7 +324,7 @@ describe('groupSessions', () => {
     expect(project.displayName).toBe('Newest alias');
   });
 
-  it('applies last-activity cutoff to persistent projects using lastUsedAt', () => {
+  it('does not use directory registration time as matching task activity', () => {
     const projects = [
       {
         workingDir: '/workspace/old',
@@ -342,8 +343,8 @@ describe('groupSessions', () => {
         projects,
         Date.parse('2026-08-01T00:00:00.000Z'),
       ).map((project) => project.workingDir),
-    ).toEqual(['/workspace/recent']);
-    expect(filterPersistentLocalProjectsByLastActivity(projects, null)).toEqual(projects);
+    ).toEqual([]);
+    expect(filterPersistentLocalProjectsByLastActivity(projects, null)).toBe(projects);
   });
 
   it('distinguishes a truly empty project from a vendor-mismatched historical project', () => {
@@ -398,9 +399,75 @@ describe('groupSessions', () => {
       persistentLocalProjects: activityFiltered,
     }).projects.filter((project) => persistentProjectMatchesVendor(project, 'codex'));
 
-    expect(visibleForCodex.map((project) => project.workingDir)).toEqual([
-      '/workspace/empty-recent',
-    ]);
+    expect(visibleForCodex).toEqual([]);
+  });
+
+  it('retains projects introduced by matching tasks even when directory activity is old', () => {
+    const persistent = [
+      {
+        workingDir: '/workspace/matching',
+        lastUsedAt: '2026-01-01T00:00:00.000Z',
+        knownAgentKinds: [],
+      },
+      {
+        workingDir: '/workspace/empty',
+        lastUsedAt: '2026-08-12T00:00:00.000Z',
+        knownAgentKinds: [],
+      },
+    ];
+    const task = s({ workingDir: '/workspace/matching', updatedAt: '2026-08-12T00:00:00.000Z' });
+    const filtered = groupSessions([task], {
+      persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(
+        persistent,
+        Date.parse('2026-08-05T00:00:00.000Z'),
+      ),
+    });
+    expect(filtered.projects.map((project) => project.workingDir)).toEqual(['/workspace/matching']);
+    expect(filtered.projects[0]?.sessions).toEqual([task]);
+    expect(
+      groupSessions([], {
+        persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(persistent, null),
+      }).projects,
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ['D:/Work/Repo', 'd:/work/repo'],
+    ['//Server/Share/École', '//server/share/école'],
+  ])('groups Windows case variants under an activity filter: %s', (first, second) => {
+    const tasks = [
+      s({ workingDir: first, updatedAt: '2026-08-12T00:00:00.000Z' }),
+      s({ workingDir: second, updatedAt: '2026-08-11T00:00:00.000Z' }),
+    ];
+    const persistent = [
+      { workingDir: first.toUpperCase(), lastUsedAt: tasks[0].updatedAt, knownAgentKinds: [] },
+    ];
+    const result = groupSessions(tasks, {
+      localPlatform: 'win32',
+      persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(
+        persistent,
+        Date.parse('2026-08-05T00:00:00.000Z'),
+      ),
+    });
+    expect(result.projects).toHaveLength(1);
+    expect(result.projects[0].sessions).toEqual(tasks);
+    expect(result.projects[0].workingDir).toBe(first);
+    expect(
+      findProjectRepresentativeKey(result.projects, `local:${first.toUpperCase()}`, 'win32'),
+    ).toBe(result.projects[0].projectKey);
+  });
+
+  it('keeps POSIX casing and remote identities distinct without persistent seeds', () => {
+    const result = groupSessions(
+      [
+        s({ workingDir: '/Work/Repo' }),
+        s({ workingDir: '/work/repo' }),
+        s({ workingDir: '/work/repo', remoteHostId: 'host-a' }),
+        s({ workingDir: '/work/repo', remoteHostId: 'host-b' }),
+      ],
+      { localPlatform: 'linux' },
+    );
+    expect(result.projects).toHaveLength(4);
   });
 
   it('does not let an older session regress retained project activity', () => {

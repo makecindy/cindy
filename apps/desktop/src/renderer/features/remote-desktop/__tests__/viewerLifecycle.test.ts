@@ -34,7 +34,13 @@ afterEach(() => {
 });
 
 async function fixture(
-  options: { legacyTimeout?: boolean; delayStart?: boolean; busy?: boolean } = {},
+  options: {
+    legacyTimeout?: boolean;
+    delayStart?: boolean;
+    busy?: boolean;
+    alwaysTimeout?: boolean;
+    portal?: boolean;
+  } = {},
 ) {
   const start = deferred();
   const stop = deferred();
@@ -50,6 +56,7 @@ async function fixture(
       check();
       requests.push(request);
       if (request.op === 'capabilities') {
+        if (options.alwaysTimeout) throw new Error('INVOKE_TIMEOUT');
         if (options.legacyTimeout && ++capabilityAttempts === 1) throw new Error('INVOKE_TIMEOUT');
         return {
           version: 1,
@@ -57,7 +64,7 @@ async function fixture(
           canControl: true,
           connectionTakeover: true,
           automaticReconnect: options.legacyTimeout ? undefined : true,
-          displays: ['one', 'two', 'three'].map((id) => ({
+          displays: (options.portal ? ['wayland-portal'] : ['one', 'two', 'three']).map((id) => ({
             id,
             name: id,
             width: 1280,
@@ -97,6 +104,7 @@ async function fixture(
     clipboard: async () => {},
     close: async () => {},
     fullscreen: async () => {},
+    resize: async () => {},
     rendererReady: async () => {},
     presentationReady: async () => {},
     inputFocus: async () => {},
@@ -130,6 +138,152 @@ it('retries an initial capabilities timeout on a legacy host without inventing a
   expect(current.requests.filter((request) => request.op === 'start')).toEqual([
     { op: 'start', displayId: 'one' },
   ]);
+});
+
+it('stops repeated connection failures at the total deadline and allows manual retry', async () => {
+  const options = { alwaysTimeout: true };
+  const current = await fixture(options);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(snapshot).toMatchObject({ error: 'connectionTimeout', ready: false });
+  const attempts = current.requests.length;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(current.requests).toHaveLength(attempts);
+  options.alwaysTimeout = false;
+  controller.retry();
+  await vi.advanceTimersByTimeAsync(0);
+  runtime.post?.({ type: 'framePresented', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(snapshot).toMatchObject({ error: null, ready: true });
+});
+
+it('times out a lease that never presents a frame and releases only that lease', async () => {
+  const current = await fixture();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(snapshot).toMatchObject({ error: 'connectionTimeout', ready: false });
+  expect(current.requests.filter((r) => r.op === 'stop')).toEqual([
+    { op: 'stop', lease: 'lease-one' },
+  ]);
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  expect(snapshot.error).toBe('connectionTimeout');
+});
+
+it.each(['streaming', 'framePresented'])(
+  'allows portal consent after 60 seconds before %s',
+  async (type) => {
+    const current = await fixture({ portal: true });
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(snapshot).toMatchObject({ error: null, ready: false });
+    expect(current.hostLease()).toBe('lease-wayland-portal');
+    runtime.post?.({ type, epoch: 'lease-wayland-portal' });
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(snapshot).toMatchObject({ error: null, ready: true });
+    expect(current.requests.filter((r) => r.op === 'stop')).toEqual([]);
+  },
+);
+
+it('keeps the portal deadline bounded across fallback and rejects a late frame', async () => {
+  const current = await fixture({ portal: true });
+  await vi.advanceTimersByTimeAsync(90_000);
+  runtime.post?.({ type: 'fallback', epoch: 'lease-wayland-portal' });
+  await vi.advanceTimersByTimeAsync(89_999);
+  expect(snapshot.error).toBeNull();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(snapshot.error).toBe('connectionTimeout');
+  expect(current.hostLease()).toBeNull();
+  runtime.post?.({ type: 'streaming', epoch: 'lease-wayland-portal' });
+  expect(snapshot.ready).toBe(false);
+});
+
+it('retires a portal start arriving after the extended deadline', async () => {
+  const current = await fixture({ portal: true, delayStart: true });
+  await vi.advanceTimersByTimeAsync(180_000);
+  expect(snapshot.error).toBe('connectionTimeout');
+  current.start.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(current.hostLease()).toBeNull();
+  expect(snapshot).toMatchObject({ error: 'connectionTimeout', ready: false });
+});
+
+it('retires a start reply arriving after the connection deadline', async () => {
+  const current = await fixture({ delayStart: true });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(snapshot.error).toBe('connectionTimeout');
+  current.start.resolve();
+  current.stop.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(current.hostLease()).toBeNull();
+  expect(snapshot).toMatchObject({ error: 'connectionTimeout', ready: false });
+});
+
+it('releases the lease and cancels the deadline when the viewer is disposed', async () => {
+  const current = await fixture();
+  controller.dispose();
+  await vi.advanceTimersByTimeAsync(150_000);
+  expect(current.hostLease()).toBeNull();
+  expect(current.requests.filter((r) => r.op === 'stop')).toEqual([
+    { op: 'stop', lease: 'lease-one' },
+  ]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('keeps a healthy viewer on the same host connected when another viewer times out', async () => {
+  const leases = new Set<string>();
+  const snapshots = new Map<string, ViewerSnapshot>();
+  const createViewer = (peer: string) => {
+    const api = {
+      state: async () => ({
+        target: { deviceId: 'host', name: 'Computer' },
+        active: true,
+        generation: 1,
+      }),
+      onActive: () => () => {},
+      onLocale: () => () => {},
+      onCloseRequested: () => () => {},
+      ice: async () => [],
+      clipboard: async () => {},
+      close: async () => {},
+      fullscreen: async () => {},
+      resize: async () => {},
+      rendererReady: async () => {},
+      presentationReady: async () => {},
+      inputFocus: async () => {},
+      request: async (_generation: number, request: RemoteDesktopRequest) => {
+        if (request.op === 'capabilities')
+          return {
+            version: 1,
+            enabled: true,
+            canControl: false,
+            automaticReconnect: true,
+            displays: [{ id: 'one', width: 1280, height: 720 }],
+          };
+        if (request.op === 'start') {
+          leases.add(peer);
+          return {
+            lease: peer,
+            controlling: false,
+            display: { id: 'one', width: 1280, height: 720 },
+          };
+        }
+        if (request.op === 'stop') leases.delete(request.lease);
+        return { controlling: false, jpeg: null };
+      },
+    } satisfies RemoteDesktopViewerApi;
+    return new DesktopViewerController(api, {} as HTMLElement, (value) =>
+      snapshots.set(peer, value),
+    );
+  };
+  const stalled = createViewer('stalled');
+  try {
+    controller = createViewer('healthy');
+    await vi.advanceTimersByTimeAsync(0);
+    runtime.post?.({ type: 'streaming', epoch: 'healthy' });
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(snapshots.get('stalled')?.error).toBe('connectionTimeout');
+    expect(snapshots.get('healthy')).toMatchObject({ ready: true, error: null });
+    expect([...leases]).toEqual(['healthy']);
+  } finally {
+    stalled.dispose();
+  }
 });
 
 it.each([['two'], ['two', 'three']])(

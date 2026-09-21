@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { app } from 'electron';
+import { initializeTaskTagPresets } from './taskTagPresets';
 import { createLogger } from '../logger';
 import {
   backupDb,
@@ -63,10 +64,7 @@ function resolveDrizzleDir(): string {
   return path.resolve(__dirname, '../../drizzle');
 }
 
-export async function runMigrations(
-  db: Database.Database,
-  dbFilePath: string,
-): Promise<void> {
+export async function runMigrations(db: Database.Database, dbFilePath: string): Promise<void> {
   const drizzleDir = resolveDrizzleDir();
   log.info(
     JSON.stringify({
@@ -87,13 +85,15 @@ export async function runMigrations(
       event: 'localDb.migrate.scan',
       currentVersion,
       pendingCount: pending.length,
-      pending: pending.map((m) => ({ seq: m.seq, fileName: m.fileName, hasTsScript: !!m.tsScriptPath })),
+      pending: pending.map((m) => ({
+        seq: m.seq,
+        fileName: m.fileName,
+        hasTsScript: !!m.tsScriptPath,
+      })),
     }),
   );
   if (pending.length === 0) {
-    log.info(
-      JSON.stringify({ event: 'localDb.migrate.upToDate', currentVersion }),
-    );
+    log.info(JSON.stringify({ event: 'localDb.migrate.upToDate', currentVersion }));
     return;
   }
   if (
@@ -130,40 +130,51 @@ export async function runMigrations(
   );
 
   try {
-    runMigrationReplay(db, {
-      drizzleDir,
-      currentVersion,
-      onMigrationStart: (m) => {
-        log.info(
-          JSON.stringify({
-            event: 'localDb.migrate.apply.begin',
-            seq: m.seq,
-            fileName: m.fileName,
-            hasTsScript: !!m.tsScriptPath,
-          }),
-        );
-      },
-      onMigrationApplied: (m, durationMs) => {
-        log.info(
-          JSON.stringify({
-            event: 'localDb.migrate.apply.ok',
-            seq: m.seq,
-            fileName: m.fileName,
-            durationMs,
-          }),
-        );
-      },
-      onMigrationHistoryWriteFailed: (failure) => {
-        log.warn(
-          JSON.stringify({
-            event: 'localDb.migrate.history.writeFailed',
-            seq: failure.seq,
-            fileName: failure.fileName,
-            error: failure.error instanceof Error ? failure.error.message : String(failure.error),
-          }),
-        );
-      },
-    });
+    const apply = () =>
+      runMigrationReplay(db, {
+        drizzleDir,
+        currentVersion,
+        onMigrationStart: (m) => {
+          log.info(
+            JSON.stringify({
+              event: 'localDb.migrate.apply.begin',
+              seq: m.seq,
+              fileName: m.fileName,
+              hasTsScript: !!m.tsScriptPath,
+            }),
+          );
+        },
+        onMigrationApplied: (m, durationMs) => {
+          log.info(
+            JSON.stringify({
+              event: 'localDb.migrate.apply.ok',
+              seq: m.seq,
+              fileName: m.fileName,
+              durationMs,
+            }),
+          );
+        },
+        onMigrationHistoryWriteFailed: (failure) => {
+          log.warn(
+            JSON.stringify({
+              event: 'localDb.migrate.history.writeFailed',
+              seq: failure.seq,
+              fileName: failure.fileName,
+              error: failure.error instanceof Error ? failure.error.message : String(failure.error),
+            }),
+          );
+        },
+      });
+    if (currentVersion < 110) {
+      // Commit the first tag catalog together with its schema version. A crash
+      // must not leave the temporary color seeds marked as fully initialized.
+      db.transaction(() => {
+        apply();
+        initializeTaskTagPresets(db);
+      })();
+    } else {
+      apply();
+    }
   } catch (err) {
     log.error(
       JSON.stringify({

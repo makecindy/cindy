@@ -41,7 +41,7 @@ const mocks = vi.hoisted(() => ({
   noteSilentStopUserSend: vi.fn(),
   noteSilentStopSessionReset: vi.fn(),
   onSilentStopSettled: vi.fn(() => vi.fn()),
-  rejectAllPending: vi.fn(),
+  rejectAllPending: vi.fn<(reason: string, owner?: symbol) => Array<{ requestId: string; messageId: string }>>(() => []),
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
   checkDestructiveToolCall: vi.fn(() => ({ destructive: false })),
@@ -274,6 +274,7 @@ beforeEach(() => {
   mocks.takePendingInteractionsForSession.mockReturnValue([]);
   // maker.createSession: 按 id 返回独立 harness(多 session 并行的关键)
   mocks.getMaker.mockReturnValue({
+    getSession: vi.fn((id: string) => harnesses.get(id)?.session),
     on: vi.fn(() => () => undefined),
     createSession: vi.fn(async (args: { id?: string }) => {
       const id = args.id ?? 'anon';

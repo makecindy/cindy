@@ -10,6 +10,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { SUPPORTED_LOCALES } from '@/i18n';
 import { createLogger } from '@/lib/logger';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { dictionaryTermKey } from '@cindy/voice-input-core';
@@ -2216,26 +2217,22 @@ export function VoiceInputSection() {
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex rounded-full bg-[var(--settings-btn-secondary-bg)] p-1">
-                      {DICTIONARY_FILTERS.map((filter) => (
-                        <button
-                          key={filter}
-                          type="button"
-                          onClick={() => setDictionaryFilter(filter)}
-                          className={cn(
-                            'flex h-8 items-center gap-1.5 rounded-full px-3 text-12 font-medium transition-colors',
-                            dictionaryFilter === filter
-                              ? 'bg-[var(--settings-theme-card-bg)] text-[var(--settings-section-title)]'
-                              : 'text-[var(--settings-section-sublabel)] hover:text-[var(--settings-section-title)]',
-                          )}
-                        >
-                          {t(`settings.voiceInput.refinement.dictionary.filters.${filter}`)}
-                          <span className="text-11 opacity-60">
-                            {dictionaryCounts[filter]}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
+                    <SegmentedControl
+                      aria-label={t('settings.voiceInput.refinement.dictionary.ariaLabel')}
+                      value={dictionaryFilter}
+                      onValueChange={setDictionaryFilter}
+                      height={40}
+                      optionHeight={32}
+                      options={DICTIONARY_FILTERS.map((filter) => ({
+                        value: filter,
+                        label: (
+                          <>
+                            {t(`settings.voiceInput.refinement.dictionary.filters.${filter}`)}
+                            <span className="text-11 opacity-60">{dictionaryCounts[filter]}</span>
+                          </>
+                        ),
+                      }))}
+                    />
 
                     <div className="flex items-center gap-2">
                       <Tip

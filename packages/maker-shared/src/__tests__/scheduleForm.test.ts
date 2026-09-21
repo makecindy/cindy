@@ -327,7 +327,7 @@ describe('mobile schedule form model', () => {
   });
 
   it('pins agent-only fields back to script-safe values when serializing a script draft (codex review 966 second pass)', () => {
-    // 表单残留或误操作把 draft 拨到 script 非法组合(worktree/绑定/持续会话/
+    // 表单残留或误操作把 draft 拨到 script 非法组合(worktree/持续会话/
     // dialogue 工作区/静默)时,序列化层必须钉回合法值——否则引擎合并态校验
     // 直接拒绝整个 patch,一个可见控件就能让保存失败。
     const draft = {
@@ -347,7 +347,7 @@ describe('mobile schedule form model', () => {
       persistentSession: false,
       silentWhenIdle: false,
     });
-    expect(input.targetSessionId).toBeUndefined();
+    expect(input.targetSessionId).toBe('sess-oops');
   });
 
   it('still requires a prompt for a regular agent-mode schedule', () => {

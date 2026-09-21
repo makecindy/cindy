@@ -10,6 +10,7 @@
  * 不持有 LLM client、不做决策、不存任何业务记忆 —— 这些是未来 MetaAgent 的事。
  */
 
+import type { AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import { randomUUID } from 'node:crypto';
 import type { ReviewableAction } from './agents/shared/auto-review.js';
 import type { AutoReviewDecision } from './agents/shared/auto-review-decision.js';
@@ -58,6 +59,7 @@ import type {
 } from './agents/base-agent.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
+  AUTO_REVIEW_USER_INTENT,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
 } from './agents/base-agent.js';
@@ -283,6 +285,8 @@ function appendManagedImageReferences(
 }
 
 export interface SessionSendOptions extends SendOptions {
+  /** Host-owned authorization refresh after all async preparation, before vendor dispatch. */
+  resolveAutoReviewUserIntent?: () => Promise<AutoReviewUserIntent>;
   /**
    * Turn reservation 建立后的原子准备钩子。
    *
@@ -727,6 +731,7 @@ export class Session {
       onAccepted,
       onDispatching,
       onTurnReserved,
+      resolveAutoReviewUserIntent,
       ...handleOpts
     } = opts ?? {};
     const cancelledBeforeReservation = (): SessionSendResult | null =>
@@ -872,6 +877,11 @@ export class Session {
           });
           return cancelledAfterVision;
         }
+      }
+      if (resolveAutoReviewUserIntent) {
+        handleOpts[AUTO_REVIEW_USER_INTENT] = await resolveAutoReviewUserIntent();
+        const cancelledAfterAuthorization = finishCancelledBeforeDispatch();
+        if (cancelledAfterAuthorization !== null) return cancelledAfterAuthorization;
       }
       reservation.phase = 'dispatching';
       // 越过 dispatch 边界才记 origin — cancelled-before-dispatch 早返回不会到这,
@@ -1965,7 +1975,7 @@ export class Session {
    * 不写 DB —— 持久化由调用方 (main IPC 协调 local-db:sessions:update) 负责,
    * 跟 setModel/setEffort 双 IPC 协调先例一致。
    */
-  async setExtraDirs(dirs: string[]): Promise<void> {
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
       throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
@@ -1973,7 +1983,7 @@ export class Session {
     if (!this.handle.setExtraDirs) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setExtraDirs(dirs);
+    await this.handle.setExtraDirs(dirs, libraryRoot);
   }
 
   /**

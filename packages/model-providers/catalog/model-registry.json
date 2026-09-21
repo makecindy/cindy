@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-11T06:45:19.551Z",
+  "updatedAt": "2026-09-14T00:00:00.001Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -1692,6 +1692,20 @@
       ],
       "nativeApi": "anthropic-messages",
       "modelRef": "minimax/minimax-m2"
+    },
+    {
+      "id": "moonshotai/kimi-k2.8-preview",
+      "name": "Kimi K2.8 Preview",
+      "sortOrder": 42,
+      "routes": [
+        {
+          "providerId": "moonshot-kimi-code",
+          "modelId": "kimi-for-coding",
+          "agents": ["claude-code", "codex"]
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "moonshotai/kimi-k2.8-preview"
     },
     {
       "id": "moonshotai/kimi-k3",
@@ -5053,6 +5067,18 @@
           ]
         }
       ]
+    },
+    {
+      "id": "moonshotai/kimi-k2.8-preview",
+      "aliases": ["kimi-for-coding"],
+      "defaults": {
+        "name": "Kimi K2.8 Preview",
+        "group": "china",
+        "contextWindow": 1048576,
+        "supportsImageInput": true,
+        "efforts": ["low", "high", "max"],
+        "defaultEffort": "max"
+      }
     },
     {
       "id": "moonshotai/kimi-k3",

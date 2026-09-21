@@ -82,6 +82,7 @@ import {
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
+  onStandaloneTextEvent,
   getSessionTextSnapshot,
   onInteractionMessage,
   onInteractionResolved,
@@ -3685,5 +3686,70 @@ describe('resolved interactions publish authoritative history rows', () => {
     onInteractionResolved(SESSION, 'removed', 'plan_review', { requestId: 'removed' }, { dismissed: true });
     await flushWrites();
     expect(broadcastMessageRow).not.toHaveBeenCalled();
+  });
+});
+
+describe('Pi extension notification and assistant reply isolation', () => {
+  it('keeps plan toggles before the input from backdating the next answer', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(1000);
+      const enabled = onStandaloneTextEvent(SESSION, 'Plan mode enabled.');
+      clock.mockReturnValue(2000);
+      const disabled = onStandaloneTextEvent(SESSION, 'Plan mode disabled.');
+      expect(getSessionTextSnapshot(SESSION)).toBeNull();
+      expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
+      clock.mockReturnValue(3000); // User input precedes model output.
+      noteTurnStarted(SESSION);
+      clock.mockReturnValue(4000);
+      const reply = onAssistantTextEvent(SESSION, { text: 'Complete ', isFinal: false }, null);
+      onAssistantTextEvent(SESSION, { text: 'answer', isFinal: false }, null);
+      onAssistantTextEvent(SESSION, { text: 'Complete answer', isFinal: true, isFullText: true }, null);
+      flushAssistantBlock(SESSION);
+      await flushWrites();
+      expect(new Set([enabled, disabled, reply]).size).toBe(3);
+      const rows = vi.mocked(createMessage).mock.calls.map((call) => call[1]);
+      expect(rows.map(({ content, createdAt }) => ({ content, createdAt }))).toEqual([
+        { content: 'Plan mode enabled.', createdAt: 1000 },
+        { content: 'Plan mode disabled.', createdAt: 2000 },
+        { content: 'Complete answer', createdAt: 4000 },
+      ]);
+      expect(consumeLastAssistantPersistId(SESSION)).toBe(reply);
+      expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(reply);
+      for (const call of vi.mocked(createMessage).mock.calls) {
+        expect(call[2]).toMatchObject({ shouldBroadcast: expect.any(Function) });
+        expect(call[2]?.shouldBroadcast?.()).toBe(true);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('preserves a streaming reply and its terminal ownership across interleaved notices', async () => {
+    const reply = onAssistantTextEvent(SESSION, { text: 'First ', isFinal: false }, null);
+    const before = getSessionTextSnapshot(SESSION);
+    const notice = onStandaloneTextEvent(SESSION, 'Extension warning');
+    expect(getSessionTextSnapshot(SESSION)).toEqual(before);
+    expect(onAssistantTextEvent(SESSION, { text: 'second', isFinal: false }, null)).toBe(reply);
+    expect(onAssistantTextEvent(SESSION, {
+      text: 'First second', isFinal: true, isFullText: true,
+    }, { model: 'test-model' })).toBe(reply);
+    flushAssistantBlock(SESSION);
+    const after = onStandaloneTextEvent(SESSION, 'Extension finished');
+    expect(getSessionTextSnapshot(SESSION)).toBeNull();
+    expect(consumeLastAssistantPersistId(SESSION)).toBe(reply);
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(reply);
+    await flushWrites();
+    const rows = vi.mocked(createMessage).mock.calls.map((call) => call[1]);
+    expect(rows.map(({ clientId, content }) => ({ clientId, content }))).toEqual([
+      { clientId: notice, content: 'Extension warning' },
+      { clientId: reply, content: 'First second' },
+      { clientId: after, content: 'Extension finished' },
+    ]);
+    resetTurnPersistState(SESSION);
+    const next = onAssistantTextEvent(SESSION, { text: 'First second', isFinal: true }, null);
+    expect(next).not.toBe(reply);
+    await flushWrites();
+    expect(vi.mocked(createMessage).mock.calls.at(-1)?.[1].content).toBe('First second');
   });
 });

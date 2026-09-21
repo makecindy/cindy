@@ -2,5 +2,11 @@
 export function mountRemoteDesktopViewer(
   root: Document | HTMLElement,
   post: (message: Record<string, unknown>) => void,
-  config: { net: object; iceServers: readonly object[]; keyCodes: readonly string[]; desktop?: boolean },
+  config: {
+    net: object;
+    iceServers: readonly object[];
+    keyCodes: readonly string[];
+    desktop?: boolean;
+    nativeMedia?: boolean;
+  },
 ): { receive(message: object): void; dispose(): void };

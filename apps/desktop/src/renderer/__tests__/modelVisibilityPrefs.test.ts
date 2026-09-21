@@ -110,6 +110,39 @@ beforeEach(() => {
   vi.resetModules();
 });
 
+describe('shared origin readiness', () => {
+  it('does not publish transient pending while a reloaded renderer waits for its owner lock', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', JSON.stringify({ 'pi:xd:kept': false }));
+    const locks = new Locks();
+    vi.stubGlobal('navigator', { locks });
+    const release = locks.hold();
+    const prefs = await loadModule();
+    const initialization = prefs.setModelVisibilityOwner('owner-a', 1, 'cloud');
+    await Promise.resolve();
+    expect(prefs.isModelEnabled('pi', 'xd', { id: 'kept' })).toBe(false);
+    expect(syncModelVisibility).not.toHaveBeenCalled();
+    release();
+    await initialization;
+    expect(syncModelVisibility).toHaveBeenCalled();
+    expect(syncModelVisibility).not.toHaveBeenCalledWith('owner-a', 1,
+      expect.anything(), expect.objectContaining({ pending: true }));
+  });
+
+  it('does not repeat owner claims for preference operations while legacy storage stays absent', async () => {
+    setOwnerClaim('owner-a', 1, true, false);
+    ownerClaim.profileOrigin = 'existing';
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.local-adoption.owner.owner-a', '1');
+    const claim = vi.spyOn(window.electronAPI.maker, 'claimLegacyModelVisibilityOwner');
+    const prefs = await loadModuleForOwner();
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, []);
+    claim.mockClear();
+    expect(await prefs.setModelVisibility('pi', 'xd', 'kept', false)).toBe(true);
+    expect(claim).not.toHaveBeenCalled();
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBeNull();
+  });
+});
+
 describe('local profile visibility adoption', () => {
   const initKey = (owner: string) => `xdt:modelVisibilityPrefs:v1.initialization.owner.${owner}`;
   const mapKey = (owner: string) => `xdt:modelVisibilityPrefs:v1.owner.${owner}`;
@@ -1250,7 +1283,10 @@ describe('compact model defaults upgrade', () => {
     const prefs = await upgrade();
     await prefs.setModelVisibility('pi', 'xd', 'fable-5-1', false);
     if (hasLegacy) expect(memStorage.getItem(markerKey)).toBeNull();
-    else expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({ eligibleForDefaults: true, scopes: [] });
+    else expect(JSON.parse(memStorage.getItem(markerKey)!)).toMatchObject({
+      eligibleForDefaults: true,
+      scopes: provider.agents.map((agent) => JSON.stringify([provider.id, agent])),
+    });
     setOwnerClaim('owner-a', 1);
     await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
     expect(prefs.isModelEnabled('pi', 'xd', { id: 'gemini', defaultEnabled: true })).toBe(true);

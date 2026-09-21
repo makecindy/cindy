@@ -1511,6 +1511,20 @@ describe('LearnController 状态机', () => {
     });
   });
 
+  it('session 源在创建 run 前拒绝没有可蒸馏消息的空任务', async () => {
+    const h = makeHarness({ getConversationBlock: async () => '' });
+
+    await expect(h.controller.startLearn({
+      input: '',
+      sourceKind: 'session',
+      originSessionId: 'empty-origin',
+    })).rejects.toMatchObject({
+      code: 'INVALID_PARAMS',
+      message: 'the origin conversation has no distillable content',
+    });
+    expect(h.store.list()).toEqual([]);
+  });
+
   it('证据检索抛错 → 无证据继续(不整轮失败)', async () => {
     const h = makeHarness({
       search: async () => {

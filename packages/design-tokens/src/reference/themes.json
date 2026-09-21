@@ -763,9 +763,27 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.933333,
-              0.933333,
-              0.933333
+              0.254902,
+              0.486275,
+              0.866667
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-switch-thumb-light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.988235,
+              0.988235,
+              0.988235
             ]
           },
           "$extensions": {
@@ -3594,6 +3612,132 @@
               "alpha": false
             }
           }
+        },
+        "value-slider-track": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.384314,
+              0.384314,
+              0.384314
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-slider-fill": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.933333,
+              0.933333,
+              0.933333
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-slider-thumb": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.988235,
+              0.988235,
+              0.988235
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-selected-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.207843,
+              0.207843,
+              0.207843
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-selected-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.231373,
+              0.231373,
+              0.231373
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-option-fg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.666667,
+              0.666667,
+              0.666667
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-hover-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.160784,
+              0.160784,
+              0.160784
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
         }
       },
       "cindy-light": {
@@ -3824,9 +3968,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.290196,
-              0.301961,
-              0.317647
+              0.254902,
+              0.486275,
+              0.866667
             ]
           },
           "$extensions": {
@@ -6617,6 +6761,132 @@
               "alpha": false
             }
           }
+        },
+        "value-slider-track": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.639216,
+              0.639216,
+              0.619608
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-slider-fill": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.235294,
+              0.247059,
+              0.262745
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-slider-thumb": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.992157,
+              0.992157,
+              0.972549
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-selected-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.992157,
+              0.992157,
+              0.972549
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-selected-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.941176,
+              0.941176,
+              0.921569
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-option-fg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.419608,
+              0.419608,
+              0.403922
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
+        },
+        "value-segmented-hover-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.894118,
+              0.894118,
+              0.87451
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": true,
+              "alpha": false
+            }
+          }
         }
       },
       "default-dark": {
@@ -8867,6 +9137,24 @@
               ]
             }
           }
+        },
+        "palette-HINT_TEXT": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.545098,
+              0.564706,
+              0.603922
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
         }
       },
       "solarized-light": {
@@ -9600,6 +9888,66 @@
               "format": "hex",
               "uppercase": false,
               "alpha": false
+            }
+          }
+        },
+        "palette-HINT_TEXT": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.407843,
+              0.407843,
+              0.407843
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "value-search-match-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "hsl",
+            "components": [
+              45,
+              100,
+              62
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "triplet",
+              "precision": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "value-search-match-fg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "hsl",
+            "components": [
+              0,
+              0,
+              35
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "triplet",
+              "precision": [
+                0,
+                0,
+                0
+              ]
             }
           }
         }

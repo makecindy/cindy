@@ -47,6 +47,7 @@ export type {
   PiTransportCloseInfo,
   PiLineHandler,
   PiCloseHandler,
+  PiOversizedFrameHandler,
 } from './agents/pi/transport.js';
 // pi 远端 agentHome 文件操作原语(host 经 SSH 实现)。
 export type { PiRemoteFileOps } from './agents/base-agent.js';
@@ -126,3 +127,5 @@ export {
   type MakerContactsManagerDeps,
   type ContactsSqliteFactory,
 } from './contacts/manager.js';
+
+export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';

@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { useTranslation } from 'react-i18next';
+import { X } from 'lucide-react';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { Tooltip } from '@/components/ui/tooltip';
 
 export interface ConfirmDialogProps {
   /** Explicit pilot opt-in; unselected callers retain their existing presentation. */
@@ -34,6 +36,8 @@ export interface ConfirmDialogProps {
   confirmText?: string;
   cancelText?: string;
   showCancel?: boolean;
+  /** Dismiss without invoking the footer cancel action, which may have its own meaning. */
+  showCloseButton?: boolean;
   /** 可选的第三按钮(如「不保存」)。设了即渲染,在 confirm/cancel 之间。
    *  典型场景:文件未保存时关闭 tab → 保存(primary) / 不保存(tertiary) / 取消(secondary)。 */
   tertiaryText?: string;
@@ -102,6 +106,7 @@ export function ConfirmDialog({
   confirmText,
   cancelText,
   showCancel = true,
+  showCloseButton = false,
   tertiaryText,
   dontShowAgainLabel,
   checkboxDefaultChecked = false,
@@ -221,9 +226,31 @@ export function ConfirmDialog({
                 : undefined
             }
           >
+            {showCloseButton && (
+              <Tooltip.Provider>
+                <Tooltip.Root>
+                  <Tooltip.Trigger asChild>
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      className="absolute right-3 top-3 w-8 border-transparent bg-transparent px-0 text-[var(--confirm-desc)]"
+                      disabled={loading}
+                      aria-label={t('common.dismiss')}
+                      onClick={() => onOpenChange(false)}
+                    >
+                      <X size={16} aria-hidden />
+                    </Button>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content style={{ zIndex: zIndex + 1 }}>
+                    {t('common.dismiss')}
+                  </Tooltip.Content>
+                </Tooltip.Root>
+              </Tooltip.Provider>
+            )}
             <AlertDialog.Title
               className={cn(
                 'shrink-0 text-lg font-medium text-[var(--confirm-title)]',
+                showCloseButton && 'pr-9',
                 textClassName,
               )}
             >
