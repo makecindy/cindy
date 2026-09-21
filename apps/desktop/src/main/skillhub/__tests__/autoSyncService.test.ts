@@ -153,6 +153,16 @@ function makeService(options: {
 }
 
 describe('SkillhubAutoSyncService', () => {
+  it('refreshes department policies after signing out and back into the same identity', async () => {
+    const setup = makeService({ configSkills: [] });
+    await setup.service.runOnceAfterLogin();
+    await setup.service.runOnceAfterLogin();
+    expect(setup.fetchConfig).toHaveBeenCalledTimes(1);
+    setup.service.cancelInFlight();
+    await setup.service.runOnceAfterLogin();
+    expect(setup.fetchConfig).toHaveBeenCalledTimes(2);
+  });
+
   afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
 
   it('defers automatic cancellation cleanup behind a pending uninstall and retries after release', async () => {

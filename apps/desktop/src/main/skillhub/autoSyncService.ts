@@ -5,6 +5,7 @@
  * product-owned whitelist against SkillHub, reusing the existing installer so
  * zip verification, registry writes, and global skill links stay centralized.
  */
+import { fetchOrganizationAutoInstallSkills } from './organizationAutoInstall';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -138,6 +139,7 @@ export class SkillhubAutoSyncService {
     this.inFlightUserId = userId;
     this.inFlight = this.run()
       .then(() => {
+        this.assertAuthUnchanged();
         this.completedUserId = userId;
       })
       .catch((err) => {
@@ -153,6 +155,7 @@ export class SkillhubAutoSyncService {
   }
 
   cancelInFlight(): void {
+    this.completedUserId = null;
     this.externalCancelRequested = true;
     if (this.activeInstallSlug) {
       this.deps.cancelInstall(this.activeInstallSlug);
@@ -172,6 +175,7 @@ export class SkillhubAutoSyncService {
       });
       return { skills: defaultAutoSyncSkills(), usingFallbackConfig: true };
     });
+    this.assertAuthUnchanged();
     const { skills, usingFallbackConfig } = config;
     if (skills.length === 0) {
       await this.recordCandidateSkills(userId, [], { replace: !usingFallbackConfig });
@@ -504,6 +508,23 @@ async function pathExists(p: string): Promise<boolean> {
 }
 
 async function fetchRemoteAutoSyncConfig(): Promise<AutoSyncConfigResult> {
+  const [product, organization] = await Promise.allSettled([
+    fetchProductAutoSyncConfig(), fetchOrganizationAutoInstallSkills(),
+  ]);
+  const productConfig = product.status === 'fulfilled' ? product.value
+    : { skills: defaultAutoSyncSkills(), usingFallbackConfig: true };
+  const skills = new Map(productConfig.skills.map((skill) => [skill.name, skill]));
+  if (organization.status === 'fulfilled') {
+    for (const skill of organization.value) skills.set(skill.name, skill);
+  } else {
+    // Old servers and transient errors must not erase persisted ignore preferences.
+    log.warn('organization skill distribution unavailable');
+  }
+  return { skills: [...skills.values()], usingFallbackConfig:
+    productConfig.usingFallbackConfig || organization.status === 'rejected' };
+}
+
+async function fetchProductAutoSyncConfig(): Promise<AutoSyncConfigResult> {
   const url = process.env.XDT_SKILLHUB_AUTO_SYNC_CONFIG_URL
     ?? `${(await ensureBaseUrl()).replace(/\/+$/, '')}/${SKILLHUB_AUTO_SYNC_CONFIG_PATH}`;
   const response = await fetchJsonWithTimeout(url, CONFIG_FETCH_TIMEOUT_MS);
