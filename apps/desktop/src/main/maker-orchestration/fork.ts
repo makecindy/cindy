@@ -23,7 +23,7 @@ import { getMaker } from '../maker-host/index.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
-import { copySessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
+import { copySessionContextWindowBudget, pruneSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
 import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import {
@@ -963,6 +963,14 @@ export async function forkSessionAtMessage(
   const toolParentUuids = usesTailTurnFork
     ? []
     : collectClaudeToolParentUuids(sourceMessages, claudeAnchorIndex);
+  // 6. 任务级窗口档位随 fork 继承（同一任务意图）；启动时仍会按新路由重新收敛，
+  // 所以跨 agent / 跨模型的 fork 不会残留超出目标上限的值。它是偏好文件里的条目，
+  // 不是会话列，所以不在上面的行插入里。
+  //
+  // 写在事务**之前**：写失败时调用方拿到的失败与「任务还没建出来」是一致的
+  // （否则 DB 已提交、调用方却认为整体失败，会留下一个“报了错但存在”的任务）；
+  // 事务失败则把刚写的条目撤掉，不留指向不存在任务的孤儿条目。
+  const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
   try {
     await getDbClient().tx('fork.session', {
       sourceSessionId,
@@ -1017,6 +1025,7 @@ export async function forkSessionAtMessage(
     // 轮 40-w4-t13 HIGH:SDK 侧已创建新 session file(forkSdkSession), DB 事务
     // 失败时该文件成孤儿 —— 调用方收到失败, 但孤儿累积不可达。至少记录
     // 可恢复线索(sdkSessionId), 供诊断/清理; 错误照常上抛。
+    if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
     if (newSdkSessionId) {
       console.error(
         `[fork] SDK session ${newSdkSessionId} created but DB transaction failed — orphan session file left behind`,
@@ -1026,10 +1035,6 @@ export async function forkSessionAtMessage(
     throw err;
   }
 
-  // 6. 任务级窗口档位随 fork 继承（同一任务意图）；启动时仍会按新路由重新收敛，
-  // 所以跨 agent / 跨模型的 fork 不会残留超出目标上限的值。它是偏好文件里的条目，
-  // 不是会话列，所以不在上面的行插入里。
-  copySessionContextWindowBudget(sourceSessionId, newSessionId);
   // 7. 返回 mapper 转过的新 session（含 messageCount）
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
   if (!row) {
@@ -1160,42 +1165,50 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
     source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
   }) : undefined;
-  await getDbClient().tx('fork.session', {
-    sourceSessionId,
-    sourceClearedAt: source.clearedAt,
-    targetCreatedAt: copyBeforeCreatedAt,
-    targetRowid: null,
-    newSession: {
-      id: newSessionId,
-      title: newTitle,
-      workingDir: source.workingDir,
-      model: source.model,
-      // 同 forkSessionAtMessage:providerId 必须继承,防止凭证形态漂移。
-      providerId: source.providerId,
-      effort: source.effort,
-      permissionMode: source.permissionMode,
-      status: 'active',
-      sdkSessionId: newSdkSessionId,
-      totalTokenUsage: 0,
-      totalCostUsd: 0,
-      contextTokens: 0,
-      contextWindow: 0,
-      fastMode: source.fastMode,
-      clearedAt: null,
-      pinnedAt: null,
-      userSendAt: now,
-      agentKind: source.agentKind,
-      workspaceKind: source.workspaceKind,
-      codexHistoryHasProductPrompt: source.codexHistoryHasProductPrompt,
-      parentSessionId: source.id,
-      forkedAtMessageId: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    uuidMap: Array.from(uuidMap.entries()),
-    newMessageIds,
-    recoveryMarker,
-  });
+  // 任务级窗口档位与普通 fork 同口径继承（同一条任务意图）；这是偏好文件里的条目，
+  // 与普通 fork 一样先写后提交：写失败时任务还没建出来，事务失败则撤掉条目。
+  const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
+  try {
+    await getDbClient().tx('fork.session', {
+      sourceSessionId,
+      sourceClearedAt: source.clearedAt,
+      targetCreatedAt: copyBeforeCreatedAt,
+      targetRowid: null,
+      newSession: {
+        id: newSessionId,
+        title: newTitle,
+        workingDir: source.workingDir,
+        model: source.model,
+        // 同 forkSessionAtMessage:providerId 必须继承,防止凭证形态漂移。
+        providerId: source.providerId,
+        effort: source.effort,
+        permissionMode: source.permissionMode,
+        status: 'active',
+        sdkSessionId: newSdkSessionId,
+        totalTokenUsage: 0,
+        totalCostUsd: 0,
+        contextTokens: 0,
+        contextWindow: 0,
+        fastMode: source.fastMode,
+        clearedAt: null,
+        pinnedAt: null,
+        userSendAt: now,
+        agentKind: source.agentKind,
+        workspaceKind: source.workspaceKind,
+        codexHistoryHasProductPrompt: source.codexHistoryHasProductPrompt,
+        parentSessionId: source.id,
+        forkedAtMessageId: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      uuidMap: Array.from(uuidMap.entries()),
+      newMessageIds,
+      recoveryMarker,
+    });
+  } catch (err) {
+    if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
+    throw err;
+  }
 
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
   if (!row) {

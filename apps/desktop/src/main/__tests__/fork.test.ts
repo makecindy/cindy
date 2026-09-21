@@ -20,6 +20,18 @@ import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { projectSessionContextWindow } from '../../shared/sessionContextWindow';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
+import {
+  pruneSessionContextWindowBudget,
+  readSessionContextWindowBudget,
+  writeSessionContextWindowBudget,
+} from '../maker-host/session-context-budget-store.js';
+
+/** 事务提交时正在写入的新会话 id（由 createBusinessSessionId 生成，测试从 txMock 入参里取）。 */
+function forkedSessionIdFromTx(): string {
+  const call = txCalls.find((c) => c.name === 'fork.session');
+  if (!call) throw new Error('no fork.session tx call recorded');
+  return (call.args as { newSession: { id: string } }).newSession.id;
+}
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -205,6 +217,105 @@ async function writeClaudeJsonlInConfigDir(
 // ── tests ──────────────────────────────────────────────────────────────────
 
 describe('forkSessionAtMessage', () => {
+  it('inherits the task context-window budget (preference entry, not a session column)', async () => {
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+    const priorAssistant = makeMessageRow({
+      id: 'asst-1',
+      role: 'assistant',
+      content: '"hi back"',
+      agentMeta: JSON.stringify({ uuid: 'sdk-msg-uuid-1' }),
+      createdAt: 2500,
+    });
+    const priorUser = makeMessageRow({ id: 'user-1', role: 'user', content: '"hi"', createdAt: 2000 });
+    selectQueue.push([makeSourceRow({})]);
+    selectQueue.push([target]);
+    selectQueue.push([priorUser, priorAssistant]);
+    selectQueue.push([makeSourceRow({ title: '[Fork] Project A', sdkSessionId: 'sdk-new-session-uuid' })]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'sdk-new-session-uuid',
+      uuidMap: new Map<string, string>(),
+      initialContextTokens: 123456,
+    });
+
+    writeSessionContextWindowBudget('src-session', 300_000);
+    try {
+      await forkSessionAtMessage('src-session', 'target-user');
+      const newSessionId = forkedSessionIdFromTx();
+      expect(readSessionContextWindowBudget(newSessionId)).toBe(300_000);
+      pruneSessionContextWindowBudget(newSessionId);
+    } finally {
+      pruneSessionContextWindowBudget('src-session');
+    }
+  });
+
+  it('writes the inherited budget before the commit, and rolls it back when the transaction fails', async () => {
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+    const priorAssistant = makeMessageRow({
+      id: 'asst-1',
+      role: 'assistant',
+      content: '"hi back"',
+      agentMeta: JSON.stringify({ uuid: 'sdk-msg-uuid-1' }),
+      createdAt: 2500,
+    });
+    const priorUser = makeMessageRow({ id: 'user-1', role: 'user', content: '"hi"', createdAt: 2000 });
+    selectQueue.push([makeSourceRow({})]);
+    selectQueue.push([target]);
+    selectQueue.push([priorUser, priorAssistant]);
+
+    writeSessionContextWindowBudget('src-session', 262_144);
+    let budgetSeenAtCommit: number | null | undefined;
+    let committedSessionId = '';
+    txMock.mockImplementationOnce((name: string, args: unknown) => {
+      txCalls.push({ name, args });
+      committedSessionId = (args as { newSession: { id: string } }).newSession.id;
+      budgetSeenAtCommit = readSessionContextWindowBudget(committedSessionId);
+      return Promise.reject(new Error('tx boom'));
+    });
+
+    try {
+      await expect(forkSessionAtMessage('src-session', 'target-user')).rejects.toThrow('tx boom');
+      // 事务里能读到它 = 写在提交之前：写失败时不会出现「任务已建好却报整体失败」。
+      expect(budgetSeenAtCommit).toBe(262_144);
+      // 事务失败 → 刚写的条目被撤掉，不留指向不存在任务的孤儿。
+      expect(readSessionContextWindowBudget(committedSessionId)).toBeNull();
+    } finally {
+      // 一次性实现必须收回：否则会漏给下一个用例的 fork.session 事务。
+      txMock.mockReset();
+      pruneSessionContextWindowBudget('src-session');
+    }
+  });
+
+  it('inherits the task context-window budget on a strip-encrypted Codex fork too', async () => {
+    const first = makeMessageRow({ id: 'user-1', role: 'user', createdAt: 1000 });
+    const second = makeMessageRow({ id: 'asst-1', role: 'assistant', createdAt: 2000 });
+    selectQueue.push([
+      makeSourceRow({ agentKind: 'codex', model: 'gpt-5.5', sdkSessionId: 'codex-thread-source' }),
+    ]);
+    selectQueue.push([]); // 没有已存在的剥离 fork 子会话
+    selectQueue.push([first, second]);
+    selectQueue.push([
+      makeSourceRow({
+        agentKind: 'codex',
+        title: '[Fork·已剥离] Project A',
+        sdkSessionId: 'codex-thread-new',
+        parentSessionId: 'src-session',
+      }),
+    ]);
+    forkSdkSessionMock.mockResolvedValue({
+      newSdkSessionId: 'codex-thread-new',
+      uuidMap: new Map<string, string>(),
+    });
+
+    writeSessionContextWindowBudget('src-session', 250_000);
+    try {
+      await forkSessionStripEncrypted('src-session');
+      const newSessionId = forkedSessionIdFromTx();
+      expect(readSessionContextWindowBudget(newSessionId)).toBe(250_000);
+      pruneSessionContextWindowBudget(newSessionId);
+    } finally {
+      pruneSessionContextWindowBudget('src-session');
+    }
+  });
   it.each([
     { marker: 200000, projectedWindow: 200000 },
     { marker: null, projectedWindow: 272000 },

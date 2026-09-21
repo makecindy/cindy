@@ -209,6 +209,7 @@ export function ContextWindowBudgetChip({
   // 绝不把「另一条路由」的值当成事实。
   const {
     bounds: authoritativeBounds,
+    boundsFetchedAt,
     refresh: refreshBounds,
     refreshIfStale: refreshBoundsIfStale,
   } = useSessionContextWindowBounds(deviceId, sessionId, model, makerAgent, providerId ?? null);
@@ -254,17 +255,33 @@ export function ContextWindowBudgetChip({
   // 来源是**权威边界**里的 `budget`（main / 被控端从偏好文件读出，与档位表同源）：
   // 预算是 main 侧偏好条目而不是会话列，远程会话拿不到被控端的库，所以不再从会话快照读。
   // 提交成功后先本地记账（隧道/落盘完成前 UI 立即显示新档），边界刷新回来一致即清除。
-  const [optimisticBudget, setOptimisticBudget] = useState<number | null | undefined>(undefined);
+  // 乐观记账只在**同一个会话（同一设备）**内有效：预算是偏好文件里按 sessionId 存的条目、
+  // 与路由无关，所以切模型/来源/引擎不该丢掉它（否则刷新回来前会闪回旧档）；但同一张卡被换到
+  // 别的会话/设备时必须立刻失效，否则旧值会一直盖住新上下文的权威 budget。
+  // `confirmedAt` = 写入确实落地的时刻；只有在这之后回来的权威回答才有资格清它 —— 提交前发出、
+  // 之后才回来的那次请求（以及路由切换命中旧缓存）不能把刚写的值改回去。
+  const budgetScopeKey = `${deviceId ?? 'local'}|${sessionId}`;
+  const [optimisticBudget, setOptimisticBudget] = useState<
+    { scopeKey: string; value: number | null; confirmedAt: number } | undefined
+  >(undefined);
   const storedBudget = useMemo(() => {
-    if (optimisticBudget !== undefined) return optimisticBudget;
+    if (optimisticBudget && optimisticBudget.scopeKey === budgetScopeKey) return optimisticBudget.value;
     return normalizeContextWindowBudget(authoritativeBounds?.budget ?? null);
-  }, [optimisticBudget, authoritativeBounds?.budget]);
+  }, [optimisticBudget, budgetScopeKey, authoritativeBounds?.budget]);
   useEffect(() => {
-    if (optimisticBudget === undefined) return;
-    if (normalizeContextWindowBudget(authoritativeBounds?.budget ?? null) === optimisticBudget) {
+    if (!optimisticBudget) return;
+    if (optimisticBudget.scopeKey !== budgetScopeKey) {
       setOptimisticBudget(undefined);
+      return;
     }
-  }, [optimisticBudget, authoritativeBounds?.budget]);
+    if (normalizeContextWindowBudget(authoritativeBounds?.budget ?? null) === optimisticBudget.value) {
+      setOptimisticBudget(undefined);
+      return;
+    }
+    // 提交已确认，且这次权威回答发生在确认之后：以权威值收口。对方设备改了值、被夹紧、
+    // 或这条路由的查询失败返回 null（老被控端/隧道抖动）都走这里，避免旧值永久盖着权威值。
+    if (boundsFetchedAt >= optimisticBudget.confirmedAt) setOptimisticBudget(undefined);
+  }, [optimisticBudget, budgetScopeKey, authoritativeBounds?.budget, boundsFetchedAt]);
 
   // 每行显示的百分比都按**同一个基准**算（与档位推导同源）：默认档因此显示 `100% · 1.05M`
   // 而不是「绝对值在前」，旧值补的当前档也有百分比 —— 行的形态与颜色在整列里保持一个样式。
@@ -367,7 +384,9 @@ export function ContextWindowBudgetChip({
         await sessionService.update(sessionId, { contextWindowBudget: next });
       }
       // 提交后失效缓存：被控端/主进程可能刚更新了该路由的上限，下次开菜单要拿最新的。
-      setOptimisticBudget(next);
+      // 乐观值打上确认时刻（写入已经落地），随后这次 refresh 的结果（fetchedAt 必定晚于它）
+      // 才有资格把它收口 —— 之前 in-flight 的查询会被 effect 的 cancelled 丢弃，不会误清新值。
+      setOptimisticBudget({ scopeKey: budgetScopeKey, value: next, confirmedAt: Date.now() });
       refreshBounds();
     } catch (error) {
       const unsupported = extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
@@ -681,16 +700,31 @@ export function useSessionContextWindowBounds(
   model: string,
   agentKind: MakerAgentKindWire,
   providerId?: string | null,
-): { bounds: SessionContextWindowBounds | null; refresh: () => void; refreshIfStale: () => void } {
+): {
+  bounds: SessionContextWindowBounds | null;
+  /** 当前键那份权威回答的落盘时刻（0 = 还没拿到过）；调用方用它判断回答是否晚于自己的提交。 */
+  boundsFetchedAt: number;
+  refresh: () => void;
+  refreshIfStale: () => void;
+} {
   const key = cacheKey(deviceId, sessionId, model, agentKind, providerId ?? null);
-  const [boundsState, setBoundsState] = useState<{ key: string; value: SessionContextWindowBounds | null }>(
-    () => ({ key, value: boundsCache.get(key)?.value ?? null }),
-  );
+  const [boundsState, setBoundsState] = useState<{
+    key: string;
+    value: SessionContextWindowBounds | null;
+    fetchedAt: number;
+  }>(() => {
+    const cached = boundsCache.get(key);
+    return { key, value: cached?.value ?? null, fetchedAt: cached?.fetchedAt ?? 0 };
+  });
   // 会话/模型切换时**渲染期**就换锚（缓存命中直接派生，不必等 effect），避免闪现上一个
-  // 会话的上限；in-flight 结果按 key 丢弃。
+  // 会话的上限；in-flight 结果按 key 丢弃。fetchedAt 一并暴露：调用方（chip 的乐观记账）
+  // 要判断「这次权威回答是不是发生在我提交之后」，否则拿旧回答清掉刚写的新值。
   const bounds = boundsState.key === key
     ? boundsState.value
     : (boundsCache.get(key)?.value ?? null);
+  const boundsFetchedAt = boundsState.key === key
+    ? boundsState.fetchedAt
+    : (boundsCache.get(key)?.fetchedAt ?? 0);
   // 渲染期只读，写入放在 effect 里（并发渲染/StrictMode 重放时渲染期写 ref 是反模式）。
   const activeKeyRef = useRef(key);
   const [reloadToken, setReloadToken] = useState(0);
@@ -698,12 +732,12 @@ export function useSessionContextWindowBounds(
   useEffect(() => {
     activeKeyRef.current = key;
     if (!model || !sessionId) {
-      setBoundsState({ key, value: null });
+      setBoundsState({ key, value: null, fetchedAt: 0 });
       return;
     }
     const cached = boundsCache.get(key);
     if (cached && reloadToken === 0 && Date.now() - cached.fetchedAt < BOUNDS_TTL_MS) {
-      setBoundsState({ key, value: cached.value });
+      setBoundsState({ key, value: cached.value, fetchedAt: cached.fetchedAt });
       return;
     }
     let cancelled = false;
@@ -717,13 +751,15 @@ export function useSessionContextWindowBounds(
             )
           : await window.electronAPI.maker.getSessionContextWindowBounds(sessionId, route);
         const resolved = normalizeSessionContextWindowBounds(view);
-        boundsCache.set(key, { value: resolved, fetchedAt: Date.now() });
-        if (!cancelled && activeKeyRef.current === key) setBoundsState({ key, value: resolved });
+        const fetchedAt = Date.now();
+        boundsCache.set(key, { value: resolved, fetchedAt });
+        if (!cancelled && activeKeyRef.current === key) setBoundsState({ key, value: resolved, fetchedAt });
       } catch {
         // 老被控端 → CHANNEL_NOT_ALLOWED，或隧道/主进程瞬时失败：缓存 null（TTL 内不重试），
         // UI 退回「只允许收紧」，由菜单里的说明如实告知。
-        boundsCache.set(key, { value: null, fetchedAt: Date.now() });
-        if (!cancelled && activeKeyRef.current === key) setBoundsState({ key, value: null });
+        const fetchedAt = Date.now();
+        boundsCache.set(key, { value: null, fetchedAt });
+        if (!cancelled && activeKeyRef.current === key) setBoundsState({ key, value: null, fetchedAt });
       }
     })();
     return () => {
@@ -741,5 +777,5 @@ export function useSessionContextWindowBounds(
     if (cached && Date.now() - cached.fetchedAt < BOUNDS_TTL_MS) return;
     setReloadToken((token) => token + 1);
   }, [key]);
-  return { bounds, refresh, refreshIfStale };
+  return { bounds, boundsFetchedAt, refresh, refreshIfStale };
 }

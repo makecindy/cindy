@@ -144,6 +144,29 @@ function triggerLabel(chip: Element | null): string {
   return chip?.getAttribute('aria-label') ?? '';
 }
 
+/** 权威边界的形状（本地 `maker:get-context-window-bounds` / 远程 device-link 同名 channel）。 */
+function boundsView(
+  over: Partial<Record<"budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit", unknown>> = {},
+) {
+  return {
+    providerId: "xd",
+    defaultWindow: 1_000_000,
+    maxWindow: null,
+    modelLimit: null,
+    budget: null,
+    budgetCustomized: false,
+    ...over,
+  };
+}
+
+/** 装一份带指定 bounds mock 的 electronAPI（本地会话走 maker，远程走 deviceLink）。 */
+function installElectronApi(getBounds: unknown): void {
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    deviceLink: { invoke: vi.fn().mockResolvedValue(null) },
+    maker: { getSessionContextWindowBounds: getBounds },
+  };
+}
+
 function renderChip(
   overrides: Partial<React.ComponentProps<typeof ContextWindowBudgetChip>> & { budget?: number | null } = {},
 ) {
@@ -252,6 +275,75 @@ describe('ContextWindowBudgetChip', () => {
     const chip = document.querySelector('[data-context-window-budget-chip]');
     await waitFor(() => {
       expect(chip?.textContent).toContain('optionPercent#{"percent":25}');
+    });
+  });
+
+  // 乐观记账的作用域与收口（Greptile 复审 P1）：预算是「按会话」存的偏好条目、与路由无关，
+  // 所以切模型不该丢掉刚写的值；但同一张卡换到别的会话/设备时必须失效，而且只有**提交之后**
+  // 回来的权威回答才有资格把它收口（保存后的那次 refresh 会丢弃之前 in-flight 的结果）。
+/** 触发器文本（`↕ 25%`）：百分比在文本里，绝对值在 aria-label（triggerLabel）里。 */
+function chipText(): string {
+  return document.querySelector('[data-context-window-budget-chip]')?.textContent ?? '';
+}
+
+  it('keeps the saved tier while the post-save authoritative answer is still in flight', async () => {
+    const getBounds = vi
+      .fn()
+      .mockResolvedValueOnce(boundsView({ budget: null }))
+      // 保存后触发的那次查询永不返回：chip 仍要显示刚提交的档位，而不是回退到旧值。
+      .mockImplementation(() => new Promise(() => {}));
+    installElectronApi(getBounds);
+
+    renderChip();
+    const options = await openTierCard();
+    fireEvent.click(options.find((el) => el.getAttribute('data-token') === '250000')!);
+    await waitFor(() => {
+      expect(chipText()).toContain('optionPercent#{"percent":25}');
+    });
+  });
+
+  it('lets a post-save authoritative answer override the optimistic tier', async () => {
+    // 别的控制端改过值 / 写被夹紧 → 保存后回来的权威值与本机乐观值不同：以权威值收口。
+    let calls = 0;
+    const getBounds = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? boundsView({ budget: null })
+        : boundsView({ budget: 500_000, budgetCustomized: true });
+    });
+    installElectronApi(getBounds);
+
+    renderChip();
+    const options = await openTierCard();
+    fireEvent.click(options.find((el) => el.getAttribute('data-token') === '250000')!);
+    await waitFor(() => {
+      expect(chipText()).toContain('optionPercent#{"percent":50}');
+    });
+  });
+
+  it('does not carry the optimistic tier into another task', async () => {
+    installElectronApi(vi.fn(async () => boundsView({ budget: null })));
+
+    const view = renderChip();
+    const options = await openTierCard();
+    fireEvent.click(options.find((el) => el.getAttribute('data-token') === '250000')!);
+    await waitFor(() => {
+      expect(chipText()).toContain('optionPercent#{"percent":25}');
+    });
+
+    // 同一张卡换到另一个会话（新会话未存过档位）：乐观值必须失效，显示回默认档。
+    view.rerender(
+      <ContextWindowBudgetChip
+        sessionId="another-session"
+        contextTokens={0}
+        model="grok-4.6"
+        providerId="xd"
+        agentKind="cc"
+        providers={routeCatalog}
+      />,
+    );
+    await waitFor(() => {
+      expect(chipText()).toContain('optionPercent#{"percent":100}');
     });
   });
 
