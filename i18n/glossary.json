@@ -6,6 +6,168 @@
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
+      "id": "chat-workspace",
+      "status": "proposed",
+      "en": "Chat workspace",
+      "translations": {
+        "zh-CN": "对话工作区",
+        "zh-TW": "對話工作區",
+        "ja": "チャットワークスペース",
+        "ko": "대화 작업 공간"
+      },
+      "checkCase": false,
+      "note": "用户于 2026-09-18 明确指定的存储设置名称，表示未绑定项目的新任务工作目录的分配位置。单个任务的 working directory 仍称工作目录，不改其术语。"
+    },
+    {
+      "id": "cindy-make-history",
+      "status": "proposed",
+      "en": "Make history",
+      "translations": {
+        "zh-CN": "制作历史",
+        "zh-TW": "製作歷史",
+        "ja": "制作履歴",
+        "ko": "제작 기록"
+      },
+      "note": "Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。"
+    },
+    {
+      "id": "cindy-make-undo-integration",
+      "status": "proposed",
+      "en": "Undo integration",
+      "translations": {
+        "zh-CN": "撤销合入",
+        "zh-TW": "撤銷合入",
+        "ja": "取り込みを取り消す",
+        "ko": "반영 취소"
+      },
+      "note": "撤销单次制作已合入个人源码的全部改动，保留其他制作与已有应用成品；通过新的反向提交实现。"
+    },
+    {
+      "id": "cindy-make-reapply-integration",
+      "status": "proposed",
+      "en": "Reapply integration",
+      "translations": {
+        "zh-CN": "重新合入",
+        "zh-TW": "重新合入",
+        "ja": "再度取り込む",
+        "ko": "다시 반영"
+      },
+      "note": "重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。"
+    },
+    {
+      "id": "cindy-make-version-control",
+      "status": "proposed",
+      "en": "Version Control",
+      "translations": {
+        "zh-CN": "版本控制",
+        "zh-TW": "版本控制",
+        "ja": "バージョン管理",
+        "ko": "버전 관리"
+      },
+      "note": "Cindy Make 设置中用户指定的页签名称，汇总我的版本与制作历史，并提供本地合入、撤销和生成入口。"
+    },
+    {
+      "id": "cindy-original-version",
+      "status": "proposed",
+      "en": "Original Version",
+      "translations": {
+        "zh-CN": "原版",
+        "zh-TW": "原版",
+        "ja": "オリジナル版",
+        "ko": "기본 버전"
+      },
+      "note": "Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正式安装版属于同一个类型；Dev 只影响底层启动方式，不作为第三类版本。"
+    },
+    {
+      "id": "cindy-personal-version",
+      "status": "proposed",
+      "en": "Personal Version",
+      "translations": {
+        "zh-CN": "个人版",
+        "zh-TW": "個人版",
+        "ja": "個人版",
+        "ko": "개인 버전"
+      },
+      "note": "Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。"
+    },
+    {
+      "id": "task-tag",
+      "status": "proposed",
+      "en": "Tag",
+      "translations": {
+        "zh-CN": "标签",
+        "zh-TW": "標籤",
+        "ja": "タグ",
+        "ko": "태그"
+      },
+      "checkCase": false,
+      "note": "任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。"
+    },
+    {
+      "id": "remote-desktop-display-sound",
+      "status": "proposed",
+      "en": "Display & Sound",
+      "translations": {
+        "zh-CN": "影音",
+        "zh-TW": "影音",
+        "ja": "画面とサウンド",
+        "ko": "화면 및 소리"
+      },
+      "checkCase": false,
+      "note": "Remote desktop panel containing picture and audio settings; icon-only toolbar trigger."
+    },
+    {
+      "id": "local-session-scope",
+      "status": "proposed",
+      "en": "Local",
+      "translations": {
+        "zh-CN": "本机任务",
+        "zh-TW": "本機任務",
+        "ja": "このデバイスのセッション",
+        "ko": "이 기기의 세션"
+      },
+      "checkCase": false,
+      "alsoAllowed": {
+        "zh-CN": [
+          {
+            "text": "本机",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine（设备菜单与新建任务按钮）、ccAgent.sidebar.deviceGroup.local（设备分组标题）"
+          }
+        ],
+        "zh-TW": [
+          {
+            "text": "本機",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local"
+          }
+        ],
+        "ja": [
+          {
+            "text": "このデバイス",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local"
+          }
+        ],
+        "ko": [
+          {
+            "text": "이 기기",
+            "when": "设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local"
+          }
+        ]
+      },
+      "note": "用于 Desktop 本机范围标签。translations 中带任务／セッション／세션 的译法仅用于侧栏任务范围标题 ccAgent.sidebar.scopeLocalSessions；设备菜单、新建任务按钮和设备分组标题使用 alsoAllowed 中不带任务的设备标签译法，不可互换。英文统一使用 Local，表示当前电脑或其上的任务；其他语言保留各位置现有表达。不表示本地模型、离线模式或未登录状态，也不约束其他语境中的 local。"
+    },
+    {
+      "id": "remote-desktop-background-running",
+      "status": "proposed",
+      "en": "Run in background",
+      "translations": {
+        "zh-CN": "后台运行",
+        "zh-TW": "背景執行",
+        "ja": "バックグラウンド実行",
+        "ko": "백그라운드 실행"
+      },
+      "note": "远程桌面的持续开关，用户已确认中文名。离开页面或切到后台时以小窗继续显示，回到全屏后仍保持开启；不是任意后台任务或强制退出后继续运行的承诺。其他语言译名登记为 proposed。"
+    },
+    {
       "id": "remote-desktop-direct",
       "status": "proposed",
       "en": "Direct to computer",
@@ -112,7 +274,7 @@
         "ja": "Cindy Make",
         "ko": "Cindy Make"
       },
-      "note": "用户通过内置 /cindy-make 显式开启的 Cindy 个人版制作流程，先复用 /cindy-make-doctor 检查本机环境，再按平台补齐缺少的便携工具，并在消息流卡片中保留修改需求；Doctor 自身只检查，上游查询与构建分阶段接入。命令名已由用户指定，卡片保留同一专名。"
+      "note": "用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。"
     },
     {
       "id": "cindy-ai-free-tier",

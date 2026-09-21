@@ -61,6 +61,46 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.__resetPinnedOriginsForTest();
   });
 
+  it('invalidates and reloads the first snapshot when a tag catalog push arrives first', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    const epoch = remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    const otherEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-B');
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', epoch)).toBe(false);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-B', otherEpoch)).toBe(true);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active']]);
+    const replacementEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', replacementEpoch)).toBe(true);
+  });
+
+  it('reloads an in-flight first archived snapshot without loading untouched history', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active']]);
+    reseed.mockClear();
+    remoteProjectsStore.markSessionStatusLoading('dev-A', 'archived');
+    const epoch = remoteProjectsStore.nextSnapshotEpoch('dev-A', 'archived');
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', epoch, 'archived')).toBe(false);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
+  });
+
+  it('requeues both loaded buckets after invalidating a refresh that may contain new tasks', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('archived', { status: 'archived' })], 'archived');
+    const activeEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    const archivedEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-A', 'archived');
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', activeEpoch)).toBe(false);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', archivedEpoch, 'archived')).toBe(false);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
+  });
+
   it('把用户的任务重试动作交给 listing tier 注册的 bootstrap 实现', () => {
     const retry = vi.fn();
     setRemoteSessionBootstrapRetryImpl(retry);

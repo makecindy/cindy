@@ -1,4 +1,10 @@
+import { TaskTagDots } from '@/session/TaskTags';
+import { GlassView } from "expo-glass-effect";
+import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
+import { useHeaderHeight } from "expo-router/react-navigation";
+import { SessionHeaderNativeBlur } from "@/session/SessionHeaderNativeControls";
 import { RemoteTaskSuggestions } from '@/session/RemoteTaskSuggestions';
+import { isTaskSuggestionsSyncPending, useRemoteTaskSuggestionsPresentation } from '@/session/useRemoteTaskSuggestionsPresentation';
 import { countHomeSuggestionSessions, remoteTaskSuggestionsMode, type RemoteTaskSuggestionId } from '@/session/remoteTaskSuggestionsModel';
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
@@ -48,7 +54,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
-import Reanimated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import Reanimated, { measure, runOnJS, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -363,7 +369,8 @@ function HomeScreenContent() {
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
+  const liquidGlass = useLiquidGlassAvailable();
   const { t, i18n: i18nInstance } = useTranslation();
   // 所有前进导航(进会话 / 新建 / 设置 / 组页面)统一走守卫 push:列表卡顿时的
   // 连点会各自触发一次裸 push,把同一页压进栈 N 层(返回也要 N 次)。
@@ -1897,7 +1904,10 @@ function HomeScreenContent() {
   // 「可用」项,但缓存设备不能当 live 设备直接开新会话——列表先画出来,新建入口等 live 数据。
   const newSessionDisabled = !home.primaryDevice || (!initialHomeSettled && !hasOpenableLiveDevice);
   const taskSuggestionsDeviceId = selectedDeviceId ?? home.primaryDevice?.deviceId ?? undefined;
-  const taskSuggestionsMode = remoteTaskSuggestionsMode({
+  const taskSuggestionsSyncing = isTaskSuggestionsSyncPending(
+    homeSyncDeviceIds, homeListOwnedDeviceIdsRef.current, rawDeviceConnectionStates,
+  );
+  const taskSuggestionsCandidateMode = remoteTaskSuggestionsMode({
     sessionCount: countHomeSuggestionSessions(home,
       shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? indexedSearch.results : undefined),
     totalSessionCount: home.overview.all,
@@ -1906,7 +1916,9 @@ function HomeScreenContent() {
     ready: status === 'online' && !activeConnectionIssue && !initialHomeLoading && !initialHomeError && !connectionError
       && indexedSearch.status !== 'searching' && !newSessionDisabled
       && deviceModels.some((device) => device.canOpen
-        && !homeRecoveringDeviceIds.has(device.deviceId)
+        && !recoveringDeviceIds.has(device.deviceId)
+        && !unresponsiveDevices.has(device.deviceId)
+        && rawDeviceConnectionStates[device.deviceId] !== 'failed'
         && device.deviceId === taskSuggestionsDeviceId),
   });
   const newSessionDeviceOptions = useMemo(
@@ -1915,6 +1927,11 @@ function HomeScreenContent() {
       .map((item) => ({ deviceId: item.deviceId, name: item.name })),
     [deviceModels],
   );
+  const { mode: taskSuggestionsMode, pending: taskSuggestionsPending } = useRemoteTaskSuggestionsPresentation({
+    scope: JSON.stringify([accountGeneration, selectedDeviceId, taskSuggestionsDeviceId, [...homeSyncDeviceIds].sort()]),
+    candidateMode: taskSuggestionsCandidateMode,
+    syncing: taskSuggestionsSyncing,
+  });
   const selectedDeviceLabel = useMemo(() => {
     if (!selectedDeviceId) return t('devices.list.allConversations');
     // 设备列表尚未同步回来时,用偏好里存的设备名兜底,避免冷启动表头闪占位文案。
@@ -2472,8 +2489,9 @@ function HomeScreenContent() {
   }, [guardedPush, home.deviceFilters, selectedDeviceId, selectedDeviceLabel]);
 
   const nativeHomeHeader = usesNativeStackHeader();
+  const nativeHeaderHeight = useHeaderHeight();
   const chromeHeight = nativeHomeHeader
-    ? (headerHeight ?? 0)
+    ? nativeHeaderHeight + (headerHeight ?? 0)
     : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
   return (
     <View
@@ -2481,6 +2499,7 @@ function HomeScreenContent() {
       style={[styles.safeArea, { paddingLeft: edgePadding.paddingLeft, paddingRight: edgePadding.paddingRight }]}
       testID="devices.screen"
     >
+      {nativeHomeHeader ? <SessionHeaderNativeBlur height={nativeHeaderHeight + spacing.xxl} /> : null}
       {nativeHomeHeader ? (
         <HomeNativeStackHeader
           syncing={quietSyncing}
@@ -2507,7 +2526,7 @@ function HomeScreenContent() {
       ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
         <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
         <View style={{ paddingTop: nativeHomeHeader ? 0 : edgePadding.paddingTop }}>
@@ -2676,7 +2695,7 @@ function HomeScreenContent() {
             <View style={styles.pinnedFooter} testID="home.pinnedFooter" />
           ) : null}
         ListEmptyComponent={
-          initialHomeLoading ? (
+          initialHomeLoading || taskSuggestionsPending ? (
             <HomeInitialLoadingState
               style={{
                 marginTop: spacing.xxl,
@@ -2684,10 +2703,7 @@ function HomeScreenContent() {
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : home.pinned.length > 0 ? (
-            // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
-            null
-          ) : showRemoteGuide && home.emptyNoDevice ? (
+          ) : home.pinned.length > 0 ? null : showRemoteGuide && home.emptyNoDevice ? (
             // 无可控制电脑是「首次使用 / 产品模式说明」级空态:按 reason 渲染远程访问引导
             // (首跑三步 / 离线设备卡 / 精确开关 / 重试访问 + 云端 Cindy 预告),而非一句话空态。
             <RemoteAccessGuide
@@ -2744,7 +2760,7 @@ function HomeScreenContent() {
         />
       ) : null}
 
-      {showRemoteGuide || taskSuggestionsMode === 'empty' ? null : (
+      {showRemoteGuide || taskSuggestionsPending || taskSuggestionsMode === 'empty' ? null : (
         // 无可控电脑时不提供入口;完整空态已有主按钮,避免重复显示新建 CTA。
         <Pressable
           accessibilityLabel={t('devices.list.a11y.newRemoteConversation')}
@@ -2754,13 +2770,22 @@ function HomeScreenContent() {
           onPress={() => openNewSession()}
           style={({ pressed }) => [
             styles.newChatButton,
+            liquidGlass && styles.newChatButtonTransparent,
             { bottom: CINDY_LIST_FAB_BOTTOM + insets.bottom },
             pressed && styles.pressed,
             newSessionDisabled && styles.disabled,
           ]}
           testID="home.newChatButton"
         >
-          <SquarePen color={colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />
+          {liquidGlass ? (
+            <GlassView colorScheme={mode} glassEffectStyle="regular" tintColor={`${colors.homeListFab}B3`} isInteractive style={styles.newChatGlass}>
+              <View pointerEvents="none" style={styles.newChatGlassIcon}>
+                <SquarePen color={colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />
+              </View>
+            </GlassView>
+          ) : (
+            <SquarePen color={colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />
+          )}
         </Pressable>
       )}
 
@@ -2894,6 +2919,7 @@ function HomeScreenContent() {
         visible={displaySettingsOpen}
       />
       <SessionOptionsPresenter
+        session={actionSheetSession}
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}
@@ -3317,36 +3343,45 @@ function HomeProjectWindowAnchorTracker({
   childOffsets,
   onAnchorChange,
   projectHeaderHeight,
-  projectLayoutReady,
-  projectTop,
+  projectLayoutRevision,
+  projectRef,
   scrollY,
   viewportHeight,
 }: {
   childOffsets: readonly number[];
   onAnchorChange(anchor: number): void;
   projectHeaderHeight: SharedValue<number>;
-  projectLayoutReady: SharedValue<boolean>;
-  projectTop: SharedValue<number>;
+  projectLayoutRevision: SharedValue<number>;
+  projectRef: AnimatedRef<View>;
   scrollY: SharedValue<number>;
   viewportHeight: number;
 }) {
   useAnimatedReaction(
     () => {
-      if (!projectLayoutReady.value) return -1;
+      // Both layout and scrolling invalidate the measurement. Read pageY on
+      // the UI thread, in screen coordinates; never combine an asynchronous
+      // measureInWindow result with a newer scroll offset.
+      const revision = projectLayoutRevision.value;
+      const offset = scrollY.value;
+      if (revision === 0 || !Number.isFinite(offset)) return null;
+      const layout = measure(projectRef);
+      if (!layout || !Number.isFinite(layout.pageY)) return null;
       return resolveHomeProjectChildAnchor({
         childOffsets,
         projectHeaderHeight: projectHeaderHeight.value,
-        projectTop: projectTop.value,
+        projectTop: layout.pageY,
         shift: PROJECT_CHILD_WINDOW_SHIFT,
         viewportHeight,
-        viewportTop: scrollY.value,
+        viewportTop: 0,
       });
     },
     (next, previous) => {
-      if (next === previous) return;
+      // A temporarily unavailable native view is not evidence that its rows
+      // left the viewport. Keep the last bounded window until measured again.
+      if (next === null || next === previous) return;
       runOnJS(onAnchorChange)(next);
     },
-    [childOffsets, onAnchorChange, projectHeaderHeight, projectLayoutReady, projectTop, scrollY, viewportHeight],
+    [childOffsets, onAnchorChange, projectHeaderHeight, projectLayoutRevision, projectRef, scrollY, viewportHeight],
   );
   return null;
 }
@@ -3415,11 +3450,10 @@ function ProjectRow({
       isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
     },
   );
-  const projectTop = useSharedValue(0);
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
-  const projectRef = useRef<View>(null);
+  const projectRef = useAnimatedRef<View>();
   const [windowAnchor, setWindowAnchor] = useState(-1);
-  const projectLayoutReady = useSharedValue(false);
+  const projectLayoutRevision = useSharedValue(0);
   const estimatedChildHeights = useMemo(() => {
     const expandedKeys = new Set(expandedAutomationGroups);
     return visibleSessions.map((item) => estimateHomeProjectChildHeight(item, expandedKeys));
@@ -3540,22 +3574,11 @@ function ProjectRow({
     </Pressable>
   );
   return (
-    <View
-      onLayout={(event) => {
+    <Reanimated.View
+      collapsable={false}
+      onLayout={() => {
         if (!windowingEnabled) return;
-        projectLayoutReady.value = false;
-        const fallbackY = event.nativeEvent.layout.y;
-        projectRef.current?.measureInWindow((_x, screenY) => {
-          projectTop.value = screenY + (homeScrollY?.value ?? 0);
-          projectLayoutReady.value = true;
-        });
-        // A native measure can be unavailable in shallow/unit renderers. Keep
-        // the local layout as a safe fallback; the real device measurement
-        // above is used whenever the row is mounted in a ScrollView.
-        if (!projectRef.current) {
-          projectTop.value = fallbackY;
-          projectLayoutReady.value = true;
-        }
+        projectLayoutRevision.value += 1;
       }}
       ref={projectRef}
       style={[styles.projectGroup, suppressTopBorder && styles.projectGroupNoTop]}
@@ -3566,8 +3589,8 @@ function ProjectRow({
           childOffsets={estimatedChildOffsets}
           onAnchorChange={setWindowAnchor}
           projectHeaderHeight={projectHeaderHeight}
-          projectLayoutReady={projectLayoutReady}
-          projectTop={projectTop}
+          projectLayoutRevision={projectLayoutRevision}
+          projectRef={projectRef}
           scrollY={scrollY}
           viewportHeight={viewportHeight}
         />
@@ -3647,7 +3670,7 @@ function ProjectRow({
           ) : null}
         </View>
       )}
-    </View>
+    </Reanimated.View>
   );
 }
 
@@ -3944,7 +3967,14 @@ function HomeSessionRowInner({
           ? groupRowOpensPrimary ? t('devices.list.a11y.openAutomationLatest', { title: item.title }) : t('devices.list.a11y.automationTask', { title: item.title })
           : t('devices.list.a11y.openConversation', { title: item.title })}
         accessibilityState={group ? { expanded: groupExpanded, selected } : { selected }}
-        onLongPress={onLongPress}
+        delayLongPress={400}
+        onLongPress={
+          !selectionMode && !group && swipe && conversationSearchAllowsLocalWrites(item)
+            ? () => {
+                swipe.registry.closeOpenRow();
+                swipe.onShowOptions(latestMobileSessionRow(item).session as RemoteSession);
+              }
+            : onLongPress}
         onPress={handlePress}
         style={({ pressed }) => [
           styles.sessionListRow,
@@ -4008,6 +4038,7 @@ function HomeSessionRowInner({
             >
               {item.title}
             </Text>
+            <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
             {sourceLabel ? (
               <Text
                 ellipsizeMode="tail"
@@ -4966,6 +4997,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
+  },
+  newChatButtonTransparent: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+  },
+  newChatGlass: {
+    width: '100%',
+    height: '100%',
+    borderRadius: radius.pill,
+  },
+  newChatGlassIcon: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   newChatButton: {
     alignItems: 'center',

@@ -57,9 +57,21 @@ import {
 
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { BotWorkingStatus } from '@/features/bots/BotWorkingStatus';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
+import {
+  getCindyMakeTestRecovery,
+  getCindyMakeComposerPhase,
+  getCindyMakePendingTest,
+  getCindyMakePreparation,
+} from '@/lib/cindyMakeComposer';
+import { CindyMakeTestCard } from '@/components/cindy-make/CindyMakeTestCard';
+import { useCindyMakeEditing } from '@/components/cindy-make/useCindyMakeEditing';
+import { useCindyMakeState } from '@/lib/cindyMakeState';
+import { resolveLearnDesktopCommandFeedback } from '@/features/learn/desktopCommandFeedback';
 import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -81,7 +93,6 @@ import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
 import {
-  hasBotAssistantOutputInCurrentTurn,
   MessageStream,
   type InlinePlanVisibility,
 } from '@/components/chat/MessageStream';
@@ -134,6 +145,7 @@ import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
+import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
@@ -172,6 +184,7 @@ import {
   useControlledBy,
 } from '@/features/remote-device/ControlledBanner';
 import {
+  commandsForHelpCard,
   loadAllCommands,
   dispatchCommand,
   leadingSlashInvocation,
@@ -197,11 +210,12 @@ import {
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { BotAvatar } from '@/features/bots/BotAvatar';
+import { BotSessionContentHeaderRegistration } from '@/features/bots/BotSessionContentHeader';
 import {
-  BotSessionContentHeaderRegistration,
-  type BotChatIdentity,
-} from '@/features/bots/BotSessionContentHeader';
-import { botComposerPlaceholderKey } from '@/features/bots/botChatPresentation';
+  botComposerPlaceholderKey,
+  resolveBotChatIdentity,
+  type BotChatBinding,
+} from '@/features/bots/botChatPresentation';
 import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';
 import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
@@ -234,7 +248,12 @@ import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
-import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
+import {
+  formatRecentOutputTokenRate,
+  formatRunningTokenCount,
+  resolveRunningUsageMeta,
+} from './lib/runningTokenUsage';
+import { RunningTokenRatePopover, useRunningTokenRateHistory } from './RunningTokenRatePopover';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -279,7 +298,9 @@ import {
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
+import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
+import { hasInlineOverloadRetry } from './lib/inlineRetryError';
 import { createSessionSnapshotPatchBuffer } from './lib/sessionSnapshotPatchBuffer';
 import { readPanelCollapsedRecord } from '@/layout/collapsePrefs';
 import {
@@ -476,9 +497,9 @@ interface CCAgentSessionViewProps {
   /**
    * 本对话所属的伙伴身份（仅 Bot 路由传）。传入即把这个聊天当成「跟 TA 聊天」渲染：
    * 顶栏换成伙伴 lockup、assistant 气泡挂 TA 的头像、输入框使用伙伴称呼，保留标准权限入口。
-   * 判定仍与 `session.source === 'bot'` 双重成立才生效——URL 不是身份。
+   * 调用方须先验证持久归属并绑定 sessionId；运行快照不决定伙伴界面身份。
    */
-  botIdentity?: BotChatIdentity;
+  botIdentity?: BotChatBinding;
   /** Entry-time read boundary for a Bot chat; preserved after the live read position advances. */
   botUnreadBoundaryAt?: number | null;
 }
@@ -932,10 +953,9 @@ export function CCAgentSessionView({
       : null;
   const isOrcaLeadSessionView = session?.orcaRole === 'lead';
 
-  // 「这是一场跟伙伴的对话」的单一判据:路由声明的身份 + 任务自己的 source 双重成立。
-  // 只有 URL 说了不算 —— 那是导航投影,不是身份。
-  const botChatIdentity: BotChatIdentity | null =
-    botIdentity && session?.source === 'bot' ? botIdentity : null;
+  // Bot route gates have already checked durable ownership. The async runtime
+  // snapshot may be absent during load/reconnect; it must never change the skin.
+  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   // 伙伴没有 RunningStatusBar，折叠呼吸灯继续留在输入框上方，不能随状态行一起消失。
   const showCenteredControlledBanner =
     hasControlledBanner && (!controlledBannerCollapsed || Boolean(botChatIdentity));
@@ -1101,7 +1121,7 @@ export function CCAgentSessionView({
   // 交互时,session 行天然是 startedAt > endedAt,不能把这个正常在飞窗口误判成
   // 「应用退出中断」。直接门控首帧,再锁存本次视图,避免 activity 终态与 ended patch
   // 先后到达时横幅闪现。
-  const remoteSessionActivity = useRemoteSessionActivity(sessionId ?? '');
+  const remoteSessionActivity = useRemoteSessionActivity(sessionId ?? '', remoteDeviceId);
   const remoteTurnActive = isRemoteSessionActivityActive(remoteSessionActivity);
 
   // device-link 远程会话:非选中行镜像**被控端自己的全局模型预设**。先 pull 一次,再订阅
@@ -1757,6 +1777,54 @@ export function CCAgentSessionView({
     updateQueueItem,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  const makeState = useCindyMakeState();
+  const cindyMakePreparation = useMemo(
+    () =>
+      getCindyMakePreparation({
+        session,
+        report: remoteDeviceId
+          ? undefined
+          : Object.values(makeState.tasks ?? {}).find(
+              (report) => report.task?.sessionId === sessionId,
+            ),
+        messages,
+      }),
+    [session, sessionId, remoteDeviceId, makeState, messages],
+  );
+  const cindyMakeComposerPhase = useMemo(
+    () =>
+      getCindyMakeComposerPhase({
+        session,
+        report: cindyMakePreparation?.report,
+        messages,
+        historyLoaded,
+        busy: isAgentBusy,
+        error,
+      }),
+    [session, cindyMakePreparation, messages, historyLoaded, isAgentBusy, error],
+  );
+  const cindyMakePendingTest = useMemo(
+    () => !remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'
+      ? getCindyMakePendingTest({ session, messages, busy: isAgentBusy }) : null,
+    [session, messages, isAgentBusy, remoteDeviceId, readOnly],
+  );
+  const cindyMakeEditing = useCindyMakeEditing(sessionId, !remoteDeviceId && !readOnly);
+  const cindyMakeRecoveryId =
+    !remoteDeviceId &&
+    !readOnly &&
+    !pendingQueue.length &&
+    typeof window.electronAPI.cindyMakeTest === 'function'
+      ? getCindyMakeTestRecovery({
+          session,
+          messages,
+          busy: isAgentBusy,
+          historyLoaded,
+          dismissedId: cindyMakeEditing.dismissedId,
+        })
+      : null;
+  const cindyMakeInputLocked = Boolean(
+    cindyMakeComposerPhase || cindyMakePendingTest || cindyMakeRecoveryId,
+  );
   useEffect(() => {
     if (!sessionId || !isOrcaLeadSessionView || !historyLoaded) return;
     const recoveredAssignment = getRecoverableDeferredUiAssignment({
@@ -1945,6 +2013,23 @@ export function CCAgentSessionView({
     () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
     [isRemoteSession, remoteDeviceId, taskUpdates],
   );
+  const activeReconnect = useMemo(
+    () => findActiveReconnect({
+      messages,
+      sessionRunning: agentStatus.isRunning || isStreaming,
+      continuationTurnClientId,
+      projectionCapability: continuationInFlightProjectionCapability,
+    }),
+    [messages, agentStatus.isRunning, isStreaming, continuationTurnClientId, continuationInFlightProjectionCapability],
+  );
+  const reconnectStatus = activeReconnect
+    ? activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
+      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
+          attempt: activeReconnect.attempt,
+          total: activeReconnect.maxAttempts,
+        })
+      : t('chat.systemCard.autoResumePending.label')
+    : null;
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
@@ -2128,29 +2213,72 @@ export function CCAgentSessionView({
       setSessionInterruptAcked(false);
     }
   }, [syntheticContinuationPending, sessionInterruptAcked]);
+  // main 真值回填(#4513):双时间戳候选对任何在飞 turn 都成立,而运行态抑制依赖的
+  // status(isRunning) 事件在协同 worker 会话上可能缺失/迟到(消息流与状态流是两条通道,
+  // 实测「流式输出中误显中断横幅」)。候选出现(activeTurnStartedAt 变化)时向 main 查一次
+  // 权威运行态;null=未确认,在真值回来前不把候选当中断证据(决策见 sessionInterruptBannerModel.ts)。
+  // 真值必须绑定所属会话:路由复用本组件(无 key 的 :sessionId 路由),A(在飞)→B(真中断)
+  // 切会话时旧 true 若直接锁存 ack,会把 B 的横幅永久抑制(P1)。查询 effect 切会话先置
+  // null,但锁存 effect 同批次仍能读到旧快照 —— 因此锁存与判定都只认同会话的真值。
+  const [mainTurnActive, setMainTurnActive] = useState<{
+    sessionId: string;
+    inTurn: boolean;
+  } | null>(null);
+  const activeTurnStartedAt = session?.activeTurnStartedAt ?? null;
+  useEffect(() => {
+    if (!sessionId || activeTurnStartedAt == null) {
+      setMainTurnActive(null);
+      return;
+    }
+    let cancelled = false;
+    setMainTurnActive(null);
+    window.electronAPI.maker
+      .getSessionTurnActive(sessionId)
+      .then((result) => {
+        if (!cancelled) setMainTurnActive({ sessionId, inTurn: result?.inTurn === true });
+      })
+      .catch(() => {
+        // 查询失败按未确认处理:宁可漏显横幅,不把在飞 turn 误判成中断。
+        if (!cancelled) setMainTurnActive(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, activeTurnStartedAt]);
+  // 同会话真值:只认归属当前 sessionId 的查询结果,旧会话残留的 true 不得锁存
+  // 新会话的 ack(路由复用切会话 P1)。sessionId 变化时查询 effect 先置 null,
+  // 但同批次的锁存 effect 仍能读到旧快照 —— 这里按 sessionId 过滤兜底。
+  const mainTurnActiveForSession = mainTurnActive && mainTurnActive.sessionId === sessionId
+    ? mainTurnActive.inTurn
+    : null;
   // sessionId 必须在 deps 里:running→running 切会话时 isRunning 布尔值不变(true→true),
   // 只依赖它会漏掉新会话的"跑起来即熄灭"锁存——上面的 reset effect 把 acked 清成 false 后
   // 没人再置回。此时切入时拉的 session 快照天然 startedAt > endedAt(turn 在飞,ended 未写),
   // 用户点 stop 的瞬间 isRunning 落 false、ended 落库广播还没到,双时间戳判定短暂成立,
   // 「应用退出中断」横幅会闪现一帧(假阳性)。带上 sessionId 让每次切换后按新会话当前
-  // isRunning 重新锁存。
+  // isRunning 重新锁存。mainTurnActiveForSession === true 同样锁存(同会话真值回填,见上)。
   useEffect(() => {
-    if (agentStatus.isRunning || remoteTurnActive) setSessionInterruptAcked(true);
-  }, [sessionId, agentStatus.isRunning, remoteTurnActive]);
-  const interruptedFromSession = useMemo(() => {
-    if (sessionInterruptAcked || remoteTurnActive) return false;
-    const started = session?.activeTurnStartedAt ?? null;
-    if (!started) return false;
-    const ended = session?.lastTurnEndedAt ?? 0;
-    const cleared = session?.clearedAt ? Date.parse(session.clearedAt) : 0;
-    return started > ended && started > cleared;
-  }, [
-    session?.activeTurnStartedAt,
-    session?.lastTurnEndedAt,
-    session?.clearedAt,
-    sessionInterruptAcked,
-    remoteTurnActive,
-  ]);
+    if (agentStatus.isRunning || remoteTurnActive || mainTurnActiveForSession === true) setSessionInterruptAcked(true);
+  }, [sessionId, agentStatus.isRunning, remoteTurnActive, mainTurnActiveForSession]);
+  const interruptedFromSession = useMemo(
+    () =>
+      resolveSessionInterruptCandidate({
+        acked: sessionInterruptAcked,
+        remoteTurnActive,
+        mainTurnActive: mainTurnActiveForSession,
+        activeTurnStartedAt,
+        lastTurnEndedAt: session?.lastTurnEndedAt ?? null,
+        clearedAtMs: session?.clearedAt ? Date.parse(session.clearedAt) : null,
+      }),
+    [
+      activeTurnStartedAt,
+      session?.lastTurnEndedAt,
+      session?.clearedAt,
+      sessionInterruptAcked,
+      remoteTurnActive,
+      mainTurnActiveForSession,
+    ],
+  );
   // 打开会话且中断判定不成立(peer 已忽略 / 续跑已完成 / 用户已操作)时重算告警:
   // 红点是 pending-alerts 的派生,这里只触发重查,由差分决定清不清 —— 不直接清点,
   // 否则会抹掉同一会话上仍未处理的错误尾行告警。
@@ -2356,12 +2484,7 @@ export function CCAgentSessionView({
   const insertHelpCard = useCallback(async () => {
     const commands = await getHelpCommandsSnapshot();
     insertSystemCard('help', {
-      commands: commands.map((c) => ({
-        name: c.name,
-        description: 'description' in c ? c.description : undefined,
-        // help 卡用 source 区分类目: agent-skill 透传原 source, 其余按 kind 简化
-        source: c.kind === 'agent-skill' ? c.source : c.kind,
-      })),
+      commands: commandsForHelpCard(commands),
     });
   }, [getHelpCommandsSnapshot, insertSystemCard]);
 
@@ -2409,19 +2532,13 @@ export function CCAgentSessionView({
         return;
       }
       if (payload.command === 'learn') {
-        // /learn 的蒸馏在独立后台 session 跑(learn-host);这里只反馈启动结果。
-        // 进度与"待审查"入口由 learn:event 状态流驱动(审查面板见 features/learn)。
-        if (payload.error === 'learn-usage') {
-          toast.warning(t('learn.toast.usage'));
-        } else if (payload.error === 'learn-busy') {
-          toast.warning(t('learn.toast.busy'));
-        } else if (payload.error === 'learn-failed') {
-          toast.error(t('learn.toast.failed'));
-        } else if (payload.error === 'remote-unsupported') {
-          toast.warning(t('commands.toast.remoteUnsupported'));
-        } else if (payload.learnRunId) {
-          // 状态卡只存 runId,状态本体由卡片内 useLearnRun 订阅 learn:event 实时刷新。
-          insertSystemCard('learn', { runId: payload.learnRunId });
+        // Agent Skill 成功路径不会发 Desktop payload；SSH / Skill 查询失败时仍会回退
+        // 到 Desktop 命令。保留回退的错误提示，并用 runId 补上可能早于订阅到达的状态卡。
+        const feedback = resolveLearnDesktopCommandFeedback(payload);
+        if (feedback?.kind === 'toast') {
+          toast[feedback.level](t(feedback.i18nKey));
+        } else if (feedback?.kind === 'insert-card') {
+          insertSystemCard('learn', { runId: feedback.runId });
         }
         return;
       }
@@ -3324,9 +3441,16 @@ export function CCAgentSessionView({
         slashCommandRanges?: SlashCommandRange[];
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         onDeferredAccepted?: () => void;
+        cindyMakeRecovery?: boolean;
       },
     ) => {
       if (readOnly) return false;
+      if (
+        cindyMakeComposerPhase ||
+        cindyMakePendingTest ||
+        (cindyMakeRecoveryId && !opts?.cindyMakeRecovery)
+      )
+        return false;
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
       const navigationRequestVersion =
@@ -3609,6 +3733,9 @@ export function CCAgentSessionView({
       vendorAuthGate,
       remoteDeviceId,
       sessionHandoffPreparing,
+      cindyMakeComposerPhase,
+      cindyMakePendingTest,
+      cindyMakeRecoveryId,
     ],
   );
 
@@ -3778,9 +3905,10 @@ export function CCAgentSessionView({
   ]);
 
   const handleBeforeVoiceInputStart = useCallback(async () => {
+    if (cindyMakeInputLocked) return false;
     const { proceed } = await vendorAuthGate.checkAndConfirm('codex', { purpose: 'voice-input' });
     return proceed;
-  }, [vendorAuthGate]);
+  }, [vendorAuthGate, cindyMakeInputLocked]);
 
   // M32: Retry — ErrorBanner 的 retryText 现在只是兼容展示值。真正的
   // recovery target 由 main coordinator 持有，避免把已发出的文本重新走普通
@@ -4309,22 +4437,23 @@ export function CCAgentSessionView({
     };
   }, [historyLoaded, insertSystemCard, sessionId, learnRestoreKey]);
 
-  // learn 卡跟随最新叙述:提案就绪 / 每轮修订刷新(awaiting-review 的
-  // state-changed)时把本会话的 learn 卡移到消息流末尾 —— 卡片是 /learn 发出
-  // 时插入的,蒸馏长输出把用户视线带到底部后,顶部的「查看提案」入口会被
-  // 错过、误以为已装好(Chris 实测反馈)。移动只调位置不换消息对象。
+  // Agent Skill 路径由首个属于本会话的状态事件插入卡片；Desktop 回退路径也会
+  // 用 learnRunId 幂等补卡。提案就绪 / 每轮修订刷新时再把卡片移到消息流末尾，
+  // 避免蒸馏长输出把「查看提案」入口留在顶部。
   useEffect(() => {
     if (!sessionId) return;
     // subscribeLearnEvents:本机走 learn:event IPC;device-link 远程会话经
     // onRemotePush 消费被控端转发的同名事件(learnTransport 内路由)。
     const off = subscribeLearnEvents(sessionId, (payload) => {
       if (payload.type !== 'state-changed') return;
-      if (payload.run.status !== 'awaiting-review') return;
       if (payload.run.sessionId !== sessionId && payload.run.originSessionId !== sessionId) return;
-      makerChatStore.moveLearnCardToEnd(sessionId, payload.run.runId);
+      insertSystemCard('learn', { runId: payload.run.runId });
+      if (payload.run.status === 'awaiting-review') {
+        makerChatStore.moveLearnCardToEnd(sessionId, payload.run.runId);
+      }
     });
     return off;
-  }, [sessionId]);
+  }, [insertSystemCard, sessionId]);
 
   // session 切换时 reset consumed guard(切到别的 session 后再回来,理论上 pending
   // 已被消费过、Map 也清掉了,但 ref 复用一份是为了 guard 可重入)。
@@ -4381,6 +4510,7 @@ export function CCAgentSessionView({
   const shareSelectionBlocked =
     Boolean(sessionBinding.attached) ||
     worktreePreparing ||
+    cindyMakeInputLocked ||
     Boolean(
       pendingPlanReview ||
       pendingPermission ||
@@ -4420,6 +4550,8 @@ export function CCAgentSessionView({
       simplifiedBotConversation={Boolean(botChatIdentity)}
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
       messages={messages}
+      cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
+      cindyMakeCompletionInComposer={session?.source === 'cindy-make' && !remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'}
       historyLoaded={historyLoaded}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
@@ -4447,11 +4579,6 @@ export function CCAgentSessionView({
   const composerRuntimeVisible =
     !pendingPlanReview &&
     (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null);
-  const botAssistantOutputStarted = useMemo(
-    () => Boolean(botChatIdentity) && hasBotAssistantOutputInCurrentTurn(messages),
-    [botChatIdentity, messages],
-  );
-  const botThinkingVisible = composerRuntimeVisible && !botAssistantOutputStarted;
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -4533,6 +4660,7 @@ export function CCAgentSessionView({
           if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
+          if (cindyMakeInputLocked) return;
           dragCounterRef.current += 1;
           if (dragCounterRef.current === 1) setIsDragOver(true);
         }}
@@ -4540,7 +4668,7 @@ export function CCAgentSessionView({
           if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
-          e.dataTransfer.dropEffect = 'copy';
+          e.dataTransfer.dropEffect = cindyMakeInputLocked ? 'none' : 'copy';
         }}
         onDragLeave={(e) => {
           if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
@@ -4555,6 +4683,7 @@ export function CCAgentSessionView({
           e.stopPropagation();
           dragCounterRef.current = 0;
           setIsDragOver(false);
+          if (cindyMakeInputLocked) return;
           // .cindy / .cshare 已被窗口级 capture 接管(装入 / 导入链路),
           // 只清理拖拽 UI 状态,不当附件消费。
           if (isGlobalDropIntercepted(e.nativeEvent)) return;
@@ -4707,29 +4836,36 @@ export function CCAgentSessionView({
               style={{ width: inputWidth }}
             >
               {botChatIdentity ? (
-                botThinkingVisible ? (
-                  <div
-                    data-testid="bot-thinking-indicator"
-                    role="status"
-                    aria-live="polite"
-                    className="mx-auto flex items-center gap-2 px-2 py-[6px] text-12 text-[var(--text-tertiary)]"
-                    style={{ width: inputWidth }}
-                  >
-                    {botAssistantAvatar}
-                    <Spinner size={12} />
-                    <span>{t('ccAgent.agentStatus.thinking')}</span>
-                  </div>
-                ) : null
+                <BotWorkingStatus
+                  key={sessionId}
+                  sessionId={remoteDeviceId ? undefined : sessionId ?? undefined}
+                  visible={composerRuntimeVisible}
+                  status={
+                    pendingPermission ? 'Waiting on approval'
+                      : pendingAskUser ? 'Waiting on input'
+                        : composerStatus
+                  }
+                  messages={messages}
+                  startedAt={agentStatus.startedAt}
+                  foregroundRunning={agentStatus.isRunning || isStreaming}
+                  backgroundWorkActive={
+                    backgroundTasksActive || runningWorkflow !== null || Boolean(agentStatus.sideTaskRunning)
+                  }
+                  avatar={botAssistantAvatar}
+                  inputWidth={inputWidth}
+                />
               ) : !pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (
                 <RunningStatusBar
                   key={sessionId}
+                  sessionKey={sessionId ?? null}
                   status={composerStatus}
+                  reconnectStatus={reconnectStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
                   startedAt={agentStatus.startedAt}
-                  visible={composerRuntimeVisible}
+                  visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
@@ -4905,7 +5041,14 @@ export function CCAgentSessionView({
                 />
               )}
 
-            {!readOnly && error && (
+            {/* 只隐藏已有同一错误活动行的过载重试；认证、额度等操作入口照常保留。 */}
+            {!readOnly && error && !hasInlineOverloadRetry({
+              error,
+              errorReason,
+              isRecoverable: errorIsRecoverable,
+              messages,
+              continuationTurnClientId,
+            }) && (
               <ErrorBanner
                 error={error}
                 errorReason={errorReason}
@@ -5077,11 +5220,11 @@ export function CCAgentSessionView({
                  既处理不了确认又无法继续发送或排队消息。
                  优先级 (高 → 低):
                    1. attached (远程接管中)  → TakeoverMask  (90px)
-                   2. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
-                   3. 默认                    → ChatInput
-                 两个 mask 共用 TakeoverMask 同款外形 (90px h / 12px round / sidebar
-                 border), 切到 ChatInput 时高度变大, 与 takeover 收回回到 ChatInput
-                 的体验一致。 */}
+                   2. Cindy Make 准备 → 完整准备卡；开始修改后恢复普通输入
+                   3. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
+                   4. 默认                    → ChatInput
+                 Cindy Make 沿用输入框的背景与边框，准备详情限高滚动；
+                 接管与 worktree 创建继续使用 90px 状态框。 */}
               {pendingPlanReview ||
               pendingPermission ||
               pendingAskUser ||
@@ -5095,6 +5238,23 @@ export function CCAgentSessionView({
                   userId={sessionBinding.identity?.userId ?? null}
                   displayName={sessionBinding.displayName}
                 />
+              ) : cindyMakeComposerPhase ? (
+                <CindyMakeComposerMask
+                  phase={cindyMakeComposerPhase}
+                  report={cindyMakePreparation?.report}
+                  request={cindyMakePreparation?.request}
+                  readOnly={readOnly || Boolean(remoteDeviceId)}
+                />
+              ) : cindyMakePendingTest && sessionId ? (
+                <CindyMakeTestCard
+                  key={cindyMakePendingTest.completionId}
+                  sessionId={sessionId}
+                  completionId={cindyMakePendingTest.completionId}
+                  meta={cindyMakePendingTest.meta}
+                  onContinue={() =>
+                    cindyMakeEditing.continueEditing(cindyMakePendingTest.completionId)
+                  }
+                />
               ) : worktreePreparing && smoothedBranchName ? (
                 <WorktreeCreatingOverlay branchName={smoothedBranchName} />
               ) : shareSelectionActive && sessionId ? (
@@ -5102,6 +5262,25 @@ export function CCAgentSessionView({
                   sessionId={sessionId}
                   barWidth={inputWidth}
                   getContentWidth={getMessageWidth}
+                />
+              ) : cindyMakeRecoveryId && session ? (
+                <CindyMakeTestCard
+                  key={`${session.id}:${cindyMakeRecoveryId}`}
+                  sessionId={session.id}
+                  recovery={{
+                    onContinue: () =>
+                      cindyMakeEditing.continueEditing(cindyMakeRecoveryId),
+                    onCheck: () =>
+                      handleSend(
+                        t('cindyMake.test.resume.request'),
+                        session.model,
+                        session.effort as Effort,
+                        session.permissionMode as PermissionMode,
+                        undefined,
+                        undefined,
+                        { cindyMakeRecovery: true },
+                      ),
+                  }}
                 />
               ) : (
                 <ChatInput
@@ -5542,6 +5721,7 @@ const CONTROLLED_BANNER_MAX_WIDTH = 420;
 
 function RunningStatusBar({
   status,
+  reconnectStatus = null,
   tokenUsage,
   outputTokens = 0,
   generationDurationMs = 0,
@@ -5557,9 +5737,12 @@ function RunningStatusBar({
   onStopBackgroundTasks,
   rightLeadingSlot = null,
   suppressContent = false,
+  sessionKey = null,
   className,
 }: {
   status: string;
+  /** Same pending row / continuation owner as the message stream; overrides stale agent status. */
+  reconnectStatus?: string | null;
   tokenUsage: number;
   outputTokens?: number;
   generationDurationMs?: number;
@@ -5597,6 +5780,8 @@ function RunningStatusBar({
   rightLeadingSlot?: ReactNode;
   /** 交互卡接管 composer 时立即隐藏旧运行文案/token，只保留折叠呼吸灯。 */
   suppressContent?: boolean;
+  /** 会话身份：速度历史按它做进程内缓存，切任务再切回图表不清零。 */
+  sessionKey?: string | null;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -5606,6 +5791,11 @@ function RunningStatusBar({
   // component returns null below so the composer does not retain an empty line.
   const [showContent, setShowContent] = useState(visible);
   const [fading, setFading] = useState(false);
+  const [ratePanelPinned, setRatePanelPinned] = useState(false);
+  const reconnecting = reconnectStatus !== null;
+  useEffect(() => {
+    if (reconnecting) setRatePanelPinned(false);
+  }, [reconnecting]);
 
   useEffect(() => {
     if (visible) {
@@ -5627,7 +5817,7 @@ function RunningStatusBar({
   // Local timer (F-SDK-3: render-side setInterval)
   useEffect(() => {
     if (!startedAt) {
-      setElapsed(0);
+      // Keep the last completed turn duration visible while a pinned panel lingers.
       return;
     }
 
@@ -5645,11 +5835,12 @@ function RunningStatusBar({
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
-  const isDone = status === 'Done' && !sideTaskRunning && !backgroundTasksRunning;
+  const isDone = status === 'Done' && !reconnecting && !sideTaskRunning && !backgroundTasksRunning;
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
   // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
   const displayStatus =
+    reconnectStatus ??
     workflowStatus ??
     (backgroundTasksRunning
       ? backgroundBashOnlyCount > 0
@@ -5687,7 +5878,7 @@ function RunningStatusBar({
     // suppressContent 或 reduced-motion 期间 shimmer 类/动画被摘，
     // onAnimationEnd 不会到来。立即清零播放态，确保运行期关闭减弱动效后
     // 下一次真实动静能重新触发呼吸，不必等 visible 先变 false。
-    if (!visible || suppressContent || reducedMotion) {
+    if (!visible || suppressContent || reducedMotion || reconnecting) {
       // 运行结束把播放态清零,下一轮 turn 的首次动静立即触发而不是误判在播。
       shimmerPlayingRef.current = false;
       shimmerPendingRef.current = false;
@@ -5703,6 +5894,7 @@ function RunningStatusBar({
     visible,
     suppressContent,
     reducedMotion,
+    reconnecting,
     status,
     tokenUsage,
     outputTokens,
@@ -5713,24 +5905,36 @@ function RunningStatusBar({
   // incrementing number. Rate does not use this: locally ticking the
   // denominator would make a paused model look like decaying speed.
   const animatedTokens = useAnimatedNumber(tokenUsage, 400);
+  const tokenCountText = t('chat.runningStatus.tokenCount', {
+    tokens: formatRunningTokenCount(animatedTokens),
+  });
+  const rateHistory = useRunningTokenRateHistory({
+    sessionKey,
+    startedAt,
+    outputTokens,
+    generationDurationMs,
+    generationReliable:
+      generationReliable &&
+      !reconnecting &&
+      !sideTaskRunning &&
+      !backgroundTasksRunning &&
+      !workflowWaiting,
+  });
+  const latestRate = rateHistory.latestRate;
   const usageMeta = resolveRunningUsageMeta({
     outputTokens,
     generationDurationMs,
     generationReliable,
     tokenUsage,
+    latestRate,
   });
-  const tokenCountText = t('chat.runningStatus.tokenCount', {
-    tokens: formatRunningTokenCount(animatedTokens),
-  });
-  const tokenCountTipText = t('chat.messageActionBar.turnTokens', {
-    tokens: formatRunningTokenCount(animatedTokens),
-  });
+  const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
   const rateText =
-    usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
-  const rateTipText = [
-    t('chat.runningStatus.tokenRateDescription'),
-    ...(tokenUsage > 0 ? [tokenCountTipText] : []),
-  ].join('\n');
+    !isHidden && !reconnecting && usageMeta.kind === 'rate'
+      ? latestRateText !== null
+        ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
+        : t('chat.runningStatus.waitingSample')
+      : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -5741,9 +5945,18 @@ function RunningStatusBar({
     transition: isHidden ? 'none' : `opacity ${STATUS_BAR_FADE_MS}ms ease-out`,
     pointerEvents: isHidden ? 'none' : 'auto',
   };
+  const showRatePanel =
+    !reconnecting &&
+    (ratePanelPinned ||
+      (!workflowWaiting &&
+        !sideTaskRunning &&
+        !backgroundTasksRunning &&
+        Boolean(rateText) &&
+        usageMeta.kind === 'rate'));
+  // A pinned panel keeps its anchor mounted through idle and subsequent turns.
   // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (isHidden && !rightLeadingSlot) return null;
+  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
@@ -5766,6 +5979,7 @@ function RunningStatusBar({
           // min-w-0(非 shrink-0):让内部 status span 的 truncate 真正生效 —— status 可变长
           // (turn-start 带用户名 / tool 进度长串),窄宽时左段截断而非把右段顶出界。
           'flex min-w-0 items-center gap-[6px]',
+          reconnecting && 'text-[var(--status-bar-accent)]',
           // 隐藏时一律摘所有动画类:动画即便 visibility:hidden 不画也照算样式/合成层，
           // 长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
           // 非隐藏时 done 与 shimmer 区别对待:
@@ -5774,12 +5988,14 @@ function RunningStatusBar({
           // - done 是 0.4s 一次性 pop(keyframe 已去掉 opacity、只动 transform)，turn
           //   结束那一刻(isDone 必伴随 !visible)要弹一下，故保持 !isHidden gate;
           //   不动 opacity 所以不会盖 fade。
-          isHidden ? '' : isDone ? 'status-bar-done' : visible ? 'status-bar-shimmer' : '',
+          isHidden ? '' : isDone ? 'status-bar-done' : visible && !reconnecting ? 'status-bar-shimmer' : '',
         )}
         style={fadeStyle}
         aria-hidden={isHidden}
       >
-        {isDone ? (
+        {reconnecting ? (
+          <Spinner size={14} />
+        ) : isDone ? (
           <Check size={14} className="shrink-0" strokeWidth={2.5} />
         ) : // 后台子任务模式换 Activity 图标(与 Compacting 换 Layers 同一设计逻辑:
         // 图标回答"现在在干嘛")。优先于 isCompacting —— 后者按残留 status 文本
@@ -5802,13 +6018,31 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {!isHidden && (
+        {(!suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"
-            style={fadeStyle}
-            aria-hidden={isHidden}
+            style={ratePanelPinned ? undefined : fadeStyle}
+            aria-hidden={isHidden && !ratePanelPinned}
           >
+            {showRatePanel && (
+              <RunningTokenRatePopover
+                elapsedText={elapsedText}
+                rate={latestRateText}
+                rateText={
+                  workflowWaiting || sideTaskRunning || backgroundTasksRunning
+                    ? null
+                    : usageMeta.kind === 'tokens'
+                      ? tokenCountText
+                      : rateText
+                }
+                isTokenCount={usageMeta.kind === 'tokens'}
+                averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
+                outputTokens={outputTokens}
+                history={rateHistory}
+                onPinnedChange={setRatePanelPinned}
+              />
+            )}
             {backgroundTasksRunning ? (
               // 后台子任务模式:elapsed 是上一轮 turn 的残留计时、tokens 是残留计数,
               // 都不成立 —— 整段换成「全部停止」入口(原横幅唯一操作,横幅已删)。
@@ -5832,30 +6066,20 @@ function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : workflowWaiting ? null : (
+            ) : workflowWaiting || showRatePanel ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}
                 </span>
-                {!sideTaskRunning && usageMeta.kind !== 'none' && (
+                {!reconnecting && !sideTaskRunning && usageMeta.kind !== 'none' && (
                   <>
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       &middot;
                     </span>
-                    {rateText ? (
-                      <Tip text={rateTipText} side="top" contentClassName="whitespace-pre-line">
-                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                          {rateText}
-                        </span>
-                      </Tip>
-                    ) : (
-                      <>
-                        <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
-                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                          {tokenCountText}
-                        </span>
-                      </>
-                    )}
+                    <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
+                    <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                      {tokenCountText}
+                    </span>
                   </>
                 )}
               </>

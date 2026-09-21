@@ -156,6 +156,13 @@ export {
   type SubmitGithubIssueHostErr,
   type SubmitGithubIssueHostErrorCode,
 } from './submit_github_issue.js';
+export {
+  registerStartSkillLearningTool,
+  type AuthorizedSkillLearningContext,
+  type AuthorizeSkillLearningCallback,
+  type StartSkillLearningCallback,
+  type StartSkillLearningParams,
+} from './start_skill_learning.js';
 export type {
   XdtHelperHistoryDeps,
   HistoryAgentKind,

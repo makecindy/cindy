@@ -27,6 +27,7 @@ import * as fsSync from 'node:fs';
 import type Database from 'better-sqlite3';
 
 import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
+import { parseBotMemoryScopeKey } from './storage.js';
 import {
   MemoryError,
   type MemoryConfig,
@@ -127,6 +128,26 @@ interface PooledEntry {
 const MEMORY_SUBDIR = 'maker-memory';
 const FTS_DB_FILENAME = 'fts.db';
 const STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+// This shape is only a candidate: sanitized project paths can match it too.
+const LEGACY_BOT_MEMORY_DIR = /^bot-.{0,24}-[a-f0-9]{16}$/;
+
+async function isLegacyBotMemoryDir(dir: string): Promise<boolean> {
+  const name = path.basename(dir);
+  if (!LEGACY_BOT_MEMORY_DIR.test(name)) return false;
+  try {
+    const meta: unknown = JSON.parse(await fsSync.promises.readFile(path.join(dir, 'meta.json'), 'utf8'));
+    const scope = meta && typeof meta === 'object' && 'absPath' in meta ? meta.absPath : undefined;
+    // Validate both identity and its mapping to this directory. A matching
+    // project scope must be cleared even if its directory looks like a Bot's.
+    if (typeof scope === 'string' && scope && memoryScopeDirName(scope) === name) {
+      return parseBotMemoryScopeKey(scope) !== null;
+    }
+  } catch {
+    // Missing/damaged metadata cannot prove either ownership. Preserve the
+    // ambiguous data, but never report a successful global clear.
+  }
+  throw new MemoryError('not-ready', `cannot determine memory scope for ${name}; reset incomplete, data preserved`);
+}
 
 function copyLegacyMemoryShardsSync(sourceDir: string, targetDir: string): void {
   fsSync.mkdirSync(targetDir, { recursive: true });
@@ -384,14 +405,15 @@ export class MakerMemoryManager {
     };
   }
 
-  isEnabled(): boolean {
+  /** No scope queries the global switch; host-owned independent scopes opt out. */
+  isEnabled(scopeKey?: string): boolean {
     // 读取前同步 scope (review #2388 Codex 11th P1): rebindEnabled 只在
     // ensureOwnerScope/syncOwnerScope 里跑, 先读 isEnabled() 的路径 (withStore
     // 短路、session/remote option backfills) 会停留在旧 owner 的 flag —
     // owner A false→B true 时不得继续短路, B false→A true 时不得漏暴露。
     // 纯查询语义, 不抛 (owner 缺失由 getStore fail-closed)。
     this.syncOwnerScope();
-    return this.enabled;
+    return this.enabled || (scopeKey !== undefined && this.deps.isIndependentScope?.(scopeKey) === true);
   }
 
   /**
@@ -748,6 +770,9 @@ export class MakerMemoryManager {
       } catch {
         continue;
       }
+      const botOwned = await isLegacyBotMemoryDir(dir);
+      this.assertScopeUnchanged(scopeAtEntry);
+      if (botOwned) continue;
       for (const filename of filenames) {
         if (parseFilename(filename)?.type !== 'digest') continue;
         try {
@@ -806,7 +831,6 @@ export class MakerMemoryManager {
         // 先复核 scope (review #2388 Greptile 23rd P1): readdir await 期间边界
         // 可能发生 — 不得把跨边界的 reset 误判为成功。
         this.assertScopeUnchanged(scopeAtEntry);
-        this.poolGeneration += 1;
         return { removedCount: 0 };
       }
       for (const entry of entries) {
@@ -814,7 +838,9 @@ export class MakerMemoryManager {
         try {
           const stat = await fs.stat(dir);
           if (!stat.isDirectory()) continue;
+          const botOwned = await isLegacyBotMemoryDir(dir);
           this.assertScopeUnchanged(scopeAtEntry);
+          if (botOwned) continue;
           await fs.rm(dir, { recursive: true, force: true });
           total += 1;
         } catch (e) {
@@ -837,11 +863,11 @@ export class MakerMemoryManager {
           'owner scope changed during resetAll; result is partial and must not be trusted',
         );
       }
-      // 池世代兜底失效 (review #2388 Greptile 13th/16th): 即使有漏网旧条目,
-      // getStore 命中旧世代也会 close + 重建, 不残留指向已删目录的条目。
-      this.poolGeneration += 1;
       return { removedCount: total };
     } finally {
+      // closeResettableStores invalidates its handles even if ambiguous
+      // ownership aborts the reset. Retained callers must reopen their store.
+      this.poolGeneration += 1;
       this.resetInFlight -= 1;
     }
   }

@@ -562,6 +562,8 @@ export function createTurnRunner(
   deps: ImTurnRunnerDeps = {},
 ): ImTurnRunner {
   const { im, output, ui, channel } = adapter;
+  const pendingOwner = Symbol('im-runner-pending');
+  const cardExpirations = new Set<{ done: Promise<void>; cancel(): void }>();
   const richIm = output.kind === 'rich-card' ? output.im : null;
 
   function sendTextClaimingOpener(
@@ -612,6 +614,18 @@ export function createTurnRunner(
     subscribedMaker = maker;
     unsubscribeMakerEvents = maker.on((event) => {
       if (event.type !== 'session:closed') return;
+      const state = sessionStates.get(event.sessionId);
+      // A retired instance must not clear a replacement already wired to this task.
+      if (
+        state && state.makerSession !== event.session &&
+        maker.getSession(event.sessionId) === state.makerSession
+      ) return;
+      // Runtime refresh preserves the task and its queued input, including refreshes
+      // applied repeatedly before dispatch rebinds the cached runtime under the send lock.
+      if (
+        state && event.reason === 'runtime-refresh' &&
+        deps.acquirePendingAgentSwitch
+      ) return;
       const suppression = agentSwitchCloseSuppressed.get(event.sessionId);
       if (suppression?.expectedSession === event.session && event.reason === 'agent-switch') return;
       forgetClosedSession(event.sessionId, 'maker session closed');
@@ -1124,6 +1138,29 @@ export function createTurnRunner(
       // 群护栏取缔: 按会话当前权限档决定是否真正挂强确认策略, 见
       // resolveEffectiveTurnPolicy。不挂时走与 DM 轮次相同的无策略路径。
       const effectiveTurnPolicy = await resolveEffectiveTurnPolicy(item);
+
+      // Stop can arrive while this turn waits for the switch/send lock, before
+      // Maker owns it. Its abort cannot cancel that pre-dispatch input for us.
+      if (item.turn.terminalKind === 'aborted') {
+        const index = state.queue.indexOf(item.turn);
+        if (index >= 0) state.queue.splice(index, 1);
+        if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
+          try {
+            await output.commitFinal({
+              userId,
+              text: ui.agent.stopDone(0),
+              terminal: 'aborted',
+              threadTs: item.turn.scopeKey,
+            });
+          } catch (err) {
+            log.warn(`cancelled reply finalization failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        await completeTurnCallbackAfterAck(item.turn);
+        settleTurnTerminal(item.turn);
+        if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);
+        return { kind: 'rejected', reason: 'aborted' };
+      }
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
@@ -1878,12 +1915,12 @@ export function createTurnRunner(
               : { kind, behavior: 'deny', reason: err.message },
           );
         },
-        req.kind === 'permission'
-          ? {
-              toolName: req.toolName,
-              permissionCard: { title: spec.title ?? '', body: spec.body },
-            }
-          : askMultiExtras(req),
+        {
+          owner: pendingOwner,
+          ...(req.kind === 'permission'
+            ? { toolName: req.toolName, permissionCard: { title: spec.title ?? '', body: spec.body } }
+            : askMultiExtras(req)),
+        },
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2565,11 +2602,19 @@ export function createTurnRunner(
     // 返回值是 router 的契约: true = 渠道侧已收口这次交互, router 不再自行 cancel。
     // 丢掉它会让同一个 requestId 被取消两次(第二次落到 SDK 的默认拒绝路径)。
     if (!cancelled) return false;
+    expireInteractionCard(requestId, cancelled.messageId);
+    return true;
+  }
+
+  function expireInteractionCard(requestId: string, messageId: string): void {
     const notice = adapter.interactionExpiredNotice;
-    if (!notice || !richIm) return true;
-    const messageId = cancelled.messageId;
+    if (!notice || !richIm) return;
     const im = richIm;
-    void enqueueAskCardPatch(requestId, async () => {
+    let cancelled = false;
+    const done = enqueueAskCardPatch(requestId, async () => {
+      // A queued patch must not first reach a transport after logout timed out
+      // and a later account has reconnected the shared adapter.
+      if (cancelled) return;
       try {
         await im.updateInteractiveCard(messageId, cards.buildResolvedCard(notice));
       } catch (err: unknown) {
@@ -2577,7 +2622,32 @@ export function createTurnRunner(
         log.warn(`dropped interaction card cleanup failed (non-fatal): ${msg}`);
       }
     });
-    return true;
+    const expiration = { done, cancel: () => { cancelled = true; } };
+    cardExpirations.add(expiration);
+    void done.then(() => cardExpirations.delete(expiration));
+  }
+
+  async function drainCardExpirations(): Promise<void> {
+    const pending = [...cardExpirations];
+    if (pending.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all(pending.map(({ done }) => done)),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            log.warn('interaction card cleanup timed out (non-fatal)');
+            resolve();
+          }, 1000);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      for (const expiration of pending) {
+        expiration.cancel();
+        cardExpirations.delete(expiration);
+      }
+    }
   }
 
   function settleTurnTerminal(turn: TurnState): void {
@@ -3350,12 +3420,12 @@ export function createTurnRunner(
           // Stash toolName for permission requests so cardActionHandler can
           // build permissionUpdates when the user picks 'allow:always'.
           // permissionCard 留着收口时恢复原始正文(工具名 + 参数预览)。
-          req.kind === 'permission'
-            ? {
-                toolName: req.toolName,
-                permissionCard: { title: spec.title ?? '', body: spec.body },
-              }
-            : askMultiExtras(req),
+          {
+            owner: pendingOwner,
+            ...(req.kind === 'permission'
+              ? { toolName: req.toolName, permissionCard: { title: spec.title ?? '', body: spec.body } }
+              : askMultiExtras(req)),
+          },
         );
         return decision;
       } catch (err) {
@@ -3504,12 +3574,17 @@ export function createTurnRunner(
     // Denial reasons are classified by exact/prefix match. Keep this a stable
     // system code so Auto-review fallback confirmations are not presented as
     // a user click when logout / disconnect disposes the IM runner.
-    rejectAllPending('session_disposed');
-    return Promise.all(aborts).then(() => undefined);
+    for (const card of rejectAllPending('session_disposed', pendingOwner)) {
+      expireInteractionCard(card.requestId, card.messageId);
+    }
+    return Promise.all([...aborts, drainCardExpirations()]).then(() => undefined);
   }
 
   function getMakerSessionById(sessionId: string): MakerSession | null {
-    return sessionStates.get(sessionId)?.makerSession ?? null;
+    // The queue can retain a retired instance until the next dispatch rebinds it.
+    // Model/effort/permission actions must only operate on Maker's current runtime.
+    if (!sessionStates.has(sessionId)) return null;
+    return getMaker().getSession(sessionId) ?? null;
   }
 
   /**
@@ -3574,6 +3649,7 @@ export function createTurnRunner(
       : await resolveExistingRouteTarget(botContextId, userId, scopeKey);
     const state = target ? sessionStates.get(target.row.id) : undefined;
     if (!state) return { stopped: false, droppedQueued: 0 };
+    const current = getMaker().getSession(state.makerSession.id);
     if (args.notificationSessionId) {
       const matches = (turn: TurnState) => turn.userId === userId && turn.scopeKey === scopeKey;
       const removed = state.sendQueue.filter((item) => matches(item.turn));
@@ -3586,11 +3662,11 @@ export function createTurnRunner(
       if (!active || !matches(active)) return { stopped: removed.length > 0, droppedQueued: removed.length };
       noteSilentStopSessionReset(state.makerSession.id);
       active.terminalKind = 'aborted';
-      await state.makerSession.abort();
+      await current?.abort();
       return { stopped: true, droppedQueued: removed.length };
     }
     const running =
-      state.queue.length > 0 || state.sendQueue.length > 0 || state.makerSession.isTurnRunning();
+      state.queue.length > 0 || state.sendQueue.length > 0 || current?.isTurnRunning();
     if (!running) return { stopped: false, droppedQueued: 0 };
     const droppedQueued = state.sendQueue.length;
     // 先清排队再 abort — abort 触发的 done/error 会走 maybeDispatchNextQueued,
@@ -3602,7 +3678,7 @@ export function createTurnRunner(
     // 重置后守卫判 superseded → settle('skip') → 挂起 turn 经现有订阅按 done 收口。
     noteSilentStopSessionReset(state.makerSession.id);
     if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
-    await state.makerSession.abort();
+    await current?.abort();
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,
     );
@@ -3621,7 +3697,7 @@ export function createTurnRunner(
     cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');
     try {
-      await state.makerSession.close();
+      await getMaker().getSession(sessionId)?.close();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`disposeOneSession close failed (non-fatal): ${msg}`);

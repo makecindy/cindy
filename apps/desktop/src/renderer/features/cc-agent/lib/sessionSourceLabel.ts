@@ -1,6 +1,11 @@
+import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import type { Session } from '@/lib/ccAgent.types';
 
-import { normalizeWorkingDir, projectIdentityKeyForSession, type ProjectNode } from './projectGrouping';
+import {
+  normalizeWorkingDir,
+  projectIdentityKeyForSession,
+  type ProjectNode,
+} from './projectGrouping';
 
 /**
  * 构建 session → "项目来源"标签映射,供文字模式 SessionItem hover 时右侧浮层展示。
@@ -17,15 +22,21 @@ import { normalizeWorkingDir, projectIdentityKeyForSession, type ProjectNode } f
 export function buildSessionSourceLabelMap(
   sessions: readonly Session[],
   allKnownProjects: readonly ProjectNode[],
-  dialogueLabel: string,
+  dialogueLabel = '',
+  cindyMakeLabel?: string,
 ): Map<string, string> {
   const nameByKey = new Map(allKnownProjects.map((p) => [p.projectKey, p.displayName]));
   const map = new Map<string, string>();
   for (const s of sessions) {
-    if (s.workspaceKind === 'dialogue') {
+    if (isCindyMakeFamilySource(s.source) && cindyMakeLabel) {
+      map.set(s.id, cindyMakeLabel);
+      continue;
+    }
+    if (s.workspaceKind === 'dialogue' && dialogueLabel) {
       map.set(s.id, dialogueLabel);
       continue;
     }
+    if (s.workspaceKind === 'dialogue') continue;
     const key = projectIdentityKeyForSession(s);
     const name = key ? nameByKey.get(key) : undefined;
     if (name) {

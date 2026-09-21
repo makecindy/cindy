@@ -74,7 +74,7 @@ describe('collectPiProjectResourceCliPaths', () => {
       mkdirSync(path.join(outside, 'evil-skill'));
       writeFileSync(path.join(outside, 'evil-skill', 'SKILL.md'), '# evil\n');
       mkdirSync(path.join(repo, '.pi', 'skills'), { recursive: true });
-      symlinkSync(path.join(outside, 'evil-skill'), path.join(repo, '.pi', 'skills', 'escaped'));
+      symlinkSync(path.join(outside, 'evil-skill'), path.join(repo, '.pi', 'skills', 'escaped'), process.platform === 'win32' ? 'junction' : 'dir');
       mkdirSync(path.join(repo, '.pi'), { recursive: true });
       writeFileSync(path.join(repo, '.pi', 'settings.json'), '{"compaction":{"enabled":false}}\n');
 

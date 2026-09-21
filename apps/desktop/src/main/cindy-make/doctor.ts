@@ -87,6 +87,14 @@ function versionCheck(
 }
 
 /** Shared compatibility decision for system tools, cached tools, and staged installs. */
+export function makePythonProbeCandidates(platform: string): [string, string[]][] {
+  return [
+    ['python3', ['--version']],
+    ['python', ['--version']],
+    ...(platform === 'win32' ? [['py', ['-3', '--version']] as [string, string[]]] : []),
+  ];
+}
+
 export function checkMakeToolVersion(
   id: MakeToolId,
   result: DoctorProbeResult,
@@ -171,13 +179,7 @@ export async function checkCindyMakeEnvironment(
           break;
         case 'python': {
           // A working but old python3 must not hide a compatible python/Windows launcher.
-          const candidates: [string, string[]][] = [
-            ['python3', ['--version']],
-            ['python', ['--version']],
-            ...(env.platform === 'win32'
-              ? [['py', ['-3', '--version']] as [string, string[]]]
-              : []),
-          ];
+          const candidates = makePythonProbeCandidates(env.platform);
           check = { id, status: 'missing', reason: 'notFound' };
           for (const [command, args] of candidates) {
             if (signal.aborted) break;

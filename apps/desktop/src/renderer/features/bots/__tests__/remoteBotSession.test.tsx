@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   merge: vi.fn(),
   view: vi.fn(),
   online: true,
+  lastReplyAt: 0,
 }));
 vi.mock('react-router-dom', () => ({ useParams: () => ({ deviceId: 'home', botId: 'writer' }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -23,6 +24,7 @@ vi.mock('../useRemoteBots', () => ({
       avatarColor: '',
       sessionId: 'old-canonical',
       online: h.online,
+      lastReplyAt: h.lastReplyAt,
     },
   ],
 }));
@@ -31,6 +33,8 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     pinSessionOrigin: h.pin,
     getSessionDeviceId: () => undefined,
     mergeDeviceSessions: h.merge,
+    getDeviceSessions: () => [],
+    captureSessionRead: () => Object.assign(() => true, { mergeActivity: <T,>(detail: T) => detail }),
   },
 }));
 vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
@@ -42,6 +46,7 @@ vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
 import { RemoteBotSessionView } from '../RemoteBotSessionView';
 beforeEach(() => {
   h.online = true;
+  h.lastReplyAt = 0;
   h.pin.mockReset();
   h.merge.mockReset();
   h.view.mockReset();
@@ -56,7 +61,7 @@ beforeEach(() => {
     }
     expect(h.pin).toHaveBeenCalledWith('home', 'new-canonical');
     expect(args).toEqual(['new-canonical']);
-    return { id: 'new-canonical', source: 'bot' };
+    return { id: 'new-canonical', source: 'bot', status: 'active' };
   });
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
@@ -68,13 +73,23 @@ it('resolves the latest canonical task and pins its host before mounting writabl
     expect.objectContaining({ id: 'new-canonical' }),
   ]);
   expect(h.view).toHaveBeenLastCalledWith(
-    expect.objectContaining({ sessionIdProp: 'new-canonical', routeOwner: true, readOnly: false }),
+    expect.objectContaining({
+      sessionIdProp: 'new-canonical', routeOwner: true, readOnly: false,
+      botIdentity: expect.objectContaining({ id: 'writer', sessionId: 'new-canonical' }),
+    }),
   );
+  const identity = h.view.mock.lastCall![0].botIdentity;
+  const requestCount = h.invoke.mock.calls.length;
+  h.lastReplyAt = 123;
+  rerender(<RemoteBotSessionView />);
+  expect(h.view.mock.lastCall![0].botIdentity).toBe(identity);
+  expect(h.invoke).toHaveBeenCalledTimes(requestCount);
   h.online = false;
   rerender(<RemoteBotSessionView />);
   await waitFor(() =>
     expect(h.view).toHaveBeenLastCalledWith(expect.objectContaining({ readOnly: true })),
   );
+  expect(h.view.mock.lastCall![0].botIdentity).toBe(identity);
 });
 it('never mounts a task with a mismatched authoritative source', async () => {
   h.invoke

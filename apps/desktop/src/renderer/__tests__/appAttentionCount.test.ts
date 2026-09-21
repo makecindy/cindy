@@ -33,6 +33,20 @@ describe('app attention total', () => {
     expect(countAppAttention(input({ attentionKinds }))).toBe(2);
   });
 
+  it('excludes local scheduled unread results from the system badge', () => {
+    const unread = { hasUnreadRun: true, hasUnreadFailedRun: false };
+    expect(
+      countAppAttention(
+        input({
+          localSchedules: new Map([
+            ['a', unread],
+            ['b', unread],
+          ]),
+        }),
+      ),
+    ).toBe(0);
+  });
+
   it('excludes remote and automated sessions from the system badge', () => {
     expect(
       countAppAttention(
@@ -50,6 +64,10 @@ describe('app attention total', () => {
             ['scheduler', 'error'],
             ['learn', 'awaiting'],
             ['legacy', 'done'],
+          ]),
+          localSchedules: new Map([
+            ['remote', { hasUnreadRun: true, hasUnreadFailedRun: true }],
+            ['scheduler', { hasUnreadRun: true, hasUnreadFailedRun: true }],
           ]),
         }),
       ),
@@ -85,9 +103,7 @@ describe('app attention total', () => {
 
   it('excludes heartbeat-generated done on a bound ordinary task without dropping later user attention', () => {
     const sessions = [session('bound')];
-    const localSchedules = new Map([
-      ['bound', { hasUnreadRun: true, hasUnreadFailedRun: false }],
-    ]);
+    const localSchedules = new Map([['bound', { hasUnreadRun: true, hasUnreadFailedRun: false }]]);
     expect(
       countAppAttention(
         input({
@@ -111,9 +127,7 @@ describe('app attention total', () => {
         input({
           sessions,
           attentionKinds: new Map([['bound', 'error']]),
-          localSchedules: new Map([
-            ['bound', { hasUnreadRun: false, hasUnreadFailedRun: false }],
-          ]),
+          localSchedules: new Map([['bound', { hasUnreadRun: false, hasUnreadFailedRun: false }]]),
         }),
       ),
     ).toBe(1);

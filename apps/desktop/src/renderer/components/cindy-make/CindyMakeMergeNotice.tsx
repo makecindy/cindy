@@ -1,0 +1,70 @@
+import { useTranslation } from 'react-i18next';
+import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
+import { useCindyMakeMergeResolution } from './useCindyMakeMergeResolution';
+import type { CindyMakeMergeState } from '../../../shared/cindyMakeMerge';
+
+function ResolveMergeButton({
+  state,
+  disabled,
+}: {
+  state: CindyMakeMergeState;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const { resolveMerge, busy } = useCindyMakeMergeResolution();
+  const cancelling = state.cancellationRequested || state.error === 'cancelFailed';
+  return (
+    <Tip
+      text={t(cancelling ? 'cindyMake.merge.errors.cancelFailed' : 'cindyMake.merge.resolveHint')}
+    >
+      <Button
+        variant="secondary"
+        disabled={busy || disabled}
+        onClick={() => void resolveMerge(state)}
+      >
+        {busy && <Spinner size={14} />}
+        {t(
+          cancelling
+            ? 'cindyMake.merge.retryCancel'
+            : state.sessionId
+              ? 'cindyMake.merge.openTask'
+              : 'cindyMake.merge.resolve',
+        )}
+      </Button>
+    </Tip>
+  );
+}
+
+export function CindyMakeMergeNotice({
+  state,
+  busy,
+}: {
+  state: CindyMakeMergeState;
+  busy?: boolean;
+}) {
+  const { t } = useTranslation();
+  const active = ['fetching', 'merging', 'checking'].includes(state.status);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-4 py-3 text-12">
+      <div className="min-w-0 flex-1 space-y-1 text-[var(--text-secondary)]" role="status">
+        <p className="flex items-center gap-2">
+          {active && <Spinner size={14} />}
+          {t(`cindyMake.merge.status.${state.status}`)}
+        </p>
+        {state.error && (
+          <p className="text-[var(--status-danger)]">
+            {t(`cindyMake.merge.errors.${state.error}`)}
+          </p>
+        )}
+        {state.ownedByAnotherAccount && <p>{t('cindyMake.merge.otherAccount')}</p>}
+      </div>
+      {!active &&
+        (state.hasWorkspace || state.cancellationRequested || state.error === 'cancelFailed') &&
+        state.status !== 'merged' &&
+        state.status !== 'cancelled' &&
+        !state.ownedByAnotherAccount && <ResolveMergeButton state={state} disabled={busy} />}
+    </div>
+  );
+}

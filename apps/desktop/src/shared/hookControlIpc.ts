@@ -50,8 +50,9 @@ export const HOOK_CONTROL_INVOKE = {
   ADD_BINDING: 'maker:hook-control:add-binding',
   /** (multi-team)给指定 team 重新授权(bind.start 带 teamId, pin 授权页)。 */
   REBIND_TEAM: 'maker:hook-control:rebind-team',
-  /** (multi-team)解绑指定 team(bind.revoke{teamId}; displaced 行 = 仅清本地缓存)。 */
+  /** (multi-team)解绑指定 team；通讯专用行只撤本机 grant，不撤账号授权。 */
   REVOKE_TEAM: 'maker:hook-control:revoke-team',
+  SET_SLACK_COMMUNICATIONS: 'maker:hook-control:set-slack-communications',
   /** (multi-team)取消在途的添加/重绑授权(bind.revoke{pendingOnly} + 本地清 pending)。 */
   CANCEL_PENDING_BIND: 'maker:hook-control:cancel-pending-bind',
   /** 独立开关一个 Cindy IM provider；不会改动其它 provider。 */
@@ -237,11 +238,13 @@ export interface HookTeamBindingView {
   slackUserId: string;
   slackUserName: string | null;
   /**
-   * true = 该 team 的绑定已被同用户在另一台设备顶替(reason=superseded 实时
-   * 推送, 或冷启动快照 diff 出「本地有、服务端没有」): 行保留并标注
-   * 「已在另一台设备绑定」, 用户可重新绑定(rebind)或删除(仅清本地缓存)。
+   * true = 本机不是该 team 的 Bot 接收设备(换绑、通讯专用 OAuth 或缓存缺失)。
+   * 是否仍可通讯由独立 communicationsEnabled 决定；删除新 server 的通讯行
+   * 只撤本机 grant，旧 server 行仅清本地缓存。
    */
   displaced: boolean;
+  /** undefined = 未收到独立通讯授权，不能从 displaced 或本地缓存推断。 */
+  communicationsEnabled?: boolean;
 }
 
 /**
@@ -250,6 +253,7 @@ export interface HookTeamBindingView {
  * failed)。confirmed/revoked 只落到 bindings 列表, 不出现在这里。
  */
 export interface HookPendingBindView {
+  purpose?: 'communications';
   state: 'pending' | 'denied' | 'expired' | 'failed';
   message: string | null;
   /** 仅 pending 时非空(SIWS OIDC 授权链接, 复制链接兜底用)。 */
@@ -304,6 +308,8 @@ export interface SlackHookView {
   pendingBind: HookPendingBindView | null;
   /** server 是否宣告 multi-team 能力(welcome.features; renderer 据此显示「添加」入口)。 */
   serverMultiTeam: boolean;
+  /** 新 server 将通讯授权与唯一 Bot 接收设备分离。 */
+  serverSlackCommunications?: boolean;
   /** 平级 Telegram hook 服务状态；Slack 旧字段保持原形。 */
   telegram: ProviderHookView;
   /** 平级 X (Twitter) hook 服务状态。 */

@@ -625,6 +625,55 @@ describe('makerChatStore text delta batching', () => {
     assertReply();
   });
 
+  it('keeps durable Pi notices separate before, during and after a streamed answer and history reload', async () => {
+    const notice = (clientId: string, content: string, createdAt: string) => serverMessage({
+      id: `${clientId}-row`, clientId, sessionId: SESSION_ID, role: 'assistant', content,
+      agentMeta: null, createdAt,
+    });
+    const enabled = notice('plan-enabled', 'Plan mode enabled.', '2026-09-20T00:00:01Z');
+    const user = serverMessage({
+      id: 'user-row', clientId: 'user-input', sessionId: SESSION_ID, role: 'user',
+      content: JSON.stringify({ text: 'Discuss the report' }), createdAt: '2026-09-20T00:00:02Z',
+    });
+    const during = notice('extension-warning', 'Extension warning', '2026-09-20T00:00:04Z');
+    const after = notice('extension-finished', 'Extension finished', '2026-09-20T00:00:05Z');
+    const reply = serverMessage({
+      id: 'reply-row', clientId: 'reply', sessionId: SESSION_ID, role: 'assistant',
+      content: 'Complete answer', createdAt: '2026-09-20T00:00:03Z',
+      agentMeta: { model: 'test-model', stopReason: 'stop', turnCompleted: true },
+    });
+    for (const message of [enabled, user]) onDbMessageCreated?.({ sessionId: SESSION_ID, message });
+    const sendText = (text: string, isFinal: boolean) => onEvent?.({
+      sessionId: SESSION_ID, persistId: 'reply', event: {
+        type: 'text', source: 'pi', data: { text, isFinal, ...(isFinal ? { isFullText: true } : {}) },
+      },
+    });
+    sendText('Complete ', false);
+    vi.advanceTimersByTime(32);
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: during });
+    sendText('answer', false);
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.find((row) => row.clientId === 'reply')?.content)
+      .toBe('Complete answer');
+    sendText('Complete answer', true);
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: reply });
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: after });
+    onEvent?.({ sessionId: SESSION_ID, event: {
+      type: 'done', source: 'pi', data: { status: 'completed', result: 'Complete answer' },
+    } });
+    const assertRows = () => {
+      const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+      expect(rows.map((row) => row.clientId)).toEqual(['plan-enabled', 'user-input', 'reply', 'extension-warning', 'extension-finished']);
+      expect(rows.find((row) => row.clientId === 'reply')).toMatchObject({ content: 'Complete answer', isStreaming: false });
+    };
+    assertRows();
+    makerChatStore.purgeSession(SESSION_ID);
+    vi.mocked(messageService.list).mockResolvedValueOnce([enabled, user, reply, during, after]);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    assertRows();
+  });
+
   it('coalesces consecutive text deltas into one store notification', () => {
     let notifyCount = 0;
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {

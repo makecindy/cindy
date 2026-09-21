@@ -104,10 +104,14 @@ it('removes GPT window presets from new choices while preserving runtime history
   const legacy = openai.models['claude-code']!.find((m) => m.id.endsWith('[1m]'))!;
   expect(legacy).toBeDefined();
   const withCustom: Catalog = {
-    ...runtime, providers: [...runtime.providers, { ...openai, id: 'user:test', source: 'user' }],
+    ...runtime, providers: [...runtime.providers,
+      { ...openai, id: 'openai-independent', source: 'user', auth: { method: 'oauth', native: 'codex' } },
+      { ...openai, id: 'user:test', source: 'user', auth: { method: 'apiKey' } },
+    ],
   };
   const selectable = filterLegacyGptContextProfiles(withCustom);
   expect(selectable.providers.find((p) => p.id === 'openai')!.models['claude-code']!.some((m) => m.id.endsWith('[1m]'))).toBe(false);
+  expect(selectable.providers.find((p) => p.id === 'openai-independent')!.models['claude-code']!.some((m) => m.id.endsWith('[1m]'))).toBe(false);
   expect(selectable.providers.find((p) => p.id === 'user:test')!.models['claude-code']).toContain(legacy);
   expect(openai.models['claude-code']).toContain(legacy);
   expect(deriveAvailableModels(runtime, 'claude-code').some((m) => m.id === legacy.id)).toBe(false);

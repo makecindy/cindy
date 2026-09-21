@@ -73,7 +73,7 @@ describe('official Telegram behavior settings', () => {
     render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
 
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
       }),
     );
@@ -96,12 +96,12 @@ describe('official Telegram behavior settings', () => {
     render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
 
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
       }),
     );
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.quoteOption.all',
       }),
     );
@@ -112,10 +112,10 @@ describe('official Telegram behavior settings', () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole('button', {
+          .getByRole('radio', {
             name: 'settings.remoteControl.hook.telegram.behavior.quoteOption.all',
           })
-          .getAttribute('aria-pressed'),
+          .getAttribute('aria-checked'),
       ).toBe('true'),
     );
   });
@@ -130,12 +130,12 @@ describe('official Telegram behavior settings', () => {
     const view = render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
 
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
       }),
     );
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.quoteOption.all',
       }),
     );
@@ -161,7 +161,7 @@ describe('official Telegram behavior settings', () => {
     const view = render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
 
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
       }),
     );
@@ -171,10 +171,10 @@ describe('official Telegram behavior settings', () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole('button', {
+          .getByRole('radio', {
             name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.off',
           })
-          .getAttribute('aria-pressed'),
+          .getAttribute('aria-checked'),
       ).toBe('true'),
     );
 
@@ -182,10 +182,10 @@ describe('official Telegram behavior settings', () => {
     await act(async () => oldSave.promise);
     expect(
       screen
-        .getByRole('button', {
+        .getByRole('radio', {
           name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.off',
         })
-        .getAttribute('aria-pressed'),
+        .getAttribute('aria-checked'),
     ).toBe('true');
   });
 
@@ -202,12 +202,12 @@ describe('official Telegram behavior settings', () => {
     render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
 
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
       }),
     );
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.quoteOption.all',
       }),
     );
@@ -221,17 +221,17 @@ describe('official Telegram behavior settings', () => {
     expect(api.getTelegramBehavior).toHaveBeenCalledTimes(2);
     expect(
       screen
-        .getByRole('button', {
+        .getByRole('radio', {
           name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.minimal',
         })
-        .getAttribute('aria-pressed'),
+        .getAttribute('aria-checked'),
     ).toBe('true');
     expect(
       screen
-        .getByRole('button', {
+        .getByRole('radio', {
           name: 'settings.remoteControl.hook.telegram.behavior.quoteOption.all',
         })
-        .getAttribute('aria-pressed'),
+        .getAttribute('aria-checked'),
     ).toBe('true');
   });
 
@@ -240,7 +240,7 @@ describe('official Telegram behavior settings', () => {
     render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
 
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
       }),
     );
@@ -250,10 +250,10 @@ describe('official Telegram behavior settings', () => {
     expect(api.getTelegramBehavior).toHaveBeenCalledTimes(2);
     expect(
       screen
-        .getByRole('button', {
+        .getByRole('radio', {
           name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.minimal',
         })
-        .getAttribute('aria-pressed'),
+        .getAttribute('aria-checked'),
     ).toBe('true');
   });
 
@@ -262,7 +262,7 @@ describe('official Telegram behavior settings', () => {
     render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
 
     fireEvent.click(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
       }),
     );
@@ -299,7 +299,7 @@ describe('official Telegram behavior settings', () => {
       }),
     );
     expect(
-      await screen.findByRole('button', {
+      await screen.findByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.minimal',
       }),
     ).toBeTruthy();
@@ -311,7 +311,7 @@ describe('official Telegram behavior settings', () => {
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.groups.mode.always',
       }),
     );
@@ -356,7 +356,7 @@ describe('official Telegram behavior settings', () => {
     expect(await screen.findByText('Old account group')).toBeTruthy();
 
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.groups.mode.always',
       }),
     );
@@ -375,10 +375,10 @@ describe('official Telegram behavior settings', () => {
     expect(screen.queryByText('Old account group')).toBeNull();
     expect(
       screen
-        .getByRole('button', {
+        .getByRole('radio', {
           name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
         })
-        .getAttribute('aria-pressed'),
+        .getAttribute('aria-checked'),
     ).toBe('true');
   });
 
@@ -406,10 +406,10 @@ describe('official Telegram behavior settings', () => {
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     expect(screen.getAllByText('-1002').length).toBeGreaterThan(0);
-    const alwaysButtons = screen.getAllByRole('button', {
+    const alwaysButtons = screen.getAllByRole('radio', {
       name: 'settings.remoteControl.hook.telegram.groups.mode.always',
     });
-    expect(alwaysButtons[1]?.getAttribute('aria-pressed')).toBe('true');
+    expect(alwaysButtons[1]?.getAttribute('aria-checked')).toBe('true');
   });
 
   it('实时行为推送会补入本地群列表中尚不存在的 override', async () => {
@@ -429,11 +429,11 @@ describe('official Telegram behavior settings', () => {
     });
 
     expect(screen.getAllByText('-1002').length).toBeGreaterThan(0);
-    const alwaysButtons = screen.getAllByRole('button', {
+    const alwaysButtons = screen.getAllByRole('radio', {
       name: 'settings.remoteControl.hook.telegram.groups.mode.always',
     });
     expect(alwaysButtons).toHaveLength(2);
-    expect(alwaysButtons[1]?.getAttribute('aria-pressed')).toBe('true');
+    expect(alwaysButtons[1]?.getAttribute('aria-checked')).toBe('true');
   });
 
   it('群模式写入失败后回滚并保留重试入口', async () => {
@@ -442,7 +442,7 @@ describe('official Telegram behavior settings', () => {
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.groups.mode.always',
       }),
     );
@@ -452,10 +452,10 @@ describe('official Telegram behavior settings', () => {
     expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
     expect(
       screen
-        .getByRole('button', {
+        .getByRole('radio', {
           name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
         })
-        .getAttribute('aria-pressed'),
+        .getAttribute('aria-checked'),
     ).toBe('true');
   });
 
@@ -465,7 +465,7 @@ describe('official Telegram behavior settings', () => {
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.remoteControl.hook.telegram.groups.mode.always',
       }),
     );
@@ -509,7 +509,7 @@ describe('official Telegram behavior settings', () => {
     render(<TelegramGroupActivationSettings source="official" bindingId="binding-1" />);
 
     expect(await screen.findByText('Ops')).toBeTruthy();
-    const alwaysButtons = screen.getAllByRole('button', {
+    const alwaysButtons = screen.getAllByRole('radio', {
       name: 'settings.remoteControl.hook.telegram.groups.mode.always',
     });
     fireEvent.click(alwaysButtons[0]);
@@ -522,10 +522,10 @@ describe('official Telegram behavior settings', () => {
     ).toBeTruthy();
     expect(api.setTelegramGroupActivation).toHaveBeenCalledTimes(2);
     expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
-    const mentionButtons = screen.getAllByRole('button', {
+    const mentionButtons = screen.getAllByRole('radio', {
       name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
     });
-    expect(mentionButtons[0].getAttribute('aria-pressed')).toBe('true');
-    expect(alwaysButtons[1].getAttribute('aria-pressed')).toBe('true');
+    expect(mentionButtons[0].getAttribute('aria-checked')).toBe('true');
+    expect(alwaysButtons[1].getAttribute('aria-checked')).toBe('true');
   });
 });

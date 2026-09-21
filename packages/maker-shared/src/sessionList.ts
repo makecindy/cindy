@@ -11,6 +11,7 @@ import { getSessionListCollapseView } from './sessionListCollapse.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 
 export interface RemoteSessionListSessionLike extends SessionInterruptionState {
+  tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;
   createdAt: string;

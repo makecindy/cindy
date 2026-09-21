@@ -404,6 +404,22 @@ function readPermissionSnapshot() {
   }
 }
 
+function copyManagedRipgrep(parentHome, childHome) {
+  const name = process.platform === 'win32' ? 'rg.exe' : 'rg';
+  const source = join(parentHome, 'bin', name);
+  try {
+    if (!statSync(source).isFile()) return;
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  const destDir = join(childHome, 'bin');
+  mkdirSync(destDir, { recursive: true, mode: 0o700 });
+  const dest = join(destDir, name);
+  copyFileSync(source, dest);
+  try { chmodSync(dest, 0o755); } catch (err) { /* best effort on Windows */ }
+}
+
 function toolsFor(agent, permission) {
   if (agent !== 'worker') return PROFILES[agent].tools;
   // Ask/Auto are enforced by cindy-bridge inside the child. Its RPC UI request
@@ -898,6 +914,9 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
     try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
     mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
     copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
+    // Parent configHome is ephemeral. Durable children outlive it, so Pi native
+    // grep (PI_CODING_AGENT_DIR/bin) and the Cindy find override need a private copy.
+    copyManagedRipgrep(configHome, childConfigHome);
     // Inherit the parent's frozen rules, not the possibly edited native user
     // home. Child config outlives the parent when a durable run is detached.
     for (const name of ${JSON.stringify(PI_GLOBAL_CONTEXT_FILE_NAMES)}) {

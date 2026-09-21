@@ -66,6 +66,8 @@ interface PendingProtectedRead {
 }
 
 const pendingProtectedRead = new Map<string, PendingProtectedRead>();
+/** A post-clear remote read must inherit the counter returned by that clear. */
+const pendingMessageClears = new Map<string, Promise<number | undefined>>();
 
 /**
  * 等在途受保护读完成后取令牌,带超时与账号代际复核。
@@ -97,7 +99,7 @@ function afterProtectedRead<T>(
 }
 
 /** 读某 (设备, 会话) 缓存的最近一页 server rows;未命中 / 出错一律空数组。 */
-export async function readCachedMessages(deviceId: string, sessionId: string): Promise<Message[]> {
+export async function readCachedMessages(deviceId: string, sessionId: string, onHistory?: (value: unknown) => void): Promise<Message[]> {
   const api = bridge();
   if (!api || !deviceId || !sessionId) return [];
   const ownerAtStart = getDataOwnerGeneration();
@@ -124,6 +126,7 @@ export async function readCachedMessages(deviceId: string, sessionId: string): P
       rememberMainInvalidation(sessionId, result?.invalidation);
       rememberOwnerToken(sessionId, result?.ownerToken);
       rememberAccountCounter(sessionId, accountCounter);
+      onHistory?.(result.historyView);
       return Array.isArray(result?.messages) ? (result.messages as unknown as Message[]) : [];
     } catch (err) {
       log.debug('read cached messages failed', err);
@@ -230,15 +233,19 @@ export function persistCachedMessages(
   expectedInvalidation?: number | Promise<number | undefined>,
   expectedOwnerToken?: string | Promise<string | undefined>,
   expectedAccountCounter?: number | Promise<number | undefined>,
-): void {
+  historyView?: string,
+): Promise<number | undefined> {
   const api = bridge();
-  if (!api || !deviceId || !sessionId) return;
+  if (!api || !deviceId || !sessionId) return Promise.resolve(undefined);
+  const owner = getDataOwnerGeneration();
+  const localToken = sessionCacheInvalidationToken(sessionId);
   const dispatch = (
     expected: number | undefined,
     ownerToken: string | undefined,
     accountCounter: number | undefined,
-  ): void => {
-    void api
+  ): Promise<number | undefined> => {
+    if (!isDataOwnerGenerationCurrent(owner) || localToken !== sessionCacheInvalidationToken(sessionId)) return Promise.resolve(undefined);
+    return api
       .putMessages(
         deviceId,
         sessionId,
@@ -246,9 +253,14 @@ export function persistCachedMessages(
         expected,
         ownerToken,
         accountCounter,
+        ...(historyView !== undefined ? [historyView] : []),
       )
-      .then((result) => rememberMainInvalidation(sessionId, result?.invalidation))
-      .catch((err: unknown) => log.debug('persist cached messages failed', err));
+      .then((result) => {
+        if (!isDataOwnerGenerationCurrent(owner) || localToken !== sessionCacheInvalidationToken(sessionId)) return undefined;
+        rememberMainInvalidation(sessionId, result?.invalidation);
+        return result?.invalidation;
+      })
+      .catch((err: unknown) => { log.debug('persist cached messages failed', err); return undefined; });
   };
   // 令牌已经在手 / 根本没有(空写)时**同步**派发 —— 清缓存这类"必须尽快到 main"的调用不该
   // 因为多一个 await 被推到下一个微任务(顺序会被后面的写入抢到前面去)。
@@ -257,10 +269,9 @@ export function persistCachedMessages(
     && (typeof expectedOwnerToken === 'string' || expectedOwnerToken === undefined)
     && (typeof expectedAccountCounter === 'number' || expectedAccountCounter === undefined)
   ) {
-    dispatch(expectedInvalidation, expectedOwnerToken, expectedAccountCounter);
-    return;
+    return dispatch(expectedInvalidation, expectedOwnerToken, expectedAccountCounter);
   }
-  void Promise.all([
+  return Promise.all([
     expectedInvalidation instanceof Promise
       ? expectedInvalidation
       : Promise.resolve(expectedInvalidation),
@@ -272,7 +283,7 @@ export function persistCachedMessages(
     .then(([expected, ownerToken, accountCounter]) =>
       dispatch(expected, ownerToken, accountCounter),
     )
-    .catch((err: unknown) => log.debug('persist cached messages failed', err));
+    .catch((err: unknown) => { log.debug('persist cached messages failed', err); return undefined; });
 }
 
 /**
@@ -287,6 +298,8 @@ export function invalidationAtRequestStart(
   deviceId: string,
   sessionId: string,
 ): number | Promise<number | undefined> {
+  const clearing = pendingMessageClears.get(sessionId);
+  if (clearing) return clearing;
   const known = knownMainInvalidation.get(sessionId);
   if (typeof known === 'number') return known;
   const api = bridge();
@@ -317,7 +330,12 @@ export function clearCachedMessages(deviceId: string, sessionId: string): void {
   // 于是丢弃那次写 —— 否则它排在这次空写之后落地,把已经被 /clear、rewind、删消息抹掉的
   // 正文重新写回盘上(review: pr-code-review)。
   invalidationTokens.set(sessionId, (invalidationTokens.get(sessionId) ?? 0) + 1);
-  persistCachedMessages(deviceId, sessionId, []);
+  knownMainInvalidation.delete(sessionId);
+  const clearing = tokenReadWithin(persistCachedMessages(deviceId, sessionId, []));
+  pendingMessageClears.set(sessionId, clearing);
+  void clearing.finally(() => {
+    if (pendingMessageClears.get(sessionId) === clearing) pendingMessageClears.delete(sessionId);
+  });
 }
 
 /**
@@ -504,6 +522,7 @@ export function clearMirrorCacheAccountState(): void {
   // sessionId 时的写点去等一笔注定拿不到令牌的读(review: Greptile P1)。`afterProtectedRead`
   // 的代际复核已是兜底,这里直接摘掉登记,让 B 的写点走「无在途读 → undefined」的快路径。
   pendingProtectedRead.clear();
+  pendingMessageClears.clear();
 }
 
 export const __testing = {

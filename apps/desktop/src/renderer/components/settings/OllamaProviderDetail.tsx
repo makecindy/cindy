@@ -425,7 +425,7 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
 
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto border-t px-5 py-5"
+      className="flex flex-col gap-6 border-t px-5 py-5"
       style={{ borderColor: 'var(--settings-theme-card-border)' }}
     >
       {statusKind !== 'ready' && statusKind !== 'pulling' && statusKind !== 'absent' && (

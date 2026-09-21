@@ -105,6 +105,37 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+it.each([false, true])(
+  "waits for unlock preparation and respects cancellation=%s",
+  async (cancel) => {
+    const f = fixture();
+    const ready = deferred<void>();
+    const entered = deferred<void>();
+    const connecting = f.session.connect({
+      isCurrent: () => true,
+      onCapabilities: () => {
+        entered.resolve();
+        return ready.promise;
+      },
+    });
+    await entered.promise;
+    expect(f.request.mock.calls.map(([r]) => r.op)).toEqual(["capabilities"]);
+    const stopping = cancel ? f.session.stop() : undefined;
+    ready.resolve();
+    if (cancel) {
+      await expect(connecting).rejects.toThrow("DESKTOP_VIDEO_STOPPED");
+      await stopping;
+      expect(f.request.mock.calls.map(([r]) => r.op)).toEqual(["capabilities"]);
+    } else {
+      await connecting;
+      expect(f.request.mock.calls.map(([r]) => r.op)).toEqual([
+        "capabilities",
+        "start",
+      ]);
+    }
+  },
+);
+
 it("does not mark a capabilities failure as a start attempt on an older host", async () => {
   const current = fixture();
   const onStart = vi.fn();

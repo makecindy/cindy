@@ -5,6 +5,7 @@ import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sd
 export interface ObservedClaudeProcessOptions {
   spawnOptions: SpawnOptions;
   registerProcess?: (pid: number) => void | (() => void);
+  trackDebugFile?: () => () => void;
   onStderr?: (chunk: string) => void;
 }
 
@@ -24,6 +25,7 @@ export function spawnObservedClaudeProcess(
     },
   );
   let disposeRegistration: (() => void) | undefined;
+  let disposeDebugFile: (() => void) | undefined;
   if (child.pid != null && child.pid > 0) {
     try {
       const dispose = opts.registerProcess?.(child.pid);
@@ -32,6 +34,7 @@ export function spawnObservedClaudeProcess(
       // Observation failures must not block Claude startup. Missing registry state
       // only makes this process fail closed for termination.
     }
+    try { disposeDebugFile = opts.trackDebugFile?.(); } catch { /* diagnostics are best effort */ }
   }
 
   let registrationDisposed = false;
@@ -39,6 +42,8 @@ export function spawnObservedClaudeProcess(
     if (registrationDisposed) return;
     registrationDisposed = true;
     try { disposeRegistration?.(); } catch { /* best-effort cleanup */ }
+    try { disposeDebugFile?.(); } catch { /* best-effort diagnostics */ }
+    disposeDebugFile = undefined;
     disposeRegistration = undefined;
   };
   child.once('exit', disposeOnce);

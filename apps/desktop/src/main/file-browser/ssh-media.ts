@@ -82,11 +82,12 @@ export function makeSshChunkExecutor(
   workdir: string,
   relPath: string,
 ): FetchExecutor {
-  return async (destPath, progress) => {
+  return async (destPath, progress, signal) => {
     const handle = await fsPromises.open(destPath, 'w');
     try {
       let offset = 0;
       for (;;) {
+        if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
         const chunk = await request<{ dataBase64: string; eof: boolean; size: number; mtimeMs: number }>(
           hostId,
           'readFileChunk',
@@ -140,10 +141,10 @@ const MIME_BY_EXT: Record<string, string> = {
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg',
   '.flac': 'audio/flac',
-  // HTML 预览的同目录资源(review P1):手机端 htmlLocalResources 接受这些扩展名并把它们
-  // 内联成 data: URI,本表若不同步,SSH 会话下最常见的 `<link href="assets/style.css">`
-  // 会直接 415 —— 本地会话有样式、SSH 会话必然缺样式。
-  // 只放宽「类型」,不放宽「范围」:路径仍由上面的 toWorkdirRelPosix 约束在 SSH 工作目录内。
+  // HTML 预览:入口文档与同目录资源都走这条 SSH 媒体管线。只放宽类型,不放宽范围。
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.xhtml': 'application/xhtml+xml',
   '.css': 'text/css',
   '.js': 'text/javascript',
   '.mjs': 'text/javascript',

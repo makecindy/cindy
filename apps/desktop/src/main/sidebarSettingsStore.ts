@@ -44,7 +44,10 @@ import {
   isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
-import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from './security/trustedAppRenderer.js';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
@@ -424,7 +427,7 @@ function broadcastHiddenProjectKeysChanged(
   ownerStamp: DataOwnerPushStamp,
 ): void {
   for (const window of BrowserWindow.getAllWindows()) {
-    if (!isAppContentWindow(window)) continue;
+    if (!isTrustedAppRendererWindow(window)) continue;
     window.webContents.send(
       'sidebar-settings:hidden-project-keys-changed',
       Array.from(projectKeys),
@@ -488,6 +491,23 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
     refreshInputDeviceTaskSlotsAfterPinnedOrderChange();
   }
   return Array.from(nextSettings.pinnedOrder);
+}
+
+/** Restore one local project using the same owner fence and broadcast as the sidebar. */
+export async function restoreLocalProjectVisibility(
+  workingDir: string,
+  ownerStamp: DataOwnerPushStamp,
+): Promise<boolean> {
+  return setLocalProjectHidden(workingDir, false, ownerStamp);
+}
+
+/** Host project tools share the sidebar's owner-scoped visibility mutation. */
+export async function setLocalProjectHidden(
+  workingDir: string,
+  hidden: boolean,
+  ownerStamp: DataOwnerPushStamp,
+): Promise<boolean> {
+  return setProjectHidden({ ...ownerStamp, projectKey: normalizeProjectKey(workingDir), hidden });
 }
 
 async function setProjectHidden(rawRequest: unknown): Promise<boolean> {

@@ -1,3 +1,4 @@
+import { resetTaskTagCatalogCache } from '@/features/task-tags/taskTagEvents';
 import {
   createContext,
   useCallback,
@@ -72,6 +73,13 @@ export interface AuthContextValue {
   dataOwnerId: string | null;
   /** Failed auth boundaries remount owner-scoped routes so stale generations can rehydrate. */
   dataOwnerRecoveryEpoch: number;
+  /**
+   * Main-owned owner generation as last pushed. It advances on every owner commit,
+   * including same-owner repairs that keep `dataOwnerId` and never touch
+   * `dataOwnerRecoveryEpoch`; owner-stamped mirrors in main are fenced on it, so a
+   * consumer that pushes such a mirror must re-push when this changes (#4469).
+   */
+  dataOwnerGeneration: number;
   canEnterApp: boolean;
   isAuthenticated: boolean;
   /** 当前账号是否加入 Canary 发布通道。 */
@@ -116,6 +124,7 @@ const log = createLogger('AuthContext');
 function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?: number): void {
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
   if (previousOwnerId !== dataOwnerId) {
+    resetTaskTagCatalogCache();
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
@@ -136,6 +145,7 @@ export function AuthProvider({
   const [mode, setMode] = useState<'signed-out' | 'local' | 'cloud'>('signed-out');
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
   const [dataOwnerRecoveryEpoch, setDataOwnerRecoveryEpoch] = useState(0);
+  const [dataOwnerGeneration, setDataOwnerGenerationState] = useState(0);
   const [canEnterApp, setCanEnterApp] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCanary, setIsCanary] = useState(false);
@@ -173,6 +183,7 @@ export function AuthProvider({
         activeDataOwnerIdRef.current,
         activeDataOwnerGenerationRef.current,
       );
+      setDataOwnerGenerationState(activeDataOwnerGenerationRef.current);
       setDataOwnerRecoveryEpoch((epoch) => epoch + 1);
       void preloadLocalCatalogSnapshot();
       throw error;
@@ -201,6 +212,7 @@ export function AuthProvider({
       }
       activeDataOwnerIdRef.current = state.dataOwnerId;
       activeDataOwnerGenerationRef.current = state.ownerGeneration;
+      setDataOwnerGenerationState(state.ownerGeneration);
       setNewMakerDraftOwner(state.dataOwnerId);
       setProviderModelMemoryOwner(state.dataOwnerId);
       // 模型选择器的持久记忆与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
@@ -505,6 +517,7 @@ export function AuthProvider({
       mode,
       dataOwnerId,
       dataOwnerRecoveryEpoch,
+      dataOwnerGeneration,
       canEnterApp,
       isAuthenticated,
       isCanary,
@@ -536,6 +549,7 @@ export function AuthProvider({
       mode,
       dataOwnerId,
       dataOwnerRecoveryEpoch,
+      dataOwnerGeneration,
       canEnterApp,
       isAuthenticated,
       isCanary,

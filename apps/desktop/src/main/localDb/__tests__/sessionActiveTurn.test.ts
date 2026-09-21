@@ -548,6 +548,46 @@ describe('sessionActiveTurn', () => {
     expect(await hasAssistantProgressAfterMessage('s-same-ms', 'c-user2')).toBe(true);
   });
 
+  it('restores native Make failures and drops them only when handled or no longer visible', async () => {
+    const { listErrorTailPendingSessionIds } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const at = Date.now();
+    const insert = async (id: string, completion: unknown, options: {
+      source?: string; status?: string; clearedAt?: number; rewindAt?: number; content?: unknown;
+    } = {}) => {
+      await seedSession(client, id, { source: options.source ?? 'cindy-make', ...options });
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, id, id, 'assistant', JSON.stringify(options.content ?? ''),
+          JSON.stringify({ cindyMakeCompletion: completion }), at, options.rewindAt ?? null],
+      );
+    };
+    const failed = { reportedAt: at, lastAction: 'build', personal: { status: 'failed', error: 'buildFailed' } };
+    await insert('make-failed', failed);
+    await insert('make-test-failed', { reportedAt: at, lastAction: 'test', test: { status: 'failed' } });
+    await insert('make-interrupted', { reportedAt: at, lastAction: 'test', test: { status: 'stopped', error: 'interrupted' } });
+    await insert('make-preparation', null, { content: { __cindyMakeCard: { type: 'cindy-make',
+      data: { report: { runId: 'run', status: 'failed' } } } } });
+    await insert('make-continued', { ...failed, continuedAt: at + 1 });
+    await insert('make-cancelled', { ...failed, personal: { status: 'failed', error: 'cancelled' } });
+    await insert('make-retried', { ...failed, personal: { status: 'checking' } });
+    await insert('make-new-test', { ...failed, lastAction: 'test', test: { status: 'ready' } });
+    await insert('make-rewound', failed, { rewindAt: at + 1 });
+    await insert('make-cleared', failed, { clearedAt: at });
+    await insert('make-archived', failed, { status: 'archived' });
+    await insert('ordinary-task', failed, { source: 'desktop' });
+    await insert('make-later-user', failed);
+    await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['later', 'later', 'make-later-user', 'user', '{}', at]);
+    expect((await listErrorTailPendingSessionIds()).sort()).toEqual([
+      'make-failed', 'make-interrupted', 'make-preparation', 'make-test-failed',
+    ]);
+    await client.exec('UPDATE messages SET agent_meta = ? WHERE id = ?', [
+      JSON.stringify({ cindyMakeCompletion: { ...failed, personal: { status: 'waiting' } } }), 'make-failed',
+    ]);
+    expect(await listErrorTailPendingSessionIds()).not.toContain('make-failed');
+  });
+
   it('listErrorTailPendingSessionIds matches undismissed error tails only', async () => {
     const { listErrorTailPendingSessionIds } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();

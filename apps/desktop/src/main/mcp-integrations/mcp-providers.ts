@@ -1,4 +1,8 @@
+import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
+import { createProject } from './createProject.js';
+import { createMoveSession } from './moveSession.js';
+import { listProjects, renameProject, removeProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { routineTools } from '../routines/service.js';
@@ -8,6 +12,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   createLiziMcpProviders,
   resolveLiziMcpSessionContext,
+  setSessionPathAuthorizer,
   type IOSSimulatorMcpAccessDecision,
   type LiziMcpProvider,
   type LiziMcpSessionContext,
@@ -18,6 +23,7 @@ import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
+  authorizeDesktopSessionPath,
   getCindyGhostsMcpDeps,
   type GhostGrantLiveSessionState,
   type CindyGhostsHostDeps,
@@ -43,6 +49,7 @@ import {
   tryGetBotDelegationService,
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
+  isSessionInTurn,
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
@@ -80,6 +87,9 @@ import {
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
 import { botSessionLinks, sessions } from '../localDb/schema.js';
+import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
+import { getLearnController } from '../learn-host/index.js';
+import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 
 export interface DesktopMcpProvidersDeps {
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
@@ -101,6 +111,11 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /** Reject stale, remote, or already-closed Session tool contexts. */
+  isCurrentLocalSessionInstance?: (
+    sessionId: string,
+    sessionInstanceId: string | undefined,
+  ) => boolean;
   /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
    *  返回结构区分「有意跳过」(skipped:true, 视觉桥未开/模型不命中, 不告警)与
    *  「真正尝试但失败」(skipped:false + null, 计入 attemptedCount 供告警)。 */
@@ -115,6 +130,9 @@ export interface DesktopMcpProvidersDeps {
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
+  setSessionPathAuthorizer((request) =>
+    authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
+  );
   const { pluginRegistry } = deps;
   let redactSshText: ((snapshot: SshHostSnapshotLike, text: string) => string) | undefined;
   const loadRemoteSsh = async () => {
@@ -363,6 +381,99 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       logger: createLogger('mcp/cindy_helper'),
+      sessionTags: async (callerSessionId, request) => {
+        const result = await executeTaskTags(request, callerSessionId);
+        return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
+      },
+      createProject,
+      moveSession: createMoveSession(isSessionInTurn),
+      projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },
+      authorizeSkillLearning: async (request, context) => {
+        if (!isCindyLearnSkillEnabled()) {
+          return {
+            ok: false,
+            errorCode: 'SKILL_DISABLED',
+            message: 'Cindy Learn is disabled in Local Skills.',
+          };
+        }
+        if (!getLearnController()) {
+          return {
+            ok: false,
+            errorCode: 'HOST_NOT_READY',
+            message: 'Cindy Learn is not ready yet.',
+          };
+        }
+        const sessionInstanceId = context.sessionInstanceId;
+        if (
+          !sessionInstanceId
+          || !deps.isCurrentLocalSessionInstance?.(request.callerSessionId, sessionInstanceId)
+        ) {
+          return {
+            ok: false,
+            errorCode: 'USER_REQUEST_REQUIRED',
+            message: 'Cindy Learn is not authorized for this task instance.',
+          };
+        }
+        const authorization = await consumeLearnInvocationGrant(request, sessionInstanceId);
+        return authorization.ok
+          ? { ok: true, sessionInstanceId }
+          : authorization;
+      },
+      skillLearning: async ({
+        callerSessionId,
+        input,
+        sourceKind,
+        hubSlug,
+        hubCatalogScope,
+      }, authorization) => {
+        try {
+          if (!isCindyLearnSkillEnabled()) {
+            return {
+              ok: false,
+              errorCode: 'SKILL_DISABLED',
+              message: 'Cindy Learn is disabled in Local Skills.',
+            };
+          }
+          const controller = getLearnController();
+          if (!controller) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Cindy Learn is not ready yet.',
+            };
+          }
+          if (!deps.isCurrentLocalSessionInstance?.(
+            callerSessionId,
+            authorization.sessionInstanceId,
+          )) {
+            return {
+              ok: false,
+              errorCode: 'USER_REQUEST_REQUIRED',
+              message: 'Cindy Learn is not authorized for this task instance.',
+            };
+          }
+          const { runId } = await controller.startLearn({
+            input,
+            sourceKind,
+            originSessionId: callerSessionId,
+            ...(hubSlug ? { hubSlug } : {}),
+            ...(hubCatalogScope ? { hubCatalogScope } : {}),
+          });
+          return { ok: true, runId };
+        } catch (err) {
+          const rawCode = (err as { code?: unknown })?.code;
+          const errorCode =
+            typeof rawCode === 'string'
+            && ['LEARN_BUSY', 'LEARN_INVALID_STATE', 'INVALID_PARAMS', 'NOT_FOUND'].includes(rawCode)
+              ? rawCode
+              : 'INTERNAL';
+          return {
+            ok: false,
+            errorCode,
+            message: err instanceof Error ? err.message : 'Failed to start Cindy Learn.',
+          };
+        }
+      },
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient) return 'restricted';
@@ -551,6 +662,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botMessaging: {
+        checkMessage: async (params) => {
+          const svc = tryGetBotDirectMessageService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate messaging is unavailable' };
+          return svc.checkMessage(params);
+        },
+        listAgents: async ({ callerSessionId }) => {
+          const svc = tryGetBotDirectMessageService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
+          return svc.listAgents(callerSessionId);
+        },
         messageAgent: async (params) => {
           const svc = tryGetBotDirectMessageService();
           if (!svc) {

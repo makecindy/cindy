@@ -4,6 +4,7 @@ import { ensureMacPackageManagerPath } from './agentToolPath.js';
 import { app } from 'electron';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -13,6 +14,22 @@ import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
+import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
+import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
+import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
+
+if (process.platform === 'linux' && app.isPackaged) {
+  const installation = recognizeLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);
+  if (installation) app.setDesktopName(linuxUserDesktopName(installation.prefix));
+}
+
+// Backend selection must precede ready and the dynamic bootstrap/auth imports.
+// This default never overrides --password-store; no plaintext fallback is added.
+configureLinuxPasswordStore({
+  platform: process.platform,
+  env: process.env,
+  commandLine: app.commandLine,
+});
 
 // 正式目录保持历史兼容：global 构建继续使用 CindyGlobal，cn 版继续使用
 // productName 默认的 Cindy；dev 也按构建区域选择对应 profile。必须在
@@ -27,6 +44,8 @@ const regionUserDataDirName = resolveRegionUserDataDirName({
 if (regionUserDataDirName) {
   app.setPath('userData', path.join(app.getPath('appData'), regionUserDataDirName));
 }
+// A verified version handoff retains the launching original's profile and keychain identity.
+prepareCindyVersionStartup();
 
 // Node happy-eyeballs(autoSelectFamily)默认每个地址只给 250ms 完成 TCP 握手,
 // VPN/高 RTT 链路上直连海外端点(platform.claude.com 换 token、订阅模式模型流量等)
@@ -268,6 +287,7 @@ if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
 refreshBrowserRuntimeConfigDir();
 
 async function dispatch(): Promise<void> {
+  if (await dispatchCindyVersionStartup()) return;
   const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
   // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
   process.once('exit', cleanupDevInstance);

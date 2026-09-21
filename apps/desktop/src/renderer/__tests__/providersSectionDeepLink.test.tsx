@@ -131,6 +131,11 @@ vi.mock('@/components/settings/AddProviderWizard', () => ({
 import { updateCustomProvider } from '@/lib/customProviders';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
+import { useProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
+
+vi.mock('@/components/settings/useProviderSubscriptionCard', () => ({
+  useProviderSubscriptionCard: vi.fn(() => null),
+}));
 
 vi.mock('@/components/settings/OllamaProviderDetail', () => ({ OllamaProviderDetail: () => null }));
 
@@ -172,6 +177,7 @@ function renderAt(search: string) {
 }
 
 beforeEach(() => {
+  vi.mocked(useProviderSubscriptionCard).mockReset().mockReturnValue(null);
   confirmSpy.mockReset().mockResolvedValue(true);
   codexAuthState.state = { kind: 'unauthenticated' };
   codexAuthState.reconnectCredentialScope = undefined;
@@ -256,6 +262,65 @@ describe('ProvidersSection — 深链定位', () => {
     renderAt(`?tab=providers&connect=${id}`);
     await waitFor(() => expect(screen.getAllByText('My renamed provider').length).toBeGreaterThanOrEqual(2));
   });
+
+  it.each(['openai', 'anthropic', 'xai', 'custom-api', 'custom-oauth'])(
+    'keeps identity outside the shared model scroll area for %s',
+    async (id) => {
+      providersState.providers = [
+        makeProvider(id, {
+          name: 'Scroll provider',
+          source: id.startsWith('custom') ? 'user' : 'builtin',
+          connected: true,
+          auth: id === 'custom-api' ? { method: 'apiKey' } : { method: 'oauth', native: 'codex' },
+          agents: ['codex'],
+          models: {
+            codex: [
+              {
+                id: 'scroll-model',
+                name: 'Scroll Model',
+                contextWindow: 0,
+                efforts: [],
+                defaultEffort: null,
+              },
+            ],
+          },
+        }),
+      ];
+      renderAt(`?tab=providers&connect=${id}`);
+      const scroll = await screen.findByTestId('provider-detail-scroll');
+      expect(scroll.contains(screen.getByTestId('provider-detail-identity'))).toBe(false);
+      expect(within(scroll).getByText('Scroll Model')).toBeTruthy();
+      expect(
+        within(scroll).getByTestId('provider-model-toolbar').classList.contains('sticky'),
+      ).toBe(true);
+      // No nested scrolling surface may trap wheel input above or below the model list.
+      expect(scroll.querySelector('.overflow-y-auto')).toBeNull();
+    },
+  );
+
+  it.each(['subscriptionAccount', 'openAiAccount'] as const)(
+    'collapses usage on %s changes but retains expansion on quota refresh',
+    async (identityField) => {
+      const account = { title: 'ChatGPT', windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20 }, detail: 'Weekly usage details' }] };
+      vi.mocked(useProviderSubscriptionCard).mockReturnValue(account);
+      const provider = makeProvider('openai', {
+        connected: true,
+        [identityField]: { source: 'oauth', identity: 'first@example.test' },
+      });
+      providersState.providers = [provider];
+      const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      fireEvent.click(await screen.findByRole('button', { name: 'quotaCard.usageTitle' }));
+      const refresh = () => view.rerender(
+        <MemoryRouter><ProvidersSection /></MemoryRouter>,
+      );
+      vi.mocked(useProviderSubscriptionCard).mockReturnValue({ ...account, updatedAt: Date.now() });
+      refresh();
+      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('true');
+      providersState.providers = [{ ...provider, [identityField]: { source: 'oauth', identity: 'second@example.test' } }];
+      refresh();
+      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('false');
+    },
+  );
 
   it('added OpenAI shares status and moves rename/delete into the single menu', async () => {
     providersState.providers = [
@@ -368,6 +433,43 @@ describe('ProvidersSection — 深链定位', () => {
     expect(within(actions).getByText('settings.providers.pill.configured')).toBeTruthy();
     expect(within(actions).queryByText('settings.providers.pill.connected')).toBeNull();
     expect(within(actions).getByRole('button', { name: 'settings.providers.button.disconnect' })).toBeTruthy();
+  });
+
+  it('reveals replacement-key inputs once without resetting scroll while typing', async () => {
+    providersState.providers = [makeProvider('gemini', { connected: true, auth: { method: 'apiKey' } })];
+    renderAt('?tab=providers&connect=gemini');
+    const scroll = await screen.findByTestId('provider-detail-scroll');
+    scroll.scrollTop = 500;
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByText('settings.providers.builtinApiKey.replaceKey'));
+    const input = await screen.findByPlaceholderText('settings.providers.builtinApiKey.keyPlaceholder');
+    expect(scroll.scrollTop).toBe(0);
+    scroll.scrollTop = 100;
+    fireEvent.change(input, { target: { value: 'fixture-key' } });
+    expect(scroll.scrollTop).toBe(100);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.cancel' }));
+    expect(scroll.scrollTop).toBe(100);
+  });
+
+  it('reveals device-code authorization above a scrolled model list', async () => {
+    let complete!: (result: { ok: boolean }) => void;
+    Object.assign(window.electronAPI.maker, {
+      providerOAuthLogin: vi.fn(() => new Promise<{ ok: boolean }>((resolve) => { complete = resolve; })),
+      providerOAuthCancel: vi.fn(async () => ({ ok: true })),
+    });
+    providersState.providers = [makeProvider('device-provider', {
+      source: 'user',
+      auth: { method: 'oauth', oauth: {
+        flow: 'device-code', deviceAuthorizationUrl: 'https://auth.example.test/device',
+        tokenUrl: 'https://auth.example.test/token', clientId: 'fixture', scopes: 'openid',
+      } },
+    })];
+    renderAt('?tab=providers&connect=device-provider');
+    const scroll = await screen.findByTestId('provider-detail-scroll');
+    scroll.scrollTop = 500;
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.authorizeWithDeviceCode' }));
+    expect(scroll.scrollTop).toBe(0);
+    await act(async () => complete({ ok: false }));
   });
 
   it('added OpenAI recovery overrides a stale connected snapshot', async () => {

@@ -1,7 +1,8 @@
 /**
  * WindowBehaviorSection — 「应用行为」section:本机相关的应用级开关。
  *
- * 三项设置:
+ * 应用设置:
+ *  - 登录电脑后自动启动:Windows / macOS 的系统登录启动项,默认不注册。
  *  1. 「保持电脑唤醒」(keepAwake):main 用 powerSaveBlocker 防系统休眠、放行锁屏,
  *     让后台 agent / 定时任务持续运行。跨平台生效(mac/win/linux),故常驻显示。
  *  2. 「关闭主窗口时」:Windows 选择退出或收起到托盘,Linux 选择退出或最小化。
@@ -15,12 +16,13 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
 import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
+import { useLoginItemSetting } from '@/hooks/useLoginItemSetting';
 import {
   isLinuxCloseBehavior,
   isWindowsCloseBehavior,
@@ -38,6 +40,7 @@ function BehaviorCard({
   checked,
   onCheckedChange,
   ariaLabel,
+  disabled,
 }: {
   label: string;
   hint: string;
@@ -45,6 +48,7 @@ function BehaviorCard({
   checked: boolean;
   onCheckedChange: (next: boolean) => void;
   ariaLabel: string;
+  disabled?: boolean;
 }) {
   return (
     <div
@@ -67,7 +71,12 @@ function BehaviorCard({
         {note}
       </div>
 
-      <Switch checked={checked} onCheckedChange={onCheckedChange} aria-label={ariaLabel} />
+      <Switch
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        aria-label={ariaLabel}
+        disabled={disabled}
+      />
     </div>
   );
 }
@@ -75,6 +84,7 @@ function BehaviorCard({
 export function WindowBehaviorSection() {
   const { enabled, setEnabled } = useSwallowActivationClickSettings();
   const { keepAwake, setKeepAwake } = useKeepAwakeSetting();
+  const loginItem = useLoginItemSetting();
   const { t } = useTranslation();
   // macOS 上 acceptFirstMouse 是 Cocoa 级参数、只在 BrowserWindow 构造时读一次,
   // 用户切完开关下次启动才生效——单独渲染一行"需要重启应用"避免和主 hint 混在
@@ -136,6 +146,31 @@ export function WindowBehaviorSection() {
         ariaLabel={t('settings.devices.keepAwake')}
       />
 
+      {loginItem.supported && (
+        <BehaviorCard
+          label={t('settings.windowBehavior.loginItem.label')}
+          hint={t('settings.windowBehavior.loginItem.hint')}
+          checked={Boolean(loginItem.state?.enabled || loginItem.state?.requiresApproval)}
+          disabled={!loginItem.state?.available || loginItem.busy}
+          onCheckedChange={(enabled) => void loginItem.setEnabled(enabled)}
+          ariaLabel={t('settings.windowBehavior.loginItem.label')}
+          note={
+            <div
+              className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]"
+              aria-live="polite"
+            >
+              {loginItem.error ? (
+                <p role="alert">{t(`settings.windowBehavior.loginItem.${loginItem.error}`)}</p>
+              ) : loginItem.state?.requiresApproval ? (
+                <p>{t('settings.windowBehavior.loginItem.requiresApproval')}</p>
+              ) : loginItem.busy ? (
+                <p>{t('settings.windowBehavior.loginItem.loading')}</p>
+              ) : null}
+            </div>
+          }
+        />
+      )}
+
       {(isWindows || isLinux) && (
         <div
           className={cn(
@@ -156,7 +191,7 @@ export function WindowBehaviorSection() {
             </p>
           </div>
 
-          <SettingsSegmentedControl
+          <SegmentedControl
             aria-label={t('settings.windowBehavior.closeBehavior.aria')}
             value={closeBehavior}
             onValueChange={setCloseBehavior}

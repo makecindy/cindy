@@ -1,4 +1,12 @@
 {
+  "privacyExit": {
+    "status": "Cindy를 통해 원격 제어 중입니다",
+    "hint": "화면을 클릭하거나 아무 키나 누르면 연결 끊기를 확인합니다",
+    "title": "원격 데스크톱 연결을 끊을까요?",
+    "detail": "원격 제어를 종료하고 컴퓨터 화면을 복원합니다. 종료 시 잠금이 켜져 있으면 컴퓨터도 잠깁니다.",
+    "cancel": "연결 유지",
+    "disconnect": "연결 끊기"
+  },
   "appBadge": {
     "attentionCount": "확인이 필요한 세션: {{count}}"
   },
@@ -56,7 +64,10 @@
     "pan": "화면 이동",
     "keyboard": "키보드",
     "rightClick": "오른쪽 클릭",
-    "fit": "화면 맞춤",
+    "actualSize": "실제 크기 (1:1)",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "fit": "창에 맞춤",
     "display": "디스플레이",
     "gestureHint": "두 손가락으로 확대/축소 및 스크롤합니다. 화면 이동 모드에서는 이동합니다. 길게 누른 후 움직이면 드래그합니다.",
     "textPlaceholder": "컴퓨터에 텍스트 입력",
@@ -65,10 +76,11 @@
     "showDesktop": "데스크톱",
     "allWindows": "모든 창",
     "reconnecting": "다시 연결 중…",
+    "connectionTimeout": "연결 시간이 초과되었습니다. 네트워크와 컴퓨터의 온라인 상태를 확인한 후 다시 연결하세요.",
     "connectionBusy": "다른 기기가 이 원격 데스크톱에 연결되어 있습니다. 해당 기기에서 원격 데스크톱을 종료한 후 다시 연결하세요.",
     "takeoverConnection": "연결 넘겨받기",
     "connectionBusyTakeover": "다른 기기가 연결되어 있습니다. 연결을 넘겨받으면 해당 기기의 연결이 끊어집니다.",
-    "remoteDisabled": "컴퓨터에서 원격 제어가 꺼져 있습니다.",
+    "remoteDisabled": "원격 컴퓨터의 Cindy 설정 → 원격 제어에서 원격 제어를 켜세요.",
     "accessRevoked": "이 컴퓨터에 대한 접근 권한이 취소되었습니다.",
     "directConnection": "컴퓨터에 직접 연결",
     "videoRelay": "서버 영상 중계",
@@ -79,12 +91,18 @@
       "opening": "원격 데스크톱 여는 중…",
       "unavailable": "원격 데스크톱에 연결할 수 없습니다: {{reason}}",
       "offline": "이 컴퓨터는 오프라인입니다.",
-      "controlDisabled": "원격 제어 설정에서 이 컴퓨터의 제어를 허용하세요.",
+      "controlDisabled": "원격 컴퓨터의 Cindy 설정 → 원격 제어에서 이 컴퓨터의 제어를 허용하세요.",
       "unsupported": "이 기기는 원격 데스크톱을 지원하지 않습니다.",
-      "checkFailed": "컴퓨터 상태를 확인하지 못했습니다. 마우스를 다시 올려 재시도하세요.",
+      "checkFailed": "컴퓨터 상태를 확인하지 못했습니다. 해당 컴퓨터의 네트워크 연결을 확인하세요.",
+      "screenRecordingRequired": "원격 Mac의 시스템 설정 → 개인정보 보호 및 보안에서 Cindy의 화면 기록을 허용하세요. 요청이 표시되면 Cindy를 다시 여세요.",
       "noDisplay": "이 컴퓨터에 사용 가능한 디스플레이가 없습니다."
     },
     "viewer": {
+      "displayPanel": "화면 및 소리",
+      "clipboardPanel": "클립보드",
+      "securityPanel": "보안",
+      "controlGroup": "원격 제어",
+      "controlMode": "제어",
       "settings": "조작",
       "sound": "소리",
       "fullscreen": "전체 화면",
@@ -96,17 +114,57 @@
       "balanced": "균형",
       "clear": "선명",
       "resolution": "컴퓨터 해상도",
-      "clipboardFailed": "텍스트를 전송할 수 없습니다. 제어 권한을 확인하고 내용을 16,384자 이내로 줄이세요.",
-      "settingsFailed": "디스플레이 설정을 변경할 수 없습니다.",
+      "clipboardFailed": "클립보드 내용을 전송하지 못했습니다. 제어 권한을 확인하고 다시 시도하세요.",
+      "settingsFailed": "설정을 저장하지 못했습니다. 다시 시도하세요.",
       "inputHint": "화면을 클릭하여 입력하세요. Ctrl+Alt+Esc로 키보드 포커스를 해제하고 Cmd/Ctrl+W로 이 창을 닫습니다.",
       "controlPending": "제어 권한을 가져오는 중…",
-      "controlRequired": "보기 전용입니다. 클립보드와 데스크톱 작업을 사용하려면 제어 권한을 가져오세요.",
+      "controlRequired": "보기 전용입니다. 원격 컴퓨터를 조작하려면 제어 권한을 가져오세요.",
       "confirmDisconnect": "이 컴퓨터와의 연결을 끊을까요?",
       "confirmDisconnectHint": "원격 데스크톱 연결이 종료됩니다. 컴퓨터의 앱은 계속 실행됩니다.",
       "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
-      "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 컴퓨터 간에 텍스트를 복사하고 붙여넣으세요. 이미지와 파일은 아직 지원하지 않습니다.",
+      "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 복사하고 붙여넣으세요. 지원되는 내용은 원격 컴퓨터에 따라 다르며 파일은 전송되지 않습니다.",
+      "fitViewerDisplay": "현재 화면 비율에 맞추기",
+      "fitViewerDisplayHint": "데스크톱 내용을 유지하면서 컴퓨터 화면 비율을 일시적으로 변경합니다. 연결을 종료하면 원래 해상도로 돌아갑니다.",
       "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
-    }
+    },
+    "settingUnsupported": "이 컴퓨터는 아직 이 설정을 지원하지 않습니다",
+    "privacyScreen": "컴퓨터 프라이버시 화면",
+    "privacyScreenHint": "컴퓨터 화면을 가립니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
+    "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
+    "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
+    "hostMute": "원격 컴퓨터 음소거",
+    "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
+    "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다",
+    "clipboardSync": "클립보드 동기화",
+    "clipboardSyncConflict": "양쪽 클립보드가 변경되어 각각의 내용을 유지했습니다. 어느 기기에서든 다시 복사하면 동기화됩니다.",
+    "clipboardSyncFailed": "동기화가 일시적으로 실패했습니다. 자동으로 재시도하며 설정은 켜진 상태로 유지됩니다.",
+    "clipboardSyncSkipped": "현재 콘텐츠를 동기화할 수 없어 건너뛰었습니다. 붙여넣기 권한을 확인하거나 텍스트 또는 이미지를 복사한 후 다시 시도해 주세요.",
+    "clipboardSyncPermission": "동기화가 일시 중지되었습니다. 붙여넣기를 허용한 후 다시 시도해 주세요. 설정은 켜진 상태로 유지됩니다.",
+    "lockingOnExit": "컴퓨터를 잠그는 중…",
+    "lockOnExit": "종료 시 컴퓨터 잠금",
+    "lockOnExitHint": "원격 데스크톱을 종료하면 잠급니다. 재연결이나 앱 전환 시에는 잠그지 않습니다.",
+    "lockOnExitFailed": "컴퓨터가 잠겼는지 확인하지 못했습니다. 컴퓨터 상태를 확인해 주세요.",
+    "nativeResolution": "기본 해상도",
+    "autoUnlock": "컴퓨터 자동 잠금 해제",
+    "autoUnlockHint": "Mac 로그인 암호를 이 기기에 저장하고 연결할 때 컴퓨터 잠금을 해제합니다.",
+    "autoUnlockStorageHint": "암호는 현재 기기에만 암호화되어 저장됩니다. 설정과 암호는 계정에 동기화되지 않습니다.",
+    "autoUnlockUnavailable": "자동 잠금 해제를 사용할 수 없습니다. 연결한 뒤 Mac을 수동으로 잠금 해제할 수 있습니다.",
+    "biometricVerification": "생체 인증",
+    "biometricVerificationHint": "저장된 암호를 사용하기 전에 본인 인증을 합니다.",
+    "loadingSettings": "불러오는 중…",
+    "credentialSigningRequired": "Mac 개발 버전에 서명 설정이 없습니다. Mac에서 서명을 설정하고 Cindy를 다시 시작한 후 다시 시도해 주세요.",
+    "credentialPasswordRejected": "Mac 로그인 암호를 확인하지 못했습니다. 다시 입력해 주세요.",
+    "credentialIdentityChanged": "컴퓨터의 신원을 확인할 수 없습니다. 확인되지 않은 기기로 암호를 보내지 않습니다.",
+    "credentialAccessibilityRequired": "Mac의 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 Cindy를 허용한 후 다시 연결하세요.",
+    "credentialUnlockUnavailable": "이 Mac의 잠금을 안전하게 해제하지 못했습니다. 잠금 화면에서 본인 계정을 선택한 후 다시 연결하세요. 계속 실패하면 Mac에서 직접 잠금을 해제하세요.",
+    "disconnecting": "연결 끊는 중…",
+    "loadingDisplayModes": "해상도 불러오는 중…",
+    "displayModesFailed": "해상도를 불러오지 못했습니다. 다시 시도하세요.",
+    "retry": "다시 시도",
+    "copy": "이 컴퓨터로 복사",
+    "paste": "원격 컴퓨터에 붙여넣기",
+    "clipboardSyncHint": "이 창이 전면에 있을 때 텍스트, 이미지, 서식 있는 텍스트를 양방향으로 동기화합니다.",
+    "credentialRequired": "Mac 암호를 확인하세요. 확인할 수 없으면 두 컴퓨터에서 Cindy를 업데이트하세요."
   },
   "ipcError": {
     "INVALID_PARAMS": "매개변수가 잘못되었습니다. 확인 후 다시 시도하세요.",
@@ -678,6 +736,15 @@
       "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "로그인 시 Cindy 자동 시작",
+        "hint": "컴퓨터에 로그인하면 Cindy를 자동으로 엽니다. 기본값은 꺼짐입니다.",
+        "requiresApproval": "자동 시작을 켜려면 macOS 시스템 설정의 로그인 항목에서 Cindy를 허용하세요.",
+        "loading": "시스템 설정을 읽는 중…",
+        "loadFailed": "시작 설정을 읽지 못했습니다. 이 설정 페이지를 다시 열어 재시도하세요.",
+        "saveFailed": "시작 설정을 저장하지 못했습니다. 다시 시도하거나 시스템 시작 항목을 확인하세요.",
+        "notApplied": "시스템에 설정이 적용되지 않았습니다. 시스템 시작 항목을 확인한 후 다시 시도하세요."
+      },
       "title": "앱 동작",
       "closeBehavior": {
         "label": "기본 창을 닫을 때",
@@ -870,10 +937,10 @@
       },
       "linuxUpdates": {
         "title": "Linux 설치와 업데이트",
-        "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
-        "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-<아키텍처>.deb 를 사용하세요(x64는 amd64, arm64는 arm64).",
-        "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
-        "item3": "Linux x64에서는 Beta 채널을 사용할 수 있지만 arm64는 아직 지원하지 않습니다. 설치에는 시스템 권한 승인이 필요하므로 두 아키텍처 모두 유휴 상태 자동 설치를 지원하지 않습니다."
+        "description": "Ubuntu는 시스템 .deb 패키지를 사용합니다. Arch Linux와 Omarchy는 같은 검증된 .deb 콘텐츠를 관리되는 사용자 디렉터리에 설치합니다. Debian 패키지 관리자는 필요하지 않습니다.",
+        "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb를 실행하세요. Arch/Omarchy: docs/linux.md의 사용자 설치 안내를 따르세요.",
+        "item2": "업데이트 시 시스템 .deb 설치는 인증을 요청하고, 사용자 설치는 시스템 비밀번호 없이 버전을 전환합니다. 다른 패키지 관리자로 설치한 경우 해당 관리자로 업데이트하세요.",
+        "item3": "Linux x64는 Beta 채널을 지원하며 arm64는 아직 지원하지 않습니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
@@ -934,7 +1001,7 @@
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
-      "linuxUpdateDescription": "새 빌드가 있으면 앱에서 .deb를 다운로드합니다. 설치할 때 시스템 비밀번호가 필요하므로 유휴 상태에서는 자동 설치하지 않습니다.",
+      "linuxUpdateDescription": "재시작을 선택하면 업데이트가 적용됩니다. 시스템 .deb 설치에는 시스템 비밀번호가 필요하지만 사용자 설치에는 필요하지 않습니다. 다른 설치 방식은 패키지 관리자를 사용하세요.",
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
@@ -967,6 +1034,18 @@
         "unknown": "알 수 없음"
       },
       "storage": {
+        "dialogueDirectoryTitle": "대화 작업 공간",
+        "dialogueDirectoryDescription": "새 세션에만 적용됩니다. 기존 파일은 원래 위치에 유지됩니다.",
+        "dialogueDirectoryOpen": "폴더 열기",
+        "dialogueDirectoryChoose": "폴더 변경",
+        "dialogueDirectoryReset": "기본 위치로 복원",
+        "dialogueDirectoryFailed": "대화 작업 공간을 변경하지 못했습니다. 선택한 폴더에 쓰기 권한이 있는지 확인한 후 다시 시도하세요.",
+        "dialogueDirectoryDefault": "기본",
+        "dialogueDirectoryFullPath": "전체 경로",
+        "dialogueDirectoryDetails": "프로젝트 폴더를 지정하지 않은 새 세션에 사용됩니다. 선택한 폴더 안에 현재 계정 전용 하위 폴더가 생성됩니다.",
+        "dialogueDirectoryCopy": "경로 복사",
+        "dialogueDirectoryCopied": "경로가 복사되었습니다",
+        "dialogueDirectoryCopyFailed": "경로를 복사하지 못했습니다. 경로를 선택하여 직접 복사하세요.",
         "mediaSectionTitle": "미디어 파일",
         "databaseSectionTitle": "데이터베이스",
         "overviewTitle": "로컬 저장 공간",
@@ -3757,6 +3836,12 @@
           "statusPendingSuffix_other": "({{count}}개 처리 대기)",
           "statusOffKept_one": "꺼짐 · 워크스페이스 바인딩 {{count}}개 유지됨",
           "statusOffKept_other": "꺼짐 · 워크스페이스 바인딩 {{count}}개 유지됨",
+          "removeCommunicationsConfirmDescription": "이 기기의 워크스페이스 통신 권한을 제거합니다. 다른 기기나 Bot 수신 설정에는 영향을 주지 않습니다.",
+          "localCommunications": "이 기기의 Slack 통신",
+          "communicationsActive": "Slack 통신 켜짐",
+          "communicationsInactive": "Slack 통신 꺼짐",
+          "botNotReceiving": "Bot 대화 수신 안 함",
+          "receiveBot": "Bot 대화 수신",
           "displaced": "다른 기기에서 바인딩됨",
           "rebind": "다시 바인딩",
           "removeAria": "이 워크스페이스 바인딩 해제",
@@ -5654,20 +5739,27 @@
       "permissionModeDisabled": "원격 IM은 Cindy Desktop의 확인 정책을 사용하므로 이 권한 모드를 사용할 수 없습니다."
     },
     "cindyMake": {
+      "create": {
+        "title": "개인 버전 만들기",
+        "cancel": "취소",
+        "description": "Cindy에서 바꾸고 싶은 내용을 알려주세요. 제작 작업을 열고 기존 공통 흐름에 따라 환경 확인과 소스 코드 준비를 거쳐 제작을 진행합니다.",
+        "requestLabel": "무엇을 바꾸고 싶으신가요?",
+        "requestHint": "최대 {{max}}자. 제출 후 작업에서 진행 상황을 확인할 수 있습니다. 설정을 나가도 준비는 멈추지 않습니다.",
+        "placeholder": "예: 작업 목록에서 미완료 작업만 보여주는 필터 버튼을 추가하고 싶어요.",
+        "continue": "제작 시작",
+        "failed": "제작을 시작하지 못했습니다. 입력 내용은 그대로 있으니 다시 시도해 주세요."
+      },
       "title": "Cindy Make",
       "openToolsDir": "도구 폴더 열기",
       "source": {
         "title": "개인 버전 소스",
         "openDir": "소스 폴더 열기",
         "prepare": "소스 준비",
+        "retry": "준비 재시도",
         "reset": "소스 정리",
         "update": "소스 업데이트",
         "preparingAction": "소스 준비 중",
         "path": "경로",
-        "channel": "채널",
-        "version": "버전",
-        "ref": "Ref",
-        "commit": "커밋",
         "status": {
           "missing": "개인 소스가 아직 준비되지 않았습니다",
           "pending": "소스 준비 중",
@@ -5682,8 +5774,6 @@
           "confirm": "소스 정리",
           "cancel": "취소"
         },
-        "branch": "개인 버전 브랜치",
-        "baseCommit": "기준선",
         "description": "개인 버전 Cindy의 소스 사본입니다. 개인 버전을 만들 때마다 개인 버전 브랜치에서 독립 작업 디렉터리를 만들고, 테스트를 통과한 변경을 여기로 병합합니다. 이 디렉터리 자체를 직접 수정하지는 않습니다.",
         "stop": "중지"
       },
@@ -5695,6 +5785,75 @@
         "ariaLabel": "설치 테스트: 시스템 도구 무시",
         "enabledHint": "아래 카드에서 Windows 도구의 다운로드와 설치를 테스트할 수 있습니다. 이미 설치된 Cindy 관리 도구는 재사용합니다. 즉시 적용되며 새로고침이나 재시작 시 꺼집니다. 시스템 도구는 변경하지 않습니다.",
         "reportHint": "설치 테스트가 켜져 있습니다. 휴대용 도구는 Cindy 관리 복사본을 사용합니다. 공식 설치 안내를 테스트하도록 Windows 컴파일 도구를 없음으로 표시합니다. 실제 상태를 확인하려면 스위치를 끄세요."
+      },
+      "tasks": {
+        "title": "미완료 제작",
+        "search": "제작 작업 검색",
+        "noResults": "일치하는 제작 작업이 없습니다",
+        "restore": "복원하고 작업 열기",
+        "finish": "제작 완료",
+        "delete": "제작 삭제",
+        "retryCleanup": "정리 다시 시도",
+        "finishHint": "변경 사항을 확인하고 제작을 완료하면 개인 버전에 병합하고 개발 폴더를 정리합니다. 대화 기록은 보관된 작업에 남습니다.",
+        "finishConfirm": "“{{title}}” 제작을 완료할까요? 커밋된 변경 사항을 개인 버전에 병합하고 개발 폴더와 제작 브랜치를 삭제한 뒤 작업을 보관합니다. 커밋하지 않은 변경 사항이나 병합 충돌이 있으면 정리를 중단합니다.",
+        "deleteConfirm": "“{{title}}” 제작을 삭제할까요? 제작을 중지하고 작업을 삭제하며 개발 폴더, 설치된 프로젝트 의존성 및 제작 브랜치를 정리합니다. 개인 버전에 병합하지 않은 변경 사항은 영구적으로 삭제됩니다.",
+        "status": {
+          "preparing": "준비 중",
+          "running": "제작 중",
+          "ready": "완료 확인 대기",
+          "archived": "보관됨 · 재개 가능",
+          "failed": "준비 실패",
+          "cancelled": "준비 중지됨",
+          "cleaning": "정리 중",
+          "cleanup": "정리 대기",
+          "cleanupFailed": "정리 실패",
+          "integrated": "반영 완료",
+          "unintegrated": "미반영",
+          "unknown": "반영 상태 미확인"
+        },
+        "errors": {
+          "busy": "작업 또는 폴더가 사용 중입니다. 중지한 후 다시 시도하세요.",
+          "dirty": "커밋하지 않은 변경 사항이 있습니다. 작업을 열어 변경 사항을 저장한 후 완료하세요.",
+          "conflict": "병합하지 못했습니다. 변경 사항은 보존되었습니다. 작업을 열어 충돌을 해결한 후 다시 시도하세요.",
+          "cleanupFailed": "정리하지 못했습니다. 다시 시도할 수 있도록 기록이 유지됩니다.",
+          "directoryBusy": "개발 폴더의 파일이 사용 중이거나 삭제할 수 없습니다. 이 폴더를 사용하는 터미널, 편집기 또는 미리보기를 닫은 후 정리를 다시 시도하세요.",
+          "unavailable": "작업 또는 개발 폴더가 변경되었습니다. 새로 고침한 후 다시 시도하세요."
+        },
+        "end": "제작 종료",
+        "endHint": "제작을 종료하면 작업 폴더를 정리하고 제작 기록과 저장된 변경 사항을 유지합니다.",
+        "endConfirm": "“{{title}}”을 종료하고 작업 폴더를 정리할까요? 제작 기록과 저장된 변경 사항은 유지됩니다.",
+        "cleanupDeletedConfirm": "“{{title}}”의 남은 작업 폴더를 정리할까요? 저장된 제작 기록은 유지됩니다.",
+        "endUnintegrated": "개인 버전에 반영되지 않은 변경 사항이 있습니다. 제작을 종료해도 자동으로 반영되지 않습니다.",
+        "endUnknown": "반영 상태를 확인할 수 없습니다. 변경 사항을 확인한 후 정리해 주세요."
+      },
+      "tabs": {
+        "versions": "버전 관리",
+        "environment": "환경 준비"
+      }
+    },
+    "worktreeRecycle": {
+      "title": "worktree 정리",
+      "refresh": "새로 고침",
+      "empty": "정리 대기 중인 worktree가 없습니다",
+      "loadFailed": "정리 상태를 불러오지 못했습니다",
+      "actionFailed": "상태를 업데이트하지 못했습니다. 새로 고침 후 다시 시도하세요",
+      "retry": "정리 재시도",
+      "keep": "디렉터리 유지",
+      "state": {
+        "retrying": "정리 대기 중",
+        "waiting": "사용 종료 대기 중",
+        "paused": "자동 재시도 일시 중지",
+        "kept": "디렉터리 유지됨"
+      },
+      "reason": {
+        "in-use": "사용 중",
+        "changed": "내용이 변경됨",
+        "kept": "유지 요청됨",
+        "integrity": "백업 검증 실패",
+        "storage": "디스크 공간과 권한을 확인하세요",
+        "identity": "디렉터리 확인 필요",
+        "failed": "정리를 완료하지 못함",
+        "pending": "대기 중"
       }
     }
   },
@@ -5807,6 +5966,7 @@
   "login": {
     "title": "Cindy에 오신 것을 환영합니다",
     "subtitle": "안전한 로그인 방법을 선택하세요",
+    "savedLoginPreserved": "저장된 로그인 정보는 이 기기에 남아 있습니다",
     "phonePlaceholder": "휴대폰 번호 입력",
     "emailPlaceholder": "이메일 입력",
     "invalidEmail": "올바른 이메일 주소를 입력하세요",
@@ -5906,6 +6066,9 @@
       "fallback": "로그인에 실패했습니다. 다시 시도하세요.",
       "AUTH_SERVICE_UNAVAILABLE": "로그인 서비스를 일시적으로 사용할 수 없습니다.",
       "AUTH_REQUEST_FAILED": "로그인 요청에 실패했습니다.",
+      "CREDENTIAL_STORE_UNAVAILABLE": "Cindy를 완전히 종료한 뒤 다시 열어 로그인을 복구하세요.",
+      "BROWSER_OPEN_FAILED": "브라우저를 열 수 없습니다. 다시 시도하세요.",
+      "BROWSER_OPEN_TIMEOUT": "브라우저 시작 시간이 초과되었습니다. 다시 시도하세요.",
       "NETWORK_ERROR": "네트워크 연결을 확인하세요.",
       "REQUEST_TIMEOUT": "요청 시간이 초과되었습니다.",
       "INVALID_PARAMS": "입력한 값을 확인하세요.",
@@ -6149,6 +6312,7 @@
     "loadFailed": "사용량 기록을 불러오지 못했습니다. 설정을 다시 열어 재시도해 주세요.",
     "range": {
       "label": "기간",
+      "date": "날짜",
       "ariaLabel": "사용량 기간 필터",
       "all": "전체 기간",
       "30d": "최근 30일",
@@ -6267,7 +6431,7 @@
       "ready": "새 버전 준비 완료 — 사이드바를 클릭해 업데이트 완료",
       "manifestFailed": "업데이트 확인 실패, 네트워크를 확인하세요",
       "downloadFailed": "새 버전 다운로드 실패, 나중에 다시 시도하세요",
-      "manualDownload": "앱에서 업데이트를 다운로드하세요. 설치하려면 시스템 비밀번호가 필요합니다."
+      "manualDownload": "앱에서 다운로드한 뒤 재시작할 때를 선택하세요. 시스템 .deb 설치에만 시스템 비밀번호가 필요합니다."
     },
     "closeConfirm": {
       "title": "정말 나가시겠습니까?",
@@ -7164,6 +7328,13 @@
       "move": "지금 이동 (권장)",
       "download": "수동으로 다운로드"
     },
+    "linuxInstallation": {
+      "title": "이 설치는 자체 업데이트할 수 없습니다",
+      "description": "패키지 관리자를 사용하거나 Linux 사용자 설치 안내를 확인하세요. 관리되는 설치에는 누락된 도구를 설치하거나 쓰기 권한을 복원해야 할 수 있습니다. Cindy와 다운로드한 업데이트는 유지됩니다.",
+      "guide": "Linux 안내 열기",
+      "retry": "다시 확인",
+      "later": "나중에"
+    },
     "windowsRuntimeMissing": {
       "title": "Microsoft Visual C++ 런타임 필요",
       "description": "이 PC에는 업데이터에 필요한 Microsoft Visual C++ 런타임이 없습니다. 다운로드한 업데이트는 유지됩니다. Microsoft 공식 x64 런타임을 설치한 후 다시 확인해 주세요.",
@@ -7215,6 +7386,10 @@
       "downloadMobile": "Cindy 모바일 다운로드"
     },
     "accountSwitcher": {
+      "current": "현재 계정",
+      "switching": "계정 전환 중…",
+      "adding": "로그인 준비 중…",
+      "sharedDataRestriction": "이 개발용 창은 다른 Cindy 인스턴스와 계정 데이터를 공유하므로 계정을 전환하거나 추가할 수 없습니다. 원래 Cindy 창에서 작업하거나 별도의 데이터로 개발 버전을 실행하세요.",
       "title": "계정 전환",
       "description": "이 기기에서 로그인한 계정을 선택하세요",
       "syncing": "로그인 상태 확인 중…",
@@ -7886,6 +8061,8 @@
       "trigger": {
         "currentAndNext": "현재: {{current}}\n다음 메시지: {{next}}",
         "placeholder": "모델 선택",
+        "loading": "모델을 불러오는 중…",
+        "unresolved": "모델 정보를 사용할 수 없음",
         "aria": "모델 선택. 현재: {{model}}",
         "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
         "pendingAria": "모델 선택. 다음 메시지: {{agent}} · {{model}}",
@@ -7959,7 +8136,8 @@
         "effortEndFast": "더 빠르게",
         "effortEndSmart": "더 똑똑하게",
         "railSameEngine": "{{agent}} 전용",
-        "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다"
+        "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다",
+        "favoritesSyncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다."
       }
     },
     "permissionSelector": {
@@ -8564,8 +8742,15 @@
       }
     },
     "runningStatus": {
+      "currentRate": "최근 속도",
+      "waitingSample": "측정 중",
+      "averageRate": "이번 턴 평균",
+      "rateHistory": "생성 속도 추이",
+      "outputTotal": "누적 출력",
+      "observedPeak": "최고",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "이번 턴에서 메인 Agent의 평균 생성 속도입니다. 사고 과정을 포함하며 도구 실행과 승인 대기 시간은 제외합니다. 사용량 보고에 따라 갱신되며, 옆에는 턴의 전체 경과 시간이 표시됩니다.",
+      "tokenRateUnit": "tok/s",
+      "tokenRateDescription": "최근 생성 구간의 속도. 도구 실행과 대기는 제외합니다.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
@@ -8691,6 +8876,7 @@
     },
     "media": {
       "clickToZoom": "클릭하여 확대",
+      "audioProgress": "재생 위치",
       "audioPlay": "오디오 재생",
       "audioPause": "오디오 일시 정지",
       "modelPreviewAlt": "3D 모델 미리보기",
@@ -8789,6 +8975,11 @@
       "closeHint": "또는 배경을 클릭해 닫기"
     },
     "remoteFile": {
+      "previewFailed": "웹 미리보기를 준비하지 못했습니다. 디렉터리와 연결을 확인한 후 다시 시도하세요.",
+      "previewNotFound": "HTML 파일을 찾을 수 없습니다. 파일이 존재하는지 확인하세요.",
+      "previewFetching": "웹 미리보기 준비 중…",
+      "previewTooLarge": "준비 중인 미리보기가 너무 많습니다. 잠시 후 다시 시도하세요.",
+      "previewUnsupported": "디렉터리를 미리 보려면 원격 기기의 Cindy를 업데이트하세요.",
       "fetching": "원격에서 파일을 가져오는 중…",
       "fetchFailed": "원격에서 파일을 가져오지 못했습니다",
       "notFound": "원격에 파일이 없습니다",
@@ -9307,6 +9498,22 @@
   },
   "ccAgent": {
     "agentStatus": {
+      "readingMemory": "기억을 읽고 있어요…",
+      "savingMemory": "기억을 저장하고 있어요…",
+      "deletingMemory": "기억을 삭제하고 있어요…",
+      "organizingMemory": "기억을 정리하고 있어요…",
+      "readingFile": "파일을 읽고 있어요…",
+      "savingFile": "파일을 수정하고 있어요…",
+      "readingWeb": "웹 페이지를 읽고 있어요…",
+      "searchingFiles": "파일을 찾고 있어요…",
+      "testing": "테스트를 실행하고 있어요…",
+      "checking": "코드를 확인하고 있어요…",
+      "reviewingMemory": "기억을 확인하고 있어요…",
+      "reviewingFiles": "파일을 확인하고 있어요…",
+      "reviewingSources": "웹 자료를 확인하고 있어요…",
+      "reviewingChecks": "검사 결과를 확인하고 있어요…",
+      "replying": "답변 중…",
+      "processing": "처리 중…",
       "thinking": "생각 중…",
       "generating": "생성 중…",
       "editingFiles": "파일 수정 중…",
@@ -10172,7 +10379,7 @@
     },
     "empty": {
       "promptHeading": "자동화가 아직 없습니다",
-      "promptDescription": "cron 자동화를 만들어 Claude Code 또는 Codex로 프롬프트를 일정에 따라 실행하세요."
+      "promptDescription": "cron 자동화를 만들어 Claude Code, Codex 또는 Pi로 프롬프트를 일정에 따라 실행하세요."
     },
     "usageLimitRecovery": {
       "name": "사용량 제한 재설정 후 작업 계속",
@@ -10347,7 +10554,7 @@
         "titleCreate": "자동화 만들기",
         "titleProjectCreate": "새 프로젝트 자동화",
         "titleProjectEdit": "프로젝트 자동화 편집",
-        "subtitle": "Claude 또는 Codex로 프롬프트를 일정에 따라 실행합니다.",
+        "subtitle": "Claude, Codex 또는 Pi로 프롬프트를 일정에 따라 실행합니다.",
         "subtitleFromGhost": "\"{{name}}\"에서 자동화 만들기를 요청했습니다. 모델을 고르고 저장하면 적용됩니다.",
         "save": "저장",
         "create": "만들기",
@@ -10964,6 +11171,13 @@
       "descriptionRevealPath": "이 경로는 허용한 뒤에만 현재 Agent로 반환되며 대화 기록에 남습니다. 페어링된 기기에도 해당 기록이 동기화될 수 있습니다. 이 작업은 플러그인에 파일 읽기 권한을 부여하지 않습니다.",
       "descriptionFsWrite": "이 플러그인이 현재 세션의 작업 디렉터리에 아래 파일을 쓰려고 합니다. 허용하면 이 세션 동안 같은 디렉터리에 대한 이후 쓰기는 다시 묻지 않습니다.",
       "descriptionWorkspace": "이 폴더는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Cindy가 이 폴더를 작업 디렉터리로 하는 빈 세션을 사이드바에 만듭니다(이미 세션이 있으면 재사용). 폴더 안의 파일은 읽지 않습니다.",
+      "descriptionForgeSource": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Forge가 해당 디렉터리에서 플러그인을 패키징하거나 스캐폴드합니다(.cindy 산출물 또는 스켈레톤 파일을 씁니다).",
+      "descriptionForgeScaffold": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Forge가 해당 디렉터리에 플러그인 소스 스켈레톤을 만듭니다.",
+      "descriptionForgePack": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Forge가 해당 디렉터리에서 플러그인을 패키징하고 .cindy 산출물을 씁니다.",
+      "descriptionForgeInstall": "아래 디렉터리는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 Forge가 이 플러그인을 패키징한 뒤 이 컴퓨터에 설치하고 활성화합니다.",
+      "descriptionOutsideWorkdir": "아래 경로는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 현재 도구가 해당 위치를 읽거나 쓸 수 있습니다.",
+      "descriptionOutsideRead": "아래 경로는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 현재 도구가 해당 위치를 읽을 수 있습니다.",
+      "descriptionOutsideWrite": "아래 경로는 현재 세션의 작업 디렉터리 밖에 있습니다. 허용하면 현재 도구가 해당 위치에 쓸 수 있습니다.",
       "dirMeta": "파일 {{count}}개 · {{size}}",
       "directory": "디렉터리",
       "allowDirs": "이 파일들의 폴더도 허용(이 세션에서 같은 폴더의 미디어 파일은 다시 묻지 않습니다)",
@@ -10976,6 +11190,21 @@
     "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
   },
   "skillhub": {
+    "unifiedDetail": {
+      "contentSource": "콘텐츠 출처",
+      "local": "로컬",
+      "market": "마켓",
+      "marketUnavailable": "마켓 정보를 불러올 수 없습니다. 로컬 사본은 계속 사용할 수 있습니다.",
+      "retry": "다시 시도"
+    },
+    "publishComparison": {
+      "updateAvailable": "업데이트를 게시할 수 있습니다",
+      "pendingChanges": "검토 제출 후 로컬 변경 사항이 있습니다",
+      "unavailable": "게시된 내용과 비교할 수 없습니다",
+      "diffTitle": "온라인 v{{version}}과의 차이",
+      "summaryBadge": "요약",
+      "summaryNote": "바이너리, 큰 파일 또는 전체 내용을 미리 볼 수 없는 파일은 크기만 표시합니다."
+    },
     "home": {
       "title": "스킬",
       "description": "로컬 스킬을 관리하거나 Skill Hub에서 새로운 스킬을 찾아 설치하세요.",
@@ -11003,6 +11232,7 @@
       "installed": "설치됨",
       "globalScope": "전역",
       "sourceSkillhub": "SkillHub",
+      "sourceBuiltIn": "내장",
       "sourceLocal": "로컬",
       "import": "스킬 가져오기",
       "importAria": "로컬 zip 또는 SKILL.md에서 스킬 가져오기",
@@ -11010,6 +11240,16 @@
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} 가져오기 완료{{suffix}}",
       "importFailed": "스킬 가져오기 실패"
+    },
+    "builtIn": {
+      "official": "공식",
+      "officialDetail": "Cindy가 앱에 포함하고 관리합니다.",
+      "skillCreator": {
+        "description": "명확한 지침과 필요한 지원 리소스를 갖춘 Cindy 스킬을 만들거나 업데이트합니다."
+      },
+      "learn": {
+        "description": "현재 작업, 설명한 워크플로 또는 SkillHub 스킬에서 재사용 가능한 스킬을 추출하고 Cindy 검토 절차를 거쳐 저장합니다."
+      }
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",
@@ -11192,6 +11432,8 @@
       "installError": "알 수 없는 오류"
     },
     "marketCard": {
+      "updateAvailable": "업데이트 받기",
+      "updateFailed": "업데이트하지 못했습니다. 다시 시도해 주세요.",
       "visibilityPublic": "공개",
       "visibilityDept": "팀",
       "visibilityPrivate": "개인",
@@ -11554,6 +11796,7 @@
       "unlinkDescription": "로컬 스킬 등록만 제거합니다. 원본 파일과 수정 내용은 유지됩니다.",
       "sharedImpact": "이 스킬을 공유하는 다른 Agent도 영향을 받습니다. 게시된 버전과 다른 위치에 설치된 스킬에는 영향을 주지 않습니다.",
       "managedElsewhere": "이 스킬은 다른 패키지 또는 공유 디렉터리에서 관리됩니다. 원본 위치에서 제거하세요",
+      "builtInManaged": "이 스킬은 Cindy에 내장되어 있어 제거할 수 없습니다",
       "managedByPlugin": "이 스킬은 플러그인이 제공합니다. 해당 플러그인 페이지에서 관리하세요.",
       "cleanupIncomplete": "“{{name}}”의 제거 정리가 완료되지 않았습니다. 다시 시도하거나 나중에 스킬을 다시 열어 계속하세요. 정리가 완료될 때까지 재설치할 수 없습니다.",
       "retryCleanup": "정리 다시 시도",
@@ -11956,7 +12199,8 @@
       "INTERNAL": "내부 오류입니다. 잠시 후 다시 시도해 주세요."
     },
     "hub": {
-      "learnButton": "이 스킬 학습하기"
+      "learnButton": "이 스킬 학습하기",
+      "disabledHint": "이 작업을 사용하려면 로컬 스킬에서 기본 제공 Learn 스킬을 활성화하세요."
     }
   },
   "planMode": {
@@ -12169,7 +12413,8 @@
     },
     "dialogs": {
       "subscription": {
-        "title": "구독 요금제 선택"
+        "title": "구독 요금제 선택",
+        "confirmTitle": "구독 확인"
       },
       "topup": {
         "title": "잔액 충전"
@@ -12302,6 +12547,39 @@
       "targetLabel": "대상 플랜: {{name}}",
       "pendingDowngrade": "{{name}}(으)로의 다운그레이드가 {{date}}에 예약되어 있습니다.",
       "undo": "다운그레이드 취소"
+    },
+    "comparison": {
+      "free": "FREE",
+      "freeUsage": "무료 사용",
+      "priceFromSuffix": "부터",
+      "topup": "필요할 때 충전",
+      "topupExpiry": "충전 잔액은 만료되지 않음",
+      "agent": "모든 Agent 기능",
+      "apiKey": "내 API key 사용",
+      "existingSubscription": "기존 구독 연결",
+      "localModels": "로컬 모델 지원",
+      "basicModels": "일부 모델 사용",
+      "subscription": "구독 요금제",
+      "rollover": "남은 잔액은 {{period}}에 최대 {{amount}}까지 사용 가능",
+      "nextPeriod": {
+        "MONTH": "다음 달",
+        "YEAR": "다음 해",
+        "OTHER": "다음 기간"
+      },
+      "includesFree": "FREE의 모든 기능 포함",
+      "advancedModels": "더 많은 모델 잠금 해제",
+      "managedService": "공식 서비스, 설정 불필요",
+      "topupUnlock": "필요한 만큼 결제하고 <models>더 많은 모델 잠금 해제</models>",
+      "select": "{{name}} 선택",
+      "upgrade": "{{name}}(으)로 업그레이드",
+      "downgrade": "{{name}}(으)로 다운그레이드",
+      "changeUnavailable": "변경 불가",
+      "creditMultiple": "기간별 포함 금액은 {{name}}의 {{multiple}}배",
+      "credits": {
+        "MONTH": "매월 {{amount}} 포함",
+        "YEAR": "매년 {{amount}} 포함",
+        "OTHER": "{{amount}}"
+      }
     }
   },
   "fileAccess": {
@@ -12484,6 +12762,20 @@
     }
   },
   "cindyMake": {
+    "beta": "Beta",
+    "preflight": {
+      "closeTitle": "Cindy Make를 닫을까요?",
+      "closeConfirm": "Cindy Make 닫기",
+      "keepOpen": "계속 보기",
+      "creating": "제작 세션을 만드는 중입니다. 잠시 기다려 주세요…",
+      "closeDescription": {
+        "environment": "환경을 준비하고 있습니다. 닫으면 준비가 중지되며 설정 화면에 표시된 동일한 준비도 중지됩니다. 설치된 도구는 유지됩니다.",
+        "source": "소스 코드를 준비하고 있습니다. 닫으면 준비가 중지되며 설정 화면에 표시된 동일한 준비도 중지됩니다. 준비된 환경과 소스 코드는 유지됩니다.",
+        "upstream": "업스트림 PR을 검색하고 있습니다. 닫으면 검색이 중지됩니다. 준비된 환경과 소스 코드는 유지됩니다.",
+        "ready": "준비가 완료되었지만 제작은 아직 시작되지 않았습니다. 닫으면 제작 세션이 생성되지 않습니다. 준비된 환경과 소스 코드는 유지됩니다.",
+        "incomplete": "준비가 완료되지 않았으며 제작도 아직 시작되지 않았습니다. 닫으면 제작 세션이 생성되지 않습니다. 준비된 환경과 소스 코드는 유지됩니다."
+      }
+    },
     "description": "로컬 도구를 확인하고 준비하여 개인 버전 Cindy 제작을 시작합니다. 사용법: /cindy-make [변경 요청]",
     "localOnly": "/cindy-make는 현재 로컬 데스크톱 세션에서만 사용할 수 있습니다. 이 기기로 전환해 주세요.",
     "usage": "/cindy-make 또는 /cindy-make 요청 을 사용하세요. 환경 검사는 아직 첨부 파일, 참조, 댓글을 지원하지 않습니다. 입력 내용은 유지됩니다.",
@@ -12523,20 +12815,22 @@
       "needRequest": "변경할 기능 이름이나 구체적인 오류를 입력해 관련 업스트림 작업을 검색하세요.",
       "placeholder": "예: 메시지 스트림 깜박임 수정",
       "search": "업스트림 검색",
-      "searching": "업스트림 이슈와 PR 검색 중…",
-      "found": "관련 가능성이 있는 업스트림 작업을 찾았습니다",
-      "notFound": "일치하는 업스트림 작업을 찾지 못했습니다",
+      "searching": "관련 업스트림 PR 검색 중…",
+      "found": "관련 가능성이 있는 PR을 찾았습니다",
+      "notFound": "추가로 일치하는 PR을 찾지 못했습니다",
       "failed": "업스트림 검색 실패",
       "cancelled": "업스트림 검색 중지됨",
       "terms": "검색어: {{terms}}",
       "author": "작성자: {{author}}",
       "updated": "업데이트: {{date}}",
-      "notFoundHint": "이 검색어와 일치하는 공개 이슈 또는 PR이 없습니다. 다른 표현으로 검색하면 다른 결과가 나올 수 있습니다.",
-      "resultHint": "링크를 열어 관련성을 확인하세요. 현재 열린 Issue와 PR만 표시됩니다.",
+      "expand": "검색 결과 보기",
+      "collapse": "검색 결과 접기",
+      "notFoundHint": "이번 키워드 검색에서는 추가 후보를 찾지 못했습니다. 다른 표현으로 검색하면 더 많은 PR을 찾을 수 있습니다.",
+      "resultHint": "미병합 및 병합된 PR을 검색하며 실행 중인 버전에 포함된 것으로 확인된 PR은 제외합니다. 링크에서 관련성을 확인하세요. 병합되었다고 출시된 것은 아닙니다.",
       "wait": "업스트림 기다리기",
       "personal": "개인 버전 제작 계속",
       "retry": "환경 재확인 및 검색",
-      "count": "관련 가능성이 있는 열린 Issue 또는 PR {{count}}개를 찾았습니다",
+      "count": "확인할 관련 가능성이 있는 PR {{count}}개",
       "kind": {
         "issue": "이슈",
         "pr": "PR"
@@ -12560,6 +12854,22 @@
         "rateLimit": "GitHub 요청 제한에 도달했습니다. 잠시 후 다시 시도하세요.",
         "timeout": "검색 시간이 초과되었습니다. 다시 시도하세요.",
         "invalidResponse": "GitHub 결과가 불완전하거나 읽을 수 없습니다. 다시 시도하세요."
+      },
+      "runtimeUnknown": "실행 중인 소스 버전을 정확히 확인할 수 없습니다(예: 로컬 변경이 있는 Dev 버전). 후보 PR을 확인용으로 유지합니다.",
+      "excludedIncluded": "실행 중인 버전에 포함된 PR {{count}}개를 제외했습니다.",
+      "limitedHint": "검색 결과의 일부만 확인했습니다. 요청을 구체화하면 검색 범위를 좁힐 수 있습니다.",
+      "runtimeVersion": "실행 중: {{channel}} {{version}} · {{commit}}",
+      "unknownCommit": "커밋 알 수 없음",
+      "draft": "초안",
+      "channel": {
+        "dev": "Dev",
+        "beta": "Beta",
+        "release": "정식 버전"
+      },
+      "inclusion": {
+        "included": "실행 중인 버전에 포함됨",
+        "notIncluded": "실행 중인 버전에 포함되지 않음",
+        "unknown": "실행 중인 버전의 포함 여부 미확인"
       }
     },
     "title": "Cindy Make",
@@ -12569,12 +12879,19 @@
     "source": {
       "preparing": "소스를 준비하는 중",
       "phase": {
-        "checking": "Git 및 소스 확인 중",
+        "waiting": "다른 프로젝트 작업이 끝나기를 기다리는 중…",
+        "checking": "Git 확인 중…",
+        "checkingRemote": "업스트림 버전 확인 중…",
+        "checkingLocal": "로컬 소스 확인 중…",
         "cloning": "소스 다운로드 중",
         "fetching": "저장소 새로 고침 중",
         "checkingOut": "버전 전환 중",
-        "preparingBranch": "개인 버전 브랜치 준비 중"
+        "preparingBranch": "개인 버전 브랜치 준비 중",
+        "caching": "의존성 캐시 준비 중",
+        "installing": "의존성 설치 중"
       },
+      "cacheProgress": "확인 {{resolved}} · 재사용 {{reused}} · 다운로드 {{downloaded}}",
+      "pending": "소스 준비 대기 중",
       "ready": "소스가 준비되었습니다",
       "failed": "소스 준비 실패",
       "cancelled": "소스 준비가 중지됨",
@@ -12587,7 +12904,7 @@
         "localCommits": "소스에 업스트림에 포함되지 않은 로컬 커밋 또는 스태시가 있습니다. 정리하기 전에 보관하거나 백업하세요.",
         "environmentNotReady": "빌드 환경이 준비되지 않았습니다. 필요한 도구를 확인하세요.",
         "gitUnavailable": "Git을 사용할 수 없습니다. 환경 카드에서 Git을 확인하고 설치한 후 다시 시도하세요.",
-        "installFailed": "의존성 설치에 실패했습니다. 다시 시도하세요.",
+        "installFailed": "의존성 준비에 실패했습니다. 다시 시도하세요.",
         "locked": "일부 파일이 다른 프로그램에서 사용 중이라 삭제할 수 없습니다. 해당 프로그램을 닫거나 Cindy를 다시 시작한 뒤 재시도하세요."
       },
       "gitProgress": {
@@ -12598,8 +12915,21 @@
         "checkingOut": "파일 업데이트 중"
       },
       "missing": "아직 소스가 준비되지 않았습니다",
-      "personalBranch": "개인 버전 브랜치 {{branch}}",
-      "baseCommit": "{{ref}} {{commit}} 기준"
+      "details": {
+        "unknown": "미확인",
+        "latest": {
+          "dev": "온라인 main",
+          "beta": "최신 beta",
+          "release": "최신 정식 버전",
+          "same": "최신 상태 ({{target}}), 뒤처진 변경 기록 0개",
+          "behind_one": "로컬 main이 변경 기록 {{count}}개 뒤처짐",
+          "behind_other": "로컬 main이 변경 기록 {{count}}개 뒤처짐",
+          "ahead_one": "로컬 main이 변경 기록 {{count}}개 앞섬",
+          "ahead_other": "로컬 main이 변경 기록 {{count}}개 앞섬",
+          "difference": "로컬 main이 변경 기록 {{behind}}개 뒤처지고 {{ahead}}개 앞섬",
+          "unknown": "온라인 버전"
+        }
+      }
     },
     "code": {
       "starting": "개인 버전 작업을 여는 중",
@@ -12608,7 +12938,35 @@
       "start": "개인 버전 만들기",
       "open": "개인 버전 작업 열기",
       "sendFailed": "요청을 보내지 못했습니다. 개인 버전 작업을 열어 다시 시도하세요",
-      "preparingWorkspace": "독립 작업 디렉터리를 만들고 의존성을 설치하는 중",
+      "preparingWorkspace": "독립 작업 디렉터리를 만드는 중",
+      "preparingDependencies": "개인 작업 의존성을 준비하는 중",
+      "preparingNpmDependencies": "npm 의존성을 준비하는 중",
+      "phases": {
+        "waiting": "프로젝트 준비 대기 중",
+        "environment": "환경 준비 중",
+        "source": "개인 프로젝트 소스 준비 중",
+        "workspace": "작업 브랜치와 작업 디렉터리 생성 중",
+        "dependencies": "작업 의존성 설치 중",
+        "starting": "작업 자동 시작 중",
+        "completed": "준비 완료"
+      },
+      "prepared": "준비가 완료되어 요청을 자동으로 실행하기 시작했습니다.",
+      "preparationFailed": "준비에 실패하여 요청이 시작되지 않았습니다. 다시 시도할 수 있습니다.",
+      "workspaceUnavailable": "개인 버전의 작업 디렉터리가 없거나 불완전합니다. 새 제작 작업을 시작하거나 원래 작업 디렉터리를 복원한 후 계속하세요.",
+      "projectClearing": "개인 버전 프로젝트를 정리하고 있습니다. 완료된 후 메시지를 보내세요.",
+      "inputLocked": {
+        "executing": "Cindy Make가 첫 요청을 실행 중입니다",
+        "hint": "준비가 완료되면 입력창을 사용할 수 있습니다.",
+        "retry": "준비가 완료되지 않았습니다. 다시 시도하여 계속하세요."
+      },
+      "dependencyActivity": {
+        "starting": "의존성 설치 시작 중…",
+        "packages": "의존성 다운로드 및 설치 중…",
+        "scripts": "설치 스크립트 실행 중…"
+      },
+      "dependencyProgress": "해결 {{resolved}} · 재사용 {{reused}} · 다운로드 {{downloaded}} · 추가 {{added}}",
+      "taskName": "Cindy Make 개인 버전",
+      "taskTitle": "[{{worktree}}] {{request}}",
       "workspace": "작업 디렉터리 {{branch}}"
     },
     "complete": {
@@ -12619,6 +12977,355 @@
       "changedFiles_other": "{{count}}개 파일 변경됨",
       "commit": "{{commit}} 기준",
       "branch": "{{branch}}에 커밋됨"
+    },
+    "overview": {
+      "description": "개인 버전 소스를 확인하고 사용할 버전을 전환하며 제작 기록을 관리합니다.",
+      "title": "버전 개요",
+      "switchVersion": "버전 전환",
+      "personalCode": "개인 버전 소스",
+      "localMain": "로컬 main",
+      "lookupUnavailable": "조회 실패",
+      "comparisonUnavailable": "로컬 main의 차이 미확인",
+      "comparison": {
+        "same": "로컬 main과 SHA가 같음",
+        "personalAhead": "로컬 main을 포함하며 개인 변경 기록 {{ahead}}개 추가",
+        "mainAhead": "로컬 main의 변경 기록 {{behind}}개가 아직 반영되지 않음",
+        "diverged": "로컬 main의 변경 기록 {{behind}}개 미반영, 개인 변경 기록 {{ahead}}개 추가",
+        "different": "로컬 main과 SHA가 다름, 차이 알 수 없음",
+        "unknown": "로컬 main과의 차이 알 수 없음"
+      },
+      "personal": "cindy-personal"
+    },
+    "versions": {
+      "title": "내 버전",
+      "description": "이 컴퓨터에서 사용할 Cindy 버전을 선택하세요. 전환하면 앱이 다시 시작되며 계정, 설정, 작업은 유지됩니다.",
+      "original": "기본 버전",
+      "personal": "개인 버전",
+      "development": "개발 환경",
+      "current": "현재 사용",
+      "using": "사용 중",
+      "switch": "전환 후 다시 시작",
+      "switchPersonal": "이 개인 버전으로 전환",
+      "remove": "버전 삭제",
+      "removeTitle": "이 개인 버전을 삭제할까요?",
+      "removeDescription": "생성된 앱 파일만 삭제합니다. 소스 코드, 계정, 설정, 작업은 유지됩니다.",
+      "empty": "아직 전환할 수 있는 개인 버전이 없습니다.",
+      "unavailable": "이 버전의 앱 파일을 사용할 수 없습니다.",
+      "incompatible": "현재 데이터와 호환되지 않습니다. 현재 기본 버전에서 다시 빌드하세요.",
+      "readyHint": "개인 버전이 준비되었습니다. 전환하면 Cindy가 다시 시작되며 계정, 설정, 작업은 유지됩니다.",
+      "errors": {
+        "busy": "작업, 테스트 또는 빌드가 진행 중입니다. 완료한 후 버전을 전환하거나 삭제하세요.",
+        "incompatible": "데이터 구조가 다릅니다. 현재 기본 버전에서 개인 버전을 다시 빌드하세요.",
+        "unavailable": "이 버전을 읽을 수 없습니다. 다시 빌드한 후 시도하세요.",
+        "launchFailed": "대상 버전을 시작하지 못했습니다. 현재 버전은 유지됩니다.",
+        "recovery": "선택한 버전을 시작하지 못했습니다. 기본 버전을 다시 기본값으로 설정했습니다. 원래 실행 경로에서 Cindy를 다시 여세요. 기존 데이터는 유지됩니다."
+      },
+      "localChanges": "로컬 변경 사항 있음"
+    },
+    "personal": {
+      "generate": "개인 버전 빌드",
+      "open": "설치 파일 위치 열기",
+      "description": "이번 수정 사항을 개인 버전에 병합하고, 검사와 패키징을 통과한 후 새 개인 버전으로 저장합니다.",
+      "readyHint": "설치 파일 {{name}}이 준비되었습니다. 저장된 폴더를 열 수 있습니다.",
+      "failedStep": "실패한 단계: {{step}}",
+      "preparationStep": {
+        "environment": "빌드 환경 준비 중…",
+        "original": "현재 버전 확인 중…"
+      },
+      "checkStep": {
+        "dependencies": "빌드 의존성 설치 중…",
+        "tests": "자동 테스트 실행 중입니다. 몇 분 정도 걸릴 수 있습니다…",
+        "types": "코드 타입 검사 중…"
+      },
+      "status": {
+        "waiting": "개인 버전 빌드 대기 중…",
+        "merging": "수정 사항 병합 중…",
+        "checking": "개인 버전 검사 중…",
+        "packaging": "개인 버전 패키징 중…",
+        "publishing": "개인 버전 저장 중…",
+        "ready": "개인 버전 생성 완료",
+        "failed": "개인 버전을 생성하지 못했습니다"
+      },
+      "buildLog": {
+        "title": "빌드 기록",
+        "steps": {
+          "environment": "빌드 환경 준비",
+          "original": "현재 버전 확인",
+          "merging": "수정 사항 병합",
+          "checking-dependencies": "빌드 의존성 설치",
+          "checking-tests": "자동 테스트 실행",
+          "checking-types": "코드 타입 검사",
+          "packaging": "개인 버전 패키징",
+          "publishing": "개인 버전 저장",
+          "ready": "개인 버전 생성 완료",
+          "failed": "빌드 실패",
+          "cancelled": "빌드 중지"
+        }
+      },
+      "errors": {
+        "unavailable": "빌드 기록이나 설치 파일을 읽을 수 없습니다. 개인 버전을 다시 빌드하세요.",
+        "changed": "작업 디렉터리나 코드가 변경되었습니다. 수정을 완료한 후 다시 빌드하세요.",
+        "environment": "빌드 도구가 준비되지 않았습니다. Cindy Make 환경을 확인한 후 다시 시도하세요.",
+        "missingShell": "자동 검사에는 Git Bash가 필요합니다. Git for Windows를 설치한 후 다시 시도하세요.",
+        "checksFailed": "병합한 코드가 검사를 통과하지 못했습니다. 수정을 계속한 후 다시 빌드하세요.",
+        "conflict": "현재 개인 버전과 수정 사항이 충돌합니다. 편집을 계속하여 충돌을 해결하세요.",
+        "baselineChanged": "빌드 중에 개인 버전이 변경되었습니다. 최신 수정 사항을 포함하려면 다시 빌드하세요.",
+        "buildFailed": "패키징이 완료되지 않았습니다. 다시 시도하거나 수정을 계속하세요.",
+        "cancelled": "제작이 취소되었습니다. 다시 생성할 수 있습니다.",
+        "cleanupFailed": "자동 정리가 완료되지 않았습니다. 개인 버전 생성을 눌러 다시 시도하세요.",
+        "interrupted": "빌드가 중지되었습니다. 개인 버전을 다시 빌드할 수 있습니다."
+      }
+    },
+    "test": {
+      "resume": {
+        "title": "테스트 계속하기",
+        "description": "현재 변경 사항을 확인한 뒤 테스트와 개인 버전 생성 옵션을 다시 표시합니다.",
+        "action": "확인 후 계속",
+        "failed": "확인을 시작하지 못했습니다. 다시 시도해 주세요.",
+        "request": "현재 변경 사항을 확인한 뒤 테스트와 개인 버전 생성 옵션을 다시 표시하고, 제가 다음 단계를 선택할 때까지 기다려 주세요."
+      },
+      "title": "수정 완료 · 다음 단계 선택",
+      "description": "수정을 계속하거나, 격리 테스트 버전을 실행하거나, 개인 버전 설치 파일을 생성할 수 있습니다.",
+      "readyHint": "테스트 창에서 수정 사항을 확인하세요. 계속 수정을 선택하면 테스트 버전이 종료되고 입력창으로 돌아갑니다.",
+      "start": "격리 테스트 버전 실행",
+      "started": "테스트 버전 실행됨",
+      "continue": "계속 수정",
+      "status": {
+        "waiting": "수정 완료 · 다음 단계 선택",
+        "starting": "격리 테스트 버전 실행 중…",
+        "ready": "테스트 버전 준비 완료",
+        "failed": "테스트 버전을 실행하지 못했습니다",
+        "stopped": "테스트 버전을 다시 실행할 수 있습니다"
+      },
+      "errors": {
+        "unavailable": "수정 기록이나 작업 디렉터리가 변경되었습니다. 수정을 계속한 후 완료를 다시 보고하세요.",
+        "changed": "완료 후 코드가 변경되었습니다. 수정을 마친 후 다시 테스트하세요.",
+        "environment": "테스트 환경이 준비되지 않았습니다. 설정의 Cindy Make에서 환경을 확인한 후 다시 시도하세요.",
+        "launchFailed": "테스트 버전을 실행하지 못했습니다. 다시 시도하거나 편집으로 돌아가세요.",
+        "timeout": "테스트 버전 실행 시간이 초과되었습니다. 다시 시도하세요.",
+        "interrupted": "이전 테스트가 중단되었습니다. 격리 테스트 버전을 다시 실행하세요.",
+        "stopFailed": "테스트 버전이 아직 종료되지 않았습니다. 테스트 창을 닫은 후 다시 시도하세요."
+      },
+      "startingHint": "실행 준비가 끝날 때까지 수정이 일시 중지됩니다. 현재 단계가 완료될 때까지 기다려 주세요.",
+      "currentStep": "현재 단계: {{step}}",
+      "failedStep": "중단된 단계: {{step}}",
+      "steps": {
+        "waiting": "실행 대기",
+        "environment": "테스트 환경 확인",
+        "workspace": "수정 내용 검증",
+        "stopping": "격리 인스턴스 준비",
+        "dependencies": "종속성 확인 및 준비",
+        "assets": "런타임 리소스 확인 및 준비",
+        "launching": "컴파일 및 테스트 창 열기"
+      }
+    },
+    "history": {
+      "title": "제작 기록",
+      "batch": {
+        "make": "개인 버전 만들기",
+        "selected": "선택한 변경 {{count}}개로 만들기",
+        "selectAll": "이 목록 모두 선택",
+        "selectItem": "{{title}} 선택",
+        "hint": "오래된 변경부터 병합한 뒤 새 버전 하나를 생성합니다.",
+        "confirmTitle": "변경 {{count}}개를 포함한 개인 버전을 만들까요?",
+        "confirmDescription": "선택한 변경을 아래 순서대로 병합하고 모두 성공하면 새 버전 하나를 생성합니다. 선택한 변경의 격리 버전이 실행 중이면 먼저 중지합니다. 충돌이 발생하면 중단하고 이미 병합된 변경은 유지합니다. 충돌을 해결한 뒤 다시 만들 수 있습니다. 해결되지 않은 충돌이 없을 때 취소하거나 실패하면 저장된 버전에 포함되지 않은 병합을 되돌리고 각 세션의 원래 변경은 유지합니다.",
+        "start": "만들기 확인",
+        "progress": "병합 중 {{current}} / {{total}}: {{title}}",
+        "restartTest": "격리 버전 다시 시작"
+      },
+      "build": "개인 버전 생성",
+      "buildDescription": "현재 개인 소스로 새 버전을 생성합니다. 아직 반영하지 않은 이전 변경 사항은 포함되지 않습니다.",
+      "building": "개인 버전 생성 중…",
+      "stop": "제작 중지",
+      "stopping": "중지 중…",
+      "progress": {
+        "waiting": "시작 대기 중",
+        "merging": "변경 사항 병합 중",
+        "checking": "검사 실행 중",
+        "packaging": "개인 버전 패키징 중",
+        "publishing": "개인 버전 저장 중"
+      },
+      "noActions": {
+        "ended": "이 제작은 종료되어 실행할 수 있는 작업이 없습니다.",
+        "sessionUnavailable": "이 제작 작업 기록을 사용할 수 없습니다.",
+        "completionUnavailable": "완료 상태를 확인할 수 없어 안전한 작업이 없습니다.",
+        "sourceUnavailable": "개인 소스 코드를 확인할 수 없어 안전한 작업이 없습니다.",
+        "changedAfterCompletion": "완료 당시와 현재 소스가 일치하지 않아 안전한 작업이 없습니다.",
+        "busy": "다른 제작 또는 검사가 진행 중입니다. 완료 후 다시 시도하세요.",
+        "checking": "이 제작 기록을 확인하는 중입니다. 잠시 후 다시 시도하세요."
+      },
+      "counts": "전체 {{total}}회 · 반영 대기 {{pending}}회 · 반영 완료 {{integrated}}회",
+      "filterLabel": "제작 기록 필터",
+      "mergeTaskTitle": "반영 충돌 해결",
+      "revertTaskTitle": "반영 취소 충돌 해결",
+      "filters": {
+        "all": "전체 제작",
+        "pending": "반영 대기",
+        "integrated": "반영 완료",
+        "ended": "종료됨"
+      },
+      "loadFailed": "제작 기록을 불러오지 못했습니다. 다시 시도해 주세요.",
+      "loading": "제작 기록 불러오는 중…",
+      "actionFailed": "작업을 완료하지 못했습니다. 새로 고친 후 다시 시도해 주세요.",
+      "openInstaller": "설치 파일 보기",
+      "updated": "업데이트: {{time}}",
+      "needsBuild": "소스가 변경되었습니다. 개인 버전을 생성하면 변경 사항을 사용할 수 있습니다.",
+      "versionReady": "개인 버전 생성됨",
+      "versionPending": "개인 버전 생성 대기",
+      "built": "{{time}}에 생성한 개인 버전에 포함됨",
+      "builtKnown": "생성된 개인 버전에 포함됨",
+      "conflict": "변경 사항이 충돌합니다. 해결 작업을 열어 계속해 주세요.",
+      "rounds": "수정 {{count}}회",
+      "round": "{{number}}차 · {{time}}",
+      "files": "파일 {{count}}개 변경",
+      "working": "처리 중…",
+      "endAndClean": "종료 및 정리",
+      "clean": "기록 숨기기",
+      "cleanTask": "작업 정리",
+      "cleanTitle": "이 세션을 정리할까요?",
+      "cleanConfirm": "이 기록은 제작 기록 목록에서 숨겨지고 세션은 보관됩니다. 대화 기록은 유지됩니다.",
+      "cleanWorkspace": "남아 있는 제작 브랜치와 작업 폴더를 삭제합니다. 커밋하지 않은 변경 사항은 사라집니다.",
+      "cleanKeep": "개인 버전에 반영된 변경 사항과 생성된 앱 버전은 유지됩니다.",
+      "endConfirm": "이 제작을 종료하고 작업 폴더를 정리할까요? 제작 기록과 저장된 변경 사항은 유지됩니다.",
+      "revertConfirm": "이 제작에서 개인 소스에 반영한 변경 사항을 취소할까요? 다른 제작과 생성된 앱은 유지됩니다.",
+      "lifecycle": {
+        "preparing": "준비 중",
+        "running": "수정 중",
+        "editing": "편집 중",
+        "ready": "다음 단계 대기",
+        "failed": "준비 실패",
+        "ended": "종료됨",
+        "cleanup": "정리 중"
+      },
+      "integration": {
+        "unintegrated": "미반영",
+        "integrated": "반영 완료",
+        "changed": "새 변경 사항 반영 대기",
+        "reverted": "반영 취소됨",
+        "unknown": "반영 상태 미확인",
+        "unchanged": "반영할 변경 사항 없음"
+      },
+      "actions": {
+        "open": "작업 열기",
+        "continue": "수정 계속",
+        "test": "격리 테스트 버전 실행",
+        "integrate": "개인 버전에 반영",
+        "revert": "반영 취소",
+        "reapply": "다시 반영",
+        "resolve": "충돌 해결",
+        "retry": "다시 시도",
+        "build": "개인 버전 생성",
+        "end": "제작 종료",
+        "retry-prepare": "준비 다시 시도",
+        "retry-cleanup": "정리 다시 시도"
+      },
+      "buildStatus": {
+        "waiting": "개인 버전 생성 대기 중…",
+        "checking": "개인 버전 확인 중…",
+        "merging": "변경 사항 반영 중…",
+        "packaging": "개인 버전 패키징 중…",
+        "publishing": "개인 버전 저장 중…",
+        "ready": "개인 버전 생성 완료",
+        "failed": "개인 버전 생성 실패",
+        "installerReady": "설치 파일 준비 완료"
+      },
+      "rounds_other": "수정 {{count}}회",
+      "files_other": "파일 {{count}}개 변경"
+    },
+    "merge": {
+      "getLatest": "최신 소스 동기화",
+      "taskTitle": "소스 업데이트 충돌 해결",
+      "updateHint": "공식 소스를 업데이트하고 개인 변경 사항을 유지합니다.",
+      "confirmTitle": "최신 소스로 업데이트할까요?",
+      "confirmDescription": "개인 변경 사항은 유지됩니다. 충돌이 발생하면 해결 세션을 시작하기 전에 확인을 요청합니다.",
+      "conflictConfirm": {
+        "title": "소스 업데이트 중 충돌 발생",
+        "description": "확인하면 별도 세션을 만들고 Agent가 충돌을 자동으로 해결합니다. 취소하면 이번 반영을 중단하고 현재 개인 버전을 유지합니다.",
+        "confirm": "확인 및 해결",
+        "cancel": "업데이트 취소"
+      },
+      "confirm": "소스 업데이트",
+      "openTask": "해결 작업 열기",
+      "resolve": "충돌 해결",
+      "retryCancel": "취소 다시 시도",
+      "resolveHint": "별도 작업에서 충돌을 해결하고 결과를 확인합니다.",
+      "otherAccount": "다른 계정에서 시작한 작업입니다. 해당 계정으로 전환해 계속해 주세요.",
+      "status": {
+        "fetching": "최신 소스 가져오는 중…",
+        "merging": "소스 변경 사항 반영 중…",
+        "conflict": "충돌 해결 필요",
+        "resolving": "충돌 해결 중",
+        "checking": "변경 사항 확인 중…",
+        "merged": "소스 변경 사항 반영 완료",
+        "failed": "소스 반영 실패",
+        "cancelled": "소스 업데이트 취소됨"
+      },
+      "errors": {
+        "busy": "다른 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요.",
+        "dirty": "소스에 커밋되지 않은 변경 사항이 있습니다. 저장한 후 다시 시도해 주세요.",
+        "localMain": "main 브랜치에 로컬 커밋이 있습니다. 확인한 후 업데이트해 주세요.",
+        "unavailable": "소스 또는 작업 기록을 사용할 수 없습니다. 새로 고친 후 다시 시도해 주세요.",
+        "gitFailed": "Git 작업을 완료하지 못했습니다. 다시 시도해 주세요.",
+        "baselineChanged": "개인 소스가 변경되었습니다. 최신 상태에서 다시 시도해 주세요.",
+        "checksFailed": "변경 사항이 검사를 통과하지 못했습니다. 해결 작업을 열어 계속해 주세요.",
+        "interrupted": "작업이 중단되었습니다. 변경 사항은 유지됩니다. 다시 시도해 주세요.",
+        "startFailed": "해결 작업을 열지 못했습니다. 다시 시도해 주세요.",
+        "cancelFailed": "업데이트를 취소하지 못했습니다. 다시 시도해 주세요. 개인 소스는 유지됩니다."
+      }
     }
+  },
+  "taskTags": {
+    "loadFailed": "태그를 불러오지 못했습니다. 다시 시도해 주세요.",
+    "retry": "다시 시도",
+    "editLabel": "“{{name}}” 편집",
+    "reorderLabel": "“{{name}}” 순서 변경",
+    "reorderHint": "드래그하거나 위아래 방향키로 순서 변경",
+    "addLabel": "“{{name}}” 추가",
+    "removeLabel": "“{{name}}” 제거",
+    "title": "태그",
+    "more": "태그 더 보기",
+    "settings": "태그 설정",
+    "name": "이름",
+    "color": "색상",
+    "favorite": "즐겨찾기(최대 7개)",
+    "create": "만들기",
+    "save": "저장",
+    "done": "완료",
+    "back": "뒤로",
+    "delete": "태그 삭제",
+    "cancel": "취소",
+    "deleteConfirm": "작업 {{count}}개에서 “{{name}}” 태그를 삭제할까요? 작업과 메시지는 유지됩니다.",
+    "loading": "불러오는 중…",
+    "unavailable": "태그를 사용하려면 이 컴퓨터를 업데이트하세요.",
+    "offline": "태그를 편집하려면 세션이 있는 컴퓨터에 연결하세요.",
+    "failed": "저장하지 못했습니다. 다시 시도하세요.",
+    "conflict": "다른 기기에서 태그가 변경되었습니다. 새로고침하세요.",
+    "favoritesFull": "즐겨찾기 태그는 최대 7개입니다.",
+    "alreadyExists": "같은 이름의 태그가 있습니다.",
+    "empty": "태그가 없습니다.",
+    "red": "빨강",
+    "orange": "주황",
+    "yellow": "노랑",
+    "green": "초록",
+    "blue": "파랑",
+    "purple": "보라",
+    "gray": "회색",
+    "none": "색상 없음",
+    "pink": "분홍색",
+    "coral": "산호색",
+    "teal": "청록색",
+    "indigo": "남색",
+    "white": "흰색",
+    "add": "태그 추가",
+    "editTitle": "태그 편집",
+    "editHint": "이 태그를 사용하는 모든 작업에 적용됩니다.",
+    "addHint": "추가 후 현재 작업에 자동으로 선택됩니다.",
+    "selectedCount": "{{count}}개 선택됨",
+    "presetImportant": "중요",
+    "presetFollowUp": "후속 확인",
+    "presetWork": "업무",
+    "presetLife": "생활",
+    "presetIdeas": "아이디어",
+    "presetReference": "자료"
   }
 }

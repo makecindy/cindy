@@ -63,7 +63,6 @@ import {
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
-import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
@@ -328,22 +327,6 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
     const listed = hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
-    // 不阻塞首屏。旧 reconnect-stalled 横幅只在首页扫描一次，分页不再读 rollout。
-    if (!before && beforeTs == null && !after) {
-      const ownerScope = captureOwnerBroadcastScope();
-      void maybeUpgradeCodexHistoryOversizedError(sid)
-        .then((upgrade) => {
-          if (upgrade.result !== 'upgraded' || !upgrade.message) return;
-          if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-          broadcastMessageRow(sid, upgrade.message, ownerScope);
-        })
-        .catch((error) => {
-          log.warn('codex oversized history upgrade rejected', {
-            sessionId: sid,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    }
     return listed;
 }
 
@@ -2480,6 +2463,13 @@ export async function listMessagesForAgentHandoff(
       AND json_type(${messages.agentMeta}, '$.autoReviewUserText.text') = 'text'
       THEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.acceptedAt')
       ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
+  // Scheduled executions are not owner messages. Exclude them before LIMIT so
+  // a long-running heartbeat cannot push its authorizing request out of history.
+  // Keep malformed/unknown rows: restoration must still invalidate ambiguous consent.
+  const notScheduledExecution = sql`CASE WHEN ${messages.role} = 'user'
+    AND json_valid(${messages.agentMeta}) THEN CASE
+      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') = 'scheduled-continuation'
+      THEN 0 ELSE 1 END ELSE 1 END`;
   const rows = await db
     .select({
       rowid: messageRowid,
@@ -2493,7 +2483,7 @@ export async function listMessagesForAgentHandoff(
     .from(messages)
     .where(
       and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark,
-        role === 'authorization' ? inArray(messages.role, ['user', 'ask_user', 'plan_review'])
+        role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
           : role ? eq(messages.role, role) : undefined),
     )
     .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid))

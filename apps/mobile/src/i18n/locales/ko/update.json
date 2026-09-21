@@ -13,5 +13,21 @@
   "upToDateBody": "이미 최신 패키지입니다.",
   "checkFailedTitle": "확인 실패",
   "checkFailedBody": "업데이트 서버에 연결할 수 없습니다. 나중에 다시 시도하세요.",
-  "latestRequestFailed": "latest 요청 실패: HTTP {{status}}"
+  "latestRequestFailed": "latest 요청 실패: HTTP {{status}}",
+  "android": {
+    "permissionRequired": "업데이트하려면 Cindy에 앱 설치 권한이 필요합니다. 시스템 설정에서 허용하거나 브라우저에서 다운로드할 수 있습니다.",
+    "permissionPending": "설치 권한 확인 중…",
+    "permissionDenied": "앱 설치 권한이 없습니다. 설치를 허용하거나 브라우저에서 다운로드하세요.",
+    "grantPermission": "설치 허용",
+    "browser": "브라우저에서 다운로드",
+    "downloading": "업데이트 다운로드 중…",
+    "downloadProgress": "업데이트 다운로드 중… {{percent}}%",
+    "failed": "업데이트를 다운로드하거나 열 수 없습니다. 다시 시도하거나 브라우저에서 다운로드하세요.",
+    "ready": "업데이트를 다운로드했습니다. 설치를 취소했다면 설치 프로그램을 다시 열 수 있습니다.",
+    "installing": "설치 프로그램 여는 중…",
+    "install": "업데이트 설치",
+    "retry": "업데이트 재시도",
+    "cancel": "업데이트 취소",
+    "browserFailed": "다운로드 링크를 열 수 없습니다. 나중에 다시 시도하세요."
+  }
 }

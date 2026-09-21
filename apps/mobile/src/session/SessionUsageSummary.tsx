@@ -30,12 +30,16 @@ export function SessionUsageSummary({
   contextUsage,
   onPress,
   detail = false,
+  translucent = false,
+  providerName,
 }: {
   session: RemoteSession;
   usage: ReturnType<typeof useSessionMenuUsage>;
   contextUsage: unknown;
   onPress?: () => void;
   detail?: boolean;
+  translucent?: boolean;
+  providerName?: string;
 }) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -43,14 +47,13 @@ export function SessionUsageSummary({
   const amounts = sessionUsageAmounts(session, usage.estimate);
   const account = usage.account;
   const source = account?.source;
-  const sourceLabel =
+  const sourceLabel = providerName?.trim() || (
     !account?.accountOnly &&
     source &&
     source !== "api" &&
     source !== "unavailable"
       ? t(`session.menu.usage.source.${source}`)
-      : (session.providerId ??
-        { cc: "Claude Code", codex: "Codex", pi: "Pi" }[session.agentKind]);
+      : null);
   // Overall and model-specific limits both constrain the task; never hide an exhausted one.
   const rows = accountUsageRows(account, t, i18n.language);
   const rawContext =
@@ -104,16 +107,10 @@ export function SessionUsageSummary({
     <>
       <View style={styles.heading}>
         <Text style={styles.source} numberOfLines={2}>
-          {session.model} · {sourceLabel}
+          {session.model}{sourceLabel ? ` · ${sourceLabel}` : ""}
           {account?.plan && !account.accountOnly ? ` · ${account.plan}` : ""}
         </Text>
       </View>
-      {account?.accountOnly && rows.length > 0 ? (
-        <Text style={styles.note}>
-          {t("session.menu.usage.accountOnly")}
-          {account.plan ? ` · ${account.plan}` : ""}
-        </Text>
-      ) : null}
       {rows.map((row, index) => (
         <View key={index} style={styles.quotaRow}>
           <View style={styles.row}>
@@ -209,6 +206,7 @@ export function SessionUsageSummary({
       onPress={onPress}
       style={({ pressed }) => [
         styles.container,
+        translucent && styles.translucent,
         styles.entry,
         pressed && styles.pressed,
       ]}
@@ -223,7 +221,7 @@ export function SessionUsageSummary({
       />
     </Pressable>
   ) : (
-    <View style={styles.container} testID="session.usageDetails">
+    <View style={[styles.container, translucent && styles.translucent]} testID="session.usageDetails">
       {content}
     </View>
   );
@@ -240,6 +238,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderWidth: StyleSheet.hairlineWidth,
       minHeight: 44,
     },
+    translucent: { backgroundColor: colors.surfaceTranslucent, borderWidth: 0 },
     entry: { flexDirection: "row", alignItems: "center" },
     entryContent: { flex: 1, minWidth: 0, gap: spacing.sm },
     heading: { flexDirection: "row", alignItems: "center", gap: spacing.sm },

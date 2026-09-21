@@ -11,16 +11,16 @@
  *    session 会经 upsertRecentWorkdir 重新入列,已迁移的死路径则一去不返。
  *    recent 只影响项目列表展示,不再充当 device-link remote-workdir-guard
  *    的放行依据；远程入口始终实时探测目录当前是否可访问。
- *  - upsert 不暴露 IPC —— 由 main 内部在 session 创建和本地项目归档/删除路径上调用,
- *    避免 renderer 私自污染该表。生命周期与 session 解耦:归档 / 删除不会移除目录；
- *    两者都会刷新最后活动时间，确保清空会话后的项目仍服从同一活动筛选语义。
+ *  - upsert 不暴露 IPC —— 由 main 内部在 session 创建、项目归属变更和发送消息时调用,
+ *    避免 renderer 私自污染该表。生命周期与 session 解耦:归档 / 删除既不移除目录，
+ *    也不刷新最后活动时间；未启用任务时间筛选时仍保留空项目。
  *  - upsert 失败仅日志,不抛 —— 这是"用户体验增强"数据,不该挡住 session 创建主流程。
  */
 
 import { stat } from 'node:fs/promises';
 
 import { BrowserWindow, ipcMain } from 'electron';
-import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../client/DbClient.js';
 import { getDbClient } from '../client/current';
@@ -136,57 +136,55 @@ async function dirExists(path: string): Promise<boolean> {
   }
 }
 
-function recentWorkdirProjectIdentity(
-  path: string,
-  localPlatform: NodeJS.Platform,
-): string | null {
+function recentWorkdirProjectIdentity(path: string, localPlatform: NodeJS.Platform): string | null {
   const grouped = normalizeWorkingDirForGrouping(path);
   if (!grouped) return null;
   return isCaseInsensitiveWindowsPath(grouped, localPlatform) ? grouped.toLowerCase() : grouped;
 }
 
-export function registerRecentWorkdirsIpc(): void {
-  ipcMain.handle('local-db:recent-workdirs:list', async () => {
-    const db = getDbClient().drizzle;
-    const rows = await db.select().from(recentWorkdirs).orderBy(desc(recentWorkdirs.lastUsedAt));
-    const sessionRows = await db
-      .selectDistinct({
-        workingDir: sessions.workingDir,
-        agentKind: sessions.agentKind,
-      })
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.workspaceKind, 'project'),
-          isNull(sessions.remoteHostId),
-          isNotNull(sessions.workingDir),
-        ),
-      );
-    const knownKindsByPath = new Map<string, Set<string>>();
-    for (const session of sessionRows) {
-      if (!session.workingDir) continue;
-      const identity = recentWorkdirProjectIdentity(session.workingDir, process.platform);
-      if (!identity) continue;
-      const kinds = knownKindsByPath.get(identity) ?? new Set<string>();
-      kinds.add(session.agentKind ?? 'cc');
-      knownKindsByPath.set(identity, kinds);
-    }
-    // 存在性探测与条目数解耦；项目只有显式移除才会退出这份持久目录。
-    const exists = await Promise.all(rows.map((r) => dirExists(r.path)));
-    // 返回 ISO 字符串避免序列化数字时区岐义 —— 跟 sessions IPC 输出风格一致。
-    return rows.map((r, i) => {
-      const identity = recentWorkdirProjectIdentity(r.path, process.platform);
-      return {
-        path: r.path,
-        lastUsedAt: new Date(r.lastUsedAt).toISOString(),
-        exists: exists[i],
-        knownAgentKinds: Array.from(
-          (identity && knownKindsByPath.get(identity)) ?? [],
-        ).sort(),
-      };
-    });
+/** Shared persistent project listing, including directories without tasks. */
+export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
+  const db = client.drizzle;
+  const rows = await db.select().from(recentWorkdirs).orderBy(desc(recentWorkdirs.lastUsedAt));
+  const sessionRows = await db
+    .selectDistinct({
+      workingDir: sessions.workingDir,
+      agentKind: sessions.agentKind,
+    })
+    .from(sessions)
+    .where(
+      and(
+        eq(sessions.workspaceKind, 'project'),
+        isNull(sessions.remoteHostId),
+        isNotNull(sessions.workingDir),
+        or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker')),
+      ),
+    );
+  const knownKindsByPath = new Map<string, Set<string>>();
+  for (const session of sessionRows) {
+    if (!session.workingDir) continue;
+    const identity = recentWorkdirProjectIdentity(session.workingDir, process.platform);
+    if (!identity) continue;
+    const kinds = knownKindsByPath.get(identity) ?? new Set<string>();
+    kinds.add(session.agentKind ?? 'cc');
+    knownKindsByPath.set(identity, kinds);
+  }
+  // 存在性探测与条目数解耦；项目只有显式移除才会退出这份持久目录。
+  const exists = await Promise.all(rows.map((r) => dirExists(r.path)));
+  // 返回 ISO 字符串避免序列化数字时区岐义 —— 跟 sessions IPC 输出风格一致。
+  return rows.map((r, i) => {
+    const identity = recentWorkdirProjectIdentity(r.path, process.platform);
+    return {
+      path: r.path,
+      lastUsedAt: new Date(r.lastUsedAt).toISOString(),
+      exists: exists[i],
+      knownAgentKinds: Array.from((identity && knownKindsByPath.get(identity)) ?? []).sort(),
+    };
   });
+}
 
+export function registerRecentWorkdirsIpc(): void {
+  ipcMain.handle('local-db:recent-workdirs:list', async () => listRecentWorkdirs());
   ipcMain.handle('local-db:recent-workdirs:remove', async (_evt, input: unknown) => {
     const body = (input ?? {}) as { path?: unknown };
     const raw = requireString(body.path, 'path');
