@@ -18,6 +18,7 @@ import {
 } from '@cindy/device-link';
 
 import { Text } from '@/components/AppText';
+import { TeammateList } from '@/session/TeammateList';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { MainWindowEmptyState, StatusDot } from '@/components/MobilePrimitives';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
@@ -212,11 +213,14 @@ export default function RemoteCollectionScreen() {
       <SimpleStackHeader
         backTestID="remoteResources.backButton"
         onBack={() => goBackGuarded(router)}
-        subtitle={targets.length > 1 ? t('devices.resources.hostCount', { count: targets.length }) : targets[0]?.deviceName}
+        subtitle={collectionId === 'teammates' ? undefined : targets.length > 1 ? t('devices.resources.hostCount', { count: targets.length }) : targets[0]?.deviceName}
         title={title || t('devices.resources.titleFallback')}
         titleTestID="remoteResources.title"
       />
-      {loading && items.length === 0 ? (
+      {collectionId === 'teammates' ? <TeammateList
+        items={itemsAccount === accountGeneration ? items : []} loading={loading} refreshing={refreshing} error={error}
+        isOnline={host => isRemoteResourceHostOnline(relayStatus, getPresenceAvailability(host.deviceId), replyEpochs[host.deviceId], connectionEpoch)}
+        onRefresh={() => void load(true)} onSelect={openItem} /> : loading && items.length === 0 ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.textSecondary} />
           <Text style={styles.muted}>{t('devices.resources.loading')}</Text>

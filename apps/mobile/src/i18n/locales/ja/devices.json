@@ -90,13 +90,19 @@
       }
     },
     "sessionList": {
-      "section": { "pinned": "ピン留め", "dialogue": "会話" },
+      "section": {
+        "pinned": "ピン留め",
+        "dialogue": "会話"
+      },
       "filterWithCount": "{{label}} {{count}}",
       "controlsSummary": "{{filter}} · {{group}}別にグループ化",
       "automation": "自動化",
       "sessionCount": "{{count}} 件のセッション",
       "messageCount": "{{count}} 件のメッセージ",
-      "status": { "archived": "アーカイブ済み", "deleted": "削除済み" },
+      "status": {
+        "archived": "アーカイブ済み",
+        "deleted": "削除済み"
+      },
       "preview": {
         "permission": "権限の確認待ち",
         "planReview": "計画レビュー待ち",
@@ -130,11 +136,26 @@
         }
       },
       "empty": {
-        "search": { "title": "一致するセッションはありません", "copy": "別のタイトル、プロジェクトパス、モデル、またはメッセージのキーワードを試してください。" },
-        "waiting": { "title": "保留中のリクエストはありません", "copy": "権限の確認、計画レビュー、質問がここに表示されます。" },
-        "automation": { "title": "自動化セッションはありません", "copy": "自動化の実行後に作成されたセッションがここにまとめられます。" },
-        "archived": { "title": "アーカイブ済みセッションはありません", "copy": "セッションを長押しすると、一括でアーカイブまたは削除できます。" },
-        "active": { "title": "このコンピューターにアクティブなセッションはありません", "copy": "コンピューターでセッションを作成または再開すると、ここに表示されます。" }
+        "search": {
+          "title": "一致するセッションはありません",
+          "copy": "別のタイトル、プロジェクトパス、モデル、またはメッセージのキーワードを試してください。"
+        },
+        "waiting": {
+          "title": "保留中のリクエストはありません",
+          "copy": "権限の確認、計画レビュー、質問がここに表示されます。"
+        },
+        "automation": {
+          "title": "自動化セッションはありません",
+          "copy": "自動化の実行後に作成されたセッションがここにまとめられます。"
+        },
+        "archived": {
+          "title": "アーカイブ済みセッションはありません",
+          "copy": "セッションを長押しすると、一括でアーカイブまたは削除できます。"
+        },
+        "active": {
+          "title": "このコンピューターにアクティブなセッションはありません",
+          "copy": "コンピューターでセッションを作成または再開すると、ここに表示されます。"
+        }
       },
       "time": {
         "unknown": "最近のアクティビティ時刻は不明です",
@@ -162,21 +183,54 @@
       "uncategorizedProject": "未分類のプロジェクト",
       "cindyMake": "Cindy Make",
       "empty": {
-        "search": { "title": "一致する結果はありません", "copy": "別のプロジェクト名、セッション名、コンピューター名、またはメッセージのキーワードを試してください。" },
-        "waiting": { "title": "保留中のリクエストはありません", "copy": "権限の確認、計画レビュー、質問がここに表示されます。" },
-        "automation": { "title": "自動化セッションはありません", "copy": "自動化の実行後に作成されたセッションがプロジェクト別にまとめられます。" },
-        "archived": { "title": "アーカイブ済みセッションはありません", "copy": "［すべて］または［アクティブ］に切り替えて、現在のプロジェクトとセッションを確認してください。" },
-        "noSession": { "title": "セッションはまだありません", "copy": "コンピューターでセッションを作成または再開すると、対応するプロジェクトとセッションがここに表示されます。" }
+        "search": {
+          "title": "一致する結果はありません",
+          "copy": "別のプロジェクト名、セッション名、コンピューター名、またはメッセージのキーワードを試してください。"
+        },
+        "waiting": {
+          "title": "保留中のリクエストはありません",
+          "copy": "権限の確認、計画レビュー、質問がここに表示されます。"
+        },
+        "automation": {
+          "title": "自動化セッションはありません",
+          "copy": "自動化の実行後に作成されたセッションがプロジェクト別にまとめられます。"
+        },
+        "archived": {
+          "title": "アーカイブ済みセッションはありません",
+          "copy": "［すべて］または［アクティブ］に切り替えて、現在のプロジェクトとセッションを確認してください。"
+        },
+        "noSession": {
+          "title": "セッションはまだありません",
+          "copy": "コンピューターでセッションを作成または再開すると、対応するプロジェクトとセッションがここに表示されます。"
+        }
       },
       "noDevice": {
-        "accessRevoked": { "title": "アクセス権が取り消されました", "copy": "{{names}} がこのスマートフォンのリモートアクセスを取り消しました。アクセスを再試行するか、コンピューター側で再度許可してください。" },
-        "remoteDisabled": { "title": "コンピューターでリモートコントロールを許可", "copy": "{{names}} はオンラインです。コンピューター側でスマートフォンからの操作を有効にしてください。" },
-        "offline": { "title": "コンピューターで Cindy を開く", "copy": "接続済みのコンピューターは現在オフラインです。コンピューターで Cindy を開いてログインしたままにすると、自動的に再接続します。" },
-        "firstRun": { "title": "コンピューターの Cindy に接続", "copy": "現在 Cindy はコンピューター上で動作します。モバイルアプリはリモートアクセスを使って、そのコンピューターの Agent を利用します。" }
+        "accessRevoked": {
+          "title": "アクセス権が取り消されました",
+          "copy": "{{names}} がこのスマートフォンのリモートアクセスを取り消しました。アクセスを再試行するか、コンピューター側で再度許可してください。"
+        },
+        "remoteDisabled": {
+          "title": "コンピューターでリモートコントロールを許可",
+          "copy": "{{names}} はオンラインです。コンピューター側でスマートフォンからの操作を有効にしてください。"
+        },
+        "offline": {
+          "title": "コンピューターで Cindy を開く",
+          "copy": "接続済みのコンピューターは現在オフラインです。コンピューターで Cindy を開いてログインしたままにすると、自動的に再接続します。"
+        },
+        "firstRun": {
+          "title": "コンピューターの Cindy に接続",
+          "copy": "現在 Cindy はコンピューター上で動作します。モバイルアプリはリモートアクセスを使って、そのコンピューターの Agent を利用します。"
+        }
       }
     },
     "bulk": {
-      "action": { "archive": "アーカイブ", "delete": "削除", "pin": "固定", "restore": "復元", "unpin": "固定解除" },
+      "action": {
+        "archive": "アーカイブ",
+        "delete": "削除",
+        "pin": "固定",
+        "restore": "復元",
+        "unpin": "固定解除"
+      },
       "title": "{{count}} 件のタスクを{{action}}",
       "description": "選択した {{count}} 件のタスクを{{action}}します。",
       "descriptionWithSkipped": "選択した {{count}} 件のタスクを{{action}}します。対象外の {{skippedCount}} 件はスキップされます。"
@@ -764,7 +818,11 @@
     "artifactCount_other": "ファイル {{count}} 件",
     "prCount_one": "PR {{count}} 件",
     "prCount_other": "PR {{count}} 件",
-    "duration": {"seconds": "{{n}} 秒", "minutes": "{{n}} 分", "hoursMinutes": "{{h}} 時間 {{m}} 分"},
+    "duration": {
+      "seconds": "{{n}} 秒",
+      "minutes": "{{n}} 分",
+      "hoursMinutes": "{{h}} 時間 {{m}} 分"
+    },
     "retrying": "まだ開始できていません。再試行中…",
     "stopTask": "タスクを停止",
     "actionFailed": "読み込みまたは操作を完了できません",
@@ -780,6 +838,179 @@
       "cancelled": "キャンセル済み",
       "timed-out": "タイムアウト",
       "unknown": "状態を確認できません"
+    },
+    "title": "チームメイト",
+    "tasks": "セッション",
+    "search": "チームメイトを検索",
+    "emptyTitle": "チームメイトはまだいません",
+    "emptyCopy": "パソコンの Cindy でチームメイトを作成してください。",
+    "noResults": "一致するチームメイトがいません",
+    "preferenceSaveFailed": "表示設定を保存できませんでした。もう一度表示を切り替えてください。",
+    "automation": {
+      "unsupported": "自動化を管理するには、パソコンの Cindy を更新して再試行してください。",
+      "changed": "この自動化は別の場所で変更されました。編集内容は保持されています。戻って開き直すと最新の内容を読み込めます。",
+      "unknown": "状態不明",
+      "unsavedTitle": "変更を破棄しますか？",
+      "unsavedBody": "変更はまだ保存されていません。",
+      "continueEditing": "編集を続ける",
+      "discard": "変更を破棄",
+      "invalid": "名前、実行内容、トリガー設定を確認して、もう一度保存してください。",
+      "everyMinutes": "{{count}} 分ごと",
+      "everyMinutes_one": "{{count}} 分ごと",
+      "everyMinutes_other": "{{count}} 分ごと",
+      "paused": "一時停止中",
+      "new": "自動化を作成",
+      "save": "自動化を保存",
+      "offline": "自動化を管理するには、パソコンに再接続してください。",
+      "retry": "再読み込み",
+      "inProgress": "進行中",
+      "scheduled": "予定済み",
+      "empty": "自動化はまだありません。作成して始めましょう。",
+      "name": "名前",
+      "enabled": "有効",
+      "instructions": "実行内容",
+      "triggers": "トリガー",
+      "triggerType": "トリガーの種類",
+      "cron": "スケジュール",
+      "interval": "間隔",
+      "event": "イベント",
+      "minutes": "間隔（分）",
+      "source": "イベントのソース",
+      "filterField": "フィルターの項目",
+      "operator": "条件",
+      "equals": "等しい",
+      "contains": "含む",
+      "not-equals": "等しくない",
+      "filterValue": "フィルターの値",
+      "removeFilter": "フィルターを削除",
+      "addFilter": "フィルターを追加",
+      "removeTrigger": "トリガーを削除",
+      "addTrigger": "トリガーを追加",
+      "largeDefinition": "この自動化は大きすぎるため、ここでは編集できません。パソコンで編集してください。",
+      "run": "今すぐ実行",
+      "runTitle": "この自動化を今すぐ実行しますか？",
+      "cancel": "キャンセル",
+      "history": "実行履歴",
+      "noRuns": "実行履歴はまだありません。自動化を実行してみましょう。",
+      "delete": "自動化を削除",
+      "deleteTitle": "この自動化を削除しますか？",
+      "deleteBody": "今後この自動化は起動しなくなります。この操作は元に戻せません。",
+      "queued": "開始待ち",
+      "running": "実行中",
+      "success": "完了",
+      "failed": "失敗",
+      "interrupted": "中断",
+      "cancelled": "キャンセル済み",
+      "repeat": "繰り返し",
+      "hourly": "毎時",
+      "daily": "毎日",
+      "weekdays": "月曜日から金曜日",
+      "weekly": "毎週",
+      "custom": "カスタム",
+      "weekday": "曜日",
+      "day0": "日曜日",
+      "day1": "月曜日",
+      "day2": "火曜日",
+      "day3": "水曜日",
+      "day4": "木曜日",
+      "day5": "金曜日",
+      "day6": "土曜日",
+      "time": "時刻",
+      "hour": "時",
+      "minute": "分",
+      "cronExpression": "Cron 式",
+      "timezone": "タイムゾーン",
+      "monthly": "毎月",
+      "monthDay": "毎月の日付",
+      "saveAndRun": "保存して実行"
+    },
+    "openNavigation": "ナビゲーションを開く",
+    "openProfile": "{{name}}のプロフィールを表示",
+    "switchCompanion": "チームメイトを切り替える",
+    "activity": {
+      "thinking": "考え中",
+      "typing": "入力中",
+      "helping": "対応中"
+    },
+    "working": {
+      "thinking": "考え中…",
+      "replying": "返信中…",
+      "processing": "処理中…",
+      "reading-memory": "記憶を読んでいます…",
+      "saving-memory": "記憶を保存しています…",
+      "deleting-memory": "記憶を削除しています…",
+      "organizing-memory": "記憶を整理しています…",
+      "reading-file": "ファイルを読んでいます…",
+      "saving-file": "ファイルを更新しています…",
+      "searching": "ウェブを検索中…",
+      "reading-web": "ウェブページを読んでいます…",
+      "searching-files": "ファイルを探しています…",
+      "testing": "テストを実行しています…",
+      "checking": "コードを確認しています…",
+      "reviewing-memory": "記憶を確認しています…",
+      "reviewing-files": "ファイルを確認しています…",
+      "reviewing-sources": "ウェブ情報を確認しています…",
+      "reviewing-checks": "チェック結果を確認しています…"
+    },
+    "invitation": {
+      "title": "出会いの準備",
+      "waiting": "もうすぐ会えます、{{name}}",
+      "background": "この画面を離れても、準備は続きます。",
+      "profile": "自分の物語を書いています",
+      "skills": "{{name}} のパソコンを準備しています",
+      "avatar": "{{name}} が新しいアバターを選んでいます",
+      "welcome": "最初の挨拶を準備しています",
+      "failed": "準備が一時停止しました。完了した内容は保存されています。もう一度試せます。",
+      "retryFailed": "再試行できませんでした。少し待ってお試しください。",
+      "leave": "いったん離れる",
+      "avatarSkipped": "今は初期アバターを使っています。いつでも変更できます。"
     }
+  },
+  "companionProfile": {
+    "avatar": "アバター",
+    "emptyEditor": "まだありません。",
+    "searchOptions": "検索",
+    "changed": "別の場所で変更されました。未保存の編集は保持されています。",
+    "discardAndReload": "編集を破棄して再読み込み",
+    "notes": "記憶ノート",
+    "create": "新しいチームメイト",
+    "createFailed": "作成結果を確認できていません。再試行して確認してください。",
+    "title": "チームメイト",
+    "profile": "プロフィールと性格",
+    "memory": "記憶",
+    "skills": "スキルと接続",
+    "artifacts": "成果物",
+    "direct": "チームメイト間のメッセージ",
+    "automation": "自動化",
+    "settings": "モデルと権限",
+    "search": "メッセージを検索",
+    "models": "モデル候補",
+    "permissions": "操作権限",
+    "personalSkills": "学習したスキル",
+    "connections": "参照中のスキルと接続",
+    "save": "変更を保存",
+    "offline": "続けるには {{deviceName}} に再接続してください。編集内容は保持されています。",
+    "hostUpgrade": "{{deviceName}} の Cindy を更新して再試行するか、そのパソコンでチームメイトの設定を編集してください。",
+    "readFailed": "最新の状態を確認できませんでした。更新してから再試行してください。操作は完了している可能性があります。編集内容は保持されています。",
+    "artifactsEmpty": "成果物はまだありません。チームメイトに作成を頼んでみましょう。",
+    "openSourceTask": "元のセッションを開く",
+    "modelFollowsDefault": "現在のデフォルトモデル候補を使用",
+    "modelOverride": "このチームメイト固有のモデル候補を使用",
+    "modelsUnavailable": "利用可能なモデルがありません。パソコンでこのチームメイトのモデル設定を確認し、更新してください。",
+    "artifactsRecovery": "メッセージカードからファイルを開くか、{{deviceName}} でファイルを参照してください。",
+    "directRecovery": "チームメイト間のメッセージを読み込めません。{{deviceName}} の Cindy を更新して再試行してください。",
+    "directEmpty": "チームメイト間のメッセージはまだありません",
+    "skillsEmpty": "学習したスキルはまだありません。作業方法を覚えるようチームメイトに頼めます。",
+    "connectionsEmpty": "スキルや接続は選択されていません",
+    "largeProfileRecovery": "このプロフィールは長すぎるため、ここでは編集できません。{{deviceName}} で全文を編集してください。",
+    "addModel": "予備モデルを追加",
+    "removeModel": "モデルを削除",
+    "moveModelUp": "モデルを上へ",
+    "settingsTitle": "チームメイトの設定",
+    "name": "名前",
+    "portraitNumber": "アバター {{number}}",
+    "uploadAvatar": "アバターをアップロード",
+    "avatarFailed": "この画像を開けません。別の画像を選んでください。",
+    "nameTaken": "この名前は使用されています。別の名前を選んでください。"
   }
 }

@@ -1,4 +1,6 @@
+import { CompanionMessageActions } from './CompanionMessageActions';
 import { PluginInvocationHeader } from './PluginInvocationHeader';
+import { companionPluginWorkEntries, type PluginInvocation } from './pluginInvocations';
 import { useAuth } from '@/auth/AuthContext';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
@@ -611,6 +613,9 @@ export interface ShareableMessageViewport {
 }
 
 interface MessageActions {
+  companion?: boolean;
+  companionWorkingLabel?: string | null;
+  companionPluginWork?: ReturnType<typeof companionPluginWorkEntries>;
   /** Partner chats keep the user's bubble plain; result and authorization cards remain independent. */
   showPluginInvocations?: boolean;
   /** Device hosting plugin results; independent of a filesystem workdir. */
@@ -664,6 +669,9 @@ interface MessageActions {
 }
 
 export function MessageRenderer({
+  companion = false,
+  companionWorkingLabel,
+  companionPluginInvocations,
   showPluginInvocations = true,
   remoteDeviceId,
   topOverlayHeight,
@@ -713,6 +721,9 @@ export function MessageRenderer({
   devExposeList,
   devRecycleItems = false,
 }: {
+  companion?: boolean;
+  companionWorkingLabel?: string | null;
+  companionPluginInvocations?: ReadonlyMap<string, PluginInvocation[]>;
   bottomOverlayHeight?: number;
   /** Floating composers reserve a stable tail gap while their expanded surface overlays history. */
   contentBottomInset?: number;
@@ -1532,7 +1543,7 @@ export function MessageRenderer({
     lightboxImagesRef.current = next;
     return next;
   }, [galleryImages, imageLightboxOpen, payload]);
-  const bottomPadding = mobileMessageListBottomPadding(contentBottomInset ?? bottomOverlayHeight);
+  const bottomPadding = mobileMessageListBottomPadding(bottomOverlayHeight, contentBottomInset);
   const topPadding = mobileMessageListTopPadding(topOverlayHeight);
   listBottomPaddingRef.current = bottomPadding;
   listTopPaddingRef.current = topPadding;
@@ -1565,7 +1576,11 @@ export function MessageRenderer({
     }
     if (shareSelectionActiveRef.current) scheduleStickyShareCheckRef.current?.(true);
   }, []);
+  const companionPluginWork = useMemo(() => companion ? companionPluginWorkEntries(items, companionPluginInvocations) : undefined, [companion, items, companionPluginInvocations]);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
+    companion,
+    companionWorkingLabel,
+    companionPluginWork,
     showPluginInvocations,
     remoteDeviceId,
     onAddMessageToComposer,
@@ -1597,6 +1612,9 @@ export function MessageRenderer({
     isSessionStreaming,
     screenWidth: viewportLayout.contentWidth,
   }), [
+    companion,
+    companionWorkingLabel,
+    companionPluginWork,
     showPluginInvocations,
     remoteDeviceId,
     busyClientId,
@@ -2472,11 +2490,19 @@ export function MessageRenderer({
   // 闭包更新不足以保证可见行重绘。把选中项显式纳入 extraData，确保轻点气泡后
   // 「取消 / 编辑 / 插话」操作行立即出现，不依赖滚动触发回收重渲染。
   const messageListExtraData = useMemo(
-    () => buildMobileMessageListExtraData(
-      pendingSend?.selectedClientId ?? null,
-      shareSelectionActive === true,
-    ),
-    [pendingSend?.selectedClientId, shareSelectionActive],
+    () => ({
+      ...buildMobileMessageListExtraData(
+        pendingSend?.selectedClientId ?? null,
+        shareSelectionActive === true,
+      ),
+      // Resource discovery can complete after history has already populated the list.
+      // Update visible cells when a task is identified as a companion chat.
+      companion,
+      companionWorkingLabel,
+      showPluginInvocations,
+      companionPluginWork,
+    }),
+    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, showPluginInvocations, companionPluginWork],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
   // recycling an Android container across heterogeneous message trees can race
@@ -2497,6 +2523,7 @@ export function MessageRenderer({
     >
       <Animated.View style={[styles.messageList, { opacity: initialRevealOpacity }]}>
       <LegendList
+        keyboardShouldPersistTaps="handled"
         // 与 main 一致：每个任务用完整历史重挂；首次命令式落底在 opacity 遮罩下完成。
         key={scrollResetKey}
         data={listData}
@@ -3289,6 +3316,8 @@ function MessageBubble({
         presentation.density === 'compact' && styles.bubbleCompact,
         presentation.density === 'rich' && styles.bubbleRich,
         isUser ? styles.userBubble : styles.agentBubble,
+        actions.companion && isUser && styles.companionUserBubble,
+        actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
         hookSource && styles.hookSourceBubble,
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
@@ -3474,7 +3503,21 @@ function MessageBubble({
           </Text>
         </View>
       ) : null}
-      {hasActions ? (
+      {hasActions && actions.companion ? <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
+        onCopy={canCopy ? copyMessage : undefined}
+        actions={[
+          ...(canCopy ? [{ id: 'copy', title: copyActionLabel(copyState), image: 'doc.on.doc', disabled: copyState === 'copying' }] : []),
+          ...(canShare ? [{ id: 'share', title: t('session.shareImage.shareMessage'), image: 'square.and.arrow.up' }] : []),
+          ...(canFork ? [{ id: 'fork', title: messageControlActionLabel('fork', copyState), image: 'arrow.triangle.branch', disabled: actionBusy }] : []),
+          ...messageMenu.map(item => ({ id: item.id, title: item.label, image: item.image, destructive: item.destructive, disabled: actionBusy })),
+          ...(absoluteTime ? [{ id: 'time', title: t('message.renderer.sentTime', { time: absoluteTime }), disabled: true }] : []),
+          ...(turnCost || turnTokens ? [{ id: 'usage', title: turnCost ? t('message.renderer.turnCost', { cost: turnCost }) : t('message.renderer.turnTokens', { tokens: turnTokens }), disabled: true }] : []),
+        ]}
+        onAction={id => {
+          if (id === 'copy' || id === 'fork') selectControlAction(id);
+          else if (id === 'share') actions.onEnterShareSelection?.(clientId);
+          else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
+        }} /> : hasActions ? (
         <View
           style={[
             styles.messageActionBar,
@@ -4212,11 +4255,16 @@ function WorkGroupCard({
       ].filter((value): value is string => value !== null).join(' · ')
     : '';
   const title = [
-    presentation.title,
+    actions.companion && isStreaming && actions.companionWorkingLabel ? actions.companionWorkingLabel : presentation.title,
     explorationSummary,
   ].filter(Boolean).join(' · ');
   const onToggle = item.deferred?.setVisible ? toggleExpanded : item.deferred?.toggle ?? toggleExpanded;
+  const pluginWork = actions.companionPluginWork?.get(item.key);
   return (
+    <>
+    {pluginWork ? <PluginInvocationHeader plugins={pluginWork.plugins} running={pluginWork.running}
+      showCompletionBadge={false}
+      deviceId={actions.remoteDeviceId} sessionId={pluginWork.sessionId} /> : null}
     <FoldablePanel
       chevronPosition={header.chevronPosition}
       chevronSize={header.chevronSize}
@@ -4273,6 +4321,7 @@ function WorkGroupCard({
         </Rail>
       ) : null}
     </FoldablePanel>
+    </>
   );
 }
 
@@ -6118,16 +6167,23 @@ function MediaPreview({
   }, [autoResolve, resolveThumbnail]);
 
   const phase = mediaThumbnailPhase(media, resolveState, !!onResolveRemoteMedia);
+  const { t } = useTranslation();
+  const fallbackDetail = phase.kind === 'fallback' && phase.reason === 'error'
+    ? t('message.lightbox.loadFailed') : preview.detail;
   const thumbUri = phase.kind === 'direct' ? media.url : phase.kind === 'resolved' ? phase.uri : null;
 
   const handleImageError = useCallback(() => {
+    if (media.previewable) {
+      setResolveState({ status: 'error' });
+      return;
+    }
     if (imageRetryUsedRef.current) {
       setResolveState({ status: 'error' });
       return;
     }
     imageRetryUsedRef.current = true;
     resolveThumbnail(true);
-  }, [resolveThumbnail]);
+  }, [media.previewable, resolveThumbnail]);
 
   // attachment 变体:异步量原图宽高并写入模块级缓存;失败置 -1 走 max 框回落帧,
   // 图仍照常渲染(不作为出图门控,见下)。已有尺寸(含缓存命中)不重复测量。
@@ -6186,7 +6242,7 @@ function MediaPreview({
             testID="message.mediaThumbFallback"
           >
             <Text style={styles.mediaKind}>{preview.meta[0] ?? payloadMediaKindLabel(media.kind)}</Text>
-            <Text style={styles.mediaHint} numberOfLines={2}>{preview.detail}</Text>
+            <Text style={styles.mediaHint} numberOfLines={2}>{fallbackDetail}</Text>
           </View>
         ) : thumbUri ? (
           <Image
@@ -6196,7 +6252,7 @@ function MediaPreview({
             // 一致时两者等价;max 框帧时保证不裁内容。
             resizeMode="contain"
             source={{ uri: thumbUri }}
-            onError={phase.kind === 'resolved' ? handleImageError : undefined}
+            onError={handleImageError}
             style={[styles.attachmentImage, displaySize]}
           />
         ) : (
@@ -6225,7 +6281,7 @@ function MediaPreview({
           <Image
             resizeMode="cover"
             source={{ uri }}
-            onError={phase.kind === 'resolved' ? handleImageError : undefined}
+            onError={handleImageError}
             style={[styles.imagePreview, frameSize]}
           />
         ) : phase.kind === 'resolving' ? (
@@ -6236,7 +6292,7 @@ function MediaPreview({
             testID="message.mediaThumbFallback"
           >
             <Text style={styles.mediaKind}>{preview.meta[0] ?? payloadMediaKindLabel(media.kind)}</Text>
-            <Text style={styles.mediaHint} numberOfLines={2}>{preview.detail}</Text>
+            <Text style={styles.mediaHint} numberOfLines={2}>{fallbackDetail}</Text>
           </View>
         )}
       </MessageContentOpenButton>
@@ -7967,6 +8023,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   bubbleRich: {
     gap: spacing.sm,
   },
+  companionAnswer: { backgroundColor: colors.surface, borderWidth: 0, paddingHorizontal: 0 },
+  companionUserBubble: { borderColor: colors.border },
   userBubble: {
     alignSelf: 'flex-end',
     backgroundColor: colors.surfaceElevated,

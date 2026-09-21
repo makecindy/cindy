@@ -40,6 +40,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 })
 vi.mock('@/session/usePluginResultCard', () => ({ usePluginResultCard: () => ({}), useSessionPluginResource: () => ({ title: 'Art' }) }));
 vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({ downloadRemoteMediaShareTemp: vi.fn() }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/session/expandedBlockMemory', () => ({ useFoldableExpandedState: () => [false, vi.fn()] }));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, showActionMenu: vi.fn(), usesNativePullDownMenu: () => false, usesSystemActionMenu: () => false }));
 vi.mock('@/session/MobileComposerInputRow', () => ({ MobileComposerInputRow: () => null, MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT: 0, MOBILE_COMPOSER_CONTROL_SIZE: 44 }));
 vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: () => null }));
@@ -49,6 +50,7 @@ vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () =>
 vi.mock('@/session/MarkdownBlockContent', () => ({ MarkdownBlockContent: () => null }));
 vi.mock('@/session/MessageActionSheet', () => ({ MessageActionSheet: () => null }));
 vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard: () => null }));
+vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => null }));
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
 vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
@@ -81,5 +83,24 @@ describe('attachment-only user plugin bubble', () => {
   });
   it('does not add an empty bubble to ordinary attachments', () => {
     expect(render(true, false, false)).not.toContain('message.userBubble');
+  });
+});
+
+describe('partner work feedback', () => {
+  it('uses the short hint in the existing live work row and preserves the completed record', () => {
+    const messages = [msg('u', 'user', 'Remember this'), msg('c', 'tool_use', {
+      toolName: 'bot_memory', toolUseId: 'c', input: { action: 'write' },
+    }, { toolUseId: 'c' })];
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: true }).filter(item => item.type === 'work_group');
+    expect(items).toHaveLength(1);
+    const live = renderToStaticMarkup(<MessageRenderer items={items} companion isSessionStreaming companionWorkingLabel="Saving memory…" />);
+    expect(live).toContain('Expand Saving memory…');
+    expect(live).not.toContain('Expand Working…');
+    const ordinary = renderToStaticMarkup(<MessageRenderer items={items} isSessionStreaming companionWorkingLabel="Saving memory…" />);
+    expect(ordinary).not.toContain('Saving memory…');
+    const done = items.map(item => ({ ...item, isStreaming: false }));
+    const completed = renderToStaticMarkup(<MessageRenderer items={done} companion companionWorkingLabel="Saving memory…" />);
+    expect(completed).not.toContain('Saving memory…');
+    expect(completed).toContain('message.workGroupToggle');
   });
 });

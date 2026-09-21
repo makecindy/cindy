@@ -69,6 +69,9 @@ import {
   StatusDot,
 } from '@/components/MobilePrimitives';
 import { RemoteAccessGuide } from '@/components/RemoteAccessGuide';
+import { useHomeMode } from '@/session/useHomeMode';
+import { TeammateHomeScreen } from '@/session/TeammateHomeScreen';
+import { HomeModePanes } from '@/session/HomeModePanes';
 import { HomeChromeDrawer } from '@/session/HomeChromeDrawer';
 import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';
 import { HomeChromeFrost } from '@/session/HomeChromeFrost';
@@ -358,15 +361,20 @@ class HomeSyncScopeSupersededError extends Error {
 
 export default function HomeScreen() {
   const screenFocused = useIsFocused();
-  return (
-    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
-      <HomeScreenContent />
-    </RemoteSessionStoreSubscriptionGate>
-  );
+  const { accountGeneration } = useAuth();
+  const navigation = useHomeMode();
+  if (!navigation.hydrated) return null;
+  return <HomeModePanes key={accountGeneration} mode={navigation.mode}
+    tasks={<RemoteSessionStoreSubscriptionGate enabled={screenFocused && navigation.mode === 'tasks'}>
+      <HomeScreenContent active={navigation.mode === 'tasks'} />
+    </RemoteSessionStoreSubscriptionGate>}
+    teammates={<TeammateHomeScreen active={navigation.mode === 'teammates'} />} />;
 }
 
-function HomeScreenContent() {
-  const screenFocused = useIsFocused();
+function HomeScreenContent({ active }: { active: boolean }) {
+  const routeFocused = useIsFocused();
+  const screenFocused = routeFocused && active;
+  const homeNavigation = useHomeMode();
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
   const styles = useThemedStyles(makeStyles);
@@ -2501,7 +2509,7 @@ function HomeScreenContent() {
       testID="devices.screen"
     >
       {nativeHomeHeader ? <SessionHeaderNativeBlur height={nativeHeaderHeight + spacing.xxl} /> : null}
-      {nativeHomeHeader ? (
+      {nativeHomeHeader && active ? (
         <HomeNativeStackHeader
           syncing={quietSyncing}
           displayA11y={t('devices.list.a11y.openDisplaySettings')}
@@ -2836,6 +2844,12 @@ function HomeScreenContent() {
         visible={deviceMenuOpen}
       />
       <HomeChromeDrawer
+        mode="tasks"
+        onModeChange={(next) => {
+          pendingMenuActionRef.current = () => { void homeNavigation.setMode(next); };
+          setChromeMenuCloseInstant(false);
+          setChromeMenuOpen(false);
+        }}
         closeInstant={chromeMenuCloseInstant}
         loggingOut={loggingOut}
         onClose={() => {

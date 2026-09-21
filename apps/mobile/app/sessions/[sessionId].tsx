@@ -3,6 +3,9 @@ import { nativeComposerAvailable } from '@/session/ComposerNativeInput';
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
+import { CompanionHeader } from '@/session/CompanionHeader';
+import { collectCompanionPluginInvocations } from '@/session/pluginInvocations';
+import { CompanionWorkingStatus, useCompanionWorkingLabel } from '@/session/CompanionWorkingStatus';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { useSessionResourceCards } from '@/session/useSessionResourceCards';
 import { SessionResourceCards } from '@/session/SessionResourceCards';
@@ -2222,12 +2225,13 @@ export default function SessionScreen() {
     () => remoteSessionStore.getSessionLiveActivity(sessionId)?.attention === true,
   );
   const hasRenderedMessages = historyView.snapshot.ready ? historyView.snapshot.items.length > 0 : messages.length > 0;
-  useRemoteResourceSession(deviceId, deviceName, sessionId,
+  const companionResource = useRemoteResourceSession(deviceId, deviceName, sessionId,
     currentSession?.id === sessionId && hasRenderedMessages
       && readAckSyncedKey === `${sessionId}:${connectionEpoch}`
       // A pre-ACK snapshot may omit replies sent before the subscription took effect.
       && contentRecoveryKey !== null && contentSyncedKey === contentRecoveryKey
       && !outboxRecoverySyncHeld && !loading);
+  const companionChat = companionResource?.ref.kind === 'bot';
   const lastAckKeyRef = useRef<string | null>(null);
   const sessionResourceCards = useSessionResourceCards(
     deviceId, deviceName, sessionId, currentSession?.source, remoteSessionRunning,
@@ -2436,7 +2440,8 @@ export default function SessionScreen() {
   // 重试/清错属于输入恢复：Lead 能发消息，也应能恢复失败输入。
   // 队列编辑和恢复整组队列仍沿用协作编排只读规则。
   const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason;
-  const showMessageHistory = sessionOperationLayout.messageHistoryMode === 'visible'
+  const companionInlineInteraction = companionChat && pending.length > 0 && !pendingInteractionFullHeight;
+  const showMessageHistory = companionInlineInteraction || sessionOperationLayout.messageHistoryMode === 'visible'
     || (sessionOperationLayout.messageHistoryMode === 'collapsed' && pendingHistoryExpanded);
   // 冷开即出壳:session 元信息还没回来,但不是真正不可用(离线/被撤销,看 remoteUnavailableReason)——
   // 立即渲染真壳(标题乐观显示、消息区骨架、输入框可编辑、发送禁用),而不是阻塞式占位。
@@ -5826,6 +5831,16 @@ export default function SessionScreen() {
     () => mergePendingSendItems(renderWindow.items, pendingSendItems, optimisticClientIds),
     [pendingSendItems, renderWindow.items, optimisticClientIds],
   );
+  const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionResource?.ref.id ?? '',
+    active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
+  const companionPluginInvocations = useMemo(() => companionChat ? collectCompanionPluginInvocations(projectedMessages) : undefined,
+    [companionChat, projectedMessages]);
+  const companionWorkGroupLabel = companionChat && activePendingKind
+    ? t(`devices.presentation.sessionList.preview.${activePendingKind === 'permission' ? 'permission'
+      : activePendingKind === 'ask_user_question' ? 'answer'
+      : activePendingKind === 'plan_review' ? 'planReview' : 'attention'}`)
+    : companionWorkingLabel;
+  const hasLiveWorkGroup = messageListItems.some(item => item.type === 'work_group' && item.isStreaming);
   const messageListStructureKey = useMemo(
     () => ({}),
     [pendingSendItems, renderItemsStructureKey, optimisticClientIds],
@@ -6827,7 +6842,7 @@ export default function SessionScreen() {
             testID="session.planModeChip"
           />
         ) : null}
-        {composerRuntimeSummary ? (
+        {!sessionManagedByHost && composerRuntimeSummary ? (
           <ComposerRuntimePill
             disabled={sessionManagedByHost || controlBusy || !canUseRemoteSessionControls}
             fastOn={composerPillFastOn}
@@ -8948,8 +8963,10 @@ export default function SessionScreen() {
           <SessionHeaderNativeBlur height={Math.max(topOverlayHeight, insets.top + 44) + spacing.xxl} />
         ) : null}
         <View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">
-          <View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>
-            <SessionHeaderBar
+          <View style={[styles.sessionChromeContent, { paddingTop: insets.top }, companionChat && { backgroundColor: colors.surface }]}>
+            {companionChat && companionResource && !shareSelectionActive ? <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
+              resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason}
+              onSearch={() => setSearchOpen(true)} /> : <SessionHeaderBar
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
@@ -8999,7 +9016,7 @@ export default function SessionScreen() {
                 : projectDraftSessionTitle(currentSession?.title, t('session.menu.unnamedTitle'))
                   || currentSession?.workingDir
                   || (connectionError ? t('session.screen.sessionNotSynced') : (deviceName || t('session.screen.conversationFallback')))}
-            />
+            />}
 
             {showConnectionBanner || showCachedHistoryNotice ? (
               <ConnectionBanner
@@ -9322,7 +9339,7 @@ export default function SessionScreen() {
                 topOverlayHeight={topOverlayHeight}
               />
 
-              {sessionOperationLayout.messageHistoryMode === 'collapsed' ? (
+              {!companionInlineInteraction && sessionOperationLayout.messageHistoryMode === 'collapsed' ? (
                 <MessageHistoryToggle
                   expanded={pendingHistoryExpanded}
                   onToggle={() => setPendingHistoryExpanded((value) => !value)}
@@ -9332,11 +9349,14 @@ export default function SessionScreen() {
               {/* showSyncingShell:session 还没回来但在同步,消息区先出骨架(走 MessageRenderer 的 loading 态)。 */}
               {showMessageHistory || showSyncingShell ? (
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
-                  <MessageRenderer
+                  <MessageRenderer companion={companionChat} companionWorkingLabel={companionWorkGroupLabel}
+                    companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}
-                    showPluginInvocations={Boolean(currentSession && currentSession.source !== 'bot')}
+                    showPluginInvocations={!companionChat && Boolean(currentSession && currentSession.source !== 'bot')}
                     bottomOverlayHeight={bottomOverlayHeight}
-                    contentBottomInset={nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
+                    contentBottomInset={companionInlineInteraction && !shareSelectionActive
+                      ? spacing.md
+                      : nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
                       ? MOBILE_MESSAGE_LIST_BOTTOM_PADDING
                       : undefined}
                     topOverlayHeight={topOverlayHeight}
@@ -9384,6 +9404,16 @@ export default function SessionScreen() {
                     imageAnnotation={collaborationReadOnlyReason ? undefined : composerAnnotations.chatAnnotation}
                     queueFooter={(
                       <>
+                        {companionChat && !hasLiveWorkGroup && !companionInlineInteraction ? <CompanionWorkingStatus label={companionWorkingLabel} /> : null}
+                        {companionInlineInteraction && !shareSelectionActive ? <InteractionPanel
+                          embedded
+                          companion={companionChat}
+                          collapse={pendingInteractionCollapse} deviceId={deviceId} sessionId={sessionId}
+                          interactions={pending} activeRequestId={pendingInteractionActiveRequestId}
+                          onActiveRequestIdChange={setPendingInteractionActiveRequestId}
+                          planViewerState={pendingPlanViewerState} onPlanViewerStateChange={setPendingPlanViewerState}
+                          onError={setError} readOnlyReason={collaborationReadOnlyReason}
+                        /> : null}
                         {/* error-tail / interrupted 收尾提示:live 错误与队列区互斥
                             (resolveSessionTailBanner 内部已按 projection.error 抑制)。
                             协同只读会话(worker):error-tail 不渲染(错误卡已回流
@@ -9492,7 +9522,7 @@ export default function SessionScreen() {
             在等什么、能取消,但不吃掉 composer —— 否则用户既处理不了这张卡又发不
             出消息。高度按 palette 量级收紧,内容超出走内部滚动。
           */}
-          {!shareSelectionActive && sessionOperationLayout.pendingInteractionPlacement === 'above-composer' ? (
+          {!shareSelectionActive && !companionInlineInteraction && sessionOperationLayout.pendingInteractionPlacement === 'above-composer' ? (
             <View
               style={[
                 styles.pendingInteractionSurface,
@@ -9509,6 +9539,7 @@ export default function SessionScreen() {
                     不给收起入口:收起态的文案与 a11y 都是「先不答、稍后回答」,套在它身上是
                     错的语义。 */}
                 <InteractionPanel
+                  companion={companionChat}
                   deviceId={deviceId}
                   sessionId={sessionId}
                   interactions={pending}
@@ -9522,6 +9553,7 @@ export default function SessionScreen() {
           ) : null}
 
           {shareSelectionActive ? null : sessionOperationLayout.composerSlot === 'pending-interaction' ? (
+            companionInlineInteraction ? null : (
             <View
               style={[
                 styles.pendingInteractionSurface,
@@ -9543,6 +9575,7 @@ export default function SessionScreen() {
                   testID="interaction.bottomScroll"
                 >
                   <InteractionPanel
+                  companion={companionChat}
                     safeAreaBottomInset={insets.bottom}
                     collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
@@ -9564,6 +9597,7 @@ export default function SessionScreen() {
                   testID="interaction.bottomScroll"
                 >
                 <InteractionPanel
+                  companion={companionChat}
                   safeAreaBottomInset={insets.bottom}
                   collapse={pendingInteractionCollapse}
                   deviceId={deviceId}
@@ -9579,7 +9613,7 @@ export default function SessionScreen() {
                 </ScrollView>
               )}
             </View>
-          ) : sessionOperationLayout.composerSlot === 'read-only' ? (
+          )) : sessionOperationLayout.composerSlot === 'read-only' ? (
             <View style={styles.readOnlyComposer} testID="session.collaborationReadOnlyComposer">
               <Text style={styles.collaborationTitle}>{t('session.screen.readOnlyMode')}</Text>
               <Text style={styles.collaborationText}>
@@ -9593,7 +9627,7 @@ export default function SessionScreen() {
                   紧接着消息落屏时这条又要重排一次。等有内容了再显示活动条。
                   判据必须带 messageCount:syncingWhileEmpty 只要 loading 就为真,而收口后
                   还会再来几轮 load(实测日志),只看它会让已有消息的会话反复熄灭活动条。 */}
-              {showComposerActivity && !(syncingWhileEmpty && !hasRenderedMessages) ? (
+              {!companionChat && showComposerActivity && !(syncingWhileEmpty && !hasRenderedMessages) ? (
                 <View
                   style={[
                     styles.composerActivityFrame,

@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   Check,
+  ShieldCheck,
+  MessageCircle,
+  ChevronDown,
+  ChevronUp,
   CornerDownLeft,
   Maximize2,
   Minimize2,
@@ -105,7 +109,20 @@ function localizedInteractionKindKey(kind: string): string {
 export type MobilePlanViewerState = 'half' | 'expanded' | 'minimized' | 'edit';
 type RestorablePlanViewerState = Exclude<MobilePlanViewerState, 'minimized'>;
 
-export function InteractionPanel({
+const CompanionInteractionContext = createContext(false);
+
+export function InteractionPanel(props: Parameters<typeof InteractionPanelContent>[0] & { companion?: boolean }) {
+  return <CompanionInteractionContext.Provider value={props.companion === true}>
+    <InteractionPanelContent {...props} />
+  </CompanionInteractionContext.Provider>;
+}
+
+function useInteractionStyles() {
+  return useThemedStyles<InteractionStyles>(useContext(CompanionInteractionContext) ? makeCompanionStyles : makeStyles);
+}
+
+function InteractionPanelContent({
+  embedded = false,
   safeAreaBottomInset = 0,
   collapse,
   deviceId,
@@ -119,6 +136,7 @@ export function InteractionPanel({
   onError,
   readOnlyReason,
 }: {
+  embedded?: boolean;
   safeAreaBottomInset?: number;
   /**
    * 收起能力:整组给或整组不给。
@@ -143,7 +161,7 @@ export function InteractionPanel({
   readOnlyReason?: string | null;
   onError(message: string | null): void;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
   const sortedInteractions = useMemo(
@@ -218,7 +236,7 @@ export function InteractionPanel({
   const rootLayoutStyle = {
     gap: touchLayout.rootGap,
     paddingBottom: Math.max(spacing.sm, safeAreaBottomInset),
-    paddingHorizontal: touchLayout.rootPaddingHorizontal,
+    paddingHorizontal: embedded ? 0 : touchLayout.rootPaddingHorizontal,
   };
   const cardLayoutStyle = {
     gap: touchLayout.cardGap,
@@ -321,7 +339,7 @@ function resolveActionCount(kind: string): number {
   return 1;
 }
 
-type InteractionStyles = ReturnType<typeof makeStyles>;
+type InteractionStyles = ReturnType<typeof makeStyles> | ReturnType<typeof makeCompanionStyles>;
 
 function cardStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout): StyleProp<ViewStyle> {
   return [
@@ -363,7 +381,8 @@ function PendingTaskHeader({
   presentation: ReturnType<typeof buildPendingInteractionQueuePresentation>;
   touchLayout: InteractionTouchLayout;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
+  const companion = useContext(CompanionInteractionContext);
   const { colors } = useTheme();
   const { t } = useTranslation();
   const activeIndex = Math.max(0, presentation.items.findIndex((item) => item.active));
@@ -382,8 +401,8 @@ function PendingTaskHeader({
         ]}
       >
         <View style={styles.taskHeaderText}>
-          <Text style={styles.taskEyebrow}>{t('interaction.panel.pendingRequests')}</Text>
-          <Text numberOfLines={1} style={styles.taskTitle}>{presentation.title}</Text>
+          {!companion && <Text style={styles.taskEyebrow}>{t('interaction.panel.pendingRequests')}</Text>}
+          <Text numberOfLines={1} style={styles.taskTitle}>{companion ? t('interaction.panel.pendingRequests') : presentation.title}</Text>
         </View>
         {presentation.totalCount > 1 ? (
           <InteractionTouchButton
@@ -599,12 +618,14 @@ function PermissionCard({
   onDecision(decision: Record<string, unknown>): void;
   touchLayout: InteractionTouchLayout;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const { t, i18n: i18nInstance } = useTranslation();
   const presentation = useMemo(
     () => buildPermissionReviewPresentation(item.request, mobilePresentationLocalizer),
     [i18nInstance.language, item.request],
   );
+  const companion = useContext(CompanionInteractionContext);
+  const { colors } = useTheme();
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
@@ -622,11 +643,18 @@ function PermissionCard({
 
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.permission.card">
-      <View style={styles.compactCardHeader}>
+      {companion ? <>
+        <View style={styles.companionCaption}>
+          <ShieldCheck size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
+          <Text style={styles.kind}>{t('interaction.kinds.permission.label')}</Text>
+        </View>
+        <Text style={styles.cardTitle}>{permissionState.title}</Text>
+      </> : <View style={styles.compactCardHeader}>
         <Text style={styles.kind}>{t('interaction.permission.kind')}</Text>
         <Text numberOfLines={1} style={styles.compactCardTitle}>{permissionState.title}</Text>
-      </View>
+      </View>}
       <PermissionEvidence
+        input={item.request.input}
         armed={!!armedDecision}
         presentation={presentation}
         riskWarningText={permissionState.riskWarningText}
@@ -678,18 +706,44 @@ function PermissionCard({
 }
 
 function PermissionEvidence({
+  input,
   armed,
   presentation,
   riskWarningText,
   touchLayout,
 }: {
+  input: unknown;
   armed: boolean;
   presentation: PermissionReviewPresentation;
   riskWarningText: string | null;
   touchLayout: InteractionTouchLayout;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const { t } = useTranslation();
+  const companion = useContext(CompanionInteractionContext);
+  const { colors } = useTheme();
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const fields = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const facts = Object.entries(fields).filter((entry): entry is [string, string] =>
+    typeof entry[1] === 'string' && ['path', 'file_path', 'url', 'command', 'ghost_id', 'tool'].includes(entry[0]));
+  const fullDetails = Object.keys(fields).length ? JSON.stringify(fields, null, 2) : presentation.code;
+  if (companion) return <View style={styles.companionEvidence} testID="interaction.permission.decisionSummary">
+    <View style={styles.companionFact}><Text style={styles.companionFactLabel}>{t('interaction.companion.operation')}</Text><Text selectable style={styles.companionFactValue}>{presentation.toolName}</Text></View>
+    {facts.map(([key, value]) => <View key={key} style={styles.companionFact}>
+      <Text style={styles.companionFactLabel}>{t(`interaction.companion.fields.${key}`)}</Text>
+      <Text selectable style={styles.companionFactValue}>{value}</Text>
+    </View>)}
+    {presentation.autoReviewUnavailable || presentation.description ? <Text style={styles.body}>{presentation.autoReviewUnavailable ? t('interaction.permission.autoReviewUnavailable') : presentation.description}</Text> : null}
+    {riskWarningText ? <View style={[styles.permissionRiskRow, armed && styles.permissionRiskRowArmed]} testID="interaction.permission.riskWarning">
+      <Text style={styles.permissionRiskLabel}>{t('interaction.permission.highRisk')}</Text><Text style={styles.permissionRiskText}>{riskWarningText}</Text>
+    </View> : null}
+    {facts.length > 0 ? <InteractionTouchButton accessibilityLabel={t('interaction.companion.details')} expanded={detailsOpen}
+      onPress={() => setDetailsOpen(value => !value)} style={styles.companionDetailsButton} testID="interaction.permission.detailsButton">
+      <Text style={styles.kind}>{t('interaction.companion.details')}</Text>
+      {detailsOpen ? <ChevronUp size={iconSize.sm} color={colors.textSecondary} /> : <ChevronDown size={iconSize.sm} color={colors.textSecondary} />}
+    </InteractionTouchButton> : null}
+    {(!facts.length || detailsOpen) && <ScrollView style={styles.permissionCodeBlock} nestedScrollEnabled><Text selectable style={styles.codeText}>{fullDetails}</Text></ScrollView>}
+  </View>;
   return (
     <View
       style={[
@@ -744,9 +798,10 @@ function AskUserQuestionCard({
   onDecision(decision: Record<string, unknown>): void;
   touchLayout: InteractionTouchLayout;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const companion = useContext(CompanionInteractionContext);
   const requestId = readRequestId(item) ?? '';
   const questions = useMemo(() => normalizeAskQuestions(item.request.questions), [item.request.questions]);
   const draftCompletedRef = useRef(false);
@@ -899,6 +954,7 @@ function AskUserQuestionCard({
       {/* 收起入口统一在队列头(PendingTaskHeader),卡内不再自持一份 collapsed state:
           两套状态时页面级那份被卡片 key 变化冲掉,收起会自己弹回来。 */}
       <View style={styles.compactCardHeader}>
+        {companion && <MessageCircle size={iconSize.sm} color={colors.textSecondary} />}
         <Text style={styles.askHeaderKind}>{t('interaction.panel.awaitingAnswer')}</Text>
         <View style={styles.compactHeaderActions}>
           <Text style={styles.pageText}>{presentation.pageLabel}</Text>
@@ -1025,7 +1081,13 @@ function AskUserQuestionCard({
           <InteractionTouchButton
             accessibilityLabel={t('interaction.panel.previous')}
             disabled={busy}
-            onPress={() => setCurrentIndex((idx) => Math.max(0, idx - 1))}
+            onPress={() => {
+              const answer = isMulti
+                ? encodeMultiSelectAnswer(options, selectedLabels, customInput)
+                : customModeActive ? customInput : existingAnswer ?? '';
+              setAnswers((prev) => ({ ...prev, [currentAnswerKey]: answer }));
+              setCurrentIndex((idx) => Math.max(0, idx - 1));
+            }}
             style={[
               styles.secondaryButton,
               resolveButtonLayoutStyle(touchLayout, 'secondary'),
@@ -1090,7 +1152,7 @@ function PlanReviewCard({
   onViewerStateChange?(state: MobilePlanViewerState): void;
   touchLayout: InteractionTouchLayout;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   const requestId = readRequestId(item) ?? '';
@@ -1417,6 +1479,18 @@ function PlanReviewCard({
  * interactionResolveOrigin),所以这张卡的价值全在「看懂」:哪个插件、卡在哪一步、
  * 为什么失败、回电脑端要做什么。动作只有取消。
  */
+export function PluginSetupMessageContent({ request, busy, onCancel }: {
+  request: PendingInteraction['request']; busy: boolean; onCancel?: () => void;
+}) {
+  const { width } = useWindowDimensions();
+  const { t } = useTranslation();
+  return <CompanionInteractionContext.Provider value>
+    <PluginSetupCard item={{ request }} requestId={typeof request.requestId === 'string' ? request.requestId : null}
+      busy={busy} touchLayout={buildInteractionTouchLayout({ screenWidth: width, actionCount: 1 })}
+      cancel={onCancel ? { label: t('interaction.panel.cancelRequest'), accessibilityLabel: t('interaction.panel.cancelRequestAccessibility'), onPress: onCancel } : null} />
+  </CompanionInteractionContext.Provider>;
+}
+
 function PluginSetupCard({
   busy,
   cancel,
@@ -1430,7 +1504,7 @@ function PluginSetupCard({
   requestId: string | null;
   touchLayout: InteractionTouchLayout;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const { t } = useTranslation();
   const presentation = useMemo(
     () => buildRemotePluginSetupPresentation(item.request),
@@ -1452,10 +1526,10 @@ function PluginSetupCard({
           />
         ) : null}
         <View style={styles.compactCardTitleWrap}>
-          <Text style={styles.kind}>{t('interaction.panel.desktopOnlyKind')}</Text>
+          <Text style={styles.kind}>{t(presentation.terminal ? 'interaction.kinds.plugin_setup.label' : 'interaction.panel.desktopOnlyKind')}</Text>
           <Text numberOfLines={1} style={styles.compactCardTitle}>{title}</Text>
         </View>
-        {presentation.stepCount > 0 ? (
+        {presentation.stepCount > 0 && !presentation.terminal ? (
           <Text style={styles.pageText} testID="interaction.pluginSetup.progress">
             {t('interaction.pluginSetup.progress', {
               satisfied: presentation.satisfiedCount,
@@ -1464,7 +1538,7 @@ function PluginSetupCard({
           </Text>
         ) : null}
       </View>
-      {presentation.intro ? (
+      {presentation.intro && !presentation.terminal ? (
         <Text style={styles.body} numberOfLines={3}>{presentation.intro}</Text>
       ) : null}
       {presentation.groups.map((group) => (
@@ -1473,7 +1547,7 @@ function PluginSetupCard({
             <Text style={styles.pluginSetupGroupHint}>{t('interaction.pluginSetup.chooseOne')}</Text>
           ) : null}
           {group.steps.map((step) => (
-            <PluginSetupStepRow key={step.id} step={step} />
+            <PluginSetupStepRow key={step.id} step={step} terminal={presentation.terminal} />
           ))}
         </View>
       ))}
@@ -1506,8 +1580,8 @@ const PLUGIN_SETUP_RUNNING_PHASES: ReadonlySet<RemotePluginSetupPhase> = new Set
   'verifying',
 ]);
 
-function PluginSetupStepRow({ step }: { step: RemotePluginSetupStep }) {
-  const styles = useThemedStyles(makeStyles);
+function PluginSetupStepRow({ step, terminal }: { step: RemotePluginSetupStep; terminal: boolean }) {
+  const styles = useInteractionStyles();
   const { colors } = useTheme();
   const { t } = useTranslation();
   const phaseColor = step.phase === 'satisfied'
@@ -1526,14 +1600,14 @@ function PluginSetupStepRow({ step }: { step: RemotePluginSetupStep }) {
       })
       : null;
   // 已完成的步骤不再提示「回电脑端做什么」——那是下一步该做的事。
-  const visibleActionHint = actionHint && step.phase !== 'satisfied' ? actionHint : null;
+  const visibleActionHint = actionHint && !terminal && step.phase !== 'satisfied' ? actionHint : null;
   const errorText = step.errorCode ? t(`interaction.pluginSetup.error.${step.errorCode}`) : null;
   return (
     <View
       // 聚合成一个读屏单元:标题 / 状态 / 待办 / 错误分开念会把一步拆成四条碎片。
       // 分隔符走文案目录:硬编码「，」会让 en / ja / ko 的读屏念出中文标点。
       accessible
-      accessibilityLabel={[step.title, phaseText, step.description, visibleActionHint, errorText]
+      accessibilityLabel={[step.title, phaseText, terminal ? null : step.description, visibleActionHint, errorText]
         .filter((part): part is string => !!part)
         .join(t('interaction.pluginSetup.a11ySeparator'))}
       style={styles.pluginSetupStep}
@@ -1545,7 +1619,7 @@ function PluginSetupStepRow({ step }: { step: RemotePluginSetupStep }) {
           <Text style={[styles.pluginSetupPhase, { color: phaseColor }]}>{phaseText}</Text>
         ) : null}
       </View>
-      {step.description ? (
+      {step.description && !terminal ? (
         <Text numberOfLines={2} style={styles.pluginSetupStepBody}>{step.description}</Text>
       ) : null}
       {visibleActionHint ? (
@@ -1575,7 +1649,7 @@ function UnsupportedCard({
   request: PendingInteraction['request'];
   touchLayout: InteractionTouchLayout;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const { t } = useTranslation();
   // 未知类型只能靠 request 预览交底;整段一次限行,不按行各自限行(每行各自
   // numberOfLines={6} 会把总可见行数放大成 6 × 行数,#530 review)。
@@ -1614,7 +1688,7 @@ function ResolveButton({
   testID: string;
   variant: 'primary' | 'secondary' | 'inline';
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const presentation = buildInteractionResolveActionPresentation({
     armed,
     busy,
@@ -1663,6 +1737,7 @@ function InteractionTouchButton({
   disabled = false,
   onPress,
   selected = false,
+  expanded,
   style,
   testID,
 }: {
@@ -1673,10 +1748,11 @@ function InteractionTouchButton({
   disabled?: boolean;
   onPress?: () => void;
   selected?: boolean;
+  expanded?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }) {
-  const styles = useThemedStyles(makeStyles);
+  const styles = useInteractionStyles();
   const interactionDisabled = disabled || busy || !onPress;
   return (
     <Pressable
@@ -1687,6 +1763,7 @@ function InteractionTouchButton({
         busy,
         disabled: interactionDisabled,
         selected,
+        ...(expanded !== undefined ? { expanded } : {}),
       }}
       disabled={interactionDisabled}
       onPress={interactionDisabled ? undefined : onPress}
@@ -1703,6 +1780,12 @@ function InteractionTouchButton({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  companionCaption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  companionEvidence: { gap: spacing.sm },
+  companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
+  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
+  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
+  companionDetailsButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start' },
   root: {
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -2426,3 +2509,27 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     opacity: 0.45,
   },
 });
+
+const makeCompanionStyles = (colors: ThemeColors) => {
+  const base = makeStyles(colors);
+  return {
+    ...base,
+    root: { ...base.root, borderBottomWidth: 0, paddingHorizontal: 0, paddingVertical: spacing.sm },
+    taskTitle: { ...base.taskTitle, color: colors.textSecondary, fontSize: typeScale.caption },
+    taskCollapseButton: { ...base.taskCollapseButton, borderWidth: 0, paddingHorizontal: spacing.sm },
+    kind: { ...base.kind, textTransform: 'none' as const, color: colors.textSecondary },
+    askHeaderKind: { ...base.askHeaderKind, textTransform: 'none' as const, color: colors.textSecondary },
+    compactCardHeader: { ...base.compactCardHeader, minHeight: 0, flexWrap: 'wrap' as const },
+    compactCardTitleWrap: { ...base.compactCardTitleWrap, flexDirection: 'column' as const, alignItems: 'flex-start' as const },
+    compactCardTitle: { ...base.compactCardTitle, flex: 0, flexShrink: 1 },
+    permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.surface, borderRadius: radius.control, borderWidth: 0 },
+    permissionRiskRow: { ...base.permissionRiskRow, borderRadius: radius.control },
+    optionList: { ...base.optionList, borderWidth: 0, overflow: 'visible' as const, gap: spacing.sm },
+    optionRow: { ...base.optionRow, borderRadius: radius.control, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+    inlineInput: { ...base.inlineInput, borderRadius: radius.pill },
+    inlineInputWide: { ...base.inlineInputWide, borderRadius: radius.pill },
+    planEditor: { ...base.planEditor, borderRadius: radius.control },
+    optionCustom: { ...base.optionCustom, fontStyle: 'normal' as const },
+    pluginSetupStep: { ...base.pluginSetupStep, borderWidth: 0 },
+  };
+};

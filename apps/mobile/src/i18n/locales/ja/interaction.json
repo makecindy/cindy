@@ -236,7 +236,9 @@
     "inlineFormActionGeneric": "パソコンで設定を入力"
   },
   "presentation": {
-    "action": { "submitting": "送信中" },
+    "action": {
+      "submitting": "送信中"
+    },
     "permission": {
       "highRiskTitle": "高リスクの権限は再確認が必要です",
       "highRiskDetail": "コマンドを確認し、もう一度許可を確定してください。不明な場合は拒否してください。",
@@ -274,6 +276,18 @@
         "plugin_setup": "設定はコンピューターで完了する必要があります。ここではリクエストをキャンセルできます。",
         "fallback": "モバイルではデスクトップから届いた順にリモートリクエストを処理します。"
       }
+    }
+  },
+  "companion": {
+    "operation": "操作",
+    "details": "詳細を表示",
+    "fields": {
+      "path": "ファイル",
+      "file_path": "ファイル",
+      "url": "アドレス",
+      "command": "コマンド",
+      "ghost_id": "プラグイン",
+      "tool": "ツール"
     }
   }
 }

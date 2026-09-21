@@ -236,7 +236,9 @@
     "inlineFormActionGeneric": "Enter one setting on your computer"
   },
   "presentation": {
-    "action": { "submitting": "Submitting" },
+    "action": {
+      "submitting": "Submitting"
+    },
     "permission": {
       "highRiskTitle": "High-risk permission needs confirmation",
       "highRiskDetail": "Review the command, then confirm again to allow it. Deny it if you're unsure.",
@@ -274,6 +276,18 @@
         "plugin_setup": "Setup must be completed on the computer; you can cancel this request here.",
         "fallback": "Mobile handles remote requests in the order sent by the desktop."
       }
+    }
+  },
+  "companion": {
+    "operation": "Operation",
+    "details": "Details",
+    "fields": {
+      "path": "File",
+      "file_path": "File",
+      "url": "Address",
+      "command": "Command",
+      "ghost_id": "Plugin",
+      "tool": "Tool"
     }
   }
 }

@@ -20,9 +20,8 @@ import { WorkingStatusCopy, WORKING_STATUS_COPY_INSTRUCTIONS, workingStatusPromp
 const requestSchema = z.object({ sessionId: z.string().min(1).max(200), phase: z.enum(WORKING_PHASES), locale: z.enum(SUPPORTED_LOCALES) }).strict();
 const copies = new WeakMap<Session, { generation: number; scope: string; copy: WorkingStatusCopy; dispose: () => void }>();
 
-export function registerWorkingStatusIpc(): void {
-  ipcMain.handle(MAKER_INVOKE.WORKING_STATUS, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
+/** Shared read path. Remote callers must first bind the request to a visible teammate's canonical session. */
+export async function getWorkingStatusCopy(raw: unknown): Promise<{ text: string | null }> {
     const { sessionId, phase, locale } = requestSchema.parse(raw);
     if (!hasPublicWorkingSubject(phase)) return { text: null };
     const maker = getMakerIfReady();
@@ -93,5 +92,11 @@ export function registerWorkingStatusIpc(): void {
       copies.set(session, entry);
     }
     return { text: await entry.copy.request(phase) };
+}
+
+export function registerWorkingStatusIpc(): void {
+  ipcMain.handle(MAKER_INVOKE.WORKING_STATUS, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return getWorkingStatusCopy(raw);
   });
 }

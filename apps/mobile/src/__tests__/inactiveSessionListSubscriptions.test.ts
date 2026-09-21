@@ -12,7 +12,9 @@ describe('inactive session list subscriptions', () => {
       const screen = source(path);
       expect(screen).toContain('const screenFocused = useIsFocused();');
       expect(screen).toContain(
-        '<RemoteSessionStoreSubscriptionGate enabled={screenFocused}>',
+        path === 'app/devices/index.tsx'
+          ? "<RemoteSessionStoreSubscriptionGate enabled={screenFocused && navigation.mode === 'tasks'}>"
+          : '<RemoteSessionStoreSubscriptionGate enabled={screenFocused}>',
       );
     }
   });

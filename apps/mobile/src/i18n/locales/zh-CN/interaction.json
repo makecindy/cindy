@@ -236,7 +236,9 @@
     "inlineFormActionGeneric": "在电脑端填写一项配置"
   },
   "presentation": {
-    "action": { "submitting": "提交中" },
+    "action": {
+      "submitting": "提交中"
+    },
     "permission": {
       "highRiskTitle": "高风险授权需要二次确认",
       "highRiskDetail": "先核对命令内容，再点一次确认允许；不确定就拒绝。",
@@ -274,6 +276,18 @@
         "plugin_setup": "配置要在电脑端完成，这里可以取消这次请求。",
         "fallback": "手机版会按桌面端的请求顺序处理。"
       }
+    }
+  },
+  "companion": {
+    "operation": "操作",
+    "details": "查看详情",
+    "fields": {
+      "path": "文件",
+      "file_path": "文件",
+      "url": "地址",
+      "command": "命令",
+      "ghost_id": "插件",
+      "tool": "工具"
     }
   }
 }

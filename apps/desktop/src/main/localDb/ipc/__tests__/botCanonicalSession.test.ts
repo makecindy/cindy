@@ -72,6 +72,7 @@ const h = await vi.hoisted(async () => {
   getSession: vi.fn(() => null as {
     capabilities?: { manualCompact?: { supported?: boolean } };
     compactSession: (instructions?: string) => Promise<unknown>;
+    setPermissionMode?: (mode: string) => Promise<void>;
   } | null),
   ensureDialogue: vi.fn((sessionId: string) => join(userDataDir, sessionId)),
   searchConversations: vi.fn(),
@@ -752,6 +753,32 @@ describe('Bot canonical Session lifecycle', () => {
     expect(updated.invitation.stage).toBe('avatar');
   });
 
+  it.each([['ask', 'ask'], ['auto', 'auto'], ['trusted', 'bypassPermissions']])('applies saved %s permissions to the existing chat and live runtime', async (permissions, mode) => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const setPermissionMode = vi.fn(async () => {});
+    h.getSession.mockReturnValue({ compactSession: vi.fn(), setPermissionMode });
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { permissions } });
+    expect(h.sqlite!.prepare('SELECT permission_mode AS mode FROM sessions WHERE id = ?').get(created.session.id)).toEqual({ mode });
+    expect(setPermissionMode).toHaveBeenCalledWith(mode);
+    // Saving the same value repairs an old chat left at the prior permission mode.
+    h.sqlite!.prepare("UPDATE sessions SET permission_mode = 'default' WHERE id = ?").run(created.session.id);
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { permissions } });
+    expect(h.sqlite!.prepare('SELECT permission_mode AS mode FROM sessions WHERE id = ?').get(created.session.id)).toEqual({ mode });
+  });
+
+  it('retires a runtime whose permission change failed and keeps the saved setting for restart', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    h.getSession.mockReturnValue({ compactSession: vi.fn(), setPermissionMode: vi.fn(async () => { throw new Error('runtime disconnected'); }) });
+    await expect(invoke('local-db:bots:update', { id: 'bot-1', capabilities: { permissions: 'ask' } })).rejects.toThrow('runtime disconnected');
+    expect(h.closeSession).toHaveBeenCalledWith(created.session.id);
+    expect(h.sqlite!.prepare('SELECT permission_mode AS mode FROM sessions WHERE id = ?').get(created.session.id)).toEqual({ mode: 'ask' });
+    expect(h.requestRuntimeRefresh).not.toHaveBeenCalled();
+  });
+
   it('stops profile saving before projecting or writing files under a newly selected owner', async () => {
     const runTx = h.tx!;
     h.tx = async (name, args) => {
@@ -872,6 +899,51 @@ describe('Bot canonical Session lifecycle', () => {
     const next = await createBotProfile({ name: 'Another name' });
     expect(next.avatar).not.toBe(created.avatar);
     expect((await invoke('local-db:bots:get', created.id)).avatar).toBe(created.avatar);
+  });
+
+  it('reconciles mobile creation after a lost receipt without bypassing invitation preparation', async () => {
+    const { botRemoteManagement } = await import('../botRemoteManagement');
+    const sharp = (await import('sharp')).default;
+    const bytes = await sharp(resolve(__dirname, '../../../../renderer/assets/bot-presets/cindy.png')).resize(256, 256).jpeg({ quality: 80 }).toBuffer();
+    const context = { controllerDeviceId: 'mobile-creation-test' };
+    const client = { protocolVersion: 1, primitives: ['form'], locale: 'zh-CN' };
+    const input = { name: '手机创建的伙伴', avatarImageBase64: bytes.toString('base64'), requestId: 'mobile-creation-intent-001' };
+    const submit = async () => {
+      const resource = await botRemoteManagement.getEditor(context, 'create', 'zh-CN');
+      return botRemoteManagement.invoke(context, { collectionId: 'teammates', resourceRef: resource.ref, actionId: resource.actions![0].id, client, input });
+    };
+    const first = await submit();
+    const target = first.effects.find(effect => effect.kind === 'navigate');
+    if (target?.kind !== 'navigate' || target.target.kind !== 'resource') throw Error('Missing creation receipt');
+    const botId = target.target.ref.id;
+    const profile = await invoke('local-db:bots:get', botId);
+    expect(profile.canonicalSessionId).toBeUndefined();
+    expect(profile.invitation).toMatchObject({ stage: 'skills' });
+    const preparing = await botRemoteManagement.getInvitation(context, botId);
+    expect(preparing.blocks).toContainEqual(expect.objectContaining({ id: 'invitation', data: { stage: 'skills' } }));
+    expect(preparing.links).toEqual([]);
+    expect(readFileSync(resolveSafe(profile.avatar).absPath)).toEqual(bytes);
+    expect(await submit()).toEqual(first);
+    // The host invitation worker owns progress; a reconnect cannot advance it.
+    expect((await invoke('local-db:bots:get', botId)).invitation.stage).toBe('skills');
+    h.sqlite!.prepare("UPDATE bot_profile_versions SET capabilities_json = json_set(capabilities_json, '$.invitation.stage', 'failed') WHERE bot_id = ?").run(botId);
+    const failed = await botRemoteManagement.getInvitation(context, botId);
+    const invitation = await import('../../../maker-ipc/botInvitation');
+    const queued = vi.spyOn(invitation, 'queueBotInvitation').mockImplementation(() => {});
+    try {
+      await botRemoteManagement.invoke(context, { collectionId: 'teammates', resourceRef: failed.ref, actionId: failed.actions![0].id, client });
+      expect(queued).toHaveBeenCalledWith(botId, expect.objectContaining({ createCanonicalSession: expect.any(Function) }), true);
+    } finally { queued.mockRestore(); }
+    const staleRetry = await botRemoteManagement.getInvitation(context, botId);
+    h.sqlite!.prepare("UPDATE bot_profile_versions SET capabilities_json = json_set(capabilities_json, '$.invitation.stage', 'ready') WHERE bot_id = ?").run(botId);
+    await expect(botRemoteManagement.invoke(context, { collectionId: 'teammates', resourceRef: staleRetry.ref, actionId: staleRetry.actions![0].id, client })).rejects.toThrow('Resource changed');
+    await submit();
+    const ready = await invoke('local-db:bots:get', botId);
+    expect(ready.canonicalSessionId).toBeTruthy();
+    await updateStoredBotProfile({ id: botId, name: '后来在电脑上改的名字' });
+    expect(await submit()).toEqual(first);
+    expect(await invoke('local-db:bots:get', botId)).toMatchObject({ name: '后来在电脑上改的名字', canonicalSessionId: ready.canonicalSessionId });
+    expect(h.sqlite!.prepare('SELECT id FROM bot_profiles WHERE id = ?').all(botId)).toHaveLength(1);
   });
 
   it('allows creating and renaming an ordinary Cindy after the old Cindy is deleted', async () => {
@@ -3748,7 +3820,7 @@ describe('Bot Session task end-to-end runtime', () => {
     release();
     const [firstResult, secondResult] = await Promise.allSettled([first, second]);
     if (order === 'delete-first') {
-      expect(firstResult).toMatchObject({ status: 'fulfilled', value: { status: 'deleted' } });
+      expect(firstResult, firstResult.status === 'rejected' ? String(firstResult.reason) : '').toMatchObject({ status: 'fulfilled', value: { status: 'deleted' } });
       expect(secondResult).toMatchObject({ status: 'fulfilled', value: { ok: false } });
       expect(dispatch).not.toHaveBeenCalled();
       expect(sqlite.prepare('SELECT * FROM bot_direct_message_threads').all()).toEqual([]);

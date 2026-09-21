@@ -34,6 +34,7 @@ function fixture() {
   };
   const Image = Object.assign(ExpoImage, { getSize: vi.fn() });
   const bindings = { React, View, Text: View, ExpoImage, Image,
+    useTranslation: () => ({ t: (key: string) => key }),
     useThemedStyles: () => ({}), makeStyles: () => ({}),
     useRecyclingState: React.useState, useState: React.useState, useLayoutEffect: React.useLayoutEffect,
     useEffect: React.useEffect, useRef: React.useRef, useCallback: React.useCallback,
@@ -60,6 +61,20 @@ function fixture() {
 }
 
 describe('image frame continuity', () => {
+  it('shows a same-size failure state after a direct image fails and keeps its viewer action', () => {
+    const f = fixture();
+    const open = vi.fn();
+    const url = 'https://example.invalid/missing.png';
+    f.render(<f.MediaPreview layout={f.layout} label="Missing image" variant="attachment"
+      media={{ kind: 'image', url, previewable: true }} onOpen={open} />);
+    act(() => f.handlers.get(url)!.onError());
+    const fallback = f.host.querySelector('[data-testid="message.mediaThumbFallback"]') as HTMLElement;
+    expect(fallback).not.toBeNull();
+    expect(fallback.textContent).toContain('message.lightbox.loadFailed');
+    expect(fallback.style.width).toBe(`${f.layout.attachmentImageMaxWidth}px`);
+    act(() => fallback.click());
+    expect(open).toHaveBeenCalledOnce();
+  });
   it('keeps the displayed pending source when upload completes, but releases it on attachment replacement', () => {
     const f = fixture();
     const Probe = ({ thumb }: any) => <span>{f.useThumbCellUri(thumb)}</span>;

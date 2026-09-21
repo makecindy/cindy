@@ -73,6 +73,7 @@ export interface UnifiedMobileGroup {
 export interface UnifiedMobilePickerViewProps {
   visible: boolean;
   onClose(): void;
+  onClosed?(): void;
   onBack?: () => void;
   title: string;
   testID: string;
@@ -455,6 +456,7 @@ export function UnifiedModelPickerSheet(
     <UnifiedModelPickerView
       visible={p.visible}
       onClose={p.onClose}
+      onClosed={p.onClosed}
       onBack={
         row
           ? () => {

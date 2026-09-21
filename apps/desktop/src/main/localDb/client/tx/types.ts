@@ -613,6 +613,8 @@ export interface BotsCreateProfileArgs {
 
 export interface BotsUpdateProfileArgs {
   id: string;
+  /** Explicit settings changes also update the permanent chat in this transaction. */
+  canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;
   description?: string;
   avatar?: string;

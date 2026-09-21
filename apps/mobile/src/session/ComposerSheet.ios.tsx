@@ -22,6 +22,7 @@ import {
   frame,
   padding,
   presentationDetents,
+  interactiveDismissDisabled,
   presentationDragIndicator,
   scrollContentBackground,
 } from "@expo/ui/swift-ui/modifiers";
@@ -45,6 +46,7 @@ export function ComposerSheet({
   testID,
   nativeContent,
   nativeHeader,
+  preventDismiss = false,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
@@ -58,7 +60,7 @@ export function ComposerSheet({
       <BottomSheet
         isPresented={visible}
         onIsPresentedChange={(open) => {
-          if (!open) onClose();
+          if (!open && visible) onClose();
         }}
         onDismiss={onClosed}
       >
@@ -66,6 +68,7 @@ export function ComposerSheet({
           modifiers={[
             presentationDetents(["medium", "large"], { selection: "medium" }),
             presentationDragIndicator("visible"),
+            interactiveDismissDisabled(preventDismiss),
           ]}
         >
           <VStack

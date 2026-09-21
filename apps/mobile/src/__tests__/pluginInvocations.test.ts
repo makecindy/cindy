@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import { companionPluginWorkEntries, collectCompanionPluginInvocations } from '@/session/pluginInvocations';
+import { buildMobileMessageRenderItems, type MobileWorkGroupItem } from '@/session/messageRenderModel';
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({
   id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra,
@@ -54,4 +56,33 @@ describe('plugin annotations on user messages', () => {
     const rows = normalizeRemoteMessages([msg('u', 'user', 'hello'), call('info', 'mcp__cindy__ghost_info', { ghost_id: 'art' }), msg('r', 'tool_result', '{"ok":true,', { toolUseId: 'info' }), call('c')]);
     expect(rows[0].pluginInvocations?.[0].name).toBe('art');
   });
+});
+
+
+it('places companion plugin activity in assistant work once, follows later work, and never crosses turns', () => {
+  const rendered = buildMobileMessageRenderItems([msg('u', 'user', 'Draw'), call('c')], { isSessionStreaming: true });
+  const work = rendered.find((item): item is MobileWorkGroupItem => item.type === 'work_group');
+  expect(work).toBeDefined();
+  const first = { ...work!, key: 'first', isStreaming: false };
+  const last = { ...work!, key: 'last', isStreaming: true };
+  const next = buildMobileMessageRenderItems([msg('u2', 'user', 'Read'), call('read', 'Read', { path: '/tmp/test' })]);
+  const entries = companionPluginWorkEntries([rendered[0], first, last, ...next]);
+  expect([...entries.keys()]).toEqual(['first']);
+  expect(entries.get('first')).toMatchObject({ sessionId: 's', running: true, plugins: [{ id: 'art', hasPendingCalls: true }] });
+  const settled = companionPluginWorkEntries([rendered[0], first, { ...last, isStreaming: false }, ...next]);
+  expect(settled.get('first')?.running).toBe(false);
+});
+
+
+it('retains plugin identity when history work is deferred and the user row has no derived annotations', () => {
+  const messages = [msg('u', 'user', 'Use plugin'), call('info', 'mcp:cindy:ghost_info', { ghost_id: 'art' }),
+    msg('ri', 'tool_result', { ok: true, ghost: { id: 'art', name: 'Art' } }, { toolUseId: 'info' }),
+    call('c', 'mcp:cindy:ghost_call'), msg('r', 'tool_result', { code: 'SETUP_REQUIRED' }, { toolUseId: 'c' })];
+  const rendered = buildMobileMessageRenderItems(messages);
+  const deferred = rendered.map(item => item.type === 'message' && item.message.kind === 'user'
+    ? { ...item, message: { ...item.message, pluginInvocations: undefined } }
+    : item.type === 'work_group' ? { ...item, children: [] } : item);
+  const entries = [...companionPluginWorkEntries(deferred, collectCompanionPluginInvocations(messages)).values()];
+  expect(entries).toHaveLength(1);
+  expect(entries[0]).toMatchObject({ running: false, plugins: [{ id: 'art', name: 'Art', hasPendingCalls: false }] });
 });

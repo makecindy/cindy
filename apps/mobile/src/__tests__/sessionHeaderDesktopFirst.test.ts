@@ -70,7 +70,7 @@ describe('mobile session header desktop-first surface', () => {
     const chromeStyle = source.slice(source.indexOf('  sessionChrome: {'), source.indexOf('  sessionChromeContent: {'));
     expect(chromeStyle).toContain("backgroundColor: Platform.OS === 'ios' ? 'transparent' : colors.surface");
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
-    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>');
+    expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: insets.top }, companionChat && { backgroundColor: colors.surface }]}>');
     expect(chromeStyle).toContain("position: 'absolute'");
     // Let native glass press feedback extend beyond the 44pt iOS header.
     expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");

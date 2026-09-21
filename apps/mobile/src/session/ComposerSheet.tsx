@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 export interface ComposerSheetProps {
   nativeContent?: boolean;
+  /** Protect an unsaved or in-flight form; explicit Back/Save remains available. */
+  preventDismiss?: boolean;
   nativeHeader?: ReactNode;
   visible: boolean;
   onClose(): void;

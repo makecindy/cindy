@@ -98,6 +98,9 @@ describe('messageScroll', () => {
   it('uses the measured bottom overlay height when it is larger than the fallback padding', () => {
     expect(mobileMessageListBottomPadding(320)).toBe(320);
     expect(mobileMessageListBottomPadding(80)).toBe(MOBILE_MESSAGE_LIST_BOTTOM_PADDING);
+    expect(mobileMessageListBottomPadding(320, 16)).toBe(16);
+    expect(mobileMessageListBottomPadding(320, 0)).toBe(0);
+    expect(mobileMessageListBottomPadding(320, Number.NaN)).toBe(320);
     expect(mobileMessageListNearBottomThreshold(320)).toBe(DEFAULT_NEAR_BOTTOM_THRESHOLD + 320);
 
     const metrics = {

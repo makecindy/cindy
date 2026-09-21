@@ -236,7 +236,9 @@
     "inlineFormActionGeneric": "在電腦端填寫一項配置"
   },
   "presentation": {
-    "action": { "submitting": "提交中" },
+    "action": {
+      "submitting": "提交中"
+    },
     "permission": {
       "highRiskTitle": "高風險授權需要二次確認",
       "highRiskDetail": "先核對指令內容，再點一次確認允許；不確定就拒絕。",
@@ -274,6 +276,18 @@
         "plugin_setup": "設定要在電腦端完成，這裡可以取消這次請求。",
         "fallback": "手機版會按桌面端的請求順序處理。"
       }
+    }
+  },
+  "companion": {
+    "operation": "操作",
+    "details": "檢視詳情",
+    "fields": {
+      "path": "檔案",
+      "file_path": "檔案",
+      "url": "位址",
+      "command": "指令",
+      "ghost_id": "插件",
+      "tool": "工具"
     }
   }
 }
