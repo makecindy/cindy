@@ -305,6 +305,12 @@ export function AgentTaskCard({
   // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
   // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
+  // 「点了停止但没停掉」:老被控端(无此 channel)等失败让任务真的还在跑 —— 卡片上
+  // 就地说明,按钮留着可重试;任务状态一变就收掉(它描述的是上一次点击)。
+  const [stopFailed, setStopFailed] = useState(false);
+  useEffect(() => {
+    setStopFailed(false);
+  }, [status, update?.taskId]);
   const providerCanStop = update?.provider === 'claude-code'
     || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
   const canStop =
@@ -320,7 +326,8 @@ export function AgentTaskCard({
     setStopping(true);
     void stopAgentTaskFor(sessionId, update.taskId)
       .catch(() => {
-        // 静默:失败时卡片仍显示 running,用户可重试;不弹打断式错误。
+        // 不装成功:卡片仍显示 running,同时给一句「停止未确认」,按钮留着可重试。
+        setStopFailed(true);
       })
       .finally(() => setStopping(false));
   }, [sessionId, update?.taskId]);
@@ -539,6 +546,14 @@ export function AgentTaskCard({
           </button>
         )}
         </div>
+        {stopFailed && (
+          <p
+            data-agent-task-stop-unconfirmed="true"
+            className="mt-1 text-13 leading-5 text-[var(--text-secondary)]"
+          >
+            {t('chat.agentTask.stopUnconfirmed')}
+          </p>
+        )}
 
         {/* live workflow 卡不渲染展开区(详情在后台任务面板);历史 workflow 卡
             (无 live taskId,面板无数据)保留展开区兜底展示 description/summary。 */}

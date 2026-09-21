@@ -415,8 +415,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // (控制端 main 没有该 handle,本地停止会「假成功」而任务照旧在跑),所以这是一个
   // 必须隧道到数据属主的 mutation —— 与已放行的 'maker:input:stop' 同一类(停的是能停的
   // 东西,权限由被控端的控制链路开关把关)。老被控端无此 channel → CHANNEL_NOT_ALLOWED
-  // → 控制端保留按钮，请求失败后行仍显示 running、按钮留在原地可重试(**静默失败**,
-  // 不乐观收口 —— 任务确实还在跑)。
+  // → 控制端保留按钮并就地呈现「停止未确认」（列表行 meta / 详情页 / 聊天卡），可重试；
+  // 两侧都不做乐观收口 —— 任务确实还在跑。
   // 不进 INVOKE_TIMEOUT_OVERRIDES_MS:SIGTERM 宽限 + SIGKILL 确认最坏 ≈ 4s,默认 30s 够用。
   'maker:agent-task:stop',
   // Durable PI Subagent truth and process handles live on the data-owning device.

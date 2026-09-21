@@ -7231,6 +7231,7 @@
       "empty": "No background tasks in this session yet",
       "stop": "Stop",
       "stopping": "Stopping…",
+      "stopUnconfirmed": "Stop unconfirmed — the task may still be running",
       "back": "Back",
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
@@ -8673,6 +8674,7 @@
         "stopped": "Stopped"
       },
       "stop": "Stop this task",
+      "stopUnconfirmed": "Stop unconfirmed — the task may still be running",
       "openInPanel": "Open in the background tasks panel",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} agents",
       "workflowProgressCount": "{{done}}/{{total}} agents",

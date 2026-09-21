@@ -7229,6 +7229,7 @@
       "empty": "このセッションにバックグラウンドタスクはまだありません",
       "stop": "停止",
       "stopping": "停止中…",
+      "stopUnconfirmed": "停止を確認できません。タスクはまだ実行中の可能性があります",
       "back": "戻る",
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
@@ -8671,6 +8672,7 @@
         "stopped": "停止済み"
       },
       "stop": "このタスクを停止",
+      "stopUnconfirmed": "停止を確認できません。タスクはまだ実行中の可能性があります",
       "openInPanel": "バックグラウンドタスクパネルで開く",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
       "workflowProgressCount": "{{done}}/{{total}} Agent",

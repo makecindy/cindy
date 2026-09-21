@@ -214,7 +214,15 @@ function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
 }
 
 /** 停止按钮:在飞防连点、失败静默,状态翻转由事件流收口(不改本地状态)。 */
-function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }) {
+function StopButton({
+  sessionId,
+  taskId,
+  onStopFailed,
+}: {
+  sessionId: string;
+  taskId: string;
+  onStopFailed: () => void;
+}) {
   const { t } = useTranslation();
   const [stopping, setStopping] = useState(false);
   const handleStop = useCallback(
@@ -225,11 +233,13 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
       setStopping(true);
       void stopAgentTaskFor(sessionId, taskId)
         .catch(() => {
-          // 静默:真失败时状态仍是 running,按钮保留可重试。
+          // 不装成功:老被控端(无此 channel)等失败会让任务真的还在跑 —— 在行上就地
+          // 呈现「停止未确认」,按钮留着可重试。
+          onStopFailed();
         })
         .finally(() => setStopping(false));
     },
-    [sessionId, taskId, stopping],
+    [sessionId, taskId, stopping, onStopFailed],
   );
   const actionLabel = t('rightSidebar.backgroundTasks.stop');
   const label = stopping
@@ -288,6 +298,13 @@ function TaskRow({
   const KindIcon = kindIcon(item.kind);
   const StatusIcon = statusIcon(item.status);
   const running = item.status === 'running';
+  // 「点了停止但没停掉」:描述的是上一次点击,任务状态一变(真停了 / 换了一条任务)
+  // 就收掉。
+  const [stopFailed, setStopFailed] = useState(false);
+  useEffect(() => {
+    setStopFailed(false);
+  }, [item.status, item.update?.taskId]);
+  const handleStopFailed = useCallback(() => setStopFailed(true), []);
 
   // meta:状态 · 时长 · tokens · 工具调用(缺项省略);workflow 行前置 agent 进度摘要。
   const metaParts = useMemo(() => {
@@ -322,8 +339,10 @@ function TaskRow({
     if (typeof usage?.toolUses === 'number') {
       parts.push(t('chat.agentTask.toolUses', { count: usage.toolUses }));
     }
+    // 失败说明放 meta 行尾:列表行空间有限,但这条必须看见(老被控端会走到这里)。
+    if (stopFailed) parts.push(t('rightSidebar.backgroundTasks.stopUnconfirmed'));
     return parts;
-  }, [item, t]);
+  }, [item, t, stopFailed]);
 
   // 非 workflow 行的聊天定位:意图 emitter 是 renderer 进程内的,独立侧栏窗口里
   // 没有聊天流也没有跨窗口中转 —— 点了必然无响应,不给假 affordance(跨窗口
@@ -378,7 +397,11 @@ function TaskRow({
       </button>
       {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
         <div className="pt-1.5">
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
+          <StopButton
+            sessionId={sessionId}
+            taskId={item.update.taskId}
+            onStopFailed={handleStopFailed}
+          />
         </div>
       )}
     </div>
@@ -409,6 +432,12 @@ function WorkflowDetail({
   const { t } = useTranslation();
   const taskId = item.update?.taskId ?? item.taskId ?? null;
   const [fileProgress, setFileProgress] = useState<WorkflowProgress | null>(null);
+  // 详情页与列表行同口径:停止失败就就地说明,按钮留着可重试。
+  const [stopFailed, setStopFailed] = useState(false);
+  useEffect(() => {
+    setStopFailed(false);
+  }, [item.status, item.update?.taskId]);
+  const handleStopFailed = useCallback(() => setStopFailed(true), []);
 
   // wf 文件辅源:挂载读一次;任务翻终态(isTerminal false→true 触发 effect 重跑)
   // 再读一次。任务已终态而文件快照还停在运行中(终态事件先于终局落盘)时做有界
@@ -482,9 +511,18 @@ function WorkflowDetail({
           {title}
         </span>
         {canStopItem(item, sessionId) && sessionId && item.update?.taskId && (
-          <StopButton sessionId={sessionId} taskId={item.update.taskId} />
+          <StopButton
+            sessionId={sessionId}
+            taskId={item.update.taskId}
+            onStopFailed={handleStopFailed}
+          />
         )}
       </div>
+      {stopFailed && (
+        <p className="shrink-0 px-2 pt-1 text-11 leading-4 text-[var(--text-secondary)]">
+          {t('rightSidebar.backgroundTasks.stopUnconfirmed')}
+        </p>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {model ? (
           <WorkflowProgressTree model={model} />

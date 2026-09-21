@@ -408,6 +408,40 @@ describe('AgentTaskCard', () => {
     expect(stopButton(container)).toBeNull();
   });
 
+  it('surfaces an unconfirmed stop and keeps the button retryable when the stop request fails', async () => {
+    const stopAgentTask = vi.fn().mockRejectedValue(new Error('boom'));
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      maker: { stopAgentTask },
+    };
+    try {
+      const { container } = render(
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-fail',
+          update: {
+            provider: 'claude-code',
+            taskId: 'bash-fail',
+            taskType: 'local_bash',
+            status: 'running',
+          },
+        }),
+      );
+      const btn = stopButton(container);
+      expect(btn).not.toBeNull();
+      await act(async () => {
+        btn!.click();
+        await Promise.resolve();
+      });
+      expect(stopAgentTask).toHaveBeenCalledWith('session-fail', 'bash-fail');
+      // 不装作成功:行上给「停止未确认」,按钮留着可重试。「老被控端 CHANNEL_NOT_ALLOWED」
+      // 与「SIGKILL 之后仍未确认退出」都走这条路径,这是用户唯一能看到的信号。
+      expect(container.querySelector('[data-agent-task-stop-unconfirmed="true"]')).not.toBeNull();
+      expect(container.textContent).toContain('chat.agentTask.stopUnconfirmed');
+      expect(stopButton(container)).not.toBeNull();
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
+
   it('stops a running PI durable subagent through the common task control IPC', async () => {
     const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
     (window as unknown as { electronAPI?: unknown }).electronAPI = {
