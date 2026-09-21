@@ -65,8 +65,6 @@ const CONTEXT_WINDOW_MARKER = '↕';
 
 export interface ContextWindowBudgetChipProps {
   sessionId: string;
-  /** 当前任务的显式预算；null/undefined = 跟随模型默认。 */
-  budget: number | null | undefined;
   /** 运行期上下文占用，用于「换小档位会立刻触发压缩」的提示。 */
   contextTokens: number;
   model: string;
@@ -101,7 +99,6 @@ function inputPriceAtTokens(quote: ModelPriceQuote | undefined, tokens: number):
 
 export function ContextWindowBudgetChip({
   sessionId,
-  budget,
   contextTokens,
   model,
   providerId,
@@ -251,9 +248,23 @@ export function ContextWindowBudgetChip({
     ? Math.min(defaultWindow, ceiling)
     : defaultWindow;
 
-  // 已存值可能是手改 DB 的脏值（写入口拦不住已存在的数据）：先按同一口径归一化，
+  // 已存值可能来自手改偏好文件（写入口拦不住已存在的数据）：先按同一口径归一化，
   // 否则会在选项里补出一个「点了必失败」的档（update 入口对非整数直接拒绝）。
-  const storedBudget = useMemo(() => normalizeContextWindowBudget(budget), [budget]);
+  //
+  // 来源是**权威边界**里的 `budget`（main / 被控端从偏好文件读出，与档位表同源）：
+  // 预算是 main 侧偏好条目而不是会话列，远程会话拿不到被控端的库，所以不再从会话快照读。
+  // 提交成功后先本地记账（隧道/落盘完成前 UI 立即显示新档），边界刷新回来一致即清除。
+  const [optimisticBudget, setOptimisticBudget] = useState<number | null | undefined>(undefined);
+  const storedBudget = useMemo(() => {
+    if (optimisticBudget !== undefined) return optimisticBudget;
+    return normalizeContextWindowBudget(authoritativeBounds?.budget ?? null);
+  }, [optimisticBudget, authoritativeBounds?.budget]);
+  useEffect(() => {
+    if (optimisticBudget === undefined) return;
+    if (normalizeContextWindowBudget(authoritativeBounds?.budget ?? null) === optimisticBudget) {
+      setOptimisticBudget(undefined);
+    }
+  }, [optimisticBudget, authoritativeBounds?.budget]);
 
   // 每行显示的百分比都按**同一个基准**算（与档位推导同源）：默认档因此显示 `100% · 1.05M`
   // 而不是「绝对值在前」，旧值补的当前档也有百分比 —— 行的形态与颜色在整列里保持一个样式。
@@ -287,11 +298,12 @@ export function ContextWindowBudgetChip({
 
   useEffect(() => {
     if (options.length === 0) return;
-    if (budget !== null && budget !== undefined && budget < 1_000) {
-      // 非法值只可能来自手改 DB / 旧数据；运行时会被 main 收敛，这里只留日志线索。
-      console.warn('[context-window-budget] ignoring out-of-range saved budget', { budget });
+    const raw = authoritativeBounds?.budget;
+    if (raw !== null && raw !== undefined && raw < 1_000) {
+      // 非法值只可能来自手改偏好文件 / 旧数据；运行时会被 main 收敛，这里只留日志线索。
+      console.warn('[context-window-budget] ignoring out-of-range saved budget', { budget: raw });
     }
-  }, [budget, options.length]);
+  }, [authoritativeBounds?.budget, options.length]);
 
   // 当前档位的绝对值（早退之前就算出：Tab 停靠点的 effect 是 hook，必须在早退之前）。
   const selectedTokens = storedBudget === null
@@ -355,6 +367,7 @@ export function ContextWindowBudgetChip({
         await sessionService.update(sessionId, { contextWindowBudget: next });
       }
       // 提交后失效缓存：被控端/主进程可能刚更新了该路由的上限，下次开菜单要拿最新的。
+      setOptimisticBudget(next);
       refreshBounds();
     } catch (error) {
       const unsupported = extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';

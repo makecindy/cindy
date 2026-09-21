@@ -168,6 +168,25 @@ describe('resolveSessionContextWindowBounds', () => {
       defaultWindow: 200_000,
       maxWindow: 1_000_000,
       modelLimit: 800_000,
+      budget: null,
+      budgetCustomized: false,
+    });
+  });
+
+  it('carries the task budget when the caller supplies one', () => {
+    // 任务档位与边界同源返回（偏好文件里的条目）：调用方不给时默认「未自定义」。
+    expect(
+      resolveSessionContextWindowBounds({
+        catalog, agent: 'claude-code', providerId: 'xd', modelId: 'long-window-model',
+        budget: 262_144, budgetCustomized: true,
+      }),
+    ).toEqual({
+      providerId: 'xd',
+      defaultWindow: 200_000,
+      maxWindow: 1_000_000,
+      modelLimit: null,
+      budget: 262_144,
+      budgetCustomized: true,
     });
   });
 

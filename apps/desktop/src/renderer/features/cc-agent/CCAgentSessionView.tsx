@@ -5543,11 +5543,11 @@ export function CCAgentSessionView({
                       deviceLinkDeviceId={remoteDeviceId ?? null}
                     />
                     {/* device-link 远程任务的档位走 maker:set-context-window-budget 隧道命令，
-                        在被控端落库并应用；老被控端不支持时由 chip 提示版本不支持。 */}
+                        在偏好文件落盘并应用到活实例；老被控端不支持时由 chip 提示版本不支持。
+                        当前档位与可选档位一起来自权威边界查询（本地 main / 远程被控端）。 */}
                     {sessionId && (
                       <ContextWindowBudgetChip
                         sessionId={sessionId}
-                        budget={session?.contextWindowBudget ?? null}
                         contextTokens={agentStatus.contextTokens}
                         model={agentSwitchIntent?.model ?? session?.model ?? ''}
                         providerId={

@@ -20,6 +20,10 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
+import {
+  isSessionContextWindowBudgetCustomized,
+  readSessionContextWindowBudget,
+} from '../../../maker-host/session-context-budget-store.js';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
@@ -197,7 +201,6 @@ function createDb(): void {
       total_cost_usd REAL NOT NULL DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
-      context_window_budget INTEGER,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
@@ -684,17 +687,15 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('persists null and an in-range task context window budget', async () => {
+    // 任务窗口预算不是会话列（没有 context_window_budget 列），而是 main 侧偏好文件里的
+    // 条目：这里读写它自己的 store（路径由 electron 的 userData mock 指到临时目录）。
     await invokeUpdate('cc-local', { contextWindowBudget: 300_000 });
-    let persisted = h.sqlite!
-      .prepare('SELECT context_window_budget FROM sessions WHERE id = ?')
-      .get('cc-local') as { context_window_budget: number | null };
-    expect(persisted.context_window_budget).toBe(300_000);
+    expect(readSessionContextWindowBudget('cc-local')).toBe(300_000);
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(true);
 
     await invokeUpdate('cc-local', { contextWindowBudget: null });
-    persisted = h.sqlite!
-      .prepare('SELECT context_window_budget FROM sessions WHERE id = ?')
-      .get('cc-local') as { context_window_budget: number | null };
-    expect(persisted.context_window_budget).toBeNull();
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(false);
   });
 
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {

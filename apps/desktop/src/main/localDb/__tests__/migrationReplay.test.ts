@@ -262,29 +262,6 @@ describeMigrationReplay('migration replay', () => {
     }
   });
 
-  it('replays the guarded 0114 companion over an existing column as a no-op', () => {
-    const { db, cleanup } = createTempDb();
-    try {
-      runMigrationReplay(db, { drizzleDir: drizzleDir() });
-
-      db.prepare('DELETE FROM migration_history WHERE seq = 114').run();
-      db.prepare("UPDATE migration_meta SET value = '113' WHERE key = 'schema_version'").run();
-
-      expect(() => runMigrationReplay(db, { drizzleDir: drizzleDir() })).not.toThrow();
-      expect(
-        columnNames(db, 'sessions').filter((name) => name === 'context_window_budget'),
-      ).toEqual(['context_window_budget']);
-      expect(
-        db.prepare("SELECT value FROM migration_meta WHERE key='schema_version'").pluck().get(),
-      ).toBe('114');
-      expect(
-        db.prepare('SELECT COUNT(*) FROM migration_history WHERE seq = 114').pluck().get(),
-      ).toBe(1);
-    } finally {
-      cleanup();
-    }
-  });
-
   it('upgrades a schema v39 Orca workflow database through the 0040 script', () => {
     const { db, cleanup } = createTempDb();
     try {

@@ -20,6 +20,16 @@ export interface SessionContextWindowBounds {
   maxWindow: number | null;
   /** 用户在同一路由上设过的模型级「上下文上限」。 */
   modelLimit: number | null;
+  /**
+   * 该任务已保存的预算（用户显式设过的**原始**值，tokens）；null = 跟随默认。
+   *
+   * 与上面三个字段同源（同一个 handler / 同一条隧道）：档位表既要画可选档位，也要标出
+   * 当前选中的那一档。预算是 main 侧偏好文件里的条目，不是会话列，所以随边界一起回来，
+   * 不依赖调用方手里的会话快照（远程会话拿不到被控端的库）。
+   */
+  budget: number | null;
+  /** 用户是否显式设过（区分「跟随默认」与「设了一个刚好等于默认的值」）。 */
+  budgetCustomized: boolean;
 }
 
 /** 被控端/主进程返回值的形状收敛：缺字段或非法值一律按「未知」处理（不猜上限）。 */
@@ -38,6 +48,8 @@ export function normalizeSessionContextWindowBounds(
     defaultWindow,
     maxWindow,
     modelLimit: positive(raw.modelLimit),
+    budget: positive(raw.budget),
+    budgetCustomized: raw.budgetCustomized === true,
   };
 }
 

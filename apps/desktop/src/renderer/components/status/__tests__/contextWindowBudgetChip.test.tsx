@@ -144,17 +144,36 @@ function triggerLabel(chip: Element | null): string {
   return chip?.getAttribute('aria-label') ?? '';
 }
 
-function renderChip(overrides: Partial<React.ComponentProps<typeof ContextWindowBudgetChip>> = {}) {
+function renderChip(
+  overrides: Partial<React.ComponentProps<typeof ContextWindowBudgetChip>> & { budget?: number | null } = {},
+) {
+  const { budget, ...rest } = overrides;
+  // 任务预算这次由**权威边界查询**带回（偏好文件里的条目，本地 main / 远程被控端算），
+  // 不再是会话快照上的字段：给了档位就把它放进边界响应里。不给 = 边界不可用，
+  // chip 按 renderer 自解析兑底（未存过任何档）。
+  if (budget) {
+    (
+      window.electronAPI.maker.getSessionContextWindowBounds as unknown as {
+        mockResolvedValue: (value: unknown) => void;
+      }
+    ).mockResolvedValue({
+      providerId: 'xd',
+      defaultWindow: 1_000_000,
+      maxWindow: null,
+      modelLimit: null,
+      budget,
+      budgetCustomized: true,
+    });
+  }
   return render(
     <ContextWindowBudgetChip
       sessionId={SESSION_ID}
-      budget={null}
       contextTokens={0}
       model="grok-4.6"
       providerId="xd"
       agentKind="cc"
       providers={routeCatalog}
-      {...overrides}
+      {...rest}
     />,
   );
 }
@@ -226,11 +245,14 @@ describe('ContextWindowBudgetChip', () => {
     expect(cls).not.toContain('text-[var(--text-tertiary)]');
   });
 
-  it('shows the saved tier percentage next to the marker', () => {
-    // 存了 25% 档 → 触发器读 `[ ] 25%`（绝对值在 aria-label / 卡片里）。
+  it('shows the saved tier percentage next to the marker', async () => {
+    // 存了 25% 档 → 触发器读 `↕ 25%`（绝对值在 aria-label / 卡片里）。
+    // 档位来自权威边界查询（偏好文件里的条目），所以这里要等那次查询回来。
     renderChip({ budget: 250_000 });
     const chip = document.querySelector('[data-context-window-budget-chip]');
-    expect(chip?.textContent).toContain('optionPercent#{"percent":25}');
+    await waitFor(() => {
+      expect(chip?.textContent).toContain('optionPercent#{"percent":25}');
+    });
   });
 
   it('uses the quota-card caption gray for every secondary line in the menu', async () => {
@@ -621,7 +643,6 @@ describe('ContextWindowBudgetChip', () => {
     view.rerender(
       <ContextWindowBudgetChip
         sessionId={SESSION_ID}
-        budget={null}
         contextTokens={0}
         model="deepseek/deepseek-v4.1-flash"
         providerId="commandcode"
@@ -706,7 +727,6 @@ describe('ContextWindowBudgetChip', () => {
     view.rerender(
       <ContextWindowBudgetChip
         sessionId={SESSION_ID}
-        budget={null}
         contextTokens={0}
         model="grok-4.6"
         providerId="cpa"

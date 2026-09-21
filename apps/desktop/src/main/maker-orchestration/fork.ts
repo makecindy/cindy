@@ -23,7 +23,7 @@ import { getMaker } from '../maker-host/index.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
-import { normalizeContextWindowBudget } from '../../shared/sessionContextWindowBudget.js';
+import { copySessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
 import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import {
@@ -985,10 +985,6 @@ export async function forkSessionAtMessage(
         totalCostUsd: 0,
         contextTokens: forkContextTokens,
         contextWindow: forkContextWindow,
-        // 任务级窗口档位随 fork 继承（同一任务意图）；启动时仍会按新路由重新收敛，
-        // 所以跨 agent / 跨模型的 fork 不会残留超出目标上限的值。
-        // 继承前归一化：手改 DB 的脏值不该被复制进新任务（与 updateSessionInDb 同口径）。
-        contextWindowBudget: normalizeContextWindowBudget(source.contextWindowBudget),
         contextWindowRuntime: sameContextRoute && forkContextWindow > 0 && source.contextWindowRuntime === forkContextWindow
           ? forkContextWindow : null,
         fastMode: forkSource.agentKind === source.agentKind ? source.fastMode : false,
@@ -1030,7 +1026,11 @@ export async function forkSessionAtMessage(
     throw err;
   }
 
-  // 6. 返回 mapper 转过的新 session（含 messageCount）
+  // 6. 任务级窗口档位随 fork 继承（同一任务意图）；启动时仍会按新路由重新收敛，
+  // 所以跨 agent / 跨模型的 fork 不会残留超出目标上限的值。它是偏好文件里的条目，
+  // 不是会话列，所以不在上面的行插入里。
+  copySessionContextWindowBudget(sourceSessionId, newSessionId);
+  // 7. 返回 mapper 转过的新 session（含 messageCount）
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
   if (!row) {
     throw new Error('Fork session 创建后查询失败');

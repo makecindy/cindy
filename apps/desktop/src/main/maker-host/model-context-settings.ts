@@ -1,8 +1,7 @@
 import type { AgentKind, Catalog } from '@cindy/model-providers';
-import { eq } from 'drizzle-orm';
 
-import { desktopMakerLogger } from './logger-adapter.js';import { getDbClient } from '../localDb/client/current.js';
-import { sessions } from '../localDb/schema.js';
+import { desktopMakerLogger } from './logger-adapter.js';
+import { readSessionContextWindowBudget } from './session-context-budget-store.js';
 import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import { gatewayDefaultRouteDecision } from './provider-route.js';
@@ -50,12 +49,7 @@ function tighterBudget(
 /** 该任务已保存的**原始**预算值（tokens）；null = 未自定义。切模/校验需要按目标路由重新收敛时用它。 */
 export async function readStoredSessionContextWindowBudget(sessionId: string): Promise<number | null> {
   try {
-    const [row] = await getDbClient().drizzle
-      .select({ contextWindowBudget: sessions.contextWindowBudget })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    return row?.contextWindowBudget ?? null;
+    return readSessionContextWindowBudget(sessionId);
   } catch (error) {
     desktopMakerLogger.warn('stored session context window budget read failed', {
       sessionId,
@@ -99,18 +93,28 @@ export function resolveSessionContextWindowBounds(input: {
   agent: AgentKind;
   providerId: string | null | undefined;
   modelId: string;
+  /**
+   * 该任务已保存的预算（偏好文件里的**原始**用户值）与「是否显式设过」。
+   * 缺省 = 跟随默认：不带会话上下文的调用方（如纯路由探测）不必关心它。
+   */
+  budget?: number | null;
+  budgetCustomized?: boolean;
 }): SessionContextWindowBounds {
   const source = resolveDesktopModelContextProviderId(
     input.catalog, input.agent, input.providerId, input.modelId,
   );
   const bounds = resolveRouteContextWindowBounds(input.catalog, input.agent, source, input.modelId);
   const modelLimit = source ? readModelContextLimit(input.agent, source, input.modelId) : null;
+  const budget = typeof input.budget === 'number' && Number.isFinite(input.budget) && input.budget > 0
+    ? Math.round(input.budget) : null;
   return {
     providerId: source,
     defaultWindow: bounds?.defaultWindow ?? null,
     maxWindow: bounds?.maxWindow ?? null,
     modelLimit: typeof modelLimit === 'number' && Number.isFinite(modelLimit) && modelLimit > 0
       ? modelLimit : null,
+    budget,
+    budgetCustomized: input.budgetCustomized === true,
   };
 }
 

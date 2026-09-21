@@ -276,12 +276,6 @@ export interface Session {
   totalMoney?: RegionalMoney;
   contextTokens: number;
   contextWindow: number;
-  /**
-   * 任务级工作上下文预算（tokens）；null = 跟随模型路由默认。
-   * 有效窗口 = min(预算, 模型级上限, 目录 contextWindowMax)，只影响本任务。
-   * 与 contextWindow（引擎实际上报的快照）是两回事。
-   */
-  contextWindowBudget?: number | null;
   fastMode: boolean;
   /** Host-only temporary route; absent on older Desktop/device-link peers. */
   runtimeGeneration?: number;

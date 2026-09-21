@@ -36,6 +36,7 @@ import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.j
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget } from '../maker-host/model-context-settings.js';
+import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import { MAX_CONTEXT_WINDOW_BUDGET, MIN_CONTEXT_WINDOW_BUDGET } from '../../shared/sessionContextWindowBudget.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
@@ -17301,11 +17302,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const modelId = requestedRoute?.model ?? row?.model ?? null;
       if (!modelId) return null;
       // 事实来自**本机**（被控端）目录与该路由的模型级上限，与运行期收敛同一套口径。
+      // 任务档位（用户显式设过的原始预算）与边界同源返回：档位表要标出当前选中的那一档，
+      // 而它是 main 侧偏好文件里的条目，远程调用方拿不到被控端的库。
       return resolveSessionContextWindowBounds({
         catalog: getActiveCatalog(),
         agent,
         providerId,
         modelId,
+        budget: readSessionContextWindowBudget(sessionId),
+        budgetCustomized: isSessionContextWindowBudgetCustomized(sessionId),
       });
     },
   );
