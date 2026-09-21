@@ -22,7 +22,7 @@ import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
-import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
+import { canStopAgentTask, getWorkflowProgressFor, stopAgentTaskFor } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
@@ -309,18 +309,16 @@ export function AgentTaskCard({
     || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
   const canStop =
     status === 'running' &&
-    Boolean(sessionId) &&
     Boolean(update?.taskId) &&
     providerCanStop &&
-    // device-link 镜像会话:session 活在被控端,本地 stopAgentTask 会假成功 —— 不给
-    // 按钮。粘滞判定:relay 瞬断清空注册表的窗口内不误判为本机(与面板同口径)。
-    !(sessionId && isRemoteSessionSticky(sessionId));
+    // 远程镜像会话不再一律隐藏:stopAgentTaskFor 把停止隧道到任务真身所在的被控端
+    // (与后台任务面板同口径)。只有「看起来是远程镜像、当下又拿不到设备」才隐藏 ——
+    // 那条路径上本地调用会假成功、任务在被控端继续跑。粘滞判定保证瞬断窗口不误判本机。
+    canStopAgentTask(sessionId);
   const handleStop = useCallback(() => {
-    const api = window.electronAPI?.maker;
-    if (!sessionId || !update?.taskId || !api?.stopAgentTask) return;
+    if (!sessionId || !update?.taskId) return;
     setStopping(true);
-    void api
-      .stopAgentTask(sessionId, update.taskId)
+    void stopAgentTaskFor(sessionId, update.taskId)
       .catch(() => {
         // 静默:失败时卡片仍显示 running,用户可重试;不弹打断式错误。
       })

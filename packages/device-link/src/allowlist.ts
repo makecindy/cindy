@@ -410,6 +410,14 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  // 逐任务精确停止(后台命令 / durable PI subagent):handler 只在自己进程的内存表里
+  // 按 taskId 找到本实例 spawn 的进程并终止它,无 event.sender 依赖;任务真身在被控端
+  // (控制端 main 没有该 handle,本地停止会「假成功」而任务照旧在跑),所以这是一个
+  // 必须隧道到数据属主的 mutation —— 与已放行的 'maker:input:stop' 同一类(停的是能停的
+  // 东西,权限由被控端的控制链路开关把关)。老被控端无此 channel → CHANNEL_NOT_ALLOWED
+  // → 控制端保留按钮但按「停止未确认」提示(任务确实还在跑,不允许乐观收口)。
+  // 不进 INVOKE_TIMEOUT_OVERRIDES_MS:SIGTERM 宽限 + SIGKILL 确认最坏 ≈ 4s,默认 30s 够用。
+  'maker:agent-task:stop',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall
   // back to its own pi-agent-home for a remote task.

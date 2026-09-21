@@ -80,6 +80,10 @@ export interface RoutableMaker {
   enableOrca: FullMaker['enableOrca'];
   dispatchOrcaUiAssignment: FullMaker['dispatchOrcaUiAssignment'];
   disableOrca: FullMaker['disableOrca'];
+  // 逐任务精确停止(后台命令 / durable subagent):任务进程属于**会话所在端**,控制端
+  // 本机没有该 handle —— 本地调用会「假成功」(任务照旧在被控端跑)。与 enableOrca
+  // 同源:必须隧道到数据属主,不能跟随易失的会话来源判定回退本机。
+  stopAgentTask: FullMaker['stopAgentTask'];
   input: Pick<
     FullMaker['input'],
     | 'enqueue'
@@ -191,6 +195,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       'maker:worker:dispatch-ui-assignment',
     ) as FullMaker['dispatchOrcaUiAssignment'],
     disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
+    stopAgentTask: t('maker:agent-task:stop') as FullMaker['stopAgentTask'],
     input: {
       enqueue: t('maker:input:enqueue') as FullMaker['input']['enqueue'],
       compact: t('maker:input:compact') as FullMaker['input']['compact'],
@@ -257,10 +262,36 @@ export function makerApiFor(sessionId: string): RoutableMaker {
  *
  * 普通高频操作(send / setModel / …)仍用 makerApiFor:它们本就跟随会话来源的实时判定,
  * 且误判的代价是一次失败重试,不是在错误的机器上留下持久状态。
+ * 逐任务停止(stopAgentTask)同属这一类:误判回本机时那个 taskId 属于控制端自己的表,
+ * 停掉的是本机另一条任务(或对不存在的 id 静默成功),被控端那条照旧在跑。
  */
 export function makerApiForSticky(sessionId: string): RoutableMaker {
   const deviceId = getStickySessionDeviceId(sessionId);
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
+/**
+ * 逐任务停止(后台命令 / durable subagent):按**粘滞归属**隧道到任务真身所在的端。
+ *
+ * 粘滞而不是实时判定是刻意的:relay 瞬断清空注册表的窗口里退回本机,会用同一个 taskId
+ * 停掉控制端自己的另一条任务(或对不存在的 id 静默成功),而被控端那条照旧在跑。
+ * 老被控端无此 channel → CHANNEL_NOT_ALLOWED 原样抛出:调用方按「停止未确认」提示,
+ * 不做乐观收口(任务确实还在跑)。
+ */
+export function stopAgentTaskFor(
+  sessionId: string,
+  taskId: string,
+): ReturnType<RoutableMaker['stopAgentTask']> {
+  return makerApiForSticky(sessionId).stopAgentTask(sessionId, taskId);
+}
+
+/**
+ * Stop 按钮的可用性(与 stopAgentTaskFor 同口径):本机 → 可停;远程镜像且能解析出设备
+ * → 可停(走隧道);看起来是远程镜像但当下拿不到设备(relay 注册表尚未水合)→ **不可**。
+ */
+export function canStopAgentTask(sessionId: string | null | undefined): boolean {
+  if (!sessionId) return false;
+  return isRemoteSessionSticky(sessionId) || !isRemoteSession(sessionId);
 }
 
 /** Subscribe to local exact-turn updates; remote sessions deliberately fail closed in this phase. */

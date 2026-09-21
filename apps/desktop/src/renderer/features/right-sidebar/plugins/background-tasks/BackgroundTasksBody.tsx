@@ -56,9 +56,11 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 import {
+  canStopAgentTask,
   getWorkflowProgressFor,
   isRemoteSessionSticky,
   listSessionBackgroundTasksFor,
+  stopAgentTaskFor,
 } from '@/lib/makerTransport';
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { Message } from '@/lib/ccAgent.types';
@@ -198,15 +200,16 @@ function workflowAgentCounts(
 }
 
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId +
- *  非远程。远程判定用粘滞版:relay 瞬断窗口误判本机会放出假 Stop(本地调用假成功,
- *  任务在被控端继续跑),与水合的粘滞归属同口径。 */
+ *  有可信的停止目标。远程镜像会话不再一律隐藏:stopAgentTaskFor 会把请求隧道到任务
+ *  真身所在的被控端(append-only 新通道,老被控端 CHANNEL_NOT_ALLOWED → 失败提示)。
+ *  仍然隐藏的只有「看起来是远程镜像、当下又拿不到设备」这一种(relay 注册表未水合):
+ *  那条路径上本地调用会假成功,不给按钮。粘滞判定保证瞬断窗口不误判为本机。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   return (
     item.status === 'running' &&
     item.provider === 'claude-code' &&
     Boolean(item.update?.taskId) &&
-    Boolean(sessionId) &&
-    !(sessionId && isRemoteSessionSticky(sessionId))
+    canStopAgentTask(sessionId)
   );
 }
 
@@ -218,11 +221,9 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
     (e: MouseEvent) => {
       // 行点击(进详情 / 聊天定位)不该被停止按钮触发。
       e.stopPropagation();
-      const api = window.electronAPI?.maker;
-      if (!api?.stopAgentTask || stopping) return;
+      if (!sessionId || stopping) return;
       setStopping(true);
-      void api
-        .stopAgentTask(sessionId, taskId)
+      void stopAgentTaskFor(sessionId, taskId)
         .catch(() => {
           // 静默:真失败时状态仍是 running,按钮保留可重试。
         })
