@@ -217,7 +217,7 @@ describe('assessRuntimeModelSwitchGate', () => {
 describe('shouldSkipColdPiWindowRehydration', () => {
   it.each([
     {
-      name: 'idle task far below the target window → skip the 2~3s cold start',
+      name: 'live usage far below the target window → skip the 2~3s cold start',
       input: { contextTokens: 26_921, targetContextWindow: million },
       want: true,
     },
@@ -242,7 +242,7 @@ describe('shouldSkipColdPiWindowRehydration', () => {
       want: false,
     },
     {
-      name: 'unknown persisted usage must not skip verification',
+      name: 'missing live usage must not skip verification',
       input: { contextTokens: null, targetContextWindow: twoHundredK },
       want: false,
     },

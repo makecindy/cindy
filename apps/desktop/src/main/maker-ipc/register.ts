@@ -816,6 +816,10 @@ import {
 } from '../maker-host/codex-local-sessions.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
+import {
+  getSessionLastLiveUsage,
+  rememberSessionLastLiveUsage,
+} from './sessionLastLiveUsage.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planReconcile.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
@@ -4437,6 +4441,9 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     deferredProductTurnFailureGate.clearSession(session.id, session);
   },
   finalizeClosedSession: (session: WiredSession, context) => {
+    // 关闭前固化 live 用量（见 sessionLastLiveUsage.ts）：冷 Pi 切模的窗口核实
+    // 预检用它代替可能低报的 DB 快照（Greptile P1）。
+    rememberSessionLastLiveUsage(session.id, session.getUsageSnapshot?.());
     finalizeSessionClose(context.closedDirectAbortBoundary !== null, {
       clearTurnState: () => {
         sessionTurnActivityTracker.deleteSession(session.id);
@@ -16179,15 +16186,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // 冷启动核实(2~3s)只在它可能改变决策时才做：目标窗口对**已知占用**已到
           // danger/overflow 才可能需要缩窗交接 / 二次确认；有余量时任何「当前窗口」
           // 读数都不会触发交接（见 assessRuntimeModelSwitchGate 的 fail-open 矩阵），
-          // 让用户白等一次 Pi 冷启动就是纯卡顿（2026-09-21 实报）。占用只信 DB 里
-          // 最后一次上报值（活 runtime 不存在时的唯一事实源）；缺值时保守走原核实。
-          // 无原生会话的冷 Pi 不在本预检范围内：那种情况维持既有 fail-closed 语义。
-          const coldPiPersistedContextTokens =
-            typeof runtimeStatus.contextTokens === 'number' &&
-            Number.isFinite(runtimeStatus.contextTokens) &&
-            runtimeStatus.contextTokens >= 0
-              ? runtimeStatus.contextTokens
-              : null;
+          // 让用户白等一次 Pi 冷启动就是纯卡顿（2026-09-21 实报）。
+          // 占用取 runtime **关闭时固化的 live 读数**（sessionLastLiveUsage），
+          // 不读 sessions.context_tokens：后者只在 turn 正常收尾时落库，中断 / 崩溃
+          // 后可能低报真实占用，拿它证明「目标还有余量」会绕过缩窗交接
+          // （Greptile P1，2026-09-21）；进程重启 / 硬杀后没有缓存时自动回退到核实。
+          // 无原生会话的冷 Pi 也不在本预检范围内（维持既有 fail-closed 语义）。
+          const coldPiLastLiveUsage = getSessionLastLiveUsage(sessionId);
           const coldPiTargetContextWindow = lookupVerifiedContextWindow(
             (_agentKind, modelId, pid) =>
               resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId),
@@ -16198,7 +16203,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const skipColdPiWindowVerification =
             !!runtimeStatus.sdkSessionId &&
             shouldSkipColdPiWindowRehydration({
-              contextTokens: coldPiPersistedContextTokens,
+              contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
               targetContextWindow: coldPiTargetContextWindow,
             });
           if (skipColdPiWindowVerification) {
@@ -16206,7 +16211,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             log.info('set-model: skipped cold Pi window verification', {
               sessionId,
               reason: 'target-window-has-headroom',
-              contextTokens: coldPiPersistedContextTokens,
+              contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
+              contextWindow: coldPiLastLiveUsage?.contextWindow ?? null,
+              capturedAtMs: coldPiLastLiveUsage?.capturedAtMs ?? null,
               targetContextWindow: coldPiTargetContextWindow,
               fromModel: currentRuntimeModel ?? null,
               toModel: model,
