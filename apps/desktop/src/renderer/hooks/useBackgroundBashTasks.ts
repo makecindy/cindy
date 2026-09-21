@@ -24,7 +24,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
 import {
   isRemoteSessionSticky,
-  listSessionBackgroundTasksFor,
+  readSessionBackgroundTasks,
   stopAgentTaskFor,
 } from '@/lib/makerTransport';
 
@@ -99,23 +99,31 @@ export function useBackgroundBashTasks(
     if (!sessionId) return;
     if (!window.electronAPI?.maker?.listSessionBackgroundTasks) return;
     let disposed = false;
-    const staleRunningCandidates = isRemoteSessionSticky(sessionId)
-      ? undefined
-      : makerChatStore.captureRunningClaudeTaskIds(sessionId);
-    void listSessionBackgroundTasksFor(sessionId)
-      .then(({ tasks }) => {
+    // 候选集必须在**发起请求前**捕获(时序论证见 store 的 reconcileStaleRunningTasks)。
+    // 远程会话额外带上 hook 当前运行集里的条目:store 的 capture 只覆盖
+    // claude-code,而被控端自 #4700 起也能停 PI 后台命令 —— 不收进候选集,
+    // 「停止后重拉快照」就永远收口不掉这些行(会一直误报运行中)。tasksRef 是
+    // 本次渲染的列表,晚于它启动的任务不会被误收。
+    const staleRunningCandidates = new Set(
+      makerChatStore.captureRunningClaudeTaskIds(sessionId),
+    );
+    if (isRemoteSessionSticky(sessionId)) {
+      for (const task of tasksRef.current) staleRunningCandidates.add(task.taskId);
+    }
+    void readSessionBackgroundTasks(sessionId)
+      .then(({ tasks, source }) => {
         if (disposed || !Array.isArray(tasks)) return;
-        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
-        // 快照实际来自本机 main(路由在发起时已定),「查无此会话」的空表不可
-        // 用于收口 → 丢弃候选集;seed 保留(远程会话的常规水合不受影响,该
-        // 空表本就 seed 不出东西)。
+        // 来源与当下归属必须一致:归属在请求在飞期间才完成水合时,本机 main 的
+        // 「查无此会话」空表(或撞 id 数据)对远程会话无意义 → 整体丢弃,
+        // 等下一次水合(历史重载 / 停止动作)重试。
+        if ((source === 'remote') !== isRemoteSessionSticky(sessionId)) return;
+        // 只有权威快照能收口 stale running:降级空表(老被控端无 channel /
+        // 隧道失败)与「确实没有任务」不可区分。
         const candidates =
-          staleRunningCandidates && !isRemoteSessionSticky(sessionId)
-            ? staleRunningCandidates
-            : undefined;
-        if (tasks.length === 0 && !(candidates && candidates.size > 0)) {
-          return;
-        }
+          source === null || staleRunningCandidates.size === 0
+            ? undefined
+            : staleRunningCandidates;
+        if (tasks.length === 0 && !candidates) return;
         makerChatStore.seedBackgroundTaskSnapshots(
           sessionId,
           tasks,

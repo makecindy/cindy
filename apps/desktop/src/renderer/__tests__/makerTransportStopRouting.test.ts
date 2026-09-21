@@ -107,6 +107,37 @@ describe('listSessionBackgroundTasksFor 路由', () => {
   });
 });
 
+describe('readSessionBackgroundTasks 权威性标记', () => {
+  it('本机 → local;远程隧道成功 → remote;失败 → null + 空表', async () => {
+    const { listSessionBackgroundTasks, invoke } = stubElectron();
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { readSessionBackgroundTasks } = await import('@/lib/makerTransport');
+
+    listSessionBackgroundTasks.mockResolvedValue({ tasks: [{ taskId: 'b1' }], pendingContinuations: 0 });
+    await expect(readSessionBackgroundTasks('local-1')).resolves.toEqual({
+      tasks: [{ taskId: 'b1' }],
+      pendingContinuations: 0,
+      source: 'local',
+    });
+
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('remote-1')]);
+    invoke.mockResolvedValue({ tasks: [{ taskId: 'b2' }], pendingContinuations: 0 });
+    await expect(readSessionBackgroundTasks('remote-1')).resolves.toEqual({
+      tasks: [{ taskId: 'b2' }],
+      pendingContinuations: 0,
+      source: 'remote',
+    });
+
+    // 关键:失败必须能与「确实没有任务」区分 —— 调用方靠 source 决定能不能收口
+    // stale running(降级空表当权威会把镜像里真实在跑的任务错误停掉)。
+    invoke.mockRejectedValue(new Error('DEVICE_LINK_CHANNEL_NOT_ALLOWED'));
+    await expect(readSessionBackgroundTasks('remote-1')).resolves.toEqual({
+      tasks: [],
+      source: null,
+    });
+  });
+});
+
 describe('canStopAgentTask 门禁', () => {
   it('本机 / 远程已知设备 → 可停;归属不可解析 → 不可停', async () => {
     stubElectron();

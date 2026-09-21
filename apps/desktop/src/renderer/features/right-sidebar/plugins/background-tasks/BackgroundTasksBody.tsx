@@ -16,7 +16,9 @@
  *  - 快照水合:挂载时对本机会话调一次 listSessionBackgroundTasks 经
  *    seedBackgroundTaskSnapshots 补存量(与 useBackgroundBashTasks 同口径,只复用
  *    store 公开函数);本机会话同一次快照兼做 stale running 对账(终态事件丢失
- *    的自愈),device-link 远程会话只 seed 不对账(降级空表不可当权威)。
+ *    的自愈),device-link 远程会话这里只 seed 不对账 —— 远程的 stale running
+ *    收口由 useBackgroundBashTasks 用**权威快照**(readSessionBackgroundTasks
+ *    的 source !== null)完成,降级空表不可当权威。
  *  - wf 文件辅源:详情视图挂载时拉一次 getWorkflowProgressFor,任务从 running 翻
  *    终态时再拉一次;不轮询。远程/老被控端自动降级返回 null。
  *  - 停止:gating = running + claude-code + 有 taskId + 非远程会话;在飞防连点、
@@ -616,9 +618,10 @@ export function BackgroundTasksBody({
     if (!sessionId) return;
     let disposed = false;
     // 同一次快照兼做 stale running 对账(终态事件丢失的自愈)。候选集在发起
-    // 请求前捕获(时序论证见 store 的 reconcileStaleRunningTasks);仅本机会话
-    // 参与 —— device-link 远程快照有老被控端降级空表窗口,无法与「没有任务」
-    // 区分,不可当权威(粘滞判定与 Stop gating 同口径)。
+    // 请求前捕获(时序论证见 store 的 reconcileStaleRunningTasks);远程会话
+    // 本面板不收口 —— 快照可能是老被控端的降级空表,与「没有任务」不可区分。
+    // 远程的收口交给 useBackgroundBashTasks:它用 readSessionBackgroundTasks
+    // 的 source 区分权威快照与降级空表,只用前者对账。
     const staleRunningCandidates = isRemoteSessionSticky(sessionId)
       ? undefined
       : makerChatStore.captureRunningClaudeTaskIds(sessionId);

@@ -517,23 +517,56 @@ export function getWorkflowProgressFor(
 }
 
 /**
- * 会话仍在运行的后台任务快照(只读,best-effort):后台任务面板挂载时补回
- * 「订阅前已启动 / 重载清空 taskUpdates 后」的存量任务。远程会话任务真身在
- * 被控端,必须隧道读(控制端 main 无该会话 handle,本机读必空);老被控端无此
- * channel 或隧道失败一律降级空表,面板退化为事件流 + 消息扫描两源。
+ * 会话仍在运行的后台任务快照(只读,best-effort)+ **来源标记**。
+ *
+ * 调用方靠 source 区分「权威快照」与「降级空表」:老被控端无此 channel /
+ * 隧道失败 / 本机 IPC 失败都返回空表,但它与「确实没有任务」不可区分 ——
+ * 拿降级空表去收口 stale running 会把镜像里真实在跑的任务错误停掉。只有
+ * source !== null 的快照可以用于对账(见 useBackgroundBashTasks 的重拉)。
+ *
  * 归属用粘滞解析(与 estimatedSessionValueFor 同款):这是一次性水合,relay
  * 瞬时重连清空注册表的窗口内若误判为本机,会 seed 一张空表且面板不重试。
+ * 会话归属在请求在飞期间才完成水合时,响应来源与当下归属不符 —— 由调用方
+ * 对比 source 与当前 isRemoteSessionSticky 决定丢弃。
  */
-export function listSessionBackgroundTasksFor(
+export interface RoutedBackgroundTasksSnapshot {
+  tasks: Awaited<ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks>>['tasks'];
+  pendingContinuations?: number;
+  /** 'local' = 本机 main;'remote' = 被控端隧道;null = 读取失败 / 老端降级空表。 */
+  source: 'local' | 'remote' | null;
+}
+
+export function readSessionBackgroundTasks(
   sessionId: string,
-): ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks> {
+): Promise<RoutedBackgroundTasksSnapshot> {
   const deviceId = getStickySessionDeviceId(sessionId);
-  if (!deviceId) return window.electronAPI.maker.listSessionBackgroundTasks(sessionId);
+  if (!deviceId) {
+    return window.electronAPI.maker
+      .listSessionBackgroundTasks(sessionId)
+      .then((snapshot) => ({ ...snapshot, source: 'local' as const }))
+      .catch(() => ({ tasks: [], source: null }));
+  }
   return (
     invokeRemote(deviceId, 'maker:session-background-tasks:list', [sessionId]) as ReturnType<
       typeof window.electronAPI.maker.listSessionBackgroundTasks
     >
-  ).catch(() => ({ tasks: [] }));
+  )
+    .then((snapshot) => ({ ...snapshot, source: 'remote' as const }))
+    .catch(() => ({ tasks: [], source: null }));
+}
+
+/**
+ * 后台任务面板挂载时补回「订阅前已启动 / 重载清空 taskUpdates 后」的存量任务。
+ * 远程会话任务真身在 被控端,必须隧道读(控制端 main 无该会话 handle,本机读必空);
+ * 老被控端无此 channel 或隧道失败一律降级空表,面板退化为事件流 + 消息扫描两源。
+ * 需要区分权威/降级(收口 stale running)的调用方改用 readSessionBackgroundTasks。
+ */
+export function listSessionBackgroundTasksFor(
+  sessionId: string,
+): ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks> {
+  return readSessionBackgroundTasks(sessionId).then(({ tasks, pendingContinuations }) =>
+    pendingContinuations === undefined ? { tasks } : { tasks, pendingContinuations },
+  );
 }
 
 /**
