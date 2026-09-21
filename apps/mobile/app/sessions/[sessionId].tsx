@@ -4,6 +4,8 @@ import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
+import { useSessionResourceCards } from '@/session/useSessionResourceCards';
+import { SessionResourceCards } from '@/session/SessionResourceCards';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
@@ -38,7 +40,6 @@ import {
 import {
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
-  setAudioModeAsync,
 } from 'expo-audio';
 import {
   addScreenshotListener,
@@ -73,10 +74,14 @@ import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { GestureDetector } from '@/platform/gestureHandler';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { SessionHeaderNativeBack, SessionHeaderNativeActions, SessionHeaderNativeTitle, SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
+import { TaskTagDots } from '@/session/TaskTags';
 import type { TextInput as NativeTextInput } from 'react-native';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
+import { usePromptRecommendation } from '@/session/usePromptRecommendation';
+import { PromptRecommendation } from '@/session/PromptRecommendation';
+import { usePromptRecommendationVisibility } from '@/session/usePromptRecommendationVisibility';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
@@ -171,7 +176,6 @@ import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
-import { PiSessionTreeSheet } from '@/session/PiSessionTreeSheet';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
@@ -1072,6 +1076,7 @@ export default function SessionScreen() {
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
+  const recommendationSession = sessions.find((item) => item.id === sessionId);
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
   const taskUpdates = useSessionTaskUpdates(sessionId);
   const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
@@ -1382,10 +1387,23 @@ export default function SessionScreen() {
       }
     };
   }, [sessionId, removePendingUpload]);
+  // 排队编辑复用 composer；推荐只属于用户的普通草稿。
+  const [queueEditing, setQueueEditing] = useState<QueueEditingState | null>(null);
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const voiceStartPendingSeqRef = useRef(0);
   const voiceStartedOnPressInRef = useRef(false);
   const [voiceState, setVoiceStateInternal] = useState<MobileVoiceState>('idle');
+  const { prompt: promptRecommendation, dismiss: dismissPromptRecommendation } = usePromptRecommendation({
+    ownerId: auth.user?.id, deviceId, sessionId, maker,
+    agentKind: recommendationSession ? agentKindForSession(recommendationSession) : null,
+    revision: recommendationSession?.lastTurnEndedAt, running: remoteSessionRunning,
+    composerSource: composerDraftSource,
+    queueEditing: queueEditing !== null,
+    hasAttachments: attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0,
+    hasTerminalError: remoteSessionRunStatus.hasTerminalError === true,
+    voiceIsBusy: voiceStartPending || voiceState === 'listening'
+      || voiceState === 'submitting' || voiceState === 'refining',
+  });
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   // 「语音结束保持展开」hold:语音真实收尾(busy → done/error)时布防,草稿仍有
@@ -1405,19 +1423,16 @@ export default function SessionScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuInitialView, setMenuInitialView] = useState<SessionMenuView>('menu');
-  const [sessionTreeOpen, setSessionTreeOpen] = useState(false);
-  const [sessionTreePendingOpen, setSessionTreePendingOpen] = useState(false);
   const [sessionSearchPendingOpen, setSessionSearchPendingOpen] = useState(false);
   // inline 排队区:展开操作行的条目(同时只展开一条;null=全收起)。
   const [queueSelectedClientId, setQueueSelectedClientId] = useState<string | null>(null);
   // 排队消息「复用 composer 编辑」态:进入时把队列条目的文本/附件载入 composer,
   // 暂存(stash)用户原本的草稿与附件托盘,退出(保存/放弃/条目消失)时恢复。
   // ref 镜像供 send() 等异步闭包读最新值。
-  const [queueEditing, setQueueEditing] = useState<QueueEditingState | null>(null);
   const queueEditingRef = useRef<QueueEditingState | null>(null);
   // 会话切换 cleanup(声明在前)引用组件后段的回收函数,经 ref 断开声明顺序依赖。
   const discardQueueEditTransientAttachmentResourcesRef = useRef<
-    ((editing: QueueEditingState, attachmentsAtExit: readonly RemoteSerializedAttachment[]) => void) | null
+    | ((editing: QueueEditingState, attachmentsAtExit: readonly RemoteSerializedAttachment[]) => void) | null
   >(null);
   // 排队编辑保存(update-content RPC)在途 promise:会话切换 cleanup 据此把解锁
   // 排到保存落定之后,防止 device-link 并发下解锁超车、桌面端用旧内容抢先派发。
@@ -1537,6 +1552,8 @@ export default function SessionScreen() {
     });
     const projection = remoteSessionStore.getInputProjection(sessionId);
     const source = remoteSessionStore.getMessages(sessionId);
+    // Capture at send time, not when React later runs the state updater.
+    const observed = latestMessagesRef.current;
     // Match Desktop's idle-send placement. Busy follow-ups retain the existing
     // pending tail until authoritative history supplies their transcript row.
     const busy = projection.pendingQueue.length > 0 || projection.steeringQueueClientIds.length > 0
@@ -1544,7 +1561,7 @@ export default function SessionScreen() {
       || remoteSessionStore.getPendingInteractions(sessionId).length > 0
       || currentTurnHasStreamingAssistant(source);
     if (!busy) setOptimisticUserState((current) => current.sessionId !== sessionId ? current : {
-      sessionId, items: appendOptimisticUserMessage(current.items, source, queued, sessionId),
+      sessionId, items: appendOptimisticUserMessage(current.items, source, queued, sessionId, observed),
     });
     setSendingQueueClientIds((current) => {
       if (current.has(clientId)) return current;
@@ -1992,7 +2009,8 @@ export default function SessionScreen() {
   const composerInputRef = useRef<ComposerRichInputHandle | null>(null);
   const voiceControllerSessionRef = useRef<MobileVoiceControllerSession | null>(null);
   const voiceDictionaryLearningTrackerRef = useRef<MobileVoiceDictionaryLearningTracker | null>(null);
-  const sendLatestRef = useRef<((options?: {
+  const sendLatestRef = useRef<
+    | ((options?: {
     draftOverride?: string;
     documentOverride?: ComposerDocument;
   }) => Promise<void>) | null>(null);
@@ -2210,6 +2228,9 @@ export default function SessionScreen() {
       && contentRecoveryKey !== null && contentSyncedKey === contentRecoveryKey
       && !outboxRecoverySyncHeld && !loading);
   const lastAckKeyRef = useRef<string | null>(null);
+  const sessionResourceCards = useSessionResourceCards(
+    deviceId, deviceName, sessionId, currentSession?.source, remoteSessionRunning,
+  );
   // AppState 门槛:锁屏 / 切后台时导航焦点不变,useFocusEffect 的 cleanup 不会跑,
   // 驻留计时器可能在没有真实前台展示的情况下(甚至后台恢复补跑时)发出 explicit
   // 回执。把 AppState 作为回执 effect 的重算信号:离开 active 立刻取消未到期的
@@ -2385,7 +2406,7 @@ export default function SessionScreen() {
       setPendingPlanViewerState('half');
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
-  const canUseComposer = sessionOperationLayout.canUseComposer;
+  const canUseComposer = sessionOperationLayout.canUseComposer && !sessionResourceCards.blocked;
   const canUseRemoteSessionControls = canUseComposer
     && !sessionSettingsLocked
     && !remoteRealtimeControlsUnavailable;
@@ -2398,7 +2419,9 @@ export default function SessionScreen() {
   );
   const composerDisabledReason = composerDisabledReasonKey
     ? t(composerDisabledReasonKey)
-    : sessionOperationLayout.composerDisabledReason;
+    : sessionOperationLayout.composerDisabledReason
+      ?? (sessionResourceCards.blocked
+        ? sessionResourceCards.blockedReason ?? t('shared.syncing') : null);
   // inline 队列操作可用性:旧队列弹层由 showQueue 整体隐藏(离线/被撤销、pending
   // interaction 等),inline 化后气泡必须留在消息流里,故改为保留渲染、按同一规则
   // 禁用操作(取消/编辑/插话/重试/恢复),禁用理由沿用 composerDisabledReason。
@@ -2788,19 +2811,12 @@ export default function SessionScreen() {
     setMenuInitialView(view);
     setSettingsOpen(true);
   }, []);
-  const openSessionTreeAfterMenu = useCallback(() => {
-    setSessionTreePendingOpen(true);
-    setSettingsOpen(false);
-  }, []);
   const handleSessionMenuClosed = useCallback(() => {
     if (sessionSearchPendingOpen) {
       setSessionSearchPendingOpen(false);
       setSearchOpen(true);
     }
-    if (!sessionTreePendingOpen) return;
-    setSessionTreePendingOpen(false);
-    setSessionTreeOpen(true);
-  }, [sessionTreePendingOpen, sessionSearchPendingOpen]);
+  }, [sessionSearchPendingOpen]);
   const measureSendButtonTarget = useCallback(() => {
     sendButtonRef.current?.measureInWindow((x, y, width, height) => {
       sendButtonFrameRef.current = { x, y, width, height };
@@ -3001,8 +3017,6 @@ export default function SessionScreen() {
     if (!sessionManagedByHost) return;
     setSettingsOpen(false);
     setModelSheetOpen(false);
-    setSessionTreeOpen(false);
-    setSessionTreePendingOpen(false);
     if (contextSheetView !== 'main') {
       setContextSheetView('main');
       setContextSheetOpen(false);
@@ -4947,7 +4961,6 @@ export default function SessionScreen() {
     let permissionRequestSeq: number | null = null;
     let permissionRequestAbortController: AbortController | null = null;
     let startupSeq: number | null = null;
-    let audioModeEnabled = false;
     // The controller THIS startup created. Stale-teardown paths must only touch
     // this one: by the time a superseded continuation resumes, the shared ref
     // may already point at a newer session's live recording. Read through the
@@ -5015,11 +5028,8 @@ export default function SessionScreen() {
       startupSeq = voiceStartupSeqRef.current + 1;
       voiceStartupSeqRef.current = startupSeq;
       voiceStartupInFlightRef.current = true;
-      await setAudioModeAsync({
-        allowsRecording: true,
-        playsInSilentMode: true,
-      });
-      audioModeEnabled = true;
+      // The capture backend owns audio-session configuration and teardown.
+      // Screen-level Expo mode changes also affect remote desktop PiP.
       // Open the device link in the background: voice dictation writes into the
       // local composer via the cloud ASR proxy and does not need the mobile↔desktop
       // link (only submitting the composed message later does). Awaiting it used
@@ -5052,21 +5062,8 @@ export default function SessionScreen() {
           CINDY_MANAGED_REFINER_PROVIDER,
         );
       if (voiceStartupSeqRef.current !== startupSeq) {
-        // The startup was superseded while we awaited: close the claimed
-        // connection instead of opening a mic for a dead run. Session switches
-        // supersede IN PLACE here (the cleanup effect keys on [sessionId], no
-        // unmount), so a NEWER voice run may already be starting or live — and
-        // audio mode is app-global. Only undo the recording mode this startup
-        // enabled when no newer run is active, otherwise the reset could land
-        // after the new run's native capture started and silently kill it.
+        // This run never opened the microphone; release only its claimed ASR.
         void prewarmedVoice?.asr.stop().catch(() => undefined);
-        if (
-          !voiceControllerSessionRef.current
-          && !voiceStartupInFlightRef.current
-          && !voiceRecordingActiveRef.current
-        ) {
-          await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-        }
         return;
       }
       const startController = async () => {
@@ -5134,7 +5131,6 @@ export default function SessionScreen() {
             voiceControllerSessionRef.current = null;
             voiceRecordingActiveRef.current = false;
             voiceStopInFlightRef.current = false;
-            await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
           }
           await created.cancel().catch(() => undefined);
         }
@@ -5165,14 +5161,6 @@ export default function SessionScreen() {
           }
           await created.cancel().catch(() => undefined);
         }
-        if (
-          audioModeEnabled
-          && !voiceControllerSessionRef.current
-          && !voiceStartupInFlightRef.current
-          && !voiceRecordingActiveRef.current
-        ) {
-          await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-        }
         return;
       }
       const controller = voiceControllerSessionRef.current;
@@ -5185,7 +5173,6 @@ export default function SessionScreen() {
       voiceStopAfterStartRef.current = false;
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
-      await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
   }, [deviceId, openLink, renderItems, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
@@ -5217,7 +5204,6 @@ export default function SessionScreen() {
     setVoiceError(null);
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
-    void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
   }, [setVoiceState]);
 
   useEffect(() => {
@@ -5268,7 +5254,6 @@ export default function SessionScreen() {
       setComposerVoiceHoldArmed(false);
       if (controller) void controller.cancel().catch(() => undefined);
       discardPendingPrewarm();
-      void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     };
   }, [sessionId]);
 
@@ -5293,7 +5278,6 @@ export default function SessionScreen() {
       const documentBeforeStop = composerDocumentRef.current;
       const inputBeforeStop = composerInputRef.current;
       const latestDraft = await controller.stop();
-      await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
       setVoiceState('done');
       // chat-text-quote:纯引用(无转写文字、无附件)也要发出去——发送按钮在
       // quote-only 时可见,漏了引用会变成「点发送只停了录音、消息没发」。
@@ -5317,7 +5301,6 @@ export default function SessionScreen() {
       voiceRecordingActiveRef.current = false;
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
-      await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     } finally {
       voiceStopInFlightRef.current = false;
     }
@@ -6129,6 +6112,7 @@ export default function SessionScreen() {
       return;
     }
     pendingSkillSelectionRef.current = null;
+    dismissPromptRecommendation();
     // 乐观第一拍:点发送立刻清空输入框并跟到底部,不等任何网络往返(enqueue 是
     // device-link 远程调用,弱网下数秒;文字已捕获进 text)。失败时若输入框仍为空
     // 则恢复原文——用户可能在 await 期间又打了字,不能覆盖。
@@ -8370,7 +8354,6 @@ export default function SessionScreen() {
   screenshotBlockedByOverlayRef.current = Boolean(
     settingsOpen
     || searchOpen
-    || (sessionTreeOpen && currentSession?.agentKind === 'pi')
     || contextSheetOpen
     || chipMenuTarget !== null
     || (modelSheetOpen && canUseComposer)
@@ -9035,6 +9018,7 @@ export default function SessionScreen() {
         </View>
         {currentSession ? (
           <SessionMenuSheet
+            tagDeviceId={deviceId}
             providerName={providerAccountLabel}
             messageOnly={sessionManagedByHost}
             onOpenSearch={() => {
@@ -9066,9 +9050,6 @@ export default function SessionScreen() {
                 params: { sessionId, deviceId, deviceName },
               });
             }}
-            onOpenSessionTree={currentSession.agentKind === 'pi'
-              ? openSessionTreeAfterMenu
-              : undefined}
             onRegenerateTitle={() => maker.regenerateSessionTitle(sessionId)}
             onRename={(title) => patchSessionMeta({ title })}
             onRestore={() => patchSessionMeta({ status: 'active' })}
@@ -9086,20 +9067,6 @@ export default function SessionScreen() {
             visible={settingsOpen}
           />
         ) : null}
-        <PiSessionTreeSheet
-          disabledReason={remoteSessionRunning
-            ? t('session.menu.branchRunningBlocked')
-            : collaborationReadOnlyReason}
-          maker={maker}
-          onClose={() => setSessionTreeOpen(false)}
-          onNavigated={async (draftText) => {
-            if (draftText) applyComposerDocument(textComposerDocument(draftText));
-            setSessionTreeOpen(false);
-            await requestSync({ reason: 'session-tree-navigate', replaceMessages: true });
-          }}
-          sessionId={sessionId}
-          visible={sessionTreeOpen && currentSession?.agentKind === 'pi'}
-        />
         <SessionSearchSheet
           activeHit={activeSearchHit}
           activeIndex={activeSearchIndex}
@@ -9361,6 +9328,8 @@ export default function SessionScreen() {
               {showMessageHistory || showSyncingShell ? (
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
                   <MessageRenderer
+                    remoteDeviceId={deviceId}
+                    showPluginInvocations={Boolean(currentSession && currentSession.source !== 'bot')}
                     bottomOverlayHeight={bottomOverlayHeight}
                     contentBottomInset={nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
                       ? MOBILE_MESSAGE_LIST_BOTTOM_PADDING
@@ -9383,7 +9352,7 @@ export default function SessionScreen() {
                     itemsStructureKey={messageListStructureKey}
                     pendingSend={pendingSendActions}
                     getSentImagePreview={getSentImagePreview}
-                    loadingEarlier={historyView.snapshot.ready ? historyView.snapshot.loading : loadingEarlier}
+                    loadingEarlier={historyView.snapshot.ready ? historyView.view.isLoadingOlder() : loadingEarlier}
                     loadEarlierProgressKey={oldestLoadedMessageCursor}
                     onCopyMessageLink={copyMessageLink}
                     onAddMessageToComposer={canUseComposer ? addMessageToComposer : undefined}
@@ -9681,7 +9650,10 @@ export default function SessionScreen() {
                   <Text style={styles.queueEditBarText}>{composerAgentAuthHint}</Text>
                 </View>
               ) : null}
-              <SessionComposerInput
+              <SessionResourceCards state={sessionResourceCards} />
+              {!sessionResourceCards.blocked ? <SessionComposerInput
+                promptRecommendation={promptRecommendation}
+                onDismissPromptRecommendation={dismissPromptRecommendation}
                 key={activeComposerDraftScopeKey}
                 source={composerDraftSource}
                 sessionId={sessionId}
@@ -9717,7 +9689,7 @@ export default function SessionScreen() {
                 onPasteImages={(uris) => void addPastedImageAttachments(uris)}
                 onDragActiveChange={handleComposerDragActiveChange}
                 renderControls={renderComposerControls}
-              />
+              /> : null}
             </>
         )}
           {shareSelectionActive ? (
@@ -9899,6 +9871,8 @@ function SessionHeaderBar({
 
       {nativeHeader ? <SessionHeaderNativeTitle
         title={title}
+          tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
+          onTagsPress={onOpenSettings}
         pinned={!messageOnly && !!currentSession?.pinnedAt}
         syncing={syncing}
         syncingImmediately={syncingImmediately}
@@ -9916,7 +9890,12 @@ function SessionHeaderBar({
           <Text numberOfLines={1} style={styles.sessionHeaderTitle} testID="session.title">
             {title}
           </Text>
-          <QuietSyncIndicator active={syncing} immediate={syncingImmediately} />
+          <TaskTagDots
+              tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}
+              maxVisible={7}
+              onPress={onOpenSettings}
+            />
+            <QuietSyncIndicator active={syncing} immediate={syncingImmediately} />
         </View>
         {notice ? (
           <Text numberOfLines={1} style={styles.sessionHeaderNotice} testID="session.headerNotice">
@@ -10387,6 +10366,8 @@ interface SessionComposerControls {
   voiceButton: (style?: StyleProp<ViewStyle>) => ReactNode;
 }
 interface SessionComposerInputProps {
+  promptRecommendation?: string | null;
+  onDismissPromptRecommendation: () => void;
   source: ComposerDraftSource;
   sessionId: string;
   composerInputRef: RefObject<ComposerRichInputHandle | null>;
@@ -10412,7 +10393,7 @@ interface SessionComposerInputProps {
   pendingUploadCount: number;
   visualFocusComposer: boolean;
   applyRichComposerChange: (value: ComposerDocument) => void;
-  setComposerDraft: (value: string) => void;
+  setComposerDraft: (value: SetStateAction<string>) => void;
   handleComposerInputPressIn: () => void;
   onPasteImages: (uris: string[]) => void;
   beginPastePlaceholders: (count: number) => void;
@@ -10425,6 +10406,8 @@ interface SessionComposerInputProps {
 
 /** High-frequency editor, dictation, timer and resize state stops at this boundary. */
 function SessionComposerInput({
+  promptRecommendation,
+  onDismissPromptRecommendation,
   source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, renderControls,
@@ -10539,6 +10522,18 @@ function SessionComposerInput({
     || permissionSheetOpen
     || voiceIsBusy
     || composerVoiceHoldActive;
+  const recommendationPresentation = usePromptRecommendationVisibility(sessionId, draft, composerCardActive);
+  const visibleRecommendation = promptRecommendation && recommendationPresentation.visible
+    && !composerQuoteCount && !attachmentCount && !pendingUploadCount
+    && canUseComposer && !canStopComposer && !sending && !queueBusy
+    && !voiceIsBusy && !voiceStartPending && !modelSheetOpen && !permissionSheetOpen
+    ? promptRecommendation : null;
+  const acceptRecommendation = useCallback(() => {
+    if (!promptRecommendation) return;
+    recommendationPresentation.hide();
+    setComposerDraft((current) => current ? `${current}\n${promptRecommendation}` : promptRecommendation);
+    composerInputRef.current?.focus();
+  }, [promptRecommendation, recommendationPresentation.hide, setComposerDraft, composerInputRef]);
   useComposerCardTransition(composerCardActive, keyboardState);
   const composerChromeHeight = useMemo(() => {
     const statusReserve = voiceStatusVisible
@@ -10734,6 +10729,17 @@ function SessionComposerInput({
 
   const controls = renderControls({ composerLayout, composerSendUnavailableReason, composerStopDisabledReason, composerStopDisabled, composerShowInlineStop, composerSendSlotIsStop, composerShowSendButton, composerSendDisabled, voiceIsListening, voiceIsProcessing, voiceIsBusy, voiceRecordingTimer, composerVoicePlacement });
   return (
+    <>
+      {visibleRecommendation ? (
+        <View style={{ paddingHorizontal: composerTouchLayout.composerPaddingHorizontal }}>
+          <PromptRecommendation
+            key={`${sessionId}:${visibleRecommendation}`}
+            prompt={visibleRecommendation}
+            onAccept={acceptRecommendation}
+            onDismiss={onDismissPromptRecommendation}
+          />
+        </View>
+      ) : null}
               <Reanimated.View
                 style={[
                   styles.composer,
@@ -10773,6 +10779,7 @@ function SessionComposerInput({
                 ) : null}
                 {/* Keep UIKit's shadow outside the scrolling viewport's rectangular clip. */}
                 <ComposerFrame
+                  onTouchStart={recommendationPresentation.hide}
                   expanded={composerCardActive}
                   unframed={!nativeComposerFrameAvailable}
                   style={styles.composerScrollFrame}
@@ -10884,6 +10891,7 @@ function SessionComposerInput({
                 </GestureDetector>
                 </ComposerFrame>
               </Reanimated.View>
+    </>
 
   );
 }
@@ -11492,7 +11500,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   keyboard: { flex: 1 },
   sessionChrome: {
     left: 0,
-    overflow: 'hidden',
+    // Native glass buttons expand past the compact header during a press.
+    overflow: Platform.OS === 'ios' ? 'visible' : 'hidden',
     position: 'absolute',
     right: 0,
     top: 0,

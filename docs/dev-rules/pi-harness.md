@@ -391,7 +391,8 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
   user-provider 派生 → pi-host `resolvePiNativeProviders` → PiAgent writeModelsJson 原生块 +
   provider 感知 setModel。真二进制测试证明直连原生端点、网关零请求。
 - ✅ **统一会话树**(已交付):Cindy session fork 与 Pi append-only entry tree 的后端/
-  对话框实现仍在。头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
-  `agentKind=pi` 露出。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
+  对话框实现仍在。桌面头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
+  `agentKind=pi` 露出；手机版暂隐 Pi「任务分支」入口，保留树组件与 transport 能力。
+  入口呈现见 `apps/mobile/src/session/SessionMenuSheet.tsx`。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
   SQLite 可见时间线原子重投影与上下文 usage 恢复;device-link / mobile transport
   contract 同步开放。切换不回滚工作区文件。

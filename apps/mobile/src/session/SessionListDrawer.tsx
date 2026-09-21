@@ -1,3 +1,4 @@
+import { TaskTagDots } from '@/session/TaskTags';
 import { loadDeviceSessionScheduleIndex } from './scheduleIndex';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
@@ -44,9 +45,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
+import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
+import { RenameSessionModal } from '@/session/RenameSessionModal';
+import { useSessionListActions } from '@/session/useSessionListActions';
+import type { RemoteSession } from '@/session/types';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import {
   conversationSearchOriginsFromDeviceModels,
+  conversationSearchAllowsLocalWrites,
   listConversationSearchProjects,
   shouldReplaceListWithSearchResults,
   type ConversationSearchDeviceModel,
@@ -118,6 +124,7 @@ export function SessionListDrawer({
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const reduceMotion = useReduceMotionEnabled();
+  const actions = useSessionListActions();
   // 抽屉贴左缘,横屏刘海侧的 left inset 并进面板总宽,内容用 padding 让出。
   // 下限 1 是除零保险:当前调用点 enabled=false 时本组件整个不渲染(width 恒 >=300),
   // 但 progress/scrim 多处除以 panelWidth,不把不变量寄托在调用方身上。
@@ -408,11 +415,12 @@ export function SessionListDrawer({
           active={active}
           item={item.item}
           onSelect={onSelectSession}
+          onShowOptions={actions.showSessionOptions}
           searchResult={item.source === 'search'}
         />
       );
     },
-    [currentSessionId, onSelectSession],
+    [currentSessionId, onSelectSession, actions.showSessionOptions],
   );
 
   if (!mounted) return null;
@@ -540,6 +548,23 @@ export function SessionListDrawer({
         topOffset={insets.top + spacing.sm}
         visible={searchFilterOpen}
       />
+    <SessionOptionsPresenter
+        session={actions.actionSheetSession}
+        onAction={actions.handleSessionSheetAction}
+        onClose={() => actions.setActionSheetSession(null)}
+        onClosed={actions.handleSessionSheetClosed}
+        pinnedAt={actions.actionSheetSession?.pinnedAt}
+        status={actions.actionSheetSession?.status}
+        visible={actions.actionSheetSession !== null}
+      />
+      <RenameSessionModal
+        draft={actions.renameSessionDraft}
+        onCancel={actions.closeRenameSession}
+        onChangeDraft={actions.setRenameSessionDraft}
+        onConfirm={actions.confirmRenameSession}
+        saving={false}
+        visible={actions.renameSessionTarget !== null}
+      />
     </View>
   );
 }
@@ -548,11 +573,13 @@ const DrawerSessionRow = memo(function DrawerSessionRow({
   active,
   item,
   onSelect,
+  onShowOptions,
   searchResult,
 }: {
   active: boolean;
   item: RemoteSessionListItem;
   onSelect(item: RemoteSessionListItem): void;
+  onShowOptions(session: RemoteSession): void;
   searchResult: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -578,6 +605,12 @@ const DrawerSessionRow = memo(function DrawerSessionRow({
       accessibilityRole="button"
       accessibilityState={{ selected: active }}
       onPress={() => onSelect(item)}
+      delayLongPress={400}
+      onLongPress={
+        !item.automationGroup && conversationSearchAllowsLocalWrites(item)
+          ? () => onShowOptions(latestItem.session as RemoteSession)
+          : undefined
+      }
       style={({ pressed }) => [styles.row, active && styles.rowActive, pressed && styles.pressed]}
       testID={`sessionDrawer.row.${item.session.id}`}
     >
@@ -585,6 +618,10 @@ const DrawerSessionRow = memo(function DrawerSessionRow({
         <Text numberOfLines={1} style={styles.rowTitle}>
           {item.title}
         </Text>
+        <TaskTagDots
+          tags={item.session.tags}
+          surfaceColor={active ? colors.surfaceChip : colors.surface}
+        />
         {rightStatus === 'time' ? (
           <DrawerRelativeTime lastActivityAt={item.lastActivityAt} />
         ) : (

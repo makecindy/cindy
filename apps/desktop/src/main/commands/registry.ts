@@ -56,6 +56,8 @@ export interface DesktopCommandContext extends MakeDoctorCommandContext {
 export interface DesktopCommandDefinition {
   name: string;
   description: string;
+  /** Optional dynamic gate for commands backed by a user-toggleable capability. */
+  isVisible?: (ctx?: Pick<DesktopCommandContext, 'deviceId'>) => boolean;
   /**
    * 主入口 —— 命中此命令时由 main 执行。
    * 同步/异步皆可; 抛错由调用方 catch + 上报, 不会自动 swallow。
@@ -78,12 +80,14 @@ export class DesktopCommandRegistry {
    * 暴露给 renderer 的视图: 只含 kind/name/description, 不含 execute 函数。
    * 与 maker-core 的 DesktopCommandMeta 形状一致, palette 直接消费。
    */
-  list(): DesktopCommandMeta[] {
-    return Array.from(this.commands.values()).map((c) => ({
-      kind: 'desktop' as const,
-      name: c.name,
-      description: c.description,
-    }));
+  list(ctx?: Pick<DesktopCommandContext, 'deviceId'>): DesktopCommandMeta[] {
+    return Array.from(this.commands.values())
+      .filter((c) => c.isVisible?.(ctx) !== false)
+      .map((c) => ({
+        kind: 'desktop' as const,
+        name: c.name,
+        description: c.description,
+      }));
   }
 
   /**
@@ -92,7 +96,7 @@ export class DesktopCommandRegistry {
    */
   async execute(name: string, ctx: DesktopCommandContext): Promise<unknown> {
     const cmd = this.commands.get(name);
-    if (!cmd) {
+    if (!cmd || cmd.isVisible?.(ctx) === false) {
       throw new Error(`DesktopCommandRegistry: unknown command "/${name}"`);
     }
     return cmd.execute(ctx);

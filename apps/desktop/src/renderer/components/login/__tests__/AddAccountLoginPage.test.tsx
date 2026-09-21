@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode, useState } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
@@ -16,8 +16,13 @@ const auth = vi.hoisted(() => ({
   cancelAddAccount: vi.fn(async () => undefined),
 }));
 
+const translate = (key: string) => key;
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: translate }),
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: { loading: vi.fn(() => 'login-progress'), dismiss: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
@@ -44,6 +49,7 @@ vi.mock('../LoginPage', () => ({
 
 import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { AddAccountLoginPage } from '../AddAccountLoginPage';
+import { toast } from '@/lib/toast';
 
 function CoverProbe() {
   const { coverHeld, localDbGateStatus } = useAppShellCover();
@@ -78,6 +84,7 @@ function Harness() {
 
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
   auth.beginAddAccount.mockReset();
   auth.beginAddAccount.mockResolvedValue({
     success: true,
@@ -89,6 +96,55 @@ afterEach(() => {
 });
 
 describe('AddAccountLoginPage app-shell cover', () => {
+  it.each(['success', 'failure'] as const)(
+    'keeps progress until initialization settles with %s',
+    async (outcome) => {
+      let resolve!: (value: { success: boolean; state: { step: string } }) => void;
+      let reject!: (error: Error) => void;
+      auth.beginAddAccount.mockReturnValueOnce(
+        new Promise((res, rej) => {
+          resolve = res;
+          reject = rej;
+        }),
+      );
+      render(<Harness />);
+      expect(toast.loading).toHaveBeenCalledWith('sidebar.accountSwitcher.adding');
+      expect(toast.dismiss).not.toHaveBeenCalled();
+      await act(async () => {
+        if (outcome === 'success') resolve({ success: true, state: { step: 'identifier' } });
+        else reject(new Error('initialization failed'));
+      });
+      expect(toast.dismiss).toHaveBeenCalledWith('login-progress');
+      if (outcome === 'failure') {
+        expect(toast.error).toHaveBeenCalledWith('sidebar.accountSwitcher.startFailed');
+        expect(screen.getByTestId('location-probe').textContent).toBe('/settings');
+      }
+    },
+  );
+
+  it('cleans up pending progress on exit and keeps it visible after StrictMode replay', async () => {
+    let resolve!: (value: { success: boolean; state: { step: string } }) => void;
+    auth.beginAddAccount.mockReturnValueOnce(
+      new Promise((res) => {
+        resolve = res;
+      }),
+    );
+    render(
+      <StrictMode>
+        <Harness />
+      </StrictMode>,
+    );
+    expect(auth.beginAddAccount).toHaveBeenCalledOnce();
+    expect(toast.loading).toHaveBeenCalledTimes(2);
+    expect(toast.dismiss).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'leave route' }));
+    expect(toast.dismiss).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      resolve({ success: true, state: { step: 'identifier' } });
+    });
+    expect(toast.loading).toHaveBeenCalledTimes(2);
+  });
+
   it('releases a freshly reset cover and cancels the flow when leaving', async () => {
     render(<Harness />);
 

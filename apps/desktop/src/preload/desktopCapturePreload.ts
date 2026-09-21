@@ -23,6 +23,7 @@ const api: DesktopCaptureApi = {
     ipcRenderer.invoke(DESKTOP_LOCAL.INPUT, lease, sequence, events),
   viewHeartbeat: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.VIEW_HEARTBEAT, lease),
   nativeFrame: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_FRAME, lease),
+  nativeAudio: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_AUDIO, lease),
 };
 if (location.search === '?mode=files') {
   const files: FilePeerHostApi = {

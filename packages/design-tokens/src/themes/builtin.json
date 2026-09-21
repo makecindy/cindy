@@ -1285,6 +1285,22 @@
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-slider-thumb}",
         "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "segmented-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-selected-bg}"
+      },
+      "segmented-selected-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-selected-border}"
+      },
+      "segmented-option-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-option-fg}"
+      },
+      "segmented-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-hover-bg}"
       }
     },
     "cindy-light": {
@@ -2173,6 +2189,22 @@
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-slider-thumb}",
         "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "segmented-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-selected-bg}"
+      },
+      "segmented-selected-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-selected-border}"
+      },
+      "segmented-option-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-option-fg}"
+      },
+      "segmented-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-hover-bg}"
       }
     },
     "default-dark": {

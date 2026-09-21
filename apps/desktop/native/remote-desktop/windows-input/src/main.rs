@@ -136,7 +136,48 @@ fn release(keys: &mut HashSet<u16>, buttons: &mut HashSet<u64>) {
         }
     }
 }
+fn clipboard_counter() -> Result<u32, ()> {
+    use windows_sys::Win32::System::{DataExchange::*, StationsAndDesktops::*};
+    unsafe {
+        let desktop = OpenInputDesktop(0, 0, DESKTOP_READOBJECTS);
+        if desktop.is_null() { return Err(()); }
+        let mut name = [0u16; 256];
+        let mut needed = 0;
+        let ok = GetUserObjectInformationW(desktop, UOI_NAME, name.as_mut_ptr().cast(), 512, &mut needed);
+        CloseDesktop(desktop);
+        let length = name.iter().position(|c| *c == 0).unwrap_or(name.len());
+        if ok == 0 || String::from_utf16_lossy(&name[..length]) != "Default" { return Err(()); }
+        Ok(GetClipboardSequenceNumber())
+    }
+}
+fn counter_session() {
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut input = io::stdin().lock();
+        loop {
+            let mut line = Vec::new();
+            match input.by_ref().take(34).read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) if line.len() > 33 || line.last() != Some(&b'\n') => break,
+                Ok(_) => if tx.send(line).is_err() { break; },
+            }
+        }
+    });
+    while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
+        let Ok(line) = std::str::from_utf8(&line) else { break; };
+        let parts: Vec<_> = line.trim_end().split(' ').collect();
+        if parts.len() != 2 || parts[0].len() > 16 || parts[0].parse::<u64>().is_err()
+            || !["0", "1"].contains(&parts[1]) { break; }
+        let value = clipboard_counter().map(|v| v.to_string()).unwrap_or_else(|_| "unavailable".into());
+        println!("{} {}", parts[0], value);
+        if io::stdout().flush().is_err() { break; }
+    }
+}
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--clipboard-counter") {
+        counter_session();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("--privacy-input") {
         privacy::run();
         return;
@@ -150,27 +191,9 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("--clipboard-version") {
         // The user-session clipboard must never masquerade as secure-desktop data.
-        use windows_sys::Win32::System::{DataExchange::*, StationsAndDesktops::*};
-        unsafe {
-            let desktop = OpenInputDesktop(0, 0, DESKTOP_READOBJECTS);
-            if desktop.is_null() {
-                std::process::exit(2);
-            }
-            let mut name = [0u16; 256];
-            let mut needed = 0;
-            let ok = GetUserObjectInformationW(
-                desktop,
-                UOI_NAME,
-                name.as_mut_ptr().cast(),
-                512,
-                &mut needed,
-            );
-            CloseDesktop(desktop);
-            let length = name.iter().position(|c| *c == 0).unwrap_or(name.len());
-            if ok == 0 || String::from_utf16_lossy(&name[..length]) != "Default" {
-                std::process::exit(2);
-            }
-            println!("{}", GetClipboardSequenceNumber());
+        match clipboard_counter() {
+            Ok(value) => println!("{value}"),
+            Err(_) => std::process::exit(2),
         }
         return;
     }

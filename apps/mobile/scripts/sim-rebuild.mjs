@@ -70,6 +70,7 @@ import {
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
 import { podInstallBounded } from './sim-pod-install.mjs';
+import { computeSimulatorNativeFingerprint, inspectSimulatorNativeIdentity } from './lib/sim-native-identity.mjs';
 import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import {
@@ -240,6 +241,12 @@ async function rebuildAndroidSimulator() {
 // 宿主机架构只参与缓存隔离；真实构建架构由 Xcode 与各 Pod 的支持矩阵决定。
 const simArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
 const expectedBundleId = resolveMobileSimulatorBundleId(region);
+let expectedNativeFingerprint = computeSimulatorNativeFingerprint(mobileDir, devProcessEnv);
+
+function assertNativeIdentity(appPath) {
+  const verdict = inspectSimulatorNativeIdentity({ appPath, expectedFingerprint: expectedNativeFingerprint });
+  if (!verdict.healthy) throw new Error(`${verdict.code}: 原生产物与当前依赖不匹配，不能交付测试。请用 --force-build 重新构建。`);
+}
 
 // —— fingerprint 产物缓存查询 ——
 // 失败(工具异常等)只降级为完整构建,绝不让缓存机制本身挡住构建路径。
@@ -260,7 +267,7 @@ const cacheDir = fingerprintHash ? join(appCacheRoot, `ios-${simArch}-${fingerpr
 let app = null;
 if (cacheDir && !forceBuild) {
   const cached = readAppCacheEntry(cacheDir, simArch);
-  if (cached) {
+  if (cached && inspectSimulatorNativeIdentity({ appPath: cached, expectedFingerprint: expectedNativeFingerprint }).healthy) {
     console.log(`✓ fingerprint 命中产物缓存(${fingerprintHash.slice(0, 12)}…),跳过 prebuild / pod / xcodebuild。`);
     console.log('  (改了原生层但怀疑缓存不对时,用 --force-build 强制重编。)');
     utimesSync(cacheDir, new Date(), new Date());
@@ -316,11 +323,16 @@ if (!app) {
     process.exit(1);
   }
   assertBundleIdentity(app);
+  // Prebuild can update generated inputs. Compare the actual build resource,
+  // never label an old artifact with a newly computed hash.
+  expectedNativeFingerprint = computeSimulatorNativeFingerprint(mobileDir, devProcessEnv);
+  assertNativeIdentity(app);
   if (cacheDir) storeAppCacheEntry(cacheDir, scheme, app, readAppBundleIdentifier(app));
 }
 
 assertAppSupportsArchitecture(app, simArch);
 assertBundleIdentity(app);
+assertNativeIdentity(app);
 
 // bundle identity 必须从实际产物读:global 的 app.config.js 会把 bundle id
 // 切成 com.xd.cindy，不能再用默认 cn 的 app.json 值启动错 app。
@@ -343,6 +355,7 @@ if (clean) {
 }
 console.log('› 安装到 booted 模拟器…');
 run('xcrun', ['simctl', 'install', simulatorUdid ?? 'booted', app]);
+assertNativeIdentity(capture('xcrun', ['simctl', 'get_app_container', simulatorUdid ?? 'booted', bundleId, 'app']).trim());
 
 if (!await ensureMetroOwnershipBeforeLaunch(bundleId)) process.exit(1);
 console.log('› 启动…');

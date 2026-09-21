@@ -6,6 +6,7 @@
  * 必须做 sender 断言 + 运行期结构/长度/枚举校验(TS 类型不等于运行期校验)。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -336,6 +337,15 @@ beforeEach(() => {
 });
 
 describe('maker:predict-prompt — sender 断言', () => {
+  it.each(['win32', 'darwin', 'ios', 'android'])('trusted %s controllers can request host predictions', async (controllerPlatform) => {
+    h.trusted = false; // Tunnel dispatch has no local Renderer sender.
+    const result = await runDeviceLinkInvokeContext({
+      controllerDeviceId: 'controller-a', controllerPlatform, channel: 'maker:predict-prompt',
+    }, () => invokePredict(VALID_REQUEST));
+    expect(result).toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
   it('非受信来源(子 frame / WebView)被拒,且不调用付费模型', async () => {
     h.trusted = false;
 
@@ -504,6 +514,23 @@ describe('maker:predict-prompt — DB 防御纵深(远程会话拒绝)', () => {
 });
 
 describe('maker:predict-prompt — 多窗口同轮幂等', () => {
+  it('cache-only navigation never starts a prediction and can reuse a later live result', async () => {
+    await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+    expect(h.drainPersistQueue).not.toHaveBeenCalled();
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
+  it('cache-only requests still reject a cached result after a new turn starts', async () => {
+    await invokePredict(VALID_REQUEST);
+    h.sessionRow = { ...h.sessionRow!, activeTurnStartedAt: 3 };
+    await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({ prompt: null });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
   it('同一 session 同一 completion revision 并发时共享 Promise 和结果', async () => {
     let resolveFirst!: (value: string) => void;
     h.predict.mockImplementationOnce(

@@ -521,6 +521,17 @@ describe('mobile native app config', () => {
     expect(cn.ios.infoPlist.UIViewControllerBasedStatusBarAppearance).toBe(true);
   });
 
+  it('enables the scene lifecycle required to launch iOS 27 SDK builds', () => {
+    const appJson = JSON.parse(readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'));
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    for (const config of [appJson.expo, buildConfig({ config: appJson.expo })]) {
+      const properties = config.plugins.find(
+        (plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-build-properties',
+      );
+      expect(properties?.[1]?.ios?.enableSceneSupport).toBe(true);
+    }
+  });
+
   it('keeps audio capture foreground-only in native builds', () => {
     const appJson = JSON.parse(
       readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),

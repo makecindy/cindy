@@ -396,7 +396,7 @@ import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGes
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
-import { makerApiFor, makerApiForDevice } from '@/lib/makerTransport';
+import { makerApiFor, makerApiForDevice, makerApiForSticky } from '@/lib/makerTransport';
 import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
 const log = createLogger('ChatInput');
@@ -1306,12 +1306,12 @@ export function ChatInput({
       dismissPromptRecommendation(sessionId, recommendation.revision);
       return;
     }
-    // remote / review/read-only 保持原有 fail-closed 语义。deviceLinkDeviceId=undefined
-    // 是归属尚未解析的暂态，先保留 candidate；解析为本地 null 后再继续。
+    // deviceLinkDeviceId=undefined 是归属尚未解析的暂态，先保留 candidate；
+    // 远程推荐通过被控端 maker 隧道生成，避免在控制端读取不到会话素材。
     if (deviceLinkDeviceId === undefined || runtimeAgentKind == null || !hasPredictionMessages) {
       return;
     }
-    if (deviceLinkDeviceId !== null || remoteHostId || disabled) {
+    if (remoteHostId || disabled) {
       dismissPromptRecommendation(sessionId, recommendation.revision);
       return;
     }
@@ -1342,7 +1342,7 @@ export function ChatInput({
       content: message.content,
     }));
 
-    window.electronAPI.maker
+    makerApiForSticky(requestSessionId)
       .predictNextPrompt({
         sessionId: requestSessionId,
         agentKind: runtimeAgentKind,
@@ -6912,8 +6912,12 @@ export function ChatInput({
   //     身份未加载时 resolveModelSelectorAgentIdentity 返回 undefined → 不画
   //     (绝不拿 vendorKey 的 Claude Code 回退冒充,见 runtimeAgentKind 的 prop 说明);
   //   · 草稿:没有 session 身份可言,当前引擎就是 vendorKey 本身。
+  const composerAgentIdentity = resolveModelSelectorAgentIdentity(
+    runtimeAgentKind ? composerSelection.current.agentKind : runtimeAgentKind,
+    composerSelection.pending ? composerSelection.display.agentKind : null,
+  );
   const composerEngineMarkVendor = sessionId
-    ? (resolveModelSelectorAgentIdentity(runtimeAgentKind, composerSelection.pending ? composerSelection.display.agentKind : null)?.vendorKey ?? null)
+    ? (composerAgentIdentity?.vendorKey ?? null)
     : (vendorKey ?? null);
 
   /**
@@ -8847,10 +8851,7 @@ export function ChatInput({
                     // 供重试时也不会长期隐藏身份或把目标冒充为当前 Agent。
                     agentIdentity={
                       sessionId
-                        ? resolveModelSelectorAgentIdentity(
-                            runtimeAgentKind,
-                            composerSelection.pending ? composerSelection.display.agentKind : null,
-                          )
+                        ? composerAgentIdentity
                         : undefined
                     }
                     // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;

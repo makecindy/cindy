@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null }));
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";

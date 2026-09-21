@@ -1,3 +1,5 @@
+import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
+import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
  * sessionsStore — CC Agent Session 列表的模块级单例 store
  * ---------------------------------------------------------------------------
@@ -1136,6 +1138,21 @@ if (typeof window !== 'undefined') {
         ...(totalMoney ? { totalMoney } : {}),
         ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
       });
+    },
+  );
+
+  window.electronAPI?.localDb?.taskTags?.onChanged?.(({ tags }, ownerStamp) => {
+    if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    const catalog = normalizeTaskTags(tags, 256);
+    emitTaskTagCatalog(undefined, catalog);
+    for (const [filter, rows] of cache)
+      cache.set(
+        filter,
+        rows.map((row) => ({ ...row, tags: reconcileTaskTags(row.tags, catalog) })),
+      );
+    notify();
+    // Supersede list reads which started before this directory mutation.
+    void sessionsStore.forceRefreshAll();
     },
   );
 

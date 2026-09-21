@@ -19,6 +19,7 @@ beforeEach(() => {
     'rev-parse --verify refs/remotes/origin/main^{commit}': remoteMain,
     'rev-parse --abbrev-ref HEAD': 'main',
     ['rev-list --left-right --count ' + localMain + '...' + remoteMain]: '0	4',
+    ['rev-list --left-right --count ' + personal + '...' + localMain]: '1	2',
   };
   vi.mocked(runSourceGit)
     .mockReset()
@@ -42,8 +43,10 @@ describe('source revision snapshot', () => {
       mainRemoteCommit: remoteMain,
       mainBehind: 4,
       mainAhead: 0,
+      personalAhead: 1,
+      personalBehind: 2,
     });
-    expect(runSourceGit).toHaveBeenCalledTimes(5);
+    expect(runSourceGit).toHaveBeenCalledTimes(7);
     expect(vi.mocked(runSourceGit).mock.calls.every(([, , cwd]) => cwd === 'managed-source')).toBe(
       true,
     );
@@ -68,13 +71,19 @@ describe('source revision snapshot', () => {
       expect(result.mainBehind).toBeUndefined();
       expect(result.mainAhead).toBeUndefined();
       expect(result[ref === 'refs/heads/main' ? 'mainCommit' : 'mainRemoteCommit']).toBeUndefined();
-      expect(runSourceGit).toHaveBeenCalledTimes(4);
+      expect(runSourceGit).toHaveBeenCalledTimes(ref === 'refs/heads/main' ? 5 : 6);
     },
   );
 
   it('does not substitute the latest upstream commit for an unknown personal ancestor', async () => {
     outputs['merge-base ' + personal + ' ' + remoteMain] = new Error('unrelated histories');
     await expect(read()).resolves.toMatchObject({ baseCommit: undefined, mainBehind: 4 });
+  });
+
+  it('reports the explicitly adopted upstream even when personal HEAD has not moved', async () => {
+    outputs['rev-parse --verify refs/cindy-make/personal-upstream^{commit}'] = remoteMain;
+    await expect(read()).resolves.toMatchObject({ baseCommit: remoteMain });
+    expect(vi.mocked(runSourceGit).mock.calls.some(([, args]) => args[0] === 'merge-base')).toBe(false);
   });
 
   it.each(['', '-1 2', '0 1.5', '0 9007199254740992', 'failed', new Error('count failed')])(

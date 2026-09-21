@@ -16,6 +16,20 @@ export type ThemeMode = 'light' | 'dark';
 
 /** 随主题切换的颜色 token。light / dark 必须有完全一致的 key 集合。 */
 export interface ThemeColors {
+  taskTagRed: string;
+  taskTagOrange: string;
+  taskTagYellow: string;
+  taskTagGreen: string;
+  taskTagBlue: string;
+  taskTagPurple: string;
+  taskTagGray: string;
+  taskTagPink: string;
+  taskTagCoral: string;
+  taskTagTeal: string;
+  taskTagIndigo: string;
+  taskTagWhite: string;
+  taskTagWhiteCheck: string;
+
   /** 页面 Surface 背景 */
   surface: string;
   /** 抬一层的 Card / 弹窗 / 输入框 */
@@ -370,6 +384,20 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
  */
 export const lightColors: ThemeColors = {
   surface: '#EDEDED',
+  taskTagRed: '#ed615f',
+  taskTagOrange: '#eea34e',
+  taskTagYellow: '#e5c744',
+  taskTagGreen: '#70b568',
+  taskTagBlue: '#609bd4',
+  taskTagPurple: '#ab7bc6',
+  taskTagGray: '#969696',
+  taskTagPink: '#df83b0',
+  taskTagCoral: '#de8970',
+  taskTagTeal: '#53a89d',
+  taskTagIndigo: '#7c83cf',
+  taskTagWhite: '#ffffff',
+  taskTagWhiteCheck: '#525252',
+
   surfaceElevated: '#F8F8F8',
   surfaceTranslucent: 'rgba(237, 237, 237, 0.78)',
   surfaceTranslucentSidebar: 'rgba(246, 246, 246, 0.90)',
@@ -443,6 +471,19 @@ export const lightColors: ThemeColors = {
  */
 export const darkColors: ThemeColors = {
   surface: '#2A2828',
+  taskTagRed: '#ed615f',
+  taskTagOrange: '#eea34e',
+  taskTagYellow: '#e5c744',
+  taskTagGreen: '#70b568',
+  taskTagBlue: '#609bd4',
+  taskTagPurple: '#ab7bc6',
+  taskTagGray: '#969696',
+  taskTagPink: '#e79fc1',
+  taskTagCoral: '#e6a08c',
+  taskTagTeal: '#75bfb4',
+  taskTagIndigo: '#999fdf',
+  taskTagWhite: '#ffffff',
+  taskTagWhiteCheck: '#525252',
   surfaceElevated: '#312F2F',
   surfaceTranslucent: 'rgba(42, 40, 40, 0.78)',
   surfaceTranslucentSidebar: 'rgba(18, 15, 15, 0.85)',

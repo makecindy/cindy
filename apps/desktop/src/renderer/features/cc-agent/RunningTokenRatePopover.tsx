@@ -155,7 +155,7 @@ export function RunningTokenRatePopover({
     <Popover
       open={open}
       onOpenChange={(next) => {
-        if (next) setMode('pinned');
+        setMode(next ? 'pinned' : 'dismissed');
       }}
     >
       <Tooltip.Provider>
@@ -193,7 +193,12 @@ export function RunningTokenRatePopover({
               </button>
             </Tooltip.Trigger>
           </PopoverTrigger>
-          <Tooltip.Content side="top" className={`${surface} break-normal`}>
+          <Tooltip.Content
+            side="top"
+            align="end"
+            sideOffset={8}
+            className={`${surface} break-normal`}
+          >
             {card}
           </Tooltip.Content>
         </Tooltip.Root>

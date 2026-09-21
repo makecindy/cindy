@@ -170,8 +170,8 @@ describe('ModelPriceOverrideDialog', () => {
     );
 
     await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledOnce());
-    expect(getByRole('button', { name: 'Claude Code' }).classList.contains('shadow-sm')).toBe(false);
-    expect(getByRole('button', { name: 'Codex' }).classList.contains('shadow-sm')).toBe(false);
+    expect(getByRole('radio', { name: 'Claude Code' }).classList.contains('shadow-sm')).toBe(false);
+    expect(getByRole('radio', { name: 'Codex' }).classList.contains('shadow-sm')).toBe(false);
   });
 
   it('prevents switching runtime while a reset response is pending', async () => {
@@ -204,7 +204,7 @@ describe('ModelPriceOverrideDialog', () => {
     fireEvent.click(reset);
     await waitFor(() => expect(resetModelPriceOverride).toHaveBeenCalledOnce());
 
-    const codex = getByRole('button', { name: 'Codex' });
+    const codex = getByRole('radio', { name: 'Codex' });
     expect(codex.hasAttribute('disabled')).toBe(true);
     fireEvent.click(codex);
     expect(getModelPriceOverride).toHaveBeenCalledOnce();

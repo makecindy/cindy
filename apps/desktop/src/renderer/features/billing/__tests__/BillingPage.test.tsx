@@ -53,7 +53,8 @@ const checkout = {
   close: vi.fn(),
 };
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
     i18n,
     t: (key: string, params?: Record<string, string>) => {

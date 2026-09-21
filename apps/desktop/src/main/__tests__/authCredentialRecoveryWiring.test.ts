@@ -46,6 +46,8 @@ describe('production credential recovery wiring', () => {
         authCredentialRecovery: { request },
         app: { isPackaged: true },
         noteAuthColdStartState: vi.fn(),
+        isCindyVersionLaunchPending: () => false,
+        recordDesktopDevAuthStartupResult: vi.fn(),
       };
       new Function(...Object.keys(deps), compiled)(...Object.values(deps));
       if (rejects) await expect(handler()).rejects.toBe(outcome);

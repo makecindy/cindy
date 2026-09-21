@@ -233,7 +233,35 @@ describe('resolvePiCindyGatewayModelApi', () => {
     );
     expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toEqual({
       api: 'anthropic-messages',
+      compat: { sendSessionAffinityHeaders: true },
     });
+  });
+
+  it.each([false, true])('enables Gateway session affinity without losing model compat (remote=%s)', (remote) => {
+    setXdGatewayModels([
+      { id: 'claude-opus-5', agents: ['pi'] },
+      { id: 'moonshot/kimi-k3', agents: ['pi'] },
+      { id: 'gpt-5.6-sol', agents: ['pi'] },
+      { id: 'google/gemini-3.7-flash', agents: ['pi'] },
+    ]);
+    expect(resolvePiCindyGatewayModelSpec('xd', 'claude-opus-5', { remote })).toMatchObject({
+      api: 'anthropic-messages',
+      compat: { sendSessionAffinityHeaders: true, forceAdaptiveThinking: true },
+    });
+    const chat = resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3', { remote });
+    expect(chat).toMatchObject({
+      api: 'openai-completions',
+      compat: { sendSessionAffinityHeaders: true, maxTokensField: 'max_tokens', thinkingFormat: 'openai' },
+    });
+    // Returned profiles must not mutate the bundled/probed catalog shared with direct providers.
+    chat!.compat!.sendSessionAffinityHeaders = false;
+    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3', { remote })?.compat)
+      .toHaveProperty('sendSessionAffinityHeaders', true);
+    for (const id of ['gpt-5.6-sol', 'google/gemini-3.7-flash']) {
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote });
+      expect(spec).toBeDefined();
+      expect(spec?.compat ?? {}).not.toHaveProperty('sendSessionAffinityHeaders');
+    }
   });
 
   it('uses the exact local Pi API regardless of Gateway hints or selected BYOM provider', () => {

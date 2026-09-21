@@ -265,6 +265,14 @@ export function crossesCodexAppliedCustomProviderIdentity(
     : actualIsAppliedCustomProviderIdentity || actualIsRetiredPrototypeIdentity;
 }
 
+/** Whether a thread provider id belongs to the currently applied dynamic route set. */
+export function isAppliedCodexCustomProviderIdentity(providerId: string | null | undefined): boolean {
+  const actual = providerId?.trim() || null;
+  return actual !== null && appliedCustomProviderRoutes.some(
+    (route) => route.modelProviderId === actual,
+  );
+}
+
 export function buildCodexCustomProviderArgs(
   proxyEndpoint: string,
   authMode: CodexProxySpawnAuthMode,

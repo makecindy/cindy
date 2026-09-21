@@ -1,4 +1,5 @@
 import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
@@ -28,6 +29,26 @@ export interface SessionRuntimeControlSnapshot {
   pending: PendingSessionRuntimeMutation | null;
   fallbackHop: number;
   visitedRoutes: string[];
+}
+
+/** Shared by full session reads and route-change pushes; all axes come from one profile. */
+export function projectSessionRuntimeControl(
+  sessionId: string,
+  baseline: SessionRuntimeProfile,
+): Partial<RendererSession> {
+  const control = getSessionRuntimeControlSnapshot(sessionId);
+  const effective = control.effectiveOverride ?? baseline;
+  return {
+    model: effective.model,
+    providerId: effective.providerId,
+    // The legacy wire axis is string-compatible; the profile preserves null.
+    effort: effective.effort ?? '',
+    fastMode: effective.fastMode,
+    runtimeGeneration: control.generation,
+    runtimeBaseline: baseline,
+    runtimeEffective: effective,
+    runtimePending: control.pending,
+  };
 }
 
 export type SessionRuntimeProfilePatch = Partial<

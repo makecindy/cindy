@@ -72,6 +72,16 @@ function projectNodeFor(session: Session, displayName: string): ProjectNode {
 /* ============================== tests ============================== */
 
 describe('buildSessionSourceLabelMap', () => {
+  it('labels pinned Cindy Make tasks with their feature name rather than a worktree id', () => {
+    const personal = {
+      ...s({ id: 'personal', workingDir: '/managed/worktrees/run-id' }),
+      source: 'cindy-make' as const,
+    };
+    const map = buildSessionSourceLabelMap([personal], [], 'Dialogue', 'Cindy Make');
+    expect(map.get(personal.id)).toBe('Cindy Make');
+  });
+
+
   it('does not label standalone dialogue sessions', () => {
     const d = s({ id: 'd1', workspaceKind: 'dialogue' });
     const map = buildSessionSourceLabelMap([d], []);

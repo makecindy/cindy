@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 549,
+  "count": 568,
   "colors": [
     {
       "id": "surface",
@@ -2746,6 +2746,101 @@
       "id": "slider-thumb-shadow",
       "light": "0 1px 3px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08)",
       "dark": "0 1px 3px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.16)"
+    },
+    {
+      "id": "segmented-track",
+      "light": "rgba(0, 0, 0, 0.06)",
+      "dark": "rgba(0, 0, 0, 0.25)"
+    },
+    {
+      "id": "segmented-selected-bg",
+      "light": "var(--surface-elevated)",
+      "dark": "var(--surface-elevated)"
+    },
+    {
+      "id": "segmented-selected-border",
+      "light": "var(--border-default)",
+      "dark": "var(--border-default)"
+    },
+    {
+      "id": "segmented-selected-shadow",
+      "light": "0 1px 2px rgba(0, 0, 0, 0.1), 0 3px 8px rgba(0, 0, 0, 0.06)",
+      "dark": "0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.24)"
+    },
+    {
+      "id": "segmented-option-fg",
+      "light": "var(--text-secondary)",
+      "dark": "var(--text-secondary)"
+    },
+    {
+      "id": "segmented-hover-bg",
+      "light": "var(--surface-hover)",
+      "dark": "var(--surface-hover)"
+    },
+    {
+      "id": "task-tag-red",
+      "light": "#ed615f",
+      "dark": "#ed615f"
+    },
+    {
+      "id": "task-tag-orange",
+      "light": "#eea34e",
+      "dark": "#eea34e"
+    },
+    {
+      "id": "task-tag-yellow",
+      "light": "#e5c744",
+      "dark": "#e5c744"
+    },
+    {
+      "id": "task-tag-green",
+      "light": "#70b568",
+      "dark": "#70b568"
+    },
+    {
+      "id": "task-tag-blue",
+      "light": "#609bd4",
+      "dark": "#609bd4"
+    },
+    {
+      "id": "task-tag-purple",
+      "light": "#ab7bc6",
+      "dark": "#ab7bc6"
+    },
+    {
+      "id": "task-tag-gray",
+      "light": "#969696",
+      "dark": "#969696"
+    },
+    {
+      "id": "task-tag-pink",
+      "light": "#df83b0",
+      "dark": "#e79fc1"
+    },
+    {
+      "id": "task-tag-coral",
+      "light": "#de8970",
+      "dark": "#e6a08c"
+    },
+    {
+      "id": "task-tag-teal",
+      "light": "#53a89d",
+      "dark": "#75bfb4"
+    },
+    {
+      "id": "task-tag-indigo",
+      "light": "#7c83cf",
+      "dark": "#999fdf"
+    },
+    {
+      "id": "task-tag-white",
+      "light": "#ffffff",
+      "dark": "#ffffff"
+    },
+    {
+      "id": "task-tag-white-check",
+      "light": "#525252",
+      "dark": "#525252"
     }
   ]
 }

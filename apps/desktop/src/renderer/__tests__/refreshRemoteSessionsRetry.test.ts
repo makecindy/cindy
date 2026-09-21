@@ -567,6 +567,22 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
   });
 
+  it('does not restore deleted tags from a first snapshot overtaken by a catalog push', async () => {
+    const d = did();
+    const snapshot = deferred<Session[]>();
+    invoke.mockReturnValueOnce(snapshot.promise);
+    const refresh = refreshRemoteDeviceSessions(d, 'Mac', { sleep: noSleep });
+    remoteProjectsStore.applyTagCatalog(d, []);
+    snapshot.resolve([session('task', { tags: [{
+      id: 'old', name: 'Deleted', color: 'red', favoriteOrder: 0, revision: 1,
+    }] })]);
+    await expect(refresh).resolves.toBe('superseded');
+    expect(remoteProjectsStore.getDeviceSessions(d)).toHaveLength(0);
+    invoke.mockResolvedValueOnce([session('task', { tags: [] })]);
+    await expect(refreshRemoteDeviceSessions(d, 'Mac', { sleep: noSleep })).resolves.toBe('ok');
+    expect(remoteProjectsStore.getDeviceSessions(d)).toMatchObject([{ id: 'task', tags: [] }]);
+  });
+
   it('首拉 active 列表时要求被控端补齐置顶,避免旧置顶被 200 条窗口截掉', async () => {
     const d = did();
     invoke.mockResolvedValueOnce([

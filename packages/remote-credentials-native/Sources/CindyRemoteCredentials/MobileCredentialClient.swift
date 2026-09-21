@@ -1,7 +1,11 @@
-#if os(iOS)
+#if os(iOS) || os(macOS)
 import Foundation
 import CryptoKit
+#if os(iOS)
 import UIKit
+#else
+import AppKit
+#endif
 // The system context is read on the worker and only invalidated on Main for
 // cancellation; LocalAuthentication predates Swift Sendable annotations.
 @preconcurrency import LocalAuthentication
@@ -46,11 +50,23 @@ public final class MobileCredentialClient {
   private var authentication: LAContext?
   public var onInvalidated: ((String) -> Void)?
 
-  public init() {}
+  private let storageDirectory: URL?
+  public init(storageDirectory: URL? = nil) { self.storageDirectory = storageDirectory }
+  private var foreground: Bool {
+    #if os(iOS)
+    return UIApplication.shared.applicationState == .active
+    #else
+    return NSApp.isActive || NSWorkspace.shared.frontmostApplication?.processIdentifier == getppid()
+    #endif
+  }
+  private func storageRoot() throws -> URL {
+    if let storageDirectory { return storageDirectory }
+    return try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+      appropriateFor: nil, create: true).appendingPathComponent("CindyRemoteCredentials", isDirectory: true)
+  }
 
   private func localVault() throws -> CredentialVault {
-    let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-      appropriateFor: nil, create: true).appendingPathComponent("CindyRemoteCredentials", isDirectory: true)
+    let root = try storageRoot()
     return CredentialVault(installation: try InstallationMarker.loadOrCreate(directory: root))
   }
   private func settingsKey(realm: String, membership: String, authDevice: String, target: String) throws -> String {
@@ -61,7 +77,10 @@ public final class MobileCredentialClient {
   public func savedSettings(realm: String, membership: String, authDevice: String, target: String) throws -> [String: Bool] {
     let vault = try localVault()
     let value = try vault.settings(settingsKey(realm: realm, membership: membership, authDevice: authDevice, target: target))
-    let biometricAvailable = LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+    var biometricAvailable = LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+    #if os(macOS)
+    biometricAvailable = biometricAvailable && SecureEnclave.isAvailable
+    #endif
     let autoUnlock = try value.map { settings in
       guard settings.targetPublicKey != nil else { return false }
       return try vault.contains(binding: settings.binding)
@@ -78,7 +97,7 @@ public final class MobileCredentialClient {
   }
   public func changeBiometric(realm: String, membership: String, authDevice: String, target: String,
     enabled: Bool, locale: String) async throws {
-    guard UIApplication.shared.applicationState == .active, authentication == nil, !operationPending else { throw CredentialError.cancelled }
+    guard foreground, authentication == nil, !operationPending else { throw CredentialError.cancelled }
     let vault = try localVault(), key = try settingsKey(realm: realm, membership: membership, authDevice: authDevice, target: target)
     guard let settings = try vault.settings(key) else { throw CredentialError.unavailable }
     if settings.biometric == enabled { return }
@@ -104,8 +123,7 @@ public final class MobileCredentialClient {
     }
     let next = Owner(realm: realm, membership: membership, authDevice: authDevice)
     if owner != next { reset(); owner = next }
-    let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-      appropriateFor: nil, create: true).appendingPathComponent("CindyRemoteCredentials", isDirectory: true)
+    let root = try storageRoot()
     let installation = try InstallationMarker.loadOrCreate(directory: root)
     let signingKey = try InstallationIdentity.loadOrCreate(installation: installation, realm: realm)
     let descriptor = LocalCredentialIdentity(device: authDevice, membership: membership, realm: realm, publicKey: signingKey.publicKey)
@@ -120,7 +138,7 @@ public final class MobileCredentialClient {
   public func pushHeaders(method: String, body: [String: String]) async throws -> [String: String] { throw CredentialError.unavailable }
 
   public func begin(target: String, descriptor: String = "", setup: Bool = false, savedOnly: Bool = false, biometric: Bool = false) async throws -> [String: String] {
-    guard UIApplication.shared.applicationState == .active,
+    guard foreground,
       let owner, let key, let vault else { throw CredentialError.unavailable }
     close()
     let local = LocalCredentialIdentity(device: owner.authDevice, membership: owner.membership, realm: owner.realm, publicKey: key.publicKey).peer
@@ -182,7 +200,7 @@ public final class MobileCredentialClient {
   public func password(handle: String, useSaved: Bool, locale: String, theme: String) async throws -> String {
     let state = try current(handle)
     try state.channel.requireConfirmed()
-    guard UIApplication.shared.applicationState == .active else { throw CredentialError.applicationInactive }
+    guard foreground else { throw CredentialError.applicationInactive }
     guard let account = state.account, let vault else { throw CredentialError.unavailable }
     guard form == nil, authentication == nil, !operationPending else { throw CredentialError.authenticationBusy }
     operationPending = true
@@ -214,22 +232,28 @@ public final class MobileCredentialClient {
         // Cancellation is never turned into another prompt.
       }
     }
+    #if os(iOS)
     guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
       .first(where: { $0.activationState == .foregroundActive }),
       var presenter = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else {
       throw CredentialError.unavailable
     }
     while let presented = presenter.presentedViewController { presenter = presented }
+    #endif
     defer { if session === state { form = nil } }
     let entered: (Data, Bool) = try await withCheckedThrowingContinuation { continuation in
       let form = CredentialPasswordForm(labels: labels, account: account.name, saveRequired: state.setup) {
         continuation.resume(with: $0.mapError { $0 as Error })
       }
-      form.overrideUserInterfaceStyle = theme == "dark" ? .dark : .light
       self.form = form
+      #if os(iOS)
+      form.overrideUserInterfaceStyle = theme == "dark" ? .dark : .light
       presenter.present(form, animated: true)
+      #else
+      form.present(theme: theme)
+      #endif
     }
-    guard session === state, UIApplication.shared.applicationState == .active else { throw CredentialError.cancelled }
+    guard session === state, foreground else { throw CredentialError.cancelled }
     _ = try current(handle)
     state.usedSavedPassword = false
     return try state.controller.authenticate(password: entered.0, remember: state.setup || entered.1)
@@ -292,11 +316,15 @@ public final class MobileCredentialClient {
 
   private func requireForeground(epoch: UInt64) throws {
     let state: CredentialForegroundGate.State
+    #if os(iOS)
     switch UIApplication.shared.applicationState {
     case .active: state = .active
     case .inactive: state = .inactive
     default: state = .background
     }
+    #else
+    state = foreground ? .active : .background
+    #endif
     try CredentialForegroundGate.require(isCurrent: generation == epoch, state: state)
   }
 

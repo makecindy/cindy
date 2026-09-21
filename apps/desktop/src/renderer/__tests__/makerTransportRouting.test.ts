@@ -27,6 +27,7 @@ function stubElectron() {
     dispatchOrcaUiAssignment: vi.fn(),
     disableOrca: vi.fn(),
     regenerateSessionTitle: vi.fn().mockResolvedValue({ title: 'local title' }),
+    predictNextPrompt: vi.fn().mockResolvedValue({ prompt: 'local prompt' }),
     plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
     input: { clearSession: vi.fn(), compact: vi.fn() },
   };
@@ -239,6 +240,20 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
 
     expect(makerSpies.regenerateSessionTitle).toHaveBeenCalledWith('local-only');
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('输入框推荐在远程会话由被控端生成，不回落到控制端', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    const { makerApiFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+
+    const request = {
+      sessionId: 'rs', agentKind: 'codex' as const, messages: [], turnGen: 2, completionRevision: 9,
+    };
+    await makerApiFor('rs').predictNextPrompt(request);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:predict-prompt', [request]);
+    expect(makerSpies.predictNextPrompt).not.toHaveBeenCalled();
   });
 
   it('远程会话 patchMeta(删/归档/改名/置顶)经隧道 local-db:sessions:patch-meta', async () => {

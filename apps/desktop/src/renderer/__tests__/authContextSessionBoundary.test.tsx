@@ -345,6 +345,26 @@ describe('AuthContext session cache boundaries', () => {
     expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledOnce();
   });
 
+  it('exposes the pushed owner generation so same-owner repairs are observable (#4469)', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    act(() => {
+      mocks.emitAuth({ ...authState('a'), ownerGeneration: 1 });
+    });
+    await waitFor(() => expect(result.current.dataOwnerGeneration).toBe(1));
+    const epochBefore = result.current.dataOwnerRecoveryEpoch;
+    mocks.reset.mockClear();
+
+    // Same-owner projection repair: generation advances, owner and epoch do not.
+    act(() => {
+      mocks.emitAuth({ ...authState('a'), ownerGeneration: 2 });
+    });
+    await waitFor(() => expect(result.current.dataOwnerGeneration).toBe(2));
+    expect(result.current.dataOwnerId).toBe('a');
+    expect(result.current.dataOwnerRecoveryEpoch).toBe(epochBefore);
+    expect(getDataOwnerGeneration()).toEqual({ dataOwnerId: 'a', generation: 2 });
+    expect(mocks.reset).not.toHaveBeenCalled();
+  });
+
   it('updates Canary state without treating it as an account switch', async () => {
     const view = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));

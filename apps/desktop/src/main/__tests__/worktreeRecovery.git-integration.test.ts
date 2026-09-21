@@ -1,3 +1,8 @@
+// These suites exercise real archive I/O in Node; Electron worker isolation is covered separately.
+vi.mock('../worktree/recoveryArchiveWorkerClient', async () => {
+  const { executeRecoveryArchiveTask } = await import('../worktree/recoveryArchiveTask');
+  return { runRecoveryArchiveTask: executeRecoveryArchiveTask };
+});
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';

@@ -1,3 +1,4 @@
+import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
   createContext,
   createElement,
@@ -115,6 +116,8 @@ export const sessionMetaWriteQueue = createSessionWriteQueue();
 
 export interface RemoteSessionRunStatus {
   isRunning: boolean;
+  /** Terminal failure remains sticky until the next run, even after read acknowledgement. */
+  hasTerminalError?: boolean;
   reconnectAttempt: RemoteSessionReconnectAttempt | null;
   sideTaskRunning: boolean;
   startedAt: number | null;
@@ -2172,12 +2175,10 @@ function reanchorPendingLiveAssistantRows(
       messageIdentityMatches(message, row.message)
     )));
     if (groupedRows.length === 0) continue;
-    const withoutPending = next.filter((message) => !group.pendingRows.some((row) => (
-      messageIdentityMatches(message, row.message)
-    )));
-    const anchorIndex = withoutPending.findIndex((message) => (
-      messageIdentityMatches(message, group.afterMessage)
+    const withoutPending = next.filter((message) => !group.pendingRows.some((row) => messageIdentityMatches(message, row.message)
     ));
+    const anchorIndex = withoutPending.findIndex((message) =>
+      messageIdentityMatches(message, group.afterMessage));
     if (anchorIndex < 0) continue;
     next = [
       ...withoutPending.slice(0, anchorIndex + 1),
@@ -4253,6 +4254,18 @@ export const remoteSessionStore = {
       applySessionModelPrefPush(payload);
       return;
     }
+    if (channel === 'local-db:task-tags:changed' && isRecord(payload)) {
+      bumpDeviceSessionListMutationEpoch(deviceId);
+      const shard = shards.get(deviceId);
+      if (!shard) return;
+      const catalog = normalizeTaskTags(payload.tags, 256);
+      shard.sessions = shard.sessions.map((session) => ({
+        ...session,
+        tags: reconcileTaskTags(session.tags, catalog),
+      }));
+      recomputeSessions();
+      return;
+    }
     if (channel === 'local-db:sessions:patched' && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const patch = isRecord(payload.patch) ? payload.patch : null;
@@ -4538,6 +4551,7 @@ export const remoteSessionStore = {
       changed = writeSessionRunStatus(sessionId, {
         ...current,
         isRunning: false,
+        ...(phase === 'error' ? { hasTerminalError: true } : {}),
         reconnectAttempt: null,
         sideTaskRunning: false,
         startedAt: null,
@@ -4640,6 +4654,11 @@ export const remoteSessionStore = {
           }
         }
       }
+      const terminalErrorChanged = isTerminalMakerErrorEvent(event)
+        && writeSessionRunStatus(sessionId, {
+          ...readSessionRunStatus(sessionId),
+          hasTerminalError: true,
+        });
       this.setSessionRunning(
         sessionId,
         false,
@@ -4647,8 +4666,8 @@ export const remoteSessionStore = {
       );
       if (terminalPlanChanged) {
         bumpMessageVersion(sessionId);
-        emit();
       }
+      if (terminalPlanChanged || terminalErrorChanged) emit();
       return;
     }
 
@@ -4836,6 +4855,7 @@ export const remoteSessionStore = {
       }
       const next: RemoteSessionRunStatus = {
         isRunning,
+        ...(current.hasTerminalError !== undefined ? { hasTerminalError: current.hasTerminalError } : {}),
         reconnectAttempt: null,
         sideTaskRunning: isRunning ? data?.skipTurnReset === true : false,
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
@@ -5433,6 +5453,9 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
 
 function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus): boolean {
   const current = readSessionRunStatus(sessionId);
+  if (next.isRunning && !current.isRunning && current.hasTerminalError) {
+    next = { ...next, hasTerminalError: false };
+  }
   if (shallowRecordEqual(current as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>)) {
     return false;
   }

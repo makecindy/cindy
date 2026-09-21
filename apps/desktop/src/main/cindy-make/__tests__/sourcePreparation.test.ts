@@ -220,6 +220,8 @@ describe('Source and dependency preparation', () => {
         processEnvironment: () => ({}),
       } as unknown as MakeToolchainEnvironment;
       vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+        if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+          throw new Error('no file integration yet');
         if (args[0] === 'ls-remote') return '0123456789abcdef	refs/heads/main';
         if (args[0] === 'remote') return CINDY_SOURCE_REPOSITORY;
         if (args[0] === 'branch') return 'cindy-personal';
@@ -509,44 +511,56 @@ describe('Source and dependency preparation', () => {
     unsubscribe();
   });
 
-  it('hydrates Git details from an existing checkout when an old status file lacks them', async () => {
-    const sourcePath = path.join(root, 'source');
-    await createExistingCheckout(sourcePath);
-    await writeFile(
-      path.join(root, 'source-status.json'),
-      JSON.stringify({
+  it.each(['cindy-personal', 'main', 'HEAD'])(
+    'hydrates personal SHA and counts from Git with the checkout on %s',
+    async (currentBranch) => {
+      const sourcePath = path.join(root, 'source');
+      await createExistingCheckout(sourcePath);
+      await writeFile(
+        path.join(root, 'source-status.json'),
+        JSON.stringify({
+          status: 'ready',
+          path: sourcePath,
+          branch: 'cindy-personal',
+          ref: 'main',
+          commit: 'a'.repeat(40),
+          baseCommit: 'b'.repeat(40),
+        }),
+      );
+      const env = { processEnvironment: () => ({}) } as MakeToolchainEnvironment;
+      vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+        if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+          throw new Error('no file integration yet');
+        if (args.includes('refs/heads/cindy-personal^{commit}')) return 'd'.repeat(40);
+        if (args.join(' ') === 'rev-parse HEAD') return 'e'.repeat(40);
+        if (args[0] === 'merge-base') return 'b'.repeat(40);
+        if (args[0] === 'rev-parse' && args[1] === '--verify') return 'c'.repeat(40);
+        if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return currentBranch;
+        if (args[0] === 'rev-list') return '0\t2';
+        throw new Error('not available');
+      });
+      await expect(readCurrentCindySourceStatus(root, env)).resolves.toMatchObject({
         status: 'ready',
-        path: sourcePath,
         branch: 'cindy-personal',
-        ref: 'main',
-        commit: 'a'.repeat(40),
+        commit: 'd'.repeat(40),
         baseCommit: 'b'.repeat(40),
-      }),
-    );
-    const env = { processEnvironment: () => ({}) } as MakeToolchainEnvironment;
-    vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
-      if (args[0] === 'merge-base') return 'b'.repeat(40);
-      if (args[0] === 'rev-parse' && args[1] === '--verify') return 'c'.repeat(40);
-      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'cindy-personal';
-      if (args[0] === 'rev-list') return '0\t2';
-      throw new Error('not available');
-    });
-    await expect(readCurrentCindySourceStatus(root, env)).resolves.toMatchObject({
-      status: 'ready',
-      branch: 'cindy-personal',
-      baseCommit: 'b'.repeat(40),
-      mainCommit: 'c'.repeat(40),
-      currentBranch: 'cindy-personal',
-    });
-    await expect(readCindySourceStatus(root)).resolves.toMatchObject({
-      status: 'ready',
-    });
-    await expect(readCindySourceStatus(root)).resolves.not.toHaveProperty('mainCommit');
-    expect(vi.mocked(runSourceGit).mock.calls.some(([, args]) => args[0] === 'fetch')).toBe(false);
-    expect(vi.mocked(runSourceGit).mock.calls.some(([, args]) => args[0] === 'checkout')).toBe(
-      false,
-    );
-  });
+        mainCommit: 'c'.repeat(40),
+        currentBranch: currentBranch === 'HEAD' ? null : currentBranch,
+        personalAhead: 0,
+        personalBehind: 2,
+      });
+      await expect(readCindySourceStatus(root)).resolves.toMatchObject({
+        status: 'ready',
+      });
+      await expect(readCindySourceStatus(root)).resolves.not.toHaveProperty('mainCommit');
+      expect(vi.mocked(runSourceGit).mock.calls.some(([, args]) => args[0] === 'fetch')).toBe(
+        false,
+      );
+      expect(vi.mocked(runSourceGit).mock.calls.some(([, args]) => args[0] === 'checkout')).toBe(
+        false,
+      );
+    },
+  );
 
   it('does not invent a personal source version when the legacy status has no baseline', async () => {
     const sourcePath = path.join(root, 'source');
@@ -557,7 +571,9 @@ describe('Source and dependency preparation', () => {
     );
     const env = { processEnvironment: () => ({}) } as MakeToolchainEnvironment;
     vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
-      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'a'.repeat(40);
+      if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+        throw new Error('no file integration yet');
+      if (args.includes('refs/heads/cindy-personal^{commit}')) return 'a'.repeat(40);
       if (args[0] === 'rev-parse' && args[1] === '--verify') return 'b'.repeat(40);
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'cindy-personal';
       throw new Error('not available');
@@ -565,10 +581,28 @@ describe('Source and dependency preparation', () => {
     await expect(readCurrentCindySourceStatus(root, env)).resolves.toMatchObject({
       status: 'ready',
       branch: 'cindy-personal',
+      commit: 'a'.repeat(40),
       baseCommit: undefined,
       mainCommit: 'b'.repeat(40),
       currentBranch: 'cindy-personal',
     });
+  });
+
+  it('keeps a missing personal branch unknown instead of displaying another branch HEAD', async () => {
+    const sourcePath = path.join(root, 'source');
+    await createExistingCheckout(sourcePath);
+    const env = { processEnvironment: () => ({}) } as MakeToolchainEnvironment;
+    vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+      if (args.includes('refs/heads/main^{commit}') || args.join(' ') === 'rev-parse HEAD')
+        return 'c'.repeat(40);
+      if (args.join(' ') === 'rev-parse --abbrev-ref HEAD') return 'main';
+      throw new Error('missing ref');
+    });
+    const status = await readCurrentCindySourceStatus(root, env);
+    expect(status.mainCommit).toBe('c'.repeat(40));
+    expect(status.commit).toBeUndefined();
+    expect(status.personalAhead).toBeUndefined();
+    expect(status.personalBehind).toBeUndefined();
   });
 
   it.each(['missing', 'failed', 'timeout'] as const)(
@@ -602,6 +636,8 @@ describe('Source and dependency preparation', () => {
       processEnvironment: () => ({}),
     } as unknown as MakeToolchainEnvironment;
     vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+      if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+        throw new Error('no file integration yet');
       switch (args[0]) {
         case 'ls-remote':
           return '0123456789abcdef\trefs/heads/main';
@@ -660,6 +696,8 @@ describe('Source and dependency preparation', () => {
         processEnvironment: () => ({}),
       } as unknown as MakeToolchainEnvironment;
       vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+        if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+          throw new Error('no file integration yet');
         if (
           (missing === 'main' && args.includes('refs/heads/main^{commit}')) ||
           (missing === 'origin/main' && args.includes('refs/remotes/origin/main^{commit}')) ||
@@ -777,6 +815,8 @@ describe('Source and dependency preparation', () => {
       processEnvironment: () => ({}),
     } as unknown as MakeToolchainEnvironment;
     vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+      if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+        throw new Error('no file integration yet');
       if (args[0] === 'ls-remote') return '0123456789abcdef\trefs/heads/main';
       if (args[0] === 'remote') return CINDY_SOURCE_REPOSITORY;
       if (args[0] === 'for-each-ref') return 'refs/heads/main';
@@ -802,6 +842,8 @@ describe('Source and dependency preparation', () => {
       processEnvironment: () => ({}),
     } as unknown as MakeToolchainEnvironment;
     vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+      if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+        throw new Error('no file integration yet');
       if (args[0] === 'ls-remote') return '0123456789abcdef\trefs/heads/main';
       if (args[0] === 'clone') {
         await expect(access(sourcePath)).rejects.toThrow();
@@ -829,6 +871,8 @@ describe('Source and dependency preparation', () => {
       processEnvironment: () => ({}),
     } as unknown as MakeToolchainEnvironment;
     vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+      if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+        throw new Error('no file integration yet');
       if (args[0] === 'ls-remote') return '0123456789abcdef\trefs/heads/main';
       if (args[0] === 'remote') return CINDY_SOURCE_REPOSITORY;
       if (args[0] === 'for-each-ref') return 'refs/heads/main';
@@ -918,6 +962,8 @@ describe('Source and dependency preparation', () => {
       releaseFetch = resolve;
     });
     vi.mocked(runSourceGit).mockImplementation(async (_env, args) => {
+      if (args.includes('refs/cindy-make/personal-upstream^{commit}'))
+        throw new Error('no file integration yet');
       if (args[0] === 'ls-remote') return '0123456789abcdef\trefs/heads/main';
       if (args[0] === 'remote') return CINDY_SOURCE_REPOSITORY;
       if (args[0] === 'fetch') {

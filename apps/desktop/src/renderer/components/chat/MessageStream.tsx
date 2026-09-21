@@ -42,6 +42,7 @@ import {
   makerChatStore,
   type HistoryChatMessage,
 } from '@/lib/makerChatStore';
+import { isCindyMakeCompletionMessage, isCindyMakePreparationMessage } from '@/lib/cindyMakeComposer';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
@@ -82,6 +83,8 @@ import type {
   ChatMessage,
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
+import { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
+export { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
 import { Spinner } from '@/components/ui/spinner';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
@@ -425,6 +428,9 @@ interface MessageStreamProps {
   /** Bot read position captured before entry marks the conversation read. */
   botUnreadBoundaryAt?: number | null;
   messages: ChatMessage[];
+  /** This task's preparation card is shown in the composer, including after history reload. */
+  cindyMakeSessionId?: string;
+  cindyMakeCompletionInComposer?: boolean;
   historyLoaded: boolean;
   /** The task shell remains, but all prior message content was intentionally cleared. */
   historyCleared?: boolean;
@@ -819,51 +825,6 @@ export function findLastUserMessageClientId(messages: readonly ChatMessage[]): s
     if (messages[i].role === 'user' && !messages[i].isSyntheticTrigger) return messages[i].clientId;
   }
   return null;
-}
-
-/**
- * 最后一条「用户侧输入」的 clientId —— **含**合成行（自动续跑指令本身）。
- *
- * 与上面的 `findLastUserMessageClientId` 的区别就在这里：那份服务于「编辑最后一条消息」
- * 这个**可见** affordance，刻意跳过渲染成 null 的合成行；本份要回答的是「此刻正在跑的
- * 这个 turn 是不是自动续跑发起的」——合成行恰恰是那个 turn 的发起者，跳过就答不了。
- *
- * 用途：自愈重连行判断自己是不是"仍在飞"。用户在续跑之后又自己发了消息时，最后一条用户
- * 侧输入就换成他那条，旧的重连行随之停转（正在跑的已经是另一个 turn 了）。
- */
-export function findLastUserInputClientId(messages: readonly ChatMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    // **插话（`delivery === 'steer'`）不算新 turn 的发起者** —— 它是同一个正在跑的 turn 内
-    // 的追加输入。算进来的话，用户在自愈 turn 里插一句，正在跑的重连行会立刻被"夺走归属"、
-    // 提前停转退回静态（codex P2 / greptile P1）。本文件里其它 turn 边界判断（见上方
-    // `hasFollowingUserTurn` 等）也都显式排除 steer，此处保持一致。
-    //
-    // 首选判据直接使用 main 投影的 vendor-turn owner；旧被控端缺省 owner 字段时，
-    // 才由下面的兼容分支按最后一条非 steer 用户输入兜底。
-    if (messages[i].role === 'user' && messages[i].delivery !== 'steer') {
-      return messages[i].clientId;
-    }
-  }
-  return null;
-}
-
-/**
- * 自愈落库行是否仍属于当前运行中的续跑 turn。
- *
- * 新端以 main 持有的 vendor-turn owner 做精确关联；只有 wire 上确实缺省 owner 字段的旧
- * 被控端才恢复历史启发式。旧端无法区分自动续跑与不落 user 行的 Goal turn，这是协议信息
- * 不足时的兼容降级，不能扩散到 supported / unknown 两种状态。
- */
-export function isAutoResumeRowInFlight(args: {
-  isContinuationTurnOwner: boolean;
-  sessionRunning: boolean;
-  isLastUserInput: boolean;
-  projectionCapability: ContinuationInFlightProjectionCapability;
-}): boolean {
-  return (
-    args.isContinuationTurnOwner ||
-    (args.projectionCapability === 'legacy' && args.sessionRunning && args.isLastUserInput)
-  );
 }
 
 export function shouldBlockAssistantFork(
@@ -1494,6 +1455,9 @@ export function buildRenderItems(
     botSessionId?: string;
     /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
     markdownImageTargetCache?: MarkdownImageTargetCache;
+    /** Keep the stored preparation report out of its own task's visible timeline. */
+    cindyMakeSessionId?: string;
+    cindyMakeCompletionInComposer?: boolean;
   },
 ): {
   items: RenderItem[];
@@ -1501,7 +1465,12 @@ export function buildRenderItems(
 } {
   // Modal-only Cindy Make cards are transient UI state. They stay in the
   // shared store for the dialog to observe, but never enter the chat timeline.
-  allMessages = allMessages.filter((message) => message.systemCardData?.modalOnly !== true);
+  allMessages = allMessages.filter(
+    (message) =>
+      message.systemCardData?.modalOnly !== true &&
+      !(opts?.cindyMakeCompletionInComposer && isCindyMakeCompletionMessage(message)) &&
+      !isCindyMakePreparationMessage(message, opts?.cindyMakeSessionId),
+  );
   if (opts?.botSessionId) {
     allMessages = placeBotTaskCardsAfterIntroduction(allMessages, (message) => {
       if (message.role === 'user') {
@@ -2572,6 +2541,8 @@ export function MessageStream({
   simplifiedBotConversation = false,
   botUnreadBoundaryAt = null,
   messages,
+  cindyMakeSessionId,
+  cindyMakeCompletionInComposer,
   historyLoaded,
   historyCleared = false,
   taskUpdates,
@@ -2828,6 +2799,8 @@ export function MessageStream({
       workingDir,
       botSessionId: simplifiedBotConversation ? sessionId : undefined,
       markdownImageTargetCache: markdownImageTargetCacheRef.current,
+      cindyMakeSessionId,
+      cindyMakeCompletionInComposer,
     });
     if (historyView && historySnapshot?.ready) {
       const results = new Map(built.singleResultMap);
@@ -2850,6 +2823,8 @@ export function MessageStream({
             workingDir,
             botSessionId: simplifiedBotConversation ? sessionId : undefined,
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
+            cindyMakeSessionId,
+            cindyMakeCompletionInComposer,
           });
           for (const [key, value] of chunk.singleResultMap) results.set(key, value);
           return groupWorkRuns(chunk.items, isSessionStreaming);
@@ -2897,6 +2872,8 @@ export function MessageStream({
     };
   }, [
     displayMessages,
+    cindyMakeSessionId,
+    cindyMakeCompletionInComposer,
     historyView,
     historySnapshot,
     historyLiveMessages,
@@ -3068,16 +3045,18 @@ export function MessageStream({
     const cTop = container.getBoundingClientRect().top;
     const children = items.children;
     for (let i = 0; i < children.length; i++) {
-      const rect = (children[i] as HTMLElement).getBoundingClientRect();
+      const itemElement = children[i] as HTMLElement;
+      const rect = itemElement.getBoundingClientRect();
       // 第一条「底边还在容器顶边下方」的 item = 正好跨过视口顶边的那条。
       if (rect.height > 0 && rect.bottom - cTop > 0) {
         const key = children[i].getAttribute('data-render-item-key');
         if (!key) return null;
         const snapshot: ViewportTopSnapshot = {
           viewportTopKey: key,
+          // Negative offsets retain top padding or a gap above the first visible
+          // row; clamping to zero pulls that row to the viewport edge on prepend.
           offset: cTop - rect.top,
         };
-        const itemElement = children[i] as HTMLElement;
         const childAnchor = pickIntersectingChildAnchor(
           Array.from(
             [itemElement, ...itemElement.querySelectorAll<HTMLElement>('[data-message-client-id]')],
@@ -3110,7 +3089,24 @@ export function MessageStream({
   }, []);
   // 量测并写入「删除前快照」，返回结果供同帧复用。用户滚动、非贴底程序化跳转与
   // focus 落定经它刷新；贴底态由 auto-follow 接管，无需快照。
-  const refreshViewportAnchor = useCallback((): ViewportTopSnapshot | null => {
+  const refreshViewportAnchor = useCallback((preserveAligned = false): ViewportTopSnapshot | null => {
+    const previous = lastViewportTopRef.current;
+    const container = scrollRef.current;
+    if (preserveAligned && previous && container) {
+      const target = previous.messageClientId
+        ? queryMessageElement(container, previous.messageClientId)
+        : findRenderItemElement(itemsRef.current, previous.viewportTopKey);
+      const rect = target?.getBoundingClientRect();
+      const viewport = container.getBoundingClientRect();
+      const offset = previous.messageClientId ? previous.messageOffset ?? 0 : previous.offset;
+      // Native anchoring also emits scroll events during prepend/size settling.
+      // An already aligned reading row must not be replaced by a new offscreen
+      // row whose content-visibility estimate temporarily crosses the top edge.
+      if (
+        rect && rect.height > 0 && rect.bottom > viewport.top && rect.top < viewport.bottom
+        && viewportAnchorCorrection(viewport.top, rect.top, offset) === 0
+      ) return previous;
+    }
     const measured = measureViewportTop();
     if (measured) lastViewportTopRef.current = measured;
     return measured;
@@ -3812,7 +3808,7 @@ export function MessageStream({
     (includeHeights = false) => {
       // Do not overwrite the reading position with the temporary tail while loading it.
       if (restoringRef.current && restoreLoadRef.current !== 'settled') return;
-      const measured = refreshViewportAnchor();
+      const measured = refreshViewportAnchor(true);
       if (!sessionId || !measured) return;
       const items = itemsRef.current;
       let itemHeights: SessionScrollSnapshot['itemHeights'];
@@ -4234,7 +4230,7 @@ export function MessageStream({
       if (chipJumpGenerationRef.current !== null) return;
       if (!programmaticScrollRef.current) return;
       const generation = programmaticScrollGenerationRef.current;
-      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor(true);
     };
     root.addEventListener('scrollend', onScrollEnd);
     return () => root.removeEventListener('scrollend', onScrollEnd);
@@ -5020,7 +5016,9 @@ export function MessageStream({
         const rebased: ViewportTopSnapshot = {
           ...snapshot,
           viewportTopKey: recoveredKey,
-          offset: 0,
+          // A prepended page can rename a surviving work group. Preserve its
+          // measured offset instead of treating it as a newly selected row.
+          offset: snapshot.offset,
           ...(recoverableMessageExists
             ? {
                 messageClientId: recoverableMessageClientId,
@@ -5030,7 +5028,7 @@ export function MessageStream({
         };
         lastViewportTopRef.current = rebased;
         if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) {
-          restoreViewportSnapshot(rebased, 0);
+          restoreViewportSnapshot(rebased);
         }
       }
       if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) return;
@@ -5797,7 +5795,7 @@ export function MessageStream({
             >
               <div
                 ref={contentRef}
-                className="mx-auto w-full pt-7"
+                className="relative mx-auto w-full pt-7"
                 style={{
                   paddingBottom: resolvedBottomPadding,
                   // Match the input overlay's width so chat content + input box
@@ -5807,9 +5805,10 @@ export function MessageStream({
                 }}
               >
                 {historyLoaded && historyCleared && <HistoryClearedMarker />}
-                {/* F-SYNC-2: Loading spinner at top */}
+                {/* Keep pagination feedback inside the existing top padding so
+                    toggling it never changes message positions or scrollHeight. */}
                 {isLoadingMore && (
-                  <div className="flex items-center justify-center pb-4">
+                  <div className="pointer-events-none absolute inset-x-0 top-1 flex items-center justify-center">
                     <Spinner size={20} className="text-[var(--msg-tool-text)]" />
                   </div>
                 )}

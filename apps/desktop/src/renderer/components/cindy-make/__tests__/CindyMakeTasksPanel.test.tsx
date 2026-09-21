@@ -18,7 +18,9 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 }));
 vi.mock('@/lib/sessionService', () => ({ get: h.get, restoreIfArchived: h.restore }));
 vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { prependCreated: h.prepend } }));
-vi.mock('@/lib/cindyMakeState', () => ({ cindyMakeState: { refresh: h.refresh } }));
+vi.mock('@/lib/cindyMakeState', () => ({
+  cindyMakeState: { refresh: h.refresh, manageTask: h.manage },
+}));
 vi.mock('@/lib/toast', () => ({ toast: { error: h.error } }));
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { MakeDoctorReport } from '../../../../shared/cindyMakeDoctor';
@@ -117,19 +119,19 @@ describe('Cindy Make settings task list', () => {
       setDataOwnerGeneration('another-owner');
       return true;
     });
-    fireEvent.click(screen.getByRole('button', { name: 'settings.cindyMake.tasks.delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.cindyMake.tasks.end' }));
     await waitFor(() => expect(h.confirm).toHaveBeenCalled());
     expect(h.manage).not.toHaveBeenCalled();
   });
-  it('requires confirmation before deleting and refreshes only after the operation settles', async () => {
+  it('requires confirmation before ending and refreshes only after the operation settles', async () => {
     h.confirm.mockResolvedValueOnce(false);
     render(<CindyMakeTasksPanel reports={[report(1)]} />);
-    const remove = screen.getByRole('button', { name: 'settings.cindyMake.tasks.delete' });
+    const remove = screen.getByRole('button', { name: 'settings.cindyMake.tasks.end' });
     fireEvent.click(remove);
     await waitFor(() => expect(remove.hasAttribute('disabled')).toBe(false));
     expect(h.manage).not.toHaveBeenCalled();
     fireEvent.click(remove);
-    await waitFor(() => expect(h.manage).toHaveBeenCalledWith('session-1', 'delete'));
+    await waitFor(() => expect(h.manage).toHaveBeenCalledWith('session-1', 'end'));
     expect(h.confirm).toHaveBeenLastCalledWith(
       expect.objectContaining({ confirmVariant: 'destructive' }),
     );
@@ -139,8 +141,12 @@ describe('Cindy Make settings task list', () => {
     render(<CindyMakeTasksPanel reports={[report(1, { sessionStatus: 'deleted' })]} />);
     expect(screen.queryByRole('button', { name: 'cindyMake.code.open' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'settings.cindyMake.tasks.retryCleanup' }));
-    await waitFor(() => expect(h.manage).toHaveBeenCalledWith('session-1', 'delete'));
-    expect(h.confirm).not.toHaveBeenCalled();
+    await waitFor(() => expect(h.manage).toHaveBeenCalledWith('session-1', 'end'));
+    expect(h.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: expect.stringContaining('settings.cindyMake.tasks.cleanupDeletedConfirm'),
+      }),
+    );
   });
   it('shows cleanup progress and keeps an actionable failure beside the retry button', async () => {
     let reject!: (error: Error) => void;
@@ -203,5 +209,51 @@ describe('Cindy Make settings task list', () => {
         .getByRole('button', { name: 'settings.cindyMake.tasks.retryCleanup' })
         .hasAttribute('disabled'),
     ).toBe(false);
+  });
+
+  it.each(['integrated', 'unintegrated', 'unknown'] as const)(
+    'shows %s in the cell and always confirms before ending',
+    async (integration) => {
+      h.confirm.mockResolvedValueOnce(false);
+      render(<CindyMakeTasksPanel reports={[report(1, { integration })]} />);
+      const row = screen.getByRole('button', { name: /Build 1/ });
+      expect(row.textContent).toContain('settings.cindyMake.tasks.status.' + integration);
+      expect(screen.queryByRole('button', { name: 'settings.cindyMake.tasks.finish' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'settings.cindyMake.tasks.delete' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'settings.cindyMake.tasks.end' }));
+      await waitFor(() => expect(h.confirm).toHaveBeenCalled());
+      expect(h.manage).not.toHaveBeenCalled();
+      const dialog = h.confirm.mock.calls[0][0];
+      expect(dialog.description).toContain('settings.cindyMake.tasks.endConfirm');
+      expect(dialog.confirmVariant).toBe('destructive');
+      if (integration === 'unintegrated') expect(dialog.description).toContain('endUnintegrated');
+      if (integration === 'unknown') expect(dialog.description).toContain('endUnknown');
+    },
+  );
+
+  it('shows a failed end in its cell, preserves its record and confirms retry after reopening', async () => {
+    const props = {
+      reports: [report(1, { sessionStatus: 'archived', cleanupPending: true })],
+      taskActions: {
+        'session-1': {
+          action: 'end' as const,
+          status: 'failed' as const,
+          error: 'directoryBusy' as const,
+        },
+      },
+    };
+    const view = render(<CindyMakeTasksPanel {...props} />);
+    expect(screen.getByRole('button', { name: /Build 1/ }).textContent).toContain(
+      'settings.cindyMake.tasks.status.cleanupFailed',
+    );
+    view.unmount();
+    render(<CindyMakeTasksPanel reports={props.reports} />);
+    expect(screen.getByRole('button', { name: /Build 1/ }).textContent).toContain(
+      'settings.cindyMake.tasks.status.cleanup',
+    );
+    h.confirm.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.cindyMake.tasks.retryCleanup' }));
+    await waitFor(() => expect(h.confirm).toHaveBeenCalled());
+    expect(h.manage).not.toHaveBeenCalled();
   });
 });

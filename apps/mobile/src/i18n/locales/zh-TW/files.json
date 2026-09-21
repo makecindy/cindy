@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "上一頁",
+    "browserForward": "下一頁",
+    "browserMore": "更多操作",
+    "browserShowSource": "檢視原始碼",
+    "browserShowPage": "返回網頁",
+    "browserAddToTask": "加入目前任務",
+    "browserFileInfo": "檔案資訊",
     "done": "完成",
     "a11yShare": "匯出分享",
     "copyPath": "複製路徑",
@@ -119,7 +126,13 @@
     "originalFailedThumb": "原圖取回失敗，當前為縮圖",
     "fetchingOriginalHint": "縮圖 · 正在取回原圖…",
     "a11yExportShareFile": "匯出分享原檔案",
-    "exportShare": "匯出 / 分享"
+    "exportShare": "匯出 / 分享",
+    "browserAddress": "網址",
+    "browserCancelAddress": "取消編輯",
+    "browserReturnToFile": "返回檔案",
+    "browserCopyAddress": "複製網址",
+    "browserInvalidAddress": "請輸入有效的 http 或 https 網址。",
+    "browserWebsiteFailed": "無法開啟網頁，請嘗試重新載入。"
   },
   "export": {
     "exportFailed": "匯出失敗",

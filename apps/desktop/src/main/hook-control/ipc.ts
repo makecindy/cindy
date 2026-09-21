@@ -54,6 +54,7 @@ import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
+  dialogueWorkspaceRoots,
   ensureDialogueWorkspaceDir,
 } from '../localDb/dialogueWorkspace.js';
 import * as authManager from '../authManager.js';
@@ -194,8 +195,7 @@ async function drainCodexMcpRefreshForSlackAvailability(): Promise<void> {
     while (codexMcpRefreshPending) {
       codexMcpRefreshPending = false;
       try {
-        await restartCodexAfterAuthModeChange();
-        await shutdownCodexEnvironment();
+        await restartCodexAfterAuthModeChange(shutdownCodexEnvironment);
         log.info('Codex MCP environment refreshed after Slack provider availability changed', {
           enabled: latestSlackToolProviderEnabled,
         });
@@ -516,6 +516,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 内置「对话」伪目录(chat): 与桌面端无项目对话同一套 app 托管目录
       dialogue: {
         rootDir: dialogueWorkspaceRootDir,
+        rootDirs: dialogueWorkspaceRoots,
         allocateDir: async (sessionId) => ensureDialogueWorkspaceDir(sessionId, Date.now()),
       },
       // task.cancel 的中断出口: 与用户手动 Stop 同一条 session.abort() 路径

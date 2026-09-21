@@ -11,6 +11,7 @@ import {
 } from '@cindy/maker-shared/client-endpoints';
 
 import type { LoginMessageKey } from '@/auth/loginMessages';
+import { resolveMobileEndpointManifest } from './endpointManifestLoader';
 
 export type CindyAuthRegion = 'cn' | 'global' | 'dev';
 
@@ -49,7 +50,7 @@ export const MOBILE_REDIRECT_URL = `${APP_SCHEME}://auth`;
 
 // __DEV__ 端点初值来源:metro 构建期按 AUTH_REGION 把仓内
 // config/endpoint.json 或 config/endpoint.global.json require 进 dev bundle
-// (__DEV__ 常量折叠 + DCE 后 prod bundle 不含该 JSON)。与 desktop dev 读同一份
+// 正式包的随包兜底由共享 resolver 负责；这里仅初始化 dev。与 desktop dev 读同一份
 // region 正本同语义;正本非法直接抛错红屏(阻断语义:配置错要炸出来)。
 // 显式 EXPO_PUBLIC_* env 仍然优先——「手机连本地 server」的既有工作流不变。
 // prod(非 __DEV__)此处为空:生效端点由启动闸门拉取的 endpoint.json 回填
@@ -493,8 +494,6 @@ export function getMobileEndpointRealmConfig(): {
   };
 }
 
-const MOBILE_REALM_MANIFEST_TIMEOUT_MS = 10_000;
-
 /** 当前登录态消费业务请求的区域；与安装包/更新通道所在区域相互独立。 */
 export function getActiveMobileSessionRealm(): ClientEndpointRegion {
   return activeSessionRealm;
@@ -509,26 +508,10 @@ export async function loadMobileEndpointsForRealm(
   if (!baseUrl) {
     throw new Error('realm-manifest-url-unavailable');
   }
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    MOBILE_REALM_MANIFEST_TIMEOUT_MS,
-  );
-  try {
-    const response = await fetch(`${baseUrl}/endpoint.json?t=${Date.now()}`, {
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`http-${response.status}`);
-    const parsed = parseClientEndpointManifest(await response.text());
-    if (!parsed.ok) throw new Error(parsed.reason);
-    if (parsed.region !== null && parsed.region !== region) {
-      throw new Error(`region-mismatch:${region}:${parsed.region}`);
-    }
-    realmEndpointCache.set(region, parsed.endpoints);
-    return parsed.endpoints;
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await resolveMobileEndpointManifest(region, baseUrl);
+  if (!result.ok) throw new Error(result.reason);
+  realmEndpointCache.set(region, result.parsed.endpoints);
+  return result.parsed.endpoints;
 }
 
 export function getMobileEndpointForRealm(

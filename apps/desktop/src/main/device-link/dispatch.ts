@@ -1,4 +1,10 @@
-import { FILE_PEER_CHANNEL } from '@cindy/device-link';
+import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
+import type { TaskTagRequest } from '@cindy/maker-shared';
+import {
+  FILE_PEER_CHANNEL,
+  encodeSessionTagCatalog,
+  decodeSessionTagCatalog,
+} from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { normalizeProviderOrder } from "../../shared/providerOrder.js";
 /**
@@ -356,7 +362,8 @@ export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void
 }
 
 /** set-* channel → 持久化的 session 字段名(args[0]=sessionId, args[1]=value)。 */
-const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs' | 'writableDirs'> = {
+const SET_CHANNEL_FIELD: Record<string,
+  | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs' | 'writableDirs'> = {
   'maker:set-model': 'model',
   'maker:set-effort': 'effort',
   'maker:set-permission-mode': 'permissionMode',
@@ -1625,7 +1632,7 @@ function drainSessionActivityStage(dst: string, stage: SessionActivityStage): vo
       return;
     }
     const next = stage.queue.entries().next().value as
-      | [string, { payload: unknown; ownerStamp?: PushOwnerStamp }]
+      [string, { payload: unknown; ownerStamp?: PushOwnerStamp }]
       | undefined;
     if (!next) return;
     const [key, item] = next;
@@ -2083,6 +2090,7 @@ function deactivateControllerState(
   deviceId: string,
   observedConnectionEpoch?: number,
   observedLinkGeneration?: number,
+  transientSignalingLoss = false,
 ): boolean {
   const activeEpoch = controllerConnectionEpochByDevice.get(deviceId);
   const activeLinkGeneration = controllerLinkGenerationByDevice.get(deviceId);
@@ -2109,7 +2117,8 @@ function deactivateControllerState(
   let changed = false;
   changed = acceptedLinkControllers.delete(deviceId) || changed;
   stopFilePeers(deviceId);
-  remoteDesktop.stop(deviceId);
+  if (transientSignalingLoss) remoteDesktop.signalingLost(deviceId);
+  else remoteDesktop.stop(deviceId);
   void remoteCredentialHost.close(deviceId).catch(() => remoteCredentialHost.dispose());
   changed = controllerConnectionEpochByDevice.delete(deviceId) || changed;
   changed = controllerLinkGenerationByDevice.delete(deviceId) || changed;
@@ -2136,11 +2145,13 @@ export function deactivateController(
   reason: string,
   observedConnectionEpoch?: number,
   observedLinkGeneration?: number,
+  transientSignalingLoss = false,
 ): boolean {
   const changed = deactivateControllerState(
     deviceId,
     observedConnectionEpoch,
     observedLinkGeneration,
+    transientSignalingLoss,
   );
   if (changed) {
     log.info(`controller ${shortId(deviceId)} deactivated (${reason})`);
@@ -2152,7 +2163,7 @@ export function deactivateController(
 /** Relay 连接离开 online：清本连接代所有 active controller，但保留恢复意图。 */
 export function deactivateAllControllers(reason: string): void {
   stopFilePeers();
-  remoteDesktop.stop();
+  remoteDesktop.signalingLost();
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
@@ -2163,7 +2174,7 @@ export function deactivateAllControllers(reason: string): void {
   ]);
   let changed = false;
   for (const deviceId of controllerIds) {
-    changed = deactivateControllerState(deviceId) || changed;
+    changed = deactivateControllerState(deviceId, undefined, undefined, true) || changed;
   }
   if (changed) {
     log.info(`all active controllers deactivated (${reason}, count=${controllerIds.size})`);
@@ -2181,6 +2192,7 @@ export function handleControllerOffline(
     routeChange ? 'relay-device-offline' : 'presence-offline',
     routeChange?.connectionEpoch,
     routeChange?.linkGeneration,
+    true,
   );
 }
 
@@ -2844,7 +2856,13 @@ async function authorizeRemoteBotResult(
     if (!result.ok) return result;
     try {
       await assertRemoteBotInvocationAllowed(args ?? [], channel);
-      return { ok: true, result: await projectRemoteSessionResult(channel ?? '', result.result) };
+      return {
+        ok: true,
+        result: await projectRemoteSessionResult(
+          channel ?? '',
+          decodeSessionTagCatalog(channel, result.result),
+        ),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (isDbWorkerOverloadedError(message) && isCompletedInvokeRetryableReadChannel(channel)) {
@@ -2889,7 +2907,17 @@ function sendInvokeResultSafe(
   fingerprint?: string,
 ): boolean {
   const key = `${src}\u0000${requestId}`;
-  const normalized = sanitizeMessageInvokeResult(normalizeInvokeResultForWire(result), channel);
+  const sanitized = sanitizeMessageInvokeResult(normalizeInvokeResultForWire(result), channel);
+  const normalized = sanitized.ok && channel === 'local-db:sessions:list'
+    ? {
+        ...sanitized,
+        result: encodeSessionTagCatalog(
+          channel,
+          args,
+          decodeSessionTagCatalog(channel, sanitized.result),
+        ),
+      }
+    : sanitized;
   const proactive =
     subscriptions.controllerSupports(src, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1) &&
     channel === 'local-db:messages:list' && normalized.ok && Array.isArray(normalized.result)
@@ -3750,7 +3778,10 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
-      () => dispatchLocalInvoke(
+      () =>
+          payload.channel === TASK_TAG_CHANNEL
+            ? executeTaskTags(args[0] as TaskTagRequest)
+            : dispatchLocalInvoke(
         payload.channel,
         payload.channel === 'maker:provider:list' ? [] : args,
       ),

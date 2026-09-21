@@ -18,7 +18,7 @@ interface ViewerConnectOptions {
   resume?: boolean;
   takeover?: boolean;
   isCurrent: () => boolean;
-  onCapabilities?: (caps: RemoteDesktopCapabilities) => void;
+  onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
 
@@ -80,7 +80,7 @@ export class RemoteDesktopViewerSession {
     if (!caps.enabled) throw new Error("DESKTOP_DISABLED");
     if (options.resume && !caps.automaticReconnect)
       throw new Error("CHANNEL_NOT_ALLOWED");
-    options.onCapabilities?.(caps);
+    await options.onCapabilities?.(caps);
     check();
     const display =
       caps.displays.find((d) => d.id === options.displayId) ?? caps.displays[0];
@@ -188,10 +188,26 @@ export class RemoteDesktopViewerSession {
     try {
       const result = await operation;
       check();
+      const adjustedViewerDisplay =
+        !modeId &&
+        !restore &&
+        result.viewerDisplayRequest?.width === width &&
+        result.viewerDisplayRequest?.height === height &&
+        Number.isSafeInteger(result.display?.width) &&
+        result.display.width > 0 &&
+        result.display.width <= 4096 &&
+        Number.isSafeInteger(result.display?.height) &&
+        result.display.height > 0 &&
+        result.display.height <= 4096 &&
+        Math.abs(
+          result.display.width * height - result.display.height * width,
+        ) <= Math.max(width, height);
       if (
         result.lease !== lease.lease ||
         typeof result.display?.id !== "string" ||
+        result.display.id.length === 0 ||
         (!restore &&
+          !adjustedViewerDisplay &&
           (result.display.width !== width ||
             result.display.height !== height)) ||
         !Number.isFinite(result.display.width) ||

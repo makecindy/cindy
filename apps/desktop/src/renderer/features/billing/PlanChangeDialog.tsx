@@ -308,7 +308,7 @@ export function PlanChangeTargetDialog({
               <PlanComparison
                 plans={sortedPlans}
                 freeAction={t('billing.comparison.topup')}
-                freeHint={t('billing.comparison.topupUnlock')}
+                onViewModels={onClose}
                 freeDisabled={topupDisabled || !onTopup}
                 onFreeAction={() => onTopup?.()}
               />

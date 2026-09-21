@@ -7,6 +7,9 @@ const mock = vi.hoisted(() => ({
   settings: { remoteControlEnabled: true, revokedControllers: [] as string[] },
   current: true,
   resolve: vi.fn(),
+  iceConfig: vi.fn(async () => []),
+  ready: vi.fn(async () => {}),
+  replyDelay: 0,
 }));
 vi.mock('electron', () => ({
   ipcMain: { handle: (key: string, fn: (...args: any[]) => any) => mock.handlers.set(key, fn) },
@@ -18,15 +21,20 @@ vi.mock('../broadcast-tap', () => ({
   captureDataOwnerBroadcastScope: () => ({}),
   isDataOwnerBroadcastScopeCurrent: () => mock.current,
 }));
-vi.mock('../../remote-desktop/iceConfig', () => ({ loadDesktopIceServers: async () => [] }));
+vi.mock('../../remote-desktop/iceConfig', () => ({ loadDesktopIceServers: mock.iceConfig }));
 vi.mock('../../remote-desktop/captureWindow', () => ({
   DesktopCaptureWindow: class {
     contents: any = null;
     async start() {
+      await mock.ready();
       this.contents = {
         isDestroyed: () => false,
         send: (_channel: string, id: string, c: { action: string }) => {
-          if (c.action !== 'close') mock.handlers.get('file-peer:host:reply')!({}, id, true, 'v=0');
+          if (c.action !== 'close') {
+            const reply = () => mock.handlers.get('file-peer:host:reply')!({}, id, true, 'v=0');
+            if (mock.replyDelay) setTimeout(reply, mock.replyDelay);
+            else reply();
+          }
         },
       };
     }
@@ -43,6 +51,9 @@ describe('authorized file peer source', () => {
   let directory: string, file: string;
   beforeEach(async () => {
     mock.current = true;
+    mock.iceConfig.mockReset().mockResolvedValue([]);
+    mock.ready.mockReset().mockResolvedValue();
+    mock.replyDelay = 0;
     mock.settings = { remoteControlEnabled: true, revokedControllers: [] };
     mock.handlers.clear();
     registerFilePeerIpc();
@@ -69,6 +80,49 @@ describe('authorized file peer source', () => {
   }
   const read = (connection: string, ticket: string, offset: number) =>
     mock.handlers.get('file-peer:host:read')!({}, connection, ticket, offset);
+  it('fits slow config, cold host and command reply within the 30s offer RPC', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      mock.iceConfig.mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(() => resolve([]), 8_000)),
+      );
+      mock.ready.mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(resolve, 10_000)),
+      );
+      mock.replyDelay = 14_000;
+      let settled = false;
+      const result = connect().then((value) => {
+        settled = true;
+        return value;
+      });
+      await vi.advanceTimersByTimeAsync(23_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect((await result).connection).toEqual(expect.any(String));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('does not let one stopped config request close another peer', async () => {
+    let finish!: (value: never[]) => void;
+    mock.iceConfig.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const slow = connect('device-a');
+    const rejected = expect(slow).rejects.toThrow('CLOSED');
+    const healthy = await connect('device-b');
+    stopFilePeers('device-a');
+    finish([]);
+    await rejected;
+    const source = await open(healthy.connection, 'device-b');
+    expect(await read(healthy.connection, source.ticket, 0)).toBe(
+      Buffer.from('hello').toString('base64'),
+    );
+  });
   it('reads bounded bytes and consumes the ticket only after verified EOF', async () => {
     const { connection } = await connect(),
       { ticket, size } = await open(connection);
@@ -82,8 +136,15 @@ describe('authorized file peer source', () => {
   it('accepts a sparse 2 GiB source and rejects one byte above the transport limit', async () => {
     const limit = 2 * 1024 * 1024 * 1024;
     await truncate(file, limit);
-    mock.resolve.mockResolvedValue({ absPath: file, mimeType: 'application/octet-stream', maxBytes: limit });
-    expect(await requestFilePeer('device-a', { action: 'caps' })).toEqual({ version: 1, maxBytes: limit });
+    mock.resolve.mockResolvedValue({
+      absPath: file,
+      mimeType: 'application/octet-stream',
+      maxBytes: limit,
+    });
+    expect(await requestFilePeer('device-a', { action: 'caps' })).toEqual({
+      version: 1,
+      maxBytes: limit,
+    });
     const first = await connect();
     expect((await open(first.connection)).size).toBe(limit);
     stopFilePeers();
@@ -144,7 +205,8 @@ describe('authorized file peer source', () => {
       const next = await open(connection);
       await vi.advanceTimersByTimeAsync(61_000);
       await expect(read(connection, next.ticket, 0)).rejects.toThrow('FILE_PEER_BLOCK');
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
-
 });

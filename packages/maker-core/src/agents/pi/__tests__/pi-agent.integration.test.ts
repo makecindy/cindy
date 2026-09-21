@@ -1456,6 +1456,51 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  it.each(['anthropic-messages', 'openai-completions'] as const)(
+    'keeps native plan notifications separate from replies using %s',
+    { timeout: 60_000 },
+    async (api) => {
+      const deps = buildDeps();
+      deps.resolvePiGatewayModelApi = () => api;
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-reply-'));
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await new PiAgent(deps).startSession({
+          sessionId: `plan-reply-${api}`, workingDir, model: 'pi-test-model',
+        });
+        for (const enabled of [true, false, true]) {
+          await handle.setPlanMode?.(enabled);
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'Reply with a short greeting.' });
+          await done;
+          const notices = events.filter((event) => event.standaloneText);
+          expect(notices).toHaveLength(1);
+          expect(notices[0]).toMatchObject({
+            type: 'text', source: 'pi', turnScope: 'background',
+            data: { isFinal: true, text: expect.stringContaining(enabled ? 'enabled' : 'disabled') },
+          });
+          const reply = events.filter((event) => event.type === 'text' && !event.standaloneText);
+          expect(reply.at(-1)?.data).toMatchObject({
+            text: 'pong from fake gateway', isFinal: true, isFullText: true,
+          });
+          expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+            status: 'completed', result: 'pong from fake gateway',
+          });
+          expect(events.filter((event) => event.type === 'error')).toEqual([]);
+        }
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it(
     're-syncs plan mode from pi persisted state on resume (no mirror desync)',
     { timeout: 60_000 },

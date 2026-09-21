@@ -58,6 +58,17 @@ const canSymlink = (() => {
 })();
 
 describe('endpointManifestCache', () => {
+  it('按区域独立写入且保留旧缓存，互不覆盖', () => {
+    const cn = { ...ENTRY, sourceUrl: 'https://hotfix.cindy.com.cn/cindy/endpoint.json' };
+    const global = { ...ENTRY, sourceUrl: 'https://hotfix.cindy.app/cindy/endpoint.json' };
+    expect(writeEndpointManifestCache(dir, ENTRY)).toBe(true);
+    expect(writeEndpointManifestCache(dir, cn, 'cn')).toBe(true);
+    expect(writeEndpointManifestCache(dir, global, 'global')).toBe(true);
+    expect(readEndpointManifestCache(dir, 'cn')).toEqual(cn);
+    expect(readEndpointManifestCache(dir, 'global')).toEqual(global);
+    expect(readEndpointManifestCache(dir)).toEqual(ENTRY);
+  });
+
   it('写入后可原样读回', () => {
     expect(writeEndpointManifestCache(dir, ENTRY)).toBe(true);
     expect(readEndpointManifestCache(dir)).toEqual(ENTRY);
