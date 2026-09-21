@@ -72,7 +72,7 @@ describe('stopAgentTaskFor 路由', () => {
 });
 
 describe('canStopAgentTask 门禁', () => {
-  it('本机 / 远程已知设备 → 可停;远程但拿不到设备 → 不可停', async () => {
+  it('本机 / 远程已知设备 → 可停;归属不可解析 → 不可停', async () => {
     stubElectron();
     const { canStopAgentTask } = await import('@/lib/makerTransport');
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
@@ -91,8 +91,30 @@ describe('canStopAgentTask 门禁', () => {
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', []);
     expect(canStopAgentTask('remote-1')).toBe(true);
 
-    // 连粘滞缓存也没有(完全查不到归属)= 本机判定 —— 与会话来源同一口径。
+    // 连粘滞缓存也没有、也没有镜像来源证据 = 本机判定 —— 与会话来源同一口径。
     __resetStickySessionOriginForTest();
     expect(canStopAgentTask('remote-1')).toBe(true);
+
+    // 一旦有镜像来源证据(受保护镜像读记下的 owner token),同一会话立刻变成「不可停」:
+    // 归属不可解析时不允许回退本机(见上一个 describe 的用例)。
+    const { __testing } = await import('@/features/device-link/mirrorCacheClient');
+    __testing.rememberOwnerTokenForTest('remote-1', 'owner-token-2');
+    expect(canStopAgentTask('remote-1')).toBe(false);
+  });
+});
+
+describe('镜像来源但归属不可解析(第三状态)', () => {
+  it('门禁返回 false,且停止拒绝而不是回退本机假成功', async () => {
+    const { stopAgentTask, invoke } = stubElectron();
+    const { __testing } = await import('@/features/device-link/mirrorCacheClient');
+    // 真实路径由 device-link 受保护镜像读(readCachedMessages)记入;本机会话永不经过那条路。
+    __testing.rememberOwnerTokenForTest('mirror-1', 'owner-token-1');
+    const { canStopAgentTask, stopAgentTaskFor } = await import('@/lib/makerTransport');
+
+    expect(canStopAgentTask('mirror-1')).toBe(false);
+    await expect(stopAgentTaskFor('mirror-1', 'bash-1')).rejects.toThrow(/REMOTE_ORIGIN_UNKNOWN/);
+    // 关键:绝不回退本机 —— 控制端 main 对不属于自己的会话会「幂等成功」,那是假成功。
+    expect(stopAgentTask).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

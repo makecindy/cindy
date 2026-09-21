@@ -23,6 +23,7 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import {
   accountCounterAtRequestStart,
   invalidationAtRequestStart,
+  knownOwnerTokenFor,
   ownerTokenAtRequestStart,
   persistCachedMessages,
   sessionCacheInvalidationToken,
@@ -271,27 +272,63 @@ export function makerApiForSticky(sessionId: string): RoutableMaker {
 }
 
 /**
+ * 逐任务停止的归属路由。
+ *
+ * `remote` → 有设备可隧道;`local` → 本机会话(走本地 IPC);`unknown` → **确定是镜像来源，
+ * 但当下拿不到设备**(relay 刚清过注册表、本次 app 运行还没查过归属) —— 这条路径上不允
+ * 许回退本机:控制端 main 对不属于自己的会话会「幂等成功」,而那正是假成功(任务在被控端
+ * 照旧跑)。
+ *
+ * 第三状态靠一个**独立于易失注册表**的信号表达:`knownOwnerTokenFor` 只在会话数据经
+ * device-link 受保护镜像读(`readCachedMessages(deviceId, …)`)落地时记入 —— 本机会话
+ * 永远不走那条路。它比粘滞缓存更硬:粘滞缓存是「查询时记入」,没查过就没有。
+ */
+function stopRouteFor(
+  sessionId: string,
+): { kind: 'remote'; deviceId: string } | { kind: 'local' } | { kind: 'unknown' } {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (deviceId) return { kind: 'remote', deviceId };
+  if (knownOwnerTokenFor(sessionId) !== undefined) return { kind: 'unknown' };
+  return { kind: 'local' };
+}
+
+/**
  * 逐任务停止(后台命令 / durable subagent):按**粘滞归属**隧道到任务真身所在的端。
  *
  * 粘滞而不是实时判定是刻意的:relay 瞬断清空注册表的窗口里退回本机,会用同一个 taskId
- * 停掉控制端自己的另一条任务(或对不存在的 id 静默成功),而被控端那条照旧在跑。
- * 老被控端无此 channel → CHANNEL_NOT_ALLOWED 原样抛出:调用方按「停止未确认」提示,
- * 不做乐观收口(任务确实还在跑)。
+ * 停掉控制端自己的另一条任务(或对不存在的 id 静默成功),而被控端那条照旧在跑。归属完全
+ * 查不出但能确认是镜像来源时(**unknown**)**直接拒绝**:宁可让用户看到失败后重试,也不
+ * 发一个本机假成功。
+ *
+ * 失败(含老被控端的 CHANNEL_NOT_ALLOWED)由调用方按静默失败处理:行仍显示 running、按钮
+ * 留在原地可重试,不做乐观收口 —— 任务确实还在跑。
  */
 export function stopAgentTaskFor(
   sessionId: string,
   taskId: string,
 ): ReturnType<RoutableMaker['stopAgentTask']> {
-  return makerApiForSticky(sessionId).stopAgentTask(sessionId, taskId);
+  const route = stopRouteFor(sessionId);
+  if (route.kind === 'remote') {
+    return makerApiForDevice(route.deviceId).stopAgentTask(sessionId, taskId);
+  }
+  if (route.kind === 'unknown') {
+    return Promise.reject(
+      new Error(
+        'REMOTE_ORIGIN_UNKNOWN: refusing to stop a mirrored background task on the local host',
+      ),
+    );
+  }
+  return window.electronAPI.maker.stopAgentTask(sessionId, taskId);
 }
 
 /**
- * Stop 按钮的可用性(与 stopAgentTaskFor 同口径):本机 → 可停;远程镜像且能解析出设备
- * → 可停(走隧道);看起来是远程镜像但当下拿不到设备(relay 注册表尚未水合)→ **不可**。
+ * Stop 按钮的可用性(与 stopAgentTaskFor 同口径):本机 → 可停;有设备可隧道 → 可停;
+ * 确认是镜像来源却拿不到设备(**unknown**)→ **不可**:那条路径上没有任何可信的停止目标,
+ * 本地调用会假成功。
  */
 export function canStopAgentTask(sessionId: string | null | undefined): boolean {
   if (!sessionId) return false;
-  return isRemoteSessionSticky(sessionId) || !isRemoteSession(sessionId);
+  return stopRouteFor(sessionId).kind !== 'unknown';
 }
 
 /** Subscribe to local exact-turn updates; remote sessions deliberately fail closed in this phase. */
