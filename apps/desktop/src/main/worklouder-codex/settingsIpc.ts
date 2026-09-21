@@ -17,6 +17,7 @@ import {
   isWorkLouderCodexCommandId,
   isWorkLouderCodexEncoderMode,
   isWorkLouderCodexKeycapId,
+  isWorkLouderCreatorKeymapPolicy,
   canonicalizeWorkLouderCodexKeycapId,
   isWorkLouderModel,
   type WorkLouderAccessoriesState,
@@ -28,10 +29,12 @@ import {
   type WorkLouderModel,
 } from '../../shared/workLouderCodex.js';
 import { WORKLOUDER_CODEX_TASK_OPTION_LIMIT } from './taskSlots.js';
+import { normalizeInputDeviceCommandId } from '../../shared/inputDevices.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 const SETTING_KEYS = [
   'deviceEnabled',
+  'keymapPolicy',
   'lightingBrightness',
   'lightingAutoDim',
   'agentSource',
@@ -43,7 +46,10 @@ const SETTING_KEYS = [
 export interface WorkLouderCodexSettingsIpcDeps {
   assertTrustedSender(event: unknown): void;
   getState(): WorkLouderAccessoriesState;
-  writeSettings(model: WorkLouderModel, patch: WorkLouderCodexSettingsPatch): WorkLouderCodexSettings;
+  writeSettings(
+    model: WorkLouderModel,
+    patch: WorkLouderCodexSettingsPatch,
+  ): WorkLouderCodexSettings;
   resetSettings(model: WorkLouderModel): WorkLouderCodexSettings;
   applySettings(model: WorkLouderModel, settings: WorkLouderCodexSettings): void;
   openInputMonitoringSettings(): Promise<void>;
@@ -102,6 +108,12 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
       throwIpcError('INVALID_PARAMS', 'deviceEnabled must be a boolean');
     }
     patch.deviceEnabled = record.deviceEnabled;
+  }
+  if ('keymapPolicy' in record) {
+    if (!isWorkLouderCreatorKeymapPolicy(record.keymapPolicy)) {
+      throwIpcError('INVALID_PARAMS', 'keymapPolicy is invalid');
+    }
+    patch.keymapPolicy = record.keymapPolicy;
   }
   if ('singleTapAgentKeys' in record) {
     if (typeof record.singleTapAgentKeys !== 'boolean') {
@@ -181,10 +193,7 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
   if (!isWorkLouderCodexEncoderMode(record.encoderMode)) {
     throwIpcError('INVALID_PARAMS', 'encoderMode is invalid');
   }
-  if (
-    record.merges === undefined &&
-    typeof record.separateMicrophoneKeys !== 'boolean'
-  ) {
+  if (record.merges === undefined && typeof record.separateMicrophoneKeys !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'separateMicrophoneKeys must be a boolean');
   }
   if (record.merges !== undefined && !Array.isArray(record.merges)) {
@@ -199,9 +208,7 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
   const merges = workLouderLayoutMerges({
     merges: record.merges !== undefined ? normalizeWorkLouderMerges(record.merges) : undefined,
     separateMicrophoneKeys:
-      typeof record.separateMicrophoneKeys === 'boolean'
-        ? record.separateMicrophoneKeys
-        : true,
+      typeof record.separateMicrophoneKeys === 'boolean' ? record.separateMicrophoneKeys : true,
   });
   return {
     version: 1,
@@ -231,7 +238,7 @@ function parseAction(value: unknown, nullable: boolean): WorkLouderCodexAction |
     if (!isWorkLouderCodexCommandId(record.commandId)) {
       throwIpcError('INVALID_PARAMS', 'command action is invalid');
     }
-    return { type: 'command', commandId: record.commandId };
+    return { type: 'command', commandId: normalizeInputDeviceCommandId(record.commandId) };
   }
   if (record.type === 'task') {
     rejectUnknownKeys(record, ['type', 'sessionId'], 'task action field');

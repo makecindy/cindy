@@ -11,6 +11,7 @@ import type {
   WorkLouderCodexConnectionReason,
   WorkLouderCodexConnectionStatus,
   WorkLouderCodexDeviceState,
+  WorkLouderCreatorKeymapPolicy,
 } from '../../shared/workLouderCodex.js';
 import type { WorkLouderCodexLightingSink } from './WorkLouderCodexLightingController.js';
 
@@ -82,6 +83,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private connectionStatusHandler: ((status: WorkLouderCodexConnectionStatus) => void) | null =
     null;
   private pendingCreatorKeymap: string[][] | null = null;
+  private creatorKeymapPolicy: WorkLouderCreatorKeymapPolicy = 'managed';
   private presenceHandler:
     | ((
         present: boolean,
@@ -100,6 +102,8 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private permissionBlocked = false;
   /** True while the current host is stopping so re-enable cannot talk to it. */
   private hostStopping = false;
+  /** ChatGPT/Codex owns the vendor HID while its native process is present. */
+  private nativeOwnerPresent = false;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
 
@@ -134,6 +138,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.deviceEnabled = enabled;
     this.permissionBlocked = false;
     if (enabled) {
+      if (this.nativeOwnerPresent) return;
       this.updateHidListeningIntent();
       if (this.latestFrame) this.update(this.latestFrame);
       // Occupancy can turn the device on after the host already posted
@@ -145,6 +150,26 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       return;
     }
     this.disconnectHost();
+  }
+
+  /**
+   * Enforce native-app ownership at the transport boundary. A host started
+   * before ChatGPT appeared must stop, and must not recreate itself until the
+   * native owner has gone away.
+   */
+  setNativeOwnerPresent(present: boolean): void {
+    if (this.nativeOwnerPresent === present) return;
+    this.nativeOwnerPresent = present;
+    if (present) {
+      this.disconnectHost();
+      return;
+    }
+    if (this.deviceEnabled) {
+      this.updateHidListeningIntent();
+      if (this.latestFrame) this.update(this.latestFrame);
+    } else if (this.wantsPresence) {
+      this.discoverPresence();
+    }
   }
 
   private updateHidListeningIntent(): void {
@@ -183,8 +208,9 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
 
   update(frame: WorkLouderCodexLightingFrame): void {
     if (this.disposed) return;
+    // Keep the newest state for handoff even while another app owns HID.
     this.latestFrame = frame;
-    if (!this.deviceEnabled) return;
+    if (!this.deviceEnabled || this.nativeOwnerPresent) return;
     if (isWorkLouderCodexLightingFrameOff(frame) && this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
@@ -210,7 +236,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
 
   rebindCreatorKeymap(keymap: string[][]): void {
     this.pendingCreatorKeymap = keymap;
-    if (this.disposed || !this.child) return;
+    if (this.disposed || this.hostStopping || this.nativeOwnerPresent || !this.child) return;
     try {
       this.child.postMessage({
         kind: 'rebind-creator-keymap',
@@ -218,6 +244,22 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       } satisfies WorkLouderCodexHostRequest);
     } catch (error) {
       this.deps.log.warn('failed to rebind Creator keymap', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  setCreatorKeymapPolicy(policy: WorkLouderCreatorKeymapPolicy): void {
+    if (this.creatorKeymapPolicy === policy) return;
+    this.creatorKeymapPolicy = policy;
+    if (this.disposed || this.hostStopping || this.nativeOwnerPresent || !this.child) return;
+    try {
+      this.child.postMessage({
+        kind: 'set-creator-keymap-policy',
+        policy,
+      } satisfies WorkLouderCodexHostRequest);
+    } catch (error) {
+      this.deps.log.warn('failed to update Creator keymap policy', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -252,7 +294,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private ensureChild(): WorkLouderCodexChildLike | null {
-    if (this.hostStopping) return null;
+    if (this.hostStopping || this.nativeOwnerPresent) return null;
     // A scheduled recycle owns recovery; work/presence callers must not
     // recreate the host early and bypass its exponential backoff.
     if (this.restartTimer) return null;
@@ -292,6 +334,9 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
         sdkEntry: sdk.entry,
         ...(keymapBackupDir ? { keymapBackupDir } : {}),
         ...(this.pendingCreatorKeymap ? { creatorKeymap: this.pendingCreatorKeymap } : {}),
+        ...(this.creatorKeymapPolicy === 'preserve'
+          ? { creatorKeymapPolicy: this.creatorKeymapPolicy }
+          : {}),
       };
       startedChild.postMessage(initRequest);
       const armConnectionWatchdog = (): void => {
@@ -353,7 +398,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    * no such keyboard.
    */
   probe(): void {
-    if (this.disposed || this.permissionBlocked) return;
+    if (this.disposed || this.permissionBlocked || this.nativeOwnerPresent) return;
     if (!this.deviceEnabled) {
       this.discoverPresence();
       return;
@@ -381,7 +426,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    * paths call this method when a permission change may have happened.
    */
   retryPermission(): void {
-    if (this.disposed || !this.permissionBlocked) return;
+    if (this.disposed || this.nativeOwnerPresent || !this.permissionBlocked) return;
     this.permissionBlocked = false;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -391,7 +436,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private requestHidListening(): void {
-    if (this.disposed || !this.wantsHidInput) return;
+    if (this.disposed || this.nativeOwnerPresent || !this.wantsHidInput) return;
     const child = this.ensureChild();
     if (!child) return;
     try {
@@ -420,6 +465,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deps.log[message.level](`[host] ${message.message}`);
       return;
     }
+    if (this.disposed || this.hostStopping || this.nativeOwnerPresent) return;
     if (message.kind === 'hid') {
       this.clearConnectWatchdog();
       if (/^(?:AG|ACT)/.test(message.event.key)) {
@@ -555,6 +601,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.completeDispose(child);
       return;
     }
+    if (this.nativeOwnerPresent) {
+      this.updateConnectionReason(null);
+      this.updateConnectionStatus('disabled');
+      return;
+    }
     if (!this.deviceEnabled) {
       this.updateConnectionReason(null);
       this.updateConnectionStatus('disabled');
@@ -579,13 +630,19 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private restartHost(): void {
-    if (this.disposed || !this.deviceEnabled) return;
+    if (this.disposed || this.nativeOwnerPresent || !this.deviceEnabled) return;
     if (this.wantsHidInput) this.requestHidListening();
     if (this.latestFrame) this.update(this.latestFrame);
   }
 
   private scheduleRestart(): void {
-    if (this.restartTimer || this.permissionBlocked || !this.shouldRestartHost()) return;
+    if (
+      this.restartTimer ||
+      this.nativeOwnerPresent ||
+      this.permissionBlocked ||
+      !this.shouldRestartHost()
+    )
+      return;
     this.consecutiveCrashes += 1;
     if (this.isCrashBudgetExhausted()) {
       this.deps.log.error('Codex Micro lighting host repeatedly crashed; disabled until restart');
@@ -610,7 +667,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private shouldRestartHost(): boolean {
-    if (this.disposed) return false;
+    if (this.disposed || this.nativeOwnerPresent) return false;
     if (!this.deviceEnabled) return this.wantsPresence;
     return (
       this.wantsHidInput ||
@@ -682,7 +739,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.finishDispose = null;
     finish?.();
     if (this.disposed || !owned || this.child) return;
-    if (this.deviceEnabled) this.restartHost();
+    if (this.deviceEnabled && !this.nativeOwnerPresent) this.restartHost();
     else if (this.wantsPresence) this.discoverPresence();
   }
 
@@ -731,6 +788,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private discoverPresence(): void {
+    if (this.nativeOwnerPresent) return;
     this.wantsPresence = true;
     const child = this.ensureChild();
     if (!child) return;

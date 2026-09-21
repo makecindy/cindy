@@ -27,6 +27,7 @@ import {
   type WorkLouderCodexPreviewPart,
   type WorkLouderCodexRendererAction,
   type WorkLouderCodexSettings,
+  type WorkLouderCreatorKeymapPolicy,
   type WorkLouderCodexState,
   type WorkLouderCodexTaskOption,
 } from '../../shared/workLouderCodex.js';
@@ -82,14 +83,17 @@ export interface WorkLouderCodexLightingSink {
   ): void;
   setDeviceEnabled?(enabled: boolean): void;
   rebindCreatorKeymap?(keymap: string[][]): void;
+  setCreatorKeymapPolicy?(policy: WorkLouderCreatorKeymapPolicy): void;
   setPresenceHandler?(
-    handler: ((
-      present: boolean,
-      identity?: {
-        deviceType: 'codex-micro' | 'creator-micro-2';
-        isUsbConnection: boolean;
-      },
-    ) => void) | null,
+    handler:
+      | ((
+          present: boolean,
+          identity?: {
+            deviceType: 'codex-micro' | 'creator-micro-2';
+            isUsbConnection: boolean;
+          },
+        ) => void)
+      | null,
   ): void;
   dispose(): Promise<void>;
 }
@@ -214,12 +218,16 @@ export class WorkLouderCodexLightingController {
     this.lightingDimmed = false;
     this.clearWindowRevealTimer();
     if (turningOff) this.releaseHeldHardwareGestures();
-    this.sink.setDeviceEnabled?.(settings.deviceEnabled);
+    // Stop first on disable; on enable, init must already carry the selected
+    // policy/layout before the host can connect or perform any keymap IO.
+    if (!settings.deviceEnabled) this.sink.setDeviceEnabled?.(false);
+    this.sink.setCreatorKeymapPolicy?.(settings.keymapPolicy);
     if (!settings.deviceEnabled) this.connectionStatus = 'disabled';
     this.publishAgentSlots();
     if (settings.layout.taskKeys) {
       this.sink.rebindCreatorKeymap?.(buildCreatorMicro2AgentKeymap(settings.layout.taskKeys));
     }
+    if (settings.deviceEnabled) this.sink.setDeviceEnabled?.(true);
     const frame = this.updateLightingFrame();
     this.resetAutoDimTimer(frame);
     this.emitState();
@@ -430,10 +438,7 @@ export class WorkLouderCodexLightingController {
     });
   }
 
-  private handleCommandKeyInput(
-    event: WorkLouderCodexHidEvent,
-    physical?: string,
-  ): void {
+  private handleCommandKeyInput(event: WorkLouderCodexHidEvent, physical?: string): void {
     const slot = physical ?? this.commandSlotForKey(event.key);
     if (!slot) return;
     const assignment = isWorkLouderCreatorProgrammableKey(slot)
@@ -624,9 +629,7 @@ export class WorkLouderCodexLightingController {
       ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
       : null;
     const slot =
-      creatorRole?.role === 'command'
-        ? creatorRole.physical
-        : this.commandSlotForKey(event.key);
+      creatorRole?.role === 'command' ? creatorRole.physical : this.commandSlotForKey(event.key);
     if (!slot) return;
     const assignment = isWorkLouderCreatorProgrammableKey(slot)
       ? creatorCommandAssignment(this.settings.layout, slot)
@@ -725,6 +728,15 @@ export class WorkLouderCodexLightingController {
 
   private agentActionsForCurrentSource(): Array<WorkLouderCodexAction | null> {
     const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+    if (this.settings.agentSource === 'pinned') {
+      const pinned =
+        this.taskCatalog.pinned ?? this.taskCatalog.options.filter((task) => task.pinned);
+      // Never fill unused pinned slots with unrelated tasks.
+      return Array.from({ length: slotCount }, (_, slot) => {
+        const task = pinned[slot];
+        return task ? { type: 'task', sessionId: task.id } : null;
+      });
+    }
     if (this.settings.agentSource === 'custom') {
       return Array.from({ length: slotCount }, (_, slot) => {
         if (slot < this.settings.customAgentKeys.length) {
@@ -941,6 +953,9 @@ export class WorkLouderCodexLightingController {
     this.clearAutoDimTimer();
     const delayMs = workLouderCodexAutoDimMs(this.settings.lightingAutoDim);
     if (delayMs === null || isWorkLouderCodexLightingFrameOff(frame)) return;
+    // Inactivity on the keyboard is not inactivity of the task. Keep progress
+    // and attention visible during long turns; only idle assignment lights dim.
+    if (frame.ambient.brightness > 0 || frame.keys.brightness > 0) return;
     this.autoDimTimer = setTimeout(() => {
       this.autoDimTimer = null;
       this.lightingDimmed = true;
@@ -1029,6 +1044,7 @@ function normalizeTaskCatalog(
       sidebar: value.sidebar.map((task) => ({ ...task })),
       lastSent: value.lastSent.map((task) => ({ ...task })),
       options: value.options.map((task) => ({ ...task })),
+      pinned: value.pinned?.map((task) => ({ ...task })),
     };
   }
   const options = value.map((id) => ({ id, title: id, pinned: false }));

@@ -4164,9 +4164,17 @@
             "name": "새 작업에서 계속",
             "description": "현재 작업을 바탕으로 새 작업을 만듭니다"
           },
+          "forkThread": {
+            "name": "새 작업에서 계속",
+            "description": "현재 작업을 바탕으로 새 작업을 만듭니다"
+          },
           "composer.submit": {
             "name": "메시지 보내기",
-            "description": "입력창의 메시지를 보내거나, 대기 중인 요청이 있으면 승인합니다"
+            "description": "메시지 전송(실행 중에는 대기열에 추가) 또는 대기 중인 요청 승인"
+          },
+          "composer.steer": {
+            "name": "작업 스티어",
+            "description": "실행 중인 작업에 입력창의 메시지로 지시합니다"
           },
           "feedback": {
             "name": "피드백 보내기",
@@ -4187,6 +4195,10 @@
             "name": "작업 보관",
             "description": "현재 작업을 보관합니다"
           },
+          "archiveThread": {
+            "name": "작업 보관",
+            "description": "현재 작업을 보관합니다"
+          },
           "newTask": {
             "name": "새 작업",
             "description": "새 작업을 시작합니다"
@@ -4196,6 +4208,10 @@
             "description": "새 브라우저 탭을 엽니다"
           },
           "toggleTaskPin": {
+            "name": "고정 전환",
+            "description": "현재 작업을 고정하거나 고정을 해제합니다"
+          },
+          "toggleThreadPin": {
             "name": "고정 전환",
             "description": "현재 작업을 고정하거나 고정을 해제합니다"
           },
@@ -4331,7 +4347,7 @@
           },
           "autoDim": {
             "label": "자동 끄기",
-            "description": "사용하지 않으면 조명을 끄고 키보드 사용 또는 작업 상태 변경 시 다시 켭니다.",
+            "description": "사용하지 않으면 대기 조명을 끕니다. 실행 중이거나 확인이 필요한 세션의 조명은 유지합니다.",
             "aria": "Codex Micro 자동 끄기 시간 선택",
             "options": {
               "off": "끄기",
@@ -4352,6 +4368,7 @@
             "description": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
             "descriptions": {
               "sidebar": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
+              "pinned": "고정된 세션만 사이드바 순서대로 키에 할당합니다. 나머지 키는 비워 둡니다.",
               "last-sent": "작업 키는 보드 순서대로, 최근에 메시지를 보낸 작업에 대응합니다.",
               "priority": "작업 키는 보드 순서대로 우선 작업에 대응합니다.",
               "custom": "각 작업 키는 지정한 작업을 엽니다."
@@ -4359,6 +4376,7 @@
             "value": "사이드바 순서",
             "options": {
               "sidebar": "사이드바 순서",
+              "pinned": "고정된 세션만",
               "last-sent": "최근 작업",
               "priority": "우선 작업",
               "custom": "사용자 지정"
@@ -4479,6 +4497,16 @@
               "toggle": {
                 "aria": "이 Cindy에서 Creator Micro 2 사용"
               },
+              "keymapPolicy": {
+                "label": "Creator 키맵 관리",
+                "description": "Cindy가 Creator 레이어를 관리하도록 허용하거나 하드웨어 키맵을 그대로 유지합니다.",
+                "options": {
+                  "managed": "표준",
+                  "preserve": "키맵 보호"
+                },
+                "managedWarning": "표준 모드에서는 Cindy가 장치를 사용하는 동안 세션 키 레이어를 설정하고 종료 시 이전 키맵을 복원합니다.",
+                "preserveWarning": "보호 모드는 읽기 전용입니다. 기본 KV_OAI 동작, 조명, 세션 제어를 사용할 수 있지만 keymap.json에는 쓰지 않습니다. ChatGPT/Codex가 열려 있으면 우선 사용하며, 닫으면 Cindy가 이어받습니다."
+              },
               "descriptions": {
                 "connecting": "Cindy가 Work Louder 장치 서비스를 시작하고 있습니다.",
                 "connected": "USB가 연결되었습니다. Cindy가 키 입력을 수신하고 작업 조명을 동기화합니다.",
@@ -4498,6 +4526,7 @@
               "source": {
                 "descriptions": {
                   "sidebar": "작업 키는 보드 순서대로 사이드바 위쪽부터의 작업에 대응합니다.",
+                  "pinned": "고정된 세션만 사이드바 순서대로 키에 할당합니다. 나머지 키는 비워 둡니다.",
                   "last-sent": "작업 키는 보드 순서대로, 최근에 메시지를 보낸 작업에 대응합니다.",
                   "priority": "작업 키는 보드 순서대로 우선 작업에 대응합니다.",
                   "custom": "각 작업 키는 지정한 작업을 엽니다."
@@ -8138,6 +8167,20 @@
         "railSameEngine": "{{agent}} 전용",
         "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다",
         "favoritesSyncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다."
+      },
+      "fallback": {
+        "fallback": "폴백",
+        "title": "폴백 모델",
+        "pickHint": "폴백으로 추가할 모델을 선택하세요.",
+        "desc": "기본 모델이 실패하거나 한도에 도달하면 다음 모델로 전환합니다.",
+        "mainLabel": "기본",
+        "fallbackLabel": "폴백",
+        "remove": "제거",
+        "back": "뒤로",
+        "enabled": "켜짐",
+        "disabled": "꺼짐",
+        "exhausted": "할당량 소진",
+        "exhaustedUntil": "{{time}}에 복구"
       }
     },
     "permissionSelector": {

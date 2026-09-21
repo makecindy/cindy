@@ -107,6 +107,13 @@ export interface UnifiedModelPanelProps {
   selected: { providerId: string | null; modelId: string };
   /** 选中的收藏锚点(M5 接线后由 draft 提供);缺省 = 收藏行不显示选中态。 */
   selectedFavoriteUid?: string | null;
+  /**
+   * 多选模式:命中的行画成选中态,替代单选的「当前会话在用它」。
+   *
+   * 备用链用它——链是一组目标,不是一个;没有它,已加入的行与未加入的行长得一样,
+   * 重复点击就成了「点了没反应」。入参是行的 (来源, 模型, 引擎, 深度) 身份。
+   */
+  isRowChosen?: (providerId: string, modelId: string, agent: AgentKind, effort?: string) => boolean;
   /** 会话 / 草稿当前真正在用的引擎 —— 判定「这行是不是 live 选中行」。 */
   liveAgentKind: AgentKind | null;
   /** live 选中行的 Fast 实时值(会话 = live;草稿 = 调用方派生)。 */
@@ -285,6 +292,7 @@ export function UnifiedModelPanel({
   onPaymentRequired,
   configurationEnabled = true,
   selectionPolicy = 'personalized',
+  isRowChosen,
   deviceId,
   isRouteDisabled,
   sessionEngineFilter,
@@ -1085,7 +1093,16 @@ export function UnifiedModelPanel({
                       {...(effectiveRail.kind === 'all' || effectiveRail.kind === 'favorites'
                         ? { sourceLabel: providerLabel(row.entry.providerId) }
                         : {})}
-                      selected={isSelectedRow(row.anchor, row.entry)}
+                      selected={
+                        isRowChosen
+                          ? isRowChosen(
+                              row.entry.providerId,
+                              row.entry.modelId,
+                              config.agent,
+                              config.effort ?? undefined,
+                            )
+                          : isSelectedRow(row.anchor, row.entry)
+                      }
                       active={sameAnchor(flyAnchor, row.anchor)}
                       isFavoriteRow={!!row.favorite}
                       justFavorited={justFavorited === key}

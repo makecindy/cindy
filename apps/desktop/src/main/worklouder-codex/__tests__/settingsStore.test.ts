@@ -78,10 +78,21 @@ describe('Work Louder Codex settings store', () => {
     expect(__testing.normalize({ lightingBrightness: Number.NaN }).lightingBrightness).toBe(100);
   });
 
-  it('maps the old pinned and recent sources onto sidebar order', () => {
-    expect(__testing.normalize({ agentSource: 'pinned' }).agentSource).toBe('sidebar');
+  it('retains pinned-only mode while migrating the old recent source', () => {
+    expect(__testing.normalize({ agentSource: 'pinned' }).agentSource).toBe('pinned');
     expect(__testing.normalize({ agentSource: 'recent' }).agentSource).toBe('sidebar');
     expect(__testing.normalize({ agentSource: 'last-sent' }).agentSource).toBe('last-sent');
+  });
+
+  it('migrates saved Queue to original Send without changing Steer', () => {
+    expect(__testing.normalizeAction({ type: 'command', commandId: 'composer.queue' })).toEqual({
+      type: 'command',
+      commandId: 'composer.submit',
+    });
+    expect(__testing.normalizeAction({ type: 'command', commandId: 'composer.steer' })).toEqual({
+      type: 'command',
+      commandId: 'composer.steer',
+    });
   });
 
   it('persists a patch under the Electron userData directory', () => {
@@ -147,6 +158,18 @@ describe('Work Louder Codex settings store', () => {
     ).toEqual({ deviceEnabled: true });
   });
 
+  it('keeps Creator Protect map mode across a restore-defaults action', () => {
+    writeWorkLouderCodexSettingsPatch('creator-micro-2', {
+      keymapPolicy: 'preserve',
+      deviceEnabled: true,
+    });
+
+    const next = resetWorkLouderCodexSettings('creator-micro-2');
+
+    expect(next.keymapPolicy).toBe('preserve');
+    expect(next.deviceEnabled).toBe(true);
+  });
+
   it('persists extra Codex task keys', () => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklouder-settings-'));
     const layout = cloneWorkLouderCodexLayout(createWorkLouderCodexDefaultSettings().layout);
@@ -160,7 +183,7 @@ describe('Work Louder Codex settings store', () => {
     );
   });
 
-  it('keeps Creator Micro 2 settings in a separate file with blank keycaps', () => {
+  it('keeps Creator Micro 2 settings in a separate file with the official default layout', () => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklouder-settings-'));
 
     expect(__testing.normalize(undefined, 'creator-micro-2')).toEqual(
@@ -171,11 +194,23 @@ describe('Work Louder Codex settings store', () => {
       lightingBrightness: 40,
     });
 
-    expect(next.layout.slots.ACT06.keycapId).toBe('EMPT1');
-    expect(next.layout.slots.ACT06.action).toEqual({
-      type: 'command',
-      commandId: 'composer.toggleFastMode',
+    expect(next.layout.slots.ACT06).toEqual({
+      keycapId: 'EMPT1',
+      action: { type: 'command', commandId: 'composer.toggleFastMode' },
     });
+    expect(next.layout.slots.ACT07).toEqual({
+      keycapId: 'EMPT1',
+      action: { type: 'command', commandId: 'approval.approve' },
+    });
+    expect(next.layout.slots.ACT08).toEqual({
+      keycapId: 'EMPT1',
+      action: { type: 'command', commandId: 'approval.decline' },
+    });
+    expect(next.layout.slots.ACT11).toEqual({
+      keycapId: 'EMPT1',
+      action: null,
+    });
+    expect(next.deviceEnabled).toBe(false);
     expect(next.layout.separateMicrophoneKeys).toBe(true);
     expect(readWorkLouderCodexSettings('creator-micro-2')).toEqual(next);
     expect(readWorkLouderCodexSettings('codex-micro').layout.slots.ACT06.keycapId).toBe('FAST');
@@ -223,15 +258,56 @@ describe('Work Louder Codex settings store', () => {
       'creator-micro-2',
     );
 
-    expect(next.layout.slots.ACT06.action).toEqual({
-      type: 'command',
-      commandId: 'composer.toggleFastMode',
+    expect(next.layout.slots.ACT06).toEqual({
+      keycapId: 'EMPT1',
+      action: { type: 'command', commandId: 'composer.toggleFastMode' },
     });
     expect(next.layout.slots.ACT12.action).toEqual({
       type: 'command',
       commandId: 'composer.submit',
     });
-    expect(next.layout.slots.ACT10.action).toEqual({ type: 'voice' });
+    expect(next.layout.slots.ACT10).toEqual({ keycapId: 'EMPT1', action: { type: 'voice' } });
+  });
+
+  it('migrates the previous generic Creator defaults to the official layout', () => {
+    const next = __testing.normalize(
+      {
+        layout: {
+          slots: {
+            ACT06: {
+              keycapId: 'EMPT1',
+              action: { type: 'command', commandId: 'composer.toggleFastMode' },
+            },
+            ACT07: {
+              keycapId: 'EMPT1',
+              action: { type: 'command', commandId: 'approval.approve' },
+            },
+            ACT08: {
+              keycapId: 'EMPT1',
+              action: { type: 'command', commandId: 'approval.decline' },
+            },
+            ACT09: { keycapId: 'EMPT1', action: { type: 'command', commandId: 'forkTask' } },
+            ACT10: { keycapId: 'EMPT1', action: null },
+            ACT11: { keycapId: 'EMPT1', action: null },
+            ACT10_ACT11: { keycapId: 'EMPT1', action: null },
+            ACT12: { keycapId: 'EMPT1', action: { type: 'command', commandId: 'composer.submit' } },
+          },
+          separateMicrophoneKeys: true,
+        },
+      },
+      'creator-micro-2',
+    );
+
+    expect(next.layout.slots).toEqual(
+      createWorkLouderCodexDefaultSettings('creator-micro-2').layout.slots,
+    );
+    expect(next.deviceEnabled).toBe(false);
+  });
+
+  it('keeps an explicit Creator enable flag for the ownership lease to arbitrate', () => {
+    expect(__testing.normalize({ deviceEnabled: true }, 'creator-micro-2').deviceEnabled).toBe(
+      true,
+    );
   });
 
   it('keeps a Creator layout that is blank on purpose after the new schema exists', () => {

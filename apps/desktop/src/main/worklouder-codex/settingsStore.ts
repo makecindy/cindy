@@ -1,6 +1,7 @@
 /** Main-process persistence for Work Louder keyboard preferences, one file per model. */
 
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
+import { normalizeInputDeviceCommandId } from '../../shared/inputDevices.js';
 
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
@@ -22,6 +23,7 @@ import {
   isWorkLouderCodexKeycapId,
   isWorkLouderCodexBlankKeycap,
   canonicalizeWorkLouderCodexKeycapId,
+  isWorkLouderCreatorKeymapPolicy,
   type WorkLouderCodexAction,
   type WorkLouderCodexKeyAssignment,
   type WorkLouderCodexLayout,
@@ -48,7 +50,7 @@ function normalizeAction(raw: unknown): WorkLouderCodexAction | null {
     return { type: 'voice' };
   }
   if (value.type === 'command' && isWorkLouderCodexCommandId(value.commandId)) {
-    return { type: 'command', commandId: value.commandId };
+    return { type: 'command', commandId: normalizeInputDeviceCommandId(value.commandId) };
   }
   if (value.type === 'task' && isBoundedString(value.sessionId, 512)) {
     return { type: 'task', sessionId: value.sessionId };
@@ -103,6 +105,13 @@ function normalizeLayout(raw: unknown, model: WorkLouderModel): WorkLouderCodexL
       normalizeKeyAssignment(rawSlots[slot], defaults.slots[slot]),
     ]),
   ) as WorkLouderCodexLayout['slots'];
+  const legacyCreatorLayout = model === 'creator-micro-2' && isLegacyCreatorNativeLayout(slots);
+  if (legacyCreatorLayout) {
+    // Older Cindy builds initialized Creator Micro 2 with a generic approval
+    // layout. Migrate only that exact old default to the same command slots
+    // ChatGPT currently publishes; never overwrite a real custom layout.
+    slots = defaults.slots;
+  }
   const blank: WorkLouderCodexKeyAssignment = { keycapId: 'EMPT1', action: null };
   for (const key of WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS) {
     if (key.startsWith('AG') && rawSlots[key]) {
@@ -151,9 +160,11 @@ function normalizeLayout(raw: unknown, model: WorkLouderModel): WorkLouderCodexL
   const analogStick = Object.fromEntries(
     WORKLOUDER_CODEX_ANALOG_DIRECTIONS.map((direction) => [
       direction,
-      rawAnalog[direction] === null
-        ? null
-        : (normalizeAction(rawAnalog[direction]) ?? defaults.analogStick[direction]),
+      legacyCreatorLayout
+        ? defaults.analogStick[direction]
+        : rawAnalog[direction] === null
+          ? null
+          : (normalizeAction(rawAnalog[direction]) ?? defaults.analogStick[direction]),
     ]),
   ) as WorkLouderCodexLayout['analogStick'];
   const encoder = Object.fromEntries(
@@ -167,9 +178,11 @@ function normalizeLayout(raw: unknown, model: WorkLouderModel): WorkLouderCodexL
     slots,
     analogStick,
     encoder,
-    encoderMode: isWorkLouderCodexEncoderMode(value.encoderMode)
-      ? value.encoderMode
-      : defaults.encoderMode,
+    encoderMode: legacyCreatorLayout
+      ? defaults.encoderMode
+      : isWorkLouderCodexEncoderMode(value.encoderMode)
+        ? value.encoderMode
+        : defaults.encoderMode,
     separateMicrophoneKeys: workLouderMicrophoneKeysSeparate(merges),
     merges,
     taskKeys: workLouderTaskKeysForLayout({
@@ -184,6 +197,32 @@ function normalizeLayout(raw: unknown, model: WorkLouderModel): WorkLouderCodexL
 function isCreatorFactoryBlankSlots(slots: WorkLouderCodexLayout['slots']): boolean {
   return WORKLOUDER_CODEX_COMMAND_SLOTS.every(
     (slot) => isWorkLouderCodexBlankKeycap(slots[slot].keycapId) && slots[slot].action === null,
+  );
+}
+
+function isLegacyCreatorNativeLayout(slots: WorkLouderCodexLayout['slots']): boolean {
+  return (
+    slots.ACT06.keycapId === 'EMPT1' &&
+    slots.ACT06.action?.type === 'command' &&
+    slots.ACT06.action.commandId === 'composer.toggleFastMode' &&
+    slots.ACT07.keycapId === 'EMPT1' &&
+    slots.ACT07.action?.type === 'command' &&
+    slots.ACT07.action.commandId === 'approval.approve' &&
+    slots.ACT08.keycapId === 'EMPT1' &&
+    slots.ACT08.action?.type === 'command' &&
+    slots.ACT08.action.commandId === 'approval.decline' &&
+    slots.ACT09.keycapId === 'EMPT1' &&
+    slots.ACT09.action?.type === 'command' &&
+    slots.ACT09.action.commandId === 'forkTask' &&
+    slots.ACT10.keycapId === 'EMPT1' &&
+    slots.ACT10.action === null &&
+    slots.ACT11.keycapId === 'EMPT1' &&
+    slots.ACT11.action === null &&
+    slots.ACT10_ACT11.keycapId === 'EMPT1' &&
+    slots.ACT10_ACT11.action === null &&
+    slots.ACT12.keycapId === 'EMPT1' &&
+    slots.ACT12.action?.type === 'command' &&
+    slots.ACT12.action.commandId === 'composer.submit'
   );
 }
 
@@ -208,6 +247,10 @@ function normalize(raw: unknown, model: WorkLouderModel = 'codex-micro'): WorkLo
       : defaults.lightingAutoDim,
     deviceEnabled:
       typeof value.deviceEnabled === 'boolean' ? value.deviceEnabled : defaults.deviceEnabled,
+    keymapPolicy:
+      model === 'creator-micro-2' && isWorkLouderCreatorKeymapPolicy(value.keymapPolicy)
+        ? value.keymapPolicy
+        : defaults.keymapPolicy,
     agentSource: normalizeWorkLouderCodexAgentSource(value.agentSource),
     customAgentKeys,
     singleTapAgentKeys:
@@ -233,10 +276,9 @@ function createStore(model: WorkLouderModel) {
   });
 }
 
-const stores = Object.fromEntries(WORKLOUDER_MODELS.map((model) => [model, createStore(model)])) as Record<
-  WorkLouderModel,
-  ReturnType<typeof createStore>
->;
+const stores = Object.fromEntries(
+  WORKLOUDER_MODELS.map((model) => [model, createStore(model)]),
+) as Record<WorkLouderModel, ReturnType<typeof createStore>>;
 
 export function readWorkLouderCodexSettings(
   model: WorkLouderModel = 'codex-micro',
@@ -260,12 +302,21 @@ export function resetWorkLouderCodexSettings(
   model: WorkLouderModel = 'codex-micro',
 ): WorkLouderCodexSettings {
   const store = stores[model];
-  const keepEnabled = store.read().deviceEnabled;
+  const previous = store.read();
+  const keepEnabled = previous.deviceEnabled;
   const settings = store.reset();
   log.info('Work Louder settings reset', { model });
   // Restore-defaults resets layout and lighting, but never turns the keyboard off
-  // after the user has already chosen to use it in this instance.
-  if (keepEnabled) return writeWorkLouderCodexSettingsPatch(model, { deviceEnabled: true });
+  // after the user has already chosen to use it in this instance. Preserve is
+  // a safety policy, so resetting layout must never silently make keymap writes
+  // possible again.
+  const patch: WorkLouderCodexSettingsPatch = {
+    ...(model === 'creator-micro-2' && previous.keymapPolicy === 'preserve'
+      ? { keymapPolicy: 'preserve' as const }
+      : {}),
+    ...(keepEnabled ? { deviceEnabled: true } : {}),
+  };
+  if (Object.keys(patch).length > 0) return writeWorkLouderCodexSettingsPatch(model, patch);
   return settings;
 }
 

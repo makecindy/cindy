@@ -1,9 +1,10 @@
-import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { selectInputDeviceCatalogRows } from '../../shared/inputDevices.js';
 import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
@@ -28,6 +29,8 @@ export interface WorkLouderCodexTaskCatalog {
   sidebar: WorkLouderCodexTaskOption[];
   lastSent: WorkLouderCodexTaskOption[];
   options: WorkLouderCodexTaskOption[];
+  /** Optional for legacy task loaders; production catalogs always supply it. */
+  pinned?: WorkLouderCodexTaskOption[];
 }
 
 /** Keeps database recency order unchanged and caps the keyboard projection at the board size. */
@@ -58,14 +61,24 @@ export async function listWorkLouderCodexTaskCatalog(
     .orderBy(desc(sql`COALESCE(${sessions.userSendAt}, ${sessions.updatedAt})`), desc(sessions.id))
     .limit(TASK_OPTION_LIMIT);
 
-  return buildWorkLouderCodexTaskCatalog(
-    rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      pinnedAt: row.pinnedAt,
-      userSendAt: row.userSendAt,
-    })),
-  );
+  // Pins are independent of recency: an old pinned task must not disappear just
+  // because more than 100 newer tasks have been used since it was pinned.
+  const pinnedRows = await db
+    .select({
+      id: sessions.id,
+      title: sessions.title,
+      pinnedAt: sessions.pinnedAt,
+      userSendAt: sessions.userSendAt,
+    })
+    .from(sessions)
+    .where(and(visibleActiveTask, isNotNull(sessions.pinnedAt)))
+    .orderBy(desc(sessions.pinnedAt), desc(sessions.id))
+    .limit(KEYBOARD_TASK_SLOT_LIMIT);
+  const recentIds = new Set(rows.map((row) => row.id));
+  return buildWorkLouderCodexTaskCatalog([
+    ...rows,
+    ...pinnedRows.filter((row) => !recentIds.has(row.id)),
+  ]);
 }
 
 /** One task as the keyboard needs to see it, already in display order. */
@@ -90,14 +103,16 @@ export function buildWorkLouderCodexTaskCatalog(
   rows: readonly WorkLouderCodexTaskCatalogInput[],
   options: { publishedVisibleOrder?: boolean } = {},
 ): WorkLouderCodexTaskCatalog {
-  const publishedRows: WorkLouderCodexTaskCatalogRow[] = rows.slice(0, TASK_OPTION_LIMIT).map((row) => ({
-    id: row.id,
-    // An untitled task still gets a key; the UI supplies its own placeholder.
-    title: row.title,
-    pinned: row.pinnedAt !== null,
-    pinnedAt: row.pinnedAt,
-    userSendAt: row.userSendAt,
-  }));
+  const publishedRows: WorkLouderCodexTaskCatalogRow[] = rows
+    .slice(0, TASK_OPTION_LIMIT + KEYBOARD_TASK_SLOT_LIMIT)
+    .map((row) => ({
+      id: row.id,
+      // An untitled task still gets a key; the UI supplies its own placeholder.
+      title: row.title,
+      pinned: row.pinnedAt !== null,
+      pinnedAt: row.pinnedAt,
+      userSendAt: row.userSendAt,
+    }));
   const catalogRows = publishedRows.filter((_, index) => rows[index]?.catalogEligible !== false);
   const byPublishedId = new Map(publishedRows.map((row) => [row.id, row] as const));
   const visibleOrder = rows
@@ -119,7 +134,22 @@ export function buildWorkLouderCodexTaskCatalog(
   return {
     sidebar,
     lastSent,
-    options: catalogRows.map(toTaskOption),
+    options: selectInputDeviceCatalogRows(
+      catalogRows,
+      new Map(visibleOrder.map((row) => [row.id, row.sidebarOrder ?? 0])),
+      TASK_OPTION_LIMIT,
+    ).map(toTaskOption),
+    pinned: rows
+      .filter((row) => row.catalogEligible !== false && row.pinnedAt !== null)
+      .toSorted(
+        (left, right) =>
+          (left.sidebarOrder ?? Number.MAX_SAFE_INTEGER) -
+            (right.sidebarOrder ?? Number.MAX_SAFE_INTEGER) ||
+          (right.pinnedAt ?? 0) - (left.pinnedAt ?? 0) ||
+          right.id.localeCompare(left.id),
+      )
+      .slice(0, KEYBOARD_TASK_SLOT_LIMIT)
+      .map((row) => ({ id: row.id, title: row.title, pinned: true })),
   };
 }
 

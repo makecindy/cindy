@@ -5,6 +5,7 @@ import {
   buildCreatorMicro2AgentKeymap,
   type WorkLouderCodexConnectionReason,
   type WorkLouderCodexDeviceState,
+  type WorkLouderCreatorKeymapPolicy,
 } from '../../shared/workLouderCodex.js';
 
 export { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../shared/workLouderCodex.js';
@@ -50,7 +51,13 @@ export interface WorkLouderCodexLightingFrame {
 }
 
 export type WorkLouderCodexHostRequest =
-  | { kind: 'init'; sdkEntry: string; keymapBackupDir?: string; creatorKeymap?: string[][] }
+  | {
+      kind: 'init';
+      sdkEntry: string;
+      keymapBackupDir?: string;
+      creatorKeymap?: string[][];
+      creatorKeymapPolicy?: WorkLouderCreatorKeymapPolicy;
+    }
   | { kind: 'listen' }
   | { kind: 'apply'; frame: WorkLouderCodexLightingFrame }
   // Ask the host to verify the device is still there. The SDK has no
@@ -60,6 +67,7 @@ export type WorkLouderCodexHostRequest =
   | { kind: 'probe' }
   | { kind: 'discover' }
   | { kind: 'rebind-creator-keymap'; keymap: string[][] }
+  | { kind: 'set-creator-keymap-policy'; policy: WorkLouderCreatorKeymapPolicy }
   | { kind: 'stop' };
 
 export type WorkLouderCodexHostMessage =
@@ -108,12 +116,15 @@ export function workLouderFirmwareIdlesHidRead(
 }
 
 /**
- * Another process is using the vendor HID, or our own handle was closed under
- * an in-flight RPC. That is contention, not an unplugged cable — recycling the
- * host here just storms `0xE00002E2` / `device has been closed`.
+ * IOKit distinguishes exclusive access (2c5) from authorization denial
+ * (2c1/2e2). A closed local handle is neither: it must be replaced.
  */
 export function isWorkLouderHidContention(detail: string): boolean {
-  return /0xE00002C1|0xE00002E2|device has been closed|\(iokit\/common\) not permitted/i.test(
+  return /0xE00002C5|exclusive access|device already open|device (?:is )?in use/i.test(detail);
+}
+
+export function isWorkLouderHidPermissionDenied(detail: string): boolean {
+  return /0xE00002C1|0xE00002E2|permission|not permitted|not privileged|access denied|input monitoring|operation not allowed/i.test(
     detail,
   );
 }
@@ -124,6 +135,12 @@ export function isWorkLouderIdleFirmwareError(
   deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
 ): boolean {
   if (!workLouderFirmwareIdlesHidRead(deviceType)) return false;
+  if (
+    /device has been closed/i.test(detail) ||
+    isWorkLouderHidPermissionDenied(detail) ||
+    isWorkLouderHidContention(detail)
+  )
+    return false;
   return /hid_read_timeout|device disconnected|could not read/i.test(detail);
 }
 
@@ -149,20 +166,20 @@ export function shouldRequestWorkLouderLivenessProbe(
  * unplug. Codex still treats both the timeout and a disconnected handle as a
  * dead cable.
  *
- * HID contention (`0xE00002E2`, `device has been closed`) is also not a dead
- * cable — see `isWorkLouderHidContention`.
+ * Contention and authorization denial have separate recovery paths. An
+ * explicitly closed handle, however, cannot become usable by retrying it.
  */
 
 export function isWorkLouderSdkTransportDeath(
   detail: string,
   deviceType: 'codex-micro' | 'creator-micro-2' | null | undefined,
 ): boolean {
-  if (isWorkLouderHidContention(detail)) return false;
+  if (isWorkLouderHidContention(detail) || isWorkLouderHidPermissionDenied(detail)) return false;
   if (isWorkLouderIdleFirmwareError(detail, deviceType)) return false;
   if (/hid_read_timeout/i.test(detail)) {
     return Boolean(deviceType) && !workLouderFirmwareIdlesHidRead(deviceType);
   }
-  return /cannot send, no device connected|device disconnected|hid_unavailable|0xE00002C5|error sending message|could not write|hid device disconnected/i.test(
+  return /device has been closed|cannot send, no device connected|device disconnected|hid_unavailable|error sending message|could not write|hid device disconnected/i.test(
     detail,
   );
 }
@@ -204,17 +221,22 @@ export function createWorkLouderCodexLightingFrame(
   threadCount: number = WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
 ): WorkLouderCodexLightingFrame {
   const slots = projectWorkLouderCodexSlotActivity(activity, slotSessionIds, threadCount);
-  const aggregate = slots.reduce<WorkLouderCodexSessionActivity['phase'] | null>((current, item) => {
-    if (!item) return current;
-    return current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
-      ? item.phase
-      : current;
-  }, null);
+  const aggregate = slots.reduce<WorkLouderCodexSessionActivity['phase'] | null>(
+    (current, item) => {
+      if (!item) return current;
+      return current === null || PHASE_PRIORITY[item.phase] > PHASE_PRIORITY[current]
+        ? item.phase
+        : current;
+    },
+    null,
+  );
 
   return {
     ambient: aggregate ? ambientForPhase(aggregate) : { ...OFF_SIDE },
     keys: aggregate ? keysForPhase(aggregate) : { ...OFF_SIDE },
-    threads: Array.from({ length: threadCount }, (_, id) => threadForActivity(id, slots[id])),
+    threads: Array.from({ length: threadCount }, (_, id) =>
+      threadForActivity(id, slots[id], Boolean(slotSessionIds?.[id])),
+    ),
   };
 }
 
@@ -266,7 +288,7 @@ export function foldOrcaWorkerActivityOntoLeads(
       changed = true;
     }
   }
-  return changed ? next : activity as WorkLouderCodexSessionActivity[];
+  return changed ? next : (activity as WorkLouderCodexSessionActivity[]);
 }
 
 function lightingActivityOrNull(
@@ -371,9 +393,9 @@ export function rewriteBareWorkLouderNotifyJson(data: string): string | null {
 export function isFailedWorkLouderRpcEnvelope(result: unknown): boolean {
   return Boolean(
     result &&
-      typeof result === 'object' &&
-      !Array.isArray(result) &&
-      (result as { ok?: unknown }).ok === false,
+    typeof result === 'object' &&
+    !Array.isArray(result) &&
+    (result as { ok?: unknown }).ok === false,
   );
 }
 
@@ -416,7 +438,10 @@ export function unwrapWorkLouderDeviceStatus(result: unknown): {
   const record = result as Record<string, unknown>;
   if (record.ok === false) return {};
   const source =
-    record.ok === true && record.value && typeof record.value === 'object' && !Array.isArray(record.value)
+    record.ok === true &&
+    record.value &&
+    typeof record.value === 'object' &&
+    !Array.isArray(record.value)
       ? (record.value as Record<string, unknown>)
       : record;
   const firmwareVersion =
@@ -550,6 +575,23 @@ export function isCindyExclusiveAgentLayer(layer: WorkLouderKeymapLayer | undefi
   );
 }
 
+/**
+ * A Creator layer that already contains Work Louder agent keys belongs to a
+ * native owner (currently ChatGPT) or to an existing Cindy session. Replacing
+ * it would silently remove user controls such as KC_RALT (Wispr Flow) and the
+ * onboard clear-composer macro. Only a factory layer with no agent keys is
+ * safe for Cindy to claim wholesale.
+ */
+export function shouldPreserveCreatorMicro2Keymap(
+  layer: WorkLouderKeymapLayer | undefined,
+): boolean {
+  const keymap = layer?.layout?.keymap;
+  if (!Array.isArray(keymap)) return false;
+  const codes = keymap.flat().filter((code): code is string => typeof code === 'string');
+  const hasAgentKey = codes.some((code) => code.startsWith('KV_OAI_'));
+  return hasAgentKey;
+}
+
 export function isCindyExclusiveAgentKeymap(
   text: string,
   profileIndex = 0,
@@ -642,9 +684,7 @@ const CREATOR_KEYMAP_BACKUP_ID_MAX = 64;
  */
 export function creatorMicro2KeymapBackupFileName(deviceId?: string | null): string {
   const sanitized = sanitizeCreatorKeymapBackupId(deviceId);
-  return sanitized
-    ? `keymap-backup-${sanitized}.json`
-    : CREATOR_MICRO_2_KEYMAP_BACKUP_FILE;
+  return sanitized ? `keymap-backup-${sanitized}.json` : CREATOR_MICRO_2_KEYMAP_BACKUP_FILE;
 }
 
 /** Per-occupancy snapshot restored when Cindy releases the board. */
@@ -655,7 +695,10 @@ export function creatorMicro2KeymapSessionFileName(deviceId?: string | null): st
 
 function sanitizeCreatorKeymapBackupId(deviceId: string | null | undefined): string {
   if (typeof deviceId !== 'string') return '';
-  const trimmed = deviceId.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const trimmed = deviceId
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
   return trimmed.slice(0, CREATOR_KEYMAP_BACKUP_ID_MAX);
 }
 
@@ -840,6 +883,7 @@ function isLightingVisibleActivity(activity: WorkLouderCodexSessionActivity): bo
   return (
     activity.phase === 'running' ||
     activity.phase === 'needs-interaction' ||
+    activity.phase === 'error' ||
     activity.attention === true
   );
 }
@@ -867,13 +911,15 @@ function keysForPhase(phase: WorkLouderCodexSessionActivity['phase']): WorkLoude
 function threadForActivity(
   id: number,
   activity: WorkLouderCodexSessionActivity | undefined,
+  assigned = false,
 ): WorkLouderThreadLighting {
   if (!activity) {
     return {
       id,
-      color: 0,
-      brightness: 0,
-      effect: WorkLouderLightingEffect.Off,
+      // Assignment outlives transient activity, which clears on acknowledgement.
+      color: assigned ? 0xffffff : 0,
+      brightness: assigned ? 0.35 : 0,
+      effect: assigned ? WorkLouderLightingEffect.Solid : WorkLouderLightingEffect.Off,
       speed: 0,
       syncKeysLighting: false,
       syncAmbientLighting: false,

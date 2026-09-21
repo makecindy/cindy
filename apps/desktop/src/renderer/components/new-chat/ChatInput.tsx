@@ -7501,8 +7501,12 @@ export function ChatInput({
       }
       if (action.type !== 'command') return false;
       switch (action.commandId) {
+        case 'composer.queue':
         case 'composer.submit':
           void handleClickSend();
+          return true;
+        case 'composer.steer':
+          void handleClickSend('steer');
           return true;
         case 'composer.toggleFastMode':
           void handleFastModeChange(!composerSelection.display.fastMode);

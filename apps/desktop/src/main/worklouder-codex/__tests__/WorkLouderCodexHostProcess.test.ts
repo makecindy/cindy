@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   classifyConnectionError,
+  describeLightingRpcFailure,
   isOptionalDeviceStatusError,
   postDeviceStatus,
 } from '../workLouderCodexHostProcess.js';
@@ -39,6 +40,17 @@ describe('Work Louder connection error classification', () => {
     setPlatform('linux');
 
     expect(classifyConnectionError('not permitted')).toBe('connection-failed');
+  });
+});
+
+describe('Work Louder lighting RPC failures', () => {
+  it('keeps the device error that caused a rejected lighting envelope', () => {
+    expect(
+      describeLightingRpcFailure('rgbcfg', {
+        ok: false,
+        error: { message: 'device has been closed' },
+      }),
+    ).toBe('Work Louder rgbcfg lighting RPC returned ok=false: device has been closed');
   });
 });
 

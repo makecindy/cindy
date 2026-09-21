@@ -4164,9 +4164,17 @@
             "name": "新しいタスクで続ける",
             "description": "現在のタスクから新しいタスクを作成します"
           },
+          "forkThread": {
+            "name": "新しいタスクで続ける",
+            "description": "現在のタスクから新しいタスクを作成します"
+          },
           "composer.submit": {
             "name": "メッセージを送信",
-            "description": "入力中のメッセージを送信します。承認待ちがあれば承認します"
+            "description": "メッセージを送信（実行中はキューに追加）、または保留中のリクエストを承認"
+          },
+          "composer.steer": {
+            "name": "タスクをステア",
+            "description": "実行中のタスクに入力中のメッセージで指示します"
           },
           "feedback": {
             "name": "フィードバックを送信",
@@ -4187,6 +4195,10 @@
             "name": "タスクをアーカイブ",
             "description": "現在のタスクをアーカイブします"
           },
+          "archiveThread": {
+            "name": "タスクをアーカイブ",
+            "description": "現在のタスクをアーカイブします"
+          },
           "newTask": {
             "name": "新しいタスク",
             "description": "新しいタスクを開始します"
@@ -4196,6 +4208,10 @@
             "description": "新しいブラウザタブを開きます"
           },
           "toggleTaskPin": {
+            "name": "ピン留めの切り替え",
+            "description": "現在のタスクをピン留め、または解除します"
+          },
+          "toggleThreadPin": {
             "name": "ピン留めの切り替え",
             "description": "現在のタスクをピン留め、または解除します"
           },
@@ -4331,7 +4347,7 @@
           },
           "autoDim": {
             "label": "自動消灯",
-            "description": "操作がないとライトを消し、キーボードの使用またはタスク状態の変化で復帰します。",
+            "description": "操作がないと待機中のライトを消します。実行中や確認が必要なセッションのライトは点灯を続けます。",
             "aria": "Codex Micro の自動消灯時間を選択",
             "options": {
               "off": "オフ",
@@ -4352,6 +4368,7 @@
             "description": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
             "descriptions": {
               "sidebar": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
+              "pinned": "ピン留めしたセッションだけをサイドバー順に割り当てます。残りのキーは空きのままです。",
               "last-sent": "タスクキーは基板上の順で、最後にメッセージを送ったタスクに対応します。",
               "priority": "タスクキーは基板上の順で、優先タスクに対応します。",
               "custom": "各タスクキーは指定したタスクを開きます。"
@@ -4359,6 +4376,7 @@
             "value": "サイドバー順",
             "options": {
               "sidebar": "サイドバー順",
+              "pinned": "ピン留めしたセッションのみ",
               "last-sent": "最近のタスク",
               "priority": "優先タスク",
               "custom": "カスタム"
@@ -4479,6 +4497,16 @@
               "toggle": {
                 "aria": "この Cindy で Creator Micro 2 を使う"
               },
+              "keymapPolicy": {
+                "label": "Creator キーマップの管理",
+                "description": "Cindy に Creator レイヤーの管理を許可するか、キーマップを変更せずに使うかを選びます。",
+                "options": {
+                  "managed": "標準",
+                  "preserve": "マップを保護"
+                },
+                "managedWarning": "標準モードでは、Cindy がデバイスを使用中にセッションキーのレイヤーを設定し、終了時に元のマップに戻します。",
+                "preserveWarning": "保護モードは読み取り専用です。ネイティブの KV_OAI 操作、ライト、セッション操作を利用できますが、keymap.json には書き込みません。ChatGPT/Codex の起動中はそちらを優先し、終了後に Cindy が引き継ぎます。"
+              },
               "descriptions": {
                 "connecting": "Cindy が Work Louder デバイスサービスを起動しています。",
                 "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
@@ -4498,6 +4526,7 @@
               "source": {
                 "descriptions": {
                   "sidebar": "タスクキーは基板上の順で、サイドバーの上から下のタスクに対応します。",
+                  "pinned": "ピン留めしたセッションだけをサイドバー順に割り当てます。残りのキーは空きのままです。",
                   "last-sent": "タスクキーは基板上の順で、最後にメッセージを送ったタスクに対応します。",
                   "priority": "タスクキーは基板上の順で、優先タスクに対応します。",
                   "custom": "各タスクキーは指定したタスクを開きます。"
@@ -8138,6 +8167,20 @@
         "railSameEngine": "{{agent}} のみ",
         "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
         "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。"
+      },
+      "fallback": {
+        "fallback": "フォールバック",
+        "title": "フォールバックモデル",
+        "pickHint": "フォールバックとして追加するモデルを選びます。",
+        "desc": "メインモデルが失敗または上限に達したとき、次のモデルに切り替えます。",
+        "mainLabel": "メイン",
+        "fallbackLabel": "フォールバック",
+        "remove": "削除",
+        "back": "戻る",
+        "enabled": "オン",
+        "disabled": "オフ",
+        "exhausted": "上限に達しました",
+        "exhaustedUntil": "{{time}} に回復"
       }
     },
     "permissionSelector": {

@@ -22,6 +22,7 @@
     "./device-link-contract": "./src/deviceLinkContract.ts",
     "./device-responsiveness": "./src/deviceResponsiveness.ts",
     "./error-redaction": "./src/errorRedaction.ts",
+    "./fallback-chain": "./src/fallbackChain.ts",
     "./expanded-block-memory": "./src/expandedBlockMemory.ts",
     "./file-browser": "./src/fileBrowser.ts",
     "./file-browser-grid": "./src/fileBrowserGrid.ts",

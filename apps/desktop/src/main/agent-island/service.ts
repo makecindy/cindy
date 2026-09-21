@@ -172,7 +172,7 @@ export interface AgentIslandServiceDeps {
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
-  /** Optional process-local consumer for task activity, such as hardware status lighting. */
+  /** Hardware status projection; reconnecting turns show error without changing canonical activity. */
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
 }
 
@@ -1549,8 +1549,17 @@ export class AgentIslandService {
   }
 
   private notifySessionActivityConsumer(activity: readonly AgentIslandSessionActivity[]): void {
+    if (!this.deps.onSessionActivityChange) return;
     try {
-      this.deps.onSessionActivityChange?.(activity);
+      // A reconnect is still a running turn for lifecycle, notifications and remote
+      // clients, but hardware must show the connection failure until progress resumes.
+      // Use the state machine's retry marker, never parse localized display strings here.
+      const hardwareActivity = activity.map((snapshot) =>
+        snapshot.phase === 'running' && this.state.sessions.get(snapshot.sessionId)?.reconnectStatus
+          ? { ...snapshot, phase: 'error' as const }
+          : snapshot,
+      );
+      this.deps.onSessionActivityChange(hardwareActivity);
     } catch (error) {
       log.warn('process-local session activity consumer failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -1560,13 +1569,10 @@ export class AgentIslandService {
 
   private publish(): void {
     const now = Date.now();
-    if (!this.enabledSynced) {
-      this.mutedCompletionSoundSessionIds.clear();
-      this.clearStreamingPreviewPublishTimer();
-      this.clearPublishTimer();
-      return;
-    }
-    if (!this.enabled) {
+    // Preference readiness controls the native island UI, not task activity.
+    // Local/no-account startup may never sync that UI preference; hardware and
+    // sidebar consumers must still receive live events and terminal expiry updates.
+    if (!this.enabledSynced || !this.enabled) {
       this.mutedCompletionSoundSessionIds.clear();
       this.clearStreamingPreviewPublishTimer();
       this.lastSoundDisplayState = withAgentIslandConfig(
@@ -1579,7 +1585,7 @@ export class AgentIslandService {
       // Windows / headless / 用户关掉岛面时,仍要按 TTL 把完整会话迁到轻量未读账本。
       // 不排 timer 的话,终态后再无事件,活动文本会无限留在 state.sessions。
       this.scheduleNextPublish(now);
-      if (!this.hiddenPublished) {
+      if (this.enabledSynced && !this.hiddenPublished) {
         if (this.nativeHost.suspend) {
           this.nativeHost.suspend();
         } else {

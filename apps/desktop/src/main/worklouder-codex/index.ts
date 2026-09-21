@@ -54,6 +54,7 @@ import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingCont
 import { WorkLouderAccessories, WorkLouderLayoutPreviewSession } from './accessories.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
 import { CodexMicroGuardService } from './CodexMicroGuardService.js';
+import { listCodexMicroGuardProcesses } from './codexMicroGuardProcesses.js';
 import { createCodexMicroGuardIpc } from './codexMicroGuardIpc.js';
 import { createWorkLouderCodexActiveWindowRouter } from './actionWindow.js';
 import { createWorkLouderCodexSystemFrontmostInput } from './systemFrontmostInput.js';
@@ -163,6 +164,38 @@ const workLouderAccessories = new WorkLouderAccessories(workLouderCodexLightingC
   hostClient.probe();
 });
 
+let nativeWorkLouderOwnerTimer: ReturnType<typeof setInterval> | null = null;
+
+async function refreshNativeWorkLouderOwner(): Promise<void> {
+  try {
+    const processes = await listCodexMicroGuardProcesses();
+    const present = processes.length > 0;
+    // Enforce the lease before projecting settings. This closes a race where
+    // a host started while ChatGPT was closed could keep the vendor HID after
+    // ChatGPT appeared.
+    hostClient.setNativeOwnerPresent(present);
+    workLouderAccessories.setNativeOwnerPresent(present);
+  } catch (error) {
+    log.debug('Could not refresh native Work Louder owner state', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function startNativeWorkLouderOwnerPolling(): void {
+  if (nativeWorkLouderOwnerTimer) return;
+  if (process.platform !== 'darwin') {
+    hostClient.setNativeOwnerPresent(false);
+    workLouderAccessories.setNativeOwnerPresent(false);
+    return;
+  }
+  void refreshNativeWorkLouderOwner();
+  nativeWorkLouderOwnerTimer = setInterval(() => {
+    void refreshNativeWorkLouderOwner();
+  }, 2_000);
+  nativeWorkLouderOwnerTimer.unref?.();
+}
+
 const layoutPreviewSession = new WorkLouderLayoutPreviewSession();
 let layoutPreviewOwner: LayoutPreviewOwner | null = null;
 const layoutPreviewLease = createLayoutPreviewLease(
@@ -207,17 +240,15 @@ export function registerWorkLouderCodexInputDevice(): void {
       start: () => {
         registerWorkLouderCodexSettingsIpc();
       },
+      // The registry broadcasts to every adapter, including disabled models.
+      // Feed the shared controller once; it serves whichever board occupies HID.
       updateSessionActivity:
         model === 'codex-micro'
-          ? (activity) => {
-              workLouderCodexLightingController.updateSessionActivity(activity);
-            }
+          ? (activity) => workLouderCodexLightingController.updateSessionActivity(activity)
           : () => undefined,
       playWindowReveal:
         model === 'codex-micro'
-          ? () => {
-              workLouderCodexLightingController.playWindowReveal();
-            }
+          ? () => workLouderCodexLightingController.playWindowReveal()
           : undefined,
       resumeTaskSlots: async () => {
         workLouderAccessories.applySettings(model, readWorkLouderCodexSettings(model));
@@ -234,6 +265,8 @@ export function registerWorkLouderCodexInputDevice(): void {
       dispose:
         model === 'codex-micro'
           ? async () => {
+              if (nativeWorkLouderOwnerTimer) clearInterval(nativeWorkLouderOwnerTimer);
+              nativeWorkLouderOwnerTimer = null;
               await Promise.all([
                 workLouderCodexLightingController.dispose(),
                 codexMicroGuardService.dispose(),
@@ -248,6 +281,10 @@ export function registerWorkLouderCodexInputDevice(): void {
 export function registerWorkLouderCodexSettingsIpc(): void {
   if (settingsIpcRegistered) return;
   settingsIpcRegistered = true;
+  // Fail closed until the first process probe proves that ChatGPT/Codex is
+  // absent. The native owner must win even during Cindy startup.
+  hostClient.setNativeOwnerPresent(true);
+  startNativeWorkLouderOwnerPolling();
 
   // macOS can report the same HID denial while the screen is locked. The
   // client keeps that failure circuit-broken until unlock, then makes one
@@ -364,9 +401,23 @@ function dispatchRendererAction(action: WorkLouderCodexRendererAction): void {
     });
     return;
   }
-  const win = actionWindowRouter.resolve(action);
-  if (win && sendWindowMessage(win, WORKLOUDER_CODEX_ACTION_CHANNEL, action)) return;
-  if (systemFrontmostInput.handle(action)) return;
+  const rendererAction =
+    action.type === 'command'
+      ? {
+          ...action,
+          commandId:
+            action.commandId === 'toggleThreadPin'
+              ? 'toggleTaskPin'
+              : action.commandId === 'archiveThread'
+                ? 'archiveTask'
+                : action.commandId === 'forkThread'
+                  ? 'forkTask'
+                  : action.commandId,
+        }
+      : action;
+  const win = actionWindowRouter.resolve(rendererAction);
+  if (win && sendWindowMessage(win, WORKLOUDER_CODEX_ACTION_CHANNEL, rendererAction)) return;
+  if (systemFrontmostInput.handle(rendererAction)) return;
   log.debug('Codex Micro action skipped because no ready Cindy window can receive it', {
     type: action.type,
   });
