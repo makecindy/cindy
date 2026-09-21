@@ -13,6 +13,10 @@ let current: DataOwnerGeneration = {
   generation: 0,
 };
 
+type DataOwnerGenerationListener = () => void;
+
+const listeners = new Set<DataOwnerGenerationListener>();
+
 /** Publish the renderer data owner synchronously, before React state updates settle. */
 export function setDataOwnerGeneration(dataOwnerId: string | null, generation?: number): void {
   const nextGeneration =
@@ -24,6 +28,13 @@ export function setDataOwnerGeneration(dataOwnerId: string | null, generation?: 
     dataOwnerId,
     generation: nextGeneration,
   };
+  for (const listener of [...listeners]) listener();
+}
+
+/** Subscribe to owner changes that must cancel in-flight owner-scoped work. */
+export function subscribeDataOwnerGeneration(listener: DataOwnerGenerationListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 export function getDataOwnerGeneration(): DataOwnerGeneration {
