@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>app.cindy.passport-helper</string>
+<key>CFBundleName</key><string>Cindy Passport</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Connect your Cindy Passport to display task status and open tasks.</string>
+<key>LSUIElement</key><true/>
+</dict></plist>
