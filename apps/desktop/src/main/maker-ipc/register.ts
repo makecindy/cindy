@@ -119,6 +119,7 @@ import {
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
   planUserRuntimeModelSwitch,
+  shouldSkipColdPiWindowRehydration,
 } from '../../shared/runtimeModelSwitchGate.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
@@ -16104,6 +16105,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       let liveSessionBeforeRouteChange = maker.getSession(sessionId);
       let rehydratedColdPiRuntime: typeof liveSessionBeforeRouteChange = undefined;
+      // 冷 Pi 但没做活进程窗口核验（本轮新增：目标窗口对已知占用有余量、压力预检证明
+      // 核实不可能改变结论，于是跳过了冷启动核实）：目标 route 照常落定，由下一次发送
+      // 按目标窗口懒创建；apply 之后的终态活进程核验必须同步跳过，否则只会换成
+      // 'Pi target runtime could not be verified'。
+      let coldPiRouteWithoutLiveWindowCheck = false;
       const targetProviderId =
         effectiveProviderId === undefined
           ? (previousRuntime.pendingCredentialSwitch?.providerId ?? currentProviderId)
@@ -16170,25 +16176,64 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
         if (!liveSessionBeforeRouteChange) {
-          try {
-            await rehydrateColdPiRuntimeForWindowVerification(sessionId);
-          } catch {
-            throwIpcError(
-              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-              'Pi current runtime could not be verified; runtime selection was not changed',
-            );
+          // 冷启动核实(2~3s)只在它可能改变决策时才做：目标窗口对**已知占用**已到
+          // danger/overflow 才可能需要缩窗交接 / 二次确认；有余量时任何「当前窗口」
+          // 读数都不会触发交接（见 assessRuntimeModelSwitchGate 的 fail-open 矩阵），
+          // 让用户白等一次 Pi 冷启动就是纯卡顿（2026-09-21 实报）。占用只信 DB 里
+          // 最后一次上报值（活 runtime 不存在时的唯一事实源）；缺值时保守走原核实。
+          // 无原生会话的冷 Pi 不在本预检范围内：那种情况维持既有 fail-closed 语义。
+          const coldPiPersistedContextTokens =
+            typeof runtimeStatus.contextTokens === 'number' &&
+            Number.isFinite(runtimeStatus.contextTokens) &&
+            runtimeStatus.contextTokens >= 0
+              ? runtimeStatus.contextTokens
+              : null;
+          const coldPiTargetContextWindow = lookupVerifiedContextWindow(
+            (_agentKind, modelId, pid) =>
+              resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId),
+            model,
+            targetRouteProviderId,
+            'pi',
+          );
+          const skipColdPiWindowVerification =
+            !!runtimeStatus.sdkSessionId &&
+            shouldSkipColdPiWindowRehydration({
+              contextTokens: coldPiPersistedContextTokens,
+              targetContextWindow: coldPiTargetContextWindow,
+            });
+          if (skipColdPiWindowVerification) {
+            coldPiRouteWithoutLiveWindowCheck = true;
+            log.info('set-model: skipped cold Pi window verification', {
+              sessionId,
+              reason: 'target-window-has-headroom',
+              contextTokens: coldPiPersistedContextTokens,
+              targetContextWindow: coldPiTargetContextWindow,
+              fromModel: currentRuntimeModel ?? null,
+              toModel: model,
+              currentProviderId,
+              nextProviderId: targetRouteProviderId,
+            });
+          } else {
+            try {
+              await rehydrateColdPiRuntimeForWindowVerification(sessionId);
+            } catch {
+              throwIpcError(
+                localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+                'Pi current runtime could not be verified; runtime selection was not changed',
+              );
+            }
+            liveSessionBeforeRouteChange = maker.getSession(sessionId);
+            if (!liveSessionBeforeRouteChange) {
+              throwIpcError(
+                localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+                'Pi current runtime could not be verified; runtime selection was not changed',
+              );
+            }
+            rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
+            currentRuntimeModel = liveSessionBeforeRouteChange.model;
+            runtimeRouteChanged =
+              currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
           }
-          liveSessionBeforeRouteChange = maker.getSession(sessionId);
-          if (!liveSessionBeforeRouteChange) {
-            throwIpcError(
-              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-              'Pi current runtime could not be verified; runtime selection was not changed',
-            );
-          }
-          rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
-          currentRuntimeModel = liveSessionBeforeRouteChange.model;
-          runtimeRouteChanged =
-            currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
         }
       }
       let targetContextWindow: number | undefined;
@@ -16577,7 +16622,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           runtimeAgentKind === 'pi' &&
           runtimeRouteChanged &&
           result.status !== 'deferred' &&
-          !modelWindowRebuilt
+          !modelWindowRebuilt &&
+          !coldPiRouteWithoutLiveWindowCheck
         ) {
           if (!piSessionAfterRouteChange) {
             restoreControlStores();

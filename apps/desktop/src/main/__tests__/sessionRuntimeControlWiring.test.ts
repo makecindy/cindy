@@ -998,6 +998,36 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('Pi current runtime could not be verified');
   });
 
+  it('skips the cold Pi window rehydration when the target window has headroom', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 冷启动核实(2~3s)必须经压力预检：目标窗口对**已知占用**有余量时不再拉起运行时，
+    // 路由照常落定、下一次发送按目标窗口懒重建；danger/overflow 仍走原核实路径。
+    const pressurePreflight = setModel.indexOf('shouldSkipColdPiWindowRehydration({');
+    const rehydrate = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
+    );
+    expect(pressurePreflight).toBeGreaterThan(-1);
+    expect(pressurePreflight).toBeLessThan(rehydrate);
+    expect(setModel).toContain('coldPiPersistedContextTokens');
+    expect(setModel).toContain('set-model: skipped cold Pi window verification');
+    expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
+    // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。
+    const finalBlockStart = setModel.indexOf('const piSessionAfterRouteChange =');
+    const finalVerification = setModel.indexOf(
+      'Pi target runtime could not be verified',
+      finalBlockStart,
+    );
+    expect(finalBlockStart).toBeGreaterThan(-1);
+    expect(finalVerification).toBeGreaterThan(finalBlockStart);
+    expect(setModel.slice(finalBlockStart, finalVerification)).toContain(
+      '!coldPiRouteWithoutLiveWindowCheck',
+    );
+  });
+
   it('closes a cold Pi runtime when route persistence fails after rehydrate', () => {
     const setModel = handlerBody(
       registerSource,
