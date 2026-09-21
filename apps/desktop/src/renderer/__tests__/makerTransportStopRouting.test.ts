@@ -16,14 +16,15 @@ beforeEach(() => {
 
 function stubElectron() {
   const stopAgentTask = vi.fn().mockResolvedValue('stopped');
+  const listSessionBackgroundTasks = vi.fn().mockResolvedValue({ tasks: [] });
   const invoke = vi.fn().mockResolvedValue('stopped');
   vi.stubGlobal('window', {
     electronAPI: {
-      maker: { stopAgentTask },
+      maker: { stopAgentTask, listSessionBackgroundTasks },
       deviceLink: { invoke },
     },
   });
-  return { stopAgentTask, invoke };
+  return { stopAgentTask, listSessionBackgroundTasks, invoke };
 }
 
 const sess = (id: string): never => ({ id }) as never;
@@ -68,6 +69,41 @@ describe('stopAgentTaskFor 路由', () => {
 
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:agent-task:stop', ['remote-1', 'bash-9']);
     expect(stopAgentTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('listSessionBackgroundTasksFor 路由', () => {
+  it('本机会话走本地 IPC,远程镜像会话隧道到被控端(运行集信号不再在控制端关闭)', async () => {
+    const { listSessionBackgroundTasks, invoke } = stubElectron();
+    const { listSessionBackgroundTasksFor } = await import('@/lib/makerTransport');
+
+    await listSessionBackgroundTasksFor('local-1');
+    expect(listSessionBackgroundTasks).toHaveBeenCalledWith('local-1');
+    expect(invoke).not.toHaveBeenCalled();
+
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('remote-1')]);
+    const snapshot = {
+      tasks: [{ taskId: 'bash-9', taskType: 'local_bash', provider: 'pi' }],
+      pendingContinuations: 0,
+    };
+    invoke.mockResolvedValue(snapshot);
+
+    await expect(listSessionBackgroundTasksFor('remote-1')).resolves.toEqual(snapshot);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session-background-tasks:list', [
+      'remote-1',
+    ]);
+    expect(listSessionBackgroundTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('老被控端无该 channel / 隧道失败:降级空表,不透传异常(控制端保持现状不误报)', async () => {
+    const { invoke } = stubElectron();
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('remote-2')]);
+    invoke.mockRejectedValue(new Error('DEVICE_LINK_CHANNEL_NOT_ALLOWED'));
+    const { listSessionBackgroundTasksFor } = await import('@/lib/makerTransport');
+
+    await expect(listSessionBackgroundTasksFor('remote-2')).resolves.toEqual({ tasks: [] });
   });
 });
 

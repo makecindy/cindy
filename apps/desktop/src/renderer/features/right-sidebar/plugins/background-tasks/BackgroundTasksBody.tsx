@@ -205,9 +205,16 @@ function workflowAgentCounts(
  *  仍然隐藏的只有「看起来是远程镜像、当下又拿不到设备」这一种(relay 注册表未水合):
  *  那条路径上本地调用会假成功,不给按钮。粘滞判定保证瞬断窗口不误判为本机。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
+  // 远程镜像会话：能不能停由**被控端的 channel** 决定（PI 后台命令自 #4700 起可停），
+  // 控制端不按 provider 预筛；停不掉时由 StopButton 把「停止未确认」就地呈现。
+  const providerCanStop =
+    item.provider === 'claude-code' ||
+    (item.provider === 'pi' &&
+      Boolean(sessionId) &&
+      isRemoteSessionSticky(sessionId as string));
   return (
     item.status === 'running' &&
-    item.provider === 'claude-code' &&
+    providerCanStop &&
     Boolean(item.update?.taskId) &&
     canStopAgentTask(sessionId)
   );

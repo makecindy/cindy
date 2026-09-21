@@ -22,7 +22,12 @@ import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
-import { canStopAgentTask, getWorkflowProgressFor, stopAgentTaskFor } from '@/lib/makerTransport';
+import {
+  canStopAgentTask,
+  getWorkflowProgressFor,
+  isRemoteSessionSticky,
+  stopAgentTaskFor,
+} from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
@@ -311,8 +316,11 @@ export function AgentTaskCard({
   useEffect(() => {
     setStopFailed(false);
   }, [status, update?.taskId]);
+  // 远程镜像会话：能不能停由**被控端的 channel** 决定（PI 后台命令自 #4700 起可停），
+  // 控制端不按 provider 预筛；停不掉时由 catch 里的「停止未确认」就地反馈。
+  const remoteStickyForStop = Boolean(sessionId) && isRemoteSessionSticky(sessionId as string);
   const providerCanStop = update?.provider === 'claude-code'
-    || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
+    || (update?.provider === 'pi' && (update.taskType === 'pi_subagent' || remoteStickyForStop));
   const canStop =
     status === 'running' &&
     Boolean(update?.taskId) &&

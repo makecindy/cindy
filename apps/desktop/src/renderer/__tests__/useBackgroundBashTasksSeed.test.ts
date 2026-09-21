@@ -3,7 +3,11 @@
 /**
  * useBackgroundBashTasks 快照水合接线:候选集在发起 IPC 前捕获并透传给
  * seedBackgroundTaskSnapshots(stale running 对账);空快照 + 空候选不打扰
- * store;远程镜像会话整条链路关闭。
+ * store。
+ *
+ * device-link 远程镜像会话同样拉快照 —— 路由交给 listSessionBackgroundTasksFor
+ * (它按粘滞归属决定本机 IPC 还是隧道;路由本身在 makerTransportStopRouting 覆盖),
+ * 本 hook 只负责「远程也不关闭运行集信号」+「粘滞远程只 seed 不对账」。
  */
 
 import { renderHook, waitFor } from '@testing-library/react';
@@ -23,10 +27,17 @@ vi.mock('@/lib/makerChatStore', () => ({
   },
 }));
 
+const transport = vi.hoisted(() => ({
+  listSessionBackgroundTasksFor: vi.fn(),
+  stopAgentTaskFor: vi.fn(),
+}));
+
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSession: (sessionId: string) => sessionId.startsWith('remote-'),
   isRemoteSessionSticky: (sessionId: string) =>
     sessionId.startsWith('remote-') || mocks.stickyRemoteIds.has(sessionId),
+  listSessionBackgroundTasksFor: transport.listSessionBackgroundTasksFor,
+  stopAgentTaskFor: transport.stopAgentTaskFor,
 }));
 
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
@@ -38,6 +49,7 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     // clearAllMocks 不清 mockReturnValue,显式回位空候选集,避免用例间串状态。
     mocks.captureRunningClaudeTaskIds.mockReturnValue(new Set<string>());
     listTasks = vi.fn(async () => ({ tasks: [] }));
+    transport.listSessionBackgroundTasksFor.mockImplementation(listTasks);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       maker: { listSessionBackgroundTasks: listTasks },
     };
@@ -72,10 +84,10 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
   });
 
-  it('远程镜像会话:不拉快照也不对账', async () => {
+  it('远程镜像会话:照拉快照(隧道由 helper 负责),但不捕获对账候选集', async () => {
     renderHook(() => useBackgroundBashTasks('remote-s3', new Map(), true));
-    await Promise.resolve();
-    expect(listTasks).not.toHaveBeenCalled();
+    await waitFor(() => expect(transport.listSessionBackgroundTasksFor).toHaveBeenCalledWith('remote-s3'));
+    // 远程快照有老端降级空表窗口,不可当权威 —— 只 seed 不对账。
     expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
   });
 
@@ -113,12 +125,13 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
     expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
 
-    // 快照非空(理论分支:本机撞 id)同样整体丢弃 —— 本机来源快照对远程会话
-    // 无意义,响应侧粘滞复查统一拦截,不 seed。
+    // 快照非空:仍然 seed —— 粘滞远程会话的常规水合就走这条(不 non-空就无法
+    // 把被控端运行中的任务带回控制端);代价是本机撞 id 的理论分支也会 seed,
+    // 与后台任务面板（BackgroundTasksBody）同款取舍。
     listTasks.mockResolvedValueOnce({ tasks: [{ taskId: 't-new' }] });
     renderHook(() => useBackgroundBashTasks(sid, new Map(), false));
     await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
     await Promise.resolve();
-    expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
+    expect(mocks.seedBackgroundTaskSnapshots).toHaveBeenCalledWith(sid, [{ taskId: 't-new' }], undefined);
   });
 });
