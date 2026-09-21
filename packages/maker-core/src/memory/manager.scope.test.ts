@@ -370,6 +370,44 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     manager.dispose();
   });
 
+  it('listScopes 只读取 maker-memory 下的 scope 目录', async () => {
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => 'cloud:scope-test:1',
+      sqliteFactory: () => { throw new Error('listScopes must not open sqlite'); },
+      agents: {},
+      logger: noopLogger,
+    });
+
+    await writeFile(path.join(rootA, 'ghost-unread.json'), '{}');
+    await mkdir(path.join(rootA, 'maker-contacts'));
+    await mkdir(path.join(rootA, 'maker-memory'));
+    await writeFile(path.join(rootA, 'maker-memory', 'not-a-scope.md'), '# index');
+    const localDir = path.join(rootA, 'maker-memory', SCOPE_DIR);
+    const remoteDirName = 'ssh-prod-0123456789abcdef';
+    await mkdir(localDir, { recursive: true });
+    await mkdir(path.join(rootA, 'maker-memory', remoteDirName), { recursive: true });
+    await writeFile(path.join(localDir, 'meta.json'), JSON.stringify({ absPath: WORKDIR }));
+
+    const scopes = await manager.listScopes();
+    expect(scopes).toHaveLength(2);
+    expect(scopes).toEqual([
+      {
+        dirName: SCOPE_DIR,
+        kind: 'local',
+        scopeKey: WORKDIR,
+        displayPath: WORKDIR,
+      },
+      {
+        dirName: remoteDirName,
+        kind: 'remote',
+        scopeKey: null,
+        displayPath: null,
+      },
+    ]);
+  });
+
   // ── 异步竞态 (review #2388 P1) ──────────────────────────────────────────
 
   it('getStore 异步 init 期间 owner 切换 → 抛 not-ready 且旧 store 不入池', async () => {

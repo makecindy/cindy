@@ -31,8 +31,11 @@ import {
   type SearchOptions,
   type WriteOptions,
   type WriteResult,
+  type MemoryEvent,
+  type MemoryTrashEntry,
 } from './types.js';
 import type { Logger } from '../interfaces/logger.js';
+import { analyzeRecommendations, computeInsights, type MemoryInsights, type MemoryRecommendation } from './analysis.js';
 
 export interface MakerMemoryStoreDeps {
   /** 已就绪的目录绝对路径 (manager 算好) */
@@ -192,6 +195,17 @@ export class MakerMemoryStore {
         error: String(e),
       });
     }
+    // P2: 事件日志
+    const op = opts.mode === 'update' ? 'update' : opts.mode === 'append' ? 'append' : 'create';
+    this.fts.appendEvent({
+      ts: new Date().toISOString(),
+      op,
+      actor: 'user',
+      filename: result.filename,
+      type: opts.type,
+      title: opts.title,
+      description: opts.description,
+    });
     return result;
   }
 
@@ -209,9 +223,117 @@ export class MakerMemoryStore {
         error: String(e),
       });
     }
+    const parsed = parseFilename(filename);
+    if (parsed) {
+      this.fts.appendEvent({
+        ts: new Date().toISOString(),
+        op: 'delete',
+        actor: 'user',
+        filename,
+        type: parsed.type,
+        title: '',
+        description: '',
+      });
+    }
   }
 
   /** 仅清空一种 memory；给 agent 私有的系统记忆（如 Pi digest）使用。 */
+
+  // ── P2: 软删除 / 回收站 / 恢复 / 历史 ──────────────────────────────────
+
+  /**
+   * P2: 软删除 — 移入 .trash/ 子目录而不是 unlink (review: 此前误调
+   * storage.delete 实际永久删除; 现在 storage.softDelete 用 rename 保留文件,
+   * listTrash/restore 才真的有内容可恢复)。
+   */
+  async softDelete(filename: string): Promise<void> {
+    this.assertScopeOk();
+    await this.init();
+    const rec = await this.storage.read(filename);
+    await this.storage.softDelete(filename);
+    this.assertScopeOk();
+    try { this.fts.delete(filename); } catch { /* will rebuild */ }
+    const parsed = parseFilename(filename);
+    this.fts.appendEvent({
+      ts: new Date().toISOString(),
+      op: 'delete' as const,
+      actor: 'user',
+      filename,
+      type: parsed?.type ?? rec.frontmatter.type,
+      title: rec.frontmatter.title,
+      description: rec.frontmatter.description,
+    });
+  }
+
+  /** P2: 列出回收站内容 */
+  async listTrash(): Promise<MemoryTrashEntry[]> {
+    this.assertScopeOk();
+    await this.init();
+    return this.storage.listTrash();
+  }
+
+  /** P2: 从回收站恢复条目 */
+  async restore(filename: string): Promise<WriteResult> {
+    this.assertScopeOk();
+    await this.init();
+    const result = await this.storage.restore(filename);
+    this.assertScopeOk();
+    try {
+      const rec = await this.storage.read(result.filename);
+      this.assertScopeOk();
+      this.fts.upsert(rec);
+    } catch { /* will rebuild */ }
+    this.fts.appendEvent({
+      ts: new Date().toISOString(),
+      op: 'restore' as const,
+      actor: 'user',
+      filename: result.filename,
+      type: parseFilename(result.filename)?.type ?? 'user' as const,
+      title: '',
+      description: '',
+    });
+    return result;
+  }
+
+  /** P2: 查询单条记忆的变更历史 */
+  async history(filename: string): Promise<MemoryEvent[]> {
+    this.assertScopeOk();
+    await this.init();
+    return this.fts.listEvents(filename);
+  }
+
+  /** P3: 最近全局事件 */
+  async recentEvents(limit = 50): Promise<MemoryEvent[]> {
+    this.assertScopeOk();
+    await this.init();
+    return this.fts.listRecentEvents(limit);
+  }
+
+
+  /** P3: 计算洞察数据 */
+  async insights(): Promise<MemoryInsights> {
+    this.assertScopeOk();
+    await this.init();
+    const entries = await this.storage.list();
+    const events = await this.fts.listRecentEvents(50);
+    return computeInsights(entries, events);
+  }
+
+  /** P3: 生成推荐列表 */
+  async recommendations(): Promise<MemoryRecommendation[]> {
+    this.assertScopeOk();
+    await this.init();
+    const entries = await this.storage.list();
+    return analyzeRecommendations(entries);
+  }
+
+  /** P4: delta 检查 */
+  async shouldTriggerBackgroundAnalysis(threshold: number, lastAnalysisTs: string | null): Promise<boolean> {
+    if (!lastAnalysisTs) return true;
+    const delta = this.fts.eventCountSince(lastAnalysisTs);
+    return delta >= threshold;
+  }
+
   async resetType(type: MemoryType): Promise<{ removedCount: number }> {
     this.assertScopeOk();
     await this.init();

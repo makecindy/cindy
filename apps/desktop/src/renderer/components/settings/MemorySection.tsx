@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RotateCcw, Sparkles } from 'lucide-react';
+import { Database, RotateCcw, Sparkles } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -26,6 +26,7 @@ import { PiMark } from '@/components/icons/PiMark';
 import { createLogger } from '@/lib/logger';
 import { useMemorySettings } from '@/hooks/useMemorySettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { MemoryHubDialog } from './MemoryHubDialog';
 
 const log = createLogger('MemorySection');
 
@@ -82,6 +83,21 @@ export function MemorySection() {
   // 把用户刚改的乐观值或回滚状态覆盖掉。任一 slot pending 都跳过整轮 reload。
   const slotsRef = useRef(slots);
   slotsRef.current = slots;
+  const [hubOpen, setHubOpen] = useState(false);
+  const [hubBackgroundAnalysis, setHubBackgroundAnalysis] = useState(true);
+  const [hubBackgroundPending, setHubBackgroundPending] = useState(false);
+
+  const handleHubBackgroundToggle = useCallback(async (next: boolean) => {
+    setHubBackgroundPending(true);
+    try {
+      const res = await window.electronAPI.maker.memoryHubSetSettings({ backgroundAnalysis: next });
+      setHubBackgroundAnalysis(res.backgroundAnalysis);
+    } catch (err) {
+      log.warn('memoryHubSetSettings failed', err);
+    } finally {
+      setHubBackgroundPending(false);
+    }
+  }, []);
 
   // 加载/刷新: 各 agent 独立, 一个失败不影响另一个 (Promise.allSettled)。
   // 触发时机:
@@ -116,6 +132,9 @@ export function MemorySection() {
     void reloadSlots();
     void window.electronAPI.maker.memoryGetSettingsState()
       .then((settings) => setSettingsCustomized(settings.isCustomized))
+      .catch(() => undefined);
+    void window.electronAPI.maker.memoryHubGetSettings()
+      .then((settings) => setHubBackgroundAnalysis(settings.backgroundAnalysis))
       .catch(() => undefined);
     const onFocus = () => void reloadSlots();
     window.addEventListener('focus', onFocus);
@@ -277,11 +296,24 @@ export function MemorySection() {
           <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
             {t('settings.memory.title')}
           </h2>
-          <DefaultOverrideControls
-            isCustomized={settingsCustomized}
-            disabled={makerTogglePending}
-            onReset={() => void handleResetSettings()}
-          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setHubOpen(true)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg bg-[var(--settings-input-bg)]',
+                'px-3 py-1.5 text-13 text-[var(--settings-section-title)] hover:opacity-80',
+              )}
+            >
+              <Database size={14} />
+              {t('settings.memory.hub.open')}
+            </button>
+            <DefaultOverrideControls
+              isCustomized={settingsCustomized}
+              disabled={makerTogglePending}
+              onReset={() => void handleResetSettings()}
+            />
+          </div>
         </div>
         <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.memory.description')}
@@ -405,7 +437,39 @@ export function MemorySection() {
             </div>
           );
         })}
+        <div
+          className={cn(
+            'flex items-center justify-between gap-3 px-4 py-[14px]',
+            'border-t border-[var(--settings-theme-card-border)]',
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className={cn(
+                'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                'bg-[var(--settings-input-bg)]',
+              )}
+            >
+              <Database size={18} className="text-[var(--settings-section-title)]" />
+            </div>
+            <div className="flex flex-col gap-[8px]">
+              <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
+                {t('settings.memory.hub.backgroundToggleLabel')}
+              </p>
+              <p className="text-12 leading-none text-[var(--settings-section-desc)]">
+                {t('settings.memory.hub.backgroundToggleDescription')}
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={hubBackgroundAnalysis}
+            disabled={hubBackgroundPending}
+            onCheckedChange={(v) => void handleHubBackgroundToggle(v)}
+            aria-label={t('settings.memory.hub.backgroundToggleLabel')}
+          />
+        </div>
       </div>
+      <MemoryHubDialog open={hubOpen} onClose={() => setHubOpen(false)} />
     </div>
   );
 }
