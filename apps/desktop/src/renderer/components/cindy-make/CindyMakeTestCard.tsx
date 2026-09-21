@@ -17,6 +17,9 @@ import type {
 } from '../../../shared/cindyMakeSession';
 import { CindyMakeCompleteCard } from './CindyMakeCompleteCard';
 import { CindyMakeBuildLog } from './CindyMakeBuildLog';
+import { CindyMakeBuildProgress } from './CindyMakeBuildProgress';
+import { CindyMakeBuildFailure } from './CindyMakeBuildFailure';
+import { cindyMakeBuildStatusKey } from './cindyMakeBuildStatus';
 import { CindyMakeTestStep } from './CindyMakeTestStep';
 
 type CompletedTestProps = {
@@ -244,7 +247,9 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
     }
   };
   const testStatus = pending === 'start' ? 'starting' : (meta.test?.status ?? 'waiting');
-  const buildStatus = pending === 'build' ? 'waiting' : personal?.status;
+  const displayBuild: CindyMakePersonalBuildState | undefined =
+    pending === 'build' ? { status: 'waiting' } : personal;
+  const buildStatus = displayBuild?.status;
   const building = ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
     buildStatus ?? '',
   );
@@ -255,7 +260,7 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       pending === 'build' ||
       pending === 'open-build' ||
       (error?.mode ?? meta.lastAction ?? (meta.personal ? 'build' : 'test')) === 'build');
-  const stopping = building && (stoppingBuild || personal?.stopping === true);
+  const stopping = building && (stoppingBuild || displayBuild?.stopping === true);
   const stopBuild = async () => {
     if (!personal?.buildId || stopping || !current()) return;
     setStoppingBuild(true);
@@ -283,16 +288,10 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       composer
       data={{ ...meta }}
       busy={working}
-      failed={Boolean(errorCode)}
+      failed={Boolean(errorCode) || (buildMode && buildStatus === 'failed')}
       heading={t(
-        buildMode && buildStatus
-          ? stopping
-            ? 'cindyMake.history.stopping'
-            : buildStatus === 'waiting' && personal?.preparationStep
-              ? 'cindyMake.personal.preparationStep.' + personal.preparationStep
-              : buildStatus === 'checking' && personal?.checkStep
-                ? 'cindyMake.personal.checkStep.' + personal.checkStep
-                : 'cindyMake.personal.status.' + buildStatus
+        buildMode && displayBuild
+          ? cindyMakeBuildStatusKey(displayBuild, stopping)
           : 'cindyMake.test.status.' + testStatus,
       )}
       description={t(
@@ -311,7 +310,11 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       )}
       detail={
         buildMode ? (
-          <CindyMakeBuildLog build={personal} openWhileActive={building || Boolean(errorCode)} />
+          <div className="mt-3 space-y-3">
+            <CindyMakeBuildProgress build={displayBuild} />
+            <CindyMakeBuildFailure build={displayBuild} error={errorCode} />
+            <CindyMakeBuildLog build={displayBuild} />
+          </div>
         ) : (
           <CindyMakeTestStep
             test={pending === 'start' ? { status: 'starting', step: 'waiting' } : meta.test}
@@ -324,9 +327,9 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
           {t('cindyMake.versions.errors.' + versions.error)}
         </p>
       )}
-      {errorCode && (
+      {errorCode && !buildMode && (
         <p role="alert" className="text-12 text-[var(--status-danger)]">
-          {t((buildMode ? 'cindyMake.personal.errors.' : 'cindyMake.test.errors.') + errorCode)}
+          {t('cindyMake.test.errors.' + errorCode)}
         </p>
       )}
       <div className="flex flex-wrap justify-end gap-2">

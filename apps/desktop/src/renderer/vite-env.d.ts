@@ -3025,9 +3025,9 @@ interface ElectronAPI {
     runId: string,
     action: import('../shared/cindyMakeHistory').MakeHistoryAction,
   ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
-  generateCindyMakePersonal: () => Promise<
-    import('../shared/cindyMakeHistory').CindyMakeHistoryState
-  >;
+  generateCindyMakePersonal: (
+    selection?: import('../shared/cindyMakeHistory').MakeHistoryBuildSelection[],
+  ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
   cancelCindyMakePersonal: (
     buildId: string,
   ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
@@ -3463,7 +3463,9 @@ interface ElectronAPI {
       error?: string;
       errorCode?: string;
     }>;
-    comparePublished: (params: import('../shared/skillhubPublishComparison').SkillhubPublishComparisonParams) => Promise<import('../shared/skillhubPublishComparison').SkillhubPublishComparison>;
+    comparePublished: (
+      params: import('../shared/skillhubPublishComparison').SkillhubPublishComparisonParams,
+    ) => Promise<import('../shared/skillhubPublishComparison').SkillhubPublishComparison>;
 
     getFolderHash: (absolutePath: string) => Promise<{
       success: boolean;

@@ -16,10 +16,17 @@ import { formatCindyMakeTitle } from '@/lib/cindyMakeTitle';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
-import type { CindyMakeHistoryState, MakeHistoryAction } from '../../../shared/cindyMakeHistory';
+import type {
+  CindyMakeHistoryState,
+  MakeHistoryAction,
+  MakeHistoryBuildSelection,
+} from '../../../shared/cindyMakeHistory';
 import './cindyMakeTasks.css';
 import { CindyMakeTestStep } from './CindyMakeTestStep';
 import { CindyMakeBuildLog } from './CindyMakeBuildLog';
+import { CindyMakeBuildProgress } from './CindyMakeBuildProgress';
+import { CindyMakeBuildFailure } from './CindyMakeBuildFailure';
+import { cindyMakeBuildStatusKey } from './cindyMakeBuildStatus';
 
 type Filter = 'all' | 'pending' | 'integrated' | 'ended';
 /** Historical facts and allowed actions come from Main; an old button cannot authorize a write. */
@@ -43,6 +50,8 @@ export function CindyMakeHistoryPanel({
   const [selectedId, select] = useState('');
   const [query, search] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [selecting, setSelecting] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [pending, setPending] = useState<string>();
   const [failed, setFailed] = useState(false);
   const request = useRef(0);
@@ -68,6 +77,8 @@ export function CindyMakeHistoryPanel({
   useEffect(() => {
     setSnapshot(undefined);
     setPending(undefined);
+    setSelecting(false);
+    setCheckedIds([]);
     acting.current = false;
     actionGeneration.current += 1;
     return () => {
@@ -124,6 +135,12 @@ export function CindyMakeHistoryPanel({
             item.lifecycle !== 'ended'),
   );
   const selected = visible.find((item) => item.runId === selectedId) ?? visible[0];
+  const selectable = visible.filter((item) => item.canSelectForBuild);
+  const checked = items
+    .filter((item) => item.canSelectForBuild && checkedIds.includes(item.runId))
+    .sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId));
+  const allChecked =
+    selectable.length > 0 && selectable.every((item) => checkedIds.includes(item.runId));
   const currentBuild = (item: CindyMakeHistoryState['items'][number]) =>
     item.operation === 'build' ||
     (!item.operation && ['ready', 'ended'].includes(item.lifecycle) && !item.test)
@@ -134,14 +151,7 @@ export function CindyMakeHistoryPanel({
     if (item.operationError) return 'cindyMake.history.actionFailed';
     if (item.operation && item.operation !== 'build') return 'cindyMake.history.working';
     const build = currentBuild(item);
-    if (build)
-      return build.stopping
-        ? 'cindyMake.history.stopping'
-        : build.status === 'waiting' && build.preparationStep
-          ? 'cindyMake.personal.preparationStep.' + build.preparationStep
-          : build.status === 'checking' && build.checkStep
-            ? 'cindyMake.personal.checkStep.' + build.checkStep
-            : 'cindyMake.history.buildStatus.' + build.status;
+    if (build) return cindyMakeBuildStatusKey(build);
     return item.test
       ? 'cindyMake.test.status.' + item.test.status
       : 'cindyMake.history.lifecycle.' + item.lifecycle;
@@ -150,11 +160,13 @@ export function CindyMakeHistoryPanel({
   const selectedError =
     selected?.conflict || selected?.operationError
       ? undefined
-      : selectedBuild?.status === 'failed' && selectedBuild.error
-        ? 'cindyMake.personal.errors.' + selectedBuild.error
-        : selected?.test?.error
-          ? 'cindyMake.test.errors.' + selected.test.error
-          : undefined;
+      : !selectedBuild && selected?.test?.error
+        ? 'cindyMake.test.errors.' + selected.test.error
+        : undefined;
+  const selectedIsGlobalFailure =
+    state?.build?.status === 'failed' &&
+    !!state.build.buildId &&
+    selectedBuild?.buildId === state.build.buildId;
   const selectedActions: MakeHistoryAction[] = selected
     ? (
         [
@@ -326,19 +338,62 @@ export function CindyMakeHistoryPanel({
     }
   };
   const building = !!state?.build && !['ready', 'failed'].includes(state.build.status);
+  const buildSelected = async () => {
+    if (acting.current || !checked.length || !isDataOwnerGenerationCurrent(owner)) return;
+    const pins: MakeHistoryBuildSelection[] = checked.map((item) => ({
+      runId: item.runId,
+      completionId: item.completionId!,
+      commit: item.completions.at(-1)!.commit!,
+      tree: item.completions.at(-1)!.tree!,
+    }));
+    acting.current = true;
+    request.current += 1;
+    const actionId = ++actionGeneration.current;
+    setPending('batch-build');
+    try {
+      const accepted = await confirm({
+        title: t('cindyMake.history.batch.confirmTitle', { count: checked.length }),
+        description: t('cindyMake.history.batch.confirmDescription'),
+        content: (
+          <ol className="list-decimal space-y-2 pl-5 text-[var(--confirm-desc)]">
+            {checked.map((item) => (
+              <li key={item.runId} className="break-words">
+                {formatCindyMakeTitle(item.title, item.runId)}
+                <span className="block text-12 text-[var(--text-secondary)]">
+                  {date(item.createdAt)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ),
+        describeContent: true,
+        confirmText: t('cindyMake.history.batch.start'),
+        cancelText: t('settings.cindyMake.create.cancel'),
+      });
+      if (!accepted || !isDataOwnerGenerationCurrent(owner)) return;
+      const next = await window.electronAPI.generateCindyMakePersonal(pins);
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      update(next);
+      setSelecting(false);
+      setCheckedIds([]);
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) {
+        toast.error(t('cindyMake.history.actionFailed'));
+        await refresh();
+      }
+    } finally {
+      if (actionId === actionGeneration.current) {
+        acting.current = false;
+        if (isDataOwnerGenerationCurrent(owner)) setPending(undefined);
+      }
+    }
+  };
   const showGlobalResult =
     state?.build &&
     !building &&
-    !items.some((item) => state.build?.buildId && item.build?.buildId === state.build.buildId);
+    (state.build.status === 'failed' ||
+      !items.some((item) => state.build?.buildId && item.build?.buildId === state.build.buildId));
   const stopping = building && state?.build?.stopping === true;
-  const buildStep = (value: NonNullable<CindyMakeHistoryState['build']>) => {
-    if (value.status === 'waiting') return 1;
-    if (value.status === 'merging') return 2;
-    if (value.status === 'checking') return 3;
-    if (value.status === 'packaging') return 4;
-    if (value.status === 'publishing') return 5;
-    return 1;
-  };
   const stopBuild = async () => {
     const buildId = state?.build?.buildId;
     if (!building || !buildId || stopping || !isDataOwnerGenerationCurrent(owner)) return;
@@ -402,7 +457,12 @@ export function CindyMakeHistoryPanel({
                   value,
                   label: t('cindyMake.history.filters.' + value),
                 }))}
-                onValueChange={(value) => setFilter(value as Filter)}
+                onValueChange={(value) => {
+                  setFilter(value as Filter);
+                  setSelecting(false);
+                  setCheckedIds([]);
+                }}
+                disabled={!!pending}
                 className="h-8 w-[168px]"
               />
               <Input
@@ -413,7 +473,68 @@ export function CindyMakeHistoryPanel({
                 placeholder={t('settings.cindyMake.tasks.search')}
                 className="cindy-make-tasks-search"
               />
+              {filter === 'pending' && !selecting && (
+                <Button
+                  variant="primary"
+                  className="ml-auto"
+                  disabled={!!pending || failed || !selectable.length}
+                  onClick={() => {
+                    setSelecting(true);
+                    setCheckedIds([]);
+                  }}
+                >
+                  {t('cindyMake.history.batch.make')}
+                </Button>
+              )}
+              {selecting && (
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    disabled={!!pending}
+                    onClick={() => {
+                      setSelecting(false);
+                      setCheckedIds([]);
+                    }}
+                  >
+                    {t('settings.cindyMake.create.cancel')}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={!!pending || failed || !checked.length}
+                    loading={pending === 'batch-build'}
+                    onClick={() => void buildSelected()}
+                  >
+                    {t('cindyMake.history.batch.selected', { count: checked.length })}
+                  </Button>
+                </div>
+              )}
             </div>
+            {selecting && (
+              <div className="flex flex-wrap items-center gap-3 text-12 text-[var(--text-secondary)]">
+                <label className="flex min-h-8 cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={allChecked}
+                    disabled={!!pending || !selectable.length}
+                    ref={(node) => {
+                      if (node)
+                        node.indeterminate =
+                          !allChecked && selectable.some((item) => checkedIds.includes(item.runId));
+                    }}
+                    className="size-4 accent-[var(--confirm-btn-primary-bg)]"
+                    onChange={() =>
+                      setCheckedIds((previous) =>
+                        allChecked
+                          ? previous.filter((id) => !selectable.some((item) => item.runId === id))
+                          : [...new Set([...previous, ...selectable.map((item) => item.runId)])],
+                      )
+                    }
+                  />
+                  {t('cindyMake.history.batch.selectAll')}
+                </label>
+                <span>{t('cindyMake.history.batch.hint')}</span>
+              </div>
+            )}
           </>
         )}
         {building && state?.build && (
@@ -426,18 +547,14 @@ export function CindyMakeHistoryPanel({
               <div className="flex min-w-0 items-start gap-2">
                 <Spinner size={16} className="mt-0.5 shrink-0" />
                 <div className="min-w-0">
-                  <p className="font-medium">
-                    {t(
-                      stopping
-                        ? 'cindyMake.history.stopping'
-                        : state.build.status === 'waiting' && state.build.preparationStep
-                          ? 'cindyMake.personal.preparationStep.' + state.build.preparationStep
-                          : 'cindyMake.history.buildStatus.' + state.build.status,
-                    )}
-                  </p>
-                  {state.build.status === 'checking' && state.build.checkStep && (
+                  <p className="font-medium">{t(cindyMakeBuildStatusKey(state.build, stopping))}</p>
+                  {state.batch && (
                     <p className="text-12 text-[var(--text-secondary)]">
-                      {t('cindyMake.personal.checkStep.' + state.build.checkStep)}
+                      {t('cindyMake.history.batch.progress', {
+                        current: state.batch.current,
+                        total: state.batch.total,
+                        title: formatCindyMakeTitle(state.batch.title, state.batch.runId),
+                      })}
                     </p>
                   )}
                 </div>
@@ -451,51 +568,22 @@ export function CindyMakeHistoryPanel({
                 {t(stopping ? 'cindyMake.history.stopping' : 'cindyMake.history.stop')}
               </Button>
             </div>
-            <ol className="grid gap-1 text-12 text-[var(--text-secondary)] sm:grid-cols-2">
-              {(['waiting', 'merging', 'checking', 'packaging', 'publishing'] as const).map(
-                (step, index) => {
-                  const current = buildStep(state.build!);
-                  const active = current === index + 1;
-                  const done = current > index + 1;
-                  return (
-                    <li
-                      key={step}
-                      className={cn(
-                        'flex items-center gap-2',
-                        active && 'font-medium text-[var(--text-primary)]',
-                        done && 'text-[var(--status-success)]',
-                      )}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="inline-block h-1.5 w-1.5 rounded-full bg-current"
-                      />
-                      {t('cindyMake.history.progress.' + step)}
-                    </li>
-                  );
-                },
-              )}
-            </ol>
-            <CindyMakeBuildLog build={state.build} openWhileActive />
+            <CindyMakeBuildProgress build={state.build} />
+            <CindyMakeBuildLog build={state.build} />
           </div>
         )}
-        {showGlobalResult && state?.build && (
-          <p
-            role={state.build.status === 'failed' ? 'alert' : 'status'}
-            className={cn(
-              'text-12',
-              state.build.status === 'failed'
-                ? 'text-[var(--status-danger)]'
-                : 'text-[var(--text-secondary)]',
-            )}
-          >
+        {showGlobalResult && state?.build?.status === 'failed' && (
+          <div className="space-y-3">
+            <CindyMakeBuildFailure build={state.build} />
+            <CindyMakeBuildLog build={state.build} />
+          </div>
+        )}
+        {showGlobalResult && state?.build?.status === 'ready' && (
+          <p role="status" className="text-12 text-[var(--text-secondary)]">
             {t(
-              state.build.status === 'failed' && state.build.error
-                ? 'cindyMake.personal.errors.' + state.build.error
-                : 'cindyMake.history.buildStatus.' +
-                    (state.build.status === 'ready' && !state.build.versionId
-                      ? 'installerReady'
-                      : state.build.status),
+              !state.build.versionId
+                ? 'cindyMake.history.buildStatus.installerReady'
+                : cindyMakeBuildStatusKey(state.build),
             )}
           </p>
         )}
@@ -532,7 +620,27 @@ export function CindyMakeHistoryPanel({
           className="cindy-make-history-list min-h-0 space-y-1 overflow-y-auto overscroll-contain border-b border-[var(--border-default)] p-2"
         >
           {visible.map((item) => (
-            <li key={item.runId}>
+            <li key={item.runId} className="flex items-center gap-1">
+              {selecting && (
+                <label className="flex min-h-8 min-w-8 shrink-0 cursor-pointer items-center justify-center">
+                  <input
+                    type="checkbox"
+                    checked={checked.some((entry) => entry.runId === item.runId)}
+                    disabled={!!pending || !item.canSelectForBuild}
+                    aria-label={t('cindyMake.history.batch.selectItem', {
+                      title: formatCindyMakeTitle(item.title, item.runId),
+                    })}
+                    className="size-4 accent-[var(--confirm-btn-primary-bg)]"
+                    onChange={(event) =>
+                      setCheckedIds((previous) =>
+                        event.target.checked
+                          ? [...new Set([...previous, item.runId])]
+                          : previous.filter((id) => id !== item.runId),
+                      )
+                    }
+                  />
+                </label>
+              )}
               <button
                 type="button"
                 aria-pressed={selected?.runId === item.runId}
@@ -589,7 +697,12 @@ export function CindyMakeHistoryPanel({
                 )}
               </p>
               <CindyMakeTestStep test={selected.test} />
-              <CindyMakeBuildLog build={selectedBuild} />
+              {!selectedIsGlobalFailure && (
+                <>
+                  <CindyMakeBuildFailure build={selectedBuild} />
+                  <CindyMakeBuildLog build={selectedBuild} />
+                </>
+              )}
               {!selected.completions.length &&
                 formatCindyMakeTitle(selected.request.trim(), selected.runId) !==
                   formatCindyMakeTitle(selected.title.trim(), selected.runId) && (
@@ -638,7 +751,9 @@ export function CindyMakeHistoryPanel({
                       : action === 'retry'
                         ? 'cindyMake.history.actions.build'
                         : action === 'test'
-                          ? 'cindyMake.test.start'
+                          ? selected.test?.status === 'ready'
+                            ? 'cindyMake.history.batch.restartTest'
+                            : 'cindyMake.test.start'
                           : 'cindyMake.history.actions.' + action,
                   )}
                 </Button>

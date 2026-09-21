@@ -13039,6 +13039,7 @@
       "open": "查看安装包",
       "description": "将本次修改与个人版合并，检查和打包通过后保存为新个人版。",
       "readyHint": "安装包 {{name}} 已生成，可打开所在目录。",
+      "failedStep": "失败步骤：{{step}}",
       "preparationStep": {
         "environment": "正在准备生成环境…",
         "original": "正在检查当前版本…"
@@ -13132,6 +13133,18 @@
     },
     "history": {
       "title": "制作历史",
+      "batch": {
+        "make": "制作个人版",
+        "selected": "制作所选 {{count}} 项",
+        "selectAll": "全选当前列表",
+        "selectItem": "选择 {{title}}",
+        "hint": "按从老到新的顺序合入，统一生成一个新版本。",
+        "confirmTitle": "制作包含 {{count}} 项改动的个人版？",
+        "confirmDescription": "所选改动将按以下顺序逐条合入，全部成功后只生成一个新版本。已启动的所选隔离版会先停止。遇到冲突时停止制作并保留已合入改动，处理后可重新发起制作。没有待处理冲突时，取消或生成失败会撤回尚未生成成功版本的合入，保留各任务的原始改动。",
+        "start": "确认制作",
+        "progress": "正在合入 {{current}} / {{total}}：{{title}}",
+        "restartTest": "重新启动隔离版"
+      },
       "build": "生成个人版",
       "buildDescription": "将当前个人源码生成新版本，未合入的历史改动不会包含在内。",
       "building": "正在生成个人版…",

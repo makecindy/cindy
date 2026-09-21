@@ -1,29 +1,19 @@
-import { useEffect, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { CindyMakePersonalBuildState } from '../../../shared/cindyMakeSession';
 
 /** A compact, localizable timeline of build stages; it deliberately omits raw process output. */
-export function CindyMakeBuildLog({
-  build,
-  openWhileActive = false,
-}: {
-  build?: CindyMakePersonalBuildState;
-  openWhileActive?: boolean;
-}) {
+export function CindyMakeBuildLog({ build }: { build?: CindyMakePersonalBuildState }) {
   const { t, i18n } = useTranslation();
   const entries = build?.logs ?? [];
-  const [open, setOpen] = useState(openWhileActive);
-  useEffect(() => {
-    if (openWhileActive) setOpen(true);
-  }, [openWhileActive]);
   if (!entries.length) return null;
   return (
     <details
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-      className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] px-3 py-2"
+      key={build?.buildId ?? build?.startedAt}
+      className="group rounded-xl border border-[var(--border-default)] bg-[var(--surface-card)] px-3 py-2"
     >
-      <summary className="flex min-h-8 cursor-pointer select-none items-center text-12 font-medium text-[var(--text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+      <summary className="flex min-h-8 cursor-pointer select-none items-center gap-1.5 text-12 font-medium text-[var(--text-secondary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+        <ChevronRight size={14} aria-hidden className="shrink-0 group-open:rotate-90" />
         {t('cindyMake.personal.buildLog.title')} · {entries.length}
       </summary>
       <ol className="mt-2 max-h-40 space-y-1 overflow-y-auto border-t border-[var(--border-default)] pt-2 text-12">

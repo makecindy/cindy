@@ -83,12 +83,22 @@ export interface CindyMakeHistoryItem extends CindyMakeHistoryRecord {
   actionReason?: MakeHistoryActionReason;
   /** Main-owned permission to hide this entry after its workspace is reclaimed. */
   canHide?: boolean;
+  /** A selection hint; Main verifies the pinned completion again before merging. */
+  canSelectForBuild?: boolean;
+}
+/** The exact editing round approved in the batch confirmation. */
+export interface MakeHistoryBuildSelection {
+  runId: string;
+  completionId: string;
+  commit: string;
+  tree: string;
 }
 export interface CindyMakeHistoryState {
   items: CindyMakeHistoryItem[];
   busy: boolean;
   canBuild: boolean;
   build?: CindyMakePersonalBuildState;
+  batch?: { current: number; total: number; runId: string; title: string };
 }
 /** The last undo removes all preceding active changes; reapply starts a new effective delta. */
 export function activeFeatureReceipts(receipts: MakeFeatureReceipt[]): MakeFeatureReceipt[] {
@@ -119,15 +129,14 @@ export function makeHistoryActions(facts: {
 }): MakeHistoryAction[] {
   const actions: MakeHistoryAction[] = facts.sessionAvailable ? ['open'] : [];
   if (facts.test?.status === 'starting') return actions;
-  // Continue is the one action that stops a ready test through its controller.
-  // Do not depend on a global busy snapshot taken before the latest receipt.
+  // A ready test can be restarted or handed over to a build through its controller.
   if (facts.test?.status === 'ready')
     return facts.completed &&
       facts.sessionAvailable &&
       facts.workspaceAvailable &&
       facts.lifecycle === 'ready' &&
       !facts.conflict
-      ? [...actions, 'continue']
+      ? [...actions, 'continue', ...(facts.sourceAvailable ? (['test', 'build'] as const) : [])]
       : actions;
   if (facts.busy) {
     if (!facts.allowCleanupWhileBusy) return actions;

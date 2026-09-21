@@ -3875,9 +3875,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     action: import('../shared/cindyMakeHistory').MakeHistoryAction,
   ): Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState> =>
     ipcRenderer.invoke('app:cindy-make-history-action', runId, action),
-  generateCindyMakePersonal: (): Promise<
-    import('../shared/cindyMakeHistory').CindyMakeHistoryState
-  > => ipcRenderer.invoke('app:cindy-make-history-build'),
+  generateCindyMakePersonal: (
+    selection?: import('../shared/cindyMakeHistory').MakeHistoryBuildSelection[],
+  ): Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState> =>
+    ipcRenderer.invoke('app:cindy-make-history-build', selection),
   cancelCindyMakePersonal: (
     buildId: string,
   ): Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState> =>

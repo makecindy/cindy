@@ -155,7 +155,7 @@ export function RunningTokenRatePopover({
     <Popover
       open={open}
       onOpenChange={(next) => {
-        if (next) setMode('pinned');
+        setMode(next ? 'pinned' : 'dismissed');
       }}
     >
       <Tooltip.Provider>

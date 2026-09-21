@@ -13056,6 +13056,7 @@
       "open": "Show Installer",
       "description": "Merge these changes with your personal version, then save the new version after checks and packaging pass.",
       "readyHint": "Installer {{name}} is ready. Open its folder to install it.",
+      "failedStep": "Failed during: {{step}}",
       "preparationStep": {
         "environment": "Preparing the build environment…",
         "original": "Checking the current version…"
@@ -13149,6 +13150,18 @@
     },
     "history": {
       "title": "Make history",
+      "batch": {
+        "make": "Make Personal Version",
+        "selected": "Build {{count}} Selected Changes",
+        "selectAll": "Select all in this list",
+        "selectItem": "Select {{title}}",
+        "hint": "Merge oldest to newest, then generate one new version.",
+        "confirmTitle": "Make a personal version with {{count}} changes?",
+        "confirmDescription": "The selected changes will be merged in the order below, then one new version will be generated after all merges succeed. Running isolated tests for these changes will stop first. A conflict stops the build and keeps already merged changes; resolve it, then start a new build. When no conflict is pending, cancellation or failure rolls back merges that have not produced a saved version, keeping each task's original changes.",
+        "start": "Confirm Build",
+        "progress": "Merging {{current}} / {{total}}: {{title}}",
+        "restartTest": "Restart Isolated Version"
+      },
       "build": "Generate personal version",
       "buildDescription": "Generate a new version from the current personal source. Changes not yet integrated are excluded.",
       "building": "Generating personal version…",

@@ -13039,6 +13039,7 @@
       "open": "查看安裝套件",
       "description": "將本次修改與個人版合併，檢查和打包通過後儲存為新個人版。",
       "readyHint": "安裝套件 {{name}} 已產生，可開啟所在目錄。",
+      "failedStep": "失敗步驟：{{step}}",
       "preparationStep": {
         "environment": "正在準備產生環境…",
         "original": "正在檢查目前版本…"
@@ -13132,6 +13133,18 @@
     },
     "history": {
       "title": "製作歷史",
+      "batch": {
+        "make": "製作個人版",
+        "selected": "製作所選 {{count}} 項",
+        "selectAll": "全選目前清單",
+        "selectItem": "選取 {{title}}",
+        "hint": "由舊到新依序合入，統一產生一個新版本。",
+        "confirmTitle": "製作包含 {{count}} 項變更的個人版？",
+        "confirmDescription": "所選變更將依下列順序逐項合入，全部成功後只產生一個新版本。已啟動的所選隔離版會先停止。遇到衝突時停止製作並保留已合入變更，處理後可重新開始製作。沒有待處理衝突時，取消或產生失敗會撤回尚未產生成功版本的合入，保留各任務的原始變更。",
+        "start": "確認製作",
+        "progress": "正在合入 {{current}} / {{total}}：{{title}}",
+        "restartTest": "重新啟動隔離版"
+      },
       "build": "產生個人版",
       "buildDescription": "將目前的個人原始碼產生為新版本，尚未合入的歷史改動不會包含在內。",
       "building": "正在產生個人版…",

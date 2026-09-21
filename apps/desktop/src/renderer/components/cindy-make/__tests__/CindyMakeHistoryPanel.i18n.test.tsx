@@ -248,7 +248,7 @@ describe('Cindy Make history with real translations', () => {
             resource.cindyMake.versions.localChanges,
         ),
       ).toBeTruthy();
-      expect(screen.getAllByText(resource.cindyMake.history.buildStatus.failed)).toHaveLength(2);
+      expect(screen.getAllByText(resource.cindyMake.personal.status.failed)).toHaveLength(2);
       expect(
         screen.getByText(i18n.t('cindyMake.history.files', { count: 2 }), { exact: false }),
       ).toBeTruthy();

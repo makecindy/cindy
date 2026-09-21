@@ -215,6 +215,33 @@ it('undoes all rounds of one make after an official rebase without removing the 
   }
 }, 120000);
 
+it('adopts a later conflicting selection against the preserved unbuilt prefix', async () => {
+  const h = await fixture();
+  try {
+    await h.task('aaaa', 'a.txt', 'first-selection\n');
+    await h.task('bbbb', 'a.txt', 'second-selection\n');
+    const first = await h.action('aaaa', 'integrate');
+    expect(first.status).toBe('merged');
+    const pending = await h.action('bbbb', 'integrate');
+    expect(pending).toMatchObject({ status: 'conflict', baselineCommit: first.commit });
+    expect(h.store.read('aaaa')?.versions).toEqual([]);
+    expect(await h.git(['rev-parse', 'HEAD'])).toBe(first.commit);
+    const worktree = mergeWorktree(h.userData, pending.id);
+    await writeFile(path.join(worktree, 'a.txt'), 'both-selections\n');
+    await h.git(['add', '.'], worktree);
+    const resolved = await applyFeatureMerge(h.userData, pending, h.git);
+    expect(resolved.status).toBe('merged');
+    h.record(resolved);
+    expect(h.store.read('aaaa')?.receipts).toHaveLength(1);
+    expect(h.store.read('bbbb')?.receipts).toHaveLength(1);
+    expect(await h.git(['merge-base', '--is-ancestor', first.commit!, 'HEAD'])).toBe('');
+    expect(await readFile(path.join(h.source, 'a.txt'), 'utf8')).toBe('both-selections\n');
+    expect(await h.git(['status', '--porcelain'])).toBe('');
+  } finally {
+    await h.clean();
+  }
+}, 90000);
+
 it('isolates an undo conflict and adopts the resolved delta once without resetting later history', async () => {
   const h = await fixture();
   try {

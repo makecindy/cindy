@@ -139,10 +139,16 @@ describe('detached Pi Subagent worktree references', () => {
       await fs.mkdir(entry);
     } else {
       const target = path.join(state.root, 'link-target');
-      await fs.writeFile(target, '{}');
-      await fs.symlink(target, entry, process.platform === 'win32' ? 'file' : undefined);
+      if (process.platform === 'win32') await fs.mkdir(target);
+      else await fs.writeFile(target, '{}');
+      // Junctions exercise the same lstat link guard without requiring Windows symlink privileges.
+      await fs.symlink(target, entry, process.platform === 'win32' ? 'junction' : undefined);
+      expect((await fs.lstat(entry)).isSymbolicLink()).toBe(true);
     }
+    const followingStat = vi.spyOn(fs, 'stat');
     expect(await livePaths()).toBeNull();
+    // A directory junction must not hide a regression that follows the entry before rejecting it.
+    expect(followingStat.mock.calls.some(([target]) => target === entry)).toBe(false);
   });
 
   it.each(['notes.txt', '.launch-fence-backup.json', '.launch-fence-.json'])(
