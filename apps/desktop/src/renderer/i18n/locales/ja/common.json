@@ -7434,6 +7434,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "この端末",
+      "title": "端末を切り替え",
+      "switchDevice": "端末を切り替え（現在：{{device}}）",
+      "unread": "未読メッセージあり",
+      "otherUnread": "他の端末に未読メッセージがあります",
+      "remotePlaceholder": "{{device}}の{{name}}にメッセージを送信…"
+    },
     "creationName": "名前",
     "settingsBack": "設定に戻る",
     "sidebar": {
@@ -12995,6 +13003,14 @@
       "localMain": "ローカル main",
       "lookupUnavailable": "取得できませんでした",
       "comparisonUnavailable": "ローカル main との差分は未取得",
+      "personalStatus": {
+        "suffix": "（{{status}}）",
+        "upToDate": "最新です",
+        "updateAvailable": "更新あり",
+        "unverified": "バージョン状態は未確認",
+        "upToDateDescription": "個人版のコードには{{target}}の更新がすべて含まれています",
+        "personalChanges": "個人版の変更履歴が {{ahead}} 件追加"
+      },
       "comparison": {
         "same": "ローカル main と同じ SHA",
         "personalAhead": "ローカル main を含み、個人版の変更履歴が {{ahead}} 件追加",
@@ -13037,6 +13053,16 @@
       "description": "今回の変更を個人版にマージし、チェックとパッケージ化が完了してから新しい個人版として保存します。",
       "readyHint": "インストーラー {{name}} を作成しました。保存先フォルダーを開けます。",
       "failedStep": "失敗したステップ：{{step}}",
+      "diagnostic": {
+        "outOfMemory": "パッケージ作成プロセスがメモリ上限を超えました。Cindy を更新して再生成してください。再び失敗する場合は、以下のエラーを報告してください。",
+        "timeout": "生成に 1 時間以上かかったため停止しました。以下の記録を確認して再試行してください。",
+        "exitCode": "プロセスの終了コード：{{code}}",
+        "unavailable": "この生成では具体的なエラーが保存されていません。原因を記録するには再生成してください。"
+      },
+      "mergeStep": {
+        "conflicts": "競合を解決中…",
+        "cleanup": "マージ用ファイルを削除中…"
+      },
       "preparationStep": {
         "environment": "ビルド環境を準備中…",
         "original": "現在のバージョンを確認中…"
@@ -13058,6 +13084,8 @@
       "buildLog": {
         "title": "ビルド記録",
         "steps": {
+          "resolving-conflicts": "競合を解決",
+          "cleaning-merge": "マージ用ファイルを削除",
           "environment": "ビルド環境を準備",
           "original": "現在のバージョンを確認",
           "merging": "変更を統合",
@@ -13137,7 +13165,7 @@
         "selectItem": "{{title}} を選択",
         "hint": "古い順にマージし、最後に新しいバージョンを1つ作成します。",
         "confirmTitle": "{{count}} 件の変更を含む個人版を作成しますか？",
-        "confirmDescription": "選択した変更を以下の順序でマージし、すべて成功したら新しいバージョンを1つ作成します。選択した変更の隔離版が起動中の場合は先に停止します。競合が発生した場合は停止し、マージ済みの変更を保持します。競合を解消してから、再度作成を開始してください。未解決の競合がない場合、キャンセルや失敗時は保存済みバージョンに含まれていないマージを取り消し、各セッションの元の変更を保持します。",
+        "confirmDescription": "選択した変更を以下の順序でマージし、すべて成功したら新しいバージョンを1つ作成します。選択した変更の隔離版が起動中の場合は先に停止します。競合は関連セッションで解決し、完了後に一時ファイルを削除して自動的に作成を続けます。制作を停止すると関連セッションも停止し、一時的な競合修正を破棄します。元の変更と保存済みバージョンは保持します。",
         "start": "作成を確定",
         "progress": "マージ中 {{current}} / {{total}}: {{title}}",
         "restartTest": "隔離版を再起動"
@@ -13146,6 +13174,10 @@
       "buildDescription": "現在の個人版ソースから新しいバージョンを生成します。未取り込みの過去の変更は含まれません。",
       "building": "個人版を生成中…",
       "stop": "制作を停止",
+      "stopConfirm": {
+        "title": "今回の制作を停止しますか？",
+        "description": "競合を解決中のセッションも停止し、一時的な競合修正とファイルを破棄します。保存済みバージョンに含まれていないマージも取り消します。元のセッションの変更、やり取りの履歴、保存済みバージョンは保持します。"
+      },
       "stopping": "停止中…",
       "progress": {
         "waiting": "開始を待機中",

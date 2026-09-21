@@ -1,3 +1,4 @@
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 /**
  * 远程文件 Quick Look 预览。
  *
@@ -20,6 +21,7 @@
  * (fetchRemoteAbsFileToUrl);无同目录翻页、无缩略图(直接取原图)。
  */
 import * as Clipboard from 'expo-clipboard';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { Image } from 'expo-image';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -164,7 +166,10 @@ export default function RemoteFilePreviewScreen() {
   const targetLineRaw = Number(readRouteString(params.line) ?? '');
   const targetLine = Number.isInteger(targetLineRaw) && targetLineRaw > 0 ? targetLineRaw : null;
   const router = useRouter();
-  const { width: pageWidth } = useWindowDimensions();
+  const systemBack = useSystemNavigationBack();
+  const previewWindow = useAdaptiveWindow();
+  const [measuredPageWidth, setMeasuredPageWidth] = useState<number | null>(null);
+  const pageWidth = measuredPageWidth ?? Math.max(1, previewWindow.width - previewWindow.insets.left - previewWindow.insets.right);
   const { openLink } = useDeviceLink();
   const auth = useAuth();
   const maker = useMobileMakerTransport(deviceId);
@@ -494,7 +499,9 @@ export default function RemoteFilePreviewScreen() {
   if (!current || !siblings) {
     return (
       <SafeAreaView style={styles.safeArea} testID="filePreview.screen">
+        <SystemNavigationBack close label={t('files.preview.done')} onPress={() => goBackGuarded(router)} />
         <PreviewNav
+          hideDone={systemBack}
           meta=""
           onDone={() => goBackGuarded(router)}
           onShare={null}
@@ -517,7 +524,9 @@ export default function RemoteFilePreviewScreen() {
   return (
     <SafeAreaView edges={htmlBrowser ? [] : undefined} style={styles.safeArea} testID="filePreview.screen">
       {!htmlBrowser ? <>
+        <SystemNavigationBack close label={t('files.preview.done')} onPress={() => goBackGuarded(router)} />
       <PreviewNav
+        hideDone={systemBack}
         meta={[
           `${pageIndex + 1} / ${siblings.length}`,
           // absPath 单文件模式没有目录列举,size 未知(0)不显示,避免「0 B」。
@@ -531,6 +540,7 @@ export default function RemoteFilePreviewScreen() {
       </> : null}
 
       <FlatList
+        onLayout={event => setMeasuredPageWidth(Math.max(1, event.nativeEvent.layout.width))}
         data={siblings}
         getItemLayout={(_, index) => ({ index, length: pageWidth, offset: pageWidth * index })}
         ref={pagerRef}
@@ -645,11 +655,13 @@ export default function RemoteFilePreviewScreen() {
 /* ------------------------------ 页面组件 ------------------------------ */
 
 function PreviewNav({
+  hideDone = false,
   meta,
   onDone,
   onShare,
   title,
 }: {
+  hideDone?: boolean;
   meta: string;
   onDone(): void;
   onShare: (() => void) | null;
@@ -660,9 +672,9 @@ function PreviewNav({
   const { t } = useTranslation();
   return (
     <View style={styles.navRow}>
-      <Pressable accessibilityLabel={t('files.preview.done')} hitSlop={10} onPress={onDone} testID="filePreview.done">
+      {!hideDone ? <Pressable accessibilityLabel={t('files.preview.done')} hitSlop={10} onPress={onDone} testID="filePreview.done">
         <Text style={styles.doneText}>{t('files.preview.done')}</Text>
-      </Pressable>
+      </Pressable> : null}
       <View style={styles.navTitleCol}>
         <Text numberOfLines={1} style={styles.navTitle} testID="filePreview.title">{title}</Text>
         {meta ? <Text numberOfLines={1} style={styles.navMeta}>{meta}</Text> : null}
@@ -1382,6 +1394,7 @@ function ToolbarButton({
   return (
     <Pressable
       accessibilityLabel={label}
+      accessibilityRole="button"
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [styles.toolItem, (pressed || disabled) && styles.pressed]}

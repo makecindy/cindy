@@ -192,9 +192,9 @@ export function MyPublishesSection({
                   className={cn(
                     'shrink-0 rounded-full px-2.5 py-1 text-11',
                     key === 'approved'
-                      ? 'bg-[var(--success-soft)] text-[var(--success)]'
+                      ? 'bg-[var(--surface-chip)] text-[var(--status-success)]'
                       : key === 'failed' || key === 'rejected' || key === 'expired'
-                        ? 'bg-[var(--danger-soft)] text-[var(--danger)]'
+                        ? 'bg-[var(--error-bg)] text-[var(--error-fg)]'
                         : 'bg-[var(--surface-chip)] text-[var(--text-secondary)]',
                   )}
                 >

@@ -14,7 +14,7 @@ export function OfficialSkillBadge({ className }: { className?: string }) {
       )}
       title={t('skillhub.builtIn.officialDetail')}
     >
-      <BadgeCheck size={12} strokeWidth={2} className="text-[var(--accent-fg)]" aria-hidden="true" />
+      <BadgeCheck size={12} strokeWidth={2} className="text-[var(--accent-emphasis)]" aria-hidden="true" />
       {t('skillhub.builtIn.official')}
     </span>
   );

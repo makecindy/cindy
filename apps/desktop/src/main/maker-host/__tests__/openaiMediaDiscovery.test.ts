@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const credentials = vi.hoisted(() => ({ key: '' }));
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-openai-media-discovery-test' } }));
 vi.mock('../../logger.js', () => ({
@@ -9,9 +11,9 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
-  getProviderSecretStore: () => ({ get: () => '' }),
+  getProviderSecretStore: () => ({ get: () => credentials.key }),
 }));
-vi.mock('../active-catalog.js', () => ({ setDiscoveredProviderMediaModels: vi.fn() }));
+vi.mock('../active-catalog.js', () => ({ setDiscoveredProviderMediaModels: vi.fn(), setOpenAiImagesApiKeyConfigured: vi.fn() }));
 vi.mock('../anthropic-responses-bridge-host.js', () => ({
   getChatgptBridgeAuth: vi.fn(),
   invalidateChatgptBridgeAuth: vi.fn(),
@@ -20,11 +22,19 @@ vi.mock('../codex-oauth-readiness.js', () => ({ hasCodexOAuthLoginReadOnly: () =
 vi.mock('../outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
 
 import {
+  refreshOpenAiMediaModels,
+  notifyOpenAiMediaCredentialChanged,
+  syncOpenAiMediaAfterCodexAuthChange,
   createOpenAiMediaDiscovery,
   mapOpenAiMediaModels,
   type OpenAiMediaCredentialKind,
   type OpenAiMediaDiscoverySnapshot,
 } from '../model-discovery/openai-media.js';
+
+import { setOpenAiImagesApiKeyConfigured, setDiscoveredProviderMediaModels } from '../active-catalog.js';
+import { outboundFetch } from '../outbound-fetch.js';
+
+afterEach(() => { credentials.key = ''; vi.clearAllMocks(); });
 
 function modelsList(ids: string[]): string {
   return JSON.stringify({
@@ -293,5 +303,21 @@ describe('OpenAI media discovery lifecycle', () => {
 
     await expect(refresh).resolves.toBe(false);
     expect(h.applied).toEqual([null]);
+  });
+});
+
+
+describe('OpenAI image connection mode', () => {
+  it('uses credential presence even when Platform discovery fails, and resets immediately when the key is removed', async () => {
+    credentials.key = 'fixture-key';
+    vi.mocked(outboundFetch).mockRejectedValue(new Error('offline'));
+    await expect(refreshOpenAiMediaModels()).resolves.toBe(false);
+    expect(setOpenAiImagesApiKeyConfigured).toHaveBeenLastCalledWith(true);
+    syncOpenAiMediaAfterCodexAuthChange();
+    expect(setOpenAiImagesApiKeyConfigured).toHaveBeenLastCalledWith(true);
+    credentials.key = '';
+    notifyOpenAiMediaCredentialChanged();
+    expect(setOpenAiImagesApiKeyConfigured).toHaveBeenLastCalledWith(false);
+    expect(setDiscoveredProviderMediaModels).toHaveBeenLastCalledWith('openai', null);
   });
 });

@@ -609,7 +609,11 @@ import { cindyMakeManager } from '../cindy-make/manager.js';
 import { assertCindyMakeWorkspace, withCindyMakeProjectUse } from '../cindy-make/projectAccess.js';
 import { isCindyMakeWorktreePath, isCindyMakeManagedWorktreePath } from '../cindy-make/sourcePaths.js';
 import { assertCindyMakeTaskReady, configureCindyMakeTaskSender, CINDY_MAKE_TASK_DISPATCH } from '../cindy-make/taskRuntime.js';
-import { finishUpstreamMergeTurn, assertUpstreamMergeTaskWritable } from '../cindy-make/upstreamMergeRuntime.js';
+import {
+  finishUpstreamMergeTurn,
+  interruptUpstreamMergeTurn,
+  prepareUpstreamMergeTurn,
+} from '../cindy-make/upstreamMergeRuntime.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
@@ -1123,6 +1127,10 @@ import {
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { openMainWindowSession } from '../deepLink.js';
 import { handleSessionEvent, type SessionEventDependencies } from './sessionEventPipeline.js';
+import {
+  createDeferredProductTurnFailureGate,
+  type ProductTurnFailureOwner,
+} from './productTurnFailureOwner.js';
 import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
@@ -1281,8 +1289,20 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
   // 3–20 秒之后),onTurnErrorEvent 无 agentMeta 时按 register 记录的 turnDedupId 做多窗
   // dedup(saveTurnStartedAtForDeferred 已在压住那一刻存好 turn 开始时刻)。
   persistSuppressedError: (sessionId, detail) => onTurnErrorEvent(sessionId, detail, null),
-  surfaceSuppressedError: (sessionId, detail) =>
-    surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail),
+  surfaceSuppressedError: (sessionId, detail) => {
+    surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail);
+    // L3 may run after a provider replacement or a newer user turn. Resolve
+    // the exact deferred owner before interrupting the product task; a bare
+    // session id can otherwise stop the replacement turn.
+    deferredProductTurnFailureGate.settle(
+      sessionId,
+      isCurrentProductTurnFailureOwner,
+      (owner) => {
+        void interruptProductTurn(sessionId, owner).catch(() =>
+          log.warn('Could not interrupt product turn follow-up'));
+      },
+    );
+  },
   // L3：auto-resume 放弃后，用当初压住的 capture 恰好一次收口 Orca status / auto-bridge。
   // L2 flush/discard 不会走到这里，避免「还在重试却已经把异常终止桥给 Lead」。
   finalizeOrcaSuppressedTerminal: (sessionId, payload) => {
@@ -1340,6 +1360,7 @@ function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
   silentStopAutoResumeGuard.noteSessionReset(sessionId);
   interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
   autoResumeBookkeeping.teardown(sessionId);
+  deferredProductTurnFailureGate.clearSession(sessionId);
 }
 
 function autoResumeAttemptToken(item: AgentInputQueuedMessage): number | null {
@@ -4349,6 +4370,8 @@ interface WiredSessionCloseContext {
   preserveAutoResumeIntent: boolean;
 }
 
+const deferredProductTurnFailureGate = createDeferredProductTurnFailureGate();
+
 /** Desktop adapters for the instance-owned binding and synchronous close lifecycle. */
 const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSessionCloseContext>({
   log,
@@ -4361,6 +4384,11 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
   onBind: (session: WiredSession) => {
     advanceSessionTurnBoundaryGeneration(session.id);
     bindContinuationOnlyAutoResumeLease(session);
+    // Auth/gateway and context-overflow recovery can replace the provider
+    // runtime before the old renderer reports its final deferred error. Move
+    // that logical owner to the replacement; the actual dispatch boundary
+    // below retires it if a newer turn has already started.
+    deferredProductTurnFailureGate.rebindSession(session.id, session);
   },
   broadcastStatus: (session: WiredSession, status) => {
     broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
@@ -4403,6 +4431,9 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     botCompactRuntimeRefreshCoordinator.clearForClosedSession(session);
     cancelDirectAbortReconciliation(session.id);
     pendingFailedTurnAssistantPersistId.delete(session.id);
+    // An explicit close has no replacement turn to inherit the deferred
+    // receipt. Retire it before late renderer callbacks can arrive.
+    deferredProductTurnFailureGate.clearSession(session.id, session);
   },
   finalizeClosedSession: (session: WiredSession, context) => {
     finalizeSessionClose(context.closedDirectAbortBoundary !== null, {
@@ -4416,6 +4447,42 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     });
   },
 });
+
+function isCurrentProductTurnFailureOwner(owner: ProductTurnFailureOwner): boolean {
+  const bound = sessionBindings.getSession(owner.sessionId);
+  // A closed owner may still receive its renderer's final deferred-persist IPC.
+  // If a replacement is already bound, the old identity is stale; while no
+  // replacement exists, the captured Session/generation remains authoritative.
+  if (bound && bound !== owner.session) return false;
+  if (owner.session.instanceId !== owner.instanceId) return false;
+  try {
+    return owner.session.getTurnGeneration() === owner.generation;
+  } catch {
+    return false;
+  }
+}
+
+async function finishProductTurn(
+  sessionId: string,
+  owner?: ProductTurnFailureOwner,
+): Promise<void> {
+  if (owner) {
+    deferredProductTurnFailureGate.clear(owner);
+    if (!isCurrentProductTurnFailureOwner(owner)) return;
+  }
+  await finishUpstreamMergeTurn(sessionId);
+}
+
+async function interruptProductTurn(
+  sessionId: string,
+  owner?: ProductTurnFailureOwner,
+): Promise<void> {
+  if (owner) {
+    deferredProductTurnFailureGate.clear(owner);
+    if (!isCurrentProductTurnFailureOwner(owner)) return;
+  }
+  await interruptUpstreamMergeTurn(sessionId);
+}
 
 /** Remaining domain cleanup stays in its original order, after input coordination. */
 function cleanupClosedSessionRuntime(session: WiredSession): void {
@@ -4460,7 +4527,9 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
 // operation. Capturing these services when wiring a Session would freeze the
 // pre-initialization or previous runtime value for later events.
 const sessionEventDependencies: SessionEventDependencies = {
-  onSuccessfulProductTurn: finishUpstreamMergeTurn,
+  onSuccessfulProductTurn: finishProductTurn,
+  onUnsuccessfulProductTurn: interruptProductTurn,
+  deferUnsuccessfulProductTurn: (owner) => deferredProductTurnFailureGate.defer(owner),
   get botCompactRuntimeRefreshCoordinator() { return botCompactRuntimeRefreshCoordinator; },
   get attemptBotCompactRuntimeRefresh() { return attemptBotCompactRuntimeRefresh; },
   get botDelegationServiceHolder() { return botDelegationServiceHolder; },
@@ -8508,7 +8577,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     anchorClientId: string,
     opts: SessionSendOptions,
   ): Promise<SessionSendResult> {
-    assertUpstreamMergeTaskWritable(session.id);
+    const dispatchMergeTurn = prepareUpstreamMergeTurn(session.id);
     if (!session.remoteHostId && isCindyMakeWorktreePath(app.getPath('userData'), session.workDir)) {
       if (cindyMakeManager.isTaskPreparing(session.id))
         throwIpcError('PRECONDITION_FAILED', 'Cindy Make is still preparing this task');
@@ -8535,6 +8604,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               await gitSnapshotCoordinator.onTurnStart(session.id);
               baselineStarted = true;
             }
+          },
+          onDispatching: () => {
+            opts.onDispatching?.();
+            // A real provider dispatch supersedes any deferred receipt from a
+            // previous recovery attempt. Clear only at this irreversible
+            // boundary; preparation can still be rejected before dispatch.
+            deferredProductTurnFailureGate.clearSession(session.id);
+            dispatchMergeTurn?.();
           },
         });
         if (turnChangeSetStarted && !sendResult.accepted) {
@@ -12206,6 +12283,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
   };
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
+    prepareProductTurn: (sessionId) => {
+      const dispatch = prepareUpstreamMergeTurn(sessionId);
+      return dispatch
+        ? () => {
+            // This is the transaction path's actual vendor-dispatch boundary.
+            deferredProductTurnFailureGate.clearSession(sessionId);
+            dispatch();
+          }
+        : undefined;
+    },
     readAutoReviewHistory,
     readScheduledPermissions: getSessionFsSnapshot,
     getSession: (sessionId) => maker.getSession(sessionId),
@@ -15131,6 +15218,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const sid = requireSessionId(sessionId);
     const remote = isDeviceLinkInvoke();
     await assertRemoteInputControlBoundary(sid, remote, opts, 'stop');
+    // Some providers acknowledge Stop without emitting another terminal event.
+    // Close the native build's wait at this authorized, shared Stop boundary.
+    const makeInterrupted = interruptUpstreamMergeTurn(sid).catch(() =>
+      log.warn('Could not interrupt merge task after explicit stop'),
+    );
     if (!remote) reviewRunControl.noteReviewerStopRequested(sid);
     // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
     // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
@@ -15157,7 +15249,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!inputCoordinator.hasPendingQueuedWork(sid)) {
       getAgentIslandService()?.notifyQueueEmptied(sid);
     }
-    await goalPause;
+    await Promise.all([goalPause, makeInterrupted]);
     return result;
   });
 
@@ -15199,6 +15291,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? (agentMetaRaw as AgentMeta)
           : null;
       const persistId = onTurnErrorEvent(sid, errData, agentMeta);
+      deferredProductTurnFailureGate.settle(
+        sid,
+        isCurrentProductTurnFailureOwner,
+        (owner) => {
+          void interruptProductTurn(sid, owner).catch(() =>
+            log.warn('Could not interrupt product turn after deferred recovery failure'),
+          );
+        },
+        { data: errData, meta: agentMeta },
+      );
       getAgentIslandService()?.resolveDeferredRemoteAuthRetryError(sid);
       return persistId;
     },

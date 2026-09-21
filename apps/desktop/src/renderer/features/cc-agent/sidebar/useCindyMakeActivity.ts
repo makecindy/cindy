@@ -7,11 +7,16 @@ import type { CindyMakeTaskPreparation } from '../../../../shared/cindyMakeDocto
 
 const idle = () => undefined;
 
-export function useCindyMakePreparing(
+export function useCindyMakeActivity(
   session: Session,
-): CindyMakeTaskPreparation['phase'] | undefined {
+): CindyMakeTaskPreparation['phase'] | 'building' | undefined {
   const generation = getDataOwnerGeneration();
-  const enabled = session.source === CINDY_MAKE_SESSION_SOURCE && !session.deviceLinkDeviceId;
+  const enabled =
+    session.source === CINDY_MAKE_SESSION_SOURCE &&
+    !session.deviceLinkDeviceId &&
+    !session.remoteHostId &&
+    session.status !== 'archived' &&
+    session.status !== 'deleted';
   const subscribe = useCallback(
     (listener: () => void) => (enabled ? cindyMakeState.subscribe(listener) : idle),
     [enabled, generation.dataOwnerId, generation.generation],
@@ -20,6 +25,8 @@ export function useCindyMakePreparing(
   // progress must not redraw the entire sidebar on every installation update.
   const getSnapshot = useCallback(() => {
     if (!enabled) return undefined;
+    if (cindyMakeState.getSnapshot().personalBuildSessionIds?.includes(session.id))
+      return 'building';
     const report = cindyMakeState.taskForSession(session.id);
     return report?.status === 'running' ? report.task?.phase : undefined;
   }, [enabled, session.id]);

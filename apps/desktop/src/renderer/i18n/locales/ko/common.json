@@ -7434,6 +7434,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "이 기기",
+      "title": "기기 전환",
+      "switchDevice": "기기 전환, 현재 {{device}}",
+      "unread": "읽지 않은 메시지",
+      "otherUnread": "다른 기기에 읽지 않은 메시지가 있어요",
+      "remotePlaceholder": "{{device}}의 {{name}}에게 메시지 보내기…"
+    },
     "creationName": "이름",
     "settingsBack": "설정으로 돌아가기",
     "sidebar": {
@@ -12995,6 +13003,14 @@
       "localMain": "로컬 main",
       "lookupUnavailable": "조회 실패",
       "comparisonUnavailable": "로컬 main의 차이 미확인",
+      "personalStatus": {
+        "suffix": " ({{status}})",
+        "upToDate": "최신 상태",
+        "updateAvailable": "업데이트 있음",
+        "unverified": "버전 상태 미확인",
+        "upToDateDescription": "개인 버전 코드에 {{target}}의 모든 업데이트가 포함되어 있습니다",
+        "personalChanges": "개인 변경 기록 {{ahead}}개 추가"
+      },
       "comparison": {
         "same": "로컬 main과 SHA가 같음",
         "personalAhead": "로컬 main을 포함하며 개인 변경 기록 {{ahead}}개 추가",
@@ -13037,6 +13053,16 @@
       "description": "이번 수정 사항을 개인 버전에 병합하고, 검사와 패키징을 통과한 후 새 개인 버전으로 저장합니다.",
       "readyHint": "설치 파일 {{name}}이 준비되었습니다. 저장된 폴더를 열 수 있습니다.",
       "failedStep": "실패한 단계: {{step}}",
+      "diagnostic": {
+        "outOfMemory": "패키징 프로세스가 메모리 한도를 초과했습니다. Cindy를 업데이트한 후 다시 생성하세요. 계속 실패하면 아래 오류를 제보하세요.",
+        "timeout": "생성 시간이 1시간을 초과하여 중단되었습니다. 아래 기록을 확인한 후 다시 시도하세요.",
+        "exitCode": "프로세스 종료 코드: {{code}}",
+        "unavailable": "이번 생성에서는 구체적인 오류가 저장되지 않았습니다. 원인을 기록하려면 다시 생성하세요."
+      },
+      "mergeStep": {
+        "conflicts": "충돌 해결 중…",
+        "cleanup": "병합 파일 정리 중…"
+      },
       "preparationStep": {
         "environment": "빌드 환경 준비 중…",
         "original": "현재 버전 확인 중…"
@@ -13058,6 +13084,8 @@
       "buildLog": {
         "title": "빌드 기록",
         "steps": {
+          "resolving-conflicts": "충돌 해결",
+          "cleaning-merge": "병합 파일 정리",
           "environment": "빌드 환경 준비",
           "original": "현재 버전 확인",
           "merging": "수정 사항 병합",
@@ -13137,7 +13165,7 @@
         "selectItem": "{{title}} 선택",
         "hint": "오래된 변경부터 병합한 뒤 새 버전 하나를 생성합니다.",
         "confirmTitle": "변경 {{count}}개를 포함한 개인 버전을 만들까요?",
-        "confirmDescription": "선택한 변경을 아래 순서대로 병합하고 모두 성공하면 새 버전 하나를 생성합니다. 선택한 변경의 격리 버전이 실행 중이면 먼저 중지합니다. 충돌이 발생하면 중단하고 이미 병합된 변경은 유지합니다. 충돌을 해결한 뒤 다시 만들 수 있습니다. 해결되지 않은 충돌이 없을 때 취소하거나 실패하면 저장된 버전에 포함되지 않은 병합을 되돌리고 각 세션의 원래 변경은 유지합니다.",
+        "confirmDescription": "선택한 변경을 아래 순서대로 병합하고 모두 성공하면 새 버전 하나를 생성합니다. 선택한 변경의 격리 버전이 실행 중이면 먼저 중지합니다. 충돌은 연결된 세션에서 해결하며, 완료되면 임시 파일을 정리하고 자동으로 생성을 계속합니다. 제작을 중지하면 연결된 세션도 중지하고 임시 충돌 수정을 삭제합니다. 원래 변경과 저장된 버전은 유지됩니다.",
         "start": "만들기 확인",
         "progress": "병합 중 {{current}} / {{total}}: {{title}}",
         "restartTest": "격리 버전 다시 시작"
@@ -13146,6 +13174,10 @@
       "buildDescription": "현재 개인 소스로 새 버전을 생성합니다. 아직 반영하지 않은 이전 변경 사항은 포함되지 않습니다.",
       "building": "개인 버전 생성 중…",
       "stop": "제작 중지",
+      "stopConfirm": {
+        "title": "이번 제작을 중지할까요?",
+        "description": "충돌을 해결 중인 세션도 중지하고 임시 충돌 수정과 파일을 삭제합니다. 저장된 버전에 포함되지 않은 병합도 되돌립니다. 원래 세션의 변경, 대화 기록, 저장된 버전은 유지됩니다."
+      },
       "stopping": "중지 중…",
       "progress": {
         "waiting": "시작 대기 중",

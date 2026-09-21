@@ -6,6 +6,8 @@
  * (the `cindy_make` MCP server, the per-turn task note, the completion card).
  * Ordinary tasks never carry the marker, even inside the same source checkout.
  */
+import type { CindyMakeBuildDiagnostic } from './cindyMakeBuildDiagnostic.js';
+
 export const CINDY_MAKE_SESSION_SOURCE = 'cindy-make' as const;
 
 /**
@@ -66,12 +68,20 @@ export type CindyMakeTestStep =
 
 export interface CindyMakePersonalBuildState {
   status: 'waiting' | 'checking' | 'merging' | 'packaging' | 'publishing' | 'ready' | 'failed';
+  /** Retained for navigation after the disposable merge workspace is reclaimed. */
+  mergeSessionId?: string;
   /** Optional preparation detail; older clients still display waiting. */
   preparationStep?: 'environment' | 'original';
+  /** Native conflict handling and cleanup remain part of the same build. */
+  mergeStep?: 'conflicts' | 'cleanup';
   /** Optional detail within checking; old records/clients retain the broad status. */
   checkStep?: 'dependencies' | 'tests' | 'types';
   /** Bounded, structured progress records; raw process output never crosses into the UI. */
   logs?: CindyMakeBuildLogEntry[];
+  /** Latest scrubbed process line for the current stage; replaced, never appended to history. */
+  outputLine?: string;
+  /** Sanitized failure excerpt; absent on builds made before diagnostic capture was added. */
+  diagnostic?: CindyMakeBuildDiagnostic;
   /** Cancellation is pending until owned processes and disposable outputs are cleaned. */
   stopping?: boolean;
   startedAt?: number;
@@ -106,6 +116,8 @@ export type CindyMakeBuildLogStep =
   | 'environment'
   | 'original'
   | 'merging'
+  | 'resolving-conflicts'
+  | 'cleaning-merge'
   | 'checking-dependencies'
   | 'checking-tests'
   | 'checking-types'
@@ -124,6 +136,8 @@ const CINDY_MAKE_BUILD_LOG_STEPS = new Set<CindyMakeBuildLogStep>([
   'environment',
   'original',
   'merging',
+  'resolving-conflicts',
+  'cleaning-merge',
   'checking-dependencies',
   'checking-tests',
   'checking-types',
@@ -159,18 +173,29 @@ export function appendCindyMakeBuildLog(
   next: CindyMakePersonalBuildState,
   at = Date.now(),
 ): CindyMakePersonalBuildState {
+  if (
+    next.buildId &&
+    next.buildId === previous?.buildId &&
+    !next.mergeSessionId &&
+    previous.mergeSessionId
+  )
+    next = { ...next, mergeSessionId: previous.mergeSessionId };
   const step: CindyMakeBuildLogStep | undefined =
     next.status === 'waiting'
       ? next.preparationStep
-      : next.status === 'checking'
-        ? next.checkStep
-          ? (('checking-' + next.checkStep) as CindyMakeBuildLogStep)
-          : 'checking-dependencies'
-        : next.status === 'failed'
-          ? next.error === 'cancelled'
-            ? 'cancelled'
-            : 'failed'
-          : next.status;
+      : next.status === 'merging' && next.mergeStep
+        ? next.mergeStep === 'conflicts'
+          ? 'resolving-conflicts'
+          : 'cleaning-merge'
+        : next.status === 'checking'
+          ? next.checkStep
+            ? (('checking-' + next.checkStep) as CindyMakeBuildLogStep)
+            : 'checking-dependencies'
+          : next.status === 'failed'
+            ? next.error === 'cancelled'
+              ? 'cancelled'
+              : 'failed'
+            : next.status;
   if (!step) return next;
   const logs = previous?.logs ?? next.logs ?? [];
   if (logs.at(-1)?.step === step) return { ...next, logs };

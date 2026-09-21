@@ -16,12 +16,18 @@ export function createHistoryDiskIO(): HistoryDiskIO {
     async write(name, text) {
       directory.create({ intermediates: true, idempotent: true });
       const temporary = new File(directory, `${name}.tmp`);
+      const temporaryUri = temporary.uri;
       try {
         // Native asynchronous write avoids a synchronous filesystem write on the UI thread.
         const fs = await import('expo-file-system/legacy');
         await fs.writeAsStringAsync(temporary.uri, text);
         temporary.moveSync(new File(directory, name), { overwrite: true });
-      } finally { if (temporary.exists) temporary.delete(); }
+      } finally {
+        // moveSync changes temporary.uri to the destination. Only clean the original
+        // staging path; deleting temporary here would delete the committed snapshot.
+        const leftover = new File(temporaryUri);
+        if (leftover.exists) leftover.delete();
+      }
     },
     async remove(name) { const file = new File(directory, name); if (file.exists) file.delete(); },
   };

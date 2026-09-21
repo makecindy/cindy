@@ -58,6 +58,7 @@ import {
   type CustomProviderConfig,
   type PiModelApi as NativePiModelApi,
   type Provider,
+  type ProviderMediaModel,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 
@@ -120,6 +121,8 @@ let customConfigs: CustomProviderConfig[] | null = null;
  * **additions-only**:静态 id first-wins,cache 只补未来新增模型,不会覆盖目录的受控能力元数据。
  */
 let discoveredCodex: CatalogModel[] = [];
+/** Mirrors credential presence only; secrets stay in the existing secret store. */
+let openAiImagesApiKeyConfigured = false;
 /**
  * 通用 OAuth 供应商（auth.oauth 描述符）的动态发现模型:providerId → per-agent 增量。
  * 语义同 discoveredCodex:**additions-only**,只补目录里没有的新 id,静态条目 first-wins,
@@ -1689,29 +1692,55 @@ function computeMerged(): Catalog {
   const modelRegistry = b.modelRegistry
     ? { ...b.modelRegistry, localModels: effectiveLocalModels }
     : undefined;
+  const userMediaMetadata = (provider: Provider, modelId: string, mediaModel: ProviderMediaModel) => {
+    const catalogId = providerCatalogId(provider);
+    const catalogModelId = catalogId !== provider.id && modelId.startsWith(`${provider.id}/`)
+      ? `${catalogId}/${modelId.slice(provider.id.length + 1)}` : modelId;
+    const identity =
+      findModelRegistryRoute(b.modelRegistry, catalogId, catalogModelId)?.entry.modelRef ??
+      findBaseModel(b.modelRegistry, catalogModelId)?.id;
+    const key = `${encodeURIComponent(provider.id)}:${modelId}`;
+    const userModel =
+      provider.source === 'user' && mediaModel.sourceAgent
+        ? provider.models[mediaModel.sourceAgent]
+            ?.find((m) => m.id === modelId)?.userModelConfig
+        : undefined;
+    return {
+      ...(identity ? localOverrides.baseModels?.[identity] : {}),
+      ...(userModel ? runtimeUserModelMetadata(userModel) : {}),
+      ...pickModelMetadata(localOverrides.patches[key]?.base),
+    };
+  };
   providers = providers.map((provider) =>
     projectProviderMediaModels(provider, b.modelRegistry, {
-      userMetadata: (modelId, mediaModel) => {
-        const catalogId = providerCatalogId(provider);
-        const catalogModelId = catalogId !== provider.id && modelId.startsWith(`${provider.id}/`)
-          ? `${catalogId}/${modelId.slice(provider.id.length + 1)}` : modelId;
-        const identity =
-          findModelRegistryRoute(b.modelRegistry, catalogId, catalogModelId)?.entry.modelRef ??
-          findBaseModel(b.modelRegistry, catalogModelId)?.id;
-        const key = `${encodeURIComponent(provider.id)}:${modelId}`;
-        const userModel =
-          provider.source === 'user' && mediaModel.sourceAgent
-            ? provider.models[mediaModel.sourceAgent]
-                ?.find((m) => m.id === modelId)?.userModelConfig
-            : undefined;
-        return {
-          ...(identity ? localOverrides.baseModels?.[identity] : {}),
-          ...(userModel ? runtimeUserModelMetadata(userModel) : {}),
-          ...pickModelMetadata(localOverrides.patches[key]?.base),
-        };
-      },
+      userMetadata: (modelId, mediaModel) => userMediaMetadata(provider, modelId, mediaModel),
     }),
   );
+  // Subscription image_generation is one hosted capability, not the Platform model list.
+  // Keep the original ID so saved Art selections and visibility overrides still resolve.
+  providers = providers.map((provider) => {
+    if (!isOpenAiSubscriptionProvider(provider) ||
+        (provider.id === 'openai' && openAiImagesApiKeyConfigured) ||
+        provider.imageModels?.length === 0) return provider;
+    const id = `${provider.id}/gpt-image-2`;
+    const previous = provider.imageModels?.find((model) => model.id === id);
+    const defaults: ProviderMediaModel = {
+      id,
+      name: 'GPT Image Gen',
+      mode: 'image_generation',
+      modalities: { input: ['text', 'image'], output: ['image'] },
+      ...(previous?.defaultEnabled !== undefined ? { defaultEnabled: previous.defaultEnabled } : {}),
+      ...(previous?.disabled !== undefined ? { disabled: previous.disabled } : {}),
+    };
+    return {
+      ...provider,
+      imageModels: [{
+        ...defaults,
+        ...userMediaMetadata(provider, id, previous ?? defaults),
+      }],
+      imageDefaults: provider.imageDefaults ? { standard: id } : undefined,
+    };
+  });
   return { ...b, modelRegistry, providers };
 }
 
@@ -2016,6 +2045,13 @@ export function setXaiDiscoveredModels(models: readonly XaiDiscoveredModel[] | n
   } else {
     xaiDiscoveredModels = models === null ? null : models.map((model) => ({ ...model }));
   }
+  markChanged();
+}
+
+/** Switch the builtin image connection using credential presence, including discovery failures. */
+export function setOpenAiImagesApiKeyConfigured(configured: boolean): void {
+  if (openAiImagesApiKeyConfigured === configured) return;
+  openAiImagesApiKeyConfigured = configured;
   markChanged();
 }
 

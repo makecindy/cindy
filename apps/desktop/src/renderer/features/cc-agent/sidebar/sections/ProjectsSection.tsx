@@ -86,6 +86,7 @@ import { projectKeyComparisonKey, type BotGroupNode } from '../../lib/projectGro
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { aggregateSessionLamps, type SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
 import {
@@ -1308,7 +1309,7 @@ export function SessionGroupNode({
 }: {
   sessions: Session[];
   /** 仅收起时显示组头聚合灯(ProjectNode.lamp 同款语义):running → 图标呼吸橙;
-   *  dotTone → 标题右侧 AttentionDot。聚合集合 = 组内会话(与渲染一致)。 */
+   *  dotTone → 右侧状态槽。聚合集合 = 组内会话(与渲染一致)。 */
   lamp?: SessionLampAggregate;
   /** 透传给组内 SessionEntryList 的折叠豁免追加集合(语义见其 prop 注释)。 */
   foldExemptSessionIds?: ReadonlySet<string>;
@@ -1357,7 +1358,7 @@ export function SessionGroupNode({
   const showRunning = collapsed && lamp?.running;
   return (
     <div className="relative flex w-full select-none flex-col" data-no-drag>
-      {/* 段头:与 ProjectNode Header 同款规格(h-8 药丸 hover / pl-3 pr-1 /
+      {/* 段头:与 ProjectNode Header 同款规格(h-8 药丸 hover / pl-3 pr-2 /
           gap-2.5 / 15px 图标 / meta 灰 font-normal),仅图标换 MessagesSquare、
           无重命名与右键菜单(「对话」是固定分类名,没有项目那套操作)。 */}
       <div
@@ -1372,7 +1373,7 @@ export function SessionGroupNode({
           }
         }}
         className={cn(
-          'group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-full pl-3 pr-1',
+          'group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-full pl-3 pr-2',
           'text-sm font-normal text-[var(--sidebar-list-muted)]',
           'transition-colors hover:bg-sidebar-item-hover',
         )}
@@ -1398,10 +1399,6 @@ export function SessionGroupNode({
           <span className="min-w-0 shrink truncate">
             {groupTitle ?? t('ccAgent.sidebar.dialogues')}
           </span>
-          {/* 聚合未读点与 ProjectNode 一致,仅收起时显示。 */}
-          {collapsed && lamp?.dotTone && (
-            <AttentionDot size={5} tone={lamp.dotTone} className="shrink-0" />
-          )}
           <Chevron
             size={13}
             strokeWidth={2}
@@ -1409,6 +1406,12 @@ export function SessionGroupNode({
             className="shrink-0 text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100"
           />
         </div>
+        {/* 聚合状态与普通任务行保持同一右侧槽位；展开后由子任务行分别显示。 */}
+        {collapsed && lamp?.dotTone && (
+          <div className="ml-auto flex h-6 shrink-0 items-center justify-end">
+            <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
+          </div>
+        )}
         {/* 悬浮工具组:与 ProjectNode Header 同款——常态隐藏,hover 整行淡入。
             对话组没有项目那套 More 菜单,只保留新建(SquarePen,与项目行等位)。 */}
         {onCreateDialogue && (

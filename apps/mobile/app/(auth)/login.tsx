@@ -1,17 +1,13 @@
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { resolveLoginGroupPlacement } from '@/auth/loginGroupPlacement';
 import { Stack } from 'expo-router';
 import { X } from 'lucide-react-native';
+import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
+import { hasNativeLoginButtons, LoginNativeButton } from '@/components/LoginNativeButton';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  Animated,
-  Easing,
-  Keyboard,
-  Linking,
-  Platform,
-  Pressable,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { Animated, Easing, Keyboard, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
@@ -130,6 +126,8 @@ export function LoginScreen({
     [remoteSessionStoreVersion],
   );
   const stage = useLoginSurface();
+  const loginWindow = useAdaptiveWindow();
+  const systemBack = useSystemNavigationBack() && !additionalAccount;
   const insets = useSafeAreaInsets();
   // 舞台有效主题(首启亮色门可强制 light,与系统主题可能不一致):状态栏样式
   // 必须跟舞台而不是系统,经 screen option 走 VC-based 通道(见 _layout 注释)。
@@ -461,7 +459,7 @@ export function LoginScreen({
         testID="login.accountSwitcher"
       />
     ) : null;
-  const backNode = backAction ? (
+  const backNode = backAction && !systemBack ? (
     <LoginBackButton
       disabled={auth.isBusy}
       label={loginText('back')}
@@ -1245,26 +1243,25 @@ export function LoginScreen({
   // 组内容缩放 = stage.scale × loginGroupScale(§3.6 pad 构图 0.794117 / 0.655357,
   // 手机 1)。Safe Area:背景 edge-to-edge(stage 宿主不裁),功能区保持 insets 内——
   // 组底边越过 bottom inset 时整组按差值上移(附录 C §3.4 工程定案)。
-  const groupScale = stage.scale * stage.loginGroupScale;
-  const groupLeftPx = stage.offsetX + stage.loginX * stage.scale;
-  const groupTopPxRaw = stage.offsetY + stage.loginY * stage.scale;
-  const bottomLimitPx = stage.viewportHeight - insets.bottom;
+  const keyboard = useLoginKeyboardRect();
+  const foldedLogin = loginWindow.regions.some(r => r.kind === 'division');
+  const scrollForKeyboard = foldedLogin || (stage.mode === 'compact-wide' && stage.viewportHeight < 480
+    && (!keyboard.visible || (keyboard.rect != null && keyboard.rect.width >= loginWindow.width * 0.95)));
   // consent PR:identifier 主视图下方多出协议行(行底 622 超出组高 560 共 62 设计px)。
   // 流程底边全步骤恒取 622(含协议行的最低内容):一防步骤切换时 lift 释放产生
   // 整组纵向跳变(规则 7,codex 审查 P1),二让下方外层/内层容器 bounds 恒包住
   // 协议行——RN(尤其 Android)对父 bounds 外子节点不派发触摸,协议行必须在界内。
   const flowBottomDesignPx = loginSizes.flowHeight + LOGIN_CONSENT_ROW.bottomOverflow;
-  const liftPx = Math.max(
-    0,
-    groupTopPxRaw + flowBottomDesignPx * groupScale - bottomLimitPx,
+  const { x: groupLeftPx, y: groupTopPx, height: groupVisibleHeight, scale: groupScale } = resolveLoginGroupPlacement(
+    loginWindow, stage, flowBottomDesignPx,
+    scrollForKeyboard && keyboard.visible && keyboard.rect && keyboard.rect.width >= loginWindow.width * 0.95
+      ? Math.max(0, loginWindow.height - keyboard.rect.y) : 0,
   );
-  const groupTopPx = Math.max(0, groupTopPxRaw - liftPx);
 
   // 键盘契约(Step 5b.1,方案 B):唯一位移源 = 自定义 translate。
   // v5 冻结测量拓扑:基线只在下方「外层未变换测量 wrapper」上 measureInWindow
   // (天然不含 translate);键盘事件 / viewport 变化(Android resize)后重测,
   // 基线随 resize 更新 → 位移只计一次,无系统/自定义双算。
-  const keyboard = useLoginKeyboardRect();
   const outerGroupRef = useRef<View>(null);
   const [groupBaseline, setGroupBaseline] = useState<{
     x: number;
@@ -1290,11 +1287,12 @@ export function LoginScreen({
   // viewport 不缩窗,需独立跟踪全高以算「全高 - 键盘高 - 系统栏底」键盘顶(见
   // loginKeyboardAvoidance computeDockedKeyboardTop)。取 max 抗缩窗/旋转噪声。
   const [fullViewportHeight, setFullViewportHeight] = useState(stage.viewportHeight);
+  const fullViewportWidthRef = useRef(stage.viewportWidth);
   useEffect(() => {
-    setFullViewportHeight((prev) =>
-      stage.viewportHeight > prev ? stage.viewportHeight : prev,
-    );
-  }, [stage.viewportHeight]);
+    const resized = fullViewportWidthRef.current !== stage.viewportWidth;
+    fullViewportWidthRef.current = stage.viewportWidth;
+    setFullViewportHeight(prev => resized || !keyboard.visible ? stage.viewportHeight : Math.max(prev, stage.viewportHeight));
+  }, [stage.viewportHeight, stage.viewportWidth, keyboard.visible]);
   const ssoOrgHistoryBottom =
     ssoOrgMode && ssoOrgHistoryOpen && ssoOrgHistory.length > 1
       ? LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight
@@ -1339,7 +1337,7 @@ export function LoginScreen({
     fullViewportHeight,
     insets.bottom,
   ]);
-  const keyboardShift = shiftResult.shift;
+  const keyboardShift = scrollForKeyboard ? 0 : shiftResult.shift;
 
   // handoff 面板入场(demo:300+moveMs 起步,自下而上 20px + 渐显 420ms;
   // reduced-motion/已登录直入由 Provider 收敛为 done,此处直落终态)
@@ -1367,6 +1365,8 @@ export function LoginScreen({
     >
       {/* 渲染为 null,仅把状态栏样式写进本屏 screen options。iOS 专用:
           Android 由舞台内组件式 StatusBar 控制,不走 RNS 双轨 */}
+      {!additionalAccount ? <SystemNavigationBack available={!!backAction} disabled={auth.isBusy}
+        label={loginText('back')} onPress={() => backAction?.()} /> : null}
       {Platform.OS === 'ios' ? (
         <Stack.Screen
           options={{
@@ -1374,28 +1374,14 @@ export function LoginScreen({
           }}
         />
       ) : null}
+
       {additionalAccount && onClose ? (
-        <Pressable
-          accessibilityLabel={t('shared.closePanel')}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: auth.isBusy }}
-          disabled={auth.isBusy}
-          hitSlop={8}
-          onPress={onClose}
-          style={({ pressed }) => [
-            styles.closeButton,
-            { top: insets.top + spacing.sm },
-            pressed && styles.closeButtonPressed,
-            auth.isBusy && styles.closeButtonDisabled,
-          ]}
-          testID="login.closeButton"
-        >
-          <X
-            color={colors.textPrimary}
-            size={iconSize.lg}
-            strokeWidth={iconStroke.regular}
-          />
-        </Pressable>
+        <View style={{ position: 'absolute', right: spacing.lg, top: insets.top + spacing.sm, zIndex: 20 }}>
+          <HomeHeaderGlassButton accessibilityLabel={t('shared.closePanel')}
+            disabled={auth.isBusy} onPress={onClose} testID="login.closeButton">
+            <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+          </HomeHeaderGlassButton>
+        </View>
       ) : null}
       {/* 外层未变换测量 wrapper(v5 冻结拓扑):持布局基线,不参与任何 translate */}
       <View
@@ -1411,7 +1397,7 @@ export function LoginScreen({
         ref={outerGroupRef}
         style={{
           // 恒含协议行区间(622 设计px):协议行必须在父 bounds 内才可命中(见 flowBottomDesignPx 注)
-          height: flowBottomDesignPx * groupScale,
+          height: groupVisibleHeight,
           left: groupLeftPx,
           position: 'absolute',
           top: groupTopPx,
@@ -1419,7 +1405,13 @@ export function LoginScreen({
         }}
       >
         {/* 内层 translate 容器:键盘位移唯一施加处(方案 B) */}
-        <View style={{ flex: 1, transform: [{ translateY: -keyboardShift }] }}>
+        <ScrollView
+          style={{ flex: 1, transform: [{ translateY: -keyboardShift }] }}
+          contentContainerStyle={{ height: flowBottomDesignPx * groupScale }}
+          keyboardShouldPersistTaps="handled"
+          scrollEnabled={groupVisibleHeight < flowBottomDesignPx * groupScale}
+          showsVerticalScrollIndicator={false}
+        >
           <Animated.View
             style={{
               flex: 1,
@@ -1443,7 +1435,7 @@ export function LoginScreen({
               {stateContent}
             </View>
           </Animated.View>
-        </View>
+        </ScrollView>
       </View>
       <AccountSwitcherSheet
         hasRunningTasks={hasRunningTasks}
@@ -1662,7 +1654,12 @@ function AccountDeletionStatusPanel({
             ? loginText('accountDeletionProcessingCopy')
             : loginText('accountDeletionCompletedCopy')}
       </Text>
-      {onDismiss ? (
+      {onDismiss ? (hasNativeLoginButtons ? (
+        <LoginNativeButton label={loginText('accountDeletionDismiss')} onPress={onDismiss}
+          testID="login.accountDeletionDismissButton" variant="text"
+          width={frame.width - scaled(B.padding) * 2} height={Math.max(44, scaled(B.lineHeight))} fontSize={scaled(B.font)}
+          style={{ marginTop: scaled(B.bodyLinkGap) }} />
+      ) : (
         <Pressable
           accessibilityRole="button"
           hitSlop={resolveDeletionBubbleLinkHitSlop(frame.scale)}
@@ -1679,7 +1676,7 @@ function AccountDeletionStatusPanel({
             {loginText('accountDeletionDismiss')}
           </Text>
         </Pressable>
-      ) : null}
+      )) : null}
     </View>
   );
 }

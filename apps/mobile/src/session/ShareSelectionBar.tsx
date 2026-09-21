@@ -1,10 +1,9 @@
-import { GlassView } from "expo-glass-effect";
+import { HomeHeaderGlassButton } from "./HomeHeaderGlassButton";
 import { Share as ShareIcon, X } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { ShareImageNativeButton } from "@/session/ShareImageNativeButton";
-import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import {
   fontWeight,
@@ -31,42 +30,24 @@ export function ShareSelectionBar({
   onShare(): void;
 }) {
   const { t } = useTranslation();
-  const { colors, mode } = useTheme();
+  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const liquidGlass = useLiquidGlassAvailable();
 
   const cancelIcon = (
     <X
-      color={colors.textSecondary}
-      size={iconSize.md}
+      color={colors.textPrimary}
+      size={iconSize.action}
       strokeWidth={iconStroke.regular}
     />
   );
   const cancelButton = (
-    <Pressable
+    <HomeHeaderGlassButton
       accessibilityLabel={t("session.shareImage.cancel")}
-      accessibilityRole="button"
-      hitSlop={spacing.sm}
       onPress={onCancel}
-      style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
       testID="session.shareImage.cancel"
     >
-      {liquidGlass ? (
-        <GlassView
-          colorScheme={mode}
-          glassEffectStyle="regular"
-          isInteractive
-          style={styles.cancelGlass}
-          tintColor={colors.surface}
-        >
-          <View pointerEvents="none" style={styles.iconButton}>
-            {cancelIcon}
-          </View>
-        </GlassView>
-      ) : (
-        cancelIcon
-      )}
-    </Pressable>
+      {cancelIcon}
+    </HomeHeaderGlassButton>
   );
   const countLabel = (
     <View
@@ -138,17 +119,6 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 64,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.sm,
-    },
-    iconButton: {
-      alignItems: "center",
-      flexShrink: 0,
-      height: 44,
-      justifyContent: "center",
-      width: 44,
-    },
-    cancelGlass: {
-      borderRadius: radius.pill,
-      overflow: "hidden",
     },
     count: { flex: 1, minWidth: 0 },
     titleText: {

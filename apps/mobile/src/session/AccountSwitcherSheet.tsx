@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Platform,
   Pressable,
   StyleSheet,
   View,
@@ -14,10 +15,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/auth/AuthContext';
 import { Text } from '@/components/AppText';
+import { hasNativeLoginButtons, LoginNativeButton } from '@/components/LoginNativeButton';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
+import { ComposerSheet } from '@/session/ComposerSheet';
+import type { SheetSurfaceProps } from '@/session/SheetSurface';
 import { presentSavedAccount } from '@/session/accountSwitcherPresentation';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
@@ -98,7 +102,13 @@ export function AccountSwitcherSheet({
     });
   };
 
-  const footer = (
+  const footer = hasNativeLoginButtons ? (
+    <LoginNativeButton label={t('devices.list.accounts.add')} height={48} fontSize={typeScale.body}
+      disabled={switchingKey !== null} onPress={() => confirmBoundary(onAddAccount)}
+      testID="accountSwitcher.addAccount" showLabel artworkSize={iconSize.md}>
+      <UserPlus color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+    </LoginNativeButton>
+  ) : (
     <Pressable
       accessibilityRole="button"
       disabled={switchingKey !== null}
@@ -119,18 +129,13 @@ export function AccountSwitcherSheet({
   );
 
   return (
-    <SheetModal
-      backdropTestID="accountSwitcher.backdrop"
-      onBackdropPress={onClose}
+    <AccountSwitcherContainer
+      onClose={onClose}
       onClosed={onClosed}
-      onRequestClose={onClose}
       visible={visible}
-    >
-      <SheetSurface
         bottomInset={insets.bottom}
         footer={footer}
         heights={heights}
-        onClose={onClose}
         onSnapChange={setSnap}
         snap={snap}
         testID="accountSwitcher.sheet"
@@ -141,6 +146,18 @@ export function AccountSwitcherSheet({
             const { imageUrl, isOrg, subtitle, title } =
               presentSavedAccount(account);
             const switching = switchingKey === account.accountKey;
+            if (hasNativeLoginButtons) return <LoginNativeButton key={account.accountKey}
+              label={title} subtitle={subtitle ?? undefined} height={64} fontSize={typeScale.body}
+              accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
+              onPress={() => switchTo(account.accountKey)} variant="text" showLabel artworkSize={44}
+              disabled={account.isCurrent || switchingKey !== null} busy={switching}
+              selected={account.isCurrent} testID={`accountSwitcher.account.${account.membershipId}`}>
+              <View style={styles.avatar}>
+                {imageUrl ? <Image source={{ uri: imageUrl }} style={styles.avatarImage} />
+                  : isOrg ? <Building2 color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                    : <UserRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
+              </View>
+            </LoginNativeButton>;
             return (
               <Pressable
                 accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
@@ -196,9 +213,21 @@ export function AccountSwitcherSheet({
             <Text style={styles.error}>{t('devices.list.accounts.syncFailed')}</Text>
           ) : null}
         </View>
-      </SheetSurface>
-    </SheetModal>
+    </AccountSwitcherContainer>
   );
+}
+
+function AccountSwitcherContainer({ visible, onClosed, children, ...surface }: SheetSurfaceProps & {
+  visible: boolean; onClosed?: () => void; children: ReactNode;
+}) {
+  if (Platform.OS === 'ios') return <ComposerSheet
+    visible={visible} onClose={surface.onClose} onClosed={onClosed}
+    title={surface.title} footer={surface.footer} testID={surface.testID}
+  >{children}</ComposerSheet>;
+  return <SheetModal visible={visible} onRequestClose={surface.onClose}
+    onBackdropPress={surface.onClose} onClosed={onClosed} backdropTestID="accountSwitcher.backdrop">
+    <SheetSurface {...surface}>{children}</SheetSurface>
+  </SheetModal>;
 }
 
 const makeStyles = (colors: ThemeColors) =>

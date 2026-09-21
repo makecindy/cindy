@@ -2572,7 +2572,7 @@ export function ProviderConnectionDialog({
                 {/* Codex Responses Provider 级能力。放在自定义请求头之后，默认收起；
                     同一张说明卡片支持 hover/focus 临时预览和 click/tap 固定。 */}
                 {canShowImageGenerationAdvanced && (
-                  <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] pt-3">
+                  <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
                     <button
                       type="button"
                       onClick={() => {

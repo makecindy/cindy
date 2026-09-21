@@ -73,7 +73,7 @@ import {
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
 import { sessionMatchesProjectDir } from '@/session/mobileHome';
-import { HomeSessionRow } from './index';
+import { HomeSessionRow } from '@/session/HomeSurface';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';

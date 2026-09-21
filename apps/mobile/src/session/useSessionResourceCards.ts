@@ -1,11 +1,12 @@
 import { useCallback, useRef, useState } from 'react';
-import { AppState } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { Alert, AppState } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import {
   resolveRemoteText,
   type RemoteCollectionDescriptor,
   type RemoteResource,
+  type RemoteResourceLink,
 } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -45,6 +46,7 @@ export function useSessionResourceCards(
   source: string | undefined,
   running: boolean,
 ) {
+  const router = useRouter();
   const {
     invoke,
     status,
@@ -54,7 +56,7 @@ export function useSessionResourceCards(
     onRemoteResourceChanged,
   } = useDeviceLink();
   const { accountGeneration } = useAuth();
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const binding = JSON.stringify([
     accountGeneration,
     deviceId,
@@ -151,7 +153,11 @@ export function useSessionResourceCards(
           generation += 1;
           setState((previous) =>
             previous?.binding === binding
-              ? { ...previous, stale: true, scope: blockInput ? '' : previous.scope }
+              ? {
+                  ...previous,
+                  stale: true,
+                  scope: blockInput ? '' : previous.scope,
+                }
               : previous,
           );
         }
@@ -229,16 +235,32 @@ export function useSessionResourceCards(
 
   const visible = state?.binding === binding ? state : undefined;
   const fresh =
-    visible?.scope === scope && status === 'online' && !visible.failed && !visible.stale;
+    visible?.scope === scope &&
+    status === 'online' &&
+    !visible.failed &&
+    !visible.stale;
   const pendingId = pending?.binding === binding ? pending.id : null;
+  const latest = useRef({ visible, fresh });
+  latest.current = { visible, fresh };
+  const focused = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      focused.current = true;
+      return () => {
+        focused.current = false;
+      };
+    }, [scope]),
+  );
   const act = async (resource: RemoteResource, actionId: string) => {
+    const action = resource.actions?.find(
+      (item) => item.id === actionId && !item.disabled,
+    );
     if (
       !fresh ||
       current.current !== scope ||
       request.current?.binding === binding ||
-      !resource.actions?.some(
-        (action) => action.id === actionId && !action.disabled,
-      )
+      !action ||
+      !visible?.resources.includes(resource)
     )
       return;
     const token = { binding };
@@ -246,6 +268,57 @@ export function useSessionResourceCards(
     setPending({ binding, id: actionId });
     setActionError(undefined);
     try {
+      if (action.confirmation) {
+        const confirmation = action.confirmation;
+        const accepted = await new Promise<boolean>((resolve) =>
+          Alert.alert(
+            resolveRemoteText(confirmation.title, i18n.language),
+            confirmation.body
+              ? resolveRemoteText(confirmation.body, i18n.language)
+              : undefined,
+            [
+              {
+                text: t('session.common.cancel'),
+                style: 'cancel',
+                onPress: () => resolve(false),
+              },
+              {
+                text: resolveRemoteText(
+                  confirmation.confirmLabel ?? action.label,
+                  i18n.language,
+                ),
+                style:
+                  action.tone === 'destructive' ? 'destructive' : 'default',
+                onPress: () => resolve(true),
+              },
+            ],
+            { cancelable: true, onDismiss: () => resolve(false) },
+          ),
+        );
+        if (
+          !accepted ||
+          !focused.current ||
+          current.current !== scope ||
+          AppState.currentState !== 'active' ||
+          !latest.current.fresh
+        )
+          return;
+        const next = latest.current.visible?.resources.find(
+          (item) =>
+            item.ref.collectionId === resource.ref.collectionId &&
+            item.ref.kind === resource.ref.kind &&
+            item.ref.id === resource.ref.id,
+        );
+        const nextAction = next?.actions?.find(
+          (item) => item.id === actionId && !item.disabled,
+        );
+        if (
+          !nextAction ||
+          JSON.stringify(nextAction.confirmation) !==
+            JSON.stringify(confirmation)
+        )
+          return;
+      }
       await invokeRemoteResourceAction(
         invoke,
         { deviceId, deviceName },
@@ -272,6 +345,20 @@ export function useSessionResourceCards(
     fresh: !!fresh,
     pending: pendingId,
     act,
+    openLink: (resource: RemoteResource, link: RemoteResourceLink) => {
+      if (
+        !fresh ||
+        current.current !== scope ||
+        !visible?.resources.includes(resource) ||
+        !resource.links.includes(link) ||
+        link.target.kind !== 'session'
+      )
+        return;
+      router.push({
+        pathname: '/sessions/[sessionId]',
+        params: { deviceId, sessionId: link.target.sessionId },
+      });
+    },
     refresh: () => {
       setActionError(undefined);
       refresh.current();

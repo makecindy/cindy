@@ -1962,7 +1962,7 @@ export function AddProviderWizard({
                           aria-invalid={!valid}
                           className="h-9 rounded-full border px-4 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
                           style={{
-                            borderColor: valid ? 'var(--border-default)' : 'var(--status-error)',
+                            borderColor: valid ? 'var(--border-default)' : 'var(--error-border)',
                             backgroundColor: 'var(--surface-elevated)',
                             color: 'var(--settings-section-title)',
                           }}

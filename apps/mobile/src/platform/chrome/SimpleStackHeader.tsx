@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import { useTranslation } from 'react-i18next';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import type { ReactNode } from "react";
 import { Platform, StyleSheet, View } from "react-native";
@@ -55,6 +56,7 @@ export function SimpleStackHeader({
   syncing?: boolean;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeNativeTitleStyles);
 
   if (!usesNativeStackHeader()) {
@@ -74,6 +76,7 @@ export function SimpleStackHeader({
   }
 
   return (
+    <>
     <Stack.Screen
       options={{
         headerShown: true,
@@ -89,20 +92,15 @@ export function SimpleStackHeader({
             {syncing !== undefined ? <QuietSyncIndicator active={syncing} /> : null}
           </View>
         ),
-        headerLeft: onBack
-          ? () => (
-              <ScreenBackButton
-                compact
-                onPress={onBack}
-                testID={backTestID ?? "screen.backButton"}
-              />
-            )
-          : undefined,
         headerRight: right ? () => right : action
           ? () => <MainWindowActionButton action={action} density="compact" />
           : undefined,
       }}
     />
+    {onBack ? <Stack.Toolbar placement="left">
+      <Stack.Toolbar.Button icon="chevron.backward" onPress={onBack} accessibilityLabel={t('shared.back')} />
+    </Stack.Toolbar> : null}
+    </>
   );
 }
 

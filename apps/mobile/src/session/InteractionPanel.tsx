@@ -1,3 +1,4 @@
+import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
@@ -181,7 +182,7 @@ function InteractionPanelContent({
     if (!activeRequestId) return fallbackInteraction;
     return sortedInteractions.find((item) => readRequestId(item) === activeRequestId) ?? fallbackInteraction;
   }, [activeRequestId, fallbackInteraction, sortedInteractions]);
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth } = usePaneViewport();
   useEffect(() => {
     if (!activeRequestId) return;
     if (!sortedInteractions.some((item) => readRequestId(item) === activeRequestId)) {

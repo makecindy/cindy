@@ -91,7 +91,7 @@ import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './side
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { useCindyMakeActivity } from './useCindyMakeActivity';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
@@ -158,7 +158,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   hideBottomDivider = false,
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
-  const cindyMakePreparing = useCindyMakePreparing(session);
+  const cindyMakeActivity = useCindyMakeActivity(session);
+  const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
@@ -180,7 +181,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
     isRunning: session.deviceLinkDeviceId
       ? remoteActivity?.phase === 'running'
-      : isRunning || cindyMakePreparing != null,
+      : isRunning || cindyMakeActivity != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;

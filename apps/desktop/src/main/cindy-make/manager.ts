@@ -98,7 +98,7 @@ export class CindyMakeManager {
   private readonly sourceJobs = new Map<string, SharedSourceJob>();
   private readonly projectJobs = new Map<string, Promise<unknown>>();
   private readonly projectUsers = new Map<string, number>();
-  private personalBuild: object | undefined;
+  private personalBuild: { sessionIds: string[]; isCurrent: () => boolean } | undefined;
   private readonly reports = new Map<
     string,
     { report: MakeDoctorReport; isCurrent: () => boolean }
@@ -146,13 +146,19 @@ export class CindyMakeManager {
   }
 
   /** Both entry points reserve synchronously, before any asynchronous build work. */
-  claimPersonalBuild(): () => void {
+  claimPersonalBuild(
+    sessionIds: readonly string[] = [],
+    isCurrent: () => boolean = () => true,
+  ): () => void {
     if (this.personalBuild)
       throw Object.assign(new Error('personal build is running'), { code: 'busy' });
-    const claim = {};
+    const claim = { sessionIds: [...new Set(sessionIds)], isCurrent };
     this.personalBuild = claim;
+    this.notify();
     return () => {
-      if (this.personalBuild === claim) this.personalBuild = undefined;
+      if (this.personalBuild !== claim) return;
+      this.personalBuild = undefined;
+      this.notify();
     };
   }
 
@@ -636,6 +642,9 @@ export class CindyMakeManager {
     };
     return structuredClone({
       ...this.states,
+      personalBuildSessionIds: this.personalBuild?.isCurrent()
+        ? this.personalBuild.sessionIds
+        : undefined,
       ...(this.states.upstreamMerge && !this.mergeSessionCurrent()
         ? {
             upstreamMerge: {

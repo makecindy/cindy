@@ -5,6 +5,9 @@ import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { CindyMakePersonalBuildState } from '../../../../shared/cindyMakeSession';
 import { CindyMakeHistoryPanel } from '../CindyMakeHistoryPanel';
 import { CindyMakeTestCard } from '../CindyMakeTestCard';
+import { CindyMakeBuildProgress } from '../CindyMakeBuildProgress';
+
+const navigation = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -13,7 +16,7 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'en' },
   }),
 }));
-vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigation }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
 }));
@@ -30,8 +33,82 @@ vi.mock('@/features/device-link/stickySessionOrigin', () => ({
 
 afterEach(() => {
   cleanup();
+  navigation.mockClear();
   vi.unstubAllGlobals();
 });
+
+it('replaces the single live line on progress, falls back at stage changes, and clears at completion', () => {
+  const { rerender } = render(
+    <CindyMakeBuildProgress
+      build={{ status: 'checking', checkStep: 'tests', outputLine: 'Test Files 12 passed' }}
+    />,
+  );
+  expect(screen.getByRole('status').textContent).toBe('Test Files 12 passed');
+  rerender(
+    <CindyMakeBuildProgress
+      build={{ status: 'checking', checkStep: 'tests', outputLine: 'Test Files 57 passed' }}
+    />,
+  );
+  expect(screen.queryByText('Test Files 12 passed')).toBeNull();
+  expect(screen.getByRole('status').textContent).toBe('Test Files 57 passed');
+  rerender(<CindyMakeBuildProgress build={{ status: 'packaging' }} />);
+  expect(screen.getByRole('status').textContent).toBe('cindyMake.personal.status.packaging');
+  rerender(
+    <CindyMakeBuildProgress
+      build={{ status: 'packaging', outputLine: 'Old output', stopping: true }}
+    />,
+  );
+  expect(screen.getByRole('status').textContent).toBe('cindyMake.history.stopping');
+  rerender(<CindyMakeBuildProgress build={{ status: 'ready', outputLine: 'Old output' }} />);
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it.each(['merging', 'failed', 'ready'] as const)(
+  'shows live status only during an active build, without a merge navigation button: %s',
+  (status) => {
+    const mergeAction = vi.fn();
+    vi.stubGlobal('electronAPI', { cindyMakeMerge: mergeAction });
+    render(
+      <CindyMakeBuildProgress
+        build={{ status, mergeSessionId: 'merge-task', outputLine: 'Merging changes' }}
+      />,
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+    if (status === 'merging')
+      expect(screen.getByRole('status').textContent).toBe('Merging changes');
+    else expect(screen.queryByRole('status')).toBeNull();
+    expect(navigation).not.toHaveBeenCalled();
+    expect(mergeAction).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['failed', 'ready'] as const)(
+  'does not restore a merge button or live output on the actual %s history panel',
+  async (status) => {
+    setDataOwnerGeneration('history-link-owner');
+    const mergeAction = vi.fn();
+    vi.stubGlobal('electronAPI', {
+      cindyMakeMerge: mergeAction,
+      getCindyMakeHistory: vi.fn(async () => ({
+        items: [],
+        busy: false,
+        canBuild: true,
+        build: {
+          status,
+          buildId: 'build',
+          mergeSessionId: 'merge-task',
+          outputLine: 'Previous build output',
+        },
+      })),
+    });
+    render(<CindyMakeHistoryPanel />);
+    await waitFor(() => expect(window.electronAPI.getCindyMakeHistory).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: 'cindyMake.merge.openTask' })).toBeNull();
+    expect(screen.queryByText('Previous build output')).toBeNull();
+    expect(navigation).not.toHaveBeenCalled();
+    expect(mergeAction).not.toHaveBeenCalled();
+  },
+);
 
 it('keeps the session and history headings and stage indicators in sync as the shared build advances', async () => {
   setDataOwnerGeneration('build-parity-owner');
@@ -54,7 +131,7 @@ it('keeps the session and history headings and stage indicators in sync as the s
   );
   const history = screen.getByRole('region', { name: 'cindyMake.history.title' });
   const session = screen.getByRole('region', { name: 'cindyMake.test.title' });
-  await within(session).findByText('cindyMake.personal.status.waiting');
+  await within(session).findAllByText('cindyMake.personal.status.waiting');
 
   const stages: Array<{ state: CindyMakePersonalBuildState; heading: string; completed: number }> =
     [
@@ -64,6 +141,16 @@ it('keeps the session and history headings and stage indicators in sync as the s
         completed: 0,
       },
       { state: { status: 'merging' }, heading: 'status.merging', completed: 1 },
+      {
+        state: { status: 'merging', mergeStep: 'conflicts' },
+        heading: 'mergeStep.conflicts',
+        completed: 2,
+      },
+      {
+        state: { status: 'merging', mergeStep: 'cleanup' },
+        heading: 'mergeStep.cleanup',
+        completed: 2,
+      },
       {
         state: { status: 'checking', checkStep: 'dependencies' },
         heading: 'checkStep.dependencies',
@@ -87,10 +174,15 @@ it('keeps the session and history headings and stage indicators in sync as the s
     fireEvent(window, new Event('focus'));
     await waitFor(() => {
       for (const surface of [history, session]) {
-        expect(within(surface).getByText('cindyMake.personal.' + heading)).toBeTruthy();
+        expect(within(surface).getAllByText('cindyMake.personal.' + heading)).toHaveLength(2);
         const current = surface.querySelectorAll('[aria-current="step"]');
         expect(current).toHaveLength(1);
-        expect(current[0].textContent).toBe('cindyMake.history.progress.' + state.status);
+        expect(current[0].textContent).toBe(
+          state.mergeStep
+            ? 'cindyMake.personal.buildLog.steps.' +
+                (state.mergeStep === 'conflicts' ? 'resolving-conflicts' : 'cleaning-merge')
+            : 'cindyMake.history.progress.' + state.status,
+        );
         expect(surface.querySelectorAll('li[class*="--status-success"]')).toHaveLength(completed);
       }
     });
@@ -99,7 +191,7 @@ it('keeps the session and history headings and stage indicators in sync as the s
   fireEvent(window, new Event('focus'));
   await waitFor(() => {
     for (const surface of [history, session]) {
-      expect(within(surface).getAllByText('cindyMake.history.stopping')).toHaveLength(2);
+      expect(within(surface).getAllByText('cindyMake.history.stopping')).toHaveLength(3);
       expect(surface.querySelector('[aria-current="step"]')?.textContent).toBe(
         'cindyMake.history.progress.publishing',
       );

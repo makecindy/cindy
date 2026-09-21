@@ -13,7 +13,8 @@ export function useDelayedConnectionNotice(active: boolean, immediate = false): 
   return active && (immediate || ready);
 }
 
-type Notice = { top: number; children: ReactNode };
+type NoticeFrame = { top: number; left: number; width: number };
+type Notice = NoticeFrame & { children: ReactNode };
 const NoticeContext = createContext<{ publish: (id: string, notice: Notice | null) => void; host: RefObject<View | null> } | null>(null);
 
 /** Render outside clipped headers, with real touch bounds and no modal input capture. */
@@ -33,7 +34,7 @@ export function ConnectionNoticeProvider({ children }: { children: ReactNode }) 
     <View ref={host} collapsable={false} style={styles.host}>
       {children}
       <View pointerEvents="box-none" style={styles.layer}>
-        {[...notices].map(([id, notice]) => <View key={id} style={[styles.overlay, { top: notice.top }]}>{notice.children}</View>)}
+        {[...notices].map(([id, notice]) => <View key={id} pointerEvents="box-none" style={[styles.overlay, { top: notice.top, left: notice.left, width: notice.width }]}>{notice.children}</View>)}
       </View>
     </View>
   </NoticeContext.Provider>;
@@ -44,7 +45,7 @@ export function ConnectionNoticeOverlay({ children }: { children: ReactNode }) {
   const context = useContext(NoticeContext);
   const id = useId();
   const anchor = useRef<View>(null);
-  const [top, setTop] = useState<number | null>(null);
+  const [frame, setFrame] = useState<NoticeFrame | null>(null);
   const [focused, setFocused] = useState(false);
   useFocusEffect(useCallback(() => {
     setFocused(true);
@@ -52,14 +53,17 @@ export function ConnectionNoticeOverlay({ children }: { children: ReactNode }) {
   }, []));
   const { width, height } = useWindowDimensions();
   const measure = useCallback(() => {
-    if (context?.host.current) anchor.current?.measureLayout(context.host.current, (_x, y) => setTop(y + spacing.sm));
+    if (context?.host.current) anchor.current?.measureLayout(context.host.current, (x, y, width) => {
+      const next = { top: y + spacing.sm, left: x + spacing.md, width: Math.max(0, width - spacing.md * 2) };
+      setFrame(previous => previous?.top === next.top && previous.left === next.left && previous.width === next.width ? previous : next);
+    });
   }, [context]);
   useEffect(() => { measure(); }, [measure, width, height, focused]);
   useEffect(() => {
-    if (focused && top !== null) context?.publish(id, { top, children });
+    if (focused && frame !== null) context?.publish(id, { ...frame, children });
     else context?.publish(id, null);
     return () => context?.publish(id, null);
-  }, [children, focused, id, context, top]);
+  }, [children, focused, id, context, frame]);
   return <View ref={anchor} collapsable={false} pointerEvents="none" onLayout={measure} style={styles.anchor} />;
 }
 
@@ -67,5 +71,5 @@ const styles = StyleSheet.create({
   host: { flex: 1 },
   layer: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, zIndex: 20 },
   anchor: { height: 0 },
-  overlay: { position: 'absolute', left: spacing.md, right: spacing.md },
+  overlay: { position: 'absolute' },
 });

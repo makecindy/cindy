@@ -445,7 +445,7 @@ function CindyMakeSourceStatusCard({
     : displayStatus === 'ready'
       ? 'text-[var(--status-success)]'
       : displayStatus === 'failed'
-        ? 'text-[var(--status-danger)]'
+        ? 'text-[var(--error-fg)]'
         : 'text-[var(--text-secondary)]';
   const openSourceDir = () => {
     void Promise.resolve(window.electronAPI.openCindyMakeSourceDir?.())

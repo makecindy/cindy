@@ -16,9 +16,12 @@ import { useTranslation } from 'react-i18next';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useRegisterContentHeader } from '../feature-context';
 import { BotAvatar } from './BotAvatar';
+import { isCindyDeviceBot } from './cindyDeviceRoster';
+import { CindyHeaderDevicePicker } from './CindyDevicePicker';
 
 export interface BotChatIdentity {
   id: string;
+  templateId?: string;
   deviceId?: string;
   deviceName?: string;
   name: string;
@@ -30,6 +33,7 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const isCindy = isCindyDeviceBot(bot);
   const openSettings = () => {
     const search = new URLSearchParams(location.search);
     search.set('settings', '1');
@@ -52,7 +56,8 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
-      <div className="ml-auto flex shrink-0 items-center gap-1">
+      {isCindy ? <CindyHeaderDevicePicker bot={bot} /> : null}
+      {!bot.deviceId || !isCindy ? <div className="ml-auto flex shrink-0 items-center gap-1">
         {!bot.deviceId ? <button
           type="button"
           onClick={openSettings}
@@ -62,7 +67,7 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
         >
           <Settings2 size={15} />
         </button> : <span className="truncate text-12 text-[var(--text-tertiary)]">{bot.deviceName}</span>}
-      </div>
+      </div> : null}
     </div>
   );
 }

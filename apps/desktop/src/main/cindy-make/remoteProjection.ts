@@ -1,4 +1,8 @@
 import type { RemoteResource, RemoteActionDescriptor } from '@cindy/device-link';
+import {
+  parseCindyMakeBuildDiagnostic,
+  parseCindyMakeBuildOutput,
+} from '../../shared/cindyMakeBuildDiagnostic.js';
 import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
 import type {
   CindyMakeCompletionMeta,
@@ -22,7 +26,7 @@ export interface MakeRemoteSnapshot {
 }
 type Translate = (key: string, values?: Record<string, string>) => string;
 
-/** Portable projection of Main-owned facts. Paths, prompts and process output stay on the host. */
+/** Portable projection of Main-owned facts. Only scrubbed, bounded process excerpts may leave the host. */
 export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate): RemoteResource {
   let title = t('cindyMake.history.lifecycle.running');
   let description = '';
@@ -30,6 +34,9 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
   let busy = source.busy;
   let failed = false;
   const details: string[] = [];
+  const links: RemoteResource['links'] = [
+    { rel: 'conversation', target: { kind: 'session', sessionId: source.sessionId } },
+  ];
   const actions: RemoteActionDescriptor[] = [];
   const action = (id: string, key: string, disabled = false) =>
     actions.push({ id, label: t(key), disabled });
@@ -93,7 +100,10 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       shared?.buildId === meta.personal?.buildId &&
       meta.personal &&
       ['ready', 'failed'].includes(meta.personal.status)
-        ? meta.personal
+        ? {
+            ...meta.personal,
+            mergeSessionId: meta.personal.mergeSessionId ?? shared?.mergeSessionId,
+          }
         : (shared ?? meta.personal);
     const building =
       !!personal &&
@@ -103,6 +113,10 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       !starting &&
       ((!!shared && (building || meta.lastAction !== 'test')) ||
         (meta.lastAction ?? (meta.personal ? 'build' : 'test')) === 'build');
+    if (buildMode && building && !personal?.stopping) {
+      const outputLine = parseCindyMakeBuildOutput(personal?.outputLine);
+      if (outputLine) details.push(outputLine);
+    }
     busy = buildMode ? building : starting;
     const error =
       starting || building
@@ -114,11 +128,13 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       buildMode && personal
         ? personal.stopping
           ? 'cindyMake.history.stopping'
-          : personal.status === 'waiting' && personal.preparationStep
-            ? 'cindyMake.personal.preparationStep.' + personal.preparationStep
-          : personal.status === 'checking' && personal.checkStep
-            ? 'cindyMake.personal.checkStep.' + personal.checkStep
-            : 'cindyMake.personal.status.' + personal.status
+          : personal.status === 'merging' && personal.mergeStep
+            ? 'cindyMake.personal.mergeStep.' + personal.mergeStep
+            : personal.status === 'waiting' && personal.preparationStep
+              ? 'cindyMake.personal.preparationStep.' + personal.preparationStep
+              : personal.status === 'checking' && personal.checkStep
+                ? 'cindyMake.personal.checkStep.' + personal.checkStep
+                : 'cindyMake.personal.status.' + personal.status
         : 'cindyMake.test.status.' + testStatus,
     );
     description = t(
@@ -142,6 +158,18 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       details.push(
         t((buildMode ? 'cindyMake.personal.errors.' : 'cindyMake.test.errors.') + error),
       );
+    if (buildMode && personal?.status === 'failed') {
+      const diagnostic = parseCindyMakeBuildDiagnostic(personal.diagnostic);
+      if (diagnostic && diagnostic.kind !== 'process')
+        details.push(t('cindyMake.personal.diagnostic.' + diagnostic.kind));
+      if (diagnostic?.exitCode !== undefined)
+        details.push(
+          t('cindyMake.personal.diagnostic.exitCode', { code: String(diagnostic.exitCode) }),
+        );
+      if (diagnostic?.message) details.push(diagnostic.message);
+      if (!diagnostic && ['buildFailed', 'checksFailed'].includes(error ?? ''))
+        details.push(t('cindyMake.personal.diagnostic.unavailable'));
+    }
     if (buildMode && personal?.logs?.length)
       details.push(
         t('cindyMake.personal.buildLog.title') +
@@ -154,18 +182,22 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
     action(`test:${id}:continue`, 'cindyMake.test.continue', starting || building);
     action(
       `test:${id}:start`,
-      testStatus === 'ready'
-        ? 'cindyMake.test.started'
-        : 'cindyMake.test.start',
+      testStatus === 'ready' ? 'cindyMake.test.started' : 'cindyMake.test.start',
       starting || building || testStatus === 'ready' || !meta.commit,
     );
     action(`test:${id}:build`, 'cindyMake.personal.generate', starting || building || !meta.commit);
     if (building && personal?.buildId)
-      action(
-        `build:${personal.buildId}:stop`,
-        personal.stopping ? 'cindyMake.history.stopping' : 'cindyMake.history.stop',
-        !!personal.stopping,
-      );
+      actions.push({
+        id: `build:${personal.buildId}:stop`,
+        label: t(personal.stopping ? 'cindyMake.history.stopping' : 'cindyMake.history.stop'),
+        disabled: !!personal.stopping,
+        tone: 'destructive',
+        confirmation: {
+          title: t('cindyMake.history.stopConfirm.title'),
+          body: t('cindyMake.history.stopConfirm.description'),
+          confirmLabel: t('cindyMake.history.stop'),
+        },
+      });
   } else if (!source.busy && source.recoverable) {
     title = t('cindyMake.test.resume.title');
     description = t('cindyMake.test.resume.description');
@@ -180,7 +212,7 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       subtitle: description,
       status: { label: title, tone: failed ? 'critical' : busy ? 'warning' : 'neutral' },
     },
-    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: source.sessionId } }],
+    links,
     blocks:
       blocked || (!source.busy && source.recoverable)
         ? [

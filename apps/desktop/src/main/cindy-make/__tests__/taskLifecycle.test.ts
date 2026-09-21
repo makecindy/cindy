@@ -76,6 +76,30 @@ describe('Main-owned Cindy Make task lifecycle', () => {
     releaseRetry();
     expect(manager.hasActiveWork()).toBe(false);
   });
+  it('publishes only the current build owners and clears them when the lease settles', () => {
+    const manager = new CindyMakeManager();
+    const changed = vi.fn();
+    manager.subscribe(changed);
+    let current = true;
+    const release = manager.claimPersonalBuild(['first', 'second', 'first'], () => current);
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ personalBuildSessionIds: ['first', 'second'] }),
+    );
+    current = false;
+    expect(manager.getState().personalBuildSessionIds).toBeUndefined();
+    // An old account still owns cleanup, but never appears in the new account's tasks.
+    expect(manager.hasActiveWork()).toBe(true);
+    release();
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ personalBuildSessionIds: undefined }),
+    );
+    const releaseRetry = manager.claimPersonalBuild(['retry']);
+    release();
+    expect(manager.getState().personalBuildSessionIds).toEqual(['retry']);
+    releaseRetry();
+    expect(manager.getState().personalBuildSessionIds).toBeUndefined();
+    expect(new CindyMakeManager().getState().personalBuildSessionIds).toBeUndefined();
+  });
   it.each(['completed', 'failed', 'cancelled'] as const)(
     'keeps the lock through final persistence, then retains %s history without staying busy',
     async (status) => {

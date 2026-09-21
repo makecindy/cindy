@@ -288,7 +288,7 @@ export function HomeChromeDrawer({
             {
               paddingBottom: insets.bottom,
               paddingLeft: insets.left,
-              paddingTop: insets.top,
+              paddingTop: insets.top + spacing.xl,
               width: panelWidth,
             },
             panelStyle,

@@ -211,7 +211,7 @@ describe('Make history controls', () => {
       build: { status: 'checking', checkStep: 'dependencies', buildId: 'build-1' },
     });
     fireEvent.click(build);
-    await screen.findByText('cindyMake.personal.checkStep.dependencies');
+    expect(await screen.findAllByText('cindyMake.personal.checkStep.dependencies')).toHaveLength(2);
     const stop = screen.getByRole('button', { name: 'cindyMake.history.stop' });
     expect(stop.hasAttribute('disabled')).toBe(false);
     fireEvent.click(stop);
@@ -219,7 +219,9 @@ describe('Make history controls', () => {
     for (const checkStep of ['tests', 'types'] as const) {
       f.set({ items: [], busy: true, canBuild: false, build: { status: 'checking', checkStep } });
       fireEvent(window, new Event('focus'));
-      await screen.findByText('cindyMake.personal.checkStep.' + checkStep);
+      expect(await screen.findAllByText('cindyMake.personal.checkStep.' + checkStep)).toHaveLength(
+        2,
+      );
     }
     f.set({
       items: [task],
@@ -229,7 +231,7 @@ describe('Make history controls', () => {
     });
     fireEvent(window, new Event('focus'));
     expect((await screen.findByRole('alert')).textContent).toBe(
-      'cindyMake.personal.errors.checksFailed',
+      'cindyMake.personal.errors.checksFailedcindyMake.personal.diagnostic.unavailable',
     );
     fireEvent.click(screen.getByRole('button', { name: 'cindyMake.history.actions.build' }));
     await waitFor(() => expect(f.execute).toHaveBeenCalledTimes(2));
@@ -309,7 +311,7 @@ describe('Make history controls', () => {
     fireEvent.click(generate);
     expect(f.execute).toHaveBeenCalledWith('aaaa', 'build');
     expect((await screen.findByRole('alert')).textContent).toBe(
-      'cindyMake.personal.errors.checksFailed',
+      'cindyMake.personal.errors.checksFailedcindyMake.personal.diagnostic.unavailable',
     );
     expect(screen.queryByText('Blue background')).toBeNull();
     expect(screen.queryByRole('button', { name: 'cindyMake.history.actions.revert' })).toBeNull();

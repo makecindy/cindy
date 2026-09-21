@@ -145,22 +145,24 @@ function findClosestMobileHistoryAnchorIndex<ItemT>(
   // viewport with O(log n) position reads instead of scanning the whole retained history.
   let lower = 0;
   let upper = state.data.length - 1;
-  let closestIndex: number | null = null;
-  let closestDistance = Number.POSITIVE_INFINITY;
+  let containingIndex: number | null = null;
+  let firstFollowingIndex: number | null = null;
+  const dataScroll = state.scroll - (state.topOffsetAdjustment ?? 0);
   while (lower <= upper) {
     const index = Math.floor((lower + upper) / 2);
     const position = state.positionAtIndex(index);
     if (!Number.isFinite(position)) break;
-    const dataScroll = state.scroll - (state.topOffsetAdjustment ?? 0);
-    const distance = Math.abs((position as number) - dataScroll);
-    if (distance < closestDistance) {
-      closestDistance = distance;
-      closestIndex = index;
+    // Anchor the row containing the viewport top, not the next row whose top
+    // happens to be closer. That next row can be offscreen and still estimated.
+    if ((position as number) <= dataScroll) {
+      containingIndex = index;
+      lower = index + 1;
+    } else {
+      firstFollowingIndex = index;
+      upper = index - 1;
     }
-    if ((position as number) < dataScroll) lower = index + 1;
-    else upper = index - 1;
   }
-  return closestIndex;
+  return containingIndex ?? firstFollowingIndex;
 }
 
 /**

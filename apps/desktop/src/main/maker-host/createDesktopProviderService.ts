@@ -579,6 +579,9 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   // 也必须先按新的 ownerScopedUserDataPath 换掉本地 override，不能让上一账号的
   // additions/patches 继续留在 active-catalog 内存层。
   syncLocalCatalogOverridesIntoActiveCatalog();
+  // Secret invalidation can run before the owner commit. Re-read the committed
+  // owner's image key synchronously, even when the endpoint fast path is reused.
+  void refreshOpenAiMediaModels();
 
   const source = buildSource();
   const sourceKey = catalogSourceKey(source);

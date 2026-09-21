@@ -678,7 +678,7 @@ describe('maker:event hot path ordering', () => {
       'const goalPause = pauseGoalBeforeExplicitStop(sid);',
       'inputCoordinator.stop(',
     );
-    expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await goalPause;');
+    expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await Promise.all([goalPause, makeInterrupted]);');
     expect(goalPauseStart).toBeGreaterThanOrEqual(0);
     expect(goalPauseSource).toContain('catch (err)');
     expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');

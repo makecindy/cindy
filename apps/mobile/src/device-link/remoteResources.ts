@@ -346,9 +346,21 @@ export async function getRemoteResource(
         const entry = recordOf(value);
         const id = boundedString(entry?.id, MAX_REMOTE_ID_CHARS);
         const label = normalizeRemoteText(entry?.label, 512);
-        // Forms/confirmations require their own supported interaction. Never execute them silently.
-        if (!entry || !id || !label || entry.fields || entry.confirmation) return [];
-        return [{ id, label, disabled: entry.disabled !== undefined && entry.disabled !== false }];
+        // Forms remain unsupported; a malformed confirmation must never become an unconfirmed action.
+        if (!entry || !id || !label || entry.fields) return [];
+        let confirmation: RemoteActionDescriptor['confirmation'];
+        if (entry.confirmation !== undefined) {
+          const raw = recordOf(entry.confirmation);
+          const title = normalizeRemoteText(raw?.title, 512);
+          const body = raw?.body === undefined ? undefined : normalizeRemoteText(raw.body, 8192);
+          const confirmLabel = raw?.confirmLabel === undefined ? undefined : normalizeRemoteText(raw.confirmLabel, 512);
+          if (!title || body === null || confirmLabel === null) return [];
+          confirmation = { title, ...(body ? { body } : {}), ...(confirmLabel ? { confirmLabel } : {}) };
+        }
+        return [{ id, label, disabled: entry.disabled !== undefined && entry.disabled !== false,
+          ...(entry.tone === 'destructive' ? { tone: 'destructive' } : {}),
+          ...(confirmation ? { confirmation } : {}),
+        }];
       }) : [];
   const blocks: RemoteResourceBlock[] | undefined = Array.isArray(source?.blocks) ? source.blocks.slice(0, 256).flatMap<RemoteResourceBlock>((rawBlock) => {
     const block = recordOf(rawBlock);

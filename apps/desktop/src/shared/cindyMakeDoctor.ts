@@ -137,6 +137,8 @@ export interface CindyMakeGlobalState {
   source?: MakeSourceStatus;
   reports?: Record<string, MakeDoctorReport>;
   tasks?: Record<string, MakeDoctorReport>;
+  /** Live build owners only; absent after the job (including stop cleanup) settles. */
+  personalBuildSessionIds?: string[];
   /** Current-owner cleanup jobs, keyed by session ID; independent of Settings lifetime. */
   taskActions?: Record<string, CindyMakeTaskActionState>;
 }

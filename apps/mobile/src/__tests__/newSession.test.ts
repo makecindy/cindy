@@ -1033,7 +1033,7 @@ describe('pickNewSessionDefaultDevice', () => {
 // 避免锚点(如 deps 数组)变化时 indexOf 失效产生误导性报错。
 describe('new session default device follows the home device filter', () => {
   it('sends deviceExplicit for a home device filter or a checked recommendation target', () => {
-    const homeSource = readTextLf(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const homeSource = readTextLf(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
     // 筛选电脑或推荐指定电脑时带显式标记;普通新建保留记忆回落。
     expect(homeSource).toContain("...(selectedDeviceId || explicitDeviceId ? { deviceExplicit: '1' } : {})");
   });

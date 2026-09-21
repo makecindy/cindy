@@ -433,6 +433,8 @@ export interface MakerSendTransactionDeps {
   /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
   linkPiUserEntry?(sessionId: string, clientId: string, piEntryId: string): Promise<boolean | void>;
   beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
+  /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
+  prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
@@ -933,6 +935,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
       const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
@@ -1584,6 +1587,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
             deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts);
+            dispatchProductTurn?.();
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(
                 userPromptPreviewSessionId,

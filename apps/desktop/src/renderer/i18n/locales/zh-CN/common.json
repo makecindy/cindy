@@ -7434,6 +7434,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "本机",
+      "title": "切换设备",
+      "switchDevice": "切换设备，当前为{{device}}",
+      "unread": "有未读消息",
+      "otherUnread": "其他设备有未读消息",
+      "remotePlaceholder": "发给{{device}}上的 {{name}}…"
+    },
     "creationName": "名字",
     "settingsBack": "返回设置",
     "sidebar": {
@@ -12995,6 +13003,14 @@
       "localMain": "本地 main",
       "lookupUnavailable": "查询失败",
       "comparisonUnavailable": "本地 main 的差距未读取",
+      "personalStatus": {
+        "suffix": "（{{status}}）",
+        "upToDate": "已是最新",
+        "updateAvailable": "有更新",
+        "unverified": "版本状态未确认",
+        "upToDateDescription": "个人版代码已包含{{target}}的全部更新",
+        "personalChanges": "另有 {{ahead}} 条个人修改记录"
+      },
       "comparison": {
         "same": "与本地 main 的 SHA 相同",
         "personalAhead": "已包含本地 main，另有 {{ahead}} 条个人修改记录",
@@ -13037,6 +13053,16 @@
       "description": "将本次修改与个人版合并，检查和打包通过后保存为新个人版。",
       "readyHint": "安装包 {{name}} 已生成，可打开所在目录。",
       "failedStep": "失败步骤：{{step}}",
+      "diagnostic": {
+        "outOfMemory": "打包程序超出了内存上限。请更新 Cindy 后重新生成；若仍失败，请反馈下方错误。",
+        "timeout": "生成超过 1 小时，已停止。请检查下方记录后重试。",
+        "exitCode": "程序退出码：{{code}}",
+        "unavailable": "这次生成没有保存具体错误，请重新生成以记录失败原因。"
+      },
+      "mergeStep": {
+        "conflicts": "正在处理冲突…",
+        "cleanup": "正在清理合并文件…"
+      },
       "preparationStep": {
         "environment": "正在准备生成环境…",
         "original": "正在检查当前版本…"
@@ -13058,6 +13084,8 @@
       "buildLog": {
         "title": "生成记录",
         "steps": {
+          "resolving-conflicts": "处理冲突",
+          "cleaning-merge": "清理合并文件",
           "environment": "准备生成环境",
           "original": "检查当前版本",
           "merging": "合入修改",
@@ -13137,7 +13165,7 @@
         "selectItem": "选择 {{title}}",
         "hint": "按从老到新的顺序合入，统一生成一个新版本。",
         "confirmTitle": "制作包含 {{count}} 项改动的个人版？",
-        "confirmDescription": "所选改动将按以下顺序逐条合入，全部成功后只生成一个新版本。已启动的所选隔离版会先停止。遇到冲突时停止制作并保留已合入改动，处理后可重新发起制作。没有待处理冲突时，取消或生成失败会撤回尚未生成成功版本的合入，保留各任务的原始改动。",
+        "confirmDescription": "所选改动将按以下顺序逐条合入，全部成功后只生成一个新版本。已启动的所选隔离版会先停止。遇到冲突会进入处理冲突步骤，可打开关联任务查看；处理完成后自动清理临时文件并继续生成。停止制作也会停止关联任务并丢弃临时冲突修改，原任务修改和已生成版本会保留。",
         "start": "确认制作",
         "progress": "正在合入 {{current}} / {{total}}：{{title}}",
         "restartTest": "重新启动隔离版"
@@ -13146,6 +13174,10 @@
       "buildDescription": "将当前个人源码生成新版本，未合入的历史改动不会包含在内。",
       "building": "正在生成个人版…",
       "stop": "停止制作",
+      "stopConfirm": {
+        "title": "停止本次制作？",
+        "description": "会同时停止本次处理冲突的任务，丢弃临时冲突修改，清理临时文件，并撤回尚未生成成功版本的合入。原制作任务的修改、交流记录和已生成版本会保留。"
+      },
       "stopping": "正在停止…",
       "progress": {
         "waiting": "等待开始",

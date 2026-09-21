@@ -7436,6 +7436,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "This Device",
+      "title": "Switch Device",
+      "switchDevice": "Switch device, currently {{device}}",
+      "unread": "Unread messages",
+      "otherUnread": "Unread messages on other devices",
+      "remotePlaceholder": "Message {{name}} on {{device}}…"
+    },
     "creationName": "Name",
     "settingsBack": "Back to Settings",
     "sidebar": {
@@ -13012,6 +13020,14 @@
       "localMain": "Local main",
       "lookupUnavailable": "Lookup failed",
       "comparisonUnavailable": "Local main comparison unavailable",
+      "personalStatus": {
+        "suffix": " ({{status}})",
+        "upToDate": "Up to Date",
+        "updateAvailable": "Update Available",
+        "unverified": "Version Status Unverified",
+        "upToDateDescription": "Personal source includes all updates from {{target}}",
+        "personalChanges": "Personal change records: {{ahead}}"
+      },
       "comparison": {
         "same": "Same SHA as local main",
         "personalAhead": "Includes local main · personal change records: {{ahead}}",
@@ -13054,6 +13070,16 @@
       "description": "Merge these changes with your personal version, then save the new version after checks and packaging pass.",
       "readyHint": "Installer {{name}} is ready. Open its folder to install it.",
       "failedStep": "Failed during: {{step}}",
+      "diagnostic": {
+        "outOfMemory": "The packaging process exceeded its memory limit. Update Cindy and generate again. If it still fails, report the error below.",
+        "timeout": "Generation stopped after exceeding 1 hour. Check the records below and retry.",
+        "exitCode": "Process exit code: {{code}}",
+        "unavailable": "This attempt did not save the specific error. Generate again to capture the cause."
+      },
+      "mergeStep": {
+        "conflicts": "Resolving conflicts…",
+        "cleanup": "Cleaning up merge files…"
+      },
       "preparationStep": {
         "environment": "Preparing the build environment…",
         "original": "Checking the current version…"
@@ -13075,6 +13101,8 @@
       "buildLog": {
         "title": "Build log",
         "steps": {
+          "resolving-conflicts": "Resolve conflicts",
+          "cleaning-merge": "Clean up merge files",
           "environment": "Prepare build environment",
           "original": "Check current version",
           "merging": "Merge changes",
@@ -13154,7 +13182,7 @@
         "selectItem": "Select {{title}}",
         "hint": "Merge oldest to newest, then generate one new version.",
         "confirmTitle": "Make a personal version with {{count}} changes?",
-        "confirmDescription": "The selected changes will be merged in the order below, then one new version will be generated after all merges succeed. Running isolated tests for these changes will stop first. A conflict stops the build and keeps already merged changes; resolve it, then start a new build. When no conflict is pending, cancellation or failure rolls back merges that have not produced a saved version, keeping each task's original changes.",
+        "confirmDescription": "The selected changes will be merged in the order below, then one new version will be generated. Running isolated tests for these changes will stop first. Conflicts will be handled in a linked task; once resolved, temporary files will be cleaned up and generation will continue automatically. Stopping the build also stops that task and discards temporary conflict edits. Original task changes and saved versions will be kept.",
         "start": "Confirm Build",
         "progress": "Merging {{current}} / {{total}}: {{title}}",
         "restartTest": "Restart Isolated Version"
@@ -13163,6 +13191,10 @@
       "buildDescription": "Generate a new version from the current personal source. Changes not yet integrated are excluded.",
       "building": "Generating personal version…",
       "stop": "Stop making",
+      "stopConfirm": {
+        "title": "Stop making this version?",
+        "description": "This also stops its conflict-resolution task, discards temporary conflict edits, cleans up temporary files, and undoes merges that have not produced a saved version. Original task changes, task history, and saved versions will be kept."
+      },
       "stopping": "Stopping…",
       "progress": {
         "waiting": "Waiting to start",

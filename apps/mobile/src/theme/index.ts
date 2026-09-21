@@ -9,6 +9,7 @@ export {
   iconStroke,
   lightColors,
   lineHeight,
+  navigationChrome,
   motionDuration,
   motionEasing,
   palettes,

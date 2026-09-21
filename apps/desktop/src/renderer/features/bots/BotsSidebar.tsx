@@ -35,6 +35,8 @@ import { useRemoteBots } from './useRemoteBots';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
+import { CindyDeviceRow } from './CindyDeviceRow';
+import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotDeleteDialog } from './BotDeleteDialog';
@@ -135,7 +137,24 @@ function BotsSidebarContent() {
       .find((activity) => activity?.phase === 'running');
   };
   const roster = partitionBotRoster(rosterBots, { query, showHidden });
-  const showSearch = rosterBots.length + remoteBots.length >= 8 || query.trim().length > 0;
+  const cindyOptions = cindyDeviceOptions(bots, remoteBots, devices ?? [], unreadByBotId, t('bots.devicePicker.local'));
+  const hasMultipleCindys = cindyOptions.length > 1;
+  const routeCindy = cindyOptions.find(option => option.key === cindyDeviceKey({ id: botId ?? '', deviceId }));
+  // Follow the open Cindy chat; otherwise the local-first roster is the default.
+  const currentCindy = routeCindy ?? cindyOptions[0];
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const showCindy = hasMultipleCindys && currentCindy && (
+    !normalizedQuery ||
+    roster.visible.some(bot => cindyOptions.some(option => option.bot === bot)) ||
+    cindyOptions.some(option =>
+      `${option.bot.name} ${option.bot.description} ${option.label} ${option.deviceName}`.toLocaleLowerCase().includes(normalizedQuery))
+  );
+  const visibleBots = [
+    ...roster.visible.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
+    ...remoteBots.filter(bot => (!hasMultipleCindys || !isCindyDeviceBot(bot)) && (!normalizedQuery || `${bot.name} ${bot.description} ${bot.deviceName}`.toLocaleLowerCase().includes(normalizedQuery))),
+  ];
+  const rosterSize = rosterBots.length + remoteBots.length - (hasMultipleCindys ? cindyOptions.length - 1 : 0);
+  const showSearch = rosterSize >= 8 || normalizedQuery.length > 0;
 
   const sessionOwners = useMemo(() => {
     const next = new Map<string, { bot: BotProfile; title: string }>();
@@ -146,9 +165,10 @@ function BotsSidebarContent() {
   }, [bots]);
   const activeBotSessionId = useMemo(() => {
     if (sessionId) return sessionId;
+    if (deviceId) return remoteBots.find(bot => bot.deviceId === deviceId && bot.id === botId)?.sessionId ?? undefined;
     const selectedBot = bots.find((bot) => bot.id === botId);
     return selectedBot ? canonicalBotSessionId(selectedBot) : undefined;
-  }, [botId, bots, sessionId]);
+  }, [botId, bots, deviceId, remoteBots, sessionId]);
   const fireSessionNotification = useCallback(
     (targetSessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
       const owner = sessionOwners.get(targetSessionId);
@@ -202,10 +222,10 @@ function BotsSidebarContent() {
   });
 
   useEffect(() => {
-    if (roster.visible.length === 0) return;
+    if (roster.visible.length + remoteBots.length === 0) return;
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
-  }, [roster.visible.length]);
+  }, [roster.visible.length, remoteBots.length]);
 
   // 曾经这里还按 bot 逐个拉 `getBotHealth` 只为在行尾画一个状态图标。图标下线之后
   // 这一轮 N 次 IPC 也一起下线——列表不再为一个不显示的东西查询。
@@ -256,6 +276,89 @@ function BotsSidebarContent() {
       unsubscribe();
     };
   }, []);
+
+  const renderBotContextMenu = (bot: BotProfile, selected: boolean) => (
+    <DropdownMenu
+      open={contextMenu?.botId === bot.id}
+      onOpenChange={(open) => { if (!open) setContextMenu(null); }}
+    >
+      <DropdownMenuTrigger asChild>
+        <span
+          aria-hidden="true"
+          className="pointer-events-none fixed h-0 w-0"
+          style={{ left: contextMenu?.x ?? 0, top: contextMenu?.y ?? 0 }}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="min-w-40"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (menuRestoreFocusRef.current) menuOriginRef.current?.focus({ preventScroll: true });
+        }}
+        onInteractOutside={() => { menuRestoreFocusRef.current = false; }}
+        onPointerDownCapture={(event) => {
+          menuPointerDownRef.current = event.button === 0 && !event.ctrlKey;
+        }}
+        onPointerUpCapture={(event) => {
+          // Radix synthesizes a click on release when the press happened
+          // outside an item. Opening a context menu must never select it.
+          if (!menuPointerDownRef.current || event.button !== 0 || event.ctrlKey) {
+            event.preventDefault();
+          }
+          menuPointerDownRef.current = false;
+        }}
+        onClickCapture={(event) => {
+          if (event.button !== 0 || event.ctrlKey) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+      >
+        <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
+          <Pin size={14} className="mr-2" />
+          {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => {
+            void setBotHidden(bot.id, true).then(() => {
+              if (!selected) return;
+              const fallback = roster.visible.find(
+                (candidate) => candidate.id !== bot.id,
+              );
+              navigate(fallback ? `/bots/${fallback.id}` : '/bots');
+            });
+          }}
+        >
+          <EyeOff size={14} className="mr-2" />
+          {t('bots.list.hide')}
+        </DropdownMenuItem>
+        {bot.templateId !== 'cindy' && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => {
+                void duplicateBotProfile(bot.id).then((copy) =>
+                  navigate(`/bots/${copy.id}`),
+                );
+              }}
+            >
+              <Copy size={14} className="mr-2" />
+              {t('bots.list.duplicate')}
+            </DropdownMenuItem>
+          </>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
+          onSelect={() => setDeleteTarget(bot)}
+        >
+          <Trash2 size={14} className="mr-2" />
+          {t('bots.lifecycle.delete')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   if (collapsed) {
     return (
@@ -308,7 +411,7 @@ function BotsSidebarContent() {
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t('bots.list.searchPlaceholder')}
             aria-label={t('bots.list.search')}
-            className="h-7 w-full rounded-lg border border-[var(--border-default)] bg-transparent pl-7 pr-2 text-11 text-[var(--sidebar-nav-text)] outline-none placeholder:text-[var(--sidebar-list-muted)] focus:border-[var(--border-strong)]"
+            className="h-7 w-full rounded-lg border border-[var(--border-default)] bg-transparent pl-7 pr-2 text-11 text-[var(--sidebar-nav-text)] outline-none placeholder:text-[var(--sidebar-list-muted)] focus:border-[var(--focus-ring)]"
           />
         </label>
       ) : null}
@@ -320,7 +423,36 @@ function BotsSidebarContent() {
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {[...roster.visible, ...remoteBots.filter((bot) => !query.trim() || `${bot.name} ${bot.description} ${bot.deviceName}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))]
+            {showCindy && currentCindy ? (() => {
+              const bot = currentCindy.bot;
+              const local = 'deviceId' in bot ? null : bot;
+              const selected = Boolean(routeCindy);
+              const activity = local ? botRunningActivity(local) : undefined;
+              const subtitle = local ? botListSubtitle(local) : null;
+              const subtitleText = activity ? activity.compactDetail?.trim() || t('bots.list.typing')
+                : subtitle ? subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text
+                  : 'preview' in bot ? bot.preview || bot.description || t('bots.list.startChat') : '';
+              return <CindyDeviceRow key="cindy-devices" current={currentCindy} options={cindyOptions}
+                selected={selected} typing={Boolean(activity)} subtitle={subtitleText}
+                timestamp={formatBotListTimestamp(local
+                  ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
+                  : 'activityAt' in bot ? bot.activityAt : 0, now)}
+                onOpen={() => navigate(currentCindy.route)}
+                onSelect={option => navigate(option.route)}
+                onContextMenu={local ? event => {
+                  event.preventDefault(); event.stopPropagation();
+                  openBotContextMenu(local.id, event.currentTarget, event.clientX, event.clientY);
+                } : undefined}
+                onKeyDown={local ? event => {
+                  if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+                  event.preventDefault();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  openBotContextMenu(local.id, event.currentTarget, rect.left + 10, rect.bottom);
+                } : undefined}>
+                {local ? renderBotContextMenu(local, selected) : null}
+              </CindyDeviceRow>;
+            })() : null}
+            {visibleBots
               .sort((a, b) => {
                 const pin = Number('pinnedAt' in b && Boolean(b.pinnedAt)) - Number('pinnedAt' in a && Boolean(a.pinnedAt));
                 return pin || ('activityAt' in b ? b.activityAt : b.lastMessageAt ?? b.createdAt) - ('activityAt' in a ? a.activityAt : a.lastMessageAt ?? a.createdAt);
@@ -469,86 +601,7 @@ function BotsSidebarContent() {
                       </span>
                     </span>
                   </button>
-                  <DropdownMenu
-                    open={contextMenu?.botId === bot.id}
-                    onOpenChange={(open) => { if (!open) setContextMenu(null); }}
-                  >
-                    <DropdownMenuTrigger asChild>
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none fixed h-0 w-0"
-                        style={{ left: contextMenu?.x ?? 0, top: contextMenu?.y ?? 0 }}
-                      />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="start"
-                      className="min-w-40"
-                      onCloseAutoFocus={(event) => {
-                        event.preventDefault();
-                        if (menuRestoreFocusRef.current) menuOriginRef.current?.focus({ preventScroll: true });
-                      }}
-                      onInteractOutside={() => { menuRestoreFocusRef.current = false; }}
-                      onPointerDownCapture={(event) => {
-                        menuPointerDownRef.current = event.button === 0 && !event.ctrlKey;
-                      }}
-                      onPointerUpCapture={(event) => {
-                        // Radix synthesizes a click on release when the press happened
-                        // outside an item. Opening a context menu must never select it.
-                        if (!menuPointerDownRef.current || event.button !== 0 || event.ctrlKey) {
-                          event.preventDefault();
-                        }
-                        menuPointerDownRef.current = false;
-                      }}
-                      onClickCapture={(event) => {
-                        if (event.button !== 0 || event.ctrlKey) {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }
-                      }}
-                    >
-                      <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
-                        <Pin size={14} className="mr-2" />
-                        {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() => {
-                          void setBotHidden(bot.id, true).then(() => {
-                            if (!selected) return;
-                            const fallback = roster.visible.find(
-                              (candidate) => candidate.id !== bot.id,
-                            );
-                            navigate(fallback ? `/bots/${fallback.id}` : '/bots');
-                          });
-                        }}
-                      >
-                        <EyeOff size={14} className="mr-2" />
-                        {t('bots.list.hide')}
-                      </DropdownMenuItem>
-                      {bot.templateId !== 'cindy' && (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              void duplicateBotProfile(bot.id).then((copy) =>
-                                navigate(`/bots/${copy.id}`),
-                              );
-                            }}
-                          >
-                            <Copy size={14} className="mr-2" />
-                            {t('bots.list.duplicate')}
-                          </DropdownMenuItem>
-                        </>
-                      )}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
-                        onSelect={() => setDeleteTarget(bot)}
-                      >
-                        <Trash2 size={14} className="mr-2" />
-                        {t('bots.lifecycle.delete')}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  {renderBotContextMenu(bot, selected)}
                 </div>
               );
             })}

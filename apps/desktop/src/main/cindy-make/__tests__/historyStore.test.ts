@@ -5,6 +5,62 @@ import { afterEach, expect, it } from 'vitest';
 import { CindyMakeHistoryStore } from '../historyStore';
 
 const dirs: string[] = [];
+it('reloads one scrubbed active output line, supports older records, and omits terminal output', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'make-build-output-'));
+  dirs.push(dir);
+  const store = new CindyMakeHistoryStore(dir);
+  store.saveBuild({
+    status: 'checking',
+    outputLine: 'Checking token=fake-secret; /Users/private/file.ts\nDone',
+  });
+  expect(new CindyMakeHistoryStore(dir).readBuild()?.outputLine).toBe(
+    'Checking token=[REDACTED]; <path> Done',
+  );
+  store.saveBuild({ status: 'ready', outputLine: 'Previous output' });
+  expect(store.readBuild()).toEqual({ status: 'ready' });
+  store.saveBuild({ status: 'checking' });
+  expect(store.readBuild()).toEqual({ status: 'checking' });
+});
+it('retains the merge task and stage history after restart while rejecting invalid task identities', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'make-merge-link-'));
+  dirs.push(dir);
+  const store = new CindyMakeHistoryStore(dir);
+  const state = {
+    status: 'failed' as const,
+    error: 'interrupted' as const,
+    buildId: 'build',
+    mergeSessionId: 'merge-task',
+    logs: [
+      { step: 'resolving-conflicts' as const, at: 100 },
+      { step: 'failed' as const, at: 200 },
+    ],
+  };
+  store.saveBuild(state);
+  expect(new CindyMakeHistoryStore(dir).readBuild()).toEqual(state);
+  store.saveBuild({ ...state, mergeSessionId: '../unrelated' });
+  expect(store.readBuild()?.mergeSessionId).toBeUndefined();
+});
+it('retains a sanitized build diagnostic across store reloads and tolerates old receipts', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'make-build-diagnostic-'));
+  dirs.push(dir);
+  const store = new CindyMakeHistoryStore(dir);
+  store.saveBuild({
+    status: 'failed',
+    error: 'buildFailed',
+    diagnostic: {
+      kind: 'process',
+      exitCode: 1,
+      message: 'Error: token=fake-secret; failed at /Users/private/source',
+    },
+  });
+  expect(new CindyMakeHistoryStore(dir).readBuild()?.diagnostic).toEqual({
+    kind: 'process',
+    exitCode: 1,
+    message: 'Error: token=[REDACTED]; failed at <path>',
+  });
+  store.saveBuild({ status: 'failed', error: 'buildFailed' });
+  expect(store.readBuild()).toEqual({ status: 'failed', error: 'buildFailed' });
+});
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -16,6 +72,12 @@ it('preserves real checking stages and known failures while filtering private or
     store.saveBuild({ status: 'checking', checkStep });
     expect(store.readBuild()).toEqual({ status: 'checking', checkStep });
   }
+  for (const mergeStep of ['conflicts', 'cleanup'] as const) {
+    store.saveBuild({ status: 'merging', mergeStep });
+    expect(new CindyMakeHistoryStore(dir).readBuild()).toEqual({ status: 'merging', mergeStep });
+  }
+  store.saveBuild({ status: 'merging', mergeStep: 'private-output' as never });
+  expect(store.readBuild()).toEqual({ status: 'merging' });
   for (const error of ['checksFailed', 'missingShell', 'baselineChanged', 'interrupted'] as const) {
     store.saveBuild({ status: 'failed', error });
     expect(store.readBuild()).toEqual({ status: 'failed', error });

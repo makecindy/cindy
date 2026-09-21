@@ -1,7 +1,9 @@
+import type { ComponentProps, ReactNode } from "react";
 import { Stack } from "expo-router";
+import { HomeHeaderGlassButton } from "@/session/HomeHeaderGlassButton";
 import { BlurBackdrop } from "@/session/BlurBackdrop";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
-import { ChevronDown, Ellipsis, Menu, Monitor } from "lucide-react-native";
+import { ChevronDown, Menu } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Text } from "@/components/AppText";
 import {
@@ -31,7 +33,6 @@ export function HomeNativeStackHeader({
   menuA11y,
   onDisplayAction,
   onOpenDeviceMenu,
-  onOpenDisplaySettings,
   onOpenMenu,
   onOpenRemoteDesktop,
   remoteDesktopA11y,
@@ -39,6 +40,7 @@ export function HomeNativeStackHeader({
   scopeActions,
   showRemoteGuide,
   syncing = false,
+  keepMenuTopLeft = false,
   title,
   titleA11y,
 }: {
@@ -55,6 +57,7 @@ export function HomeNativeStackHeader({
   scopeActions: readonly NativePullDownAction[];
   showRemoteGuide: boolean;
   syncing?: boolean;
+  keepMenuTopLeft?: boolean;
   title: string;
   titleA11y: string;
 }) {
@@ -106,6 +109,7 @@ export function HomeNativeStackHeader({
           headerStyle: { backgroundColor: "transparent" },
           headerTintColor: colors.textPrimary,
           headerTransparent: true,
+          headerTitle: () => titleNode,
         }}
       />
       <Stack.Header
@@ -115,90 +119,51 @@ export function HomeNativeStackHeader({
           shadowColor: "transparent",
         }}
       />
-      <Stack.Title asChild>{titleNode}</Stack.Title>
       <Stack.Toolbar placement="left">
-        <Stack.Toolbar.View>
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.iconHit, pressed && styles.pressed]}
-            accessibilityLabel={menuA11y}
-            onPress={onOpenMenu}
-            testID="home.chromeMenu"
-          >
-            <Menu
-              color={colors.textPrimary}
-              size={iconSize.xl}
-              strokeWidth={iconStroke.regular}
-            />
-          </Pressable>
-        </Stack.Toolbar.View>
+        {keepMenuTopLeft ? (
+          // This home-only custom item stays at the top left on Duo. Hosting it
+          // in the native bar keeps its hit target above the transparent header.
+          <Stack.Toolbar.View hidesSharedBackground>
+            <HomeHeaderGlassButton accessibilityLabel={menuA11y} onPress={onOpenMenu} testID="home.chromeMenu">
+              <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+            </HomeHeaderGlassButton>
+          </Stack.Toolbar.View>
+        ) : (
+          <Stack.Toolbar.Button icon="line.3.horizontal" accessibilityLabel={menuA11y} onPress={onOpenMenu} />
+        )}
       </Stack.Toolbar>
       {showRemoteGuide ? null : (
         <Stack.Toolbar placement="right">
-          <Stack.Toolbar.View>
-            <View style={styles.trailingActions}>
-              {onOpenRemoteDesktop ? (
-                <Pressable
-                  accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.iconHit,
-                    pressed && styles.pressed,
-                  ]}
-                  accessibilityLabel={remoteDesktopA11y}
-                  onPress={onOpenRemoteDesktop}
-                  testID="home.remoteDesktopButton"
-                >
-                  <Monitor
-                    color={colors.textPrimary}
-                    size={iconSize.xl}
-                    strokeWidth={iconStroke.regular}
-                  />
-                </Pressable>
-              ) : null}
-              <NativePullDownMenu
-                actions={displayActions}
-                onAction={onDisplayAction}
-              >
-                <Pressable
-                  accessibilityRole="button"
-                  style={({ pressed }) => [
-                    styles.iconHit,
-                    pressed && styles.pressed,
-                  ]}
-                  accessibilityLabel={displayA11y}
-                  onPress={
-                    nativeMenus ? () => undefined : onOpenDisplaySettings
-                  }
-                  testID="home.displaySettingsButton"
-                >
-                  <Ellipsis
-                    color={colors.textPrimary}
-                    size={iconSize.xl}
-                    strokeWidth={iconStroke.regular}
-                  />
-                </Pressable>
-              </NativePullDownMenu>
-            </View>
-          </Stack.Toolbar.View>
+          {onOpenRemoteDesktop ? <Stack.Toolbar.Button icon={require("../../../assets/navigation/monitor.png")} iconRenderingMode="template"
+            accessibilityLabel={remoteDesktopA11y} onPress={onOpenRemoteDesktop} /> : null}
+          <Stack.Toolbar.Menu icon="ellipsis" accessibilityLabel={displayA11y}>
+            {displayMenuItems(displayActions, onDisplayAction)}
+          </Stack.Toolbar.Menu>
         </Stack.Toolbar>
       )}
     </>
   );
 }
 
+
+function displayMenuItems(actions: readonly NativePullDownAction[], onAction: (id: string) => void): ReactNode {
+  return actions.map(action => action.subactions?.length ? (
+    <Stack.Toolbar.Menu key={action.id} title={action.title} inline={action.displayInline}
+      disabled={action.disabled} destructive={action.destructive}>
+      {displayMenuItems(action.subactions, onAction)}
+    </Stack.Toolbar.Menu>
+  ) : (
+    <Stack.Toolbar.MenuAction key={action.id} disabled={action.disabled}
+      destructive={action.destructive} isOn={action.state === 'on'} subtitle={action.subtitle}
+      icon={action.image as ComponentProps<typeof Stack.Toolbar.MenuAction>['icon']}
+      unstable_keepPresented={action.keepPresented} onPress={() => onAction(action.id)}>
+      {action.title}
+    </Stack.Toolbar.MenuAction>
+  ));
+}
+
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    trailingActions: {
-      flexDirection: "row",
-      alignItems: "center",
-    },
-    iconHit: {
-      alignItems: "center",
-      justifyContent: "center",
-      height: 44,
-      width: 44,
-      borderRadius: radius.pill,
-    },
     pressed: { opacity: 0.72 },
     title: {
       color: colors.textPrimary,

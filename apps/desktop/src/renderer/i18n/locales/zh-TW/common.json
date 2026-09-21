@@ -7434,6 +7434,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "本機",
+      "title": "切換裝置",
+      "switchDevice": "切換裝置，目前為{{device}}",
+      "unread": "有未讀訊息",
+      "otherUnread": "其他裝置有未讀訊息",
+      "remotePlaceholder": "傳送給{{device}}上的 {{name}}…"
+    },
     "creationName": "名字",
     "settingsBack": "返回設定",
     "sidebar": {
@@ -12995,6 +13003,14 @@
       "localMain": "本機 main",
       "lookupUnavailable": "查詢失敗",
       "comparisonUnavailable": "本機 main 的差距尚未讀取",
+      "personalStatus": {
+        "suffix": "（{{status}}）",
+        "upToDate": "已是最新",
+        "updateAvailable": "有更新",
+        "unverified": "版本狀態未確認",
+        "upToDateDescription": "個人版程式碼已包含{{target}}的全部更新",
+        "personalChanges": "另有 {{ahead}} 筆個人修改記錄"
+      },
       "comparison": {
         "same": "與本機 main 的 SHA 相同",
         "personalAhead": "已包含本機 main，另有 {{ahead}} 筆個人修改記錄",
@@ -13037,6 +13053,16 @@
       "description": "將本次修改與個人版合併，檢查和打包通過後儲存為新個人版。",
       "readyHint": "安裝套件 {{name}} 已產生，可開啟所在目錄。",
       "failedStep": "失敗步驟：{{step}}",
+      "diagnostic": {
+        "outOfMemory": "打包程式超出了記憶體上限。請更新 Cindy 後重新產生；若仍失敗，請回報下方錯誤。",
+        "timeout": "產生時間超過 1 小時，已停止。請檢查下方記錄後重試。",
+        "exitCode": "程式結束代碼：{{code}}",
+        "unavailable": "這次產生沒有儲存具體錯誤，請重新產生以記錄失敗原因。"
+      },
+      "mergeStep": {
+        "conflicts": "正在處理衝突…",
+        "cleanup": "正在清理合併檔案…"
+      },
       "preparationStep": {
         "environment": "正在準備產生環境…",
         "original": "正在檢查目前版本…"
@@ -13058,6 +13084,8 @@
       "buildLog": {
         "title": "產生記錄",
         "steps": {
+          "resolving-conflicts": "處理衝突",
+          "cleaning-merge": "清理合併檔案",
           "environment": "準備產生環境",
           "original": "檢查目前版本",
           "merging": "合入修改",
@@ -13137,7 +13165,7 @@
         "selectItem": "選取 {{title}}",
         "hint": "由舊到新依序合入，統一產生一個新版本。",
         "confirmTitle": "製作包含 {{count}} 項變更的個人版？",
-        "confirmDescription": "所選變更將依下列順序逐項合入，全部成功後只產生一個新版本。已啟動的所選隔離版會先停止。遇到衝突時停止製作並保留已合入變更，處理後可重新開始製作。沒有待處理衝突時，取消或產生失敗會撤回尚未產生成功版本的合入，保留各任務的原始變更。",
+        "confirmDescription": "所選變更將依下列順序逐項合入，全部成功後只產生一個新版本。已啟動的所選隔離版會先停止。遇到衝突會進入處理衝突步驟，可開啟關聯任務查看；處理完成後自動清理暫存檔案並繼續產生。停止製作也會停止關聯任務並捨棄暫存的衝突修改，原任務修改和已產生版本會保留。",
         "start": "確認製作",
         "progress": "正在合入 {{current}} / {{total}}：{{title}}",
         "restartTest": "重新啟動隔離版"
@@ -13146,6 +13174,10 @@
       "buildDescription": "將目前的個人原始碼產生為新版本，尚未合入的歷史改動不會包含在內。",
       "building": "正在產生個人版…",
       "stop": "停止製作",
+      "stopConfirm": {
+        "title": "停止本次製作？",
+        "description": "會同時停止本次處理衝突的任務，捨棄暫存的衝突修改，清理暫存檔案，並撤回尚未產生成功版本的合入。原製作任務的修改、交流記錄和已產生版本會保留。"
+      },
       "stopping": "正在停止…",
       "progress": {
         "waiting": "等待開始",
