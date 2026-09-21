@@ -13,7 +13,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IMCardActionEvent, IMHost, IMMessageEvent } from '../../types.js';
 import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.js';
 import { encodeCallbackData, encodeMessageId } from '../codec.js';
-import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
+import {
+  TELEGRAM_DEFAULT_BEHAVIOR,
+  TelegramIM,
+  type TelegramGroupWindowEntry,
+} from '../index.js';
 
 const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bot' };
 const OWNER_ID = '111';
@@ -300,6 +304,33 @@ describe('TelegramIM', () => {
       text: 'hi',
       messageId: '111|2',
     });
+  });
+
+  it('私聊: 开关允许非 owner 普通对话, 但控制命令仍丢弃', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({
+        ...TELEGRAM_DEFAULT_BEHAVIOR,
+        allowNonOwnerMessages: true,
+      }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      privateMessage('hello from guest', 222, 1),
+      privateMessage('/new', 222, 2),
+      privateMessage('hi', 111, 3),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[0]).toMatchObject({
+      senderId: '222',
+      text: 'hello from guest',
+    });
+    expect(events[0]!.speaker).toMatchObject({ id: '222', isOwner: false });
+    expect(events[1]).toMatchObject({ senderId: OWNER_ID, text: 'hi' });
   });
 
   it('群里 owner 裸斜杠命令视为召唤(不带 @ 也进 slash); 成员裸命令仍静默', async () => {

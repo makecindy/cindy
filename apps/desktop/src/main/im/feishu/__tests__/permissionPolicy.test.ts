@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createFeishuGroupTurnPermissionPolicy } from '../permissionPolicy';
+import { createFeishuGuestTurnPermissionPolicy, createFeishuGroupTurnPermissionPolicy } from '../permissionPolicy';
 
 describe('feishu group turn permission policy', () => {
   const policy = createFeishuGroupTurnPermissionPolicy('om_trigger');
@@ -45,6 +45,18 @@ describe('feishu group turn permission policy', () => {
   });
 });
 
+describe('feishu guest turn permission policy(开关放行的非 owner 轮次)', () => {
+  it('每个工具调用都强制确认, 并向审阅器声明 guest 授权来源', () => {
+    const group = createFeishuGuestTurnPermissionPolicy('g/oc_group1/omt_t1', 'group');
+    expect(group.autoReviewContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
+    expect(group.forceConfirmToolCall('Read', { path: 'README.md' })).toBe(true);
+    expect(group.forceConfirmToolCall('Write', { path: 'notes.md', content: 'x' })).toBe(true);
+
+    const direct = createFeishuGuestTurnPermissionPolicy('ou_guest');
+    expect(direct.autoReviewContext).toEqual({ requesterAuthority: 'guest', source: 'direct' });
+    expect(direct.forceConfirmToolCall('Grep', { pattern: 'foo' })).toBe(true);
+  });
+});
 
 it('keeps trusted requester authority separate from message text', () => {
   expect(createFeishuGroupTurnPermissionPolicy('message', true).autoReviewContext).toEqual({ requesterAuthority: 'owner', source: 'group' });

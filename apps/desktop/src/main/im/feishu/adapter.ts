@@ -41,7 +41,7 @@ import {
   FILTERED_HISTORY_PLACEHOLDER,
   looksLikePromptInjection,
 } from './groupContextInjection';
-import { createFeishuGroupTurnPermissionPolicy } from './permissionPolicy';
+import { createFeishuGroupTurnPermissionPolicy, createFeishuGuestTurnPermissionPolicy } from './permissionPolicy';
 import { ui, REACTION_PROCESSING } from './uiText';
 
 const log = createLogger('im:feishu-adapter');
@@ -232,6 +232,10 @@ export function buildFeishuAdapter(
   config: ImOrchestratorConfig,
 ): ImChannelAdapter {
   const isLark = () => feishuIm.getService() === 'lark';
+  // 同一条群任务会混入 owner 与非 owner 的消息。Full access 只能取缔 owner
+  // 触发轮次的逐轮策略；用对象身份记录这批 policy，避免把会话级权限误当成
+  // 整个群所有成员的授权。WeakSet 不延长排队 policy 的生命周期。
+  const ownerGroupTurnPolicies = new WeakSet<object>();
   const conversationPrefix = () => (isLark() ? '[Lark·DM] ' : '[飞书·DM] ');
   const groupPrefix = (threadId: string) =>
     isLark()
@@ -342,14 +346,27 @@ export function buildFeishuAdapter(
 
     // 群轮次(speaker 存在)统一挂强确认策略 — 群历史前缀携带成员可控文本,
     // 注入可借 owner 轮次的宽松档执行危险操作; 确认卡经 deliverToOwnerDm
-    // 改投 owner 私聊, 点击也只认 owner。DM 不挂, owner 私聊保持全速。
-    turnPermissionPolicyFor: (event) =>
-      event.speaker ? createFeishuGroupTurnPermissionPolicy(event.messageId, event.speaker.isOwner) : undefined,
-    // 群护栏取缔: 用户在渠道设置里显式允许群会话用「完全访问」→ 该档位
-    // 不再挂强确认策略(maker 不再拒绝, 按用户选择直接执行)。群上下文的
-    // 防注入过滤/包裹在 prepareAgentTurnText 里独立生效, 不随权限档关闭;
+    // 改投 owner 私聊, 点击也只认 owner。owner 私聊不挂, 保持全速;
+    // 开关放行的非 owner 私聊带 speaker, 挂访客策略(每个工具调用等 owner 拍板)。
+    turnPermissionPolicyFor: (event) => {
+      if (!event.speaker) return undefined;
+    if (event.speaker.isOwner === false) {
+      return createFeishuGuestTurnPermissionPolicy(
+        event.messageId,
+        event.senderId?.startsWith('g/') ? 'group' : 'direct',
+      );
+    }
+      const policy = createFeishuGroupTurnPermissionPolicy(event.messageId, true);
+      ownerGroupTurnPolicies.add(policy);
+      return policy;
+    },
+    // 群护栏取缔: 用户在渠道设置里显式允许群会话用「完全访问」→ owner 触发的
+    // 轮次不再挂强确认策略(maker 不再拒绝, 按用户选择直接执行); 访客轮次不在这份
+    // 授权里 — 群窗口带成员可控文本, 会话档位是 owner 的选择, 不能变成访客的授权。
+    // 群上下文的防注入过滤/包裹在 prepareAgentTurnText 里独立生效, 不随权限档关闭;
     // acceptEdits 仍保持失败路径(错误 + 私聊修复卡)。
-    turnPolicyOptionalForMode: (mode) => mode === 'bypassPermissions',
+    turnPolicyOptionalForMode: (mode, policy) =>
+      mode === 'bypassPermissions' && ownerGroupTurnPolicies.has(policy),
     // 群 lane: 触发时按页回翻群历史拼上下文前缀(含媒体附件), 落库仍是渠道原文。
     prepareAgentTurnText: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);

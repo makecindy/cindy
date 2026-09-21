@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createTelegramGuestTurnPermissionPolicy } from '../permissionPolicy';
+import { createTelegramGuestOnlyPolicy, createTelegramGuestTurnPermissionPolicy } from '../permissionPolicy';
 
 describe('telegram guest turn permission policy(一群一会话的成员轮次收紧)', () => {
   it('破坏性 shell 与包装的 MCP 写操作强制确认', () => {
@@ -53,6 +53,18 @@ describe('telegram guest turn permission policy(一群一会话的成员轮次�
   });
 });
 
+describe('telegram guest-only policy(开关放行的非 owner 轮次)', () => {
+  it('每个工具调用都强制确认, 并向审阅器声明 guest 授权来源', () => {
+    const group = createTelegramGuestOnlyPolicy('g/-100200|11', 'group');
+    expect(group.autoReviewContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
+    expect(group.forceConfirmToolCall('Read', { path: 'README.md' })).toBe(true);
+    expect(group.forceConfirmToolCall('Bash', { command: 'rm -rf build' })).toBe(true);
+
+    const direct = createTelegramGuestOnlyPolicy('ou_guest');
+    expect(direct.autoReviewContext).toEqual({ requesterAuthority: 'guest', source: 'direct' });
+    expect(direct.forceConfirmToolCall('Read', { path: 'README.md' })).toBe(true);
+  });
+});
 
 it('keeps trusted requester authority separate from message text', () => {
   expect(createTelegramGuestTurnPermissionPolicy('message', true).autoReviewContext).toEqual({ requesterAuthority: 'owner', source: 'group' });

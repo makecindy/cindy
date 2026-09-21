@@ -1600,6 +1600,70 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  it('redirects a guest DM interaction card to the owner DM', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'm-guest-plan' });
+    mocks.buildPlanReviewCard.mockReturnValue({ title: 'plan', body: 'plan body', buttons: [] });
+    await getRunner().runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_guest',
+      userMessageId: 'msg-guest-plan',
+      text: 'guest asks for a plan',
+      attachments: [],
+      guestTurn: true,
+    });
+
+    // 访客私聊 lane 里这张卡只有访客看得到, 而卡片回调只认 owner 点击 ——
+    // 不转投 owner DM, 这一轮就永远挂在 await 上。
+    void h.dispatchInteraction({
+      kind: 'plan_review',
+      requestId: 'interaction-guest-plan',
+      plan: 'do the thing',
+    });
+    await waitForAssertion(() =>
+      expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledWith(
+        'ou_guest',
+        expect.objectContaining({ title: 'plan' }),
+        expect.objectContaining({
+          deliverToOwnerDm: true,
+          ownerDmNote: expect.stringContaining('其他人私聊'),
+        }),
+      ),
+    );
+  });
+
+  it('redirects a guest group-lane plan card to the owner DM', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    mocks.feishuIm.sendInteractiveCard.mockResolvedValue({ messageId: 'm-group-plan' });
+    mocks.buildPlanReviewCard.mockReturnValue({ title: 'plan', body: 'plan body', buttons: [] });
+    await getRunner().runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'g/oc_group1/omt_t1',
+      userMessageId: 'msg-guest-group-plan',
+      text: 'guest asks for a plan in a group',
+      attachments: [],
+      guestTurn: true,
+    });
+
+    // 群里可能出现没有 owner 在场的情况, 而卡片回调只认 owner 点击 —— 访客
+    // 发起的问答 / 计划卡同样改投 owner 私聊, 否则该轮永远挂在 await 上。
+    void h.dispatchInteraction({
+      kind: 'plan_review',
+      requestId: 'interaction-guest-group-plan',
+      plan: 'do the thing',
+    });
+    await waitForAssertion(() =>
+      expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledWith(
+        'g/oc_group1/omt_t1',
+        expect.objectContaining({ title: 'plan' }),
+        expect.objectContaining({
+          deliverToOwnerDm: true,
+          ownerDmNote: expect.stringContaining('其他人私聊'),
+        }),
+      ),
+    );
+  });
+
   it('does not suppress a requested close during no-op switch acquisition', async () => {
     const oldSession = createSessionHarness(async () => ({ accepted: true }));
     let live: Session | undefined = oldSession.session;
