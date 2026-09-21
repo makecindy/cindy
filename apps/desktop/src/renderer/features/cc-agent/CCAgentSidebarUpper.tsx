@@ -1,4 +1,5 @@
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
+import { selectInputDeviceCatalogRows } from '../../../shared/inputDevices';
 /**
  * CCAgentFeature 的 Sidebar 上半内容。
  * ---------------------------------------------------------------------------
@@ -602,7 +603,10 @@ export function CCAgentSidebarUpper() {
       .filter((session) => !catalogSessionIds.has(session.id))
       .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
+    const tasks = [
+      ...visibleProjection,
+      ...selectInputDeviceCatalogRows(catalogSessions, sidebarOrder, remainingCatalogSlots),
+    ].map(
       (session) => {
         const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
         const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;

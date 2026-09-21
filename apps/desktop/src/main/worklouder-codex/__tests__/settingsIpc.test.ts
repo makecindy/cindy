@@ -14,7 +14,10 @@ import {
   cloneWorkLouderCodexLayout,
   createWorkLouderCodexDefaultSettings,
 } from '../../../shared/workLouderCodex.js';
-import { createWorkLouderCodexSettingsIpc, __testing as settingsIpcTesting } from '../settingsIpc.js';
+import {
+  createWorkLouderCodexSettingsIpc,
+  __testing as settingsIpcTesting,
+} from '../settingsIpc.js';
 
 const DEFAULT_SETTINGS: WorkLouderCodexSettings = createWorkLouderCodexDefaultSettings();
 
@@ -94,6 +97,31 @@ function makeIpc(options?: {
 }
 
 describe('Work Louder Codex settings IPC business body', () => {
+  it('accepts pinned-only mode and canonicalizes legacy Queue before saving', () => {
+    const { ipc, writeSettings } = makeIpc();
+    ipc.set(EVENT, 'creator-micro-2', {
+      agentSource: 'pinned',
+      customAgentKeys: [
+        { type: 'command', commandId: 'composer.queue' },
+        null,
+        null,
+        null,
+        null,
+        null,
+      ],
+    });
+    expect(writeSettings).toHaveBeenCalledWith('creator-micro-2', {
+      agentSource: 'pinned',
+      customAgentKeys: [
+        { type: 'command', commandId: 'composer.submit' },
+        null,
+        null,
+        null,
+        null,
+        null,
+      ],
+    });
+  });
   it('rejects an untrusted sender before reading or writing device state', () => {
     const untrusted = () => {
       throw new Error('untrusted sender');
@@ -155,6 +183,7 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(writeSettings).toHaveBeenCalledWith('codex-micro', patch);
     expect(applySettings).toHaveBeenCalledWith('codex-micro', {
       deviceEnabled: false,
+      keymapPolicy: 'managed',
       lightingBrightness: 40,
       lightingAutoDim: 'off',
       agentSource: 'last-sent',
@@ -224,7 +253,9 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(() => ipc.publishTasks(EVENT, [{ id: '', title: 'x', pinnedAt: null }])).toThrow();
     expect(() => ipc.publishTasks(EVENT, [{ id: 'a', title: 5, pinnedAt: null }])).toThrow();
     expect(() =>
-      ipc.publishTasks(EVENT, [{ id: 'a', title: 'x'.repeat(513), pinnedAt: null, userSendAt: null }]),
+      ipc.publishTasks(EVENT, [
+        { id: 'a', title: 'x'.repeat(513), pinnedAt: null, userSendAt: null },
+      ]),
     ).toThrow('title is too long');
     expect(() =>
       ipc.publishTasks(
@@ -248,12 +279,12 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(source).toContain('workLouderAccessories.applySettings(model, persisted[model]);');
     expect(source).toContain('workLouderCodexLightingController.start();');
     expect(source).toContain('hostClient.probe()');
-    expect(source).toContain('const win = actionWindowRouter.resolve(action);');
-    expect(source).toContain('if (systemFrontmostInput.handle(action)) return;');
+    expect(source).toContain('const win = actionWindowRouter.resolve(rendererAction);');
+    expect(source).toContain('if (systemFrontmostInput.handle(rendererAction)) return;');
     expect(source).toContain('return win === main || isSecondaryAppWindow(win);');
-    expect(source.indexOf('workLouderAccessories.applySettings(model, persisted[model]);')).toBeLessThan(
-      source.indexOf('workLouderCodexLightingController.start();'),
-    );
+    expect(
+      source.indexOf('workLouderAccessories.applySettings(model, persisted[model]);'),
+    ).toBeLessThan(source.indexOf('workLouderCodexLightingController.start();'));
   });
 
   it('still accepts a layout saved before voiceButtonMode was removed', () => {

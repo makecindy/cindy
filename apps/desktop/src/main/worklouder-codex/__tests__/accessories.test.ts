@@ -88,18 +88,28 @@ function defaults(model: WorkLouderModel, enabled = false): WorkLouderCodexSetti
 }
 
 describe('resolveWorkLouderOccupyingModel', () => {
-  it('asks for presence discovery while a board is enabled but still unidentified', () => {
+  it('does not discover a Creator Micro 2 while the native owner is present', () => {
     expect(
-      workLouderNeedsIdentityDiscovery(null, {
-        'codex-micro': defaults('codex-micro'),
-        'creator-micro-2': defaults('creator-micro-2', true),
-      }),
-    ).toBe(true);
+      workLouderNeedsIdentityDiscovery(
+        null,
+        {
+          'codex-micro': defaults('codex-micro'),
+          'creator-micro-2': defaults('creator-micro-2', true),
+        },
+        undefined,
+        true,
+      ),
+    ).toBe(false);
     expect(
-      workLouderNeedsIdentityDiscovery('creator-micro-2', {
-        'codex-micro': defaults('codex-micro'),
-        'creator-micro-2': defaults('creator-micro-2', true),
-      }),
+      workLouderNeedsIdentityDiscovery(
+        'creator-micro-2',
+        {
+          'codex-micro': defaults('codex-micro'),
+          'creator-micro-2': defaults('creator-micro-2', true),
+        },
+        undefined,
+        true,
+      ),
     ).toBe(false);
     expect(
       workLouderNeedsIdentityDiscovery(
@@ -109,13 +119,19 @@ describe('resolveWorkLouderOccupyingModel', () => {
           'creator-micro-2': defaults('creator-micro-2', true),
         },
         false,
+        true,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
-      workLouderNeedsIdentityDiscovery(null, {
-        'codex-micro': defaults('codex-micro'),
-        'creator-micro-2': defaults('creator-micro-2'),
-      }),
+      workLouderNeedsIdentityDiscovery(
+        null,
+        {
+          'codex-micro': defaults('codex-micro'),
+          'creator-micro-2': defaults('creator-micro-2'),
+        },
+        undefined,
+        true,
+      ),
     ).toBe(false);
   });
 
@@ -178,10 +194,10 @@ describe('WorkLouderAccessories occupancy', () => {
     expect(state['creator-micro-2'].connectionStatus).toBe('disabled');
     expect(state['creator-micro-2'].devicePresent).toBe(true);
     expect(lighting.getState().settings.deviceEnabled).toBe(false);
-    expect(lighting.getState().settings.layout.slots.ACT06.keycapId).toBe('EMPT1');
+    expect(lighting.getState().settings.layout).toEqual(defaults('creator-micro-2').layout);
   });
 
-  it('occupies Creator Micro 2 with its own blank layout once that model is enabled', () => {
+  it('keeps Creator Micro 2 read-only even when an old settings file enables it', () => {
     const lighting = new FakeLighting(
       liveState({
         deviceType: 'creator-micro-2',
@@ -198,16 +214,19 @@ describe('WorkLouderAccessories occupancy', () => {
       }),
     );
     const accessories = new WorkLouderAccessories(lighting);
-    accessories.applySettings('creator-micro-2', defaults('creator-micro-2', true));
+    accessories.applySettings('creator-micro-2', {
+      ...defaults('creator-micro-2', true),
+      keymapPolicy: 'preserve',
+    });
 
     const state = accessories.getAccessories();
-    expect(state['creator-micro-2'].connectionStatus).toBe('connected');
-    expect(state['creator-micro-2'].agentSlots[0]?.title).toBe('Live task');
+    expect(state['creator-micro-2'].connectionStatus).toBe('not-detected');
+    expect(state['creator-micro-2'].agentSlots[0]?.title).toBeNull();
     expect(state['codex-micro'].connectionStatus).toBe('not-detected');
     expect(state['codex-micro'].agentSlots[0]?.title).toBeNull();
-    expect(lighting.getState().settings.deviceEnabled).toBe(true);
-    expect(lighting.getState().settings.layout.slots.ACT06.keycapId).toBe('EMPT1');
-    expect(lighting.getState().settings.layout.separateMicrophoneKeys).toBe(true);
+    expect(lighting.getState().settings.deviceEnabled).toBe(false);
+    expect(lighting.getState().settings.layout).toEqual(defaults('creator-micro-2').layout);
+    expect(lighting.getState().settings.keymapPolicy).toBe('preserve');
   });
 
   it('occupies Codex Micro with the Codex layout when that board is present and enabled', () => {
@@ -254,14 +273,14 @@ describe('WorkLouderAccessories occupancy', () => {
     expect(accessories.getAccessories()['codex-micro'].connectionStatus).toBe('not-detected');
   });
 
-  it('discovers identity once when a board is enabled before the firmware names itself', () => {
+  it('does not discover Creator Micro 2 from a legacy enabled setting', () => {
     const lighting = new FakeLighting(liveState({ deviceType: null, present: null }));
     const discover = vi.fn();
     const accessories = new WorkLouderAccessories(lighting, discover);
 
     accessories.applySettings('creator-micro-2', defaults('creator-micro-2', true));
     accessories.applySettings('creator-micro-2', defaults('creator-micro-2', true));
-    expect(discover).toHaveBeenCalledOnce();
+    expect(discover).not.toHaveBeenCalled();
     expect(lighting.getState().settings.deviceEnabled).toBe(false);
 
     lighting.setLive(
@@ -270,21 +289,21 @@ describe('WorkLouderAccessories occupancy', () => {
         settings: lighting.getState().settings,
       }),
     );
-    expect(discover).toHaveBeenCalledOnce();
-    expect(lighting.getState().settings.deviceEnabled).toBe(true);
+    expect(discover).not.toHaveBeenCalled();
+    expect(lighting.getState().settings.deviceEnabled).toBe(false);
   });
 
-  it('retries identity discovery while a board stays enabled but unnamed', () => {
+  it('does not retry Creator identity discovery while ChatGPT owns it', () => {
     vi.useFakeTimers();
     try {
       const lighting = new FakeLighting(liveState({ deviceType: null, present: null }));
       const discover = vi.fn();
       const accessories = new WorkLouderAccessories(lighting, discover);
       accessories.applySettings('creator-micro-2', defaults('creator-micro-2', true));
-      expect(discover).toHaveBeenCalledOnce();
+      expect(discover).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(5_000);
-      expect(discover).toHaveBeenCalledTimes(2);
+      expect(discover).not.toHaveBeenCalled();
 
       lighting.setLive(
         liveState({
@@ -293,13 +312,13 @@ describe('WorkLouderAccessories occupancy', () => {
         }),
       );
       vi.advanceTimersByTime(5_000);
-      expect(discover).toHaveBeenCalledTimes(2);
+      expect(discover).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('resumes discovery after a remembered board disappears', () => {
+  it('does not discover Creator Micro 2 after another board disappears', () => {
     const lighting = new FakeLighting(liveState({ deviceType: 'codex-micro' }));
     const discover = vi.fn();
     const accessories = new WorkLouderAccessories(lighting, discover);
@@ -313,7 +332,7 @@ describe('WorkLouderAccessories occupancy', () => {
         settings: lighting.getState().settings,
       }),
     );
-    expect(discover).toHaveBeenCalledOnce();
+    expect(discover).not.toHaveBeenCalled();
   });
 
   it('does not re-apply lighting when occupancy already matches live settings', () => {

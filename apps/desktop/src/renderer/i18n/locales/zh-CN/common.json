@@ -2151,7 +2151,11 @@
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
         "signIn": "登录",
-        "setupLink": { "apiKey": "获取 API Key", "account": "注册或登录", "setup": "设置帮助" },
+        "setupLink": {
+          "apiKey": "获取 API Key",
+          "account": "注册或登录",
+          "setup": "设置帮助"
+        },
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加，稍后在详情里刷新",
         "manualModelHint": "未发现可用模型，请填写此 Proxy 实际提供的模型 ID。",
@@ -4069,9 +4073,17 @@
             "name": "在新任务中继续",
             "description": "基于当前任务创建一个新任务"
           },
+          "forkThread": {
+            "name": "在新任务中继续",
+            "description": "基于当前任务创建一个新任务"
+          },
           "composer.submit": {
             "name": "发送消息",
-            "description": "发送输入框中的消息；若有待确认的请求则改为批准"
+            "description": "发送消息（运行中时加入队列），或批准待处理的请求"
+          },
+          "composer.steer": {
+            "name": "插话引导",
+            "description": "用输入框中的消息引导正在运行的任务"
           },
           "feedback": {
             "name": "发送反馈",
@@ -4092,6 +4104,10 @@
             "name": "归档任务",
             "description": "归档当前任务"
           },
+          "archiveThread": {
+            "name": "归档任务",
+            "description": "归档当前任务"
+          },
           "newTask": {
             "name": "新建任务",
             "description": "开始一个新任务"
@@ -4101,6 +4117,10 @@
             "description": "打开一个新的浏览器标签页"
           },
           "toggleTaskPin": {
+            "name": "切换置顶",
+            "description": "置顶或取消置顶当前任务"
+          },
+          "toggleThreadPin": {
             "name": "切换置顶",
             "description": "置顶或取消置顶当前任务"
           },
@@ -4236,7 +4256,7 @@
           },
           "autoDim": {
             "label": "自动熄灯",
-            "description": "闲置后关闭灯光；使用键盘或任务状态变化时自动恢复。",
+            "description": "闲置后关闭空闲灯光；正在执行和需要关注的任务保持亮灯。",
             "aria": "选择 Codex Micro 自动熄灯时间",
             "options": {
               "off": "关闭",
@@ -4257,6 +4277,7 @@
             "description": "任务键按板上顺序，对应侧边栏从上到下的任务。",
             "descriptions": {
               "sidebar": "任务键按板上顺序，对应侧边栏从上到下的任务。",
+              "pinned": "任务键仅对应置顶任务，按侧边栏顺序排列；其余键保持空置。",
               "last-sent": "任务键按板上顺序，对应你最近发过消息的任务，越近越靠前。",
               "priority": "任务键按板上顺序，对应优先任务。",
               "custom": "每颗任务键打开你指定的任务。"
@@ -4264,6 +4285,7 @@
             "value": "侧边栏顺序",
             "options": {
               "sidebar": "侧边栏顺序",
+              "pinned": "仅置顶任务",
               "last-sent": "最近任务",
               "priority": "优先任务",
               "custom": "自定义"
@@ -4384,6 +4406,16 @@
               "toggle": {
                 "aria": "让这台 Cindy 使用 Creator Micro 2"
               },
+              "keymapPolicy": {
+                "label": "Creator 键位映射策略",
+                "description": "选择允许 Cindy 管理 Creator 图层，或保持硬件映射不变。",
+                "options": {
+                  "managed": "标准",
+                  "preserve": "保护映射"
+                },
+                "managedWarning": "标准模式可在 Cindy 使用设备时安装任务键图层，停止使用时恢复原映射。",
+                "preserveWarning": "保护映射模式为只读：Cindy 可使用原生 KV_OAI 操作、灯光和任务控制，但绝不写入 keymap.json。ChatGPT/Codex 打开时优先使用设备，关闭后由 Cindy 接管。"
+              },
               "descriptions": {
                 "connecting": "Cindy 正在启动 Work Louder 设备服务。",
                 "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
@@ -4403,6 +4435,7 @@
               "source": {
                 "descriptions": {
                   "sidebar": "任务键按板上顺序，对应侧边栏从上到下的任务。",
+                  "pinned": "任务键仅对应置顶任务，按侧边栏顺序排列；其余键保持空置。",
                   "last-sent": "任务键按板上顺序，对应你最近发过消息的任务，越近越靠前。",
                   "priority": "任务键按板上顺序，对应优先任务。",
                   "custom": "每颗任务键打开你指定的任务。"
@@ -7956,6 +7989,20 @@
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
         "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容"
+      },
+      "fallback": {
+        "fallback": "备用",
+        "title": "备用模型",
+        "pickHint": "点一个模型把它加为备用。",
+        "desc": "主模型失败或用尽时，自动切到下一个。",
+        "mainLabel": "主模型",
+        "fallbackLabel": "备用",
+        "remove": "移除",
+        "back": "返回",
+        "enabled": "已开启",
+        "disabled": "已关闭",
+        "exhausted": "额度已用完",
+        "exhaustedUntil": "额度用完，{{time}} 恢复"
       }
     },
     "permissionSelector": {

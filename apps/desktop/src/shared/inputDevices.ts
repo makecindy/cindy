@@ -5,14 +5,17 @@ export const INPUT_DEVICE_COMMAND_IDS = [
   'approval.approve',
   'approval.decline',
   'forkTask',
+  'forkThread',
   'composer.submit',
   'feedback',
   'toggleTerminal',
   'copyConversationMarkdown',
   'archiveTask',
+  'archiveThread',
   'newTask',
   'openBrowserTab',
   'toggleTaskPin',
+  'toggleThreadPin',
   'toggleReviewTab',
   'composer.addPhotos',
   'settings',
@@ -29,6 +32,7 @@ export const INPUT_DEVICE_COMMAND_IDS = [
   'navigateBack',
   'toggleFullscreen',
   'composer.focus',
+  'composer.steer',
   'conversation.scrollUp',
   'conversation.scrollDown',
   'conversation.scrollBottom',
@@ -36,7 +40,15 @@ export const INPUT_DEVICE_COMMAND_IDS = [
   'session.selectNext',
 ] as const;
 
-export type InputDeviceCommandId = (typeof INPUT_DEVICE_COMMAND_IDS)[number];
+// Queue was an alias for Send, not a third delivery mode. Accept old saved and
+// remote actions without offering the duplicate in any device's action picker.
+export type InputDeviceCommandId = (typeof INPUT_DEVICE_COMMAND_IDS)[number] | 'composer.queue';
+
+export function normalizeInputDeviceCommandId(
+  commandId: InputDeviceCommandId,
+): InputDeviceCommandId {
+  return commandId === 'composer.queue' ? 'composer.submit' : commandId;
+}
 
 export type InputDeviceAction =
   | { type: 'command'; commandId: InputDeviceCommandId }
@@ -87,7 +99,19 @@ export interface InputDevicePublishedTask {
 }
 
 export function isInputDeviceCommandId(value: unknown): value is InputDeviceCommandId {
-  return typeof value === 'string' && (INPUT_DEVICE_COMMAND_IDS as readonly string[]).includes(value);
+  return (
+    value === 'composer.queue' ||
+    (typeof value === 'string' && (INPUT_DEVICE_COMMAND_IDS as readonly string[]).includes(value))
+  );
+}
+
+/** Keep visible rows and pins in bounded device catalogs, even when they are old. */
+export function selectInputDeviceCatalogRows<
+  T extends { id: string; pinnedAt?: string | number | null },
+>(rows: readonly T[], visibleIds: ReadonlyMap<string, number>, limit: number): T[] {
+  if (rows.length <= limit) return rows.slice();
+  const priority = (row: T) => (visibleIds.has(row.id) ? 2 : row.pinnedAt != null ? 1 : 0);
+  return rows.toSorted((left, right) => priority(right) - priority(left)).slice(0, limit);
 }
 
 export function inputDeviceHasCapability(

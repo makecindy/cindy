@@ -131,6 +131,16 @@ import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
+import { fallbackChainKey, getFallbackChain } from '@/state/fallbackChains';
+import { findChainContaining } from '@/state/fallbackChains';
+import { planNextFallbackStep, selectStartEntry } from '@/lib/fallbackRunner';
+import {
+  clearFallbackCooldown,
+  fallbackCooldownFor,
+  markFallbackExhausted,
+} from '@/state/fallbackCooldowns';
+import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
+import { fallbackEntryUid } from '@cindy/maker-shared/fallback-chain';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
@@ -3535,6 +3545,61 @@ export function CCAgentSessionView({
       }
 
       // ④ Execute send — effort + permissionMode came straight from ChatInput (fresh value)
+      // ★ 发送前选路：链首已知没额度时，直接从第一个可用的项开始，
+      // 不要每开一条新消息都先撞一次。只看**已记录的真实失败**，不看用量百分比：
+      // Luna 之类的保留额度会显示 0% 但仍然能跑，凭百分比跳过会误伤它。
+      if (sessionId && !remoteDeviceId && session.providerId && session.agentKind) {
+        try {
+          const sessionEffort = typeof session.effort === 'string' ? session.effort : '';
+          const liveUid = fallbackEntryUid({
+            providerId: session.providerId,
+            modelId: session.model,
+            agent: session.agentKind,
+            ...(sessionEffort ? { effort: sessionEffort } : {}),
+          });
+          // 正在跑的这一项自己没在冷却 = 无需改道，一字不动。
+          if (fallbackCooldownFor(liveUid)) {
+            const start = selectStartEntry({
+              chain: findChainContaining(liveUid),
+              isCoolingDown: (entry) => fallbackCooldownFor(entry.uid) !== null,
+            });
+            if (start && start.uid !== liveUid) {
+              const targetAgent =
+                start.agent === 'codex' || start.agent === 'pi' ? start.agent : 'claude-code';
+              if (targetAgent === session.agentKind) {
+                await window.electronAPI.maker.setModel(
+                  sessionId,
+                  start.modelId,
+                  start.providerId,
+                  undefined,
+                  {
+                    effort: start.effort ?? null,
+                    fastMode: start.fast ?? false,
+                  } as { effort: string; fastMode: boolean },
+                );
+                await sessionService.update(sessionId, {
+                  model: start.modelId,
+                  providerId: start.providerId,
+                });
+              } else {
+                await window.electronAPI.maker.switchSessionAgent(
+                  sessionId,
+                  targetAgent,
+                  start.modelId,
+                  start.providerId,
+                  start.effort,
+                  start.fast ?? false,
+                );
+              }
+              await refreshServerSession();
+              model = start.modelId;
+            }
+          }
+        } catch (err) {
+          // 预路由失败不能阻断发送：原样发出去，失败后还有改道那条路。
+          log.warn('fallback pre-send reroute failed', err);
+        }
+      }
       const sendOptions = {
         ...orcaLeadVendorOptions,
         ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
@@ -3878,6 +3943,145 @@ export function CCAgentSessionView({
   const handleSilentStopContinue = useCallback(() => {
     continueAfterSilentStop();
   }, [continueAfterSilentStop]);
+
+  // 备用模型链：把存好的链变成真正的自动改道。
+  //
+  // 去重是必需的：同一条错误会因重渲染反复触发 effect，不去重会把整条链
+  // 在一瞬间烧完。用错误文本做本轮指纹，busy 锁挡住在途的那一步。
+  const fallbackRunRef = useRef<{ signature: string | null; retries: number; busy: boolean }>({
+    signature: null,
+    retries: 0,
+    busy: false,
+  });
+
+  useEffect(() => {
+    // 只管本机会话：device-link 的路由真源在被控端。
+    if (!sessionId || !session || remoteDeviceId || readOnly) return;
+    if (!error) {
+      if (fallbackRunRef.current.signature !== null && !fallbackRunRef.current.busy) {
+        fallbackRunRef.current = { signature: null, retries: 0, busy: false };
+      }
+      return;
+    }
+    if (fallbackRunRef.current.busy) return;
+
+    const providerId = session.providerId ?? null;
+    const agent = session.agentKind ?? null;
+    if (!providerId || !agent) return;
+
+    const sessionEffort = typeof session.effort === 'string' ? session.effort : '';
+    const chain = getFallbackChain(
+      fallbackChainKey({
+        providerId,
+        modelId: session.model,
+        agent,
+        ...(sessionEffort ? { effort: sessionEffort } : {}),
+      }),
+    );
+    if (!chain) return;
+
+    const signature = error;
+    const sameRound = fallbackRunRef.current.signature === signature;
+    const retries = sameRound ? fallbackRunRef.current.retries : 0;
+
+    // 先记账：这一次失败如果是额度耗尽，把恢复时间记在当前这一项上，
+    // 以后的新会话就不会再去撞它。resetAtMs 拿不到时店内存的保守默认值。
+    const currentUid = fallbackEntryUid({
+      providerId,
+      modelId: session.model,
+      agent,
+      ...(sessionEffort ? { effort: sessionEffort } : {}),
+    });
+    const usageHint = extractUsageLimitRecoveryHint({ message: error });
+    if (usageHint && !sameRound) {
+      markFallbackExhausted(currentUid, usageHint.resetAtMs);
+    }
+
+    const plan = planNextFallbackStep({
+      chain,
+      current: { providerId, modelId: session.model, agent },
+      failure: { message: error, ...(errorReason ? { tag: errorReason } : {}) },
+      retries,
+      // 已知没额度的项直接跳过 —— 撞一个已知会失败的模型只是白多一轮往返。
+      isCoolingDown: (entry) => fallbackCooldownFor(entry.uid) !== null,
+    });
+    if (plan.kind === 'stop') return;
+
+    fallbackRunRef.current = { signature, retries: retries + 1, busy: true };
+    void (async () => {
+      try {
+        if (plan.kind === 'switch') {
+          const target = plan.target;
+          const targetAgent =
+            target.agent === 'codex' || target.agent === 'pi' ? target.agent : 'claude-code';
+          if (targetAgent === agent) {
+            // 同引擎换模型：与手动换模型同一条路。
+            await window.electronAPI.maker.setModel(
+              sessionId,
+              target.modelId,
+              target.providerId,
+              undefined,
+              {
+                effort: target.effort ?? null,
+                fastMode: target.fast ?? false,
+              } as { effort: string; fastMode: boolean },
+            );
+            await sessionService.update(sessionId, {
+              model: target.modelId,
+              providerId: target.providerId,
+            });
+          } else {
+            // 跨引擎：必须走 switchSessionAgent，setModel 不重建引擎。
+            await window.electronAPI.maker.switchSessionAgent(
+              sessionId,
+              targetAgent,
+              target.modelId,
+              target.providerId,
+              target.effort,
+              target.fast ?? false,
+            );
+          }
+          await refreshServerSession();
+        }
+        await retryLastError();
+      } catch (err) {
+        log.warn('fallback chain step failed', err);
+      } finally {
+        fallbackRunRef.current.busy = false;
+      }
+    })();
+  }, [
+    error,
+    errorReason,
+    readOnly,
+    refreshServerSession,
+    remoteDeviceId,
+    retryLastError,
+    session,
+    sessionId,
+  ]);
+
+  /**
+   * 一个模型真的跑起来了 = 它的额度回来了，清掉冷却。
+   *
+   * 不能只等时间到点：上游给的 reset 时间可能偏晚，也可能根本没给（那时候用的是
+   * 我们自己的保守估值）。一次成功是比任何时间戳都硬的证据。
+   */
+  useEffect(() => {
+    if (!session || !isStreaming || remoteDeviceId) return;
+    const providerId = session.providerId ?? null;
+    const agent = session.agentKind ?? null;
+    if (!providerId || !agent) return;
+    const sessionEffort = typeof session.effort === 'string' ? session.effort : '';
+    clearFallbackCooldown(
+      fallbackEntryUid({
+        providerId,
+        modelId: session.model,
+        agent,
+        ...(sessionEffort ? { effort: sessionEffort } : {}),
+      }),
+    );
+  }, [isStreaming, remoteDeviceId, session]);
 
   const handleContinueAfterUsageReset = useCallback(() => {
     if (!sessionId || !usageLimitRecovery || remoteDeviceId) return;

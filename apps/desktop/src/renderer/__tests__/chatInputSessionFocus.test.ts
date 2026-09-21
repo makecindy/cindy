@@ -43,6 +43,14 @@ const useCCAgentChatSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 
 describe('ChatInput session switch focus contract', () => {
+  it('keeps original Send queued and Steer on the distinct steering path', () => {
+    expect(chatInputSource).toContain("async (deliveryMode: MessageDeliveryMode = 'queue')");
+    expect(chatInputSource).toMatch(/case 'composer.queue':\s*case 'composer.submit':\s*void handleClickSend\(\);/);
+    expect(chatInputSource).toMatch(/case 'composer.steer':\s*void handleClickSend\('steer'\);/);
+    expect(sessionViewSource).toMatch(/if \(deliveryMode === 'steer'\) {[\s\S]*?await steerMessage\(/);
+    expect(sessionViewSource).toContain("action.commandId === 'approval.approve' || action.commandId === 'composer.submit'");
+    expect(sidebarUpperSource).toContain('selectInputDeviceCatalogRows(catalogSessions, sidebarOrder, remainingCatalogSlots)');
+  });
   it('refocuses the editor after storageKey switches only when requested', () => {
     const restoreNextDraftBlock = extractBetween(
       chatInputSource,

@@ -91,7 +91,7 @@ describe('WorkLouderCodexHostClient', () => {
     expect(fork).toHaveBeenCalledTimes(2);
   });
 
-  it('replays a live connection when occupancy turns the device back on', () => {
+  it('ignores late connection and HID messages from a stopping host', () => {
     const child = new FakeChild();
     const client = new WorkLouderCodexHostClient({
       resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
@@ -100,14 +100,17 @@ describe('WorkLouderCodexHostClient', () => {
     });
     const status = vi.fn();
     client.setConnectionStatusHandler(status);
-    client.setHidInputHandler(vi.fn());
+    const hid = vi.fn();
+    client.setHidInputHandler(hid);
 
     client.setDeviceEnabled(false);
     child.emit('message', { kind: 'state', status: 'connected' });
+    child.emit('message', { kind: 'hid', event: { key: 'ACT07', act: 1 } });
     status.mockClear();
 
     client.setDeviceEnabled(true);
-    expect(status).toHaveBeenCalledWith('connected');
+    expect(status).not.toHaveBeenCalledWith('connected');
+    expect(hid).not.toHaveBeenCalled();
   });
 
   it('restarts a still-wanted host after disable finishes stopping', () => {
@@ -153,6 +156,23 @@ describe('WorkLouderCodexHostClient', () => {
     });
   });
 
+  it('forwards Preserve mode to the isolated host without changing the managed default', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    client.setCreatorKeymapPolicy('preserve');
+    client.setAgentKeyPressHandler(vi.fn());
+
+    expect(child.postMessage).toHaveBeenCalledWith({
+      kind: 'init',
+      sdkEntry: '/sdk',
+      creatorKeymapPolicy: 'preserve',
+    });
+  });
+
   it('kills a host that never acknowledges stop after disable', async () => {
     vi.useFakeTimers();
     try {
@@ -187,6 +207,64 @@ describe('WorkLouderCodexHostClient', () => {
 
     expect(fork).toHaveBeenCalledWith('/sdk');
     expect(child.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('does not claim the vendor HID while the native owner is present', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    client.setNativeOwnerPresent(true);
+    client.setAgentKeyPressHandler(vi.fn());
+    client.probe();
+
+    expect(fork).not.toHaveBeenCalled();
+
+    client.setNativeOwnerPresent(false);
+
+    expect(fork).toHaveBeenCalledOnce();
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('stops an already-running host when the native owner appears', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    client.setAgentKeyPressHandler(vi.fn());
+    expect(fork).toHaveBeenCalledOnce();
+
+    client.setNativeOwnerPresent(true);
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'stop' });
+    child.emit('message', { kind: 'stopped' });
+
+    expect(fork).toHaveBeenCalledOnce();
+    client.setNativeOwnerPresent(false);
+    expect(fork).toHaveBeenCalledTimes(2);
+  });
+
+  it('replays the latest lighting state accumulated while ChatGPT owned the device', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    client.setNativeOwnerPresent(true);
+    const frame = createWorkLouderCodexLightingFrame([
+      { sessionId: 'task', phase: 'running', attention: false, compactDetail: '' },
+    ]);
+    client.update(frame);
+    client.setNativeOwnerPresent(false);
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'apply', frame });
   });
 
   it('probes a running host but never starts one just to probe', () => {

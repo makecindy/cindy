@@ -26,6 +26,7 @@ import {
   creatorMicro2KeymapBackupFileName,
   creatorMicro2KeymapSessionFileName,
   isCindyExclusiveAgentKeymap,
+  shouldPreserveCreatorMicro2Keymap,
   workLouderLayerHasAgentKeys,
   workLouderFirmwareIdlesHidRead,
   foldOrcaWorkerActivityOntoLeads,
@@ -103,15 +104,45 @@ describe('createWorkLouderCodexLightingFrame', () => {
     const frame = createWorkLouderCodexLightingFrame([running], ['idle-task', 'running-task']);
 
     expect(projected).toEqual([undefined, running, undefined, undefined, undefined, undefined]);
-    expect(frame.threads[0].brightness).toBe(0);
+    expect(frame.threads[0]).toMatchObject({
+      color: 0xffffff,
+      effect: WorkLouderLightingEffect.Solid,
+    });
     expect(frame.threads[1].brightness).toBeGreaterThan(0);
   });
 
-  it('lights the lead task key when only an Orca worker is running', () => {
-    const folded = foldOrcaWorkerActivityOntoLeads(
-      [activity('worker-1', 'running')],
-      { 'lead-1': ['worker-1'] },
+  it('shows every assigned status independently and leaves unassigned keys dark', () => {
+    const frame = createWorkLouderCodexLightingFrame(
+      [
+        activity('running', 'running'),
+        activity('failed', 'error', false),
+        activity('done', 'completed', true),
+        activity('read', 'completed', false),
+      ],
+      ['idle', 'running', 'failed', 'done', 'read'],
     );
+    expect(frame.threads.map(({ color }) => color)).toEqual([
+      0xffffff, 0x4c6fff, 0xff453a, 0x35c759, 0xffffff, 0,
+    ]);
+    expect(frame.threads[5].brightness).toBe(0);
+  });
+
+  it('returns an assigned task to white after completion acknowledgement', () => {
+    const colors = [
+      [activity('task', 'running')],
+      [activity('task', 'completed', true)],
+      [],
+      [activity('task', 'running')],
+      [activity('task', 'error', true)],
+    ].map((snapshots) => createWorkLouderCodexLightingFrame(snapshots, ['task']).threads[0].color);
+    expect(colors).toEqual([0x4c6fff, 0x35c759, 0xffffff, 0x4c6fff, 0xff453a]);
+    expect(createWorkLouderCodexLightingFrame([], ['task']).ambient.brightness).toBe(0);
+  });
+
+  it('lights the lead task key when only an Orca worker is running', () => {
+    const folded = foldOrcaWorkerActivityOntoLeads([activity('worker-1', 'running')], {
+      'lead-1': ['worker-1'],
+    });
     const frame = createWorkLouderCodexLightingFrame(folded, ['lead-1']);
 
     expect(folded).toEqual([activity('worker-1', 'running'), activity('lead-1', 'running')]);
@@ -142,7 +173,10 @@ describe('Work Louder Agent key protocol', () => {
 
   it('treats a missing HID act as a press and accepts numeric strings', () => {
     expect(parseWorkLouderCodexHidEvent({ key: 'ACT06' })).toEqual({ key: 'ACT06', act: 1 });
-    expect(parseWorkLouderCodexHidEvent({ key: 'AG00', act: '1' })).toEqual({ key: 'AG00', act: 1 });
+    expect(parseWorkLouderCodexHidEvent({ key: 'AG00', act: '1' })).toEqual({
+      key: 'AG00',
+      act: 1,
+    });
     expect(parseWorkLouderCodexHidEvent({ k: 'ACT07', act: 0 })).toEqual({ key: 'ACT07', act: 0 });
     expect(parseWorkLouderCodexHidEvent({ key: 'ENC_CW', act: 2 })).toEqual({
       key: 'ENC_CW',
@@ -282,8 +316,7 @@ describe('isWorkLouderSdkTransportDeath', () => {
   });
 
   it('does not treat Creator idle device.status disconnects as a dead cable', () => {
-    const poisonedStatus =
-      'Error calling RPC, id: 137 method: device.status Device disconnected';
+    const poisonedStatus = 'Error calling RPC, id: 137 method: device.status Device disconnected';
     expect(isWorkLouderSdkTransportDeath(poisonedStatus, 'creator-micro-2')).toBe(false);
     expect(isWorkLouderSdkTransportDeath(poisonedStatus, 'codex-micro')).toBe(true);
   });
@@ -292,23 +325,33 @@ describe('isWorkLouderSdkTransportDeath', () => {
     expect(
       isWorkLouderSdkTransportDeath('cannot send, no device connected', 'creator-micro-2'),
     ).toBe(true);
-    expect(isWorkLouderSdkTransportDeath('Error sending message: 0xE00002C5', 'codex-micro')).toBe(
-      true,
-    );
+    expect(
+      isWorkLouderSdkTransportDeath('Error sending message: device has been closed', 'codex-micro'),
+    ).toBe(true);
+    expect(isWorkLouderSdkTransportDeath('device has been closed', 'creator-micro-2')).toBe(true);
+    expect(
+      isWorkLouderSdkTransportDeath('could not read: device has been closed', 'creator-micro-2'),
+    ).toBe(true);
   });
 
   it('does not treat HID contention as a dead cable', () => {
     const contention = [
-      'Error sending message: Cannot write to hid device: IOHIDDeviceSetReport failed: (0xE00002E2) (iokit/common) not permitted',
-      'Error sending message: device has been closed',
-      'Cannot write to hid device: IOHIDDeviceSetReport failed: (0xE00002E2) (iokit/common) not permitted',
-      'IOHIDDeviceOpen failed: (0xE00002C1) (iokit/common) not privileged',
+      'IOHIDDeviceOpen failed: (0xE00002C5) exclusive access',
+      'device already open',
     ];
     for (const detail of contention) {
       expect(isWorkLouderHidContention(detail)).toBe(true);
       expect(isWorkLouderSdkTransportDeath(detail, 'creator-micro-2')).toBe(false);
       expect(isWorkLouderSdkTransportDeath(detail, 'codex-micro')).toBe(false);
     }
+  });
+
+  it('does not confuse authorization denial with exclusive access or a closed handle', () => {
+    for (const detail of ['0xE00002E2 not permitted', '0xE00002C1 not privileged']) {
+      expect(isWorkLouderHidContention(detail)).toBe(false);
+      expect(isWorkLouderSdkTransportDeath(detail, 'creator-micro-2')).toBe(false);
+    }
+    expect(isWorkLouderHidContention('device has been closed')).toBe(false);
   });
 });
 
@@ -330,9 +373,7 @@ describe('rewriteBareWorkLouderNotifyJson', () => {
 
   it('leaves real JSON-RPC lines and incomplete fragments alone', () => {
     expect(
-      rewriteBareWorkLouderNotifyJson(
-        '{"result":{"ok":1},"id":12,"method":"v.oai.rgbcfg"}',
-      ),
+      rewriteBareWorkLouderNotifyJson('{"result":{"ok":1},"id":12,"method":"v.oai.rgbcfg"}'),
     ).toBeNull();
     expect(rewriteBareWorkLouderNotifyJson('{"k":"AG00"')).toBeNull();
     expect(rewriteBareWorkLouderNotifyJson('{"ok":1}')).toBeNull();
@@ -526,6 +567,45 @@ describe('Creator Micro 2 agent keymap', () => {
     const parsed = parseWorkLouderKeymapDocument(JSON.stringify(factoryDocument));
     const cindy = applyCreatorMicro2AgentLayer(parsed!, 0);
     expect(isCindyExclusiveAgentKeymap(JSON.stringify(cindy.document))).toBe(true);
+  });
+
+  it('preserves a native agent layer when it also contains ordinary HID controls', () => {
+    const nativeLayer = {
+      ...factoryLayer,
+      layout: {
+        ...factoryLayer.layout,
+        keymap: [
+          ['KV_OAI_AG00', 'KV_OAI_AG01'],
+          ['KV_OAI_AG02', 'KV_OAI_AG03', 'KV_OAI_AG04', 'KV_OAI_AG05'],
+          ['KV_OAI_ACT06', 'KV_OAI_ACT07', 'KV_OAI_ACT08', 'KA_A1'],
+          ['KC_RALT', 'KV_OAI_ACT11', 'KV_OAI_ACT12'],
+        ],
+      },
+    };
+    expect(shouldPreserveCreatorMicro2Keymap(nativeLayer)).toBe(true);
+    expect(shouldPreserveCreatorMicro2Keymap(factoryLayer)).toBe(false);
+    expect(nativeLayer.layout.keymap).toEqual([
+      ['KV_OAI_AG00', 'KV_OAI_AG01'],
+      ['KV_OAI_AG02', 'KV_OAI_AG03', 'KV_OAI_AG04', 'KV_OAI_AG05'],
+      ['KV_OAI_ACT06', 'KV_OAI_ACT07', 'KV_OAI_ACT08', 'KA_A1'],
+      ['KC_RALT', 'KV_OAI_ACT11', 'KV_OAI_ACT12'],
+    ]);
+  });
+
+  it('preserves an all-native agent layer instead of rewriting ChatGPT ownership', () => {
+    const nativeLayer = {
+      ...factoryLayer,
+      layout: {
+        ...factoryLayer.layout,
+        keymap: [
+          ['KV_OAI_AG00', 'KV_OAI_AG01'],
+          ['KV_OAI_AG02', 'KV_OAI_AG03', 'KV_OAI_AG04', 'KV_OAI_AG05'],
+          ['KV_OAI_ACT06', 'KV_OAI_ACT07', 'KV_OAI_ACT08', 'KV_OAI_ACT09'],
+          ['KV_OAI_ACT10', 'KV_OAI_ACT11', 'KV_OAI_ACT12'],
+        ],
+      },
+    };
+    expect(shouldPreserveCreatorMicro2Keymap(nativeLayer)).toBe(true);
   });
 
   it('only treats the rebound layer as a Cindy occupancy map', () => {

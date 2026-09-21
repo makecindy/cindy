@@ -31,8 +31,12 @@ export interface WorkLouderLightingHost {
 export function resolveWorkLouderOccupyingModel(
   deviceType: WorkLouderModel | null,
   settings: Record<WorkLouderModel, WorkLouderCodexSettings>,
+  nativeOwnerPresent = false,
 ): WorkLouderModel | null {
   if (!deviceType) return null;
+  if (deviceType === 'creator-micro-2' && nativeOwnerPresent) {
+    return null;
+  }
   return settings[deviceType].deviceEnabled ? deviceType : null;
 }
 
@@ -45,8 +49,18 @@ export function workLouderNeedsIdentityDiscovery(
   deviceType: WorkLouderModel | null,
   settings: Record<WorkLouderModel, WorkLouderCodexSettings>,
   devicePresent: boolean | null = null,
+  nativeOwnerPresent = false,
 ): boolean {
+  if (settings['creator-micro-2'].deviceEnabled && nativeOwnerPresent) {
+    // Creator Micro 2 is reserved for ChatGPT's native owner. Do not even
+    // start identity discovery from an old or hand-edited Cindy settings file.
+    const onlyCodexEnabled = settings['codex-micro'].deviceEnabled;
+    if (!onlyCodexEnabled) return false;
+  }
   if (!WORKLOUDER_MODELS.some((model) => settings[model].deviceEnabled)) return false;
+  if (nativeOwnerPresent && !settings['codex-micro'].deviceEnabled) {
+    return false;
+  }
   if (deviceType === null) return true;
   // Remembered identity is gone — another enabled board may appear.
   return devicePresent === false;
@@ -196,6 +210,10 @@ export class WorkLouderAccessories {
   private syncing = false;
   private identityDiscoveryRequested = false;
   private identityDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
+  // Fail closed until the first process probe proves that the native owner is
+  // absent. This avoids a startup race where Cindy could claim Creator HID for
+  // a moment while ChatGPT is already open.
+  private nativeOwnerPresent = true;
 
   constructor(
     private readonly lighting: WorkLouderLightingHost,
@@ -207,14 +225,26 @@ export class WorkLouderAccessories {
     });
   }
 
+  /** ChatGPT/Codex native ownership wins while its process is present. */
+  setNativeOwnerPresent(present: boolean): void {
+    if (this.nativeOwnerPresent === present) return;
+    this.nativeOwnerPresent = present;
+    this.syncOccupancy();
+  }
+
   applySettings(model: WorkLouderModel, settings: WorkLouderCodexSettings): void {
-    this.settings[model] = cloneWorkLouderCodexSettings(settings);
+    const safeSettings = cloneWorkLouderCodexSettings(settings);
+    this.settings[model] = safeSettings;
     this.syncOccupancy();
   }
 
   getAccessories(): WorkLouderAccessoriesState {
     const live = this.lighting.getState();
-    const occupying = resolveWorkLouderOccupyingModel(liveDeviceType(live), this.settings);
+    const occupying = resolveWorkLouderOccupyingModel(
+      liveDeviceType(live),
+      this.settings,
+      this.nativeOwnerPresent,
+    );
     return Object.fromEntries(
       WORKLOUDER_MODELS.map((model) => [
         model,
@@ -233,7 +263,11 @@ export class WorkLouderAccessories {
 
   private syncOccupancy(): void {
     const live = this.lighting.getState();
-    const occupying = resolveWorkLouderOccupyingModel(liveDeviceType(live), this.settings);
+    const occupying = resolveWorkLouderOccupyingModel(
+      liveDeviceType(live),
+      this.settings,
+      this.nativeOwnerPresent,
+    );
     const desired = desiredLightingSettings(occupying, liveDeviceType(live), this.settings);
     if (JSON.stringify(desired) !== JSON.stringify(live.settings)) {
       this.syncing = true;
@@ -247,6 +281,7 @@ export class WorkLouderAccessories {
       liveDeviceType(live),
       this.settings,
       live.devicePresent,
+      this.nativeOwnerPresent,
     );
     if (needsDiscovery) this.scheduleIdentityDiscovery();
     else this.stopIdentityDiscovery();

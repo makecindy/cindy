@@ -315,6 +315,16 @@ describe('WorkLouderCodexSettings', () => {
     },
   );
 
+  it('offers pinned-only selection on Creator Micro 2', async () => {
+    mocks.deviceType = 'creator-micro-2';
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+    await chooseSelectOption(
+      'settings.shortcuts.workLouderCodex.agentKeys.source.label',
+      'settings.shortcuts.workLouderCodex.agentKeys.source.options.pinned',
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith({ agentSource: 'pinned' });
+  });
+
   it('sets all six task keys at once, since they follow one shared rule', async () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
@@ -609,6 +619,20 @@ describe('WorkLouderCodexSettings', () => {
     expect(
       screen.queryByText('settings.shortcuts.workLouderCodex.device.inputMonitoring.label'),
     ).toBeNull();
+  });
+
+  it('uses a real toggle for Creator keymap protection', () => {
+    mocks.deviceType = 'creator-micro-2';
+    render(<WorkLouderCodexSettings model="creator-micro-2" onBack={vi.fn()} />);
+
+    const toggle = screen.getByRole('switch', {
+      name: 'settings.shortcuts.workLouderCodex.models.creatorMicro2.connection.keymapPolicy.label',
+    });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(toggle);
+
+    expect(mocks.setSettings).toHaveBeenCalledWith({ keymapPolicy: 'preserve' });
   });
 
   it('promotes a Codex command key into the task-key set', () => {

@@ -2151,7 +2151,11 @@
         "endpointLabel": "{{agent}} 基礎 URL",
         "noAuthNote": "此 Proxy 無需客戶端金鑰；Cindy 會在轉發前移除 CLI 的訂閱憑證。",
         "signIn": "登入",
-        "setupLink": { "apiKey": "取得 API Key", "account": "註冊或登入", "setup": "設定說明" },
+        "setupLink": {
+          "apiKey": "取得 API Key",
+          "account": "註冊或登入",
+          "setup": "設定說明"
+        },
         "fetching": "正在驗證連線並獲取模型列表…",
         "fetchFailed": "模型列表獲取失敗——可先按預設推薦模型完成新增，稍後在詳情裡重新整理",
         "manualModelHint": "未發現可用模型，請填寫此 Proxy 實際提供的模型 ID。",
@@ -4075,9 +4079,17 @@
             "name": "在新任務中繼續",
             "description": "以目前任務為基礎建立新任務"
           },
+          "forkThread": {
+            "name": "在新任務中繼續",
+            "description": "以目前任務為基礎建立新任務"
+          },
           "composer.submit": {
             "name": "傳送訊息",
-            "description": "傳送輸入框中的訊息；若有待確認的請求則改為批准"
+            "description": "傳送訊息（執行中時加入佇列），或批准待處理的請求"
+          },
+          "composer.steer": {
+            "name": "插話引導",
+            "description": "用輸入框中的訊息引導正在執行的工作"
           },
           "feedback": {
             "name": "傳送意見回饋",
@@ -4098,6 +4110,10 @@
             "name": "封存任務",
             "description": "封存目前任務"
           },
+          "archiveThread": {
+            "name": "封存任務",
+            "description": "封存目前任務"
+          },
           "newTask": {
             "name": "新增任務",
             "description": "開始一個新任務"
@@ -4107,6 +4123,10 @@
             "description": "開啟一個新的瀏覽器分頁"
           },
           "toggleTaskPin": {
+            "name": "切換釘選",
+            "description": "釘選或取消釘選目前任務"
+          },
+          "toggleThreadPin": {
             "name": "切換釘選",
             "description": "釘選或取消釘選目前任務"
           },
@@ -4242,7 +4262,7 @@
           },
           "autoDim": {
             "label": "自動熄燈",
-            "description": "閒置後關閉燈光；使用鍵盤或任務狀態變更時自動恢復。",
+            "description": "閒置後關閉閒置燈光；正在執行和需要關注的任務保持亮燈。",
             "aria": "選擇 Codex Micro 自動熄燈時間",
             "options": {
               "off": "關閉",
@@ -4263,6 +4283,7 @@
             "description": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
             "descriptions": {
               "sidebar": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
+              "pinned": "任務鍵僅對應置頂任務，按側邊欄順序排列；其餘鍵保持空置。",
               "last-sent": "任務鍵按板上順序，對應你最近傳送過訊息的任務，越近越靠前。",
               "priority": "任務鍵按板上順序，對應優先任務。",
               "custom": "每顆任務鍵開啟你指定的任務。"
@@ -4270,6 +4291,7 @@
             "value": "側邊欄順序",
             "options": {
               "sidebar": "側邊欄順序",
+              "pinned": "僅置頂任務",
               "last-sent": "最近任務",
               "priority": "優先任務",
               "custom": "自訂"
@@ -4390,6 +4412,16 @@
               "toggle": {
                 "aria": "讓這台 Cindy 使用 Creator Micro 2"
               },
+              "keymapPolicy": {
+                "label": "Creator 鍵位映射策略",
+                "description": "選擇允許 Cindy 管理 Creator 圖層，或保持硬體映射不變。",
+                "options": {
+                  "managed": "標準",
+                  "preserve": "保護映射"
+                },
+                "managedWarning": "標準模式可在 Cindy 使用裝置時安裝任務鍵圖層，停止使用時恢復原映射。",
+                "preserveWarning": "保護映射模式為唯讀：Cindy 可使用原生 KV_OAI 操作、燈光和任務控制，但絕不寫入 keymap.json。ChatGPT/Codex 開啟時優先使用裝置，關閉後由 Cindy 接管。"
+              },
               "descriptions": {
                 "connecting": "Cindy 正在啟動 Work Louder 裝置服務。",
                 "connected": "USB 已連線，Cindy 正在監聽按鍵並同步任務燈效。",
@@ -4409,6 +4441,7 @@
               "source": {
                 "descriptions": {
                   "sidebar": "任務鍵按板上順序，對應側邊欄由上到下的任務。",
+                  "pinned": "任務鍵僅對應置頂任務，按側邊欄順序排列；其餘鍵保持空置。",
                   "last-sent": "任務鍵按板上順序，對應你最近傳送過訊息的任務，越近越靠前。",
                   "priority": "任務鍵按板上順序，對應優先任務。",
                   "custom": "每顆任務鍵開啟你指定的任務。"
@@ -7956,7 +7989,21 @@
         "railSameEngine": "僅 {{agent}}",
         "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容"
       },
-      "modelListAria": "模型清單"
+      "modelListAria": "模型清單",
+      "fallback": {
+        "fallback": "備用",
+        "title": "備用模型",
+        "pickHint": "點一個模型把它加為備用。",
+        "desc": "主模型失敗或用盡時，自動切到下一個。",
+        "mainLabel": "主模型",
+        "fallbackLabel": "備用",
+        "remove": "移除",
+        "back": "返回",
+        "enabled": "已開啟",
+        "disabled": "已關閉",
+        "exhausted": "額度已用完",
+        "exhaustedUntil": "額度用完，{{time}} 恢復"
+      }
     },
     "permissionSelector": {
       "triggerAria": "選擇權限模式：{{label}}",

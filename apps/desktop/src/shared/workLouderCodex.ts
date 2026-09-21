@@ -18,6 +18,26 @@ export type WorkLouderModel = (typeof WORKLOUDER_MODELS)[number];
 /** Settings currently lists both Work Louder boards. */
 export const VISIBLE_WORKLOUDER_MODELS = WORKLOUDER_MODELS;
 
+/**
+ * Creator keymap ownership policy.
+ *
+ * `managed` is Cindy's upstream-compatible mode: when Cindy owns the HID
+ * device it may install its agent layer and restore the previous map on exit.
+ * `preserve` is for mixed Wispr/ChatGPT maps: Cindy listens and lights the
+ * board but never writes keymap.json.
+ */
+export const WORKLOUDER_CREATOR_KEYMAP_POLICIES = ['managed', 'preserve'] as const;
+export type WorkLouderCreatorKeymapPolicy = (typeof WORKLOUDER_CREATOR_KEYMAP_POLICIES)[number];
+
+export function isWorkLouderCreatorKeymapPolicy(
+  value: unknown,
+): value is WorkLouderCreatorKeymapPolicy {
+  return (
+    typeof value === 'string' &&
+    (WORKLOUDER_CREATOR_KEYMAP_POLICIES as readonly string[]).includes(value)
+  );
+}
+
 export const WORKLOUDER_CODEX_DEVICE: InputDeviceDescriptor = {
   id: WORKLOUDER_CODEX_DEVICE_ID,
   label: 'Work Louder Codex Micro',
@@ -73,7 +93,13 @@ export const WORKLOUDER_CODEX_AUTO_DIM_OPTIONS = [
   '1-hour',
 ] as const;
 
-export const WORKLOUDER_CODEX_AGENT_SOURCES = ['sidebar', 'last-sent', 'priority', 'custom'] as const;
+export const WORKLOUDER_CODEX_AGENT_SOURCES = [
+  'sidebar',
+  'pinned',
+  'last-sent',
+  'priority',
+  'custom',
+] as const;
 
 export const WORKLOUDER_CODEX_COMMAND_SLOTS = [
   'ACT06',
@@ -208,9 +234,7 @@ export function workLouderLayoutMerges(layout: {
   return workLouderMergesFromMicrophoneFlag(layout.separateMicrophoneKeys);
 }
 
-export function workLouderMicrophoneKeysSeparate(
-  merges: readonly WorkLouderKeyMerge[],
-): boolean {
+export function workLouderMicrophoneKeysSeparate(merges: readonly WorkLouderKeyMerge[]): boolean {
   return !merges.some((merge) => merge.origin === 'ACT10' && merge.cover === 'ACT11');
 }
 
@@ -348,10 +372,7 @@ export type WorkLouderCodexAutoDim = (typeof WORKLOUDER_CODEX_AUTO_DIM_OPTIONS)[
 export type WorkLouderCodexAgentSource = (typeof WORKLOUDER_CODEX_AGENT_SOURCES)[number];
 export type WorkLouderCodexCommandSlot = (typeof WORKLOUDER_CODEX_COMMAND_SLOTS)[number];
 export type WorkLouderCodexPreviewPart =
-  | WorkLouderCodexCommandSlot
-  | `AG0${0 | 1 | 2 | 3 | 4 | 5}`
-  | 'analog'
-  | 'encoder';
+  WorkLouderCodexCommandSlot | `AG0${0 | 1 | 2 | 3 | 4 | 5}` | 'analog' | 'encoder';
 
 export interface WorkLouderCodexPreviewInput {
   part: WorkLouderCodexPreviewPart;
@@ -430,6 +451,8 @@ export interface WorkLouderCodexLayout {
 export interface WorkLouderCodexSettings {
   /** When false, this Cindy instance does not occupy the HID device. */
   deviceEnabled: boolean;
+  /** Creator-only keymap ownership. Codex Micro ignores this setting. */
+  keymapPolicy: WorkLouderCreatorKeymapPolicy;
   /** Overall lighting intensity, in percent. Zero keeps HID input active with LEDs off. */
   lightingBrightness: number;
   lightingAutoDim: WorkLouderCodexAutoDim;
@@ -443,12 +466,7 @@ export interface WorkLouderCodexSettings {
 export type WorkLouderCodexSettingsPatch = Partial<WorkLouderCodexSettings>;
 
 export type WorkLouderCodexConnectionStatus =
-  | 'connecting'
-  | 'connected'
-  | 'not-detected'
-  | 'disabled'
-  | 'error'
-  | 'unavailable';
+  'connecting' | 'connected' | 'not-detected' | 'disabled' | 'error' | 'unavailable';
 
 export type WorkLouderCodexConnectionReason =
   | 'connection-timeout'
@@ -495,8 +513,7 @@ export interface WorkLouderCodexState {
 export type WorkLouderAccessoriesState = Record<WorkLouderModel, WorkLouderCodexState>;
 
 export type WorkLouderCodexRendererAction =
-  | InputDeviceRendererAction
-  | { type: 'keycap'; keycapId: WorkLouderCodexKeycapId };
+  InputDeviceRendererAction | { type: 'keycap'; keycapId: WorkLouderCodexKeycapId };
 
 /** Built-in Cindy behavior printed on each official Work Louder keycap. */
 export const WORKLOUDER_CODEX_KEYCAP_ACTIONS: Readonly<
@@ -505,16 +522,16 @@ export const WORKLOUDER_CODEX_KEYCAP_ACTIONS: Readonly<
   FAST: { type: 'command', commandId: 'composer.toggleFastMode' },
   APPR: { type: 'command', commandId: 'approval.approve' },
   REJ: { type: 'command', commandId: 'approval.decline' },
-  SPLIT: { type: 'command', commandId: 'forkTask' },
+  SPLIT: { type: 'command', commandId: 'forkThread' },
   CODEX: { type: 'command', commandId: 'composer.submit' },
   BUG: { type: 'command', commandId: 'feedback' },
   OAI: { type: 'external-url', url: 'https://developers.openai.com' },
   TERM: { type: 'command', commandId: 'toggleTerminal' },
   DWN: { type: 'command', commandId: 'copyConversationMarkdown' },
-  DEL: { type: 'command', commandId: 'archiveTask' },
+  DEL: { type: 'command', commandId: 'archiveThread' },
   NEW: { type: 'command', commandId: 'newTask' },
   NAV: { type: 'command', commandId: 'openBrowserTab' },
-  MAGIC: { type: 'command', commandId: 'toggleTaskPin' },
+  MAGIC: { type: 'command', commandId: 'toggleThreadPin' },
   DIFF: { type: 'command', commandId: 'toggleReviewTab' },
   PAINT: { type: 'command', commandId: 'composer.addPhotos' },
   LAB: { type: 'command', commandId: 'settings' },
@@ -541,8 +558,6 @@ export const WORKLOUDER_CODEX_DEFAULT_LAYOUT: WorkLouderCodexLayout = {
     ACT10_ACT11: { keycapId: 'MIC', action: null },
     ACT12: { keycapId: 'CODEX', action: null },
   },
-  // The stick maps to the two axes of the screen: up/down moves through the
-  // conversation, left/right opens and closes the panel on that side.
   analogStick: {
     up: { type: 'command', commandId: 'conversation.scrollUp' },
     right: { type: 'command', commandId: 'toggleRightSidebar' },
@@ -558,6 +573,7 @@ export const WORKLOUDER_CODEX_DEFAULT_LAYOUT: WorkLouderCodexLayout = {
 
 export const WORKLOUDER_CODEX_DEFAULT_SETTINGS: WorkLouderCodexSettings = {
   deviceEnabled: false,
+  keymapPolicy: 'managed',
   lightingBrightness: 100,
   lightingAutoDim: '3-minutes',
   agentSource: 'last-sent',
@@ -598,6 +614,7 @@ export const WORKLOUDER_CREATOR_MICRO_2_DEFAULT_LAYOUT: WorkLouderCodexLayout = 
 
 export const WORKLOUDER_CREATOR_MICRO_2_DEFAULT_SETTINGS: WorkLouderCodexSettings = {
   deviceEnabled: false,
+  keymapPolicy: 'managed',
   lightingBrightness: 100,
   lightingAutoDim: '3-minutes',
   agentSource: 'last-sent',
@@ -680,12 +697,13 @@ export function isWorkLouderCodexAgentSource(value: unknown): value is WorkLoude
 }
 
 /**
- * Saved values from older builds: `recent` was the visible sidebar, `pinned`
- * was a separate pinned-only list. Both now mean sidebar order.
+ * Saved `recent` values mean the visible sidebar. Pinned remains pinned-only.
  */
 export function normalizeWorkLouderCodexAgentSource(value: unknown): WorkLouderCodexAgentSource {
-  if (value === 'recent' || value === 'pinned') return 'sidebar';
-  return isWorkLouderCodexAgentSource(value) ? value : WORKLOUDER_CODEX_DEFAULT_SETTINGS.agentSource;
+  if (value === 'recent') return 'sidebar';
+  return isWorkLouderCodexAgentSource(value)
+    ? value
+    : WORKLOUDER_CODEX_DEFAULT_SETTINGS.agentSource;
 }
 
 export function isWorkLouderCodexCommandId(value: unknown): value is WorkLouderCodexCommandId {

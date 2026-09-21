@@ -15,6 +15,37 @@ describe('selectWorkLouderCodexRecentTaskSlots', () => {
 });
 
 describe('buildWorkLouderCodexTaskCatalog', () => {
+  it('keeps pinned-only order independent of activity, with visible pin order first', () => {
+    const catalog = buildWorkLouderCodexTaskCatalog([
+      { id: 'unpin', title: 'Recent', pinnedAt: null, userSendAt: 999 },
+      { id: 'hidden-pin', title: 'Hidden', pinnedAt: 300, userSendAt: 0 },
+      { id: 'pin-2', title: 'Second', pinnedAt: 200, userSendAt: 200, sidebarOrder: 1 },
+      { id: 'pin-1', title: 'First', pinnedAt: 100, userSendAt: 100, sidebarOrder: 0 },
+      {
+        id: 'archived-pin',
+        title: 'Archived',
+        pinnedAt: 400,
+        userSendAt: 999,
+        catalogEligible: false,
+      },
+    ]);
+    expect(catalog.pinned?.map(({ id }) => id)).toEqual(['pin-1', 'pin-2', 'hidden-pin']);
+  });
+
+  it('retains old pins beyond the recent-task cap in both mapping and options', () => {
+    const rows = Array.from({ length: 100 }, (_, i) => ({
+      id: `recent-${i}`,
+      title: 'Recent',
+      pinnedAt: null,
+      userSendAt: 999,
+    }));
+    const pin = { id: 'old-pin', title: 'Old Pin', pinnedAt: 1, userSendAt: 1 };
+    const catalog = buildWorkLouderCodexTaskCatalog([...rows, pin]);
+    expect(catalog.pinned).toEqual([{ id: pin.id, title: pin.title, pinned: true }]);
+    expect(catalog.options).toContainEqual({ id: pin.id, title: pin.title, pinned: true });
+    expect(catalog.options).toHaveLength(100);
+    expect(catalog.sidebar[0].id).toBe('recent-0');
+  });
   it('projects whatever list it is handed, wherever the tasks live', () => {
     // Rows can come from the renderer, which is the only side that sees tasks
     // on a linked machine. The catalogue does not care which is which.
@@ -123,7 +154,9 @@ describe('buildWorkLouderCodexTaskCatalog', () => {
     });
 
     expect(catalog.sidebar.map((task) => task.id)).toEqual(archived.map((row) => row.id));
-    expect(catalog.lastSent.map((task) => task.id)).toEqual([...active].reverse().map((row) => row.id));
+    expect(catalog.lastSent.map((task) => task.id)).toEqual(
+      [...active].reverse().map((row) => row.id),
+    );
     expect(catalog.options.map((task) => task.id)).toEqual(active.map((row) => row.id));
   });
 

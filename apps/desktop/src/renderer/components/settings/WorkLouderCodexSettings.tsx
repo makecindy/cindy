@@ -560,7 +560,10 @@ export function WorkLouderCodexSettings({
             <div className="flex items-center gap-2">
               <Switch
                 checked={settings.deviceEnabled}
-                disabled={!state || saving}
+                disabled={
+                  !state ||
+                  saving
+                }
                 onCheckedChange={(checked) => void setSettings({ deviceEnabled: checked })}
                 aria-label={t(workLouderCopyKey(model, 'connection.toggle.aria'))}
               />
@@ -607,6 +610,59 @@ export function WorkLouderCodexSettings({
             )}
         </div>
       </SettingsCard>
+
+      {model === 'creator-micro-2' ? (
+        <SettingsCard className="flex flex-col gap-3">
+          <SettingsRow
+            label={t(workLouderCopyKey(model, 'connection.keymapPolicy.label'), {
+              defaultValue: 'Protect Creator keymap',
+            })}
+            description={t(workLouderCopyKey(model, 'connection.keymapPolicy.description'), {
+              defaultValue:
+                'Keep the hardware map untouched so your custom Creator Micro 2 buttons remain available.',
+            })}
+            control={
+              <div className="flex items-center gap-2">
+                <span className="text-12 text-[var(--text-secondary)]">
+                  {settings.keymapPolicy === 'preserve'
+                    ? t(workLouderCopyKey(model, 'connection.keymapPolicy.options.preserve'), {
+                        defaultValue: 'Protected',
+                      })
+                    : t(workLouderCopyKey(model, 'connection.keymapPolicy.options.managed'), {
+                        defaultValue: 'Standard',
+                      })}
+                </span>
+                <Switch
+                  checked={settings.keymapPolicy === 'preserve'}
+                  onCheckedChange={(protectMap) =>
+                    void setSettings({ keymapPolicy: protectMap ? 'preserve' : 'managed' })
+                  }
+                  disabled={!state || saving}
+                  aria-label={t(workLouderCopyKey(model, 'connection.keymapPolicy.label'), {
+                    defaultValue: 'Protect Creator keymap',
+                  })}
+                />
+              </div>
+            }
+          />
+          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
+            {t(
+              workLouderCopyKey(
+                model,
+                settings.keymapPolicy === 'preserve'
+                  ? 'connection.keymapPolicy.preserveWarning'
+                  : 'connection.keymapPolicy.managedWarning',
+              ),
+              {
+                defaultValue:
+                  settings.keymapPolicy === 'preserve'
+                    ? 'Protect map mode is read-only: Cindy never writes keymap.json, so ChatGPT/Codex and your custom buttons remain in control.'
+                    : "Standard mode lets Cindy manage the Creator layer while it owns the device and restores the previous map when it stops.",
+              },
+            )}
+          </p>
+        </SettingsCard>
+      ) : null}
 
       <SettingsCard className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-3">

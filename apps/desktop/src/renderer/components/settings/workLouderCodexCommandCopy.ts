@@ -22,13 +22,13 @@ function humanizeCommandId(commandId: string): string {
 }
 
 export function workLouderCodexCommandName(t: TFunction, commandId: string): string {
-  const key = `${COMMAND_COPY_PREFIX}.${commandId}.name`;
+  const key = `${COMMAND_COPY_PREFIX}.${commandId === 'composer.queue' ? 'composer.submit' : commandId}.name`;
   const translated = t(key);
   return translated === key ? humanizeCommandId(commandId) : translated;
 }
 
 export function workLouderCodexCommandDescription(t: TFunction, commandId: string): string | null {
-  const key = `${COMMAND_COPY_PREFIX}.${commandId}.description`;
+  const key = `${COMMAND_COPY_PREFIX}.${commandId === 'composer.queue' ? 'composer.submit' : commandId}.description`;
   const translated = t(key);
   return translated === key ? null : translated;
 }

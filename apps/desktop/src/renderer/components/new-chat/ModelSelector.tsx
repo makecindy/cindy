@@ -29,6 +29,7 @@ import {
   ChevronDown,
   CircleAlert,
   Clock3,
+  GitBranch,
   Loader2,
   PlugZap,
   Plus,
@@ -41,16 +42,38 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import {
+  fallbackEntryUid,
+  isFallbackChainActive,
+  type FallbackChain,
+  type FallbackChainEntry,
+} from '@cindy/maker-shared/fallback-chain';
+import {
+  appendFallbackEntry,
+  fallbackChainKey,
+  fallbackCountFor,
+  getFallbackChain,
+  findChainContaining,
+  removeFallbackEntry,
+  setFallbackChainEnabled,
+  useFallbackChainsVersion,
+} from '@/state/fallbackChains';
+import {
+  fallbackCooldownFor,
+  useFallbackCooldownsVersion,
+} from '@/state/fallbackCooldowns';
+import { FallbackChainHeader } from './FallbackChainBar';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { MorphPopover } from '@/components/ui/morph-popover';
+import { MORPH_CONTENT_RESIZE_EVENT, MorphPopover } from '@/components/ui/morph-popover';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { agentOptionOf } from './agentOptions';
+import { agentKindOfEngine } from './unifiedModelSelection';
 import type { SelectableVendor } from '@/lib/agentVendors';
 import { FastModeToggle } from './FastModeToggle';
 import {
@@ -186,6 +209,20 @@ const MODEL_LIST_DEFAULT_MAX_HEIGHT_PX = 300;
 // 一级菜单只保留单行模型信息与必要标签：20px 内容 + 16px 纵向 padding。
 const MODEL_LIST_ROW_HEIGHT_PX = 36;
 const MODEL_LIST_ROW_GAP_PX = 2;
+/**
+ * 备用模式头部(返回行 + 链条 + 提示)的实测高度。
+ *
+ * 统一面板的列表是**固定高度**(UnifiedModelPanel.panelContent 的 428px),不是弹性的:
+ * 在它上面插一块头部,总高就超过面板列的 max-h,溢出部分被宿主 overflow-hidden 裁掉 ——
+ * 头部正好在最上面,于是「点了没反应」。进入备用模式时把列表按这个高度让出来。
+ *
+ * ★ 这只是**首帧兜底**。链条 chip 现在会换行,头部高度随链长变化,写死一个值必然
+ * 在第二行出现时把列表压不够、重新裁掉头部底部。挂载后按真实 offsetHeight 量,
+ * 见 fallbackHeaderHeight。
+ */
+const FALLBACK_HEADER_HEIGHT_PX = 92;
+/** 统一面板列表的默认固定高度(UnifiedModelPanel.panelContent 的同一个值)。 */
+const UNIFIED_LIST_DEFAULT_HEIGHT_PX = 428;
 
 export function modelListMaxHeightForRows(maxVisibleRows?: number): number | undefined {
   if (maxVisibleRows === undefined || !Number.isFinite(maxVisibleRows)) return undefined;
@@ -822,6 +859,10 @@ interface ModelSelectorContentProps {
    * 可选「跟随会话」行(opt-in)。仅 scheduler 的 heartbeat(绑定会话)任务传入:
    * 在模型列表顶部加一行,选中 = model 留空(跟随绑定会话的模型 / 来源)。
    */
+  /** 打开备用模型第二屏;不传 = 该入口不出现(例如被控端 / 只读场景)。 */
+  onOpenFallback?: () => void;
+  /** 已配置的备用模型数量,用于 footer 角标。0 = 不显示角标。 */
+  fallbackCount?: number;
   followSession?: { active: boolean; label: string; onFollow: () => void | boolean | Promise<void | boolean> };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
@@ -1041,6 +1082,8 @@ function ModelSelectorContentView({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
+  onOpenFallback,
+  fallbackCount = 0,
   fastModeConfigurable = true,
   unifiedPanel: useUnifiedPanel = true,
   sessionEngineFilter,
@@ -1472,6 +1515,177 @@ function ModelSelectorContentView({
     currentModelProvider && currentAgentKind
       ? getModel(currentModelProvider, modelId, currentAgentKind)
       : undefined;
+
+  // ── 备用模型链 ────────────────────────────────────────────────────────────
+  // 链条按**当前主模型身份**索引:换主模型 = 换一条链,各自的备用配置都留着。
+  // 主模型尚未解析出引擎时不给 key —— 没有稳定身份就不该写任何链。
+  const [fallbackView, setFallbackView] = useState(false);
+  // ★ The version must be **consumed**, not just subscribed to. Calling this and
+  // discarding the result re-renders the component on every chain write, but the
+  // memos below keep returning their cached value because their dependency lists
+  // never change. The chain strip, the chosen-row marks and the footer badge then
+  // stay frozen at whatever was in storage when the panel mounted — the write
+  // lands in localStorage and nothing on screen moves, which reads exactly like
+  // "clicking a model does nothing".
+  const fallbackChainsVersion = useFallbackChainsVersion();
+  const fallbackMainEntry = useMemo<FallbackChainEntry | null>(() => {
+    if (!activeSourceId || !modelId || !currentAgentKind) return null;
+    // 主模型身份也带 effort:列表行的身份含 effort,不带的话主模型行匹配不上自己,
+    // 会被当成一个可添加的备用项。
+    const base = {
+      providerId: activeSourceId,
+      modelId,
+      agent: currentAgentKind,
+      ...(effort ? { effort } : {}),
+    };
+    return { ...base, uid: fallbackEntryUid(base) };
+  }, [activeSourceId, modelId, currentAgentKind, effort]);
+  const fallbackKey = fallbackMainEntry ? fallbackChainKey(fallbackMainEntry) : null;
+  // The fallback editor is a local chain configuration surface. It must not
+  // inherit the live-session picker locks: while the main session is switching
+  // (or temporarily disabled), those locks make every fallback row silently
+  // discard its click before it reaches addFallbackTarget.
+  const fallbackSelectionMode = fallbackView && !!fallbackKey && !!fallbackMainEntry;
+  const fallbackPickerInteractionDisabled = fallbackSelectionMode ? false : interactionDisabled;
+  const fallbackChain = useMemo<FallbackChain | null>(() => {
+    if (!fallbackMainEntry || !fallbackKey) return null;
+    // 没有存过链时也要能进第二屏:给一条只含主模型的空链,用户在里面添加备用。
+    return getFallbackChain(fallbackKey) ?? { entries: [fallbackMainEntry], enabled: true };
+    // fallbackChainsVersion 必须在依赖里:getFallbackChain 读的是模块级缓存,
+    // 缓存换了之后只有版本号会变,少了它这份 memo 永远返回挂载时的那一条链。
+  }, [fallbackKey, fallbackMainEntry, fallbackChainsVersion]);
+  // prop `fallbackCount` 是调用方可选的覆盖值;没传就用本机存储里的真实数量。
+  const resolvedFallbackCount = useMemo(
+    () => (fallbackKey ? fallbackCountFor(fallbackKey) : fallbackCount),
+    [fallbackKey, fallbackCount, fallbackChainsVersion],
+  );
+  const closeFallbackView = useCallback(() => setFallbackView(false), []);
+  /**
+   * 已在链里的目标 uid 集合。
+   *
+   * 列表行不能只是「点了没反应」:normalizeFallbackChain 会把重复项丢掉,用户看到的
+   * 就是点击无效。把已选集合交给列表,由行自己画成已选中状态,点击才有可解释的结果。
+   */
+  const fallbackChosenUids = useMemo(
+    () => new Set((fallbackChain?.entries ?? []).map((entry) => entry.uid)),
+    [fallbackChain],
+  );
+  /**
+   * 头部的**实测**高度。chip 换行后头部不再是固定的 92px:链条到第二行时头部长高,
+   * 列表若仍按常量让位,总高超过面板 max-h,底部的提示行又会被裁掉。
+   * 用 ResizeObserver 跟着真实高度走,首帧回落到常量。
+   */
+  const [fallbackHeaderHeight, setFallbackHeaderHeight] = useState(FALLBACK_HEADER_HEIGHT_PX);
+  const fallbackHeaderObserver = useRef<ResizeObserver | null>(null);
+  const bindFallbackHeader = useCallback((node: HTMLDivElement | null) => {
+    if (!node) {
+      fallbackHeaderObserver.current?.disconnect();
+      fallbackHeaderObserver.current = null;
+      return;
+    }
+    const measure = (): void => setFallbackHeaderHeight(node.offsetHeight || FALLBACK_HEADER_HEIGHT_PX);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    fallbackHeaderObserver.current?.disconnect();
+    fallbackHeaderObserver.current = observer;
+  }, []);
+  useEffect(() => () => fallbackHeaderObserver.current?.disconnect(), []);
+  /**
+   * 备用链的唯一写入口:加一个目标,已在链里则移除(再点即取消)。
+   *
+   * 两条点击路径共用它 —— 同引擎走 onSelect,跨引擎被 selectRow 改道到
+   * onCrossEngineSelect。两边必须落到同一份逻辑,否则会出现「Claude 行点得动、
+   * Codex 行点不动」这种只在部分行上复现的怪象。
+   */
+  const addFallbackTarget = useCallback(
+    (
+      providerId: string,
+      rowModelId: string,
+      agent: AgentKind,
+      rowEffort?: string,
+      fast?: boolean,
+    ): void => {
+      if (!fallbackKey || !fallbackMainEntry) return;
+      const base = {
+        providerId,
+        modelId: rowModelId,
+        agent,
+        ...(rowEffort ? { effort: rowEffort } : {}),
+      };
+      const uid = fallbackEntryUid(base);
+      // 主模型已经是链首,点它不做任何事(移除它会让链失去起点)。
+      if (uid === fallbackMainEntry.uid) return;
+      // 判重必须读**此刻的持久化真相**,不能用渲染期捕获的集合:
+      // 同一次交互里连点两下、或另一个窗口刚写过,闭包里的集合已经是旧的 ——
+      // 用旧集合判断会把刚加进去的那条当成「已存在」再删掉,净效果就是「点了没反应」。
+      const live = getFallbackChain(fallbackKey);
+      const present = (live?.entries ?? []).some((entry) => entry.uid === uid);
+      if (present) {
+        removeFallbackEntry(fallbackKey, uid);
+        return;
+      }
+      appendFallbackEntry(fallbackKey, fallbackMainEntry, {
+        ...base,
+        uid,
+        ...(fast === undefined ? {} : { fast }),
+      });
+    },
+    [fallbackKey, fallbackMainEntry],
+  );
+  /**
+   * 进出备用模式会增删头部一整块。面板内容被 min-h-0 钳制链约束,**增长**方向
+   * morph 宿主的 ResizeObserver 看不见(只看得见收缩),不吱声的话头部会被裁在
+   * 面板外 —— 表现就是「点了没反应」。与 UnifiedModelPanel 切视图时同一条通道。
+   */
+  useEffect(() => {
+    const el = paneElement;
+    if (!el) return;
+    el.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+  }, [fallbackView, paneElement]);
+  const fallbackLabelOf = useCallback(
+    (entry: FallbackChainEntry) => {
+      const provider = providers.find((p) => p.id === entry.providerId);
+      // 与列表行同源:行显示的是目录条目的 displayName,不是裸 id。两边必须一致,
+      // 否则 chip 写 `claude-opus-5`、行写 `Claude Opus 5`,看起来像两个东西。
+      const catalogModel =
+        provider && entry.agent
+          ? getModel(provider, entry.modelId, entry.agent as AgentKind)
+          : undefined;
+      const name = localizedModelName(catalogModel?.name ?? entry.modelId, t);
+      // 同一模型在多个账号下会重名(截图里两条 GPT-6-Astra 就是两个 OpenAI 账号),
+      // chip 不带账号就看着像重复项。取值口径与 UnifiedModelRow 逐字一致。
+      const account =
+        provider?.openAiAccount?.identity?.trim() ||
+        provider?.subscriptionAccount?.identity?.trim();
+      return account ? `${name} · ${account}` : name;
+    },
+    [providers, getModel, t],
+  );
+  const fallbackSourceLabelOf = useCallback(
+    (entry: FallbackChainEntry) => {
+      const provider = providers.find((p) => p.id === entry.providerId);
+      return provider?.name ?? entry.providerId;
+    },
+    [providers],
+  );
+  const handleRemoveFallbackEntry = useCallback(
+    (uid: string) => {
+      if (!fallbackKey) return;
+      removeFallbackEntry(fallbackKey, uid);
+    },
+    [fallbackKey],
+  );
+  const handleToggleFallbackEnabled = useCallback(
+    (enabled: boolean) => {
+      if (!fallbackKey || !fallbackMainEntry) return;
+      const existing = getFallbackChain(fallbackKey);
+      if (!existing) return;
+      setFallbackChainEnabled(fallbackKey, enabled);
+    },
+    [fallbackKey, fallbackMainEntry],
+  );
   const isCurrentModelHidden =
     !browsing &&
     !!currentAgentKind &&
@@ -2800,13 +3014,28 @@ function ModelSelectorContentView({
             fluidWidth
               ? 'w-full min-w-0'
               : 'w-max min-w-[300px] max-w-[min(600px,calc(100vw-48px))]',
+            // 备用模式:整块底色抬浅一档,让用户一眼看出「这次点击不一样」。
+            // 仍是既有 token,不新造颜色。
+            fallbackView && 'bg-[var(--surface-elevated-soft)]',
           )}
         >
+          {/* 备用模式的头部:链条一览 + 模式提示。中间的列表保持原样。 */}
+          {fallbackView && fallbackChain && (
+            <FallbackChainHeader
+              chain={fallbackChain}
+              labelOf={fallbackLabelOf}
+              containerRef={bindFallbackHeader}
+              interactionDisabled={fallbackPickerInteractionDisabled}
+              onBack={closeFallbackView}
+              onRemove={handleRemoveFallbackEntry}
+              onToggleEnabled={handleToggleFallbackEnabled}
+            />
+          )}
           {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
           <div
             className={cn(
               'flex shrink-0 items-center gap-2 border-b border-[var(--model-dropdown-border)] px-3.5 py-3',
-              interactionDisabled
+              fallbackPickerInteractionDisabled
                 ? 'text-[var(--text-disabled-tertiary)]'
                 : 'text-[var(--text-tertiary)]',
             )}
@@ -2814,13 +3043,13 @@ function ModelSelectorContentView({
             <Search size={14} className="shrink-0" />
             <input
               type="text"
-              disabled={interactionDisabled}
+              disabled={fallbackPickerInteractionDisabled}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t('newChat.modelSelector.search.placeholderAll')}
               className={cn(
                 'min-w-0 flex-1 bg-transparent text-13 outline-none',
-                interactionDisabled
+                fallbackPickerInteractionDisabled
                   ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
                   : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
               )}
@@ -2846,7 +3075,11 @@ function ModelSelectorContentView({
             query={query}
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
-            selected={{ providerId: activeSourceId, modelId }}
+            // 备用模式下不打勾:勾表示「当前会话在用它」,而此刻列表是在挑备用,
+            // 沿用主模型的勾会让人以为点过了。链条状态由头部的 chip 表达。
+            selected={
+              fallbackView ? { providerId: null, modelId: '' } : { providerId: activeSourceId, modelId }
+            }
             selectedFavoriteUid={selectedFavoriteUid}
             liveAgentKind={unifiedSelectionPolicy === 'official' ? null : currentAgentKind}
             fastMode={unifiedSelectionPolicy === 'official' ? false : fastMode}
@@ -2856,18 +3089,55 @@ function ModelSelectorContentView({
             priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
             providerLabel={unifiedProviderLabel}
             effortLabelOf={unifiedEffortLabel}
-            {...(constrainedListMaxHeight !== undefined
-              ? { listMaxHeight: constrainedListMaxHeight }
+            {...(fallbackView && fallbackMainEntry
+              ? {
+                  // 备用模式:行的「选中」= 已在链里。主模型也画成选中,表达「它已经在链首」。
+                  isRowChosen: (providerId: string, rowModelId: string, agent: AgentKind, rowEffort?: string) => {
+                    const uid = fallbackEntryUid({
+                      providerId,
+                      modelId: rowModelId,
+                      agent,
+                      ...(rowEffort ? { effort: rowEffort } : {}),
+                    });
+                    return uid === fallbackMainEntry.uid || fallbackChosenUids.has(uid);
+                  },
+                }
               : {})}
-            interactionDisabled={interactionDisabled}
+            {...(() => {
+              // 备用模式:列表让出头部占掉的高度。列表是固定高度,不让的话总高超过
+              // 面板列 max-h,头部会被裁在可视区外(表现为「点了没反应」)。
+              const base = constrainedListMaxHeight ?? UNIFIED_LIST_DEFAULT_HEIGHT_PX;
+              if (fallbackView) {
+                return { listMaxHeight: Math.max(200, base - fallbackHeaderHeight) };
+              }
+              return constrainedListMaxHeight !== undefined
+                ? { listMaxHeight: constrainedListMaxHeight }
+                : {};
+            })()}
+            interactionDisabled={fallbackPickerInteractionDisabled}
             includePaymentRequired
             paymentRequiredLabel={t('newChat.modelSelector.paymentRequired.badge')}
             paymentRequiredUnlockLabel={t('newChat.modelSelector.paymentRequired.unlock')}
             onPaymentRequired={showPaymentRequired}
             configurationEnabled={configurationEnabled}
             selectionPolicy={unifiedSelectionPolicy}
-            isRouteDisabled={(providerId, id, rowAgent) => providersOverride ? false : modelDisabledOf(providers.find((provider) => provider.id === providerId) ?? null, id, rowAgent)}
-            {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
+            // Fallback rows are choices for the local chain, not choices for
+            // the current conversation. Do not apply live route availability
+            // or session engine switching rules to them; either guard can
+            // swallow the click before the fallback onSelect callback runs.
+            isRouteDisabled={
+              fallbackSelectionMode
+                ? undefined
+                : (providerId, id, rowAgent) =>
+                    providersOverride
+                      ? false
+                      : modelDisabledOf(
+                          providers.find((provider) => provider.id === providerId) ?? null,
+                          id,
+                          rowAgent,
+                        )
+            }
+            {...(sessionEngineFilter && !fallbackSelectionMode ? { sessionEngineFilter } : {})}
             {...(followSession ? { followSession: {
               ...followSession,
               onFollow: async () => {
@@ -2879,6 +3149,21 @@ function ModelSelectorContentView({
             } } : {})}
             onSelect={(providerId, id, rowEffort, rowConfig) => {
               const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
+              // 备用模式下的点击 = 给链条追加一项,**不切换主模型**。列表还是那张列表,
+              // 只是这次点击的后果不同(头部已明说)。
+              if (fallbackView && fallbackKey && fallbackMainEntry) {
+                addFallbackTarget(
+                  providerId,
+                  id,
+                  // rowConfig.engine 是 vendor 码('cc'),不是 AgentKind('claude-code')。
+                  // 传错会让链里存下一个查不到目录条目的 agent:写进去了,但 chip 解析不出
+                  // 名字、路由也对不上,看起来就像「什么都没发生」。
+                  agentKindOfEngine(rowConfig.engine),
+                  rowEffortValue,
+                  rowConfig.fast,
+                );
+                return false;
+              }
               // 草稿(M5):整行原样直通给调用方 —— 引擎跟着模型一起落，中途不再被单引擎
               // 链路重解析一次(见 onUnifiedSelect 的说明)。
               if (onUnifiedSelect) {
@@ -2959,22 +3244,56 @@ function ModelSelectorContentView({
               ? { overlayClassName: overlayContentClassName }
               : {})}
           />
-          {/* 连接来源入口只对本机展示。 */}
-          {onNavigateToProviders && !deviceId && (
+          {/* 连接来源入口只对本机展示。备用模式下整条 footer 收起:那时头部已经承载
+              了全部上下文(链条 + 返回),再留一条「配置模型 / 备用」只会让人以为
+              还能再往下钻一层。 */}
+          {!fallbackView && (onNavigateToProviders || fallbackMainEntry) && !deviceId && (
             <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
-              <button
-                type="button"
-                disabled={interactionDisabled}
-                onClick={onNavigateToProviders}
-                className={cn(
-                  'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
-                  'transition-colors hover:text-[var(--text-primary)]',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                <Plus size={14} className="shrink-0" />
-                <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
-              </button>
+              {onNavigateToProviders ? (
+                <button
+                  type="button"
+                  disabled={interactionDisabled}
+                  onClick={onNavigateToProviders}
+                  className={cn(
+                    'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
+                    'transition-colors hover:text-[var(--text-primary)]',
+                    interactionDisabled && 'cursor-not-allowed opacity-50',
+                  )}
+                >
+                  <Plus size={14} className="shrink-0" />
+                  <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
+                </button>
+              ) : (
+                // 占位:justify-between 下没有左项时,备用入口才会仍然靠右。
+                <span aria-hidden className="min-w-0 flex-1" />
+              )}
+              {/* 备用模型入口:与「配置模型」同一条 footer,靠右。父级已是
+                  justify-between,因此这里不需要额外的定位规则。 */}
+              {fallbackMainEntry && (
+                <button
+                  type="button"
+                  data-fallback-entry
+                  disabled={interactionDisabled}
+                  onClick={() => {
+                    onOpenFallback?.();
+                    setFallbackView(true);
+                  }}
+                  className={cn(
+                    'flex shrink-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
+                    'transition-colors hover:text-[var(--text-primary)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    interactionDisabled && 'cursor-not-allowed opacity-50',
+                  )}
+                >
+                  <GitBranch size={14} className="shrink-0" />
+                  <span className="truncate">{t('newChat.modelSelector.fallback.fallback')}</span>
+                  {resolvedFallbackCount > 0 && (
+                    <span className="shrink-0 rounded-[6px] bg-[var(--model-item-hover)] px-1.5 text-11 text-[var(--model-item-desc)]">
+                      {resolvedFallbackCount}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -3595,6 +3914,92 @@ export function ModelSelector({
   const isBudget = modelId.startsWith('codex/');
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
+  // ── composer 上的备用链一览 ───────────────────────────────────────────────
+  // 不开面板也要看得见「主模型 → 备用 1 → 备用 2」。链条按与面板**逐字相同**的身份
+  // 索引(activeSourceId + wire modelId + 引擎 + 深度),否则 composer 会去读一条
+  // 不存在的链、永远显示空。
+  const composerChainVersion = useFallbackChainsVersion();
+  const composerCooldownVersion = useFallbackCooldownsVersion();
+  const composerChain = useMemo<FallbackChain | null>(() => {
+    // 只画在 composer 工具条上:field 形态(设置页 / 新建对话框的表单入口)没有
+    // 横向余量,塞进去会把入口挤成两行。
+    if (isFieldTrigger || !activeSourceId || !modelId || !currentAgentKind) return null;
+    // 找**包含**当前模型的那条链，不只是以它为键的：改道之后会话跑的是第二项，
+    // 按键查会什么都查不到 —— 恰恰在用户最需要看到自己跑到哪一步的时候。
+    const chain = findChainContaining(
+      fallbackChainKey({
+        providerId: activeSourceId,
+        modelId,
+        agent: currentAgentKind,
+        ...(effort ? { effort } : {}),
+      }),
+    );
+    // 停用的链不画:它此刻不改变任何路由,画出来等于撒谎。
+    return isFallbackChainActive(chain) ? chain : null;
+  }, [
+    isFieldTrigger,
+    activeSourceId,
+    modelId,
+    currentAgentKind,
+    effort,
+    composerChainVersion,
+  ]);
+  /** 备用项的显示名:与面板 chip 同源(目录 displayName + 账号),不露裸 id。 */
+  const composerChainLabelOf = useCallback(
+    (entry: FallbackChainEntry): string => {
+      const provider = providers.find((p) => p.id === entry.providerId);
+      const catalogModel =
+        provider && entry.agent
+          ? getModel(provider, entry.modelId, entry.agent as AgentKind)
+          : undefined;
+      return localizedModelName(catalogModel?.name ?? entry.modelId, t);
+    },
+    [providers, getModel, t],
+  );
+  /**
+   * 这一项是不是已知没额度，以及什么时候恢复。
+   *
+   * 只读已记录的**真实失败**，不看用量百分比（Luna 保留额度显示 0% 仍能跑）。
+   */
+  const composerCooldownOf = useCallback(
+    (entry: FallbackChainEntry) => fallbackCooldownFor(entry.uid),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 读模块缓存，版本号变才重算。
+    [composerCooldownVersion],
+  );
+  /** 恢复时刻 → 本地时分（跨天带日期），与 GoalIndicator 同口径。 */
+  /** 正在跑的那一项的身份：pi1l 已经画了它，尾巴不重复。 */
+  const composerLiveUid =
+    activeSourceId && modelId && currentAgentKind
+      ? fallbackEntryUid({
+          providerId: activeSourceId,
+          modelId,
+          agent: currentAgentKind,
+          ...(effort ? { effort } : {}),
+        })
+      : null;
+  /**
+   * Where the running entry sits in the chain.
+   *
+   * After a failover it is no longer the first: the entries before it (already
+   * used up) must render BEFORE the pill and the rest after it, otherwise the
+   * line reads "2 → 1 → 3", which is simply wrong. -1 when the user moved
+   * off-chain manually; then the whole chain renders after the pill.
+   */
+  const composerLiveIndex = composerChain
+    ? composerChain.entries.findIndex((entry) => entry.uid === composerLiveUid)
+    : -1;
+  const formatChainResetTime = useCallback((untilMs: number): string => {
+    const d = new Date(untilMs);
+    const sameDay = new Date().toDateString() === d.toDateString();
+    return sameDay
+      ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+  }, []);
   // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。
   // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
   const isCompactToolbar = compactToolbar && !isFieldTrigger;
@@ -3660,6 +4065,114 @@ export function ModelSelector({
         color: 'transparent',
       }
     : undefined;
+
+  /**
+   * composer 上的链条尾巴：接在模型 pill 右边。
+   *
+   * 只读展示，不是按钮 —— 编辑仍然在面板里（一个入口）。
+   * 用 pill 自己的 meta 颜色 token，不新造颜色；窄工具条下整块收起。
+   */
+  /**
+   * 已经用完、被跳过的那几项，画在 pill **前面**。
+   *
+   * 不拆成前后两段的话，改道后顺序会读成“2 → 1 → 3” —— 链的意义就是顺序，
+   * 顺序错了比不显示更糟。
+   */
+  const composerChainHead =
+    composerChain && !isCompactToolbar && composerLiveIndex > 0 ? (
+      <span
+        data-composer-fallback-head
+        className="flex min-w-0 shrink items-center gap-1 overflow-hidden"
+      >
+        {composerChain.entries.slice(0, composerLiveIndex).map((entry) => {
+          const cooldown = composerCooldownOf(entry);
+          const label = composerChainLabelOf(entry);
+          return (
+            <span key={entry.uid} className="flex min-w-0 shrink items-center gap-1">
+              <span
+                data-composer-fallback-entry={entry.uid}
+                {...(cooldown ? { 'data-composer-fallback-exhausted': 'true' } : {})}
+                title={
+                  cooldown && cooldown.exact
+                    ? `${label} · ${t('newChat.modelSelector.fallback.exhaustedUntil', {
+                        time: formatChainResetTime(cooldown.until),
+                      })}`
+                    : `${label} · ${t('newChat.modelSelector.fallback.exhausted')}`
+                }
+                className={cn(
+                  'min-w-0 shrink truncate font-normal line-through',
+                  'text-[var(--text-disabled-tertiary)]',
+                  dense ? 'text-12' : 'text-13',
+                )}
+              >
+                {label}
+              </span>
+              <span
+                aria-hidden
+                className={cn(
+                  'shrink-0 font-normal text-[var(--model-trigger-meta)]',
+                  dense ? 'text-12' : 'text-13',
+                )}
+              >
+                →
+              </span>
+            </span>
+          );
+        })}
+      </span>
+    ) : null;
+  const composerChainTail =
+    composerChain && !isCompactToolbar ? (
+      <span
+        data-composer-fallback-chain
+        className="flex min-w-0 shrink items-center gap-1 overflow-hidden"
+        title={composerChain.entries.map(composerChainLabelOf).join(' → ')}
+      >
+        {composerChain.entries.slice(composerLiveIndex + 1).map((entry) => {
+          const cooldown = composerCooldownOf(entry);
+          const label = composerChainLabelOf(entry);
+          return (
+            <span key={entry.uid} className="flex min-w-0 shrink items-center gap-1">
+              <span
+                aria-hidden
+                className={cn(
+                  'shrink-0 font-normal text-[var(--model-trigger-meta)]',
+                  dense ? 'text-12' : 'text-13',
+                )}
+              >
+                →
+              </span>
+              <span
+                data-composer-fallback-entry={entry.uid}
+                {...(cooldown ? { 'data-composer-fallback-exhausted': 'true' } : {})}
+                title={
+                  cooldown
+                    ? `${label} · ${
+                        cooldown.exact
+                          ? t('newChat.modelSelector.fallback.exhaustedUntil', {
+                              time: formatChainResetTime(cooldown.until),
+                            })
+                          : t('newChat.modelSelector.fallback.exhausted')
+                      }`
+                    : label
+                }
+                className={cn(
+                  'min-w-0 shrink truncate font-normal',
+                  // 用完额度的项画成删除线 + 更淡：一眼看出它暂时不会被试，
+                  // 但仍然在链里（到点自动恢复）。用现有 token，不新造颜色。
+                  cooldown
+                    ? 'text-[var(--text-disabled-tertiary)] line-through'
+                    : 'text-[var(--model-trigger-meta)]',
+                  dense ? 'text-12' : 'text-13',
+                )}
+              >
+                {label}
+              </span>
+            </span>
+          );
+        })}
+      </span>
+    ) : null;
 
   const trigger = (
     <button
@@ -3989,6 +4502,8 @@ export function ModelSelector({
 
   if (morphEnabled) {
     return (
+      <>
+      {composerChainHead}
       <MorphPopover
         open={open || keepOpenForAgentConfirmation}
         onOpenChange={handleOpenChange}
@@ -4010,10 +4525,14 @@ export function ModelSelector({
       >
         {content}
       </MorphPopover>
+      {composerChainTail}
+      </>
     );
   }
 
   return (
+    <>
+    {composerChainHead}
     <Popover open={open || keepOpenForAgentConfirmation} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
@@ -4034,5 +4553,7 @@ export function ModelSelector({
         {content}
       </PopoverContent>
     </Popover>
+    {composerChainTail}
+    </>
   );
 }

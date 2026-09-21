@@ -16,6 +16,8 @@ import {
   creatorMicro2KeymapBackupFileName,
   creatorMicro2KeymapSessionFileName,
   isWorkLouderHidContention,
+  isWorkLouderHidPermissionDenied,
+  isWorkLouderIdleFirmwareError,
   isWorkLouderSdkTransportDeath,
   shouldRequestWorkLouderLivenessProbe,
   isWorkLouderCodexLightingFrameOff,
@@ -25,6 +27,7 @@ import {
   resolveWorkLouderActiveProfileIndex,
   rewriteBareWorkLouderNotifyJson,
   readWorkLouderDeviceStatusOrThrow,
+  shouldPreserveCreatorMicro2Keymap,
   unwrapWorkLouderKeymapText,
   isCindyExclusiveAgentKeymap,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
@@ -34,6 +37,10 @@ import {
   type WorkLouderCodexHostRequest,
   type WorkLouderCodexLightingFrame,
 } from './protocol.js';
+import {
+  isWorkLouderCreatorKeymapPolicy,
+  type WorkLouderCreatorKeymapPolicy,
+} from '../../shared/workLouderCodex.js';
 
 interface ParentPortLike {
   postMessage(message: unknown): void;
@@ -143,6 +150,7 @@ let creatorKeymapRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let creatorKeymapRetryAt = 0;
 let creatorKeymap: readonly (readonly string[])[] = CREATOR_MICRO_2_AGENT_KEYMAP;
 let creatorKeymapGeneration = 0;
+let creatorKeymapPolicy: WorkLouderCreatorKeymapPolicy = 'managed';
 
 if (parentPort) {
   parentPort.on('message', (event) => {
@@ -156,8 +164,15 @@ if (parentPort) {
         typeof request.keymapBackupDir === 'string' && request.keymapBackupDir.length > 0
           ? request.keymapBackupDir
           : null;
+      creatorKeymapPolicy = isWorkLouderCreatorKeymapPolicy(request.creatorKeymapPolicy)
+        ? request.creatorKeymapPolicy
+        : 'managed';
       if (Array.isArray(request.creatorKeymap) && request.creatorKeymap.length > 0) {
         creatorKeymap = request.creatorKeymap.map((row) => [...row]);
+      }
+    } else if (request?.kind === 'set-creator-keymap-policy') {
+      if (isWorkLouderCreatorKeymapPolicy(request.policy)) {
+        void setCreatorKeymapPolicy(request.policy);
       }
     } else if (request?.kind === 'rebind-creator-keymap') {
       if (Array.isArray(request.keymap) && request.keymap.length > 0) {
@@ -173,10 +188,8 @@ if (parentPort) {
       latestFrame = request.frame;
       requestApply();
     } else if (request?.kind === 'probe') {
-      // A probe is an explicit recovery request (for example after the user
-      // grants Input Monitoring or unlocks macOS), so it is allowed to clear
-      // the permission circuit breaker once.
-      permissionBlocked = false;
+      // Settings pollers also probe. Explicit permission recovery creates a
+      // fresh host; background probes must never clear this circuit breaker.
       requestProbe();
     } else if (request?.kind === 'discover') {
       requestDiscover();
@@ -339,22 +352,19 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
       scheduleRetry();
       return;
     }
-    const lightingOk = lightingRpcSucceeded(
-      await deviceApi.sendLightingConfig({
-        ambient: frame.ambient,
-        keys: frame.keys,
-      }),
-    );
-    const threadsOk = lightingRpcSucceeded(await deviceApi.sendThreadsLighting(frame.threads));
-    if (transportFaulted) throw new Error('lighting transport faulted');
-    if (!lightingOk || !threadsOk) {
-      hostLog(
-        'warn',
-        `Work Louder lighting RPC failed (threads=${frame.threads.length}); keeping HID listening`,
-      );
-    } else {
-      hostLog('debug', `Work Louder lighting applied threads=${frame.threads.length}`);
+    const lightingResult = await deviceApi.sendLightingConfig({
+      ambient: frame.ambient,
+      keys: frame.keys,
+    });
+    if (!lightingRpcSucceeded(lightingResult)) {
+      throw new Error(describeLightingRpcFailure('rgbcfg', lightingResult));
     }
+    const threadsResult = await deviceApi.sendThreadsLighting(frame.threads);
+    if (!lightingRpcSucceeded(threadsResult)) {
+      throw new Error(describeLightingRpcFailure('thstatus', threadsResult));
+    }
+    if (transportFaulted) throw new Error('lighting transport faulted');
+    hostLog('debug', `Work Louder lighting applied threads=${frame.threads.length}`);
     clearRetry();
     lastLoggedError = null;
     post({ kind: 'state', status: 'connected' });
@@ -364,14 +374,8 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
       lastLoggedError = message;
       hostLog('error', `lighting apply failed: ${message}`);
     }
-    if (isWorkLouderHidContention(message)) {
-      post({ kind: 'state', status: 'error', reason: 'device-in-use' });
-      scheduleRetry();
-      return;
-    }
     await disconnect();
-    post({ kind: 'state', status: 'error', reason: classifyConnectionError(message) });
-    scheduleRetry();
+    reportConnectionError(message);
   }
 }
 
@@ -442,13 +446,8 @@ async function probeConnection(): Promise<void> {
     if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
   } catch (error) {
     const message = safeErrorMessage(error);
-    if (isWorkLouderHidContention(message)) {
-      post({ kind: 'state', status: 'error', reason: 'device-in-use' });
-      scheduleCreatorKeymapRetry();
-      return;
-    }
-    post({ kind: 'state', status: 'not-detected' });
-    scheduleRetry();
+    await disconnect();
+    reportConnectionError(message);
   }
 }
 
@@ -510,14 +509,8 @@ async function listenForAgentKeys(): Promise<void> {
       lastLoggedError = message;
       hostLog('error', `HID listening failed: ${message}`);
     }
-    if (isWorkLouderHidContention(message)) {
-      post({ kind: 'state', status: 'error', reason: 'device-in-use' });
-      scheduleCreatorKeymapRetry();
-      return;
-    }
     await disconnect();
-    post({ kind: 'state', status: 'error', reason: classifyConnectionError(message) });
-    scheduleRetry();
+    reportConnectionError(message);
   }
 }
 
@@ -610,6 +603,13 @@ function lightingRpcSucceeded(result: unknown): boolean {
   if (result === false || result == null) return false;
   if (typeof result === 'object' && 'ok' in result) return (result as { ok: unknown }).ok === true;
   return true;
+}
+
+export function describeLightingRpcFailure(method: string, result: unknown): string {
+  const record =
+    typeof result === 'object' && result !== null ? (result as WorkLouderRpcResult) : null;
+  const detail = typeof record?.error?.message === 'string' ? `: ${record.error.message}` : '';
+  return `Work Louder ${method} lighting RPC returned ok=false${detail}`;
 }
 
 function describeHidEvent(event: unknown): string {
@@ -712,6 +712,15 @@ async function backupCreatorKeymap(
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (creatorKeymapBound || stopping) return;
   if (connectedDevice?.deviceType !== 'creator-micro-2') return;
+  if (creatorKeymapPolicy === 'preserve') {
+    // Preserve mode intentionally does not even request the filesystem API.
+    // The SDK HID subscription and lighting are still allowed, but this
+    // process can never rewrite or restore the user's mixed keymap.
+    creatorKeymapBound = true;
+    clearCreatorKeymapRetry();
+    hostLog('info', 'Creator Micro 2 preserve mode: keymap.json is read-only');
+    return;
+  }
   if (!comm) return;
   const generation = creatorKeymapGeneration;
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
@@ -737,6 +746,16 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   );
   const layerCount = document.profiles[profileIndex]?.layers.length ?? 0;
   const layerIndex = resolveWorkLouderActiveLayerIndex(status.layerIndex, layerCount);
+  const activeLayer = document.profiles[profileIndex]?.layers?.[layerIndex];
+  if (shouldPreserveCreatorMicro2Keymap(activeLayer)) {
+    creatorKeymapBound = true;
+    clearCreatorKeymapRetry();
+    hostLog(
+      'info',
+      `Work Louder layer ${layerIndex + 1} contains native agent keys and user HID mappings; preserving it`,
+    );
+    return;
+  }
   const next = applyCreatorMicro2AgentLayer(document, layerIndex, creatorKeymap, profileIndex);
   if (!next.changed) {
     creatorKeymapBound = true;
@@ -818,6 +837,26 @@ function clearCreatorKeymapRetry(): void {
   creatorKeymapRetryTimer = null;
 }
 
+async function setCreatorKeymapPolicy(policy: WorkLouderCreatorKeymapPolicy): Promise<void> {
+  if (creatorKeymapPolicy === policy) return;
+  const previous = creatorKeymapPolicy;
+  creatorKeymapPolicy = policy;
+  creatorKeymapGeneration += 1;
+  clearCreatorKeymapRetry();
+  if (policy === 'preserve' && previous === 'managed' && api && creatorKeymapWritten) {
+    try {
+      await restoreCreatorKeymap(api);
+    } catch (error) {
+      // Keep the process in preserve mode even if the best-effort restore is
+      // unavailable. Most importantly, do not issue another keymap write.
+      hostLog('warn', `Creator Micro 2 policy restore failed: ${safeErrorMessage(error)}`);
+    }
+  }
+  creatorKeymapWritten = false;
+  creatorKeymapBound = policy === 'preserve';
+  if (api && policy === 'managed') void bindCreatorAgentKeysWhenIdle(api);
+}
+
 async function ensureConnected(): Promise<WorkLouderApi | null> {
   if (api && transportFaulted) await disconnect();
   if (api) {
@@ -829,8 +868,11 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   const loaded = loadSdk();
   const nextComm = new loaded.WLDeviceCommImpl(sdkLogger);
   recoverBareWorkLouderNotifies(nextComm);
-  if (!(await nextComm.connect(candidate.device))) return null;
   comm = nextComm;
+  if (!(await nextComm.connect(candidate.device))) {
+    await disconnect();
+    return null;
+  }
   const nextApi = new loaded.RPCApiOAI(nextComm, sdkLogger);
   if (typeof nextApi.onHidReceived === 'function') {
     const unsubscribe = nextApi.onHidReceived((event) => {
@@ -911,7 +953,9 @@ export async function postDeviceStatus(
       status = readWorkLouderDeviceStatusOrThrow(await deviceApi.getDeviceStatus());
     } catch (error) {
       hostLog('warn', `device status unavailable: ${safeErrorMessage(error)}`);
-      if (transportFaulted || !isOptionalDeviceStatusError(error)) throw error;
+      const idleCreatorStatus = isWorkLouderIdleFirmwareError(safeErrorMessage(error), deviceType);
+      if (transportFaulted || (!isOptionalDeviceStatusError(error) && !idleCreatorStatus))
+        throw error;
     }
   }
   postDeviceState(deviceType, isUsbConnection, status);
@@ -944,13 +988,11 @@ export function classifyConnectionError(
   message: string,
 ): 'connection-failed' | 'permission-required' | 'device-in-use' {
   if (isWorkLouderHidContention(message)) return 'device-in-use';
-  const looksLikePermissionError =
-    /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(message);
   // Input Monitoring is a macOS authorization boundary. On Windows, the HID
   // backend also reports transient handle contention as "access denied"; that
   // must stay on the bounded connection retry path instead of tripping the
   // permanent permission circuit breaker.
-  return process.platform === 'darwin' && looksLikePermissionError
+  return process.platform === 'darwin' && isWorkLouderHidPermissionDenied(message)
     ? 'permission-required'
     : 'connection-failed';
 }
@@ -959,6 +1001,9 @@ function reportConnectionError(message: string): void {
   const reason = classifyConnectionError(message);
   if (reason === 'permission-required') {
     permissionBlocked = true;
+    applyPending = false;
+    listenPending = false;
+    probePending = false;
     clearRetry();
   }
   post({ kind: 'state', status: 'error', reason });

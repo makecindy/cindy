@@ -4080,9 +4080,17 @@
             "name": "Continue in new task",
             "description": "Create a new task from the current one"
           },
+          "forkThread": {
+            "name": "Continue in new task",
+            "description": "Create a new task from the current one"
+          },
           "composer.submit": {
             "name": "Send message",
-            "description": "Send the composer message, or approve the pending request"
+            "description": "Send the message (queue it while running), or approve the pending request"
+          },
+          "composer.steer": {
+            "name": "Steer task",
+            "description": "Steer the running task with the composer message"
           },
           "feedback": {
             "name": "Send feedback",
@@ -4103,6 +4111,10 @@
             "name": "Archive task",
             "description": "Archive the current task"
           },
+          "archiveThread": {
+            "name": "Archive task",
+            "description": "Archive the current task"
+          },
           "newTask": {
             "name": "New task",
             "description": "Start a new task"
@@ -4112,6 +4124,10 @@
             "description": "Open a new browser tab"
           },
           "toggleTaskPin": {
+            "name": "Toggle pin",
+            "description": "Pin or unpin the current task"
+          },
+          "toggleThreadPin": {
             "name": "Toggle pin",
             "description": "Pin or unpin the current task"
           },
@@ -4247,7 +4263,7 @@
           },
           "autoDim": {
             "label": "Auto-dim",
-            "description": "Turn lighting off after inactivity and restore it when the keyboard is used or a task changes state.",
+            "description": "Dim idle lighting after inactivity. Running tasks and attention indicators stay lit.",
             "aria": "Choose Codex Micro auto-dim delay",
             "options": {
               "off": "Off",
@@ -4268,6 +4284,7 @@
             "description": "Task keys follow the sidebar from top to bottom, in board order.",
             "descriptions": {
               "sidebar": "Task keys follow the sidebar from top to bottom, in board order.",
+              "pinned": "Only pinned tasks use the keys, in sidebar order. Unused keys stay empty.",
               "last-sent": "Task keys follow the tasks you last sent a message in, in board order.",
               "priority": "Task keys follow priority tasks, in board order.",
               "custom": "Each task key opens the task you assign."
@@ -4275,6 +4292,7 @@
             "value": "Sidebar order",
             "options": {
               "sidebar": "Sidebar order",
+              "pinned": "Pinned Tasks Only",
               "last-sent": "Recent tasks",
               "priority": "Priority",
               "custom": "Custom"
@@ -4395,6 +4413,16 @@
               "toggle": {
                 "aria": "Let this Cindy use Creator Micro 2"
               },
+              "keymapPolicy": {
+                "label": "Creator keymap policy",
+                "description": "Choose whether Cindy may manage the Creator layer or must leave the hardware map untouched.",
+                "options": {
+                  "managed": "Standard",
+                  "preserve": "Protect map"
+                },
+                "managedWarning": "Standard mode follows Cindy's official integration: it can install the agent layer while Cindy owns the device and restores the previous map when it stops.",
+                "preserveWarning": "Protect map mode is read-only: Cindy can use native KV_OAI actions, lighting, and task controls, but never writes keymap.json. ChatGPT/Codex wins automatically while open; Cindy takes over when it closes."
+              },
               "descriptions": {
                 "connecting": "Cindy is starting the Work Louder device service.",
                 "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
@@ -4414,6 +4442,7 @@
               "source": {
                 "descriptions": {
                   "sidebar": "Task keys follow the sidebar from top to bottom, in board order.",
+                  "pinned": "Only pinned tasks use the keys, in sidebar order. Unused keys stay empty.",
                   "last-sent": "Task keys follow the tasks you last sent a message in, in board order.",
                   "priority": "Task keys follow priority tasks, in board order.",
                   "custom": "Each task key opens the task you assign."
@@ -7962,6 +7991,20 @@
         "effortEndSmart": "Smarter",
         "railSameEngine": "{{agent}} only",
         "crossEngineWarning": "Switching engines rebuilds context and may lose content"
+      },
+      "fallback": {
+        "fallback": "Fallback",
+        "title": "Fallback models",
+        "pickHint": "Pick a model to add as a fallback.",
+        "desc": "If the main model fails or runs out, the next one takes over.",
+        "mainLabel": "Main",
+        "fallbackLabel": "Fallback",
+        "remove": "Remove",
+        "back": "Back",
+        "enabled": "On",
+        "disabled": "Off",
+        "exhausted": "Out of quota",
+        "exhaustedUntil": "Out until {{time}}"
       }
     },
     "permissionSelector": {

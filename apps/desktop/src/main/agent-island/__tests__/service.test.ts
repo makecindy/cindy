@@ -18,6 +18,7 @@ import {
   DEFAULT_AGENT_ISLAND_SOUND_SETTINGS,
   computeAgentIslandContentHeight,
   type AgentIslandDisplayState,
+  type AgentIslandSessionActivity,
   type AgentIslandSoundChoice,
   type AgentIslandSoundSettings,
 } from '../../../shared/agentIsland.js';
@@ -26,6 +27,10 @@ import type { AgentIslandNativeFrame } from '../MacAgentIslandNativeHost.js';
 import { markAppContentWindow } from '../../windowFocusClassifier.js';
 import type { AgentIslandService } from '../service.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
+import { createWorkLouderCodexLightingFrame } from '../../worklouder-codex/protocol.js';
+import { WorkLouderCodexLightingController } from '../../worklouder-codex/WorkLouderCodexLightingController.js';
+import { createWorkLouderCodexDefaultSettings, WORKLOUDER_DEVICES } from '../../../shared/workLouderCodex.js';
+import { disposeInputDevices, registerInputDevice, updateInputDeviceSessionActivity } from '../../input-devices/registry.js';
 
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
@@ -5784,6 +5789,136 @@ describe('AgentIslandService native publishing', () => {
       contentWidth: 250,
       width: 290,
     });
+  });
+});
+
+describe('AgentIslandService hardware error lighting', () => {
+  it('delivers live LED frames through the registry before UI preferences sync, including after reset', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    vi.useFakeTimers();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => ['task', 'idle']);
+    registerInputDevice({
+      descriptor: WORKLOUDER_DEVICES['creator-micro-2'],
+      start: () => undefined,
+      updateSessionActivity: (activity) => controller.updateSessionActivity(activity),
+      resumeTaskSlots: () => controller.resumeTaskSlots(),
+      suspendTaskSlots: () => controller.suspendTaskSlots(),
+      dispose: () => controller.dispose(),
+    });
+    const nativeHost = { failed: false, publish: vi.fn(() => true), suspend: vi.fn(), playSound: vi.fn(() => true) };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost,
+      onSessionActivityChange: updateInputDeviceSessionActivity,
+    });
+    const meta = { sessionId: 'task', agentKind: 'codex' as const };
+    const color = () => sink.update.mock.lastCall?.[0].threads[0].color;
+    try {
+      const settings = createWorkLouderCodexDefaultSettings('creator-micro-2');
+      settings.deviceEnabled = true;
+      settings.keymapPolicy = 'preserve';
+      settings.lightingAutoDim = 'off';
+      controller.applySettings(settings);
+      await controller.resumeTaskSlots();
+      expect(color()).toBe(0xffffff);
+
+      for (const cycle of ['startup', 'after-reset']) {
+        // A local/no-account session need never open Island settings or send setEnabled.
+        // The real registry/controller must still receive status, not just the catalog.
+        service.handleUserPrompt(meta, cycle);
+        expect(color()).toBe(0x4c6fff);
+        service.handleAgentEvent(meta, recoverableErrorEvent('Reconnecting... 1/5'));
+        expect(color()).toBe(0xff453a);
+        service.handleAgentEvent(meta, textEvent('recovered'));
+        await vi.advanceTimersByTimeAsync(50);
+        expect(color()).toBe(0x4c6fff);
+        handleInteractionRequestForTest(service, meta, {
+          kind: 'permission', requestId: cycle, toolName: 'Bash', input: { command: 'test' },
+        });
+        expect(color()).toBe(0xffa000);
+        service.handleInteractionDismissed('task', cycle);
+        service.handleAgentEvent(meta, doneEvent());
+        expect(color()).toBe(0x35c759);
+        service.handleUserPrompt(meta, 'next turn');
+        service.handleAgentEvent(meta, terminalErrorEvent('failed'));
+        expect(color()).toBe(0xff453a);
+        expect(sink.update.mock.lastCall?.[0].threads[1].color).toBe(0xffffff);
+        service.resetRuntimeState();
+        expect(color()).toBe(0xffffff);
+      }
+      // Preference readiness gates native UI/sounds only, never hardware activity.
+      expect(nativeHost.publish).not.toHaveBeenCalled();
+      expect(nativeHost.playSound).not.toHaveBeenCalled();
+      expect(nativeHost.suspend).toHaveBeenCalledTimes(2); // resets only
+    } finally {
+      service.resetRuntimeState();
+      await disposeInputDevices();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows reconnect failures red without terminating the turn and restores blue on progress', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    vi.useFakeTimers();
+    const onSessionActivityChange = vi.fn((activity: readonly AgentIslandSessionActivity[]) =>
+      createWorkLouderCodexLightingFrame(activity, ['s1', 'idle']),
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+      onSessionActivityChange,
+    });
+    const meta = { sessionId: 's1', agentKind: 'codex' as const };
+    const latestFrame = () => onSessionActivityChange.mock.results.at(-1)?.value;
+
+    try {
+      // Lighting must not depend on enabling the floating island UI.
+      service.setEnabled(false);
+      service.handleUserPrompt(meta, 'run tests');
+      expect(latestFrame()?.threads[0]).toMatchObject({ color: 0x4c6fff, brightness: 0.8 });
+
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        service.handleAgentEvent(meta, recoverableErrorEvent(`Reconnecting... ${attempt}/5`));
+        expect(latestFrame()?.threads[0]).toMatchObject({ color: 0xff453a, brightness: 0.8 });
+        expect(latestFrame()?.ambient.color).toBe(0xff453a);
+        expect(latestFrame()?.threads[1]).toMatchObject({ color: 0xffffff, brightness: 0.35 });
+        expect(service.getSessionActivitySnapshot('s1')).toMatchObject({ phase: 'running', attention: false });
+      }
+      // Do not publish a false terminal error to remote clients or the chat UI.
+      expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+        SESSION_ACTIVITY_CHANNEL,
+        expect.objectContaining({ sessionId: 's1', phase: 'error' }),
+      );
+
+      service.handleAgentEvent(meta, textEvent('Connection recovered'));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(latestFrame()?.threads[0].color).toBe(0x4c6fff);
+      service.handleAgentEvent(meta, recoverableErrorEvent('Reconnecting... 1/5'));
+      expect(latestFrame()?.threads[0].color).toBe(0xff453a);
+      service.handleAgentEvent(meta, terminalErrorEvent('retry exhausted'));
+      expect(latestFrame()?.threads[0]).toMatchObject({ color: 0xff453a, brightness: 0.8 });
+      expect(service.getSessionActivitySnapshot('s1')?.phase).toBe('error');
+      service.handleSessionAttentionCleared('s1', 'passive');
+      expect(latestFrame()?.threads[0].color).toBe(0xff453a);
+
+      service.handleUserPrompt(meta, 'try again');
+      expect(latestFrame()?.threads[0].color).toBe(0x4c6fff);
+      service.handleAgentEvent(meta, doneEvent());
+      expect(latestFrame()?.threads[0].color).toBe(0x35c759);
+    } finally {
+      service.resetRuntimeState();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+    expect(onSessionActivityChange).toHaveBeenLastCalledWith([]);
   });
 });
 
