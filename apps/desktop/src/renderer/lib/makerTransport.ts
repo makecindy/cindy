@@ -541,6 +541,14 @@ export function readSessionBackgroundTasks(
 ): Promise<RoutedBackgroundTasksSnapshot> {
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) {
+    // 归属不可解析、但已确认是镜像来源（受保护镜像读记下的 owner token；本机会话
+    // 永不经过那条路）→ **fail closed**，绝不回退本机读：控制端 main 对不属于自己
+    // 的会话会返回空表，而调用方会把它当权威快照去收口 stale running，把仍在被控端
+    // 运行的任务标成 stopped（任务会从运行列表与停止入口里消失）。与 stopRouteFor
+    // 的 unknown 态同口径：宁可漏收（等归属恢复后下一次水合），也不误停。
+    if (knownOwnerTokenFor(sessionId) !== undefined) {
+      return Promise.resolve({ tasks: [], source: null });
+    }
     return window.electronAPI.maker
       .listSessionBackgroundTasks(sessionId)
       .then((snapshot) => ({ ...snapshot, source: 'local' as const }))

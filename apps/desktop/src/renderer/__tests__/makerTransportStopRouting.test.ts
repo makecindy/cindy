@@ -136,6 +136,23 @@ describe('readSessionBackgroundTasks 权威性标记', () => {
       source: null,
     });
   });
+
+  it('镜像来源但归属不可解析(unknown):fail closed,不回退本机读', async () => {
+    const { listSessionBackgroundTasks, invoke } = stubElectron();
+    const { __testing } = await import('@/features/device-link/mirrorCacheClient');
+    // 真实路径由 device-link 受保护镜像读记入;本机会话永不经过。此时粘滞注册表
+    // 还没水合出设备 —— 若回退本机读,控制端 main 的空表会被当权威快照收口,把仍在
+    // 被控端运行的任务标成 stopped(任务从运行列表与停止入口消失)。
+    __testing.rememberOwnerTokenForTest('mirror-2', 'owner-token-2');
+    const { readSessionBackgroundTasks } = await import('@/lib/makerTransport');
+
+    await expect(readSessionBackgroundTasks('mirror-2')).resolves.toEqual({
+      tasks: [],
+      source: null,
+    });
+    expect(listSessionBackgroundTasks).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
 
 describe('canStopAgentTask 门禁', () => {

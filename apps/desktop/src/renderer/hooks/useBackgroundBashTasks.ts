@@ -13,9 +13,10 @@
  * 不折算 running 的既有决策不变 —— dev server 不能把会话 spinner 永转)。
  *
  * device-link 远程会话:任务真身在被控端,快照必须隧道读(控制端 main 无该会话
- * handle,本机读必空)—— 与后台任务面板同款走 listSessionBackgroundTasksFor。
- * 老被控端无此 channel / 隧道失败由 helper 降级空表,控制端退化为「看不到运行中」
- * 而不误报;停止同样逐任务隧道(见下),被控端停不掉时 UI 会给「停止未确认」。
+ * handle,本机读必空)—— 与后台任务面板同款走 readSessionBackgroundTasks。
+ * 老被控端无此 channel / 隧道失败 / 归属不可解析但已确认镜像来源时降级(source:
+ * null),控制端退化为「看不到运行中」而不误报;停止同样逐任务隧道(见下),
+ * 被控端停不掉时 UI 会给「停止未确认」。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -86,7 +87,7 @@ export function useBackgroundBashTasks(
   const remoteSticky = Boolean(sessionId) && isRemoteSessionSticky(sessionId as string);
 
   // 快照水合:挂载 / 切会话 / 历史重载完成后拉一次存量(远程走隧道,见
-  // listSessionBackgroundTasksFor)。maker 未 init 等瞬态失败保持现状 ——
+  // readSessionBackgroundTasks)。maker 未 init 等瞬态失败保持现状 ——
   // 实时事件流仍会自然补上。
   // 同一次快照兼做 stale running 对账:候选集必须在**发起请求前**捕获(时序论证
   // 见 store 的 reconcileStaleRunningTasks),空表 + 非空候选正是「全部已收口」

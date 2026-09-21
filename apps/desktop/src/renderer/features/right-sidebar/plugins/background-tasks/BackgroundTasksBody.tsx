@@ -61,7 +61,7 @@ import {
   canStopAgentTask,
   getWorkflowProgressFor,
   isRemoteSessionSticky,
-  listSessionBackgroundTasksFor,
+  readSessionBackgroundTasks,
   stopAgentTaskFor,
 } from '@/lib/makerTransport';
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -594,10 +594,11 @@ export function BackgroundTasksBody({
   }, [sessionId, visible]);
 
   // 快照水合:挂载 / 切会话时拉一次存量后台任务(订阅前已启动 / 重载清空
-  // taskUpdates 后事件流看不到的任务)。listSessionBackgroundTasksFor 按会话来源
+  // taskUpdates 后事件流看不到的任务)。readSessionBackgroundTasks 按会话来源
   // 路由 —— 本机走本地 IPC,device-link 远程隧道到被控端(任务真身在被控端,
-  // 本机快照必空);老被控端无此 channel 时内部降级空表。失败静默,实时事件流
-  // 自然补上(与 useBackgroundBashTasks 的快照失败同口径)。
+  // 本机快照必空);老被控端无此 channel / 隧道失败 / 归属不可解析但已确认镜像
+  // 来源时降级(source: null)。失败静默,实时事件流自然补上(与
+  // useBackgroundBashTasks 的快照失败同口径)。
   // taskUpdatesEmpty 参与依赖:reloadMessages(rewind / 远程 origin 对账)会在
   // 面板已挂载时清空 taskUpdates,布尔翻 true 即自动重水合;翻回 false 的那次
   // 重跑只是多一次幂等快照(seed 仅补缺),不会循环。
@@ -618,27 +619,21 @@ export function BackgroundTasksBody({
     if (!sessionId) return;
     let disposed = false;
     // 同一次快照兼做 stale running 对账(终态事件丢失的自愈)。候选集在发起
-    // 请求前捕获(时序论证见 store 的 reconcileStaleRunningTasks);远程会话
-    // 本面板不收口 —— 快照可能是老被控端的降级空表,与「没有任务」不可区分。
-    // 远程的收口交给 useBackgroundBashTasks:它用 readSessionBackgroundTasks
-    // 的 source 区分权威快照与降级空表,只用前者对账。
-    const staleRunningCandidates = isRemoteSessionSticky(sessionId)
-      ? undefined
-      : makerChatStore.captureRunningClaudeTaskIds(sessionId);
-    void listSessionBackgroundTasksFor(sessionId)
-      .then(({ tasks }) => {
+    // 请求前捕获(时序论证见 store 的 reconcileStaleRunningTasks)。
+    const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
+    void readSessionBackgroundTasks(sessionId)
+      .then(({ tasks, source }) => {
         if (disposed || !Array.isArray(tasks)) return;
-        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
-        // 快照实际来自本机 main(路由在发起时已定),「查无此会话」的空表不可
-        // 用于收口 → 丢弃候选集;seed 保留(远程会话的常规水合不受影响,该
-        // 空表本就 seed 不出东西)。
+        // 来源与当下归属必须一致:归属在请求在飞期间才完成水合时,本机 main 的
+        // 「查无此会话」空表(或撞 id 数据)对远程会话无意义 → 整体丢弃。
+        if ((source === 'remote') !== isRemoteSessionSticky(sessionId)) return;
+        // 只有权威快照能收口 stale running:降级空表(老被控端无 channel /
+        // 隧道失败 / 归属不可解析的镜像来源)与「确实没有任务」不可区分。
         const candidates =
-          staleRunningCandidates && !isRemoteSessionSticky(sessionId)
-            ? staleRunningCandidates
-            : undefined;
-        if (tasks.length === 0 && !(candidates && candidates.size > 0)) {
-          return;
-        }
+          source === null || staleRunningCandidates.size === 0
+            ? undefined
+            : staleRunningCandidates;
+        if (tasks.length === 0 && !candidates) return;
         makerChatStore.seedBackgroundTaskSnapshots(
           sessionId,
           tasks,
