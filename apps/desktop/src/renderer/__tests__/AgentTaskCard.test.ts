@@ -442,6 +442,48 @@ describe('AgentTaskCard', () => {
     }
   });
 
+  it('clears the stale unconfirmed hint when a retry succeeds but no status event has arrived', async () => {
+    const stopAgentTask = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ ok: true });
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      maker: { stopAgentTask },
+    };
+    try {
+      const { container } = render(
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-retry',
+          update: {
+            provider: 'claude-code',
+            taskId: 'bash-retry',
+            taskType: 'local_bash',
+            status: 'running',
+          },
+        }),
+      );
+      const first = stopButton(container);
+      await act(async () => {
+        first!.click();
+        await Promise.resolve();
+      });
+      expect(container.querySelector('[data-agent-task-stop-unconfirmed="true"]')).not.toBeNull();
+
+      // 第二次点击:本次请求成功但任务状态还没翻(事件延迟/丢包)——旧提示必须收掉。
+      // 否则重试明明发出去了,用户还以为最新一次也失败了(提示描述的是上一次点击)。
+      const second = stopButton(container);
+      await act(async () => {
+        second!.click();
+        await Promise.resolve();
+      });
+      expect(stopAgentTask).toHaveBeenCalledTimes(2);
+      expect(container.querySelector('[data-agent-task-stop-unconfirmed="true"]')).toBeNull();
+      expect(stopButton(container)).not.toBeNull();
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
+
   it('stops a running PI durable subagent through the common task control IPC', async () => {
     const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
     (window as unknown as { electronAPI?: unknown }).electronAPI = {

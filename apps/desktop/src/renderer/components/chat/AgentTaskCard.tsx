@@ -306,7 +306,7 @@ export function AgentTaskCard({
   // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
   // 「点了停止但没停掉」:老被控端(无此 channel)等失败让任务真的还在跑 —— 卡片上
-  // 就地说明,按钮留着可重试;任务状态一变就收掉(它描述的是上一次点击)。
+  // 就地说明,按钮留着可重试;任务状态一变或用户再点一次就收掉(它描述的是上一次点击)。
   const [stopFailed, setStopFailed] = useState(false);
   useEffect(() => {
     setStopFailed(false);
@@ -324,6 +324,8 @@ export function AgentTaskCard({
   const handleStop = useCallback(() => {
     if (!sessionId || !update?.taskId) return;
     setStopping(true);
+    // 重试先收掉上一次的失败提示:它描述的是上一次点击;这次再失败会在 catch 重新写上。
+    setStopFailed(false);
     void stopAgentTaskFor(sessionId, update.taskId)
       .catch(() => {
         // 不装成功:卡片仍显示 running,同时给一句「停止未确认」,按钮留着可重试。
