@@ -15,6 +15,7 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
+import { createLogger } from './logger.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
@@ -28,6 +29,8 @@ export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed';
 
 let registered = false;
+const log = createLogger('appearance-settings');
+const ZOOM_FACTOR_EPSILON = 0.001;
 
 export function registerAppearanceSettingsIpc(): void {
   if (registered) return;
@@ -50,7 +53,7 @@ export function registerAppearanceSettingsIpc(): void {
     assertTrustedAppRendererEvent(event);
     const patch = parsePatch(rawPatch);
     const settings = await writeAppearanceSettingsPatch(patch);
-    applyAppearanceToWindows(settings);
+    applyAppearanceToWindows(settings, 'appearance-settings:set-patch');
     broadcast(settings);
     return settings;
   });
@@ -58,7 +61,7 @@ export function registerAppearanceSettingsIpc(): void {
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
     const settings = await resetAppearanceSettings();
-    applyAppearanceToWindows(settings);
+    applyAppearanceToWindows(settings, 'appearance-settings:reset');
     broadcast(settings);
     return settings;
   });
@@ -67,14 +70,27 @@ export function registerAppearanceSettingsIpc(): void {
 export function applyAppearanceToWindow(
   win: BrowserWindow,
   settings: Pick<AppearanceSettings, 'windowZoom'> = readAppearanceSettings(),
+  source = 'appearance-settings:sync',
 ): void {
   if (win.isDestroyed() || win.webContents.isDestroyed() || !isAppContentWindow(win)) return;
-  win.webContents.setZoomFactor(settings.windowZoom);
+  const nextZoom = clampAppearanceWindowZoom(settings.windowZoom);
+  const currentZoom = win.webContents.getZoomFactor();
+  if (Math.abs(currentZoom - nextZoom) <= ZOOM_FACTOR_EPSILON) return;
+  win.webContents.setZoomFactor(nextZoom);
+  log.info('page zoom changed', {
+    source,
+    previous: currentZoom,
+    next: nextZoom,
+    webContentsId: win.webContents.id,
+  });
 }
 
-export function applyAppearanceToWindows(settings = readAppearanceSettings()): void {
+export function applyAppearanceToWindows(
+  settings = readAppearanceSettings(),
+  source = 'appearance-settings:sync',
+): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    applyAppearanceToWindow(win, settings);
+    applyAppearanceToWindow(win, settings, source);
   }
 }
 
@@ -84,13 +100,24 @@ export function getPersistedWindowZoom(): number {
 
 export async function updatePersistedWindowZoom(
   delta: number | null,
+  source = 'appearance-settings:update',
 ): Promise<AppearanceSettings> {
-  const settings = await updateAppearanceSettingsAtomic((current) => ({
-    windowZoom: clampAppearanceWindowZoom(
-      delta === null ? 1 : current.windowZoom + delta,
-    ),
-  }));
-  applyAppearanceToWindows(settings);
+  let previousZoom = readAppearanceSettings().windowZoom;
+  const settings = await updateAppearanceSettingsAtomic((current) => {
+    previousZoom = current.windowZoom;
+    return {
+      windowZoom: clampAppearanceWindowZoom(delta === null ? 1 : current.windowZoom + delta),
+    };
+  });
+  applyAppearanceToWindows(settings, source);
+  if (Math.abs(previousZoom - settings.windowZoom) > ZOOM_FACTOR_EPSILON) {
+    log.info('persisted page zoom updated', {
+      source,
+      delta,
+      previous: previousZoom,
+      next: settings.windowZoom,
+    });
+  }
   broadcast(settings);
   return settings;
 }

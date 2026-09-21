@@ -12,6 +12,7 @@ import {
   VERSIONLESS_VERSION,
   debianArch,
   parsePackageArgs,
+  canSkipLocalSimulatorGate,
 } from '../../apps/desktop/scripts/ci/package-lib.mjs';
 
 test('Desktop 默认版本与 versionless 打包哨兵一致', () => {
@@ -20,6 +21,14 @@ test('Desktop 默认版本与 versionless 打包哨兵一致', () => {
     'utf8',
   ));
   assert.equal(desktopPackageJson.version, VERSIONLESS_VERSION);
+});
+
+test('local simulator gate exception cannot weaken release builds', () => {
+  const local = { versionless: true, noSign: true, requested: true, requireNativeReleaseGate: false };
+  assert.equal(canSkipLocalSimulatorGate(local), true);
+  for (const override of [{ versionless: false }, { noSign: false }, { requested: false }, { requireNativeReleaseGate: true }]) {
+    assert.equal(canSkipLocalSimulatorGate({ ...local, ...override }), false);
+  }
 });
 
 test('PLATFORM_ARCHS: linux 支持 x64 与 arm64', () => {
