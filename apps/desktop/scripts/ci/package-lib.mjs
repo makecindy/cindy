@@ -240,3 +240,7 @@ export function buildBuildInfo(ctx) {
     signing: ctx.signing,
   };
 }
+/** Local development only; never suppress a versioned/signed or explicitly required gate. */
+export function canSkipLocalSimulatorGate({ versionless, noSign, requireNativeReleaseGate, requested }) {
+  return requested === true && versionless === true && noSign === true && requireNativeReleaseGate !== true;
+}

@@ -2850,7 +2850,7 @@ function persistedZoomMenuItem(
     accelerator,
     registerAccelerator,
     click: () => {
-      void updatePersistedWindowZoom(delta).catch((error: unknown) => {
+      void updatePersistedWindowZoom(delta, `menu:${role}`).catch((error: unknown) => {
         createLogger('appearance-settings-menu').error('persisted page zoom update failed', {
           role,
           error: error instanceof Error ? error.message : String(error),
@@ -3646,9 +3646,13 @@ function clampPageZoomFactor(factor: number): number {
   );
 }
 
-function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): number {
+function applyPageZoomLevel(
+  mainWindow: BrowserWindow,
+  nextFactor: number,
+  source = 'main-window:zoom',
+): number {
   const zoomFactor = clampPageZoomFactor(nextFactor);
-  applyAppearanceToWindow(mainWindow, { windowZoom: zoomFactor });
+  applyAppearanceToWindow(mainWindow, { windowZoom: zoomFactor }, source);
   return zoomFactor;
 }
 
@@ -3954,10 +3958,14 @@ const createWindow = () => {
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
   applyMainWindowBackgroundThrottling();
-  applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
+  applyPageZoomLevel(mainWindow, getPersistedWindowZoom(), 'main-window:create');
+  mainWindow.webContents.on('did-start-loading', () => {
+    if (mainWindow.isDestroyed()) return;
+    applyPageZoomLevel(mainWindow, getPersistedWindowZoom(), 'main-window:did-start-loading');
+  });
   mainWindow.webContents.on('did-finish-load', () => {
     if (mainWindow.isDestroyed()) return;
-    applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
+    applyPageZoomLevel(mainWindow, getPersistedWindowZoom(), 'main-window:did-finish-load');
   });
   // Deep link 模块持有同一个 mainWindow 引用 — 解析出的 URL 通过 webContents.send
   // 推给 renderer (channel 'deep-link:navigate')。关窗时同步清空, 避免给已销毁
@@ -5322,7 +5330,10 @@ const registerIpcHandlers = () => {
   });
   ipcMain.handle('page-zoom:in', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await updatePersistedWindowZoom(PAGE_ZOOM_FACTOR_STEP);
+    const settings = await updatePersistedWindowZoom(
+      PAGE_ZOOM_FACTOR_STEP,
+      'renderer:page-zoom:in',
+    );
     return {
       ok: true as const,
       zoomFactor: settings.windowZoom,
@@ -5330,7 +5341,10 @@ const registerIpcHandlers = () => {
   });
   ipcMain.handle('page-zoom:out', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await updatePersistedWindowZoom(-PAGE_ZOOM_FACTOR_STEP);
+    const settings = await updatePersistedWindowZoom(
+      -PAGE_ZOOM_FACTOR_STEP,
+      'renderer:page-zoom:out',
+    );
     return {
       ok: true as const,
       zoomFactor: settings.windowZoom,
@@ -5338,7 +5352,7 @@ const registerIpcHandlers = () => {
   });
   ipcMain.handle('page-zoom:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await updatePersistedWindowZoom(null);
+    const settings = await updatePersistedWindowZoom(null, 'renderer:page-zoom:reset');
     return {
       ok: true as const,
       zoomFactor: settings.windowZoom,

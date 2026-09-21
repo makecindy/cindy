@@ -82,6 +82,7 @@ import {
   artifactBaseName,
   buildBuildInfo,
   debianArch,
+  canSkipLocalSimulatorGate,
 } from './ci/package-lib.mjs';
 import { applyMacSigningConfigToEnv, applyReleaseCdnBaseUrlToEnv } from './ci/release-regions.mjs';
 
@@ -410,6 +411,9 @@ async function finishDarwin({
   const applePassword = noSign ? undefined : process.env.APPLE_APP_PASSWORD;
   const wantsRealSigning = !versionless && !noSign;
   const requireNativeReleaseGate = process.env.CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE === '1';
+  const skipIOSSimulatorReleaseGate =
+    canSkipLocalSimulatorGate({ versionless, noSign, requireNativeReleaseGate,
+      requested: process.env.CINDY_SKIP_IOS_SIMULATOR_RELEASE_GATE === '1' });
   let signingMode = 'adhoc';
 
   if (wantsRealSigning && !applePassword && !allowUnsigned) {
@@ -453,7 +457,10 @@ async function finishDarwin({
     console.log('==> Notarizing...');
     notarizeMacApp(appPath, identity);
     signingMode = 'developer-id+notarized';
-    if (hostCanExecArch(arch)) {
+    if (skipIOSSimulatorReleaseGate) {
+      verifyMacBinaryArch(appName, arch);
+      console.log('==> Skipping optional iOS Simulator release gate (local desktop install)');
+    } else if (hostCanExecArch(arch)) {
       runIOSSimulatorReleaseGate(
         appPath,
         arch,
@@ -505,7 +512,10 @@ async function finishDarwin({
         'CINDY_IOS_SIMULATOR_RELEASE_NATIVE_SMOKE=1 requires a Developer ID signed and notarized package',
       );
     }
-    if (hostCanExecArch(arch)) {
+    if (skipIOSSimulatorReleaseGate) {
+      verifyMacBinaryArch(appName, arch);
+      console.log('==> Skipping optional iOS Simulator release gate (local desktop install)');
+    } else if (hostCanExecArch(arch)) {
       runIOSSimulatorReleaseGate(appPath, arch, 'untrusted');
     } else {
       // cross-architecture 例外:跳过 launch-based gate,仍做 Mach-O arch 门禁。
