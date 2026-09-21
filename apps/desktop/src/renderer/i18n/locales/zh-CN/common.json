@@ -857,6 +857,23 @@
         "secret-chime": "秘密音",
         "custom": "本地文件…",
         "customSelected": "本地文件：{{name}}"
+      },
+      "desktopCompanion": {
+        "title": "桌面互动",
+        "enableLabel": "换系统桌面",
+        "enableHint": "按当前任务、记忆、时间和位置生成 Cindy 桌面。人物只占一角，其余留给图标。先贴静图，再铺循环短视频。",
+        "enableAria": "打开或关闭桌面互动",
+        "locationLabel": "使用当前位置",
+        "locationHint": "向系统申请定位，用大致城市画窗外景。关闭或拒绝后只表现时段。",
+        "locationAria": "打开或关闭桌面位置",
+        "previewAlt": "当前桌面",
+        "lastTopic": "当前：{{topic}}",
+        "empty": "打开后会生成第一张桌面",
+        "updateNow": "立即更新",
+        "updating": "正在生成…",
+        "needImageModel": "先在设置里配置出图模型",
+        "needVideoModel": "先在设置里配置视频模型",
+        "failed": "这次没生成成功，桌面停在上一张"
       }
     },
     "language": {

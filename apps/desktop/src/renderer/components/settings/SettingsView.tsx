@@ -23,6 +23,7 @@ import { WindowBehaviorSection } from './WindowBehaviorSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { AgentIslandSection } from './AgentIslandSection';
+import { DesktopCompanionSection } from './DesktopCompanionSection';
 import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
@@ -603,6 +604,9 @@ export function SettingsView() {
               >
                 <section className="pb-[18px]" aria-label={t('settings.sections.agentIsland')}>
                   <AgentIslandSection />
+                </section>
+                <section className="pb-[18px]" aria-label={t('settings.agentIsland.desktopCompanion.title')}>
+                  <DesktopCompanionSection />
                 </section>
               </div>
             )}

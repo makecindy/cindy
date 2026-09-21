@@ -857,6 +857,23 @@
         "secret-chime": "시크릿 차임",
         "custom": "로컬 파일…",
         "customSelected": "로컬 파일: {{name}}"
+      },
+      "desktopCompanion": {
+        "title": "데스크톱 연동",
+        "enableLabel": "시스템 바탕화면 바꾸기",
+        "enableHint": "현재 작업, 기억, 시간, 위치로 Cindy 바탕화면을 만듭니다. 인물은 한 구석만 차지하고 아이콘 자리를 남깁니다. 정지 이미지를 먼저 적용한 뒤 반복 영상을 깔습니다.",
+        "enableAria": "데스크톱 연동 켜기 또는 끄기",
+        "locationLabel": "현재 위치 사용",
+        "locationHint": "위치 권한을 요청해 대략적인 도시를 창밖 풍경에 씁니다. 끄거나 거부하면 시간대만 반영합니다.",
+        "locationAria": "데스크톱 위치 켜기 또는 끄기",
+        "previewAlt": "현재 바탕화면",
+        "lastTopic": "현재: {{topic}}",
+        "empty": "켜면 첫 바탕화면을 생성합니다",
+        "updateNow": "지금 업데이트",
+        "updating": "생성 중…",
+        "needImageModel": "설정에서 이미지 모델을 먼저 구성하세요",
+        "needVideoModel": "설정에서 비디오 모델을 먼저 구성하세요",
+        "failed": "이번 생성은 끝나지 않았습니다. 이전 바탕화면을 유지합니다"
       }
     },
     "language": {

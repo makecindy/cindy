@@ -857,6 +857,23 @@
         "secret-chime": "秘密音",
         "custom": "本地檔案…",
         "customSelected": "本地檔案：{{name}}"
+      },
+      "desktopCompanion": {
+        "title": "桌面互動",
+        "enableLabel": "更換系統桌面",
+        "enableHint": "依目前任務、記憶、時間和位置生成 Cindy 桌面。人物只佔一角，其餘留給圖示。先貼靜圖，再鋪循環短影片。",
+        "enableAria": "開啟或關閉桌面互動",
+        "locationLabel": "使用目前位置",
+        "locationHint": "向系統申請定位，用大致城市畫窗外景。關閉或拒絕後只表現時段。",
+        "locationAria": "開啟或關閉桌面位置",
+        "previewAlt": "目前桌面",
+        "lastTopic": "目前：{{topic}}",
+        "empty": "開啟後會生成第一張桌面",
+        "updateNow": "立即更新",
+        "updating": "正在生成…",
+        "needImageModel": "請先在設定裡配置出圖模型",
+        "needVideoModel": "請先在設定裡配置影片模型",
+        "failed": "這次沒有生成成功，桌面停在上一張"
       }
     },
     "language": {

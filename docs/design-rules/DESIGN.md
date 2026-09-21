@@ -1341,6 +1341,12 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Constraints**: no animation, shadow, decorative background, additional brand color, enlarged hero treatment, or alternate character composition. This approval identifies the source of an exported Cindy conversation; it is not precedent for adding mascots to cards, dialogs, tool output, or other share-adjacent UI.
 - **Theme boundary**: Light and Dark use their matching wordmark assets. The same static character crop may be used in both modes because it is an exported brand asset, not a UI color surface.
 
+**Sanctioned brand surface — macOS desktop presence (Desktop approved 2026-09-18).**
+
+- **Where**: the operating-system desktop only, after the user turns on Desktop presence in Settings → Agent Island. Generated stills and looping videos use the product-approved Cindy portrait as identity. She occupies about 15% of the frame in a corner; the rest stays empty for Finder icons. This surface is not a Cindy window and is not working UI.
+- **Constraints**: no desktop pet overlay, no click-to-talk character, no mascot in the Cindy app chrome. Reduced Motion keeps the still wallpaper and does not play video.
+- **Scope boundary**: macOS system desktop for this feature only. It is not precedent for artwork in the session stream, settings cards, or other product surfaces.
+
 **Sanctioned brand surface — mobile download dialog (approved 2026-07-25).**
 
 - **Where**: `components/sidebar/MobileDownloadDialog.tsx` only, and only the dialog header icon (64px `resources/icon.png`). This is a promotion surface for the mobile app, so showing the app's own icon is identification, not decoration.

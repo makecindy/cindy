@@ -1110,6 +1110,7 @@ type ApplicationMenuLocale = import('../shared/locale').SupportedLocale;
 type AgentIslandDisplayOption = import('../shared/agentIsland').AgentIslandDisplayOption;
 type AgentIslandDisplayTarget = import('../shared/agentIsland').AgentIslandDisplayTarget;
 type AgentIslandMascotSkin = import('../shared/agentIsland').AgentIslandMascotSkin;
+type DesktopCompanionSnapshot = import('../shared/desktopCompanion').DesktopCompanionSnapshot;
 type AgentIslandSoundChoice = import('../shared/agentIsland').AgentIslandSoundChoice;
 type AgentIslandSoundSettings = import('../shared/agentIsland').AgentIslandSoundSettings;
 type AgentIslandSessionActivity = import('../shared/agentIsland').AgentIslandSessionActivity;
@@ -2075,6 +2076,15 @@ interface ElectronAPI {
     onCloseRequested: (cb: () => void) => () => void;
     onMinimizeRequested: (cb: () => void) => () => void;
     resolveCloseRequest: (approved: boolean) => Promise<void>;
+  };
+
+  desktopCompanion: {
+    getState: () => Promise<DesktopCompanionSnapshot>;
+    getPreview: (filePath: string) => Promise<string>;
+    setEnabled: (enabled: boolean) => Promise<DesktopCompanionSnapshot>;
+    setLocationEnabled: (enabled: boolean) => Promise<DesktopCompanionSnapshot>;
+    refresh: () => Promise<DesktopCompanionSnapshot>;
+    onState: (cb: (snapshot: DesktopCompanionSnapshot) => void) => () => void;
   };
 
   agentIsland: {
