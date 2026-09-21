@@ -92,9 +92,11 @@ function TurnChangeFileRow({
 }
 
 export function TurnChangesCard({
+  renderItemKey,
   sessionId,
   changeSet,
 }: {
+  renderItemKey?: string;
   sessionId: string;
   changeSet: TurnChangeSetSummary;
 }) {
@@ -176,7 +178,7 @@ export function TurnChangesCard({
   };
 
   return (
-    <section className="my-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+    <section data-render-item-key={renderItemKey} className="my-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
       <div className="flex min-h-16 items-center gap-3 px-4 py-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-secondary)]">
           <FileDiff size={18} />

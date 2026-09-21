@@ -7,6 +7,7 @@
   },
   "common": {
     "cancel": "取消",
+    "dismissRecommendation": "关闭推荐",
     "delete": "删除",
     "openContextPanel": "打开上下文面板",
     "groupMode": "模式",
@@ -356,6 +357,7 @@
     "worktreeCleanupPending": "上一次 worktree 仍待回收，请重新连接设备后再试。"
   },
   "menu": {
+    "details": "任务详情",
     "chipPinned": "已置顶",
     "chipArchived": "已归档",
     "chipReadOnly": "只读",
@@ -418,7 +420,6 @@
       "today": "今日已用",
       "unavailable": "暂未获取",
       "quotaUnavailable": "暂未获取账号配额",
-      "accountOnly": "ChatGPT 账号配额，未确认本任务使用此套餐",
       "lastUpdated": "上次更新 {{time}}",
       "taskUsage": "本任务用量",
       "taskValue": "本任务价值",

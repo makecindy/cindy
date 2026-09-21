@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
-import { cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 import { projectHash } from '../lib/projectHash';
 
 const mocks = vi.hoisted(() => ({
-  sessions: [] as Session[], loading: true, syncProjects: vi.fn(),
-  state: { skills: [], syncResults: new Map(), bootstrapped: false },
+  mode: 'local', sessions: [] as Session[], loading: true, syncProjects: vi.fn(),
+  state: { skills: [] as SkillhubSkill[], syncResults: new Map<string, SkillhubSyncResult>(), bootstrapped: false },
 }));
 vi.mock('@/hooks/useCCSessions', () => ({ useCCSessions: () => ({ sessions: mocks.sessions, isLoading: mocks.loading }) }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'local', mode: 'local' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'local', mode: mocks.mode }) }));
 vi.mock('@/features/cc-agent/useRegisterCCAgentSidebar', () => ({ useRegisterCCAgentSidebar: vi.fn() }));
 vi.mock('../hooks/useSkillSync', () => ({ useSkillSync: vi.fn() }));
 vi.mock('../hooks/useSkillhub', () => ({
@@ -51,4 +51,27 @@ it('keeps pinned and newly created local project directories in the scan catalog
   mocks.sessions = mocks.sessions.map((item) => ({ ...item, pinnedAt: null }));
   rerender();
   expect(mocks.syncProjects.mock.lastCall![0]).toEqual(projects);
+});
+
+
+it.each(['google-play-console-local', 'Google-Play-Console'])('reconciles the registered slug and catalog for folder %s', async (name) => {
+  mocks.mode = 'cloud';
+  mocks.state.bootstrapped = true;
+  const slug = 'google-play-console';
+  const { skillhubCatalogKey } = await import('../../../../shared/skillhubCatalog');
+  const reconcileMineRegistry = vi.fn().mockResolvedValue({ success: true, added: 0, flipped: 0, failures: [] });
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { skillhub: { reconcileMineRegistry } } });
+  mocks.state.skills = [{ kind: 'skill', name, registrySkillName: slug, absolutePath: `/skills/${name}`,
+    registryEntry: { catalogScope: 'market', version: '1.0.0' } } as SkillhubSkill];
+  mocks.state.syncResults = new Map([
+    [skillhubCatalogKey(slug, 'market'), { exists: true, isMine: true, authorId: 'publisher', latestVersion: '2.0.0' } as SkillhubSyncResult],
+    [skillhubCatalogKey(slug, 'team'), { exists: true, isMine: true, authorId: 'other-publisher', latestVersion: '3.0.0' } as SkillhubSyncResult],
+  ]);
+  const hook = renderHook(useSkillhubStoreSync);
+  await waitFor(() => expect(reconcileMineRegistry).toHaveBeenCalledExactlyOnceWith([
+    { name: slug, absolutePath: `/skills/${name}`, authorId: 'publisher', version: '2.0.0' },
+  ]));
+  await act(async () => hook.rerender());
+  expect(reconcileMineRegistry).toHaveBeenCalledTimes(1);
+  mocks.mode = 'local';
 });

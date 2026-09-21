@@ -93,8 +93,56 @@ export function classifyDesignLayer({ member, layer, radius, evidence = false })
     : { classification: 'registered-value-violation', reason: `${member}: this visible layer requires ${expected} at all four corners (DESIGN §5).` };
 }
 
+/** `className`-bearing attributes are the literal style context this reporter
+ * recognises. A palette-shaped token anywhere else in the source — help text,
+ * test data, diagnostics prose — is not a class candidate, so reporting it
+ * would only add audit noise. Spans cover the quoted value and the whole
+ * balanced braced expression (cn()/ternaries included); string-aware brace
+ * counting keeps arbitrary values like rounded-[4px] from ending the span.
+ * Unparseable attributes fail closed: nothing inside becomes a candidate. */
+function classNameValueSpans(source) {
+  const spans = [];
+  const attribute = /\b[\w$]*[Cc]lassName\s*=\s*(?:"|'|\{)|\bclass\s*=\s*(?:"|')/g;
+  for (const match of source.matchAll(attribute)) {
+    const open = match[0][match[0].length - 1];
+    const start = match.index + match[0].length;
+    if (open === '{') {
+      let depth = 1, quote = '';
+      for (let i = start; i < source.length; i++) {
+        const char = source[i];
+        if (quote) {
+          if (char === '\\') i++;
+          else if (char === quote) quote = '';
+          continue;
+        }
+        if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
+        if (char === '{') depth++;
+        else if (char === '}' && --depth === 0) { spans.push([start, i]); break; }
+      }
+    } else {
+      const close = source.indexOf(open, start);
+      if (close >= 0) spans.push([start, close]);
+    }
+  }
+  return spans;
+}
+
 export function reportDesignLayers(file, source, changed, locate, spacingVariables) {
   const findings = [];
+  // Candidate reporting only: a palette utility is not proof of its rendered
+  // role. Leave dynamic classes, CSS named values and exemptions to review.
+  const paletteUtility = /(?<![\w-])(?:bg|text|border|ring|fill|stroke|outline|decoration|shadow)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-(?:50|[1-9]00|950)(?:\/(?:\d+|\[[^\]\n]+\]))?(?![\w-])/g;
+  const classSpans = classNameValueSpans(source);
+  for (const match of source.matchAll(paletteUtility)) {
+    if (!classSpans.some(([start, end]) => match.index >= start && match.index < end)) continue;
+    const pos = locate(match.index);
+    if (!changed.has(pos.line)) continue;
+    findings.push({ file, ...pos, rule: 'named-palette-candidate', value: match[0], disposition: 'report',
+      classification: 'palette-utility',
+      reason: 'Literal Tailwind palette utility; candidate only, verify rendered role and registered exceptions.',
+      suggestion: 'Use the matching semantic theme role on a production surface; preserve sanctioned content and legacy overrides. This report does not add blocking scope.',
+    });
+  }
   const patterns = /\brounded(?:-(?:\[[^\]\n]+\]|[\w-]+))?|\bborder(?:-radius|Radius)\s*:\s*[^;,}\n]+|\b(?:[pm][xytrblse]?|gap(?:-[xy])?|space-[xy])-\[[^\]\n]+\]/g;
   for (const match of source.matchAll(patterns)) {
     const pos = locate(match.index);

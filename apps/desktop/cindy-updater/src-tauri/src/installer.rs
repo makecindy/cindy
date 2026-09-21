@@ -9,6 +9,10 @@ use sysinfo::System;
 use crate::args::{CliArgs, ThemeArg};
 use crate::{logger, pid_wait};
 
+#[cfg(test)]
+#[path = "retry_tests.rs"]
+mod retry_tests;
+
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -32,7 +36,11 @@ pub enum InstallerEvent {
     Phase(Phase, String),
     Progress(Phase, String, i32),
     Done,
-    Failed(String),
+    Failed {
+        error: String,
+        can_retry: bool,
+        relaunch_on_close: bool,
+    },
 }
 
 const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -51,18 +59,200 @@ const LAUNCH_VERIFY_TIMEOUT: Duration = Duration::from_secs(3);
 const LAUNCH_VERIFY_POLL: Duration = Duration::from_millis(100);
 
 pub fn run<F: FnMut(InstallerEvent)>(args: CliArgs, mut emit: F) {
-    match run_inner(&args, &mut emit) {
+    let mut attempt = AttemptState::default();
+    match run_inner(&args, &mut attempt, &mut emit) {
         Ok(()) => emit(InstallerEvent::Done),
         Err(err) => {
             logger::error(format!("[installer] FAILED: {err}"));
-            let _ = fs::remove_file(&args.lock);
-            emit(InstallerEvent::Failed(err.to_string()));
+            let can_retry = finish_failed_attempt(&args, &attempt);
+            if attempt.lock_written {
+                let _ = fs::remove_file(&args.lock);
+            }
+            emit(InstallerEvent::Failed {
+                error: err.to_string(),
+                can_retry,
+                relaunch_on_close: attempt.app_stopped && !attempt.rollback_failed,
+            });
         }
     }
 }
 
+/// Facts needed after failure: only a failed rollback makes the install unsafe
+/// to retry or restart. The ordinary install/elevation path stays unchanged.
+#[derive(Default)]
+struct AttemptState {
+    app_stopped: bool,
+    rollback_failed: bool,
+    invalid_archive: bool,
+    lock_written: bool,
+}
+
+pub(crate) fn retry_archive(args: &CliArgs) -> std::path::PathBuf {
+    args.workdir.join("retry.zip")
+}
+
+pub(crate) fn retry_available(zip: &Path) -> bool {
+    File::open(zip)
+        .and_then(|file| file.metadata())
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+/// Keep retry inputs in Rust. The original PID may have been reused while the
+/// failure window was open, so a manual retry checks install-dir processes.
+pub(crate) fn retry_args(args: &CliArgs) -> CliArgs {
+    CliArgs {
+        zip: retry_archive(args),
+        pid: 0,
+        ..args.clone()
+    }
+}
+
+pub(crate) fn ensure_retry_processes_closed(args: &CliArgs) -> Result<(), String> {
+    let mut sys = System::new();
+    let processes = collect_appdir_processes(&mut sys, &args.app_dir, std::process::id());
+    ensure_no_other_updater(args, &sys)?;
+    if processes.is_empty() {
+        Ok(())
+    } else {
+        Err("processes_running".into())
+    }
+}
+
+/// A second updater runs from TEMP, so the install-directory scan misses it.
+/// Check its executable identity even while it is waiting for PID exit or UAC.
+/// Do not read another process's command line or change its permissions.
+fn ensure_no_other_updater(args: &CliArgs, sys: &System) -> Result<(), String> {
+    let current_exe = std::env::current_exe().ok();
+    let another_updater = sys.processes().iter().any(|(pid, process)| {
+        pid.as_u32() != std::process::id()
+            && is_other_updater(
+                &process.name().to_string_lossy(),
+                process.exe(),
+                current_exe.as_deref(),
+            )
+    });
+    if args.lock.exists() || another_updater {
+        Err("updater_busy".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn is_other_updater(name: &str, exe: Option<&Path>, current_exe: Option<&Path>) -> bool {
+    // The UAC parent and child briefly coexist at the same executable path.
+    if let (Some(exe), Some(current)) = (exe, current_exe) {
+        if path_is_within(exe, current) {
+            return false;
+        }
+    }
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    ["cindy-updater", "xdt-updater"].iter().any(|prefix| {
+        name == *prefix
+            || name.strip_prefix(prefix).is_some_and(|suffix| {
+                suffix.strip_prefix('-').is_some_and(|timestamp| {
+                    !timestamp.is_empty() && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            })
+    })
+}
+
+fn staging_dirs(args: &CliArgs) -> (std::path::PathBuf, std::path::PathBuf) {
+    let ts = workdir_ts(&args.workdir);
+    (
+        args.workdir.join(format!("cindy-update-extract-{ts}")),
+        args.workdir.join(format!("cindy-update-rollback-{ts}")),
+    )
+}
+
+/// Isolate the failed package from Electron's automatic apply location.
+/// Use create_new for the cross-volume copy so an existing retry is not replaced.
+fn prepare_retry_archive(args: &CliArgs) -> io::Result<()> {
+    let target = retry_archive(args);
+    if args.zip == target {
+        return Ok(());
+    }
+    if target.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "retry archive exists",
+        ));
+    }
+    match fs::rename(&args.zip, &target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(if cfg!(windows) { 17 } else { 18 }) => {
+            let mut source = File::open(&args.zip)?;
+            let mut dest = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)?;
+            let result = io::copy(&mut source, &mut dest).and_then(|_| dest.sync_all());
+            drop(dest);
+            drop(source);
+            let result = result.and_then(|_| fs::remove_file(&args.zip));
+            if result.is_err() {
+                let _ = fs::remove_file(&target);
+            }
+            result
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn finish_failed_attempt(args: &CliArgs, attempt: &AttemptState) -> bool {
+    let (extract_dir, backup_dir) = staging_dirs(args);
+    let _ = fs::remove_dir_all(&extract_dir);
+    if !attempt.rollback_failed {
+        let _ = fs::remove_dir_all(&backup_dir);
+    }
+    if !attempt.rollback_failed && !attempt.invalid_archive {
+        match prepare_retry_archive(args) {
+            Ok(()) if retry_available(&retry_archive(args)) => return true,
+            Ok(()) => {}
+            Err(error) => logger::warn(format!("[retry] could not retain archive: {error}")),
+        }
+    }
+    // A bad archive or an inconsistent install must not be auto-applied again.
+    let _ = fs::remove_file(&args.zip);
+    let _ = fs::remove_file(retry_archive(args));
+    false
+}
+
+/// Called once when the user leaves the failure window. A running Cindy is
+/// left alone; otherwise use the same detached launch as the original updater.
+pub(crate) fn abandon_retry(args: &CliArgs, relaunch: bool) {
+    if let Err(error) = abandon_retry_with(args, relaunch, launch_detached) {
+        logger::warn(format!("[installer] relaunch of old exe failed: {error}"));
+    }
+}
+
+fn abandon_retry_with(
+    args: &CliArgs,
+    relaunch: bool,
+    launch: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let _ = fs::remove_file(retry_archive(args));
+    if relaunch {
+        let mut sys = System::new();
+        let processes = collect_appdir_processes(&mut sys, &args.app_dir, std::process::id());
+        if ensure_no_other_updater(args, &sys).is_err() {
+            return Ok(());
+        }
+        let app_running = processes
+            .iter()
+            .any(|(_, name)| name.eq_ignore_ascii_case(&args.exe_name));
+        let exe = args.app_dir.join(&args.exe_name);
+        if !app_running && exe.exists() {
+            launch(&exe)?;
+        }
+    }
+    Ok(())
+}
+
 fn run_inner<F: FnMut(InstallerEvent)>(
     args: &CliArgs,
+    attempt: &mut AttemptState,
     emit: &mut F,
 ) -> anyhow::Result<()> {
     logger::info(format!(
@@ -78,10 +268,12 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         Phase::Waiting,
         format!("等待 PID {} 退出…", args.pid),
     ));
-    let exited = pid_wait::wait_for_exit(args.pid, PID_WAIT_TIMEOUT);
+    let is_retry = args.zip == retry_archive(args);
+    let exited = is_retry || pid_wait::wait_for_exit(args.pid, PID_WAIT_TIMEOUT);
     if !exited {
         anyhow::bail!("主程序在 60 秒内没有退出，更新中止");
     }
+    attempt.app_stopped = true;
     std::thread::sleep(FS_SETTLE_DELAY);
 
     // 1.2. Terminate lingering processes that run FROM app_dir. pid_wait only
@@ -92,7 +284,16 @@ fn run_inner<F: FnMut(InstallerEvent)>(
     //      that survives app exit and made both the replace AND the rollback
     //      fail with os error 32 (sharing violation). Windows never allows
     //      overwriting a running executable, so these must be gone first.
-    terminate_appdir_processes(&args.app_dir, emit)?;
+    if is_retry {
+        if let Err(error) = ensure_retry_processes_closed(args) {
+            // This attempt never took over; Close must not restart Cindy while
+            // another updater may be replacing it. Leave that updater's lock alone.
+            attempt.app_stopped = false;
+            return Err(anyhow::Error::msg(error));
+        }
+    } else {
+        terminate_appdir_processes(&args.app_dir, emit)?;
+    }
 
     // 1.5. Permission probe → optional self-elevation. Run BEFORE the lock
     //      write so cancelling UAC leaves zero on-disk state. If app_dir is
@@ -156,21 +357,38 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         let _ = fs::create_dir_all(parent);
     }
     fs::write(&args.lock, b"updating")?;
+    attempt.lock_written = true;
 
     // 3. Extract zip into a subdir of workdir. Child dirs preserve the
     //    parent's `{ts}` suffix so a copy-out for support still carries the
     //    attempt timestamp regardless of whether the parent context survives.
-    let ts = workdir_ts(&args.workdir);
-    let extract_dir = args.workdir.join(format!("cindy-update-extract-{ts}"));
+    let (extract_dir, backup_dir) = staging_dirs(args);
+    // A retry rebuilds both snapshots; never reuse partially extracted files.
+    remove_staging_dir(&extract_dir)?;
+    remove_staging_dir(&backup_dir)?;
     fs::create_dir_all(&extract_dir)?;
     logger::info(format!("[installer] extract_dir={}", extract_dir.display()));
     extract_zip(&args.zip, &extract_dir, |done, total| {
-        let pct = if total == 0 { -1 } else { (done * 100 / total).min(100) as i32 };
+        let pct = if total == 0 {
+            -1
+        } else {
+            (done * 100 / total).min(100) as i32
+        };
         emit(InstallerEvent::Progress(
             Phase::Extracting,
             format!("解压中 {}/{}", done, total),
             pct,
         ));
+    })
+    .map_err(|error| {
+        attempt.invalid_archive = matches!(
+            error.downcast_ref::<zip::result::ZipError>(),
+            Some(
+                zip::result::ZipError::InvalidArchive(_)
+                    | zip::result::ZipError::UnsupportedArchive(_)
+            )
+        );
+        error
     })?;
 
     // 3.5. Selective backup: copy *only* the files in app_dir that the new
@@ -182,11 +400,14 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         Phase::BackingUp,
         "备份当前版本…".into(),
     ));
-    let backup_dir = args.workdir.join(format!("cindy-update-rollback-{ts}"));
     fs::create_dir_all(&backup_dir)?;
     logger::info(format!("[installer] backup_dir={}", backup_dir.display()));
     snapshot_overwritten_files(&extract_dir, &args.app_dir, &backup_dir, |done, total| {
-        let pct = if total == 0 { -1 } else { (done * 100 / total).min(100) as i32 };
+        let pct = if total == 0 {
+            -1
+        } else {
+            (done * 100 / total).min(100) as i32
+        };
         emit(InstallerEvent::Progress(
             Phase::BackingUp,
             format!("备份 {}/{}", done, total),
@@ -194,12 +415,44 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         ));
     })?;
 
+    replace_and_launch(args, &extract_dir, &backup_dir, attempt, emit, |exe_path| {
+        launch_detached(exe_path)?;
+        if !poll_until_process_running(&args.exe_name, LAUNCH_VERIFY_TIMEOUT) {
+            anyhow::bail!(
+                "新进程 {} 在启动 {} 秒后未出现，可能被杀软拦截或新可执行文件损坏",
+                args.exe_name,
+                LAUNCH_VERIFY_TIMEOUT.as_secs()
+            );
+        }
+        Ok(())
+    })
+}
+
+/// File replacement and rollback share the original transaction. Inject only
+/// the launch/verification step so tests can exercise real files without
+/// starting or stopping the developer's installed Cindy.
+fn replace_and_launch<F, L>(
+    args: &CliArgs,
+    extract_dir: &Path,
+    backup_dir: &Path,
+    attempt: &mut AttemptState,
+    emit: &mut F,
+    launch: L,
+) -> anyhow::Result<()>
+where
+    F: FnMut(InstallerEvent),
+    L: FnOnce(&Path) -> anyhow::Result<()>,
+{
     // 4–6. The risky window: replace files, drop lock, launch, verify.
     //      Wrapped so any failure triggers rollback before bubbling out.
     let install_result: anyhow::Result<()> = (|| {
         // 4. Copy new files over app_dir.
         copy_tree(&extract_dir, &args.app_dir, |done, total| {
-            let pct = if total == 0 { -1 } else { (done * 100 / total).min(100) as i32 };
+            let pct = if total == 0 {
+                -1
+            } else {
+                (done * 100 / total).min(100) as i32
+            };
             emit(InstallerEvent::Progress(
                 Phase::Replacing,
                 format!("替换 {}/{}", done, total),
@@ -213,33 +466,15 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         // 6. Verify exe exists, launch detached, verify it actually came up.
         let exe_path = args.app_dir.join(&args.exe_name);
         if !exe_path.exists() {
-            anyhow::bail!(
-                "新版本主程序缺失：{} 在替换后不存在",
-                exe_path.display()
-            );
+            anyhow::bail!("新版本主程序缺失：{} 在替换后不存在", exe_path.display());
         }
         emit(InstallerEvent::Phase(
             Phase::Launching,
             "启动新版本…".into(),
         ));
-        launch_detached(&exe_path)?;
-        if !poll_until_process_running(&args.exe_name, LAUNCH_VERIFY_TIMEOUT) {
-            anyhow::bail!(
-                "新进程 {} 在启动 {} 秒后未出现，可能被杀软拦截或新可执行文件损坏",
-                args.exe_name,
-                LAUNCH_VERIFY_TIMEOUT.as_secs()
-            );
-        }
+        launch(&exe_path)?;
         Ok(())
     })();
-
-    // Staging dirs (extract + zip) are ALWAYS cleaned regardless of outcome —
-    // they're never useful for recovery. The backup dir survives only if the
-    // rollback itself failed (last-resort manual recovery).
-    let cleanup_staging = || {
-        let _ = fs::remove_dir_all(&extract_dir);
-        let _ = fs::remove_file(&args.zip);
-    };
 
     match install_result {
         Ok(()) => {
@@ -247,8 +482,14 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                 "[installer] LAUNCH VERIFIED: {} is running",
                 args.exe_name
             ));
+            // Best-effort metadata only, outside the file replacement/rollback
+            // transaction. Reuse existing elevation for HKLM, never request it.
+            if let Some(key) = installation_version_key(args) {
+                crate::installation_version::sync(&args.app_dir.join(&args.exe_name), &key);
+            }
             let _ = fs::remove_dir_all(&backup_dir);
-            cleanup_staging();
+            let _ = fs::remove_dir_all(&extract_dir);
+            let _ = fs::remove_file(&args.zip);
             Ok(())
         }
         Err(install_err) => {
@@ -258,7 +499,11 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                 "更新失败，正在回滚到旧版本…".into(),
             ));
             match rollback(&backup_dir, &args.app_dir, |done, total| {
-                let pct = if total == 0 { -1 } else { (done * 100 / total).min(100) as i32 };
+                let pct = if total == 0 {
+                    -1
+                } else {
+                    (done * 100 / total).min(100) as i32
+                };
                 emit(InstallerEvent::Progress(
                     Phase::RollingBack,
                     format!("回滚 {}/{}", done, total),
@@ -267,26 +512,8 @@ fn run_inner<F: FnMut(InstallerEvent)>(
             }) {
                 Ok(()) => {
                     logger::info("[installer] rollback succeeded");
-                    let _ = fs::remove_dir_all(&backup_dir);
-                    cleanup_staging();
-                    // Best-effort relaunch of the (now restored) old exe so
-                    // the user isn't left without the app after a failed
-                    // update. If it fails to start, the Failed UI still
-                    // tells them what happened.
-                    let exe_path = args.app_dir.join(&args.exe_name);
-                    if exe_path.exists() {
-                        if let Err(e) = launch_detached(&exe_path) {
-                            logger::warn(format!(
-                                "[installer] relaunch of old exe after rollback failed: {e}"
-                            ));
-                        } else {
-                            logger::info(format!(
-                                "[installer] relaunched old exe at {}",
-                                exe_path.display()
-                            ));
-                        }
-                    }
-                    let _ = fs::remove_file(&args.lock);
+                    // Keep Cindy closed while Retry is available. The user can
+                    // retry immediately, or Close to launch the restored app.
                     anyhow::bail!("{} (已回滚到旧版本)", install_err)
                 }
                 Err(rb_err) => {
@@ -294,10 +521,9 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                         "[installer] ROLLBACK ALSO FAILED: {rb_err} — appDir is now in an inconsistent state, see {}",
                         backup_dir.display()
                     ));
-                    // KEEP backup_dir — user / support may need to manually
-                    // restore. Staging is still cleaned (it's never useful
-                    // for recovery, only the backup is).
-                    cleanup_staging();
+                    // This backup is the only recovery copy. Do not offer Retry
+                    // or restart the app from a partially restored directory.
+                    attempt.rollback_failed = true;
                     anyhow::bail!(
                         "{} (回滚也失败：{}；备份保留在 {} 供手动恢复)",
                         install_err,
@@ -307,6 +533,13 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                 }
             }
         }
+    }
+}
+
+fn remove_staging_dir(path: &Path) -> io::Result<()> {
+    match fs::remove_dir_all(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
     }
 }
 
@@ -447,17 +680,20 @@ fn snapshot_overwritten_files<F: FnMut(u64, u64)>(
 /// Reverse of `snapshot_overwritten_files`: copy every file in `backup_dir`
 /// back over `app_dir`. Any new files added by the failed install remain as
 /// orphans in app_dir — harmless, the next clean install would remove them
-/// — but the originals are restored so the old version still works.
+/// — but the originals are restored so the old version still works. Backup
+/// walk errors fail this function so callers keep the backup and disable retry.
 fn rollback<F: FnMut(u64, u64)>(
     backup_dir: &Path,
     app_dir: &Path,
     mut on_progress: F,
 ) -> anyhow::Result<()> {
-    let entries: Vec<_> = walkdir::WalkDir::new(backup_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .collect();
+    let mut entries = Vec::new();
+    for entry in walkdir::WalkDir::new(backup_dir) {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            entries.push(entry);
+        }
+    }
     let total = entries.len() as u64;
     on_progress(0, total);
 
@@ -903,8 +1139,38 @@ fn build_elevation_arg_string(args: &CliArgs) -> String {
         out.push(' ');
         out.push_str(&quote_cmdline_arg(v));
     }
+    // ShellExecute(runas) need not preserve the caller's environment. This is
+    // self-reentry into the same binary, so the optional flag is supported.
+    if let Some(key) = installation_version_key(args) {
+        out.push_str(" --install-key ");
+        out.push_str(&quote_cmdline_arg(&key));
+    }
     out.push_str(" --elevated");
     out
+}
+
+fn installation_version_key(args: &CliArgs) -> Option<String> {
+    args.install_key.clone().or_else(|| std::env::var("CINDY_VERSION_SYNC_KEY").ok())
+}
+
+#[cfg(test)]
+mod version_metadata_args_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn legacy_launchers_work_and_elevation_preserves_optional_install_key() {
+        let mut args = CliArgs::try_parse_from([
+            "updater", "--zip", "patch.zip", "--app-dir", "app", "--exe-name",
+            "Cindy.exe", "--pid", "123", "--log", "update.log", "--lock", "lock",
+            "--workdir", "temp",
+        ]).unwrap();
+        assert!(args.install_key.is_none());
+        args.install_key = Some("5a59f1e9-8f21-5646-8eed-e6da4126bb5c".into());
+        assert!(build_elevation_arg_string(&args).ends_with(
+            "--install-key 5a59f1e9-8f21-5646-8eed-e6da4126bb5c --elevated"
+        ));
+    }
 }
 
 /// CommandLineToArgvW-compatible quoting. Required because ShellExecuteExW

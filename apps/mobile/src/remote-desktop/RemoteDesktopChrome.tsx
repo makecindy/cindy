@@ -6,7 +6,13 @@ import {
   SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react-native";
-import { AllWindowsIcon, ShowDesktopIcon } from "./RemoteDesktopIcons";
+import {
+  AllWindowsIcon,
+  ShowDesktopIcon,
+  WorkspaceLeftIcon,
+  WorkspaceRightIcon,
+  OmarchyMenuIcon,
+} from "./RemoteDesktopIcons";
 import { RemoteDesktopPanelButton } from "./RemoteDesktopPanelButton";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
@@ -31,6 +37,9 @@ export function RemoteDesktopToolbar({
   onDesktop,
   onKeyboard,
   onOperations,
+  onWorkspaceLeft,
+  onWorkspaceRight,
+  onOmarchyMenu,
 }: {
   landscape: boolean;
   canControl: boolean;
@@ -40,6 +49,9 @@ export function RemoteDesktopToolbar({
   onDesktop(): void;
   onKeyboard(): void;
   onOperations(): void;
+  onWorkspaceLeft?: () => void;
+  onWorkspaceRight?: () => void;
+  onOmarchyMenu?: () => void;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -52,17 +64,27 @@ export function RemoteDesktopToolbar({
     disabled?: boolean;
   }> = [
     {
-      key: "allWindows",
-      icon: AllWindowsIcon,
-      press: onWindows,
+      key: onWorkspaceLeft ? "workspaceLeft" : "allWindows",
+      icon: onWorkspaceLeft ? WorkspaceLeftIcon : AllWindowsIcon,
+      press: onWorkspaceLeft ?? onWindows,
       disabled: !canControl,
     },
     {
-      key: "showDesktop",
-      icon: ShowDesktopIcon,
-      press: onDesktop,
+      key: onWorkspaceRight ? "workspaceRight" : "showDesktop",
+      icon: onWorkspaceRight ? WorkspaceRightIcon : ShowDesktopIcon,
+      press: onWorkspaceRight ?? onDesktop,
       disabled: !canControl,
     },
+    ...(onOmarchyMenu
+      ? [
+          {
+            key: "omarchyMenu",
+            icon: OmarchyMenuIcon,
+            press: onOmarchyMenu,
+            disabled: !canControl,
+          },
+        ]
+      : []),
     {
       key: "keyboard",
       icon: Keyboard,
@@ -126,9 +148,12 @@ export function RemoteDesktopPanel({
   page,
   children,
   footer,
+  visible = true,
 }: {
   landscape: boolean;
   topInset: number;
+  toolbarOnLeft?: boolean;
+  toolbarActionCount?: number;
   title: string;
   caption: string;
   onClose(): void;
@@ -136,10 +161,12 @@ export function RemoteDesktopPanel({
   page?: string;
   children: ReactNode;
   footer?: ReactNode;
+  visible?: boolean;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  if (!visible) return null;
   return (
     <View
       style={StyleSheet.absoluteFill}
@@ -178,10 +205,7 @@ export function RemoteDesktopPanel({
               {caption}
             </Text>
           </View>
-          <RemoteDesktopPanelButton
-            label={t("remoteDesktop.close")}
-            onPress={onClose}
-          />
+          <View style={styles.close} />
         </View>
         <ScrollView
           key={page}

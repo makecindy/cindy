@@ -35,6 +35,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { DialogueDirectorySection } from './DialogueDirectorySection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -250,6 +251,8 @@ export function StorageManagementCard() {
           </p>
         </div>
       </div>
+
+      <DialogueDirectorySection />
 
       {/* 占用总览 */}
       <div
@@ -1295,12 +1298,12 @@ function CardButton({
       disabled={disabled}
       aria-busy={busy || undefined}
       className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-12 font-medium transition-colors',
+        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-12 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         'border border-[var(--settings-theme-card-border)]',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        'disabled:cursor-default disabled:opacity-60',
         emphasis
-          ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] border-transparent hover:opacity-90'
-          : 'text-[var(--settings-section-title)] hover:bg-[var(--settings-theme-card-border)]/40',
+          ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] border-transparent enabled:hover:opacity-90'
+          : 'text-[var(--settings-section-title)] enabled:hover:bg-[var(--settings-theme-card-border)]/40',
       )}
     >
       {children}

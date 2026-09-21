@@ -14,6 +14,7 @@ const harness = vi.hoisted(() => ({
     generation: 1,
   },
   boundaryPending: false,
+  navigated: false,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => unknown>(),
   send: vi.fn(),
@@ -87,6 +88,8 @@ vi.mock('../logger.js', () => ({
 
 vi.mock('../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: (...args: unknown[]) => harness.assertTrusted(...args),
+  isTrustedAppRendererWindow: (w: { appContent?: boolean; isDestroyed: () => boolean }) =>
+    w.appContent === true && !w.isDestroyed() && !harness.navigated,
 }));
 
 vi.mock('../windowFocusClassifier.js', () => ({
@@ -172,6 +175,7 @@ describe('sidebarSettingsStore', () => {
     harness.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-sidebar-owner-state-'));
     harness.session = { mode: 'cloud', dataOwnerId: 'owner-a', generation: 1 };
     harness.boundaryPending = false;
+    harness.navigated = false;
     harness.handlers.clear();
     harness.listeners.clear();
     harness.send.mockReset();
@@ -197,6 +201,39 @@ describe('sidebarSettingsStore', () => {
 
   afterEach(() => {
     fs.rmSync(harness.root, { recursive: true, force: true });
+  });
+
+  it('restores a local project through the host entry with platform identity and owner fencing', async () => {
+    const { restoreLocalProjectVisibility } = await import('../sidebarSettingsStore');
+    await hiddenHandler(request({ projectKey: 'C:/workspace/Alpha', hidden: true }));
+    const owner = request({});
+    expect(await restoreLocalProjectVisibility('c:/WORKSPACE/alpha', owner)).toBe(true);
+    expect(loadSnapshot().hiddenProjectKeys).toEqual([]);
+    expect(harness.send).toHaveBeenLastCalledWith(
+      'sidebar-settings:hidden-project-keys-changed',
+      [],
+      owner,
+    );
+    expect(await restoreLocalProjectVisibility('C:/workspace/Alpha', owner)).toBe(false);
+    setSession('cloud', 'owner-b');
+    await expect(restoreLocalProjectVisibility('C:/workspace/Alpha', owner)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+  });
+
+  it('does not send project paths after an app window navigates away', async () => {
+    const { restoreLocalProjectVisibility } = await import('../sidebarSettingsStore');
+    await hiddenHandler(request({ projectKey: 'C:/workspace/Alpha', hidden: true }));
+    expect(harness.send).toHaveBeenCalled();
+    harness.send.mockClear();
+    harness.sendSecond.mockClear();
+    harness.navigated = true;
+    await restoreLocalProjectVisibility('C:/workspace/Alpha', request({}));
+    await hiddenHandler(request({ projectKey: 'C:/workspace/Alpha', hidden: true }));
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
+    expect(harness.untrustedSend).not.toHaveBeenCalled();
+    expect(harness.destroyedSend).not.toHaveBeenCalled();
   });
 
   it('isolates pinned and hidden state by owner', async () => {
@@ -656,9 +693,7 @@ describe('sidebarSettingsStore', () => {
       'utf-8',
     );
 
-    const writing = mainViewHiddenHandler(
-      request({ ghostId: 'xd-sites', hidden: true }),
-    );
+    const writing = mainViewHiddenHandler(request({ ghostId: 'xd-sites', hidden: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     setSession('cloud', 'owner-a');
     fs.unlinkSync(`${file}.lock`);

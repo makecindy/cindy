@@ -22,6 +22,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { AlertTriangle, Check, ChevronDown, CircleHelp, Minus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
@@ -642,31 +643,21 @@ export function ModelAdvancedDrawer({
                       title={t('settings.providers.models.advanced.defaultEffort')}
                       hint={t('settings.providers.models.advanced.defaultEffortHint')}
                     >
-                      <div className="mt-1 flex flex-wrap gap-1 rounded-2xl border border-[var(--settings-theme-card-border)] p-[3px]">
-                        {shownEfforts.map((effort) => {
-                          const available = efforts.includes(effort);
-                          const active = currentEffort === effort;
-                          return (
-                            <button
-                              key={effort}
-                              type="button"
-                              disabled={!available || paymentRequired}
-                              aria-pressed={active}
-                              onClick={() => applyEffort(effort)}
-                              className={cn(
-                                'flex-1 rounded-full py-1 text-12 transition-colors',
-                                active
-                                  ? 'bg-[var(--settings-menu-bg-hover)] text-[var(--text-primary)]'
-                                  : available
-                                    ? 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                    : 'cursor-not-allowed text-[var(--text-tertiary)] opacity-45',
-                              )}
-                            >
-                              {t(`effortLevels.${effort}`)}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <SegmentedControl
+                        className="mt-1"
+                        fullWidth
+                        height={32}
+                        optionHeight={24}
+                        aria-label={t('settings.providers.models.advanced.defaultEffort')}
+                        value={shownEfforts.find((effort) => effort === currentEffort) ?? null}
+                        onValueChange={applyEffort}
+                        disabled={paymentRequired}
+                        options={shownEfforts.map((effort) => ({
+                          value: effort,
+                          label: t(`effortLevels.${effort}`),
+                          disabled: !efforts.includes(effort),
+                        }))}
+                      />
                       {effortMixed && (
                         <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.effortMixed')}

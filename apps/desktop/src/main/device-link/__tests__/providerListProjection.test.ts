@@ -39,6 +39,7 @@ const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
+    providerOrder?: string[];
   };
 const projectForCurrentController = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
@@ -373,10 +374,17 @@ describe('active runtime summary projection', () => {
   );
 });
 
+it('preserves host display order without changing catalog order', () => {
+  const result = project({ providers: [{ id: 'a' }, { id: 'b' }], providerOrder: ['b', 'a', 'b', null, 42] });
+  expect(result.providerOrder).toEqual(['b', 'a']);
+  expect(result.providers.map(p => p.id)).toEqual(['a', 'b']);
+  expect(project({ providers: [] }).providerOrder).toBeUndefined();
+});
+
 describe('schedule sidebar index tunnel cap', () => {
   it('coalesces the schedule index channel with other listing reads', () => {
-    expect(__testing.coalesceRemoteInvokeChannels.has('maker:schedule:list-sidebar-index-runs')).toBe(true);
-    expect(__testing.coalesceRemoteInvokeChannels.has('local-db:sessions:list')).toBe(true);
+    expect(__testing.canCoalesceRemoteListing({ channel: 'maker:schedule:list-sidebar-index-runs', args: [] })).toBe(true);
+    expect(__testing.canCoalesceRemoteListing({ channel: 'local-db:sessions:list', args: [] })).toBe(true);
   });
 
   it('keeps the newest mapping when the snapshot exceeds the tunnel budget', () => {

@@ -1,5 +1,6 @@
 //! Main-only Node-API transport: the OS sees the actual Cindy PID opening the
 //! pipe. A child process or a self-reported parent PID is never authorization.
+mod capture_protocol;
 mod pipe;
 mod win;
 use napi_derive::napi;
@@ -19,6 +20,7 @@ fn failure(_: impl std::fmt::Debug) -> napi::Error {
 pub struct DesktopConnection {
     pipe: Arc<Mutex<Option<pipe::Pipe>>>,
     cancel: Arc<AtomicBool>,
+    response_limit: usize,
 }
 #[napi]
 impl DesktopConnection {
@@ -73,6 +75,8 @@ impl DesktopConnection {
             if init.len() > 1023 || init.contains('\n') {
                 return Err(failure("init"));
             }
+            let parsed: serde_json::Value = serde_json::from_str(&init).map_err(failure)?;
+            let response_limit = capture_protocol::response_limit(&parsed);
             pipe.write(format!("{init}\n").as_bytes())
                 .map_err(failure)?;
             if pipe.line(1024).map_err(failure)? != b"ready\n" {
@@ -82,6 +86,7 @@ impl DesktopConnection {
             Ok(Self {
                 pipe: Arc::new(Mutex::new(Some(pipe))),
                 cancel,
+                response_limit,
             })
         })
         .await
@@ -94,13 +99,14 @@ impl DesktopConnection {
         }
         let pipe = self.pipe.clone();
         let cancel = self.cancel.clone();
+        let response_limit = self.response_limit;
         tokio::task::spawn_blocking(move || {
             let mut guard = pipe.lock().map_err(failure)?;
             let result = (|| {
                 let pipe = guard.as_mut().ok_or_else(|| failure("closed"))?;
                 pipe.write(format!("{line}\n").as_bytes())
                     .map_err(failure)?;
-                let bytes = pipe.line(240001).map_err(failure)?;
+                let bytes = pipe.line(response_limit).map_err(failure)?;
                 String::from_utf8(bytes).map_err(failure)
             })();
             if result.is_err() || cancel.load(Ordering::SeqCst) {

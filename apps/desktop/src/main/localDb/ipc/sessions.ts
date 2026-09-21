@@ -27,10 +27,16 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import {
+  selectSessionListRows,
+  selectSessionWithCount,
+  selectSessionsByIds,
+  flattenSessionReadRow,
+  projectSessionReadResult,
+  type SessionListRow,
+} from '../sessionQueries';
 import { commitBotProfileDeletion } from '../botProfileDeletionStore.js';
 import {
-  LIST_PREVIEW_EXTRACT_SQL,
-  LATEST_VISIBLE_PREVIEW_FILTER_SQL,
   persistSessionListProjectionBatch,
   type SessionListProjectionBackfillItem,
 } from '../sessionListProjection';
@@ -49,9 +55,9 @@ import {
   sessionCreateToRow,
   sessionPatchToRow,
   persistableSessionEffort,
+  projectSessionRuntimeFields,
   normalizeRemoteHostId,
   finalizePlainPreview,
-  type SessionRowWithCount,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
@@ -64,9 +70,12 @@ import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import {
   DESKTOP_VISIBLE_SESSION_SOURCES,
-  isRetainableProjectSessionSource,
+  isRetainableProjectSession,
 } from '../../../shared/sessionSource.js';
-import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import {
+  normalizeWorkingDirForProjectSettings,
+  normalizeWorkingDirForStorage,
+} from '../../../shared/workingDir.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
@@ -82,11 +91,18 @@ import {
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
 import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
-import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { SESSION_READ_BATCH_LIMIT } from '../../../shared/sessionRead';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
+import { cindyMakeManager } from '../../cindy-make/manager.js';
+import { recycleCindyMakeTask } from '../../cindy-make/taskManagement.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDirectoryPickerGrant.js';
@@ -356,7 +372,7 @@ export function broadcastSessionPatched(
   }
   for (const w of windows) {
     try {
-      if (w.isDestroyed()) continue;
+      if (!isTrustedAppRendererWindow(w)) continue;
       if (hasCapturedScope) {
         w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
       } else if (ownerStamp === undefined) {
@@ -378,7 +394,7 @@ function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): v
   const hasCapturedScope = ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed()) continue;
+    if (!isTrustedAppRendererWindow(window)) continue;
     if (hasCapturedScope || ownerStamp !== undefined) {
       window.webContents.send('local-db:recent-workdirs:changed', { path }, ownerStamp);
     } else {
@@ -460,6 +476,8 @@ async function recycleSessionWorktreeInQueue(
       ownerIsCurrent() && recycle.isSessionStillRemovable(id, mediaDb);
     const closeAndRecycle = async (targetSessionId: string, scanOwners: boolean): Promise<void> => {
       if (!(await isStillRemovable(targetSessionId))) return;
+      // Settle preparation before taking the send route lock it may be waiting for.
+      await cindyMakeManager.settleTasksForSession(targetSessionId);
       await withSessionRouteLock(targetSessionId, async () => {
         const shouldRecycle = await quiesceSessionBeforeWorktreeRecycle(targetSessionId, {
           isOwnerCurrent: ownerIsCurrent,
@@ -474,6 +492,7 @@ async function recycleSessionWorktreeInQueue(
           },
         });
         if (!shouldRecycle || !ownerIsCurrent()) return;
+        await recycleCindyMakeTask(targetSessionId, mediaDb, ownerIsCurrent);
 
         // Keep irreversible cleanup under the same task route lock as the final
         // status check. A concurrent restore/start/send must not slip between
@@ -625,8 +644,14 @@ export async function applyAgentSwitchToSessionRow(
   if (typeof patch.contextWindow === 'number' && patch.contextWindow > 0) {
     setObj.contextWindow = Math.floor(patch.contextWindow);
   }
-  await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+  // RETURNING keeps the projection tied to this committed write, including axes
+  // omitted by the caller. A later SELECT could observe a newer selection.
+  const [committed] = await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId))
+    .returning({
+      id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
+    });
+  if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
     sessionId,
     {
@@ -639,6 +664,9 @@ export async function applyAgentSwitchToSessionRow(
       ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
         ? { contextWindow: Math.floor(patch.contextWindow) }
         : {}),
+      // Publish before the consumed intent is cleared. Otherwise the composer
+      // falls back to runtimeEffective from its last full read.
+      ...projectSessionRuntimeFields({ ...committed, agentKind: normalizeDbAgentKind(committed.agentKind) }),
     },
     ownerScope,
   );
@@ -727,64 +755,6 @@ export async function persistSessionFields(
 const MAX_LIMIT = 1000;
 
 /**
- * list / get / update 共用的 messageCount：标量子查询。口径是该会话的全部 messages 行数，
- * 不过滤 role / rewind_at / cleared_at（口径要动就得连手机端卡片上的「N 条消息」一起想，
- * 见 maker-shared/sessionList 的 messageCountLabel）。
- *
- * 标量子查询没有 LEFT JOIN 补的那一行空行，无匹配时聚合返回 0，所以这里用 `count(*)` 是
- * 安全的。仍然只扫 idx_messages_session_created（session_id 是首列），不回表。
- *
- * 旧的一段式 LEFT JOIN + GROUP BY 不能图快改用 `count(*)`：LEFT JOIN 会给空会话补一行，
- * 数出 1 而非 0，打歪 sidebar 的「单空 New Maker 草稿」判定。list 已改成两段式；get/update
- * 也走同一条标量子查询，避免切任务时把几万行 join 进单行快照。
- *
- * 由 sessionListMessageCount 回归测试守护。
- *
- * list_message_count 已回填时走缓存列，跳过 messages 扫描。未回填时 count(*) 精确总数
- * （侧栏文案仍用 messageCountLabel 把 ≥1001 显示成 1000+；wire `_count.messages` 保持精确）。
- * 非 NULL 即信任：绕过 createMessage 的 messages 增删必须同步投影。
- * import / treeRehydrate 置空三列；turn/review 租约、context.rebuild、createMessage 只置空计数。
- */
-const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
-  CASE
-    WHEN ${sessions.listMessageCount} IS NOT NULL THEN ${sessions.listMessageCount}
-    ELSE (
-      SELECT count(*) FROM messages m WHERE m.session_id = ${sessions.id}
-    )
-  END
-)`.as('message_count');
-
-/**
- * sidebar-card-mode：最近一条可见 user/assistant 的预览抽出 / role。
- * list_preview 已回填时 CASE 短路，不碰 messages。否则 SQL 侧 json_extract 纯文本，
- * 不把整段 content 跨 worker RPC。autoResume 只检查 user 行的 agent_meta。
- */
-const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
-  CASE
-    WHEN ${sessions.listPreview} IS NOT NULL THEN NULL
-    ELSE (
-      SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
-      WHERE m.session_id = ${sessions.id}
-        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
-        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
-    )
-  END
-)`.as('latest_message_extract');
-const LATEST_MSG_ROLE_SQL = sql<string | null>`(
-  CASE
-    WHEN ${sessions.listPreviewRole} IS NOT NULL THEN ${sessions.listPreviewRole}
-    ELSE (
-      SELECT m.role FROM messages m
-      WHERE m.session_id = ${sessions.id}
-        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
-        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
-    )
-  END
-)`.as('latest_message_role');
-
-/**
  * 按 session id 查 desktop 端 sessions 表的产品快照。
  * 与 maker-core SessionMeta 不重叠 —— SessionMeta 故意不带 status (那是 desktop 产品语义)。
  * Resume 路径(scheduler runner / send_to_session)用它做归档/删除兜底和展示元数据返回。
@@ -822,6 +792,9 @@ export function createSessionRemoteHostIdReader(): (sessionId: string) => Promis
 
 export interface SessionRowSnapshot {
   status: string;
+  /** Bound schedule cold resumes preserve the owner's permission choice. */
+  permissionMode?: string | null;
+  planModeEnabled?: boolean | null;
   title: string | null;
   userSendAt: number | null;
   workingDir: string | null;
@@ -842,6 +815,8 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
   const [row] = await db
     .select({
       status: sessions.status,
+      permissionMode: sessions.permissionMode,
+      planModeEnabled: sessions.planModeEnabled,
       title: sessions.title,
       userSendAt: sessions.userSendAt,
       workingDir: sessions.workingDir,
@@ -928,7 +903,8 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   const ownerScope = captureOwnerScope();
   const ts =
     typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
   // 原子 guard：单条 UPDATE + WHERE 代替 SELECT→条件判断→UPDATE 三步走。
   // 旧实现存在 TOCTOU 竞态：两个并发调用（如 scheduler fire + 手动发送）都可能
   // 通过旧值检查后都执行 UPDATE，后写入的更早时间戳会覆盖已写入的更新值。
@@ -952,7 +928,15 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   // 通过 SELECT 拿回实际落库的 updatedAt（已经是 MAX'd 结果）用于广播，
   // 避免把旧 ts 当作 updatedAt 广播给 renderer。
   const updated = await db
-    .select({ userSendAt: sessions.userSendAt, updatedAt: sessions.updatedAt })
+    .select({
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+      workingDir: sessions.workingDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+      source: sessions.source,
+      orcaRole: sessions.orcaRole,
+    })
     .from(sessions)
     .where(and(eq(sessions.id, id), eq(sessions.userSendAt, ts)))
     .limit(1);
@@ -973,6 +957,19 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       },
       ownerScope,
     );
+  }
+  // 项目独立保留真实使用时间；不能等归档/删除时再取清理时间，也不能从剩余任务重算。
+  // 复用入口处的 client，避免 await 期间切换账号后把旧项目写入新账号数据库。
+  const row = updated[0];
+  if (
+    row.workspaceKind === 'project' &&
+    row.workingDir &&
+    !row.remoteHostId &&
+    isRetainableProjectSession(row)
+  ) {
+    const projectDir = normalizeWorkingDirForProjectSettings(row.workingDir);
+    const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
+    if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
   }
 }
 
@@ -1250,18 +1247,8 @@ export function registerSessionIpc(
         }
 
         scheduleSessionListProjectionBackfill(mergedRows);
-        return mergedRows.map((r) =>
-          sessionToCamel(
-            projectSessionContextWindow(
-              {
-                ...r.session,
-                messageCount: r.messageCount,
-                latestMessageExtract: r.latestMessageExtract,
-                latestMessageRole: r.latestMessageRole,
-              },
-              opts.resolveContextWindow,
-            ),
-          ),
+        return mergedRows.map((row) =>
+          projectSessionReadResult(flattenSessionReadRow(row), opts.resolveContextWindow),
         );
       };
       const loadUsageHistoryRows = async () => {
@@ -1329,6 +1316,12 @@ export function registerSessionIpc(
     const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
+    }
+    if (
+      bodyObj.title !== undefined &&
+      (typeof bodyObj.title !== 'string' || bodyObj.title.length > 200)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'title must be a string no longer than 200 characters');
     }
     const ALLOWED_WORKSPACE_KINDS = new Set<string>(['project', 'dialogue']);
     if (
@@ -1422,7 +1415,12 @@ export function registerSessionIpc(
     // 路径写进去,后续 New Maker 项目下拉选中它时会丢失 host、按本机路径创建出一个
     // 错误的本地会话(指向本机不存在的同名目录)。在 host-aware 最近项目(给该表加
     // remote_host_id 列 + picker 区分 local/remote)落地前,remote 项目一律不进最近列表。
-    if (insertRow.workspaceKind === 'project' && insertRow.workingDir && !insertRow.remoteHostId) {
+    if (
+      insertRow.workspaceKind === 'project' &&
+      insertRow.workingDir &&
+      !insertRow.remoteHostId &&
+      isRetainableProjectSession(insertRow)
+    ) {
       void upsertRecentWorkdir(insertRow.workingDir, now);
     }
     // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
@@ -1541,12 +1539,28 @@ export function registerSessionIpc(
     return { ok: true };
   });
 
+  // Bounded reconciliation read: same metadata/count/preview as GET, one DB RPC.
+  // Omitted rows mean missing or remotely hidden; the tunnel filters visibility.
+  ipcMain.handle('local-db:sessions:get-many', async (event, value: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(value) || value.length > SESSION_READ_BATCH_LIMIT) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `sessionIds must be an array of at most ${SESSION_READ_BATCH_LIMIT} ids`,
+      );
+    }
+    const ids = [...new Set(value.map((id) => requireString(id, 'sessionId')))];
+    if (!ids.length) return [];
+    const rows = await selectSessionsByIds(getDbClient().drizzle, ids);
+    return rows.map((row) => projectSessionReadResult(row, opts.resolveContextWindow));
+  });
+
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return sessionToCamel(projectSessionContextWindow(row, opts.resolveContextWindow));
+    return projectSessionReadResult(row, opts.resolveContextWindow);
   });
 
   /**
@@ -1727,7 +1741,16 @@ export async function updateSessionInDb(
   sid: string,
   p: Record<string, unknown>,
   opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
+  moveGuard?: {
+    /** Identity only: also used after commit and inside transcript relocation. */
+    assertCurrent: () => void;
+    /** Runs inside the existing route/worktree locks, including dialogue moves. */
+    beforeUpdate: () => Promise<void>;
+    /** Mutable running/IM preconditions must not reject an already committed move. */
+    beforeWrite?: () => void | Promise<void>;
+  },
 ): Promise<ReturnType<typeof sessionToCamel>> {
+  moveGuard?.assertCurrent();
   const ownerScope = captureOwnerScope();
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
     throwIpcError(
@@ -1740,6 +1763,11 @@ export async function updateSessionInDb(
   // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
   // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
   const update = async () => {
+    if (moveGuard) {
+      moveGuard.assertCurrent();
+      await moveGuard.beforeUpdate();
+      moveGuard.assertCurrent();
+    }
     if (p.workspaceKind !== undefined) {
       const value = p.workspaceKind;
       if (value !== 'project' && value !== 'dialogue') {
@@ -1783,7 +1811,7 @@ export async function updateSessionInDb(
         );
       }
     }
-    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
+    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,提交前对比实际变化。
     // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报
     // "No conversation found with session ID"(见 claude-transcript-relocation.ts)。
     const beforeMove =
@@ -1811,6 +1839,7 @@ export async function updateSessionInDb(
     // before persisting the new directory so the next send lazily recreates the
     // runtime with the moved session's cwd instead of continuing in the old one.
     if (movingLocalNonClaudeSession) {
+      moveGuard?.assertCurrent();
       if (!opts.closeIdleSessionForMove) {
         throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
       }
@@ -1846,6 +1875,34 @@ export async function updateSessionInDb(
       setObj.listPreview = null;
       setObj.listPreviewRole = null;
     }
+    // 在提交新 cwd 前完成现有 CC 迁移,与 Pi/Codex 的 runtime 关闭同处提交前。
+    // 迁移只复制、不删除旧转录:切账号或写库失败时旧 cwd 仍可恢复；提交后
+    // 围栏即使拒绝返回,也不会留下新 cwd 配旧转录。复用原锁与 best-effort 策略。
+    // 动态 import 避免 localDb → maker-host 静态模块环。
+    if (
+      beforeMove &&
+      beforeMove.agentKind === 'cc' &&
+      !beforeMove.remoteHostId &&
+      beforeMove.workingDir &&
+      typeof p.workingDir === 'string' &&
+      p.workingDir &&
+      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
+    ) {
+      const m = await import('../../maker-host/claude-transcript-relocation.js');
+      moveGuard?.assertCurrent();
+      await moveGuard?.beforeWrite?.();
+      moveGuard?.assertCurrent();
+      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
+        sid,
+        beforeMove.workingDir,
+        p.workingDir,
+        ...(moveGuard ? [{ client: dbClient, assertCurrent: moveGuard.assertCurrent }] : []),
+      );
+      if (reloc.persistedSdkSessionId) {
+        p.sdkSessionId = reloc.persistedSdkSessionId;
+        setObj.sdkSessionId = reloc.persistedSdkSessionId;
+      }
+    }
     // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
     // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
     // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
@@ -1858,12 +1915,16 @@ export async function updateSessionInDb(
       sid,
       p.status,
       async () => {
+        moveGuard?.assertCurrent();
         if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
+        await moveGuard?.beforeWrite?.();
+        moveGuard?.assertCurrent();
         await writeSessionPatch(db, sid, setObj, p.status);
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
       },
       p.workingDir !== undefined,
     );
+    moveGuard?.assertCurrent();
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
@@ -1876,31 +1937,8 @@ export async function updateSessionInDb(
       }
       void recomputePrRefsForSession(sid).catch(() => undefined);
     }
-    // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
-    // renderer 拿到更新结果时转录已就位(用户可立即续聊),且迁移中持久化的最新
-    // sdkSessionId 能进返回行与广播 patch——否则 renderer 留着旧 resume id,下一次
-    // lazy-create 仍会 resume 到 pre-fork 会话。内部 best-effort 不抛错。
-    // 动态 import 避免 localDb → maker-host 的静态模块环(同下方 sessionTaskSummary)。
-    if (
-      beforeMove &&
-      beforeMove.agentKind === 'cc' &&
-      !beforeMove.remoteHostId &&
-      beforeMove.workingDir &&
-      typeof p.workingDir === 'string' &&
-      p.workingDir &&
-      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
-    ) {
-      const m = await import('../../maker-host/claude-transcript-relocation.js');
-      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
-        sid,
-        beforeMove.workingDir,
-        p.workingDir,
-      );
-      if (reloc.persistedSdkSessionId) {
-        (p as Record<string, unknown>).sdkSessionId = reloc.persistedSdkSessionId;
-      }
-    }
     const row = await selectSessionWithCount(db, sid);
+    moveGuard?.assertCurrent();
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
     if (p.pinnedAt !== undefined && row.pinnedAt == null) {
@@ -1915,11 +1953,11 @@ export async function updateSessionInDb(
     // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
     const statusChanged = p.status !== undefined;
     if (
-      (projectTargetChanged || p.status === 'deleted' || p.status === 'archived') &&
+      projectTargetChanged &&
       row.workspaceKind === 'project' &&
       row.workingDir &&
       !row.remoteHostId &&
-      isRetainableProjectSessionSource(row.source)
+      isRetainableProjectSession(row)
     ) {
       const touched = await upsertRecentWorkdir(
         row.workingDir,
@@ -1960,6 +1998,7 @@ export async function updateSessionInDb(
               ? { status: broadcastStatus }
               : {}),
           };
+    moveGuard?.assertCurrent();
     if (
       projectTargetChanged ||
       settingsChanged ||
@@ -1991,7 +2030,7 @@ export async function updateSessionInDb(
     compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;
   };
-  if (p.workingDir === undefined) return update();
+  if (p.workingDir === undefined && !moveGuard) return update();
   return withSessionRouteLock(sid, async () => {
     const [binding] = await db
       .select({ remoteHostId: sessions.remoteHostId })
@@ -2039,7 +2078,7 @@ export async function patchSessionMetaInDb(
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
-  const { updated, source } = await withStatusWriteLock(db, sessionId, patch.status, async () => {
+  const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     await writeSessionPatch(db, sessionId, setObj, patch.status);
     const row = await selectSessionWithCount(db, sessionId);
@@ -2049,23 +2088,8 @@ export async function patchSessionMetaInDb(
       row.summary = null;
     }
     cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
-    return { updated: sessionToCamel(row), source: row.source };
+    return sessionToCamel(row);
   });
-  if (
-    (patch.status === 'deleted' || patch.status === 'archived') &&
-    updated.workspaceKind === 'project' &&
-    updated.workingDir &&
-    !updated.remoteHostId &&
-    isRetainableProjectSessionSource(source)
-  ) {
-    const touched = await upsertRecentWorkdir(
-      updated.workingDir,
-      Date.now(),
-      process.platform,
-      dbClient,
-    );
-    if (touched) broadcastRecentWorkdirsChanged(updated.workingDir, ownerScope);
-  }
   notifyAgentIslandSessionPatch(updated.id, {
     status: updated.status,
     title: updated.title,
@@ -2269,23 +2293,6 @@ export async function setSessionsStatusInDb(
   });
   for (const item of applied) {
     compactTerminalSessionToolResults(dbClient, item.sessionId, item.status);
-  }
-  if (status === 'archived') {
-    const touchedAt = Date.now();
-    const localProjectDirs = new Set(
-      applied.flatMap((item) =>
-        item.workspaceKind === 'project' &&
-        item.workingDir &&
-        !item.remoteHostId &&
-        isRetainableProjectSessionSource(item.source)
-          ? [item.workingDir]
-          : [],
-      ),
-    );
-    for (const workingDir of localProjectDirs) {
-      const touched = await upsertRecentWorkdir(workingDir, touchedAt, process.platform, dbClient);
-      if (touched) broadcastRecentWorkdirsChanged(workingDir, ownerScope);
-    }
   }
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
@@ -2669,14 +2676,6 @@ async function drainSessionListProjectionBackfill(): Promise<void> {
   }
 }
 
-/** {@link selectSessionListRows} 的行形状——与 sessionToCamel 的入参对齐。 */
-interface SessionListRow {
-  session: typeof sessions.$inferSelect;
-  messageCount: number;
-  latestMessageExtract: string | null;
-  latestMessageRole: string | null;
-}
-
 /** 用量历史专用行查询：全量读取 sessions，但跳过 sidebar 的消息预览子查询。 */
 function selectSessionUsageRows(
   db: DbClient['drizzle'],
@@ -2717,79 +2716,6 @@ function selectSessionUsageRows(
     .where(where)
     .orderBy(desc(sessions.updatedAt))
     .then((rows) => rows);
-}
-
-/**
- * sessions:list 的行查询——**两段式**：CTE 先按排序取够 `cap` 个 id，主查询只对这批行算
- * messageCount 与 preview。
- *
- * 为什么不能沿用一段式的 `LEFT JOIN messages + GROUP BY`：那个形状下 `LIMIT` 在 GROUP BY
- * **之后**才生效，于是每个候选会话的全部消息都要参与聚合，成本与"最终只要 1000 行"无关。
- * 4.7GB / 111 万条消息的真实库上，把聚合面从 1743 个会话收窄到 1000 个，热缓存 104ms →
- * 54ms。会话越多、limit 占比越小，收益越大。
- *
- * 用单条 CTE 而不是"先查 id 再 IN (...)"两次往返，有两个理由：
- *   1. 一致性——两次查询之间会话可能被删/改状态，第二段就会比第一段少行，列表凭空少一条。
- *      CTE 是单条语句、单一致性快照。
- *   2. 参数——`IN (...)` 要绑 cap 个参数（当前 MAX_LIMIT=1000），CTE 只绑一个 limit。
- *
- * messageCount 在这里是**标量子查询**里的 `count(*)`：无匹配行时聚合返回 0，不存在 LEFT JOIN
- * 那个"空会话数出 1"的坑。它同样只扫 idx_messages_session_created，不回表。
- *
- * @param where 行过滤条件，同时作用于 CTE 与主查询（CTE 决定取哪些、主查询决定算哪些）。
- * @param cap   取前 N 行；`null` = 不限（置顶补齐分支用，pinned 行数天然很少）。
- */
-function selectSessionListRows(
-  db: DbClient['drizzle'],
-  where: SQL | undefined,
-  cap: number | null,
-): Promise<SessionListRow[]> {
-  const pickedBase = db.select({ id: sessions.id }).from(sessions).where(where);
-  const picked = db
-    .$with('picked')
-    .as(
-      cap === null
-        ? pickedBase.orderBy(desc(sessions.updatedAt))
-        : pickedBase.orderBy(desc(sessions.updatedAt)).limit(cap),
-    );
-  return db
-    .with(picked)
-    .select({
-      session: sessions,
-      messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
-      latestMessageRole: LATEST_MSG_ROLE_SQL,
-    })
-    .from(sessions)
-    .innerJoin(picked, eq(picked.id, sessions.id))
-    .where(where)
-    .orderBy(desc(sessions.updatedAt));
-}
-
-/** 单行 SELECT + 标量 count / preview：与 list 同口径，不 JOIN 该会话全部消息。
- *  preview 子查询同步带出——get/update 路径返回的 Session 会整体替换 store 里的行，
- *  缺字段会把列表查询带回的 preview 冲掉。 */
-async function selectSessionWithCount(
-  db: DbClient['drizzle'],
-  id: string,
-): Promise<SessionRowWithCount | undefined> {
-  const [r] = await db
-    .select({
-      session: sessions,
-      messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
-      latestMessageRole: LATEST_MSG_ROLE_SQL,
-    })
-    .from(sessions)
-    .where(eq(sessions.id, id))
-    .limit(1);
-  if (!r) return undefined;
-  return {
-    ...r.session,
-    messageCount: r.messageCount,
-    latestMessageExtract: r.latestMessageExtract,
-    latestMessageRole: r.latestMessageRole,
-  };
 }
 
 function clampLimit(raw: unknown, fallback: number): number {

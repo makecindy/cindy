@@ -1,3 +1,4 @@
+import taskTags from './taskTags.json';
 /**
  * 本 locale 的 catalog 组装:每个区域一个 JSON 文件、一个顶级 key,
  * 组装成单一 'common' namespace 的资源对象。
@@ -23,6 +24,7 @@ import startup from './startup.json';
 import update from './update.json';
 
 export default {
+  taskTags,
   remoteDesktop,
   apiErrors,
   chat,

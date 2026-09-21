@@ -18,6 +18,8 @@ import type { WorkLouderCodexLightingSink } from './WorkLouderCodexLightingContr
 const MAX_CONSECUTIVE_CRASHES = 5;
 
 export interface WorkLouderCodexChildLike {
+  /** Native adapters may prepare/build before spawning; this time is not HID connection time. */
+  readonly whenReady?: Promise<void>;
   postMessage(message: unknown): void;
   on(event: 'message', listener: (message: unknown) => void): void;
   on(event: 'exit', listener: (code: number) => void): void;
@@ -37,7 +39,7 @@ export interface WorkLouderCodexLoggerLike {
 
 export interface WorkLouderSdkLocation {
   entry: string;
-  source: 'cindy-package' | 'openai-app';
+  source: 'cindy-package' | 'openai-app' | 'cindy-native';
 }
 
 export interface WorkLouderCodexHostClientDeps {
@@ -337,7 +339,30 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
           : {}),
       };
       startedChild.postMessage(initRequest);
-      if (this.deviceEnabled) this.startConnectWatchdog(startedChild);
+      const armConnectionWatchdog = (): void => {
+        if (
+          this.child === startedChild &&
+          !this.disposed &&
+          !this.hostStopping &&
+          this.deviceEnabled &&
+          this.lastStatus === null
+        ) {
+          this.startConnectWatchdog(startedChild);
+        }
+      };
+      if (startedChild.whenReady) {
+        void startedChild.whenReady.then(armConnectionWatchdog).catch(() => {
+          if (this.child !== startedChild) return;
+          try {
+            startedChild.kill();
+          } catch {
+            /* Preparation failed; release best effort. */
+          }
+          this.handleExit(startedChild, 1);
+        });
+      } else {
+        armConnectionWatchdog();
+      }
       this.deps.log.info('Codex Micro lighting host started', { sdkSource: sdk.source });
       return startedChild;
     } catch (error) {

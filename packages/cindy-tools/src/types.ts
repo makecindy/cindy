@@ -224,7 +224,8 @@ export type CindyGhostCallResult =
 /** ghost_forge_pack 的结构化失败分类(host 侧产生,原样透传给 agent)。 */
 export type CindyForgePackErrorCode =
   | 'DIR_NOT_FOUND' // 目录不存在或不是目录
-  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录不在当前会话工作目录内
+  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录在工作目录外且未获当前会话权限,或会话工作目录缺失
+  | 'PERMISSION_DENIED' // 工作目录外源码未获 Full Access / Auto 审阅 / 用户确认
   | 'WORKDIR_NOT_LOCAL' // 当前会话工作目录在远端或无法证明为本地
   | 'WORKDIR_READ_ONLY' // 当前会话禁止写入
   | 'SOURCE_IS_INSTALLED_PLUGIN' // 源目录命中 Host 管理的已安装插件或批准状态根
@@ -321,7 +322,7 @@ export type CindyForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'PERMISSION_DENIED' | 'INTERNAL';
       message: string;
     };
 

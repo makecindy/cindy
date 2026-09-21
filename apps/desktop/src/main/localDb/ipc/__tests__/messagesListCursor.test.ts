@@ -44,10 +44,6 @@ const h = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock('../../codexHistoryOversizedUpgrade', () => ({
-  maybeUpgradeCodexHistoryOversizedError: vi.fn(async () => ({ result: 'skipped' })),
-}));
-
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -85,7 +81,6 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db, query: h.query, tx: h.tx }),
 }));
 
-import { maybeUpgradeCodexHistoryOversizedError } from '../../codexHistoryOversizedUpgrade';
 import {
   findParkedEngineSession,
   findPendingAgentHandoff,
@@ -260,6 +255,22 @@ describe('local-db:messages:list cursor', () => {
       insertCostMessage(sqlite, { id: 'newer-grant', role: 'user', createdAt: 50 });
       expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'authorization')).map(row => row.clientId))
         .toEqual(['old-question']);
+    } finally { sqlite.close(); }
+  });
+
+  it('does not let scheduled runs evict owner restrictions from bounded authorization history', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'owner', role: 'user', createdAt: 1,
+        agentMeta: { autoReviewUserText: 'Submit PR. Do not merge.', delivery: 'turn' } });
+      insertCostMessage(sqlite, { id: 'stop', role: 'user', createdAt: 2,
+        agentMeta: { autoReviewUserText: 'Stop following it.', delivery: 'turn' } });
+      for (let i = 0; i < 120; i++) insertCostMessage(sqlite, { id: `run-${i}`, role: 'user', createdAt: i + 3,
+        agentMeta: { autoReviewUserText: { kind: 'scheduled-continuation' }, origin: { kind: 'scheduler', scheduleId: 'schedule-1', runId: `run-${i}` } } });
+      expect((await listMessagesForAgentHandoff('s1', 2, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['owner', 'stop']);
+      expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'user')).map(row => row.clientId))
+        .toEqual(['run-119']);
     } finally { sqlite.close(); }
   });
 
@@ -701,18 +712,19 @@ describe('local-db:messages:list cursor', () => {
     expect(hydrateSql).not.toMatch(/json_valid\([^)]*\) = 0 OR json_extract/);
   });
 
-  it('only scans oversized-history upgrade on the first page', async () => {
+  it('preserves a reconnect error when reading first and subsequent pages', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'new' });
+    const content = JSON.stringify({ reason: 'codex_reconnect_stalled', message: 'Connection reset' });
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'placeholder' });
+    sqlite.prepare("UPDATE messages SET role = 'error', content = ? WHERE id = 'row-new'").run(content);
     insertMessage(sqlite, { id: 'row-old', createdAt: 999, content: 'old' });
     registerMessageIpc();
     const listHandler = h.handlers.get('local-db:messages:list');
     await listHandler?.({}, 's1', { limit: 1 });
     await listHandler?.({}, 's1', { limit: 1, before: 'row-new' });
     await listHandler?.({}, 's1', { limit: 1, after: 'row-old' });
-    expect(maybeUpgradeCodexHistoryOversizedError).toHaveBeenCalledTimes(1);
-    expect(maybeUpgradeCodexHistoryOversizedError).toHaveBeenCalledWith('s1');
+    expect(sqlite.prepare('SELECT content FROM messages WHERE id = ?').get('row-new')).toEqual({ content });
   });
 });
 

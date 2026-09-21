@@ -30,7 +30,7 @@ export default function CompanionDirectMessages() {
     <SimpleStackHeader title={thread ? `${thread.botAName} · ${thread.botBName}` : t('devices.companions.messages')} subtitle={t('devices.companions.readOnly')} onBack={() => goBackGuarded(router)} />
     <ScrollView contentContainerStyle={styles.content}>
       {!online ? <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text> : null}
-      {thread?.messages.map((message) => <Text selectable key={message.id} style={styles.message}>{`${message.senderBotName}\n${message.content}`}</Text>)}
+      {(Array.isArray(thread?.messages) ? thread.messages : []).map((message) => <Text selectable key={message.id} style={styles.message}>{`${message.senderBotName}\n${message.content}`}</Text>)}
       {!thread && online ? <Text style={styles.note}>{error || value?.ok === false ? t('devices.companions.actionFailed') : t('devices.resources.loading')}</Text> : null}
       {error || value?.ok === false ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), onPress: refresh }} /> : null}
     </ScrollView>

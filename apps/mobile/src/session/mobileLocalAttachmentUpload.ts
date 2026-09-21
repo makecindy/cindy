@@ -50,7 +50,8 @@ export interface MobileLocalAttachmentUploadCandidate {
   /** resolve 阶段已完成优化编码(如 HEIC 转码+缩边),跳过 preprocess 防二次有损。 */
   skipPreprocess?: boolean;
   /**
-   * 仅由明确拥有输入文件的调用方提供(当前是 WebView 粘贴落盘):
+   * 仅由明确拥有输入文件的调用方提供(当前是 WebView 粘贴落盘与 iOS Share
+   * Extension 复制进 App Group 的文件):
    * controller 会把 resolve / preprocess 生成的同任务临时 uri 一并交回清理。
    * 系统相册、相机与文件选择器的 uri 不设置此钩子,避免误删宿主管理的文件。
    */

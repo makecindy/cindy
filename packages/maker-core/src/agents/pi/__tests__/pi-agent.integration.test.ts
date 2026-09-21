@@ -1456,6 +1456,51 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  it.each(['anthropic-messages', 'openai-completions'] as const)(
+    'keeps native plan notifications separate from replies using %s',
+    { timeout: 60_000 },
+    async (api) => {
+      const deps = buildDeps();
+      deps.resolvePiGatewayModelApi = () => api;
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-reply-'));
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await new PiAgent(deps).startSession({
+          sessionId: `plan-reply-${api}`, workingDir, model: 'pi-test-model',
+        });
+        for (const enabled of [true, false, true]) {
+          await handle.setPlanMode?.(enabled);
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'Reply with a short greeting.' });
+          await done;
+          const notices = events.filter((event) => event.standaloneText);
+          expect(notices).toHaveLength(1);
+          expect(notices[0]).toMatchObject({
+            type: 'text', source: 'pi', turnScope: 'background',
+            data: { isFinal: true, text: expect.stringContaining(enabled ? 'enabled' : 'disabled') },
+          });
+          const reply = events.filter((event) => event.type === 'text' && !event.standaloneText);
+          expect(reply.at(-1)?.data).toMatchObject({
+            text: 'pong from fake gateway', isFinal: true, isFullText: true,
+          });
+          expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+            status: 'completed', result: 'pong from fake gateway',
+          });
+          expect(events.filter((event) => event.type === 'error')).toEqual([]);
+        }
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it(
     're-syncs plan mode from pi persisted state on resume (no mirror desync)',
     { timeout: 60_000 },
@@ -1871,6 +1916,75 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  it.each(['ask', 'auto', 'bypassPermissions'] as const)(
+    'host text-only turn blocks tools in %s and restores the next ordinary turn',
+    { timeout: 60_000 },
+    async (permissionMode) => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-text-only-'));
+      let handle: AgentSessionHandle | undefined;
+      const target = path.join(workingDir, 'written.txt');
+      writeFileSync(path.join(workingDir, 'private.txt'), 'fixture-read-secret');
+      try {
+        handle = await new PiAgent(buildDeps()).startSession({
+          sessionId: `pi-text-only-${permissionMode}`, workingDir, model: 'pi-test-model', permissionMode,
+        });
+        const resolver = vi.fn(async (request: { requestId: string }) => ({
+          kind: 'permission', requestId: request.requestId, behavior: 'allow',
+        }));
+        handle.setInteractionResolver?.(resolver as never);
+        const collectTurn = async () => {
+          for await (const event of handle!.events()) if (event.type === 'done') return;
+        };
+        const blockedTools: Array<[string, Record<string, unknown>]> = [
+          ['read', { path: 'private.txt' }],
+          ['write', { path: target, content: 'test' }],
+          ['ask_user_question', { questions: [{ question: 'Continue?', options: ['Yes', 'No'] }] }],
+        ];
+        scriptedResponses.length = 0;
+        scriptedResponses.push(...blockedTools.map(([name, input], index) =>
+          anthropicToolUseBody(name, input).replaceAll('toolu_itest_1', `toolu_blocked_${index}`)),
+        anthropicStreamBody('Hello.'));
+        const requestStart = seenRequests.length;
+        const done = collectTurn();
+        const welcomeStart = performance.now();
+        await handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true });
+        const welcomeSendMs = performance.now() - welcomeStart;
+        await done;
+        const lastRequest = JSON.parse(seenRequests.at(-1)!.body);
+        const results = lastRequest.messages.flatMap((message: { content: unknown }) =>
+          Array.isArray(message.content) ? message.content : []).filter((block: { type: string }) => block.type === 'tool_result');
+        expect(seenRequests.length - requestStart).toBe(4);
+        expect(results).toHaveLength(3);
+        for (const result of results) expect(JSON.stringify(result)).toContain('Tools are disabled for this host-owned text-only turn');
+        expect(seenRequests.at(-1)!.body).not.toContain('fixture-read-secret');
+        expect(existsSync(target)).toBe(false);
+        expect(resolver).not.toHaveBeenCalled();
+
+        scriptedResponses.push(anthropicToolUseBody('read', { path: 'private.txt' }),
+          anthropicToolUseBody('write', { path: target, content: 'test' }), anthropicStreamBody('Done.'));
+        const normalDone = collectTurn();
+        const ordinaryStart = performance.now();
+        await handle.send({ type: 'user', content: 'Now write the file.' });
+        const ordinarySendMs = performance.now() - ordinaryStart;
+        await normalDone;
+        expect(readFileSync(target, 'utf8')).toBe('test');
+        const welcomeRequest = JSON.parse(seenRequests[requestStart]!.body);
+        const ordinaryRequest = JSON.parse(seenRequests.at(-1)!.body);
+        expect(seenRequests.at(-1)!.body).toContain('fixture-read-secret');
+        expect(readFileSync(handle.id, 'utf8')).not.toContain('[CINDY_TEXT_ONLY_INPUT]');
+        expect(seenRequests.slice(requestStart).every(request => !request.body.includes('[CINDY_TEXT_ONLY_INPUT]'))).toBe(true);
+        expect(ordinaryRequest.system).toEqual(welcomeRequest.system);
+        expect(ordinaryRequest.tools).toEqual(welcomeRequest.tools);
+        expect(ordinaryRequest.model).toBe(welcomeRequest.model);
+        console.info('Pi text-only send timing', { permissionMode, welcomeSendMs, ordinarySendMs });
+      } finally {
+        await handle?.close();
+        scriptedResponses.length = 0;
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it(
     'offline grep uses the host-managed ripgrep instead of falling back to bash',
@@ -2642,7 +2756,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('bash', { command: 'cat <*' }),
+          // Bash 4+ inherits dotglob, so <* matches both fixture files and is
+          // an ambiguous redirect. Keep that operation, then read a uniquely
+          // matched ordinary file to prove Full Access reached the shell.
+          anthropicToolUseBody('bash', { command: 'cat <*; cat <ordinary.*' }),
           anthropicStreamBody('bash Full Access dotglob turn finished'),
         );
         const fullAccessReqBefore = seenRequests.length;

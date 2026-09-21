@@ -1,3 +1,5 @@
+import { createDrizzleProxy } from '../../localDb/client/drizzleProxy';
+import type { DbTransport } from '../../localDb/client/DbTransport';
 /**
  * scheduler storage DB-tier smoke。
  *
@@ -1796,4 +1798,53 @@ it('excludes internal routine history from public indexes, unread counts and del
   } finally {
     harness.close();
   }
+});
+
+
+it('bounds history chunk reads while preserving run costs and schedule totals', async () => {
+  const harness = createStorageHarness();
+  try {
+    await harness.storage.insert(baseSchedule());
+    const session = harness.sqlite.prepare("INSERT INTO sessions (id,title,source) VALUES (?, 'scheduled', 'scheduler')");
+    const run = harness.sqlite.prepare("INSERT INTO schedule_runs (id,schedule_id,session_id,fired_at,status,cost_attribution) VALUES (?, 'sch-1', ?, ?, 'success', 'exact')");
+    const message = harness.sqlite.prepare("INSERT INTO messages (id,client_id,session_id,role,content,agent_meta,created_at) VALUES (?, ?, ?, 'assistant', '{}', ?, 1)");
+    harness.sqlite.transaction(() => {
+      for (let i = 0; i < 1001; i++) {
+        const id = `s-${i}`;
+        const runId = `r-${i}`;
+        session.run(id);
+        run.run(runId, id, i);
+        message.run(id, id, id, JSON.stringify({ origin: { kind: 'scheduler', scheduleId: 'sch-1', runId }, turnCostUsd: 1 }));
+      }
+    })();
+    let active = 0;
+    let peak = 0;
+    let messageReads = 0;
+    const transport: DbTransport = {
+      async send<R>(op: string, args: unknown): Promise<R> {
+        if (op !== 'rawAll') throw new Error(`unexpected read operation: ${op}`);
+        const { sql, params } = args as { sql: string; params: unknown[] };
+        peak = Math.max(peak, ++active);
+        if (sql.includes('from "messages"')) messageReads++;
+        try {
+          const rows = harness.sqlite.prepare(sql).raw().all(...params);
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          return rows as R;
+        } finally { active--; }
+      },
+      on() {}, onTerminated() {}, async close() {},
+    };
+    const storage = new DrizzleScheduleStorage(() => createDrizzleProxy(transport) as SchedulerDrizzleDb);
+    const runs = await storage.listRuns('sch-1', 1001);
+    expect(runs).toHaveLength(1001);
+    for (const run of runs) expect(run.costMoney).toEqual(actualMoneyFromLegacyUsd(1));
+    expect(messageReads).toBe(3);
+    expect(peak).toBe(1);
+    peak = messageReads = 0;
+    const summaries = await storage.listCostSummaries();
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ sessionCount: 1001, totalMoney: actualMoneyFromLegacyUsd(1001) });
+    expect(messageReads).toBe(3);
+    expect(peak).toBe(1);
+  } finally { harness.close(); }
 });

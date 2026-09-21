@@ -15,7 +15,8 @@ export function remoteDesktopUnavailableReason(value: unknown): string | null {
   if (caps.version !== 1) return 'remoteDesktop.upgrade';
   if (typeof caps.enabled !== 'boolean') return 'remoteDesktop.shortcut.checkFailed';
   if (!caps.enabled) return 'remoteDesktop.disabled';
-  if (caps.permissions?.screenRecording === 'missing') return 'remoteDesktop.permissionHint';
+  if (caps.permissions?.screenRecording === 'missing')
+    return 'remoteDesktop.shortcut.screenRecordingRequired';
   if (
     !Array.isArray(caps.displays) ||
     !caps.displays.some(
@@ -49,7 +50,7 @@ export function remoteDesktopAvailabilityError(error: unknown): string {
   return 'remoteDesktop.shortcut.checkFailed';
 }
 
-export function useRemoteDesktopAvailability(deviceId: string, active: boolean) {
+export function useRemoteDesktopAvailability(deviceId: string) {
   const devices = useDeviceLinkDeviceList();
   const { status: directoryStatus } = useDeviceLinkDeviceListRequestState();
   const revoked = useSyncExternalStore(
@@ -73,36 +74,41 @@ export function useRemoteDesktopAvailability(deviceId: string, active: boolean) 
             : !device.remoteControlEnabled
               ? 'remoteDesktop.remoteDisabled'
               : null;
+  // Presence/permission changes invalidate a check; hover and directory object
+  // refreshes do not. Keep this scoped to the mounted device row, not disk.
+  const present = !!device;
+  const version = device?.appVersion;
+  const platform = device?.platform;
   const scope = useMemo(
-    () => ({ deviceId, device, active, denied, directoryStatus }),
-    [deviceId, device, active, denied, directoryStatus],
+    () => ({ deviceId, present, blockedReason, version, platform }),
+    [deviceId, present, blockedReason, version, platform],
   );
   const [checked, setChecked] = useState<{ scope: typeof scope; reason: string | null } | null>(
     null,
   );
 
+  // Probe when an eligible device first appears, independently of pointer/focus.
   useEffect(() => {
-    if (!scope.active || !scope.device || blockedReason) return;
+    if (!scope.present || scope.blockedReason) return;
     let current = true;
-    const timer = setTimeout(() => {
-      void Promise.resolve()
-        .then(() =>
-          window.electronAPI.deviceLink.invoke(scope.deviceId, REMOTE_DESKTOP_CHANNEL, [
-            { op: 'capabilities' },
-          ]),
-        )
-        .then((value) => {
-          if (current) setChecked({ scope, reason: remoteDesktopUnavailableReason(value) });
-        })
-        .catch((error: unknown) => {
-          if (current) setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
-        });
-    }, 150);
+    void Promise.resolve()
+      .then(() =>
+        current
+          ? window.electronAPI.deviceLink.invoke(scope.deviceId, REMOTE_DESKTOP_CHANNEL, [
+              { op: 'capabilities' },
+            ])
+          : undefined,
+      )
+      .then((value) => {
+        if (current) setChecked({ scope, reason: remoteDesktopUnavailableReason(value) });
+      })
+      .catch((error: unknown) => {
+        if (current) setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
+      });
     return () => {
       current = false;
-      clearTimeout(timer);
     };
-  }, [scope, blockedReason]);
+  }, [scope]);
 
   const reason = blockedReason ?? (checked?.scope === scope ? checked.reason : null);
   return {

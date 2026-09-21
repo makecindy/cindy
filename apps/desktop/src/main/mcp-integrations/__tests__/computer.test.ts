@@ -4,6 +4,9 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { COMPUTER_TOOLS } from '@cindy/mcps/computer';
+import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/computer/recovery';
+import { HumanDesktopInput, HUMAN_INPUT_QUIET_MS } from '../../remote-desktop/inputOwnership';
+import * as inputOwnership from '../../remote-desktop/inputOwnership';
 
 const {
   existsSyncMock,
@@ -70,6 +73,8 @@ vi.mock('node:fs', async () => {
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: vi.fn().mockImplementation(() => ({
     callTool: mcpCallToolMock,
+    request: (request: { params: unknown }, _schema: unknown, options: unknown) =>
+      mcpCallToolMock(request.params, undefined, options),
     close: mcpCloseMock,
     connect: mcpConnectMock,
     listTools: mcpListToolsMock,
@@ -319,7 +324,19 @@ function mockWorkspaceRootExists(workspaceRoot: string): void {
 }
 
 describe('computer mcp integration', () => {
+  let revisionSpy: ReturnType<typeof vi.spyOn>;
+  let agentRevisionSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(async () => {
+    // Each test starts with a fresh process input history; cleanup of a driver
+    // session deliberately does not reset production remote-input revisions.
+    const readRevision = inputOwnership.desktopInputRevision;
+    const initialRevision = readRevision();
+    revisionSpy = vi.spyOn(inputOwnership, 'desktopInputRevision')
+      .mockImplementation(() => readRevision() - initialRevision);
+    const readAgentRevision = inputOwnership.agentDesktopInputRevision;
+    const initialAgentRevision = readAgentRevision();
+    agentRevisionSpy = vi.spyOn(inputOwnership, 'agentDesktopInputRevision')
+      .mockImplementation(() => readAgentRevision() - initialAgentRevision);
     setPlatform(originalPlatform);
     await cleanupAllComputerDriverSessions();
     resetComputerDriverPermissionProbeCacheForTests();
@@ -331,9 +348,16 @@ describe('computer mcp integration', () => {
     mcpCallToolMock.mockReset();
     mcpCloseMock.mockReset().mockResolvedValue(undefined);
     mcpConnectMock.mockReset().mockResolvedValue(undefined);
-    mcpListToolsMock.mockReset().mockResolvedValue({ tools: [
-      ...COMPUTER_TOOLS.map((tool) => tool.name), 'set_agent_cursor_motion', 'set_agent_cursor_style', 'end_session',
-    ].map((name) => ({ name, inputSchema: { type: 'object', additionalProperties: true } })) });
+    mcpListToolsMock
+      .mockReset()
+      .mockResolvedValue({
+        tools: [
+          ...COMPUTER_TOOLS.map((tool) => tool.name),
+          'set_agent_cursor_motion',
+          'set_agent_cursor_style',
+          'end_session',
+        ].map((name) => ({ name, inputSchema: { type: 'object', additionalProperties: true } })),
+      });
     transportCloseMock.mockReset().mockResolvedValue(undefined);
     transportCtorMock.mockReset();
     resolveDesktopOutboundProxyMock.mockReset().mockResolvedValue(null);
@@ -343,6 +367,8 @@ describe('computer mcp integration', () => {
   });
 
   afterEach(() => {
+    revisionSpy.mockRestore();
+    agentRevisionSpy.mockRestore();
     for (const key of driverResolutionEnvKeys) {
       const value = originalDriverResolutionEnv.get(key);
       if (value === undefined) {
@@ -1066,6 +1092,63 @@ describe('computer mcp integration', () => {
     expect(mcpConnectMock).toHaveBeenCalledTimes(1);
   });
 
+  it('names the run after its first goal and ignores later step descriptions', async () => {
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await callComputerDriverTool('list_windows', { session_goal: '提交报销申请' }, { sessionId: 'goal-a' });
+    await callComputerDriverTool('type_text', { pid: 1, text: 'x'.repeat(850), session_goal: '输入文字' }, { sessionId: 'goal-a' });
+    const calls = mcpCallToolMock.mock.calls.map(([call]) => call)
+      .filter((call) => ['list_windows', 'type_text'].includes(call.name));
+    expect(calls).toHaveLength(4);
+    const driverSession = calls[0].arguments.session;
+    expect(driverSession).toMatch(/^提交报销申请 · \d+-cua-[a-f0-9]{12}-0$/);
+    expect(calls.every((call) => call.arguments.session === driverSession)).toBe(true);
+    expect(calls.every((call) => !('session_goal' in call.arguments))).toBe(true);
+    await cleanupComputerDriverSession('goal-a');
+    expect(mcpCallToolMock.mock.lastCall![0]).toEqual({ name: 'end_session', arguments: { session: driverSession } });
+    await callComputerDriverTool('list_windows', { session_goal: '调整通知设置' }, { sessionId: 'goal-a' });
+    expect(mcpCallToolMock.mock.lastCall![0].arguments.session).toMatch(/^调整通知设置 · \d+-cua-[a-f0-9]{12}-1$/);
+  });
+
+  it('claims the first goal before asynchronous startup and isolates identical goals', async () => {
+    const startup = createDeferred<void>();
+    mcpConnectMock.mockReturnValueOnce(startup.promise);
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    const first = callComputerDriverTool('list_windows', { session_goal: 'Configure notifications' }, { sessionId: 'goal-a' });
+    const second = callComputerDriverTool('list_windows', { session_goal: 'Click button' }, { sessionId: 'goal-a' });
+    startup.resolve();
+    await Promise.all([first, second]);
+    await callComputerDriverTool('list_windows', { session_goal: 'Configure notifications' }, { sessionId: 'goal-b' });
+    const ids = mcpCallToolMock.mock.calls.map(([call]) => call.arguments.session);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[0]).toMatch(/^Configure notifications · /);
+    expect(ids[2]).toMatch(/^Configure notifications · /);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it('preserves the goal through transport recovery and only rotates the generation', async () => {
+    mcpCallToolMock.mockImplementation(async (call) => {
+      if (call.name === 'list_windows' && call.arguments.session.endsWith('-0')) {
+        return { content: [{ type: 'text', text: '"session ended; tool call ignored"' }] };
+      }
+      return { content: [{ type: 'text', text: '{"ok":true}' }] };
+    });
+    await callComputerDriverTool('list_windows', { session_goal: 'Submit report' }, { sessionId: 'goal-retry' });
+    const ids = mcpCallToolMock.mock.calls.map(([call]) => call)
+      .filter((call) => call.name === 'list_windows').map((call) => call.arguments.session);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toMatch(/^Submit report · /);
+    expect(ids[1]).toBe(ids[0].replace(/-0$/, '-1'));
+  });
+
+  it('keeps legacy identity when the first call omits a goal and strips host metadata on old drivers', async () => {
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await callComputerDriverTool('list_windows', {}, { sessionId: 'legacy' });
+    await callComputerDriverTool('list_windows', { session_goal: 'Late name' }, { sessionId: 'legacy' });
+    const calls = mcpCallToolMock.mock.calls.map(([call]) => call.arguments);
+    expectDriverSessionGenerations(calls.map((args) => args.session), 'legacy', [0, 0]);
+    expect(calls.every((args) => !('session_goal' in args))).toBe(true);
+  });
+
   it('retries Cindy cursor styling after a transient styling failure', async () => {
     mcpCallToolMock
       .mockRejectedValueOnce(new Error('motion unavailable'))
@@ -1193,6 +1276,8 @@ describe('computer mcp integration', () => {
       y: 20,
     }, { sessionId: 'session-style-recreated' });
     await cleanupComputerDriverSession('session-style-recreated');
+    mcpCallToolMock.mockResolvedValueOnce({ structuredContent: { ok: true, clicked: true } });
+    await callComputerDriverTool('get_window_state', { pid: 123, window_id: 7 }, { sessionId: 'session-style-recreated' });
     await callComputerDriverTool('click', {
       pid: 123,
       window_id: 7,
@@ -1207,6 +1292,7 @@ describe('computer mcp integration', () => {
       'end_session',
       'set_agent_cursor_motion',
       'set_agent_cursor_style',
+      'get_window_state',
       'click',
     ]);
     expect(mcpConnectMock).toHaveBeenCalledTimes(2);
@@ -1239,6 +1325,195 @@ describe('computer mcp integration', () => {
 
     expect(mcpConnectMock).toHaveBeenCalledTimes(2);
     expect(mcpCloseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a structured driver error after discovering output schemas', async () => {
+    mcpListToolsMock.mockResolvedValue({
+      tools: [
+        {
+          name: 'list_windows',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object', required: ['windows'] },
+        },
+      ],
+    });
+    mcpCallToolMock.mockResolvedValue({
+      isError: true,
+      content: [],
+      structuredContent: {
+        code: 'ax_window_unresolved',
+        message: 'Cannot resolve the target AX window',
+      },
+    });
+    await expect(
+      callComputerDriverTool('list_windows', {}, { sessionId: 'structured-error' }),
+    ).rejects.toMatchObject({
+      code: 'ax_window_unresolved',
+      message: 'Cannot resolve the target AX window',
+    });
+    expect(mcpCallToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks partial error delivery as unknown and never sends the next input chunk', async () => {
+    mcpCallToolMock.mockResolvedValue({
+      isError: true,
+      content: [{ type: 'text', text: 'type_text incomplete: delivered 12 of 13 characters' }],
+      structuredContent: { code: 'type_text_incomplete', effect: 'partial', delivered_chars: 12, requested_chars: 13 },
+    });
+    await expect(callComputerDriverTool('type_text', { pid: 1, window_id: 2, text: 'a'.repeat(850) }, { sessionId: 'partial-input-error' })).rejects.toMatchObject({
+      code: 'type_text_incomplete',
+      outcomeUnknown: true,
+    });
+    expect(mcpCallToolMock.mock.calls.filter(([request]) => request.name === 'type_text')).toHaveLength(1);
+  });
+
+  it('stops long input on malformed successful output and never sends the next chunk', async () => {
+    mcpListToolsMock.mockResolvedValue({
+      tools: [
+        {
+          name: 'type_text',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object', required: ['effect'] },
+        },
+      ],
+    });
+    mcpCallToolMock.mockResolvedValue({ content: [], structuredContent: { unexpected: true } });
+    await expect(
+      callComputerDriverTool(
+        'type_text',
+        { pid: 1, window_id: 2, text: 'a'.repeat(850) },
+        { sessionId: 'malformed-input-result' },
+      ),
+    ).rejects.toMatchObject({
+      code: 'DRIVER_OUTPUT_SCHEMA_MISMATCH',
+      outcomeUnknown: true,
+    });
+    expect(mcpCallToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['darwin', undefined, 'background'],
+    ['darwin', 'background', 'background'],
+    ['darwin', 'foreground', 'foreground'],
+    ['win32', undefined, undefined],
+    ['linux', undefined, undefined],
+  ] as const)(
+    'uses the platform drag default without overriding explicit mode: %s/%s',
+    async (platform, mode, expected) => {
+      setPlatform(platform);
+      mcpListToolsMock.mockResolvedValue({
+        tools: [
+          {
+            name: 'drag',
+            inputSchema: {
+              type: 'object',
+              properties: { delivery_mode: {} },
+              additionalProperties: true,
+            },
+          },
+        ],
+      });
+      mcpCallToolMock.mockResolvedValue({
+        content: [],
+        structuredContent: { effect: 'confirmed' },
+      });
+      const args = {
+        pid: 1,
+        window_id: 2,
+        from_x: 1,
+        from_y: 1,
+        to_x: 5,
+        to_y: 5,
+        ...(mode ? { delivery_mode: mode } : {}),
+      };
+      await callComputerDriverTool('drag', args, { sessionId: 'drag-default' });
+      const calls = mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'drag');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![0].arguments.delivery_mode).toBe(expected);
+      expect(args).toEqual({
+        pid: 1,
+        window_id: 2,
+        from_x: 1,
+        from_y: 1,
+        to_x: 5,
+        to_y: 5,
+        ...(mode ? { delivery_mode: mode } : {}),
+      });
+    },
+  );
+
+  it('does not inject a delivery mode into a legacy driver that does not advertise it', async () => {
+    setPlatform('darwin');
+    const args = { pid: 1, window_id: 2, from_x: 1, from_y: 1, to_x: 5, to_y: 5 };
+    mcpListToolsMock.mockResolvedValue({
+      tools: [
+        {
+          name: 'drag',
+          inputSchema: {
+            type: 'object',
+            properties: Object.fromEntries(Object.keys(args).map((key) => [key, {}])),
+            additionalProperties: false,
+          },
+        },
+      ],
+    });
+    mcpCallToolMock.mockResolvedValue({ content: [], structuredContent: { effect: 'confirmed' } });
+    await callComputerDriverTool('drag', args, { sessionId: 'legacy-drag' });
+    expect(mcpCallToolMock).toHaveBeenCalledTimes(1);
+    expect(mcpCallToolMock.mock.calls[0]![0].arguments).toEqual(args);
+  });
+
+  it('preserves a named driver error stored in the error field', async () => {
+    mcpCallToolMock.mockResolvedValue({
+      isError: true,
+      content: [{ type: 'text', text: "No installed macOS app found for name 'Example'." }],
+      structuredContent: { error: 'APP_NOT_INSTALLED', name: 'Example' },
+    });
+    await expect(
+      callComputerDriverTool('launch_app', { name: 'Example' }, { sessionId: 'app-error-code' }),
+    ).rejects.toMatchObject({ code: 'APP_NOT_INSTALLED' });
+    expect(mcpCallToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, 'background'] as const)('does not escalate or repeat a refused background drag (%s)', async (mode) => {
+    setPlatform('darwin');
+    mcpListToolsMock.mockResolvedValue({
+      tools: [{
+        name: 'drag',
+        inputSchema: {
+          type: 'object',
+          properties: { delivery_mode: {} },
+          additionalProperties: true,
+        },
+      }],
+    });
+    mcpCallToolMock.mockImplementation(async ({ name }) =>
+      name === 'drag'
+        ? {
+            isError: true,
+            content: [{ type: 'text', text: 'background unavailable' }],
+            structuredContent: { code: 'background_unavailable' },
+          }
+        : { content: [], structuredContent: { ok: true } },
+    );
+    await expect(
+      callComputerDriverTool(
+        'drag',
+        {
+          pid: 1,
+          window_id: 2,
+          from_x: 1,
+          from_y: 1,
+          to_x: 5,
+          to_y: 5,
+          ...(mode ? { delivery_mode: mode } : {}),
+        },
+        { sessionId: 'explicit-background' },
+      ),
+    ).rejects.toMatchObject({ code: 'background_unavailable' });
+    const calls = mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'drag');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0].arguments.delivery_mode).toBe('background');
   });
 
   it('chunks long type_text calls before sending them to cua-driver', async () => {
@@ -1342,6 +1617,382 @@ describe('computer mcp integration', () => {
     expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'type_text')).toHaveLength(1);
   });
 
+  it.each([false, true])('invalidates other tasks after Agent input, including session recreation=%s', async (recreate) => {
+    mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true } });
+    const target = { pid: 123, window_id: 7 };
+    const a = { sessionId: 'agent-a' }, b = { sessionId: 'agent-b' };
+    await callComputerDriverTool('get_window_state', target, a);
+    await callComputerDriverTool('get_window_state', target, b);
+    await callComputerDriverTool('click', { ...target, x: 1, y: 1 }, b);
+    if (recreate) await cleanupComputerDriverSession(a.sessionId);
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, a))
+      .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('get_window_state', target, a);
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, a)).resolves.toBeDefined();
+    // Own input does not invalidate a task's next primitive.
+    await expect(callComputerDriverTool('type_text', { ...target, text: 'hello' }, a)).resolves.toBeDefined();
+  });
+
+  it.each(['read-first', 'input-first'] as const)('does not authorize observations overlapping Agent input: %s', async (order) => {
+    const target = { pid: 123, window_id: 7 };
+    const read = createDeferred<unknown>();
+    const input = createDeferred<unknown>();
+    mcpCallToolMock.mockImplementation(({ name }) => name === 'get_window_state' ? read.promise
+      : name === 'click' ? input.promise : { structuredContent: { ok: true } });
+    const observe = () => callComputerDriverTool('get_window_state', target, { sessionId: 'reader' });
+    const act = () => callComputerDriverTool('click', { ...target, x: 1, y: 1 }, { sessionId: 'writer' });
+    const first = order === 'read-first' ? observe() : act();
+    await waitForCondition(() => mcpCallToolMock.mock.calls.some(([call]) => call.name === (order === 'read-first' ? 'get_window_state' : 'click')));
+    const second = order === 'read-first' ? act() : observe();
+    await waitForCondition(() => mcpCallToolMock.mock.calls.some(([call]) => call.name === 'click')
+      && mcpCallToolMock.mock.calls.some(([call]) => call.name === 'get_window_state'));
+    input.resolve({ structuredContent: { ok: true } });
+    read.resolve({ structuredContent: { ok: true } });
+    await Promise.all([first, second]);
+    await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, { sessionId: 'reader' }))
+      .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+  });
+
+  it('keeps text chunks together while another Agent waits', async () => {
+    const firstChunk = createDeferred<unknown>();
+    const events: string[] = [];
+    mcpCallToolMock.mockImplementation(({ name }) => {
+      if (name === 'type_text' || name === 'launch_app') events.push(name);
+      if (name === 'type_text' && events.length === 1) return firstChunk.promise;
+      return { structuredContent: { ok: true, effect: 'confirmed' } };
+    });
+    const typing = callComputerDriverTool('type_text', { pid: 123, window_id: 7, text: 'a'.repeat(850) }, { sessionId: 'typing' });
+    await waitForCondition(() => events.length === 1);
+    const launch = callComputerDriverTool('launch_app', { name: 'Calculator' }, { sessionId: 'launch' });
+    await waitForCondition(() => transportCtorMock.mock.calls.length === 2);
+    expect(events).toEqual(['type_text']);
+    firstChunk.resolve({ structuredContent: { ok: true, effect: 'confirmed' } });
+    await Promise.all([typing, launch]);
+    expect(events).toEqual(['type_text', 'type_text', 'type_text', 'launch_app']);
+  });
+
+  it('holds ownership through failed-input teardown before admitting the next Agent', async () => {
+    const input = createDeferred<unknown>();
+    const teardown = createDeferred<unknown>();
+    const events: string[] = [];
+    mcpCallToolMock.mockImplementation(({ name }) => {
+      events.push(name);
+      if (name === 'type_text') return input.promise;
+      if (name === 'end_session') return teardown.promise;
+      return { structuredContent: { ok: true } };
+    });
+    const active = callComputerDriverTool('type_text', { pid: 123, text: 'hello' }, { sessionId: 'failing' });
+    const rejected = expect(active).rejects.toMatchObject({ code: 'ACTION_OUTCOME_UNKNOWN' });
+    await waitForCondition(() => events.includes('type_text'));
+    const next = callComputerDriverTool('launch_app', { name: 'Calculator' }, { sessionId: 'next' });
+    input.reject(new Error('transport closed'));
+    await waitForCondition(() => events.includes('end_session'));
+    expect(events).not.toContain('launch_app');
+    teardown.resolve({ structuredContent: { ok: true } });
+    await Promise.all([rejected, next]);
+    expect(events.filter((name) => ['type_text', 'end_session', 'launch_app'].includes(name)))
+      .toEqual(['type_text', 'end_session', 'launch_app']);
+  });
+
+  it('preserves the completed prefix and uncertain chunk after a typing transport failure', async () => {
+    let chunks = 0;
+    mcpCallToolMock.mockImplementation(({ name }) => {
+      if (name === 'type_text' && ++chunks === 2) throw new Error('transport closed');
+      return { structuredContent: { ok: true, effect: 'confirmed' } };
+    });
+    await expect(callComputerDriverTool('type_text', { pid: 123, text: 'a'.repeat(850) }, { sessionId: 'partial' }))
+      .rejects.toMatchObject({ code: 'ACTION_OUTCOME_UNKNOWN', outcomeUnknown: true,
+        inputProgress: { completed_chars: 400, attempted_chars: 400, remaining_chars: 50 } });
+    expect(chunks).toBe(2);
+  });
+
+  it('refuses an action prepared before another task changed the desktop', async () => {
+    const startup = createDeferred<void>();
+    mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true } });
+    const target = { pid: 123, window_id: 7 };
+    mcpConnectMock.mockReturnValueOnce(startup.promise);
+    const oldAction = callComputerDriverTool('click', { ...target, x: 1, y: 1 }, { sessionId: 'slow-start' });
+    const rejected = expect(oldAction).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    await callComputerDriverTool('launch_app', { name: 'Calculator' }, { sessionId: 'other' });
+    startup.resolve();
+    await rejected;
+    expect(mcpCallToolMock.mock.calls.some(([call]) => call.name === 'click')).toBe(false);
+  });
+
+  it('cancels a queued same-session call without closing the active driver', async () => {
+    const pending = createDeferred<unknown>();
+    const controller = new AbortController();
+    mcpCallToolMock.mockImplementation(({ name }) => name === 'type_text' ? pending.promise : { structuredContent: { ok: true } });
+    const active = callComputerDriverTool('type_text', { pid: 123, text: 'hello' }, { sessionId: 'shared' });
+    await waitForCondition(() => mcpCallToolMock.mock.calls.some(([call]) => call.name === 'type_text'));
+    const queued = callComputerDriverTool('launch_app', { name: 'Calculator' }, { sessionId: 'shared', signal: controller.signal });
+    const rejected = expect(queued).rejects.toMatchObject({ code: 'REQUEST_CANCELLED', outcomeUnknown: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await rejected;
+    expect(mcpCloseMock).not.toHaveBeenCalled();
+    expect(mcpCallToolMock.mock.calls.some(([call]) => call.name === 'launch_app' || call.name === 'end_session')).toBe(false);
+    pending.resolve({ structuredContent: { ok: true } });
+    await active;
+  });
+
+  it('yields to remote input between text chunks and requires a fresh target before resuming', async () => {
+    vi.useFakeTimers();
+    const human = new HumanDesktopInput();
+    let batch: ReturnType<HumanDesktopInput['begin']> | undefined;
+    const context = { sessionId: 'remote-yield' };
+    const target = { pid: 123, window_id: 7 };
+    try {
+      mcpCallToolMock.mockImplementation(({ name }) => {
+        if (name === 'type_text' && !batch) batch = human.begin([{ kind: 'text', text: 'human' }]);
+        return { structuredContent: { ok: true, effect: 'confirmed' } };
+      });
+      await expect(callComputerDriverTool('type_text', { ...target, text: 'a'.repeat(850) }, context))
+        .rejects.toMatchObject({ code: 'DESKTOP_INPUT_YIELDED', outcomeUnknown: true,
+          inputProgress: { completed_chars: 400, attempted_chars: 0, remaining_chars: 450 } });
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'type_text')).toHaveLength(1);
+      await batch!.ready;
+      batch!.complete();
+      vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, context))
+        .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await callComputerDriverTool('get_window_state', target, context);
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, context)).resolves.toBeDefined();
+    } finally {
+      human.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['pending', 'quiet', 'settled-before-return', 'input-during-read'] as const)(
+    'does not count an observation overlapping remote input (%s) as a fresh target', async (phase) => {
+    vi.useFakeTimers();
+    const human = new HumanDesktopInput();
+    const context = { sessionId: 'remote-observation' };
+    const target = { pid: 123, window_id: 7 };
+    try {
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true } });
+      let batch: ReturnType<HumanDesktopInput['begin']> | undefined;
+      if (phase !== 'input-during-read') batch = human.begin([{ kind: 'text', text: 'human' }]);
+      if (phase === 'quiet') batch!.complete();
+      mcpCallToolMock.mockImplementation(({ name }) => {
+        if (name === 'get_window_state') {
+          if (phase === 'input-during-read' && !batch) batch = human.begin([{ kind: 'text', text: 'human' }]);
+          if (phase === 'settled-before-return' || phase === 'input-during-read' || phase === 'quiet') {
+            batch!.complete();
+            vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+          }
+        }
+        return { structuredContent: { ok: true } };
+      });
+      await callComputerDriverTool('get_window_state', target, context);
+      batch!.complete();
+      vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, context))
+        .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await callComputerDriverTool('get_window_state', { ...target, window_id: 8 }, context);
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, context))
+        .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await callComputerDriverTool('get_window_state', target, context);
+      await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1 }, context)).resolves.toBeDefined();
+    } finally { human.release(); vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('requires successful re-observation after remote input, including session cleanup=%s', async (cleanup) => {
+    vi.useFakeTimers();
+    const human = new HumanDesktopInput();
+    const context = { sessionId: 'fresh-observation' };
+    const target = { pid: 123, window_id: 7 };
+    try {
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true } });
+      if (cleanup) await callComputerDriverTool('get_window_state', target, context);
+      human.begin([{ kind: 'text', text: 'human' }]).complete();
+      vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+      if (cleanup) await cleanupComputerDriverSession(context.sessionId);
+      await expect(callComputerDriverTool('click', target, context))
+        .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      const failedObservations = [
+        { args: {}, result: { ok: false, error: 'unavailable' } },
+        { args: { capture_mode: 'vision' }, result: { screenshot_frame_valid: false, elements: [{}] } },
+        { args: { capture_mode: 'som' }, result: { screenshot_error: 'capture failed', tree_markdown: 'AX' } },
+        { args: { include_screenshot: true }, result: { screenshot_error: 'capture failed' } },
+        { args: { screenshot_out_file: '/tmp/test.png' }, result: { screenshot_frame_valid: false } },
+        { args: { capture_mode: 'ax' }, result: { degraded: true, elements: [], tree_markdown: '' } },
+        { args: { include_screenshot: false }, result: { degraded: true } },
+        { args: {}, result: { screenshot_error: 'capture failed', degraded: true } },
+      ];
+      for (const observation of failedObservations) {
+        mcpCallToolMock.mockResolvedValue({ structuredContent: observation.result });
+        await callComputerDriverTool('get_window_state', { ...target, ...observation.args }, context);
+        await expect(callComputerDriverTool('click', target, context))
+          .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      }
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true } });
+      await callComputerDriverTool('get_window_state', target, context);
+      for (const name of ['type_text', 'press_key', 'hotkey', 'click'] as const) {
+        await expect(callComputerDriverTool(name, { pid: 123, text: 'hello', key: 'a', keys: ['CTRL', 'a'] }, context))
+          .resolves.toBeDefined();
+      }
+      await expect(callComputerDriverTool('click', { pid: 124 }, context))
+        .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await expect(callComputerDriverTool('click', { ...target, window_id: 8 }, context))
+        .rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await expect(callComputerDriverTool('click', target, context)).resolves.toBeDefined();
+    } finally { human.release(); vi.useRealTimers(); }
+  });
+
+  it('keeps remote-input gating after real recovery reads until an explicit window observation', async () => {
+    vi.useFakeTimers();
+    const human = new HumanDesktopInput();
+    const context = { sessionId: 'joint-recovery' };
+    const target = { pid: 123, window_id: 7, include_screenshot: false };
+    try {
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { elements: [], tree_markdown: 'window' } });
+      human.begin([{ kind: 'text', text: 'human' }]).complete();
+      vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+      const recovery = await readForRecovery({ getStatus: vi.fn(), callTool: callComputerDriverTool }, 'get_window_state', target, context);
+      expect(recovery.ok).toBe(true);
+      await expect(callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await expect(callComputerDriverTool('type_text', { pid: 123, text: 'agent' }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => ['click', 'type_text'].includes(call.name))).toHaveLength(0);
+      expect(mcpCallToolMock.mock.calls.every(([call]) => !('observationPurpose' in call.arguments))).toBe(true);
+      await callComputerDriverTool('get_window_state', target, context);
+      await expect(callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, context)).resolves.toBeDefined();
+      await expect(callComputerDriverTool('type_text', { pid: 123, text: 'agent' }, context)).resolves.toBeDefined();
+    } finally { human.release(); vi.useRealTimers(); }
+  });
+
+  it.each([
+    { include_screenshot: false, result: { degraded: true, degraded_reason: 'ax_window_unresolved', elements: [] } },
+    { include_screenshot: true, result: { screenshot_frame_valid: false, screenshot_error: 'capture unavailable', elements: [] } },
+    { include_screenshot: false, result: { ok: false, code: 'window_id_not_found' } },
+  ])('revokes previous input authorization when explicit observation fails: $result', async ({ include_screenshot, result }) => {
+    vi.useFakeTimers();
+    const human = new HumanDesktopInput();
+    const context = { sessionId: 'joint-failed-observation' };
+    const target = { pid: 123, window_id: 7, include_screenshot };
+    try {
+      human.begin([{ kind: 'text', text: 'human' }]).complete();
+      vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { elements: [], screenshot_frame_valid: true } });
+      await callComputerDriverTool('get_window_state', target, context);
+      mcpCallToolMock.mockResolvedValue({ structuredContent: result });
+      await callComputerDriverTool('get_window_state', target, context);
+      await expect(callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await expect(callComputerDriverTool('type_text', { pid: 123, text: 'agent' }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+    } finally { human.release(); vi.useRealTimers(); }
+  });
+
+  it('does not authorize input from an observation interrupted by remote input', async () => {
+    vi.useFakeTimers();
+    const human = new HumanDesktopInput();
+    const context = { sessionId: 'joint-interrupted-observation' };
+    const target = { pid: 123, window_id: 7, include_screenshot: false };
+    const pending = createDeferred<unknown>();
+    try {
+      mcpCallToolMock.mockImplementation(({ name }) => name === 'get_window_state' ? pending.promise : { structuredContent: { ok: true } });
+      const read = callComputerDriverTool('get_window_state', target, context);
+      await vi.waitFor(() => expect(mcpCallToolMock.mock.calls.some(([call]) => call.name === 'get_window_state')).toBe(true));
+      human.begin([{ kind: 'text', text: 'human' }]).complete();
+      vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+      pending.resolve({ structuredContent: { elements: [], tree_markdown: 'window' } });
+      await read;
+      await expect(callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await callComputerDriverTool('get_window_state', target, context);
+      await expect(callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, context)).resolves.toBeDefined();
+    } finally { human.release(); vi.useRealTimers(); }
+  });
+
+  it.each([
+    { newerWindow: 7, cancel: false },
+    { newerWindow: 7, cancel: true },
+    { newerWindow: 8, cancel: false },
+    { newerWindow: 8, cancel: true },
+  ])('does not let a late observation undo newer failure: $newerWindow, cancelled=$cancel', async ({ newerWindow, cancel }) => {
+    vi.useFakeTimers();
+    const human = new HumanDesktopInput();
+    const context = { sessionId: 'joint-concurrent-observation' };
+    const target = { pid: 123, window_id: 7, include_screenshot: false };
+    const pending = createDeferred<unknown>();
+    try {
+      human.begin([{ kind: 'text', text: 'human' }]).complete();
+      vi.advanceTimersByTime(HUMAN_INPUT_QUIET_MS);
+      mcpCallToolMock.mockImplementation(({ name }) => name === 'get_window_state' ? pending.promise : { structuredContent: { ok: true } });
+      const older = callComputerDriverTool('get_window_state', target, context);
+      await vi.waitFor(() => expect(mcpCallToolMock.mock.calls.some(([call]) => call.name === 'get_window_state')).toBe(true));
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: false, code: 'window_id_not_found' } });
+      const controller = new AbortController();
+      if (cancel) controller.abort();
+      const newer = callComputerDriverTool('get_window_state', { ...target, window_id: newerWindow }, { ...context, signal: controller.signal });
+      if (cancel) await expect(newer).rejects.toBeDefined();
+      else await newer;
+      pending.resolve({ structuredContent: { elements: [], tree_markdown: 'window' } });
+      await older;
+      await expect(callComputerDriverTool('type_text', { pid: 123, text: 'agent' }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      await expect(callComputerDriverTool('click', { pid: 123, window_id: newerWindow, x: 1, y: 1 }, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { elements: [], tree_markdown: 'window' } });
+      if (newerWindow !== 7) {
+        await expect(callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, context)).resolves.toBeDefined();
+      }
+      await callComputerDriverTool('get_window_state', { ...target, window_id: newerWindow }, context);
+      await expect(callComputerDriverTool('type_text', { pid: 123, text: 'agent' }, context)).resolves.toBeDefined();
+    } finally { human.release(); vi.useRealTimers(); }
+  });
+
+  it('bounds delayed typing chunks while a remote input connection is open', async () => {
+    const human = new HumanDesktopInput();
+    try {
+      mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true, effect: 'confirmed' } });
+      await callComputerDriverTool('type_text', { pid: 123, window_id: 7, text: 'abc', delay_ms: 200 }, { sessionId: 'remote-slow-text' });
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'type_text')
+        .map(([call]) => call.arguments.text)).toEqual(['a', 'b', 'c']);
+    } finally { human.release(); }
+  });
+
+  it('lets remote input proceed during driver startup and refuses the now-stale Agent action', async () => {
+    const human = new HumanDesktopInput();
+    let finish!: () => void;
+    mcpConnectMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const action = callComputerDriverTool('click', { pid: 123, window_id: 7, x: 1, y: 1 }, { sessionId: 'remote-startup' });
+    const rejected = expect(action).rejects.toThrow('Agent yielded');
+    try {
+      await vi.waitFor(() => expect(mcpConnectMock).toHaveBeenCalled());
+      const batch = human.begin([{ kind: 'text', text: 'human' }]);
+      await batch.ready;
+      batch.complete();
+      finish();
+      await rejected;
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    } finally { finish?.(); human.release(); }
+  });
+
+  it('keeps remote input waiting through driver teardown after an interrupted primitive', async () => {
+    const human = new HumanDesktopInput();
+    let batch: ReturnType<HumanDesktopInput['begin']> | undefined;
+    let finish!: () => void;
+    let delivered = false;
+    mcpCallToolMock.mockImplementation(({ name }) => {
+      if (name === 'type_text') {
+        batch = human.begin([{ kind: 'text', text: 'human' }]);
+        void batch.ready.then(() => { delivered = true; });
+        throw new Error('session ended; tool call ignored');
+      }
+      if (name === 'end_session') return new Promise((resolve) => {
+        finish = () => resolve({ structuredContent: { ok: true } });
+      });
+      return { structuredContent: { ok: true } };
+    });
+    const action = callComputerDriverTool('type_text', { pid: 123, window_id: 7, text: 'hello' }, { sessionId: 'remote-teardown' });
+    const rejected = expect(action).rejects.toMatchObject({ code: 'ACTION_OUTCOME_UNKNOWN' });
+    try {
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      expect(delivered).toBe(false);
+      finish(); await rejected; await batch!.ready;
+      expect(delivered).toBe(true);
+      batch!.complete();
+    } finally { finish?.(); human.release(); }
+  });
+
   it.each(['connect', 'tools/list'] as const)('cancels the caller during %s without interrupting shared startup', async (phase) => {
     mcpCallToolMock.mockResolvedValue({ structuredContent: { width: 1920, height: 1080 } });
     let finish!: () => void;
@@ -1397,7 +2048,8 @@ describe('computer mcp integration', () => {
     await expect(callComputerDriverTool('click', { pid: 123, window_id: 7, x: 10, y: 20 }, {
       sessionId: 'setup-cancel', signal: controller.signal,
     })).rejects.toMatchObject({ code: 'REQUEST_CANCELLED' });
-    expect(mcpCallToolMock.mock.calls.map(([call]) => call.name)).toEqual(['set_agent_cursor_motion', 'end_session']);
+    expect(mcpCallToolMock.mock.calls.map(([call]) => call.name)).toEqual(['set_agent_cursor_motion']);
+    expect(mcpCloseMock).not.toHaveBeenCalled();
   });
 
   it('negotiates paginated tools once per connection and fails unsupported actions locally', async () => {

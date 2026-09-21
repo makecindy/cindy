@@ -133,7 +133,7 @@ describe('IssueConfirmCard draft persistence', () => {
     fireEvent.change(screen.getByLabelText('issueAgent.confirm.bodyLabel'), {
       target: { value: '编辑后的正文' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'issueAgent.confirm.typeFeature' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'issueAgent.confirm.typeFeature' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'switch session' }));
     expect(screen.queryByLabelText('issueAgent.confirm.titleLabel')).toBeNull();
@@ -147,8 +147,8 @@ describe('IssueConfirmCard draft persistence', () => {
     ).toBe('编辑后的正文');
     expect(
       screen
-        .getByRole('button', { name: 'issueAgent.confirm.typeFeature' })
-        .getAttribute('aria-pressed'),
+        .getByRole('radio', { name: 'issueAgent.confirm.typeFeature' })
+        .getAttribute('aria-checked'),
     ).toBe('true');
   });
 

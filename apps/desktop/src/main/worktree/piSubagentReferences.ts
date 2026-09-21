@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import { piSubagentRunRoot } from '@cindy/maker-core/pi-subagent-runs';
+import { piSubagentLaunchFenceArtifact, piSubagentRunRoot } from '@cindy/maker-core/pi-subagent-runs';
 
 import { createLogger } from '../logger';
 
@@ -59,6 +59,19 @@ export async function readPiSubagentWorktreeReferences(): Promise<ReadonlyMap<st
     const rootSnapshot = await readDirectory(root);
     const references = new Map<string, readonly string[]>();
     for (const sessionId of rootSnapshot.entries) {
+      if (piSubagentLaunchFenceArtifact(sessionId)) {
+        // The Host's own launch fence — and the staging file a crash can leave
+        // between its write and the rename — sits in this root beside the
+        // session directories. As a plain file it is not a session and holds no
+        // reference, so it is skipped rather than failing the whole read: that
+        // failure is what kept every recycle on a machine with one leftover
+        // staging file waiting on "still referenced" for good. Anything else
+        // wearing that name is not something the fence machinery writes, and
+        // stays fail-closed like any other suspicious entry.
+        const stat = await fs.lstat(path.join(root, sessionId));
+        if (stat.isSymbolicLink() || !stat.isFile()) return null;
+        continue;
+      }
       const sessionRoot = piSubagentRunRoot(agentHome, sessionId);
       const sessionSnapshot = await readDirectory(sessionRoot);
       const paths = new Set<string>();

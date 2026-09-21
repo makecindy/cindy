@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import { BlurBackdrop } from "@/session/BlurBackdrop";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { ChevronDown, Ellipsis, Menu, Monitor } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
@@ -22,7 +23,7 @@ import { lineHeight, radius, spacing } from "@/theme/tokens";
 
 /**
  * 首页 iOS 顶栏走系统 UINavigationBar。
- * 实底 surface,和列表同色;不要透明磨砂。Android 不渲染。
+ * 透明导航栏;设备标题使用与任务标题相同的轻磨砂胶囊。Android 不渲染。
  */
 export function HomeNativeStackHeader({
   displayA11y,
@@ -79,6 +80,7 @@ export function HomeNativeStackHeader({
         style={({ pressed }) => [styles.titleHit, pressed && styles.pressed]}
         testID="devices.title"
       >
+        <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} />
         <View style={styles.titleCluster}>
           <Text numberOfLines={1} style={styles.title}>
             {title}
@@ -101,14 +103,14 @@ export function HomeNativeStackHeader({
           headerBackVisible: false,
           headerShadowVisible: false,
           headerShown: true,
-          headerStyle: { backgroundColor: colors.surface },
+          headerStyle: { backgroundColor: "transparent" },
           headerTintColor: colors.textPrimary,
-          headerTransparent: false,
+          headerTransparent: true,
         }}
       />
       <Stack.Header
         style={{
-          backgroundColor: colors.surface,
+          backgroundColor: "transparent",
           color: colors.textPrimary,
           shadowColor: "transparent",
         }}
@@ -214,6 +216,9 @@ const makeStyles = (colors: ThemeColors) =>
       minWidth: 0,
     },
     titleHit: {
+      borderRadius: radius.pill,
+      overflow: "hidden",
+      paddingHorizontal: spacing.md,
       alignItems: "center",
       justifyContent: "center",
       minHeight: 44,

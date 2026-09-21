@@ -158,6 +158,52 @@ describe.skipIf(!binaryPath)('real Codex history/account isolation contract', ()
     await f.assertOriginals();
   }, 60_000);
 
+  it('classifies an unmaterialized thread after closing its original host', async () => {
+    const f = await fixture();
+    const original = f.host(f.historyHome);
+    const started = await original.request<{ thread: { id: string; path: string } }>('thread/start', {
+      cwd: f.root, model: 'gpt-6-astra', approvalPolicy: 'never', sandbox: 'read-only',
+    }, { timeoutMs: 15_000 });
+    expect(started.thread.path).toBeTruthy();
+    await expect(fs.lstat(started.thread.path)).rejects.toMatchObject({ code: 'ENOENT' });
+    await original.retire();
+    const replacement = f.host(f.historyHome);
+    await expect(replacement.request('thread/read', { threadId: started.thread.id, includeTurns: false })).rejects.toMatchObject({
+      code: -32600, data: undefined,
+      message: `codex app-server thread/read error -32600: thread not loaded: ${started.thread.id}`,
+    });
+    await expect(replacement.request('thread/resume', {
+      threadId: started.thread.id, cwd: f.root, model: 'gpt-6-astra',
+    }, { timeoutMs: 15_000 })).rejects.toMatchObject({
+      code: -32600,
+      message: `codex app-server thread/resume error -32600: no rollout found for thread id ${started.thread.id}`,
+      data: undefined,
+    });
+    await f.assertOriginals();
+  }, 30_000);
+
+  it('retains metadata for a lost persisted rollout despite the same no-rollout resume error', async () => {
+    const f = await fixture();
+    const original = f.host(f.historyHome);
+    await f.resume(original);
+    await original.retire();
+    const canonical = await fs.realpath(f.child.file);
+    await fs.rename(f.child.file, `${f.child.file}.preserved`);
+    const replacement = f.host(f.historyHome);
+    await expect(replacement.request('thread/read', { threadId: f.child.id, includeTurns: false })).resolves.toMatchObject({
+      thread: { id: f.child.id, path: canonical },
+    });
+    try {
+      await expect(replacement.request('thread/resume', {
+        threadId: f.child.id, cwd: f.root, model: 'gpt-6-astra',
+      }, { timeoutMs: 15_000 })).rejects.toMatchObject({
+        message: `codex app-server thread/resume error -32600: no rollout found for thread id ${f.child.id}`,
+      });
+    } finally {
+      await fs.rename(`${f.child.file}.preserved`, f.child.file);
+    }
+  }, 30_000);
+
   it('keeps native forks in the original history domain', async () => {
     const f = await fixture();
     const host = f.host(f.historyHome, 'account-b');

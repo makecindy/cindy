@@ -3,6 +3,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
 import { sessionActivityMs } from './dateSessionGrouping';
 import {
+  filterPersistentLocalProjectsByLastActivity,
   groupSessions,
   projectIdentityKeyForSession,
   type PersistentLocalProject,
@@ -86,12 +87,10 @@ export function collectRestorableProjectKeys({
     lastActivityCutoff === null
       ? vendorSessions
       : vendorSessions.filter((session) => sessionActivityMs(session) >= lastActivityCutoff);
-  const activityProjects =
-    lastActivityCutoff === null
-      ? vendorProjects
-      : vendorProjects.filter(
-          (project) => new Date(project.lastUsedAt).getTime() >= lastActivityCutoff,
-        );
+  const activityProjects = filterPersistentLocalProjectsByLastActivity(
+    vendorProjects,
+    lastActivityCutoff,
+  );
   const activityGroups = groupSessions(activitySessions, {
     includePinnedInProjects: true,
     persistentLocalProjects: activityProjects,

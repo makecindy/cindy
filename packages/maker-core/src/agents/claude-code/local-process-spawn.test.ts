@@ -29,6 +29,7 @@ function makeChild(pid = 4321) {
 
 function spawnProcess(overrides: {
   registerProcess?: (pid: number) => void | (() => void);
+  trackDebugFile?: () => () => void;
   onStderr?: (chunk: string) => void;
 } = {}) {
   return spawnObservedClaudeProcess({
@@ -48,6 +49,17 @@ beforeEach(() => {
 });
 
 describe('spawnObservedClaudeProcess', () => {
+  it('releases debug tracking once even when the process observer fails', () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const release = vi.fn();
+    const trackDebugFile = vi.fn(() => release);
+    spawnProcess({ registerProcess: () => { throw new Error('observer'); }, trackDebugFile });
+    expect(trackDebugFile).toHaveBeenCalledOnce();
+    child.emit('error', new Error('spawn'));
+    child.emit('exit', 1, null);
+    expect(release).toHaveBeenCalledOnce();
+  });
   it('registers the concrete PID and disposes that generation once', () => {
     const child = makeChild();
     mocks.spawn.mockReturnValue(child);

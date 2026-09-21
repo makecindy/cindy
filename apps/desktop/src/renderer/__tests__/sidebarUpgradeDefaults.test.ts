@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 目标:老用户升级后左侧任务列表**尽量不变**;新用户才吃新默认。
  *   - 分组默认老新一致:按项目 + 按设备 + 对话归组(用户明确要求不分老新)。
- *   - 排序默认按时间;任务信息默认只显示时间。
+ *   - 排序默认按时间;任务信息默认显示标签和时间。
  *   - **显示模式是唯一按安装新旧分叉的项**:新装 'list',老装 'text'。
  *     最难的一类是「从没动过显示模式的老用户」——localStorage 里没有 cardMode,
  *     与全新安装无法直接区分,靠 sidebarInstallVintage 的旧版使用痕迹识别。
@@ -85,12 +85,12 @@ describe('侧边栏升级兼容性:默认配置', () => {
     vintageTesting.resetMemo();
   });
 
-  it('新用户默认:项目 + 设备 + 对话三层分组,按时间排序,任务信息只显示时间', () => {
+  it('新用户默认:项目 + 设备 + 对话三层分组,按时间排序,任务信息显示标签和时间', () => {
     expect(loadGroupBy()).toBe('project');
     expect(loadGroupDevice()).toBe(true);
     expect(loadGroupDialogue()).toBe(true);
     expect(loadSortBy()).toBe('recency');
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['tags', 'time']);
   });
 
   it('分组默认不分老新:老安装拿到同一套分组默认', () => {

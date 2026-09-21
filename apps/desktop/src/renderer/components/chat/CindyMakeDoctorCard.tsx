@@ -13,6 +13,10 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
+import { CindyMakeTaskCard } from '@/components/cindy-make/CindyMakeTaskCard';
+import { CindyMakeDependencyProgress } from '@/components/cindy-make/CindyMakeDependencyProgress';
+import { useCindyMakeState } from '@/lib/cindyMakeState';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -22,6 +26,7 @@ import { toast } from '@/lib/toast';
 import {
   isMakeEnvironmentReady,
   type MakeDoctorReport,
+  type MakeRuntimeVersion,
   type MakeUpstreamDecision,
   type MakeUpstreamItem,
 } from '../../../shared/cindyMakeDoctor';
@@ -35,26 +40,101 @@ export function CindyMakeDoctorCard({
   sessionId?: string;
   onDismiss?: () => void;
 }) {
-  const report = data?.report as MakeDoctorReport | undefined;
+  const persistedReport = data?.report as MakeDoctorReport | undefined;
+  const makeState = useCindyMakeState();
+  const remote = Boolean(getStickySessionDeviceId(sessionId));
+  const liveReport =
+    !remote && persistedReport ? makeState.reports?.[persistedReport.runId] : undefined;
+  const report = liveReport ?? persistedReport;
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [startingCode, setStartingCode] = useState(false);
   const activeSession = useRef(sessionId);
+  const openingTask = useRef(false);
   useEffect(() => {
     activeSession.current = sessionId;
     return () => {
       activeSession.current = undefined;
     };
   }, [sessionId]);
+  const openTask = async (targetSessionId: string) => {
+    const owner = getDataOwnerGeneration();
+    const current = () =>
+      activeSession.current === sessionId &&
+      isDataOwnerGenerationCurrent(owner) &&
+      !getStickySessionDeviceId(sessionId) &&
+      !getStickySessionDeviceId(targetSessionId);
+    if (openingTask.current || !current()) return;
+    openingTask.current = true;
+    try {
+      const [service, { sessionsStore }] = await Promise.all([
+        import('@/lib/sessionService'),
+        import('@/lib/sessionsStore'),
+      ]);
+      if (!current()) return;
+      let target = await service.get(targetSessionId);
+      if (!current()) return;
+      if (!target || target.status === 'deleted') throw new Error('unavailable');
+      if (target.status === 'archived') {
+        const restored = await service.restoreIfArchived(target.id, target);
+        if (!current()) return;
+        if (!restored) throw new Error('unavailable');
+        target = restored;
+      }
+      sessionsStore.prependCreated(target);
+      onDismiss?.();
+      navigate('/cc-agent/' + target.id);
+    } catch {
+      if (current()) toast.error(t('settings.cindyMake.tasks.errors.unavailable'));
+    } finally {
+      openingTask.current = false;
+    }
+  };
   if (!report) return null;
+  if (report.task || (!remote && makeState.tasks?.[report.runId]?.task)) {
+    const live = !remote ? makeState.tasks?.[report.runId] : undefined;
+    const snapshot = live ?? report;
+    return (
+      <CindyMakeTaskCard
+        report={snapshot}
+        readOnly={remote}
+        request={typeof data?.request === 'string' ? data.request : undefined}
+        onOpenTask={
+          !remote && snapshot.task?.sessionId !== sessionId
+            ? () => void openTask(snapshot.task!.sessionId)
+            : undefined
+        }
+      />
+    );
+  }
   const codeSessionId = typeof data?.codeSessionId === 'string' ? data.codeSessionId : undefined;
+  const compactPrepare = report.mode === 'prepare' && codeSessionId === sessionId;
+  const syncLiveReport = async () => {
+    if (!sessionId || !liveReport || getStickySessionDeviceId(sessionId)) return;
+    const owner = getDataOwnerGeneration();
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    if (!isDataOwnerGenerationCurrent(owner) || getStickySessionDeviceId(sessionId)) return;
+    const message = makerChatStore
+      .getSnapshot(sessionId)
+      .messages.find(
+        (row) =>
+          (row.systemCardType === 'cindy-make' || row.systemCardType === 'cindy-make-doctor') &&
+          (row.systemCardData?.report as MakeDoctorReport | undefined)?.runId === liveReport.runId,
+      );
+    if (message)
+      makerChatStore.updateSystemCardData(sessionId, message.clientId, { report: liveReport });
+  };
   const start = (choice?: MakeUpstreamDecision) => {
-    if (!sessionId || startingCode) return;
+    if (!sessionId || startingCode || getStickySessionDeviceId(sessionId)) return;
     const owner = getDataOwnerGeneration();
     setStartingCode(true);
     void import('@/lib/cindyMakeDoctorStream')
-      .then(({ chooseMakeUpstream, startMakeCodeSession }) => {
-        if (!isDataOwnerGenerationCurrent(owner)) return null;
+      .then(async ({ chooseMakeUpstream, startMakeCodeSession }) => {
+        if (!isDataOwnerGenerationCurrent(owner) || getStickySessionDeviceId(sessionId))
+          return null;
+        await syncLiveReport();
+        if (!isDataOwnerGenerationCurrent(owner) || getStickySessionDeviceId(sessionId))
+          return null;
         return choice
           ? chooseMakeUpstream(sessionId, report.runId, choice)
           : startMakeCodeSession(sessionId, report.runId);
@@ -67,7 +147,9 @@ export function CindyMakeDoctorCard({
         if (
           createdId &&
           activeSession.current === sessionId &&
-          isDataOwnerGenerationCurrent(owner)
+          isDataOwnerGenerationCurrent(owner) &&
+          !getStickySessionDeviceId(sessionId) &&
+          !getStickySessionDeviceId(createdId)
         ) {
           onDismiss?.();
           navigate(`/cc-agent/${createdId}`);
@@ -81,15 +163,18 @@ export function CindyMakeDoctorCard({
       });
   };
   const recheck = (request?: string) => {
-    if (!sessionId) return;
+    if (!sessionId || getStickySessionDeviceId(sessionId)) return;
     const owner = getDataOwnerGeneration();
     void import('@/lib/cindyMakeDoctorStream')
-      .then(({ startMakeDoctorInStream }) => {
-        if (isDataOwnerGenerationCurrent(owner))
+      .then(async ({ startMakeDoctorInStream }) => {
+        if (isDataOwnerGenerationCurrent(owner) && !getStickySessionDeviceId(sessionId)) {
+          await syncLiveReport();
+          if (!isDataOwnerGenerationCurrent(owner) || getStickySessionDeviceId(sessionId)) return;
           startMakeDoctorInStream(sessionId, {
             retryRunId: report.runId,
             ...(request !== undefined ? { request } : {}),
           });
+        }
       })
       .catch(() => {
         if (isDataOwnerGenerationCurrent(owner)) toast.error(t('cindyMakeDoctor.failed'));
@@ -98,6 +183,7 @@ export function CindyMakeDoctorCard({
   return (
     <MakeDoctorReportCard
       report={report}
+      readOnly={remote}
       request={typeof data?.request === 'string' ? data.request : undefined}
       decision={
         data?.decision === 'wait' || data?.decision === 'personal' ? data.decision : undefined
@@ -105,22 +191,22 @@ export function CindyMakeDoctorCard({
       onSearch={recheck}
       onChoose={start}
       onStartCode={sessionId ? () => start() : undefined}
-      onOpenCode={
-        codeSessionId
-          ? () => {
-              onDismiss?.();
-              navigate(`/cc-agent/${codeSessionId}`);
-            }
-          : undefined
-      }
+      onOpenCode={codeSessionId && !remote ? () => void openTask(codeSessionId) : undefined}
       startingCode={startingCode}
-      startingPhase={data?.codeStartPhase === 'workspace' ? 'workspace' : 'session'}
+      startingPhase={
+        data?.codeStartPhase === 'workspace'
+          ? 'workspace'
+          : data?.codeStartPhase === 'dependencies'
+            ? 'dependencies'
+            : 'session'
+      }
       codeSessionError={data?.codeSessionError === true}
+      compactPrepare={compactPrepare}
       onRecheck={() => recheck()}
       onStop={() => {
-        void cancelMakeDoctor(report.runId, report.mode).catch(() =>
-          toast.error(t('cindyMakeDoctor.failed')),
-        );
+        if (getStickySessionDeviceId(sessionId)) return;
+        const stop = cancelMakeDoctor(report.runId, report.mode);
+        void stop.catch(() => toast.error(t('cindyMakeDoctor.failed')));
       }}
     />
   );
@@ -162,6 +248,9 @@ export function MakeDoctorReportCard({
   codeSessionError = false,
   alwaysAllowRecheck = false,
   showSource = true,
+  compactPrepare = false,
+  readOnly = false,
+  showUpstreamActions = true,
 }: {
   report: MakeDoctorReport;
   request?: string;
@@ -178,10 +267,14 @@ export function MakeDoctorReportCard({
   /** Settings shows the environment on its own; the numbered step row belongs to the workflow. */
   showSteps?: boolean;
   /** Creating the task worktree (branch + dependency install) precedes creating the task. */
-  startingPhase?: 'workspace' | 'session';
+  startingPhase?: 'workspace' | 'dependencies' | 'session';
   codeSessionError?: boolean;
   alwaysAllowRecheck?: boolean;
   showSource?: boolean;
+  compactPrepare?: boolean;
+  readOnly?: boolean;
+  /** Settings preflight places the personal-version action beside Cancel. */
+  showUpstreamActions?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
@@ -269,17 +362,19 @@ export function MakeDoctorReportCard({
                       : `cindyMakeDoctor.${status}`;
   const currentStatusKey =
     source?.status === 'ready' && decision === 'personal'
-      ? startingCode
-        ? startingPhase === 'workspace'
-          ? 'cindyMake.code.preparingWorkspace'
-          : 'cindyMake.code.starting'
-        : codeSessionError
-          ? onOpenCode
-            ? 'cindyMake.code.sendFailed'
-            : 'cindyMake.code.failed'
-          : onOpenCode
-            ? 'cindyMake.code.started'
-            : sourceStatusKey
+      ? startingPhase === 'dependencies'
+        ? 'cindyMake.code.preparingDependencies'
+        : startingCode
+          ? startingPhase === 'workspace'
+            ? 'cindyMake.code.preparingWorkspace'
+            : 'cindyMake.code.starting'
+          : codeSessionError
+            ? onOpenCode
+              ? 'cindyMake.code.sendFailed'
+              : 'cindyMake.code.failed'
+            : onOpenCode
+              ? 'cindyMake.code.started'
+              : sourceStatusKey
       : sourceStatusKey;
   const currentStatusClass =
     (codeSessionError && source?.status === 'ready') ||
@@ -296,9 +391,19 @@ export function MakeDoctorReportCard({
         : source?.status === 'ready' || allPassed
           ? 'text-[var(--status-success)]'
           : 'text-[var(--text-secondary)]';
+  if (compactPrepare) {
+    return (
+      <CompactMakePreparationCard
+        report={report}
+        onStop={onStop}
+        onRecheck={onRecheck}
+        readOnly={readOnly}
+      />
+    );
+  }
   return (
     <section
-      className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      className="min-w-0 w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
       aria-label={t(title)}
     >
       <div className="flex items-center gap-2 px-4 py-3">
@@ -313,7 +418,7 @@ export function MakeDoctorReportCard({
           {running && <Spinner size={14} />}
           {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         </button>
-        {upstream && queryFinished && !running && !startingCode && (
+        {!readOnly && upstream && queryFinished && !running && !startingCode && (
           <Button
             variant="secondary"
             size="md"
@@ -452,44 +557,43 @@ export function MakeDoctorReportCard({
               </p>
               {source && (
                 <>
-                  {(source.phase || source.ref) && (
+                  {source.status !== 'preparing' && (
                     <p className="text-[var(--text-secondary)]">
-                      {source.phase ? t(`cindyMake.source.phase.${source.phase}`) : null}
-                      {source.phase && source.ref ? ' · ' : ''}
-                      {source.ref ?? null}
+                      {t(`cindyMake.source.${source.status}`)}
                     </p>
                   )}
-                  {source.progress && (
+                  {source.status === 'preparing' && source.phase === 'caching' && (
+                    <CindyMakeDependencyProgress progress={source.dependencies} running cacheOnly />
+                  )}
+                  {source.status === 'preparing' &&
+                    source.phase &&
+                    source.phase !== 'caching' &&
+                    !source.progress && (
+                      <p className="text-[var(--text-secondary)]">
+                        {t(`cindyMake.source.phase.${source.phase}`)}
+                      </p>
+                    )}
+                  {source.status === 'preparing' && source.progress && (
                     <div
-                      className="flex items-center gap-2 text-12 text-[var(--text-secondary)]"
+                      className="space-y-1 text-12 text-[var(--text-secondary)]"
                       aria-live="polite"
                     >
-                      <Spinner size={14} />
-                      <span>{t(`cindyMake.source.gitProgress.${source.progress.stage}`)}</span>
+                      <div className="flex items-center gap-2">
+                        <Spinner size={14} />
+                        <span>{t(`cindyMake.source.gitProgress.${source.progress.stage}`)}</span>
+                        <span className="text-[var(--text-tertiary)]">
+                          ({source.progress.percent}%)
+                        </span>
+                      </div>
+                      {source.progress.message && (
+                        <p
+                          className="truncate pl-5 font-mono text-11 text-[var(--text-tertiary)]"
+                          title={source.progress.message}
+                        >
+                          {source.progress.message}
+                        </p>
+                      )}
                     </div>
-                  )}
-                  {source.path && (
-                    <p className="break-all font-mono text-12 text-[var(--text-secondary)]">
-                      {source.path}
-                    </p>
-                  )}
-                  {source.branch ? (
-                    <p className="text-12 text-[var(--text-secondary)]">
-                      {t('cindyMake.source.personalBranch', { branch: source.branch })}
-                      {source.commit ? ` · ${source.commit.slice(0, 12)}` : ''}
-                      {source.baseCommit
-                        ? ` · ${t('cindyMake.source.baseCommit', {
-                            ref: source.ref ?? '',
-                            commit: source.baseCommit.slice(0, 12),
-                          })}`
-                        : ''}
-                    </p>
-                  ) : (
-                    source.commit && (
-                      <p className="break-all font-mono text-12 text-[var(--text-secondary)]">
-                        {source.commit}
-                      </p>
-                    )
                   )}
                   {source.error && (
                     <p className="text-[var(--status-danger)]">
@@ -517,36 +621,32 @@ export function MakeDoctorReportCard({
               {preparing && upstream.status !== 'pending' && upstream.status !== 'needsRequest' && (
                 <div className="space-y-2 text-13">
                   {upstream.status === 'found' && (
-                    <p className="font-medium">
-                      {t('cindyMake.upstream.count', { count: upstream.items.length })}
-                    </p>
-                  )}
-                  {upstream.terms?.length ? (
-                    <p className="text-12 text-[var(--text-secondary)]">
-                      {t('cindyMake.upstream.terms', { terms: upstream.terms.join(', ') })}
-                    </p>
-                  ) : null}
-                  {upstream.status === 'found' && (
-                    <ul
-                      // 列表区是弹窗里唯一的滚动区:高度封顶为 5 条收起的行(每行 44px),
-                      // 展开详情或条目更多时在列表内部滚动,弹窗本身不长出滚动条。
-                      className="max-h-[228px] overflow-y-auto overscroll-contain divide-y divide-[var(--border-default)]"
-                    >
-                      {upstream.items.map((item) => (
-                        <MakeUpstreamResult
-                          key={`${report.runId}-${item.kind}-${item.number}`}
-                          item={item}
-                        />
-                      ))}
-                    </ul>
+                    <MakeUpstreamResults
+                      key={report.runId}
+                      items={upstream.items}
+                      terms={upstream.terms}
+                      runtime={upstream.runtime}
+                    />
                   )}
                   {upstream.status === 'failed' && (
                     <p>{t(`cindyMake.upstream.failure.${upstream.failure ?? 'network'}`)}</p>
                   )}
                   {upstream.status === 'notFound' && <p>{t('cindyMake.upstream.notFoundHint')}</p>}
-                  {upstream.status === 'found' && (
+                  {upstream.runtime?.confidence === 'unknown' && (
                     <p className="text-[var(--text-secondary)]">
-                      {t('cindyMake.upstream.resultHint')}
+                      {t('cindyMake.upstream.runtimeUnknown')}
+                    </p>
+                  )}
+                  {!!upstream.excludedIncluded && (
+                    <p className="text-[var(--text-secondary)]">
+                      {t('cindyMake.upstream.excludedIncluded', {
+                        count: upstream.excludedIncluded,
+                      })}
+                    </p>
+                  )}
+                  {upstream.hasMore && (
+                    <p className="text-[var(--text-secondary)]">
+                      {t('cindyMake.upstream.limitedHint')}
                     </p>
                   )}
                 </div>
@@ -574,7 +674,8 @@ export function MakeDoctorReportCard({
             </>
           )}
         </div>
-        {!decision &&
+        {!readOnly &&
+          !decision &&
           (!queryFinished || !upstream) &&
           (!allPassed ||
             running ||
@@ -607,22 +708,32 @@ export function MakeDoctorReportCard({
               </Button>
             </div>
           )}
-        {source?.status === 'ready' && decision === 'personal' && (onStartCode || onOpenCode) && (
-          <Button variant="secondary" disabled={startingCode} onClick={onOpenCode ?? onStartCode}>
-            {t(onOpenCode ? 'cindyMake.code.open' : 'cindyMake.code.start')}
-          </Button>
-        )}
-        {(upstream?.status === 'found' || upstream?.status === 'notFound') &&
+        {!readOnly &&
+          source?.status === 'ready' &&
+          decision === 'personal' &&
+          (onStartCode || onOpenCode) && (
+            <Button variant="secondary" disabled={startingCode} onClick={onOpenCode ?? onStartCode}>
+              {t(onOpenCode ? 'cindyMake.code.open' : 'cindyMake.code.start')}
+            </Button>
+          )}
+        {!readOnly &&
+          (upstream?.status === 'found' || upstream?.status === 'notFound') &&
           !decision &&
-          !searching && (
+          !searching &&
+          showUpstreamActions && (
             <div className="flex shrink-0 flex-wrap justify-end gap-2">
-              <Button variant="secondary" disabled={!onChoose} onClick={() => onChoose?.('wait')}>
+              <Button
+                variant="secondary"
+                disabled={!onChoose || startingCode}
+                onClick={() => onChoose?.('wait')}
+              >
                 {t('cindyMake.upstream.wait')}
               </Button>
               <Button
                 variant="primary"
                 className="border-[var(--border-default)] enabled:hover:border-[var(--button-primary-hover)] enabled:active:border-[var(--button-primary-pressed)]"
-                disabled={!onChoose}
+                disabled={!onChoose || startingCode}
+                loading={startingCode}
                 onClick={() => onChoose?.('personal')}
               >
                 {t('cindyMake.upstream.personal')}
@@ -630,6 +741,129 @@ export function MakeDoctorReportCard({
             </div>
           )}
       </div>
+    </section>
+  );
+}
+
+function MakeUpstreamResults({
+  items,
+  terms,
+  runtime,
+}: {
+  items: MakeUpstreamItem[];
+  terms?: string[];
+  runtime?: MakeRuntimeVersion;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p>{t('cindyMake.upstream.count', { count: items.length })}</p>
+        <Button
+          variant="secondary"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? (
+            <ChevronDown size={14} aria-hidden />
+          ) : (
+            <ChevronRight size={14} aria-hidden />
+          )}
+          {t(expanded ? 'cindyMake.upstream.collapse' : 'cindyMake.upstream.expand')}
+        </Button>
+      </div>
+      <Collapse open={expanded} id={detailsId} inert={!expanded}>
+        <div className="space-y-2">
+          {runtime && (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('cindyMake.upstream.runtimeVersion', {
+                channel: t(`cindyMake.upstream.channel.${runtime.channel}`),
+                version: runtime.version,
+                commit: runtime.commit?.slice(0, 12) ?? t('cindyMake.upstream.unknownCommit'),
+              })}
+            </p>
+          )}
+          {terms?.length ? (
+            <p className="text-12 text-[var(--text-secondary)]">
+              {t('cindyMake.upstream.terms', { terms: terms.join(', ') })}
+            </p>
+          ) : null}
+          <ul className="divide-y divide-[var(--border-default)]">
+            {items.map((item) => (
+              <MakeUpstreamResult key={item.kind + '-' + item.number} item={item} />
+            ))}
+          </ul>
+          <p className="text-[var(--text-secondary)]">{t('cindyMake.upstream.resultHint')}</p>
+        </div>
+      </Collapse>
+    </div>
+  );
+}
+
+/** Compact handoff status shown inside the newly-created Cindy Make task. */
+function CompactMakePreparationCard({
+  report,
+  onStop,
+  onRecheck,
+  readOnly,
+}: {
+  report: MakeDoctorReport;
+  onStop: () => void;
+  onRecheck: () => void;
+  readOnly: boolean;
+}) {
+  const { t } = useTranslation();
+  const running = report.status === 'running';
+  const failed = report.status === 'failed';
+  const cancelled = report.status === 'cancelled';
+  const statusKey = running
+    ? 'cindyMake.code.preparingNpmDependencies'
+    : failed
+      ? 'cindyMake.prepare.failed'
+      : cancelled
+        ? 'cindyMake.prepare.cancelled'
+        : 'cindyMake.prepare.passed';
+  const source = report.source;
+  return (
+    <section
+      className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      aria-label={t('cindyMake.code.taskName')}
+    >
+      <div className="flex items-center gap-2 px-4 py-3">
+        <Wrench size={16} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
+        <span className="font-medium">{t('cindyMake.code.taskName')}</span>
+        {running && <Spinner size={14} className="ml-auto" />}
+      </div>
+      <div className="space-y-2 border-t border-[var(--border-default)] px-4 py-3">
+        {source?.branch && (
+          <p className="text-13">{t('cindyMake.code.workspace', { branch: source.branch })}</p>
+        )}
+        {source?.path && (
+          <p className="break-all font-mono text-12 text-[var(--text-secondary)]">{source.path}</p>
+        )}
+        <p
+          className={`flex items-center gap-2 text-13 ${failed ? 'text-[var(--status-danger)]' : cancelled ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]'}`}
+          role="status"
+        >
+          {running ? <Spinner size={14} /> : failed ? <Minus size={14} /> : <Check size={14} />}
+          <span>{t(statusKey)}</span>
+        </p>
+        {failed && source?.error && (
+          <p className="text-12 text-[var(--status-danger)]">
+            {t(`cindyMake.source.errors.${source.error}`)}
+          </p>
+        )}
+      </div>
+      {!readOnly && (running || failed || cancelled) && (
+        <div className="flex justify-end gap-2 border-t border-[var(--border-default)] px-4 py-3">
+          <Button variant="secondary" onClick={running ? onStop : onRecheck}>
+            {t(running ? 'cindyMake.prepare.stop' : 'cindyMake.prepare.retry')}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
@@ -655,6 +889,15 @@ function MakeUpstreamResult({ item }: { item: MakeUpstreamItem }) {
         )}
         <span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">
           {t(`cindyMake.upstream.kind.${item.kind}`)} #{item.number} · {item.title}
+          {item.inclusion && (
+            <span className="mt-1 block text-12 font-normal text-[var(--text-secondary)]">
+              {t(
+                item.draft ? 'cindyMake.upstream.draft' : `cindyMake.upstream.state.${item.state}`,
+              )}
+              {' · '}
+              {t(`cindyMake.upstream.inclusion.${item.inclusion}`)}
+            </span>
+          )}
         </span>
       </button>
       <Collapse open={expanded} id={detailId} inert={!expanded}>

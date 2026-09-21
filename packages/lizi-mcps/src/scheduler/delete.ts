@@ -1,8 +1,8 @@
 /**
  * scheduler/delete.ts — schedule_delete tool
  *
- * 不加二次确认参数：模型在调用前应自己用
- * AskUserQuestion 跟用户确认。
+ * 不加二次确认参数：已有删除授权或达到自身自动跟进的既定清理条件时直接执行；
+ * 其他不可撤销的删除仍需先确认目标与授权。
  *
  * caller-ownership 豁免：agent 在任务 run 内删除**自己的** schedule（心跳任务
  * merge 后收口的标准动作）时，engine 的 delete 会先 abort 该 schedule 名下所有
@@ -28,7 +28,7 @@ export function registerScheduleDeleteTool(
     name: 'schedule_delete',
     category: 'scheduler',
     description:
-      '永久删除一条 schedule（同时级联删 schedule_runs 表里它的所有历史 run）。不可撤销 —— 调用前必须跟用户确认。在自动化任务 run 内删除自己所属的 schedule 是安全的：本轮 run 会被豁免、自然跑完，不会被删除动作中断。',
+      '永久删除一条 schedule（同时级联删 schedule_runs 表里它的所有历史 run），不可撤销。先核对目标与授权；本次自动跟进达到既定停止和清理条件时，可清理自身调度，无需重复确认。其他未获授权的删除须先确认，不得扩展到其他调度。在自动化任务 run 内删除自己所属的 schedule 时，本轮 run 会被豁免、自然跑完，不会被删除动作中断。',
     inputShape: {
       id: z.string().min(1).describe('要删除的 schedule id'),
     },

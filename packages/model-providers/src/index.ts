@@ -39,6 +39,7 @@ export type {
 
 export { PI_MODEL_APIS, PI_REASONING_EFFORTS } from "./types.js";
 export { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId } from './provider-identity.js';
+export { sourceProviderForPreset } from './providerPresetIdentity.js';
 
 export {
   effectivePiWireProtocol,
@@ -301,7 +302,7 @@ export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
-export { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime } from "./providerEndpointTemplate.js";
+export { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRuntime, canonicalProviderEndpoint } from "./providerEndpointTemplate.js";
 
 export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';

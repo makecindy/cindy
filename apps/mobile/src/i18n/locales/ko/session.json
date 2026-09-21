@@ -7,6 +7,7 @@
   },
   "common": {
     "cancel": "취소",
+    "dismissRecommendation": "추천 닫기",
     "delete": "삭제",
     "openContextPanel": "컨텍스트 패널 열기",
     "groupMode": "모드",
@@ -356,6 +357,7 @@
     "worktreeCleanupPending": "이전 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요."
   },
   "menu": {
+    "details": "세션 상세 정보",
     "chipPinned": "고정됨",
     "chipArchived": "보관됨",
     "chipReadOnly": "읽기 전용",
@@ -418,7 +420,6 @@
       "today": "오늘 사용액",
       "unavailable": "가져오지 못함",
       "quotaUnavailable": "계정 할당량을 가져오지 못했습니다",
-      "accountOnly": "ChatGPT 계정 할당량이며, 이 작업이 해당 요금제를 사용하는지는 확인되지 않았습니다",
       "lastUpdated": "마지막 업데이트 {{time}}",
       "taskUsage": "작업 사용량",
       "taskValue": "작업 가치",

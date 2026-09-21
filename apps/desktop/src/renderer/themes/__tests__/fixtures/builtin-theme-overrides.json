@@ -230,7 +230,7 @@
         "plan-toolbar-btn-hover-bg": "#eee8d5",
         "popover": "46 42% 88%",
         "primary-foreground": "0 0% 100%",
-        "search-match-fg": "0 0% 46%",
+        "search-match-fg": "0 0% 35%",
         "secondary": "46 42% 88%",
         "settings-btn-primary-text": "#FFFFFF",
         "settings-btn-secondary-hover-bg": "#eee8d5",
@@ -251,7 +251,9 @@
         "tooltip-bg": "#757575",
         "tooltip-text": "#fdf6e3",
         "update-btn-border": "#859900",
-        "update-btn-text": "#859900"
+        "update-btn-text": "#859900",
+        "form-field-hint": "#686868",
+        "search-match-bg": "45 100% 62%"
       }
     },
     "cindy-light": {
@@ -271,7 +273,9 @@
         "surface-hover-hsl": "60.0 12.8% 92.4%",
         "surface-on-card": "#FFFFFF",
         "switch-track-off": "#888888",
-        "switch-track-on": "#4A4D51",
+        "switch-track-on": "#417CDD",
+        "switch-thumb-on": "hsl(var(--background))",
+        "switch-thumb-off": "var(--surface-on-card)",
         "status-badge-fg": "#1F1F1F",
         "border-default": "#E4E4DF",
         "border-default-hsl": "60.0 8.5% 88.4%",
@@ -424,7 +428,14 @@
         "completion-badge-fg": "#1f1f1e",
         "create-agent-control-bg-hover": "var(--surface-hover)",
         "create-agent-control-bg-pressed": "var(--surface-hover-soft)",
-        "create-agent-send-icon": "#FCFCFC"
+        "create-agent-send-icon": "#FCFCFC",
+        "slider-track": "#A3A39E",
+        "slider-fill": "#3C3F43",
+        "slider-thumb": "#FDFDF8",
+        "segmented-selected-bg": "#FDFDF8",
+        "segmented-selected-border": "#F0F0EB",
+        "segmented-option-fg": "#6B6B67",
+        "segmented-hover-bg": "#E4E4DF"
       }
     },
     "cindy-dark": {
@@ -444,7 +455,9 @@
         "surface-hover-hsl": "0 0% 11.4%",
         "surface-on-card": "#181818",
         "switch-track-off": "#787878",
-        "switch-track-on": "#EEEEEE",
+        "switch-track-on": "#417CDD",
+        "switch-thumb-on": "#FCFCFC",
+        "switch-thumb-off": "#FCFCFC",
         "status-badge-fg": "#121212",
         "border-default": "#313131",
         "border-default-hsl": "0 0% 19.2%",
@@ -597,7 +610,14 @@
         "sidebar-nav-text": "#D4D4D4",
         "sidebar-user-card-bg-hover": "rgba(255, 255, 255, 0.10)",
         "sidebar-user-card-border": "rgba(255, 255, 255, 0.13)",
-        "sidebar-user-card-text": "#D4D4D4"
+        "sidebar-user-card-text": "#D4D4D4",
+        "slider-track": "#626262",
+        "slider-fill": "#EEEEEE",
+        "slider-thumb": "#FCFCFC",
+        "segmented-selected-bg": "#353535",
+        "segmented-selected-border": "#3B3B3B",
+        "segmented-option-fg": "#AAAAAA",
+        "segmented-hover-bg": "#292929"
       }
     },
     "default-dark": {
@@ -835,7 +855,8 @@
         "tooltip-bg": "#282c34",
         "tooltip-text": "#abb2bf",
         "update-btn-border": "#61afef",
-        "update-btn-text": "#61afef"
+        "update-btn-text": "#61afef",
+        "form-field-hint": "#8b909a"
       }
     },
     "github-dark": {

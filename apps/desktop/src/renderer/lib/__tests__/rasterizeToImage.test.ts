@@ -7,15 +7,55 @@
  * 由运行时验证覆盖。
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EXPORT_MAX_EDGE_PX,
   EXPORT_MAX_OUTPUT_PIXELS,
   EXPORT_PNG_SCALE,
   computeExportScale,
+  copyPngBlobToClipboard,
   parseSvgIntrinsicSize,
 } from '@/lib/rasterizeToImage';
+
+describe('copyPngBlobToClipboard', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('uses native copying after async export loses document focus, preserving source text', async () => {
+    const copy = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('electronAPI', { copyPngToClipboard: copy });
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const webWrite = vi.fn(() => {
+      throw new Error('Document is not focused.');
+    });
+    vi.stubGlobal('navigator', { clipboard: { write: webWrite } });
+    const bytes = new ArrayBuffer(8);
+    let finish!: (value: ArrayBuffer) => void;
+    const blob = {
+      arrayBuffer: () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          finish = resolve;
+        }),
+    } as Blob;
+    const copying = copyPngBlobToClipboard(blob, 'source');
+    expect(copy).not.toHaveBeenCalled();
+    finish(bytes);
+    await copying;
+    expect(copy).toHaveBeenCalledWith({ png: bytes, plainText: 'source' });
+    expect(webWrite).not.toHaveBeenCalled();
+  });
+
+  it('propagates native copy rejection so callers cannot show false success', async () => {
+    vi.stubGlobal('electronAPI', {
+      copyPngToClipboard: vi.fn().mockRejectedValue(new Error('[INTERNAL] Copy failed')),
+    });
+    const blob = { arrayBuffer: async () => new ArrayBuffer(8) } as Blob;
+    await expect(copyPngBlobToClipboard(blob)).rejects.toThrow('Copy failed');
+  });
+});
 
 describe('computeExportScale', () => {
   it('普通尺寸用满目标倍率(默认 3x)', () => {

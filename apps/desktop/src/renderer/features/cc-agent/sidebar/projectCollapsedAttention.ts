@@ -10,12 +10,18 @@ export type CollapsedAttentionTone = 'error' | 'done';
 export type CollapsedProjectAttentionTone = CollapsedAttentionTone;
 
 interface CollapsedAttentionInput {
-  sessions: readonly ({ id: string } & SessionInterruptionState)[];
+  sessions: readonly ({
+    id: string;
+    deviceLinkDeviceId?: string | null;
+  } & SessionInterruptionState)[];
   runningSessionIds: ReadonlySet<string>;
   notifications: ReadonlySet<string>;
   attentionKinds: ReadonlyMap<string, AttentionKind>;
   urgentSessionIds: ReadonlySet<string>;
-  remotePhaseOf: (sessionId: string) => RemoteSessionActivityPhase | undefined;
+  remotePhaseOf: (
+    sessionId: string,
+    deviceId?: string | null,
+  ) => RemoteSessionActivityPhase | undefined;
 }
 
 export interface CollapsedAttentionSummary {
@@ -61,7 +67,7 @@ export function resolveCollapsedAttention({
       errorSessionIds.push(session.id);
       continue;
     }
-    const remotePhase = remotePhaseOf(session.id);
+    const remotePhase = remotePhaseOf(session.id, session.deviceLinkDeviceId);
     if (remotePhase) {
       if (remotePhase === 'error') errorSessionIds.push(session.id);
       else if (remotePhase === 'completed') hasDone = true;

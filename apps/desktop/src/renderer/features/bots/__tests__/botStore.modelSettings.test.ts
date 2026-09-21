@@ -26,6 +26,7 @@ function apiFixture() {
   let disk = saved;
   const api = {
     list: vi.fn(async () => [] as unknown[]),
+    create: vi.fn(async (input: Record<string, unknown>) => input),
     getModelChainSettings: vi.fn(async () => disk),
     setModelChainSettings: vi.fn(async ({ modelChain }: { modelChain: typeof saved.modelChain }) => {
       disk = { modelChain, isCustomized: true };
@@ -43,6 +44,60 @@ async function hydratedStore(api: ReturnType<typeof apiFixture>) {
 }
 
 beforeEach(() => { vi.resetModules(); window.localStorage.clear(); });
+
+describe('invitation locale before provider mount', () => {
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])(
+    'sends the saved %s locale in initial hydration without menu synchronization',
+    async (locale) => {
+      const api = apiFixture();
+      Object.assign(window.electronAPI, { preferredSystemLocale: 'en', setApplicationMenuLocale: vi.fn() });
+      window.localStorage.setItem('language', locale);
+      await hydratedStore(api);
+      expect(api.list).toHaveBeenCalledWith(expect.objectContaining({ locale }));
+      expect(window.electronAPI.setApplicationMenuLocale).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['system', 'invalid-locale'])(
+    'resolves %s to the host system locale before hydration',
+    async (preference) => {
+      const api = apiFixture();
+      Object.assign(window.electronAPI, { preferredSystemLocale: 'ko' });
+      window.localStorage.setItem('language', preference);
+      await hydratedStore(api);
+      expect(api.list).toHaveBeenCalledWith(expect.objectContaining({ locale: 'ko' }));
+    },
+  );
+
+  it('keeps the current UI language when preference storage cannot be written', async () => {
+    const api = apiFixture();
+    window.localStorage.setItem('language', 'en');
+    const storageWrite = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    try {
+      const { writeStoredLocale } = await import('@/lib/localePreference');
+      writeStoredLocale('ja');
+      await hydratedStore(api);
+      expect(api.list).toHaveBeenCalledWith(expect.objectContaining({ locale: 'ja' }));
+    } finally { storageWrite.mockRestore(); }
+  });
+
+  it('freezes the create-request locale before asynchronous model preparation', async () => {
+    const api = apiFixture();
+    const store = await hydratedStore(api);
+    window.localStorage.setItem('language', 'ja');
+    const read = deferred<typeof saved>();
+    api.getModelChainSettings.mockReturnValueOnce(read.promise);
+    const creating = store.addBotProfileAndWait({
+      name: 'Locale test', description: '', prepareInvitation: true,
+      capabilities: { ...route('saved'), modelChainOverride: saved.modelChain },
+    });
+    await vi.waitFor(() => expect(api.getModelChainSettings).toHaveBeenCalledTimes(2));
+    window.localStorage.setItem('language', 'en');
+    read.resolve(saved);
+    await creating;
+    expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ locale: 'ja' }));
+  });
+});
 
 describe('global teammate model restore', () => {
   it('refreshes followers, preserves explicit per-Bot models, and drops the legacy cache', async () => {

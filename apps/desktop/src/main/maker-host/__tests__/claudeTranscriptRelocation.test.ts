@@ -12,6 +12,7 @@
  * 仍关 handle;空集 no-op、maker-core 抛错被吞并(移动主流程不受影响)。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DbClient } from '../../localDb/client/DbClient.js';
 
 const h = vi.hoisted(() => ({
   relocate: vi.fn(),
@@ -54,6 +55,32 @@ beforeEach(() => {
 });
 
 describe('relocateClaudeTranscriptsForSessionMove', () => {
+  it('uses the captured database throughout a scoped move', async () => {
+    const client = { queryOne: vi.fn(async () => ({ sdkSessionId: DB_ID })), query: vi.fn(async () => [{ sid: META_ID }]), exec: vi.fn(async () => ({ changes: 1 })) };
+    setLiveCcSessionBridge({ resolveSdkSessionId: () => LIVE_ID, closeSession: vi.fn(async () => undefined) });
+    await relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', { client: client as unknown as DbClient, assertCurrent: () => undefined });
+    expect(client.exec).toHaveBeenCalledOnce();
+    expect(client.query).toHaveBeenCalledOnce();
+    expect(h.queryOne).not.toHaveBeenCalled();
+    expect(h.exec).not.toHaveBeenCalled();
+    expect(h.query).not.toHaveBeenCalled();
+    expect(h.relocate).toHaveBeenCalledOnce();
+  });
+
+  it('stops before persistence and runtime close if the account changes during the read', async () => {
+    let current = true;
+    const closeSession = vi.fn(async () => undefined);
+    const client = { queryOne: vi.fn(async () => { current = false; return { sdkSessionId: DB_ID }; }), query: vi.fn(), exec: vi.fn() };
+    setLiveCcSessionBridge({ resolveSdkSessionId: () => LIVE_ID, closeSession });
+    await relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', {
+      client: client as unknown as DbClient,
+      assertCurrent: () => { if (!current) throw new Error('account changed'); },
+    });
+    expect(client.exec).not.toHaveBeenCalled();
+    expect(h.exec).not.toHaveBeenCalled();
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
   it('unions DB sdk_session_id, message agent_meta ids and the live in-memory id', async () => {
     h.queryOne.mockResolvedValue({ sdkSessionId: DB_ID });
     h.query.mockResolvedValue([{ sid: META_ID }, { sid: DB_ID }, { sid: null }]);

@@ -1,3 +1,4 @@
+import { Slider } from '@/components/ui/slider';
 import {
   useEffect,
   useMemo,
@@ -25,6 +26,7 @@ import { Switch } from '@/components/ui/switch';
 import { useCodexMicroGuard } from '@/hooks/useCodexMicroGuard';
 import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import {
   WorkLouderCodexKeyboardLayout,
@@ -154,7 +156,7 @@ export function WorkLouderCodexEntry({
         grouped
           ? 'rounded-none border-0 bg-transparent px-4 py-[14px]'
           : 'rounded-xl border p-4 border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-        'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+        'enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
       )}
       aria-label={t(workLouderCopyKey(model, 'openAria'))}
     >
@@ -269,9 +271,9 @@ export function WorkLouderCodexSettings({
     return () => unsubscribe?.();
   }, []);
 
-  const commitBrightness = (): void => {
-    if (!state || brightnessDraft === state.settings.lightingBrightness) return;
-    void setSettings({ lightingBrightness: brightnessDraft });
+  const commitBrightness = ([brightness]: number[]): void => {
+    if (!state || saving || brightness === state.settings.lightingBrightness) return;
+    void setSettings({ lightingBrightness: brightness });
   };
 
   const patchLayout = (update: (layout: WorkLouderCodexLayout) => void): void => {
@@ -535,7 +537,7 @@ export function WorkLouderCodexSettings({
           <button
             type="button"
             onClick={onBack}
-            className="flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            className="flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors enabled:hover:bg-[var(--surface-chip)] enabled:hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
             aria-label={t('settings.shortcuts.workLouderCodex.back')}
           >
             <ArrowLeft size={17} />
@@ -1045,7 +1047,7 @@ export function WorkLouderCodexSettings({
               <button
                 type="button"
                 onClick={() => void openInputMonitoringSettings()}
-                className="rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+                className="rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
               >
                 {t('settings.shortcuts.workLouderCodex.device.inputMonitoring.open')}
               </button>
@@ -1060,18 +1062,15 @@ export function WorkLouderCodexSettings({
           description={t('settings.shortcuts.workLouderCodex.lighting.brightness.description')}
           control={
             <div className="flex min-w-[220px] items-center gap-3">
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={100}
                 step={10}
-                value={brightnessDraft}
+                value={[brightnessDraft]}
                 disabled={!state || saving}
-                onChange={(event) => setBrightnessDraft(Number(event.currentTarget.value))}
-                onPointerUp={commitBrightness}
-                onKeyUp={commitBrightness}
-                onBlur={commitBrightness}
-                className="h-1 flex-1 cursor-pointer accent-[var(--switch-track-on)] disabled:cursor-not-allowed disabled:opacity-50"
+                onValueChange={([brightness]) => setBrightnessDraft(brightness)}
+                onValueCommit={commitBrightness}
+                className="flex-1"
                 aria-label={t('settings.shortcuts.workLouderCodex.lighting.brightness.aria')}
               />
               <span className="w-10 text-right text-12 tabular-nums text-[var(--text-secondary)]">
@@ -1166,7 +1165,7 @@ function KeyMergeControls({
             type="button"
             disabled={disabled}
             onClick={onSplit}
-            className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t('settings.shortcuts.workLouderCodex.layout.merge.split')}
           </button>
@@ -1188,7 +1187,7 @@ function KeyMergeControls({
               type="button"
               disabled={disabled}
               onClick={() => onMerge(direction)}
-              className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {t(`settings.shortcuts.workLouderCodex.layout.merge.${direction}`)}
             </button>
@@ -1413,7 +1412,7 @@ function SettingsResetButton({
         'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
         'border border-[var(--settings-input-border)]',
         'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-        'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+        'transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)]',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         'disabled:cursor-not-allowed disabled:opacity-50',
       )}
@@ -1482,38 +1481,18 @@ function CreatorKeyRoleChoice({
   onChange: (isTask: boolean) => void;
 }) {
   return (
-    <div
-      role="radiogroup"
+    <SegmentedControl
       aria-label={ariaLabel}
-      className="flex h-8 items-center rounded-full bg-[var(--surface-chip)] p-0.5"
-    >
-      {(
-        [
-          { task: true, label: taskLabel },
-          { task: false, label: actionLabel },
-        ] as const
-      ).map((option) => {
-        const selected = option.task === isTask;
-        return (
-          <button
-            key={option.label}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            disabled={disabled || selected}
-            onClick={() => onChange(option.task)}
-            className={cn(
-              'h-full rounded-full px-3 text-12 leading-none',
-              selected
-                ? 'border border-[var(--border-default)] bg-[var(--settings-theme-card-bg)] font-medium text-[var(--text-primary)]'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-            )}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+      value={isTask ? 'task' : 'action'}
+      onValueChange={(next) => {
+        if ((next === 'task') !== isTask) onChange(next === 'task');
+      }}
+      options={[
+        { value: 'task', label: taskLabel },
+        { value: 'action', label: actionLabel },
+      ]}
+      disabled={disabled}
+    />
   );
 }
 
@@ -1529,7 +1508,7 @@ function SettingsSecondaryButton({
     <button
       {...props}
       type="button"
-      className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+      className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
     >
       {children}
     </button>

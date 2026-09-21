@@ -1,3 +1,4 @@
+import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
 import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
 // inproc 回滚口：仅在 XDT_DB_INPROC=true 时使用。
@@ -83,6 +84,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return recentWorkdirsMergeWindowsIdentity(db, txArgs);
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
+    case 'taskTags.execute':
+      return runTaskTagsTransaction(db, txArgs);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(db, txArgs);
     case 'toolResults.compactSession':
@@ -574,7 +577,8 @@ function botsReconcileCanonicalLink(
   db: Database.Database,
   args: unknown,
 ): {
-  status: 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
+  status:
+    | 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
   canonicalSessionId: string | null;
 } {
   const p = asRecord(args, 'bots.reconcileCanonicalLink args');
@@ -582,8 +586,7 @@ function botsReconcileCanonicalLink(
   const now = expectNumber(p.now, 'now');
   return db.transaction(() => {
     const bot = db.prepare(`SELECT canonical_session_id AS canonicalSessionId,
-      current_version AS currentVersion FROM bot_profiles WHERE id = ?`).get(botId) as
-      | { canonicalSessionId: string | null; currentVersion: number } | undefined;
+      current_version AS currentVersion FROM bot_profiles WHERE id = ?`).get(botId) as { canonicalSessionId: string | null; currentVersion: number } | undefined;
     if (!bot) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
 
     const links = db.prepare(`SELECT id, session_id AS sessionId, profile_version AS profileVersion
@@ -601,7 +604,7 @@ function botsReconcileCanonicalLink(
     const authoritative = links[0]?.sessionId ?? null;
     if (authoritative) {
       const session = db.prepare('SELECT status FROM sessions WHERE id = ?').get(authoritative) as
-        | { status: string } | undefined;
+        { status: string } | undefined;
       if (!session || session.status === 'deleted') {
         return { status: 'missing-session' as const, canonicalSessionId: null };
       }
@@ -635,8 +638,7 @@ function botsReconcileCanonicalLink(
       return { status: 'conflict' as const, canonicalSessionId: null };
     }
     const existingLink = db.prepare(`SELECT bot_id AS botId, role FROM bot_session_links
-      WHERE session_id = ?`).get(bot.canonicalSessionId) as
-      | { botId: string; role: string } | undefined;
+      WHERE session_id = ?`).get(bot.canonicalSessionId) as { botId: string; role: string } | undefined;
     if (existingLink) {
       return { status: 'conflict' as const, canonicalSessionId: null };
     }
@@ -732,7 +734,7 @@ function insertBotSession(db: Database.Database, s: Record<string, unknown>): vo
 function botsFinishDelegation(
   db: Database.Database,
   args: unknown,
-): { id: string; parentSessionId: string | null; childSessionId: string | null; status: string } | null {
+): { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string } | null {
   const p = asRecord(args, 'bots.finishDelegation args');
   return db.transaction(() => {
     const values: unknown[] = [
@@ -743,22 +745,28 @@ function botsFinishDelegation(
     if (p.tokensUsed !== undefined) values.push(expectNumber(p.tokensUsed, 'tokensUsed'));
     const completedAt = expectNumber(p.completedAt, 'completedAt');
     values.push(completedAt, completedAt, expectString(p.delegationId, 'delegationId'));
+    let receiptGuard = '';
+    if (p.expectedRunSequence !== undefined) {
+      receiptGuard += ' AND run_sequence = ?';
+      values.push(expectNumber(p.expectedRunSequence, 'expectedRunSequence'));
+    }
+    if (p.expectedExecution !== undefined) {
+      const receipt = asRecord(p.expectedExecution, 'expectedExecution');
+      receiptGuard += " AND json_extract(permission_snapshot_json, '$.taskExecution.runSequence') = run_sequence AND json_extract(permission_snapshot_json, '$.taskExecution.instanceId') = ? AND json_extract(permission_snapshot_json, '$.taskExecution.generation') = ?";
+      values.push(expectString(receipt.instanceId, 'instanceId'), expectNumber(receipt.generation, 'generation'));
+    }
     const row = db.prepare(`UPDATE bot_delegations SET status = ?, result_summary = ?, output_artifacts_json = ?, last_error = ?
       ${tokenSet}, pending_interaction_json = NULL, completed_at = ?, completion_delivered_at = NULL, updated_at = ?
-      WHERE id = ? AND status IN ('queued','running','waiting')
-      RETURNING id, parent_session_id AS parentSessionId, child_session_id AS childSessionId, status`)
+      WHERE id = ? AND status IN ('queued','running','waiting') ${receiptGuard}
+      RETURNING id, parent_session_id AS parentSessionId, child_session_id AS childSessionId, target_bot_id AS targetBotId, run_sequence AS runSequence, status`)
       .get(...values) as
-      | { id: string; parentSessionId: string | null; childSessionId: string | null; status: string }
+      | { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string }
       | undefined;
     if (!row) return null;
-    if (row.childSessionId) {
-      // The delegation terminal transition owns its child task's terminal
-      // archive: `sessions.setStatus` refuses `source = 'bot'` rows on purpose
-      // (generic UI archive must not bypass Bot lifecycle bookkeeping), so the
-      // archive has to happen in this very transaction. Doing it anywhere else
-      // (a follow-up generic write that can also be swallowed) leaves the
-      // child task `active` forever and the guardian reports a supervision
-      // anomaly (PR #2829 QA).
+    if (row.childSessionId && row.targetBotId !== null) {
+      // Only legacy Bot-to-Bot execution containers have this archive lifecycle.
+      // An independent Session (target_bot_id IS NULL) outlives a turn, including
+      // failure/cancellation: visibility and explicit archive belong to its user.
       db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
         WHERE id = ? AND status = 'active'`)
         .run(completedAt, row.childSessionId);
@@ -868,13 +876,14 @@ function botsReopenDelegation(
   return db.transaction(() => {
     const current = db.prepare(`SELECT requesting_bot_id AS requestingBotId,
       target_bot_id AS targetBotId, target_profile_version AS targetProfileVersion,
-      parent_session_id AS parentSessionId, status
+      parent_session_id AS parentSessionId, child_session_id AS childSessionId, status
       FROM bot_delegations WHERE id = ?`).get(delegationId) as
       | {
           requestingBotId: string;
           targetBotId: string | null;
           targetProfileVersion: number | null;
           parentSessionId: string | null;
+          childSessionId: string | null;
           status: string;
         }
       | undefined;
@@ -892,9 +901,20 @@ function botsReopenDelegation(
       .get(requestingBotId, delegationId) as { count: number };
     if (count.count >= maxActiveChildren) throw new Error('BOT_DELEGATION_CONCURRENCY_LIMIT');
 
-    const session = asRecord(p.session, 'session');
-    insertBotSession(db, session);
     const childSessionId = expectString(p.childSessionId, 'childSessionId');
+    if (targetBotId === null) {
+      // Recheck in the transaction, after any asynchronous worktree lookup.
+      // Never resurrect an explicitly archived/deleted task or replace history.
+      const child = db.prepare('SELECT status FROM sessions WHERE id = ?').get(childSessionId) as
+        { status: string } | undefined;
+      if (current.childSessionId !== childSessionId || child?.status !== 'active') {
+        return { reopened: false, previousParentSessionId: current.parentSessionId };
+      }
+      db.prepare('UPDATE sessions SET parent_session_id = ?, updated_at = ? WHERE id = ?')
+        .run(expectString(p.parentSessionId, 'parentSessionId'), reopenedAt, childSessionId);
+    } else {
+      insertBotSession(db, asRecord(p.session, 'session'));
+    }
     if (p.worktreePath != null) {
       db.prepare('UPDATE sessions SET worktree_path = ? WHERE id = ?')
         .run(expectString(p.worktreePath, 'worktreePath'), childSessionId);
@@ -1020,7 +1040,7 @@ function botsDeleteProfile(
   const status: 'archived' | 'deleted' = keepTaskHistory ? 'archived' : 'deleted';
   return db.transaction(() => {
     const profile = db.prepare('SELECT status FROM bot_profiles WHERE id = ?').get(botId) as
-      | { status: string }
+      { status: string }
       | undefined;
     if (!profile) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
     if (profile.status !== 'archived') throw Object.assign(
@@ -1566,7 +1586,7 @@ function messageDelete(
     );
     const targets = clientIds.map((clientId) => {
       const target = selectTarget.get(sessionId, clientId) as
-        | { id: string; clientId: string; toolUseId: string | null }
+        { id: string; clientId: string; toolUseId: string | null }
         | undefined;
       if (!target) {
         throw Object.assign(new Error(`Message 不存在或不可删除: ${clientId}`), {
@@ -1760,7 +1780,8 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
         expectedCurrentTitle,
         expectedUpdatedAtMs,
         expectedUpdatedAtMs,
-      ) as { id: string; title: string | null; workingDir: string | null; updatedAt: number } | undefined;
+      ) as
+        | { id: string; title: string | null; workingDir: string | null; updatedAt: number } | undefined;
       if (!updated) {
         throw Object.assign(new Error(`Session 标题或 updatedAt 已变化: ${sessionId}`), {
           code: 'PRECONDITION_FAILED',

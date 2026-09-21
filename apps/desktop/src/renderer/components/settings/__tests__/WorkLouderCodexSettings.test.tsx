@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+beforeAll(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+});
 
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
@@ -243,8 +247,9 @@ describe('WorkLouderCodexSettings', () => {
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',
     });
-    fireEvent.change(slider, { target: { value: '40' } });
-    fireEvent.pointerUp(slider);
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingBrightness: 40 });
 
     await chooseSelectOption(
