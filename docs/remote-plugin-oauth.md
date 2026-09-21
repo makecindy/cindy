@@ -127,6 +127,11 @@ HTTPS 默认端口，专用 provider 目标由 `builtinAuthorizationTargets.ts` 
 唯一 state/redirect_uri/client_id/response_type=code/S256 challenge；不提供任意 HTTP
 转发。端口占用时失败，不抢端口、不杀进程、不改注册地址。
 
+CLI 的 `localhost` 回调在同一端口监听 `127.0.0.1` 和 `::1`，共用 state、卡片校验和
+一次性消费状态；显式 IP 回调只监听该地址，不监听通配接口。任一可用地址的端口冲突
+会关闭本次全部监听器；只有 OS 明确不支持某地址族或该回环地址不可用时才使用另一族。
+回归见 `plugin-oauth/__tests__/loopbackListener.test.ts`。
+
 ## 保密输入与设备码
 
 专用本机 IPC：
@@ -141,6 +146,11 @@ HTTPS 默认端口，专用 provider 目标由 `builtinAuthorizationTargets.ts` 
 再加密发送。存储 key 由最新声明解析，不能由请求选定。user Secret 不接受 OAuth、
 gh-cli、oidc-token 或账号 vault 写入；临时 Node Secret 卡只允许其已声明方法/入口。
 连接地址只接受 HTTPS 默认端口 DNS 主机/根 URL，无路径/query/自定义端口/IP。
+
+伙伴消息内的 Bot 授权卡目前只接通远程插件 OAuth 和取消，不支持远程 Secret/连接表单。
+即使旧消息或较新 Host 的快照携带这些表单能力标记，也禁用输入并提示在执行设备完成，
+不会先收取再丢弃凭据；本地伙伴卡片的保密输入保持原路径。Host 发卡、远程投影及真实
+表单组件的连通测试见 `BotAuthorizationCard.forms.test.tsx`。
 
 重新配置必须收到**本卡片/action/revision 的实际保存回执**，普通 change event 或旧值
 不能让新卡片提前结束。同地址保留原连接 ID/默认选择；提交前取消保留旧凭据。保存成功

@@ -76,6 +76,7 @@ it('rejects remote secret submissions at the callback boundary', () => {
   expect(submit).not.toHaveBeenCalled();
   expect(local).not.toHaveBeenCalled();
   expect(invoke).not.toHaveBeenCalled();
+  expect(screen.getByRole('alert').textContent).toBe('newChat.pluginSetup.error.ACTION_FAILED');
 });
 
 it('keeps local cancellation and secret submission on the local maker', async () => {

@@ -2,7 +2,11 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { readBotAuthorizationCard } from '../../../shared/botAuthorization';
-import { assistRemotePluginOauth, isRemoteSessionSticky, makerApiForSticky } from '@/lib/makerTransport';
+import {
+  assistRemotePluginOauth,
+  isRemoteSessionSticky,
+  makerApiForSticky,
+} from '@/lib/makerTransport';
 import type { PluginSetupCommandInFlight } from '@/lib/makerChatStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 
@@ -32,7 +36,13 @@ function AuthorizationBody({
   return (
     <div className="my-2 max-w-xl">
       <PluginSetupPrompt
-        pending={card.snapshot}
+        // Bot cards bind only the OAuth bridge. Do not expose private forms even
+        // if a retained/newer snapshot advertises the regular setup capabilities.
+        pending={
+          remote
+            ? { ...card.snapshot, remoteSecret: undefined, remoteConnection: undefined }
+            : card.snapshot
+        }
         compact
         viewerState="expanded"
         onViewerStateChange={() => {}}
@@ -40,34 +50,54 @@ function AuthorizationBody({
         remoteDeviceId={getStickySessionDeviceId(card.sessionId) ?? undefined}
         commandInFlight={busy}
         onCommand={(requestId, action, actionId, values) => {
-          const remoteOauth = remote && card.snapshot.remoteOauth && action === 'run_action' && actionId &&
-            card.snapshot.steps.some(s => s.action?.id === actionId && s.action.kind === 'oauth_connect');
-          const cancelRemoteOauth = action === 'cancel' && remote && card.snapshot.remoteOauth && busy?.action === 'run_action';
-          if ((busy && !cancelRemoteOauth) || (remote && action !== 'cancel' && !remoteOauth)) return;
+          const remoteOauth =
+            remote &&
+            card.snapshot.remoteOauth &&
+            action === 'run_action' &&
+            actionId &&
+            card.snapshot.steps.some(
+              (s) => s.action?.id === actionId && s.action.kind === 'oauth_connect',
+            );
+          const cancelRemoteOauth =
+            action === 'cancel' &&
+            remote &&
+            card.snapshot.remoteOauth &&
+            busy?.action === 'run_action';
+          if (busy && !cancelRemoteOauth) return;
+          if (remote && action !== 'cancel' && !remoteOauth) {
+            setFailed(true);
+            return;
+          }
           setFailed(false);
           const pending = { requestId, action, actionId };
           setBusy(pending);
           const command =
-            remoteOauth && actionId ? assistRemotePluginOauth(card.sessionId, { ghostId: card.snapshot.ghost.id, requestId, actionId, expectedRevision: card.snapshot.revision }) :
-            action === 'submit_form' && actionId && values && !remote
-              ? window.electronAPI.maker.submitPluginSetupInline({
+            remoteOauth && actionId
+              ? assistRemotePluginOauth(card.sessionId, {
+                  ghostId: card.snapshot.ghost.id,
                   requestId,
                   actionId,
                   expectedRevision: card.snapshot.revision,
-                  value: values.value,
                 })
-              : makerApiForSticky(card.sessionId).resolveInteraction(requestId, {
-                  kind: 'plugin_setup',
-                  action: action === 'cancel' ? 'cancel' : 'run_action',
-                  ...(actionId ? { actionId } : {}),
-                  expectedRevision: card.snapshot.revision,
-                });
+              : action === 'submit_form' && actionId && values && !remote
+                ? window.electronAPI.maker.submitPluginSetupInline({
+                    requestId,
+                    actionId,
+                    expectedRevision: card.snapshot.revision,
+                    value: values.value,
+                  })
+                : makerApiForSticky(card.sessionId).resolveInteraction(requestId, {
+                    kind: 'plugin_setup',
+                    action: action === 'cancel' ? 'cancel' : 'run_action',
+                    ...(actionId ? { actionId } : {}),
+                    expectedRevision: card.snapshot.revision,
+                  });
           void command
             .then((result) => {
               if (result && 'accepted' in result && !result.accepted) setFailed(true);
             })
             .catch(() => setFailed(true))
-            .finally(() => setBusy(current => current === pending ? null : current));
+            .finally(() => setBusy((current) => (current === pending ? null : current)));
         }}
       />
       {failed ? (
