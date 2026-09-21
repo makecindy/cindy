@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 
+import { normalizeImageParameters, type ImageParameters } from '../cindy-media/imageParameters.js';
 import type { ImageChannel, ImageChannelResult } from './imageChannelRegistry.js';
 import { mediaRequestParamsForLog, mediaRequestUrlForLog } from '../cindy-media/mediaRequestLog.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
@@ -21,12 +22,6 @@ const USER_AGENT = `codex_cli_rs/cindy (${process.platform}; ${process.arch})`;
 const SSE_EVENT_BOUNDARY = /(?:\r\n|\r|\n){2}/;
 const SSE_LINE_ENDING = /\r\n|\r|\n/;
 const log = createLogger('codex-image');
-const SIZE_BY_ASPECT = {
-  '1:1': '1024x1024',
-  '3:2': '1536x1024',
-  '2:3': '1024x1536',
-} as const;
-
 export interface CreateCodexImageChannelOptions {
   providerId?: string;
   hasOAuthLogin(): boolean;
@@ -52,7 +47,8 @@ function extractImageB64(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Record<string, unknown>;
   if (item.type === 'image_generation_call' && typeof item.result === 'string') return item.result;
-  if (typeof item.partial_image_b64 === 'string') return item.partial_image_b64;
+  // Preview frames are not final assets: never return one after a failed/truncated stream.
+  if (typeof item.partial_image_b64 === 'string') return null;
   for (const child of Object.values(item)) {
     const found = extractImageB64(child);
     if (found) return found;
@@ -74,12 +70,18 @@ async function collectImageB64(response: Response): Promise<string | null> {
       .map((line) => line.slice(5).trimStart())
       .join('\n');
     if (!data || data === '[DONE]') return;
+    let event: Record<string, unknown>;
     try {
-      const found = extractImageB64(JSON.parse(data) as unknown);
-      if (found) latest = found;
+      event = JSON.parse(data) as Record<string, unknown>;
     } catch {
-      // SSE 允许夹杂未知事件；坏帧不能让后续合法图片结果一起丢失。
+      // Unknown/malformed SSE frames may precede a valid completed result.
+      return;
     }
+    if (event?.type === 'error' || event?.type === 'response.failed' || event?.type === 'response.incomplete') {
+      throw new Error('Codex image generation did not complete; preview images are not final results');
+    }
+    const found = extractImageB64(event);
+    if (found) latest = found;
   };
 
   try {
@@ -99,6 +101,7 @@ async function collectImageB64(response: Response): Promise<string | null> {
       }
     }
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
   return latest;
@@ -140,13 +143,13 @@ async function httpError(
 export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): ImageChannel {
   const doFetch = opts.fetchImplementation ?? fetch;
 
-  async function generate(params: {
+  async function generate(params: ImageParameters & {
     model: string;
     prompt: string;
     imagePaths?: string[];
-    aspectRatio?: '1:1' | '3:2' | '2:3';
     signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
+    const options = normalizeImageParameters('openai', params.model, params);
     const modelPrefix = `${opts.providerId ?? 'openai'}/`;
     if (!params.model.startsWith(modelPrefix) || !params.model.slice(modelPrefix.length).trim()) {
       throw new Error(`Codex 图像通道不支持模型:${params.model}`);
@@ -177,8 +180,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
         {
           type: 'image_generation',
           model: params.model.slice(modelPrefix.length),
-          ...(params.aspectRatio ? { size: SIZE_BY_ASPECT[params.aspectRatio] } : {}),
-          quality: 'medium',
+          ...options,
           output_format: 'png',
           background: 'opaque',
           partial_images: 1,
@@ -234,10 +236,9 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
   }
 
   return {
+    imageProtocol: 'openai',
     ready: opts.hasOAuthLogin,
-    generateImage: ({ model, prompt, aspectRatio, signal }) =>
-      generate({ model, prompt, aspectRatio, signal }),
-    editImage: ({ model, prompt, imagePaths, aspectRatio, signal }) =>
-      generate({ model, prompt, imagePaths, aspectRatio, signal }),
+    generateImage: generate,
+    editImage: generate,
   };
 }

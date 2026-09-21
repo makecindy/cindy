@@ -389,6 +389,18 @@ describe('SchedulerScriptCapabilityBroker', () => {
     ).rejects.toMatchObject({ code: 'METHOD_NOT_FOUND' });
   });
 
+  it('uses the bound owner for omitted dispatch targets and rejects another target', async () => {
+    sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' });
+    const broker = new SchedulerScriptCapabilityBroker();
+    const context = { schedule: schedule({ targetSessionId: 'owner' }) };
+    await broker.call({ method: 'sessions.dispatch', params: { message: 'update' } }, new Set(['sessions.dispatch']), context);
+    expect(sendToSessionMock).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'owner' }));
+    sendToSessionMock.mockClear();
+    await expect(broker.call({ method: 'sessions.dispatch', params: { target_session_id: 'other', message: 'update' } },
+      new Set(['sessions.dispatch']), context)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
   it('dispatches sessions with host-owned create defaults from the schedule', async () => {
     sendToSessionMock.mockResolvedValue({
       ok: true,

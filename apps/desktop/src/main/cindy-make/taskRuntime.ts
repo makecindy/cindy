@@ -36,6 +36,7 @@ import {
   type MakeTaskWorkspace,
 } from '../../shared/cindyMakeDoctor.js';
 import type { DesktopMakerSendResult } from '../maker-host/send-outcome.js';
+import { captureMakeHistoryReport } from './historyCapture.js';
 
 export const CINDY_MAKE_TASK_DISPATCH = Symbol('cindy-make-task-dispatch');
 const log = createLogger('cindy-make');
@@ -47,6 +48,36 @@ type SendTask = (
 ) => Promise<DesktopMakerSendResult>;
 let sendTask: SendTask | undefined;
 let readClearBoundary: ((sessionId: string) => number | null) | undefined;
+let isEditingBlocked: (sessionId: string) => boolean = () => false;
+
+/** Every sender, including a phone with stale UI, must respect the same workspace lease. */
+export function configureCindyMakeEditingGuard(probe: typeof isEditingBlocked): void {
+  isEditingBlocked = probe;
+}
+
+/** Dispatch a Main-created task without opting it into the personal-build lifecycle. */
+export async function dispatchCindyMakeTask(
+  sessionId: string,
+  message: string,
+  createOpts: Record<string, unknown>,
+  isCurrent: () => boolean,
+  clientId: string,
+): Promise<void> {
+  if (!sendTask || !isCurrent()) throwIpcError('PRECONDITION_FAILED', 'Task runner is not ready');
+  const expectedClearBoundaryMs = readClearBoundary?.(sessionId) ?? null;
+  const sent = await sendTask(sessionId, message, createOpts, {
+    expectedClearBoundaryMs,
+    persistUserMessage: {
+      clientId,
+      content: message,
+      expectedClearBoundaryMs,
+      shouldBroadcast: isCurrent,
+    },
+  });
+  if (!sent.accepted) throwIpcError('PRECONDITION_FAILED', 'Could not start Cindy Make task');
+}
+
+export const dispatchCindyMakeMergeTask = dispatchCindyMakeTask;
 
 export function configureCindyMakeTaskSender(
   sender: SendTask,
@@ -73,6 +104,7 @@ export async function restoreCindyMakeTaskState(): Promise<void> {
       content: messages.content,
       clearedAt: sessions.clearedAt,
       sessionStatus: sessions.status,
+      createdAt: sessions.createdAt,
     })
     .from(messages)
     .innerJoin(sessions, eq(messages.sessionId, sessions.id))
@@ -106,6 +138,7 @@ export async function restoreCindyMakeTaskState(): Promise<void> {
     )
       continue;
     const savedStatus = report.status;
+    captureMakeHistoryReport(report, undefined, row.createdAt);
     if (report.task.finished) {
       cindyMakeManager.forgetTask(report.runId);
       continue;
@@ -131,6 +164,8 @@ export async function restoreCindyMakeTaskState(): Promise<void> {
 }
 
 export async function assertCindyMakeTaskReady(sessionId: string): Promise<void> {
+  if (isEditingBlocked(sessionId))
+    throwIpcError('PRECONDITION_FAILED', 'Stop Cindy Make testing or building before editing');
   const [card] = await getDbClient()
     .drizzle.select({ content: messages.content })
     .from(messages)
@@ -279,6 +314,8 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
           shouldBroadcast: isPreparationCurrent,
         },
       );
+    checkPreparationCurrent();
+    captureMakeHistoryReport(next);
   };
   const phase = (
     name: NonNullable<MakeDoctorReport['task']>['phase'],
@@ -320,10 +357,12 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
           throwIpcError('PRECONDITION_FAILED', 'Task preparation was cleared');
         const data = JSON.parse(previous.content).__cindyMakeCard?.data;
         if (
-          data?.report?.task?.originSessionId !== input.originSessionId ||
+          (input.originSessionId !== undefined &&
+            data?.report?.task?.originSessionId !== input.originSessionId) ||
           data?.request !== input.request
         )
           throwIpcError('INVALID_PARAMS', 'Task run does not match');
+        input.originSessionId = data.report.task?.originSessionId;
         sessionId = previous.sessionId;
         expectedClearBoundaryMs = previous.clearedAt;
         checkPreparationCurrent();

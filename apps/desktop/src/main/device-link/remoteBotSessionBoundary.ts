@@ -16,12 +16,35 @@ function record(value: unknown): Record<string, unknown> | null {
 function sessionIds(value: unknown): string[] {
   const row = record(value);
   if (!row) return [];
-  return [row.sessionId, row.parentSessionId, record(row.session)?.id, record(row.message)?.sessionId]
+  return [
+    ...(Array.isArray(row.sessionIds) ? row.sessionIds : []),
+    row.sessionId, row.parentSessionId, record(row.session)?.id, record(row.message)?.sessionId]
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
 }
 
 /** Resolve channel-specific Bot IDs before checking generic Session references. */
 export async function assertRemoteBotInvocationAllowed(args: unknown[], channel = ''): Promise<void> {
+  if (channel === 'local-db:task-tags:execute') {
+    const request = record(args[0]);
+    const targets = request?.sessionIds;
+    // Match taskTagsTx's ids(..., 100) / text(..., 128) before any DB lookup.
+    // Only sessionIds is consumed by this channel; unrelated object fields must
+    // not manufacture additional authorization queries.
+    if (!request || args.length !== 1 || (
+      targets !== undefined && (
+        !Array.isArray(targets) || !targets.length || targets.length > 100 ||
+        targets.some((id) => typeof id !== 'string' || !id.trim() || id.trim().length > 128)
+      )
+    ) || (['get', 'attach', 'detach'].includes(String(request.action)) && targets === undefined)) {
+      throw new Error('[INVALID_PARAMS] Invalid task tag session IDs');
+    }
+    if (lookup && Array.isArray(targets)) {
+      for (const id of new Set(targets.map((id: string) => id.trim()))) {
+        if (await lookup(id, 'session') === 'hidden') throw new Error('[NOT_FOUND] Session does not exist');
+      }
+    }
+    return;
+  }
   if (!lookup) return;
   if (channel === 'maker:bot-direct-message-thread:get') {
     // The first argument is an opaque thread ID, not a Session. The local service
@@ -37,7 +60,8 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
     ...(index === 0 && typeof arg === 'string' ? [arg] : []), ...sessionIds(arg),
   ]));
   for (const id of ids) {
-    if (await lookup(id, channel.startsWith('local-db:bots:') ? 'bot' : 'session') === 'hidden') throw new Error('[NOT_FOUND] Session does not exist');
+    if (
+      (await lookup(id, channel.startsWith('local-db:bots:') ? 'bot' : 'session')) === 'hidden') throw new Error('[NOT_FOUND] Session does not exist');
   }
   for (const arg of args) {
     const row = record(arg);
@@ -49,7 +73,17 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
 }
 
 export async function projectRemoteSessionResult(channel: string, value: unknown): Promise<unknown> {
-  if (!lookup || !['local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'local-db:bots:get', 'local-db:bots:list', 'maker:remote-resources:get', 'maker:remote-resources:list'].includes(channel)) return value;
+  if (!lookup || ![
+      'local-db:task-tags:execute',
+      'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'local-db:bots:get', 'local-db:bots:list', 'maker:remote-resources:get', 'maker:remote-resources:list'].includes(channel)) return value;
+  if (channel === 'local-db:task-tags:execute') {
+    const row = record(value);
+    if (!row) return value;
+    return {
+      ...row,
+      sessions: await projectRemoteSessionResult('local-db:sessions:list', row.sessions),
+    };
+  }
   const activeLookup = lookup;
   const activeBatchLookup = batchLookup;
   const identity = (item: unknown) => {

@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('../../localDb/dialogueWorkspace.js', () => ({
   dialogueWorkspaceRootDir: () => h.dialogueRoot,
+  dialogueWorkspaceRoots: () => [h.dialogueRoot],
 }));
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 vi.mock('../../appSessionState.js', () => ({

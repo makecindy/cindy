@@ -1,3 +1,4 @@
+import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
 /**
  * useDeviceLinkRemoteProjects —— device-link「自动常驻」接入器(listing tier,push 驱动)。
  * ---------------------------------------------------------------------------
@@ -299,7 +300,10 @@ export function resolveIneligibleRemoteProjectAction(input: {
   return 'remove';
 }
 
-export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, windowRole: 'main' | 'sidebar' = 'main'): void {
+export function useDeviceLinkRemoteProjects(
+  periodicReconcileActive = true,
+  windowRole: 'main' | 'sidebar' = 'main',
+): void {
   const { isAuthenticated, deviceId: selfDeviceId, dataOwnerId } = useAuth();
   const periodicReconcileActiveRef = useRef(periodicReconcileActive);
   periodicReconcileActiveRef.current = periodicReconcileActive;
@@ -420,6 +424,7 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
      * subscribeAndBootstrap 重试 —— 被控端恢复后即自动接回。
      */
     const handleRevoked = (deviceId: string): void => {
+      evictTaskTagCatalog(deviceId);
       clearArchivedSessionRetry(deviceId);
       eligible.delete(deviceId);
       revokedDevicesStore.markRevoked(deviceId);

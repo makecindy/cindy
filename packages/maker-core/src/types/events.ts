@@ -193,6 +193,12 @@ export interface AgentEvent {
    */
   runtimeRecovery?: true;
   /**
+   * A complete extension notice, independent of model text assembly and turn
+   * settlement. Hosts deliver it as its own durable message, never as a delta
+   * or a full-text replacement for the currently streaming assistant reply.
+   */
+  standaloneText?: true;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later

@@ -170,7 +170,7 @@ describe('sendToSession ordering', () => {
     expect(policyGuardBlock).toContain(' : leadRow?.workspaceKind;');
     expectOrder(policyGuardBlock, 'const liveWorkspaceKind =', 'assertCollabProjectEnabled(');
     expect(policyGuardBlock).toContain(
-      'matchDialogueWorkspacePath(workingDir, dialogueWorkspaceRootDir()) !== null',
+      'isManagedDialogueWorkspace',
     );
   });
 
@@ -184,7 +184,7 @@ describe('sendToSession ordering', () => {
     expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
     expect(pluginStateBlock).toContain("typeof workspaceKind === 'string' ? workspaceKind : null");
     expect(pluginStateBlock).toContain(
-      'matchDialogueWorkspacePath(candidate, dialogueWorkspaceRootDir()) !== null',
+      'isManagedDialogueWorkspace(candidate)',
     );
     expect(pluginStateBlock).toContain('getEnableState(id, policyWorkingDir)');
     expect(pluginStateBlock).toContain(
@@ -627,12 +627,19 @@ describe('sendToSession ordering', () => {
       'selection,',
     );
     expect(source).toContain('withSessionLock: withSendToSessionLock,');
-    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId);');
+    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);');
     expectOrder(
       directSendSwitchBlock,
-      'const release = await acquireSendToSessionLock(sessionId);',
+      'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);',
       'applyPendingAgentSwitchIfIdle(',
     );
+    for (const operation of [
+      'reconcileBotModelRoute', 'applyPendingAgentSwitchIfIdle',
+      'applyScheduledModelSelection', 'prepareUnhealthySession',
+    ]) {
+      expectOrder(directSendSwitchBlock, `stage = 'direct-send:${operation}'`, `${operation}(`);
+    }
+    expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', "stage = 'direct-send:caller-dispatch'");
     expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'prepareUnhealthySession');
     expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', 'return { release, selection: resolvedSelection };');
   });
@@ -760,16 +767,16 @@ describe('sendToSession ordering', () => {
     );
 
     expect(resumeBranch).toContain(
-      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));',
+      'const storedExtraDirs = await readSessionExtraDirsFromDb(target.sessionId);',
     );
     expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
-    expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
+    expect(resumeBranch).toContain('...directoryGrantsForRuntime(storedExtraDirs),');
     expectOrder(
       resumeBranch,
-      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));',
+      'const storedExtraDirs = await readSessionExtraDirsFromDb(target.sessionId);',
       'const opts = buildCreateOptsWithStderr({',
     );
-    expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
+    expectOrder(resumeBranch, '...directoryGrantsForRuntime(storedExtraDirs),', 'await bootstrapSession(opts);');
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
     expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
     expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');

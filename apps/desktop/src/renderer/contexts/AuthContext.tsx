@@ -1,3 +1,4 @@
+import { resetTaskTagCatalogCache } from '@/features/task-tags/taskTagEvents';
 import {
   createContext,
   useCallback,
@@ -116,6 +117,7 @@ const log = createLogger('AuthContext');
 function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?: number): void {
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
   if (previousOwnerId !== dataOwnerId) {
+    resetTaskTagCatalogCache();
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);

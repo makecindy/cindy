@@ -26,7 +26,19 @@ export interface ProvidersSnapshot {
 
 let cachedProviders: ProvidersSnapshot | null = null;
 let providersGeneration = 0;
+let failedRefresh: ProvidersRefreshToken | null = null;
 const providerListeners = new Set<(snapshot: ProvidersSnapshot | null) => void>();
+
+/** Failure is scoped to the latest refresh and owner; absence of a snapshot alone is not progress. */
+export function hasProvidersSnapshotLoadFailed(): boolean {
+  return failedRefresh !== null && isProvidersRefreshCurrent(failedRefresh);
+}
+
+export function failProvidersRefresh(token: ProvidersRefreshToken): void {
+  if (!isProvidersRefreshCurrent(token)) return;
+  failedRefresh = token;
+  for (const listener of providerListeners) listener(getCachedProvidersSnapshot());
+}
 
 /** 返回当前 data owner 最近一次完整 provider 快照；未加载或归属不符时为 null。 */
 export function getCachedProvidersSnapshot(): ProvidersSnapshot | null {
@@ -44,6 +56,7 @@ export function subscribeProvidersSnapshot(
 
 /** Owner 切换时同步清空旧快照，并通知已挂载的消费者立即隐藏旧 owner 数据。 */
 export function invalidateProvidersSnapshot(): void {
+  failedRefresh = null;
   cachedProviders = null;
   providersGeneration += 1;
   for (const listener of providerListeners) listener(null);
@@ -51,7 +64,12 @@ export function invalidateProvidersSnapshot(): void {
 
 /** 为一次 provider 快照读取分配代际；更早请求完成后不得再覆盖缓存。 */
 export function beginProvidersRefresh(): ProvidersRefreshToken {
+  const wasFailed = hasProvidersSnapshotLoadFailed();
+  failedRefresh = null;
   providersGeneration += 1;
+  if (wasFailed) {
+    for (const listener of providerListeners) listener(getCachedProvidersSnapshot());
+  }
   return {
     generation: providersGeneration,
     owner: getDataOwnerGeneration(),
@@ -86,6 +104,7 @@ export function commitProvidersSnapshot(
   next: ProvidersSnapshot,
 ): boolean {
   if (!isProvidersRefreshCurrent(token, next)) return false;
+  failedRefresh = null;
   cachedProviders = next;
   for (const listener of providerListeners) listener(next);
   return true;
@@ -93,6 +112,7 @@ export function commitProvidersSnapshot(
 
 export const __testing = {
   reset(): void {
+    failedRefresh = null;
     cachedProviders = null;
     providersGeneration = 0;
   },

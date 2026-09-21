@@ -16,9 +16,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
+  extractHumanSurfaceIds,
   GENERATED_BEGIN,
   GENERATED_END,
   INVENTORY_REL_PATH,
+  renderDefaultHumanRow,
 } from './shared/design-inventory.mjs';
 
 export const DEFAULT_MAIN_REF = 'origin/main';
@@ -57,12 +59,79 @@ function commandForPnpm() {
   return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 }
 
+export function inventorySubprocessEnv(source = process.env) {
+  return Object.fromEntries(
+    Object.entries(source).filter(([key]) => key.toUpperCase() !== 'CINDY_INVENTORY_DOC'),
+  );
+}
+
 function runPnpm(cwd, command) {
-  execFileSync(commandForPnpm(), [command], { cwd, stdio: 'inherit' });
+  execFileSync(commandForPnpm(), [command], {
+    cwd,
+    stdio: 'inherit',
+    env: inventorySubprocessEnv(),
+  });
 }
 
 function formatPaths(paths) {
   return paths.map(file => `  - ${file}`).join('\n');
+}
+
+const HUMAN_ROW_RE = /^\| `([^`]+)` \|/;
+
+function assertProtectedSectionsPreserved(before, after) {
+  if (before.prefix !== after.prefix) {
+    throw new Error(
+      '[design-inventory] 生成器改写了人工维护区或文件前缀，已停止并保留失败现场。',
+    );
+  }
+
+  const existingIds = new Set(extractHumanSurfaceIds(before.suffix));
+  const addedIds = new Set(
+    extractHumanSurfaceIds(after.suffix).filter((id) => !existingIds.has(id)),
+  );
+  const seenAddedIds = new Set();
+  const suffixWithoutAllowedRows = [];
+  for (const chunk of after.suffix.match(/[^\n]*(?:\n|$)/g) ?? []) {
+    if (!chunk) continue;
+    const line = chunk.endsWith('\n') ? chunk.slice(0, -1) : chunk;
+    const id = HUMAN_ROW_RE.exec(line)?.[1];
+    if (!id || !addedIds.has(id)) {
+      suffixWithoutAllowedRows.push(chunk);
+      continue;
+    }
+    if (seenAddedIds.has(id) || line !== renderDefaultHumanRow(id)) {
+      throw new Error(
+        '[design-inventory] 生成器新增了非标准默认人工行，已停止并保留失败现场。',
+      );
+    }
+    seenAddedIds.add(id);
+  }
+
+  if (
+    seenAddedIds.size !== addedIds.size ||
+    suffixWithoutAllowedRows.join('') !== before.suffix
+  ) {
+    throw new Error(
+      '[design-inventory] 生成器改写了人工维护区中的已有内容，已停止并保留失败现场。',
+    );
+  }
+  return [...addedIds];
+}
+
+const CLI_USAGE = '用法：pnpm resolve:design-inventory-conflict -- --main-ref <main-ref>';
+
+export function parseCliArgs(args) {
+  if (args.length === 0) return { mainRef: DEFAULT_MAIN_REF };
+  if (
+    args.length !== 2 ||
+    args[0] !== '--main-ref' ||
+    !args[1] ||
+    args[1].startsWith('--')
+  ) {
+    throw new Error(CLI_USAGE);
+  }
+  return { mainRef: args[1] };
 }
 
 /**
@@ -136,14 +205,7 @@ export function resolveDesignInventoryConflict({
   fs.writeFileSync(targetPath, mainDocument, 'utf8');
   runInventory(repoRoot, 'design:inventory');
   const protectedAfter = splitProtectedSections(fs.readFileSync(targetPath, 'utf8'));
-  if (
-    protectedBefore.prefix !== protectedAfter.prefix ||
-    protectedBefore.suffix !== protectedAfter.suffix
-  ) {
-    throw new Error(
-      '[design-inventory] 生成器改写了人工维护区或文件前缀，已停止并保留失败现场。',
-    );
-  }
+  const addedHumanIds = assertProtectedSectionsPreserved(protectedBefore, protectedAfter);
   runInventory(repoRoot, 'check:design-inventory');
   git(repoRoot, ['add', '--', target]);
   const remaining = unresolvedPaths(repoRoot);
@@ -153,7 +215,10 @@ export function resolveDesignInventoryConflict({
     );
   }
   const diff = git(repoRoot, ['diff', '--cached', '--', target]);
-  log(`[design-inventory] 已解决 ${target}，人工区保持不变。`);
+  log(
+    `[design-inventory] 已解决 ${target}，已有人工内容保持不变` +
+    (addedHumanIds.length > 0 ? `，新增 ${addedHumanIds.length} 条标准默认行。` : '。'),
+  );
   log('[design-inventory] 暂存 diff：');
   log(diff || '(无暂存 diff)');
   return { status: 'resolved', target, diff };
@@ -161,13 +226,7 @@ export function resolveDesignInventoryConflict({
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    const mainRefIndex = process.argv.indexOf('--main-ref');
-    const mainRef = mainRefIndex >= 0
-      ? process.argv[mainRefIndex + 1]
-      : DEFAULT_MAIN_REF;
-    if (!mainRef || mainRef.startsWith('--')) {
-      throw new Error('用法：pnpm resolve:design-inventory-conflict -- --main-ref <main-ref>');
-    }
+    const { mainRef } = parseCliArgs(process.argv.slice(2));
     resolveDesignInventoryConflict({ mainRef });
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

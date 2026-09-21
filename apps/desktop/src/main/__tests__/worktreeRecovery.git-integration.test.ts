@@ -1,3 +1,8 @@
+// These suites exercise real archive I/O in Node; Electron worker isolation is covered separately.
+vi.mock('../worktree/recoveryArchiveWorkerClient', async () => {
+  const { executeRecoveryArchiveTask } = await import('../worktree/recoveryArchiveTask');
+  return { runRecoveryArchiveTask: executeRecoveryArchiveTask };
+});
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -25,7 +30,11 @@ vi.mock('../worktree/worktreeStore', () => ({
   del: async (id: string) => { state.registry.delete(id); },
 }));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ readLocalWorktreeReferences: async () => state.refs }) }));
-vi.mock('../worktree/runtimeLeases', () => ({ readWorktreeRuntimePaths: async () => new Set() }));
+vi.mock('../worktree/runtimeLeases', async (original) => ({
+  ...await original<typeof import('../worktree/runtimeLeases')>(),
+  // Model an old owner profile that cannot see the borrower's shared leases.
+  readWorktreeRuntimePaths: async () => new Set(),
+}));
 vi.mock('../worktree/gitExec', async (original) => {
   const actual = await original<typeof import('../worktree/gitExec')>();
   return { ...actual, gitExec: vi.fn<typeof actual.gitExec>((args, cwd, options) => actual.gitExec(args, cwd, {
@@ -33,13 +42,14 @@ vi.mock('../worktree/gitExec', async (original) => {
   })) };
 });
 
-import { recycleManagedWorktree } from '../worktree/managedRecycle';
+import { checkpointWorktreeForReuse, recycleManagedWorktree } from '../worktree/managedRecycle';
 import { restoreRecordedWorktree } from '../worktree/restoreRecovery';
 import { readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
 import { captureWorktreeContent } from '../worktree/contentSnapshot';
 import { GitExecError, gitExec } from '../worktree/gitExec';
 import { acquireWorktree, releaseWorktree, parkAll } from '../worktree/WorktreePool';
 import { extractRecoveryArchive } from '../worktree/recoveryArchive';
+import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
 
 const exec = promisify(execFile);
 describe('worktree recovery with real Git and encrypted archives', () => {
@@ -48,7 +58,7 @@ describe('worktree recovery with real Git and encrypted archives', () => {
     cwd, windowsHide: true, env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(state.root, 'git-global'), GIT_CONFIG_NOSYSTEM: '1' },
   })).stdout.trim();
   beforeAll(async () => {
-    state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-recovery-git-'));
+    state.root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-recovery-git-')));
     repo = path.join(state.root, 'repo');
     await fs.mkdir(repo);
     await git(repo, 'init', '-b', 'main');
@@ -70,6 +80,22 @@ describe('worktree recovery with real Git and encrypted archives', () => {
     state.refs.push({ id: name, status: 'archived', source: 'desktop', currentDatabase: true, workingDir: worktree, worktreePath: worktree });
     return meta;
   };
+
+  it('protects a borrowed source from old recyclers after build scripts clean the worktree', async () => {
+    const meta = await createFixture('borrowed-clean');
+    const lease = (await acquireWorktreeRuntimeLease('borrower', meta.path, { crossProfile: true }))!;
+    try {
+      await git(meta.path, 'clean', '-fdx');
+      await expect(fs.stat(path.join(meta.path, 'draft.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+      // Old pool reuse and deletion must both stop before changing source.
+      await expect(checkpointWorktreeForReuse(meta)).rejects.toThrow('worktree is locked');
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(false);
+      await expect(git(repo, 'worktree', 'remove', '--force', meta.path)).rejects.toThrow();
+      expect(await fs.readFile(path.join(meta.path, 'tracked.txt'), 'utf8')).toBe('base\n');
+      await releaseWorktreeRuntimeLease(lease);
+      expect(await recycleManagedWorktree(meta, { canRemove: async () => true })).toBe(true);
+    } finally { await releaseWorktreeRuntimeLease(lease); }
+  }, 30_000);
 
   it('restores detached HEAD, staged-only bytes, unstaged files, ignored files and untracked files', async () => {
     const worktree = path.join(repo, '.cindy-worktrees', 'recover');

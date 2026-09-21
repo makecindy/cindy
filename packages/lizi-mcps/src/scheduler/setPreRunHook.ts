@@ -94,11 +94,12 @@ export function registerScheduleSetPreRunHookTool(
         if (scheduleId) {
           const schedule = await scheduler.get(scheduleId);
           if (!schedule) throw new Error(`Schedule not found: ${scheduleId}`);
+          // Script uses its own cwd; agent heartbeat inherits its bound session cwd.
           // 目录优先级:显式入参 > 绑定会话的 meta.workDir > schedule.workingDir。
           // 绑定会话(heartbeat)任务的 schedule.workingDir 通常为空(或"project
           // 任务改绑会话"后过期),不解析会话目录会把脚本落进 fallbackDir、自测
           // cwd 也与生产运行不一致。解析失败回落旧行为。
-          if (!workingDir && schedule.targetSessionId && hookScript.resolveSessionWorkDir) {
+          if (!workingDir && schedule.executionMode !== 'script' && schedule.targetSessionId && hookScript.resolveSessionWorkDir) {
             const sessionDir = await hookScript
               .resolveSessionWorkDir(schedule.targetSessionId)
               .catch(() => undefined);

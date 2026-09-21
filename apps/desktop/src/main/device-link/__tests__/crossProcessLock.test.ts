@@ -81,6 +81,52 @@ async function writeStaleReclaimGate(lock: string): Promise<void> {
   await fsp.utimes(gate, old, old);
 }
 
+describe('advisory lock cancellation', () => {
+  it('does not publish a lock or enter the task when already cancelled', async () => {
+    const lock = path.join(dir, 'cancelled-lock');
+    const controller = new AbortController();
+    controller.abort();
+    const task = vi.fn(async () => undefined);
+
+    await expect(withAdvisoryCrossProcessLock(lock, { label: 'cancelled' }, task, controller.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(task).not.toHaveBeenCalled();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it.each(['acquired', 'busy'] as const)('cancels at the %s boundary without leaking or removing another owner', async (state) => {
+    const lock = path.join(dir, 'cancelled-lock');
+    const ownerRecord = JSON.stringify({ pid: process.pid, nonce: 'existing-owner' });
+    if (state === 'busy') await fsp.writeFile(lock, ownerRecord);
+    const controller = new AbortController();
+    const task = vi.fn(async () => undefined);
+    const originalOpen = fsp.open;
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+      try {
+        return await originalOpen(...args);
+      } finally {
+        // Cancel during acquisition, including the last attempt at the deadline.
+        if (args[0] === lock) controller.abort();
+      }
+    });
+    try {
+      await expect(withAdvisoryCrossProcessLock(lock, { label: 'cancelled', waitMs: 0 }, task, controller.signal))
+        .rejects.toMatchObject({ name: 'AbortError' });
+      expect(task).not.toHaveBeenCalled();
+      if (state === 'busy') {
+        expect(await fsp.readFile(lock, 'utf8')).toBe(ownerRecord);
+        await fsp.rm(lock);
+      } else {
+        await expect(fsp.stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    } finally {
+      openSpy.mockRestore();
+    }
+    await expect(withAdvisoryCrossProcessLock(lock, { label: 'next' }, async (status) => status))
+      .resolves.toEqual({ held: true });
+  });
+});
+
 describe('接管陈旧锁', () => {
   it('删得掉 → 接管成功,task 拿到 held=true', async () => {
     const lock = path.join(dir, 'lock');
@@ -670,9 +716,15 @@ describe('接管陈旧锁', () => {
     expect(fs.existsSync(lock)).toBe(true);
   });
 
-  it('bounds repeated successful stale takeovers by time and count', async () => {
+  it.each([
+    { takeoverMs: 100, expectedTakeovers: 3 },
+    { takeoverMs: 2_500, expectedTakeovers: 1 },
+  ])('bounds repeated successful stale takeovers by time and count ($takeoverMs ms)', async ({ takeoverMs, expectedTakeovers }) => {
     const lock = path.join(dir, 'lock');
     await writeStaleStrictLock(lock);
+    // Exercise the protocol budget independently of Windows filesystem latency.
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const originalRename = fsp.rename;
     let takeovers = 0;
     const spy = vi.spyOn(fsp, 'rename').mockImplementation((async (
@@ -682,25 +734,29 @@ describe('接管陈旧锁', () => {
       const result = await (originalRename as (...args: unknown[]) => Promise<unknown>)(from, to);
       if (from === lock && typeof to === 'string' && to.startsWith(`${lock}.reclaim-`)) {
         takeovers += 1;
+        now += takeoverMs;
         await writeStaleStrictLock(lock);
       }
       return result;
     }) as typeof fsp.rename);
     try {
-      const started = performance.now();
+      const started = Date.now();
       await expect(
         withCrossProcessLock(lock, { label: 'churn', waitMs: 2_000 }, async (s) => s),
       ).resolves.toEqual({ held: false, reason: 'busy' });
-      expect(performance.now() - started).toBeLessThan(1_000);
-      expect(takeovers).toBe(3);
+      expect(takeovers).toBe(expectedTakeovers);
+      expect(Date.now() - started).toBe(takeoverMs * expectedTakeovers);
     } finally {
       spy.mockRestore();
+      clock.mockRestore();
     }
   });
 
   it('publishes after the final stale takeover when the path stays empty', async () => {
     const lock = path.join(dir, 'lock');
     await writeStaleStrictLock(lock);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const originalRename = fsp.rename;
     let takeovers = 0;
     const spy = vi.spyOn(fsp, 'rename').mockImplementation((async (
@@ -710,6 +766,7 @@ describe('接管陈旧锁', () => {
       const result = await (originalRename as (...args: unknown[]) => Promise<unknown>)(from, to);
       if (from === lock && typeof to === 'string' && to.startsWith(`${lock}.reclaim-`)) {
         takeovers += 1;
+        now += 100;
         if (takeovers < 3) await writeStaleStrictLock(lock);
       }
       return result;
@@ -721,12 +778,15 @@ describe('接管陈旧锁', () => {
       expect(takeovers).toBe(3);
     } finally {
       spy.mockRestore();
+      clock.mockRestore();
     }
   });
 
   it('retries publication after the final takeover when Windows still reports the path busy', async () => {
     const lock = path.join(dir, 'lock');
     await writeStaleStrictLock(lock);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const originalRename = fsp.rename;
     const originalLink = fsp.link;
     let takeovers = 0;
@@ -738,6 +798,7 @@ describe('接管陈旧锁', () => {
       const result = await (originalRename as (...args: unknown[]) => Promise<unknown>)(from, to);
       if (from === lock && typeof to === 'string' && to.startsWith(`${lock}.reclaim-`)) {
         takeovers += 1;
+        now += 100;
         if (takeovers < 3) await writeStaleStrictLock(lock);
       }
       return result;
@@ -761,6 +822,7 @@ describe('接管陈旧锁', () => {
     } finally {
       renameSpy.mockRestore();
       linkSpy.mockRestore();
+      clock.mockRestore();
     }
   });
 

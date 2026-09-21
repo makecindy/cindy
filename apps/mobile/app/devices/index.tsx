@@ -1,3 +1,4 @@
+import { TaskTagDots } from '@/session/TaskTags';
 import { GlassView } from "expo-glass-effect";
 import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
 import { useHeaderHeight } from "expo-router/react-navigation";
@@ -2702,10 +2703,7 @@ function HomeScreenContent() {
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : home.pinned.length > 0 ? (
-            // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
-            null
-          ) : showRemoteGuide && home.emptyNoDevice ? (
+          ) : home.pinned.length > 0 ? null : showRemoteGuide && home.emptyNoDevice ? (
             // 无可控制电脑是「首次使用 / 产品模式说明」级空态:按 reason 渲染远程访问引导
             // (首跑三步 / 离线设备卡 / 精确开关 / 重试访问 + 云端 Cindy 预告),而非一句话空态。
             <RemoteAccessGuide
@@ -2921,6 +2919,7 @@ function HomeScreenContent() {
         visible={displaySettingsOpen}
       />
       <SessionOptionsPresenter
+        session={actionSheetSession}
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}
@@ -3968,7 +3967,14 @@ function HomeSessionRowInner({
           ? groupRowOpensPrimary ? t('devices.list.a11y.openAutomationLatest', { title: item.title }) : t('devices.list.a11y.automationTask', { title: item.title })
           : t('devices.list.a11y.openConversation', { title: item.title })}
         accessibilityState={group ? { expanded: groupExpanded, selected } : { selected }}
-        onLongPress={onLongPress}
+        delayLongPress={400}
+        onLongPress={
+          !selectionMode && !group && swipe && conversationSearchAllowsLocalWrites(item)
+            ? () => {
+                swipe.registry.closeOpenRow();
+                swipe.onShowOptions(latestMobileSessionRow(item).session as RemoteSession);
+              }
+            : onLongPress}
         onPress={handlePress}
         style={({ pressed }) => [
           styles.sessionListRow,
@@ -4032,6 +4038,7 @@ function HomeSessionRowInner({
             >
               {item.title}
             </Text>
+            <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
             {sourceLabel ? (
               <Text
                 ellipsizeMode="tail"

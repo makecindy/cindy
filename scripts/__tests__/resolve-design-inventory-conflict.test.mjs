@@ -9,10 +9,19 @@ import {
   GENERATED_BEGIN,
   GENERATED_END,
   INVENTORY_REL_PATH,
+  renderDefaultHumanRow,
 } from '../shared/design-inventory.mjs';
 import {
+  inventorySubprocessEnv,
+  parseCliArgs,
   resolveDesignInventoryConflict,
 } from '../resolve-design-inventory-conflict.mjs';
+
+const CLI_PATH = path.resolve('scripts/resolve-design-inventory-conflict.mjs');
+const HUMAN_TABLE =
+  '\n## 人工标注\n\n| ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |\n' +
+  '| --- | --- | --- | --- | --- | --- |\n' +
+  '| `desktop.existing` | human-owner | pilot | protected | approved route | keep exactly |\n';
 
 function git(cwd, args, options = {}) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', ...options }).trim();
@@ -42,9 +51,9 @@ function commitAll(root, message) {
   return git(root, ['rev-parse', 'HEAD']);
 }
 
-function createMergeConflict() {
+function createMergeConflict({ manual = 'owner: base\n' } = {}) {
   const { root, inventoryPath } = createRepo();
-  writeInventory(inventoryPath);
+  writeInventory(inventoryPath, manual);
   const base = commitAll(root, 'base');
   git(root, ['switch', '-q', '-c', 'main']);
   fs.writeFileSync(inventoryPath, fs.readFileSync(inventoryPath, 'utf8').replace('base facts', 'main facts'), 'utf8');
@@ -101,6 +110,60 @@ test('resolves only the inventory conflict and preserves the manual section', ()
   assert.equal(git(root, ['rev-parse', 'MERGE_HEAD']), main);
 });
 
+test('allows standard default rows while preserving every existing human byte', () => {
+  const { root, inventoryPath } = createMergeConflict({ manual: HUMAN_TABLE });
+  resolveDesignInventoryConflict({
+    cwd: root,
+    mainRef: 'main',
+    runInventory: (cwd, command) => {
+      if (command !== 'design:inventory') return;
+      const target = path.join(cwd, ...INVENTORY_REL_PATH.split('/'));
+      const current = fs.readFileSync(target, 'utf8');
+      fs.writeFileSync(
+        target,
+        current.replace(
+          '| `desktop.existing` | human-owner | pilot | protected | approved route | keep exactly |',
+          '| `desktop.existing` | human-owner | pilot | protected | approved route | keep exactly |\n' +
+          renderDefaultHumanRow('desktop.new-surface'),
+        ),
+        'utf8',
+      );
+    },
+    log: () => {},
+  });
+
+  const result = fs.readFileSync(inventoryPath, 'utf8');
+  assert.match(result, /human-owner \| pilot \| protected \| approved route \| keep exactly/);
+  assert.match(result, new RegExp(renderDefaultHumanRow('desktop.new-surface').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('rejects a newly added human row that is not the standard default', () => {
+  const { root } = createMergeConflict({ manual: HUMAN_TABLE });
+  assert.throws(
+    () => resolveDesignInventoryConflict({
+      cwd: root,
+      mainRef: 'main',
+      runInventory: (cwd, command) => {
+        if (command !== 'design:inventory') return;
+        const target = path.join(cwd, ...INVENTORY_REL_PATH.split('/'));
+        const current = fs.readFileSync(target, 'utf8');
+        fs.writeFileSync(
+          target,
+          current.replace(
+            '| `desktop.existing` | human-owner | pilot | protected | approved route | keep exactly |',
+            '| `desktop.existing` | human-owner | pilot | protected | approved route | keep exactly |\n' +
+            '| `desktop.new-surface` | invented-owner | legacy | — | route | next |',
+          ),
+          'utf8',
+        );
+      },
+      log: () => {},
+    }),
+    /非标准默认人工行/,
+  );
+  assert.notEqual(git(root, ['diff', '--name-only', '--diff-filter=U']), '');
+});
+
 test('does not modify an ordinary clean worktree', () => {
   const { root, inventoryPath } = createRepo();
   writeInventory(inventoryPath);
@@ -151,7 +214,7 @@ test('rejects when the explicit main ref is not MERGE_HEAD', () => {
 });
 
 test('preserves the failure scene when generation changes the manual section', () => {
-  const { root } = createMergeConflict();
+  const { root } = createMergeConflict({ manual: HUMAN_TABLE });
   assert.throws(
     () => resolveDesignInventoryConflict({
       cwd: root,
@@ -159,7 +222,8 @@ test('preserves the failure scene when generation changes the manual section', (
       runInventory: (cwd, command) => {
         if (command === 'design:inventory') {
           const target = path.join(cwd, ...INVENTORY_REL_PATH.split('/'));
-          fs.appendFileSync(target, 'owner: changed\n');
+          const current = fs.readFileSync(target, 'utf8');
+          fs.writeFileSync(target, current.replace('human-owner', 'changed-owner'), 'utf8');
         }
       },
       log: () => {},
@@ -167,6 +231,45 @@ test('preserves the failure scene when generation changes the manual section', (
     /改写了人工维护区/,
   );
   assert.notEqual(git(root, ['diff', '--name-only', '--diff-filter=U']), '');
+});
+
+test('clears every casing of the inventory override from child commands', () => {
+  const source = {
+    PATH: 'test-path',
+    CINDY_INVENTORY_DOC: 'first.md',
+    cindy_inventory_doc: 'second.md',
+  };
+  assert.deepEqual(inventorySubprocessEnv(source), { PATH: 'test-path' });
+  assert.deepEqual(source, {
+    PATH: 'test-path',
+    CINDY_INVENTORY_DOC: 'first.md',
+    cindy_inventory_doc: 'second.md',
+  });
+});
+
+test('CLI parser accepts only the documented main-ref form', () => {
+  assert.deepEqual(parseCliArgs([]), { mainRef: 'origin/main' });
+  assert.deepEqual(parseCliArgs(['--main-ref', 'upstream/main']), { mainRef: 'upstream/main' });
+  for (const args of [
+    ['--main-ref'],
+    ['--main-ref=upstream/main'],
+    ['--main-reff', 'upstream/main'],
+    ['--main-ref', 'one', '--main-ref', 'two'],
+    ['unexpected'],
+  ]) {
+    assert.throws(() => parseCliArgs(args), /用法/);
+  }
+});
+
+test('CLI rejects unknown arguments before inspecting Git state', () => {
+  assert.throws(
+    () => execFileSync(process.execPath, [CLI_PATH, '--unknown'], {
+      cwd: path.dirname(CLI_PATH),
+      encoding: 'utf8',
+      stdio: 'pipe',
+    }),
+    (error) => error.status === 1 && /用法/.test(error.stderr),
+  );
 });
 
 test('preserves the failure scene when generation or validation fails', () => {

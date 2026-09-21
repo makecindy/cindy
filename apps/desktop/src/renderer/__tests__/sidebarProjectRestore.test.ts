@@ -163,6 +163,35 @@ describe('collectRestorableProjectKeys', () => {
     ).toBe(false);
   });
 
+  it('continues into draft creation when a recent empty project cannot pass the activity filter', async () => {
+    const keys = collectRestorableProjectKeys({
+      sessions: [],
+      persistentLocalProjects: [
+        {
+          workingDir: '/workspace/cindy',
+          lastUsedAt: '2026-08-02T08:00:00.000Z',
+          knownAgentKinds: [],
+        },
+      ],
+      lastActivityCutoff: Date.parse('2026-08-01T00:00:00.000Z'),
+      pinnedProjectKeys: new Set(),
+      vendorPredicate: null,
+    });
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreHiddenProjectIfPresent({
+        projectKey: PROJECT_KEY,
+        wasHiddenAtPickerOpen: true,
+        setProjectHidden: vi.fn().mockResolvedValue(true),
+        getCurrentProjectKeys: () => keys,
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(false);
+    expect(ensureProjectIncluded).not.toHaveBeenCalled();
+  });
+
   it('lets a pinned persistent project bypass activity and vendor filters', () => {
     const keys = collectRestorableProjectKeys({
       sessions: [],

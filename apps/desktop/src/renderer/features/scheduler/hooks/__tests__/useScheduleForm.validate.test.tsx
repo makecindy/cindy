@@ -10,7 +10,7 @@ import { formToProjectConfig } from '../../lib/projectAutomationConfig';
 
 /**
  * 回归(codex review #966):script 模式不展示前置检查区块,buildScheduleInput
- * 的 script 分支也会把它清空。若用户在 agent 模式下开了前置检查、命令留空,
+ * 只保留已有的非空检查。若用户在 agent 模式下开了前置检查、命令留空,
  * 再切到 script,validate 不该沿用那条校验——否则用户看不到该区块、点不到
  * 那个开关,却被挡在保存之外。
  */

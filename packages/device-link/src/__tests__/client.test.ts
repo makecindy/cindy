@@ -725,6 +725,40 @@ describe('DeviceLinkClient', () => {
     await expect(p).resolves.toMatchObject({ ok: true, result: ['s1'] });
     h.client.stop();
   });
+  it("negotiates a tag catalog and returns the original session array to callers", async () => {
+    const h = makeHarness();
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const p = h.client.invoke("dev-b", {
+      channel: 'local-db:sessions:list',
+      args: [200, "active", { includePinned: true }],
+    });
+    const sent = h.current().sent.find((e) => e.kind === 'invoke')!;
+    expect(sent.payload).toMatchObject({
+      args: [200, "active", { includePinned: true, tagCatalog: 1 }],
+    });
+    const tag = { id: "work", name: "Work" };
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: "invoke-result",
+      id: sent.id,
+      src: "dev-b",
+      payload: {
+        ok: true,
+        result: {
+          format: "session-tag-catalog-v1",
+          sessions: [{ id: "s1", tagIds: [0] }],
+          tags: [tag],
+        },
+      },
+    });
+    await expect(p).resolves.toEqual({
+      ok: true,
+      result: [{ id: "s1", tags: [tag] }],
+    });
+    h.client.stop();
+  });
 
   it('双方协商可靠传输后，大 invoke-result 分片并在累计 ACK 后停止重发', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 10_000 } });
@@ -2651,7 +2685,7 @@ describe('DeviceLinkClient', () => {
     expect(sentListing).toMatchObject({
       kind: 'invoke',
       dst: 'dev-b',
-      payload: { channel: 'local-db:sessions:list', args: [] },
+      payload: { channel: 'local-db:sessions:list', args: [null, null, { tagCatalog: 1 }] },
     });
     expect(parseTransportPayload(sentListing.payload)).toBeNull();
     h.current().push({
@@ -2781,7 +2815,7 @@ describe('DeviceLinkClient', () => {
     expect(sentListing).toMatchObject({
       kind: 'invoke',
       dst: 'dev-b',
-      payload: { channel: 'local-db:sessions:list', args: [] },
+      payload: { channel: 'local-db:sessions:list', args: [null, null, { tagCatalog: 1 }] },
     });
     expect(parseTransportPayload(sentListing.payload)).toBeNull();
 

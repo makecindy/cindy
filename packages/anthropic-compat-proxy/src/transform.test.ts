@@ -23,6 +23,11 @@ import {
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
+  stripNonCanonicalResponsesItemIdsFromBody,
+  createResponsesItemIdPrefixRecoveryRule,
+  createResponsesItemIdLengthRecoveryRule,
+  shortenOversizedResponsesItemIdsFromBody,
+  shortenResponsesItemId,
   stripToolUseProviderSpecificFields,
   stripToolUseProviderSpecificFieldsFromBody,
 } from './transform.js';
@@ -499,6 +504,133 @@ describe('stripImageGenerationItemsWithoutIdFromBody', () => {
 
   it('returns null for non-JSON body', () => {
     expect(stripImageGenerationItemsWithoutIdFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
+  });
+});
+
+describe('stripNonCanonicalResponsesItemIdsFromBody (issue #4738)', () => {
+  it('drops chat-completions style message ids and bare reasoning ids from input history, keeping canonical ids and tool pairing', () => {
+    const body = buf({
+      model: 'gpt-6-astra',
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'message', id: 'chatcmpl-abc123_msg_0', role: 'assistant', content: [{ type: 'output_text', text: 'gemini said' }] },
+        { type: 'reasoning', id: '0d5f1c2e-bare-uuid', summary: [] },
+        { type: 'message', id: 'msg_ok_1', role: 'assistant', content: [{ type: 'output_text', text: 'fine' }] },
+        { type: 'reasoning', id: 'rs_ok_1', summary: [] },
+        { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'tool', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+      ],
+    });
+    const out = stripNonCanonicalResponsesItemIdsFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([
+      { type: 'message', role: 'user', content: 'hi' },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'gemini said' }] },
+      { type: 'reasoning', summary: [] },
+      { type: 'message', id: 'msg_ok_1', role: 'assistant', content: [{ type: 'output_text', text: 'fine' }] },
+      { type: 'reasoning', id: 'rs_ok_1', summary: [] },
+      { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'tool', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+    ]);
+  });
+
+  it('returns null when every history id is already canonical or absent, and for non-JSON', () => {
+    expect(stripNonCanonicalResponsesItemIdsFromBody(buf({
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'message', id: 'msg_1', role: 'assistant', content: [] },
+        { type: 'function_call', id: 'ctc_1', call_id: 'call_1', name: 't', arguments: '{}' },
+      ],
+    }))).toBeNull();
+    expect(stripNonCanonicalResponsesItemIdsFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
+  });
+
+  it('does not touch ids outside the top-level Responses input array (tools / metadata / nested input payloads)', () => {
+    expect(stripNonCanonicalResponsesItemIdsFromBody(buf({
+      tools: [{ type: 'function', name: 'x', id: 'chatcmpl-not-input' }],
+      metadata: { type: 'message', id: 'chatcmpl-meta' },
+      input: [{ type: 'message', role: 'user', content: 'hi' }],
+    }))).toBeNull();
+    // 嵌套同名 input 数组是业务 payload, 里面的 {type:'message', id} 不是协议历史 item
+    const nested = {
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        {
+          type: 'function_call_output',
+          call_id: 'call_1',
+          output: JSON.stringify({ input: [{ type: 'message', id: 'business-id' }] }),
+        },
+        { type: 'message', id: 'msg_ok', role: 'assistant', content: [] },
+      ],
+      metadata: { input: [{ type: 'message', id: 'business-id-2' }] },
+    };
+    expect(stripNonCanonicalResponsesItemIdsFromBody(buf(nested))).toBeNull();
+    // 顶层 input 命中时, 嵌套 payload 里的业务 id 仍原样保留
+    const out = stripNonCanonicalResponsesItemIdsFromBody(buf({
+      ...nested,
+      input: [...nested.input, { type: 'message', id: 'chatcmpl-x_msg_0', role: 'assistant', content: [] }],
+    }));
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.metadata).toEqual({ input: [{ type: 'message', id: 'business-id-2' }] });
+    expect(parsed.input[1].output).toContain('business-id');
+    expect(parsed.input[3]).toEqual({ type: 'message', role: 'assistant', content: [] });
+  });
+});
+
+describe('shortenOversizedResponsesItemIdsFromBody (issue #4227)', () => {
+  const longWs = 'ws_0cb4cb13-dee8-9afb-aece-c5ec0b3bf2bf_call-94cd3890-d2bb-41ae-8c39-9613c70a322c-24';
+  const longTco = 'tco_0cb4cb13-dee8-9afb-aece-c5ec0b3bf2bf_call-94cd3890-d2bb-41ae-8c39-9613c70a322c-24';
+
+  it('rewrites only ids longer than 64 chars, keeping the type prefix and a stable digest', () => {
+    expect(longWs).toHaveLength(84);
+    expect(longTco).toHaveLength(85);
+    const shortWs = shortenResponsesItemId(longWs);
+    expect(shortWs).toHaveLength(64);
+    expect(shortWs.startsWith('ws_')).toBe(true);
+    expect(shortWs).toMatch(/^ws_[0-9a-f]{61}$/);
+    // 稳定: 每轮回放同一原 id 得到同一短 id; 不同原 id 不同短 id
+    expect(shortenResponsesItemId(longWs)).toBe(shortWs);
+    expect(shortenResponsesItemId(longTco)).not.toBe(shortWs);
+    expect(shortenResponsesItemId(longTco).startsWith('tco_')).toBe(true);
+    // 未超长原样; 无字母前缀的超长 id 只用 hash
+    expect(shortenResponsesItemId('fc_short')).toBe('fc_short');
+    expect(shortenResponsesItemId('x'.repeat(64))).toBe('x'.repeat(64));
+    expect(shortenResponsesItemId('0123456789'.repeat(7))).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('rewrites oversized ids in the top-level input only and leaves call_id, bodies and short ids alone', () => {
+    const body = buf({
+      model: 'gpt-5.6-luna',
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'web_search_call', id: longWs, status: 'completed' },
+        { type: 'function_call', id: longTco, call_id: longTco, name: 'tool', arguments: '{}' },
+        { type: 'function_call_output', call_id: longTco, output: JSON.stringify({ input: [{ id: longWs }] }) },
+        { type: 'message', id: 'msg_ok', role: 'assistant', content: [{ type: 'output_text', text: longWs }] },
+      ],
+      metadata: { id: longWs },
+    });
+    const out = shortenOversizedResponsesItemIdsFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input[1].id).toBe(shortenResponsesItemId(longWs));
+    expect(parsed.input[2].id).toBe(shortenResponsesItemId(longTco));
+    // call_id 配对与正文不动
+    expect(parsed.input[2].call_id).toBe(longTco);
+    expect(parsed.input[3].call_id).toBe(longTco);
+    expect(parsed.input[3].output).toContain(longWs);
+    expect(parsed.input[4]).toEqual({ type: 'message', id: 'msg_ok', role: 'assistant', content: [{ type: 'output_text', text: longWs }] });
+    expect(parsed.metadata).toEqual({ id: longWs });
+    // 幂等: 改写后再跑没有可改的
+    expect(shortenOversizedResponsesItemIdsFromBody(out!)).toBeNull();
+  });
+
+  it('returns null when nothing is oversized, for non-JSON, and for non-Responses bodies', () => {
+    expect(shortenOversizedResponsesItemIdsFromBody(buf({ input: [{ type: 'message', id: 'msg_1', role: 'assistant', content: [] }] }))).toBeNull();
+    expect(shortenOversizedResponsesItemIdsFromBody(buf({ messages: [{ role: 'user', content: longWs }] }))).toBeNull();
+    expect(shortenOversizedResponsesItemIdsFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
   });
 });
 
@@ -987,6 +1119,39 @@ describe('recovery rule factories', () => {
     expect(rule.matches(JSON.stringify({ code: 'invalid-argument', field: 'encrypted_content' }, null, 2))).toBe(true);
     expect(rule.matches('each thinking block must contain thinking')).toBe(false);
     expect(rule.strip(buf({ input: [{ encrypted_content: 'x' }] }))).not.toBeNull();
+  });
+
+  it('responses item id prefix rule matches the OpenAI msg/rs prefix error only and strips non-canonical ids (issue #4738)', () => {
+    const rule = createResponsesItemIdPrefixRecoveryRule();
+    expect(rule.id).toBe('responses_item_id_prefix');
+    expect(rule.enabled()).toBe(true);
+    // 2026-09-20 实测原文(Codex 上游 400, invalid_request_error / invalid_value)
+    expect(rule.matches("Invalid 'input[290].id': 'chatcmpl-8f2a1c_msg_0'. Expected an ID that begins with 'msg'.")).toBe(true);
+    expect(rule.matches(JSON.stringify({ error: { message: "Invalid 'input[3].id': 'b1c2d3-uuid'. Expected an ID that begins with 'rs'.", type: 'invalid_request_error', code: 'invalid_value' } }))).toBe(true);
+    // 工具 id 方言错配由 codex-proxy-host 的 tool_item_id 路径处理, 本规则不接管
+    expect(rule.matches("Invalid 'input[5].id': 'fc_123'. Expected an ID that begins with 'ctc'.")).toBe(false);
+    // 带工具前缀的 id 被要求 msg: 是工具项类型方言错配, 删 id 无用, 不接管
+    expect(rule.matches("Invalid 'input[2].id': 'fc_old'. Expected an ID that begins with 'msg'.")).toBe(false);
+    expect(rule.matches('invalid_encrypted_content')).toBe(false);
+    expect(rule.strip(buf({ input: [{ type: 'message', id: 'chatcmpl-x_msg_0', role: 'assistant', content: [] }] }))).not.toBeNull();
+    expect(rule.strip(buf({ input: [{ type: 'message', id: 'msg_x', role: 'assistant', content: [] }] }))).toBeNull();
+  });
+
+  it('responses item id length rule matches the OpenAI 64-char id error and shortens oversized ids (issue #4227)', () => {
+    const rule = createResponsesItemIdLengthRecoveryRule();
+    expect(rule.id).toBe('responses_item_id_length');
+    expect(rule.enabled()).toBe(true);
+    // 2026-09-20 两处实测原文
+    expect(rule.matches("Invalid 'input[74].id': string too long. Expected a string with maximum length 64, but got a string with length 84 instead.")).toBe(true);
+    expect(rule.matches('[ApiIdParam] [input[59].id] [string_above_max_length] Invalid input[59].id: string too long. Expected a string with maximum length 64, but got a string with length 84 instead')).toBe(true);
+    expect(rule.matches(JSON.stringify({ error: { message: "Invalid 'input[35].id': string too long. Expected a string with maximum length 64, but got a string with length 83 instead.", type: 'invalid_request_error', code: 'string_above_max_length', param: 'input[35].id' } }))).toBe(true);
+    // 其他字段的长度错误、前缀错误、密文错误不接管
+    expect(rule.matches("Invalid 'input[2].call_id': string too long. Expected a string with maximum length 64")).toBe(false);
+    expect(rule.matches("Invalid 'input[290].id': 'chatcmpl-8f2a1c_msg_0'. Expected an ID that begins with 'msg'.")).toBe(false);
+    expect(rule.matches('invalid_encrypted_content')).toBe(false);
+    const longId = `ws_${'a'.repeat(80)}`;
+    expect(rule.strip(buf({ input: [{ type: 'web_search_call', id: longId }] }))).not.toBeNull();
+    expect(rule.strip(buf({ input: [{ type: 'web_search_call', id: 'ws_short' }] }))).toBeNull();
   });
 
   it('empty-thinking rule matches only its error text, is always-on by default, and strips empty thinking', () => {

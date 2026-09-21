@@ -1,3 +1,5 @@
+import { collectPluginInvocations, type PluginInvocation } from './pluginInvocations';
+import { extractPayloadToolResultFiles, extractPayloadToolCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
 import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
@@ -87,6 +89,9 @@ export interface NormalizedRemoteMessage {
   /** user 专用：目标桌面落库的引用范围摘要，不含被引用消息正文。 */
   sessionReferences?: MobilePersistedSessionReferenceMetadata[];
   media?: NormalizedToolMedia[];
+  files?: PayloadToolFile[];
+  cardIds?: string[];
+  pluginInvocations?: PluginInvocation[];
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
   createdAt: string;
@@ -280,6 +285,8 @@ export function normalizeRemoteMessages(
         body: tool.summary,
         secondaryBody,
         media: extractToolResultMedia(secondaryBody ?? ''),
+        files: extractPayloadToolResultFiles(secondaryBody ?? ''),
+        cardIds: extractPayloadToolCardIds(secondaryBody ?? ''),
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,
@@ -499,6 +506,12 @@ export function normalizeRemoteMessages(
     });
   }
 
+  const pluginInvocations = collectPluginInvocations(sorted, toolResultPairing);
+  for (const row of result) {
+    if (row.kind === 'user' && !row.isSyntheticTrigger && !row.hookSource && !row.automationOrigin) {
+      row.pluginInvocations = pluginInvocations.get(row.source.clientId || row.source.id);
+    }
+  }
   dedupeToolImagesAgainstAssistantMarkdown(result);
   return result;
 }
@@ -517,10 +530,15 @@ function dedupeToolImagesAgainstAssistantMarkdown(
       if (message.kind !== 'assistant') continue;
       for (const image of collectMobileMarkdownImages(message.body)) inlineUrls.add(image.url);
     }
-    if (inlineUrls.size === 0) return;
+    const cards = new Set<string>();
     for (const message of messages.slice(lo, hi)) {
-      if (message.kind !== 'tool' || !message.media?.length) continue;
-      message.media = message.media.filter(
+      if (message.kind !== 'tool') continue;
+      message.cardIds = message.cardIds?.filter((id) => {
+        if (cards.has(id)) return false;
+        cards.add(id);
+        return true;
+      });
+      message.media = message.media?.filter(
         (item) => item.kind !== 'image' || !inlineUrls.has(item.url),
       );
     }

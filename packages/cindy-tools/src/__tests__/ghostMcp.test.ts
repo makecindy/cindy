@@ -2041,3 +2041,22 @@ describe('Cindy market MCP transport', () => {
     } finally { await client.close(); await server.close(); }
   });
 });
+
+
+describe("portable legacy plugin media", () => {
+  it("hoists singular image/video and audio arrays without claiming cards were delivered", async () => {
+    const payload = parsePayload(await handleGhostCall(fakeDeps({ callGhostTool: async () => ({ ok: true, result: {
+      xdt_image_url: "cindy-media://blobs/a.png", xdt_video_url: "cindy-media://blobs/a.mp4", xdt_audio_urls: ["cindy-media://blobs/a.mp3"],
+    } }) }), { ghost_id: "legacy", tool: "create" }));
+    expect(payload.xdt_image_url).toBe("cindy-media://blobs/a.png");
+    expect(payload.xdt_video_url).toBe("cindy-media://blobs/a.mp4");
+    expect(payload.xdt_audio_urls).toEqual(["cindy-media://blobs/a.mp3"]);
+  });
+  it("does not claim delivered media for a card-only or ledger-only result", async () => {
+    for (const result of [{ ok: true as const, result: { xdt_card_id: "c" } }, { ok: true as const, result: {}, producedMedia: ["cindy-media://blobs/a.png"] }]) {
+      const payload = parsePayload(await handleGhostCall(fakeDeps({ callGhostTool: async () => result }), { ghost_id: "art", tool: "create" }));
+      expect(payload.hint).not.toContain("已自动送达");
+      expect(payload.hint).not.toContain("媒体已由聊天气泡自动渲染");
+    }
+  });
+});

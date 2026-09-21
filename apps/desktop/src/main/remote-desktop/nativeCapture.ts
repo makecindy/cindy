@@ -12,10 +12,15 @@ import { promisify } from 'node:util';
 import { openWindowsDesktopConnection, type WindowsDesktopConnection } from './windowsHost';
 import { decodeWindowsCursorFrame } from './windowsCursorFrame';
 
+import { resolveLinuxCaptureBinary } from './linuxCapture';
+import { WAYLAND_DISPLAY_ID } from './waylandCapture';
+import { linuxMonitor } from './linuxDesktop';
+
 const exec = promisify(execFile);
 const name = 'cindy-macos-desktop-capture';
 let building: Promise<string> | null = null;
 async function binary(): Promise<string> {
+  if (process.platform === 'linux') return resolveLinuxCaptureBinary();
   if (app.isPackaged) return path.join(process.resourcesPath, 'tools', 'remote-desktop', name);
   if (building) return building;
   building = (async () => {
@@ -80,8 +85,8 @@ async function binary(): Promise<string> {
 }
 
 /** One capture child for the current lease. No sockets, files, or frame history.
- * macOS uses a user-session child; Windows uses the authorized SYSTEM broker.
- * Neither adapter keeps frame history on disk.
+ * macOS/Linux use user-session children; Windows uses the authorized SYSTEM broker.
+ * No adapter keeps frame history on disk.
  */
 export class NativeDesktopCapture {
   private excludedWindows = '';
@@ -141,8 +146,9 @@ export class NativeDesktopCapture {
         const jpeg = (await this.windows.request('f')).trim();
         if (generation !== this.generation) return null;
         if (overlay) {
-          return decodeWindowsCursorFrame(jpeg, selected.scaleFactor,
-            (pixels, size) => nativeImage.createFromBitmap(pixels, size).toPNG());
+          return decodeWindowsCursorFrame(jpeg, selected.scaleFactor, (pixels, size) =>
+            nativeImage.createFromBitmap(pixels, size).toPNG(),
+          );
         }
         return generation === this.generation &&
           jpeg.length <= 240000 &&
@@ -156,23 +162,40 @@ export class NativeDesktopCapture {
         if (generation === this.generation) this.busy = false;
       }
     }
-    const config = overlay ? [settings?.fps ?? 30, settings?.bitrate ?? 0].join(':') : '';
+    const config =
+      overlay || process.platform === 'linux'
+        ? [overlay, settings?.fps ?? 30, settings?.bitrate ?? 0].join(':')
+        : '';
     if (this.child && this.config !== config) this.stop();
-    if (process.platform !== 'darwin' || !/^[0-9]{1,10}$/.test(display)) return null;
+    const linux = process.platform === 'linux';
+    if (
+      linux
+        ? display !== WAYLAND_DISPLAY_ID && !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(display)
+        : process.platform !== 'darwin' || !/^[0-9]{1,10}$/.test(display)
+    )
+      return null;
     if (this.busy) return null;
     if (this.display && this.display !== display) this.stop();
     this.busy = true;
     const generation = this.generation;
     try {
       if (!this.child) {
+        const output = linux && display !== WAYLAND_DISPLAY_ID ? await linuxMonitor(display) : null;
         const executable = await binary();
         if (generation !== this.generation) return null;
         const quality =
           settings?.bitrate === 20_000_000 ? 0.95 : settings?.bitrate === 8_000_000 ? 0.8 : 0.65;
-        const args = overlay
-          ? [display, 'cursor-overlay', String(settings?.fps ?? 30), String(quality)]
-          : [display];
-        if (this.excludedWindows) args.push(this.excludedWindows);
+        const args = linux
+          ? [
+              overlay ? 'cursor-overlay' : 'video',
+              String(output?.scale ?? screen.getAllDisplays()[0]?.scaleFactor ?? 1),
+              String(Math.round(quality * 100)),
+              ...(output ? [output.name] : []),
+            ]
+          : overlay
+            ? [display, 'cursor-overlay', String(settings?.fps ?? 30), String(quality)]
+            : [display];
+        if (!linux && this.excludedWindows) args.push(this.excludedWindows);
         const child = spawn(executable, args, { stdio: 'pipe' });
         this.child = child;
         this.display = display;
@@ -208,7 +231,7 @@ export class NativeDesktopCapture {
         };
         const receive = (chunk: Buffer) => {
           text += chunk.toString('ascii');
-          if (text.length > (overlay ? 1_500_000 : 240_001)) {
+          if (text.length > (overlay || linux ? 1_500_000 : 240_001)) {
             this.stop();
             return;
           }

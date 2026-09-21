@@ -50,6 +50,11 @@ import {
 } from '@/session/agentCapabilitiesCache';
 import { createDeviceCatalogRefresh } from '@/device-link/deviceCatalogRefresh';
 import { evictComposerPaletteCacheForDevice, resetComposerPaletteCache } from '@/session/composerPaletteCache';
+import {
+  evictTaskTagCatalog,
+  resetTaskTagCatalogCache,
+  writeTaskTagCatalog,
+} from '@/session/taskTagCatalogCache';
 import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
 import {
@@ -164,6 +169,8 @@ export interface DeviceLinkContextValue {
   /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
+  /** Acquire before background grace ends; always release on settlement/cancellation. Hard deadline enforced by lifecycle. */
+  beginBackgroundTransition?(): () => void;
   /**
    * opts.preSend:在连接就绪之后、真正 client.invoke 之前的最后同步检查点。抛错即
    * 中止本次发送(错误原样上抛)。供写序敏感的调用方(patchHomeSession 的 isLatest
@@ -210,6 +217,15 @@ const CONTROLLER_CAPABILITIES = [
 const remoteResponseEvidenceEpochs = createPresenceAvailabilityEpochs();
 const remoteResponseEvidenceListeners = new Set<(deviceId: string) => void>();
 const remoteAgentRosterListeners = new Set<(deviceId: string) => void>();
+const remoteTaskTagsChangedListeners = new Set<(deviceId: string, tags: unknown) => void>();
+export function subscribeRemoteTaskTagsChanged(
+  listener: (deviceId: string, tags: unknown) => void,
+): () => void {
+  remoteTaskTagsChangedListeners.add(listener);
+  return () => {
+    remoteTaskTagsChangedListeners.delete(listener);
+  };
+}
 const remoteFavoritesChangedListeners = new Set<(deviceId: string) => void>();
 export function subscribeRemoteFavoritesChanged(listener: (deviceId: string) => void): () => void {
   remoteFavoritesChangedListeners.add(listener);
@@ -381,6 +397,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   // 后台释放 heavy session 订阅期间仍保留 registry 所有权;此时 unsubscribe ack
   // 可以修正 stale offline verdict,但不能顺带触发 rehydrate 把刚释放的订阅加回来。
   const backgroundReleaseInFlightRef = useRef(false);
+  const backgroundTransitions = useRef(new Set<Promise<void>>());
+  const beginBackgroundTransition = useCallback(() => {
+    let settle!: () => void;
+    const pending = new Promise<void>((resolve) => { settle = resolve; });
+    backgroundTransitions.current.add(pending);
+    return () => {
+      backgroundTransitions.current.delete(pending);
+      settle();
+    };
+  }, []);
   // 每次后台释放都翻代。subscribe 即使跨 background→active 才收到 ACK,也只能在
   // 发起代仍为当前代时登记远端 ACK,避免迟到成功覆盖较新的 unsubscribe。
   const backgroundReleaseGenerationRef = useRef(0);
@@ -422,6 +448,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     clearAllDeviceModelMeta();
     resetAgentCapabilitiesCache();
     resetComposerPaletteCache();
+    resetTaskTagCatalogCache();
     setLastPresenceSnapshot(null);
     setPresenceVersion((version) => version + 1);
   }, []);
@@ -1173,6 +1200,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const backgroundConnection = createBackgroundConnection({
       isBackground: () => AppState.currentState === 'background',
       releaseTopics: releaseHeavyTopics,
+      pendingTransitions: () => [...backgroundTransitions.current],
       stop: () => client.stop(),
       connect: () => client.connectNow('appstate-active', { overrideCongestionCooldown: true }),
       graceMs: BACKGROUND_STOP_GRACE_MS,
@@ -1241,6 +1269,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       networkSubscription?.remove();
       sub.remove();
       backgroundConnection.dispose();
+      backgroundTransitions.current.clear();
       offUnresponsive();
       offResponseEvidence();
       offBeforeLink();
@@ -1375,6 +1404,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ), []);
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
+    beginBackgroundTransition,
     status,
     recoveringDeviceIds,
     connectionIssue,
@@ -1393,6 +1423,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     onAgentsChanged: subscribeRemoteAgentRoster,
     onRemoteResourceChanged: subscribeRemoteResourceChanged,
   }), [
+    beginBackgroundTransition,
     closeLink,
     recoveringDeviceIds,
     connectionEpoch,
@@ -1441,6 +1472,15 @@ export function routeFrame(env: Envelope, handlers: {
   if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
+  if (push.channel === 'local-db:task-tags:changed') {
+    writeTaskTagCatalog(
+      handlers.currentDataOwnerId,
+      env.src,
+      (push.payload as { tags?: unknown })?.tags,
+    );
+    for (const listener of remoteTaskTagsChangedListeners)
+      listener(env.src, (push.payload as { tags?: unknown })?.tags);
+  }
   if (push.channel === 'maker:model-favorites:changed') {
     for (const listener of remoteFavoritesChangedListeners) listener(env.src);
     return;
@@ -1956,6 +1996,7 @@ function markOfflineDeviceMirror(deviceId: string): void {
 }
 
 function wipeUnavailableDeviceMirror(deviceId: string): void {
+  evictTaskTagCatalog(deviceId);
   resetRemoteProjectOrderPushFence(deviceId);
   invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);

@@ -85,6 +85,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(REMOTE_VIEWER.CLIPBOARD, generation, action),
     close: (generation) => ipcRenderer.invoke(REMOTE_VIEWER.CLOSE, generation),
     fullscreen: () => ipcRenderer.invoke(REMOTE_VIEWER.FULLSCREEN),
+    resize: (generation, width, height) =>
+      ipcRenderer.invoke(REMOTE_VIEWER.RESIZE, generation, width, height),
     rendererReady: () => ipcRenderer.invoke(REMOTE_VIEWER.READY),
     presentationReady: () => ipcRenderer.invoke(REMOTE_VIEWER.PRESENTED),
     onActive: (cb) => onPayload(REMOTE_VIEWER.ACTIVE, cb),
@@ -92,5 +94,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onCloseRequested: (cb) => onPayload(REMOTE_VIEWER.CLOSE_REQUESTED, cb),
     inputFocus: (generation, focused) =>
       ipcRenderer.invoke(REMOTE_VIEWER.INPUT_FOCUS, generation, focused),
+    preferences: (generation, patch) =>
+      ipcRenderer.invoke(REMOTE_VIEWER.PREFERENCES, generation, patch),
+    safety: (generation, retry) => ipcRenderer.invoke(REMOTE_VIEWER.SAFETY, generation, retry),
+    credential: (generation, action, enabled) =>
+      ipcRenderer.invoke(REMOTE_VIEWER.CREDENTIAL, generation, action, enabled),
   } satisfies RemoteDesktopViewerApi,
 });

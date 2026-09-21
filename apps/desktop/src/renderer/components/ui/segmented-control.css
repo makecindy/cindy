@@ -1,0 +1,102 @@
+.cindy-segmented {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: var(--segmented-height);
+  padding: calc((var(--segmented-height) - var(--segmented-option-height)) / 2);
+  border-radius: var(--radius-full);
+  background: var(--segmented-track);
+}
+
+.cindy-segmented-full {
+  display: flex;
+  width: 100%;
+}
+
+.cindy-segmented-nowrap {
+  flex-wrap: nowrap;
+  width: max-content;
+  max-width: none;
+}
+.cindy-segmented-nowrap > .cindy-segmented-option {
+  flex-shrink: 0;
+}
+.cindy-segmented-full > .cindy-segmented-option {
+  flex: 1;
+  min-width: max-content;
+}
+
+.cindy-segmented-plate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  border: 1px solid var(--segmented-selected-border);
+  border-radius: inherit;
+  background: var(--segmented-selected-bg);
+  box-shadow: var(--segmented-selected-shadow);
+  transition:
+    transform var(--motion-base) var(--motion-ease-move),
+    width var(--motion-base) var(--motion-ease-move),
+    height var(--motion-base) var(--motion-ease-move);
+}
+
+.cindy-segmented-option {
+  height: var(--segmented-option-height);
+  background: transparent;
+  color: var(--segmented-option-fg);
+  white-space: nowrap;
+  transition:
+    color var(--motion-fast),
+    background-color var(--motion-fast),
+    transform var(--motion-fast);
+}
+
+/* Dense Diff keeps its visual size, with a 24px transparent pointer target. */
+.cindy-segmented-option::after {
+  content: '';
+  position: absolute;
+  inset: min(0px, calc((var(--segmented-option-height) - 24px) / 2)) 0;
+  border-radius: inherit;
+}
+.cindy-segmented-option[data-selected='true'] {
+  color: var(--text-primary);
+}
+.cindy-segmented-option:enabled:hover {
+  color: var(--text-primary);
+}
+.cindy-segmented-option[data-selected='false']:enabled:hover {
+  background: var(--segmented-hover-bg);
+}
+.cindy-segmented-option:enabled:active {
+  transform: scale(0.98);
+}
+.cindy-segmented-option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.cindy-segmented[data-disabled],
+.cindy-segmented-option:disabled {
+  cursor: not-allowed;
+}
+.cindy-segmented[data-disabled] {
+  opacity: 0.5;
+}
+.cindy-segmented:not([data-disabled]) .cindy-segmented-option:disabled {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cindy-segmented-plate,
+  .cindy-segmented-option {
+    transition: none;
+  }
+  .cindy-segmented-option:enabled:active {
+    transform: none;
+  }
+}

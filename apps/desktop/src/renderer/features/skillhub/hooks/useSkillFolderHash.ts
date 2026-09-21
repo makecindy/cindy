@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { invalidatePublishComparison } from './useSkillPublishComparison';
 
 const HASH_TTL_MS = 30_000;
 
@@ -32,6 +33,7 @@ function notifyInvalidation(absolutePath: string): void {
 }
 
 export function invalidateHash(absolutePath: string): void {
+  invalidatePublishComparison(absolutePath);
   hashCache.delete(absolutePath);
   notifyInvalidation(absolutePath);
 }

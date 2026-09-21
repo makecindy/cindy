@@ -12,7 +12,7 @@ import type {
   ResolvedMediaInvocationGuide,
 } from '../../shared/mediaInvocation.js';
 import { MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION } from '../../shared/mediaInvocation.js';
-import { GHOST_IMAGE_ASPECT_RATIOS, type GhostImageAspectRatio } from '../../shared/ghost.js';
+import { imageParameterSchema, normalizeImageParameters, type ImageParameters } from './imageParameters.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import * as authManager from '../authManager.js';
 import * as imageCacheStore from '../imageCacheStore.js';
@@ -197,7 +197,7 @@ function providerImageGuide(
     schemaVersion: MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION,
     guideId: CLIENT_PROVIDER_IMAGE_GUIDE_ID,
     modelId: model.id,
-    revision: '1',
+    revision: '2',
     connection: { providerId: model.providerId },
     capability,
     request: {
@@ -214,8 +214,8 @@ function providerImageGuide(
       media: [{ path: ['image'], encoding: 'base64', kind: 'image' }],
     },
     instructions: edit
-      ? '必填 prompt 和 image。image 可传一条 Cindy 本地媒体引用或引用数组；可选 aspect_ratio。'
-      : '必填 prompt；可选 aspect_ratio。model 与凭证由 Cindy 注入。',
+      ? '必填 prompt 和 image。image 可传一条 Cindy 本地媒体引用或引用数组。尺寸与质量参数见 inputSchema；不要丢弃用户的明确要求。'
+      : '必填 prompt。尺寸与质量参数见 inputSchema；不指定时由上游决定。model 与凭证由 Cindy 注入。',
     exampleBody: {
       prompt: edit ? '描述希望如何修改图片' : '描述希望生成的图片',
       ...(edit ? { image: 'cindy-media://blobs/<hash>.png' } : {}),
@@ -236,7 +236,7 @@ function providerImageGuide(
               },
             }
           : {}),
-        aspect_ratio: { type: 'string', enum: [...GHOST_IMAGE_ASPECT_RATIOS] },
+        ...imageParameterSchema(model.imageProtocol, model.id),
       },
     },
     officialDocs: model.officialDocs ?? 'https://platform.openai.com/docs/guides/images',
@@ -698,27 +698,29 @@ async function localImagePath(
 async function providerImageRequest(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
-): Promise<{
+  model: ProviderMediaRuntimeModel,
+): Promise<ImageParameters & {
   prompt: string;
   imagePaths: string[];
-  aspectRatio?: GhostImageAspectRatio;
 }> {
   const prompt = body.prompt;
   if (typeof prompt !== 'string' || prompt.trim().length === 0 || prompt.length > 100_000) {
     throw new MediaInvocationError('REQUEST_INVALID', 'prompt 必须是非空字符串');
   }
-  let aspectRatio: GhostImageAspectRatio | undefined;
-  if (body.aspect_ratio !== undefined) {
-    if (
-      typeof body.aspect_ratio !== 'string' ||
-      !(GHOST_IMAGE_ASPECT_RATIOS as readonly string[]).includes(body.aspect_ratio)
-    ) {
-      throw new MediaInvocationError(
-        'REQUEST_INVALID',
-        `aspect_ratio 只支持 ${GHOST_IMAGE_ASPECT_RATIOS.join(' / ')}`,
-      );
+  let options: ImageParameters;
+  try {
+    const fields = new Set(['model', 'prompt', 'image', 'aspect_ratio', 'size', 'resolution', 'quality']);
+    for (const key of Object.keys(body)) {
+      if (!fields.has(key)) throw new Error(`Unsupported image parameter: ${key}; use prepare.input_schema.`);
     }
-    aspectRatio = body.aspect_ratio as GhostImageAspectRatio;
+    options = normalizeImageParameters(model.imageProtocol, model.id, {
+      aspectRatio: body.aspect_ratio as string | undefined,
+      size: body.size as string | undefined,
+      resolution: body.resolution as string | undefined,
+      quality: body.quality as string | undefined,
+    });
+  } catch (error) {
+    throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
   }
   const imagePaths: string[] = [];
   if (invocation.capability === 'image.edit') {
@@ -736,7 +738,7 @@ async function providerImageRequest(
   return {
     prompt,
     imagePaths,
-    ...(aspectRatio ? { aspectRatio } : {}),
+    ...options,
   };
 }
 
@@ -800,7 +802,9 @@ async function mediaBytes(
     if (encoded.length > Math.ceil((maxResultBytes(extractor.kind) * 4) / 3) + 16) {
       throw new MediaInvocationError('MEDIA_RESULT_TOO_LARGE', '上游 base64 媒体超过大小限制');
     }
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    // Repeating four-character groups exhausts V8's regexp stack on large images.
+    // Check quartet length separately so the alphabet scan uses constant stack space.
+    if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
       throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游 base64 媒体编码不合法');
     }
     buffer = Buffer.from(encoded, 'base64');
@@ -969,7 +973,7 @@ async function submitProviderInvocation(
   if (!providerModel) {
     return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源已不可用，本次生成未发出');
   }
-  const input = await providerImageRequest(invocation, body);
+  const input = await providerImageRequest(invocation, body, providerModel);
   assertAuthScope(scope, invocation.owner);
   const claimed = await transitionMediaInvocation(
     {
@@ -1326,7 +1330,18 @@ async function submitInvocation(
   if (!models.some((model) => model.providerId === 'xd' && model.id === invocation.modelId)) {
     return failure('MODEL_NOT_AVAILABLE', '该模型已下架或被停用，本次生成未发出');
   }
-  const requestBody = await prepareRequestBody(body, invocation.guide);
+  let validatedBody = body;
+  if (invocation.capability.startsWith('image.') && /^openai\/gpt-image-[12]/.test(invocation.modelId)) {
+    try {
+      validatedBody = { ...body, ...normalizeImageParameters('openai', invocation.modelId, {
+        size: body.size as string | undefined,
+        quality: body.quality as string | undefined,
+      }) };
+    } catch (error) {
+      throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
+    }
+  }
+  const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
   assertAuthScope(scope, invocation.owner);
   let connection: MediaConnection;
   try {

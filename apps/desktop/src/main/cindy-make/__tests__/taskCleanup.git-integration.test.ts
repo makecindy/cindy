@@ -6,7 +6,7 @@ import { runSourceGit } from '../sourceGit.js';
 import { manageCindyMakeWorkspace } from '../taskCleanup.js';
 import { makeSourceCheckoutPath, makeTaskWorktreePath, makeTaskBranch } from '../sourcePaths.js';
 
-it('preserves archives, merges personal changes, and completely removes discarded work with real Git', async () => {
+it('preserves archives and finished unintegrated changes, and completely removes discarded work with real Git', async () => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'cindy-make-cleanup-'));
   const source = makeSourceCheckoutPath(profile);
   const env: NodeJS.ProcessEnv = {
@@ -47,7 +47,7 @@ it('preserves archives, merges personal changes, and completely removes discarde
     await writeFile(path.join(target, 'feature.txt'), 'personal change');
     await expect(
       manageCindyMakeWorkspace(profile, 'first', 'finish', env, signal),
-    ).rejects.toMatchObject({ code: 'dirty' });
+    ).resolves.toBe(false);
     await git(['add', '.'], target);
     await git(['commit', '-s', '-m', 'feature'], target);
     await mkdir(path.join(target, 'node_modules'), { recursive: true });
@@ -56,9 +56,11 @@ it('preserves archives, merges personal changes, and completely removes discarde
       manageCindyMakeWorkspace(profile, 'first', 'archive', env, signal, { baseCommit }),
     ).resolves.toBe(false);
     await expect(manageCindyMakeWorkspace(profile, 'first', 'finish', env, signal)).resolves.toBe(
-      true,
+      false,
     );
-    expect(await readFile(path.join(source, 'feature.txt'), 'utf8')).toBe('personal change');
+    expect(await readFile(path.join(target, 'feature.txt'), 'utf8')).toBe('personal change');
+    await expect(access(path.join(source, 'feature.txt'))).rejects.toThrow();
+    await manageCindyMakeWorkspace(profile, 'first', 'delete', env, signal);
     await expect(access(target)).rejects.toThrow();
     expect(await git(['branch', '--list', makeTaskBranch('first')])).toBe('');
     const conflict = makeTaskWorktreePath(profile, 'conflict');
@@ -71,7 +73,7 @@ it('preserves archives, merges personal changes, and completely removes discarde
     await git(['commit', '-s', '-m', 'personal change advanced']);
     await expect(
       manageCindyMakeWorkspace(profile, 'conflict', 'finish', env, signal),
-    ).rejects.toMatchObject({ code: 'conflict' });
+    ).resolves.toBe(false);
     expect(await readFile(path.join(conflict, 'feature.txt'), 'utf8')).toBe('task change');
     expect(await readFile(path.join(source, 'feature.txt'), 'utf8')).toBe(
       'personal change advanced',
@@ -92,7 +94,7 @@ it('preserves archives, merges personal changes, and completely removes discarde
     await mkdir(longDependency, { recursive: true });
     await writeFile(path.join(longDependency, 'index.js'), 'long path dependency');
     await expect(
-      manageCindyMakeWorkspace(profile, 'discarded', 'delete', env, signal),
+      manageCindyMakeWorkspace(profile, 'discarded', 'end', env, signal),
     ).resolves.toBe(true);
     await expect(access(discarded)).rejects.toThrow();
     // Match Windows' failed removal: no registration/.git, but dependencies and
@@ -120,7 +122,7 @@ it('preserves archives, merges personal changes, and completely removes discarde
       manageCindyMakeWorkspace(profile, 'partial', 'delete', env, signal),
     ).rejects.toMatchObject({ code: 'unavailable' });
     await expect(
-      manageCindyMakeWorkspace(profile, 'partial', 'delete', env, signal, {
+      manageCindyMakeWorkspace(profile, 'partial', 'end', env, signal, {
         preparedWorkspace: { path: partial, branch: partialBranch },
       }),
     ).resolves.toBe(true);

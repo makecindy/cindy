@@ -16,7 +16,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
@@ -191,7 +191,7 @@ export function WindowBehaviorSection() {
             </p>
           </div>
 
-          <SettingsSegmentedControl
+          <SegmentedControl
             aria-label={t('settings.windowBehavior.closeBehavior.aria')}
             value={closeBehavior}
             onValueChange={setCloseBehavior}

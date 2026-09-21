@@ -4,6 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
@@ -587,40 +588,24 @@ export function ScheduleFormDialog({
               </p>
             </div>
             {!isEdit && !isProjectAutomationMode && (
-              <div className="flex h-[34px] shrink-0 items-center gap-0.5 rounded-full bg-[var(--chat-input-chip-bg)] p-[3px] dark:border dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-                <button
-                  type="button"
-                  onClick={() => {
+              <SegmentedControl
+                aria-label={t('scheduler.template.useTemplate')}
+                value={isTemplateMode ? 'gallery' : 'form'}
+                height={34}
+                options={[
+                  { value: 'form', label: t('scheduler.template.blank') },
+                  { value: 'gallery', label: t('scheduler.template.useTemplate') },
+                ]}
+                onValueChange={(next) => {
+                  if (next === 'form') {
                     setSelectedTemplate(null);
                     setParamValues({});
                     setPromptDirty(false);
                     reset(null);
-                    setMode('form');
-                  }}
-                  aria-pressed={!isTemplateMode}
-                  className={cn(
-                    'h-full rounded-full border px-3 text-12 font-medium transition-colors',
-                    !isTemplateMode
-                      ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)] dark:border-[var(--confirm-btn-secondary-border)] dark:bg-[var(--chat-input-chip-bg)]'
-                      : 'border-transparent bg-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)] dark:text-[var(--settings-section-desc)] dark:hover:text-[var(--msg-assistant-text)]',
-                  )}
-                >
-                  {t('scheduler.template.blank')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode('gallery')}
-                  aria-pressed={isTemplateMode}
-                  className={cn(
-                    'h-full rounded-full border px-3 text-12 font-medium transition-colors',
-                    isTemplateMode
-                      ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)] dark:border-[var(--confirm-btn-secondary-border)] dark:bg-[var(--chat-input-chip-bg)]'
-                      : 'border-transparent bg-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)] dark:text-[var(--settings-section-desc)] dark:hover:text-[var(--msg-assistant-text)]',
-                  )}
-                >
-                  {t('scheduler.template.useTemplate')}
-                </button>
-              </div>
+                  }
+                  setMode(next);
+                }}
+              />
             )}
             <button
               type="button"
@@ -683,24 +668,16 @@ export function ScheduleFormDialog({
               <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                 {t('scheduler.editor.executionMode.label')}
               </span>
-              <div className="flex h-[34px] shrink-0 items-center gap-0.5 rounded-full bg-[var(--chat-input-chip-bg)] p-[3px] dark:border dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-                {(['agent', 'script'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={(form.executionMode ?? 'agent') === mode}
-                    onClick={() => setField('executionMode', mode)}
-                    className={cn(
-                      'h-full rounded-full border px-3 text-12 font-medium transition-colors',
-                      (form.executionMode ?? 'agent') === mode
-                        ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)]'
-                        : 'border-transparent bg-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
-                    )}
-                  >
-                    {t(`scheduler.editor.executionMode.${mode}`)}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                aria-label={t('scheduler.editor.executionMode.label')}
+                value={form.executionMode ?? 'agent'}
+                onValueChange={(mode) => setField('executionMode', mode)}
+                height={34}
+                options={(['agent', 'script'] as const).map((mode) => ({
+                  value: mode,
+                  label: t(`scheduler.editor.executionMode.${mode}`),
+                }))}
+              />
             </div>
             )}
 
@@ -770,33 +747,21 @@ export function ScheduleFormDialog({
               <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.editor.fields.schedule')}</span>
               {/* 自动/手动 pill：把原先"勾一次才出现 Manually"的隐藏路径显式化。
                   自动 → manual=false,显示 cron chip + Once;手动 → manual=true,cron 保留占位值不参与调度。 */}
-              <div className="flex h-[34px] shrink-0 items-center gap-0.5 rounded-full bg-[var(--chat-input-chip-bg)] p-[3px] dark:border dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-                {(['automatic', 'manually'] as const).map((m) => {
-                  const isManual = m === 'manually';
-                  const active = form.manual === isManual;
-                  return (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => {
-                        if (active) return;
-                        setField('manual', isManual);
-                        // Manual: no cron requeue. Auto: restore default recurring=true.
-                        setField('recurring', !isManual);
-                      }}
-                      aria-pressed={active}
-                      className={cn(
-                        'h-full rounded-full border px-3 text-12 font-medium transition-colors',
-                        active
-                          ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)] dark:border-[var(--confirm-btn-secondary-border)] dark:bg-[var(--chat-input-chip-bg)]'
-                          : 'border-transparent bg-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)] dark:text-[var(--settings-section-desc)] dark:hover:text-[var(--msg-assistant-text)]',
-                      )}
-                    >
-                      {t(`scheduler.editor.fields.${m}`)}
-                    </button>
-                  );
-                })}
-              </div>
+              <SegmentedControl
+                aria-label={t('scheduler.editor.fields.schedule')}
+                value={form.manual ? 'manually' : 'automatic'}
+                height={34}
+                onValueChange={(mode) => {
+                  const isManual = mode === 'manually';
+                  if (form.manual === isManual) return;
+                  setField('manual', isManual);
+                  setField('recurring', !isManual);
+                }}
+                options={(['automatic', 'manually'] as const).map((mode) => ({
+                  value: mode,
+                  label: t(`scheduler.editor.fields.${mode}`),
+                }))}
+              />
               {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
               {!form.manual && (
                 <>
@@ -858,24 +823,19 @@ export function ScheduleFormDialog({
               <span className="text-13 leading-none text-[var(--settings-btn-secondary-text)]">
                 {t('scheduler.editor.runSession.label')}
               </span>
-              <div className="flex h-[34px] shrink-0 items-center gap-0.5 rounded-full bg-[var(--chat-input-chip-bg)] p-[3px] dark:border dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-                {(['fresh', 'persistent', ...(isProjectAutomationMode ? [] : ['bound' as const])] as RunMode[]).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setRunMode(m)}
-                    aria-pressed={runMode === m}
-                    className={cn(
-                      'h-full rounded-full border px-3 text-12 font-medium transition-colors',
-                      runMode === m
-                        ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)] dark:border-[var(--confirm-btn-secondary-border)] dark:bg-[var(--chat-input-chip-bg)]'
-                        : 'border-transparent bg-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)] dark:text-[var(--settings-section-desc)] dark:hover:text-[var(--msg-assistant-text)]',
-                    )}
-                  >
-                    {t(`scheduler.editor.runSession.${m}`)}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                aria-label={t('scheduler.editor.runSession.label')}
+                value={runMode}
+                onValueChange={setRunMode}
+                height={34}
+                options={(
+                  [
+                    'fresh',
+                    'persistent',
+                    ...(isProjectAutomationMode ? [] : ['bound' as const]),
+                  ] as RunMode[]
+                ).map((mode) => ({ value: mode, label: t(`scheduler.editor.runSession.${mode}`) }))}
+              />
               <div className="inline-flex h-[34px] items-center gap-1.5">
                 <button
                   type="button"

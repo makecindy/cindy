@@ -86,11 +86,14 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       resolve(process.cwd(), "src/session/SessionOptionsExpoSheet.tsx"),
       "utf8",
     );
-    expect(expoSheet).toMatch(/from ['"]@expo\/ui['"]/);
-    expect(expoSheet).toContain("<BottomSheet");
-    expect(expoSheet).toContain("<List>");
-    expect(expoSheet).toContain("<ListItem");
-    expect(expoSheet).toContain("onClosed?.()");
+    expect(expoSheet).toMatch(/from ['"]@expo\/ui\/swift-ui['"]/);
+    expect(expoSheet).toContain("<ComposerSheet");
+    expect(expoSheet).toContain("<Section>");
+    expect(expoSheet).toContain("<ComposerNativeRow");
+    expect(expoSheet).toContain("onClosed={onClosed}");
+    const nativeSheet = readTextLf(resolve(process.cwd(), "src/session/ComposerSheet.ios.tsx"), "utf8");
+    expect(nativeSheet).toContain("<BottomSheet");
+    expect(nativeSheet).toContain("onDismiss={onClosed}");
     expect(expoSheet).not.toContain("snapPoints");
     expect(home).toContain("<SessionOptionsPresenter");
     const actionMenu = readTextLf(

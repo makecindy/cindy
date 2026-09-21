@@ -414,18 +414,15 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     },
   };
   if (draft.executionMode === 'script') {
-    // 仅运行脚本任务:引擎合并态校验对 script 模式拒绝 worktree/绑定/持续会话/
-    // silentWhenIdle 与非 project 工作区——表单残留或误操作的这些 agent-only
-    // 字段一律钉回 script 合法值,否则一个可见控件就能让整个保存失败(codex
-    // review 发现)。model/effort/fastMode 不带(= 不修改),targetSessionId 为
-    // undefined 时 JSON 序列化自然丢 key(= 不修改)。
+    // Script schedules retain their lifecycle owner when edited from mobile.
+    // They still run in their own project cwd without starting an agent turn.
     return {
       ...input,
       workspaceKind: 'project',
       workingDir: draft.workingDir.trim(),
       useWorktree: false,
       persistentSession: false,
-      targetSessionId: undefined,
+      targetSessionId: targetSessionId || undefined,
       silentWhenIdle: false,
     };
   }

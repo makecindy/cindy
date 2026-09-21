@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveCardState, localGroupForItem, type LocalSkillIndex } from '../../hooks/useMarketList';
+import { deriveCardState, deriveLocalInstall, localGroupForItem, type LocalSkillIndex } from '../../hooks/useMarketList';
 import { skillhubCatalogKey } from '../../../../../shared/skillhubCatalog';
 
 const item = (over: Record<string, unknown> = {}) => ({
@@ -62,4 +62,35 @@ describe('market install catalog matching', () => {
       .toBe('2.0.0');
     expect(localGroupForItem({ name: 'same', isMine: false }, index)).toBeUndefined();
   });
+});
+
+describe('market primary copy update availability', () => {
+  const global = { absolutePath: '/global/x', version: '1.0.0', hasRegistryEntry: true };
+  const project = { ...global, absolutePath: '/project/x' };
+
+  it.each([false, true])('offers an update for a registered copy (isMine=%s)', (isMine) => {
+    expect(deriveLocalInstall({ isMine, latestVersion: '1.0.1' }, { global, projects: [] }))
+      .toMatchObject({ installedLocally: true, updateAvailable: true, installedAbsolutePath: global.absolutePath });
+  });
+
+  it('uses the project copy when there is no global installation', () => {
+    expect(deriveLocalInstall({ isMine: false, latestVersion: '1.0.1' }, { projects: [project] }))
+      .toMatchObject({ updateAvailable: true, installedAbsolutePath: project.absolutePath });
+  });
+
+  it('keeps the status and action on the global copy when multiple locations exist', () => {
+    expect(deriveLocalInstall({ isMine: false, latestVersion: '1.0.1' }, {
+      global: { ...global, version: '1.0.1' }, projects: [project],
+    })).toMatchObject({ updateAvailable: false, installedAbsolutePath: global.absolutePath });
+  });
+
+  it.each(['1.0.0', '0.9.9', 'v1.0.0'])('does not update or downgrade to %s', (latestVersion) => {
+    expect(deriveLocalInstall({ isMine: false, latestVersion }, { global, projects: [] }).updateAvailable).toBe(false);
+  });
+
+  it.each([undefined, { ...global, version: null }, { ...global, hasRegistryEntry: false }])(
+    'does not replace missing, unversioned or authored copies', (entry) => {
+      expect(deriveLocalInstall({ isMine: true, latestVersion: '2.0.0' }, { global: entry, projects: [] }).updateAvailable).toBe(false);
+    },
+  );
 });

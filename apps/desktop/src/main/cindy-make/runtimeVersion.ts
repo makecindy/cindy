@@ -11,6 +11,14 @@ const loadedBuild: RuntimeSourceBuild = import.meta.env.CINDY_RUNTIME_SOURCE ?? 
 const validCommit = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
+/** Identity of the loaded bundle, never a later working-tree HEAD. */
+export function getMakeRuntimeSourceIdentity(): { commit?: string; dirty?: boolean } {
+  return {
+    ...(validCommit(loadedBuild.commit) ? { commit: loadedBuild.commit } : {}),
+    ...(loadedBuild.dirty === true ? { dirty: true } : {}),
+  };
+}
+
 export type RuntimeGit = (
   root: string,
   args: string[],
