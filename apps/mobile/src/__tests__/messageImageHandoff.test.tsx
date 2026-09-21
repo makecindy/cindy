@@ -30,7 +30,7 @@ function fixture() {
   const View = ({ children, style, testID, onPress }: any) => <div style={flatten(style)} data-testid={testID} onClick={onPress}>{children}</div>;
   const ExpoImage = ({ source: imageSource, style, onLoad, onError }: any) => {
     handlers.set(imageSource.uri, { onLoad, onError });
-    return <div data-image={imageSource.uri} style={flatten(style)} />;
+    return <div data-image={imageSource.uri} data-decoder="expo" style={flatten(style)} />;
   };
   const Image = Object.assign(ExpoImage, { getSize: vi.fn() });
   const bindings = { React, View, Text: View, ExpoImage, Image,
@@ -61,6 +61,21 @@ function fixture() {
 }
 
 describe('image frame continuity', () => {
+  it('uses the SVG-capable decoder for thumbnails, measures from load and opens the existing viewer', () => {
+    const f = fixture();
+    const uri = 'https://example.com/diagram.svg';
+    const onOpen = vi.fn();
+    f.render(<f.MediaPreview layout={f.layout} label="diagram.svg" variant="attachment"
+      media={{ kind: 'image', url: uri, previewable: true }} onOpen={onOpen} />);
+    expect(f.host.querySelector('[data-image]')?.getAttribute('data-decoder')).toBe('expo');
+    act(() => f.handlers.get(uri)!.onLoad({ source: { width: 800, height: 400 } }));
+    const size = attachmentImageDisplaySize({ width: 800, height: 400 }, f.layout.attachmentImageMaxWidth, f.layout.attachmentImageMaxHeight);
+    expect(f.frame()).toEqual([`${size.width}px`, `${size.height}px`]);
+    expect(f.Image.getSize).not.toHaveBeenCalled();
+    act(() => (f.host.querySelector('[data-testid="message.mediaPreviewButton"]') as HTMLElement).click());
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
   it('shows a same-size failure state after a direct image fails and keeps its viewer action', () => {
     const f = fixture();
     const open = vi.fn();
@@ -75,6 +90,7 @@ describe('image frame continuity', () => {
     act(() => fallback.click());
     expect(open).toHaveBeenCalledOnce();
   });
+
   it('keeps the displayed pending source when upload completes, but releases it on attachment replacement', () => {
     const f = fixture();
     const Probe = ({ thumb }: any) => <span>{f.useThumbCellUri(thumb)}</span>;

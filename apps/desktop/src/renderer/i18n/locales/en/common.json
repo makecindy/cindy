@@ -10403,7 +10403,7 @@
     },
     "empty": {
       "promptHeading": "No Automations yet",
-      "promptDescription": "Create a cron Automation to let Claude Code, Codex, or Pi run your prompt on a schedule."
+      "promptDescription": "Create a cron Automation to run your prompt on a schedule."
     },
     "usageLimitRecovery": {
       "name": "Continue Task After Usage Resets",

@@ -10388,7 +10388,7 @@
     },
     "empty": {
       "promptHeading": "暫無自動化",
-      "promptDescription": "建立一個 cron 自動化，讓 Claude Code、Codex 或 Pi 按計劃執行你的 Prompt。"
+      "promptDescription": "建立一個 cron 自動化，按計劃執行你的 Prompt。"
     },
     "usageLimitRecovery": {
       "name": "用量恢復後繼續任務",
