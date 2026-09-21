@@ -858,6 +858,82 @@ function installFakeHost(
   return Object.assign(host, { getHost });
 }
 
+describe('Codex Luna reserve backend integration', () => {
+  it('sends without awaiting an unresolved reserve quota request', async () => {
+    const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: id => id === 'account-a' }));
+    let complete!: (value: any) => void;
+    vi.spyOn(agent, 'readAccountRateLimits').mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'cold-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'cold-reserve', providerId: 'account-a',
+      model: 'gpt-5.6-luna', workingDir: '/repo' });
+    try {
+      const started = performance.now();
+      await handle.send({ type: 'user', content: 'hello' });
+      const elapsed = performance.now() - started;
+      console.info(`Cold Luna send with unresolved quota: ${elapsed.toFixed(2)}ms`);
+      expect(elapsed).toBeLessThan(1000);
+      expect(host.request.mock.calls.find(([m]) => m === Method.TurnStart)?.[1]).toMatchObject({ model: 'gpt-5.6-luna' });
+    } finally { complete({ rateLimits: {} }); await handle.close(); }
+  }, 2000);
+
+  const buckets = (main = 100, reserve = 40) => ({
+    rateLimits: {},
+    rateLimitsByLimitId: {
+      codex: { limitId: 'codex', primary: { usedPercent: main, resetsAt: Date.now() / 1000 + 3600 } },
+      base_model_inference: {
+        limitId: 'base_model_inference', limitName: 'gpt-reserve', normalModelSlug: 'gpt-5.6-luna',
+        primary: { usedPercent: reserve, resetsAt: Date.now() / 1000 + 3600 },
+      },
+    },
+  });
+
+  it.each([false, true])('routes a validated Luna selection on the wire only (plan=%s)', async planMode => {
+    const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: id => id === 'account-a' }));
+    const read = vi.spyOn(agent, 'readAccountRateLimits').mockResolvedValue(buckets());
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'reserve-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'reserve-test', providerId: 'account-a',
+      model: 'gpt-5.6-luna', effort: 'high', fastMode: true, workingDir: '/repo' });
+    try {
+      const setModel = vi.spyOn(handle, 'setModel');
+      await handle.send({ type: 'user', content: 'hello' }, { planMode });
+      expect(read).toHaveBeenCalledWith('account-a');
+      const sent = host.request.mock.calls.find(([m]) => m === Method.TurnStart)?.[1] as any;
+      expect(sent).toMatchObject({ model: 'gpt-reserve', serviceTier: null, effort: 'high' });
+      if (planMode) expect(sent.collaborationMode.settings.model).toBe('gpt-reserve');
+      expect(handle.model).toBe('gpt-5.6-luna');
+      expect(setModel).not.toHaveBeenCalled();
+      host.getThreadHandlers()?.threadSettingsUpdated?.({ threadId: 'start-thread-id',
+        threadSettings: { model: 'gpt-reserve', effort: 'high', serviceTier: null } } as any);
+      expect(handle.model).toBe('gpt-5.6-luna');
+    } finally { await handle.close(); }
+  });
+
+  it.each([[50, 40], [100, 100]])('keeps ordinary Luna for main=%s reserve=%s', async (main, reserve) => {
+    const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: id => id === 'account-a' }));
+    vi.spyOn(agent, 'readAccountRateLimits').mockResolvedValue(buckets(main, reserve));
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'normal-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'normal-test', providerId: 'account-a',
+      model: 'gpt-5.6-luna', workingDir: '/repo' });
+    try {
+      await handle.send({ type: 'user', content: 'hello' });
+      expect(host.request.mock.calls.find(([m]) => m === Method.TurnStart)?.[1]).toMatchObject({ model: 'gpt-5.6-luna' });
+    } finally { await handle.close(); }
+  });
+
+  it('does not read a local subscription for a gateway session', async () => {
+    const agent = new CodexAgent(createDeps());
+    const read = vi.spyOn(agent, 'readAccountRateLimits').mockResolvedValue(buckets());
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'gateway-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'gateway-test', providerId: 'gateway',
+      model: 'gpt-5.6-luna', workingDir: '/repo' });
+    try {
+      await handle.send({ type: 'user', content: 'hello' });
+      expect(read).not.toHaveBeenCalled();
+      expect(host.request.mock.calls.find(([m]) => m === Method.TurnStart)?.[1]).toMatchObject({ model: 'gpt-5.6-luna' });
+    } finally { await handle.close(); }
+  });
+});
+
 async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEvent> {
   const result = await Promise.race([
     iterator.next(),
