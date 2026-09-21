@@ -1019,6 +1019,7 @@ import {
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
 import { registerBillingIpc } from './billing/index.js';
+import { registerSessionTitleSettingsIpc } from './session-title-settings-ipc.js';
 import {
   initModelAccess,
   noteManualXdKeySaved,
@@ -2533,6 +2534,7 @@ registerBrowserBackendIpc();
 registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
 registerLoginItemIpc();
+registerSessionTitleSettingsIpc();
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
 // 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认

@@ -144,6 +144,9 @@ export function registerSessionAutoTitleHooks(hooks?: {
   setOnUserSessionTitleWritten((sessionId) => {
     manuallyRenamed.add(sessionId);
     synthesizedPlaceholders.delete(sessionId);
+    void import('../session-title-user-renames-store.js')
+      .then((store) => store.noteSessionTitleManuallyRenamed(sessionId))
+      .catch(() => undefined);
   });
   if (hooks?.isUserMessageScreeningActive) {
     isUserMessageScreeningActive = hooks.isUserMessageScreeningActive;
@@ -169,6 +172,11 @@ export async function isSessionAutoTitleEligible(sessionId: string): Promise<boo
   // (review)。抛错时刻意不删:读不出状态属于瞬时失败,不能拿它当作废依据。
   if (!eligible) synthesizedPlaceholders.delete(sessionId);
   return eligible;
+}
+
+/** 动态任务标题刷新用:该会话是否被用户手动改过名(本进程内记号)。 */
+export function hasSessionBeenManuallyRenamed(sessionId: string): boolean {
+  return manuallyRenamed.has(sessionId);
 }
 
 async function runUnsynchronized(
