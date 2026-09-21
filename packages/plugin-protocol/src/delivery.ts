@@ -14,7 +14,9 @@ import {
   string,
 } from './internal/parse.js';
 import { isValidPluginResourceId } from './internal/pluginResourceId.js';
+import { isValidPluginNamespace, parseOptionalNamespace } from './internal/namespace.js';
 
+export { isValidPluginNamespace } from './internal/namespace.js';
 export { PluginProtocolError } from './internal/parse.js';
 export { isValidPluginResourceId } from './internal/pluginResourceId.js';
 
@@ -40,6 +42,8 @@ export const PLUGIN_PREFIX_PATTERN = /^[a-z0-9]{2,16}$/;
 export interface PluginCurrentOrganization {
   /** 当前组织的稳定 ID。 */
   organizationId: string;
+  /** Auth 永久组织 slug；旧服务端缺失时保持 undefined。 */
+  orgSlug?: string;
   /**
    * 已登记前缀原样保留，不带尾连字符。
    * `null` 表示当前是组织身份，但该组织尚未登记前缀；
@@ -81,7 +85,7 @@ export interface PluginReleaseSummary {
 /** 详情响应中的客户端兼容 Release；在摘要基础上包含已校验的完整 manifest。 */
 export interface PluginReleaseDetail extends PluginReleaseSummary {
   /** 已通过 `validateGhostManifest` 规范化的当前 manifest。 */
-  manifest: GhostManifest;
+  manifest: GhostManifest & { namespace?: string | null };
 }
 
 /** Plugin 列表项；只含市场展示和版本对账所需的摘要。 */
@@ -99,6 +103,7 @@ export interface VisiblePluginSummary {
   /** Plugin 的来源范围。 */
   scope: PluginScope;
   /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
+  namespace?: string | null;
   organizationId: string | null;
   /** 对当前请求身份计算后的默认安装值，不表示强制安装或强制启用。 */
   defaultInstall: boolean;
@@ -121,6 +126,7 @@ export interface VisiblePluginDetail {
   /** Plugin 的来源范围。 */
   scope: PluginScope;
   /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
+  namespace?: string | null;
   organizationId: string | null;
   /** 对当前请求身份计算后的默认安装值，不表示强制安装或强制启用。 */
   defaultInstall: boolean;
@@ -143,6 +149,7 @@ export interface PluginRemovalNotice {
   /** 被清理 Plugin 的来源范围；当前服务端只对 organization 下发通告。 */
   scope: PluginScope;
   /** Organization 必须是非空组织 ID；Public 和 Personal 恒为 `null`。 */
+  namespace?: string | null;
   organizationId: string | null;
   /** 处置动作。 */
   action: PluginRemovalAction;
@@ -177,6 +184,10 @@ export interface GetPluginResponse {
 
 /** 当前 Release 的短期私有下载凭证；不重复携带 HTTP envelope 版本。 */
 export interface PluginDownloadResponse {
+  pluginId?: string;
+  releaseId?: string;
+  ghostId?: string;
+  namespace?: string | null;
   /** 短期 HTTPS 下载地址。 */
   url: string;
   /** 下载地址过期时间，格式为带毫秒的 UTC ISO 8601。 */
@@ -244,7 +255,13 @@ function parseReleaseDetail(value: unknown, ghostId: string, path: string): Plug
   if (summary.version !== validatedManifest.manifest.version) {
     throw new PluginProtocolError(`${path}.version 与 manifest.version 不一致`);
   }
-  return { ...summary, manifest: validatedManifest.manifest };
+  return {
+    ...summary,
+    manifest: {
+      ...validatedManifest.manifest,
+      ...parseOptionalNamespace(object(raw.manifest, `${path}.manifest`), `${path}.manifest`),
+    },
+  };
 }
 
 function parseScope(value: unknown, path: string): PluginScope {
@@ -279,6 +296,7 @@ function parseVisiblePluginBase(
   description: string | null;
   author: string | null;
   scope: PluginScope;
+  namespace?: string | null;
   organizationId: string | null;
   defaultInstall: boolean;
 } {
@@ -287,6 +305,13 @@ function parseVisiblePluginBase(
   if (!isValidGhostId(raw.ghostId)) throw new PluginProtocolError(`${path}.ghostId 不合法`);
   const scope = parseScope(raw.scope, path);
   const organizationId = parseScopedOrganizationId(scope, raw.organizationId, path);
+  const identity = parseOptionalNamespace(raw, path);
+  if (
+    'namespace' in identity &&
+    (scope === 'organization' ? identity.namespace === null : identity.namespace !== null)
+  ) {
+    throw new PluginProtocolError(`${path}.namespace 与 scope 不一致`);
+  }
   if (typeof raw.defaultInstall !== 'boolean') {
     throw new PluginProtocolError(`${path}.defaultInstall 必须是 boolean`);
   }
@@ -299,6 +324,7 @@ function parseVisiblePluginBase(
       raw.description === null ? null : string(raw.description, `${path}.description`, 300),
     author: raw.author === null ? null : string(raw.author, `${path}.author`),
     scope,
+    ...identity,
     organizationId,
     defaultInstall: raw.defaultInstall,
   };
@@ -314,6 +340,7 @@ function parseVisiblePluginSummary(value: unknown, index: number): VisiblePlugin
     description: parsed.description,
     author: parsed.author,
     scope: parsed.scope,
+    ...parseOptionalNamespace(parsed.raw, path),
     organizationId: parsed.organizationId,
     defaultInstall: parsed.defaultInstall,
     currentRelease: parseReleaseSummary(parsed.raw.currentRelease, `${path}.currentRelease`),
@@ -331,6 +358,9 @@ function parseVisiblePluginDetail(value: unknown, path: string): VisiblePluginDe
     throw new PluginProtocolError(
       `${path}.currentRelease.manifest 的 oidc-token 仅允许 organization scope`,
     );
+  }
+  if (parsed.namespace !== currentRelease.manifest.namespace) {
+    throw new PluginProtocolError(`${path}.namespace 与有效 manifest 不一致`);
   }
   const manifestDescription = currentRelease.manifest.description ?? null;
   const manifestAuthor = currentRelease.manifest.author ?? null;
@@ -352,6 +382,7 @@ function parseVisiblePluginDetail(value: unknown, path: string): VisiblePluginDe
     description: parsed.description,
     author: parsed.author,
     scope: parsed.scope,
+    ...parseOptionalNamespace(parsed.raw, path),
     organizationId: parsed.organizationId,
     defaultInstall: parsed.defaultInstall,
     currentRelease,
@@ -366,6 +397,13 @@ function parseRemovalNotice(value: unknown, path: string): PluginRemovalNotice |
   if (!isValidGhostId(raw.ghostId)) throw new PluginProtocolError(`${path}.ghostId 不合法`);
   const scope = parseScope(raw.scope, path);
   const organizationId = parseScopedOrganizationId(scope, raw.organizationId, path);
+  const identity = parseOptionalNamespace(raw, path);
+  if (
+    'namespace' in identity &&
+    (scope === 'organization' ? identity.namespace === null : identity.namespace !== null)
+  ) {
+    throw new PluginProtocolError(`${path}.namespace 与 scope 不一致`);
+  }
   const action = string(raw.action, `${path}.action`, 64);
   const removedAt = isoDate(raw.removedAt, `${path}.removedAt`);
   // 未知动作是未来扩展位：结构校验通过后跳过该条而不是拒绝整个响应，
@@ -375,6 +413,7 @@ function parseRemovalNotice(value: unknown, path: string): PluginRemovalNotice |
     pluginId: raw.pluginId,
     ghostId: raw.ghostId,
     scope,
+    ...identity,
     organizationId,
     action: action as PluginRemovalAction,
     removedAt,
@@ -402,18 +441,25 @@ function parseCurrentOrganization(value: unknown): PluginCurrentOrganization | n
     'response.currentOrganization.organizationId',
     128,
   );
+  const orgSlug =
+    Object.prototype.hasOwnProperty.call(raw, 'orgSlug')
+      ? { orgSlug: raw.orgSlug as string }
+      : {};
+  if ('orgSlug' in orgSlug && !isValidPluginNamespace(orgSlug.orgSlug)) {
+    throw new PluginProtocolError('currentOrganization.orgSlug 不合法');
+  }
   // 「对象在、但省略了 pluginPrefix key」是畸形响应，不能规范化成 null：
   // 那会把「未登记前缀」和「取不到组织」混成一种，上层再也分不开。
   if (!Object.prototype.hasOwnProperty.call(raw, 'pluginPrefix')) {
     throw new PluginProtocolError('response.currentOrganization.pluginPrefix 缺失');
   }
   if (raw.pluginPrefix === null) {
-    return { organizationId, pluginPrefix: null };
+    return { organizationId, ...orgSlug, pluginPrefix: null };
   }
   if (typeof raw.pluginPrefix !== 'string' || !PLUGIN_PREFIX_PATTERN.test(raw.pluginPrefix)) {
     throw new PluginProtocolError('response.currentOrganization.pluginPrefix 不合法');
   }
-  return { organizationId, pluginPrefix: raw.pluginPrefix };
+  return { organizationId, ...orgSlug, pluginPrefix: raw.pluginPrefix };
 }
 
 /**
@@ -430,12 +476,27 @@ export function parseListPluginsResponse(value: unknown): ListPluginsResponse {
     throw new PluginProtocolError(`response.schemaVersion 必须为 ${PLUGIN_API_SCHEMA_VERSION}`);
   }
   if (!Array.isArray(raw.plugins)) throw new PluginProtocolError('response.plugins 必须是数组');
+  const plugins = raw.plugins.map(parseVisiblePluginSummary);
+  const removals = parseRemovals(raw.removals);
+  const currentOrganization = parseCurrentOrganization(raw.currentOrganization);
+  if (currentOrganization?.orgSlug !== undefined) {
+    for (const item of [...plugins, ...removals]) {
+      if (
+        item.scope === 'organization' &&
+        item.namespace !== undefined &&
+        (item.organizationId !== currentOrganization.organizationId ||
+          item.namespace !== currentOrganization.orgSlug)
+      ) {
+        throw new PluginProtocolError('response 企业 namespace 与 currentOrganization 不一致');
+      }
+    }
+  }
   return {
     schemaVersion: PLUGIN_API_SCHEMA_VERSION,
-    plugins: raw.plugins.map(parseVisiblePluginSummary),
+    plugins,
     nextCursor: nextCursor(raw.nextCursor, 'response.nextCursor'),
-    removals: parseRemovals(raw.removals),
-    currentOrganization: parseCurrentOrganization(raw.currentOrganization),
+    removals,
+    currentOrganization,
   };
 }
 
@@ -471,7 +532,27 @@ export function parsePluginDownloadResponse(value: unknown): PluginDownloadRespo
   ) {
     throw new PluginProtocolError('response.sizeBytes 必须是正整数');
   }
+  const identity = parseOptionalNamespace(raw, 'response');
+  const hasIdentity = ['pluginId', 'releaseId', 'ghostId', 'namespace'].some((key) =>
+    Object.prototype.hasOwnProperty.call(raw, key),
+  );
+  if (
+    hasIdentity &&
+    (!isValidPluginResourceId(raw.pluginId) ||
+      !isValidGhostId(raw.ghostId) ||
+      !('namespace' in identity))
+  ) {
+    throw new PluginProtocolError('response 下载身份不完整或不合法');
+  }
   return {
+    ...(hasIdentity
+      ? {
+          pluginId: raw.pluginId as string,
+          releaseId: string(raw.releaseId, 'response.releaseId', 128),
+          ghostId: raw.ghostId as string,
+          ...identity,
+        }
+      : {}),
     url: httpsUrl(raw.url, 'response.url'),
     expiresAt: isoDate(raw.expiresAt, 'response.expiresAt'),
     sha256: sha256(raw.sha256, 'response.sha256'),
