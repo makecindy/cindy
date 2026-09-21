@@ -7,21 +7,23 @@
  * 不接受该字段，改写 models.json 的 compat 后重放同一轮请求（PI provider compat 自愈）。
  *
  * 判据只认「被点名字段 + 明确的 not supported 措辞 + 上游给出的替代字段建议」三者
- * 同时出现：普通 400（鉴权/参数值错误）不满足，避免把不可自愈的确定性失败误收。
+ * 同时出现：普通 400（鉴权/参数值错误）不满足；裸 `invalid_request_error` 不算「不支持」
+ * （泛化 400 可能同时提到两个字段），结构化错误里出现 `param` 时必须点名被拒字段。
  */
 export const UNSUPPORTED_REQUEST_OPTION_REASON = 'unsupported-request-option';
 
+const RETENTION_FIELD = 'prompt_cache_retention';
 const RETENTION_FIELD_RE = /\bprompt_cache_retention\b/i;
 const RETENTION_SUGGESTION_RE = /\bprompt_cache_options\b/i;
-const NOT_SUPPORTED_RE = /not supported|unsupported|invalid_request_error/i;
+const NOT_SUPPORTED_RE = /not\s+supported|unsupported|isn't\s+supported|does\s+not\s+support/i;
+const STRUCTURED_PARAM_RE = /"param"\s*:\s*"([^"]*)"/i;
 
 export function isUnsupportedRequestOptionErrorMessage(message: string): boolean {
-  return (
-    typeof message === 'string' &&
-    RETENTION_FIELD_RE.test(message) &&
-    RETENTION_SUGGESTION_RE.test(message) &&
-    NOT_SUPPORTED_RE.test(message)
-  );
+  if (typeof message !== 'string' || message.length === 0) return false;
+  if (!RETENTION_FIELD_RE.test(message) || !RETENTION_SUGGESTION_RE.test(message)) return false;
+  const param = STRUCTURED_PARAM_RE.exec(message)?.[1];
+  if (param !== undefined && param.toLowerCase() !== RETENTION_FIELD) return false;
+  return NOT_SUPPORTED_RE.test(message);
 }
 
 /**

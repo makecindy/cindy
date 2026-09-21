@@ -267,7 +267,10 @@ export function finishSessionTerminalEvent(
         onTurnErrorEvent(session.id, overflowErrorPayload, eventAgentMeta, overflowPersistId);
       };
       void deps.contextOverflowRolloverHolder
-        ?.tryRecover(session.id, overflowErrorData)
+        ?.tryRecover(session.id, overflowErrorData, {
+          instanceId: event.sessionInstanceId,
+          generation: event.sessionTurnGeneration,
+        })
         .then((recovered) => {
           if (recovered) {
             deps.overflowSuppressedBroadcasts.delete(session.id);

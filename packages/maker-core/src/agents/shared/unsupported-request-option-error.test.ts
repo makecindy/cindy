@@ -35,6 +35,15 @@ describe('unsupported request option error', () => {
     ['overload', 'overloaded_error: upstream is busy'],
     ['only the suggested field', 'prompt_cache_options is not supported by this endpoint'],
     ['only the rejected field, no verdict', 'request field prompt_cache_retention was forwarded'],
+    // 裸 invalid_request_error 不再算「不支持」；结构化 param 不点名被拒字段也不算。
+    [
+      'generic invalid_request_error mentioning both fields',
+      '400: {"type":"invalid_request_error","message":"prompt_cache_retention conflicts with prompt_cache_options"}',
+    ],
+    [
+      'structured param names another field',
+      '400: {"param":"prompt_cache_options","type":"invalid_request_error","message":"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}',
+    ],
     ['empty', ''],
   ])('does not classify %s as a self-heal target', (_label, message) => {
     expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);

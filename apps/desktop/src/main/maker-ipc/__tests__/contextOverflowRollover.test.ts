@@ -1112,7 +1112,11 @@ describe('createContextOverflowRollover', () => {
       const rollover = createContextOverflowRollover(deps);
       rollover.claim('s1');
       await expect(
-        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
       ).resolves.toBe(true);
       expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
 
@@ -1124,10 +1128,42 @@ describe('createContextOverflowRollover', () => {
       ]);
       rollover.claim('s1');
       await expect(
-        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
       ).resolves.toBe(true);
       expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
       expect(deps.onRebuilt).toHaveBeenCalledTimes(1);
+    });
+
+    it('surfaces a same-signature failure from the replayed turn (new turn identity)', async () => {
+      // 重放产生的新一轮失败必须如实上报：不能因为 clientId 相同就被当成旧终态的重复投递。
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
+      ).resolves.toBe(true);
+
+      deps.listMessages.mockResolvedValue([
+        msg('user', '再跑一遍', 'u2', 1),
+        msg('assistant', '重放又失败了', 'a1', 2),
+      ]);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-2', generation: 2 },
+        ),
+      ).resolves.toBe(false);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
     });
   });
 

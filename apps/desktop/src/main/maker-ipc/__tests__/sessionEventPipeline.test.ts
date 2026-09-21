@@ -645,9 +645,11 @@ describe('production Session event pipeline', () => {
       message: '400: {"param":"prompt_cache_retention","type":"invalid_request_error"}',
     }));
     // 生产路径：claim 成立 → 广播被压住，自愈成功后直接丢弃（不闪错误横幅）。
-    expect(tryRecover).toHaveBeenCalledWith('task', expect.objectContaining({
-      reason: 'unsupported-request-option',
-    }));
+    expect(tryRecover).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({ reason: 'unsupported-request-option' }),
+      { instanceId: undefined, generation: undefined },
+    );
     expect(effects.fn('broadcast')).not.toHaveBeenCalled();
     await Promise.resolve();
     await Promise.resolve();

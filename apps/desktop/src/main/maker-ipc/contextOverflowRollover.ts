@@ -471,7 +471,12 @@ export function shouldRebuildForModelWindowSwitch(input: {
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
   claim(sessionId: string): OverflowClaimResult;
   cancelRecovery(sessionId: string): void;
-  tryRecover(sessionId: string, errorData: unknown): Promise<boolean>;
+  tryRecover(
+    sessionId: string,
+    errorData: unknown,
+    /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
+    turnIdentity?: { instanceId?: string; generation?: number },
+  ): Promise<boolean>;
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
@@ -495,11 +500,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   const inFlight = new Map<string, AbortController | undefined>();
   // One automatic continuation per source input, not one per replacement thread.
   const continuedInputs = new Map<string, string>();
+  // 自愈成功时那一轮的 turn 身份：同身份再次到达 = 同一轮的重复终态投递（丢弃）；
+  // 新身份 = 重放后的新一轮失败（必须 surface，不能静默吞掉）。
+  const healedCompatTurns = new Map<string, { instanceId?: string; generation?: number }>();
 
   const runRecover = async (
     sessionId: string,
     errorData: unknown,
     signal?: AbortSignal,
+    turnIdentity?: { instanceId?: string; generation?: number },
   ): Promise<boolean> => {
     if (signal?.aborted) return true;
     const oversized = isOversizedHistoryErrorData(errorData);
@@ -542,12 +551,20 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         signal?.throwIfAborted();
         const plan = planContextOverflowRollover(source, null);
         // 同一轮重复终态 error：上一次自愈已经重放并续跑过，这次直接丢弃（不重放、
-        // 不落错误行），否则用户会在已自动继续的任务里看到一张 400 错误卡。
+        // 不落错误行）。必须用「实例 + 轮次」身份区分：重放失败是新一轮（新 instanceId /
+        // 新 generation），必须照常 surface，否则真实的重试失败会被静默吞掉。
         const sourceUser =
           plan.action === 'rebuild'
             ? { clientId: plan.sourceUserClientId }
             : [...source].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message));
-        if (sourceUser && continuedInputs.get(sessionId) === sourceUser.clientId) {
+        const healedTurn = healedCompatTurns.get(sessionId);
+        if (
+          sourceUser &&
+          healedTurn?.generation !== undefined &&
+          healedTurn.generation === turnIdentity?.generation &&
+          healedTurn.instanceId === turnIdentity?.instanceId &&
+          continuedInputs.get(sessionId) === sourceUser.clientId
+        ) {
           return true;
         }
         // 已学过（包括用户在别处已修好）→ 不再自动重试，交常规错误面。
@@ -616,6 +633,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         }
         deps.onRebuilt?.(sessionId);
         continuedInputs.set(sessionId, plan.sourceUserClientId);
+        if (turnIdentity?.generation !== undefined) {
+          healedCompatTurns.set(sessionId, turnIdentity);
+        }
         deps.log.info('pi provider compat learned; replayed the user message', {
           sessionId,
           providerId,
@@ -1060,7 +1080,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       inFlight.get(sessionId)?.abort();
     },
 
-    async tryRecover(sessionId: string, errorData: unknown): Promise<boolean> {
+    async tryRecover(
+      sessionId: string,
+      errorData: unknown,
+      turnIdentity?: { instanceId?: string; generation?: number },
+    ): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
         // IM may not persist this input (protected content), and an attached IM
@@ -1071,9 +1095,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
         if (deps.withSessionLock) {
-          return await deps.withSessionLock(sessionId, () => runRecover(sessionId, errorData, signal));
+          return await deps.withSessionLock(sessionId, () =>
+            runRecover(sessionId, errorData, signal, turnIdentity),
+          );
         }
-        return await runRecover(sessionId, errorData, signal);
+        return await runRecover(sessionId, errorData, signal, turnIdentity);
       } catch (error) {
         if (signal?.aborted) return true;
         deps.log.warn('context overflow rollover failed', {

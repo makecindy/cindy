@@ -110,11 +110,11 @@ function quarantineUnreadableFile(): void {
     return; // 不存在：交给 store 走 defaults。
   }
   if (!stats.isFile()) {
-    quarantineFile(file, { notRegularFile: true });
+    quarantineFile(file, stats, { notRegularFile: true });
     return;
   }
   if (stats.size > MAX_BYTES) {
-    quarantineFile(file, { tooLarge: true, size: stats.size });
+    quarantineFile(file, stats, { tooLarge: true, size: stats.size });
     return;
   }
   let raw: string;
@@ -127,20 +127,31 @@ function quarantineUnreadableFile(): void {
     return;
   }
   if (raw.trim().length === 0) {
-    quarantineFile(file, { empty: true });
+    quarantineFile(file, stats, { empty: true });
     return;
   }
   try {
     const parsed: unknown = JSON.parse(raw);
     // 合法 JSON 但根不是普通对象（数组/null/数字/字符串）同样属于 unreadable。
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return;
-    quarantineFile(file, { rootNotObject: true });
+    quarantineFile(file, stats, { rootNotObject: true });
   } catch {
-    quarantineFile(file, { malformed: true });
+    quarantineFile(file, stats, { malformed: true });
   }
 }
 
-function quarantineFile(file: string, reason: Record<string, unknown>): void {
+function quarantineFile(file: string, observed: fs.Stats, reason: Record<string, unknown>): void {
+  // 锁外操作：重命名前复核文件身份（mtime + size）没变 —— 并发进程可能刚原子写入
+  // 一份有效学习结果，直接移走会丢掉它。变了就让本次写入自己走正常路径。
+  try {
+    const current = fs.statSync(file);
+    if (current.mtimeMs !== observed.mtimeMs || current.size !== observed.size) {
+      log.warn('pi native compat overrides quarantine skipped: file changed', { ...reason });
+      return;
+    }
+  } catch {
+    return;
+  }
   const backup = `${file}.broken-${Date.now()}`;
   try {
     fs.renameSync(file, backup);
