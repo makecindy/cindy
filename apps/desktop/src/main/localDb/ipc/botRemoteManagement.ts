@@ -11,6 +11,7 @@ import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRe
 import { createBotRemoteEditors } from './botRemoteEditors.js';
 import { decodeBotAvatarImage } from './botAvatarSelection.js';
 import { runRegisteredBotLifecycleAction } from '../../maker-ipc/botLifecycleService.js';
+import { listBotSettingsCapabilities, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 
 /** Composition only: profile transactions, skill reads and lifecycle stay with their existing owners. */
 const deps = {
@@ -31,7 +32,6 @@ const deps = {
         if (!entry || route.effort && !entry.efforts.some(effort => effort === route.effort) || route.fastMode && !entry.supportsFastMode) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
       }
     }
-    const { validateBotCapabilityAdditions } = await import('../../maker-host/index.js');
     if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
     return updateBotProfile(input, version, validateBotCapabilityAdditions);
   },
@@ -80,7 +80,6 @@ const getEditor = createBotRemoteEditors({ ...deps,
     if (source.canonicalSessionId) await requestBotRuntimeEpochRefresh(source.canonicalSessionId, 'resource');
   },
   async capabilities(callerSessionId, kind) {
-    const { listBotSettingsCapabilities } = await import('../../maker-host/index.js');
     return listBotSettingsCapabilities({ callerSessionId, kind });
   },
 }, settings.bindResource);
