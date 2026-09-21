@@ -29,6 +29,11 @@ describe('pi native compat overrides store', () => {
     fs.mkdirSync(tempRoot, { recursive: true });
     fs.rmSync(FILE, { force: true });
     fs.rmSync(`${FILE}.lock`, { force: true });
+    for (const name of fs.readdirSync(tempRoot)) {
+      if (name.startsWith('pi-native-compat-overrides.json.broken-')) {
+        fs.rmSync(path.join(tempRoot, name), { force: true, recursive: true });
+      }
+    }
   });
 
   it('records and returns a learned per-model compat override', async () => {
@@ -165,6 +170,34 @@ describe('pi native compat overrides store', () => {
     expect(readPiNativeCompatOverride('opencode-go', 'glm-5.3-flash')).toEqual({
       supportsLongCacheRetention: false,
     });
+  });
+
+  it('does not quarantine when the file changed after the check (concurrent write)', () => {
+    fs.writeFileSync(FILE, '{ broken json', 'utf8');
+    const realStatSync = fs.statSync;
+    let calls = 0;
+    const spy = vi.spyOn(fs, 'statSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      calls += 1;
+      const stats = (realStatSync as (...args: unknown[]) => fs.Stats)(file, ...rest);
+      if (calls === 2) {
+        // 第二次 = rename 前的身份复核；模拟并发进程刚写入有效结果（mtime 变了）。
+        const fake: fs.Stats = Object.assign(Object.create(Object.getPrototypeOf(stats)), stats);
+        (fake as { mtimeMs: number }).mtimeMs = stats.mtimeMs + 1000;
+        return fake;
+      }
+      return stats;
+    }) as typeof fs.statSync);
+    try {
+      __testing.quarantineUnreadableFile();
+    } finally {
+      spy.mockRestore();
+    }
+    // 身份已变 → 不隔离：坏文件留在原处，本次写入走自己的隔离重试路径。
+    expect(fs.readFileSync(FILE, 'utf8')).toBe('{ broken json');
+    expect(fs.readdirSync(tempRoot).some((name) => name.includes('.broken-'))).toBe(false);
   });
 
   it('drops malformed entries instead of writing them into models.json', async () => {

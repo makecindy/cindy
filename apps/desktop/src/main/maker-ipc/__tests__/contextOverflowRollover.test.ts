@@ -1005,6 +1005,21 @@ describe('createContextOverflowRollover', () => {
       expect(deps.setPendingHandoff).not.toHaveBeenCalled();
     });
 
+    it('leaves non-target 400s to the normal error surface', async () => {
+      const deps = makePiDeps([msg('user', '继续', 'u1', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', {
+          message: '400: {"type":"invalid_request_error","message":"prompt_cache_retention conflicts with prompt_cache_options"}',
+        }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
     it('does not retry a provider/model that already learned the fix', async () => {
       const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
       deps.readPiNativeCompatOverride.mockReturnValue({ supportsLongCacheRetention: false });
