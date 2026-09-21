@@ -26,6 +26,8 @@ import type { runSourcePnpm } from '../sourcePnpm';
 import type { PtySpawnFn } from '../../terminal/ptyFactory';
 import * as versionStore from '../versionStore';
 import { CindyMakeManager } from '../manager';
+import { historyBuildRollback } from '../buildRollback';
+import { CindyMakeHistoryStore } from '../historyStore';
 vi.mock('../localHistory', () => ({
   MAKE_GIT_IDENTITY: [],
   commitPersonalFiles: async (
@@ -94,6 +96,7 @@ async function fixture() {
   const abort = new AbortController();
   const git = vi.fn<typeof runSourceGit>(async (_env, args, cwd) => {
     expect(locked).toBe(true);
+    if (args[0] === 'merge-base' && args[2] === 'refs/heads/main') return 'd'.repeat(40);
     if (args[0] === 'worktree' && args[1] === 'add') {
       buildDir = args[3];
       events.push('merge');
@@ -109,6 +112,11 @@ async function fixture() {
       baseline = args[2];
       sourceTree = 'e'.repeat(40);
       events.push('adopt');
+    }
+    if (args[0] === 'reset' && args[1] === '--keep') {
+      baseline = args[2];
+      sourceTree = baseline === 'a'.repeat(40) ? baseline : 'e'.repeat(40);
+      events.push('rollback');
     }
     return '';
   });
@@ -157,6 +165,7 @@ async function fixture() {
     withProject: <T>(operation: () => Promise<T>) => Promise<T> = async (operation) => operation(),
     personalOnly = false,
     features?: () => Array<{ runId: string; operationId: string }>,
+    rollback?: ReturnType<typeof historyBuildRollback>,
   ) =>
     buildCindyPersonal(
       personalOnly ? { mode: 'personal', userData, completionId: 'history-build' } : task,
@@ -177,7 +186,7 @@ async function fixture() {
             locked = false;
           }
         }),
-      { git, pnpm, verify, packageCommand, features },
+      { git, pnpm, verify, packageCommand, features, ...rollback },
     );
   return {
     userData,
@@ -193,6 +202,10 @@ async function fixture() {
     abort,
     baseline: () => baseline,
     sourceTree: () => sourceTree,
+    integrate: () => {
+      baseline = 'f'.repeat(40);
+      sourceTree = 'e'.repeat(40);
+    },
     locked: () => locked,
     locks: () => locks,
     advance: () => {
@@ -203,6 +216,128 @@ async function fixture() {
 }
 
 describe('personal source integration and packaging', () => {
+  it('publishes live check and package output under the correct stage and clears it when advancing', async () => {
+    const h = await fixture();
+    const originalCheck = h.pnpm.getMockImplementation()!;
+    h.pnpm.mockImplementation(async (...args) => {
+      await originalCheck(...args);
+      args[5]?.('Running ' + args[1][0]);
+    });
+    const originalPackage = h.packageCommand.getMockImplementation()!;
+    h.packageCommand.mockImplementation(async (...args) => {
+      args[6]?.('Building installer');
+      await originalPackage(...args);
+    });
+    await h.run();
+    const states = h.publish.mock.calls.map(([state]) => state);
+    expect(states).toEqual(
+      expect.arrayContaining([
+        { status: 'checking', checkStep: 'dependencies', outputLine: 'Running install' },
+        { status: 'checking', checkStep: 'tests', outputLine: 'Running test:unit:related' },
+        { status: 'checking', checkStep: 'types', outputLine: 'Running --recursive' },
+        { status: 'packaging', outputLine: 'Building installer' },
+      ]),
+    );
+    expect(states.at(-1)).toEqual({ status: 'publishing' });
+  });
+  it('preserves the specific check error after rolling back a failed build', async () => {
+    const h = await fixture();
+    h.pnpm.mockRejectedValueOnce(
+      Object.assign(new Error('truncated private pnpm tail'), {
+        diagnostic: {
+          kind: 'process',
+          exitCode: 1,
+          message: 'ERR_PNPM_FETCH_404: dependency unavailable; token=fake-secret',
+        },
+      }),
+    );
+    await expect(h.run()).rejects.toMatchObject({
+      code: 'checksFailed',
+      diagnostic: {
+        kind: 'process',
+        exitCode: 1,
+        message: 'ERR_PNPM_FETCH_404: dependency unavailable; token=[REDACTED]',
+      },
+    });
+    expect(h.baseline()).toBe('a'.repeat(40));
+  });
+  it.each(['before-start', 'checks', 'package'] as const)(
+    'cleans the runtime integration and its receipt when generation fails at %s',
+    async (stage) => {
+      const h = await fixture();
+      h.integrate();
+      const store = new CindyMakeHistoryStore(path.join(h.userData, 'history'));
+      store.seed({
+        runId: 'run',
+        sessionId: 'session',
+        title: 'Feature',
+        request: 'Feature',
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      store.receipt('run', {
+        id: 'pending-integration',
+        action: 'integrate',
+        at: 2,
+        baselineCommit: 'a'.repeat(40),
+        beforeTree: 'a'.repeat(40),
+        commit: 'f'.repeat(40),
+        tree: 'e'.repeat(40),
+        taskTree: 'e'.repeat(40),
+      });
+      if (stage === 'before-start') h.abort.abort();
+      if (stage === 'checks') h.pnpm.mockRejectedValueOnce(new Error('checks failed'));
+      if (stage === 'package')
+        h.packageCommand.mockRejectedValueOnce(personalBuildError('buildFailed'));
+      await expect(
+        h.run(undefined, true, undefined, historyBuildRollback(store, h.source)),
+      ).rejects.toBeDefined();
+      expect(h.baseline()).toBe('a'.repeat(40));
+      expect(h.sourceTree()).toBe('a'.repeat(40));
+      expect(store.read('run')?.receipts).toEqual([]);
+      expect(store.readBuildRollback()).toEqual([]);
+      expect(await readFile(path.join(h.task.workingDir, 'keep.txt'), 'utf8')).toBe('editing work');
+    },
+  );
+  it('pins migration checks to inherited official history, even when origin/main is newer', async () => {
+    const h = await fixture();
+    await h.run();
+    expect(h.packageCommand.mock.calls[0][3].XDT_MIGRATION_BASE_REF).toBe('d'.repeat(40));
+    expect(h.packageCommand.mock.calls[0][3].XDT_MIGRATION_BASE_REF).not.toBe(h.baseline());
+    const original = h.git.getMockImplementation()!;
+    h.git.mockImplementation(async (...args) =>
+      args[1][0] === 'merge-base' && args[1][2] === 'refs/heads/main' ? '' : original(...args),
+    );
+    h.packageCommand.mockClear();
+    await expect(h.run()).rejects.toMatchObject({ code: 'changed' });
+    expect(h.packageCommand).not.toHaveBeenCalled();
+  });
+  it('builds a tag checkout without local main using only inherited origin history', async () => {
+    const h = await fixture();
+    const original = h.git.getMockImplementation()!;
+    h.git.mockImplementation(async (...args) => {
+      if (args[1][0] === 'show-ref')
+        throw Object.assign(new Error('local main is absent'), { exitCode: 1 });
+      if (args[1][0] === 'merge-base' && args[1][2] === 'refs/remotes/origin/main')
+        return 'd'.repeat(40);
+      return original(...args);
+    });
+    await h.run();
+    expect(h.packageCommand.mock.calls[0][3].XDT_MIGRATION_BASE_REF).toBe('d'.repeat(40));
+    expect(h.packageCommand.mock.calls[0][3].XDT_MIGRATION_BASE_REF).not.toBe(h.baseline());
+  });
+  it('does not treat an unreadable local reference as a missing branch', async () => {
+    const h = await fixture();
+    const original = h.git.getMockImplementation()!;
+    h.git.mockImplementation(async (...args) => {
+      if (args[1][0] === 'show-ref')
+        throw Object.assign(new Error('reference database unavailable'), { exitCode: 128 });
+      return original(...args);
+    });
+    await expect(h.run()).rejects.toMatchObject({ exitCode: 128 });
+    expect(h.packageCommand).not.toHaveBeenCalled();
+    expect(h.baseline()).toBe('a'.repeat(40));
+  });
   it('reports each checking step before starting its command and stops at a failed test', async () => {
     const h = await fixture();
     const observed: unknown[] = [];
@@ -212,19 +347,19 @@ describe('personal source integration and packaging', () => {
     });
     await expect(h.run()).rejects.toMatchObject({ code: 'checksFailed' });
     expect(observed).toEqual([
-      { status: 'checking', checkStep: 'dependencies' },
-      { status: 'checking', checkStep: 'tests' },
+      expect.objectContaining({ status: 'checking', checkStep: 'dependencies' }),
+      expect.objectContaining({ status: 'checking', checkStep: 'tests' }),
     ]);
     expect(h.packageCommand).not.toHaveBeenCalled();
     observed.length = 0;
     h.pnpm.mockImplementation(async () => {
       observed.push(h.publish.mock.calls.at(-1)?.[0]);
     });
-    await h.run(undefined, true);
+    await h.run();
     expect(observed).toEqual([
-      { status: 'checking', checkStep: 'dependencies' },
-      { status: 'checking', checkStep: 'tests' },
-      { status: 'checking', checkStep: 'types' },
+      expect.objectContaining({ status: 'checking', checkStep: 'dependencies' }),
+      expect.objectContaining({ status: 'checking', checkStep: 'tests' }),
+      expect.objectContaining({ status: 'checking', checkStep: 'types' }),
     ]);
   });
   it('packages already integrated source after its editing directory is gone, without another merge or a synthetic task', async () => {
@@ -314,7 +449,7 @@ describe('personal source integration and packaging', () => {
     'cancel',
     'publishCancel',
   ] as const)(
-    'preserves integrated files but publishes no artifact on %s failure',
+    'restores unpublished integrations, preserves task files and publishes no artifact on %s failure',
     async (failure) => {
       const h = await fixture();
       const original = h.packageCommand.getMockImplementation()!;
@@ -347,8 +482,9 @@ describe('personal source integration and packaging', () => {
         });
       await expect(h.run()).rejects.toBeDefined();
       expect(h.events).toContain('adopt');
-      expect(h.sourceTree()).toBe('e'.repeat(40));
-      expect(h.baseline()).toBe((failure === 'baseline' ? 'c' : 'f').repeat(40));
+      expect(h.sourceTree()).toBe((failure === 'baseline' ? 'e' : 'a').repeat(40));
+      expect(h.baseline()).toBe((failure === 'baseline' ? 'c' : 'a').repeat(40));
+      expect(h.events.includes('rollback')).toBe(failure !== 'baseline');
       expect(await readFile(path.join(h.task.workingDir, 'keep.txt'), 'utf8')).toBe('editing work');
       await expect(access(h.buildDir())).rejects.toThrow();
       await expect(access(h.source)).resolves.toBeUndefined();
@@ -359,7 +495,7 @@ describe('personal source integration and packaging', () => {
     },
   );
 
-  it('finishes integration and its receipt on cancellation, then stops before checks and packaging', async () => {
+  it('rolls back an adoption cancelled mid-flight before checks or packaging', async () => {
     const h = await fixture();
     const original = h.git.getMockImplementation()!;
     h.git.mockImplementation(async (...args) => {
@@ -370,8 +506,8 @@ describe('personal source integration and packaging', () => {
       return original(...args);
     });
     await expect(h.run()).rejects.toBeDefined();
-    expect(h.baseline()).toBe('f'.repeat(40));
-    expect(h.sourceTree()).toBe('e'.repeat(40));
+    expect(h.baseline()).toBe('a'.repeat(40));
+    expect(h.sourceTree()).toBe('a'.repeat(40));
     expect(
       h.git.mock.calls.some(
         ([, args]) => args[0] === 'update-ref' && args[1].endsWith('/integrated'),
@@ -434,7 +570,7 @@ describe('personal source integration and packaging', () => {
         expect(publishVersion).toHaveBeenCalledWith(h.userData, id);
         await expect(access(retainedDirectory)).resolves.toBeUndefined();
       }
-      expect(h.sourceTree()).toBe('e'.repeat(40));
+      expect(h.sourceTree()).toBe((cancel ? 'a' : 'e').repeat(40));
       await expect(access(h.source)).resolves.toBeUndefined();
       await expect(access(h.task.workingDir)).resolves.toBeUndefined();
     },
@@ -461,7 +597,7 @@ describe('personal source integration and packaging', () => {
     const run = h.run((operation) => manager.withProject(root, operation));
     await entered;
     const update = vi.fn(async () => {
-      expect(h.publish).toHaveBeenLastCalledWith({ status: 'publishing' });
+      expect(h.publish).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'publishing' }));
       expect(h.locked()).toBe(false);
       await expect(access(h.buildDir())).rejects.toThrow();
     });
@@ -547,7 +683,7 @@ describe('packaging process', () => {
     };
     const spawn = vi.fn(() => child) as unknown as PtySpawnFn;
     const abort = new AbortController();
-    const run = () =>
+    const run = (extraEnv: NodeJS.ProcessEnv = {}, onOutput?: (line: string) => void) =>
       runPersonalPackageCommand(
         process.execPath,
         ['package.js'],
@@ -558,9 +694,12 @@ describe('packaging process', () => {
           ELECTRON_RUN_AS_NODE: '1',
           NODE_OPTIONS: '--require private-hook',
           OPENAI_API_KEY: 'secret',
+          SystemDrive: 'C:',
+          ...extraEnv,
         },
         abort.signal,
         spawn,
+        onOutput,
       );
     return { child, spawn, abort, run, exit: (exitCode: number) => onExit({ exitCode }) };
   }
@@ -570,8 +709,61 @@ describe('packaging process', () => {
     expect(vi.mocked(h.spawn).mock.calls[0][2].env).not.toHaveProperty('OPENAI_API_KEY');
     expect(vi.mocked(h.spawn).mock.calls[0][2].env).not.toHaveProperty('NODE_OPTIONS');
     expect(vi.mocked(h.spawn).mock.calls[0][2].env).not.toHaveProperty('CINDY_SANDBOX');
+    expect(vi.mocked(h.spawn).mock.calls[0][2].env?.SystemDrive).toBe('C:');
     h.exit(0);
     await expect(run).resolves.toBeUndefined();
+  });
+  it('streams scrubbed packaging output and flushes the final line on exit', async () => {
+    const h = processFixture();
+    const output = vi.fn();
+    const run = h.run({}, output);
+    const emit = h.child.onData.mock.calls[0][0];
+    emit('\u001b[32mBuilding installer\u001b[0m\r\n');
+    emit('Signing token=not-a-');
+    emit('real-secret\r\nFinished');
+    h.exit(0);
+    await run;
+    expect(output.mock.calls.flat()).toEqual([
+      'Building installer',
+      'Signing token=[REDACTED]',
+      'Finished',
+    ]);
+  });
+  it('forwards only a pinned migration commit through the clean package environment', async () => {
+    const h = processFixture();
+    const run = h.run({ XDT_MIGRATION_BASE_REF: 'd'.repeat(40) });
+    expect(vi.mocked(h.spawn).mock.calls[0][2].env?.XDT_MIGRATION_BASE_REF).toBe('d'.repeat(40));
+    h.exit(0);
+    await run;
+    const invalid = processFixture();
+    expect(() => invalid.run({ XDT_MIGRATION_BASE_REF: 'HEAD' })).toThrow('changed');
+    expect(invalid.spawn).not.toHaveBeenCalled();
+  });
+  it('returns the captured fatal error instead of dropping package output', async () => {
+    const h = processFixture();
+    const result = expect(h.run()).rejects.toMatchObject({
+      code: 'buildFailed',
+      diagnostic: {
+        kind: 'outOfMemory',
+        exitCode: 134,
+        message: 'FATAL ERROR: Allocation failed - JavaScript heap out of memory',
+      },
+    });
+    h.child.onData.mock.calls[0][0](
+      'FATAL ERROR: Allocation failed - JavaScript heap out of memory\r\n',
+    );
+    h.exit(134);
+    await result;
+  });
+  it('keeps launch failures readable without exposing the command path', async () => {
+    const h = processFixture();
+    vi.mocked(h.spawn).mockImplementation(() => {
+      throw new Error('ENOENT: missing C:/private/node.exe');
+    });
+    await expect(h.run()).rejects.toMatchObject({
+      code: 'buildFailed',
+      diagnostic: { kind: 'process', message: 'ENOENT: missing <path>' },
+    });
   });
   it('cancels the owned process and bounds a hung package build', async () => {
     vi.useFakeTimers();
@@ -581,7 +773,10 @@ describe('packaging process', () => {
     await result;
     expect(h.child.kill).toHaveBeenCalledOnce();
     const hung = processFixture();
-    const timeout = expect(hung.run()).rejects.toMatchObject({ code: 'buildFailed' });
+    const timeout = expect(hung.run()).rejects.toMatchObject({
+      code: 'buildFailed',
+      diagnostic: { kind: 'timeout' },
+    });
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     await timeout;
     expect(hung.child.kill).toHaveBeenCalledOnce();

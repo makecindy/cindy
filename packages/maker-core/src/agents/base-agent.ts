@@ -74,6 +74,7 @@ import type {
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
+  ListRuntimeSkillsOptions,
 } from '../types/palette.js';
 import type {
   ListCustomizationsOptions,
@@ -705,6 +706,8 @@ export interface AgentDeps {
    * 缺省 / 返回 undefined → 回退到全局 process.env.XDT_CC_DEBUG_FILE。
    */
   resolveCcDebugFile?: (sessionId?: string) => string | undefined;
+  /** Register one local debug writer; the returned disposer runs on process exit/error. */
+  trackCcDebugFile?: (filePath: string, sessionId?: string) => () => void;
 
   /**
    * MCP server 提供者列表（host 注入）。agent 在 startSession 时按上下文挑选
@@ -1296,7 +1299,7 @@ export interface AgentDeps {
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
-  resolveCodexThreadStorage?: (threadId: string) => Promise<{ historyHome: string; sqliteHome: string } | undefined>;
+  resolveCodexThreadStorage?: (threadId: string) => Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined>;
   /** Freeze the owner/account scope before async host startup; never expose tokens to the renderer. */
   createCodexAuthTokenReader?: (providerId?: string) => () => Promise<import('./codex/app-server/external-auth.js').CodexChatgptTokens>;
 
@@ -1913,6 +1916,17 @@ export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
 /** Main-only selection from the original input for a retained-history continuation. */
 export const INHERITED_CAPABILITY_SELECTION = Symbol('cindy.inherited-capability-selection');
 
+/**
+ * Main-attested Skill winner for this exact send. Symbol keys cannot cross the
+ * Renderer/device-link boundary, so only a Host dispatcher can pin a path.
+ */
+export const PINNED_SKILL_INVOCATION = Symbol('cindy.pinned-skill-invocation');
+
+export interface PinnedSkillInvocation {
+  readonly name: string;
+  readonly path: string;
+}
+
 export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
@@ -1927,6 +1941,8 @@ export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
   readonly [INHERITED_CAPABILITY_SELECTION]?: string;
+  /** Exact Skill selected by a Host authorization check for this send. */
+  readonly [PINNED_SKILL_INVOCATION]?: PinnedSkillInvocation;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
@@ -2519,6 +2535,11 @@ export abstract class BaseAgent {
   async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
     void opts;
     return { skills: [] };
+  }
+
+  /** Runtime-accurate Skill discovery for host-side authorization checks. */
+  async listRuntimeSkills(opts: ListRuntimeSkillsOptions): Promise<ListAgentSkillsResult> {
+    return this.listAgentSkills(opts);
   }
 
   /**

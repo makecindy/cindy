@@ -1,14 +1,17 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: false, getAppPath: () => '/fake/app', getPath: () => '/fake/profile' },
   exec: vi.fn(),
+  spawn: vi.fn(),
   access: vi.fn(),
   accessSync: vi.fn(),
   displays: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: mocks.app, screen: { getAllDisplays: mocks.displays } }));
-vi.mock('node:child_process', () => ({ execFile: vi.fn(), spawn: vi.fn() }));
+vi.mock('node:child_process', () => ({ execFile: vi.fn(), spawn: mocks.spawn }));
 vi.mock('node:util', () => ({ promisify: () => mocks.exec }));
 vi.mock('node:fs', () => ({ accessSync: mocks.accessSync, constants: { X_OK: 1, R_OK: 4 } }));
 vi.mock('node:fs/promises', () => ({
@@ -135,3 +138,43 @@ it.each(['packaged', 'windows'] as const)('does no helper work for %s builds', a
   expect(mocks.exec).not.toHaveBeenCalled();
   expect(mocks.access).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  'uses OS logical dimensions while matching the request (stale=%s)',
+  async (stale) => {
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: vi.fn(),
+    });
+    child.stdin.on('data', () =>
+      queueMicrotask(() =>
+        child.stdout.write(
+          JSON.stringify({
+            id: 9,
+            width: stale ? 1280 : 1920,
+            height: 1420,
+            logicalWidth: 960,
+            logicalHeight: 710,
+          }) + '\n',
+        ),
+      ),
+    );
+    child.stdin.on('finish', () => queueMicrotask(() => child.emit('exit', 0)));
+    mocks.spawn.mockReturnValue(child);
+    mocks.displays.mockReturnValue([
+      { id: 4, size: { width: 2560, height: 1440 } },
+      { id: 9, size: { width: 960, height: 710 } },
+    ]);
+    const { createViewerDisplay } = await import('../viewerDisplay');
+    const handle = await createViewerDisplay('4', () => true, vi.fn());
+    try {
+      const result = handle.resize(1920, 1420, () => true);
+      if (stale) await expect(result).rejects.toThrow('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+      else await expect(result).resolves.toMatchObject({ id: '9', width: 960, height: 710 });
+    } finally {
+      handle.dispose();
+    }
+  },
+);

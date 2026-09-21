@@ -488,6 +488,21 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(onSessionDone).not.toHaveBeenCalled();
   });
 
+  it('does not replace a native Make failure with delayed Agent success attention', async () => {
+    vi.useFakeTimers();
+    renderHook(() => useSessionRunningStatus(undefined));
+    await emitSnapshot(new Map([['make', status(true)]]));
+    await emitSnapshot(new Map([['make', status(false)]]));
+    // The native build failed after the Agent finished: there is no Agent error row.
+    vi.mocked(getSessionAttentionKind).mockReturnValue('error');
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(addSessionAttention).not.toHaveBeenCalledWith('make', 'done');
+    } finally {
+      vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
+    }
+  });
+
   it('preserves the prior done attention if the next turn stays in starting', async () => {
     vi.useFakeTimers();
     const onSessionDone = vi.fn();

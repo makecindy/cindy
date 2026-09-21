@@ -60,6 +60,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupStoppedError,
   TurnPermissionPolicyUnsupportedError,
+  PINNED_SKILL_INVOCATION,
   type AgentSessionHandle,
   type AgentDeps,
   type StartSessionOptions,
@@ -67,6 +68,7 @@ import {
   type SendOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
+import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
@@ -168,6 +170,7 @@ import type {
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
+  ListRuntimeSkillsOptions,
 } from '../../types/palette.js';
 import { CLAUDE_CODE_AGENT_COMMANDS } from './commands.js';
 import type {
@@ -1013,6 +1016,35 @@ export class ClaudeCodeAgent extends BaseAgent {
         scope: c.scope,
         enabled: c.enabled,
       })),
+    };
+  }
+
+  override async listRuntimeSkills(opts: ListRuntimeSkillsOptions): Promise<ListAgentSkillsResult> {
+    if (opts.remoteHostId) return this.listAgentSkills(opts);
+    if (!opts.workingDir) return { skills: [] };
+    let result: Awaited<ReturnType<typeof scanClaudeRuntimeSkills>>;
+    try {
+      result = await scanClaudeRuntimeSkills(opts.workingDir, opts.runtimeConfigDir);
+    } catch (error) {
+      return {
+        skills: [],
+        errors: [{
+          path: opts.workingDir,
+          message: error instanceof Error ? error.message : String(error),
+        }],
+      };
+    }
+    return {
+      skills: result.items.map((item) => ({
+        kind: 'agent-skill' as const,
+        name: item.name,
+        description: item.description,
+        source: item.kind === 'skill' ? 'skill' as const : 'user' as const,
+        path: item.mdPath,
+        scope: item.scope === 'project' ? 'project' as const : 'global' as const,
+        enabled: true,
+      })),
+      ...(result.errors.length > 0 ? { errors: result.errors } : {}),
     };
   }
 
@@ -2401,7 +2433,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     const disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
     const disabledSkillOverrides = disabledSkillPaths.length > 0
-      ? claudeDisabledSkillOverrides((await scanClaudeRuntimeSkills(opts.workingDir)).items, currentDisabledSkillLaunchPaths(disabledSkillLaunch))
+      ? claudeDisabledSkillOverrides(
+        (await scanClaudeRuntimeSkills(opts.workingDir, env.CLAUDE_CONFIG_DIR)).items,
+        currentDisabledSkillLaunchPaths(disabledSkillLaunch),
+      )
       : {};
     const buildSettings = (): Settings => {
       const settings = buildClaudeFlagSettings({
@@ -3828,7 +3863,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
-          ...(this.deps.registerLocalAgentProcess
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
             ? {
                 spawnClaudeCodeProcess: (spawnOptions) =>
                   spawnObservedClaudeProcess({
@@ -3839,6 +3874,9 @@ export class ClaudeCodeAgent extends BaseAgent {
                         kind: 'claude',
                         role: 'task-host',
                       }),
+                    trackDebugFile: process.env.XDT_CC_DEBUG_NET === '1' && ccDebugFile
+                      ? () => this.deps.trackCcDebugFile?.(ccDebugFile, opts.sessionId) ?? (() => {})
+                      : undefined,
                     onStderr: vo.onStderrLine as ((line: string) => void) | undefined,
                   }),
               }
@@ -6033,9 +6071,20 @@ export class ClaudeCodeAgent extends BaseAgent {
               reviewReadGrants,
             );
           }
+          const pinnedSkill = sendOpts?.[PINNED_SKILL_INVOCATION];
+          let providerContent = message.content;
+          if (pinnedSkill) {
+            if (typeof providerContent !== 'string') {
+              throw new Error('Pinned Claude Skill invocation must be text-only.');
+            }
+            providerContent = await preparePinnedClaudeSkillInvocation(
+              providerContent,
+              pinnedSkill,
+            );
+          }
           // SSH 图片路径属于远端主机，不能在桌面端压缩或读取；保留路径引用交给远端 SDK。
           const content = await toClaudeSdkContent(
-            withLibraryNativeReadContext(message.content, mutableLibraryRoot, activeQueryReadonlyDirs),
+            withLibraryNativeReadContext(providerContent, mutableLibraryRoot, activeQueryReadonlyDirs),
             undefined,
             !opts.remoteHostId,
           );

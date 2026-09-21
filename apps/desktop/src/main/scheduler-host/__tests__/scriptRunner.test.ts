@@ -100,6 +100,61 @@ describe('ScriptScheduleRunner', () => {
     killProcessTreeMock.mockClear();
   });
 
+  it.each(['archived', 'deleted', 'missing'])('pauses a bound script with a %s owner before any hook or process', async (status) => {
+    const pause = vi.fn(async () => undefined);
+    const db = { select: () => ({ from: () => ({ where: () => ({
+      limit: async () => status === 'missing' ? [] : [{ status }],
+    }) }) }) };
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {},
+      getDb: () => db as never, scheduler: { pause } as never });
+    await expect(runner.fire({ ...schedule(), targetSessionId: 'owner',
+      preRunHook: { command: 'broken-or-idle-hook' } }, {
+      runId: 'run-owner', firedAt: 1, signal: new AbortController().signal,
+    })).resolves.toMatchObject({ skipped: true, resultText: `Script stopped: target session ${status}` });
+    expect(pause).toHaveBeenCalledWith('script-schedule', { exemptRunId: 'run-owner' });
+    expect(executePreRunHookMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('does not retire a live owner or treat a database outage as a missing owner', async () => {
+    const pause = vi.fn();
+    const limit = vi.fn().mockResolvedValue([{ status: 'active' }]);
+    const db = { select: () => ({ from: () => ({ where: () => ({ limit }) }) }) };
+    executePreRunHookMock.mockResolvedValue({ decision: 'skip', exitCode: 2, durationMs: 1,
+      stdout: '', stderr: '', timedOut: false });
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {},
+      getDb: () => db as never, scheduler: { pause } as never });
+    const input = { ...schedule(), targetSessionId: 'owner', preRunHook: { command: 'idle' } };
+    const ctx = { runId: 'run-owner', firedAt: 1, signal: new AbortController().signal };
+    await expect(runner.fire(input, ctx)).resolves.toMatchObject({ skipped: true });
+    expect(executePreRunHookMock).toHaveBeenCalledOnce();
+    limit.mockRejectedValue(new Error('database unavailable'));
+    await expect(runner.fire(input, ctx)).rejects.toThrow('database unavailable');
+    expect(pause).not.toHaveBeenCalled();
+  });
+
+  it.each(['active', 'archived'])('rechecks durable %s owner after a dispatch NOT_FOUND race', async (status) => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const pause = vi.fn(async () => undefined);
+    const limit = vi.fn().mockResolvedValueOnce([{ status: 'active' }]).mockResolvedValue([{ status }]);
+    const db = { select: () => ({ from: () => ({ where: () => ({ limit }) }) }) };
+    const call = vi.fn().mockRejectedValue(Object.assign(new Error('owner not available'), { code: 'NOT_FOUND' }));
+    const runner = new ScriptScheduleRunner({ broker: { call }, logger: {},
+      getDb: () => db as never, scheduler: { pause } as never });
+    const result = runner.fire({ ...schedule(), targetSessionId: 'owner' }, {
+      runId: 'run-owner', firedAt: 1, signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+    child.stdout.write(JSON.stringify({ protocol: 'cindy-script/1', type: 'call', id: 'send',
+      method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'update' } }) + '\n');
+    await vi.waitFor(() => expect(limit).toHaveBeenCalledTimes(2));
+    child.stdout.write(JSON.stringify({ protocol: 'cindy-script/1', type: 'complete', resultText: 'not delivered' }) + '\n');
+    child.emit('close', 0);
+    await result;
+    expect(pause).toHaveBeenCalledTimes(status === 'archived' ? 1 : 0);
+  });
+
   it('pre-run hook exit 2 skips without creating a session or spawning the script', async () => {
     executePreRunHookMock.mockResolvedValue({
       decision: 'skip',

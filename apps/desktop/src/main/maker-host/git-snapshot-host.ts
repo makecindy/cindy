@@ -38,6 +38,7 @@ interface LatestUserMessage {
 /** Optional dependency overrides used by focused main-process unit tests. */
 export interface GitSnapshotCoordinatorHostDeps {
   readAutoSnapshotEnabled?: () => boolean;
+  readAutoInitProjectGit?: () => boolean;
   detectRepoRoot?: (workingDir: string) => Promise<string | null>;
   initializeProjectGit?: ConstructorParameters<
     typeof GitSnapshotCoordinator
@@ -103,6 +104,8 @@ export function createGitSnapshotCoordinator(
   return new GitSnapshotCoordinator({
     readAutoSnapshotEnabled:
       deps.readAutoSnapshotEnabled ?? (() => readGitSafetySettings().autoSnapshotEnabled),
+    readAutoInitProjectGit:
+      deps.readAutoInitProjectGit ?? (() => readGitSafetySettings().autoInitProjectGit),
     detectRepoRoot: deps.detectRepoRoot ?? defaultDetectRepoRoot,
     initializeProjectGit:
       deps.initializeProjectGit ??
@@ -113,6 +116,7 @@ export function createGitSnapshotCoordinator(
           remoteHostId: context.remoteHostId,
           sessionId,
           autoSnapshotEnabled: opts.autoSnapshotEnabled,
+          autoInitProjectGit: opts.autoInitProjectGit,
           source: 'git-snapshot:on-turn',
         })),
     getSessionContext: async (sessionId) => {

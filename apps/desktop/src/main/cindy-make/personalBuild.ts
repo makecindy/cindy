@@ -13,7 +13,14 @@ import {
   type VersionProfile,
 } from './versionStore.js';
 import { defaultPtySpawn, type PtySpawnFn } from '../terminal/ptyFactory.js';
-import { snapshotContent, contentRef, applyContent, taskContentRef } from './sourceContent.js';
+import {
+  snapshotContent,
+  contentRef,
+  applyContent,
+  taskContentRef,
+  type ContentGit,
+} from './sourceContent.js';
+import { restoreBuildSource } from './buildRollback.js';
 import { runSourceGit } from './sourceGit.js';
 import { runSourcePnpm } from './sourcePnpm.js';
 import { makeSourceCheckoutPath, makeSourceRoot, CINDY_PERSONAL_BRANCH } from './sourcePaths.js';
@@ -25,10 +32,13 @@ import {
 import type { CindyMakePersonalBuildState } from '../../shared/cindyMakeSession.js';
 import { commitLocalFiles, commitPersonalFiles, MAKE_GIT_IDENTITY } from './localHistory.js';
 import { createPersonalBuildCleanup } from './personalBuildCleanup.js';
+import { createMakeBuildOutput, makeBuildErrorDiagnostic } from './buildDiagnostic.js';
+import { createMakeBuildLineOutput, runMakeBuildStep } from './buildProgress.js';
+import type { CindyMakeBuildDiagnostic } from '../../shared/cindyMakeBuildDiagnostic.js';
 
 type BuildError = NonNullable<CindyMakePersonalBuildState['error']>;
-export function personalBuildError(code: BuildError): Error & { code: BuildError } {
-  return Object.assign(new Error(code), { code });
+export function personalBuildError(code: BuildError, diagnostic?: CindyMakeBuildDiagnostic) {
+  return Object.assign(new Error(code), { code, ...(diagnostic ? { diagnostic } : {}) });
 }
 export type PersonalArtifact = Required<
   Pick<CindyMakePersonalBuildState, 'artifactDirectory' | 'artifactName' | 'sha256' | 'commit'>
@@ -83,18 +93,43 @@ export function runPersonalPackageCommand(
   env: NodeJS.ProcessEnv,
   signal: AbortSignal,
   spawn: PtySpawnFn = defaultPtySpawn,
+  onOutput?: (line: string) => void,
 ): Promise<void> {
   signal.throwIfAborted();
+  // Only the builder's resolved commit may cross the otherwise clean child environment.
+  const migrationBase = env.XDT_MIGRATION_BASE_REF;
+  if (migrationBase !== undefined && !/^[0-9a-f]{40,64}$/i.test(migrationBase))
+    throw personalBuildError('changed');
   return new Promise((resolve, reject) => {
-    const child = spawn(node, args, {
-      cwd,
-      env: makeTestEnvironment(env),
-      cols: 4096,
-      rows: 30,
-      name: 'xterm-256color',
+    const output = createMakeBuildOutput();
+    const lineOutput = createMakeBuildLineOutput(
+      onOutput
+        ? (line) => {
+            if (!signal.aborted) onOutput(line);
+          }
+        : undefined,
+    );
+    let child: ReturnType<PtySpawnFn>;
+    try {
+      child = spawn(node, args, {
+        cwd,
+        env: {
+          ...makeTestEnvironment(env),
+          ...(migrationBase ? { XDT_MIGRATION_BASE_REF: migrationBase } : {}),
+        },
+        cols: 4096,
+        rows: 30,
+        name: 'xterm-256color',
+      });
+    } catch (error) {
+      output.append(error instanceof Error ? error.message : '');
+      reject(personalBuildError('buildFailed', output.failure()));
+      return;
+    }
+    child.onData((chunk) => {
+      output.append(chunk);
+      lineOutput.append(chunk);
     });
-    // Drain output so compiler progress cannot block the process; never publish raw build logs.
-    child.onData(() => {});
     const abort = () => {
       try {
         child.kill();
@@ -112,8 +147,10 @@ export function runPersonalPackageCommand(
     child.onExit(({ exitCode }) => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', abort);
+      lineOutput.finish();
       if (signal.aborted) reject(personalBuildError('interrupted'));
-      else if (timedOut || exitCode !== 0) reject(personalBuildError('buildFailed'));
+      else if (timedOut || exitCode !== 0)
+        reject(personalBuildError('buildFailed', output.failure(exitCode, timedOut)));
       else resolve();
     });
     if (signal.aborted) abort();
@@ -157,6 +194,11 @@ interface BuildDeps {
   packageCommand?: typeof runPersonalPackageCommand;
   verify?: typeof verifyMakeTestWorkspace;
   features?: () => Array<{ runId: string; operationId: string }>;
+  recoverRollback?: (git: ContentGit) => Promise<void>;
+  prepareRollback?: (
+    head: { commit: string; tree: string },
+    git: ContentGit,
+  ) => () => Promise<void>;
 }
 
 /** Integrate task files first, then build only in the locked cindy-personal checkout. */
@@ -201,14 +243,28 @@ export async function buildCindyPersonal(
         signal,
       );
     };
-    const pnpm = (args: string[]) => {
-      check();
-      return (deps.pnpm ?? runSourcePnpm)(environment, args, source, signal);
-    };
     let baseline = '';
     let baselineTree = '';
     let candidateTree = '';
     let taskTree = '';
+    let original: { commit: string; tree: string } | undefined;
+    let previousTaskTree: string | undefined;
+    let adopted = false;
+    let rollbackHistory: (() => Promise<void>) | undefined;
+    const report = (next: CindyMakePersonalBuildState) => publish(next);
+    const pnpm = (args: string[], onOutput: (line: string) => void) => {
+      check();
+      return (deps.pnpm ?? runSourcePnpm)(environment, args, source, signal, undefined, onOutput);
+    };
+    const recoveryGit: ContentGit = (args, cwd, indexFile) => {
+      checkCurrent();
+      return (deps.git ?? runSourceGit)(
+        { ...environment, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) },
+        args,
+        cwd,
+        AbortSignal.timeout(120_000),
+      );
+    };
     const assertSource = async (tree: string) => {
       if (
         (await git(['rev-parse', 'HEAD'])).trim() !== baseline ||
@@ -219,7 +275,7 @@ export async function buildCindyPersonal(
     };
     try {
       check();
-      await publish({ status: 'merging' });
+      if (editingTask) await report({ status: 'merging' });
       await verifyTask();
       const canonicalSource = await realpath(source);
       if ((await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim() !== CINDY_PERSONAL_BRANCH)
@@ -228,14 +284,22 @@ export async function buildCindyPersonal(
         (deps.git ?? runSourceGit)(environment, args, cwd, AbortSignal.timeout(30_000)),
       );
       await cleanup.clean();
+      try {
+        await deps.recoverRollback?.(recoveryGit);
+      } catch {
+        throw personalBuildError('cleanupFailed');
+      }
       const personal = await commitPersonalFiles(git, source);
       baseline = personal.commit;
       baselineTree = personal.tree;
+      original = personal;
+      rollbackHistory = deps.prepareRollback?.(personal, recoveryGit);
       if (editingTask) {
         const task = editingTask;
+        previousTaskTree = await contentRef(git, source, taskContentRef(task.runId, 'integrated'));
         taskTree = task.tree ?? (await git(['rev-parse', task.commit + '^{tree}'])).trim();
         const taskBase =
-          (await contentRef(git, source, taskContentRef(task.runId, 'integrated'))) ??
+          previousTaskTree ??
           (await contentRef(git, source, taskContentRef(task.runId, 'base'))) ??
           (
             await git([
@@ -273,7 +337,7 @@ export async function buildCindyPersonal(
         await assertSource(baselineTree);
         check();
         // Adopt the local merge commit before checking/packaging in the real personal checkout.
-        // Cancellation never discards the already integrated commit or the editing worktree.
+        // The candidate remains provisional until a verified version is published.
         const adoptGit = (args: string[], cwd: string, indexFile?: string) =>
           (deps.git ?? runSourceGit)(
             { ...environment, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) },
@@ -282,22 +346,56 @@ export async function buildCindyPersonal(
             AbortSignal.timeout(120_000),
           );
         await adoptGit(['merge', '--ff-only', candidateCommit], source);
-        await adoptGit(['update-ref', taskContentRef(task.runId, 'integrated'), taskTree], source);
         baseline = candidateCommit;
+        adopted = true;
+        await adoptGit(['update-ref', taskContentRef(task.runId, 'integrated'), taskTree], source);
       } else {
         candidateTree = baselineTree;
       }
       const includedFeatures = deps.features?.();
+      // Make's local main follows the selected release, while origin/main may already
+      // contain later migrations. Freeze the official history actually inherited by
+      // this personal version; never bless personal edits by using its own HEAD.
+      let officialRef = 'refs/heads/main';
+      try {
+        await git(['show-ref', '--verify', '--quiet', officialRef]);
+      } catch (error) {
+        if ((error as { exitCode?: number }).exitCode !== 1) throw error;
+        // Cloning a release tag leaves HEAD detached and creates no local main.
+        // Use its shared history with origin/main, never the newer remote tip itself.
+        officialRef = 'refs/remotes/origin/main';
+      }
+      const migrationBase = (await git(['merge-base', baseline, officialRef])).trim();
+      if (!/^[0-9a-f]{40,64}$/i.test(migrationBase)) throw personalBuildError('changed');
       check();
       try {
-        await publish({ status: 'checking', checkStep: 'dependencies' });
-        await pnpm(['install', '--frozen-lockfile', '--prefer-offline', '--prod=false']);
-        await publish({ status: 'checking', checkStep: 'tests' });
-        await pnpm(['test:unit:related']);
-        await publish({ status: 'checking', checkStep: 'types' });
-        await pnpm(['--recursive', '--workspace-concurrency=1', '--if-present', 'typecheck']);
-      } catch {
-        throw personalBuildError(signal.aborted ? 'interrupted' : 'checksFailed');
+        await runMakeBuildStep(
+          { status: 'checking', checkStep: 'dependencies' },
+          signal,
+          report,
+          (onLine) =>
+            pnpm(['install', '--frozen-lockfile', '--prefer-offline', '--prod=false'], onLine),
+        );
+        await runMakeBuildStep(
+          { status: 'checking', checkStep: 'tests' },
+          signal,
+          report,
+          (onLine) => pnpm(['test:unit:related'], onLine),
+        );
+        await runMakeBuildStep(
+          { status: 'checking', checkStep: 'types' },
+          signal,
+          report,
+          (onLine) =>
+            pnpm(['--recursive', '--workspace-concurrency=1', '--if-present', 'typecheck'], onLine),
+        );
+      } catch (error) {
+        const output = createMakeBuildOutput();
+        output.append(error instanceof Error ? error.message : '');
+        throw personalBuildError(
+          signal.aborted ? 'interrupted' : 'checksFailed',
+          signal.aborted ? undefined : (makeBuildErrorDiagnostic(error) ?? output.failure()),
+        );
       }
       check();
       await assertSource(candidateTree);
@@ -324,24 +422,27 @@ export async function buildCindyPersonal(
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      await publish({ status: 'packaging' });
       check();
       await cleanup.captureManifest();
-      await (deps.packageCommand ?? runPersonalPackageCommand)(
-        node,
-        [
-          path.join(source, 'apps', 'desktop', 'scripts', 'package-desktop.mjs'),
-          '--platform',
-          process.platform,
-          '--arch',
-          process.arch,
-          '--region',
-          region,
-          '--no-sign',
-        ],
-        source,
-        environment,
-        signal,
+      await runMakeBuildStep({ status: 'packaging' }, signal, report, (onLine) =>
+        (deps.packageCommand ?? runPersonalPackageCommand)(
+          node,
+          [
+            path.join(source, 'apps', 'desktop', 'scripts', 'package-desktop.mjs'),
+            '--platform',
+            process.platform,
+            '--arch',
+            process.arch,
+            '--region',
+            region,
+            '--no-sign',
+          ],
+          source,
+          { ...environment, XDT_MIGRATION_BASE_REF: migrationBase },
+          signal,
+          undefined,
+          onLine,
+        ),
       );
       check();
       await assertSource(candidateTree);
@@ -414,7 +515,7 @@ export async function buildCindyPersonal(
         });
         if (versionId) artifact.versionId = versionId;
       }
-      await publish({ status: 'publishing' });
+      await report({ status: 'publishing' });
       await verifyTask();
       await cleanup.restoreManifest();
       await cleanup.clean();
@@ -490,6 +591,32 @@ export async function buildCindyPersonal(
         }
         try {
           await cleanup.clean();
+        } catch {
+          cleanupFailed = true;
+        }
+      }
+      if (!published) {
+        try {
+          if (adopted && original && editingTask) {
+            await restoreBuildSource(recoveryGit, source, original, {
+              commit: baseline,
+              tree: candidateTree,
+            });
+            const ref = taskContentRef(editingTask.runId, 'integrated');
+            await recoveryGit(
+              previousTaskTree ? ['update-ref', ref, previousTaskTree] : ['update-ref', '-d', ref],
+              source,
+            );
+          }
+          // Cancellation or a setup failure can happen before the baseline was read.
+          // Already integrated history still belongs to this failed generation.
+          if (!rollbackHistory && deps.prepareRollback) {
+            await deps.recoverRollback?.(recoveryGit);
+            const commit = (await recoveryGit(['rev-parse', 'HEAD'], source)).trim();
+            const tree = await snapshotContent(recoveryGit, source);
+            rollbackHistory = deps.prepareRollback({ commit, tree }, recoveryGit);
+          }
+          await rollbackHistory?.();
         } catch {
           cleanupFailed = true;
         }

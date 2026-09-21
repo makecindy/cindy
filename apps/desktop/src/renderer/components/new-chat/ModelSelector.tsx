@@ -129,15 +129,25 @@ import { buildProviderSections } from './sourceSwitch';
 const MODEL_DISCOVERY_INDICATOR_DELAY_MS = 300;
 
 /**
+ * 工具栏紧凑统一面板宽度。规格 `docs/product-rules/model-selector-unified.md` §1.2：
+ * max-content，下限 300px，上限 min(460px, 100vw-48px)。完整 class 字面量必须留在
+ * 源码里给 Tailwind 扫描；改数字时同步规格。
+ */
+export const UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX = 460;
+export const UNIFIED_COMPACT_PANEL_WIDTH_CLASS =
+  'w-max min-w-[300px] max-w-[min(460px,calc(100vw-48px))]';
+
+/**
  * 标签降级按选择器 pane 宽度生效。这里的 width 是整个 pane 宽度，不是模型名
  * 实际可用宽度；行还要扣掉左右 padding、来源图标、effort 和选中勾选。因此不能把
  * 300px 当成“能放下全部标签”的阈值，否则英文 Subscription 会先把模型名压成省略号。
  * 模型名优先：促销标签先收起，订阅标签随后收起，只保留「已隐藏」和选中勾选。
+ * full 只在宽过紧凑面板上限时启用，避免 460px 触顶时促销标签把刚留给长模型名的空间吃回去。
  */
 export type ModelTagDensity = 'full' | 'subscription' | 'hidden';
 
 export function modelTagDensityForWidth(width: number | null): ModelTagDensity {
-  if (width === null || width >= 450) return 'full';
+  if (width === null || width > UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX) return 'full';
   if (width >= 370) return 'subscription';
   return 'hidden';
 }
@@ -749,7 +759,7 @@ interface ModelSelectorProps {
   /** 点击当前已选模型行时打开该行的配置浮层，而不是直接收起选择器。 */
   selectedRowClickOpensConfiguration?: boolean;
   /**
-   * modelId 非空但不在可见清单时的 trigger 文案（默认落「选择模型」占位符）。
+   * modelId 非空但不在可见清单时的诊断文案（默认提示模型信息暂不可用）。
    * 供展示已持久化偏好的调用方给出诊断性文案，避免把「存过但当前不可用」显示成「没选过」。
    */
   unknownModelLabel?: (modelId: string) => string;
@@ -2813,11 +2823,8 @@ function ModelSelectorContentView({
             // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
             // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
             'max-h-[min(560px,calc(100vh-120px))]',
-            // 紧凑内容宽度：长模型名在 420px 上限内省略，不为完整名称撑大面板。
-            // field 入口仍绑定字段宽度；窄窗口继续受视口与 morph 锚点约束。
-            fluidWidth
-              ? 'w-full min-w-0'
-              : 'w-max min-w-[300px] max-w-[min(420px,calc(100vw-48px))]',
+            // 紧凑宽度契约见 UNIFIED_COMPACT_PANEL_WIDTH_CLASS；field 入口仍绑 trigger。
+            fluidWidth ? 'w-full min-w-0' : UNIFIED_COMPACT_PANEL_WIDTH_CLASS,
           )}
         >
           {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
@@ -3386,6 +3393,10 @@ export function ModelSelector({
   });
   const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
   const remoteModelLoadFailed = !!deviceId && remoteModelListStatus === 'error';
+  const localModelLoading = !deviceId && !(!providersOverride && localProviders.loadFailed) && (
+    (!providersOverride && localProviders.loading) ||
+    (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
+  );
   const visibleModels = useMemo(
     () =>
       selectVisibleModels({
@@ -3442,7 +3453,11 @@ export function ModelSelector({
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
-      t('newChat.modelSelector.trigger.placeholder'));
+      (modelId
+        ? t(localModelLoading
+            ? 'newChat.modelSelector.trigger.loading'
+            : 'newChat.modelSelector.trigger.unresolved')
+        : t('newChat.modelSelector.trigger.placeholder')));
   const agentName =
     agentIdentity && !fallbackOption?.active
       ? agentIdentity.vendorKey === 'cc'

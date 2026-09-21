@@ -60,7 +60,6 @@ import {
   useAgentCapabilities,
   type AgentKind as MakerAgentKind,
 } from '@/hooks/useAgentCapabilities';
-import { useGitSafetyAutoSnapshotEnabledForDevice } from '@/hooks/useGitSafetySettings';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
@@ -173,8 +172,8 @@ interface UserMessageProps {
    *  the Fork button is not rendered. */
   sessionId?: string;
   /** Owning agent kind (renderer 短名 'cc' | 'codex') — gates Fork/Rewind icon
-   *  visibility via capabilities. Codex rewind additionally requires the Git
-   *  safety snapshot setting because file rewind depends on savepoint commits. */
+   *  visibility via capabilities. File rewind may degrade to conversation-only
+   *  rewind when no Git savepoint is available; the preview explains why. */
   agentKind?: RendererAgentKind;
   /** Owning session's remote SSH host id (null for local). Remote cc daemon
    *  sessions don't support the query-rebuild that Fork/Rewind need yet (MVP),
@@ -978,7 +977,6 @@ export function UserMessage({
   // context 更新会穿透 memo 触发重渲,替代旧的 render 期一次性读取)。
   const sessionFileCtx = useChatSessionFile();
   const remoteDeviceId = originDeviceId(sessionFileCtx.origin);
-  const gitSafetyAutoSnapshotEnabled = useGitSafetyAutoSnapshotEnabledForDevice(remoteDeviceId);
   const remoteMediaOrigin = useMemo(
     () => toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir),
     [sessionFileCtx],
@@ -987,10 +985,8 @@ export function UserMessage({
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
-  const codexRewindEntryAllowed = agentKind !== 'codex' || gitSafetyAutoSnapshotEnabled;
   const forkSupported = !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    codexRewindEntryAllowed &&
     !isRemote &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
 
@@ -1272,7 +1268,7 @@ export function UserMessage({
 
   // 第一条 user 消息没有可作为锚点的 prior assistant uuid → 后端必抛
   // NO_PRIOR_ASSISTANT。直接藏掉按钮，避免无效点击。
-  // 同时按 capabilities.rewind.supported gate；Codex 入口还要用户显式开启 Git safety。
+  // 同时按 capabilities.rewind.supported gate；文件恢复能力由实际 Git 保存点决定。
   const canRewind =
     Boolean(sessionId && messageClientId) &&
     !isFirstUserMessage &&

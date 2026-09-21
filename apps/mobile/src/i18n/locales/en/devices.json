@@ -90,13 +90,19 @@
       }
     },
     "sessionList": {
-      "section": { "pinned": "Pinned", "dialogue": "Chat" },
+      "section": {
+        "pinned": "Pinned",
+        "dialogue": "Chat"
+      },
       "filterWithCount": "{{label}} {{count}}",
       "controlsSummary": "{{filter}} · Grouped by {{group}}",
       "automation": "Automation",
       "sessionCount": "{{count}} sessions",
       "messageCount": "{{count}} messages",
-      "status": { "archived": "Archived", "deleted": "Deleted" },
+      "status": {
+        "archived": "Archived",
+        "deleted": "Deleted"
+      },
       "preview": {
         "permission": "Waiting for permission",
         "planReview": "Waiting for plan review",
@@ -130,11 +136,26 @@
         }
       },
       "empty": {
-        "search": { "title": "No matching sessions", "copy": "Try another title, project path, model, or message keyword." },
-        "waiting": { "title": "No pending requests", "copy": "Permission prompts, plan reviews, and questions will appear here." },
-        "automation": { "title": "No automation sessions", "copy": "Sessions created by automations will be grouped here after a run." },
-        "archived": { "title": "No archived sessions", "copy": "Touch and hold a session to archive or delete it in bulk." },
-        "active": { "title": "No active sessions on this computer", "copy": "Create or continue a session on your computer and it will appear here." }
+        "search": {
+          "title": "No matching sessions",
+          "copy": "Try another title, project path, model, or message keyword."
+        },
+        "waiting": {
+          "title": "No pending requests",
+          "copy": "Permission prompts, plan reviews, and questions will appear here."
+        },
+        "automation": {
+          "title": "No automation sessions",
+          "copy": "Sessions created by automations will be grouped here after a run."
+        },
+        "archived": {
+          "title": "No archived sessions",
+          "copy": "Touch and hold a session to archive or delete it in bulk."
+        },
+        "active": {
+          "title": "No active sessions on this computer",
+          "copy": "Create or continue a session on your computer and it will appear here."
+        }
       },
       "time": {
         "unknown": "Recent activity time unknown",
@@ -160,22 +181,56 @@
       "synced": "Synced",
       "unknownComputer": "Unknown computer",
       "uncategorizedProject": "Uncategorized project",
+      "cindyMake": "Cindy Make",
       "empty": {
-        "search": { "title": "No matches", "copy": "Try another project name, session title, computer name, or message keyword." },
-        "waiting": { "title": "No pending requests", "copy": "Permission prompts, plan reviews, and questions will appear here." },
-        "automation": { "title": "No automation sessions", "copy": "Sessions created by automations will be grouped here by project." },
-        "archived": { "title": "No archived sessions", "copy": "Switch to All or Active to keep browsing your current projects and sessions." },
-        "noSession": { "title": "No sessions yet", "copy": "Create or continue a session on your computer and its project will appear here." }
+        "search": {
+          "title": "No matches",
+          "copy": "Try another project name, session title, computer name, or message keyword."
+        },
+        "waiting": {
+          "title": "No pending requests",
+          "copy": "Permission prompts, plan reviews, and questions will appear here."
+        },
+        "automation": {
+          "title": "No automation sessions",
+          "copy": "Sessions created by automations will be grouped here by project."
+        },
+        "archived": {
+          "title": "No archived sessions",
+          "copy": "Switch to All or Active to keep browsing your current projects and sessions."
+        },
+        "noSession": {
+          "title": "No sessions yet",
+          "copy": "Create or continue a session on your computer and its project will appear here."
+        }
       },
       "noDevice": {
-        "accessRevoked": { "title": "Access revoked", "copy": "{{names}} revoked this phone’s remote access. Retry access, or allow it again on the computer to reconnect automatically." },
-        "remoteDisabled": { "title": "Allow remote control on your computer", "copy": "{{names}} is online. One step remains: enable phone control on the computer." },
-        "offline": { "title": "Open Cindy on your computer", "copy": "Your connected computers are offline. Open Cindy and stay signed in; your phone will reconnect automatically." },
-        "firstRun": { "title": "Connect Cindy on your computer", "copy": "Cindy currently runs on your computer. The mobile app uses remote access so you can work with the Agents on that computer." }
+        "accessRevoked": {
+          "title": "Access revoked",
+          "copy": "{{names}} revoked this phone’s remote access. Retry access, or allow it again on the computer to reconnect automatically."
+        },
+        "remoteDisabled": {
+          "title": "Allow remote control on your computer",
+          "copy": "{{names}} is online. One step remains: enable phone control on the computer."
+        },
+        "offline": {
+          "title": "Open Cindy on your computer",
+          "copy": "Your connected computers are offline. Open Cindy and stay signed in; your phone will reconnect automatically."
+        },
+        "firstRun": {
+          "title": "Connect Cindy on your computer",
+          "copy": "Cindy currently runs on your computer. The mobile app uses remote access so you can work with the Agents on that computer."
+        }
       }
     },
     "bulk": {
-      "action": { "archive": "Archive", "delete": "Delete", "pin": "Pin", "restore": "Restore", "unpin": "Unpin" },
+      "action": {
+        "archive": "Archive",
+        "delete": "Delete",
+        "pin": "Pin",
+        "restore": "Restore",
+        "unpin": "Unpin"
+      },
       "title": "{{action}} {{count}} sessions",
       "description": "Apply {{action}} to the {{count}} selected sessions.",
       "descriptionWithSkipped": "Apply {{action}} to {{count}} selected sessions; {{skippedCount}} inapplicable sessions will be skipped."
@@ -763,7 +818,11 @@
     "artifactCount_other": "{{count}} files",
     "prCount_one": "{{count}} PR",
     "prCount_other": "{{count}} PRs",
-    "duration": {"seconds": "{{n}}s", "minutes": "{{n}} min", "hoursMinutes": "{{h}} h {{m}} min"},
+    "duration": {
+      "seconds": "{{n}}s",
+      "minutes": "{{n}} min",
+      "hoursMinutes": "{{h}} h {{m}} min"
+    },
     "retrying": "Hasn't started yet — retrying…",
     "stopTask": "Stop task",
     "actionFailed": "Unable to load or complete this action",
@@ -779,6 +838,179 @@
       "cancelled": "Cancelled",
       "timed-out": "Timed out",
       "unknown": "Status unavailable"
+    },
+    "title": "Teammates",
+    "tasks": "Sessions",
+    "search": "Search Teammates",
+    "emptyTitle": "No Teammates Yet",
+    "emptyCopy": "Create a teammate in Cindy on your computer.",
+    "noResults": "No Matching Teammates",
+    "preferenceSaveFailed": "Couldn’t save your view preference. Try switching views again.",
+    "automation": {
+      "unsupported": "Update Cindy on your computer, then retry to manage automations.",
+      "changed": "This automation changed elsewhere. Your edits are retained. Go back and reopen it to load the latest version.",
+      "unknown": "Unknown status",
+      "unsavedTitle": "Discard Changes?",
+      "unsavedBody": "Your changes haven’t been saved.",
+      "continueEditing": "Continue Editing",
+      "discard": "Discard Changes",
+      "invalid": "Check the name, instructions, and trigger settings, then save again.",
+      "everyMinutes": "Every {{count}} minutes",
+      "everyMinutes_one": "Every {{count}} minute",
+      "everyMinutes_other": "Every {{count}} minutes",
+      "paused": "Paused",
+      "new": "New Automation",
+      "save": "Save Automation",
+      "offline": "Reconnect to your computer to manage automations.",
+      "retry": "Retry Loading",
+      "inProgress": "In Progress",
+      "scheduled": "Scheduled",
+      "empty": "No automations yet. Create one to get started.",
+      "name": "Name",
+      "enabled": "Enabled",
+      "instructions": "Instructions",
+      "triggers": "Triggers",
+      "triggerType": "Trigger Type",
+      "cron": "Schedule",
+      "interval": "Interval",
+      "event": "Event",
+      "minutes": "Interval (Minutes)",
+      "source": "Event Source",
+      "filterField": "Filter Field",
+      "operator": "Condition",
+      "equals": "Equals",
+      "contains": "Contains",
+      "not-equals": "Does Not Equal",
+      "filterValue": "Filter Value",
+      "removeFilter": "Remove Filter",
+      "addFilter": "Add Filter",
+      "removeTrigger": "Remove Trigger",
+      "addTrigger": "Add Trigger",
+      "largeDefinition": "This automation is too large to edit here. Edit it on your computer.",
+      "run": "Run Now",
+      "runTitle": "Run This Automation Now?",
+      "cancel": "Cancel",
+      "history": "Run History",
+      "noRuns": "No runs yet. Run this automation to get started.",
+      "delete": "Delete Automation",
+      "deleteTitle": "Delete This Automation?",
+      "deleteBody": "This automation will no longer trigger. This can’t be undone.",
+      "queued": "Queued",
+      "running": "Running",
+      "success": "Completed",
+      "failed": "Failed",
+      "interrupted": "Interrupted",
+      "cancelled": "Cancelled",
+      "repeat": "Repeat",
+      "hourly": "Hourly",
+      "daily": "Daily",
+      "weekdays": "Weekdays",
+      "weekly": "Weekly",
+      "custom": "Custom",
+      "weekday": "Day of Week",
+      "day0": "Sunday",
+      "day1": "Monday",
+      "day2": "Tuesday",
+      "day3": "Wednesday",
+      "day4": "Thursday",
+      "day5": "Friday",
+      "day6": "Saturday",
+      "time": "Time",
+      "hour": "Hour",
+      "minute": "Minute",
+      "cronExpression": "Cron Expression",
+      "timezone": "Time Zone",
+      "monthly": "Monthly",
+      "monthDay": "Day of month",
+      "saveAndRun": "Save and run"
+    },
+    "openNavigation": "Open navigation",
+    "openProfile": "View {{name}}'s profile",
+    "switchCompanion": "Switch teammate",
+    "activity": {
+      "thinking": "Thinking",
+      "typing": "Typing",
+      "helping": "Working on it"
+    },
+    "working": {
+      "thinking": "Thinking…",
+      "replying": "Replying…",
+      "processing": "Working…",
+      "reading-memory": "Reading memory…",
+      "saving-memory": "Saving memory…",
+      "deleting-memory": "Deleting memory…",
+      "organizing-memory": "Organizing memory…",
+      "reading-file": "Reading files…",
+      "saving-file": "Updating files…",
+      "searching": "Searching the web…",
+      "reading-web": "Reading web pages…",
+      "searching-files": "Searching files…",
+      "testing": "Running tests…",
+      "checking": "Checking code…",
+      "reviewing-memory": "Checking memory…",
+      "reviewing-files": "Reviewing files…",
+      "reviewing-sources": "Checking web sources…",
+      "reviewing-checks": "Reviewing check results…"
+    },
+    "invitation": {
+      "title": "Getting ready to meet",
+      "waiting": "See you soon, {{name}}",
+      "background": "Feel free to step away. Preparation continues in the background.",
+      "profile": "Writing a personal story",
+      "skills": "Preparing a computer for {{name}}",
+      "avatar": "{{name}} is choosing a new portrait",
+      "welcome": "Getting a first hello ready",
+      "failed": "Preparation paused. Everything completed so far is saved. You can try again.",
+      "retryFailed": "Couldn’t retry just now. Please try again shortly.",
+      "leave": "Step away",
+      "avatarSkipped": "Using the default portrait for now. You can change it anytime."
     }
+  },
+  "companionProfile": {
+    "avatar": "Avatar",
+    "emptyEditor": "Nothing here yet.",
+    "searchOptions": "Search",
+    "changed": "Changed elsewhere. Your unsaved edits are retained.",
+    "discardAndReload": "Discard edits and reload",
+    "notes": "Memory Notes",
+    "create": "New Teammate",
+    "createFailed": "Creation is not confirmed yet. Retry to check.",
+    "title": "Teammate",
+    "profile": "Profile & Personality",
+    "memory": "Memory",
+    "skills": "Skills & Connections",
+    "artifacts": "Artifacts",
+    "direct": "Teammate Messages",
+    "automation": "Automations",
+    "settings": "Models & Permissions",
+    "search": "Search Messages",
+    "models": "Model Chain",
+    "permissions": "Operation Permissions",
+    "personalSkills": "Personal Skills",
+    "connections": "Referenced Skills & Connections",
+    "save": "Save Changes",
+    "offline": "Reconnect to {{deviceName}} to continue. Your edits are retained.",
+    "hostUpgrade": "Update Cindy on {{deviceName}} and retry, or edit this teammate’s settings there.",
+    "readFailed": "Couldn’t confirm the latest state. Refresh before retrying; the action may already have completed. Your edits are retained.",
+    "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
+    "openSourceTask": "Open Source Session",
+    "modelFollowsDefault": "Follow the default model chain",
+    "modelOverride": "Using this teammate’s own model chain",
+    "modelsUnavailable": "No usable models. Check this teammate’s model settings on your computer, then refresh.",
+    "artifactsRecovery": "Open files from the message cards, or browse them on {{deviceName}}.",
+    "directRecovery": "Couldn’t load teammate messages. Update Cindy on {{deviceName}} and retry.",
+    "directEmpty": "No teammate messages yet.",
+    "skillsEmpty": "No personal skills yet. Ask your teammate to remember a way of working.",
+    "connectionsEmpty": "No skills or connections selected.",
+    "largeProfileRecovery": "This profile is too long to edit here. Edit the full profile on {{deviceName}}.",
+    "addModel": "Add fallback model",
+    "removeModel": "Remove model",
+    "moveModelUp": "Move model up",
+    "settingsTitle": "Teammate settings",
+    "name": "Name",
+    "portraitNumber": "Portrait {{number}}",
+    "uploadAvatar": "Upload Avatar",
+    "avatarFailed": "Could not open this image. Try another.",
+    "nameTaken": "That name is already in use. Choose another."
   }
 }

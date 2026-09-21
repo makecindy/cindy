@@ -23,6 +23,7 @@ import {
   backgroundTurnPredatesSessionClear,
   noteAgentMeta,
   noteTurnStarted,
+  onStandaloneTextEvent,
 } from '../messagePersistBroadcaster.js';
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -156,6 +157,22 @@ export function prepareSessionEvent(
         text: t('settings.piPackages.failure.runtimeRetirementFailed'),
       },
     };
+  }
+  if (event.type === 'text' && event.standaloneText === true) {
+    // Deliver through the existing persisted-row channel only. Sending a text
+    // event as well would let older renderers adopt the notice as their active
+    // assistant stream and overwrite/misdate the next model reply.
+    const redacted = deps.redactEventForRenderer(event);
+    const text = (redacted.data as { text?: unknown } | null)?.text;
+    const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
+    // Private-message visibility is still owned by the accepted input, even
+    // though the notice is independent of the model's reply/usage state.
+    const privateReply = inputId ? inputId.startsWith('bot-dm:') : event.agentMeta?.botPrivateReply;
+    if (typeof text === 'string') {
+      onStandaloneTextEvent(session.id, text,
+        typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
+    }
+    return;
   }
   // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
   // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token

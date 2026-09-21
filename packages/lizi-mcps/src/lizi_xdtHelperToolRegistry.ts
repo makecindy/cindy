@@ -35,6 +35,9 @@ import { z } from 'zod';
  * session,或为业务对象新建专属 session),供 skill 路由用。单独成类(不并入 control)
  * 是为了让 list_tools(control) 的"改会话标题"结果里不混入 handoff,避免 LLM 在"改名"
  * 意图下误选 send_to_session。
+ *
+ * 'skills' 是由 Cindy 宿主管理的 Skill 工作流入口。工具只负责启动，
+ * staging、审查与安装仍由宿主状态机控制。
  */
 export type XdtHelperToolCategory =
   | 'cindy'
@@ -42,6 +45,7 @@ export type XdtHelperToolCategory =
   | 'control'
   | 'feedback'
   | 'handoff'
+  | 'skills'
   | 'bots';
 
 export type XdtHelperToolContentBlock =

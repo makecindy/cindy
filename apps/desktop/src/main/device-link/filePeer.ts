@@ -130,8 +130,8 @@ function stopConnection(id: string) {
 export function stopFilePeers(peer?: string) {
   for (const [id, c] of connections) if (!peer || peer === c.peer) stopConnection(id);
 }
-async function command(c: FilePeerCommand): Promise<string | undefined> {
-  touch(c.connection);
+async function prepareHost(connection: string): Promise<void> {
+  touch(connection);
   if (!host.contents) {
     if (!starting)
       starting = host.start().finally(() => {
@@ -139,7 +139,10 @@ async function command(c: FilePeerCommand): Promise<string | undefined> {
       });
     await starting;
   } else if (starting) await starting;
-  touch(c.connection);
+  touch(connection);
+}
+async function command(c: FilePeerCommand): Promise<string | undefined> {
+  await prepareHost(c.connection);
   return new Promise((resolve, reject) => {
     const id = randomUUID();
     const timer = setTimeout(
@@ -163,10 +166,13 @@ export async function requestFilePeer(peer: string, value: unknown): Promise<unk
     const id = randomUUID();
     track(id, peer, true);
     try {
+      // Cold host readiness and TURN configuration share the outer 30s RPC
+      // budget: max(10s, 8s) + 15s command leaves transport headroom.
+      const [, servers] = await Promise.all([prepareHost(id), loadDesktopIceServers()]);
       const sdp = await command({
         action: 'accept',
         connection: id,
-        servers: await loadDesktopIceServers(),
+        servers,
         sdp: r.sdp,
       });
       return { connection: id, sdp };
@@ -346,10 +352,14 @@ type Invoke = (
 const queuePeerRead = createFileReadQueue();
 export function tryPeerFile(peer: string, url: string, invoke: Invoke, signal?: AbortSignal) {
   const owner = captureDataOwnerBroadcastScope();
-  return queuePeerRead(peer, () => {
-    if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
-    return receivePeerFile(peer, url, invoke, signal);
-  }, signal);
+  return queuePeerRead(
+    peer,
+    () => {
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
+      return receivePeerFile(peer, url, invoke, signal);
+    },
+    signal,
+  );
 }
 async function receivePeerFile(peer: string, url: string, invoke: Invoke, signal?: AbortSignal) {
   if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
@@ -374,10 +384,11 @@ async function receivePeerFile(peer: string, url: string, invoke: Invoke, signal
         throw new Error('FILE_PEER_CANCELLED');
       if (!caps.ok || (caps.result as { version?: unknown })?.version !== 1) return null;
       track(id, peer, false);
+      const [, servers] = await Promise.all([prepareHost(id), loadDesktopIceServers()]);
       const offer = await command({
         action: 'offer',
         connection: id,
-        servers: await loadDesktopIceServers(),
+        servers,
       });
       const response = await invoke(peer, FILE_PEER_CHANNEL, [{ action: 'offer', sdp: offer }]);
       const r = response.result as { connection?: string; sdp?: string };

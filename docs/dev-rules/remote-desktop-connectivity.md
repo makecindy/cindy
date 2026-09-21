@@ -20,18 +20,25 @@ URL scheme/length/ports and credential lifetime are checked before bridge delive
 Require two minutes of remaining lifetime for cold capture/SDP/ICE headroom.
 The owning backend supplies its deployment's node pool; no new user region setting.
 
-Missing endpoint, empty configuration, invalid response and a three-second timeout
+Missing endpoint, empty configuration, invalid response and an eight-second timeout
 fall back to the old public STUN list. With a valid self-hosted list, public STUN
 is not added. All configured nodes participate in ICE checks; a dead first node
 does not prevent using candidates from the others. URI ordering is not a promise
 of priority. Candidate statistics already distinguish direct, relay and JPEG paths.
 
 Every existing bounded media retry fetches fresh configuration on both peers.
-No configuration cache, WSS reconnect or new global retry loop. The WebView bounds
-its native bridge wait at 3.5 seconds. Lease/generation/attempt checks reject stale
+No configuration cache, WSS reconnect or new global retry loop. All Desktop/Mobile
+video and file callers share the configuration budget in
+[`remoteDesktopIce.ts`](../../packages/device-link/src/remoteDesktopIce.ts).
+The WebView and iOS native receiver allow another 500 ms for bridge delivery
+(8.5 seconds total). Lease/generation/attempt checks reject stale
 responses; explicit stop takes precedence. A failed media attempt affects only its
 owner. Credential expiry may require rebuilding the connection; this change does
 not promise uninterrupted in-place renewal of TURN allocations.
+
+Regression coverage includes slow configuration, bounded fallback and late-response
+isolation in the [resolver tests](../../packages/device-link/src/__tests__/remoteDesktopIceConfig.test.ts)
+and [viewer tests](../../apps/mobile/src/remote-desktop/__tests__/viewerRtc.test.ts).
 
 Old clients continue unchanged. New viewer + old Desktop can still use viewer-side
 TURN; old viewer + new Desktop can use host-side TURN. Existing full-SDP and trickle
@@ -208,6 +215,11 @@ existing account, enabled-host and controller-revocation checks. It introduces n
 relay envelope kind or server file API. Both peers use the existing ICE endpoint;
 ICE chooses a direct or TURN path. The file channel does not share desktop video,
 input handling, capture permissions or capture-process lifetime.
+
+Desktop prepares the file-transfer host (up to 10 seconds) and fetches ICE
+configuration (up to 8 seconds) concurrently, then rechecks the owning connection
+before issuing the 15-second media command. This keeps the cold-start stages within
+25 seconds and retains headroom inside the unchanged 30-second RPC budget.
 
 File access has two layers. `packages/device-link/src/fileAccess.ts` owns the
 shared directory/text operation facade and whole-file transfer selection; Desktop

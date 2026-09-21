@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
 import { Check } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import type { BillingCatalogOffer, BillingCatalogProduct } from '../../../shared/billing';
 import { formatBillingAmount } from './money';
 
@@ -25,13 +25,13 @@ export type ComparisonPlan = {
 export function PlanComparison({
   plans,
   freeAction,
-  freeHint,
+  onViewModels,
   onFreeAction,
   freeDisabled = false,
 }: {
   plans: ComparisonPlan[];
   freeAction: string;
-  freeHint: string;
+  onViewModels: () => void;
   onFreeAction: () => void;
   freeDisabled?: boolean;
 }) {
@@ -77,10 +77,19 @@ export function PlanComparison({
   const currency = selected[0]?.entry?.offer.currency;
   const buttonClass =
     'flex min-h-9 w-full items-center justify-center rounded-full border border-[var(--border-default)] px-3 py-2 text-13 font-medium transition-colors enabled:hover:bg-[var(--surface-hover-soft)] enabled:active:bg-[var(--surface-chip)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50';
+  const modelsLink = (
+    <a
+      href="#/settings?tab=providers&connect=xd"
+      onClick={onViewModels}
+      className="underline underline-offset-4 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+    >
+      {t('billing.comparison.advancedModels')}
+    </a>
+  );
   const feature = (key: string) => (
     <li key={key} className="flex items-start gap-2 text-13 leading-relaxed">
       <Check size={15} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" aria-hidden />
-      <span>{t(`billing.comparison.${key}`)}</span>
+      {key === 'advancedModels' ? modelsLink : <span>{t(`billing.comparison.${key}`)}</span>}
     </li>
   );
   return (
@@ -104,7 +113,9 @@ export function PlanComparison({
             {['agent', 'apiKey', 'existingSubscription', 'localModels', 'basicModels'].map(feature)}
           </ul>
           <div className="mt-auto">
-            <p className="mb-3 text-11 leading-relaxed text-[var(--text-secondary)]">{freeHint}</p>
+            <p className="mb-3 text-11 leading-relaxed text-[var(--text-secondary)]">
+              <Trans i18nKey="billing.comparison.topupUnlock" components={{ models: modelsLink }} />
+            </p>
             <button
               type="button"
               className={buttonClass}

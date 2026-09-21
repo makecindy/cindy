@@ -228,7 +228,7 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: "drag",
     description:
-      "Drag from one window-local coordinate to another. Use after get_window_state or zoom. On macOS, omitted delivery_mode defaults to foreground and may bring the target forward; explicit background is never escalated or retried.",
+      'Drag from one window-local coordinate to another. Use after get_window_state or zoom. On macOS drivers supporting delivery_mode, omitted mode defaults to background; unsupported background drag returns an error without automatic foreground escalation or retry. Explicit foreground delivery may interrupt the user\'s keyboard and mouse input; coordinate desktop use with the user before requesting it. Background delivery is not a guarantee of focus isolation.',
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative().optional(),

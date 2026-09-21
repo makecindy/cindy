@@ -13,14 +13,14 @@ import type { PluginInvocation } from './pluginInvocations';
 // Registered summon-seal cycle: DESIGN §14.4, identical to Desktop.
 const SUMMON_CYCLE_MS = 2400;
 
-export function PluginInvocationHeader({ plugins, running, deviceId, sessionId }: {
-  plugins: readonly PluginInvocation[]; running: boolean; deviceId?: string; sessionId: string;
+export function PluginInvocationHeader({ plugins, running, deviceId, sessionId, showCompletionBadge = true }: {
+  plugins: readonly PluginInvocation[]; running: boolean; deviceId?: string; sessionId: string; showCompletionBadge?: boolean;
 }) {
-  return <View>{plugins.map((plugin) => <PluginInvocationRow key={plugin.id} plugin={plugin} running={running && plugin.hasPendingCalls} deviceId={deviceId} sessionId={sessionId} />)}</View>;
+  return <View>{plugins.map((plugin) => <PluginInvocationRow key={plugin.id} plugin={plugin} running={running && plugin.hasPendingCalls} deviceId={deviceId} sessionId={sessionId} showCompletionBadge={showCompletionBadge} />)}</View>;
 }
 
-function PluginInvocationRow({ plugin, running, deviceId, sessionId }: {
-  plugin: PluginInvocation; running: boolean; deviceId?: string; sessionId: string;
+function PluginInvocationRow({ plugin, running, deviceId, sessionId, showCompletionBadge }: {
+  plugin: PluginInvocation; running: boolean; deviceId?: string; sessionId: string; showCompletionBadge: boolean;
 }) {
   const identity = useSessionPluginResource(deviceId, sessionId, plugin.id, 'plugin-identities', 'plugin');
   const name = identity.title || plugin.name;
@@ -57,7 +57,7 @@ function PluginInvocationRow({ plugin, running, deviceId, sessionId }: {
           </Svg>
         </Animated.View>
         <View>{iconUrl ? <Image source={{ uri: iconUrl }} style={{ width: 18, height: 18, borderRadius: radius.pill }} /> : <Ghost size={iconSize.sm} color={colors.textSecondary} />}</View>
-        {!running && <View style={[styles.check, { backgroundColor: colors.statusDone }]}>
+        {!running && showCompletionBadge && <View style={[styles.check, { backgroundColor: colors.statusDone }]}>
           <Check size={iconSize.xs} color={colors.surface} strokeWidth={iconStroke.regular} />
         </View>}
       </View>

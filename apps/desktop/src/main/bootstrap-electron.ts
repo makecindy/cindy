@@ -241,10 +241,6 @@ import {
   setUpdateAutoRelaunchBusyProbe,
 } from './updateService';
 import {
-  isWindowsUpdateLockSharingViolation,
-  shouldKeepWaitingForWindowsUpdateLock,
-} from './updateLockWait';
-import {
   createUpdatePresentationRecoveryController,
   decideUpdateRelaunchBusyTransition,
   hasUpdateRelaunchBusyActivity,
@@ -383,8 +379,8 @@ import {
 } from './cindy-make/versionService.js';
 import {
   deliverCindyVersionOpenEvents,
+  finishCindyVersionStartup,
   isCindyVersionLaunchPending,
-  recordCindyVersionActive,
   watchCindyVersionStartupResult,
 } from './cindy-make/versionStartup.js';
 import {
@@ -642,10 +638,15 @@ import { listAllowedSkillhubProjectRoots } from './skillhub/allowedProjectRoots'
 import { SkillhubMarketService } from './skillhub/marketService';
 import { skillhubAutoSyncService } from './skillhub/autoSyncService';
 import { rehydrateCloseSuppression } from './maker-host/rehydrateCloseSuppression.js';
+import {
+  builtInSkillDescriptors,
+} from './maker-host/built-in-skills.js';
+import { isCindyLearnSkillEnabled } from './skillhub/activationPreferences';
 // Maker Core 一阶段重构（新链路）—— 静态 import 避免 dynamic import 触发 vite chunking
 // 让 imageProtocol 等需要 app.ready 前注册的模块跑在错误时机。getMaker() 是 lazy 的，
 // 静态 import 不会触发 Maker / Agent 的实例化。
 import {
+  desktopClaudeAuthAdapter,
   getMaker as getMakerCore,
   getMakerIfReady,
   resetMaker,
@@ -879,7 +880,8 @@ import { createChatEmbeddingSettingsWatcher } from './maker-host/chat-embedding-
 import {
   readGitSafetySettingsState,
   resetGitSafetySettings,
-  writeGitSafetyAutoSnapshotEnabled,
+  writeGitSafetyMode,
+  type GitSafetyMode,
 } from './maker-host/git-safety-settings-store.js';
 import {
   CHAT_EMBED_MODEL_ID,
@@ -948,8 +950,10 @@ import {
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
+  focusMainWindow as activateMainWindow,
   takePendingDeepLink,
 } from './deepLink.js';
+import { createMakeTestWindowBehavior } from './cindy-make/testWindowBehavior.js';
 import { registerFolderContextMenu } from './folderContextMenu.js';
 import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
 import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
@@ -1525,7 +1529,7 @@ import {
   keepRecentSync,
   keepRecentSessionCcDebugSync,
   createLogger,
-  writeCcDebugLine,
+  setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
 initLogger();
@@ -2724,46 +2728,8 @@ if (started) {
       Atomics.wait(lockWait, 0, 0, pollMs);
       continue;
     }
-    const holderPid = readLockPid();
-    const holderAlive = holderPid !== null && pidAlive(holderPid);
-    const elapsedMs = Date.now() - start;
-    if (
-      shouldKeepWaitingForWindowsUpdateLock({
-        lockExists: true,
-        elapsedMs,
-        maxWaitMs,
-        holderPid,
-        holderAlive,
-        unlinkFailed: false,
-        sharingViolation: false,
-      })
-    ) {
-      Atomics.wait(lockWait, 0, 0, pollMs);
-      continue;
-    }
-    let unlinkFailed = false;
-    let sharingViolation = false;
-    try {
-      fs.unlinkSync(lockPath);
-    } catch (error) {
-      unlinkFailed = fs.existsSync(lockPath);
-      sharingViolation = unlinkFailed && isWindowsUpdateLockSharingViolation(error);
-    }
-    if (
-      shouldKeepWaitingForWindowsUpdateLock({
-        lockExists: fs.existsSync(lockPath),
-        elapsedMs,
-        maxWaitMs,
-        holderPid,
-        holderAlive,
-        unlinkFailed,
-        sharingViolation,
-      })
-    ) {
-      Atomics.wait(lockWait, 0, 0, pollMs);
-      continue;
-    }
-    break;
+    if (Date.now() - start >= maxWaitMs) break;
+    Atomics.wait(lockWait, 0, 0, pollMs);
   }
   // If still locked after the wait, proceed anyway (stale lock).
   // 锁已不存在(更新脚本正常清掉)同样算已清——等锁实例必须走
@@ -3785,7 +3751,7 @@ if (
     );
     app.quit();
   } else {
-    recordCindyVersionActive();
+    finishCindyVersionStartup();
     app.on('second-instance', (_event, argv) => {
       // Windows: 用户点 cindy://(或历史 xdt-maker://)链接 / 右键 "通过 Cindy 打开" 时,
       // OS 会再起一个本 app 实例; 单例锁把它 redirect 成 second-instance 事件,
@@ -4012,8 +3978,15 @@ const createWindow = () => {
   });
   // Main-window close policy is explicit because hidden utility windows (for
   // example the prewarmed global voice overlay) can keep the process alive.
+  const makeTestWindow = createMakeTestWindowBehavior({
+    isPackaged: app.isPackaged,
+    environment: process.env,
+    focus: () => activateMainWindow(),
+    quit: () => app.quit(),
+  });
   mainWindow.on('close', (event) => {
     if (isQuitting) return;
+    if (makeTestWindow.close(event)) return;
     // macOS: keep the window + renderer alive and hide only, so Dock activation
     // can restore it without remounting the renderer.
     if (process.platform === 'darwin') {
@@ -4112,6 +4085,7 @@ const createWindow = () => {
     showMainWindowAndRestoreFullscreen(mainWindow, {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
+    makeTestWindow.ready();
     refreshWindowsAppBadge();
     if (!app.isPackaged || isCindyVersionLaunchPending())
       markDesktopDevWindowReady(mainWindow.webContents.getOSProcessId());
@@ -5038,11 +5012,12 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_GET, async () => {
     return gitSafetyWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_SET, async (_e, enabled: unknown) => {
-    if (typeof enabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'git safety enabled required (boolean)');
+  ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_SET, async (_e, mode: unknown) => {
+    if (typeof mode === 'boolean') mode = mode ? 'all-projects' : 'off';
+    if (mode !== 'off' && mode !== 'existing-git' && mode !== 'all-projects') {
+      throwIpcError('INVALID_PARAMS', 'git safety mode required');
     }
-    writeGitSafetyAutoSnapshotEnabled(enabled);
+    writeGitSafetyMode(mode as GitSafetyMode);
     return gitSafetyWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_RESET, async () => {
@@ -5477,87 +5452,12 @@ const registerIpcHandlers = () => {
   }
   // per-session raw (sessions/<id>/cc-debug.raw.log) 同样在启动期砍头保尾 —— 它不经 emit,
   // 平时只靠 cleanupOldSessions 30 天整目录删, 期间一个开着 NODE_DEBUG 的活跃 session 能把单个
-  // raw 写爆磁盘。内容已被下面的 tailer 汇入 <date>.ndjson, raw 只是中转, 砍掉旧头不丢有效信息。
+  // raw 写爆磁盘。tailer 尽量汇入 <date>.ndjson；背压或进程退出时未汇入的部分仍留在 raw。
   keepRecentSessionCcDebugSync();
 
-  // cc-debug.raw.log → 统一 agent 流 (agent-<date>.ndjson, source=cc-debug):
-  // cc 子进程通过 SDK debugFile 直接 fopen 写 raw, 不经 logger; 这里轮询读增量,
-  // 逐行调 writeCcDebugLine() 解析行首 UTC-ISO 时间戳后归一化写入当天 agent 流,
-  // 跟 maker / proxy 两源合并、共用按天 rotate + 保留策略。
-  //
-  // - 轮询 2s: cc-debug 不是高频热点, 不需要 fs.watch 的实时性 (排序按解析出的 ts,
-  //   不受 2s 轮询延迟影响, 延迟只影响"多久可见")
-  // - cc 持有 fd 期间我们 rotate 不掉 raw 文件 (Windows rename 失败, Linux truncate
-  //   留稀疏空洞, 都不安全), 所以反向走 ─ 读出内容汇入 agent 流, raw 仅启动期 trim
-  // - 检测到文件 size 倒退 (truncate / 启动 rename), 重置 read offset 从 0 开始
-  // - 跨读保留尾部不完整行, 跟下一段拼起来再切, 不切坏 multi-line 信息
-  // - timer.unref() 防止进程关闭时被卡住
-  // per-file tail 状态: filePath → { offset, leftover }。同时 tail 全局 fallback raw
-  // (无 sessionId 的 cc, 罕见) + 各 sessions/<id>/cc-debug.raw.log; sessionId 从路径
-  // 提取后传给 writeCcDebugLine, 让 cc 网络 debug 归到对应 session 的 <date>.ndjson。
-  const ccLogRootDir = path.dirname(ccDebugLogPath);
-  const ccTailState = new Map<string, { offset: number; leftover: string }>();
-
-  function tailOneCcFile(filePath: string, sessionId: string): void {
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(filePath);
-    } catch {
-      return;
-    }
-    const st = ccTailState.get(filePath);
-    if (!st) {
-      // 首次发现: 从当前末尾开始, 跳过已有内容 (避免 app 重启后把旧 session 的 raw 重复
-      // 灌进 ndjson)。代价是漏掉文件被发现前 ≤ 轮询间隔 的几行初始 cc 日志, 可接受。
-      ccTailState.set(filePath, { offset: stat.size, leftover: '' });
-      return;
-    }
-    if (stat.size < st.offset) {
-      st.offset = 0;
-      st.leftover = '';
-    }
-    if (stat.size === st.offset) return;
-    let fd: number;
-    try {
-      fd = fs.openSync(filePath, 'r');
-    } catch {
-      return;
-    }
-    try {
-      const len = stat.size - st.offset;
-      const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, st.offset);
-      st.offset = stat.size;
-      st.leftover += buf.toString('utf8');
-      const lines = st.leftover.split('\n');
-      st.leftover = lines.pop() ?? '';
-      for (const line of lines) {
-        if (line.length > 0) writeCcDebugLine(line, sessionId);
-      }
-    } finally {
-      try {
-        fs.closeSync(fd);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  function tailCcDebugOnce(): void {
-    tailOneCcFile(ccDebugLogPath, ''); // 全局 fallback (无 sessionId 的 cc)
-    const sessionsBase = path.join(ccLogRootDir, 'sessions');
-    let dirs: fs.Dirent[];
-    try {
-      dirs = fs.readdirSync(sessionsBase, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const d of dirs) {
-      if (!d.isDirectory()) continue;
-      tailOneCcFile(path.join(sessionsBase, d.name, 'cc-debug.raw.log'), d.name);
-    }
-  }
-  setInterval(tailCcDebugOnce, 2000).unref();
+  // Current-process CC writers register on spawn and release on exit.
+  // The tailer has a shared read budget and pauses behind the NDJSON writer.
+  setCcDebugTailingEnabled(process.env.XDT_CC_DEBUG_NET === '1');
 
   // dev 模式不再启动期硬开(2026-07-11 Lizi 定案):NODE_DEBUG=http,https,net,tls
   // 会顺着 cc 子进程继承进 agent 的 Bash 子命令——所有命令输出被调试日志刷屏,
@@ -5591,6 +5491,7 @@ const registerIpcHandlers = () => {
         levelBeforeDebugNet = null;
       }
     }
+    setCcDebugTailingEnabled(enabled);
     ccDebugNetLog.info(`set ${enabled ? 'on' : 'off'} via renderer`);
     return { ok: true };
   });
@@ -6248,14 +6149,15 @@ const registerIpcHandlers = () => {
       registerBuiltinDesktopCommands(getDesktopCommandRegistry(), {
         getGoalController,
         getLearnController,
+        isLearnEnabled: isCindyLearnSkillEnabled,
         remoteInvoke: (deviceId, channel, args) =>
           deviceLinkHandleInvoke(deviceLinkIpcDeps(), deviceId, channel, args),
       });
       // desktop-cmd:run —— /cmd 的被控端远程执行 handler(仅隧道 dispatch 消费,
       // 本机 /cmd 仍在 builtins 内联执行,不走 IPC 往返)。
       registerRemoteCmdIpc();
-      // learn:* handler 提前一次性注册(eager,同 goal);handler 内部 getLearnController()
-      // 取单例,invoke 时 controller 已由 startLearnHost 启动。
+      // learn:* handler 提前一次性注册(eager,同 goal);handler 内部读取 controller
+      // 单例,invoke 时 controller 已由 startLearnHost 启动。
       registerLearnIpc();
       // maker:schedule:* handler 提前一次性注册;handler 内部 awaitReady 等真实
       // scheduler 实例(由后续 attemptStartScheduler 通过 attachSchedulerEventListeners
@@ -6867,6 +6769,10 @@ const registerIpcHandlers = () => {
   registerSkillhubIpc({
     getMaker: getMakerCore,
     getManagedSkillRoots: () => getGhostManager().managedRootDirs(),
+    getBuiltInSkills: () => builtInSkillDescriptors(
+      app.getPath('userData'),
+      app.getPath('appData'),
+    ),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
@@ -7674,15 +7580,22 @@ const registerIpcHandlers = () => {
       assertTrustedAppRendererEvent(event);
       try {
         return await actCindyMakeHistory(runId, action);
-      } catch {
-        throwIpcError('PRECONDITION_FAILED', 'unavailable');
+      } catch (error) {
+        const message = (error as { message?: unknown }).message;
+        const reason =
+          typeof message === 'string'
+            ? /^\[PRECONDITION_FAILED\]\s*(busy|dirty|conflict|cleanupFailed|directoryBusy|unavailable|stopFailed)$/.exec(
+                message,
+              )?.[1]
+            : undefined;
+        throwIpcError('PRECONDITION_FAILED', reason ?? 'unavailable');
       }
     },
   );
-  ipcMain.handle('app:cindy-make-history-build', async (event) => {
+  ipcMain.handle('app:cindy-make-history-build', async (event, selection: unknown) => {
     assertTrustedAppRendererEvent(event);
     try {
-      return await generateHistoryPersonalVersion();
+      return await generateHistoryPersonalVersion(selection);
     } catch {
       throwIpcError('PRECONDITION_FAILED', 'unavailable');
     }
@@ -7719,6 +7632,7 @@ const registerIpcHandlers = () => {
     assertTrustedAppRendererEvent(event);
     return actCindyVersion(action, id);
   });
+  onQuit('cindy-make-tests', () => cindyMakeTestController.stopAllAndWait(), 'async');
   app.once('will-quit', () => cindyMakeTestController.stopAll());
   ipcMain.handle(
     'app:cindy-make-test',
@@ -8897,6 +8811,18 @@ app.on('ready', async () => {
   }
 
   await ensureMainAppPresence('app-ready');
+
+  // Cindy-owned Skill activation and all home-level projections happen through
+  // one stable-owner boundary. Passive shared-userData instances may consume the
+  // active bundle but cannot switch it or its projections.
+  try {
+    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+  } catch (error) {
+    // A broken optional Skill must not block the desktop from starting.
+    createLogger('built-in-skills').warn('built-in Skill preparation failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   // macOS App Translocation fix: when the user launches the app without
   // dragging it to /Applications first, macOS runs it from a read-only
@@ -10278,8 +10204,11 @@ function chatEmbeddingWire() {
 function gitSafetyWire() {
   const state = readGitSafetySettingsState();
   return {
+    mode: state.value.mode,
     autoSnapshotEnabled: state.value.autoSnapshotEnabled,
+    autoInitProjectGit: state.value.autoInitProjectGit,
     isCustomized: state.isCustomized,
+    defaultMode: state.defaults.mode,
     defaultAutoSnapshotEnabled: state.defaults.autoSnapshotEnabled,
   };
 }

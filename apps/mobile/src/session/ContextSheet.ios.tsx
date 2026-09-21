@@ -1,3 +1,4 @@
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import { iconSize, useTheme } from '@/theme';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import {
@@ -116,12 +117,13 @@ export function ContextSheetRow(props: ContextSheetRowProps) {
   );
 }
 export function ContextSheetFooterButton(props: ContextSheetFooterButtonProps) {
+  const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   return (
     <Button
       onPress={props.onPress}
       testID={props.testID}
       modifiers={[
-        buttonStyle("glassProminent"),
+        ...glassStyle,
         disable(!!props.disabled || !!props.busy),
         frame({ maxWidth: Infinity, minHeight: 44 }),
       ]}

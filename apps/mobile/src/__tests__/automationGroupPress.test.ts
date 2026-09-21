@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RemoteSessionListItem } from '@cindy/maker-shared/session-list';
 import { resolveMobileSessionRowStatus } from '../session/sessionRightStatus';
 
-const source = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8').replace(/\r\n/g, '\n');
+const source = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8').replace(/\r\n/g, '\n');
 const start = source.indexOf('  const openGroupPrimary = () => {');
 const body = source.slice(start, source.indexOf('  return (', start));
 // Execute the actual row handler while keeping native rendering out of this unit test.

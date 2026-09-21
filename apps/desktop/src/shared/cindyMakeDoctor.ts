@@ -137,6 +137,8 @@ export interface CindyMakeGlobalState {
   source?: MakeSourceStatus;
   reports?: Record<string, MakeDoctorReport>;
   tasks?: Record<string, MakeDoctorReport>;
+  /** Live build owners only; absent after the job (including stop cleanup) settles. */
+  personalBuildSessionIds?: string[];
   /** Current-owner cleanup jobs, keyed by session ID; independent of Settings lifetime. */
   taskActions?: Record<string, CindyMakeTaskActionState>;
 }
@@ -159,6 +161,9 @@ export interface MakeSourcePreparation {
   mainRemoteCommit?: string;
   mainBehind?: number;
   mainAhead?: number;
+  /** Commits unique to cindy-personal / main, respectively. */
+  personalBehind?: number;
+  personalAhead?: number;
   error?:
     | 'unsupportedVersion'
     | 'tagNotFound'
@@ -224,6 +229,9 @@ export interface MakeSourceStatus {
   mainRemoteCommit?: string;
   mainBehind?: number;
   mainAhead?: number;
+  /** Commits unique to cindy-personal / main, respectively. */
+  personalBehind?: number;
+  personalAhead?: number;
   latestVersion?: MakeSourceLatestVersion;
   error?: MakeSourcePreparation['error'];
   phase?: MakeSourcePreparation['phase'];

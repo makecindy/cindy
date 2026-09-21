@@ -1,3 +1,4 @@
+import { registerTaskTagsIpc } from './taskTags';
 import { registerRoutineRemoteResources } from '../../routines/remote.js';
 import { registerRoutinesIpc } from '../../routines/service.js';
 /**
@@ -33,6 +34,7 @@ import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search';
 import { registerRemoteHistoryIpc } from './history';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
+import { botRemoteManagement } from './botRemoteManagement';
 import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
 import { createLogger } from '../../logger';
@@ -259,13 +261,14 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerRemoteHistoryIpc();
   registerBotIpc();
   registerRoutinesIpc();
-  registerRoutineRemoteResources();
-  registerBotRemoteResourceProvider();
+  registerRoutineRemoteResources(botRemoteManagement);
+  registerBotRemoteResourceProvider(botRemoteManagement);
   registerSessionImportIpc();
   registerSessionShareIpc();
   registerOrcaWorkflowIpc();
   registerRecentWorkdirsIpc();
   registerProjectAliasesIpc();
+  registerTaskTagsIpc();
   registerRightSidebarTabsIpc();
   // Durable Subagent projection writes share the agent event path's FIFO, so a
   // reconciliation and an agent_task_update cannot both insert the first

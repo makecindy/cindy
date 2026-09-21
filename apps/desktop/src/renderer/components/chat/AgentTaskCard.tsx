@@ -564,7 +564,7 @@ export function AgentTaskCard({
                       type="button"
                       aria-expanded={piResultExpanded}
                       onClick={() => setPiResultExpanded((current) => !current)}
-                      className="mb-1 rounded-full text-12 text-[var(--accent-fg)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      className="mb-1 rounded-full text-12 text-[var(--accent-emphasis)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       {t(piResultExpanded
                         ? 'chat.agentTask.hideFullResult'

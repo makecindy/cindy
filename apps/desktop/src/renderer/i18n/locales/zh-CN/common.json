@@ -64,7 +64,10 @@
     "pan": "移动画面",
     "keyboard": "键盘",
     "rightClick": "右键",
-    "fit": "适应屏幕",
+    "actualSize": "实际大小（1:1）",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fit": "适应窗口",
     "display": "显示器",
     "gestureHint": "双指缩放；双指移动可滚动，移动画面模式下可平移。长按后移动可拖拽。",
     "textPlaceholder": "在电脑上输入文字",
@@ -77,7 +80,7 @@
     "connectionBusy": "已有其他设备连接此远程桌面。请先在那台设备上退出远程桌面，再尝试连接。",
     "takeoverConnection": "接管连接",
     "connectionBusyTakeover": "已有其他设备连接此远程桌面。接管连接后，上一台设备会断开。",
-    "remoteDisabled": "电脑端已关闭远程控制。",
+    "remoteDisabled": "请在远程电脑的 Cindy 设置 → 远程控制中开启远程控制。",
     "accessRevoked": "对这台电脑的访问已撤销。",
     "directConnection": "电脑直连",
     "videoRelay": "服务器视频中转",
@@ -88,12 +91,18 @@
       "opening": "正在打开远程桌面…",
       "unavailable": "无法连接远程桌面：{{reason}}",
       "offline": "这台电脑已离线。",
-      "controlDisabled": "请先在远程控制设置中允许控制这台电脑。",
+      "controlDisabled": "请在远程电脑的 Cindy 设置 → 远程控制中，允许控制这台电脑。",
       "unsupported": "此设备不支持远程桌面。",
-      "checkFailed": "未能确认电脑状态，重新悬停可重试。",
+      "checkFailed": "未能确认电脑状态，请检查这台电脑的网络连接。",
+      "screenRecordingRequired": "请在远程 Mac 的系统设置 → 隐私与安全性中，为 Cindy 开启屏幕录制权限。如果系统要求，请重新打开 Cindy。",
       "noDisplay": "这台电脑没有可用的显示器。"
     },
     "viewer": {
+      "displayPanel": "影音",
+      "clipboardPanel": "剪贴板",
+      "securityPanel": "安全",
+      "controlGroup": "远程操作",
+      "controlMode": "控制",
       "settings": "操作",
       "sound": "声音",
       "fullscreen": "全屏",
@@ -105,19 +114,57 @@
       "balanced": "均衡",
       "clear": "清晰",
       "resolution": "电脑分辨率",
-      "clipboardFailed": "文字传输失败，请确认已取得控制权，且内容不超过 16,384 字符。",
-      "settingsFailed": "未能修改显示设置。",
+      "clipboardFailed": "剪贴板内容传输失败，请检查控制权限后重试。",
+      "settingsFailed": "设置未能保存，请重试。",
       "inputHint": "点击画面即可输入。Ctrl+Alt+Esc 释放键盘焦点；Cmd/Ctrl+W 关闭这个窗口。",
       "controlPending": "正在取得控制权…",
-      "controlRequired": "当前仅查看，取得控制权后可使用剪贴板和桌面操作。",
+      "controlRequired": "当前仅查看。接管后可操作远端电脑。",
       "confirmDisconnect": "断开与这台电脑的连接？",
       "confirmDisconnectHint": "将结束远程桌面连接，电脑上的应用仍会继续运行。",
       "disconnectFailed": "未能断开连接，请重试。",
-      "clipboardShortcutHint": "在画面内使用 {{modifier}}+C / {{modifier}}+V，即可在两台电脑之间复制粘贴文字。暂不支持图片和文件。",
+      "clipboardShortcutHint": "在画面内使用 {{modifier}}+C / {{modifier}}+V 复制粘贴。支持的内容取决于远程电脑，暂不传输文件。",
       "fitViewerDisplay": "按当前画面比例调整",
       "fitViewerDisplayHint": "临时调整电脑桌面比例，保留当前桌面内容。退出连接后恢复原分辨率。",
       "resolutionHint": "分辨率修改会影响远端的实际显示器。"
-    }
+    },
+    "settingUnsupported": "当前电脑端暂不支持此设置",
+    "privacyScreen": "电脑防窥",
+    "privacyScreenHint": "遮住电脑屏幕。在电脑上点击鼠标或按键，确认后断开连接，并按设置锁屏。",
+    "privacyActive": "防窥已开启。在电脑上点击鼠标或按键，确认后断开连接，并按设置锁屏。",
+    "privacyFailed": "未能开启防窥，电脑屏幕可能仍可见。",
+    "hostMute": "被控端静音",
+    "hostMuteHint": "连接期间将被控电脑静音",
+    "hostMuteFailed": "无法修改被控端静音状态",
+    "clipboardSync": "剪贴板同步",
+    "clipboardSyncConflict": "两端剪贴板都发生了变化，已分别保留。请在任一设备上重新复制以同步。",
+    "clipboardSyncFailed": "同步暂时失败，正在自动重试。开关保持开启。",
+    "clipboardSyncSkipped": "当前内容无法同步，已跳过。请检查粘贴权限，或复制文字、图片后重试。",
+    "clipboardSyncPermission": "同步已暂停，请允许粘贴权限后重试。开关保持开启。",
+    "lockingOnExit": "正在锁定电脑…",
+    "lockOnExit": "退出后锁定电脑",
+    "lockOnExitHint": "退出远程桌面时锁屏。重连或切换 App 不会触发。",
+    "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。",
+    "nativeResolution": "原生",
+    "autoUnlock": "自动解锁电脑",
+    "autoUnlockHint": "在此设备保存 Mac 登录密码，连接时自动解锁电脑。",
+    "autoUnlockStorageHint": "密码仅加密保存在当前设备。设置和密码不随账号同步。",
+    "autoUnlockUnavailable": "暂时无法自动解锁。你仍可连接，并手动解锁 Mac。",
+    "biometricVerification": "生物识别验证",
+    "biometricVerificationHint": "使用保存的密码前，验证你的身份。",
+    "loadingSettings": "读取中…",
+    "credentialSigningRequired": "Mac 上的开发版缺少签名配置。请在 Mac 上配置签名并重新启动 Cindy，然后重试。",
+    "credentialPasswordRejected": "Mac 登录密码验证失败，请重新输入。",
+    "credentialIdentityChanged": "无法确认电脑身份，不会向未经验证的设备发送密码。",
+    "credentialAccessibilityRequired": "请在 Mac 的系统设置 → 隐私与安全性 → 辅助功能中允许 Cindy，然后重新连接。",
+    "credentialUnlockUnavailable": "暂时无法安全解锁这台 Mac。请在锁屏界面选中你的账户后重连；若仍失败，请在电脑上手动解锁。",
+    "disconnecting": "正在断开…",
+    "loadingDisplayModes": "正在读取分辨率…",
+    "displayModesFailed": "未能读取分辨率，请重试。",
+    "retry": "重试",
+    "copy": "复制到本机",
+    "paste": "粘贴到远程电脑",
+    "clipboardSyncHint": "此窗口在前台时，双向同步文字、图片和富文本。",
+    "credentialRequired": "请完成 Mac 密码验证。如果无法验证，请更新两台电脑上的 Cindy。"
   },
   "ipcError": {
     "INVALID_PARAMS": "参数无效，请检查后重试。",
@@ -2413,9 +2460,15 @@
     },
     "gitSafety": {
       "title": "Git 安全",
-      "autoSnapshotTitle": "Git 安全保存点",
-      "description": "Agent 修改后自动在项目 Git 仓库里记录隐藏保存点，不会在你的分支上产生 commit。只有开启后才显示 Codex rewind 入口。",
-      "toggleAria": "切换 Git 安全保存点",
+      "autoSnapshotTitle": "文件恢复点",
+      "description": "选择 Cindy 记录隐藏文件恢复点的范围。这只影响文件恢复成本，不影响对话回退。",
+      "modeAria": "文件恢复点模式",
+      "modes": {
+        "off": "关闭",
+        "existingGit": "仅已有 Git 项目",
+        "allProjects": "包括新的空项目"
+      },
+      "toggleAria": "文件恢复点模式",
       "saveFailed": "保存 Git 安全设置失败"
     },
     "feishuBot": {
@@ -7381,6 +7434,14 @@
     }
   },
   "bots": {
+    "devicePicker": {
+      "local": "本机",
+      "title": "切换设备",
+      "switchDevice": "切换设备，当前为{{device}}",
+      "unread": "有未读消息",
+      "otherUnread": "其他设备有未读消息",
+      "remotePlaceholder": "发给{{device}}上的 {{name}}…"
+    },
     "creationName": "名字",
     "settingsBack": "返回设置",
     "sidebar": {
@@ -8014,6 +8075,8 @@
       "trigger": {
         "currentAndNext": "当前：{{current}}\n下条消息：{{next}}",
         "placeholder": "选择模型",
+        "loading": "正在读取模型…",
+        "unresolved": "模型信息暂不可用",
         "aria": "选择模型。当前：{{model}}",
         "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}",
         "pendingAria": "选择模型。下条消息：{{agent}} · {{model}}",
@@ -9250,6 +9313,7 @@
       "editCancel": "取消",
       "editSend": "发送",
       "editRollbackHint": "发送将撤销上一轮对 {{count}} 个文件的改动",
+      "editConversationOnlyHint": "发送不会恢复项目文件，上一轮的文件改动会保留",
       "forkErrors": {
         "unsupportedHistory": "目标位置对应的历史引擎会话已不可用，无法从这里开启新任务",
         "noPriorAssistant": "请在 AI 回复之后的消息上开启新任务",
@@ -9269,7 +9333,9 @@
       "viewThread": "查看 thread 上下文 ({{count}})"
     },
     "rewind": {
-      "noFilesToRollback": "没有可回滚的文件，仅会截断对话历史",
+      "noFilesToRollback": "没有检测到可恢复的项目文件改动",
+      "conversationOnlyNotice": "当前无法恢复项目文件，因为没有可用的 Git 保存点；继续后会移除这条消息之后的对话记录，项目文件不会回到之前的状态",
+      "gitSafetyDisabledNotice": "Git 安全保存点未开启，因此当前无法恢复项目文件。请在设置中开启后再使用文件恢复；继续后会移除这条消息之后的对话记录，项目文件不会回到之前的状态",
       "errors": {
         "noPriorAssistantPreview": "请在 AI 回复之后的提问上 rewind（这条之前没有 assistant 回复）",
         "sessionRunning": "等待任务停止超时，请重新回退",
@@ -9284,11 +9350,11 @@
         "errorDescription": "这个任务的文件 checkpointing 未启用，无法回退被工具改动过的文件。",
         "calculating": "正在计算回退影响…",
         "noChanges": "没有需要回滚的文件改动",
-        "continueWillTruncate": "继续回退仍会截断后续消息",
+        "continueWillTruncate": "继续后会移除这条消息之后的对话记录",
         "noPerFileDiff": "该 SDK 版本不支持单文件 diff 预览",
         "summaryDefault": "后续消息会被丢弃，工作目录里的 {{count}} 个文件会回退到那一刻。",
-        "summaryRunning": "当前执行会被停止；后续消息和对应文件改动会被回退。",
-        "summaryEmpty": "后续消息会被丢弃。没有文件被改动，仅截断历史。",
+        "summaryRunning": "当前任务会被停止；这条消息之后的对话会被回退。停止前无法确认项目文件是否会恢复。",
+        "summaryEmpty": "这条消息之后没有检测到项目文件改动，继续后会移除后续对话记录。",
         "summaryEmptyWithNote": "后续消息会被丢弃。",
         "runningNotice": "任务仍在运行。确认后会先停止任务，再按最新状态执行回退。",
         "runningQueueNotice": "排队消息会保留并暂停，不会自动发送。",
@@ -10330,7 +10396,7 @@
     },
     "empty": {
       "promptHeading": "暂无自动化",
-      "promptDescription": "创建一个 cron 自动化，让 Claude Code、Codex 或 Pi 按计划执行你的 Prompt。"
+      "promptDescription": "创建一个 cron 自动化，按计划执行你的 Prompt。"
     },
     "usageLimitRecovery": {
       "name": "用量恢复后继续任务",
@@ -11141,6 +11207,21 @@
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
+    "unifiedDetail": {
+      "contentSource": "内容来源",
+      "local": "本地",
+      "market": "市场",
+      "marketUnavailable": "暂时无法读取市场信息，本地副本仍可使用。",
+      "retry": "重试"
+    },
+    "publishComparison": {
+      "updateAvailable": "可发布更新",
+      "pendingChanges": "提交审核后，本地又有改动",
+      "unavailable": "暂时无法检查发布更新",
+      "diffTitle": "与线上 v{{version}} 的差异",
+      "summaryBadge": "摘要",
+      "summaryNote": "文件为二进制、过大或无法完整预览，仅显示文件大小。"
+    },
     "home": {
       "title": "技能",
       "description": "管理本地技能，或从 Skill Hub 发现并安装更多技能。",
@@ -11168,6 +11249,7 @@
       "installed": "已安装",
       "globalScope": "全局",
       "sourceSkillhub": "SkillHub",
+      "sourceBuiltIn": "内置",
       "sourceLocal": "本地",
       "import": "导入技能",
       "importAria": "从本地压缩包或 SKILL.md 导入技能",
@@ -11175,6 +11257,16 @@
       "importPickerSubtitle": "{{name}} · {{description}}",
       "importSuccess": "{{name}} 已导入{{suffix}}",
       "importFailed": "导入技能失败"
+    },
+    "builtIn": {
+      "official": "官方",
+      "officialDetail": "由 Cindy 随应用提供并维护。",
+      "skillCreator": {
+        "description": "创建或更新 Cindy 技能，并编写清晰的说明和所需支持资源。"
+      },
+      "learn": {
+        "description": "从当前任务、描述的工作流或 SkillHub 技能中提炼可复用技能，并通过 Cindy 的审查流程保存。"
+      }
     },
     "common": {
       "openFolderFailed": "打开文件夹失败",
@@ -11357,6 +11449,8 @@
       "installError": "未知错误"
     },
     "marketCard": {
+      "updateAvailable": "获取更新",
+      "updateFailed": "更新失败，请重试",
       "visibilityPublic": "公开",
       "visibilityDept": "团队",
       "visibilityPrivate": "个人",
@@ -11719,6 +11813,7 @@
       "unlinkDescription": "仅移除本地技能入口，原文件及修改会保留。",
       "sharedImpact": "共用此技能的其他 Agent 也会受影响。云端发布和其他安装位置不受影响。",
       "managedElsewhere": "此技能由其他包或共享目录管理，需在其来源处移除",
+      "builtInManaged": "此技能由 Cindy 内置，无法卸载",
       "managedByPlugin": "此技能由插件提供，请到所属插件页面管理。",
       "cleanupIncomplete": "“{{name}}”的卸载清理尚未完成。请重试；重开技能中心后也可继续。清理完成前无法重新安装。",
       "retryCleanup": "重试清理",
@@ -12121,7 +12216,8 @@
       "INTERNAL": "内部错误，请稍后重试"
     },
     "hub": {
-      "learnButton": "学习此技能"
+      "learnButton": "学习此技能",
+      "disabledHint": "请先在本地技能中启用内置 Learn 技能。"
     }
   },
   "planMode": {
@@ -12470,37 +12566,37 @@
       "undo": "撤销降级"
     },
     "comparison": {
-      "select": "选择{{name}}",
-      "topup": "充值",
-      "topupUnlock": "充值后可解锁额外用量。",
-      "rollover": "{{amount}} 可结转至{{period}}",
-      "changeUnavailable": "无法进行此变更",
-      "upgrade": "升级",
-      "downgrade": "降级",
-      "free": "免费",
-      "freeUsage": "按量使用",
-      "topupExpiry": "充值余额用完为止",
+      "free": "FREE",
+      "freeUsage": "免费使用",
       "priceFromSuffix": "起",
-      "subscription": "订阅",
-      "includesFree": "包含免费版全部能力",
-      "creditMultiple": "包含金额是{{name}}的 {{multiple}} 倍",
-      "credits": {
-        "MONTH": "每月 {{amount}}",
-        "YEAR": "每年 {{amount}}",
-        "OTHER": "{{amount}}"
-      },
+      "topup": "按需充值",
+      "topupExpiry": "充值余额不过期",
+      "agent": "完整 Agent 功能",
+      "apiKey": "自带 API key",
+      "existingSubscription": "接入已有订阅",
+      "localModels": "支持本地模型",
+      "basicModels": "可用部分模型",
+      "subscription": "订阅套餐",
+      "rollover": "剩余余额可留到{{period}}，最多 {{amount}}",
       "nextPeriod": {
-        "MONTH": "下个月",
-        "YEAR": "明年",
-        "OTHER": "下一周期"
+        "MONTH": "下月",
+        "YEAR": "下一年",
+        "OTHER": "下期"
       },
-      "agent": "Agent 任务",
-      "apiKey": "使用自有 API Key",
-      "existingSubscription": "沿用已有订阅",
-      "localModels": "本地模型",
-      "basicModels": "基础模型",
-      "advancedModels": "进阶模型",
-      "managedService": "托管服务"
+      "includesFree": "包含 FREE 全部能力",
+      "advancedModels": "解锁更多模型",
+      "managedService": "官方服务，免配置",
+      "topupUnlock": "按需付费，<models>解锁更多模型</models>",
+      "select": "选择 {{name}}",
+      "upgrade": "升级至 {{name}}",
+      "downgrade": "降级至 {{name}}",
+      "changeUnavailable": "暂不可切换",
+      "creditMultiple": "每期包含金额为 {{name}} 的 {{multiple}} 倍",
+      "credits": {
+        "MONTH": "每月包含 {{amount}}",
+        "YEAR": "每年包含 {{amount}}",
+        "OTHER": "{{amount}}"
+      }
     }
   },
   "fileAccess": {
@@ -12683,6 +12779,20 @@
     }
   },
   "cindyMake": {
+    "beta": "Beta",
+    "preflight": {
+      "closeTitle": "关闭 Cindy Make？",
+      "closeConfirm": "关闭 Cindy Make",
+      "keepOpen": "继续查看",
+      "creating": "正在创建制作任务，请稍候…",
+      "closeDescription": {
+        "environment": "环境准备尚未完成。关闭将停止当前准备，设置页中的同一准备也会停止；已安装的工具会保留。",
+        "source": "源码准备尚未完成。关闭将停止当前准备，设置页中的同一准备也会停止；已准备好的环境和源码会保留。",
+        "upstream": "正在查询上游 PR。关闭将停止查询，已准备好的环境和源码会保留。",
+        "ready": "准备已完成，尚未开始制作。关闭后不会创建制作任务，已准备好的环境和源码会保留。",
+        "incomplete": "本次准备未完成，尚未开始制作。关闭后不会创建制作任务，已准备好的环境和源码会保留。"
+      }
+    },
     "description": "检查并准备本机工具，开始制作个人版 Cindy。用法：/cindy-make [修改需求]",
     "localOnly": "/cindy-make 暂仅支持本机桌面任务。请切回本机后使用。",
     "usage": "请在 /cindy-make 后填写要修改的内容，例如 /cindy-make 修复消息流闪烁。空指令不会开始环境检查。环境检查暂不支持附件、引用或批注。",
@@ -12823,24 +12933,18 @@
       },
       "missing": "尚未准备源码",
       "details": {
-        "branch": "个人版分支",
-        "baseRef": "基于 {{ref}}",
-        "baseCommit": "来源版本",
-        "mainCommit": "main 版本",
-        "currentBranch": "当前项目分支",
-        "detached": "未在分支上（固定提交）",
-        "unknown": "更新源码后查看",
+        "unknown": "未读取",
         "latest": {
-          "dev": "最新 main",
+          "dev": "线上 main",
           "beta": "最新 beta",
           "release": "最新正式版",
-          "unavailable": "未能查询，请重新打开设置重试",
-          "same": "（已同步）",
-          "behind_one": "（落后 {{count}} 个提交）",
-          "behind_other": "（落后 {{count}} 个提交）",
-          "ahead_one": "（领先 {{count}} 个提交）",
-          "ahead_other": "（领先 {{count}} 个提交）",
-          "difference": "（落后 {{behind}}，领先 {{ahead}} 个提交）"
+          "same": "与{{target}} 一致，落后 0 条修改记录",
+          "behind_one": "本地 main 落后 {{count}} 条修改记录",
+          "behind_other": "本地 main 落后 {{count}} 条修改记录",
+          "ahead_one": "本地 main 领先 {{count}} 条修改记录",
+          "ahead_other": "本地 main 领先 {{count}} 条修改记录",
+          "difference": "本地 main 落后 {{behind}} 条修改记录，领先 {{ahead}} 条修改记录",
+          "unknown": "线上版本"
         }
       }
     },
@@ -12891,6 +12995,32 @@
       "commit": "基于 {{commit}}",
       "branch": "已提交到 {{branch}}"
     },
+    "overview": {
+      "description": "查看个人版代码、切换使用版本和管理制作历史。",
+      "title": "版本概览",
+      "switchVersion": "切换版本",
+      "personalCode": "个人版代码",
+      "localMain": "本地 main",
+      "lookupUnavailable": "查询失败",
+      "comparisonUnavailable": "本地 main 的差距未读取",
+      "personalStatus": {
+        "suffix": "（{{status}}）",
+        "upToDate": "已是最新",
+        "updateAvailable": "有更新",
+        "unverified": "版本状态未确认",
+        "upToDateDescription": "个人版代码已包含{{target}}的全部更新",
+        "personalChanges": "另有 {{ahead}} 条个人修改记录"
+      },
+      "comparison": {
+        "same": "与本地 main 的 SHA 相同",
+        "personalAhead": "已包含本地 main，另有 {{ahead}} 条个人修改记录",
+        "mainAhead": "尚缺本地 main 的 {{behind}} 条修改记录",
+        "diverged": "尚缺本地 main 的 {{behind}} 条修改记录，另有 {{ahead}} 条个人修改记录",
+        "different": "SHA 与本地 main 不同，差距未知",
+        "unknown": "与本地 main 的差距未知"
+      },
+      "personal": "cindy-personal"
+    },
     "versions": {
       "title": "我的版本",
       "description": "选择本机要使用的 Cindy 版本。切换后会重启，并保留账号、设置与任务。",
@@ -12922,6 +13052,21 @@
       "open": "查看安装包",
       "description": "将本次修改与个人版合并，检查和打包通过后保存为新个人版。",
       "readyHint": "安装包 {{name}} 已生成，可打开所在目录。",
+      "failedStep": "失败步骤：{{step}}",
+      "diagnostic": {
+        "outOfMemory": "打包程序超出了内存上限。请更新 Cindy 后重新生成；若仍失败，请反馈下方错误。",
+        "timeout": "生成超过 1 小时，已停止。请检查下方记录后重试。",
+        "exitCode": "程序退出码：{{code}}",
+        "unavailable": "这次生成没有保存具体错误，请重新生成以记录失败原因。"
+      },
+      "mergeStep": {
+        "conflicts": "正在处理冲突…",
+        "cleanup": "正在清理合并文件…"
+      },
+      "preparationStep": {
+        "environment": "正在准备生成环境…",
+        "original": "正在检查当前版本…"
+      },
       "checkStep": {
         "dependencies": "正在安装构建依赖…",
         "tests": "正在运行自动测试，可能需要数分钟…",
@@ -12936,6 +13081,24 @@
         "ready": "个人版已生成",
         "failed": "个人版未能生成"
       },
+      "buildLog": {
+        "title": "生成记录",
+        "steps": {
+          "resolving-conflicts": "处理冲突",
+          "cleaning-merge": "清理合并文件",
+          "environment": "准备生成环境",
+          "original": "检查当前版本",
+          "merging": "合入修改",
+          "checking-dependencies": "安装构建依赖",
+          "checking-tests": "运行自动测试",
+          "checking-types": "检查代码类型",
+          "packaging": "打包个人版",
+          "publishing": "保存个人版",
+          "ready": "个人版已生成",
+          "failed": "生成失败",
+          "cancelled": "已停止生成"
+        }
+      },
       "errors": {
         "unavailable": "无法读取生成记录或安装包，请重新生成。",
         "changed": "制作目录或代码已有变化，请完成修改后重新生成。",
@@ -12946,7 +13109,7 @@
         "baselineChanged": "生成期间个人版已有更新，请重新生成以包含最新修改。",
         "buildFailed": "打包未完成，请重试，或继续修改后再生成。",
         "cancelled": "制作已取消，可以重新生成个人版。",
-        "cleanupFailed": "制作已停止，但部分临时内容未能清理。请重启 Cindy 后再试。",
+        "cleanupFailed": "自动清理尚未完成，请再次点击“生成个人版”重试。",
         "interrupted": "生成已停止，可以重新生成个人版。"
       }
     },
@@ -12961,7 +13124,7 @@
       "title": "修改已完成，选择下一步",
       "description": "可以继续修改、启动隔离版测试，或直接生成个人版安装包。",
       "readyHint": "请在测试窗口体验修改。点击“继续修改”会关闭测试版并恢复输入。",
-      "start": "启动隔离版测试",
+      "start": "启动隔离测试版",
       "started": "测试版已启动",
       "continue": "继续修改",
       "status": {
@@ -12977,9 +13140,9 @@
         "environment": "测试环境尚未就绪，请在设置中检查 Cindy Make 环境后重试。",
         "launchFailed": "未能启动隔离版，请重试；仍失败可返回继续修改。",
         "timeout": "隔离版启动超时，请重试。",
-        "interrupted": "上次测试已中断，请重新启动隔离版。"
+        "interrupted": "上次测试已中断，请重新启动隔离版。",
+        "stopFailed": "测试版尚未退出，请关闭测试窗口后重试。"
       },
-      "retry": "重试启动",
       "startingHint": "启动完成前暂时不能继续修改，请等待当前步骤完成。",
       "currentStep": "当前步骤：{{step}}",
       "failedStep": "中断步骤：{{step}}",
@@ -12995,10 +13158,26 @@
     },
     "history": {
       "title": "制作历史",
+      "batch": {
+        "make": "制作个人版",
+        "selected": "制作所选 {{count}} 项",
+        "selectAll": "全选当前列表",
+        "selectItem": "选择 {{title}}",
+        "hint": "按从老到新的顺序合入，统一生成一个新版本。",
+        "confirmTitle": "制作包含 {{count}} 项改动的个人版？",
+        "confirmDescription": "所选改动将按以下顺序逐条合入，全部成功后只生成一个新版本。已启动的所选隔离版会先停止。遇到冲突会进入处理冲突步骤，可打开关联任务查看；处理完成后自动清理临时文件并继续生成。停止制作也会停止关联任务并丢弃临时冲突修改，原任务修改和已生成版本会保留。",
+        "start": "确认制作",
+        "progress": "正在合入 {{current}} / {{total}}：{{title}}",
+        "restartTest": "重新启动隔离版"
+      },
       "build": "生成个人版",
       "buildDescription": "将当前个人源码生成新版本，未合入的历史改动不会包含在内。",
       "building": "正在生成个人版…",
       "stop": "停止制作",
+      "stopConfirm": {
+        "title": "停止本次制作？",
+        "description": "会同时停止本次处理冲突的任务，丢弃临时冲突修改，清理临时文件，并撤回尚未生成成功版本的合入。原制作任务的修改、交流记录和已生成版本会保留。"
+      },
       "stopping": "正在停止…",
       "progress": {
         "waiting": "等待开始",
@@ -13018,6 +13197,8 @@
       },
       "counts": "共 {{total}} 次 · 待合入 {{pending}} 次 · 已合入 {{integrated}} 次",
       "filterLabel": "筛选制作历史",
+      "mergeTaskTitle": "处理合入冲突",
+      "revertTaskTitle": "处理撤销合入冲突",
       "filters": {
         "all": "全部制作",
         "pending": "待合入",
@@ -13030,6 +13211,8 @@
       "openInstaller": "查看安装包",
       "updated": "更新于 {{time}}",
       "needsBuild": "源码已有改动，生成个人版后即可使用。",
+      "versionReady": "已生成个人版",
+      "versionPending": "待生成个人版",
       "built": "已包含在 {{time}} 生成的个人版中",
       "builtKnown": "已包含在生成的个人版中",
       "conflict": "改动存在冲突，请打开处理任务继续。",
@@ -13038,6 +13221,12 @@
       "files": "改动 {{count}} 个文件",
       "working": "正在处理…",
       "endAndClean": "结束并清理",
+      "clean": "清理历史",
+      "cleanTask": "清理任务",
+      "cleanTitle": "清理这条任务？",
+      "cleanConfirm": "这条记录将从制作历史中隐藏，任务会归档，对话记录保留。",
+      "cleanWorkspace": "删除仍存在的制作分支和工作目录，其中未提交的改动将丢失。",
+      "cleanKeep": "保留已合入个人版的改动和已生成的应用版本。",
       "endConfirm": "结束这次制作并清理工作目录？制作历史与已保存的改动会保留。",
       "revertConfirm": "撤销这次制作合入个人源码的改动？其他制作和已生成的应用会保留。",
       "lifecycle": {
@@ -13067,7 +13256,6 @@
         "resolve": "处理冲突",
         "retry": "重试",
         "build": "生成个人版",
-        "retryBuild": "重新生成",
         "end": "结束制作",
         "retry-prepare": "重试准备",
         "retry-cleanup": "重试清理"
@@ -13086,13 +13274,21 @@
       "files_other": "改动 {{count}} 个文件"
     },
     "merge": {
-      "getLatest": "获取最新源码",
+      "getLatest": "同步最新源码",
+      "taskTitle": "处理源码更新冲突",
       "updateHint": "更新官方源码，并保留个人改动。",
       "confirmTitle": "更新到最新源码？",
-      "confirmDescription": "会保留你的个人改动。如有冲突，将通过独立任务协助处理。",
+      "confirmDescription": "会保留你的个人改动。如有冲突，会先询问是否创建任务处理。",
+      "conflictConfirm": {
+        "title": "源码更新遇到冲突",
+        "description": "确认后会创建独立任务，由 Agent 自动处理冲突。取消将放弃本次合入，保留现有个人版。",
+        "confirm": "确认并解决",
+        "cancel": "取消更新"
+      },
       "confirm": "更新源码",
       "openTask": "打开处理任务",
       "resolve": "处理冲突",
+      "retryCancel": "重试取消",
       "resolveHint": "在独立任务中处理冲突并检查结果。",
       "otherAccount": "这项操作由其他账号发起，请切回该账号继续。",
       "status": {
@@ -13102,7 +13298,8 @@
         "resolving": "正在处理冲突",
         "checking": "正在检查改动…",
         "merged": "源码改动已合入",
-        "failed": "源码合入失败"
+        "failed": "源码合入失败",
+        "cancelled": "已取消源码更新"
       },
       "errors": {
         "busy": "其他操作正在进行，请稍后重试。",
@@ -13113,8 +13310,63 @@
         "baselineChanged": "个人源码已发生变化，请基于最新状态重试。",
         "checksFailed": "改动未通过检查，请打开处理任务继续。",
         "interrupted": "操作已中断，改动已保留，请重试。",
-        "startFailed": "无法打开处理任务，请重试。"
+        "startFailed": "无法打开处理任务，请重试。",
+        "cancelFailed": "未能取消本次更新，请重试。个人版源码已保留。"
       }
     }
+  },
+  "taskTags": {
+    "loadFailed": "标签加载失败，请重试。",
+    "retry": "重试",
+    "editLabel": "编辑“{{name}}”",
+    "reorderLabel": "调整“{{name}}”的顺序",
+    "reorderHint": "拖动排序，也可用上下方向键调整",
+    "addLabel": "添加“{{name}}”",
+    "removeLabel": "移除“{{name}}”",
+    "title": "标签",
+    "more": "更多标签",
+    "settings": "标签设置",
+    "name": "名称",
+    "color": "颜色",
+    "favorite": "常用（最多 7 个）",
+    "create": "创建",
+    "save": "保存",
+    "done": "完成",
+    "back": "返回",
+    "delete": "删除标签",
+    "cancel": "取消",
+    "deleteConfirm": "从 {{count}} 个任务中删除“{{name}}”？任务和消息会保留。",
+    "loading": "加载中…",
+    "unavailable": "此电脑需要更新才能支持标签。",
+    "offline": "连接任务所在电脑后可编辑标签。",
+    "failed": "保存失败，请重试。",
+    "conflict": "标签已在其他端修改，请刷新后重试。",
+    "favoritesFull": "最多设置七个常用标签。",
+    "alreadyExists": "已有同名标签。",
+    "empty": "暂无标签。",
+    "red": "红色",
+    "orange": "橙色",
+    "yellow": "黄色",
+    "green": "绿色",
+    "blue": "蓝色",
+    "purple": "紫色",
+    "gray": "灰色",
+    "none": "无颜色",
+    "pink": "粉色",
+    "coral": "珊瑚色",
+    "teal": "青色",
+    "indigo": "靛蓝色",
+    "white": "白色",
+    "add": "添加标签",
+    "editTitle": "编辑标签",
+    "editHint": "修改会同步到使用此标签的所有任务。",
+    "addHint": "添加后，自动选中到当前任务。",
+    "selectedCount": "已选 {{count}} 个",
+    "presetImportant": "重要",
+    "presetFollowUp": "待跟进",
+    "presetWork": "工作",
+    "presetLife": "生活",
+    "presetIdeas": "灵感",
+    "presetReference": "资料"
   }
 }

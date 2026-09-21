@@ -2,8 +2,9 @@
  * ChatGPT/Codex OAuth image channel.
  *
  * The subscription token cannot call the public Platform Images API. It can,
- * however, call the Codex Responses surface and expose `gpt-image-2` through
- * the hosted `image_generation` tool. Keep the token in Main and parse the raw
+ * however, call the Codex Responses surface's hosted `image_generation` tool.
+ * The catalog ID is a compatibility handle, not an upstream image model selector.
+ * Keep the token in Main and parse the raw
  * SSE stream because image-generation events may be newer than SDK typings.
  */
 
@@ -179,7 +180,6 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       tools: [
         {
           type: 'image_generation',
-          model: params.model.slice(modelPrefix.length),
           ...options,
           output_format: 'png',
           background: 'opaque',

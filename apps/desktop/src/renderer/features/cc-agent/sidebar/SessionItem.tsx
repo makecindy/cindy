@@ -1,3 +1,4 @@
+import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 /**
  * SessionItem — 单条 CCS 会话行
  * ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ import {
   startSessionDrag,
 } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { useCindyMakeActivity } from './useCindyMakeActivity';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
@@ -339,7 +340,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   insideAutomationGroup = false,
 }: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
-  const cindyMakePreparing = useCindyMakePreparing(session);
+  const cindyMakeActivity = useCindyMakeActivity(session);
+  const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   const prRefs = usePrRefsForSession(session.id);
   // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
@@ -416,7 +418,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
     isRunning: session.deviceLinkDeviceId
       ? remoteActivity?.phase === 'running'
-      : isRunning || cindyMakePreparing != null,
+      : isRunning || cindyMakeActivity != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
@@ -430,6 +432,16 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
     ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const tagMenu = (
+    <TaskTagMenuSection
+      session={session}
+      onMore={() => {
+        setTagEditorOpen(true);
+        setMenuPos(null);
+      }}
+    />
+  );
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   // heartbeat schedule 绑定标识(targetSessionId 指向本会话);schedule 删除/过期后
@@ -498,8 +510,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         ? 'cindyMake.code.taskName'
         : 'ccAgent.common.unnamedSession',
     ),
+    t,
   );
-  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const titleContent =
     matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
       ? highlightSegments(session.title, matchIndices, {
@@ -965,13 +978,14 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
         isActive
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+          ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
           : isSelected
-            ? 'bg-[var(--chat-input-chip-bg)] text-foreground'
+            ? 'bg-[var(--chat-input-chip-bg)] [--task-tag-ring-bg:var(--chat-input-chip-bg)] text-foreground'
             : cn(
-                'text-foreground hover:bg-sidebar-item-hover',
+                'text-foreground hover:bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
                 // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
-                menuPos !== null && 'bg-sidebar-item-hover',
+                menuPos !== null &&
+                  'bg-sidebar-item-hover [--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
               ),
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
       )}
@@ -1071,6 +1085,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           槽宽取信息层与按钮的较大值——不再绝对定位盖到标题上。 */}
       {!isEditing && (
         <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
+          {infoPieces.find((piece) => piece.key === 'tags')?.tags?.length ? (
+            <span className="mr-1 inline-flex shrink-0 items-center">
+              <TaskTagDots tags={session.tags} />
+            </span>
+          ) : null}
           {/* 任务信息同步 fade-out:hover/菜单打开/archivePending 时
               一起让位,确保只有 action buttons 占住右侧。fade 容器复用同一份条件,
               避免两个元素 fade 时机不一致产生闪烁。
@@ -1084,11 +1103,12 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 'col-start-1 row-start-1 flex items-center gap-1',
                 // duration 与 action 按钮组的渐显同拍(120ms),让位/回归一进一出同步。
                 'transition-opacity duration-[120ms]',
-                !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
-                menuPos !== null && 'opacity-0',
-                archivePending && 'opacity-0',
+                !archivePending &&
+                  'group-hover:opacity-0 group-hover:w-0 group-hover:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
+                menuPos !== null && 'opacity-0 w-0 overflow-hidden',
+                archivePending && 'opacity-0 w-0 overflow-hidden',
                 // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
-                ordinalBadgeLabel != null && 'opacity-0',
+                ordinalBadgeLabel != null && 'opacity-0 w-0 overflow-hidden',
               )}
             >
               {cindyMakePreparing && rightStatusKind === 'running' ? (
@@ -1108,7 +1128,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 // 任务信息复选:按用户勾选拼装 pr / worktree / tokens / cost / time;默认仅
                 // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
                 <SessionInfoMeta
-                  pieces={infoPieces}
+                  pieces={infoPieces.filter((piece) => piece.key !== 'tags')}
                   prRef={infoPrRef}
                   worktree={infoWorktree ?? undefined}
                   isActive={isActive}
@@ -1259,6 +1279,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 </DropdownMenuItem>
                 {exportShareMenuItem}
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1279,6 +1300,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1318,6 +1340,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1340,6 +1363,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       )}
 
       {/* 导出 .cshare 弹窗:仅打开时挂载,避免侧栏每行常驻 Dialog 实例。 */}
+      {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
       {shareExportOpen && (
         <SessionShareExportDialog
           open={shareExportOpen}

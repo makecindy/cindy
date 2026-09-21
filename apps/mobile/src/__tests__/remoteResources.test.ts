@@ -211,6 +211,9 @@ describe('portable task controls', () => {
         { id: 'start', label: 'Start' }, { id: 'continue', label: 'Continue', disabled: true },
         { id: 'form', label: 'Form', fields: [{ id: 'secret' }] },
         { id: 'confirm', label: 'Confirm', confirmation: { title: 'Sure?' } },
+        { id: 'bad-confirm', label: 'Bad', confirmation: { title: '' } },
+        { id: 'bad-body', label: 'Bad', confirmation: { title: 'Sure?', body: 42 } },
+        { id: 'null-confirm', label: 'Bad', confirmation: null },
         { id: 'x'.repeat(161), label: 'Too long' },
       ],
       blocks: [
@@ -219,7 +222,7 @@ describe('portable task controls', () => {
       ],
     })) as RemoteInvoke;
     const card = await getRemoteResource(invoke, targets[0], ref);
-    expect(card.actions).toEqual([{ id: 'start', label: 'Start', disabled: false }, { id: 'continue', label: 'Continue', disabled: true }]);
+    expect(card.actions).toEqual([{ id: 'start', label: 'Start', disabled: false }, { id: 'continue', label: 'Continue', disabled: true }, { id: 'confirm', label: 'Confirm', disabled: false, confirmation: { title: 'Sure?' } }]);
     expect(card.blocks?.[0].data).toEqual({ input: 'blocked', busy: true });
     expect(card.blocks?.[1]).toEqual({ id: 'future', primitive: 'future-widget', fallbackMarkdown: 'Readable fallback' });
     expect(JSON.stringify(card)).not.toContain('/private');

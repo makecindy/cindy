@@ -389,13 +389,15 @@ async function withBot<T>(
 /** Single management boundary used by desktop, remote resources and all MCP harnesses. */
 export const routineTools = {
   list: (botId: string) => withBot(botId, (engine) => engine.list(botId)),
-  save: (botId: string, input: RoutineInput, id?: string) =>
-    withBot(botId, (engine) => engine.put(botId, input, id)),
-  remove: (botId: string, id: string) =>
+  createOnce: (botId: string, input: RoutineInput, creationId: string) =>
+    withBot(botId, (engine) => engine.createOnce(botId, input, creationId)),
+  save: (botId: string, input: RoutineInput, id?: string, expectedRevision?: number) =>
+    withBot(botId, (engine) => engine.put(botId, input, id, expectedRevision)),
+  remove: (botId: string, id: string, expectedRevision?: number) =>
     withBot(botId, async (engine, scope) => {
-      await engine.remove(botId, id, () => cleanBackingSchedules(scope, [id], true));
+      await engine.remove(botId, id, () => cleanBackingSchedules(scope, [id], true), expectedRevision);
     }),
-  runNow: (botId: string, id: string) => withBot(botId, (engine) => engine.runNow(botId, id)),
+  runNow: (botId: string, id: string, expectedRevision?: number) => withBot(botId, (engine) => engine.runNow(botId, id, expectedRevision)),
   history: (botId: string, id: string) =>
     withBot(botId, (engine) => {
       if (!engine.list(botId).some((routine) => routine.id === id))

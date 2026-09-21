@@ -66,6 +66,33 @@ async function fixture(
 }
 
 describe("Routine event admission and execution", () => {
+  it('deduplicates concurrent creation and a retry after restart without overwriting newer edits', async () => {
+    const f = await fixture();
+    const creationId = 'mobile-request-123456';
+    const [a, b] = await Promise.all([f.engine.createOnce('bot', input, creationId), f.engine.createOnce('bot', input, creationId)]);
+    expect(a).toEqual(b);
+    expect(f.engine.list('bot')).toHaveLength(1);
+    await f.engine.stop();
+    const restarted = await fixture(undefined, f.snapshot());
+    try {
+      expect(await restarted.engine.createOnce('bot', input, creationId)).toEqual(a);
+      const updated = await restarted.engine.put('bot', { ...input, name: 'Edited on desktop' }, a.id);
+      await expect(restarted.engine.createOnce('bot', input, creationId)).rejects.toThrow('already created');
+      expect(restarted.engine.list('bot')).toEqual([updated]);
+      await expect(restarted.engine.createOnce('another-bot', input, creationId)).rejects.toThrow('already used');
+    } finally { await restarted.engine.stop(); }
+  });
+  it('rejects stale remote edits, deletes and manual runs without changing the current routine', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.engine.put('bot-1', input);
+      const updated = await f.engine.put('bot-1', { ...input, name: 'Newer desktop edit' }, first.id, first.revision);
+      await expect(f.engine.put('bot-1', { ...input, name: 'Old mobile draft' }, first.id, first.revision)).rejects.toThrow('Routine changed');
+      await expect(f.engine.remove('bot-1', first.id, undefined, first.revision)).rejects.toThrow('Routine changed');
+      await expect(f.engine.runNow('bot-1', first.id, first.revision)).rejects.toThrow('Routine changed');
+      expect(f.engine.list('bot-1')).toEqual([updated]);
+    } finally { await f.engine.stop(); }
+  });
   it.each([
     { id: 'timer', kind: 'interval' as const, intervalMs: 60_000 },
     { id: 'timer', kind: 'cron' as const, expression: '* * * * *', timezone: 'UTC' },

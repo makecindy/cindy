@@ -2034,6 +2034,29 @@ export function resetTurnPersistState(sessionId: string): void {
 }
 
 /**
+ * Extension notices are already complete. Keep them out of assistantBlocks,
+ * reply dedup/fork anchors and per-turn usage targets, including when a notice
+ * arrives between model deltas. The normal durable-row broadcast works for
+ * both local windows and older device-link clients without a new stream flag.
+ */
+export function onStandaloneTextEvent(
+  sessionId: string,
+  text: string,
+  agentMeta: Pick<AgentMeta, 'botPrivateReply'> | null = null,
+): string | undefined {
+  if (!text.trim()) return undefined;
+  const persistId = createId();
+  enqueueVisibleDbMessage(`standalone_text:${sessionId}:${persistId}`, sessionId, {
+    clientId: persistId,
+    role: 'assistant',
+    content: text,
+    agentMeta,
+    createdAt: Date.now(),
+  });
+  return persistId;
+}
+
+/**
  * 处理 assistant 'text' 事件,返回该消息的 persistId 供 onEvent 盖进广播 payload。
  *
  *  - delta(isFinal=false):首 delta 分配 persistId、建 block;后续累积全文。**不落库**。

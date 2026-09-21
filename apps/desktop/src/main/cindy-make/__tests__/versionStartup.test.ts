@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CINDY_VERSION_PROTOCOL } from '../../../shared/cindyVersions';
 const h = vi.hoisted(() => ({
   profile: '',
   appPath: '',
@@ -14,7 +15,9 @@ const h = vi.hoisted(() => ({
   pty: vi.fn(),
   exit: vi.fn(),
   quit: vi.fn(),
+  relaunch: vi.fn(),
   errorBox: vi.fn(),
+  ready: false,
   live: new Set<number>(),
 }));
 vi.mock('electron', () => ({
@@ -33,6 +36,7 @@ vi.mock('electron', () => ({
       h.profile = value;
     },
     whenReady: async () => {},
+    isReady: () => h.ready,
     dock: { hide: vi.fn() },
     once: vi.fn(),
     on: vi.fn(),
@@ -40,6 +44,7 @@ vi.mock('electron', () => ({
     emit: vi.fn(),
     exit: h.exit,
     quit: h.quit,
+    relaunch: h.relaunch,
   },
   dialog: { showErrorBox: h.errorBox },
 }));
@@ -55,6 +60,7 @@ vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
 vi.mock('../../../shared/brandRegion.js', () => ({ CURRENT_CINDY_REGION: 'global' }));
 
 const originalExec = process.execPath;
+const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
 const originalArgv = [...process.argv];
 let root = '';
 let startup: typeof import('../versionStartup');
@@ -66,8 +72,10 @@ beforeEach(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), 'cindy-version-startup-'));
   h.profile = path.join(root, 'profile');
   h.appPath = path.join(root, 'checkout', 'apps', 'desktop');
+  Object.defineProperty(process, 'resourcesPath', { value: h.appPath, configurable: true });
   h.name = 'Cindy';
   h.packaged = false;
+  h.ready = false;
   await mkdir(h.profile);
   await mkdir(path.join(h.appPath, 'drizzle'), { recursive: true });
   await mkdir(path.join(root, 'checkout/config'), { recursive: true });
@@ -132,12 +140,60 @@ afterEach(async () => {
     configurable: true,
     writable: true,
   });
+  if (originalResourcesPath)
+    Object.defineProperty(process, 'resourcesPath', originalResourcesPath);
+  else Reflect.deleteProperty(process, 'resourcesPath');
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   if (root) await rm(root, { recursive: true, force: true });
 });
 function saveOriginal() {
   store.writeVersionJson(path.join(store.versionsRoot(h.profile), 'original.json'), original);
+}
+/** A retained personal version whose recorded digests match its files unless `corrupt`. */
+async function savePersonalVersion(options: { corrupt?: boolean } = {}) {
+  const id = randomUUID();
+  const directory = store.versionDirectory(h.profile, id);
+  const resources = path.join(directory, 'resources');
+  await mkdir(path.join(resources, 'drizzle'), { recursive: true });
+  await writeFile(path.join(directory, 'Cindy.exe'), 'personal executable');
+  await writeFile(path.join(resources, 'app.asar'), 'personal application');
+  await writeFile(
+    path.join(resources, 'cindy-version-protocol.json'),
+    JSON.stringify({ version: CINDY_VERSION_PROTOCOL }),
+  );
+  await writeFile(
+    path.join(resources, 'drizzle', '0000_base.sql'),
+    await readFile(path.join(h.appPath, 'drizzle', '0000_base.sql')),
+  );
+  const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+  store.writeVersionJson(path.join(directory, 'version.json'), {
+    protocol: 1,
+    id,
+    profile: original.profile,
+    title: 'Blue background',
+    commit: 'a'.repeat(40),
+    builtAt: '2026-09-17T20:00:00.000+08:00',
+    platform: process.platform,
+    arch: process.arch,
+    executable: 'Cindy.exe',
+    resources: 'resources',
+    executableHash: digest(options.corrupt ? 'something else' : 'personal executable'),
+    applicationHash: digest('personal application'),
+    migrationHash: store.migrationIdentity(path.join(h.appPath, 'drizzle')),
+  });
+  return { id, executable: path.join(directory, 'Cindy.exe') };
+}
+/**
+ * Electron emits 'ready' from the first event-loop turn after the main script; anything the
+ * dispatcher awaits that is real I/O lets that turn run before bootstrap-electron loads.
+ */
+function armReadyOnNextTurn() {
+  const fired = vi.fn(() => {
+    h.ready = true;
+  });
+  setImmediate(fired);
+  return fired;
 }
 function launchRequest(patch: Partial<import('../versionStartup').VersionLaunchRequest> = {}) {
   const value: import('../versionStartup').VersionLaunchRequest = {
@@ -185,8 +241,17 @@ describe('one original version type for Dev and installed Cindy', () => {
     expect(h.spawn).not.toHaveBeenCalled();
   });
   it('rejects a declared endpoint realm that differs from the running original', async () => {
-    await writeFile(path.join(root, 'checkout/config/endpoint.json'), JSON.stringify({ schemaVersion: 1, region: 'cn', authApiBaseUrl: 'https://auth.example.invalid' }));
-    await expect(startup.rememberOriginalVersion(originalExec)).rejects.toMatchObject({ code: 'unavailable' });
+    await writeFile(
+      path.join(root, 'checkout/config/endpoint.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        region: 'cn',
+        authApiBaseUrl: 'https://auth.example.invalid',
+      }),
+    );
+    await expect(startup.rememberOriginalVersion(originalExec)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
     expect(h.spawn).not.toHaveBeenCalled();
   });
   it('pins a validated launch to its original profile and consumes launch arguments before ordinary relaunch', async () => {
@@ -310,6 +375,10 @@ describe('one original version type for Dev and installed Cindy', () => {
     expect(store.selectedVersion(h.profile)).toBe('original');
   });
   it('starts the original Dev through the complete existing runner and retains its PTY until exit', async () => {
+    vi.stubEnv('DISPLAY', ':8');
+    vi.stubEnv('WAYLAND_DISPLAY', 'wayland-1');
+    vi.stubEnv('XDG_RUNTIME_DIR', '/run/user/1000');
+    vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus');
     saveOriginal();
     const value = launchRequest({ state: 'pending' });
     process.argv.push('--cindy-version-profile=' + h.profile, '--cindy-version-helper=' + value.id);
@@ -317,6 +386,12 @@ describe('one original version type for Dev and installed Cindy', () => {
     const kill = vi.fn(() => onExit());
     h.pty.mockImplementation((_node, _args, options) => {
       expect(options.env.CINDY_VERSION_LAUNCH).toBe(value.id);
+      expect(options.env).toMatchObject({
+        DISPLAY: ':8',
+        WAYLAND_DISPLAY: 'wayland-1',
+        XDG_RUNTIME_DIR: '/run/user/1000',
+        DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
+      });
       queueMicrotask(() => {
         const file = startup.versionRequestPath(h.profile, value.id);
         store.writeVersionJson(file, {
@@ -346,5 +421,124 @@ describe('one original version type for Dev and installed Cindy', () => {
     await expect(result).resolves.toBe(true);
     expect(h.exit).toHaveBeenCalledWith(0);
     expect(kill).not.toHaveBeenCalled();
+  });
+});
+
+// bootstrap-electron is loaded right after the dispatcher returns false and registers
+// privileged schemes plus the 'ready' listener at module top level. Any real I/O awaited on a
+// path that keeps this process running lets Electron become ready first (the 2026-09-20 Dev
+// startup failure with a recorded original.json).
+describe('startup dispatch stays ahead of Electron ready', () => {
+  it.each([false, true])(
+    'rejects an outdated selection using the running original before its registry refresh (packaged=%s)',
+    async (packaged) => {
+      h.packaged = packaged;
+      original.migrationHash = store.migrationIdentity(path.join(h.appPath, 'drizzle'));
+      saveOriginal();
+      const personal = await savePersonalVersion();
+      await store.selectVersion(h.profile, personal.id);
+      await writeFile(
+        path.join(h.appPath, 'drizzle', '0001_upgrade.sql'),
+        'ALTER TABLE sample ADD COLUMN name TEXT;',
+      );
+      const ready = armReadyOnNextTurn();
+      expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+      expect(ready).not.toHaveBeenCalled();
+      expect(h.spawn).not.toHaveBeenCalled();
+      expect(h.exit).not.toHaveBeenCalled();
+      expect(store.readOriginalVersion(h.profile)?.migrationHash).toBe(original.migrationHash);
+      startup.finishCindyVersionStartup();
+      await vi.waitFor(() => {
+        expect(store.selectedVersion(h.profile)).toBe('original');
+        expect(store.readOriginalVersion(h.profile)?.migrationHash).toBe(
+          store.migrationIdentity(path.join(h.appPath, 'drizzle')),
+        );
+      });
+    },
+  );
+  it('opens the recorded original without yielding, then refreshes the record after the lock', async () => {
+    saveOriginal();
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(store.readOriginalVersion(h.profile)?.version).toBeUndefined();
+    startup.finishCindyVersionStartup();
+    await vi.waitFor(() => expect(store.readOriginalVersion(h.profile)?.version).toBe('0.1.99'));
+    expect(
+      store.readVersionJson(path.join(store.versionsRoot(h.profile), 'active.json')),
+    ).toMatchObject({ pid: process.pid, id: 'original' });
+    expect(h.spawn).not.toHaveBeenCalled();
+  });
+  it('restores the original with --cindy-version-original and persists the choice after the lock', async () => {
+    saveOriginal();
+    const personal = await savePersonalVersion();
+    await store.selectVersion(h.profile, personal.id);
+    process.argv.push('--cindy-version-original');
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(h.spawn).not.toHaveBeenCalled();
+    expect(store.selectedVersion(h.profile)).toBe(personal.id);
+    startup.finishCindyVersionStartup();
+    await vi.waitFor(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+  });
+  it('opens the original in-process when the selected version fails before any real I/O', async () => {
+    saveOriginal();
+    await store.selectVersion(h.profile, randomUUID());
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(h.relaunch).not.toHaveBeenCalled();
+    startup.finishCindyVersionStartup();
+    await vi.waitFor(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+  });
+  it.each([
+    ['packaged', true],
+    ['Dev', false],
+  ])(
+    'resets the selection and leaves when a %s handoff fails after Electron became ready',
+    async (_label, packaged) => {
+      saveOriginal();
+      const personal = await savePersonalVersion({ corrupt: true });
+      await store.selectVersion(h.profile, personal.id);
+      h.packaged = packaged;
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const ready = armReadyOnNextTurn();
+      expect(await startup.dispatchCindyVersionStartup()).toBe(true);
+      expect(ready).toHaveBeenCalled();
+      expect(store.selectedVersion(h.profile)).toBe('original');
+      expect(h.spawn).not.toHaveBeenCalled();
+      if (packaged) {
+        expect(h.relaunch).toHaveBeenCalledWith({
+          args: expect.arrayContaining(['--cindy-version-original']),
+        });
+        expect(h.exit).toHaveBeenCalledWith(0);
+      } else {
+        expect(h.relaunch).not.toHaveBeenCalled();
+        expect(h.exit).toHaveBeenCalledWith(1);
+        expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Start Dev again'));
+      }
+    },
+  );
+  it('self-verifies a launched personal version synchronously', async () => {
+    saveOriginal();
+    const personal = await savePersonalVersion();
+    Object.defineProperty(process, 'execPath', {
+      value: personal.executable,
+      configurable: true,
+      writable: true,
+    });
+    const request = launchRequest({ targetId: personal.id });
+    process.argv.push(
+      '--cindy-version-profile=' + h.profile,
+      '--cindy-version-launch=' + request.id,
+    );
+    startup.prepareCindyVersionStartup();
+    expect(startup.getCurrentCindyVersionId()).toBe(personal.id);
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(h.spawn).not.toHaveBeenCalled();
   });
 });

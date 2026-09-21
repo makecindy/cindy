@@ -6,6 +6,8 @@ import {
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
   planColdPiWindowVerification,
+  resolveColdPiWindowVerificationExecution,
+  shouldSkipColdPiWindowRehydration,
 } from '../runtimeModelSwitchGate';
 
 const million = 1_000_000;
@@ -254,6 +256,116 @@ describe('planColdPiWindowVerification', () => {
     },
   ])('$name', ({ input, want }) => {
     expect(planColdPiWindowVerification(input)).toBe(want);
+  });
+});
+
+describe('resolveColdPiWindowVerificationExecution', () => {
+  it('keeps every non-rehydrate decision untouched', () => {
+    for (const plan of [
+      'live-runtime',
+      'reject-cold-remote',
+      'skip-without-native-session',
+    ] as const) {
+      expect(
+        resolveColdPiWindowVerificationExecution(plan, {
+          contextTokens: 185_000,
+          targetContextWindow: twoHundredK,
+        }),
+      ).toBe(plan);
+    }
+  });
+
+  it('downgrades a planned cold rehydrate once pressure preflight proves headroom', () => {
+    expect(
+      resolveColdPiWindowVerificationExecution('rehydrate-cold-runtime', {
+        contextTokens: 26_921,
+        targetContextWindow: million,
+      }),
+    ).toBe('skip-without-live-verification');
+  });
+
+  it('keeps the rehydrate when the known usage can still need the handoff', () => {
+    expect(
+      resolveColdPiWindowVerificationExecution('rehydrate-cold-runtime', {
+        contextTokens: 185_000,
+        targetContextWindow: twoHundredK,
+      }),
+    ).toBe('rehydrate-cold-runtime');
+  });
+
+  it('keeps the rehydrate without live usage or a verified target window', () => {
+    expect(
+      resolveColdPiWindowVerificationExecution('rehydrate-cold-runtime', {
+        contextTokens: null,
+        targetContextWindow: twoHundredK,
+      }),
+    ).toBe('rehydrate-cold-runtime');
+    expect(
+      resolveColdPiWindowVerificationExecution('rehydrate-cold-runtime', {
+        contextTokens: 26_921,
+        targetContextWindow: null,
+      }),
+    ).toBe('rehydrate-cold-runtime');
+  });
+
+  it('skips a cleared native context without consulting the pressure preflight', () => {
+    expect(
+      resolveColdPiWindowVerificationExecution(
+        planColdPiWindowVerification({
+          hasLiveSession: false,
+          remoteHostId: null,
+          nativeSessionId: null,
+        }),
+        { contextTokens: null, targetContextWindow: null },
+      ),
+    ).toBe('skip-without-native-session');
+  });
+});
+
+describe('shouldSkipColdPiWindowRehydration', () => {
+  it.each([
+    {
+      name: 'live usage far below the target window → skip the 2~3s cold start',
+      input: { contextTokens: 26_921, targetContextWindow: million },
+      want: true,
+    },
+    {
+      name: 'empty context → nothing to protect, skip',
+      input: { contextTokens: 0, targetContextWindow: twoHundredK },
+      want: true,
+    },
+    {
+      name: 'warn band still hot-applies (no rebuild) → skip',
+      input: { contextTokens: 150_000, targetContextWindow: twoHundredK },
+      want: true,
+    },
+    {
+      name: 'danger band can need the shrink handoff → verify',
+      input: { contextTokens: 185_000, targetContextWindow: twoHundredK },
+      want: false,
+    },
+    {
+      name: 'overflow can need confirmation → verify',
+      input: { contextTokens: 240_000, targetContextWindow: twoHundredK },
+      want: false,
+    },
+    {
+      name: 'missing live usage must not skip verification',
+      input: { contextTokens: null, targetContextWindow: twoHundredK },
+      want: false,
+    },
+    {
+      name: 'unknown target window must not skip verification',
+      input: { contextTokens: 26_921, targetContextWindow: null },
+      want: false,
+    },
+    {
+      name: 'non-positive target window is not a verified ceiling',
+      input: { contextTokens: 26_921, targetContextWindow: 0 },
+      want: false,
+    },
+  ])('$name', ({ input, want }) => {
+    expect(shouldSkipColdPiWindowRehydration(input)).toBe(want);
   });
 });
 

@@ -21,6 +21,11 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
+import {
+  hasInterruptionContext,
+  readAutoResumeInfo,
+  type AutoResumeCardInfo,
+} from '@/lib/autoResumePresentation';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
@@ -44,6 +49,7 @@ import {
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { CindyMakeDoctorCard } from './CindyMakeDoctorCard';
+import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
 import { CindyMakeCompleteCard } from '@/components/cindy-make/CindyMakeCompleteCard';
 
 interface SystemCardProps {
@@ -105,22 +111,38 @@ const codeClass = cn(
 );
 
 function HelpCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const commands =
-    (data?.commands as Array<{ name: string; description?: string; source: string }>) ?? [];
+    (data?.commands as Array<{
+      name: string;
+      description?: string;
+      source: string;
+      builtIn?: boolean;
+    }>) ?? [];
   const desktopCmds = commands.filter((c) => c.source === 'desktop');
   const agentBuiltinCmds = commands.filter((c) => c.source === 'agent-builtin');
   const projectCmds = commands.filter((c) => c.source === 'user' || c.source === 'skill');
 
   const renderCommandRows = (
-    items: Array<{ name: string; description?: string; source: string }>,
+    items: Array<{
+      name: string;
+      description?: string;
+      source: string;
+      builtIn?: boolean;
+    }>,
   ) => (
     <div className="flex flex-col gap-[2px]">
-      {items.map((c) => (
-        <div key={c.name} className={rowClass}>
-          <span className={codeClass}>/{c.name}</span>
-          <span className={descClass}>{c.description ?? ''}</span>
-        </div>
-      ))}
+      {items.map((c) => {
+        const descriptionKey = builtInSkillDescriptionKey(c);
+        return (
+          <div key={c.name} className={rowClass}>
+            <span className={codeClass}>/{c.name}</span>
+            <span className={descClass}>
+              {descriptionKey ? t(descriptionKey) : c.description ?? ''}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -832,53 +854,6 @@ function GoalResumedCard({ data }: { data?: { kind?: string } }) {
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
     </div>
   );
-}
-
-/**
- * silent-stop 自动续跑分隔条:上游空响应静默收尾后,main 守卫自动补发了隐藏的
- * 「继续」。用户不看到用户气泡,只看到这条轻分隔线标记"上一段与下一段之间发生过
- * 一次自动接续"(否则模型"一句话断成两段凭空接着说"会让人怀疑消息丢了)。
- * 复用 CompactBoundaryCard / GoalResumedCard 的分隔条视觉语言。
- */
-/** 活动行需要的展示信息(从 systemCardData 松散读取,缺字段一律降级而不是崩)。 */
-interface AutoResumeCardInfo {
-  error?: string;
-  attempt?: number;
-  maxAttempts?: number;
-  sessionTotal?: number;
-  /** 结果:由 main 在产出 / 再次被打断时回填;缺省 = 还在等结果。 */
-  outcome?: 'succeeded' | 'failed';
-}
-
-/**
- * 这条自动续跑记录属于「中断重连」还是 silent-stop 的「空回复后续跑」。
- *
- * 判据是有没有任何中断上下文（原因 / 次数 / 累计 / 结果）。**必须区分**：silent-stop 那条
- * 路径也走 `auto-resume` 卡，但它不是重连——把三态重连行套上去，历史里那条「已自动继续」
- * 会变成语义错误的「重新连接」（copilot review）。
- */
-function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
-  return (
-    info.error !== undefined ||
-    info.attempt !== undefined ||
-    info.maxAttempts !== undefined ||
-    info.sessionTotal !== undefined ||
-    info.outcome !== undefined
-  );
-}
-
-function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCardInfo {
-  const num = (v: unknown) =>
-    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
-  return {
-    ...(typeof data?.error === 'string' && data.error.length > 0 ? { error: data.error } : {}),
-    ...(num(data?.attempt) !== undefined ? { attempt: num(data?.attempt) } : {}),
-    ...(num(data?.maxAttempts) !== undefined ? { maxAttempts: num(data?.maxAttempts) } : {}),
-    ...(num(data?.sessionTotal) !== undefined ? { sessionTotal: num(data?.sessionTotal) } : {}),
-    ...(data?.outcome === 'succeeded' || data?.outcome === 'failed'
-      ? { outcome: data.outcome }
-      : {}),
-  };
 }
 
 /**

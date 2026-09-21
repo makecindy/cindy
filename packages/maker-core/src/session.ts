@@ -507,6 +507,8 @@ export class Session {
   // ── turn 零事件看门狗（见 DEFAULT_TURN_STALL_MS）────────────────────────
   private readonly turnStallMs: number;
   private turnStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private turnStallDiagnosticState = 'idle';
+  private turnStallLastDiagnosticAt = 0;
   /** 还需要"清醒地"静默多久才判卡死;按分片递减(见 armTurnStallSlice)。 */
   private turnStallRemainingMs = 0;
   /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
@@ -2099,7 +2101,7 @@ export class Session {
   ): Promise<InteractionDecision> {
     this.pendingInteractions += 1;
     const runtime = this.observeInteractionStarted(request);
-    this.clearTurnStallWatchdog();
+    this.armTurnStallWatchdog();
     try {
       return await resolve();
     } finally {
@@ -2731,13 +2733,17 @@ export class Session {
     }
   }
 
-  private clearTurnStallWatchdog(): void {
+  private clearTurnStallWatchdog(refresh = false): void {
     if (this.turnStallTimer) {
       clearTimeout(this.turnStallTimer);
       this.turnStallTimer = null;
     }
     this.turnStallRemainingMs = 0;
     this.turnStallSliceStartedAt = 0;
+    if (!refresh && this.turnStallDiagnosticState === 'armed') {
+      this.logger.info('turn stall watchdog disarmed', { status: this.status });
+      this.turnStallDiagnosticState = 'idle';
+    }
   }
 
   private clearTerminalErrorDrain(): void {
@@ -2776,14 +2782,33 @@ export class Session {
    * 后两条是误杀防护(见 DEFAULT_TURN_STALL_MS)。
    */
   private armTurnStallWatchdog(): void {
-    this.clearTurnStallWatchdog();
-    if (this.turnStallMs <= 0) return;
-    if (this.status !== 'active') return;
-    if (this.closePromise) return;
-    if (!this.isTurnRunning() && !this.hasUnsettledTurn()) return;
-    if (this.pendingInteractions > 0) return;
-    if (this.hasRunningBackgroundTasks()) return;
+    this.clearTurnStallWatchdog(true);
+    const reason = this.turnStallMs <= 0 ? 'disabled'
+      : this.status !== 'active' ? this.status
+      : this.closePromise ? 'closing'
+      : !this.isTurnRunning() && !this.hasUnsettledTurn() ? 'no-active-turn'
+      : this.pendingInteractions > 0 ? 'pending-interaction'
+      : this.hasRunningBackgroundTasks() ? 'background-task' : null;
+    if (reason) {
+      if (this.turnStallDiagnosticState !== reason) {
+        this.logger.info('turn stall watchdog suspended', { reason });
+        this.turnStallDiagnosticState = reason;
+      }
+      return;
+    }
     this.turnStallRemainingMs = this.turnStallMs;
+    const now = Date.now();
+    // Bound refresh diagnostics to once per minute, independent of token volume.
+    if (this.turnStallDiagnosticState !== 'armed' || now - this.turnStallLastDiagnosticAt >= 60_000) {
+      this.logger.info(this.turnStallDiagnosticState !== 'armed'
+        ? 'turn stall watchdog armed' : 'turn stall watchdog refreshed', {
+        timeoutMs: this.turnStallMs,
+        lastActivityAt: now,
+        deadlineWithoutSuspendAt: now + this.turnStallMs,
+      });
+      this.turnStallLastDiagnosticAt = now;
+    }
+    this.turnStallDiagnosticState = 'armed';
     this.armTurnStallSlice();
   }
 

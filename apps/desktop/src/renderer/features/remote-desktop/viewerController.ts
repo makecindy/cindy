@@ -20,6 +20,12 @@ import type {
   RemoteDesktopViewerApi,
   RemoteViewerState,
 } from '../../../shared/remoteDesktopViewer';
+import {
+  DEFAULT_VIEWER_PREFERENCES,
+  type RemoteViewerPreferences,
+  type RemoteViewerSafety,
+  type RemoteViewerCredentialState,
+} from '../../../shared/remoteDesktopViewer';
 
 export interface ViewerSnapshot {
   target: RemoteViewerState['target'];
@@ -34,6 +40,14 @@ export interface ViewerSnapshot {
   latency: number | null;
   settings: RemoteDesktopVideoSettings;
   ready: boolean;
+  scaleMode?: 'fit' | 'actual' | 'custom';
+  preferences: RemoteViewerPreferences;
+  safety: RemoteViewerSafety;
+  receiveRate: number | null;
+  closing: boolean;
+  credential: RemoteViewerCredentialState | null;
+  credentialBusy: boolean;
+  credentialNotice: string | null;
 }
 
 function connectionBudget(caps: RemoteDesktopCapabilities | null): number {
@@ -60,6 +74,13 @@ export class DesktopViewerController {
     latency: null,
     settings: { fps: 30, bitrate: 0, audio: true },
     ready: false,
+    preferences: { ...DEFAULT_VIEWER_PREFERENCES },
+    safety: { privacyActive: false, notice: null, clipboardProgress: null },
+    receiveRate: null,
+    closing: false,
+    credential: null,
+    credentialBusy: false,
+    credentialNotice: null,
   };
   private scope: RemoteViewerState = { target: null, active: false, generation: -1 };
   private disposed = false;
@@ -76,6 +97,17 @@ export class DesktopViewerController {
   private clipboardQueue: Promise<void> = Promise.resolve();
   private clipboardQueued = 0;
   private clipboardRevision = 0;
+  private pendingSettings = false;
+  private offers = new Set<import('@cindy/device-link').RemoteDesktopLease>();
+  private mediaChanging = false;
+  private settingsTimer: ReturnType<typeof setTimeout> | null = null;
+  private statsAt = 0;
+  private frameAt = 0;
+  private unlockAttempted = false;
+  private credentialRetry: {
+    action: 'settings' | 'enable' | 'disable' | 'unlock' | 'biometric';
+    enabled?: boolean;
+  } | null = null;
   private session: RemoteDesktopViewerSession;
   private media: RemoteDesktopViewerMedia;
   private runtime: ReturnType<typeof mountRemoteDesktopViewer>;
@@ -83,7 +115,7 @@ export class DesktopViewerController {
   private unsubscribers: (() => void)[];
   constructor(
     private readonly api: RemoteDesktopViewerApi,
-    root: HTMLElement,
+    private readonly root: HTMLElement,
     private readonly changed: (state: ViewerSnapshot) => void,
   ) {
     this.session = new RemoteDesktopViewerSession(this.request);
@@ -102,6 +134,13 @@ export class DesktopViewerController {
               },
             }
           : null,
+      onOfferStart: (lease) => {
+        this.offers.add(lease);
+      },
+      onOfferSettled: (lease) => {
+        this.offers.delete(lease);
+        this.applySettings();
+      },
     });
     this.runtime = mountRemoteDesktopViewer(root, (message) => this.message(message), {
       desktop: true,
@@ -117,6 +156,11 @@ export class DesktopViewerController {
     this.timers = [
       setInterval(() => void this.heartbeat(), 3000),
       setInterval(() => void this.frame(), 350),
+      setInterval(() => {
+        void this.refreshSafety();
+        if (this.statsAt && Date.now() - this.statsAt > 5000)
+          this.publish({ receiveRate: null, latency: null });
+      }, 1500),
     ];
   }
   private publish(patch: Partial<ViewerSnapshot>): void {
@@ -133,6 +177,7 @@ export class DesktopViewerController {
       this.scope.active &&
       !this.disposed &&
       !this.state.error &&
+      !this.state.closing &&
       (!this.state.ready || this.state.status === 'reconnecting');
     if (!waiting) {
       if (this.connectionTimer !== null) clearTimeout(this.connectionTimer);
@@ -177,11 +222,39 @@ export class DesktopViewerController {
       status: 'connecting',
       caps: null,
       ready: false,
+      closing: false,
+      credential: null,
+      credentialBusy: false,
+      credentialNotice: null,
+      preferences: { ...DEFAULT_VIEWER_PREFERENCES },
     });
-    if (scope.active) void this.connect();
+    this.unlockAttempted = false;
+    this.credentialRetry = null;
+    if (scope.active)
+      void (async () => {
+        try {
+          const preferences = await this.api.preferences?.(scope.generation);
+          if (this.scope !== scope || this.disposed) return;
+          if (preferences)
+            this.publish({
+              preferences,
+              settings: { ...this.state.settings, audio: preferences.audio },
+            });
+        } catch {
+          /* Defaults preserve ordinary viewing if preference storage is unavailable. */
+        }
+        if (this.scope === scope && !this.disposed) void this.connect();
+      })();
   }
   private cancel(preserveFrame = false): void {
     this.epoch++;
+    if (this.settingsTimer) clearTimeout(this.settingsTimer);
+    this.settingsTimer = null;
+    this.pendingSettings = false;
+    this.mediaChanging = false;
+    this.offers.clear();
+    this.statsAt = 0;
+    this.frameAt = 0;
     this.clipboardQueue = Promise.resolve();
     this.clipboardQueued = 0;
     this.opening = false;
@@ -197,6 +270,8 @@ export class DesktopViewerController {
       transport: '',
       latency: null,
       clipboardError: false,
+      receiveRate: null,
+      safety: { privacyActive: false, notice: null, clipboardProgress: null },
     });
   }
   private async connect(takeover = false): Promise<void> {
@@ -230,7 +305,7 @@ export class DesktopViewerController {
         fillHeight: false,
         trickleIce: caps.trickleIce === true,
         audio: caps.systemAudio && this.state.settings.audio,
-        clipboardShortcuts: caps.clipboardText === true,
+        clipboardShortcuts: caps.clipboardText === true || caps.clipboardContent === true,
         clipboardModifier:
           typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin'
             ? 'meta'
@@ -254,11 +329,12 @@ export class DesktopViewerController {
   }
   retry(): void {
     this.cancel(true);
+    this.unlockAttempted = false;
     this.resuming = false;
     void this.connect(this.state.error === 'connectionBusy');
   }
   async setControl(enabled: boolean): Promise<void> {
-    if (this.state.controlPending || !this.session.lease) return;
+    if (this.state.closing || this.state.controlPending || !this.session.lease) return;
     this.wantsControl = enabled;
     this.runtime.receive({ type: 'releaseInput' });
     const lease = this.session.lease;
@@ -282,6 +358,7 @@ export class DesktopViewerController {
       if (lease === this.session.lease) {
         this.publish({ controlPending: false });
         this.syncControl();
+        this.applySettings();
       }
     }
   }
@@ -311,16 +388,138 @@ export class DesktopViewerController {
   }
   settings(patch: Partial<RemoteDesktopVideoSettings>): void {
     this.publish({ settings: { ...this.state.settings, ...patch } });
+    if (patch.audio !== undefined) void this.preference({ audio: patch.audio });
+    this.pendingSettings = true;
+    if (this.settingsTimer) clearTimeout(this.settingsTimer);
+    this.settingsTimer = setTimeout(() => {
+      this.settingsTimer = null;
+      this.applySettings();
+    }, 0);
+  }
+  private applySettings(): void {
+    if (
+      !this.pendingSettings ||
+      !this.session.lease ||
+      !this.state.ready ||
+      this.state.closing ||
+      this.offers.size ||
+      this.state.controlPending ||
+      this.mediaChanging ||
+      !['live', 'compatibility'].includes(this.state.status)
+    )
+      return;
+    this.pendingSettings = false;
+    this.mediaChanging = true;
     this.runtime.receive({
       type: 'videoSettings',
       audio: this.state.settings.audio && this.state.caps?.systemAudio === true,
     });
   }
+  async preference(patch: Partial<RemoteViewerPreferences>): Promise<void> {
+    const scope = this.scope;
+    try {
+      const preferences = await this.api.preferences?.(scope.generation, patch);
+      if (this.scope !== scope || this.disposed || !preferences) return;
+      this.publish({ preferences });
+      void this.refreshSafety();
+    } catch {
+      if (this.scope === scope)
+        this.publish({ safety: { ...this.state.safety, notice: 'viewer.settingsFailed' } });
+    }
+  }
+  async refreshSafety(retry = false): Promise<void> {
+    if (!this.state.ready || this.state.closing || !this.api.safety) return;
+    const epoch = this.epoch;
+    try {
+      const safety = await this.api.safety(this.scope.generation, retry);
+      if (epoch === this.epoch && !this.disposed) this.publish({ safety });
+    } catch {
+      /* Connection state owns disconnected/retired generations. */
+    }
+  }
+  async close(): Promise<void> {
+    if (this.state.closing) return;
+    this.releaseInput();
+    this.publish({ closing: true });
+    const epoch = this.epoch;
+    try {
+      await this.api.close(this.scope.generation);
+    } catch (error) {
+      if (epoch === this.epoch && !this.disposed) this.publish({ closing: false });
+      throw error;
+    }
+  }
+  async credential(
+    action: 'settings' | 'enable' | 'disable' | 'unlock' | 'biometric',
+    enabled?: boolean,
+  ): Promise<void> {
+    if (
+      !this.api.credential ||
+      this.state.credentialBusy ||
+      !this.state.ready ||
+      this.state.closing
+    )
+      return;
+    const scope = this.scope;
+    this.publish({ credentialBusy: true, credentialNotice: null });
+    this.credentialRetry = { action, enabled };
+    try {
+      const credential = await this.api.credential(scope.generation, action, enabled);
+      if (this.scope === scope && !this.disposed) {
+        this.credentialRetry = null;
+        this.publish({ credential });
+      }
+    } catch (error) {
+      if (this.scope !== scope || this.disposed) return;
+      const code = extractIpcError(error)?.message ?? String(error);
+      if (action === 'unlock' && code.includes('PASSWORD_REJECTED'))
+        this.credentialRetry = { action: 'enable' };
+      if (!code.includes('CREDENTIAL_CANCELLED'))
+        this.publish({
+          credentialNotice: code.includes('SIGNING_REQUIRED')
+            ? 'credentialSigningRequired'
+            : code.includes('PASSWORD_REJECTED')
+              ? 'credentialPasswordRejected'
+              : code.includes('INVALID_IDENTITY')
+                ? 'credentialIdentityChanged'
+                : code.includes('ACCESSIBILITY_REQUIRED')
+                  ? 'credentialAccessibilityRequired'
+                  : code.includes('UNLOCK_UNAVAILABLE')
+                    ? 'credentialUnlockUnavailable'
+                    : 'credentialRequired',
+        });
+    } finally {
+      if (this.scope === scope && !this.disposed) this.publish({ credentialBusy: false });
+    }
+  }
+  retryCredential(): void {
+    if (this.credentialRetry)
+      void this.credential(this.credentialRetry.action, this.credentialRetry.enabled);
+  }
   releaseInput(): void {
     this.runtime.receive({ type: 'releaseInput' });
   }
+  actualSize(): void {
+    const lease = this.session.lease;
+    if (!lease || !this.state.ready) return;
+    this.runtime.receive({ type: 'actualSize' });
+    const toolbar = this.root.parentElement?.querySelector('.remote-viewer-toolbar');
+    const toolbarHeight = toolbar?.getBoundingClientRect().height ?? 60;
+    void this.api
+      .resize(
+        this.scope.generation,
+        Math.ceil(lease.display.width),
+        Math.ceil(lease.display.height + toolbarHeight),
+      )
+      .catch(() => {
+        /* A closed or replaced viewer must not resize its successor. */
+      });
+  }
   fit(): void {
     this.runtime.receive({ type: 'fit' });
+  }
+  zoom(direction: 'in' | 'out'): void {
+    this.runtime.receive({ type: 'zoom', factor: direction === 'in' ? 1.25 : 0.8 });
   }
   keys(codes: string[]): void {
     if (!this.state.controlling) return;
@@ -363,13 +562,15 @@ export class DesktopViewerController {
   async permissionGuide(): Promise<void> {
     await this.request({ op: 'permissions', action: 'guide' });
   }
-  displayModes() {
+  async displayModes() {
     const lease = this.session.lease;
-    if (!lease) return Promise.resolve([]);
-    return this.request<import('@cindy/device-link').RemoteDesktopDisplayMode[]>({
+    if (!lease) return [];
+    const modes = await this.request<import('@cindy/device-link').RemoteDesktopDisplayMode[]>({
       op: 'displayModes',
       lease: lease.lease,
     });
+    if (this.session.lease !== lease) throw new Error('DESKTOP_STOPPED');
+    return modes;
   }
   async resolution(modeId: string): Promise<void> {
     const lease = this.session.lease;
@@ -436,7 +637,8 @@ export class DesktopViewerController {
       this.streaming = false;
       this.runtime.receive({
         type: 'videoSettings',
-        ...size,
+        width: next.display.width,
+        height: next.display.height,
         ...(modeId ? { restore: true } : {}),
         audio: this.state.settings.audio && this.state.caps?.systemAudio === true,
       });
@@ -455,7 +657,7 @@ export class DesktopViewerController {
     }
   }
   private async heartbeat(): Promise<void> {
-    if (!this.scope.active || this.disposed) return;
+    if (!this.scope.active || this.disposed || this.state.closing) return;
     if (!this.session.lease) {
       if (!this.state.error && Date.now() >= this.retryAt) void this.connect();
       return;
@@ -479,7 +681,14 @@ export class DesktopViewerController {
   }
   private async frame(): Promise<void> {
     const lease = this.session.lease;
-    if (!lease || this.streaming || this.frameBusy === lease.lease || !this.scope.active) return;
+    if (
+      !lease ||
+      this.state.closing ||
+      this.streaming ||
+      this.frameBusy === lease.lease ||
+      !this.scope.active
+    )
+      return;
     this.frameBusy = lease.lease;
     try {
       const result = await this.request<{ jpeg: string | null; cursor?: unknown }>({
@@ -492,12 +701,22 @@ export class DesktopViewerController {
         !this.streaming &&
         typeof result.jpeg === 'string' &&
         result.jpeg.length <= Math.ceil(REMOTE_DESKTOP_MAX_FRAME_BYTES / 3) * 4
-      )
+      ) {
+        const now = Date.now();
+        this.publish({
+          receiveRate:
+            this.frameAt && now > this.frameAt
+              ? (result.jpeg.length * 0.75 * 1000) / (now - this.frameAt)
+              : null,
+        });
+        this.frameAt = now;
+        this.statsAt = now;
         this.runtime.receive({
           type: 'frame',
           jpeg: result.jpeg,
           ...('cursor' in result ? { cursor: result.cursor } : {}),
         });
+      }
     } catch (error) {
       if (this.session.lease === lease) this.fail(error);
     } finally {
@@ -514,6 +733,10 @@ export class DesktopViewerController {
       return;
     }
     switch (message.type) {
+      case 'scaleMode':
+        if (message.mode === 'fit' || message.mode === 'actual' || message.mode === 'custom')
+          this.publish({ scaleMode: message.mode });
+        break;
       case 'clipboard': {
         if (
           !this.state.controlling ||
@@ -538,8 +761,10 @@ export class DesktopViewerController {
         this.present('compatibility');
         break;
       case 'fallback':
+        this.mediaChanging = false;
         this.streaming = false;
         this.publish({ transport: 'screenshots', status: 'compatibility', latency: null });
+        this.applySettings();
         break;
       case 'reconnecting':
         this.publish({ status: 'reconnecting' });
@@ -555,6 +780,12 @@ export class DesktopViewerController {
           break;
         this.publish({
           transport,
+          receiveRate:
+            typeof message.bytesPerSecond === 'number' &&
+            Number.isFinite(message.bytesPerSecond) &&
+            message.bytesPerSecond >= 0
+              ? message.bytesPerSecond
+              : null,
           latency:
             typeof message.latencyMs === 'number' &&
             Number.isFinite(message.latencyMs) &&
@@ -562,6 +793,7 @@ export class DesktopViewerController {
               ? message.latencyMs
               : null,
         });
+        this.statsAt = Date.now();
         break;
       }
       case 'inputOverflow':
@@ -592,9 +824,16 @@ export class DesktopViewerController {
     }
   }
   private present(status: string): void {
+    if (status === 'live') this.mediaChanging = false;
     this.retryDelay = 1000;
     this.publish({ ready: true, status });
     this.syncControl();
+    this.applySettings();
+    void this.refreshSafety();
+    if (!this.unlockAttempted && this.state.caps?.platform === 'darwin') {
+      this.unlockAttempted = true;
+      void this.credential('unlock');
+    }
   }
   dispose(): void {
     this.cancel();

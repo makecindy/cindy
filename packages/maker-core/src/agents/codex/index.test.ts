@@ -6,12 +6,14 @@ import { applyPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 
 import { CodexAgent, isExactNoRolloutThreadResumeError } from './index.js';
 import { CodexForkError } from './fork-error.js';
+import { Session } from '../../session.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
+  PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
   type AgentDeps,
@@ -6555,7 +6557,10 @@ describe('CodexAgent MCP thread context hooks', () => {
     const agent = new CodexAgent(createDeps());
 
     await expect(agent.listAgentSkills({})).resolves.toMatchObject({
-      skills: [expect.objectContaining({ name: 'pr-watch', scope: 'user' })],
+      skills: [
+        expect.objectContaining({ name: 'pr-watch', scope: 'user' }),
+        expect.objectContaining({ name: 'skill-creator', scope: 'system' }),
+      ],
     });
 
     const request = createdTransports[0].lines
@@ -6565,6 +6570,193 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     await agent.dispose();
   });
+
+  it('keeps an installed skill-creator ahead of the native system fallback', async () => {
+    const home = os.homedir();
+    const installedPath = path.join(home, '.agents', 'skills', 'skill-creator', 'SKILL.md');
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.SkillsList, {
+        result: {
+          data: [{
+            cwd: home,
+            skills: [
+              {
+                name: 'skill-creator',
+                description: 'User copy',
+                path: installedPath,
+                scope: 'user',
+                enabled: true,
+              },
+              {
+                name: 'skill-creator',
+                description: 'System fallback',
+                path: path.join(home, '.codex', 'skills', '.system', 'skill-creator', 'SKILL.md'),
+                scope: 'system',
+                enabled: true,
+              },
+            ],
+            errors: [],
+          }],
+        },
+      });
+    };
+    const agent = new CodexAgent(createDeps());
+
+    const result = await agent.listAgentSkills({});
+    expect(result.skills).toEqual([
+      expect.objectContaining({ name: 'skill-creator', path: installedPath, scope: 'user' }),
+    ]);
+
+    await agent.dispose();
+  });
+
+  it('resolves /skill-creator to the native system Skill when no installed copy exists', async () => {
+    const skillPath = path.join(
+      os.homedir(),
+      '.codex',
+      'skills',
+      '.system',
+      'skill-creator',
+      'SKILL.md',
+    );
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.SkillsList) {
+        const { cwds = ['/repo'] } = params as { cwds?: string[] };
+        return {
+          data: cwds.map((cwd) => ({
+            cwd,
+            skills: [{
+              name: 'skill-creator',
+              description: 'Create a Skill',
+              path: skillPath,
+              scope: 'system',
+              enabled: true,
+            }],
+            errors: [],
+          })),
+        };
+      }
+      if (method === Method.TurnStart) return { turn: { id: 'turn-skill-creator' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-system-skill-creator',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.send({
+      type: 'user',
+      content: '/skill-creator Create a release-note checker',
+    });
+
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as { input?: unknown[] };
+    expect(turnStart.input).toEqual([
+      { type: 'skill', name: 'skill-creator', path: skillPath },
+      { type: 'text', text: 'Create a release-note checker' },
+    ]);
+
+    await handle.close();
+  });
+
+  it.each(['/learn release flow', '/skill:learn release flow'])(
+    'dispatches the exact Host-attested Skill path for %s without rescanning a new winner',
+    async (command) => {
+      const pinnedPath = '/cindy/system-skills/v10/learn/SKILL.md';
+      let skillsListCalls = 0;
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method, params) => {
+        if (method === Method.SkillsList) {
+          skillsListCalls += 1;
+          const { cwds = ['/repo'] } = params as { cwds?: string[] };
+          return {
+            data: cwds.map((cwd) => ({
+              cwd,
+              skills: [{
+                name: 'learn',
+                description: 'Untrusted replacement',
+                path: '/repo/.agents/skills/learn/SKILL.md',
+                scope: 'repo',
+                enabled: true,
+              }],
+              errors: [],
+            })),
+          };
+        }
+        if (method === Method.TurnStart) return { turn: { id: 'turn-pinned-learn' } };
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-pinned-learn',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+
+      await handle.send(
+        { type: 'user', content: command },
+        { [PINNED_SKILL_INVOCATION]: { name: 'learn', path: pinnedPath } },
+      );
+
+      const turnStart = host.request.mock.calls.find(
+        ([method]) => method === Method.TurnStart,
+      )?.[1] as { input?: unknown[] };
+      expect(turnStart.input).toEqual([
+        { type: 'skill', name: 'learn', path: pinnedPath },
+        { type: 'text', text: 'release flow' },
+      ]);
+      expect(skillsListCalls).toBe(0);
+
+      await handle.close();
+    },
+  );
+
+  it.each(['system', 'admin'] as const)(
+    'keeps a palette-hidden %s Skill directly invocable',
+    async (scope) => {
+      const skillPath = path.join(os.homedir(), '.codex', 'skills', `.${scope}`, 'slides', 'SKILL.md');
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method, params) => {
+        if (method === Method.SkillsList) {
+          const { cwds = ['/repo'] } = params as { cwds?: string[] };
+          return {
+            data: cwds.map((cwd) => ({
+              cwd,
+              skills: [{
+                name: 'slides',
+                description: 'Create slides',
+                path: skillPath,
+                scope,
+                enabled: true,
+              }],
+              errors: [],
+            })),
+          };
+        }
+        if (method === Method.TurnStart) return { turn: { id: `turn-${scope}-slides` } };
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-${scope}-slides`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+
+      await handle.send({ type: 'user', content: '/slides Build a quarterly update' });
+
+      const turnStart = host.request.mock.calls.find(
+        ([method]) => method === Method.TurnStart,
+      )?.[1] as { input?: unknown[] };
+      expect(turnStart.input).toEqual([
+        { type: 'skill', name: 'slides', path: skillPath },
+        { type: 'text', text: 'Build a quarterly update' },
+      ]);
+
+      await handle.close();
+    },
+  );
 
   it('lists remote skills through the target remote app-server host', async () => {
     const remoteWorkingDir = '/srv/project';
@@ -6860,6 +7052,65 @@ describe('CodexAgent MCP thread context hooks', () => {
     await Promise.all([first, second]);
     expect(close).toHaveBeenCalledOnce();
     await handle.close();
+  });
+
+  it('closes an in-flight turn when external dispose retires its host', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-dispose-active-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const transport = createdTransports[0];
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+
+    transport.emitMockLine({
+      method: 'turn/started',
+      params: { threadId: 'thread-1', turn: { id: 'turn-dispose-active' } },
+    });
+    await waitForExpectation(() => {
+      expect(handle.isTurnRunning?.()).toBe(true);
+    });
+
+    await agent.dispose();
+
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'error',
+      data: expect.objectContaining({
+        isTerminal: true,
+        willRetry: false,
+        message: expect.stringContaining('app-server force-retired'),
+      }),
+    });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'status',
+      data: expect.objectContaining({ status: 'Done', isRunning: false }),
+    });
+
+    await handle.close();
+  });
+
+  it('propagates global disposal through Session closure without replaying the input', async () => {
+    const deps = createDeps();
+    const agent = new CodexAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'dispose-session', model: 'gpt-5.4', workingDir: '/repo' });
+    const send = vi.spyOn(handle, 'send');
+    const session = new Session({ id: 'dispose-session', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: {} as never, logger: deps.logger, turnStallMs: 0 });
+    const statuses: string[] = [];
+    const events: CoreAgentEvent[] = [];
+    session.onStatusChange((status) => statuses.push(status));
+    session.onEvent((event) => events.push(event));
+    await session.send('perform one input');
+    await Promise.all([agent.dispose(), agent.dispose()]);
+    await waitForExpectation(() => expect(session.getStatus()).toBe('closed'));
+    expect(statuses.filter((status) => status === 'closed')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(send).toHaveBeenCalledOnce();
+    expect(handle.isTurnRunning?.()).toBe(false);
   });
 
   it('force-retires one shared local Host under the credential guard and blocks its lazy replacement', async () => {
@@ -23305,6 +23556,150 @@ describe('CodexAgent resume preparation', () => {
       vendorOptions: { orcaRole: 'lead' },
     }));
     await handle.close();
+  });
+
+  it('recovers repeated model switches before the first turn without replacing the teammate identity', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-unused-switch-'));
+    const recorded = new Map<string, string>();
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadStorage: async id => ({ historyHome: root, sqliteHome: root, rolloutPath: recorded.get(id) }),
+      prepareCodexResumeSession: async () => undefined,
+      recordCodexThreadLocation: async (id, _home, rollout) => { if (rollout) recorded.set(id, rollout); },
+    }));
+    let seq = 0;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === 'thread/read') throw Object.assign(new Error(
+        `codex app-server thread/read error -32600: thread not loaded: ${(params as { threadId: string }).threadId}`,
+      ), { code: -32600, data: undefined });
+      if (method === Method.TurnStart) return { turn: { id: 'first-user-turn' } };
+      if (method === Method.ThreadResume) throw exactNoRolloutError((params as { threadId: string }).threadId);
+      if (method === Method.ThreadStart) {
+        const id = `123e4567-e89b-12d3-a456-${String(++seq).padStart(12, '0')}`;
+        return { thread: { id, path: path.join(root, 'sessions', `${id}.jsonl`) }, model: (params as { model: string }).model };
+      }
+      return undefined;
+    }, { codexHome: root, userAgent: 'mock-codex/0.153.4', localCompactionProviderId: 'cindy_summary' });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      for (const model of ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra']) {
+        const previous = handle?.id;
+        await handle?.close();
+        handle = await agent.startSession({ sessionId: 'same-canonical-teammate', resumeSessionId: previous,
+          model, workingDir: root, botProfilePrompt: 'STABLE TEAMMATE SOUL', botRuntimeProfile: {
+            botId: 'same-bot', profileVersion: 1,
+            skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+            mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+            toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+          } });
+      }
+      expect(recorded.size).toBe(3);
+      const starts = host.request.mock.calls.filter(([method]) => method === Method.ThreadStart);
+      expect(starts.map(([, params]) => (params as { model: string }).model)).toEqual(['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-astra']);
+      for (const [, params] of starts) expect(params).toMatchObject({ cwd: root, developerInstructions: expect.stringContaining('STABLE TEAMMATE SOUL') });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+      // Verify missing native metadata in the original home before each resume fallback.
+      expect(host.request.mock.calls.filter(([method]) => method === 'thread/read')).toHaveLength(2);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(0);
+      await handle!.send({ type: 'user', content: 'First user message' }, { throwOnStartFailure: true });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      expect(host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1]).toMatchObject({ threadId: handle!.id, model: 'gpt-6-astra' });
+    } finally {
+      await handle?.close();
+      await agent.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers an unindexed unused thread when the summary metadata lookup reports it unloaded', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => {
+      if (method === 'thread/read') throw Object.assign(new Error(
+        `codex app-server thread/read error -32600: thread not loaded: ${resumeSessionId}`,
+      ), { code: -32600, data: undefined });
+      if (method === Method.ThreadResume) throw exactNoRolloutError();
+      return undefined;
+    }, { localCompactionProviderId: 'cindy_summary' });
+    const handle = await agent.startSession({ sessionId: 'unindexed-unused', resumeSessionId,
+      model: 'gpt-6-astra', workingDir: '/repo' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(1);
+    await handle.close();
+    await agent.dispose();
+  });
+
+  it('resumes a still-loaded indexed thread without a file or losing its summary provider', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-loaded-index-'));
+    const rolloutPath = path.join(root, 'sessions', 'future.jsonl');
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadStorage: async () => ({ historyHome: root, sqliteHome: root, rolloutPath }),
+      prepareCodexResumeSession: async () => undefined,
+    }));
+    const thread = { id: resumeSessionId, path: rolloutPath, modelProvider: 'cindy_summary' };
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === 'thread/read') return { thread };
+      if (method === Method.ThreadResume) return { thread, modelProvider: (params as { modelProvider: string }).modelProvider };
+      return undefined;
+    }, { codexHome: root, localCompactionProviderId: 'cindy_summary' });
+    try {
+      const handle = await agent.startSession({ sessionId: 'loaded-canonical', resumeSessionId, model: 'gpt-6-astra', workingDir: root });
+      expect(handle.id).toBe(resumeSessionId);
+      expect(host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1]).toMatchObject({ modelProvider: 'cindy_summary' });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
+      await handle.close();
+    } finally {
+      await agent.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps missing indexed history out of the fork path', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-missing-fork-'));
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadStorage: async () => ({ historyHome: root, sqliteHome: root,
+        rolloutPath: path.join(root, 'sessions', 'missing.jsonl') }),
+      prepareCodexResumeSession: async () => undefined,
+    }));
+    const host = installFakeHost(agent);
+    try {
+      await expect(agent.forkSdkSession({ sourceSdkSessionId: resumeSessionId, upToMessageId: 'missing-message', workingDir: root })).rejects.toThrow();
+      expect(host.getHost).not.toHaveBeenCalled();
+      expect(host.request).not.toHaveBeenCalled();
+    } finally {
+      await agent.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['native-history', 'read-timeout', 'unreadable', 'older-copy', 'late-file'] as const)('does not discard indexed history on %s', async failure => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-indexed-recovery-'));
+    const rolloutPath = path.join(root, 'sessions', 'canonical.jsonl');
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadStorage: async () => ({ historyHome: root, sqliteHome: root, rolloutPath }),
+      prepareCodexResumeSession: async () => undefined,
+    }));
+    const host = installFakeHost(agent, async method => {
+      if (method === 'thread/read') {
+        if (failure === 'native-history') return { thread: { id: resumeSessionId, path: rolloutPath } };
+        if (failure === 'read-timeout') throw new Error('metadata read timed out');
+        throw Object.assign(new Error(`codex app-server thread/read error -32600: thread not loaded: ${resumeSessionId}`), { code: -32600, data: undefined });
+      }
+      if (method !== Method.ThreadResume) return undefined;
+      if (failure === 'older-copy') return { thread: { id: resumeSessionId, path: path.join(root, 'older.jsonl') } };
+      if (failure === 'native-history') throw exactNoRolloutError();
+      if (failure === 'unreadable') throw new Error('failed to read existing rollout');
+      await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+      await fs.writeFile(rolloutPath, 'late native history');
+      throw exactNoRolloutError();
+    }, { codexHome: root });
+    try {
+      await expect(agent.startSession({ sessionId: 'preserve-canonical', resumeSessionId,
+        model: 'gpt-6-astra', workingDir: root })).rejects.toThrow();
+      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadStart)).toHaveLength(0);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(0);
+      if (failure === 'late-file') expect(await fs.readFile(rolloutPath, 'utf8')).toBe('late native history');
+    } finally {
+      await agent.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it('does not call thread/resume when the host identifies an unsafe rollout', async () => {

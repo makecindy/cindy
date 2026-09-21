@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HumanDesktopInput, HUMAN_INPUT_QUIET_MS, withAgentDesktopInput } from '../inputOwnership';
+import { AGENT_INPUT_WAIT_MS, HumanDesktopInput, HUMAN_INPUT_QUIET_MS, withAgentDesktopInput } from '../inputOwnership';
 
 const humans: HumanDesktopInput[] = [];
 const human = () => {
@@ -104,12 +104,64 @@ describe('remote input yields only during actual interaction', () => {
   });
 
   it('releases Agent ownership after errors and excludes overlapping Agent actions', async () => {
-    await expect(
-      withAgentDesktopInput(async () => {
-        await expect(agent()).rejects.toThrow('another Agent');
-        throw new Error('failed');
-      }),
-    ).rejects.toThrow('failed');
+    let finish!: () => void;
+    const events: string[] = [];
+    const first = withAgentDesktopInput(async () => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      throw new Error('failed');
+    });
+    const rejected = expect(first).rejects.toThrow('failed');
+    const second = withAgentDesktopInput(async () => { events.push('second'); });
+    const third = withAgentDesktopInput(async () => { events.push('third'); });
+    expect(events).toEqual([]);
+    finish();
+    await Promise.all([rejected, second, third]);
+    expect(events).toEqual(['second', 'third']);
     await expect(agent()).resolves.toBe('done');
+  });
+
+  it.each(['cancel', 'timeout'] as const)('removes a waiter on %s without releasing active input', async (mode) => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    const active = withAgentDesktopInput(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const controller = new AbortController();
+    const dispatch = vi.fn();
+    const waiting = withAgentDesktopInput(dispatch, { signal: controller.signal });
+    const rejected = expect(waiting).rejects.toMatchObject({ code: mode === 'cancel' ? 'REQUEST_CANCELLED' : 'DESKTOP_INPUT_BUSY' });
+    if (mode === 'cancel') controller.abort();
+    else await vi.advanceTimersByTimeAsync(AGENT_INPUT_WAIT_MS);
+    await rejected;
+    const next = vi.fn();
+    const tail = withAgentDesktopInput(next);
+    expect(next).not.toHaveBeenCalled();
+    finish();
+    await Promise.all([active, tail]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('revalidates queued work and drains past a refused waiter', async () => {
+    let finish!: () => void;
+    const active = withAgentDesktopInput(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const dispatch = vi.fn();
+    const stale = withAgentDesktopInput(dispatch, { assertCurrent: () => { throw new Error('stale'); } });
+    const rejected = expect(stale).rejects.toThrow('stale');
+    const tail = agent();
+    finish();
+    await Promise.all([active, rejected, tail]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('gives human input priority over already-queued Agent work', async () => {
+    let finish!: () => void;
+    const active = withAgentDesktopInput(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const dispatch = vi.fn();
+    const waiting = withAgentDesktopInput(dispatch);
+    const rejected = expect(waiting).rejects.toMatchObject({ code: 'DESKTOP_INPUT_BUSY' });
+    const batch = human().begin([{ kind: 'text', text: 'human' }]);
+    finish();
+    await Promise.all([active, rejected, batch.ready]);
+    batch.complete();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

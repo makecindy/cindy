@@ -88,11 +88,17 @@
 | 可丢弃的临时数据 | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录 |
 | 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
 | Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |
+| 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁 |
 | 跨 profile 的共享 Skill 文件互斥 | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称 |
 | 跨 profile 的 worktree 借用租约 | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，模拟器工程借用时在原 profile 租约之外发布共享副本；回收器同时读取两处，源目录 I/O 结束后显式释放，释放失败由现有 `.release` 回执重试；不能因进程退出就移除保护 |
 | 旧版 worktree 回收器兼容锁 | 验证 linked worktree 的 Git 元数据与反向链接后，在源目录外的 `<commonGitDir>/worktrees/<id>/locked` 创建 Git 标准锁，避免构建中的 `git clean` 删除保护；旧版删除/池化复用已识别此锁。不覆盖用户锁，仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除。清理失败在共享租约 `.release` 中保留路径及原文件身份，由现有维护重试；旧回执仍按原身份清理 `.worktree-keep` |
 | 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，按日志目录哈希登记原 profile 日志位置，启动日志监听和写入回收记录前原子发布；借用方只读目标资源的原始日志，不复制恢复状态、不代替 owner 执行恢复。索引跨重启保留，原日志不存在时不产生回收意图 |
 | 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
+
+- 内置 Skill 的官方身份只授予当前 manifest 已提交且指纹匹配的 bundle：`.active` 必须是
+  指向该版本的合法链接，版本目录与 Skill 内容不能经替换的符号链接越界。物化失败或目录
+  存在本身不构成官方身份；扫描、命令标记与 Learn 发现共用经验证的描述符。异常占位内容
+  不覆盖、不认领。实现与回归见 `maker-host/built-in-skills.ts` 及其同名单测。
 
 - 禁止把 `process.cwd()`、仓库根或源码目录作为 userData、凭证目录或临时目录的默认回退。
   特别不要写 `process.env.TEMP ?? process.cwd()` 一类跨平台会落入仓库的逻辑。

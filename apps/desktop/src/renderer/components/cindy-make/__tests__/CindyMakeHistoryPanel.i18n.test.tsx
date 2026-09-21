@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
@@ -27,6 +27,7 @@ const cases = [
     locale: 'en',
     resource: en,
     title: 'Make history',
+    conflict: 'Resolving conflicts…',
     build: 'Generate personal version',
     integrate: 'Integrate into personal version',
     counts: '1 total · 1 pending integration · 0 integrated',
@@ -36,6 +37,7 @@ const cases = [
     locale: 'zh-CN',
     resource: zhCN,
     title: '制作历史',
+    conflict: '正在处理冲突…',
     build: '生成个人版',
     integrate: '合入个人版',
     counts: '共 1 次 · 待合入 1 次 · 已合入 0 次',
@@ -45,6 +47,7 @@ const cases = [
     locale: 'zh-TW',
     resource: zhTW,
     title: '製作歷史',
+    conflict: '正在處理衝突…',
     build: '產生個人版',
     integrate: '合入個人版',
     counts: '共 1 次 · 待合入 1 次 · 已合入 0 次',
@@ -54,6 +57,7 @@ const cases = [
     locale: 'ja',
     resource: ja,
     title: '制作履歴',
+    conflict: '競合を解決中…',
     build: '個人版を生成',
     integrate: '個人版に取り込む',
     counts: '合計 1 件 · 未取り込み 1 件 · 取り込み済み 0 件',
@@ -63,6 +67,7 @@ const cases = [
     locale: 'ko',
     resource: ko,
     title: '제작 기록',
+    conflict: '충돌 해결 중…',
     build: '개인 버전 생성',
     integrate: '개인 버전에 반영',
     counts: '전체 1회 · 반영 대기 1회 · 반영 완료 0회',
@@ -97,7 +102,7 @@ beforeEach(() => {
         versions: [],
         lifecycle: 'ready',
         integration: 'unintegrated',
-        actions: ['continue', 'test', 'integrate', 'end'],
+        actions: ['continue', 'test', 'integrate', 'end', 'build'],
       },
     ],
   };
@@ -110,12 +115,78 @@ afterEach(() => {
 
 describe('Cindy Make history with real translations', () => {
   it.each(cases)(
+    'shows conflict resolution, cleanup and automatic continuation in $locale',
+    async ({ locale, resource, conflict }) => {
+      const state = await window.electronAPI.getCindyMakeHistory();
+      state.busy = true;
+      state.canBuild = false;
+      state.batch = { current: 1, total: 1, runId: 'aaaa', title: 'Example make' };
+      state.items[0].conflict = true;
+      state.items[0].actions = ['open'];
+      state.build = {
+        status: 'merging',
+        mergeStep: 'conflicts',
+        buildId: 'build-1',
+        logs: [{ step: 'resolving-conflicts', at: 1 }],
+      };
+      const i18n = createInstance();
+      await i18n.use(initReactI18next).init({
+        lng: locale,
+        fallbackLng: false,
+        defaultNS: 'common',
+        resources: { [locale]: { common: resource } },
+      });
+      const view = render(
+        <MemoryRouter>
+          <I18nextProvider i18n={i18n}>
+            <CindyMakeHistoryPanel />
+          </I18nextProvider>
+        </MemoryRouter>,
+      );
+      expect((await screen.findAllByText(conflict)).length).toBeGreaterThan(1);
+      expect(view.container.querySelector('[aria-current="step"]')?.textContent).toBe(
+        resource.cindyMake.personal.buildLog.steps['resolving-conflicts'],
+      );
+      expect(screen.queryByRole('alert')).toBeNull();
+      state.items[0].conflict = false;
+      state.build = {
+        ...state.build,
+        mergeStep: 'cleanup',
+        logs: [...state.build.logs!, { step: 'cleaning-merge', at: 2 }],
+      };
+      fireEvent(window, new Event('focus'));
+      await waitFor(() =>
+        expect(view.container.querySelector('[aria-current="step"]')?.textContent).toBe(
+          resource.cindyMake.personal.buildLog.steps['cleaning-merge'],
+        ),
+      );
+      state.build = {
+        status: 'checking',
+        checkStep: 'tests',
+        buildId: 'build-1',
+        logs: state.build.logs,
+      };
+      fireEvent(window, new Event('focus'));
+      await screen.findAllByText(resource.cindyMake.personal.checkStep.tests);
+      expect(view.container.querySelector('[aria-current="step"]')?.textContent).toBe(
+        resource.cindyMake.history.progress.checking,
+      );
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(view.container.textContent).not.toMatch(/cindyMake\.|\?{2,}|\uFFFD/);
+    },
+  );
+  it.each(cases)(
     'shows the live test stage and useful failure text in $locale',
     async ({ locale, resource }) => {
       const state = await window.electronAPI.getCindyMakeHistory();
       state.busy = true;
       state.canBuild = false;
-      state.build = { status: 'checking', checkStep: 'tests', buildId: 'build-1' };
+      state.build = {
+        status: 'checking',
+        checkStep: 'tests',
+        buildId: 'build-1',
+        outputLine: 'Test Files 57 passed; token=fake-secret',
+      };
       const i18n = createInstance();
       await i18n.use(initReactI18next).init({
         lng: locale,
@@ -131,13 +202,21 @@ describe('Cindy Make history with real translations', () => {
         </MemoryRouter>,
       );
       expect(await screen.findByText(resource.cindyMake.personal.checkStep.tests)).toBeTruthy();
+      expect(screen.getByText('Test Files 57 passed; token=[REDACTED]').getAttribute('role')).toBe(
+        'status',
+      );
+      expect(screen.queryByRole('button', { name: resource.cindyMake.merge.openTask })).toBeNull();
+      expect(view.container.textContent).not.toContain('fake-secret');
       expect(screen.getByRole('button', { name: resource.cindyMake.history.stop })).toBeTruthy();
-      state.build = { status: 'failed', error: 'checksFailed' };
       state.busy = false;
       state.canBuild = true;
-      fireEvent(window, new Event('focus'));
-      expect(await screen.findByText(resource.cindyMake.personal.errors.checksFailed)).toBeTruthy();
-      expect(view.container.textContent).not.toMatch(/cindyMake\.|\{\{|\?{2,}|\uFFFD/);
+      for (const error of ['checksFailed', 'cleanupFailed'] as const) {
+        state.build = { status: 'failed', error };
+        fireEvent(window, new Event('focus'));
+        expect(await screen.findByText(resource.cindyMake.personal.errors[error])).toBeTruthy();
+        expect(screen.queryByText('Test Files 57 passed; token=[REDACTED]')).toBeNull();
+        expect(view.container.textContent).not.toMatch(/cindyMake\.|\{\{|\?{2,}|\uFFFD/);
+      }
     },
   );
   it.each(cases)(
@@ -160,11 +239,12 @@ describe('Cindy Make history with real translations', () => {
       );
       expect(await screen.findByRole('heading', { name: title + ' · 1' })).toBeTruthy();
       expect(screen.getByRole('button', { name: build })).toBeTruthy();
-      expect(screen.getByRole('button', { name: integrate })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: integrate })).toBeNull();
       expect(screen.getByText(counts)).toBeTruthy();
       for (const [key, value] of strings({
         history: resource.cindyMake.history,
         checkStep: resource.cindyMake.personal.checkStep,
+        personalErrors: resource.cindyMake.personal.errors,
         merge: resource.cindyMake.merge,
         tabs: resource.settings.cindyMake.tabs,
         localChanges: resource.cindyMake.versions.localChanges,
@@ -182,7 +262,10 @@ describe('Cindy Make history with real translations', () => {
       state.items[0].lifecycle = 'ended';
       state.items[0].build = { status: 'failed' };
       state.items[0].actions = ['build'];
-      state.items[0].completions = [{ id: 'round-a', reportedAt: 1, changedFiles: 2 }];
+      state.items[0].completions = [
+        { id: 'round-a', reportedAt: 1, changedFiles: 2 },
+        { id: 'round-b', reportedAt: 60_001, changedFiles: 3 },
+      ];
       vi.stubGlobal('electronAPI', {
         getCindyMakeHistory: async () => state,
         getCindyVersions: async () => ({
@@ -233,7 +316,7 @@ describe('Cindy Make history with real translations', () => {
         </MemoryRouter>,
       );
       expect(
-        await screen.findByRole('button', { name: resource.cindyMake.history.actions.retryBuild }),
+        await screen.findByRole('button', { name: resource.cindyMake.history.actions.build }),
       ).toBeTruthy();
       expect(
         await screen.findByText(
@@ -242,10 +325,25 @@ describe('Cindy Make history with real translations', () => {
             resource.cindyMake.versions.localChanges,
         ),
       ).toBeTruthy();
-      expect(screen.getByText(resource.cindyMake.history.buildStatus.failed)).toBeTruthy();
+      expect(screen.getAllByText(resource.cindyMake.personal.status.failed)).toHaveLength(2);
       expect(
         screen.getByText(i18n.t('cindyMake.history.files', { count: 2 }), { exact: false }),
       ).toBeTruthy();
+      const rounds = Array.from(view.container.querySelectorAll('ol > li'));
+      const date = (value: number) =>
+        new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(value);
+      expect(rounds.map((round) => round.textContent)).toEqual([
+        i18n.t('cindyMake.history.round', { number: 2, time: date(60_001) }) +
+          ' · ' +
+          i18n.t('cindyMake.history.files', { count: 3 }),
+        i18n.t('cindyMake.history.round', { number: 1, time: date(1) }) +
+          ' · ' +
+          i18n.t('cindyMake.history.files', { count: 2 }),
+      ]);
+      expect(state.items[0].completions.map((completion) => completion.id)).toEqual([
+        'round-a',
+        'round-b',
+      ]);
       expect(screen.getByRole('button', { name: resource.cindyMake.merge.resolve })).toBeTruthy();
       expect(i18n.t('settings.cindyMake.tabs.versions')).toBe(
         resource.settings.cindyMake.tabs.versions,

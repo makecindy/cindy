@@ -81,7 +81,11 @@ export function buildMediaPayload(
 }
 
 export function buildAttachmentPayload(attachment: NormalizedAttachment): MessagePayload {
-  return buildSharedAttachmentPayload(attachment, mobilePresentationLocalizer);
+  const payload = buildSharedAttachmentPayload(attachment, mobilePresentationLocalizer);
+  if (payload.kind === 'media' && attachment.mimeType) {
+    return { ...payload, media: { ...payload.media, mimeType: attachment.mimeType } };
+  }
+  return payload;
 }
 
 export function buildFilePayload(title: string, sourcePath: string): Extract<MessagePayload, { kind: 'file' }> {

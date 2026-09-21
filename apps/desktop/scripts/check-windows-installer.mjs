@@ -67,6 +67,7 @@ try {
       '/WX',
       '/V2',
       `/DTEST_ROOT=${root}`,
+      `/DBUILD_RESOURCES_DIR=${resources}`,
       `/X!addincludedir "${resources}"`,
       `/X!addincludedir "${path.join(nsisTemplatesDir, 'include')}"`,
       path.join(desktop, 'scripts', 'fixtures', 'installer-directory-check.nsi'),

@@ -10,11 +10,14 @@ import {
   isDataOwnerBroadcastScopeCurrent,
 } from '../device-link/broadcast-tap.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { createLogger } from '../logger.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import type {
   CindyMakeCompletionMeta,
   CindyMakeTestAction,
 } from '../../shared/cindyMakeSession.js';
+import { parseCindyMakeBuildLogs } from '../../shared/cindyMakeSession.js';
+import { parseCindyMakeBuildDiagnostic } from '../../shared/cindyMakeBuildDiagnostic.js';
 import { createMakeTestController, type MakeTestContext } from './testController.js';
 import { launchMakeTest, makeTestError, verifyMakeTestWorkspace } from './testRunner.js';
 import {
@@ -22,7 +25,13 @@ import {
   resolveMakeToolEnvironment,
 } from './toolchainEnvironment.js';
 import { cindyMakeManager } from './manager.js';
-import { isCindyMakeWorktreePath, makeSourceRoot } from './sourcePaths.js';
+import { isCindyMakeWorktreePath, makeSourceRoot, makeSourceCheckoutPath } from './sourcePaths.js';
+import { historyBuildRollback } from './buildRollback.js';
+import {
+  getCindyMakeHistory,
+  recoverHistoryBuildRollback,
+  integrateCompletionForBuild,
+} from './historyRuntime.js';
 import {
   buildCindyPersonal,
   personalArtifactPath,
@@ -31,11 +40,13 @@ import {
 } from './personalBuild.js';
 import { untilAborted } from './doctor.js';
 import { currentVersionProfile, rememberOriginalVersion } from './versionStartup.js';
+import { hasPublishedPersonalVersionCommit } from './versionStore.js';
 import { captureMakeHistoryStore } from './historyOwner.js';
 import { captureMakeHistoryCompletion } from './historyCapture.js';
 import { broadcastMakeRemoteChanged } from './remoteBroadcast.js';
 
 let isRunning: (sessionId: string) => boolean = () => true;
+const log = createLogger('cindy-make-test');
 export function configureCindyMakeTestRuntime(probe: typeof isRunning): void {
   isRunning = probe;
 }
@@ -48,8 +59,23 @@ interface StoredContext extends MakeTestContext {
 function readCompletion(agentMeta: string | null): CindyMakeCompletionMeta {
   try {
     const meta = JSON.parse(agentMeta ?? '{}').cindyMakeCompletion;
-    if (meta && typeof meta.reportedAt === 'number' && Number.isFinite(meta.reportedAt))
+    if (meta && typeof meta.reportedAt === 'number' && Number.isFinite(meta.reportedAt)) {
+      if (meta.personal) {
+        const logs = parseCindyMakeBuildLogs(meta.personal.logs);
+        return {
+          ...meta,
+          personal: {
+            ...meta.personal,
+            ...(logs ? { logs } : {}),
+            diagnostic:
+              meta.personal.status === 'failed'
+                ? parseCindyMakeBuildDiagnostic(meta.personal.diagnostic)
+                : undefined,
+          },
+        };
+      }
       return meta;
+    }
   } catch {}
   throw makeTestError('unavailable');
 }
@@ -152,6 +178,29 @@ async function save(
       )
       .returning({ id: messages.id });
     if (!context.isCurrent() || !result.length) throw makeTestError('unavailable');
+    if (patch.test) {
+      const receipt = {
+        runId: context.runId,
+        completionId: context.completionId,
+        status: patch.test.status,
+        step: patch.test.step,
+        error: patch.test.error,
+      };
+      if (patch.test.status === 'failed') log.warn('Isolated test failed', receipt);
+      else log.debug('Isolated test state', receipt);
+    }
+    if (patch.personal) {
+      const receipt = {
+        runId: context.runId,
+        completionId: context.completionId,
+        buildId: patch.personal.buildId,
+        status: patch.personal.status,
+        checkStep: patch.personal.checkStep,
+        error: patch.personal.error,
+      };
+      if (patch.personal.status === 'failed') log.warn('Personal build failed', receipt);
+      else log.debug('Personal build state', receipt);
+    }
     captureMakeHistoryCompletion(
       captureMakeHistoryStore(),
       context.runId,
@@ -167,7 +216,8 @@ async function save(
 export const cindyMakeTestController = createMakeTestController({
   load,
   save,
-  claimBuild: () => cindyMakeManager.claimPersonalBuild(),
+  claimBuild: (context) =>
+    cindyMakeManager.claimPersonalBuild([context.sessionId], () => context.isCurrent()),
   onBuildState: (context, state) => {
     if (!context.isCurrent()) throw makeTestError('unavailable');
     const store = captureMakeHistoryStore();
@@ -185,6 +235,7 @@ export const cindyMakeTestController = createMakeTestController({
   withUse: (context, run) => cindyMakeManager.withProjectUse(makeSourceRoot(context.userData), run),
   build: (context, signal, publish) => {
     let entered = false;
+    let enteredBuilder = false;
     const waiting = new AbortController();
     const abortWaiting = () => {
       if (!entered) waiting.abort();
@@ -196,6 +247,7 @@ export const cindyMakeTestController = createMakeTestController({
       async () => {
         entered = true;
         signal.throwIfAborted();
+        await publish({ status: 'waiting', preparationStep: 'environment' });
         const fresh = await load(context.sessionId, context.completionId);
         if (
           !context.isCurrent() ||
@@ -218,9 +270,14 @@ export const cindyMakeTestController = createMakeTestController({
         if (node.status !== 'ok' || !node.path || !path.isAbsolute(node.path))
           throw makeTestError('environment');
         const buildEnv = await personalBuildEnvironment(env, git.path);
+        await publish({ status: 'waiting', preparationStep: 'original' });
         await rememberOriginalVersion(node.path);
+        await integrateCompletionForBuild(context, signal, publish);
+        signal.throwIfAborted();
+        if (!context.isCurrent()) throw makeTestError('unavailable');
         const historyStore = captureMakeHistoryStore();
-        return buildCindyPersonal(
+        enteredBuilder = true;
+        return await buildCindyPersonal(
           {
             mode: 'personal',
             userData: context.userData,
@@ -238,6 +295,11 @@ export const cindyMakeTestController = createMakeTestController({
           },
           (run) => cindyMakeManager.withProject(makeSourceRoot(context.userData), run),
           {
+            ...historyBuildRollback(
+              historyStore,
+              makeSourceCheckoutPath(context.userData),
+              (commit) => hasPublishedPersonalVersionCommit(context.userData, commit),
+            ),
             features: () =>
               historyStore.list().flatMap((record) => {
                 const last = record.receipts.at(-1);
@@ -248,9 +310,16 @@ export const cindyMakeTestController = createMakeTestController({
       },
       signal,
     );
-    return untilAborted(work, waiting.signal).finally(() =>
-      signal.removeEventListener('abort', abortWaiting),
-    );
+    return untilAborted(work, waiting.signal)
+      .catch(async (error) => {
+        if (!enteredBuilder && context.isCurrent()) {
+          const merge = cindyMakeManager.getState().upstreamMerge;
+          if (context.isCurrent() && !(merge?.hasWorkspace && merge.status !== 'merged'))
+            await recoverHistoryBuildRollback(true);
+        }
+        throw error;
+      })
+      .finally(() => signal.removeEventListener('abort', abortWaiting));
   },
   openBuild: async (context) => {
     try {
@@ -293,19 +362,36 @@ export const cindyMakeTestController = createMakeTestController({
         publish('workspace');
         await verifyMakeTestWorkspace(context, env, signal);
         const node = await environment.probe('node', ['--version'], signal);
-        if (node.status !== 'ok' || !node.path || !path.isAbsolute(node.path))
+        const pnpm = await environment.probe('pnpm', ['--version'], signal);
+        if (
+          node.status !== 'ok' ||
+          !node.path ||
+          !path.isAbsolute(node.path) ||
+          pnpm.status !== 'ok' ||
+          !pnpm.path ||
+          !path.isAbsolute(pnpm.path)
+        )
           throw makeTestError('environment');
         signal.throwIfAborted();
         if (!context.isCurrent()) throw makeTestError('unavailable');
         publish('stopping');
         return launchMakeTest(
           context,
-          node.path,
+          { node: node.path, pnpm: pnpm.path },
           env,
           CURRENT_CINDY_REGION === 'cn' ? 'cn' : 'global',
           signal,
           undefined,
           publish,
+          (diagnostic) => {
+            const entry = {
+              runId: context.runId,
+              completionId: context.completionId,
+              ...diagnostic,
+            };
+            if (diagnostic.event === 'failed') log.warn('Isolated test launcher failed', entry);
+            else log.debug('Isolated test launcher', entry);
+          },
         );
       },
       signal,
@@ -330,23 +416,13 @@ export async function actCindyMakeTest(
     if (action === 'build' && !cindyMakeTestController.isBuilding(sessionId)) {
       await cindyMakeTestController.stopTestForBuild(sessionId);
       const context = await load(sessionId, completionId);
-      const { getCindyMakeHistory, actCindyMakeHistory } = await import('./historyRuntime.js');
-      const history = await getCindyMakeHistory(context.runId);
+      let history = await getCindyMakeHistory(context.runId);
       if (!context.isCurrent()) throw makeTestError('unavailable');
       if (history.busy) throw makeTestError('unavailable');
-      if (
-        !['integrated', 'unchanged'].includes(
-          history.items.find((item) => item.runId === context.runId)?.integration ?? '',
-        )
-      ) {
-        const updated = await actCindyMakeHistory(context.runId, 'integrate');
-        if (
-          updated.items.find((item) => item.runId === context.runId)?.integration !== 'integrated'
-        )
-          return save(context, {
-            lastAction: 'build',
-            personal: { status: 'failed', error: 'conflict' },
-          });
+      if (captureMakeHistoryStore().readBuildRollback().length) {
+        await recoverHistoryBuildRollback();
+        history = await getCindyMakeHistory(context.runId);
+        if (!context.isCurrent() || history.busy) throw makeTestError('unavailable');
       }
     }
     return await cindyMakeTestController.act(
@@ -358,7 +434,7 @@ export async function actCindyMakeTest(
     const code = (error as { code?: unknown })?.code;
     throwIpcError(
       'PRECONDITION_FAILED',
-      code === 'environment' || code === 'changed' ? code : 'unavailable',
+      code === 'environment' || code === 'changed' || code === 'stopFailed' ? code : 'unavailable',
     );
   }
 }

@@ -883,6 +883,7 @@ describe("mobile maker transport", () => {
     });
     await maker.rewindPreview("s1", "m2");
     await maker.rewindCommit("s1", "m2");
+    await maker.rewindCommit("s1", "m2", { allowFileRestore: false });
     await maker.deleteMessage("s1", "m2");
 
     expect(calls.map((call) => [call.channel, call.args])).toEqual([
@@ -901,6 +902,7 @@ describe("mobile maker transport", () => {
       ],
       ["maker:rewind:preview", ["s1", "m2"]],
       ["maker:rewind:commit", ["s1", "m2"]],
+      ["maker:rewind:commit", ["s1", "m2", { allowFileRestore: false }]],
       ["maker:message:delete", ["s1", "m2"]],
     ]);
   });

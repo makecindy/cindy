@@ -1,3 +1,4 @@
+import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 /**
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './side
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { useCindyMakeActivity } from './useCindyMakeActivity';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
@@ -157,7 +158,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   hideBottomDivider = false,
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
-  const cindyMakePreparing = useCindyMakePreparing(session);
+  const cindyMakeActivity = useCindyMakeActivity(session);
+  const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
@@ -179,7 +181,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
     isRunning: session.deviceLinkDeviceId
       ? remoteActivity?.phase === 'running'
-      : isRunning || cindyMakePreparing != null,
+      : isRunning || cindyMakeActivity != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
@@ -195,6 +197,16 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
     ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const tagMenu = (
+    <TaskTagMenuSection
+      session={session}
+      onMore={() => {
+        setTagEditorOpen(true);
+        setMenuPos(null);
+      }}
+    />
+  );
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   const boundSchedules = useSessionBoundSchedules(session.id);
@@ -207,8 +219,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         ? 'cindyMake.code.taskName'
         : 'ccAgent.common.unnamedSession',
     ),
+    t,
   );
-  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
   // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;
@@ -674,11 +687,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               // 把下方所有行整体推移,选中/取消时列表跳动(2026-08-12 用户反馈)。
               // inset shadow 画在盒内、不参与布局,行高与未选中时逐像素一致。
               isActive
-                ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+                ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
                 : cn(
-                    'hover:bg-sidebar-item-hover',
+                    'hover:bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
                     // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
-                    menuPos !== null && 'bg-sidebar-item-hover',
+                    menuPos !== null &&
+                      'bg-sidebar-item-hover [--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
                   ),
             )
           : cn(
@@ -686,8 +700,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               // 负责分配列;卡片高度随标题/摘要自然变化。
               'rounded-xl bg-[var(--surface-elevated)] border',
               isActive
-                ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active text-sidebar-item-active-foreground'
-                : 'border-sidebar-border hover:!bg-sidebar-item-hover',
+                ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground'
+                : 'border-sidebar-border [--task-tag-ring-bg:var(--surface-elevated)] hover:!bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
             ),
         // 多选选中态(与列表 SessionItem 同款):内描边软高亮,不与 active 互斥。
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
@@ -1090,6 +1104,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 </DropdownMenuItem>
                 {exportShareMenuItem}
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1109,6 +1124,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1147,6 +1163,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1167,6 +1184,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+
+      {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
 
       {shareExportOpen && (
         <SessionShareExportDialog
@@ -1222,20 +1241,26 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
+      {pieces.find((piece) => piece.key === 'tags')?.tags?.length ? (
+        <span className="mr-1 inline-flex shrink-0 items-center">
+          <TaskTagDots tags={pieces.find((piece) => piece.key === 'tags')?.tags} />
+        </span>
+      ) : null}
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
         {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
         <div
           className={cn(
             // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
             'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
-            !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
-            (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
+            !archivePending &&
+              'group-hover/card:opacity-0 group-hover/card:w-0 group-hover/card:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
+            (menuOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
             // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
-            archivePending && 'invisible opacity-0',
+            archivePending && 'invisible opacity-0 w-0 overflow-hidden',
           )}
         >
           <SessionInfoMeta
-            pieces={pieces}
+            pieces={pieces.filter((piece) => piece.key !== 'tags')}
             prRef={prRef}
             worktree={worktree}
             isActive={isActive}

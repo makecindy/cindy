@@ -378,9 +378,12 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     return result;
   };
 
-  const run = (request: BotLifecycleActionRequest): Promise<BotLifecycleActionResult> => {
+  const run = (request: BotLifecycleActionRequest, beforeRun?: () => Promise<void>): Promise<BotLifecycleActionResult> => {
     const owner = activeOwnerScopeKey();
     return withBotLifecycleLock(request.botId, request.action, async () => {
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+      await beforeRun?.();
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throwIpcError('PRECONDITION_FAILED', 'Account changed');
       if (request.action === 'pause') return pause(request.botId);
       if (request.action === 'resume') return resume(request.botId);
       if (request.action === 'restart') return restart(request.botId, owner);
@@ -392,8 +395,16 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
   return { run };
 }
 
+let registeredLifecycleService: ReturnType<typeof createBotLifecycleService> | null = null;
+/** Remote settings use the same coordinator and preserve task history/worktrees. */
+export function runRegisteredBotLifecycleAction(request: BotLifecycleActionRequest, beforeRun: () => Promise<void>) {
+  if (!registeredLifecycleService) throwIpcError('PRECONDITION_FAILED', 'Lifecycle unavailable');
+  return registeredLifecycleService.run(request, beforeRun);
+}
+
 export function registerBotLifecycleHandlers(deps: BotLifecycleServiceDeps): void {
   const service = createBotLifecycleService(deps);
+  registeredLifecycleService = service;
   ipcMain.handle(MAKER_INVOKE.BOT_LIFECYCLE_ACTION, async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     const body = requireObject(raw, 'request');

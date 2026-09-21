@@ -32,6 +32,7 @@ vi.mock('../versionStartup.js', () => ({
 }));
 import { actCindyVersion, configureCindyVersions, getCindyVersions } from '../versionService';
 import { versionsRoot, versionDirectory, writeVersionJson } from '../versionStore';
+import { CindyMakeManager } from '../manager';
 const id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -61,6 +62,41 @@ afterEach(async () => {
   await rm(h.profile, { recursive: true, force: true });
 });
 describe('version management main boundary', () => {
+  it('allows switching and returning to original after preparation settles in the real manager', async () => {
+    const manager = new CindyMakeManager();
+    configureCindyVersions(() => manager.hasActiveWork());
+    let release!: () => void;
+    await manager.startTask(
+      { runId: 'version-prepare', request: 'fix', title: 'fix' },
+      {
+        create: async () => ({
+          runId: 'version-prepare',
+          platform: 'win32',
+          arch: 'x64',
+          checks: [],
+          status: 'running',
+          task: { sessionId: 'version-session', phase: 'waiting' },
+        }),
+        persist: async () => {},
+        prepare: () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+        start: async () => {},
+        isCurrent: () => true,
+        onError: () => {},
+      },
+    );
+    await expect(actCindyVersion('switch', id)).rejects.toThrow('busy');
+    release();
+    await manager.waitForTask('version-prepare');
+    expect(manager.taskReport('version-prepare')?.status).toBe('completed');
+    await actCindyVersion('switch', id);
+    expect(h.handoff).toHaveBeenCalledWith(id, expect.any(Function));
+    h.currentId = id;
+    await actCindyVersion('switch', 'original');
+    expect(h.handoff).toHaveBeenLastCalledWith('original', expect.any(Function));
+  });
   it('projects Dev as the original without creating a registry on a read', async () => {
     expect(await getCindyVersions()).toMatchObject({
       currentId: 'original',

@@ -113,7 +113,7 @@ export function CindyMakeTaskCard({
         <div
           role="status"
           aria-live="polite"
-          className={failed ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]'}
+          className={failed ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]'}
         >
           {t(
             completed
@@ -159,7 +159,7 @@ export function CindyMakeTaskCard({
           </p>
         )}
         {failed && report.source?.error && (
-          <p className="text-12 text-[var(--status-danger)]">
+          <p className="text-12 text-[var(--error-fg)]">
             {t('cindyMake.source.errors.' + report.source.error)}
           </p>
         )}

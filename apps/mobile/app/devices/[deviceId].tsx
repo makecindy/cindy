@@ -72,8 +72,8 @@ import {
   shouldReplaceListWithSearchResults,
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
-import { sessionMatchesProjectDir } from '@/session/mobileHome';
-import { HomeSessionRow } from './index';
+import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
+import { HomeSessionRow } from '@/session/HomeSurface';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
@@ -176,12 +176,13 @@ function DeviceDetailScreenContent() {
   // filter 必须 memo:裸 filter 每次渲染都产新数组,会让下游全部 [sessions, ...] 依赖的
   // useMemo 逐 emit 失效,派生链(索引 → sections → 全列表行)整体重建(2026-07-18
   // 重渲染风暴)。store 层已保证 allSessions 引用在内容未变时稳定,这里不能亲手打破。
-  const sessions = useMemo(() => allSessions.filter((s) =>
-    // 用展示用 canonicalDeviceId(设备归并结果)匹配,与首页项目卡一致 —— 被认领的 stale 会话也能显示,
-    // 数量与卡片相符。deviceLinkDeviceId 仍是物理路由 key(openSession / patch 用它),不参与此处判断。
-    (s.canonicalDeviceId ?? s.deviceLinkDeviceId) === deviceId
-    && (!projectWorkingDir || sessionMatchesProjectDir(s.workingDir, projectWorkingDir))),
-  [allSessions, deviceId, projectWorkingDir]);
+  // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
+  // 与首页卡片口径对齐:首页已 exclude worker,「查看全部 N 条」不能再把它们露出来。
+  // 用展示用 canonicalDeviceId(设备归并结果)匹配 —— 被认领的 stale 会话也能显示,数量与卡片相符。
+  const sessions = useMemo(
+    () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
+    [allSessions, deviceId, projectWorkingDir],
+  );
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
   const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
@@ -244,6 +245,7 @@ function DeviceDetailScreenContent() {
   const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [selectionRequested, setSelectionRequested] = useState(false);
   const [expandedAutomationGroups, setExpandedAutomationGroups] = useState<string[]>([]);
   const [bulkActionPending, setBulkActionPending] = useState<MobileSessionBulkAction | null>(null);
   const [bulkConfirmAction, setBulkConfirmAction] = useState<MobileSessionBulkAction | null>(null);
@@ -278,6 +280,7 @@ function DeviceDetailScreenContent() {
     setLoading(true);
     setError(null);
     try {
+      const mutationEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId);
       const list = await withTransientRemoteRetry(async () => {
         await subscribe(`device:${deviceId}`, deviceId, ['sessions']);
         return invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
@@ -289,6 +292,11 @@ function DeviceDetailScreenContent() {
           { includePinned: true, fresh: true },
         ]);
       });
+      if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
+        // The existing sync runner queues one follow-up after this stale read.
+        remoteSessionStore.requestReseed(deviceId);
+        return;
+      }
       remoteSessionStore.setDeviceSessions(deviceId, deviceName, Array.isArray(list) ? list : []);
       // A successful sessions:list is authoritative reachability evidence even when relay
       // presence was not replayed. Retire both offline caches before the schedule reload.
@@ -441,7 +449,7 @@ function DeviceDetailScreenContent() {
     [bulkActionSummaries],
   );
   const bulkConfirmSummary = bulkConfirmAction ? bulkActionSummaries[bulkConfirmAction] : null;
-  const selectionMode = selectedSessionIds.length > 0;
+  const selectionMode = selectionRequested || selectedSessionIds.length > 0;
   const runningAutomationCount = filterCounts.runningAutomation;
   const controlsSummary = useMemo(
     () => remoteSessionControlsSummary(statusFilter, filterCounts),
@@ -473,6 +481,7 @@ function DeviceDetailScreenContent() {
   }, [visibleSessionIds]);
 
   const clearSelection = useCallback(() => {
+    setSelectionRequested(false);
     setSelectedSessionIds([]);
     setBulkConfirmAction(null);
     setBulkNotice(null);
@@ -567,7 +576,8 @@ function DeviceDetailScreenContent() {
     }
     setBulkConfirmAction(null);
     setSelectedSessionIds([]);
-    try {
+      setSelectionRequested(false);
+      try {
       const failed: typeof rows = [];
       await Promise.all(rows.map(async (row) => {
         try {
@@ -1003,6 +1013,17 @@ function DeviceDetailScreenContent() {
                 onPress: () => setFiltersOpen((value) => !value),
                 testID: 'deviceDetail.filtersToggleButton',
               },
+              {
+                label: t('session.new.select'),
+                accessibilityLabel: t('session.new.select'),
+                active: selectionMode,
+                onPress: () => {
+                  swipeRegistry.closeOpenRow();
+                  if (selectionMode) clearSelection();
+                  else setSelectionRequested(true);
+                },
+                testID: 'deviceDetail.selectionToggleButton',
+              },
             ]}
             testID="deviceDetail.toolbarActions"
           />
@@ -1316,6 +1337,7 @@ function SessionListActionOverlays({
   return (
     <>
       <SessionOptionsPresenter
+        session={actionSheetSession}
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}

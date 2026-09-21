@@ -22,9 +22,10 @@ final class RTCPeerConnectionFactory {
   }
 }
 enum RTCSignalingState { case stable }
-enum RTCIceConnectionState { case connected }
-enum RTCIceGatheringState { case gathering, complete }
-enum RTCPeerConnectionState { case new, connected, disconnected, failed, closed }
+enum RTCIceConnectionState: Int { case connected }
+enum RTCIceGatheringState: Int { case gathering, complete }
+enum RTCPeerConnectionState: Int { case new, connected, disconnected, failed, closed }
+final class RTCIceCandidateErrorEvent { var errorCode = 701; var url = "stun:test.invalid:3478" }
 final class RTCConfiguration {
   enum Semantics { case unifiedPlan }
   var sdpSemantics = Semantics.unifiedPlan
@@ -145,16 +146,49 @@ struct ReceiverTests {
     ice.receive(message(ice, "answer", ["sdp": "answer"]))
     icePeer.answerCallback?(nil); drain()
     let exchange = iceEvents.first { $0["type"] as? String == "ice" }!["exchangeId"] as! Int
-    let candidate: [String: Any] = ["candidate": "candidate:one", "sdpMLineIndex": 0]
+    let candidate: [String: Any] = ["candidate": "candidate:one", "sdpMLineIndex": Double(0)]
     ice.receive(message(old, "ice", ["exchangeId": exchange, "candidates": [candidate], "next": 1]))
     assert(icePeer.candidateCallbacks.isEmpty)
     ice.receive(message(ice, "ice", ["exchangeId": exchange + 1, "candidates": [candidate], "next": 1]))
     assert(icePeer.candidateCallbacks.isEmpty)
-    ice.receive(message(ice, "ice", ["exchangeId": exchange, "candidates": [candidate], "next": 1]))
+    // Expo's untyped dictionaries carry Double for all JS numbers.
+    ice.receive(message(ice, "ice", ["exchangeId": Double(exchange), "candidates": [candidate], "next": Double(1)]))
     assert(icePeer.candidateCallbacks.count == 1)
     ice.stop(); let iceCount = iceEvents.count
     icePeer.candidateCallbacks[0](nil); drain()
     assert(iceEvents.count == iceCount)
+
+    let (numeric, numericPeer) = start()
+    var numericEvents: [[String: Any]] = []
+    numeric.emit = { numericEvents.append($0) }
+    numeric.peerConnection(numericPeer, didGenerate: RTCIceCandidate(sdp: "candidate:local", sdpMLineIndex: 0, sdpMid: "0"))
+    drain()
+    numeric.receive(message(numeric, "answer", ["sdp": "answer"]))
+    numericPeer.answerCallback?(nil); drain()
+    let sent = numericEvents.first { $0["type"] as? String == "ice" }!
+    let numericID = Double(sent["exchangeId"] as! Int)
+    numeric.receive(message(numeric, "ice", ["exchangeId": numericID, "candidates": [candidate], "next": Double(1)]))
+    assert(numericPeer.candidateCallbacks.count == 1)
+    numericPeer.candidateCallbacks[0](nil); drain(0.3)
+    let next = numericEvents.last { $0["type"] as? String == "ice" }!
+    assert(next["after"] as? Int == 1)
+    assert((next["candidates"] as? [[String: Any]])?.isEmpty == true)
+    numericPeer.connectionState = .connected
+    assert(numeric.sendInput(["sequence": Double(1), "events": [["type": "move"]]]))
+    assert(!numeric.sendInput(["sequence": true, "events": [["type": "move"]]]))
+    assert(!numeric.sendInput(["sequence": 1.5, "events": [["type": "move"]]]))
+    numeric.stop()
+
+    // The native wait must cover a configuration that arrives after the old
+    // 3.5-second fallback, while independent receivers remain usable.
+    let slowConfig = RemoteDesktopReceiver(epoch: "slow", audio: false, trickle: true, net: ["iceConfigMs": 8_000.0])
+    let beforeConfig = RTCPeerConnectionFactory.latest
+    slowConfig.begin(fallbackServers: [])
+    drain(3.6)
+    assert(RTCPeerConnectionFactory.latest === beforeConfig)
+    slowConfig.receive(message(slowConfig, "iceConfig"))
+    assert(RTCPeerConnectionFactory.latest !== beforeConfig)
+    slowConfig.stop()
 
     // A decoder frame already queued when stop occurs must not announce readiness.
     let (frames, framePeer) = start()

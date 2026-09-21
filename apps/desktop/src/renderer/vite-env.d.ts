@@ -939,6 +939,8 @@ interface CCAgentSdkSessionIdPayload {
  */
 interface RewindFilesResultPayload {
   canRewind: boolean;
+  conversationOnly?: boolean;
+  gitSafetyDisabled?: boolean;
   error?: string;
   filesChanged?: string[];
   insertions?: number;
@@ -2184,7 +2186,7 @@ interface ElectronAPI {
   // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
   getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
   setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
-  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
   resetLogUploadCrashAuto: () => Promise<LogUploadSettingsPayload>;
   /**
    * 手动上传一次;成功返回可报的上传编号。失败以 IPC 错误码区分:
@@ -3025,9 +3027,9 @@ interface ElectronAPI {
     runId: string,
     action: import('../shared/cindyMakeHistory').MakeHistoryAction,
   ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
-  generateCindyMakePersonal: () => Promise<
-    import('../shared/cindyMakeHistory').CindyMakeHistoryState
-  >;
+  generateCindyMakePersonal: (
+    selection?: import('../shared/cindyMakeHistory').MakeHistoryBuildSelection[],
+  ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
   cancelCindyMakePersonal: (
     buildId: string,
   ) => Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState>;
@@ -3266,6 +3268,7 @@ interface ElectronAPI {
       skills?: SkillhubSkill[];
       sources?: SkillhubSourceReport[];
       pendingCleanups?: Array<{ token: string; name: string }>;
+      learnSkillEnabled?: boolean;
     }>;
     readSkill: (params: { mdPath: string }) => Promise<{
       success: boolean;
@@ -3462,6 +3465,10 @@ interface ElectronAPI {
       error?: string;
       errorCode?: string;
     }>;
+    comparePublished: (
+      params: import('../shared/skillhubPublishComparison').SkillhubPublishComparisonParams,
+    ) => Promise<import('../shared/skillhubPublishComparison').SkillhubPublishComparison>;
+
     getFolderHash: (absolutePath: string) => Promise<{
       success: boolean;
       error?: string;
@@ -4816,6 +4823,17 @@ interface ElectronAPI {
         ) => void,
       ) => () => void;
     };
+    taskTags: {
+      onChanged: (
+        cb: (
+          payload: { tags: import('@cindy/maker-shared').TaskTag[] },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
+      execute: (
+        request: import('@cindy/maker-shared').TaskTagRequest,
+      ) => Promise<import('@cindy/maker-shared').TaskTagResult>;
+    };
     projectAliases: {
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
       set: (input: {
@@ -5543,7 +5561,7 @@ interface ElectronAPI {
     endSessionDragPreview: (dragEndAtMs?: number) => void;
 
     // ── Palette `/` 命令三源 (palette refactor) ───────────────────────
-    listDesktopCommands: () => Promise<{
+    listDesktopCommands: (ctx?: { deviceId?: string }) => Promise<{
       success: boolean;
       error?: string;
       commands?: Array<{ kind: 'desktop'; name: string; description: string }>;
@@ -5593,6 +5611,7 @@ interface ElectronAPI {
         kind: 'agent-skill';
         name: string;
         description?: string;
+        builtIn?: boolean;
         source: 'user' | 'skill';
         path?: string;
         scope?: string;
@@ -5627,13 +5646,10 @@ interface ElectronAPI {
           timedOut: boolean;
           spawnError?: string;
         };
-        /** /goal、/learn 共用:错误码(goal-usage / goal-no-session / goal-failed;
-         *  learn-usage / learn-busy / learn-failed)。 */
+        /** /goal 专用:错误码(goal-usage / goal-no-session / goal-failed)。 */
         error?: string;
         /** /goal 专用:动作('set'/'cleared'/'open-dialog'=打开新建目标弹窗)。 */
         goalAction?: 'set' | 'cleared' | 'open-dialog';
-        /** /learn 专用:启动成功时的 runId(关联 learn:event 状态流)。 */
-        learnRunId?: string;
       }) => void,
     ) => () => void;
 
@@ -6263,19 +6279,28 @@ interface ElectronAPI {
 
     /** Git 安全保存点开关 — 控制 agent turn 后是否自动创建 XDT savepoint commit */
     gitSafetyGet: () => Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }>;
-    /** 立即生效; Codex rewind 入口跟随此开关显示 */
-    gitSafetySet: (enabled: boolean) => Promise<{
+    /** 立即生效; mode controls snapshot capture and empty-project bootstrap. */
+    gitSafetySet: (mode: 'off' | 'existing-git' | 'all-projects' | boolean) => Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }>;
     gitSafetyReset: () => Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }>;
 
@@ -6464,7 +6489,7 @@ interface ElectronAPI {
     rewindCommit: (
       sessionId: string,
       clientId: string,
-      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean },
+      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean; allowFileRestore?: boolean },
     ) => Promise<import('@/lib/ccAgent.types').Session>;
     forkStripEncrypted: (sourceSessionId: string) => Promise<import('@/lib/ccAgent.types').Session>;
     /**
@@ -6910,6 +6935,7 @@ interface SkillhubSkill {
   cindyEnabled?: boolean;
   canUninstall?: boolean;
   managedByPlugin?: boolean;
+  builtIn?: boolean;
   uninstallLinkOnly?: boolean;
   discoveryPaths?: string[];
   id: string;
@@ -7086,13 +7112,14 @@ type SkillhubSyncResult =
       catalogScope?: 'market' | 'team';
       exists: true;
       isMine: boolean;
+      isCreator?: boolean;
       canManage: boolean;
       /** server 权威 authorId,用于本地 registry 回填及离线归属判定。 */
       authorId?: string;
       authorName?: string;
       publisherName?: string;
       latestVersion: string;
-      folderHash: string;
+      folderHash?: string;
       visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
       marketVersion?: string;
       pendingVersion?: {
@@ -7114,9 +7141,10 @@ interface SkillhubInfoResult {
   authorName: string;
   publisherName?: string;
   isMine: boolean;
+  isCreator?: boolean;
   canManage: boolean;
   latestVersion: string;
-  folderHash: string;
+  folderHash?: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
   publishedVisibility?: 'private' | 'shared' | 'public';
   ownerType?: string;

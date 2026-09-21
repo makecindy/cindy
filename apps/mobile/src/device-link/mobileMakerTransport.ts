@@ -670,7 +670,11 @@ export interface MobileMakerTransport {
     sessionId: string,
     clientId: string,
   ): Promise<RewindPreviewPayload>;
-  rewindCommit(sessionId: string, clientId: string): Promise<RemoteSession>;
+  rewindCommit(
+    sessionId: string,
+    clientId: string,
+    opts?: { allowFileRestore?: boolean },
+  ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
     clientId: string,
@@ -1101,8 +1105,11 @@ export function createMobileMakerTransport({
       call("maker:fork", [sourceSessionId, messageClientId]),
     rewindPreview: (sessionId, clientId) =>
       call("maker:rewind:preview", [sessionId, clientId]),
-    rewindCommit: (sessionId, clientId) =>
-      call("maker:rewind:commit", [sessionId, clientId]),
+    rewindCommit: (sessionId, clientId, opts) =>
+      call(
+        "maker:rewind:commit",
+        opts ? [sessionId, clientId, opts] : [sessionId, clientId],
+      ),
     deleteMessage: (sessionId, clientId) =>
       call("maker:message:delete", [sessionId, clientId]),
     closeSession: (sessionId) => call("maker:close-session", [sessionId]),

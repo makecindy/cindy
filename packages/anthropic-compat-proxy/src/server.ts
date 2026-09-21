@@ -3134,6 +3134,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       provenWebSocketHandshakes.delete(normalized);
       return disconnectWebSocketsForThread(normalized);
     },
+    hasProvenWebSocketForThread(threadId) {
+      const normalized = threadId.trim();
+      return normalized !== '' && provenWebSocketHandshakes.has(normalized);
+    },
     async dispose() {
       logger.debug?.('anthropic-compat-proxy disposing', { inflight });
       // 退出场景: 客户端(Claude Code 子进程)也即将被 SIGTERM, in-flight 请求保留无意义。

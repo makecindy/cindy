@@ -120,8 +120,24 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
         /image generation items without [`']?id[`']? are not supported/i.test(text),
       strip: () => null,
     }),
+    createResponsesItemIdPrefixRecoveryRule: () => ({
+      id: 'responses_item_id_prefix',
+      enabled: () => true,
+      matches: (text: string) =>
+        /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](?!(?:fc|fco|ctc|ctco)_)[^"']+["']\.?\s+Expected an ID that begins with ["'](?:msg|rs)["']/i.test(text),
+      strip: () => null,
+    }),
     stripEncryptedContentFromBody: () => null,
     stripImageGenerationItemsWithoutIdFromBody: () => null,
+    createResponsesItemIdLengthRecoveryRule: () => ({
+      id: 'responses_item_id_length',
+      enabled: () => true,
+      matches: (text: string) =>
+        /input\[\d+\]\.id[\s\S]{0,120}?(?:string too long|string_above_max_length)|string_above_max_length[\s\S]{0,120}?input\[\d+\]\.id/i.test(text),
+      strip: () => null,
+    }),
+    stripNonCanonicalResponsesItemIdsFromBody: () => null,
+    shortenOversizedResponsesItemIdsFromBody: () => null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
     // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
     createVisionBridgeTransform: () => (() => null),
@@ -2730,13 +2746,14 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
+        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
-          expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -2744,6 +2761,8 @@ describe('codex proxy host', () => {
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
           expect.objectContaining({ id: 'image_generation_id' }),
+          expect.objectContaining({ id: 'responses_item_id_prefix' }),
+          expect.objectContaining({ id: 'responses_item_id_length' }),
           expect.objectContaining({ id: 'xai_model_input' }),
         ]),
       }),
@@ -2849,8 +2868,20 @@ describe('codex proxy host', () => {
       threadId: 'thread-image',
       message: 'Image generation items without `id` are not supported for this request.',
     })).toBe('image_generation_id');
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-msg-id',
+      threadId: 'thread-msg-id',
+      message: "Invalid 'input[290].id': 'chatcmpl-8f2a1c_msg_0'. Expected an ID that begins with 'msg'.",
+    })).toBe('responses_item_id_prefix');
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-id-length',
+      threadId: 'thread-id-length',
+      message: 'Bad request',
+      additionalDetails: "Invalid 'input[74].id': string too long. Expected a string with maximum length 64, but got a string with length 84 instead.",
+    })).toBe('responses_item_id_length');
 
     expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-encrypted'))).toBeNull();
+    expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-id-length'))).toBeNull();
     expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-image'))).toBeNull();
     expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-safe'))).toBe(
       'https://chatgpt.com/backend-api/codex',
@@ -3061,6 +3092,11 @@ describe('codex proxy host', () => {
     ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'fc_old'. Expected an ID that begins with 'msg'.", null],
     ["Invalid 'input[2].id': 'unknown_old'. Expected an ID that begins with 'ctc'.", null],
+    // issue #4023: legacy call_ item ids are rewritten to whichever dialect the target asks for.
+    ["Invalid 'input[5].id': 'call_00_nRi4LX3KqCkex4kDJqBo0978'. Expected an ID that begins with 'ctc'.", 'tool_item_id'],
+    [JSON.stringify({ error: { message: "Invalid \"input[5].id\": \"call_fn\". Expected an ID that begins with \"fc\"." } }), 'tool_item_id'],
+    ["Invalid 'input[5].call_id': 'call_fn'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[5].id': 'CALL_fn'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'FC_old'. Expected an ID that begins with 'ctc'.", null],
     ['invalid_value', null],
   ])('arms recovery only for repairable tool item errors: %s', async (message, expected) => {
@@ -3235,6 +3271,59 @@ describe('codex proxy host', () => {
     expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBe(
       'https://chatgpt.com/backend-api/codex',
     );
+  });
+
+  it('arms recovery for a thread whose scoped socket codex already closed', async () => {
+    // #4773: Codex closes the thread WS itself on the upstream 400, so by the time
+    // maker-core arms recovery there is nothing left to disconnect. The proven
+    // thread handshake says the next upgrade will carry the same thread header,
+    // which is all the 426 decline needs.
+    const host = await freshCodexProxyHost();
+    const disconnectWebSocketsForThread = vi.fn(() => 0);
+    const hasProvenWebSocketForThread = vi.fn((threadId: string) => threadId === 'thread-closed');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      disconnectWebSocketsForThread,
+      hasProvenWebSocketForThread,
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      resolveWebSocketUpstream: (ctx: {
+        url: string;
+        headers: Readonly<Record<string, string>>;
+      }) => string | null;
+    };
+    const upgrade = (threadId: string) => proxyOpts.resolveWebSocketUpstream({
+      url: '/v1/responses',
+      headers: { 'thread-id': threadId },
+    });
+
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-closed',
+      threadId: 'thread-closed',
+      message: 'invalid_encrypted_content',
+    })).toBe('encrypted_content');
+    expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-closed');
+    expect(hasProvenWebSocketForThread).toHaveBeenCalledWith('thread-closed');
+    // Next upgrade for that thread is declined; the transport falls back to HTTP.
+    expect(upgrade('thread-closed')).toBeNull();
+    // Other threads keep their native websocket.
+    expect(upgrade('thread-elsewhere')).toBe('https://chatgpt.com/backend-api/codex');
+
+    // A thread that never proved a scoped handshake still keeps native behaviour.
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-anon',
+      threadId: 'thread-anon',
+      message: 'invalid_encrypted_content',
+    })).toBeNull();
+    expect(upgrade('thread-anon')).toBe('https://chatgpt.com/backend-api/codex');
+
+    // Closing the session drops the pending recovery with the thread registration.
+    host.unregister('session-closed');
+    expect(upgrade('thread-closed')).toBe('https://chatgpt.com/backend-api/codex');
   });
 
   it('arming recovery for a child thread preserves its parent and sibling routes', async () => {
@@ -6401,7 +6490,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(23); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(短路), 工具 ID 校正, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(25); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(短路), 工具 ID 校正, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

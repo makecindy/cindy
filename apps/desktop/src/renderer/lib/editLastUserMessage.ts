@@ -72,11 +72,17 @@ export interface CommitEditAndResendOptions {
   pastedTextRanges?: PastedTextRange[];
   /** 原消息 slash range；undefined 表示缺少显式 range，空数组表示明确无 slash。 */
   slashCommandRanges?: SlashCommandRange[];
+  /** Bound from conversation-only preview so commit cannot restore files. */
+  allowFileRestore?: boolean;
 }
 
 /** 依赖注入口 — 单测用内存假件替换,生产走默认实现。 */
 export interface CommitEditAndResendDeps {
-  rewindCommit: (sessionId: string, clientId: string) => Promise<Session>;
+  rewindCommit: (
+    sessionId: string,
+    clientId: string,
+    opts?: { allowFileRestore?: boolean },
+  ) => Promise<Session>;
   emitPatch: typeof emitSessionPatch;
   dropMessagesFromClientId: (sessionId: string, clientId: string) => void;
   sendMessage: typeof makerChatStore.sendMessage;
@@ -117,8 +123,11 @@ const defaultDeps: CommitEditAndResendDeps = {
   // fetchLatestUserMessageClientId)到 IPC 落地之间存在 TOCTOU 窗口(自动化 /
   // goal runner / 第二控制端可能追加新 user 消息),main 在 SDK 副作用前与软删
   // 事务前各校验一次,超越则抛 REWIND_TARGET_NOT_LATEST。
-  rewindCommit: (sessionId, clientId) =>
-    rewindCommitService(sessionId, clientId, { requireLatestUser: true }),
+  rewindCommit: (sessionId, clientId, opts) =>
+    rewindCommitService(sessionId, clientId, {
+      requireLatestUser: true,
+      ...(opts?.allowFileRestore === false ? { allowFileRestore: false } : {}),
+    }),
   emitPatch: emitSessionPatch,
   dropMessagesFromClientId: (sessionId, clientId) =>
     makerChatStore.dropMessagesFromClientId(sessionId, clientId),
@@ -224,7 +233,10 @@ export async function commitEditAndResend(
     throw new ApiError('EDIT_NOT_LAST_MESSAGE', 0, 'target is no longer the latest user message');
   }
 
-  const session = await deps.rewindCommit(opts.sessionId, opts.clientId);
+  const session =
+    opts.allowFileRestore === false
+      ? await deps.rewindCommit(opts.sessionId, opts.clientId, { allowFileRestore: false })
+      : await deps.rewindCommit(opts.sessionId, opts.clientId);
 
   deps.emitPatch(opts.sessionId, {
     sdkSessionId: session.sdkSessionId,

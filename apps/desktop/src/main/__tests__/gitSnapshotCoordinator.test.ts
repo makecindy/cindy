@@ -138,7 +138,7 @@ describe('GitSnapshotCoordinator', () => {
         workspaceKind: 'project',
         remoteHostId: null,
       }),
-      { autoSnapshotEnabled: true },
+      { autoSnapshotEnabled: true, autoInitProjectGit: true },
     );
     expect(deps.detectRepoRoot).toHaveBeenCalledOnce();
     expect(deps.createShadowSavepoint).toHaveBeenCalledWith(

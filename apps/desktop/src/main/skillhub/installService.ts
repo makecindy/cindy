@@ -744,8 +744,7 @@ export async function install(
     }
 
     // 拉 hub 元数据 — 落盘 authorId 给渲染层兜底用（离线 fallback）。
-    // isMine=true 时存当前 userId（与 renderer 的 currentUserId 同命名空间），
-    // 否则存 slug（不会与 currentUserId 匹配 → 正确识别为 foreign）。
+    // 与 info / batch sync 使用同一 owner slug，组织归属不能换成当前成员 ID。
     let authorId = '';
     try {
       const resp = await skillhubApiFetch<{
@@ -756,7 +755,7 @@ export async function install(
         body: { slugs: [p.name] },
       });
       const matched = resp.items?.find((i) => i.slug === p.name);
-      authorId = matched?.isMine ? userId : (matched?.owner.slug ?? '');
+      authorId = matched?.owner.slug ?? '';
     } catch (err) {
       log.warn('[skillInstall] batch-detail after install warn:', err);
     }
@@ -777,6 +776,11 @@ export async function install(
       !pathTextEquals(path.normalize(installPath), path.normalize(logicalFinalDir)),
     );
     const existingRegistryEntry = logicalRegistrySnapshot?.entry ?? physicalRegistrySnapshots[0]?.entry ?? null;
+    // Replacing the same catalog record updates its content baseline, not its publication provenance.
+    // This local metadata never grants publish rights; those still require fresh server authority.
+    const preservePublication = existingRegistryEntry?.origin === 'published'
+      && existingRegistryEntry.catalogScope === p.catalogScope;
+    if (preservePublication && !authorId) authorId = existingRegistryEntry.authorId;
     const previousRegistrySnapshots = registrySnapshots;
     const mutatedRegistryPaths = uniqueNormalizedPaths([
       logicalFinalDir,
@@ -803,7 +807,7 @@ export async function install(
         folderHash,
         installedAt: nowSec,
         updatedAt: nowSec,
-        origin: 'installed',
+        origin: preservePublication ? 'published' : 'installed',
         autoSynced: nextAutoSynced,
         ...(p.catalogScope ? { catalogScope: p.catalogScope } : {}),
       });

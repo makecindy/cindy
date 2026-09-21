@@ -11,6 +11,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const runtimeControlSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const deviceLinkHostSource = readFileSync(
   resolve(mainRoot, 'device-link/index.ts'),
   'utf8',
@@ -931,9 +935,10 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('setSessionRuntimeProjector((session) =>');
     expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) =>');
     expect(registerSource).toContain('broadcastSessionRuntimeProjection(sessionId');
-    expect(registerSource).toContain('runtimeEffective: effective');
-    expect(registerSource).toContain('runtimePending: control.pending');
-    expect(registerSource).toContain("effort: effective.effort ?? '',");
+    expect(registerSource).toContain('projectSessionRuntimeControl(session.id');
+    expect(runtimeControlSource).toContain('runtimeEffective: effective');
+    expect(runtimeControlSource).toContain('runtimePending: control.pending');
+    expect(runtimeControlSource).toContain("effort: effective.effort ?? '',");
   });
   // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 
@@ -1037,8 +1042,53 @@ describe('session runtime control wiring', () => {
     expect(finalBlockStart).toBeGreaterThan(-1);
     expect(finalVerification).toBeGreaterThan(finalBlockStart);
     expect(setModel.slice(finalBlockStart, finalVerification)).toContain(
-      '!coldPiRuntimeWithoutNativeSession',
+      '!coldPiRouteWithoutLiveWindowCheck',
     );
+  });
+
+  it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 冷启动核实(2~3s)必须经压力预检：目标窗口对**已知占用**有余量时不再拉起运行时，
+    // 路由照常落定、下一次发送按目标窗口懒重建；danger/overflow 仍走原核实路径。
+    const pressurePreflight = setModel.indexOf('resolveColdPiWindowVerificationExecution(');
+    const rehydrate = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
+    );
+    expect(pressurePreflight).toBeGreaterThan(-1);
+    expect(pressurePreflight).toBeLessThan(rehydrate);
+    // 占用只能取 runtime 关闭时固化的 live 读数：sessions.context_tokens 可能因
+    // 中断 / 崩溃低报，拿它判「有余量」会绕过缩窗交接（Greptile P1）。
+    const liveUsageRead = setModel.indexOf('getSessionLastLiveUsage(sessionId)');
+    expect(liveUsageRead).toBeGreaterThan(-1);
+    expect(liveUsageRead).toBeLessThan(pressurePreflight);
+    expect(setModel).toContain('set-model: skipped cold Pi window verification');
+    expect(setModel).toContain("coldPiWindowVerification === 'skip-without-live-verification'");
+    // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。
+    const finalBlockStart = setModel.indexOf('const piSessionAfterRouteChange =');
+    const finalVerification = setModel.indexOf(
+      'Pi target runtime could not be verified',
+      finalBlockStart,
+    );
+    expect(finalBlockStart).toBeGreaterThan(-1);
+    expect(finalVerification).toBeGreaterThan(finalBlockStart);
+    expect(setModel.slice(finalBlockStart, finalVerification)).toContain(
+      '!coldPiRouteWithoutLiveWindowCheck',
+    );
+    // 固化点：每个会话关闭时先记 live 用量，再走关闭清理。
+    const closeCaptureLine =
+      'rememberSessionLastLiveUsage(session.id, session.getUsageSnapshot?.());';
+    const closeCapture = registerSource.indexOf(closeCaptureLine);
+    const closeHook = registerSource.indexOf(
+      'finalizeClosedSession: (session: WiredSession, context) => {',
+    );
+    expect(closeCapture).toBeGreaterThan(-1);
+    expect(closeHook).toBeGreaterThan(-1);
+    expect(closeCapture).toBeGreaterThan(closeHook);
+    expect(closeCapture - closeHook).toBeLessThan(600);
   });
 
   it('closes a cold Pi runtime when route persistence fails after rehydrate', () => {

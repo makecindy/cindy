@@ -4,7 +4,14 @@ import { runSourceGit } from './sourceGit.js';
 
 export type SourceRevisions = Pick<
   MakeSourceStatus,
-  'baseCommit' | 'currentBranch' | 'mainCommit' | 'mainRemoteCommit' | 'mainBehind' | 'mainAhead'
+  | 'baseCommit'
+  | 'currentBranch'
+  | 'mainCommit'
+  | 'mainRemoteCommit'
+  | 'mainBehind'
+  | 'mainAhead'
+  | 'personalBehind'
+  | 'personalAhead'
 >;
 
 export function isSourceBranchName(value: unknown): value is string {
@@ -67,6 +74,21 @@ export async function readSourceRevisions(
       if (Number.isSafeInteger(ahead) && Number.isSafeInteger(behind)) {
         revisions.mainAhead = ahead;
         revisions.mainBehind = behind;
+      }
+    }
+  }
+  if (mainCommit && personalCommit) {
+    const counts = await query([
+      'rev-list',
+      '--left-right',
+      '--count',
+      `${personalCommit}...${mainCommit}`,
+    ]);
+    if (counts && /^\d+\s+\d+$/.test(counts)) {
+      const [personalAhead, personalBehind] = counts.split(/\s+/).map(Number);
+      if (Number.isSafeInteger(personalAhead) && Number.isSafeInteger(personalBehind)) {
+        revisions.personalAhead = personalAhead;
+        revisions.personalBehind = personalBehind;
       }
     }
   }

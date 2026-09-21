@@ -55,6 +55,7 @@ import {
   sessionCreateToRow,
   sessionPatchToRow,
   persistableSessionEffort,
+  projectSessionRuntimeFields,
   normalizeRemoteHostId,
   finalizePlainPreview,
 } from '../mapper';
@@ -643,8 +644,14 @@ export async function applyAgentSwitchToSessionRow(
   if (typeof patch.contextWindow === 'number' && patch.contextWindow > 0) {
     setObj.contextWindow = Math.floor(patch.contextWindow);
   }
-  await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+  // RETURNING keeps the projection tied to this committed write, including axes
+  // omitted by the caller. A later SELECT could observe a newer selection.
+  const [committed] = await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId))
+    .returning({
+      id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
+    });
+  if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
     sessionId,
     {
@@ -657,6 +664,9 @@ export async function applyAgentSwitchToSessionRow(
       ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
         ? { contextWindow: Math.floor(patch.contextWindow) }
         : {}),
+      // Publish before the consumed intent is cleared. Otherwise the composer
+      // falls back to runtimeEffective from its last full read.
+      ...projectSessionRuntimeFields({ ...committed, agentKind: normalizeDbAgentKind(committed.agentKind) }),
     },
     ownerScope,
   );
@@ -1378,12 +1388,14 @@ export function registerSessionIpc(
     }
     // body 透传 agentKind / orcaRole 给 mapper；非法值已由上方校验拦截，默认值由 mapper 兜底。
     const insertRow = sessionCreateToRow(id, { ...createBody, workspaceKind, workingDir }, now);
+    const gitSafety = readGitSafetySettings();
     await ensureProjectGitInitialized({
       workingDir: insertRow.workingDir,
       workspaceKind: insertRow.workspaceKind,
       remoteHostId: insertRow.remoteHostId,
       sessionId: id,
-      autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+      autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+      autoInitProjectGit: gitSafety.autoInitProjectGit,
       source: 'local-db:sessions:create',
     });
     const resource =

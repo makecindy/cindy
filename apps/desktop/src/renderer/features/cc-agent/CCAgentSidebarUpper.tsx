@@ -99,6 +99,7 @@ import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
 import {
   botOwnedSessionNotificationTitle,
+  findSessionNotificationSession,
   sendSessionEventNotification,
 } from '@/lib/sessionEventNotification';
 import type { Session } from '@/lib/ccAgent.types';
@@ -174,6 +175,7 @@ import {
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
+import { onlineDeviceSectionIds } from './lib/mainListModel';
 import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
 import {
   holdSidebarViewedPriority,
@@ -741,6 +743,8 @@ export function CCAgentSidebarUpper() {
             >
               <ExpandedView
                 sessionsHook={sessionsHook}
+                allSessionsForAttention={allSessionsForAttention}
+                remoteSessionsForNotification={remoteProjectSessions}
                 navigate={navigate}
                 activeSessionId={activeSessionId}
                 // 兜底直接用路由参数而非 filesSession?.id:filesSession 只从本地
@@ -790,6 +794,8 @@ type SessionsHook = ReturnType<typeof useCCSessions>;
 
 interface ExpandedProps {
   sessionsHook: SessionsHook;
+  allSessionsForAttention: Session[];
+  remoteSessionsForNotification: Session[];
   navigate: ReturnType<typeof useNavigate>;
   activeSessionId: string | undefined;
   /** 「正在被用户注视」的会话 —— 供 attention 语义(running-status 通知豁免 /
@@ -826,6 +832,8 @@ const CONFIRM_INITIAL: ConfirmState = {
 
 function ExpandedView({
   sessionsHook,
+  allSessionsForAttention,
+  remoteSessionsForNotification,
   navigate,
   activeSessionId,
   viewedSessionId,
@@ -1057,13 +1065,23 @@ function ExpandedView({
   // 不会因此重跑 transition effect。通道、失焦与灵动岛去重由共享入口收口。
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  // 通知不能只查当前侧栏桶：活跃筛选、归档切换和远程会话镜像都可能让目标
+  // 不在 sessionsRef 里。保留同步查找和原有兜底，避免标题解析影响通知发送。
+  const allSessionsForNotificationRef = useRef(allSessionsForAttention);
+  allSessionsForNotificationRef.current = allSessionsForAttention;
+  const remoteSessionsForNotificationRef = useRef(remoteSessionsForNotification);
+  remoteSessionsForNotificationRef.current = remoteSessionsForNotification;
   // 通知文案里的「尚未起名」兜底。走 ref 与 sessionsRef 同款:fireSessionNotification
   // 是 `[]` 依赖的稳定回调,直接闭包 t 会钉住首次渲染的语言。
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
     (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
-      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      const session = findSessionNotificationSession(sessionId, [
+        sessionsRef.current,
+        allSessionsForNotificationRef.current,
+        remoteSessionsForNotificationRef.current,
+      ]);
       // Orca worker 自身状态翻转不发独立通知 —— 等 lead 接到 worker_report 处理完
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
@@ -1888,16 +1906,20 @@ function ExpandedView({
   );
 
   // D 期:按日期分组已删除(visibleDateSessions 随 DateGroupedSessionsSection 一并下线)。
-  const hasVisibleSidebarContent =
-    visiblePinnedEntries.length > 0 ||
-    visibleUnclassified.length > 0 ||
-    visibleProjectsWithVendor.length > 0 ||
-    visibleDialogues.length > 0;
   // 与 ProjectsSection.deviceGroupingAvailable 同一门控:范围收窄到单台机器时
   // 「按设备分组」选项隐藏。占位分支也要挂范围标题,不能各写一份。
   const deviceGroupingAvailable =
     (remoteDeviceIndex?.size ?? 0) > 0 &&
     !(selectedMachineId !== MACHINE_ALL && selectedMachineId.length === 1);
+
+  const hasVisibleSidebarContent =
+    (deviceGroupingAvailable &&
+      filter.groupDevice &&
+      onlineDeviceSectionIds(remoteDeviceIndex, selectedMachineId).length > 0) ||
+    visiblePinnedEntries.length > 0 ||
+    visibleUnclassified.length > 0 ||
+    visibleProjectsWithVendor.length > 0 ||
+    visibleDialogues.length > 0;
 
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);

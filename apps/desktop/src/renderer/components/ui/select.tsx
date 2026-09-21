@@ -1,14 +1,24 @@
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { AriaAttributes } from 'react';
+import type { AriaAttributes, ReactNode } from 'react';
 import { Button } from './button';
 
 export interface SelectProps {
   id?: string;
   label: string;
   value: string;
-  options: ReadonlyArray<{ value: string; label: string; disabled?: boolean }>;
+  options: ReadonlyArray<{
+    value: string;
+    label: string;
+    disabled?: boolean;
+    title?: string;
+    endAdornment?: ReactNode;
+  }>;
+  /** Optional non-interactive status indicators, kept outside the searchable label. */
+  triggerAdornment?: ReactNode;
+  /** Compact pickers can ellipsize labels; ordinary form fields retain wrapping. */
+  truncateOptions?: boolean;
   onValueChange(value: string): void;
   onOpenChange?(open: boolean): void;
   disabled?: boolean;
@@ -28,6 +38,8 @@ export function Select({
   label,
   value,
   options,
+  triggerAdornment,
+  truncateOptions = false,
   onValueChange,
   onOpenChange,
   disabled,
@@ -37,6 +49,7 @@ export function Select({
   'aria-required': required,
   error = false,
 }: SelectProps) {
+  const selected = options.find((option) => option.value === value);
   return (
     <SelectPrimitive.Root
       value={value}
@@ -53,7 +66,7 @@ export function Select({
           aria-describedby={describedBy}
           aria-invalid={error ? true : invalid}
           aria-required={required}
-          title={options.find((option) => option.value === value)?.label}
+          title={selected?.title ?? selected?.label}
           className={cn(
             'min-w-0 max-w-full justify-between gap-2 px-3 font-normal [-webkit-app-region:no-drag]',
             className,
@@ -61,9 +74,10 @@ export function Select({
               'border-[var(--error-border)] focus-visible:border-[var(--error-fg)] focus-visible:ring-[var(--error-fg)]',
           )}
         >
-          <span className="min-w-0 truncate text-left">
+          <span className={cn('min-w-0 truncate text-left', triggerAdornment && 'flex-1')}>
             <SelectPrimitive.Value placeholder={label} />
           </span>
+          {triggerAdornment}
           <SelectPrimitive.Icon asChild>
             <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
           </SelectPrimitive.Icon>
@@ -87,9 +101,17 @@ export function Select({
                 key={option.value}
                 value={option.value}
                 disabled={option.disabled}
+                title={option.title ?? (truncateOptions ? option.label : undefined)}
                 className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[state=checked]:bg-[var(--surface-chip)] data-[highlighted]:bg-[var(--surface-hover)] data-[disabled]:opacity-60"
               >
-                <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+                {truncateOptions ? (
+                  <span className="min-w-0 flex-1 truncate">
+                    <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+                  </span>
+                ) : <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>}
+                {option.endAdornment ? (
+                  <span className="ml-2 flex shrink-0 items-center gap-1.5">{option.endAdornment}</span>
+                ) : null}
                 <SelectPrimitive.ItemIndicator className="absolute right-1 flex">
                   <Check size={14} aria-hidden="true" />
                 </SelectPrimitive.ItemIndicator>

@@ -3,16 +3,24 @@ import CindyRemoteCredentials
 import DesktopNativeCaller
 
 #if os(macOS)
+import AppKit
 /// The parent process is authenticated before arguments, storage or network are
 /// touched. Only fixed errors are emitted; no diagnostic may echo a payload.
 @main
 @MainActor
 struct CredentialHostMain {
-  static func main() async {
+  static func main() {
+    let application = NSApplication.shared
+    application.setActivationPolicy(.accessory)
+    Task { await serve(); application.terminate(nil) }
+    application.run()
+  }
+  static func serve() async {
     guard let caller = DesktopInputCaller.authenticate(resourceName: "cindy-macos-remote-credentials",
       developmentExecutable: "CREDENTIAL_HOST_DEVELOPMENT_EXECUTABLE"),
       CommandLine.arguments.count == 2, CommandLine.arguments[1].hasPrefix("/") else { exit(77) }
     let host = HostCredentialServer(directory: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true))
+    let viewer = MobileCredentialClient(storageDirectory: URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).appendingPathComponent("viewer"))
     let input = AsyncStream<Data>(bufferingPolicy: .bufferingOldest(64)) { continuation in
       DispatchQueue(label: "cindy.credential.stdin").async {
         var buffer = Data()
@@ -42,6 +50,17 @@ struct CredentialHostMain {
         }
         let result: Any
         switch method {
+        case "viewerSettings": result = try viewer.savedSettings(realm: string("realm"), membership: string("membership"), authDevice: string("authDevice"), target: string("target"))
+        case "viewerConfigure": result = try await viewer.configure(realm: string("realm"), membership: string("membership"), authDevice: string("authDevice"), token: string("token"))
+        case "viewerBegin": result = try await viewer.begin(target: string("target"), descriptor: string("descriptor"), setup: value["setup"] as? Bool == true, savedOnly: value["setup"] as? Bool != true, biometric: value["biometric"] as? Bool == true)
+        case "viewerAccept": result = try viewer.accept(handle: string("handle"), offer: string("offer"))
+        case "viewerReceive": result = try viewer.receive(handle: string("handle"), ciphertext: string("ciphertext"))
+        case "viewerPassword": result = try await viewer.password(handle: string("handle"), useSaved: value["saved"] as? Bool == true, locale: string("locale"), theme: string("theme"))
+        case "viewerAuthenticationStatus": result = try viewer.authenticationStatus(handle: string("handle"))
+        case "viewerForget": try viewer.forgetSaved(realm: string("realm"), membership: string("membership"), authDevice: string("authDevice"), target: string("target")); result = true
+        case "viewerBiometric": try await viewer.changeBiometric(realm: string("realm"), membership: string("membership"), authDevice: string("authDevice"), target: string("target"), enabled: value["enabled"] as? Bool == true, locale: string("locale")); result = true
+        case "viewerEnd": result = viewer.end(handle: try string("handle")) ?? ""
+        case "viewerReset": viewer.reset(); result = true
         case "configure": result = try await host.configure(realm: string("realm"), membership: string("membership"),
           authDevice: string("authDevice"), token: string("token"))
         case "updateToken":
@@ -69,7 +88,7 @@ struct CredentialHostMain {
     for await line in input {
       let value = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
       let method = value?["method"] as? String
-      if let method, ["configure", "relayHeaders", "begin", "receive"].contains(method) {
+      if let method, ["configure", "relayHeaders", "begin", "receive", "viewerConfigure", "viewerBegin", "viewerPassword", "viewerBiometric"].contains(method) {
         // Setup and OS unlock await independently. Status and close must remain
         // serviceable while an authentication attempt is awaiting loginwindow.
         guard networkJobs.count < 8 else {
@@ -82,6 +101,7 @@ struct CredentialHostMain {
     }
     for job in networkJobs.values { job.cancel() }
     host.reset()
+    viewer.reset()
   }
   private static func emit(_ value: [String: Any]) throws {
     var data = try JSONSerialization.data(withJSONObject: value); data.append(10)

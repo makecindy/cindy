@@ -1,3 +1,6 @@
+import { TaskMenuHeading, TaskTagsPanel } from './TaskTags';
+import { GestureHandlerRootView } from '@/platform/gestureHandler';
+import type { RemoteSession } from './types';
 /**
  * SessionActionSheet —— 首页会话行左滑「选项」触发的底部操作菜单
  * (重命名 / 置顶切换 / 归档 / 删除 + 独立「取消」)。
@@ -65,6 +68,7 @@ const ACTION_ICONS: Record<SessionSwipeAction, LucideIcon> = {
 };
 
 export function SessionActionSheet({
+  session,
   onAction,
   onClose,
   onClosed,
@@ -72,6 +76,7 @@ export function SessionActionSheet({
   status,
   visible,
 }: {
+  session?: RemoteSession | null;
   /** 点菜单项:父级负责关 sheet 并串后续(删除 Alert / 重命名弹窗 / 直接执行)。 */
   onAction(action: SessionSwipeAction): void;
   onClose(): void;
@@ -82,6 +87,10 @@ export function SessionActionSheet({
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const [tagsExpanded, setTagsExpanded] = useState(false);
+  useEffect(() => {
+    if (!visible) setTagsExpanded(false);
+  }, [visible]);
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -128,12 +137,13 @@ export function SessionActionSheet({
 
   return (
     <Modal
+      supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]}
       animationType="none"
       onRequestClose={onClose}
       transparent
       visible={mounted}
     >
-      <View style={styles.overlay}>
+      <GestureHandlerRootView style={styles.overlay}>
         <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]}>
           <BlurBackdrop />
           <Pressable
@@ -154,44 +164,80 @@ export function SessionActionSheet({
           testID="home.sessionActions"
         >
           <View style={styles.actionCard}>
-            <BlurBackdrop
-              intensity={32}
-              overlayColor={colors.sheetActionSurface}
-            />
-            {menu.map((item) => {
-              const IconComponent = ACTION_ICONS[item.action];
-              const color = item.destructive
-                ? colors.destructive
-                : colors.sheetActionText;
-              return (
-                <Pressable
-                  accessibilityLabel={item.label}
-                  accessibilityRole="button"
-                  key={item.action}
-                  onPress={() => onAction(item.action)}
-                  style={({ pressed }) => [
-                    styles.actionRow,
-                    pressed && styles.pressed,
-                  ]}
-                  testID={`home.sessionActions.${item.action}`}
-                >
-                  <IconComponent
-                    color={color}
-                    size={iconSize.lg}
-                    strokeWidth={iconStroke.regular}
-                  />
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.actionLabel,
-                      item.destructive && styles.actionLabelDanger,
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
+            <BlurBackdrop intensity={32} overlayColor={colors.sheetActionSurface} />
+            {session && <TaskMenuHeading session={session} />}
+            {!tagsExpanded &&
+              menu
+                .filter(
+                  (item) =>
+                    !item.destructive && item.action !== 'archive' && item.action !== 'restore',
+                )
+                .map((item) => {
+                  const IconComponent = ACTION_ICONS[item.action];
+                  const color = item.destructive ? colors.destructive : colors.sheetActionText;
+                  return (
+                    <Pressable
+                      accessibilityLabel={item.label}
+                      accessibilityRole="button"
+                      key={item.action}
+                      onPress={() => onAction(item.action)}
+                      style={({ pressed }) => [styles.actionRow, pressed && styles.pressed]}
+                      testID={`home.sessionActions.${item.action}`}
+                    >
+                      <IconComponent
+                        color={color}
+                        size={iconSize.lg}
+                        strokeWidth={iconStroke.regular}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.actionLabel, item.destructive && styles.actionLabelDanger]}
+                      >
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+            {visible && session && (
+              <TaskTagsPanel
+                key={`${session.canonicalDeviceId ?? session.deviceLinkDeviceId}:${session.id}`}
+                session={session}
+                expanded={tagsExpanded}
+                onExpandedChange={setTagsExpanded}
+              />
+            )}
+            {!tagsExpanded &&
+              menu
+                .filter(
+                  (item) =>
+                    item.destructive || item.action === 'archive' || item.action === 'restore',
+                )
+                .map((item) => {
+                  const IconComponent = ACTION_ICONS[item.action];
+                  const color = item.destructive ? colors.destructive : colors.sheetActionText;
+                  return (
+                    <Pressable
+                      accessibilityLabel={item.label}
+                      accessibilityRole="button"
+                      key={item.action}
+                      onPress={() => onAction(item.action)}
+                      style={({ pressed }) => [styles.actionRow, pressed && styles.pressed]}
+                      testID={`home.sessionActions.${item.action}`}
+                    >
+                      <IconComponent
+                        color={color}
+                        size={iconSize.lg}
+                        strokeWidth={iconStroke.regular}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.actionLabel, item.destructive && styles.actionLabelDanger]}
+                      >
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
           </View>
           <Pressable
             accessibilityLabel={t("session.common.cancel")}
@@ -210,7 +256,7 @@ export function SessionActionSheet({
             <Text style={styles.cancelText}>{t("session.common.cancel")}</Text>
           </Pressable>
         </Animated.View>
-      </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }

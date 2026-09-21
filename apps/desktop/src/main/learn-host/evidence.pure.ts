@@ -31,6 +31,11 @@ export interface ConversationItem {
   text: string;
 }
 
+/** A bare Learn invocation triggers collection but is never itself evidence. */
+export function isBareLearnInvocationText(text: string): boolean {
+  return /^\/(?:skill:)?learn\s*$/i.test(text.trim());
+}
+
 /**
  * 把当前会话消息渲染成 prompt 块(时间正序;超预算从**最早**的开始丢 ——
  * 提炼工作流时近期消息价值更高)。空输入返回空串。

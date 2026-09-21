@@ -22,11 +22,12 @@ import {
   frame,
   padding,
   presentationDetents,
+  interactiveDismissDisabled,
   presentationDragIndicator,
   scrollContentBackground,
 } from "@expo/ui/swift-ui/modifiers";
 import { useTranslation } from "react-i18next";
-import { ScrollView, View } from "react-native";
+import { ScrollView, View, useWindowDimensions } from "react-native";
 import { useTheme } from "@/theme";
 import type { ComposerSheetProps } from "./ComposerSheet";
 
@@ -45,9 +46,14 @@ export function ComposerSheet({
   testID,
   nativeContent,
   nativeHeader,
+  preventDismiss = false,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
+  const { width, height } = useWindowDimensions();
+  // UIKit disables the medium detent in compact-height landscape. Never bind
+  // selection to an unavailable detent, including after rotating an open sheet.
+  const landscape = width > height;
   return (
     <Host
       colorScheme={mode}
@@ -58,14 +64,15 @@ export function ComposerSheet({
       <BottomSheet
         isPresented={visible}
         onIsPresentedChange={(open) => {
-          if (!open) onClose();
+          if (!open && visible) onClose();
         }}
         onDismiss={onClosed}
       >
         <Group
           modifiers={[
-            presentationDetents(["medium", "large"], { selection: "medium" }),
+            presentationDetents(landscape ? ["large"] : ["medium", "large"], { selection: landscape ? "large" : "medium" }),
             presentationDragIndicator("visible"),
+            interactiveDismissDisabled(preventDismiss),
           ]}
         >
           <VStack
