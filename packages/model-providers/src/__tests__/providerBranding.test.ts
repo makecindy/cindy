@@ -25,6 +25,21 @@ describe('provider branding', () => {
     }
   });
 
+  it.each(['https://chatgpt.com/backend-api/codex', 'https://api.openai.com/v1'])(
+    'uses the same OpenAI mark for independent account/API connections: %s', upstream => {
+      expect(resolveProviderLogoKind('openai-independent', {
+        codex: { upstream }, 'claude-code': { upstream }, pi: { upstream },
+      })).toBe(resolveProviderLogoKind('openai'));
+      expect(resolveProviderLogoKind('renamed-work-account', { codex: { upstream } })).toBe('openai');
+    },
+  );
+
+  it('does not brand lookalike ChatGPT endpoints as OpenAI', () => {
+    expect(resolveProviderLogoKind('custom', {
+      codex: { upstream: 'https://chatgpt.com.example.org/v1' },
+    })).toBeNull();
+  });
+
   it('uses a dedicated xAI mark', () => {
     expect(resolveProviderLogoKind('xai')).toBe('xai');
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
@@ -71,6 +86,30 @@ describe('provider branding', () => {
       }
       expect(hasProviderLogo('renamed-provider', routing), preset.id).toBe(true);
     }
+  });
+
+  it.each([
+    'https://aiplatform.googleapis.com',
+    'https://us-central1-aiplatform.googleapis.com',
+    'https://aiplatform.us.rep.googleapis.com',
+    'https://aiplatform.eu.rep.googleapis.com',
+  ])('brands official Vertex hosts as Google: %s', upstream => {
+    expect(resolveProviderLogoKind('renamed-vertex', { pi: { upstream } })).toBe('google');
+  });
+
+  it('does not brand a lookalike Vertex host as Google', () => {
+    expect(resolveProviderLogoKind('lookalike', {
+      pi: { upstream: 'https://aiplatform.googleapis.com.evil.test' },
+    })).toBeNull();
+  });
+
+  it('brands the official Azure Cognitive Services host as Azure', () => {
+    expect(resolveProviderLogoKind('renamed-azure', {
+      pi: { upstream: 'https://my-resource.cognitiveservices.azure.com/openai/v1' },
+    })).toBe('azure');
+    expect(resolveProviderLogoKind('lookalike', {
+      pi: { upstream: 'https://my-resource.cognitiveservices.azure.com.evil.test/openai/v1' },
+    })).toBeNull();
   });
 
   it('rejects spoofed hosts, malformed URLs, and mixed-brand routing deterministically', () => {

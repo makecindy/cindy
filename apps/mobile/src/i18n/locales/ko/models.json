@@ -11,13 +11,16 @@
     "subscriptionBadgeCompact": "구독",
     "backToModels": "모델 목록으로 돌아가기",
     "agentSwitchHint": "모델을 선택하면 다음 메시지부터 {{agent}}(으)로 전환됩니다",
-    "crossAgentEmptyHint": "먼저 제어 대상 기기에서 {{agent}} 모델 소스를 연결하세요",
+    "crossAgentEmptyHint": "먼저 원격 기기에서 {{agent}} 모델 소스를 연결하세요",
     "permissionModeAccessibility": "권한 모드:{{mode}}",
     "selectProviderModelAccessibility": "{{provider}}의 모델 {{model}} 선택",
     "selectModelAccessibility": "모델 {{model}} 선택",
     "configureAccessibility": "{{model}} 구성",
-    "budgetDisabledHint": "이 모델을 사용하려면 먼저 제어 대상 기기에서 API 키를 설정해야 합니다",
+    "budgetDisabledHint": "이 모델을 사용하려면 먼저 원격 기기에서 API 키를 설정해야 합니다",
     "priceLine": "입력 {{input}} · 출력 {{output}} / 100만 토큰",
+    "priceTitle": "100만 토큰당",
+    "priceAmounts": "입력 {{input}} · 출력 {{output}}",
+    "discountedVsStandard": "할인 중 · 표준가 대비 {{percent}}% 절약",
     "contextSuffix": "{{size}} 컨텍스트",
     "fastTag": "빠름"
   },
@@ -36,11 +39,38 @@
       "ultra": "극한"
     }
   },
+  "contextWindowSwitch": {
+    "title": "이 모델에는 현재 대화가 모두 들어가지 않습니다",
+    "remoteTitle": "이 원격 작업에서는 모델을 안전하게 전환할 수 없습니다",
+    "description": "현재 대화에서 이미 {{used}}를 사용해 새 모델의 한도 {{total}}(약 {{pct}}%)를 초과했습니다. 전환하면 Cindy가 짧은 요약을 만든 후 계속합니다. 대화 기록은 유지되지만 모든 내용이 새 모델에 그대로 전달되지는 않습니다.",
+    "remoteDescription": "이 원격 작업의 컨텍스트는 더 작은 모델의 {{total}} 중 {{used}}(약 {{pct}}%)를 사용 중이므로 안전하게 전환할 수 없습니다. 현재 모델을 유지하거나 새 작업을 만든 뒤 이 모델을 선택하세요.",
+    "cancel": "현재 모델 유지",
+    "confirm": "전환하고 계속"
+  },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} 모델 보기",
     "confirmTitle": "{{agent}}(으)로 전환할까요?",
     "confirmMessage": "다음 메시지를 보낼 때 {{appName}}이(가) 현재 세션을 {{agent}}에 인계합니다. 두 에이전트는 컨텍스트와 도구에 대한 이해가 다를 수 있으니 확인 후 대상 모델을 선택하세요.",
     "cancel": "취소",
     "confirm": "계속 선택"
+  },
+  "unified": {
+    "favorites": "즐겨찾기",
+    "all": "모든 모델",
+    "recommended": "추천",
+    "source": "공급원",
+    "harness": "Harness",
+    "addFavorite": "즐겨찾기에 추가",
+    "removeFavorite": "즐겨찾기 해제",
+    "restoreRecommended": "권장 설정 복원",
+    "saveFailed": "저장하지 못했습니다. 다시 시도하세요.",
+    "configure": "설정",
+    "syncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다.",
+    "timeUnit": {
+      "day": "일",
+      "hour": "시간",
+      "minute": "분",
+      "second": "초"
+    }
   }
 }

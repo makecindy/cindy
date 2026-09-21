@@ -1,3 +1,6 @@
+import config from '../../../tailwind.config';
+import { UI_TEXT_TOKEN_SIZES, SCALED_TAILWIND_TOKENS, NUMERIC_TEXT_CLASSES } from '../styles/generated/token-mappings';
+import { cn } from '../lib/utils';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -141,6 +144,22 @@ interface Exemption {
 }
 
 const EXEMPTIONS: Exemption[] = [
+  {
+    file: 'src/renderer/components/chat/MarkdownRenderer.tsx',
+    rule: 'tw-weight',
+    reason: 'DESIGN §3: content strong is absolute 700, including nested strong; ordinary UI weights remain capped at 600.',
+    signatures: [{ match: 'font-bold', expected: 1 }],
+  },
+  {
+    file: 'src/main/windowsBadgeIcon.ts',
+    rule: 'inline-size',
+    reason: 'DESIGN.md §2 Windows taskbar attention badge: 16px 系统图标内的 8–12px 拟合数字',
+    signatures: [
+      { match: 'fontSize …1', expected: 1 },
+      { match: 'fontSize …2', expected: 1 },
+      { match: 'fontSize …8', expected: 1 },
+    ],
+  },
   // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五处形态
   // (238 直接字面量、290 filled/error 三元、300/310 focus/blur style 赋值、748 内联 style)。
   {
@@ -201,10 +220,13 @@ const EXEMPTIONS: Exemption[] = [
     signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
   },
   {
-    file: 'src/renderer/components/chat/DiffView.tsx',
+    file: 'src/renderer/components/chat/chatChrome.ts',
     rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+    reason: 'DS-9 将既有代码字号与紧凑派生值集中到共享样式；仅迁移签名，不扩大值域',
+    signatures: [
+      { match: 'text-[length:var(--app-code-font-size)]', expected: 1 },
+      { match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 },
+    ],
   },
   {
     file: 'src/renderer/components/chat/GhostSummonCard.tsx',
@@ -228,7 +250,7 @@ const EXEMPTIONS: Exemption[] = [
     file: 'src/renderer/components/chat/MarkdownRenderer.tsx',
     rule: 'arb-size',
     reason: '代码字号变量',
-    signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }],
+    signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 1 }],
   },
   {
     file: 'src/renderer/components/chat/SystemCard.tsx',
@@ -238,18 +260,6 @@ const EXEMPTIONS: Exemption[] = [
       { match: 'text-[length:calc(var(--app-code-font-size)_-_1.5px)]', expected: 1 },
       { match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 },
     ],
-  },
-  {
-    file: 'src/renderer/components/chat/ToolCallCard.tsx',
-    rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 }],
-  },
-  {
-    file: 'src/renderer/components/chat/ToolPayloadLightbox.tsx',
-    rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 3 }],
   },
   {
     file: 'src/renderer/components/chat/UserMessage.tsx',
@@ -720,75 +730,21 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     expect(exemptionDrift).toEqual([]);
   });
 
-  it('mirrors the size ladder across DESIGN.md and the three authoritative code sources', () => {
+  it('mirrors the independent size ladder across generated values and actual consumers', () => {
     const expected = [...SIZE_WHITELIST].sort((a, b) => a - b);
-    const expectedSemantic = { xs: 12, sm: 14, base: 16, lg: 18 };
-
-    const config = readFileSync(join(ROOT, 'tailwind.config.ts'), 'utf8');
-    const fontSizeBlock =
-      /fontSize:\s*\{([\s\S]*?)^\s*\},\s*borderRadius:/m.exec(config)?.[1] ?? '';
-    const configNumeric = parseNumericConfigMappings(config);
-    expect(configNumeric).toEqual(expected.map((n) => [n, n]));
-    const configSemantic = Object.fromEntries(
-      [...fontSizeBlock.matchAll(/^\s*(xs|sm|base|lg):\s*\[['"]var\(--text-\1\)['"]/gm)].map(
-        (m) => [m[1], expectedSemantic[m[1] as keyof typeof expectedSemantic]],
-      ),
-    );
-    expect(configSemantic).toEqual(expectedSemantic);
-    const preservedConfigSemantic = Object.fromEntries(
-      [
-        ...fontSizeBlock.matchAll(
-          /^\s*['"]?(xl|2xl|3xl|4xl|5xl)['"]?:\s*\[['"]var\(--text-\1\)['"]/gm,
-        ),
-      ].map((m) => [m[1], SEMANTIC_TOKEN_VALUES[m[1] as keyof typeof SEMANTIC_TOKEN_VALUES]]),
-    );
-    expect(preservedConfigSemantic).toEqual({ xl: 20, '2xl': 24, '3xl': 30, '4xl': 36, '5xl': 48 });
-
-    const css = readFileSync(join(ROOT, 'src/renderer/styles/globals.css'), 'utf8');
-    const cssNumeric = parseNumericCssMappings(css);
-    expect(cssNumeric).toEqual(expected.map((n) => [n, n]));
-    const cssSemantic = Object.fromEntries(
-      [...css.matchAll(/--text-(xs|sm|base|lg):\s*(\d+)px;/g)].map((m) => [m[1], Number(m[2])]),
-    );
-    expect(cssSemantic).toEqual(expectedSemantic);
-    const preservedCssSemantic = Object.fromEntries(
-      [...css.matchAll(/--text-(xl|2xl|3xl|4xl|5xl):\s*(\d+)px;/g)].map((m) => [
-        m[1],
-        Number(m[2]),
-      ]),
-    );
-    expect(preservedCssSemantic).toEqual({ xl: 20, '2xl': 24, '3xl': 30, '4xl': 36, '5xl': 48 });
-
+    expect(Object.entries(UI_TEXT_TOKEN_SIZES).map(([key, value]) => [Number(key), value])).toEqual(expected.map(n => [n, n]));
+    expect(SCALED_TAILWIND_TOKENS).toEqual({ xs: 12, sm: 14, base: 16, lg: 18, xl: 20, '2xl': 24, '3xl': 30, '4xl': 36, '5xl': 48 });
+    const TAILWIND_FONT_SIZE = config.theme?.extend?.fontSize as Record<string, unknown>;
+    for (const n of expected) expect(TAILWIND_FONT_SIZE[n]).toBe(`var(--text-${n})`);
+    for (const key of Object.keys(SCALED_TAILWIND_TOKENS)) expect(TAILWIND_FONT_SIZE[key]).toEqual([`var(--text-${key})`, { lineHeight: `var(--text-${key}-line-height)` }]);
+    const css = readFileSync(join(ROOT, 'src/renderer/styles/generated/tokens.css'), 'utf8');
+    expect(parseNumericCssMappings(css)).toEqual(expected.map(n => [n, n]));
+    const globals = readFileSync(join(ROOT, 'src/renderer/styles/globals.css'), 'utf8');
+    expect(globals).toContain("@import './generated/tokens.css'");
+    expect(parseNumericCssMappings(globals)).toEqual([]);
     const hook = readFileSync(join(ROOT, 'src/renderer/hooks/useFontSettings.ts'), 'utf8');
-    const runtimeBlock = /UI_TEXT_TOKEN_SIZES\s*=\s*\[([^\]]+)\]/s.exec(hook)?.[1] ?? '';
-    const runtimeNumeric = [...runtimeBlock.matchAll(/\b\d+\b/g)]
-      .map((m) => Number(m[0]))
-      .sort((a, b) => a - b);
-    expect(runtimeNumeric).toEqual(expected);
-    expect(hook).toMatch(
-      /for \(const tokenSize of UI_TEXT_TOKEN_SIZES\)[\s\S]*?set\(`--text-\$\{tokenSize\}`, `\$\{Math\.round\(tokenSize \* scale\)\}px`\)/,
-    );
-    const semanticBlock = /SCALED_TAILWIND_TOKENS\s*=\s*\{([^}]+)\}/s.exec(hook)?.[1] ?? '';
-    const runtimeSemantic = Object.fromEntries(
-      [...semanticBlock.matchAll(/^\s*(xs|sm|base|lg):\s*(\d+),/gm)].map((m) => [
-        m[1],
-        Number(m[2]),
-      ]),
-    );
-    expect(runtimeSemantic).toEqual(expectedSemantic);
-    const preservedRuntimeSemantic = Object.fromEntries(
-      [...semanticBlock.matchAll(/^\s*['"]?(xl|2xl|3xl|4xl|5xl)['"]?:\s*(\d+),/gm)].map((m) => [
-        m[1],
-        Number(m[2]),
-      ]),
-    );
-    expect(preservedRuntimeSemantic).toEqual({
-      xl: 20,
-      '2xl': 24,
-      '3xl': 30,
-      '4xl': 36,
-      '5xl': 48,
-    });
+    expect(hook).toContain("from '../styles/generated/token-mappings'");
+    expect(hook).not.toMatch(/UI_TEXT_TOKEN_SIZES\s*=/);
 
     // DESIGN.md §3「桌面 UI 字号白名单」小节的两个 {…} 集合。
     const design = readFileSync(DESIGN_MD, 'utf8');
@@ -805,14 +761,12 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
     expect(docTiers).toEqual(expected);
   });
 
-  it('keeps the tailwind-merge font-size consumer in sync', () => {
-    const expected = [...SIZE_WHITELIST].sort((a, b) => a - b);
-    const mergeUtils = readFileSync(join(ROOT, 'src/renderer/lib/utils.ts'), 'utf8');
-    const mergeBlock = /font-size'[\s\S]*?text:\s*\[([^\]]+)\]/.exec(mergeUtils)?.[1] ?? '';
-    const mergeNumeric = [...mergeBlock.matchAll(/['"](\d+)['"]/g)]
-      .map((m) => Number(m[1]))
-      .sort((a, b) => a - b);
-    expect(mergeNumeric).toEqual(expected);
+  it('keeps the actual tailwind-merge font-size consumer in sync', () => {
+    const expected = [...SIZE_WHITELIST];
+    expect(NUMERIC_TEXT_CLASSES.map(Number)).toEqual(expected);
+    for (const a of expected) for (const b of expected) {
+      expect(cn(`text-${a}`, `text-${b}`)).toBe(`text-${b}`);
+    }
   });
 
   // ── 红绿 fixture:检查器本身的行为锚定(防误报/漏报同时回归) ──

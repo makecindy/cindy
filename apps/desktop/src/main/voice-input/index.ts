@@ -1,4 +1,4 @@
-import { app, ipcMain, shell, systemPreferences } from 'electron';
+import { app, ipcMain, shell, systemPreferences, type WebContents } from 'electron';
 import fs from 'node:fs/promises';
 
 import {
@@ -6,6 +6,9 @@ import {
   DictationRefiner,
   VoiceInputController,
   VoiceTimelineLogger,
+  takeRefinementContextHead,
+  takeRefinementContextTail,
+  truncateRefinementReply,
   getDictationDictionaryAdviceSkipReason,
   type DictationDictionaryAdviceInput,
   type DictationDictionaryAdviceResult,
@@ -22,7 +25,11 @@ import { createLogger } from '../logger.js';
 import {
   isProviderModelRouteDisabled,
   isUtilityRouteDisabled,
+  isUtilityRoutePaymentRequired,
+  requestUtilityText,
 } from '../utility-model/oneShotCandidates.js';
+import { getMaker } from '../maker-host/index.js';
+import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -30,7 +37,11 @@ import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
 } from '../maker-host/auth-adapters.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -38,6 +49,7 @@ import {
   prewarmCodexResponsesEndpoint,
 } from './CodexResponsesTextModelClient.js';
 import { ElevenLabsScribeProvider } from './ElevenLabsScribeProvider.js';
+import { DictionaryLearningTextModelClient } from './DictionaryLearningTextModelClient.js';
 import { FallbackAsrProvider } from './FallbackAsrProvider.js';
 import {
   FallbackTextModelClient,
@@ -69,6 +81,7 @@ import {
   collectRefinerPrewarmTransports,
   orderVoiceInputRefinerChainForRuntime,
 } from './VoiceInputRefinerRouting.js';
+import { isActiveCatalogVoiceRefinerProfile } from './mapAuxiliaryRefsToVoiceRefiners.js';
 import {
   getMicrophoneSettingsUrl,
   isExplicitMicrophonePermissionDenied,
@@ -278,6 +291,7 @@ export type DictionaryAdviceIpcResult =
   | { ok: false; error: string };
 
 const activeByWebContentsId = new Map<number, ActiveVoiceInput>();
+const destroyedWebContentsListeners = new Set<number>();
 let appRestoreRegistered = false;
 let cachedMicrophonePermission: VoiceInputMicrophonePermissionCache | null = null;
 let rendererVerifiedMicrophonePermission = false;
@@ -327,6 +341,12 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     return { ok: true, actions: [], elapsedMs: 0 };
   }
 
+  // Bind dictionary learning to the owner and auxiliary chain that initiated
+  // this advisor request. Readiness and model resolution below both await, so
+  // a later account or chain switch must fail closed before any advisor fetch
+  // or dictionary mutation.
+  const ownerScopeKey = activeOwnerScopeKey();
+  const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
   const sourceLabel = options.sourceLabel ?? payload.source ?? 'in_app';
   // 锚点资格只认 main 侧由 event.sender 反查出的 fromOverlaySender，不认 payload.source
   // 这个 renderer 自报字段。锚点必须在任何 await 之前取：此刻的呈现代次才代表这次请求
@@ -359,33 +379,15 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
     };
   }
 
-  // Same fallback chain as dictation refinement: the advisor is a background
-  // task, but a primary refiner outage should degrade to a backup model
-  // instead of silently dropping dictionary learning.
-  const {
-    refinerReadinessList: advisorReadinessList,
-    readyRefinerProfiles: readyAdvisorProfiles,
-  } = await resolveVoiceInputRefinerChainForRuntime();
-  const advisorHeadProfile = readyAdvisorProfiles[0];
-  if (!advisorHeadProfile) {
-    return {
-      ok: false,
-      error: advisorReadinessList[0]?.error ?? 'Dictionary learning advisor requires a configured refiner.',
-    };
-  }
-
   try {
-    const senderId = options.senderId ?? 'device-link';
-    const advisorAttempts: FallbackTextModelAttempt[] = readyAdvisorProfiles.map((profile) => ({
-      profileId: profile.id as VoiceInputRefinerProviderKind,
-      model: profile.model,
-      client: createVoiceInputTextModelClient(profile),
-      promptCacheScope: `dictionaryLearning:${profile.id}:${senderId}`,
-    }));
+    const advisorClient = new DictionaryLearningTextModelClient(
+      (prompt, requestOptions) => requestUtilityText(getMaker(), prompt, requestOptions),
+      () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
+    );
     const advisor = new DictationDictionaryAdvisor({
-      client: new FallbackTextModelClient(advisorAttempts),
-      model: advisorHeadProfile.model,
-      promptCacheScope: `dictionaryLearning:${advisorHeadProfile.id}:${senderId}`,
+      client: advisorClient,
+      // The adapter resolves the shared auxiliary chain; this is not a route pin.
+      model: 'auxiliary',
       debug: DICTIONARY_LEARNING_TEXT_DEBUG,
     });
     const settings = voiceInputDataStore.getSettings();
@@ -395,6 +397,7 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
       existingCandidates: toDictionaryLearningCandidateState(settings.dictionaryCandidates),
     };
     const result = await advisor.advise(adviceInput);
+    assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
     const recordResult = voiceInputDataStore.recordDictionaryLearningActions(result.actions);
     if (recordResult.newAutomaticEntries.length > 0) {
       showVoiceInputDictionaryToast(
@@ -421,9 +424,8 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
         confidence: action.confidence,
         reason: action.reason,
       })),
-      refinerProvider: advisorHeadProfile.id,
-      refinerModel: advisorHeadProfile.model,
-      refinerChain: readyAdvisorProfiles.map((profile) => profile.id),
+      auxiliaryProvider: advisorClient.servedRoute?.providerId,
+      auxiliaryModel: advisorClient.servedRoute?.model,
       ignoreReason: result.ignoreReason,
       elapsedMs: Math.round(result.elapsedMs),
       debugText: DICTIONARY_LEARNING_TEXT_DEBUG
@@ -482,6 +484,52 @@ function summarizeTimelineEventForLog(event: VoiceTimelineEvent): Record<string,
   return summary;
 }
 
+function summarizeVoiceLatency(
+  events: ReadonlyMap<string, VoiceTimelineEvent>,
+  submitted: Extract<VoiceTimelineEvent, { type: 'submitted' }>,
+  provider: string | null,
+): Record<string, unknown> {
+  const start = events.get(`${submitted.runId}:start_clicked`);
+  const elapsed = (type: VoiceTimelineEvent['type']): number | undefined => {
+    const event = events.get(`${submitted.runId}:${type}`);
+    if (!event || !start) return undefined;
+    if ('elapsedMs' in event && typeof event.elapsedMs === 'number') return Math.round(event.elapsedMs);
+    return Math.max(0, event.at - start.at);
+  };
+  return {
+    runId: submitted.runId,
+    provider: provider ?? undefined,
+    totalMs: elapsed('submitted'),
+    firstAudioChunkMs: elapsed('first_audio_chunk'),
+    asrConnectedMs: elapsed('asr_connected'),
+    firstPartialMs: elapsed('first_partial'),
+    stableReceivedMs: elapsed('stable_received'),
+    submittedMs: elapsed('submitted'),
+    submitSource: submitted.source,
+  };
+}
+
+function registerVoiceInputWebContentsDestroyedCleanup(sender: WebContents): void {
+  const webContentsId = sender.id;
+  if (destroyedWebContentsListeners.has(webContentsId)) return;
+  destroyedWebContentsListeners.add(webContentsId);
+  sender.once('destroyed', () => {
+    destroyedWebContentsListeners.delete(webContentsId);
+    const active = activeByWebContentsId.get(webContentsId);
+    if (!active) return;
+    unregisterActiveInlineVoiceInputWebContents(webContentsId);
+    activeByWebContentsId.delete(webContentsId);
+    void (async () => {
+      await active.controller.cancel();
+      await disposeVoiceInputProvider(active.provider, 'web_contents_destroyed', {
+        sourceLanguage: active.sourceLanguage,
+        refinementEnabled: active.refinementEnabled,
+      });
+      await restoreSystemAudioForSender(webContentsId);
+    })();
+  });
+}
+
 // 'auto' must mean "let the ASR provider auto-detect", not "fall back to the
 // system locale". Forcing the system locale onto the provider's language hint
 // hurts code-switching users (zh+en mixed dictation gets mis-recognized when
@@ -527,9 +575,9 @@ function normalizeRefinementContext(
     dictionaryAliasHints: normalizeDictionaryAliasHints(context?.dictionaryAliasHints),
     voiceInputHistory: normalizeMultilineText(context?.voiceInputHistory ?? ''),
     selectionBefore: takeTail(context?.selectionBefore ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    selectedText: truncateText(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+    selectedText: takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     selectionAfter: takeHead(context?.selectionAfter ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    replyToMessage: truncateText(
+    replyToMessage: truncateRefinementReply(
       context?.replyToMessage ?? '',
       MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS,
     ),
@@ -572,7 +620,7 @@ function beginOverlayContextInjection(
       // synchronous fields, so prompt sizing stays predictable regardless
       // of whether overlay capture won the race.
       targetContext.selectionBefore = takeTail(overlayContext.selectionBefore, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
-      targetContext.selectedText = truncateText(overlayContext.selectedText, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
+      targetContext.selectedText = takeHead(overlayContext.selectedText, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
       targetContext.selectionAfter = takeHead(overlayContext.selectionAfter, MAX_REFINEMENT_SIDE_CONTEXT_CHARS);
     })
     .catch((error: unknown) => {
@@ -664,13 +712,11 @@ function normalizeMultilineText(text: string): string {
 }
 
 function takeHead(text: string, maxChars: number): string {
-  return truncateText(text, maxChars);
+  return takeRefinementContextHead(text, maxChars);
 }
 
 function takeTail(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(-maxChars).trim();
+  return takeRefinementContextTail(text, maxChars);
 }
 
 function readActiveVoiceInputModelSelection(reason: string): ReturnType<typeof getVoiceInputModelSelection> {
@@ -788,6 +834,16 @@ async function resolveVoiceInputRefinerChainForRuntime(
       });
       continue;
     }
+    // BYOK LiteLLM refinement calls XD directly, outside the Session rail.
+    // Apply the same owner-scoped v5 paid entitlement used by utility one-shot
+    // candidates before admitting the profile into the fallback chain.
+    if (isUtilityRoutePaymentRequired(profile)) {
+      log.info('refiner profile skipped: paid entitlement required', {
+        profileId: profile.id,
+        model: profile.model,
+      });
+      continue;
+    }
     refinerChainProfiles.push(profile);
     refinerReadinessList.push(readiness);
   }
@@ -875,19 +931,43 @@ async function getVoiceInputRefinerReadiness(
   };
 }
 
+function assertRefinerRouteAvailable(profile: VoiceInputRefinerProfile): void {
+  if (isUtilityRouteDisabled(profile)) {
+    throw new Error('voice refiner route disabled in settings');
+  }
+  if (!isActiveCatalogVoiceRefinerProfile(profile)) {
+    throw new Error('voice refiner catalog route unavailable');
+  }
+  if (isUtilityRoutePaymentRequired(profile)) {
+    throw new Error('voice refiner route requires paid entitlement');
+  }
+}
+
+function assertVoiceInputOwnerScopeCurrent(ownerScopeKey: string, chainSnapshot?: string): void {
+  if (
+    isAppSessionBoundaryPending()
+    || activeOwnerScopeKey() !== ownerScopeKey
+    || (chainSnapshot !== undefined && getEffectiveAuxiliaryModelChainSnapshot() !== chainSnapshot)
+  ) {
+    throw new Error('voice input owner scope changed');
+  }
+}
+
 /**
- * TextModelClient 的停用轴 live 包装(BYOK):每次 requestJson(= 一次精修付费请求)
- * 前按当前 override 重查该档的真实路由,停用即抛错 —— FallbackTextModelClient 将其
- * 视为该档失败,自然落到下一档(PR #744 review 第二十一轮)。
+ * TextModelClient 的 live 可用性包装(BYOK):先在 requestJson 入口快速失败，
+ * 再把同一判据传入具体 HTTP client，在每次实际 fetch 前最后复核一次。
+ * FallbackTextModelClient 会将任一复核失败视为该档失败并自然落到下一档。
  */
-function guardRefinerClientAgainstDisable(
+function guardRefinerClientAgainstUnavailableRoute(
   profile: VoiceInputRefinerProfile,
   client: TextModelClient,
 ): TextModelClient {
   return {
     requestJson: (input) => {
-      if (isUtilityRouteDisabled(profile)) {
-        return Promise.reject(new Error('voice refiner route disabled in settings'));
+      try {
+        assertRefinerRouteAvailable(profile);
+      } catch (error) {
+        return Promise.reject(error);
       }
       return client.requestJson(input);
     },
@@ -907,6 +987,8 @@ function createVoiceInputTextModelClient(
     /** Idle watchdog per attempt; both clients re-arm it on every stream chunk. */
     timeoutMs?: number;
     voiceContext?: CindyVoiceRunContext;
+    /** Final route guard invoked immediately before each network dispatch. */
+    beforeDispatch?: () => void;
   },
 ): TextModelClient {
   if (options?.voiceContext) {
@@ -920,6 +1002,7 @@ function createVoiceInputTextModelClient(
       ),
       onUsage: options.onUsage,
       timeoutMs: options.timeoutMs,
+      beforeDispatch: options.beforeDispatch,
     });
   }
   if (profile.transport === 'codex-responses') {
@@ -931,6 +1014,7 @@ function createVoiceInputTextModelClient(
       onAuthInvalidated: (reason) => {
         void desktopCodexAuthAdapter.invalidate(reason);
       },
+      beforeDispatch: options?.beforeDispatch,
     });
   }
 
@@ -942,6 +1026,7 @@ function createVoiceInputTextModelClient(
       baseUrl: proxyBaseUrl,
       onUsage: options?.onUsage,
       timeoutMs: options?.timeoutMs,
+      beforeDispatch: options?.beforeDispatch,
     });
   }
 
@@ -2002,6 +2087,11 @@ export function registerVoiceInputIpc(): void {
   });
 
   ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+    // Bind this run to the owner that initiated it before any cancellation,
+    // readiness, or credential await. A later account switch must fail closed
+    // at the final refiner dispatch instead of using the new owner's route.
+    const ownerScopeKey = activeOwnerScopeKey();
+    const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();
     const isInlineSender = !isGlobalVoiceInputOverlaySender(event.sender);
     const existing = activeByWebContentsId.get(event.sender.id);
     if (existing) {
@@ -2034,13 +2124,22 @@ export function registerVoiceInputIpc(): void {
     // Refiner fallback chain: credential-ready profiles in runtime priority
     // order. The built-in default is readiness-aware (Codex ready: Codex →
     // Kimi; Codex unavailable: LiteLLM GPT → Kimi), then cooldown-aware.
-    const {
-      refinerChainProfiles,
-      refinerReadinessList,
-      readyRefinerProfiles,
-    } = shouldRefine
-      ? await resolveVoiceInputRefinerChainForRuntime(useCindyVoiceService)
-      : { refinerChainProfiles: [], refinerReadinessList: [], readyRefinerProfiles: [] };
+    // Refiner-chain and ASR-chain resolution are independent reads (settings,
+    // secret store, Codex auth state); resolving them concurrently keeps the
+    // Codex auth round trip off the ASR dial's critical path.
+    const [
+      {
+        refinerChainProfiles,
+        refinerReadinessList,
+        readyRefinerProfiles,
+      },
+      startableAsrChain,
+    ] = await Promise.all([
+      shouldRefine
+        ? resolveVoiceInputRefinerChainForRuntime(useCindyVoiceService)
+        : Promise.resolve({ refinerChainProfiles: [], refinerReadinessList: [], readyRefinerProfiles: [] }),
+      resolveStartableAsrChain(),
+    ]);
     const primaryRefinerProfile = refinerChainProfiles[0] ?? null;
     const primaryRefinerReadiness = refinerReadinessList[0] ?? null;
     const canRefine = readyRefinerProfiles.length > 0;
@@ -2072,7 +2171,6 @@ export function registerVoiceInputIpc(): void {
     // Connect-phase fallback: hand FallbackAsrProvider the full startable
     // chain. Construction is lazy — providers beyond the first are only
     // instantiated when an earlier candidate fails to connect.
-    const startableAsrChain = await resolveStartableAsrChain();
     const effectiveRefinerProfile = readyRefinerProfiles[0] ?? null;
     // BYOK mode must never allocate a managed voice-server session even when
     // the service is reachable — the user explicitly chose their own
@@ -2110,7 +2208,14 @@ export function registerVoiceInputIpc(): void {
           }
           return createVoiceInputProvider(kind, asrLanguageHint, voiceContext);
         },
-      })));
+      })), {
+        // Managed candidates allocate one voice-server session per provider.
+        // Do not hedge those requests: concurrent sessions race the shared
+        // run context's session id and can leave refinement attached to the
+        // losing session. BYOK providers have independent credentials and
+        // may use the staggered client-side hedge.
+        hedgeDelayMs: voiceContext ? null : undefined,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn('provider create failed', { error: message });
@@ -2138,6 +2243,11 @@ export function registerVoiceInputIpc(): void {
             ?? `${VOICE_INPUT_REFINEMENT_CACHE_SCOPE}:${CINDY_MANAGED_REFINER_PROVIDER}`;
           refiner = new DictationRefiner({
             client: createVoiceInputTextModelClient(effectiveRefinerProfile, {
+              // Managed refinement is routed and failed over by voice-server;
+              // changing the local auxiliary chain must not cancel it. The
+              // owner fence still prevents a previous account's text from
+              // being sent after an account switch.
+              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),
               timeoutMs: VOICE_INPUT_MANAGED_REFINER_IDLE_TIMEOUT_MS,
               voiceContext,
               onUsage: ({ servedModel, ...usage }) => {
@@ -2167,12 +2277,16 @@ export function registerVoiceInputIpc(): void {
           const refinerAttempts: FallbackTextModelAttempt[] = readyRefinerProfiles.map((profile) => ({
             profileId: profile.id as VoiceInputRefinerProviderKind,
             model: profile.model,
-            // live 谓词包装(PR #744 review 第二十一轮):精修请求在用户停止说话时才
-            // 发出,可能距控制器构造数分钟 —— 每次请求前按当前 override 重查,停用
-            // 即抛错让 fallback 落到下一档。
-            client: guardRefinerClientAgainstDisable(
+            // live 谓词包装:精修请求在用户停止说话时才发出,可能距控制器构造
+            // 数分钟 —— 每次请求前重查设置停用与付费权限,不可用即让 fallback
+            // 落到下一档。
+            client: guardRefinerClientAgainstUnavailableRoute(
               profile,
               createVoiceInputTextModelClient(profile, {
+                beforeDispatch: () => {
+                  assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
+                  assertRefinerRouteAvailable(profile);
+                },
                 timeoutMs: VOICE_INPUT_REFINER_IDLE_TIMEOUT_MS,
                 onUsage: (usage) => {
                   if (!runId) return;
@@ -2203,8 +2317,25 @@ export function registerVoiceInputIpc(): void {
         });
       }
     }
+    const timelineEvents = new Map<string, VoiceTimelineEvent>();
     const logger = new VoiceTimelineLogger((timelineEvent) => {
       log.debug('timeline', summarizeTimelineEventForLog(timelineEvent));
+      timelineEvents.set(`${timelineEvent.runId}:${timelineEvent.type}`, timelineEvent);
+      if (timelineEvent.type === 'submitted') {
+        log.info('latency summary', summarizeVoiceLatency(
+          timelineEvents,
+          timelineEvent,
+          provider.activeProviderKind,
+        ));
+      } else if (timelineEvent.type === 'refine_accepted' || timelineEvent.type === 'refine_rejected') {
+        const start = timelineEvents.get(`${timelineEvent.runId}:start_clicked`);
+        log.info('refinement latency summary', {
+          runId: timelineEvent.runId,
+          outcome: timelineEvent.type === 'refine_accepted' ? 'accepted' : 'rejected',
+          elapsedMs: timelineEvent.elapsedMs === undefined ? undefined : Math.round(timelineEvent.elapsedMs),
+          totalMs: start ? Math.max(0, timelineEvent.at - start.at) : undefined,
+        });
+      }
       logRefineSummary(timelineEvent, refinementContext);
       if (runId) emit({ type: 'timeline', runId, event: timelineEvent });
     });
@@ -2281,20 +2412,7 @@ export function registerVoiceInputIpc(): void {
         sourceLanguage: payload?.sourceLanguage,
         refinementEnabled: Boolean(refiner),
       });
-      event.sender.once('destroyed', () => {
-        const active = activeByWebContentsId.get(event.sender.id);
-        if (active?.controller !== controller) return;
-        unregisterActiveInlineVoiceInputWebContents(event.sender.id);
-        activeByWebContentsId.delete(event.sender.id);
-        void (async () => {
-          await controller.cancel();
-          await disposeVoiceInputProvider(provider, 'web_contents_destroyed', {
-            sourceLanguage: active.sourceLanguage,
-            refinementEnabled: active.refinementEnabled,
-          });
-          await restoreSystemAudioForSender(event.sender.id);
-        })();
-      });
+      registerVoiceInputWebContentsDestroyedCleanup(event.sender);
       log.info('started', {
         runId,
         webContentsId: event.sender.id,

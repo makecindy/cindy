@@ -1,3 +1,4 @@
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import type { AgentKind } from '@cindy/maker-core';
 
 import {
@@ -38,6 +39,8 @@ const PENDING_APPLY_RETRY_DELAY_MS = 10_000;
 export interface PendingCredentialSwitch {
   model: string;
   providerId: string | null;
+  /** Configuration must be reloaded even when the provider/model stay the same. */
+  forceSessionRebuild?: boolean;
   /** 目标会话的 agent(register 时由调用方捕获,收口前的停用重裁决用;可缺席 = 不裁决)。 */
   agentKind?: AgentKind;
   /**
@@ -60,7 +63,7 @@ interface PendingSwitchSession {
 export interface PendingCredentialSwitchDeps {
   maker: {
     listActiveSessions: () => PendingSwitchSession[];
-    closeSession: (sessionId: string) => Promise<void>;
+    closeSession: (sessionId: string, reason?: 'runtime-refresh') => Promise<void>;
   };
   isSessionInTurn?: (sessionId: string) => boolean;
   /** 生效后广播给 renderer(清「任务结束后生效」标记 / 会话内 toast)。 */
@@ -125,6 +128,7 @@ export class PendingCredentialSwitchService {
     target: {
       model: string;
       providerId: string | null;
+      forceSessionRebuild?: boolean;
       agentKind?: AgentKind;
       previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
     },
@@ -132,6 +136,7 @@ export class PendingCredentialSwitchService {
     this.pending.set(sessionId, {
       model: target.model,
       providerId: target.providerId,
+      ...(target.forceSessionRebuild ? { forceSessionRebuild: true } : {}),
       ...(target.agentKind ? { agentKind: target.agentKind } : {}),
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
       requestedAt: Date.now(),
@@ -175,14 +180,24 @@ export class PendingCredentialSwitchService {
     try {
       if (session) {
         try {
-          await prepareLocalSessionCredentialModeSwitch({
-            maker: this.deps.maker,
-            sessionId,
-            isSessionInTurn: this.deps.isSessionInTurn,
-          });
+          if (session.remoteHostId && target.forceSessionRebuild) {
+            await withRehydrateCloseSuppressed(sessionId, () => this.deps.maker.closeSession(sessionId, 'runtime-refresh'));
+          } else {
+            await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.deps.isSessionInTurn,
+            });
+          }
         } catch (err) {
           if (isCredentialModeSwitchBusyError(err)) {
             // turn done 与新 turn start 竞态:保留 pending,等下一个边界。
+            return;
+          }
+          if (target.forceSessionRebuild) {
+            this.deps.logger?.warn('pending context reload failed; retaining pending configuration', {
+              sessionId, error: err instanceof Error ? err.message : String(err),
+            });
             return;
           }
           // 关闭失败也要落 route:下一次发送的 getHost 仲裁仍会按新来源协调,

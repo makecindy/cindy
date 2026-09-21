@@ -9,6 +9,7 @@
  */
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   describeAgentInputReference,
@@ -19,6 +20,32 @@ import {
 } from '@cindy/maker-shared/agent-input-projection';
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+
+export type AgentInputToolLoopKind = 'consecutive' | 'pingpong' | 'rotation' | 'contract';
+
+/** Bounded tool-loop details safe to carry across the input projection boundary. */
+export interface AgentInputToolLoopDetails {
+  kind: AgentInputToolLoopKind;
+  count: number;
+}
+
+/** Reject untrusted projection data unless it matches the bounded tool-loop contract exactly. */
+export function parseAgentInputToolLoopDetails(value: unknown): AgentInputToolLoopDetails | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as { kind?: unknown; count?: unknown };
+  if (
+    raw.kind !== 'consecutive' &&
+    raw.kind !== 'pingpong' &&
+    raw.kind !== 'rotation' &&
+    raw.kind !== 'contract'
+  ) {
+    return null;
+  }
+  if (!Number.isSafeInteger(raw.count) || typeof raw.count !== 'number' || raw.count < 1 || raw.count > 100_000) {
+    return null;
+  }
+  return { kind: raw.kind, count: raw.count };
+}
 
 export type AgentInputFileCategory = 'image' | 'pdf' | 'text' | 'office' | 'file';
 
@@ -151,6 +178,11 @@ export interface AgentInputClearBoundaryOpts {
 export interface AutoResumeInfo {
   /** 中断原文（terminal error 的 message，通常是 SDK 的英文文案）。 */
   error?: string;
+  /**
+   * translator / watchdog 给出的稳定 reason。展示用，自动续跑也靠它决定
+   * CONTINUE-only（已 accept 的 stall/idle/reconnect-stalled）还是可以克隆原文。
+   */
+  reason?: string;
   /** 本轮连续第几次重连（从 1 起）。 */
   attempt: number;
   /** 本轮上限。 */
@@ -187,6 +219,10 @@ export interface RecoveryCheckpoint {
 }
 
 export interface AgentInputQueuedMessage {
+  /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
+  autoReviewUserText?: string;
+  /** Host-owned text-only input; retained by queue persistence and retry. */
+  toolsDisabled?: boolean;
   clientId: string;
   text: string;
   /**
@@ -258,6 +294,8 @@ export interface AgentInputQueuedMessage {
    * 见 device-link/invoke-context 的可信度说明。
    */
   fromMobileClient?: boolean;
+  /** Main-owned provenance: this queue item entered through device-link input IPC. */
+  fromDeviceLinkClient?: boolean;
   /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地
@@ -300,6 +338,8 @@ export interface AgentInputQueuedMessage {
    * 旧队列快照缺省该字段(undefined = 不软删),向后兼容。
    */
   supersedesUserClientId?: string;
+  /** Stable retry provenance; unlike supersedes, never hides a user message. */
+  retrySourceClientId?: string;
 }
 
 export type AgentInputDelivery = 'turn' | 'steer';
@@ -352,6 +392,10 @@ export interface AgentInputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Stable error reason for live clients; older controlled hosts may omit it. */
+  errorReason?: string | null;
+  /** Bounded details for tool-loop errors; never carries the raw provider message. */
+  toolLoop?: AgentInputToolLoopDetails | null;
   recovery: AgentInputRecovery;
   /**
    * Compatibility display value for the existing ErrorBanner. It is no longer
@@ -368,7 +412,7 @@ export interface AgentInputProjection {
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /**
    * 中断自动续跑接管中:上游把「已经干到一半」的 turn 打断了,main 守卫已决定自动
-   * 续跑,正在退避窗口里(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
+   * 续跑,正在退避或出队后的派发准备阶段(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
    *
    * 此时 `error` 刻意保持 null —— 自愈过程不该弹红色横幅,只在聊天流里显示一条低调
    * 的「正在自动继续」分隔条(renderer 据本字段插 ephemeral system card)。真正救不
@@ -394,8 +438,9 @@ export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string
 }
 
 /**
- * 队列崩溃恢复快照不能持久化跨设备引用正文。正文只在当前进程内存中存活；
- * 恢复后保留 fail-closed 标记，禁止按目标设备本地坐标重新解释 raw refs。
+ * 队列崩溃恢复快照不能持久化跨设备引用正文或瞬时 Bot 状态。两者只在当前
+ * 进程内存中存活；恢复后正文保留 fail-closed 标记，Bot 状态必须重新查询，
+ * 不能把崩溃前的 working/idle 当成当前事实。
  */
 export function sanitizeQueuedMessageForPersistence(
   item: AgentInputQueuedMessage,
@@ -403,8 +448,9 @@ export function sanitizeQueuedMessageForPersistence(
   let changed = false;
   let persistedContent = item.persistedContent;
   let agentReferences = item.agentReferences;
+  let chatMessage = item.chatMessage;
 
-  const stripMessageBodies = (
+  const stripTransientReferenceData = (
     references: readonly unknown[],
   ): { references: unknown[]; stripped: boolean } => {
     let stripped = false;
@@ -413,26 +459,38 @@ export function sanitizeQueuedMessageForPersistence(
         return reference;
       }
       const record = reference as Record<string, unknown>;
-      if (
-        record.kind !== 'message' ||
-        (!Object.hasOwn(record, 'text') && !Object.hasOwn(record, 'truncated'))
-      ) {
-        return reference;
-      }
+      const hasMessageBody = record.kind === 'message'
+        && (Object.hasOwn(record, 'text') || Object.hasOwn(record, 'truncated'));
+      const hasBotHostSnapshot = record.kind === 'bot'
+        && Object.hasOwn(record, 'hostSnapshot');
+      if (!hasMessageBody && !hasBotHostSnapshot) return reference;
       stripped = true;
       const sanitized = { ...record };
-      delete sanitized.text;
-      delete sanitized.truncated;
+      if (hasMessageBody) {
+        delete sanitized.text;
+        delete sanitized.truncated;
+      }
+      if (hasBotHostSnapshot) delete sanitized.hostSnapshot;
       return sanitized;
     });
     return { references: stripped ? next : [...references], stripped };
   };
 
   if (agentReferences) {
-    const topLevel = stripMessageBodies(agentReferences);
+    const topLevel = stripTransientReferenceData(agentReferences);
     if (topLevel.stripped) {
       changed = true;
       agentReferences = topLevel.references as AgentInputReference[];
+    }
+  }
+  if (chatMessage.agentReferences) {
+    const chat = stripTransientReferenceData(chatMessage.agentReferences);
+    if (chat.stripped) {
+      changed = true;
+      chatMessage = {
+        ...chatMessage,
+        agentReferences: chat.references as AgentInputReference[],
+      };
     }
   }
   try {
@@ -440,7 +498,7 @@ export function sanitizeQueuedMessageForPersistence(
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const record = parsed as Record<string, unknown>;
       if (Array.isArray(record.agentReferences)) {
-        const persisted = stripMessageBodies(record.agentReferences);
+        const persisted = stripTransientReferenceData(record.agentReferences);
         if (persisted.stripped) {
           changed = true;
           persistedContent = JSON.stringify({
@@ -458,6 +516,7 @@ export function sanitizeQueuedMessageForPersistence(
   const sanitized: AgentInputQueuedMessage = {
     ...item,
     persistedContent,
+    chatMessage,
     ...(agentReferences ? { agentReferences } : {}),
     ...(item.trustedSessionReferenceContexts
       ? { sessionReferencesRequireTrustedSnapshot: true }
@@ -489,6 +548,11 @@ export function updateQueuedMessageText(
   newText: string,
   sessionRefs: AgentInputSessionRef[] = reconcileSessionRefsForText(newText, entry.sessionRefs),
 ): AgentInputQueuedMessage {
+  // A plugin rewrite must not turn a hidden host welcome into an editable user draft.
+  if (entry.toolsDisabled === true && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    && !newText.startsWith(UI_ACTION_TRIGGER_PREFIX)) {
+    newText = `${UI_ACTION_TRIGGER_PREFIX}${newText}`;
+  }
   const hasEncodedQuoteMarker = stripChatQuoteMarkerLines(newText) !== newText;
   const refsUnchanged = JSON.stringify(sessionRefs) === JSON.stringify(entry.sessionRefs ?? []);
   let nextPersisted = entry.persistedContent;
@@ -682,11 +746,15 @@ export function serializeSessionReferencePayload(
 
 /** Immutable semantic projection shared by Ghost, titles, turn and steer. */
 export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
-  return projectAgentFacingText({
+  const text = projectAgentFacingText({
     text: queued.text,
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
   });
+  // Host text-only welcomes stay synthetic in queue/history projections, not in model input.
+  return queued.toolsDisabled === true && text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    ? text.slice(UI_ACTION_TRIGGER_PREFIX.length)
+    : text;
 }
 
 /**

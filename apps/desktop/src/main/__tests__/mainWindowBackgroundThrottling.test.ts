@@ -56,7 +56,9 @@ describe('主 BrowserWindow 后台节流', () => {
   it('active turn 期间通过 webContents 运行态切换后台节流', () => {
     expect(source).toContain('function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void');
     expect(source).toContain('const nextAllowed = !hasRunningTurn;');
-    expect(source).toContain('win.webContents.setBackgroundThrottling(mainWindowBackgroundThrottlingAllowed);');
+    expect(source).toMatch(/setBackgroundThrottling\(\s*mainWindowBackgroundThrottlingAllowed,?\s*\)/);
+    expect(source).not.toContain('isRemoteDesktopVideoActive');
+    expect(source).toContain('registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);');
     expect(source).toContain('onAnySessionTurnKeepaliveChange: (isRunning) => {');
     expect(source).toContain('setMainWindowBackgroundThrottlingForActiveTurn(isRunning);');
     expect(source).toContain('notifyUpdateAutoRelaunchBusyStateChanged();');
@@ -180,12 +182,24 @@ describe('窗口可见性广播（装饰动画闸门的兜底信号）', () => {
    */
   const BROADCAST_EXEMPT = new Map<string, string>([
     [
+      'remote-desktop/captureWindow.ts',
+      '独立捕获页不加载聊天 Renderer 或装饰动画；只在媒体连接期间存在，停止时销毁',
+    ],
+    [
       'computer-permission-guide/window.ts',
       // 这两个窗口(guide / backdrop)确实也加载 index.html?view=、也装了闸门，但其视图
       // (ComputerPermissionGuideWindow.tsx)不含任何常驻装饰动画，装广播纯属空转；且该文件
       // 的测试 mock 用单 listener Map，多注册一个 did-finish-load 会覆盖既有回调。
       // 将来这两个视图若引入常驻动画，删掉本豁免即可。
       '权限引导窗与 backdrop 视图无常驻装饰动画',
+    ],
+    [
+      'doc-tools/htmlPdfRenderer.ts',
+      // render_pdf 的离屏排版窗：从不 show()、没有 Cindy 自己的 Renderer、不加载
+      // index.html，装的是任务给的任意 HTML —— 闸门根本不在这条链上，广播无处可送。
+      // 关节流是因为它全程隐藏：Chromium 会把隐藏窗口的定时器/rAF 降频，页面在打印前
+      // 需要跑的布局与字体加载会被拖慢甚至卡到超时。窗口即用即毁，节流关闭不会常驻耗电。
+      '离屏 PDF 排版窗从不显示、不加载 Cindy Renderer，装饰动画闸门不适用',
     ],
   ]);
 

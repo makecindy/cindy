@@ -25,8 +25,12 @@ export interface DesktopNotifierDeps {
   getMainWindow: () => BrowserWindow | null;
   feishuIm: FeishuIM;
   logger: Logger;
-  /** Global desktop preference and Agent Island arbitration, evaluated at send time. */
+  /** Persist the notification receipt against this exact run, when a session exists. */
+  sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
+  /** Global desktop preference, evaluated at send time. */
   shouldNotifyDesktop: () => boolean;
+  /** Whether Agent Island should arbitrate routine scheduler desktop notifications. */
+  isAgentIslandEnabled: () => boolean;
   wecomGroupPublisher?: WecomGroupNotificationPublisher;
 }
 
@@ -37,7 +41,11 @@ export class DesktopNotifier implements Notifier {
     // 链路代次在任何 await 之前捕获:飞书分支的 await 期间可能发生登出/换号,
     // 发送侧按代次不一致丢弃,旧账号调度的通知不会进新账号的链路。
     const generation = getMobileNotifyGeneration();
-    if (schedule.notify.desktop && this.deps.shouldNotifyDesktop()) {
+    if (
+      schedule.notify.desktop &&
+      this.deps.shouldNotifyDesktop() &&
+      (!this.deps.isAgentIslandEnabled() || (run.status === 'failed' && !run.sessionId))
+    ) {
       try {
         this.notifyDesktop(schedule, run);
       } catch (err) {
@@ -101,7 +109,11 @@ export class DesktopNotifier implements Notifier {
     }
     const text = renderExternalMessage(schedule, run);
     try {
-      await this.deps.feishuIm.sendMarkdownText(ownerOpenId, text);
+      if (run.sessionId && this.deps.sendFeishuSessionNotification) {
+        await this.deps.sendFeishuSessionNotification(run.sessionId, text);
+      } else {
+        await this.deps.feishuIm.sendMarkdownText(ownerOpenId, text);
+      }
     } catch (err) {
       // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data.code/msg
       // 里, axios.toString() 看不到。显式拆出来 log, 否则只看到 'Request failed

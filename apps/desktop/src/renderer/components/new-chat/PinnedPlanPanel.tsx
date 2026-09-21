@@ -19,7 +19,7 @@
  * 继续留在聊天记录里，但胶囊立即永久退场。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   getLatestMessageTodoState,
   isPlanUserBoundary,
@@ -46,11 +46,11 @@ export function PinnedPlanPanel({
   messages: readonly ChatMessage[];
   /**
    * 会话是否真的在跑(调用方传 isStreaming)。胶囊上的进度环始终静态;该值只
-   * 透传给浮层里 in_progress 行的呼吸动画——空闲时静止,不谎报步骤仍在执行。
+   * 透传给浮层里 in_progress 行的慢转——空闲时静止,不谎报步骤仍在执行。
    */
   animated: boolean;
   /** 与 composer 同宽(inputWidth),胶囊在该宽度内居中,浮层不超出。 */
-  width: number;
+  width: CSSProperties['width'];
   taskHistoryMayBeIncomplete?: boolean;
   /** 交互卡接管底部区域时只隐藏视图,保留完成后的计时与已收起状态。 */
   visible?: boolean;
@@ -146,7 +146,8 @@ export function PinnedPlanPanel({
   useEffect(() => {
     if (completionDeadlineMs === null || !completionIdentity) return;
     const current = deadlineFloorRef.current;
-    if (current?.identity === completionIdentity && current.deadlineMs >= completionDeadlineMs) return;
+    if (current?.identity === completionIdentity && current.deadlineMs >= completionDeadlineMs)
+      return;
     deadlineFloorRef.current = { identity: completionIdentity, deadlineMs: completionDeadlineMs };
   }, [completionDeadlineMs, completionIdentity]);
   const snapshotIdentity = insertion

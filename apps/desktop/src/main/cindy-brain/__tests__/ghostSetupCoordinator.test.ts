@@ -1281,12 +1281,15 @@ describe('GhostSetupCoordinator', () => {
     const changeBus = new GhostSetupChangeBus();
     const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
     const ghost = {
+      dir: '/plugins/gmail',
       enabled: true,
       manifest: {
+        schemaVersion: 3,
         id: 'gmail',
         name: 'Gmail',
+        version: '1.0.0',
         kind: 'chip',
-        slots: ['tool'],
+        entry: 'main.js',
         tools: [{ name: 'search', description: 'Search' }],
       },
     } as InstalledGhost;

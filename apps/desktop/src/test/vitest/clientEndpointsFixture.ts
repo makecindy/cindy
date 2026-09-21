@@ -38,6 +38,7 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   voiceApiBaseUrl: 'https://voice.test.invalid',
   githubApiBaseUrl: 'https://github-api.test.invalid',
   skillhubApiBaseUrl: 'https://skillhub.test.invalid',
+  cindySkillHubApiBaseUrl: 'https://cindy-skillhub.test.invalid',
   pluginApiBaseUrl: 'https://plugin.test.invalid',
   cdnBaseUrl: TEST_CDN_BASE_URL,
   mobileUpdateBaseUrl: 'https://mobile-update.test.invalid',

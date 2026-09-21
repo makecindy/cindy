@@ -1,0 +1,243 @@
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Activity, ArrowDown, X } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tooltip } from '@/components/ui/tooltip';
+import { formatRecentOutputTokenRate, formatRunningTokenCount } from './lib/runningTokenUsage';
+import {
+  emptyRateHistory,
+  loadCachedRateHistory,
+  recordRunningTokenRate,
+  saveCachedRateHistory,
+  RATE_SAMPLE_FRESH_MS,
+  type RateHistory,
+} from './lib/runningTokenRateHistory';
+
+export function useRunningTokenRateHistory(input: {
+  /** 会话身份：用于进程内缓存速度历史，切任务再切回不清零（重启应用清零）。 */
+  sessionKey: string | null;
+  startedAt: number | null;
+  outputTokens: number;
+  generationDurationMs: number;
+  generationReliable: boolean;
+}) {
+  const { sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable } = input;
+  // 挂载时从按会话的进程内缓存播种：RunningStatusBar 以 sessionId 为 key，
+  // 切走再切回是全新挂载，历史从缓存恢复而不是从零开始。
+  const [history, setHistory] = useState<RateHistory>(() => {
+    const cached = sessionKey ? loadCachedRateHistory(sessionKey) : null;
+    if (!cached) return emptyRateHistory(null);
+    // 空闲态恢复时丢弃两个计数起点：无法判断计数属于哪一轮，既不能
+    // 用旧 baseline 计算区间，也不能用旧 lastReport 判定当前轮计数回退。
+    return startedAt === null ? { ...cached, baseline: null, lastReport: null } : cached;
+  });
+  useEffect(() => {
+    setHistory((previous) =>
+      recordRunningTokenRate(previous, {
+        startedAt,
+        outputTokens,
+        generationDurationMs,
+        generationReliable,
+      }),
+    );
+  }, [startedAt, outputTokens, generationDurationMs, generationReliable]);
+  useEffect(() => {
+    if (sessionKey) saveCachedRateHistory(sessionKey, history);
+  }, [sessionKey, history]);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timestamp = history.latestSampleAt;
+    if (timestamp === undefined || history.latestRate === null) return;
+    setNow(Date.now());
+    const timer = setTimeout(() => setNow(Date.now()),
+      Math.max(0, timestamp + RATE_SAMPLE_FRESH_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [history.latestSampleAt, history.latestRate]);
+  const visibleHistory = history.latestSampleAt === undefined ||
+    Math.max(now, Date.now()) - history.latestSampleAt >= RATE_SAMPLE_FRESH_MS
+    ? { ...history, latestRate: null } : history;
+  return startedAt === null || history.startedAt === startedAt
+    ? visibleHistory
+    : { ...history, startedAt, baseline: null, latestRate: null };
+}
+
+export function RunningTokenRatePopover({
+  elapsedText,
+  rate,
+  rateText,
+  isTokenCount = false,
+  averageRate,
+  outputTokens,
+  history,
+  onPinnedChange,
+}: {
+  elapsedText: string;
+  rate: string | null;
+  rateText: string | null;
+  isTokenCount?: boolean;
+  averageRate: string | null;
+  outputTokens: number;
+  history: RateHistory;
+  onPinnedChange?: (pinned: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const [mode, setMode] = useState<'idle' | 'hover' | 'pinned' | 'dismissed'>('idle');
+  const open = mode === 'pinned';
+  useEffect(() => onPinnedChange?.(open), [open, onPinnedChange]);
+  const samples = history.samples;
+  const firstTime = samples[0]?.durationMs ?? 0;
+  const span = (samples.at(-1)?.durationMs ?? 0) - firstTime;
+  const ceiling = Math.max(1, ...samples.map((sample) => sample.rate));
+  const points = samples.map((sample) => ({
+    x: span > 0 ? 4 + ((sample.durationMs - firstTime) / span) * 108 : 112,
+    y: 44 - (sample.rate / ceiling) * 36,
+  }));
+  const line = points.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(' ');
+  const last = points.at(-1);
+  const card = (
+    <div
+      aria-description={t('chat.runningStatus.tokenRateDescription')}
+      className="grid grid-cols-[minmax(0,1fr)_128px] gap-x-3 gap-y-3 pr-1"
+    >
+      <div className="contents">
+        <div className="col-start-1 row-start-1 min-w-0 self-center">
+          <div className="mb-1 flex items-center gap-1.5 text-12 text-[var(--text-secondary)]">
+            <Activity size={14} aria-hidden="true" />
+            {t('chat.runningStatus.currentRate')}
+          </div>
+          <div className="flex items-baseline gap-1.5 tabular-nums">
+            <span className="text-28 font-medium leading-none">{rate ?? '—'}</span>
+            <span className="text-12 text-[var(--text-secondary)]">
+              {t('chat.runningStatus.tokenRateUnit')}
+            </span>
+          </div>
+        </div>
+        <svg
+          viewBox="0 0 120 48"
+          className="col-start-2 row-start-1 h-12 w-32 self-center text-[var(--text-primary)]"
+          role="img"
+          aria-label={t('chat.runningStatus.rateHistory')}
+        >
+          <path d="M4 44H112" stroke="currentColor" opacity="0.12" />
+          {points.length > 1 && (
+            <>
+              <path d={`${line} L112,44 L${points[0].x},44 Z`} fill="currentColor" opacity="0.08" />
+              <path
+                d={line}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </>
+          )}
+          {last && <circle cx={last.x} cy={last.y} r="2.5" fill="currentColor" />}
+        </svg>
+        <dl className="col-span-2 col-start-1 row-start-2 grid grid-cols-3 gap-2 text-12 tabular-nums [&>div]:flex-col [&>div]:items-start [&>div]:gap-1">
+          <div className="flex items-center gap-2">
+            <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.averageRate')}</dt>
+            <dd className="font-medium">
+              {averageRate ? t('chat.runningStatus.tokenRate', { rate: averageRate }) : '—'}
+            </dd>
+          </div>
+          <div className="flex items-center gap-2">
+            <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.outputTotal')}</dt>
+            <dd className="font-medium">
+              {t('chat.runningStatus.tokenCount', {
+                tokens: formatRunningTokenCount(outputTokens),
+              })}
+            </dd>
+          </div>
+          <div className="flex items-center gap-2">
+            <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.observedPeak')}</dt>
+            <dd className="font-medium">
+              {samples.length > 0
+                ? t('chat.runningStatus.tokenRate', {
+                    rate: formatRecentOutputTokenRate(history.peak),
+                  })
+                : '—'}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+  );
+  const surface =
+    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-menu)]';
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setMode(next ? 'pinned' : 'dismissed');
+      }}
+    >
+      <Tooltip.Provider>
+        <Tooltip.Root
+          open={mode === 'hover'}
+          onOpenChange={(next) =>
+            setMode((current) =>
+              current === 'pinned' || current === 'dismissed' ? current : next ? 'hover' : 'idle',
+            )
+          }
+        >
+          <PopoverTrigger asChild>
+            <Tooltip.Trigger asChild>
+              <button
+                type="button"
+                onPointerEnter={() =>
+                  setMode((current) => (current === 'dismissed' ? 'idle' : current))
+                }
+                onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
+                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-[6px] whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+                aria-label={
+                  rateText
+                    ? `${elapsedText} · ${isTokenCount ? rateText : `${t('chat.runningStatus.currentRate')}: ${rateText}`}`
+                    : elapsedText
+                }
+              >
+                <span>{elapsedText}</span>
+                {rateText && (
+                  <>
+                    <span aria-hidden="true">&middot;</span>
+                    {isTokenCount && <ArrowDown size={13} aria-hidden="true" />}
+                    <span>{rateText}</span>
+                  </>
+                )}
+              </button>
+            </Tooltip.Trigger>
+          </PopoverTrigger>
+          <Tooltip.Content
+            side="top"
+            align="end"
+            sideOffset={8}
+            className={`${surface} break-normal`}
+          >
+            {card}
+          </Tooltip.Content>
+        </Tooltip.Root>
+      </Tooltip.Provider>
+      <PopoverContent
+        side="top"
+        align="end"
+        sideOffset={8}
+        className={`${surface} relative`}
+        aria-label={t('chat.runningStatus.rateHistory')}
+        onInteractOutside={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          setMode('dismissed');
+        }}
+      >
+        <button
+          type="button"
+          aria-label={t('titleBar.close')}
+          onClick={() => setMode('dismissed')}
+          className="absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+        >
+          <X size={12} aria-hidden="true" />
+        </button>
+        {card}
+      </PopoverContent>
+    </Popover>
+  );
+}

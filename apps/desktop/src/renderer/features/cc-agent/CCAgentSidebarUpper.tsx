@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * CCAgentFeature 的 Sidebar 上半内容。
  * ---------------------------------------------------------------------------
@@ -34,15 +35,15 @@ import {
   CircleAlert,
   CirclePlus,
   Folder,
+  Hammer,
   Loader2,
   Plug,
-  RefreshCw,
   SquarePen,
   Timer,
   Trash2,
   X,
 } from 'lucide-react';
-import { useNavigate, useMatch } from 'react-router-dom';
+import { useNavigate, useMatch, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
@@ -50,7 +51,8 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
+import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
+import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useModifierHold } from '@/hooks/useModifierHold';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -67,7 +69,6 @@ import { SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
-import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import {
   SessionAttentionUrgencyProvider,
   useSessionAttentionUrgencySet,
@@ -91,15 +92,16 @@ import {
   resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
-import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
-import { useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
-import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
-import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
-import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
+import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
+import {
+  botOwnedSessionNotificationTitle,
+  findSessionNotificationSession,
+  sendSessionEventNotification,
+} from '@/lib/sessionEventNotification';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   clearSessionAttentionMany,
@@ -109,7 +111,10 @@ import {
 } from '@/lib/sessionAttentionStore';
 import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
-import { requestConversationSearch, useConversationSearchRequest } from '@/state/conversationSearchRequest';
+import {
+  requestConversationSearch,
+  useConversationSearchRequest,
+} from '@/state/conversationSearchRequest';
 import { searchDevicesFromSwitcher } from '@/lib/conversationSearchFanout';
 
 import { emitRefresh, onPatch } from '@/lib/sessionsBus';
@@ -117,22 +122,23 @@ import { emitRefresh, onPatch } from '@/lib/sessionsBus';
 import { useProjectGroups } from './hooks/useProjectGroups';
 import { useProjectAliases } from './hooks/useProjectAliases';
 import { useCollapsedProjects } from './hooks/useCollapsedProjects';
-import { useOrcaLeadWorkerMap } from './hooks/useOrcaLeadWorkerMap';
+import { useSessionDisplayRunningState } from './hooks/useSessionDisplayRunningState';
 import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWatcher';
-import { useAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
-import {
-  markAllScheduleRunsReadAndSync,
-  markScheduleRunsReadAndSync,
-} from '../scheduler/lib/scheduleRunReadSync';
+import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
+  buildPersistentLocalProjects,
+  filterPersistentLocalProjectsByLastActivity,
   normalizeProjectKey,
   normalizeWorkingDir,
   projectIdentityKey,
   projectIdentityKeyForSession,
   pinnedSessionIdsInDisplayOrder,
+  persistentProjectMatchesVendor,
+  type PersistentLocalProject,
   type ProjectNode,
 } from './lib/projectGrouping';
 import { projectDisplayLabelWithMachine } from './lib/remoteProjectIdentity';
@@ -142,6 +148,7 @@ import {
 } from './lib/projectBulkArchiveAction';
 import { sessionActivityMs } from './lib/dateSessionGrouping';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
+import { observeSidebarTaskChanges } from './lib/sidebarTaskObserver';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
 import { resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import {
@@ -153,6 +160,7 @@ import {
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
   buildProjectKeyComparisonSet,
+  findProjectRepresentativeKey,
   isProjectHidden,
   projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
@@ -167,20 +175,31 @@ import {
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
-import { holdSidebarViewedPriority, ProjectsSection } from './sidebar/sections/ProjectsSection';
-import { isAutomationGeneratedSession } from './lib/scheduledSessionGrouping';
+import { onlineDeviceSectionIds } from './lib/mainListModel';
+import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
+import {
+  holdSidebarViewedPriority,
+  ProjectsSection,
+  SessionGroupNode,
+} from './sidebar/sections/ProjectsSection';
+import { partitionCindyMakeSessions, sortSessionsForMainList } from './lib/mainListModel';
 import { toStoredSessionTitle } from './lib/sessionDisplayTitle';
 import {
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
 import { onRequestSessionSwitch, pickAdjacentSessionId } from './lib/sessionSwitchCommands';
-import type {
-  AutomationScheduleAction,
-  AutomationScheduleSessionInfo,
-  AutomationSessionGroup,
+import {
+  unreadSuccessScheduleRunIds,
+  type AutomationScheduleAction,
+  type AutomationScheduleSessionInfo,
+  type AutomationSessionGroup,
 } from './lib/automationSidebarGrouping';
-import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import {
+  getSessionDeviceId,
+  remoteProjectsStore,
+  useRemoteScheduleIndex,
+} from '@/features/device-link/remoteProjectsStore';
 import {
   getRemoteSessionActivity,
   useRemoteSessionActivity,
@@ -198,7 +217,8 @@ import {
   SidebarIconButton,
   SIDEBAR_RAIL_ICON_BUTTON_CLASS,
 } from '@/components/sidebar/SidebarIconButton';
-import { RailNav, remoteLampOf } from './sidebar/RailNav';
+import { RailNav } from './sidebar/RailNav';
+import { aggregateSessionLamps, remoteLampOf } from './lib/sessionLampAggregation';
 import {
   panelHasBlockingOverlay,
   panelHasEditingFocus,
@@ -222,7 +242,9 @@ import {
 } from './hooks/helpers/sidebarFilterCore';
 import {
   activePinnedSidebarEntryIds,
+  buildPinnedSidebarRank,
   pinnedProjectEntryId,
+  pinnedSidebarEntryComparisonKey,
   projectKeyFromPinnedEntryId,
 } from './lib/pinnedSidebarOrder';
 import { createLogger } from '@/lib/logger';
@@ -264,7 +286,6 @@ import {
   useSwitcherDevices,
 } from '@/features/device-link/useMachineSwitcher';
 import {
-  retryDeviceLinkDeviceList,
   useDeviceLinkDeviceListSettled,
   useDeviceLinkDeviceListRequestState,
 } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -274,6 +295,7 @@ import {
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
 import { resolveDialogueDeviceTarget, type DialogueDeviceTarget } from './lib/dialogueCreateTarget';
 import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
+import { makeGenericNewMakerRouteState } from './lib/genericNewMakerRouteState';
 
 const log = createLogger('CCAgentSidebarUpper');
 // perf-baseline(与 MessageStream 的 perf/session-switch 探针同通道):
@@ -312,23 +334,22 @@ function RemoteSidebarLoadNotice({
   status,
   deviceLabel,
   partial,
-  onRetry,
 }: {
   kind: 'tasks' | 'devices';
   status: 'loading' | 'error';
   deviceLabel?: string;
   partial: boolean;
-  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
   const isError = status === 'error';
   // tasks 的读取失败有完整自动恢复链路(10s 起对账退避重试 + 熔断探测恢复后自动重新
   // bootstrap),失败态只是「自动重试进行中」的状态说明,不是要求用户行动的告警——
   // 用中性样式 + role=status,且**不提供手动按钮**(2026-08 弱网实测反馈:重连必须
-  // 全自动,红色 alert + 按钮读起来像必须人工干预)。devices 目录失败没有等价的
-  // 自动重试,保持告警 + 手动重试。
+  // 全自动,红色 alert + 按钮读起来像必须人工干预)。设备目录失败不在侧栏展示:
+  // 本地与已缓存内容仍然可用,无需用连接状态打断用户。
   const autoRetrying = isError && kind === 'tasks';
   const alarming = isError && !autoRetrying;
+  const quietDeviceLoading = kind === 'devices' && status === 'loading';
   const messageKey =
     kind === 'tasks'
       ? status === 'loading'
@@ -336,22 +357,22 @@ function RemoteSidebarLoadNotice({
         : partial
           ? 'ccAgent.sidebar.machineSwitcher.tasksPartiallyFailed'
           : 'ccAgent.sidebar.machineSwitcher.tasksLoadFailed'
-      : status === 'loading'
-        ? 'ccAgent.sidebar.machineSwitcher.devicesLoading'
-        : partial
-          ? 'ccAgent.sidebar.machineSwitcher.devicesPartiallyFailed'
-          : 'ccAgent.sidebar.machineSwitcher.devicesLoadFailed';
+      : 'ccAgent.sidebar.machineSwitcher.devicesLoading';
   return (
     <div
       role={alarming ? 'alert' : 'status'}
       className={cn(
-        'border',
-        alarming
-          ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
-          : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
-        partial
-          ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
-          : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center',
+        quietDeviceLoading
+          ? 'mx-3 flex flex-col items-center gap-3 px-4 py-8 text-center text-[var(--text-secondary)]'
+          : 'border',
+        !quietDeviceLoading &&
+          (alarming
+            ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
+            : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]'),
+        !quietDeviceLoading &&
+          (partial
+            ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
+            : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center'),
       )}
     >
       {isError ? (
@@ -366,21 +387,6 @@ function RemoteSidebarLoadNotice({
           {t(messageKey, { device: deviceLabel })}
         </p>
       </div>
-      {alarming && onRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full font-medium',
-            'text-[var(--error-fg-strong)] transition-colors hover:bg-[var(--surface-hover)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-            partial ? 'h-6 px-2 text-11' : 'h-7 px-3 text-xs',
-          )}
-        >
-          <RefreshCw size={12} />
-          {t('ccAgent.sidebar.machineSwitcher.retryDevices')}
-        </button>
-      )}
     </div>
   );
 }
@@ -410,9 +416,6 @@ export function CCAgentSidebarUpper() {
   // 插件 / 搜索 / 远程机器),shell 顶部只留固定的「新建」——列表上滚时这些行一起
   // 滚走(2026-08-12 用户裁决,对齐 Codex)。rail 态没有该滚动区,交回 shell 整块渲染。
   useOwnTopNavScrollableRows(!isCollapsed);
-  // 错误红点的派生真源:拉取存在未处理告警(中断 ∪ 未 dismissed 错误尾行)的会话
-  // 并在收敛触发点重算 —— 横幅不被处置,红点就不消失。
-  usePendingAlertAttention();
   // F-PJ-10：filter.status 决定后端 fetch 时是否带 ?status=archived|all
   const hiddenProjects = useHiddenProjects();
   const { hiddenProjectKeys, initialSnapshot: sidebarSettingsSnapshot } = hiddenProjects;
@@ -433,7 +436,25 @@ export function CCAgentSidebarUpper() {
     [allSessionsForAttention, remoteProjectSessions, selectedMachineId],
   );
   const projectAliases = useProjectAliases();
-  const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
+  const { entries: recentWorkdirs } = useRecentWorkdirs();
+  const persistentLocalProjects = useMemo<PersistentLocalProject[]>(
+    () => buildPersistentLocalProjects(recentWorkdirs, allSessionsForAttention, localPlatform),
+    [recentWorkdirs, allSessionsForAttention, localPlatform],
+  );
+  const searchPersistentLocalProjects = useMemo(
+    () =>
+      selectedMachineId === MACHINE_ALL || selectedMachineId.includes(MACHINE_LOCAL)
+        ? persistentLocalProjects
+        : [],
+    [persistentLocalProjects, selectedMachineId],
+  );
+  const searchProjectGroups = useProjectGroups(
+    searchProjectSessions,
+    projectAliases.aliases,
+    false,
+    searchPersistentLocalProjects,
+    localPlatform,
+  );
   const restorableSelectionProjectKeys = useMemo(
     () => new Set(searchProjectGroups.projects.map((project) => project.projectKey)),
     [searchProjectGroups.projects],
@@ -473,7 +494,15 @@ export function CCAgentSidebarUpper() {
     [searchProjectSessions, hiddenProjectKeys, localPlatform],
   );
   const attentionNotifications = useSessionAttentionSnapshot();
-  const scheduleSessionIndex = useAutomationScheduleSessionIndex();
+  // Sidebar is rendered outside the :sessionId route, so useParams won't work.
+  // Use useMatch to extract the active session id from the URL.
+  const match = useMatch('/cc-agent/:sessionId');
+  const orcaMatch = useMatch('/cc-agent/orca/:sessionId');
+  const filesMatch = useMatch('/cc-agent/files/:sessionId');
+  const activeSessionId = orcaMatch?.params.sessionId ?? match?.params.sessionId;
+  const filesSessionId = filesMatch?.params.sessionId;
+  const scheduleSessionIndex = usePublishedAutomationScheduleSessionIndex();
+  const remoteScheduleIndex = useRemoteScheduleIndex();
   // 侧栏右侧 urgent 红点的"额外"来源:定时任务未读且失败(status != 'success')。
   // sessionAttentionStore 只跟踪 chat 内 attention;schedule 未读通过 sidebarNotifications
   // 合并进 hasAttentionNotification,但 attentionKind 缺失导致默认走绿(见 SessionItem
@@ -481,86 +510,16 @@ export function CCAgentSidebarUpper() {
   // 把它们提到 urgent 红档,避免"失败的 automation 被涂成 Completed"的误导。
   const unreadFailedScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadFailedRun) next.add(sessionId);
     }
     return next;
-  }, [scheduleSessionIndex]);
+  }, [scheduleSessionIndex, remoteScheduleIndex]);
   const navigate = useNavigate();
-  const automationAttentionSessionIds = useMemo(
-    () =>
-      allSessionsForAttention
-        .filter(
-          (s) =>
-            isAutomationGeneratedSession(s) &&
-            (attentionNotifications.has(s.id) ||
-              scheduleSessionIndex.get(s.id)?.hasUnreadRun === true),
-        )
-        .map((s) => s.id),
-    [allSessionsForAttention, attentionNotifications, scheduleSessionIndex],
-  );
-  // automationAttentionSessionIds 仅供下方「全部标为已读」右键菜单使用;导航栏 /
-  // rail 的自动化入口不再显示未读 dot(未读 / 运行状态改由各 schedule 组头承载)。
-
-  // Automations 按钮右键菜单：复用 TaskListCell 的 "controlled DropdownMenu + 不可见 trigger 跟坐标"模式，
-  // state 提到 root —— 折叠/展开两个视图都用同一个 button 概念,菜单只渲染一次,避免两份重复 state。
-  const [automationsMenuPos, setAutomationsMenuPos] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const handleAutomationsContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setAutomationsMenuPos({ x: e.clientX, y: e.clientY });
-  }, []);
-  const handleMarkAllAutomationsRead = useCallback(async () => {
-    setAutomationsMenuPos(null);
-    // 先清 done / awaiting(passive,store 对 error 免疫):这部分是纯未读标记,
-    // 展示过就算已读,不需要落库处置。
-    clearSessionAttentionMany(automationAttentionSessionIds);
-    // error 红点是未处理告警的派生投影,**必须先落库处置再清点**:此前是乐观先清、
-    // 失败只记日志,一旦 dismissPendingAlerts 拒绝或只处理了部分会话,横幅仍在库里
-    // 而红点已经消失(还连带发了 explicit 桥接 / 远程回执),正是本 PR 要消灭的割裂。
-    // 现在成功才 explicit 清,失败则重算把仍存在的告警点恢复回来。
-    try {
-      const { processed, failed } = await window.electronAPI.localDb.sessions.dismissPendingAlerts(
-        automationAttentionSessionIds,
-      );
-      // 只清 main 侧**确切回报处置成功**的会话。不能用「不在 failed 里」推断成功:
-      // 请求集合里可能有本 IPC 根本不处理的告警来源(如 WorktreeRestoreBanner 打的
-      // 红点),那些会话既不成功也不失败,误清后重算也恢复不了(worktree 告警不进
-      // 那条查询)。
-      clearSessionAttentionMany(processed, { intent: 'explicit' });
-      if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
-    } catch (e) {
-      log.warn('dismiss pending alerts failed', e);
-    }
-    // 成功与失败都重算一次:成功路径收敛掉残留,失败路径把红点恢复成库里的真实告警。
-    void refreshPendingAlerts();
-    try {
-      const updated = await markAllScheduleRunsReadAndSync();
-      if (updated > 0) {
-        toast.success(t('ccAgent.layout.markedAsRead', { count: updated }));
-      }
-    } catch (e) {
-      toast.error(
-        t('ccAgent.layout.markAllReadFailed', {
-          error: e instanceof Error ? e.message : String(e),
-        }),
-      );
-    }
-  }, [automationAttentionSessionIds, t]);
-
-  // Sidebar is rendered outside the :sessionId route, so useParams won't work.
-  // Use useMatch to extract the active session id from the URL.
-  const match = useMatch('/cc-agent/:sessionId');
-  const orcaMatch = useMatch('/cc-agent/orca/:sessionId');
-  const activeSessionId = orcaMatch?.params.sessionId ?? match?.params.sessionId;
 
   // Workdir-browse mode (skillhub Market sidebar pattern). When the user
   // clicked the file-text button on a Project, we swap sidebar contents to
   // the lazy file tree of that session's workdir.
-  const filesMatch = useMatch('/cc-agent/files/:sessionId');
-  const filesSessionId = filesMatch?.params.sessionId;
   const filesSession = useMemo(
     () => resolveDocModeFilesSession(allSessionsForAttention, filesSessionId),
     [allSessionsForAttention, filesSessionId],
@@ -641,6 +600,7 @@ export function CCAgentSidebarUpper() {
    * 不限定容器:展开态与 rail 折叠态是两个不同组件,扫整个 document 才能两种形态
    * 都覆盖。只送键盘需要的三个字段,不整份 session 过 IPC。 */
   const publishedTaskKeyRef = useRef<string>('');
+  const sidebarRootRef = useRef<HTMLDivElement>(null);
   const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
     const renderedIds = getVisibleSidebarSessionIds();
@@ -649,24 +609,27 @@ export function CCAgentSidebarUpper() {
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
     const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
+    const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
     const visibleProjection = visibleSessionsWithRemote
-      .filter((session) => !catalogSessions.some((active) => active.id === session.id))
+      .filter((session) => !catalogSessionIds.has(session.id))
       .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map((session) => {
-      const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
-      const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
-      const order = sidebarOrder.get(session.id);
-      const isActiveCatalog = session.status === 'active';
-      return {
-        id: session.id,
-        title: session.title ?? null,
-        pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
-        userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
-        ...(order === undefined ? {} : { sidebarOrder: order }),
-        ...(isActiveCatalog ? {} : { catalogEligible: false }),
-      };
-    });
+    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
+      (session) => {
+        const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
+        const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
+        const order = sidebarOrder.get(session.id);
+        const isActiveCatalog = session.status === 'active';
+        return {
+          id: session.id,
+          title: session.title ?? null,
+          pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
+          userSendAt: Number.isFinite(userSendAtMs) ? userSendAtMs : null,
+          ...(order === undefined ? {} : { sidebarOrder: order }),
+          ...(isActiveCatalog ? {} : { catalogEligible: false }),
+        };
+      },
+    );
     // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
     const key = JSON.stringify(tasks);
     if (key === publishedTaskKeyRef.current) return;
@@ -681,26 +644,9 @@ export function CCAgentSidebarUpper() {
     // 展开/折叠项目、分组重排这类纯 UI 变化不会动 visibleSessionsWithRemote,
     // 但会改渲染顺序 —— 跟序号徽标同样的做法,靠 DOM 变化跟住。
     if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
-    // 观察面是整个 document(展开态与 rail 是两个组件),流式输出时 mutation 会非常
-    // 密集 —— 每帧最多重算一次,别让它变成热路径。
-    let frame: number | null = null;
-    const observer = new MutationObserver(() => {
-      if (frame !== null) return;
-      frame = requestAnimationFrame(() => {
-        frame = null;
-        publishSidebarTasks();
-      });
-    });
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['class', 'hidden', 'aria-hidden'],
-    });
-    return () => {
-      observer.disconnect();
-      if (frame !== null) cancelAnimationFrame(frame);
-    };
+    const sidebarRoot = sidebarRootRef.current;
+    if (!sidebarRoot) return;
+    return observeSidebarTaskChanges(sidebarRoot, publishSidebarTasks);
   }, [publishSidebarTasks]);
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
@@ -708,12 +654,12 @@ export function CCAgentSidebarUpper() {
   // 完成未读(如重启后 attention store 还没填充)会丢绿点(codex review)。
   const railNotifications = useMemo(() => {
     const unread = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadRun) unread.add(sessionId);
     }
     if (unread.size === 0) return attentionNotifications;
     return new Set([...attentionNotifications, ...unread]);
-  }, [attentionNotifications, scheduleSessionIndex]);
+  }, [attentionNotifications, scheduleSessionIndex, remoteScheduleIndex]);
 
   useOrcaWorkerAttentionWatcher(sessionsHook.sessions, activeSessionId);
 
@@ -729,15 +675,22 @@ export function CCAgentSidebarUpper() {
       const fullActivePinnedIds = activePinnedSidebarEntryIds(
         filter.manualPinnedOrder,
         pinnedSessionIds,
+        localPlatform,
       );
-      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      const comparisonKey = (entryId: string) =>
+        pinnedSidebarEntryComparisonKey(entryId, localPlatform);
+      const baseOrder = normalizeManualPinnedOrder(
+        filter.manualPinnedOrder,
+        fullActivePinnedIds,
+        comparisonKey,
+      );
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, comparisonKey);
       void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
     },
-    [sessionsHook.sessions, remoteProjectSessions, filter, t],
+    [sessionsHook.sessions, remoteProjectSessions, filter, localPlatform, t],
   );
 
   return (
@@ -747,7 +700,7 @@ export function CCAgentSidebarUpper() {
     // 路过几行热态就丢了,体感退回"每行都要重新等 500ms"(session-git-pr-context)。
     <Tooltip.Provider skipDelayDuration={1500}>
       <SessionAttentionUrgencyProvider urgentSessionIds={unreadFailedScheduleSessionIds}>
-        <div className="relative flex flex-1 flex-col overflow-hidden">
+        <div ref={sidebarRootRef} className="relative flex flex-1 flex-col overflow-hidden">
           {/* Expanded — fade out when collapsed.
           min-w-0 让内层跟着外层 aside 的实际宽度走，配合 SessionItem 里的
           `min-w-0 flex-1 truncate` 才能正确截断。原来写死 min-w-[260px] 是
@@ -790,6 +743,8 @@ export function CCAgentSidebarUpper() {
             >
               <ExpandedView
                 sessionsHook={sessionsHook}
+                allSessionsForAttention={allSessionsForAttention}
+                remoteSessionsForNotification={remoteProjectSessions}
                 navigate={navigate}
                 activeSessionId={activeSessionId}
                 // 兜底直接用路由参数而非 filesSession?.id:filesSession 只从本地
@@ -801,6 +756,7 @@ export function CCAgentSidebarUpper() {
                 hiddenProjects={hiddenProjects}
                 projectAliases={projectAliases}
                 scheduleSessionIndex={scheduleSessionIndex}
+                persistentLocalProjects={persistentLocalProjects}
               />
             </div>
           </div>
@@ -815,7 +771,6 @@ export function CCAgentSidebarUpper() {
           >
             <CollapsedView
               navigate={navigate}
-              onAutomationsContextMenu={handleAutomationsContextMenu}
               allSearchProjects={visibleSearchProjects}
               searchableSessionIds={visibleSearchSessionIds}
               hiddenProjectKeys={hiddenProjectKeys}
@@ -826,45 +781,6 @@ export function CCAgentSidebarUpper() {
               onReorderPinned={handleRailPinnedReorder}
             />
           </div>
-
-          {/* Automations 按钮右键菜单 —— 折叠/展开两份按钮共用此渲染。trigger 跟着 click 坐标定位。 */}
-          <DropdownMenu
-            open={automationsMenuPos !== null}
-            onOpenChange={(open) => {
-              if (!open) setAutomationsMenuPos(null);
-            }}
-          >
-            <DropdownMenuTrigger asChild>
-              <span
-                aria-hidden
-                style={{
-                  position: 'fixed',
-                  left: automationsMenuPos?.x ?? 0,
-                  top: automationsMenuPos?.y ?? 0,
-                  width: 0,
-                  height: 0,
-                  pointerEvents: 'none',
-                }}
-              />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              sideOffset={2}
-              className={cn(
-                'min-w-[180px] rounded-xl p-1 overflow-hidden',
-                'bg-[var(--cmd-palette-bg)]',
-                'border border-[var(--cmd-palette-border)]',
-                'shadow-[var(--shadow-menu)]',
-              )}
-            >
-              <DropdownMenuItem
-                onSelect={() => void handleMarkAllAutomationsRead()}
-                className="cursor-pointer text-sm text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]"
-              >
-                {t('ccAgent.layout.markAllAsRead')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       </SessionAttentionUrgencyProvider>
     </Tooltip.Provider>
@@ -878,6 +794,8 @@ type SessionsHook = ReturnType<typeof useCCSessions>;
 
 interface ExpandedProps {
   sessionsHook: SessionsHook;
+  allSessionsForAttention: Session[];
+  remoteSessionsForNotification: Session[];
   navigate: ReturnType<typeof useNavigate>;
   activeSessionId: string | undefined;
   /** 「正在被用户注视」的会话 —— 供 attention 语义(running-status 通知豁免 /
@@ -889,7 +807,8 @@ interface ExpandedProps {
   filter: UseSidebarFilterReturn;
   hiddenProjects: UseHiddenProjectsReturn;
   projectAliases: ReturnType<typeof useProjectAliases>;
-  scheduleSessionIndex: ReturnType<typeof useAutomationScheduleSessionIndex>;
+  scheduleSessionIndex: ReturnType<typeof usePublishedAutomationScheduleSessionIndex>;
+  persistentLocalProjects: readonly PersistentLocalProject[];
 }
 
 /** rail 未分类隐藏态的空列表(引用稳定,免得 lampScope 发布 effect 空转)。 */
@@ -913,6 +832,8 @@ const CONFIRM_INITIAL: ConfirmState = {
 
 function ExpandedView({
   sessionsHook,
+  allSessionsForAttention,
+  remoteSessionsForNotification,
   navigate,
   activeSessionId,
   viewedSessionId,
@@ -920,8 +841,10 @@ function ExpandedView({
   hiddenProjects,
   projectAliases,
   scheduleSessionIndex,
+  persistentLocalProjects,
 }: ExpandedProps) {
   const { t, i18n } = useTranslation();
+  const location = useLocation();
   const localPlatform = window.electronAPI.platform;
   const { sessions, refreshSessions, patchLocal, effectiveIncludeArchived } = sessionsHook;
   const {
@@ -929,7 +852,6 @@ function ExpandedView({
     setProjectHidden,
     initialSnapshot: sidebarSettingsSnapshot,
   } = hiddenProjects;
-  const refreshWorktrees = useRefreshWorktrees();
   const projectPickerOptions = useProjectPickerOptions();
 
   // 自动化任务本身仍在顶部 Automations 入口管理；自动化任务 fire 后创建出的
@@ -956,7 +878,6 @@ function ExpandedView({
   const handleScheduleDeleted = useCallback(
     async ({ disposition, affectedSessionIds }: DeletedScheduleGeneratedSessionResult) => {
       await refreshSessions();
-      void refreshWorktrees();
       // 重定向判定用 viewedSessionId(files 路由兜底,与其余归档/删除 handler
       // 同口径):从面板删 schedule 连带清掉正在浏览的会话时也要跳离文件视图。
       if (
@@ -967,7 +888,7 @@ function ExpandedView({
         navigate('/cc-agent');
       }
     },
-    [viewedSessionId, navigate, refreshSessions, refreshWorktrees],
+    [viewedSessionId, navigate, refreshSessions],
   );
   const { requestDeleteSchedule, deleteScheduleDialog } = useDeleteScheduleWithSessions({
     onDeleted: handleScheduleDeleted,
@@ -986,6 +907,37 @@ function ExpandedView({
 
   const handleScheduleAction = useCallback(
     async (group: AutomationSessionGroup, action: AutomationScheduleAction) => {
+      if (action === 'mark-read') {
+        const sessionIds = group.sessions.map((session) => session.id);
+        clearSessionAttentionMany(sessionIds);
+        try {
+          const { processed, failed } =
+            await window.electronAPI.localDb.sessions.dismissPendingAlerts(sessionIds);
+          clearSessionAttentionMany(processed, { intent: 'explicit' });
+          if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
+        } catch (e) {
+          log.warn('dismiss pending alerts failed', e);
+        }
+        void refreshPendingAlerts();
+        const unreadRunIds = sessionIds.flatMap(
+          (sessionId) => scheduleSessionIndex.get(sessionId)?.unreadRunIds ?? [],
+        );
+        if (unreadRunIds.length > 0) {
+          const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds);
+          if (processed.length > 0) {
+            toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
+          }
+          if (failed.length > 0) {
+            toast.error(
+              t('ccAgent.layout.markAllReadFailed', {
+                error: firstError ?? String(failed.length),
+              }),
+            );
+          }
+        }
+        return;
+      }
+
       if (!group.scheduleId) return;
       const scheduleId = group.scheduleId;
       const scheduleName = group.title;
@@ -1092,6 +1044,9 @@ function ExpandedView({
         return;
       }
 
+      // Bot automation is owned by the Bots domain and must never be mutated
+      // through the generic Scheduler sidebar, even if a stale cache leaks it.
+      if (group.scheduleSource === 'bot') return;
       requestDeleteSchedule({
         id: scheduleId,
         name: scheduleName,
@@ -1101,53 +1056,43 @@ function ExpandedView({
         knownSessionIds: group.sessions.map((session) => session.id),
       });
     },
-    [confirmDialog, navigate, requestDeleteSchedule, t],
+    [confirmDialog, navigate, requestDeleteSchedule, scheduleSessionIndex, t],
   );
 
   const [confirm, setConfirm] = useState<ConfirmState>(CONFIRM_INITIAL);
 
-  // 系统级通知触发：sessions 数组每次渲染都新引用，但 hook 用 ref 转储 callback，
-  // 不会因此重跑 transition effect。
-  // 静音 + 失焦 gate 在这里，主进程不持有 enabled 状态。
-  // Dock/taskbar 角标不是外发通知通道：App 在后台时即使桌面/飞书通知关闭,
-  // 也要标记当前 session 需要关注；真正的 toast / 飞书仍然服从各自开关。
+  // 系统级通知触发：sessions 数组每次渲染都新引用，但 callback 读 ref，
+  // 不会因此重跑 transition effect。通道、失焦与灵动岛去重由共享入口收口。
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  // 通知不能只查当前侧栏桶：活跃筛选、归档切换和远程会话镜像都可能让目标
+  // 不在 sessionsRef 里。保留同步查找和原有兜底，避免标题解析影响通知发送。
+  const allSessionsForNotificationRef = useRef(allSessionsForAttention);
+  allSessionsForNotificationRef.current = allSessionsForAttention;
+  const remoteSessionsForNotificationRef = useRef(remoteSessionsForNotification);
+  remoteSessionsForNotificationRef.current = remoteSessionsForNotification;
   // 通知文案里的「尚未起名」兜底。走 ref 与 sessionsRef 同款:fireSessionNotification
   // 是 `[]` 依赖的稳定回调,直接闭包 t 会钉住首次渲染的语言。
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
     (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
-      // 灵动岛启用时,完成提示由灵动岛承载,不再走系统 toast,避免同一事件双重打扰;
-      // 灵动岛未启用(或平台不支持)时,继续用系统通知。飞书是独立外发通道,不受影响。
-      const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
-      const desktopEnabled = getNotificationsEnabled() && !islandActive;
-      const feishuEnabled = getFeishuNotificationsEnabled();
-      // 失焦才推 —— 见上注释。
-      if (typeof document !== 'undefined' && document.hasFocus()) return;
-      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      const session = findSessionNotificationSession(sessionId, [
+        sessionsRef.current,
+        allSessionsForNotificationRef.current,
+        remoteSessionsForNotificationRef.current,
+      ]);
       // Orca worker 自身状态翻转不发独立通知 —— 等 lead 接到 worker_report 处理完
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
-      void window.electronAPI.notificationMarkSessionAttention(sessionId);
-      // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。
-      // (手机推送用的是**桌面侧**语言 —— 标题在 wire payload 里是字面量,让手机按自己
-      //  locale 投影要改协议,超出本 PR 范围;但无论如何都比露出哨兵好。)
-      const title = projectDraftSessionTitle(session?.title, unnamedLabelRef.current);
-      // mobile 通道恒开:桌面侧不设第二个开关,是否收到由手机端注册/注销推送 token
-      // 决定;发送侧防打扰(远程正在看该会话 / 去重 / relay 能力)在 main 收口。
-      // 因此桌面/飞书都关时也要 invoke(不再提前 return)。
-      void window.electronAPI.notificationShowSessionEvent({
-        sessionId,
-        title,
-        kind,
-        channels: {
-          desktop: desktopEnabled,
-          feishu: feishuEnabled,
-          mobile: true,
-        },
+      if (session) {
+        const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
+        sendSessionEventNotification(sessionId, title, kind);
+        return;
+      }
+      void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
+        sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);
       });
     },
     [],
@@ -1180,15 +1125,16 @@ function ExpandedView({
       onSessionNeedsReply: handleSessionNeedsReply,
     },
   );
+  const remoteScheduleIndex = useRemoteScheduleIndex();
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   const unreadScheduleSessionIds = useMemo(() => {
     const next = new Set<string>();
-    for (const [sessionId, info] of scheduleSessionIndex) {
+    for (const [sessionId, info] of [...scheduleSessionIndex, ...remoteScheduleIndex]) {
       if (info.hasUnreadRun) next.add(sessionId);
     }
     return next;
-  }, [scheduleSessionIndex]);
+  }, [scheduleSessionIndex, remoteScheduleIndex]);
   const sidebarNotifications = useMemo(() => {
     if (unreadScheduleSessionIds.size === 0) return notifications;
     return new Set([...notifications, ...unreadScheduleSessionIds]);
@@ -1197,62 +1143,23 @@ function ExpandedView({
 
   const markAutomationSessionRunsRead = useCallback(
     (sessionId: string) => {
-      const info = scheduleSessionIndex.get(sessionId);
-      if (!info?.unreadRunIds.length) return;
+      const info =
+        remoteProjectsStore.getSessionScheduleInfo(sessionId) ??
+        scheduleSessionIndex.get(sessionId);
+      // 成功进入即已读；历史失败在任务内容实际展示时确认，保留横幅、只清红点。
+      const successUnreadRunIds = info ? unreadSuccessScheduleRunIds(info) : [];
+      if (successUnreadRunIds.length === 0) return;
       // …AndSync:settle 后无条件触发 renderer 本地刷新。跨实例场景下这些 runId
       // 可能在 DB 里早已被另一实例标为已读(main no-op 且不广播),没有本地刷新
       // 通道的话,这里的过期未读快照永远等不到事件、红点无法自愈。
-      void markScheduleRunsReadAndSync(info.unreadRunIds);
+      void markScheduleRunsReadAndSync(successUnreadRunIds, getSessionDeviceId(sessionId));
     },
-    [scheduleSessionIndex],
+    [scheduleSessionIndex, remoteScheduleIndex],
   );
-  const orcaLeadWorkerMap = useOrcaLeadWorkerMap(sessions);
-  const effectiveRunningSessionIds = useMemo(() => {
-    const next = new Set(runningSessionIds);
-    for (const [leadSessionId, workerSessionIds] of orcaLeadWorkerMap) {
-      for (const workerSessionId of workerSessionIds) {
-        if (runningSessionIds.has(workerSessionId)) {
-          next.add(leadSessionId);
-          break;
-        }
-      }
-    }
-    return next;
-  }, [orcaLeadWorkerMap, runningSessionIds]);
-  // 后台子任务活跃会话(turn 已结束但 CC 子进程仍在调模型)也点亮同一个呼吸指示。
-  // 单独一个**纯视觉**集合:effectiveRunningSessionIds 除了喂列表显示还是
-  // handleMoveSession 的运行中拦截闸门,后台活动不得静默扩大行为闸门的口径
-  // (move / 归档 / 通知语义都保持只认真 running)。
-  const backgroundActivitySessionIds = useBackgroundActivitySessionIds();
-  // 刚发送尚未 isRunning 的任务并进 display running:排序与呼吸点马上进运行中档,
-  // 但不扩大 effectiveRunningSessionIds 的归档 / 移动闸门。
-  const startingSessionIds = useStartingSessionIds(runningSessionIds);
-  const displayRunningSessionIds = useMemo(() => {
-    if (backgroundActivitySessionIds.size === 0 && startingSessionIds.size === 0) {
-      return effectiveRunningSessionIds;
-    }
-    const next = new Set(effectiveRunningSessionIds);
-    for (const id of backgroundActivitySessionIds) next.add(id);
-    for (const id of startingSessionIds) next.add(id);
-    for (const [leadSessionId, workerSessionIds] of orcaLeadWorkerMap) {
-      if (next.has(leadSessionId)) continue;
-      for (const workerSessionId of workerSessionIds) {
-        if (
-          backgroundActivitySessionIds.has(workerSessionId) ||
-          startingSessionIds.has(workerSessionId)
-        ) {
-          next.add(leadSessionId);
-          break;
-        }
-      }
-    }
-    return next;
-  }, [
-    effectiveRunningSessionIds,
-    backgroundActivitySessionIds,
-    startingSessionIds,
-    orcaLeadWorkerMap,
-  ]);
+  const { effectiveRunningSessionIds, displayRunningSessionIds } = useSessionDisplayRunningState(
+    sessions,
+    runningSessionIds,
+  );
   const collapsedAttentionToneFor = useCallback(
     (sessions: readonly Session[]) =>
       resolveCollapsedProjectAttentionTone({
@@ -1261,7 +1168,8 @@ function ExpandedView({
         notifications: sidebarNotifications,
         attentionKinds,
         urgentSessionIds: urgentSet,
-        remotePhaseOf: (sessionId) => getRemoteSessionActivity(sessionId)?.phase,
+        remotePhaseOf: (sessionId, deviceId) =>
+          getRemoteSessionActivity(sessionId, deviceId)?.phase,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
     [
@@ -1270,6 +1178,31 @@ function ExpandedView({
       attentionKinds,
       urgentSet,
       remoteActivityRevision,
+    ],
+  );
+
+  // 置顶区项目行的聚合灯(ProjectsSection.lampAgg / rail projectAgg 同款口径):
+  // 聚合集合 = 该行下实际渲染的会话(displaySessions ?? project.sessions),
+  // 灯亮进去一定找得到亮的行。revision 订阅让 device-link 远程镜像推送能触发重算。
+  const pinnedRemoteActivityRevision = useRemoteSessionActivityRevision();
+  const pinnedProjectLamp = useCallback(
+    (list: readonly Session[]) =>
+      aggregateSessionLamps(
+        list,
+        {
+          runningSessionIds: displayRunningSessionIds,
+          notifications: sidebarNotifications,
+          attentionKinds,
+          urgentSessionIds: urgentSet,
+        },
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pinnedRemoteActivityRevision 代表 remoteLampOf 读到的整表内容
+    [
+      displayRunningSessionIds,
+      sidebarNotifications,
+      attentionKinds,
+      urgentSet,
+      pinnedRemoteActivityRevision,
     ],
   );
 
@@ -1289,6 +1222,13 @@ function ExpandedView({
   // 机器切换栏选中机器后整体过滤:本机 → 只本地会话;远程 → 只该机器会话。
   // 过滤在源头做,下游 grouping / pinned / projects / dialogues / date-grouped / search 自动继承。
   const selectedMachineId = useEffectiveSelectedMachineId();
+  const visiblePersistentLocalProjects = useMemo(
+    () =>
+      selectedMachineId === MACHINE_ALL || selectedMachineId.includes(MACHINE_LOCAL)
+        ? persistentLocalProjects
+        : [],
+    [persistentLocalProjects, selectedMachineId],
+  );
   const localHostProjectOrder = useLocalHostProjectOrder({
     custom: filter.projectOrder === 'custom',
     keys: filter.manualProjectOrder,
@@ -1471,26 +1411,66 @@ function ExpandedView({
     if (cutoff === null) return sidebarSessions;
     return sidebarSessions.filter((s) => sessionActivityMs(s) >= cutoff);
   }, [sidebarSessions, filter.lastActivity]);
+  const activityFilteredPersistentLocalProjects = useMemo(
+    () =>
+      filterPersistentLocalProjectsByLastActivity(
+        visiblePersistentLocalProjects,
+        cutoffForLastActivity(filter.lastActivity),
+      ),
+    [filter.lastActivity, visiblePersistentLocalProjects],
+  );
 
   /* ---- Grouping & collapse ---- */
-  const allGroups = useProjectGroups(sidebarSessions, projectAliases.aliases);
-  const groups = useProjectGroups(activityFilteredSessions, projectAliases.aliases);
+  const allGroups = useProjectGroups(
+    sidebarSessions,
+    projectAliases.aliases,
+    false,
+    visiblePersistentLocalProjects,
+    localPlatform,
+  );
+  // Project pinning is independent from conversation pinning. This catalogue
+  // keeps pinned conversations inside their project solely for project identity
+  // and project-level actions; the normal project tree above remains deduped.
+  const allProjectGroups = useProjectGroups(
+    sidebarSessions,
+    projectAliases.aliases,
+    true,
+    visiblePersistentLocalProjects,
+    localPlatform,
+  );
+  const groups = useProjectGroups(
+    activityFilteredSessions,
+    projectAliases.aliases,
+    false,
+    activityFilteredPersistentLocalProjects,
+    localPlatform,
+    activityFilteredSessions === sidebarSessions &&
+      activityFilteredPersistentLocalProjects === visiblePersistentLocalProjects
+      ? allGroups
+      : undefined,
+  );
   // 普通项目目录也需要保留「所有会话都已单独置顶」的项目身份，供用户继续
   // 从 ProjectNode 菜单置顶整个项目；实际项目子行在渲染前仍会排除已置顶会话。
   const groupsWithPinnedProjects = useProjectGroups(
     activityFilteredSessions,
     projectAliases.aliases,
     true,
+    activityFilteredPersistentLocalProjects,
+    localPlatform,
+    activityFilteredSessions === sidebarSessions &&
+      activityFilteredPersistentLocalProjects === visiblePersistentLocalProjects
+      ? allProjectGroups
+      : undefined,
   );
-  // Project pinning is independent from conversation pinning. This catalogue
-  // keeps pinned conversations inside their project solely for project identity
-  // and project-level actions; the normal project tree above remains deduped.
-  const allProjectGroups = useProjectGroups(sidebarSessions, projectAliases.aliases, true);
   const activeWorkingDirs = useMemo(
     () => allProjectGroups.projects.map((p) => p.projectKey),
     [allProjectGroups.projects],
   );
-  const collapse = useCollapsedProjects(activeWorkingDirs, sidebarSettingsSnapshot.dataOwnerId);
+  const collapse = useCollapsedProjects(
+    activeWorkingDirs,
+    sidebarSettingsSnapshot.dataOwnerId,
+    localPlatform,
+  );
 
   // 项目过滤 GC 的「宇宙」用**全量**(不按机器过滤)项目键 —— 否则在某机器作用域下 remount,
   // gcProjectsAgainstActive 会把其它机器的项目从已保存的项目过滤里误删(它们只是被切换栏隐藏、
@@ -1500,7 +1480,13 @@ function ExpandedView({
     () => [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
     [sessions, remoteProjectSessions, passesOrcaAndStatus],
   );
-  const projectUniverse = useProjectGroups(unfilteredProjectSessions, projectAliases.aliases, true);
+  const projectUniverse = useProjectGroups(
+    unfilteredProjectSessions,
+    projectAliases.aliases,
+    true,
+    persistentLocalProjects,
+    localPlatform,
+  );
   // Visibility is a negative overlay only. Keep the raw universe above for
   // filter/manual-order GC, and expose a separate catalogue to sidebar UI.
   const visibleProjectUniverse = useMemo(
@@ -1533,13 +1519,19 @@ function ExpandedView({
     if (isLoadingSessions) return; // 等首次加载完
     const targetDir = pendingFocus.workingDir;
     const targetKey = normalizeProjectKey(targetDir) ?? `local:${targetDir}`;
-    const exists = groupsWithPinnedProjects.projects.some((p) => p.projectKey === targetKey);
-    if (exists) {
-      collapse.expand(targetKey);
+    const representativeKey = findProjectRepresentativeKey(
+      groupsWithPinnedProjects.projects,
+      targetKey,
+      localPlatform,
+    );
+    if (representativeKey) {
+      collapse.expand(representativeKey);
       // RAF 等 expand 触发的 re-render 完成 (project header DOM 在折叠态下已渲染,
       // 这里 RAF 主要给"刚 mount"的场景一帧时间让 querySelector 拿到节点)。
       requestAnimationFrame(() => {
-        const node = document.querySelector(`[data-project-workingdir="${CSS.escape(targetKey)}"]`);
+        const node = document.querySelector(
+          `[data-project-workingdir="${CSS.escape(representativeKey)}"]`,
+        );
         if (node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
     } else if (selectedMachineId !== MACHINE_ALL) {
@@ -1559,6 +1551,7 @@ function ExpandedView({
     groupsWithPinnedProjects.projects,
     collapse,
     isLoadingSessions,
+    localPlatform,
     selectedMachineId,
     t,
   ]);
@@ -1631,16 +1624,29 @@ function ExpandedView({
     }
     return keys;
   }, [filter.manualPinnedOrder]);
+  const pinnedProjectComparisonKeys = useMemo(
+    () => buildProjectKeyComparisonSet(pinnedProjectKeys, localPlatform),
+    [pinnedProjectKeys, localPlatform],
+  );
 
   const restorableProjectKeys = useMemo(
     () =>
       collectRestorableProjectKeys({
         sessions: scopedSidebarSessions,
+        persistentLocalProjects: visiblePersistentLocalProjects,
         lastActivityCutoff: cutoffForLastActivity(filter.lastActivity),
         pinnedProjectKeys,
         vendorPredicate,
+        localPlatform,
       }),
-    [filter.lastActivity, pinnedProjectKeys, scopedSidebarSessions, vendorPredicate],
+    [
+      filter.lastActivity,
+      localPlatform,
+      pinnedProjectKeys,
+      scopedSidebarSessions,
+      vendorPredicate,
+      visiblePersistentLocalProjects,
+    ],
   );
   const restorableProjectKeysRef = useRef(restorableProjectKeys);
   restorableProjectKeysRef.current = restorableProjectKeys;
@@ -1668,7 +1674,10 @@ function ExpandedView({
       ) {
         return [];
       }
-      if (!pinnedProjectKeys.has(project.projectKey)) return [];
+      if (
+        !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform)
+      )
+        return [];
 
       return [
         {
@@ -1679,7 +1688,12 @@ function ExpandedView({
         },
       ];
     });
-  }, [allProjectGroups.projects, hiddenProjectComparisonKeys, localPlatform, pinnedProjectKeys]);
+  }, [
+    allProjectGroups.projects,
+    hiddenProjectComparisonKeys,
+    localPlatform,
+    pinnedProjectComparisonKeys,
+  ]);
 
   const visiblePinnedEntries = useMemo<PinnedSidebarEntry[]>(() => {
     const entries: PinnedSidebarEntry[] = [
@@ -1700,14 +1714,32 @@ function ExpandedView({
     // without a rank remain at the end in their existing pinnedAt order.
     const order = filter.manualPinnedOrder;
     if (order.length === 0) return entries;
-    const rank = new Map<string, number>();
-    order.forEach((id, idx) => rank.set(id, idx));
+    const rank = buildPinnedSidebarRank(order, localPlatform);
     return entries.sort((a, b) => {
-      const ra = rank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-      const rb = rank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      const ra =
+        rank.get(pinnedSidebarEntryComparisonKey(a.id, localPlatform)) ?? Number.MAX_SAFE_INTEGER;
+      const rb =
+        rank.get(pinnedSidebarEntryComparisonKey(b.id, localPlatform)) ?? Number.MAX_SAFE_INTEGER;
       return ra - rb;
     });
-  }, [visiblePinnedSessions, visiblePinnedProjects, filter.manualPinnedOrder]);
+  }, [visiblePinnedSessions, visiblePinnedProjects, filter.manualPinnedOrder, localPlatform]);
+
+  // 置顶项目行的折叠豁免追加集合:base 豁免(notifications ∪ runningSessionIds)
+  // 只覆盖本地链路,device-link 远程 running/未读只活在远程镜像里——灯为它们
+  // 点亮时,行不能被折进「显示全部」(codex review;与 ProjectsSection 的
+  // lampFoldExemptIds、rail 面板的 panelNotifications 同语义)。只扫置顶项目
+  // 下实际渲染的会话,集合与灯的聚合来源一致。
+  const pinnedFoldExemptIds = useMemo(() => {
+    const next = new Set<string>();
+    for (const entry of visiblePinnedEntries) {
+      if (entry.kind !== 'project') continue;
+      for (const s of entry.displaySessions ?? entry.project.sessions) {
+        if (remoteLampOf(s.id, s.deviceLinkDeviceId)) next.add(s.id);
+      }
+    }
+    return next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pinnedRemoteActivityRevision 代表 remoteLampOf 读到的整表内容
+  }, [visiblePinnedEntries, pinnedRemoteActivityRevision]);
 
   const visibleUnclassified = useMemo(() => {
     const sessions = vendorPredicate
@@ -1725,9 +1757,7 @@ function ExpandedView({
   );
 
   const visibleDialogues = useMemo(() => {
-    const sessions = vendorPredicate
-      ? groups.dialogues.filter(vendorPredicate)
-      : groups.dialogues;
+    const sessions = vendorPredicate ? groups.dialogues.filter(vendorPredicate) : groups.dialogues;
     if (filter.projectsAsSet === null) return sessions;
     return filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? sessions : [];
   }, [groups.dialogues, vendorPredicate, filter.projectsAsSet]);
@@ -1743,22 +1773,19 @@ function ExpandedView({
 
   const hostProjectSort = useMemo(() => {
     const scope = projectOrderWriteScopeForSelection(selectedMachineId);
-    const hostSnapshot = scope.kind === 'host' && scope.deviceId === null
-      ? localHostProjectOrder.snapshot
-      : scope.kind === 'host' && scope.deviceId
-        ? remoteHostProjectOrders.get(scope.deviceId)
-        : undefined;
-    const hostManual = scope.kind === 'host' && scope.deviceId === null
-      ? localHostProjectOrder.snapshot.manualProjectOrder
-      : scope.kind === 'host' && scope.deviceId
-        ? controllerManualOrderForDevice(scope.deviceId, hostSnapshot) ?? []
-        : [];
-    const displayed = resolveDisplayedProjectOrder(
-      scope,
-      hostSnapshot,
-      filter,
-      hostManual,
-    );
+    const hostSnapshot =
+      scope.kind === 'host' && scope.deviceId === null
+        ? localHostProjectOrder.snapshot
+        : scope.kind === 'host' && scope.deviceId
+          ? remoteHostProjectOrders.get(scope.deviceId)
+          : undefined;
+    const hostManual =
+      scope.kind === 'host' && scope.deviceId === null
+        ? localHostProjectOrder.snapshot.manualProjectOrder
+        : scope.kind === 'host' && scope.deviceId
+          ? (controllerManualOrderForDevice(scope.deviceId, hostSnapshot) ?? [])
+          : [];
+    const displayed = resolveDisplayedProjectOrder(scope, hostSnapshot, filter, hostManual);
     return {
       order: displayed.manualProjectOrder,
       projectOrder: displayed.projectOrder,
@@ -1775,13 +1802,19 @@ function ExpandedView({
 
   const visibleProjectsWithVendor = useMemo(() => {
     const unpinnedProjects = visibleProjects.filter(
-      (project) => !pinnedProjectKeys.has(project.projectKey),
+      (project) =>
+        !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform),
     );
     const projects = unpinnedProjects.flatMap((project) => {
       const matchingSessions = vendorPredicate
         ? project.sessions.filter(vendorPredicate)
         : project.sessions;
-      if (matchingSessions.length === 0) return [];
+      if (
+        matchingSessions.length === 0 &&
+        (!project.isPersistentLocal ||
+          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
+      )
+        return [];
       return [
         {
           ...project,
@@ -1794,11 +1827,14 @@ function ExpandedView({
       hostProjectSort.sortBy,
       hostProjectSort.order,
       hostProjectSort.projectOrder,
+      localPlatform,
     );
   }, [
     visibleProjects,
-    pinnedProjectKeys,
+    pinnedProjectComparisonKeys,
+    localPlatform,
     vendorPredicate,
+    filter.vendor,
     hostProjectSort,
   ]);
 
@@ -1809,7 +1845,12 @@ function ExpandedView({
       const matchingSessions = vendorPredicate
         ? project.sessions.filter(vendorPredicate)
         : project.sessions;
-      if (matchingSessions.length === 0) return [];
+      if (
+        matchingSessions.length === 0 &&
+        (!project.isPersistentLocal ||
+          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
+      )
+        return [];
       return [
         {
           ...project,
@@ -1822,8 +1863,9 @@ function ExpandedView({
       hostProjectSort.sortBy,
       hostProjectSort.order,
       hostProjectSort.projectOrder,
+      localPlatform,
     );
-  }, [visibleProjects, vendorPredicate, hostProjectSort]);
+  }, [visibleProjects, vendorPredicate, filter.vendor, hostProjectSort, localPlatform]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
@@ -1845,37 +1887,58 @@ function ExpandedView({
       const fullActivePinnedIds = activePinnedSidebarEntryIds(
         filter.manualPinnedOrder,
         pinnedSessionIds,
+        localPlatform,
       );
-      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      const comparisonKey = (entryId: string) =>
+        pinnedSidebarEntryComparisonKey(entryId, localPlatform);
+      const baseOrder = normalizeManualPinnedOrder(
+        filter.manualPinnedOrder,
+        fullActivePinnedIds,
+        comparisonKey,
+      );
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, comparisonKey);
       void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
     },
-    [sessions, remoteProjectSessions, filter, t],
+    [sessions, remoteProjectSessions, filter, localPlatform, t],
   );
 
   // D 期:按日期分组已删除(visibleDateSessions 随 DateGroupedSessionsSection 一并下线)。
-  const hasVisibleSidebarContent =
-    visiblePinnedEntries.length > 0 ||
-    visibleUnclassified.length > 0 ||
-    visibleProjectsWithVendor.length > 0 ||
-    visibleDialogues.length > 0;
   // 与 ProjectsSection.deviceGroupingAvailable 同一门控:范围收窄到单台机器时
   // 「按设备分组」选项隐藏。占位分支也要挂范围标题,不能各写一份。
   const deviceGroupingAvailable =
     (remoteDeviceIndex?.size ?? 0) > 0 &&
     !(selectedMachineId !== MACHINE_ALL && selectedMachineId.length === 1);
 
+  const hasVisibleSidebarContent =
+    (deviceGroupingAvailable &&
+      filter.groupDevice &&
+      onlineDeviceSectionIds(remoteDeviceIndex, selectedMachineId).length > 0) ||
+    visiblePinnedEntries.length > 0 ||
+    visibleUnclassified.length > 0 ||
+    visibleProjectsWithVendor.length > 0 ||
+    visibleDialogues.length > 0;
+
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);
-  // 这三个值 handleSessionClick 只在「点击那一刻」读一次。留在它的 deps 里会让
+  // 这几个值 handleSessionClick 只在「点击那一刻」读一次。留在它的 deps 里会让
   // 每次点击(:setSelectionAnchorSessionId 必触发)和每次切换都重建 handler,
   // 行的 onClick 跟着换引用 → 整表 memo 失效重画一遍(SessionItem.tsx 不变量 #3)。
   // 经 ref 读还顺带避开闭包陈旧:拿到的是最新值而非渲染时快照。
+  // attention / running / 未读集合更是:点进去会先清通知,若留在 deps 里,刚点的
+  // 那一下就会换掉整表 onClick,把「切任务」变成「全表重画」。
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  const urgentSetRef = useRef(urgentSet);
+  urgentSetRef.current = urgentSet;
+  const attentionKindsRef = useRef(attentionKinds);
+  attentionKindsRef.current = attentionKinds;
+  const runningSessionIdsRef = useRef(displayRunningSessionIds);
+  runningSessionIdsRef.current = displayRunningSessionIds;
+  const sidebarNotificationsRef = useRef(sidebarNotifications);
+  sidebarNotificationsRef.current = sidebarNotifications;
   // viewedSessionId 同理:handleActionClick 只在触发归档那一刻用它算重定向目标。
   const viewedSessionIdRef = useRef(viewedSessionId);
   viewedSessionIdRef.current = viewedSessionId;
@@ -2073,6 +2136,9 @@ function ExpandedView({
   );
 
   const pruneSelectionToRenderedRows = useCallback(() => {
+    if (selectedSessionIdsRef.current.size === 0 && selectionAnchorSessionIdRef.current == null) {
+      return;
+    }
     const renderedSessionIds = new Set(getVisibleSidebarSessionIds(sidebarScrollRef.current));
     setSelectedSessionIds((prev) => {
       const next = new Set([...prev].filter((id) => renderedSessionIds.has(id)));
@@ -2081,17 +2147,19 @@ function ExpandedView({
     setSelectionAnchorSessionId((prev) => (prev && renderedSessionIds.has(prev) ? prev : null));
   }, []);
 
+  // 只在真有多选集合时才盯 DOM。单击也会写下 selectionAnchorSessionId 当
+  // Shift 范围锚点,那不算多选;锚点失效时 Shift 点击会现场用可见行校验。
+  // 若把锚点算进去,首次点击后观察器会一直挂着,运行态/未读子节点增删又把
+  // getVisibleSidebarSessionIds 打回整表布局税。
+  const hasSidebarSelection = selectedSessionIds.size > 0;
   useEffect(() => {
-    pruneSelectionToRenderedRows();
-  });
-
-  useEffect(() => {
+    if (!hasSidebarSelection) return undefined;
     const root = sidebarScrollRef.current;
     if (!root) return undefined;
     const observer = new MutationObserver(pruneSelectionToRenderedRows);
     observer.observe(root, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [pruneSelectionToRenderedRows]);
+  }, [hasSidebarSelection, pruneSelectionToRenderedRows]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
@@ -2125,7 +2193,10 @@ function ExpandedView({
   // true 但内容更新」的场景(前一次收尾包丢失 / 延迟时,新 completed/error/
   // needs-interaction 到来布尔值不变)。attention 回落不计——那通常是本回执生效后
   // relay 推回的收尾包,重发只是无谓 invoke。
-  const activeRemoteActivity = useRemoteSessionActivity(viewedSessionId ?? '');
+  const activeRemoteActivity = useRemoteSessionActivity(
+    viewedSessionId ?? '',
+    getSessionDeviceId(viewedSessionId ?? ''),
+  );
   const activeRemoteAttention = activeRemoteActivity?.attention === true;
   const activeRemoteActivitySig = activeRemoteActivity
     ? `${activeRemoteActivity.phase}|${activeRemoteActivity.attention === true ? 1 : 0}|${activeRemoteActivity.interactionKind ?? ''}|${activeRemoteActivity.compactDetail}`
@@ -2210,33 +2281,32 @@ function ExpandedView({
       setSelectionAnchorSessionId(id);
       // 清点会先于路由更新抹掉 attention。必须先按当前档位钉住,否则
       // ProjectsSection 首次 hold 只能读到 rest,刚打开的完成未读仍会立刻沉底。
-      const waiting = new Set(urgentSet);
-      for (const [sessionId, kind] of attentionKinds) {
+      const waiting = new Set(urgentSetRef.current);
+      for (const [sessionId, kind] of attentionKindsRef.current) {
         if (kind === 'awaiting' || kind === 'error') waiting.add(sessionId);
       }
-      holdSidebarViewedPriority(id, {
-        runningSessionIds,
-        attentionSessionIds: sidebarNotifications,
-        waitingSessionIds: waiting,
-      });
+      const target = sessionsByIdRef.current.get(id);
+      holdSidebarViewedPriority(
+        id,
+        sidebarPriorityContext(
+          {
+            runningSessionIds: runningSessionIdsRef.current,
+            attentionSessionIds: sidebarNotificationsRef.current,
+            waitingSessionIds: waiting,
+          },
+          target ? [target] : [],
+          (session) => getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase,
+        ),
+      );
       // F-SB-7: Clear done notification on click
       clearNotification(id);
       markAutomationSessionRunsRead(id);
       clearSystemSessionAttention(id);
       if (id === activeSessionIdRef.current) return; // No duplicate navigate.
       if (import.meta.env.DEV) perfLog.debug(`sidebar:click sid=${id}`); // 纯诊断,生产剔除
-      const target = sessionsRef.current.find((s) => s.id === id);
       navigate(await resolveSessionRoute(id, target));
     },
-    [
-      navigate,
-      clearNotification,
-      markAutomationSessionRunsRead,
-      urgentSet,
-      attentionKinds,
-      runningSessionIds,
-      sidebarNotifications,
-    ],
+    [navigate, clearNotification, markAutomationSessionRunsRead],
   );
 
   /* ---- mod+1..9 快速切换对话 + 按住修饰键浮现序号徽标(复刻 Codex 桌面版) ----
@@ -2276,13 +2346,13 @@ function ExpandedView({
       const target = pickAdjacentSessionId(visibleIds, activeId, direction);
       if (!target) return;
       if (target.kind === 'new-task') {
-        navigate('/cc-agent/new');
+        navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
         return;
       }
       // 同样复用行点击唯一入口,继承清通知 / 同对话去重 / Orca 角色路由。
       void handleSessionClick(target.sessionId);
     });
-  }, [handleSessionClick, navigate, sessionSwitchEnabled]);
+  }, [handleSessionClick, location.pathname, navigate, sessionSwitchEnabled]);
 
   useAppShortcut('switch-session-1', () => handleSwitchSessionSlot(0), {
     enabled: sessionSwitchEnabled,
@@ -2529,7 +2599,7 @@ function ExpandedView({
     async (workingDir: string) => {
       try {
         const result = await window.electronAPI.openPath(workingDir);
-        if (!result.success) {
+        if (shouldShowOpenPathError(result)) {
           toast.error(result.error || t('ccAgent.common.openFolderFailed'));
         }
       } catch (err) {
@@ -2711,6 +2781,12 @@ function ExpandedView({
     [filter, t],
   );
 
+  // Event-only state: metadata updates recreate the collapsed Set even when
+  // membership is unchanged. Do not propagate that identity to every task row.
+  const collapsedProjectsForMoveRef = useRef(collapse.collapsed);
+  useLayoutEffect(() => {
+    collapsedProjectsForMoveRef.current = collapse.collapsed;
+  }, [collapse.collapsed]);
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
       const session = sessionsByIdRef.current.get(sessionId);
@@ -2762,7 +2838,7 @@ function ExpandedView({
         const normalized = normalizeWorkingDir(targetWorkingDir);
         if (normalized) {
           expandedProjectKey = projectIdentityKey('local', normalized, null);
-          wasExpandedProjectCollapsed = collapse.collapsed.has(expandedProjectKey);
+          wasExpandedProjectCollapsed = collapsedProjectsForMoveRef.current.has(expandedProjectKey);
           collapse.expand(expandedProjectKey);
         }
       }
@@ -2793,16 +2869,7 @@ function ExpandedView({
         );
       }
     },
-    // 同理只依赖用到的三个成员,不要整个 collapse —— useCollapsedProjects 也返回
-    // 新对象字面量。collapsed 是 Set,仅用户手动折叠/展开时换引用,频率可忽略。
-    [
-      collapse.collapsed,
-      collapse.expand,
-      collapse.setCollapsed,
-      effectiveRunningSessionIds,
-      patchLocal,
-      t,
-    ],
+    [collapse.expand, collapse.setCollapsed, effectiveRunningSessionIds, patchLocal, t],
   );
 
   /* ---- Delete / Archive / Unarchive action handlers ----
@@ -2983,15 +3050,17 @@ function ExpandedView({
       for (const session of candidates) {
         makerChatStore.closeSessionQuery(session.id);
         try {
-          // patchMeta 按来源路由:远程会话经隧道写被控端 patch-meta(allowlist 内),本地仍走 update。
-          await sessionService.patchMeta(session.id, { status: 'deleted' });
+          // 先固定本次状态写目标:关闭远端控制后,复制库里与 sticky origin 同 ID 的任务
+          // 必须按本地任务删除；真正远端任务仍固定经隧道写被控端。
+          const statusWriteTarget = await sessionService.resolveStatusWriteTarget(session.id);
+          await sessionService.setStatus(session.id, 'deleted', statusWriteTarget);
           makerChatStore.purgeSession(session.id);
           discardComposerDraft(session.id);
           // RSB 布局偏好(fraction / treeWidth / collapsed)走 localStorage 是
           // 本机概念,本地 + 远程 session 都要清(被控端的 localStorage 由被控端自己处理)。
           cleanupSessionLayoutPrefs(session.id);
           // 图片缓存清理是本机概念;远程会话的图在被控端,由被控端自己的删除流程处理。
-          if (!session.deviceLinkDeviceId) {
+          if (statusWriteTarget.kind === 'local') {
             void window.electronAPI.cleanupSessionImages(session.id).catch((err: unknown) => {
               log.warn('[bulk session delete] cleanup images failed', err);
             });
@@ -3007,7 +3076,6 @@ function ExpandedView({
         candidates.filter((session) => !failedIds.has(session.id)).map((session) => session.id),
       );
       await refreshSessions();
-      void refreshWorktrees();
 
       if (viewedSessionId && succeededIds.has(viewedSessionId)) {
         const redirectRoute = await resolveSessionRemovalRedirect(
@@ -3045,7 +3113,6 @@ function ExpandedView({
     handleClearSelection,
     navigate,
     refreshSessions,
-    refreshWorktrees,
     resolveSessionRemovalRedirect,
     selectedSessions,
     t,
@@ -3129,10 +3196,12 @@ function ExpandedView({
       for (const session of candidates) {
         makerChatStore.closeSessionQuery(session.id);
         try {
-          // patchMeta 按来源路由:远程会话经隧道写被控端;本地仍走 update。
-          await sessionService.patchMeta(session.id, { status: 'archived', pinnedAt: null });
+          // 与单条归档共用同一目标判定,避免复制数据库后的 sticky sessionId 冲突
+          // 被误送往已经关闭控制的设备。
+          const statusWriteTarget = await sessionService.resolveStatusWriteTarget(session.id);
+          await sessionService.setStatus(session.id, 'archived', statusWriteTarget);
           // 乐观本地 patch 只对本机会话;远程会话由隧道广播 sessions:patched → applyPatch 更新远程分片。
-          if (!session.deviceLinkDeviceId) {
+          if (statusWriteTarget.kind === 'local') {
             patchLocal(session.id, { status: 'archived', pinnedAt: null });
           }
           makerChatStore.purgeSession(session.id);
@@ -3148,7 +3217,6 @@ function ExpandedView({
         candidates.filter((session) => !failedIds.has(session.id)).map((session) => session.id),
       );
       await refreshSessions();
-      void refreshWorktrees();
 
       if (viewedSessionId && succeededIds.has(viewedSessionId)) {
         navigate('/cc-agent');
@@ -3181,7 +3249,6 @@ function ExpandedView({
     navigate,
     patchLocal,
     refreshSessions,
-    refreshWorktrees,
     runningSessionIds,
     selectedSessions,
     t,
@@ -3332,7 +3399,6 @@ function ExpandedView({
       const succeededIds = new Set(candidates.filter((s) => !failedIds.has(s.id)).map((s) => s.id));
 
       await refreshSessions();
-      void refreshWorktrees();
 
       // 当前注视中的 session 被归档了 → 走 /cc-agent 让 CCAgentIndexRedirect
       // 做 Orca-aware 的「选下一条 / 空则跳 new」决策(见 runSessionAction 同位置注释)。
@@ -3356,7 +3422,6 @@ function ExpandedView({
       runningSessionIds,
       confirmDialog,
       refreshSessions,
-      refreshWorktrees,
       viewedSessionId,
       navigate,
       patchLocal,
@@ -3525,209 +3590,190 @@ function ExpandedView({
           ) : null}
           {/* 搜索时原列表只隐藏、不卸载:置顶段折叠等本地 state 才能保住。 */}
           <div hidden={searchActive} className="flex flex-col gap-2">
-          {remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice
-                kind="devices"
-                status="error"
-                partial={false}
-                onRetry={retryDeviceLinkDeviceList}
-              />
-            </>
-          ) : remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice
-                kind="tasks"
-                status="error"
-                deviceLabel={failedRemoteDeviceLabel}
-                partial={false}
-              />
-            </>
-          ) : remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
-            </>
-          ) : remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent ? (
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <RemoteSidebarLoadNotice
-                kind="tasks"
-                status="loading"
-                deviceLabel={loadingRemoteDeviceLabel}
-                partial={false}
-              />
-            </>
-          ) : selectedMachineConnecting ? (
-            // 选中机器连接中:会话还没同步,显示「连接中」而非「暂无对话」。
-            // 范围标题恒在,可从菜单切回「所有 / 本机」,不会被困在占位页。
-            <>
-              <MainListScopeHeader
-                filter={filter}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                hasRemoteDevices={deviceGroupingAvailable}
-              />
-              <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
-                <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
-                  {t('ccAgent.sidebar.machineSwitcher.connecting')}
-                </span>
-              </div>
-            </>
-          ) : (
-            <>
-              {remoteDeviceDirectoryStatus === 'error' && (
-                <RemoteSidebarLoadNotice
-                  kind="devices"
-                  status="error"
-                  partial
-                  onRetry={retryDeviceLinkDeviceList}
+            {remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
                 />
-              )}
-              {remoteSessionBootstrapFailures.length > 0 && (
                 <RemoteSidebarLoadNotice
                   kind="tasks"
                   status="error"
                   deviceLabel={failedRemoteDeviceLabel}
-                  partial
+                  partial={false}
                 />
-              )}
-              {/*
-               * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
-               * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
-               * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。错误提示仍保留
-               * 在列表前，便于用户知道已有内容不是本轮权威结果。
-               */}
-              <PinnedSection
-                entries={visiblePinnedEntries}
-                allKnownProjects={visibleProjectUniverse}
-                renderProject={(
-                  project,
-                  displaySessions,
-                  parentSectionCollapsed,
-                  sessionVariant,
-                ) => (
-                  <ProjectNodeView
-                    project={project}
-                    displaySessions={displaySessions}
-                    sessionVariant={sessionVariant}
-                    statusFilter={filter.status}
-                    isCollapsed={collapse.collapsed.has(project.projectKey)}
-                    collapsedAttentionTone={
-                      collapse.collapsed.has(project.projectKey)
-                        ? collapsedAttentionToneFor(displaySessions ?? project.sessions)
-                        : null
-                    }
-                    parentSectionCollapsed={parentSectionCollapsed}
-                    activeSessionId={activeSessionId}
-                    runningSessionIds={displayRunningSessionIds}
-                    attachedSessionIds={attachedSessionIds}
-                    notifications={sidebarNotifications}
-                    scheduleSessionIndex={scheduleSessionIndex}
-                    selectedSessionIds={selectedSessionIds}
-                    disableSessionCollapse={false}
-                    onToggle={collapse.toggle}
-                    isProjectPinned
-                    onToggleProjectPin={handleToggleProjectPin}
-                    onRenameProject={handleProjectAliasChange}
-                    onRemoveFromSidebar={handleRemoveProjectFromSidebar}
-                    onSessionClick={handleSessionClick}
-                    onAction={handleActionClick}
-                    onRename={handleRename}
-                    onTogglePin={handleTogglePin}
-                    onMoveSession={handleMoveSession}
-                    projectOptions={projectPickerOptions}
-                    onScheduleAction={handleScheduleAction}
-                    onCreateInProject={handleCreateInProject}
-                    onOpenConversationSearch={handleOpenConversationSearch}
-                    onOpenInExplorer={handleOpenInExplorer}
-                    onLinkCodexProject={handleLinkCodexProject}
-                    linkingCodexProject={linkingCodexProject === project.projectKey}
-                    onBrowseFiles={handleBrowseFiles}
-                    onArchiveAll={handleArchiveAllInProject}
+              </>
+            ) : remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent ? (
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
+                <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
+              </>
+            ) : remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent ? (
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
+                <RemoteSidebarLoadNotice
+                  kind="tasks"
+                  status="loading"
+                  deviceLabel={loadingRemoteDeviceLabel}
+                  partial={false}
+                />
+              </>
+            ) : selectedMachineConnecting ? (
+              // 选中机器连接中:会话还没同步,显示「连接中」而非「暂无对话」。
+              // 范围标题恒在,可从菜单切回「所有 / 本机」,不会被困在占位页。
+              <>
+                <MainListScopeHeader
+                  filter={filter}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  hasRemoteDevices={deviceGroupingAvailable}
+                />
+                <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
+                  <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
+                    {t('ccAgent.sidebar.machineSwitcher.connecting')}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                {remoteSessionBootstrapFailures.length > 0 && (
+                  <RemoteSidebarLoadNotice
+                    kind="tasks"
+                    status="error"
+                    deviceLabel={failedRemoteDeviceLabel}
+                    partial
                   />
                 )}
-                activeSessionId={activeSessionId}
-                runningSessionIds={displayRunningSessionIds}
-                attachedSessionIds={attachedSessionIds}
-                notifications={sidebarNotifications}
-                selectedSessionIds={selectedSessionIds}
-                onSessionClick={handleSessionClick}
-                onAction={handleActionClick}
-                onRename={handleRename}
-                onTogglePin={handleTogglePin}
-                onMoveSession={handleMoveSession}
-                projectOptions={projectPickerOptions}
-                onReorder={handlePinnedReorder}
-              />
-              {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
+                {/*
+                 * 远程任务 / 设备目录的 loading 只在上面的「无内容」分支显示。
+                 * 这里可能已经有本地或旧的远程快照；把后台重拉提示插进普通文档流会让
+                 * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。设备目录失败
+                 * 同样不展示，继续使用本地与已缓存内容即可。
+                 */}
+                <PinnedSection
+                  entries={visiblePinnedEntries}
+                  allKnownProjects={visibleProjectUniverse}
+                  renderProject={(
+                    project,
+                    displaySessions,
+                    parentSectionCollapsed,
+                    sessionVariant,
+                  ) => (
+                    <ProjectNodeView
+                      project={project}
+                      displaySessions={displaySessions}
+                      sessionVariant={sessionVariant}
+                      statusFilter={filter.status}
+                      isCollapsed={collapse.collapsed.has(project.projectKey)}
+                      collapsedAttentionTone={
+                        collapse.collapsed.has(project.projectKey)
+                          ? collapsedAttentionToneFor(displaySessions ?? project.sessions)
+                          : null
+                      }
+                      parentSectionCollapsed={parentSectionCollapsed}
+                      lamp={pinnedProjectLamp(displaySessions ?? project.sessions)}
+                      foldExemptSessionIds={pinnedFoldExemptIds}
+                      activeSessionId={activeSessionId}
+                      runningSessionIds={displayRunningSessionIds}
+                      attachedSessionIds={attachedSessionIds}
+                      notifications={sidebarNotifications}
+                      scheduleSessionIndex={scheduleSessionIndex}
+                      selectedSessionIds={selectedSessionIds}
+                      disableSessionCollapse={false}
+                      onToggle={collapse.toggle}
+                      isProjectPinned
+                      onToggleProjectPin={handleToggleProjectPin}
+                      onRenameProject={handleProjectAliasChange}
+                      onRemoveFromSidebar={handleRemoveProjectFromSidebar}
+                      onSessionClick={handleSessionClick}
+                      onAction={handleActionClick}
+                      onRename={handleRename}
+                      onTogglePin={handleTogglePin}
+                      onMoveSession={handleMoveSession}
+                      projectOptions={projectPickerOptions}
+                      onScheduleAction={handleScheduleAction}
+                      onCreateInProject={handleCreateInProject}
+                      onOpenConversationSearch={handleOpenConversationSearch}
+                      onOpenInExplorer={handleOpenInExplorer}
+                      onLinkCodexProject={handleLinkCodexProject}
+                      linkingCodexProject={linkingCodexProject === project.projectKey}
+                      onBrowseFiles={handleBrowseFiles}
+                      onArchiveAll={handleArchiveAllInProject}
+                    />
+                  )}
+                  activeSessionId={activeSessionId}
+                  runningSessionIds={displayRunningSessionIds}
+                  attachedSessionIds={attachedSessionIds}
+                  notifications={sidebarNotifications}
+                  selectedSessionIds={selectedSessionIds}
+                  onSessionClick={handleSessionClick}
+                  onAction={handleActionClick}
+                  onRename={handleRename}
+                  onTogglePin={handleTogglePin}
+                  onMoveSession={handleMoveSession}
+                  projectOptions={projectPickerOptions}
+                  onReorder={handlePinnedReorder}
+                />
+                {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
-              <ProjectsSection
-                unclassified={visibleUnclassified}
-                projects={visibleProjectsWithVendor}
-                dialogues={visibleDialogues}
-                allKnownProjects={visibleProjectUniverse}
-                dialogueCount={allGroups.dialogues.length}
-                allProjectKeysForOrder={gcProjectKeys}
-                filter={filter}
-                collapsed={collapse.collapsed}
-                isAllCollapsed={collapse.isAllCollapsed}
-                activeSessionId={activeSessionId}
-                viewedSessionId={viewedSessionId}
-                runningSessionIds={displayRunningSessionIds}
-                attachedSessionIds={attachedSessionIds}
-                notifications={sidebarNotifications}
-                scheduleSessionIndex={scheduleSessionIndex}
-                selectedSessionIds={selectedSessionIds}
-                onSessionClick={handleSessionClick}
-                onAction={handleActionClick}
-                onRename={handleRename}
-                onTogglePin={handleTogglePin}
-                onMoveSession={handleMoveSession}
-                projectOptions={projectPickerOptions}
-                onScheduleAction={handleScheduleAction}
-                onToggleProject={collapse.toggle}
-                onToggleProjectPin={handleToggleProjectPin}
-                onRenameProject={handleProjectAliasChange}
-                onRemoveFromSidebar={handleRemoveProjectFromSidebar}
-                onCollapseAll={collapse.collapseAll}
-                onExpandAll={collapse.expandAll}
-                onCreateProject={handleCreateProject}
-                onCreateInProject={handleCreateInProject}
-                onOpenConversationSearch={handleOpenConversationSearch}
-                onOpenInExplorer={handleOpenInExplorer}
-                onLinkCodexProject={handleLinkCodexProject}
-                linkingCodexProject={linkingCodexProject}
-                onBrowseFiles={handleBrowseFiles}
-                onArchiveAll={handleArchiveAllInProject}
-                remoteDeviceIndex={remoteDeviceIndex}
-                onCreateDialogue={handleCreateDialogue}
-                isCreateDialogueDisabled={dialogueCreatePending}
-              />
-            </>
-          )}
+                <ProjectsSection
+                  unclassified={visibleUnclassified}
+                  projects={visibleProjectsWithVendor}
+                  dialogues={visibleDialogues}
+                  bots={groups.bots}
+                  onOpenBot={(botId) => navigate(`/bots/${botId}`)}
+                  allKnownProjects={visibleProjectUniverse}
+                  dialogueCount={allGroups.dialogues.length}
+                  allProjectKeysForOrder={gcProjectKeys}
+                  filter={filter}
+                  collapsed={collapse.collapsed}
+                  isAllCollapsed={collapse.isAllCollapsed}
+                  activeSessionId={activeSessionId}
+                  viewedSessionId={viewedSessionId}
+                  runningSessionIds={displayRunningSessionIds}
+                  attachedSessionIds={attachedSessionIds}
+                  notifications={sidebarNotifications}
+                  scheduleSessionIndex={scheduleSessionIndex}
+                  selectedSessionIds={selectedSessionIds}
+                  onSessionClick={handleSessionClick}
+                  onAction={handleActionClick}
+                  onRename={handleRename}
+                  onTogglePin={handleTogglePin}
+                  onMoveSession={handleMoveSession}
+                  projectOptions={projectPickerOptions}
+                  onScheduleAction={handleScheduleAction}
+                  onToggleProject={collapse.toggle}
+                  onToggleProjectPin={handleToggleProjectPin}
+                  onRenameProject={handleProjectAliasChange}
+                  onRemoveFromSidebar={handleRemoveProjectFromSidebar}
+                  onCollapseAll={collapse.collapseAll}
+                  onExpandAll={collapse.expandAll}
+                  onCreateProject={handleCreateProject}
+                  onCreateInProject={handleCreateInProject}
+                  onOpenConversationSearch={handleOpenConversationSearch}
+                  onOpenInExplorer={handleOpenInExplorer}
+                  onLinkCodexProject={handleLinkCodexProject}
+                  linkingCodexProject={linkingCodexProject}
+                  onBrowseFiles={handleBrowseFiles}
+                  onArchiveAll={handleArchiveAllInProject}
+                  remoteDeviceIndex={remoteDeviceIndex}
+                  onCreateDialogue={handleCreateDialogue}
+                  isCreateDialogueDisabled={dialogueCreatePending}
+                />
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -3788,6 +3834,7 @@ function ExpandedView({
           与「显示全部」),见 railPanelStore 头注。 */}
       <RailPanels
         projects={visibleRailProjectsWithVendor}
+        sortBy={filter.sortBy}
         pinnedProjectKeys={pinnedProjectKeys}
         unclassified={railUnclassified}
         dialogues={railDialogues}
@@ -3820,7 +3867,6 @@ function ExpandedView({
 
 interface CollapsedProps {
   navigate: ReturnType<typeof useNavigate>;
-  onAutomationsContextMenu: (e: React.MouseEvent) => void;
   /** 全量项目(供 rail 搜索图标钮的 ConversationSearchBox 用)。 */
   allSearchProjects: ProjectNode[];
   searchableSessionIds: string[];
@@ -3844,7 +3890,6 @@ interface CollapsedProps {
  */
 function CollapsedView({
   navigate,
-  onAutomationsContextMenu,
   allSearchProjects,
   searchableSessionIds,
   hiddenProjectKeys,
@@ -3854,6 +3899,7 @@ function CollapsedView({
   manualPinnedOrder,
   onReorderPinned,
 }: CollapsedProps) {
+  const location = useLocation();
   const isCollapsed = useSidebarCollapsedState();
   const projectFilterRequest = useConversationSearchRequest();
   const selectedMachineId = useEffectiveSelectedMachineId();
@@ -3866,23 +3912,18 @@ function CollapsedView({
   // 只读 running 快照——**不传 options**：通知副作用（onSessionDone 等）由
   // ExpandedView 的实例独家持有，两个视图常驻挂载，双回调会重复发桌面通知。
   const { runningSessionIds } = useSessionRunningStatus(activeSessionId);
-  // 后台子任务活跃会话同样点亮呼吸(与 ExpandedView 同口径,纯视觉合并)。
-  const backgroundActivitySessionIds = useBackgroundActivitySessionIds();
-  const startingSessionIds = useStartingSessionIds(runningSessionIds);
   // 瓷砖未读点颜色按 attention kind(done 绿 / awaiting TapTap 蓝 / error 红);组件层
   // 取一次,renderItem 里查表(renderItem 非组件,不能 per-item 用 hook)。
+
   const attentionKinds = useSessionAttentionKinds();
   // 失败 automation urgency 集合 —— rail 瓷砖也要按此把 failed schedule 涂红,不能
   // 让"失败的定时任务"落到默认绿色 done tone(否则和 SessionItem 不一致,
   // 折叠视图会把失败误传成"完成了")。
   const urgentSet = useSessionAttentionUrgencySet();
-  // delayed-create:与 ExpandedView 同——单按钮 navigate transient draft 单例。
-  // 与展开态 SidebarTopNav 的通用「新建」同口径:只 navigate,不清空 newMakerDraft,
-  // 保留用户上次在草稿页选好的「对话或选择项目」(切走再回来不重置);清空语义只属于
-  // 「新建对话」等显式入口(handleCreateDialogue)。
+  // 与展开态同口径：继承当前任务的电脑，同机保留草稿项目。
   const handleNewCCS = useCallback(() => {
-    navigate('/cc-agent/new', { state: makeNewMakerRouteState('generic') });
-  }, [navigate]);
+    navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
+  }, [location.pathname, navigate]);
   const handleNavScheduled = useCallback(() => {
     navigate('/cc-agent/scheduled');
   }, [navigate]);
@@ -3900,24 +3941,10 @@ function CollapsedView({
   // → lead 点亮)——与展开态 displayRunningSessionIds 同口径。RailNav 会滤掉
   // worker 行、只聚合 lead,不晋升会出现「面板里 lead 在跑、段灯与置顶瓷砖
   // 却不亮」(codex review)。
-  const orcaLeadWorkerMap = useOrcaLeadWorkerMap(sessions);
-  const railRunningIds = useMemo(() => {
-    const next = new Set([
-      ...runningSessionIds,
-      ...backgroundActivitySessionIds,
-      ...startingSessionIds,
-    ]);
-    for (const [leadSessionId, workerSessionIds] of orcaLeadWorkerMap) {
-      if (next.has(leadSessionId)) continue;
-      for (const workerSessionId of workerSessionIds) {
-        if (next.has(workerSessionId)) {
-          next.add(leadSessionId);
-          break;
-        }
-      }
-    }
-    return next;
-  }, [runningSessionIds, backgroundActivitySessionIds, startingSessionIds, orcaLeadWorkerMap]);
+  const { displayRunningSessionIds: railRunningIds } = useSessionDisplayRunningState(
+    sessions,
+    runningSessionIds,
+  );
 
   return (
     <div
@@ -3945,8 +3972,8 @@ function CollapsedView({
         variant="rail"
         active={Boolean(onScheduleMatch)}
         onClick={handleNavScheduled}
-        onContextMenu={onAutomationsContextMenu}
       />
+      <GhostMainViewNavEntries variant="rail" />
       {/* 插件 rail 入口 —— 未读绿点与展开态 SidebarTopNav 对称(同一聚合语义:
           任一插件有未读就点亮,静态不呼吸)。 */}
       <SidebarIconButton
@@ -3958,10 +3985,7 @@ function CollapsedView({
         showDot={hasGhostUnread}
         onClick={() => navigateToView('plugins')}
       />
-      <GhostPanelRestoreEntry
-        variant="rail"
-        className={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
-      />
+      <GhostPanelRestoreEntry variant="rail" className={SIDEBAR_RAIL_ICON_BUTTON_CLASS} />
       <ConversationSearchBox
         navigate={navigate}
         allKnownProjects={allSearchProjects}
@@ -4072,6 +4096,7 @@ function RailPanelShell({
 }
 
 interface RailPanelsProps {
+  sortBy: Parameters<typeof sortSessionsForMainList>[1];
   projects: ProjectNode[];
   pinnedProjectKeys: ReadonlySet<string>;
   /** 未分类(草稿等)会话——展开态 UnclassifiedSection 同源,面板内平铺在项目列表之上。 */
@@ -4116,10 +4141,11 @@ interface RailPanelsProps {
  *   - 项目列表:getProjectCollapseLimit()(默认 20)纯硬性上限 + 同款页脚。
  */
 function RailPanels({
-  projects,
+  projects: inputProjects,
   pinnedProjectKeys,
-  unclassified,
-  dialogues,
+  unclassified: inputUnclassified,
+  dialogues: inputDialogues,
+  sortBy,
   activeSessionId,
   viewedSessionId,
   runningSessionIds,
@@ -4141,6 +4167,16 @@ function RailPanels({
   onRemoveProjectFromSidebar,
 }: RailPanelsProps) {
   const { t } = useTranslation();
+  const { projects, dialogues, unclassified, cindyMake } = useMemo(
+    () =>
+      partitionCindyMakeSessions({
+        projects: inputProjects,
+        dialogues: inputDialogues,
+        unclassified: inputUnclassified,
+      }),
+    [inputProjects, inputDialogues, inputUnclassified],
+  );
+  const [cindyMakeCollapsed, setCindyMakeCollapsed] = useState(false);
   const panelState = useSyncExternalStore(railPanelStore.subscribe, railPanelStore.getSnapshot);
   // 项目行右键菜单(「在此项目内新建」)——controlled DropdownMenu + 不可见
   // trigger 跟坐标(Automations 菜单同款模式)。
@@ -4157,6 +4193,7 @@ function RailPanels({
   // onOpenChange —— openSection 离开 projects 就同步清掉菜单状态,否则组件常驻
   // (只是 return null),下次打开面板旧菜单会按旧坐标复现并引用旧项目(review)。
   // 与下方 showAllProjects 的复位同构。
+
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   // 项目列表「显示全部」:面板关闭后复位(与 ProjectsSection 的段收起复位同语义)。
@@ -4165,6 +4202,7 @@ function RailPanels({
     if (panelState.openSection !== 'projects') {
       setShowAllProjects(false);
       setProjectMenu(null);
+      setCindyMakeCollapsed(false);
     }
   }, [panelState.openSection]);
 
@@ -4190,13 +4228,10 @@ function RailPanels({
   // RailNav 的段灯据此聚合(review P2「灯绕过筛选/截断」两条的根治)。
   useEffect(() => {
     railPanelStore.setLampScope({
-      projectSessionIds: [
-        ...projects.flatMap((p) => p.sessions.map((sess) => sess.id)),
-        ...unclassified.map((sess) => sess.id),
-      ],
-      dialogueSessionIds: dialogues.map((sess) => sess.id),
+      projectSessions: [...projects.flatMap((p) => p.sessions), ...unclassified, ...cindyMake],
+      dialogueSessions: dialogues,
     });
-  }, [projects, unclassified, dialogues]);
+  }, [projects, unclassified, dialogues, cindyMake]);
 
   // 键盘打开(popover 焦点契约,DESIGN.md §14.2):焦点移入一级面板的首个
   // 可聚焦元素(对话面板=头部新建钮/项目面板=首行),Tab 不再穿越 portal 间隔
@@ -4333,41 +4368,36 @@ function RailPanels({
 
   // 远程活动镜像整表版本号:项目行聚合灯 / 折叠豁免要跟上被控端 relay 推送。
   const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const cindyMakeSessions = useMemo(() => {
+    const running = new Set(runningSessionIds);
+    const attention = new Set(notifications);
+    const waiting = new Set(urgentSet);
+    for (const session of cindyMake) {
+      const remote = remoteLampOf(session.id, session.deviceLinkDeviceId);
+      if (remote?.running) running.add(session.id);
+      if (remote?.tone) attention.add(session.id);
+      if (remote?.tone === 'error' || remote?.tone === 'awaiting') waiting.add(session.id);
+    }
+    return sortSessionsForMainList(cindyMake, sortBy, {
+      runningSessionIds: running,
+      attentionSessionIds: attention,
+      waitingSessionIds: waiting,
+    });
+  }, [cindyMake, sortBy, runningSessionIds, notifications, urgentSet, remoteActivityRevision]);
 
   // 可见性口径的「当前会话」:files 路由下 activeSessionId 为 undefined,被浏览
   // 文件的会话若排在折叠上限外且无灯语会被折进「显示全部」(codex review)。
   // 只喂给折叠豁免(isActiveEntry)与行高亮;点击导航仍走真实 activeSessionId。
   const visibilityActiveId = activeSessionId ?? viewedSessionId;
 
+  // 聚合口径的唯一事实源(sessionLampAggregation):本地链路 + device-link 远程
+  // 镜像。远程不并入会出现「段灯亮、项目行不亮」(codex review)。
   const projectAgg = useCallback(
-    (list: readonly Session[]) => {
-      let running = false;
-      let best: 'error' | 'awaiting' | 'done' | null = null;
-      const rank = { error: 3, awaiting: 2, done: 1 } as const;
-      const consider = (tone: 'error' | 'awaiting' | 'done' | null) => {
-        if (tone && (!best || rank[tone] > rank[best])) best = tone;
-      };
-      for (const s of list) {
-        if (runningSessionIds.has(s.id)) running = true;
-        // 远程会话灯语与 rail 段灯同源(remoteLampOf):本地 running/attention
-        // 对被控端后台会话是盲区,不并入会出现「段灯亮、项目行不亮」(codex review)。
-        const remote = remoteLampOf(s.id);
-        if (remote) {
-          if (remote.running) running = true;
-          consider(remote.tone);
-        }
-        if (!notifications.has(s.id)) continue;
-        const kind = attentionKinds.get(s.id);
-        consider(
-          kind === 'error' || urgentSet.has(s.id)
-            ? 'error'
-            : kind === 'awaiting'
-              ? 'awaiting'
-              : 'done',
-        );
-      }
-      return { running, dotTone: best };
-    },
+    (list: readonly Session[]) =>
+      aggregateSessionLamps(
+        list,
+        { runningSessionIds, notifications, attentionKinds, urgentSessionIds: urgentSet },
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 remoteLampOf 读到的整表内容
     [runningSessionIds, notifications, attentionKinds, urgentSet, remoteActivityRevision],
   );
@@ -4380,15 +4410,16 @@ function RailPanels({
   const panelNotifications = useMemo(() => {
     const remoteIds: string[] = [];
     const collect = (list: readonly Session[]) => {
-      for (const s of list) if (remoteLampOf(s.id)) remoteIds.push(s.id);
+      for (const s of list) if (remoteLampOf(s.id, s.deviceLinkDeviceId)) remoteIds.push(s.id);
     };
     collect(dialogues);
     collect(unclassified);
+    collect(cindyMake);
     for (const p of projects) collect(p.sessions);
     if (remoteIds.length === 0) return notifications;
     return new Set([...notifications, ...remoteIds]);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 remoteLampOf 读到的整表内容
-  }, [notifications, dialogues, unclassified, projects, remoteActivityRevision]);
+  }, [notifications, dialogues, unclassified, projects, cindyMake, remoteActivityRevision]);
 
   // 项目列表折叠:纯硬性上限(ProjectsSection 同口径,默认 20)+「显示全部 N 项」。
   const projectsView = useMemo(
@@ -4444,8 +4475,7 @@ function RailPanels({
     disabled = false,
     disabledReason?: string,
   ) => {
-    const label =
-      disabled && disabledReason ? `${actionLabel} — ${disabledReason}` : actionLabel;
+    const label = disabled && disabledReason ? `${actionLabel} — ${disabledReason}` : actionLabel;
 
     return (
       <Tip text={label} side="bottom">
@@ -4521,8 +4551,25 @@ function RailPanels({
         )}
         {panelState.openSection === 'projects' && (
           <>
-            {panelHead(t('ccAgent.sidebar.railNav.projects'), projects.length)}
+            {panelHead(
+              t('ccAgent.sidebar.railNav.projects'),
+              projects.length + (cindyMake.length ? 1 : 0),
+            )}
             <div className="max-h-[420px] overflow-y-auto [scrollbar-width:thin]">
+              {cindyMake.length > 0 && (
+                <SessionGroupNode
+                  sessions={cindyMakeSessions}
+                  {...entryListShared}
+                  groupTitle={t('settings.cindyMake.title')}
+                  groupIcon={<Hammer size={15} strokeWidth={1.8} className="shrink-0" aria-hidden />}
+                  collapsed={cindyMakeCollapsed}
+                  onToggle={() => setCindyMakeCollapsed((value) => !value)}
+                  isCreateDisabled={false}
+                  parentSectionCollapsed={false}
+                  disableSessionCollapse={false}
+                  sessionVariant="text"
+                />
+              )}
               {/* 未分类(草稿等)会话:展开态渲染在项目树之前(UnclassifiedSection,
                   无标题纯列表),面板同形同序——折叠态不能让它们不可达(review P2)。 */}
               {unclassified.length > 0 && (

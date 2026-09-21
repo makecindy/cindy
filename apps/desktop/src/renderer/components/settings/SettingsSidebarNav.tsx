@@ -3,8 +3,11 @@ import { useTranslation } from 'react-i18next';
 import type { LucideProps } from 'lucide-react';
 import {
   Boxes,
+  Hammer,
+  ChartColumn,
   CircleDollarSign,
   CircleHelp,
+  Database,
   FileUp,
   Info,
   Keyboard,
@@ -59,6 +62,7 @@ type SettingsNavIcon = ComponentType<LucideProps>;
 const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   general: Settings2,
   billing: CircleDollarSign,
+  usage: ChartColumn,
   personalization: Sparkles,
   providers: Boxes,
   'voice-input': Mic,
@@ -69,9 +73,11 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   ghosts: Plug,
   'builtin-tools': Wrench,
   'computer-use': MonitorCog,
+  'cindy-make': Hammer,
   'im-bot': MessageCircle,
   help: CircleHelp,
   about: Info,
+  storage: Database,
 };
 
 interface SettingsSidebarNavProps {
@@ -112,6 +118,18 @@ export function SettingsSidebarNav({ tabIds, activeTab, onSelectTab }: SettingsS
               )}
             />
             <span className="leading-none">{t(TAB_LABEL_KEY[tabId])}</span>
+            {tabId === 'cindy-make' && (
+              <span
+                className={cn(
+                  'relative top-0.5 shrink-0 rounded-full border px-2 py-[1px] text-10 font-medium leading-[1.5]',
+                  selected
+                    ? 'border-current bg-transparent text-inherit'
+                    : 'border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] text-[var(--settings-menu-text)]',
+                )}
+              >
+                {t('cindyMake.beta')}
+              </span>
+            )}
           </button>
         );
       })}

@@ -35,8 +35,18 @@ import { z } from 'zod';
  * session,或为业务对象新建专属 session),供 skill 路由用。单独成类(不并入 control)
  * 是为了让 list_tools(control) 的"改会话标题"结果里不混入 handoff,避免 LLM 在"改名"
  * 意图下误选 send_to_session。
+ *
+ * 'skills' 是由 Cindy 宿主管理的 Skill 工作流入口。工具只负责启动，
+ * staging、审查与安装仍由宿主状态机控制。
  */
-export type XdtHelperToolCategory = 'cindy' | 'history' | 'control' | 'feedback' | 'handoff';
+export type XdtHelperToolCategory =
+  | 'cindy'
+  | 'history'
+  | 'control'
+  | 'feedback'
+  | 'handoff'
+  | 'skills'
+  | 'bots';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }
@@ -68,6 +78,15 @@ export interface XdtHelperToolSummary {
 
 export class XdtHelperToolRegistry {
   private readonly tools = new Map<string, XdtHelperToolDef>();
+  private readonly aliases = new Map<string, string>();
+
+  /** Accept saved legacy calls without advertising a second set of names to the model. */
+  registerAlias(alias: string, name: string): void {
+    if (this.tools.has(alias) || this.aliases.has(alias) || !this.tools.has(name)) {
+      throw new Error(`[cindyHelperToolRegistry] invalid tool alias: ${alias}`);
+    }
+    this.aliases.set(alias, name);
+  }
 
   register<T extends z.ZodRawShape>(def: {
     name: string;
@@ -76,18 +95,18 @@ export class XdtHelperToolRegistry {
     inputShape: T;
     handler: XdtHelperToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
   }): void {
-    if (this.tools.has(def.name)) {
+    if (this.tools.has(def.name) || this.aliases.has(def.name)) {
       throw new Error(`[cindyHelperToolRegistry] duplicate tool name: ${def.name}`);
     }
     this.tools.set(def.name, def as unknown as XdtHelperToolDef);
   }
 
   has(name: string): boolean {
-    return this.tools.has(name);
+    return this.get(name) !== undefined;
   }
 
   get(name: string): XdtHelperToolDef | undefined {
-    return this.tools.get(name);
+    return this.tools.get(this.aliases.get(name) ?? name);
   }
 
   list(category?: XdtHelperToolCategory): XdtHelperToolSummary[] {
@@ -110,7 +129,7 @@ export class XdtHelperToolRegistry {
   }
 
   async call(name: string, rawArgs: unknown): Promise<XdtHelperToolResult> {
-    const def = this.tools.get(name);
+    const def = this.get(name);
     if (!def) {
       return {
         content: [

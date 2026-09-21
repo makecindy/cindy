@@ -185,7 +185,7 @@ describe('shared queue presentation model', () => {
       },
       queueLength: 3,
     });
-    expect(busyOrca.actions.edit.disabledReason).toBe('协作消息由桌面端编排，手机端只读显示。');
+    expect(busyOrca.actions.edit.disabledReason).toBe('协同消息由桌面端编排，手机端只读显示。');
   });
 
   it('explains steering, edit-lock, interaction-lock, and Orca row states', () => {
@@ -200,7 +200,7 @@ describe('shared queue presentation model', () => {
       queueLength: 2,
     });
     expect(steering.title).toBe('插话发送中');
-    expect(steering.hint).toBe('插话正在发送到当前 turn,暂时不能编辑或移动。');
+    expect(steering.hint).toBe('插话正在发送到当前 turn，暂时不能编辑或移动。');
     expect(steering.actions.edit.disabledReason).toBe('插话正在发送到当前 turn，等待桌面端回流后再操作。');
 
     const editLocked = buildQueueRowPresentation({
@@ -213,7 +213,7 @@ describe('shared queue presentation model', () => {
       },
       queueLength: 2,
     });
-    expect(editLocked.hint).toBe('这条消息正在编辑中,桌面端会暂停自动发送。');
+    expect(editLocked.hint).toBe('这条消息正在编辑中，桌面端会暂停自动发送。');
     expect(editLocked.actions.remove.disabledReason).toBe('这条队列消息正在编辑中，完成后再操作。');
 
     const interactionLocked = buildQueueRowPresentation({
@@ -226,7 +226,7 @@ describe('shared queue presentation model', () => {
       },
       queueLength: 2,
     });
-    expect(interactionLocked.hint).toBe('队列正在被排序或其它交互锁定,暂时不能编辑。');
+    expect(interactionLocked.hint).toBe('队列正在被排序或其它交互锁定，暂时不能编辑。');
     expect(interactionLocked.actions.steer.disabledReason).toBe('队列正在被其它操作锁定，完成后再操作。');
 
     const orca = buildQueueRowPresentation({
@@ -239,9 +239,9 @@ describe('shared queue presentation model', () => {
       },
       queueLength: 2,
     });
-    expect(orca.title).toBe('协作队列 2');
-    expect(orca.hint).toBe('协作消息由桌面端编排,手机端只读显示。');
-    expect(orca.actions.steer.disabledReason).toBe('协作消息由桌面端编排，手机端只读显示。');
+    expect(orca.title).toBe('协同队列 2');
+    expect(orca.hint).toBe('协同消息由桌面端编排，手机端只读显示。');
+    expect(orca.actions.steer.disabledReason).toBe('协同消息由桌面端编排，手机端只读显示。');
   });
 
   it('locks edit and steer (but keeps remove and reorder) for synthetic trigger rows', () => {

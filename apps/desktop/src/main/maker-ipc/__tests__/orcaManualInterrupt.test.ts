@@ -36,6 +36,17 @@ describe('orcaManualInterrupt', () => {
     expect(getManualInterrupt('session-1', 1001)).toBeNull();
   });
 
+  it('does not let an ordinary stop reason overwrite a reserved Lead interrupt', () => {
+    markManualInterrupt('session-1', 'lead_interrupt', 1000);
+    markManualInterrupt('session-1', 'input_stop', 1001);
+    markManualInterrupt('session-1', 'abort_session', 1002);
+
+    expect(getManualInterrupt('session-1', 1003)).toEqual({
+      markedAt: 1000,
+      reason: 'lead_interrupt',
+    });
+  });
+
   it('expires stale marks with ttl cleanup', () => {
     markManualInterrupt('session-1', 'input_stop', 1000);
     markManualInterrupt('session-2', 'abort_session', 2000);

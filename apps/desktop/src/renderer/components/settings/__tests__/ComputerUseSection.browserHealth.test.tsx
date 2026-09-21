@@ -16,10 +16,18 @@ const api = vi.hoisted(() => ({
   getBackendHealth: vi.fn(),
   setBackendKind: vi.fn(),
   recoverBackend: vi.fn(),
+  openForLogin: vi.fn(),
+  warningToast: vi.fn(),
+  successToast: vi.fn(),
+  errorToast: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: { warning: api.warningToast, success: api.successToast, error: api.errorToast },
 }));
 
 import { ComputerUseSection } from '../ComputerUseSection';
@@ -90,7 +98,7 @@ beforeEach(() => {
         },
         browser: {
           status: api.getBrowserStatus,
-          openForLogin: vi.fn(),
+          openForLogin: api.openForLogin,
         },
         computer: {
           status: api.getComputerStatus,
@@ -111,6 +119,7 @@ beforeEach(() => {
         getHealth: api.getBackendHealth,
         setKind: api.setBackendKind,
         recover: api.recoverBackend,
+        setUseRealProfile: vi.fn(async (enabled: boolean) => ({ ok: true, enabled })),
       },
     },
   });
@@ -119,6 +128,39 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ComputerUseSection browser backend health loading', () => {
+  it('keeps optional copy diagnostics out of user-facing launch notifications', async () => {
+    api.getBackendState.mockResolvedValue({ active: 'external' });
+    api.getBackendHealth.mockResolvedValue({
+      active: 'external',
+      status: 'ready',
+      canRecover: false,
+    });
+    api.getBrowserStatus.mockResolvedValue({
+      detected: true,
+      browserKind: 'chrome',
+      executablePath: '/chrome',
+    });
+    api.openForLogin.mockResolvedValue({
+      launched: true,
+      warnings: [
+        { database: 'Login Data', reason: 'locked' },
+        { database: 'Login Data For Account', reason: 'locked' },
+        { database: 'Web Data', reason: 'permission-denied' },
+      ],
+    });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.computerUse.browser.openForLogin' }),
+    );
+    await waitFor(() =>
+      expect(api.successToast).toHaveBeenCalledWith(
+        'settings.computerUse.browser.toast.openedForLogin',
+      ),
+    );
+    expect(api.warningToast).not.toHaveBeenCalled();
+    expect(api.errorToast).not.toHaveBeenCalled();
+  });
+
   it('renders the Automation settings while the recoverable health probe is still pending', async () => {
     const initialHealth = deferred<BrowserBackendHealth>();
     api.getBackendHealth.mockReturnValueOnce(initialHealth.promise);
@@ -126,9 +168,11 @@ describe('ComputerUseSection browser backend health loading', () => {
     render(<ComputerUseSection workingDir="/tmp/project" />);
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.getByRole('tab', {
-      name: 'settings.computerUse.browserBackend.rsbWebview.title',
-    })).toBeTruthy();
+    expect(
+      screen.getByRole('radio', {
+        name: 'settings.computerUse.browserBackend.rsbWebview.title',
+      }),
+    ).toBeTruthy();
     expect(screen.queryByRole('status')).toBeNull();
 
     await act(async () => {
@@ -154,19 +198,27 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     render(<ComputerUseSection workingDir="/tmp/project" />);
 
-    fireEvent.click(await screen.findByRole('tab', {
-      name: 'settings.computerUse.browserBackend.external.title',
-    }));
-    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
-    await waitFor(() => expect(
-      screen.getByRole('tab', {
+    fireEvent.click(
+      await screen.findByRole('radio', {
         name: 'settings.computerUse.browserBackend.external.title',
-      }).getAttribute('aria-selected'),
-    ).toBe('true'));
+      }),
+    );
+    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('radio', {
+            name: 'settings.computerUse.browserBackend.external.title',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true'),
+    );
 
-    fireEvent.click(screen.getByRole('tab', {
-      name: 'settings.computerUse.browserBackend.rsbWebview.title',
-    }));
+    fireEvent.click(
+      screen.getByRole('radio', {
+        name: 'settings.computerUse.browserBackend.rsbWebview.title',
+      }),
+    );
     await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('rsb-webview'));
     expect((await screen.findByRole('status')).textContent).toContain(
       'settings.computerUse.browserBackend.health.ready',

@@ -48,6 +48,7 @@ export interface DeviceLinkCreateParams {
    * 通过的子集 —— 与远程 set-extra-dirs 的既有行为完全一致(控制端路径在被控端常被拒)。
    */
   extraDirs?: string[];
+  writableDirs?: string[];
   /**
    * 草稿选定的来源(**被控端**供应商 id;null / 省略 = 跟随被控端默认路由)。被控端 create 时
    * 落 `sessions.provider_id`,使新远程会话首个请求即按所选来源路由(与会话内切来源对称)。
@@ -69,6 +70,7 @@ export interface DeviceLinkCreateArgs {
   fastMode: boolean;
   /** 仅当草稿有非空 extraDirs 时出现;被控端 bootstrapSession 再校验(单一真相源)。 */
   extraDirs?: string[];
+  writableDirs?: string[];
   /** 仅当草稿显式选了非空来源时出现(null/空 = 跟随默认路由 → 不放进 args,provider_id 留 NULL)。 */
   providerId?: string;
 }
@@ -90,6 +92,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     fastMode: p.fastMode,
     // 空 / 缺省不放进 args:payload 干净,且被控端 bootstrapSession 也只在非空时才校验。
     ...(p.extraDirs && p.extraDirs.length > 0 ? { extraDirs: p.extraDirs } : {}),
+    ...(p.writableDirs && p.writableDirs.length > 0 ? { writableDirs: p.writableDirs } : {}),
     // providerId 同理:仅非空显式来源才放进 args;null/空 → 不带 → 被控端 provider_id 留 NULL(默认路由)。
     ...(p.providerId ? { providerId: p.providerId } : {}),
   };
@@ -115,6 +118,7 @@ export interface DeviceLinkSubmissionParams {
   workingDir?: string;
   id?: string;
   extraDirs?: string[];
+  writableDirs?: string[];
   candidate: DeviceLinkSubmissionCandidate;
   /** **被控端**供应商目录(useDeviceProviders 经隧道拉到的那一份)。 */
   deviceProviders: ProviderView[];
@@ -138,14 +142,13 @@ export interface DeviceLinkSubmissionParams {
  * 组件的实现细节**上。ChatInput 今天恰好会重算,不代表它有义务永远重算;而这里离 `maker:create-session`
  * 只有一步,是「提交什么就校准什么」最后也最可靠的位置。重复校准无副作用:仍有效的来源原样返回。
  *
- * 用 effectiveSourceIdForModel 而不是 actualSourceIdForModel —— 后者的注释明确要求「新路由选择
- * (新会话 / 切模型 / worker / schedule)一律用前者」,而建会话与建目标都是新路由选择。失效时落到
- * 被控端对该模型的原生默认来源(也正是 ChatInput 高亮给用户看的那一个),比一律置 null 更贴合所见即所得。
+ * 显式连接原样传给被控端，由被控端校验；控制端快照失效或未加载不能抹掉账号身份。
+ * 只有未指定连接时，才用 effectiveSourceIdForModel 解析默认来源。
  */
 export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): DeviceLinkCreateArgs {
-  const providerId = effectiveSourceIdForModel(
+  const providerId = p.candidate.providerId || effectiveSourceIdForModel(
     p.deviceProviders,
-    p.candidate.providerId ?? null,
+    null,
     p.candidate.model,
     p.capabilityAgentKind,
   );
@@ -158,6 +161,7 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
     permissionMode: p.candidate.permissionMode,
     fastMode: p.candidate.fastMode,
     extraDirs: p.extraDirs,
+    writableDirs: p.writableDirs,
     providerId,
   });
 }
@@ -220,6 +224,7 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
     extraDirs: p.args.extraDirs ?? [],
+    writableDirs: p.args.writableDirs ?? [],
     createdAt: p.nowIso,
     updatedAt: p.nowIso,
   };

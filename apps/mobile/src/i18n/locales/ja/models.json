@@ -11,13 +11,16 @@
     "subscriptionBadgeCompact": "サブスク",
     "backToModels": "モデル一覧に戻る",
     "agentSwitchHint": "モデルを選択すると、次のメッセージから {{agent}} に切り替わります",
-    "crossAgentEmptyHint": "先に操作対象のデバイスで {{agent}} のモデルソースを接続してください",
+    "crossAgentEmptyHint": "先にリモートデバイスで {{agent}} のモデルソースを接続してください",
     "permissionModeAccessibility": "権限モード:{{mode}}",
     "selectProviderModelAccessibility": "{{provider}} のモデル {{model}} を選択",
     "selectModelAccessibility": "モデル {{model}} を選択",
     "configureAccessibility": "{{model}} を設定",
-    "budgetDisabledHint": "このモデルを使うには、先に操作対象のデバイスで API キーを設定してください",
+    "budgetDisabledHint": "このモデルを使うには、先にリモートデバイスで API キーを設定してください",
     "priceLine": "入力 {{input}} · 出力 {{output}} / 100万トークン",
+    "priceTitle": "100万トークンあたり",
+    "priceAmounts": "入力 {{input}} · 出力 {{output}}",
+    "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得",
     "contextSuffix": "{{size}} コンテキスト",
     "fastTag": "高速"
   },
@@ -36,11 +39,38 @@
       "ultra": "究極"
     }
   },
+  "contextWindowSwitch": {
+    "title": "このモデルには現在の会話が収まりません",
+    "remoteTitle": "このリモートタスクではモデルを安全に切り替えられません",
+    "description": "現在の会話はすでに {{used}} を使用しており、新しいモデルの上限 {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy は短い要約を作成して続行します。会話履歴は残りますが、すべてがそのまま新しいモデルに渡されるわけではありません。",
+    "remoteDescription": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
+    "cancel": "現在のモデルを維持",
+    "confirm": "切り替えて続行"
+  },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示",
     "confirmTitle": "{{agent}} に切り替えますか?",
     "confirmMessage": "次のメッセージを送信すると、{{appName}} は現在のセッションを {{agent}} に引き継ぎます。2つのエージェントはコンテキストやツールの理解が異なる場合があります。確認してから対象のモデルを選択してください。",
     "cancel": "キャンセル",
     "confirm": "続けて選択"
+  },
+  "unified": {
+    "favorites": "お気に入り",
+    "all": "すべてのモデル",
+    "recommended": "おすすめ",
+    "source": "接続元",
+    "harness": "Harness",
+    "addFavorite": "お気に入りに追加",
+    "removeFavorite": "お気に入りを解除",
+    "restoreRecommended": "推奨設定に戻す",
+    "saveFailed": "保存できませんでした。再試行してください。",
+    "configure": "設定",
+    "syncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
+    "timeUnit": {
+      "day": "日",
+      "hour": "時間",
+      "minute": "分",
+      "second": "秒"
+    }
   }
 }

@@ -11,7 +11,9 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type AnimationEvent as ReactAnimationEvent, type HTMLAttributes, type ReactNode } from 'react';
+import { Tip } from '@/components/ui/tooltip';
+import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
+import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -33,14 +35,16 @@ import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
 import {
-  commitWordFadeCandidate,
-  createWordFadeCandidate,
   getOrCreateWordFadeState,
-  markSettledFromAnimationEnd,
   releaseWordFadeState,
-  rehypeStreamWordFade,
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
+import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
+import {
+  getStreamingMarkdownThrottleInterval,
+  splitStreamingMarkdownChunks,
+  STREAMING_MARKDOWN_THROTTLE_BASE_MS,
+} from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
@@ -203,7 +207,7 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // remarkHtmlImages(<img> HTML → mdast image)与 remarkLocalPathLinks(正文裸路径
 // → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
 // 顺序无关。
-const REMARK_PLUGINS: PluggableList = [
+export const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
   remarkMath,
@@ -213,7 +217,7 @@ const REMARK_PLUGINS: PluggableList = [
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
 ];
-const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
+export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
   remarkMath,
@@ -244,6 +248,14 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
   rehypeFencedCodeMarker,
 ];
+
+/** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
+export function normalizeMarkdownRendererContent(
+  content: string,
+  preserveLineCount = false,
+): string {
+  return normalizeMathDelimiters(content, { preserveLineCount });
+}
 /**
  * 聊天正文里一切「可点」的行内元素共用这一套外观:**正文色 + 常显下划线**。
  *
@@ -314,8 +326,8 @@ interface MarkdownRendererProps {
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
   content: string;
-  /** When true, react-markdown re-parse + rehype-highlight runs at most
-   *  ~10fps via useStreamingThrottle. The final value is always flushed
+  /** When true, react-markdown re-parse + rehype-highlight is rate-limited
+   *  (10fps for short content, slower for long documents). The final value is always flushed
    *  synchronously when this flag flips back to false, so the completed
    *  message never misses its last token. Default false (static content
    *  paths like TextLightbox bypass the throttle entirely). */
@@ -376,8 +388,8 @@ function parseSessionCardHref(href: string): {
 }
 
 /**
- * Throttle a rapidly-changing string to at most one render per
- * `intervalMs`. Caps react-markdown re-parse + rehype-highlight CPU
+ * Throttle a rapidly-changing string to at most one render per adaptive
+ * interval. Caps react-markdown re-parse + rehype-highlight CPU
  * during SDK streaming, where text deltas can land 30-60 times/s even
  * after the main-process IPC batcher.
  *
@@ -387,11 +399,22 @@ function parseSessionCardHref(href: string): {
  *   guaranteed (no-token-lost). Switching back to false flushes the
  *   latest value synchronously.
  */
-function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100): string {
+function useStreamingThrottle(value: string, enabled: boolean): string {
+  const intervalMs = enabled
+    ? getStreamingMarkdownThrottleInterval(value)
+    : STREAMING_MARKDOWN_THROTTLE_BASE_MS;
   const [throttled, setThrottled] = useState(value);
+  const throttledRef = useRef(value);
   const latestRef = useRef(value);
   const lastEmitRef = useRef(0);
   const timerRef = useRef<number | null>(null);
+
+  const emit = useCallback((nextValue: string, now: number) => {
+    lastEmitRef.current = now;
+    if (throttledRef.current === nextValue) return;
+    throttledRef.current = nextValue;
+    setThrottled(nextValue);
+  }, []);
 
   useEffect(() => {
     latestRef.current = value;
@@ -403,27 +426,39 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
       }
       // Stream just ended — flush whatever the most recent value is so
       // the final frame is never the last throttled snapshot.
-      if (throttled !== value) setThrottled(value);
+      if (throttledRef.current !== value) {
+        throttledRef.current = value;
+        setThrottled(value);
+      }
+      // A new stream should get a leading frame even if it starts shortly
+      // after the previous one ended.
+      lastEmitRef.current = 0;
       return;
     }
 
     const now = performance.now();
     const elapsed = now - lastEmitRef.current;
     if (elapsed >= intervalMs) {
-      lastEmitRef.current = now;
-      setThrottled(value);
+      if (timerRef.current != null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      emit(value, now);
       return;
     }
-    if (timerRef.current == null) {
-      timerRef.current = window.setTimeout(() => {
+
+    // Re-arm on every update so an interval bucket change cannot leave a
+    // timer using the previous (shorter) delay. The latest ref keeps the
+    // trailing edge lossless even when several batches arrive in between.
+    if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(
+      () => {
         timerRef.current = null;
-        lastEmitRef.current = performance.now();
-        setThrottled(latestRef.current);
-      }, intervalMs - elapsed);
-    }
-    // No new timer needed — an in-flight one will pick up latestRef
-    // when it fires.
-  }, [value, enabled, intervalMs, throttled]);
+        emit(latestRef.current, performance.now());
+      },
+      Math.max(0, intervalMs - elapsed),
+    );
+  }, [emit, value, enabled, intervalMs]);
 
   useEffect(() => {
     return () => {
@@ -475,11 +510,9 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       <pre
         ref={preRef}
         className={cn(
-          'rounded-[12px]',
-          'border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)]',
-          'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-          'select-text',
+          CHAT_CODE_SURFACE_CLASS,
+          CHAT_CODE_CLASS,
+          'p-4',
           // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
           'whitespace-pre-wrap break-all',
         )}
@@ -487,22 +520,23 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       >
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
-        title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
-        className={cn(
-          'absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center',
-          'rounded-md border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-          'opacity-0 transition-opacity duration-150',
-          'group-hover:opacity-100 focus-visible:opacity-100',
-          'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-        )}
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
+      <Tip text={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
+          className={cn(
+            CHAT_ICON_BUTTON_CLASS,
+            'absolute right-2 top-2 h-7 w-7 border border-[var(--msg-code-block-border)]',
+            'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+            'opacity-0 transition-[color,background-color,opacity] duration-[var(--motion-fast)]',
+            'group-hover:opacity-100 focus-visible:opacity-100',
+            'enabled:hover:bg-[var(--cmd-palette-item-hover)] enabled:hover:text-[var(--msg-assistant-text)]',
+          )}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </Tip>
     </div>
   );
 }
@@ -665,10 +699,9 @@ const baseComponents: Components = {
     return <h6 className="text-[var(--md-h6-fg)]" {...props}>{children}</h6>;
   },
 
-  // 加粗:同上,只接颜色 token。font-weight 仍由 Tailwind preflight 的
-  // `b, strong { font-weight: bolder }` 提供,这里不覆盖。
+  // Content strong is absolute 700: nested emphasis must not accumulate to 900.
   strong({ children, ...props }) {
-    return <strong className="text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
+    return <strong className="font-bold text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
   },
 
   // Blockquote
@@ -939,6 +972,8 @@ function localKindFromAbsPath(absPath: string, fallback: MarkdownLocalKind): Mar
 function FileTargetChip({
   resolvedAbsPath,
   localKind,
+  line,
+  column,
   onOpen,
   title,
   children,
@@ -946,6 +981,8 @@ function FileTargetChip({
 }: {
   resolvedAbsPath: string;
   localKind: MarkdownLocalKind;
+  line?: number;
+  column?: number;
   onOpen: () => void | Promise<void>;
   title?: string;
   children: ReactNode;
@@ -980,6 +1017,7 @@ function FileTargetChip({
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
     getAbsPath: async () => resolvedAbsPath,
+    location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,
@@ -990,17 +1028,8 @@ function FileTargetChip({
     // 与输入附件一致：点击打开 lightbox 前先撤掉 hover 层，避免关闭大图后残留。
     setImagePreviewOpen(false);
     if (htmlWithSession) {
-      if (chipRemoteOrigin) {
-        void (async () => {
-          const cachePath = await fetchChatFileWithToasts(chipRemoteOrigin, fileCtx.workingDir, resolvedAbsPath);
-          if (cachePath && sidebarTargetSessionId) {
-            await openHtmlFileByPreference(sidebarTargetSessionId, cachePath, t);
-          }
-        })();
-        return;
-      }
       if (sidebarTargetSessionId) {
-        void openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t);
+        void openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
       }
       return;
     }
@@ -1074,6 +1103,8 @@ function FileTargetChip({
 function ResolvedLocalLink({
   resolvedAbsPath,
   localKind,
+  line,
+  column,
   href,
   onOpen,
   anchorProps,
@@ -1082,6 +1113,8 @@ function ResolvedLocalLink({
 }: {
   resolvedAbsPath: string;
   localKind: MarkdownLocalKind;
+  line?: number;
+  column?: number;
   href: string;
   onOpen: () => void | Promise<void>;
   anchorProps: Record<string, unknown>;
@@ -1093,12 +1126,12 @@ function ResolvedLocalLink({
   // 同 FileTargetChip:html + 有会话上下文时左键按偏好直开,「查看源文件」
   // 与「在侧边栏浏览器中打开」并入右键菜单;其余文件左键直开预览。
   const fileCtx = useChatSessionFile();
-  const linkRemoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
   const htmlWithSession =
     localKind !== 'directory' && isHtmlFilePath(resolvedAbsPath) && sessionId ? sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
     getAbsPath: () => resolvedAbsPath,
+    location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,
@@ -1113,15 +1146,8 @@ function ResolvedLocalLink({
         onClick={async (e) => {
           e.preventDefault();
           if (htmlWithSession) {
-            if (linkRemoteOrigin) {
-              const cachePath = await fetchChatFileWithToasts(linkRemoteOrigin, fileCtx.workingDir, resolvedAbsPath);
-              if (cachePath && sidebarTargetSessionId) {
-                await openHtmlFileByPreference(sidebarTargetSessionId, cachePath, t);
-              }
-              return;
-            }
             if (sidebarTargetSessionId) {
-              await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t);
+              await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
             }
             return;
           }
@@ -1477,6 +1503,8 @@ function MarkdownTargetLink({
         <ResolvedLocalLink
           resolvedAbsPath={target.absPath}
           localKind={target.localKind}
+          line={target.line}
+          column={target.column}
           href={target.href}
           onOpen={openResolvedTarget}
           anchorProps={anchorProps}
@@ -1490,6 +1518,8 @@ function MarkdownTargetLink({
       <FileTargetChip
         resolvedAbsPath={target.absPath}
         localKind={target.localKind}
+        line={target.line}
+        column={target.column}
         title={target.href}
         onOpen={openResolvedTarget}
         sessionId={sessionId}
@@ -1609,6 +1639,8 @@ function InlineCodeWithTarget({
     <FileTargetChip
       resolvedAbsPath={target.absPath}
       localKind={target.localKind}
+      line={target.line}
+      column={target.column}
       title={target.absPath}
       onOpen={() =>
         activateResolvedLocalTarget(
@@ -1641,13 +1673,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
-  // 流式逐词淡入(rehypeStreamWordFade,§14.4 第五个 sanctioned motion class):
-  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。committed state
-  // 按消息身份跨 parse / remount 保留;本次 render 只写 candidate,layout effect
-  // 确认 DOM 已提交后才落状态,避免被放弃的并发 render 提前推进 key / 时间线。
-  // 根节点监听 animationend 把播完的段落袋(settled),下一次 parse 还原纯文本。
-  // isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS —— 终版渲染无
-  // 任何 span 包装,插件、state 与监听一起被回收,静态路径零开销。
+  // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
+  // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
+  // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
   // 用户开关(Settings → 个性化 → 流式动效,默认开)与 reduced-motion 取 AND:
   // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
   const reducedMotion = useReducedMotion();
@@ -1674,29 +1702,16 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     [throttledContent, streamFade],
   );
   const renderedContent = useMemo(
-    () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
+    () => normalizeMarkdownRendererContent(repairedContent, emitSourceLines),
     [repairedContent, emitSourceLines],
   );
-  const wordFade = useMemo(() => {
-    if (!wordFadeState) return null;
-    const candidate = createWordFadeCandidate(wordFadeState);
-    return {
-      candidate,
-      plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, candidate]] as PluggableList,
-    };
-    // animationend 不触发 React state;即使正文没变,其它 render 也要克隆最新 settled。
-  }, [wordFadeState, renderedContent, wordFadeState?.settled.size]);
-  useLayoutEffect(() => {
-    if (wordFadeState && wordFade) {
-      commitWordFadeCandidate(wordFadeState, wordFade.candidate);
-    }
-  }, [wordFadeState, wordFade]);
-  const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
-  const handleWordFadeAnimationEnd = useMemo(() => {
-    if (!wordFadeState) return undefined;
-    return (event: ReactAnimationEvent<HTMLDivElement>) =>
-      markSettledFromAnimationEnd(wordFadeState, event.nativeEvent);
-  }, [wordFadeState]);
+  const streamingChunks = useMemo(
+    () =>
+      isStreaming && !emitSourceLines
+        ? splitStreamingMarkdownChunks(renderedContent)
+        : [{ start: 0, content: renderedContent }],
+    [emitSourceLines, isStreaming, renderedContent],
+  );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地
@@ -1723,7 +1738,6 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
-
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still
@@ -1889,16 +1903,37 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   );
 
   return (
-    <div className="msg-markdown select-text" onAnimationEnd={handleWordFadeAnimationEnd}>
-      <ReactMarkdown
-        remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-        rehypePlugins={rehypePlugins}
-        components={components}
-        urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
-        skipHtml
-      >
-        {renderedContent}
-      </ReactMarkdown>
+    <div className="msg-markdown select-text">
+      {isStreaming ? (
+        streamingChunks.map((chunk) => (
+          <StreamingMarkdownChunk
+            key={chunk.start}
+            sourceKey={String(chunk.start)}
+            content={chunk.content}
+            remarkPlugins={
+              allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
+            }
+            rehypePlugins={REHYPE_PLUGINS}
+            components={components}
+            urlTransform={
+              allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform
+            }
+            wordFadeState={wordFadeState}
+            emitSourceLines={emitSourceLines}
+            wholeDocument={streamingChunks.length === 1}
+          />
+        ))
+      ) : (
+        <ReactMarkdown
+          remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          components={components}
+          urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
+          skipHtml
+        >
+          {renderedContent}
+        </ReactMarkdown>
+      )}
       {lightboxSrc && (
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}

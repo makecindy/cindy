@@ -223,13 +223,17 @@ describe('agent process discovery', () => {
   const userDataDir = allUserDataDirNames(CURRENT_CINDY_REGION)[0].toLowerCase();
   const claudeCmd = `/users/me/library/application support/${userDataDir}/claude-code/2.1.219/claude --setting-sources user`;
   const codexCmd = `/users/me/library/application support/${userDataDir}/codex/0.145.0/codex app-server`;
+  const codexPackageCmd = `/users/me/library/application support/${userDataDir}/codex-package/0.153.0/bin/codex app-server`;
   const devClaudeCmd = '/repo/apps/claude-code-bin/darwin-arm64/claude';
+  const devCodexPackageCmd = '/repo/apps/codex-package-bin/darwin-arm64/bin/codex app-server';
   const externalClaudeCmd = '/usr/local/bin/claude';
 
   it('classifies bundled claude/codex command lines and rejects external installs', () => {
     expect(classifyAgentCommandLine(claudeCmd)).toBe('claude');
     expect(classifyAgentCommandLine(codexCmd)).toBe('codex');
+    expect(classifyAgentCommandLine(codexPackageCmd)).toBe('codex');
     expect(classifyAgentCommandLine(devClaudeCmd)).toBe('claude');
+    expect(classifyAgentCommandLine(devCodexPackageCmd)).toBe('codex');
     expect(classifyAgentCommandLine(externalClaudeCmd)).toBeNull();
     expect(classifyAgentCommandLine('/usr/bin/node some-script.js')).toBeNull();
   });
@@ -249,6 +253,9 @@ describe('agent process discovery', () => {
     expect(
       classifyAgentCommandLine(`/home/u/.config/${userDataDir}/codex/0.145.0/codex app-server`),
     ).toBe('codex');
+    expect(
+      classifyAgentCommandLine(`/home/u/.config/${userDataDir}/codex-package/0.153.0/bin/codex app-server`),
+    ).toBe('codex');
     // 外部安装(不带 userData 目录)仍不认领
     expect(classifyAgentCommandLine('/home/u/.local/bin/claude')).toBeNull();
   });
@@ -265,6 +272,9 @@ describe('agent process discovery', () => {
     ).toBe('claude');
     expect(
       classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/codex/bin/codex`),
+    ).toBe('codex');
+    expect(
+      classifyAgentCommandLine(`${redirected.toLowerCase()}/codex-package/0.153.0/bin/codex`),
     ).toBe('codex');
     expect(
       classifyAgentCommandLine(`${redirected.toLowerCase()}/claude-code/2.1.219/claude`),

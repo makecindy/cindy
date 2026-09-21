@@ -302,8 +302,8 @@ export function startImOrchestrators(): void {
   // 个人微信 / 企业微信渠道工作目录 — 业务体同工厂(generation 三处校验 +
   // 两段式提交 + 日志只记错误码, 见 shared/channelWorkingDirIpc), 固定 channel
   // 注册与可信 sender 校验各渠道各自保留。目录只能经 Main 原生选择器进入,
-  // Renderer 不提交路径。用户目录探测接到 utility-process 执行边界: 失联
-  // 网络盘的挂死 IO 被隔离在子进程, 超时即终止回收(workdir-probe-host)。
+  // Renderer 不提交路径。用户目录探测接入 Main 共享有界调度器: 超时返回,
+  // 底层 IO 结束前继续占槽和去重, 并为远程目录操作保留容量。
   const channelProbeExecutor = createWorkdirProbeHostExecutor();
   configureWechatChannelProbeExecutor(channelProbeExecutor);
   configureWecomChannelProbeExecutor(channelProbeExecutor);
@@ -614,20 +614,28 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
 
 const connectionLifecycle = createSerializedConnectionLifecycle({
   startConnection: initializeImConnection,
+  beforeStopConnection: async () => {
+    // A start already in flight may have activated ingress after the initial
+    // synchronous stop gate. Re-close and drain it on the serialized boundary
+    // before retaining outbound clients for the bounded card expiry attempt.
+    const closingGeneration = captureImAccountGeneration();
+    deactivateImAccountBoundary();
+    if (closingGeneration !== null) {
+      await waitForImAccountGenerationIdle(closingGeneration);
+    }
+    await Promise.all(listImOrchestrators().map(async (orchestrator) => {
+      try {
+        await orchestrator.disposeAllSessions();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`disposeAllSessions channel=${orchestrator.channel} failed: ${msg}`);
+      }
+    }));
+  },
   stopConnection: async (reason) => {
-    // Transports stop first so no new message can enter while account-scoped
-    // orchestrator and binding caches are being discarded.
     try {
       await im.dispose();
     } finally {
-      for (const orchestrator of listImOrchestrators()) {
-        try {
-          await orchestrator.disposeAllSessions();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`disposeAllSessions channel=${orchestrator.channel} failed: ${msg}`);
-        }
-      }
       bindingStore.resetRuntime();
       // 普通退出、登出、换账号与模式切换都只清内存热缓存, 保留本地 DB 游标；
       // 只有明确删除账号数据时才清持久表。Telegram bot 解绑由 hook-control 的

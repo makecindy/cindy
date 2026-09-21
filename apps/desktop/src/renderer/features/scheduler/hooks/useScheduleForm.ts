@@ -230,7 +230,9 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     timezone: s.timezone,
     recurring: s.recurring,
     manual: s.manual,
-    agentKind: s.agentKind,
+    agentKind: s.modelAgentKind ?? s.agentKind,
+    modelAgentKind: s.modelAgentKind,
+    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
     model: s.model ?? '',
     providerId: s.providerId ?? '',
     effort: s.effort && isEffortValue(s.effort) ? s.effort : '',
@@ -257,6 +259,10 @@ export type Destination = 'local' | 'worktree' | 'thread';
 
 export interface UseScheduleFormResult {
   form: ScheduleFormState;
+  selectModelConfiguration: (
+    selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> | null,
+    followedAgentKind?: ScheduleFormState['agentKind'],
+  ) => void;
   setField: <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => void;
   /** 改 destination 时同步改 useWorktree / targetSessionId 三态互斥。 */
   setDestination: (d: Destination) => void;
@@ -302,20 +308,41 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     [],
   );
 
+  const selectModelConfiguration: UseScheduleFormResult['selectModelConfiguration'] = useCallback((selection, followedAgentKind) => {
+    setForm((form) => {
+      if (selection) {
+        const boundAgent = form.targetSessionId && form.targetSessionId !== PENDING_SESSION_ID &&
+          form.boundAgent?.sessionId !== form.targetSessionId
+          ? { sessionId: form.targetSessionId, agentKind: form.agentKind } : form.boundAgent;
+        return { ...form, ...selection, boundAgent, modelAgentKind: selection.agentKind };
+      }
+      const agentKind = followedAgentKind ??
+        (form.boundAgent?.sessionId === form.targetSessionId
+          ? form.boundAgent.agentKind : form.agentKind);
+      const boundAgent = followedAgentKind && form.targetSessionId
+        ? { sessionId: form.targetSessionId, agentKind } : form.boundAgent;
+      return { ...form, agentKind, boundAgent, model: '', providerId: '', effort: '', fastMode: false, modelAgentKind: undefined };
+    });
+  }, []);
+
   const reset = useCallback((s: Schedule | null = null, overrides?: Partial<ScheduleFormState>) => {
     const next = { ...makeFormFromSchedule(s), ...overrides };
+    if (next.targetSessionId && next.boundAgent?.sessionId !== next.targetSessionId) {
+      next.boundAgent = { sessionId: next.targetSessionId, agentKind: s?.agentKind ?? next.agentKind };
+    }
     lastBindingRef.current = captureBinding(next);
     setForm(next);
   }, []);
 
   const applyTemplateAgentFields = useCallback((template: ScheduleTemplate) => {
-    setForm((f) => ({
-      ...f,
-      ...resolveTemplateAgentFields(f, template, {
+    setForm((f) => {
+      const selection = resolveTemplateAgentFields(f, template, {
         getDefaultModel: getScheduleDefaultModel,
         getAgentPrefs: getScheduleAgentPrefs,
-      }),
-    }));
+      });
+      // A template that supplies a model is an explicit selection, even while following a bound task.
+      return { ...f, ...selection, modelAgentKind: selection.model.trim() ? selection.agentKind : undefined };
+    });
   }, []);
 
   /**
@@ -364,7 +391,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         ...f,
         targetSessionId: session.id,
         agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind),
+        boundAgent: { sessionId: session.id, agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind) },
         model: '',
+        modelAgentKind: undefined,
         // 绑定会话 = 跟随其模型/来源,providerId 一并清空(与 model/effort 同语义)。
         providerId: '',
         effort: '',
@@ -390,9 +419,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     const isHeartbeat = !!tgt;
     if (form.executionMode === 'script') {
       if (!form.workingDir.trim()) return { key: 'scheduler.editor.validation.selectProject' };
-      // 编辑 bound/persistent 任务切到 script 时 targetSessionId 会残留在 form 里
-      // (运行会话控件已隐藏,用户无从清理)——不在这里拦:buildScheduleInput 的
-      // script 分支会把绑定/worktree/静默字段全部清干净,保存即完成模式转换。
+      // Script bindings survive editing; unavailable owners are paused by the host.
     } else if (isHeartbeat) {
       if (tgt === '__pending__') return { key: 'scheduler.editor.validation.selectThread' };
     } else {
@@ -403,8 +430,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         return { key: 'scheduler.editor.validation.reasoningInvalid', values: { values: EFFORT_VALUES.join(' / ') } };
       }
     }
-    // script 模式不展示前置检查区块,buildScheduleInput 的 script 分支也会把它清空
-    // ——若在 agent 模式下开了前置检查但命令留空,切到 script 后这条校验不该沿用,
+    // script 模式保留已有前置检查;切换时命令留空不创建 hook,
     // 否则用户明明看不到该区块也点不到那个开关,却被挡在保存之外。
     if (form.executionMode !== 'script' && form.preRunHookEnabled && !form.preRunHookCommand.trim()) {
       return { key: 'scheduler.editor.validation.preRunHookCommandRequired' };
@@ -416,5 +442,5 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   // heartbeat 分支 model/effort 恒带 key(空值 undefined → update patch 清列 = 跟随会话)。
   const toInput = useCallback((): CreateScheduleInput => buildScheduleInput(form), [form]);
 
-  return { form, setField, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
+  return { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
 }

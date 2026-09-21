@@ -77,6 +77,25 @@ describe('fetchHubSkillReference', () => {
     expect(reader.readPublishedFile).not.toHaveBeenCalledWith({ name: 'demo-skill', path: 'scripts/large.py' });
   });
 
+  it('keeps the originating catalog scope on every Hub read', async () => {
+    const reader = makeReader();
+
+    await fetchHubSkillReference(reader, 'demo-skill', 'team');
+
+    expect(reader.info).toHaveBeenCalledWith('demo-skill', 'team');
+    expect(reader.getPublishedFiles).toHaveBeenCalledWith({ name: 'demo-skill', catalogScope: 'team' });
+    expect(reader.readPublishedFile).toHaveBeenCalledWith({
+      name: 'demo-skill',
+      path: 'SKILL.md',
+      catalogScope: 'team',
+    });
+    expect(reader.readPublishedFile).toHaveBeenCalledWith({
+      name: 'demo-skill',
+      path: 'scripts/run.py',
+      catalogScope: 'team',
+    });
+  });
+
   it('surfaces files omitted by the reference file cap', async () => {
     const auxFiles = Array.from({ length: 42 }, (_, i) => ({
       path: `scripts/${i}.py`,

@@ -42,6 +42,24 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
+  it.each([false, true])('keeps synthetic text on disk and strips only host text-only model input (%s)', (toolsDisabled) => {
+    const text = '[UI_ACTION_TRIGGER]Say hello with cached usage hints.';
+    const queued = {
+      ...queuedMessage([]), text, persistedContent: text, toolsDisabled,
+    };
+    const restored = JSON.parse(JSON.stringify(sanitizeQueuedMessageForPersistence(queued)));
+    expect(restored.text).toBe(text);
+    expect(restored.persistedContent).toBe(text);
+    expect(getAgentFacingText(restored)).toBe(toolsDisabled ? 'Say hello with cached usage hints.' : text);
+    expect(buildMakerUserMessage(restored)).toEqual({
+      type: 'user', content: toolsDisabled ? 'Say hello with cached usage hints.' : text,
+    });
+    const rewritten = updateQueuedMessageText(restored, 'Updated welcome.');
+    expect(rewritten.text).toBe(toolsDisabled ? '[UI_ACTION_TRIGGER]Updated welcome.' : 'Updated welcome.');
+    expect(rewritten.persistedContent).toBe(rewritten.text);
+    expect(getAgentFacingText(rewritten)).toBe('Updated welcome.');
+  });
+
   it('sends queued GIF attachments as file blocks', () => {
     expect(
       buildMakerUserMessage(
@@ -316,6 +334,7 @@ describe('agentInputQueue', () => {
     };
     entry.text = href;
     entry.agentReferences = [reference];
+    entry.chatMessage.agentReferences = [reference];
     entry.persistedContent = JSON.stringify({
       text: href,
       agentReferences: [reference],
@@ -325,12 +344,47 @@ describe('agentInputQueue', () => {
 
     expect(persisted.agentReferences?.[0]).not.toHaveProperty('text');
     expect(persisted.agentReferences?.[0]).not.toHaveProperty('truncated');
+    expect(persisted.chatMessage.agentReferences?.[0]).not.toHaveProperty('text');
+    expect(persisted.chatMessage.agentReferences?.[0]).not.toHaveProperty('truncated');
     expect(JSON.parse(persisted.persistedContent).agentReferences[0])
       .not.toHaveProperty('text');
     expect(JSON.parse(persisted.persistedContent).agentReferences[0])
       .not.toHaveProperty('truncated');
     expect(JSON.stringify(persisted)).not.toContain('process-local referenced body');
     expect(entry.agentReferences?.[0]).toHaveProperty('text', 'process-local referenced body');
+    expect(entry.chatMessage.agentReferences?.[0])
+      .toHaveProperty('text', 'process-local referenced body');
+  });
+
+  it('strips transient Bot host state from crash-recovery snapshots', () => {
+    const entry = queuedMessage(undefined);
+    const href = 'cindy://bot/bot-b';
+    const reference = {
+      kind: 'bot' as const,
+      start: 0,
+      end: href.length,
+      href,
+      botId: 'bot-b',
+      name: '小柴',
+      hostSnapshot: {
+        availability: 'ready' as const,
+        activity: 'working' as const,
+        activeDelegations: 1,
+      },
+    };
+    entry.text = href;
+    entry.agentReferences = [reference];
+    entry.chatMessage.agentReferences = [reference];
+    entry.persistedContent = JSON.stringify({ text: href, agentReferences: [reference] });
+
+    const persisted = sanitizeQueuedMessageForPersistence(entry);
+
+    expect(persisted.agentReferences?.[0]).not.toHaveProperty('hostSnapshot');
+    expect(persisted.chatMessage.agentReferences?.[0]).not.toHaveProperty('hostSnapshot');
+    expect(JSON.parse(persisted.persistedContent).agentReferences[0])
+      .not.toHaveProperty('hostSnapshot');
+    expect(entry.agentReferences?.[0]).toHaveProperty('hostSnapshot');
+    expect(entry.chatMessage.agentReferences?.[0]).toHaveProperty('hostSnapshot');
   });
 
   it('reconciles both current and legacy session links on queue edits', () => {

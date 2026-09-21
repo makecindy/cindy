@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
 import type { AgentKind, CreateSessionOptions, WorkspaceKind } from '@cindy/maker-core';
 
@@ -41,6 +42,8 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
    * main 端仍统一校验，防 IPC 直调 / 老 DB 残留 / bug 数据。
    */
   extraDirs?: string[];
+  /** 用户逐目录明确授予的附加可读写目录；不从 extraDirs 推导。 */
+  writableDirs?: string[];
   /**
    * 远端目标 host id。非空表示 session 跑在远端机器上，workingDir 必须是远端路径。
    * 目前仅 Codex 支持，Claude session 会忽略。
@@ -108,6 +111,10 @@ export function readCreateSessionOpts(
     throwIpcError('INVALID_PARAMS', 'createSession opts must be an object');
   }
   const body = requireObject(input, 'createSession opts');
+  if (Array.isArray(body.extraDirs) && body.extraDirs.some((dir) =>
+    typeof dir === 'string' && isLibraryExtraDirSlot(dir.trim()))) {
+    throwIpcError('INVALID_PARAMS', 'extraDirs must not contain Host-owned library slots');
+  }
   const agentKind = readAgentKind(body.agentKind);
   const model = requireString(body.model, 'model');
   const workspaceKind = readWorkspaceKind(body.workspaceKind);

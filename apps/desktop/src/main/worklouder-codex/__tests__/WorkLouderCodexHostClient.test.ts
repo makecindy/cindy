@@ -25,6 +25,65 @@ function logger() {
 }
 
 describe('WorkLouderCodexHostClient', () => {
+  it('starts the connection watchdog after native preparation, not during a slow build', async () => {
+    vi.useFakeTimers();
+    let ready!: () => void;
+    const child = Object.assign(new FakeChild(), {
+      whenReady: new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+    });
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: 'native', source: 'cindy-native' }),
+      fork,
+      log: logger(),
+    });
+    try {
+      client.setHidInputHandler(vi.fn());
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(fork).toHaveBeenCalledOnce();
+      ready();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      const disposed = client.dispose();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await disposed;
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not arm a late native-ready watchdog after disposal', async () => {
+    vi.useFakeTimers();
+    let ready!: () => void;
+    const child = Object.assign(new FakeChild(), {
+      whenReady: new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+    });
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: 'native', source: 'cindy-native' }),
+      fork: () => child,
+      log: logger(),
+    });
+    try {
+      client.setHidInputHandler(vi.fn());
+      const disposed = client.dispose();
+      child.emit('message', { kind: 'stopped' });
+      await disposed;
+      ready();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('does not load the optional native SDK for an idle Cindy', () => {
     const resolveSdk = vi.fn(() => null);
     const client = new WorkLouderCodexHostClient({
@@ -91,6 +150,25 @@ describe('WorkLouderCodexHostClient', () => {
     expect(fork).toHaveBeenCalledTimes(2);
   });
 
+  it('replays a live connection when occupancy turns the device back on', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    const status = vi.fn();
+    client.setConnectionStatusHandler(status);
+    client.setHidInputHandler(vi.fn());
+
+    client.setDeviceEnabled(false);
+    child.emit('message', { kind: 'state', status: 'connected' });
+    status.mockClear();
+
+    client.setDeviceEnabled(true);
+    expect(status).toHaveBeenCalledWith('connected');
+  });
+
   it('restarts a still-wanted host after disable finishes stopping', () => {
     const stopping = new FakeChild();
     const restarted = new FakeChild();
@@ -116,6 +194,22 @@ describe('WorkLouderCodexHostClient', () => {
     expect(fork).toHaveBeenCalledTimes(2);
     expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'init', sdkEntry: '/sdk' });
     expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('forwards the owner-scoped keymap backup directory on init', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+      keymapBackupDir: () => '/tmp/cindy-owner/worklouder-creator-micro-2',
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    expect(child.postMessage).toHaveBeenCalledWith({
+      kind: 'init',
+      sdkEntry: '/sdk',
+      keymapBackupDir: '/tmp/cindy-owner/worklouder-creator-micro-2',
+    });
   });
 
   it('kills a host that never acknowledges stop after disable', async () => {
@@ -222,6 +316,7 @@ describe('WorkLouderCodexHostClient', () => {
       expect(fork).toHaveBeenCalledTimes(1);
 
       child.emit('exit', 1);
+      client.probe();
       expect(fork).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(500);
@@ -351,7 +446,6 @@ describe('WorkLouderCodexHostClient', () => {
       'connecting',
       'connected',
       'not-detected',
-      'connecting',
     ]);
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -521,7 +615,136 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
-  it('recycles the host immediately after a live session drops', () => {
+  it('does not let probes or lighting updates bypass an exhausted crash budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = Array.from({ length: 7 }, () => new FakeChild());
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      const frame = createWorkLouderCodexLightingFrame([
+        {
+          sessionId: 'session-1',
+          phase: 'running',
+          compactDetail: '',
+          attention: false,
+        },
+      ]);
+      client.setAgentKeyPressHandler(vi.fn());
+
+      for (let index = 0; index < 6; index += 1) {
+        children[index].emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(Math.min(10_000, 500 * 2 ** index));
+      }
+
+      const forksAfterBudget = fork.mock.calls.length;
+      client.probe();
+      client.probe();
+      client.update(frame);
+
+      expect(fork).toHaveBeenCalledTimes(forksAfterBudget);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off a host recycle after a live session drops', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let background probes bypass host recycle backoff', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+      expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
+      client.update(
+        createWorkLouderCodexLightingFrame([
+          {
+            sessionId: 'session-1',
+            phase: 'running',
+            compactDetail: '',
+            attention: false,
+          },
+        ]),
+      );
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not restart after a permission-required failure during background probes', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', {
+        kind: 'state',
+        status: 'error',
+        reason: 'permission-required',
+      });
+
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      client.retryPermission();
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops a host when permission-required follows another error status', () => {
     const children = [new FakeChild(), new FakeChild()];
     const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
     const client = new WorkLouderCodexHostClient({
@@ -530,21 +753,69 @@ describe('WorkLouderCodexHostClient', () => {
       log: logger(),
     });
     client.setAgentKeyPressHandler(vi.fn());
-    children[0].emit('message', { kind: 'state', status: 'connected' });
-    children[0].emit('message', { kind: 'state', status: 'not-detected' });
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'connection-failed',
+    });
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'permission-required',
+    });
 
     expect(children[0].kill).toHaveBeenCalledOnce();
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    client.retryPermission();
+
     expect(fork).toHaveBeenCalledTimes(2);
     expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('does not discover presence when unlock arrives without a permission breaker', () => {
+    const fork = vi.fn(() => new FakeChild());
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    client.setDeviceEnabled(false);
+    client.retryPermission();
+
+    expect(fork).not.toHaveBeenCalled();
+  });
+
+  it('does not recycle a live host whose vendor HID is already occupied', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const onReason = vi.fn();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    client.setConnectionReasonHandler(onReason);
+    child.emit('message', { kind: 'state', status: 'connected' });
+    child.emit('message', { kind: 'state', status: 'error', reason: 'device-in-use' });
+
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(fork).toHaveBeenCalledTimes(1);
+    expect(onReason).toHaveBeenLastCalledWith('device-in-use');
   });
 });
 
 describe('Work Louder SDK resolution', () => {
   it('looks for ChatGPT and Codex installs on Windows as well as macOS', () => {
     const source = readFileSync(resolve(__dirname, '..', 'index.ts'), 'utf8');
+    const resolver = readFileSync(resolve(__dirname, '..', 'sdkResolver.ts'), 'utf8');
     expect(source).toContain("process.platform === 'win32'");
-    expect(source).toContain('LOCALAPPDATA');
-    expect(source).toContain("path.join(root, 'Programs', appName, packageTail)");
+    expect(source).toContain('createWorkLouderSdkResolver');
+    expect(source).toContain('nativeFallback:');
+    expect(resolver).toContain('LOCALAPPDATA');
+    expect(resolver).toContain("paths.join(root, 'Programs', name, tail)");
     expect(source).not.toContain("if (process.platform !== 'darwin') return null;");
   });
 });

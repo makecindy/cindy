@@ -2,9 +2,7 @@
  * MobileProviderMark —— provider-aware 模型下拉里每行前缀 / trigger 药丸的「来源徽标」。
  *
  * 对齐桌面 ProviderMark:目录供应商用**官方单色 mark**，品牌路径与 provider id/upstream
- * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram。与桌面的
- * 一处刻意差异:monogram 容器沿用 pill 圆角(桌面是 4px 方盒)——手机圆角走二元规则
- * (container/pill),不引入中间值。XD mark 非正方形(158:282),渲染时在 size×size 盒内
+ * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram，使用与桌面一致的 4px 方盒。XD mark 非正方形(158:282),渲染时在 size×size 盒内
  * 垂直居中,保证与正方形 mark 同行对齐。
  */
 import { StyleSheet, View } from 'react-native';
@@ -37,7 +35,7 @@ const makeStyles = (c: ThemeColors) =>
     monogram: {
       alignItems: 'center',
       borderColor: c.borderStrong,
-      borderRadius: radius.pill,
+      borderRadius: radius.micro,
       borderWidth: 1,
       height: MARK_SIZE,
       justifyContent: 'center',
@@ -126,7 +124,7 @@ export function MobileProviderMark({ providerId, routing, logoKind, name, color 
   }
 
   return (
-    <View style={styles.monogram}>
+    <View style={[styles.monogram, { borderColor: fill }]}>
       <Text style={[styles.monogramText, color ? { color } : null]}>
         {providerMonogram(name)}
       </Text>

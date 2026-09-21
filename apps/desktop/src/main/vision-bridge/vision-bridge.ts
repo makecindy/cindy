@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import type { UserContentBlock, UserMessage } from '@cindy/maker-core';
 import type { VisionBridgeHook, VisionBridgeResult } from '@cindy/maker-core';
 
-import { isKnownNoVisionModel, normalizeVisionModelId } from '@cindy/model-providers';
+import { isKnownNoVisionModel, normalizeVisionModelId, type CatalogModel } from '@cindy/model-providers';
 
 import {
   isTargetModelsCustomized,
@@ -39,6 +39,8 @@ interface LoggerLike {
 /** 视觉桥依赖：视觉通道 deps + 配置 + 提示回调。 */
 export interface VisionBridgeDeps extends VisionChannelDeps {
   logger?: LoggerLike;
+  /** Resolve only the current task route; never borrow metadata from another provider. */
+  resolveTargetModel?: (modelId: string, sessionId: string) => CatalogModel | null;
   /** 视觉桥不可用 / fallback 生效时的提示回调（host 可据此发 UI 事件）。sessionId 由 hook ctx 传入。
    *  kind 是结构化原因（'unavailable' | 'fallback'），host 据此分流，不做字符串匹配。 */
   onNote?: (note: string, sessionId: string, kind: 'unavailable' | 'fallback') => void;
@@ -157,7 +159,7 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
   }
 
   /** 判定某 model 是否启用视觉桥（总开关 + 目标模型命中）。层 B 与层 A 共用。 */
-  function isTargetModel(model: string): boolean {
+  function isTargetModel(model: string, sessionId?: string): boolean {
     const settings = readVisionBridgeSettings();
     if (!settings.enabled) {
       logger?.debug?.('vision bridge: target check -> disabled', { model });
@@ -174,7 +176,10 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
     // 走视觉桥——对齐设计文档「no-vision 默认勾选」。用户显式保存过 targetModels 后，
     // 按用户勾选（可显式取消 no-vision）。
     const customized = isTargetModelsCustomized();
-    const knownNoVision = isKnownNoVisionModel(model);
+    const entry = sessionId ? deps.resolveTargetModel?.(model, sessionId) : null;
+    const supportsImage = entry?.supportsImageInput ??
+      (entry?.modalities ? entry.modalities.input.includes('image') : undefined);
+    const knownNoVision = supportsImage !== undefined ? !supportsImage : isKnownNoVisionModel(model);
     if (!customized && knownNoVision) {
       logger?.debug?.('vision bridge: target check -> default no-vision hit', { model, normalizedModel });
       return true;
@@ -376,7 +381,7 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
 
   const hook: VisionBridgeHook = async (msg, ctx) => {
     // 总开关 + 目标模型命中。未启用 / 不命中 → 原样透传（零干扰契约）。
-    const target = isTargetModel(ctx.model);
+    const target = isTargetModel(ctx.model, ctx.sessionId);
     logger?.debug?.('vision bridge: hook invoked', { model: ctx.model, target });
     if (!target) {
       return { applied: false, message: msg };

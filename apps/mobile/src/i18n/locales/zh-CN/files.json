@@ -46,7 +46,47 @@
     "a11yPreviewName": "预览 {{name}}",
     "a11yPreviewNameLine": "预览 {{name}} 第 {{line}} 行"
   },
+  "presentation": {
+    "grid": {
+      "today": "今天 {{time}}",
+      "yesterday": "昨天 {{time}}",
+      "empty": "文件夹为空",
+      "summaryMixed": "{{dirs}} 个文件夹、{{files}} 个文件",
+      "summaryDirs": "{{count}} 个文件夹",
+      "summaryFiles": "{{count}} 个文件",
+      "workdir": "工作目录"
+    },
+    "preview": {
+      "nonText": {
+        "pdf": "PDF 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端或系统 PDF 阅读器中打开。",
+        "drawio": "Draw.io 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端继续查看或编辑。",
+        "office": "Office 文件暂不支持在手机版内嵌预览；请复制路径，在桌面端或系统应用中打开。",
+        "binary": "当前文件不是文本格式，手机版暂不读取内容；可复制路径到桌面端打开。",
+        "unknown": "当前文件类型无法确认，手机版暂不读取内容；可复制路径到桌面端打开。",
+        "text": "可以按需加载文本预览。"
+      },
+      "pathOnly": "当前文件只有路径信息，无法从远程电脑读取预览。",
+      "loading": "正在从远程电脑读取文本预览",
+      "ready": "已加载文本预览 · {{size}}",
+      "idle": "按需读取远程文本预览，不会在消息列表里批量拉取文件内容。",
+      "failure": {
+        "oversize": "文件超过远程预览上限 · {{limit}} · 当前 {{size}}",
+        "forbidden": "远程电脑拒绝读取这个路径。",
+        "notFound": "远程电脑上没有找到这个文件。",
+        "readFailed": "读取失败。",
+        "readFailedWithError": "读取失败：{{error}}",
+        "default": "当前文件无法预览。"
+      }
+    }
+  },
   "preview": {
+    "browserBack": "后退",
+    "browserForward": "前进",
+    "browserMore": "更多操作",
+    "browserShowSource": "查看源码",
+    "browserShowPage": "返回网页",
+    "browserAddToTask": "添加到当前任务",
+    "browserFileInfo": "文件信息",
     "done": "完成",
     "a11yShare": "导出分享",
     "copyPath": "复制路径",
@@ -66,6 +106,11 @@
     "readFailed": "读取失败",
     "truncated2mb": "文件超过 2 MB，仅显示前 2 MB 内容",
     "truncatedLines": "仅显示前 {{lines}} 行",
+    "htmlUpdateMobile": "请更新手机版 Cindy 后预览网页，仍可切换到源码查看。",
+    "htmlUpdateDesktop": "请更新所连接电脑上的 Cindy 后预览网页。",
+    "htmlSnapshotTooLarge": "文件夹过大，请将网页及其资源放到较小的文件夹后重试。",
+    "htmlSnapshotFailed": "网页加载失败，请检查连接后重试。",
+    "htmlReload": "重新加载网页",
     "fetchingHtmlResources": "正在取回页面资源…",
     "htmlResourcesMissing": "{{count}} 项页面资源没取到，可能缺图或缺样式",
     "htmlResourcesTruncated": "页面资源过多，只处理了前 {{limit}} 项",
@@ -81,7 +126,13 @@
     "originalFailedThumb": "原图取回失败，当前为缩略图",
     "fetchingOriginalHint": "缩略图 · 正在取回原图…",
     "a11yExportShareFile": "导出分享原文件",
-    "exportShare": "导出 / 分享"
+    "exportShare": "导出 / 分享",
+    "browserAddress": "网址",
+    "browserCancelAddress": "取消编辑",
+    "browserReturnToFile": "返回文件",
+    "browserCopyAddress": "复制网址",
+    "browserInvalidAddress": "请输入有效的 http 或 https 网址。",
+    "browserWebsiteFailed": "无法打开网页，请尝试重新加载。"
   },
   "export": {
     "exportFailed": "导出失败",

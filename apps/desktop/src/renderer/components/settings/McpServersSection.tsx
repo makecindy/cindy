@@ -38,7 +38,7 @@ function RowIconButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
     >
       {icon}
     </button>
@@ -155,6 +155,7 @@ export function McpServersSection() {
   const handleDelete = useCallback(
     async (config: CustomMcpConfig) => {
       const ok = await confirm({
+        presentation: 'standard',
         title: t('settings.mcp.deleteConfirm.title', { name: config.name }),
         description: t('settings.mcp.deleteConfirm.message'),
         confirmText: t('settings.mcp.deleteConfirm.confirm'),

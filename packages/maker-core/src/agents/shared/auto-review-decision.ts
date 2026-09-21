@@ -1,6 +1,8 @@
 import type { AgentKind, UserMessage } from '../../types/common.js';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
+  MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
@@ -195,6 +197,15 @@ export function isSystemPermissionDenialReason(reason: unknown): boolean {
   return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
 }
 
+/** Model-visible text on the rejected tool result, never an extra conversation message. */
+export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
+  const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
+    : source === 'user' ? 'User denied this tool call via Cindy'
+      : 'Cindy could not approve this tool call';
+  const detail = reason?.trim().slice(0, 240);
+  return detail ? `${label}: ${detail}` : `${label}.`;
+}
+
 export function isAutoReviewUnavailableMetadata(
   metadata: Record<string, unknown> | undefined,
 ): boolean {
@@ -219,20 +230,27 @@ export function annotatePermissionRequestForUnavailableReview<
   };
 }
 
-/** 交给 host 侧轻量 reviewer 的最小上下文；不含历史、工具结果、Skill 或 Memory。 */
+/** 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。 */
 export interface AutoReviewRequest {
   sessionId?: string;
   agentKind: AgentKind;
   providerId?: string | null;
   model: string;
-  userIntent: string;
+  userIntent: AutoReviewUserIntent;
+  /** Actual blocked calls preceding the latest user input; reference evidence, never consent. */
+  precedingBlockedActions?: readonly ReviewableAction[];
+  /** Host-verified requester authority, separate from model-visible/quoted text. */
+  authorizationContext?: {
+    requesterAuthority: 'owner' | 'guest' | 'unknown';
+    source: 'group' | 'direct';
+  };
   action: ReviewableAction;
-  /**
-   * 位置语义(reviewAction 同契约):`[0]` 是唯一可写的工作目录,其余是只读引用目录
-   * (additionalDirectories)。所有 agent 一律传 `[workingDir, ...extraDirs]`;host 侧
-   * reviewer prompt 依赖该顺序区分可写/只读,不得打乱或拍平。
-   */
+  /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
   workspaceRoots: string[];
+  /**
+   * 显式可写根。旧请求缺省时仍仅 workspaceRoots[0] 可写，保证跨版本 fail-closed。
+   */
+  writableRoots?: string[];
   platform: NodeJS.Platform;
 }
 
@@ -240,7 +258,26 @@ export type AutoReviewDelegate = (
   request: AutoReviewRequest,
 ) => Promise<AutoReviewDecision | null>;
 
-export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+/** Preserve the actual tool identity and arguments across progressive/Host approval entrypoints. */
+export function toolAutoReviewAction(
+  toolName: string,
+  input: unknown,
+  context?: string,
+  executionEvidence?: unknown,
+): ReviewableAction {
+  // Structured file writes are reviewed by destination/canonical scope. Do not
+  // reintroduce file bodies when a channel policy or resumed child wraps them.
+  const evidence = executionEvidence && typeof executionEvidence === 'object'
+    ? executionEvidence as Record<string, unknown> : undefined;
+  const action = evidence?.action && typeof evidence.action === 'object'
+    ? evidence.action as Record<string, unknown> : evidence;
+  if (action?.kind === 'file-write') {
+    input = undefined;
+  }
+  return { kind: 'other', description: JSON.stringify({ toolName, input, context, executionEvidence }) };
+}
+
+export { MAX_AUTO_REVIEW_ACTION_TEXT_CHARS } from './auto-review.js';
 const MAX_AUTO_REVIEW_REASON_CHARS = 240;
 /**
  * Auto-review is deliberately bounded: a reviewer outage must still resolve the
@@ -322,8 +359,10 @@ export function getAutoReviewActionTextLength(action: ReviewableAction): number 
     case 'exec':
       return action.command.length + (action.cwd?.length ?? 0);
     case 'read':
-    case 'file-write':
       return action.path?.length ?? 0;
+    case 'file-write':
+      return (action.path?.length ?? 0) + (action.resolvedPath?.length ?? 0)
+        + (action.resolvedWritableRoots?.reduce((total, root) => total + root.length, 0) ?? 0);
     case 'network':
       return (action.target?.length ?? 0) + (action.operation?.length ?? 0);
     case 'other':
@@ -345,7 +384,7 @@ export function classifyLocalAutoReviewTier(
   const verdict = reviewAction(
     request.action,
     request.workspaceRoots,
-    { platform: request.platform },
+    { platform: request.platform, writableRoots: request.writableRoots },
   );
   return verdict === 'prompt' ? 'needs-review' : verdict;
 }
@@ -380,8 +419,8 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
 }
 
 /**
- * 原生 reviewer 不可用时的统一裁决入口：明显安全和明显红线仍由本地规则确定，
- * 只有中间灰区才调用当前会话模型。
+ * Auto 的统一裁决入口：本地规则只可免审明显安全的动作；其余风险等级均交给
+ * 审阅器结合用户授权判断。风险分类不等于用户尚未授权，不能直接转换成人工确认。
  *
  * **审阅器故障时降级为 `ask`，不再静默 `block`。** 宿主侧已先做过重试
  * （见 desktop 的 createAutoPermissionReviewer），走到这里意味着重试也没救回来。
@@ -390,15 +429,20 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
  * 安全边界不降低（未经用户点头仍然不会执行），但用户至少知道该点头还是拒绝。
  *
  * 与「模型判定危险」的 `block` 仍然严格区分：那个继续静默，因为 Auto 的本意
- * 就是不打扰；只有 `unavailable` 才升级成打扰。
+ * 就是不打扰；模型 ask 与 unavailable 才交用户。
  */
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
 ): Promise<AutoReviewDecision> {
+  // Bound untrusted input before the static classifier's command/path parsers,
+  // not merely before the model request. Neither may inspect an oversized action.
+  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
+  if (oversizedEvidenceReason) {
+    return { verdict: 'block', reason: oversizedEvidenceReason };
+  }
   const localTier = classifyLocalAutoReviewTier(request);
   if (localTier === 'auto-approve') return { verdict: 'allow' };
-  if (localTier === 'prompt-each-time') return { verdict: 'ask' };
   // Never ask the model to approve an action whose material target/text is absent.
   // It has no evidence to distinguish routine work from an unsafe side effect.
   const missingEvidenceReason = missingReviewEvidence(request.action);
@@ -406,15 +450,6 @@ export async function resolveAutoReviewDecision(
     return {
       verdict: 'block',
       reason: missingEvidenceReason,
-    };
-  }
-  // The model must see the complete material action. Character sampling can hide
-  // a dangerous middle segment, so oversized gray actions must be retried in smaller form.
-  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
-  if (oversizedEvidenceReason) {
-    return {
-      verdict: 'block',
-      reason: oversizedEvidenceReason,
     };
   }
   if (!delegate) {
@@ -470,27 +505,86 @@ export async function resolveAutoReviewDecision(
   };
 }
 
-const MAX_USER_INTENT_CHARS = 2_000;
-const USER_INTENT_TRUNCATION_MARKER = '\n…[middle omitted]…\n';
+/** Structured only by the Host. User text is never parsed as an authorization envelope. */
+export type AutoReviewUserIntent = string | {
+  readonly earlierUserMessages: readonly string[];
+  readonly currentUserMessage: string;
+  /** Omitted history may contain standing restrictions; never silently treat it as unrestricted. */
+  readonly historyOmitted?: true;
+};
 
-function compactCurrentUserIntent(text: string): string {
+const MAX_USER_INTENT_CHARS = 2_000;
+const OMITTED_USER_INTENT = 'User message omitted because it exceeds the review budget; it cannot establish authorization.';
+
+function compactCurrentUserIntent(text: string, maxChars = MAX_USER_INTENT_CHARS): string {
   const normalized = text.trim();
-  if (normalized.length <= MAX_USER_INTENT_CHARS) return normalized;
-  const remaining = MAX_USER_INTENT_CHARS - USER_INTENT_TRUNCATION_MARKER.length;
-  const headChars = Math.ceil(remaining * 0.75);
-  const tailChars = remaining - headChars;
-  return `${normalized.slice(0, headChars)}${USER_INTENT_TRUNCATION_MARKER}${normalized.slice(-tailChars)}`;
+  if (normalized.length <= maxChars) return normalized;
+  return OMITTED_USER_INTENT;
 }
 
-/** 只取当前用户消息文本并设硬上限，保留末尾的最终要求或更正。 */
-export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
-  const text = typeof content === 'string'
+function userIntentText(content: UserMessage['content']): string {
+  return (typeof content === 'string'
     ? content
     : content
       .filter((block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text')
       .map((block) => block.text)
-      .join('\n');
-  return compactCurrentUserIntent(text);
+      .join('\n')).trim();
+}
+
+/** Authorization text is atomic: never sample away a restriction within a message. */
+export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
+  return compactCurrentUserIntent(userIntentText(content));
+}
+
+/** Enforce the budget without interpreting strings as Host-generated structure. */
+export function normalizeAutoReviewUserIntent(intent: AutoReviewUserIntent): AutoReviewUserIntent {
+  if (typeof intent === 'string') return compactCurrentUserIntent(intent);
+  const currentUserMessage = compactCurrentUserIntent(intent.currentUserMessage);
+  const candidate = { earlierUserMessages: [...intent.earlierUserMessages], currentUserMessage,
+    ...(intent.historyOmitted ? { historyOmitted: true as const } : {}) };
+  if (currentUserMessage !== OMITTED_USER_INTENT && JSON.stringify(candidate).length <= MAX_USER_INTENT_CHARS) return candidate;
+  // Drop all earlier grants together, flag the missing restrictions, and never sample the latest text.
+  const omitted = { earlierUserMessages: [], currentUserMessage, historyOmitted: true as const };
+  return JSON.stringify(omitted).length <= MAX_USER_INTENT_CHARS ? omitted
+    : { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+}
+
+/** Preserve chronological user messages; scope is assessed, never assumed permanent. */
+export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
+  // The authenticated Host snapshot already includes this input; never append it twice.
+  if (sendOpts?.[AUTO_REVIEW_USER_INTENT] !== undefined) {
+    return normalizeAutoReviewUserIntent(sendOpts[AUTO_REVIEW_USER_INTENT]);
+  }
+  const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? content;
+  // Only Main's Symbol carries authenticated channel text, never decorated assistant replies.
+  const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
+  // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
+  const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
+  if (!latest || hasAttachments || previous === '') return compactCurrentUserIntent(latest);
+  const earlierUserMessages = typeof previous === 'string'
+    ? [previous] : [...previous.earlierUserMessages, previous.currentUserMessage];
+  return normalizeAutoReviewUserIntent({ earlierUserMessages, currentUserMessage: latest,
+    ...(typeof previous !== 'string' && previous.historyOmitted ? { historyOmitted: true as const } : {}) });
+}
+
+/** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */
+export function createAutoReviewActionContext() {
+  let blocked: ReviewableAction[] = [];
+  let preceding: readonly ReviewableAction[] = [];
+  return {
+    advance(sameAuthority: boolean): void {
+      preceding = sameAuthority ? blocked : [];
+      blocked = [];
+    },
+    record(action: ReviewableAction, decision: AutoReviewDecision): void {
+      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return;
+      const snapshot = JSON.parse(JSON.stringify(action)) as ReviewableAction;
+      const key = JSON.stringify(snapshot);
+      blocked = [...blocked.filter((item) => JSON.stringify(item) !== key), snapshot].slice(-3);
+      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) blocked.shift();
+    },
+    get precedingBlockedActions(): readonly ReviewableAction[] { return preceding; },
+  };
 }
 
 /**
@@ -499,15 +593,12 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
  * lightweight reviewer beyond its existing intent budget.
  */
 export function composeAutoReviewIntentWithApprovedPlan(
-  currentUserIntent: string,
+  currentUserIntent: AutoReviewUserIntent,
   approvedPlan: string,
-): string {
+): AutoReviewUserIntent {
   const plan = approvedPlan.trim();
-  if (!plan) return compactCurrentUserIntent(currentUserIntent);
-  return compactCurrentUserIntent([
-    currentUserIntent.trim(),
-    `Approved plan:\n${plan}`,
-  ].filter(Boolean).join('\n\n'));
+  if (!plan) return normalizeAutoReviewUserIntent(currentUserIntent);
+  return appendAutoReviewUserIntent(currentUserIntent, `Approved plan:\n${plan}`);
 }
 
 /**
@@ -516,9 +607,9 @@ export function composeAutoReviewIntentWithApprovedPlan(
  * 有界 intent,不扩大轻量 reviewer 的输入预算。
  */
 export function composeAutoReviewIntentWithClarification(
-  currentUserIntent: string,
+  currentUserIntent: AutoReviewUserIntent,
   clarifications: readonly { question?: string; answer?: string }[],
-): string {
+): AutoReviewUserIntent {
   const lines = clarifications
     .map(({ question, answer }) => {
       const q = (question ?? '').trim();
@@ -527,9 +618,6 @@ export function composeAutoReviewIntentWithClarification(
       return q ? `- ${q} → ${a}` : `- ${a}`;
     })
     .filter(Boolean);
-  if (lines.length === 0) return compactCurrentUserIntent(currentUserIntent);
-  return compactCurrentUserIntent([
-    currentUserIntent.trim(),
-    `Clarifications:\n${lines.join('\n')}`,
-  ].filter(Boolean).join('\n\n'));
+  if (lines.length === 0) return normalizeAutoReviewUserIntent(currentUserIntent);
+  return appendAutoReviewUserIntent(currentUserIntent, `Clarifications:\n${lines.join('\n')}`);
 }

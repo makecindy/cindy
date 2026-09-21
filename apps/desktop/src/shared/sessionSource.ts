@@ -13,9 +13,38 @@ export const SESSION_SOURCES = [
   'review',
   'shared',
   'plugin',
+  'bot',
+  'cindy-make',
+  'cindy-make-merge',
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
+
+/**
+ * Only sessions whose project directory was explicitly chosen by the user belong in the
+ * durable recent-project registry. Keep historical migration 0090's SQL allowlist aligned.
+ */
+export const RETAINABLE_PROJECT_SESSION_SOURCES = [
+  'desktop',
+  'plugin',
+] as const satisfies readonly SessionSource[];
+
+export type RetainableProjectSessionSource = (typeof RETAINABLE_PROJECT_SESSION_SOURCES)[number];
+
+/** Fail closed for legacy/malformed rows whose source is missing or unknown. */
+export function isRetainableProjectSessionSource(
+  source: unknown,
+): source is RetainableProjectSessionSource {
+  return source === 'desktop' || source === 'plugin';
+}
+
+/** Internal worker directories are execution inputs, not user project registrations. */
+export function isRetainableProjectSession(session: {
+  source?: unknown;
+  orcaRole?: unknown;
+}): boolean {
+  return session.orcaRole !== 'worker' && isRetainableProjectSessionSource(session.source);
+}
 
 export function isReviewSessionSource(source: unknown): source is 'review' {
   return source === 'review';
@@ -35,6 +64,10 @@ export function isReviewSessionSource(source: unknown): source is 'review' {
 // shared: .xdtshare 导入的分享会话,按 workingDir 归组。
 // plugin: 插件经 workspace 槽创建的工作区会话入口(空 draft,用户确认后建;
 //         projectGrouping 对零消息的 plugin 会话豁免草稿判定,直接落项目分组)。
+// bot: 伙伴的任务(主对话 / 渠道 / 历史)。由 Bots 面板投影，不散进普通任务列表；
+//      任务本身仍是 Cindy 的真实 Session，隐藏的是普通列表投影，不是运行时能力。
+// cindy-make: /cindy-make 弹窗选择制作个人版后创建的代码任务，工作目录是 Cindy 受管
+//      源码。Main 据此注入 cindy_make 工具与任务说明；按 workingDir 归到源码项目分组。
 export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'desktop',
   'feishu',
@@ -50,6 +83,8 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'review',
   'shared',
   'plugin',
+  'cindy-make',
+  'cindy-make-merge',
 ];
 
 export function normalizeSessionSource(source: unknown): SessionSource {
@@ -65,7 +100,10 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     source === 'learn' ||
     source === 'review' ||
     source === 'shared' ||
-    source === 'plugin'
+    source === 'plugin' ||
+    source === 'bot' ||
+    source === 'cindy-make' ||
+    source === 'cindy-make-merge'
     ? source
     : 'desktop';
 }

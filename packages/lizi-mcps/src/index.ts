@@ -32,9 +32,14 @@ export * from './lizi_xdtHelperMcpServer.js';
 export * from './lizi_xdtHelperToolRegistry.js';
 export * from './xdt-helper/index.js';
 
+export { createCindyDocsMcpServer } from './cindy_docsMcpServer.js';
+export * from './cindy_docsToolRegistry.js';
+export * from './cindy-docs/index.js';
+
 export * from './orca/index.js';
 
 export * from './session-context.js';
+export * from './session-path-auth.js';
 
 export * from './lsp/index.js';
 
@@ -44,3 +49,5 @@ export * from './browser/index.js';
 export * from './computer/index.js';
 
 export * from './contacts/approval.js';
+
+export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState } from './xdt-helper/bot_capabilities.js';

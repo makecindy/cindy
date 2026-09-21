@@ -20,8 +20,8 @@ import { evaluatePiRuntimeRequirements } from '../pi-package-compatibility.js';
 import {
   hasPiPackageCompatibilityWarning,
   isRelativeLocalPiPackageSource,
+  listPiRuntimePaletteCommands,
   mergePiPackageCommands,
-  shouldShowPiPackagePostMutationNotice,
   shouldListPiPackageCommands,
 } from '../../../shared/piPackages.js';
 
@@ -145,24 +145,23 @@ describe('Pi package runtime compatibility', () => {
       }],
     })).toBe(true);
   });
-
-  it('shows a post-install notice for approval gates and failed or bounded inspection', () => {
-    const base = { source: 'npm:sample', name: 'sample', enabled: false, resources: [] };
-    expect(shouldShowPiPackagePostMutationNotice({
-      ...base,
-      requiresExtensionApproval: true,
-    })).toBe(true);
-    expect(shouldShowPiPackagePostMutationNotice({
-      ...base,
-      warning: 'inspection-limit',
-    })).toBe(true);
-    expect(shouldShowPiPackagePostMutationNotice(base)).toBe(false);
-  });
 });
 
 describe('Pi package slash command isolation', () => {
   const builtin = [{ kind: 'agent-builtin' as const, name: 'compact', description: 'Compact' }];
   const prompts = [{ name: 'package-review', description: 'Review with the installed Pi package' }];
+
+  it('includes authorized project prompt and extension commands in the palette', () => {
+    expect(listPiRuntimePaletteCommands([
+      { name: 'managed-run', description: 'Package command' },
+      { name: 'project-review', description: 'Project prompt' },
+      { name: 'skill:hidden', description: 'Skill stays on the skill list' },
+      { name: 'plan', description: 'Untrusted extension' },
+    ], ['managed-run', 'project-review', 'skill:hidden'])).toEqual([
+      { name: 'managed-run', description: 'Package command' },
+      { name: 'project-review', description: 'Project prompt' },
+    ]);
+  });
 
   it('adds package prompts only to Pi', () => {
     expect(mergePiPackageCommands('pi', builtin, prompts).map((command) => command.name))

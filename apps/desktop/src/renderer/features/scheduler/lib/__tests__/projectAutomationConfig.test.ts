@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
-import { formToProjectConfig, projectAutomationConfigPath } from '../projectAutomationConfig';
+import { formToProjectConfig, projectAutomationConfigPath, scheduleToProjectConfig } from '../projectAutomationConfig';
+import type { Schedule } from '@cindy/maker-scheduler';
 import type { ScheduleFormState } from '../scheduleFormLogic';
 
 describe('projectAutomationConfigPath', () => {
@@ -76,5 +77,34 @@ describe('project automation providerId serialization', () => {
       'auto-provider',
     );
     expect(config.providerId).toBe('openai');
+  });
+});
+
+describe('project automation explicit Harness serialization', () => {
+  it('preserves the selection through JSON and omits its marker when following', () => {
+    const form = makeForm({ agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model',
+      providerId: 'custom', effort: 'medium', fastMode: true, persistentSession: true,
+      targetSessionId: 'bound-codex' });
+    expect(JSON.parse(JSON.stringify(formToProjectConfig(form, 'daily')))).toMatchObject({
+      agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model', providerId: 'custom',
+      effort: 'medium', fastMode: true, persistentSession: true,
+    });
+    const followed = JSON.parse(JSON.stringify(formToProjectConfig({ ...form,
+      agentKind: 'codex', modelAgentKind: undefined, model: '', providerId: '', effort: '', fastMode: false,
+    }, 'daily')));
+    expect(followed.agentKind).toBe('codex');
+    expect(followed).not.toHaveProperty('modelAgentKind');
+    expect(followed).not.toHaveProperty('model');
+    expect(followed).not.toHaveProperty('fastMode');
+  });
+
+  it('preserves the explicit Harness when exporting an existing schedule', () => {
+    const config = scheduleToProjectConfig({
+      id: 's1', name: 'n', prompt: 'p', cronExpr: '0 9 * * *',
+      agentKind: 'codex', modelAgentKind: 'pi', model: 'test-model', persistentSession: true,
+    } as Schedule, 'daily');
+    expect(JSON.parse(JSON.stringify(config))).toMatchObject({
+      agentKind: 'codex', modelAgentKind: 'pi', model: 'test-model', persistentSession: true,
+    });
   });
 });

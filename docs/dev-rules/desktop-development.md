@@ -7,21 +7,29 @@
 
 ## Agent 启动入口
 
-Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。用户只说
-「启动开发版 / 启动测试版 / 看当前改动」且没有指定模式时，使用当前 worktree 的
-命名隔离沙箱，不要默认共享正式登录态：
+Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域。restart
+命令默认使用固定的 `dev` 命名隔离沙箱（等价于自动附加 `--isolated=dev`），
+不再默认共享 Cindy 账号登录态与业务数据。OpenAI 模型登录态是刻意保留的例外：
+普通 Dev 可只读复用同区域 Release／本机 Codex 已有登录态，能够调用模型，但不能在
+Dev 内发起 OpenAI 登录或断开共享登录态：
 
 ```bash
-pnpm restart:desktop:remote --region=global -- --isolated=@worktree
-pnpm restart:desktop:remote --region=cn -- --isolated=@worktree
+pnpm restart:desktop:remote --region=global
+pnpm restart:desktop:remote --region=cn
 ```
 
-`--isolated=@worktree` 按 checkout 目录名派生稳定沙箱名（去掉前导 `cindy-`，
-再加路径短哈希，例如 `cindy-local-ollama-models` → `local-ollama-models-a1b2c3`）。
-同一 worktree 下次还用这个名字，登录态会留在这份沙箱里。
+默认 `dev` 沙箱与 checkout 路径无关：无论从主仓还是哪个 worktree 启动，
+Global 都落在同一个 dev 沙箱，CN 也落在同一个 CN dev 沙箱；登录态与 dev 数据持续保留。
+需要按 worktree 拆分数据时才显式传 `--isolated=@worktree`，它会按 checkout 目录名派生
+稳定沙箱名（去掉前导 `cindy-`，再加路径短哈希）。
 
-只有用户明确说「共享登录 / 不要重新登录 / 用现有数据 / 不要关当前实例」时才加
-`--preserve-running`。不要把「用户没提模式」理解成共享。
+只有用户明确说「共享登录 / 不要重新登录 / 用现有数据」时才加 `--shared`；用户明确
+「不要关当前实例」时才加 `--preserve-running`。不要把「用户没提模式」理解成共享。
+需要复用旧的共享正式 profile 时，命令是：
+
+```bash
+pnpm restart:desktop:remote -- --shared
+```
 
 启动命令结束时必须出现一行 `DESKTOP_DEV_VERDICT=ready` 才算成功；看到
 `DESKTOP_DEV_VERDICT=failed` 或根本没有 verdict 行，不得声称开发版已起来。
@@ -42,14 +50,21 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 
 ## 可选启动参数
 
-两个 restart 命令都支持下列参数。脚本本身不加这些旗标时仍是共库 + 正常调度（给人在
-终端里手跑）。**Agent 例外**见上一节：用户只说启动开发版时必须加
-`--isolated=@worktree`。这些参数只对 dev 生效，不影响用户机器上的正式版。
+两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
+命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
+用户机器上的正式版。
 
 - `--region=cn|global`（默认 `global`）：切换构建身份与仓内端点清单；中国大陆版
   必须显式传 `--region=cn`，读取 `config/endpoint.json`。
-- `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、登录态、会话、定时
-  任务与设备身份都与正式版彻底隔离（首次需重新登录）；命名沙箱每个名字一条独立沙箱，
+  remote 开发启动忽略环境里的 `XDT_ENDPOINT_MANIFEST_FILE`，始终按所选区域重设
+  端点文件，避免继承宿主的其它区域或自定义服务器。`--endpoints-cdn` 仍走所选区域的
+  线上 CDN；本地服务调试（local）仍保留本地端点文件配置。
+- `--shared`：显式选择共享 userData（旧默认行为）：dev 与正式版共用当前区域的正式
+  profile，数据库、登录态、会话完全共享。仅当用户明确要求「共享登录 / 复用现有数据」
+  时使用；禁止与 `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。
+- `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、Cindy 账号登录态、会话、定时
+  任务与设备身份都与正式版彻底隔离（首次需重新登录 Cindy 账号）；OpenAI 模型登录态按
+  上述只读例外复用。命名沙箱每个名字一条独立沙箱，
   名字限 `A-Za-z0-9_-`、≤32 字符。`@worktree` 是保留名，按当前 checkout 目录派生沙箱名。
   用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
   数据」时用；Agent 把「启动开发版」也落在这条路径。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
@@ -93,7 +108,7 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 唯一例外：`--isolated` / `XDT_ISOLATED=1` 把该目录指到正式 profile 时直接拒绝启动。
 
 正式版目录保持历史兼容：CN → `Cindy`，Global → `CindyGlobal`，不在启动时改名或搬迁用户数据。
-非隔离 dev 也使用当前区域对应的正式 profile；`--isolated` 沙箱再按相同区域映射派生目录。
+`--shared` dev 使用当前区域对应的正式 profile；`--isolated` 沙箱再按相同区域映射派生目录。
 **dev writer 不得把正式 profile 升到当前 checkout 比安装版更新的 schema**：有 pending
 migration 就拒绝启动，改用 `--isolated=<名字>`。`--preserve-running` / 共库 passive 仍只读。
 跨区域共享、登录态迁移或旧版本回滚应使用显式隔离目录，避免不同构建误用同一 profile。
@@ -102,8 +117,9 @@ migration 就拒绝启动，改用 `--isolated=<名字>`。`--preserve-running` 
 
 restart 的 kill 作用域是**当前 checkout（worktree）**：只停自己这份 checkout 的 dev
 进程，其他 worktree／命名沙箱的实例一律保留（2026-07-30 约束：并行沙箱不得被另一个
-checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个实例一个独立 worktree +
-`--isolated=<名字>` 命名沙箱**，互不干扰地各自 restart。
+checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个 worktree 显式传
+`--isolated=@worktree` 或 `--isolated=<名字>`**，各自使用独立沙箱；默认 `dev`
+沙箱跨 worktree 共用，适合单人常规开发但不能并行多开同一份 userData。
 
 配套护栏与工具：
 
@@ -145,6 +161,9 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 
 ## 分层验证
 
+工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，
+按探测阶段、恢复结果与匿名关联标识区分原因，不要仅凭超时推断掉盘。
+
 本节指导**开发过程中的增量验证**；提交（commit／PR）前的强制门禁以
 `development-workflow.md` 的「提交前测试门禁」为准（仓库根 `pnpm test:unit:related` 与相关
 package 的 typecheck 全部通过；CI 仍跑完整 `pnpm test:unit`）。开发过程中根据实际改动选择最小但充分的检查：
@@ -167,3 +186,31 @@ pnpm test:unit
 - 数据库 migration、协议、更新器、权限与用户数据另有高风险专项规则；命中时先读取
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
+
+## Windows 安装目录与授权
+
+NSIS 安装器保留当前用户／所有用户两种范围。普通用户可写的目录无需提权；选择受保护的
+目录时，在替换文件和卸载旧版之前探测写权限，仅遇到 Windows `ACCESS_DENIED` 才通过
+现有 UAC broker 请求授权。取消授权保留目录选择；文件占用、无效路径等错误提示换目录
+或处理占用，不反复申请管理员权限。静默安装同样在卸载旧版之前检查目录。
+
+同账号提权保留原目录和安装范围。当前用户安装若通过另一个管理员账号授权，则停止该次
+提权安装，提示选择当前账号可写的目录，或返回选择为所有用户安装；不得把当前用户安装
+悄悄登记到管理员账号名下。此改动不调整 Cindy 运行时的权限、用户数据目录或更新器。
+
+实现使用 `resources/installer-directory.nsh` 的目录页和预检查，
+`forge.config.ts` 因此关闭上游自带目录页，由 `customPageAfterChangeDir` 插入同款原生页。
+不要单独打开上游 `allowToChangeInstallationDirectory`，否则会重复插入页面。
+
+在 Windows 显式运行原生验证（临时目录内编译，不安装 Cindy）：
+
+```bash
+node apps/desktop/scripts/check-windows-installer.mjs
+pnpm --filter desktop exec vitest run scripts/installer-directory-messages.test.mjs
+```
+
+前者编译真实安装器／卸载器，并实跑 Win32 文件访问与账号 SID 探测；UAC 返回值由测试
+替身提供，覆盖取消、子进程退出和账号／范围恢复。它不能代替真实 UAC 交互验收。发布前
+还需在普通权限 Windows 环境走查：默认目录、自定义受保护目录、允许／取消授权、使用
+另一管理员账号、旧版覆盖安装，以及静默安装失败时旧版仍在。原生对话框的 Light／Dark
+外观由 Windows 提供，自动测试不代表两种模式已完成目检。

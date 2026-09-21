@@ -1,0 +1,17 @@
+{
+  "id": "ds2b-external-import",
+  "name": "DS2b External Import",
+  "type": "light",
+  "family": "ds2b-import-family",
+  "colors": {
+    "surface": "#ffffff",
+    "surface-elevated": "#ffffff",
+    "surface-card-ivory": "#ffffff",
+    "surface-hover": "#f8f8f8",
+    "surface-hover-soft": "#ffffff",
+    "surface-on-card": "#ffffff",
+    "text-secondary": "#f0f0f0",
+    "text-placeholder": "#c4c4c4",
+    "border-default": "#dddddd"
+  }
+}

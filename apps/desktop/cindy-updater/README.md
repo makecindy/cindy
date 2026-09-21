@@ -80,6 +80,38 @@ The Electron main process owns argument construction; see
 5. `done`       — `pgrep`-style verification passed; updater self-cleans.
 6. `failed`     — any step bubbled an error; lock file dropped, UI sticks.
 
+### Manual retry after failure
+
+The failure window offers Retry when the install was not modified or rollback
+succeeded, and the package is still readable. The failed package moves to
+`<workdir>/retry.zip` so Cindy cannot automatically apply it again. A cross-volume
+move falls back to copying before removing the source. A malformed or unsupported
+ZIP is discarded; a failed rollback disables Retry and preserves the backup.
+
+Retry re-runs the installer in the same process using Rust-owned arguments.
+If UAC was cancelled, the original permission probe can request it again.
+It skips the original, potentially reused PID and asks the user to close any
+processes running from the install directory. It rebuilds extraction and backup
+directories before replacing files. Success removes the package and exits.
+An existing update lock or another Cindy updater also blocks Retry, including
+updaters still waiting in TEMP. Close does not relaunch during another update,
+and a rejected retry leaves the other updater's lock untouched.
+
+After failure Cindy stays closed until the user chooses Retry or Close. Close
+(including the native window close action) removes the retained retry package
+and restarts the unmodified or restored Cindy once. Closing is blocked during an
+active install. A failed rollback never starts the partially restored app.
+
+The original permission probe, UAC handoff, temporary staging location and
+`launch_detached` startup are retained. This also retains the original inherited
+privileges after an elevated update. No token switching or ACL classification is
+performed. The existing seven-day temporary-directory cleanup still applies.
+
+Retry controls retain the five-language WebView catalog and existing theme styles.
+
+A release uses the updater bundled with the currently installed Cindy. Shipping
+a new updater does not change the process already performing that update.
+
 ## Build
 
 ```

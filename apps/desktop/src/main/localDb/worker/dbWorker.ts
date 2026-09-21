@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 
 import type { RpcRequest, RpcResponse, WorkerEvent } from '../client/DbTransport.js';
 import { dispatch, serializeWorkerError } from './dispatcher.js';
+import { readLocalWorktreeReferences } from './worktreeReferences.js';
 import {
   createWorkerDatabase,
   type DatabaseConstructor,
@@ -28,14 +29,17 @@ let initError: { code: string; message: string; stack?: string } | null = null;
 setDatabase(startupOptions);
 
 activeWorkerPort.on('message', async (req: RpcRequest) => {
+  const startedAt = performance.timeOrigin + performance.now();
+  const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     const result = await dispatchRequest(req);
-    activeWorkerPort.postMessage({ id: req.id, ok: true, result } satisfies RpcResponse);
+    activeWorkerPort.postMessage({ id: req.id, ok: true, result, timing: timing() } satisfies RpcResponse);
   } catch (err) {
     activeWorkerPort.postMessage({
       id: req.id,
       ok: false,
       error: serializeWorkerError(err),
+      timing: timing(),
     } satisfies RpcResponse);
   }
 });
@@ -75,6 +79,9 @@ function setDatabase(opts: DbWorkerStartupOptions): void {
 
 async function dispatchRequest(req: RpcRequest): Promise<unknown> {
   const readyDb = requireReadyDb();
+  if (req.op === 'worktreeReferences') {
+    return readLocalWorktreeReferences(readyDb, DatabaseCtor, startupOptions.nativeBinding);
+  }
   if (req.op === 'echoTransfer') {
     const { buffer } = (req.args ?? {}) as { buffer?: { byteLength?: number } };
     return { byteLength: typeof buffer?.byteLength === 'number' ? buffer.byteLength : 0 };

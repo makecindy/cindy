@@ -67,13 +67,11 @@ const disposeHiddenAnimationGate = installHiddenAnimationGate();
 migrateLegacyVoiceInputRendererStorage();
 void syncVoiceInputGlobalShortcut(getVoiceInputSettings().shortcut);
 void bootstrapSilentEncryptedRetryFromMain();
-// chat embedding 开关 (Phase 1.2) — 同款镜像同步方式, 让 Settings UI 第一次渲染时
-// localStorage 已是真值, 用户能看到正确的初始 toggle 状态。
+// 对话语义索引开关 —— 先同步 signed-out 镜像；AuthContext 提交稳定 owner 后会切换
+// owner 分区并重拉 Main 真值，迟到的启动响应会被 revision fence 丢弃。
 void bootstrapChatEmbeddingFromMain();
 // LSP Beta 开关 (Phase 1) — admin-only, 默认 false; 同款镜像同步方式。
 void bootstrapLspModeFromMain();
-// Git safety workflow 开关 — 默认 false; Codex rewind 入口同步依赖此镜像。
-void bootstrapGitSafetySettingsFromMain();
 
 const view = new URLSearchParams(window.location.search).get('view');
 const isVoiceInputOverlay = view === 'voice-input-overlay';
@@ -84,6 +82,13 @@ const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissi
 const isAppearanceUtilityView =
   isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
+document.documentElement.dataset.windowBackdropMaterial =
+  window.electronAPI.windowBackdropMaterial ?? 'none';
+const disposeWindowBackdropMaterialChanged =
+  window.electronAPI.onWindowBackdropMaterialChanged?.((material) => {
+    document.documentElement.dataset.windowBackdropMaterial = material;
+  }) ?? (() => {});
+import.meta.hot?.dispose(disposeWindowBackdropMaterialChanged);
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
 }
@@ -150,7 +155,7 @@ void (async () => {
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <ComputerPermissionBackdrop />
       </ThemeProvider>,
     );
@@ -162,7 +167,7 @@ void (async () => {
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ComputerPermissionGuideWindow />
         </LocaleProvider>
@@ -174,7 +179,7 @@ void (async () => {
   if (isVoiceInputDictionaryToast) {
     const { VoiceInputDictionaryToast } = await import('./voice-input/VoiceInputDictionaryToast');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <VoiceInputDictionaryToast />
         </LocaleProvider>
@@ -186,7 +191,7 @@ void (async () => {
   if (isVoiceInputOverlay) {
     const { VoiceInputOverlay } = await import('./voice-input/VoiceInputOverlay');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ConfirmDialogProvider>
             <VoiceInputOverlay />
@@ -207,9 +212,11 @@ void (async () => {
     import.meta.hot?.dispose(disposeRsbBrowserBridge);
   }
 
-  // 主视图挂载前完成 memory 真值同步与旧配置迁移，确保用户可交互的 toggle 不会和
-  // 启动快照并发。浮窗不消费该设置，跳过同步以免多个 renderer 争写共享 localStorage。
+  // 主视图挂载前完成 memory 与 Git safety 真值同步及旧配置迁移，确保用户可交互的
+  // toggle、回退入口不会在镜像迁移完成前和启动快照并发。浮窗不消费这些设置，跳过
+  // 同步以免多个 renderer 争写共享 localStorage。
   await bootstrapMemorySettingsFromMain();
+  await bootstrapGitSafetySettingsFromMain();
 
   // TapDB 在线活跃上报 — 只在主视图启用,避免 voice-input 浮窗的弹出被算成 PV。
   // 这里只挂"同意闸":SDK 是否初始化由 main 的 analytics-settings 决定,用户没

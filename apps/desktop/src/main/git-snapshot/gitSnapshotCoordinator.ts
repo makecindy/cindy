@@ -32,13 +32,15 @@ export interface GitSnapshotSessionContext {
 export interface GitSnapshotCoordinatorDeps {
   /** Global auto-snapshot switch; turn-start decisions are reused at matching turn end. */
   readAutoSnapshotEnabled: () => boolean;
+  /** Whether an empty local project may be initialized as Git during resolution. */
+  readAutoInitProjectGit?: () => boolean;
   /** Resolves a working directory to a Git repo root, or null for non-Git dirs. */
   detectRepoRoot: (workingDir: string) => Promise<string | null>;
   /** Best-effort bootstrap for local empty project dirs that are not Git repos yet. */
   initializeProjectGit?: (
     sessionId: string,
     context: GitSnapshotSessionContext,
-    opts: { autoSnapshotEnabled: boolean },
+    opts: { autoSnapshotEnabled: boolean; autoInitProjectGit?: boolean },
   ) => Promise<{ repoRoot?: string | null } | null>;
   /** Session lookup used for workingDir detection and label-agent routing. */
   getSessionContext: (sessionId: string) => Promise<GitSnapshotSessionContext | null>;
@@ -77,6 +79,7 @@ interface TurnStartState {
 
 interface TurnStartRecord extends Partial<TurnStartState> {
   autoSnapshotEnabled: boolean;
+  autoInitProjectGit: boolean;
   promise: Promise<void>;
   /** Owning session, for same-repo concurrency checks across sessions. */
   ownerSessionId?: string;
@@ -109,8 +112,10 @@ export class GitSnapshotCoordinator {
    * shadow savepoint chain as the baseline for this turn's file rewind.
    */
   async onTurnStart(sessionId: string): Promise<void> {
+    const autoSnapshotEnabled = this.deps.readAutoSnapshotEnabled();
     const record: TurnStartRecord = {
-      autoSnapshotEnabled: this.deps.readAutoSnapshotEnabled(),
+      autoSnapshotEnabled,
+      autoInitProjectGit: this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled,
       promise: Promise.resolve(),
       ownerSessionId: sessionId,
     };
@@ -129,7 +134,11 @@ export class GitSnapshotCoordinator {
         return;
       }
 
-      const resolved = await this.resolveSession(sessionId, record.autoSnapshotEnabled);
+      const resolved = await this.resolveSession(
+        sessionId,
+        record.autoSnapshotEnabled,
+        record.autoInitProjectGit,
+      );
       if (!resolved) {
         return;
       }
@@ -165,12 +174,19 @@ export class GitSnapshotCoordinator {
     const turnStart = this.shiftTurnStartRecord(sessionId);
     try {
       const autoSnapshotEnabled = turnStart?.autoSnapshotEnabled ?? this.deps.readAutoSnapshotEnabled();
+      const autoInitProjectGit = turnStart
+        ? turnStart.autoInitProjectGit
+        : this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled;
       if (!autoSnapshotEnabled) return;
       if (turnStart && !turnStart.repoRoot) {
         await turnStart.promise;
       }
 
-      const resolved = await this.resolveSession(sessionId, autoSnapshotEnabled);
+      const resolved = await this.resolveSession(
+        sessionId,
+        autoSnapshotEnabled,
+        autoInitProjectGit,
+      );
       if (!resolved) return;
 
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
@@ -209,6 +225,7 @@ export class GitSnapshotCoordinator {
   private async resolveSession(
     sessionId: string,
     autoSnapshotEnabled: boolean = this.deps.readAutoSnapshotEnabled(),
+    autoInitProjectGit: boolean = this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled,
   ): Promise<ResolvedSnapshotSession | null> {
     const cached = this.sessionCache.get(sessionId);
     if (cached) return cached;
@@ -217,8 +234,11 @@ export class GitSnapshotCoordinator {
     if (!ctx?.workingDir) return null;
 
     let repoRoot = await this.deps.detectRepoRoot(ctx.workingDir);
-    if (!repoRoot && this.deps.initializeProjectGit) {
-      const bootstrap = await this.deps.initializeProjectGit?.(sessionId, ctx, { autoSnapshotEnabled });
+    if (!repoRoot && autoInitProjectGit && this.deps.initializeProjectGit) {
+      const bootstrap = await this.deps.initializeProjectGit?.(sessionId, ctx, {
+        autoSnapshotEnabled,
+        autoInitProjectGit,
+      });
       repoRoot = bootstrap?.repoRoot ?? null;
       if (!repoRoot) {
         repoRoot = await this.deps.detectRepoRoot(ctx.workingDir);

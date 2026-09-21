@@ -8,16 +8,16 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import DatabaseCtor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MakerMemoryManager } from './manager.js';
-import { memoryScopeDirName } from './storage.js';
+import { buildBotMemoryScopeKey, memoryScopeDirName } from './storage.js';
 import type { Logger } from '../interfaces/logger.js';
 
 const noopLogger: Logger = {
@@ -28,6 +28,12 @@ const noopLogger: Logger = {
 const WORKDIR = 'D:/repo/workdir';
 const SCOPE_DIR = memoryScopeDirName(WORKDIR); // Windows: 'D--repo-workdir'
 const memoryDirFor = (root: string) => path.join(root, 'maker-memory', SCOPE_DIR);
+
+// This file opens real better-sqlite3 databases and rebuilds FTS indexes. On
+// Windows runners, Defender can make that synchronous file work exceed
+// Vitest's default 5s timeout; keep the migration assertions unchanged while
+// giving the test the same bounded Windows allowance as the contacts tests.
+vi.setConfig({ testTimeout: process.platform === 'win32' ? 30_000 : 5_000 });
 
 let rootA: string;
 let rootB: string;
@@ -60,6 +66,193 @@ function trackingSqlite() {
 }
 
 describe('MakerMemoryManager · owner scope guard (#2341)', () => {
+  it.each(['resetAll', 'resetDigests'] as const)(
+    '%s preserves unopened legacy Bot memory until lazy Home migration',
+    async (resetMethod) => {
+      const botScope = buildBotMemoryScopeKey('bot-not-opened');
+      // A normal project's sanitized path matches the legacy Bot name shape.
+      const projectScope = path.join(path.sep, 'bot', 'proj', '0123456789abcdef');
+      const deps = {
+        basePath: rootA,
+        resolveBasePath: () => rootA,
+        ownerScopeKey: () => 'cloud:abc:1',
+        sqliteFactory: trackingSqlite().factory,
+        agents: {},
+        logger: noopLogger,
+        initialEnabled: true,
+      };
+      const legacyManager = new MakerMemoryManager(deps);
+      try {
+        for (const scope of [botScope, projectScope]) {
+          await legacyManager.write(scope, {
+            type: 'user', name: 'keep', title: 'Preference',
+            description: 'Durable preference', body: 'Keep this preference.',
+          });
+          await legacyManager.write(scope, {
+            type: 'digest', name: 'summary', title: 'Summary',
+            description: 'Compaction summary', body: 'Keep this Bot summary.',
+          });
+        }
+      } finally {
+        legacyManager.dispose();
+      }
+      const legacyDir = path.join(rootA, 'maker-memory', memoryScopeDirName(botScope));
+      const homeMemory = path.join(rootA, 'bots', 'bot-not-opened', 'memories');
+      const manager = new MakerMemoryManager({
+        ...deps,
+        isIndependentScope: (scope) => scope === botScope,
+        resolveStorageDir: (scope) => scope === botScope ? homeMemory : null,
+      });
+      try {
+        expect(existsSync(homeMemory)).toBe(false);
+        expect(await manager[resetMethod]()).toEqual({ removedCount: 1 });
+        expect(existsSync(path.join(legacyDir, 'user_keep.md'))).toBe(true);
+        expect(existsSync(path.join(legacyDir, 'digest_summary.md'))).toBe(true);
+        const projectDir = path.join(rootA, 'maker-memory', memoryScopeDirName(projectScope));
+        expect(existsSync(path.join(projectDir, 'digest_summary.md'))).toBe(false);
+        expect(existsSync(path.join(projectDir, 'user_keep.md'))).toBe(resetMethod === 'resetDigests');
+
+        const migrated = await manager.getStore(botScope);
+        expect((await migrated.list()).map((record) => record.filename)).toEqual([
+          'digest_summary.md', 'user_keep.md',
+        ]);
+        expect((await migrated.read('user_keep.md')).body.trim()).toBe('Keep this preference.');
+        expect(await migrated.getIndex()).toContain('user_keep.md');
+        expect(existsSync(path.join(homeMemory, 'user_keep.md'))).toBe(true);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
+  it.each(['resetAll', 'resetDigests'] as const)(
+    '%s refuses ambiguous directory ownership without reporting a successful clear',
+    async (resetMethod) => {
+      const scope = path.join(path.sep, 'bot-project-0123456789abcdef');
+      const deps = {
+        basePath: rootA, sqliteFactory: trackingSqlite().factory,
+        ownerScopeKey: () => 'cloud:abc:1',
+        agents: {}, logger: noopLogger, initialEnabled: true,
+      };
+      const writer = new MakerMemoryManager(deps);
+      try {
+        await writer.write(scope, {
+          type: 'digest', name: 'summary', title: 'Summary',
+          description: 'Project summary', body: 'Project data.',
+        });
+      } finally {
+        writer.dispose();
+      }
+      const dir = path.join(rootA, 'maker-memory', memoryScopeDirName(scope));
+      const metaPath = path.join(dir, 'meta.json');
+      const originalMeta = await readFile(metaPath, 'utf8');
+      const manager = new MakerMemoryManager(deps);
+      try {
+        // Reuse the directory under test: an extra project could be removed
+        // before or after the ambiguous entry depending on filesystem order.
+        const previouslyOpen = resetMethod === 'resetAll' ? await manager.getStore(scope) : null;
+        for (const metadata of [null, '{broken', JSON.stringify({ absPath: buildBotMemoryScopeKey('wrong-bot') })]) {
+          if (metadata === null) await rm(metaPath);
+          else await writeFile(metaPath, metadata, 'utf8');
+          await expect(manager[resetMethod]()).rejects.toThrow(/cannot determine memory scope/);
+          expect(existsSync(path.join(dir, 'digest_summary.md'))).toBe(true);
+          if (previouslyOpen) await expect(previouslyOpen.list()).rejects.toThrow(/memory was reset/);
+        }
+        // Recovering authoritative metadata restores the normal clear path.
+        await writeFile(metaPath, originalMeta, 'utf8');
+        expect(await manager[resetMethod]()).toEqual({ removedCount: 1 });
+        expect(existsSync(path.join(dir, 'digest_summary.md'))).toBe(false);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
+  it('keeps an independent Bot store available in Bot Home and copies legacy data', async () => {
+    const botScope = buildBotMemoryScopeKey('bot-a');
+    const legacyManager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => 'cloud:abc:1',
+      sqliteFactory: trackingSqlite().factory,
+      agents: {},
+      logger: noopLogger,
+      initialEnabled: true,
+    });
+    const legacyStore = await legacyManager.getStore(botScope);
+    await legacyStore.write({
+      type: 'user',
+      name: 'preference',
+      title: 'Preference',
+      description: 'legacy Bot memory',
+      body: 'Keep this record.',
+    });
+    legacyManager.dispose();
+
+    const homeMemory = path.join(rootA, 'bots', 'bot-a', 'memories');
+    await mkdir(homeMemory, { recursive: true });
+    await writeFile(path.join(homeMemory, 'USER.md'), 'Owner-scoped user profile.', 'utf8');
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => 'cloud:abc:1',
+      reloadEnabled: () => false,
+      sqliteFactory: trackingSqlite().factory,
+      agents: {},
+      logger: noopLogger,
+      initialEnabled: false,
+      resolveStorageDir: (scopeKey) => scopeKey === botScope ? homeMemory : null,
+      isIndependentScope: (scopeKey) => scopeKey === botScope,
+    });
+
+    const migrated = await manager.getStore(botScope);
+    expect((await migrated.read('user_preference.md')).body.trim()).toBe('Keep this record.');
+    expect(await readFile(path.join(homeMemory, 'USER.md'), 'utf8')).toBe('Owner-scoped user profile.');
+    expect(existsSync(homeMemory)).toBe(true);
+    expect(existsSync(path.join(rootA, 'maker-memory', memoryScopeDirName(botScope)))).toBe(true);
+    expect(manager.getState()).toEqual({ enabled: false, activeWorkdirs: [] });
+    manager.dispose();
+  });
+
+  it('global reset leaves an open Bot store and its Home memory intact', async () => {
+    const botScope = buildBotMemoryScopeKey('bot-a');
+    const homeMemory = path.join(rootA, 'bots', 'bot-a', 'memories');
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => rootA,
+      ownerScopeKey: () => 'cloud:abc:1',
+      reloadEnabled: () => true,
+      sqliteFactory: trackingSqlite().factory,
+      agents: {},
+      logger: noopLogger,
+      initialEnabled: true,
+      resolveStorageDir: (scopeKey) => scopeKey === botScope ? homeMemory : null,
+      isIndependentScope: (scopeKey) => scopeKey === botScope,
+    });
+    const botStore = await manager.getStore(botScope);
+    await botStore.write({
+      type: 'user',
+      name: 'preference',
+      title: 'Preference',
+      description: 'Bot-owned memory',
+      body: 'Keep this record.',
+    });
+    const globalStore = await manager.getStore(WORKDIR);
+    await globalStore.write({
+      type: 'project',
+      name: 'temporary',
+      title: 'Temporary',
+      description: 'Global memory',
+      body: 'Remove this record.',
+    });
+
+    expect((await manager.resetAll()).removedCount).toBe(1);
+    expect((await botStore.read('user_preference.md')).body.trim()).toBe('Keep this record.');
+    expect(existsSync(path.join(homeMemory, 'user_preference.md'))).toBe(true);
+    expect(existsSync(memoryDirFor(rootA))).toBe(false);
+    manager.dispose();
+  });
+
   it('owner 缺失时 getStore 抛 memory:not-ready, 且不创建任何存储目录', async () => {
     const sqlite = trackingSqlite();
     const manager = new MakerMemoryManager({
@@ -409,6 +602,8 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     manager.dispose();
   });
 
+  // Windows runner 上 SQLite 文件关闭后，Defender 仍可能短暂占用目录；这个用例
+  // 覆盖真实磁盘删除与重建，采用独立的 I/O 预算，避免拖宽整个 suite 的默认超时。
   it('resetAll 清空目录并重建 store (review Greptile 16th)', async () => {
     const sqlite = trackingSqlite();
     const manager = new MakerMemoryManager({
@@ -435,7 +630,7 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(storeB).not.toBe(storeA);
     expect(existsSync(memoryDirFor(rootA))).toBe(true);
     manager.dispose();
-  });
+  }, 20_000);
 
   it('resetAll 后旧 store 任何操作抛 not-ready, 不碰已关 db (review Greptile 20th P1)', async () => {
     const sqlite = trackingSqlite();

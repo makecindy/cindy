@@ -8,6 +8,10 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { getActiveCatalog, setActiveCatalog, setOpenAiImagesApiKeyConfigured } from '../../maker-host/active-catalog.js';
+import { deriveCindyMediaConfig } from '../cindyMediaCatalog.js';
+
 import { GhostCindySlot, type CindySlotDeps } from '../cindySlot';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
 import {
@@ -21,7 +25,7 @@ import type { InstalledGhost } from '../../../shared/ghost';
 function fakeGhost(
   overrides: {
     enabled?: boolean;
-    slots?: string[];
+    cindy?: boolean;
     model?: {
       image?: string[];
       video?: string[];
@@ -41,10 +45,9 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'cindy', 'panel'],
       tools: [{ name: 'gen_image', description: '生成图片' }],
       // null = 模拟老包缺详单;undefined = 默认全能力(image + video + media)。
-      ...(overrides.model === null
+      ...(overrides.cindy === false || overrides.model === null
         ? {}
         : {
             cindy:
@@ -219,6 +222,25 @@ describe('载荷校验', () => {
     expect(
       await slot.handleModelRequest('art', { kind: 'gen_image', prompt: 'x'.repeat(4001) }),
     ).toMatchObject({ ok: false });
+  });
+
+  it('Art keeps its saved subscription image selection for generation and editing with the unified label', async () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setOpenAiImagesApiKeyConfigured(false);
+    const config = deriveCindyMediaConfig(getActiveCatalog().providers, 'image');
+    const id = 'openai/gpt-image-2';
+    expect(config.models.find(m => m.id === id)).toMatchObject({ label: 'GPT Image Gen', supportsEdit: true });
+    const { slot, generateImage, editImage } = makeSlot({
+      getImageConfig: () => config,
+      getOverride: () => id,
+    });
+    for (const request of [REQ, EDIT_REQ]) {
+      expect(await slot.handleModelRequest('art', request)).toMatchObject({
+        ok: true, model: id, modelLabel: 'GPT Image Gen',
+      });
+    }
+    expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ model: id }));
+    expect(editImage).toHaveBeenCalledWith(expect.objectContaining({ model: id }));
   });
 
   it('旧插件模型名:名单内透传,唯一 basename 升级,失效值回落当前默认', async () => {
@@ -403,7 +425,7 @@ describe('Cindy Web Search', () => {
     const searchWeb = vi.fn();
     for (const getGhost of [
       () => fakeGhost({ enabled: false, model: { search: ['web'] } }),
-      () => fakeGhost({ slots: ['tool'], model: { search: ['web'] } }),
+      () => fakeGhost({ cindy: false, model: { search: ['web'] } }),
       () => fakeGhost(),
     ]) {
       const denied = makeSlot({ getGhost, searchWeb });
@@ -998,11 +1020,11 @@ describe('能力粒度资格审(model 详单)', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 
-  it('老包缺详单 = 零能力,一切代办拒且提示更新声明', async () => {
+  it('老包缺详单 = 零能力,一切代办拒且明确未声明 cindy 能力', async () => {
     const { slot, generateImage } = makeSlot({ getGhost: () => fakeGhost({ model: null }) });
     const r = await slot.handleModelRequest('art', REQ);
     expect(r).toMatchObject({ ok: false });
-    expect((r as { message: string }).message).toContain('更新');
+    expect((r as { message: string }).message).toContain('未声明 cindy 能力');
     expect(generateImage).not.toHaveBeenCalled();
   });
 });
@@ -1015,8 +1037,8 @@ describe('资格审', () => {
     expect(await asleep.slot.handleModelRequest('art', REQ)).toMatchObject({ ok: false });
   });
 
-  it('身份卡未声明 cindy 卡槽 → 结构上无此器官,拒', async () => {
-    const { slot, generateImage } = makeSlot({ getGhost: () => fakeGhost({ slots: ['tool', 'panel'] }) });
+  it('身份卡未声明 cindy 能力 → 结构上无此器官,拒', async () => {
+    const { slot, generateImage } = makeSlot({ getGhost: () => fakeGhost({ cindy: false }) });
     const r = await slot.handleModelRequest('art', REQ);
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('cindy');
@@ -1337,6 +1359,46 @@ describe('改图代办(edit_image)', () => {
     expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:owner-a:1');
     expect(editImage).not.toHaveBeenCalled();
   });
+
+  it('library 正本 blob 相对键可消费;sidecar 禁止当像素', async () => {
+    const HASH = 'a'.repeat(64);
+    const blob = `assets/${HASH.slice(0, 2)}/${HASH}/blob.png`;
+    const resolveOwnedMedia = vi.fn(async (_g: string, key: string) =>
+      key === blob ? `/library/${blob}` : null,
+    );
+    const { slot, editImage } = makeSlot({
+      resolveOwnedMedia,
+    } as Partial<CindySlotDeps>);
+    const ok = await slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: [blob],
+    });
+    expect(ok).toMatchObject({ ok: true });
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', blob, 'cloud:test-owner:1');
+    expect(editImage).toHaveBeenCalledWith(expect.objectContaining({ imagePaths: [`/library/${blob}`] }));
+
+    const sidecar = makeSlot();
+    const rejected = await sidecar.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: [`assets/${HASH.slice(0, 2)}/${HASH}/preview.webp`],
+    });
+    expect(rejected).toMatchObject({ ok: false });
+    expect((rejected as { message: string }).message).toContain('sidecar');
+    expect(sidecar.editImage).not.toHaveBeenCalled();
+
+    const prefixedResolve = vi.fn();
+    const prefixedSidecar = makeSlot({
+      resolveOwnedMedia: prefixedResolve,
+    } as Partial<CindySlotDeps>);
+    const prefixedRejected = await prefixedSidecar.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: [`library:assets/${HASH.slice(0, 2)}/${HASH}/preview.webp`],
+    });
+    expect(prefixedRejected).toMatchObject({ ok: false });
+    expect((prefixedRejected as { message: string }).message).toContain('sidecar');
+    expect(prefixedSidecar.editImage).not.toHaveBeenCalled();
+    expect(prefixedResolve).not.toHaveBeenCalled();
+  });
 });
 
 describe('管子续命挂钩(同步视频代办 hold/release)', () => {
@@ -1619,7 +1681,7 @@ describe('寄存(deposit_media / release_media)', () => {
     expect(noMedia.depositMedia).not.toHaveBeenCalled();
 
     const noSlot = makeSlot({
-      getGhost: () => fakeGhost({ slots: ['tool'], model: null }),
+      getGhost: () => fakeGhost({ model: null }),
     } as Partial<CindySlotDeps>);
     expect(await noSlot.slot.handleModelRequest('art', depositReq(b64(PNG)))).toMatchObject({
       ok: false,

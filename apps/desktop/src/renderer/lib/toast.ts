@@ -13,7 +13,7 @@
  * 不要把视觉组件混在这里 —— Toast.tsx / ToastContainer.tsx 另外放。
  */
 
-export type ToastVariant = 'info' | 'success' | 'warning' | 'error';
+export type ToastVariant = 'loading' | 'info' | 'success' | 'warning' | 'error';
 
 /**
  * 提示来源(第三方供文案时的身份头,由宿主画在正文前;当前消费方:意识
@@ -26,11 +26,18 @@ export interface ToastSource {
   iconDataUrl?: string;
 }
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastOptions {
   /** 自动关闭时长（ms）。不传时按 variant 取默认：info / success 1200，warning / error 8000；0 表示永久显示 */
   duration?: number;
   /** 来源身份头（见 ToastSource；主机自己的提示不传） */
   source?: ToastSource;
+  /** 与提示直接相关的单一步骤（例如打开对应设置项）。 */
+  action?: ToastAction;
   /** 关闭时回调 */
   onClose?: () => void;
 }
@@ -41,6 +48,7 @@ export interface ToastItem {
   message: string;
   duration: number;
   source?: ToastSource;
+  action?: ToastAction;
   onClose?: () => void;
   createdAt: number;
   /** 是否处于退出动画阶段（仍在 state 里但即将被移除） */
@@ -234,6 +242,7 @@ function createItem(variant: ToastVariant, message: string, options?: ToastOptio
       options?.duration ??
       (variant === 'error' || variant === 'warning' ? DEFAULT_ALERT_DURATION : DEFAULT_DURATION),
     ...(options?.source ? { source: options.source } : {}),
+    ...(options?.action ? { action: options.action } : {}),
     onClose: options?.onClose,
     createdAt: Date.now(),
     exiting: false,
@@ -243,6 +252,10 @@ function createItem(variant: ToastVariant, message: string, options?: ToastOptio
 }
 
 export const toast = {
+  /** Neutral progress; the caller dismisses it when the operation settles. */
+  loading(message: string, options?: ToastOptions): string {
+    return createItem('loading', message, { duration: 0, ...options });
+  },
   info(message: string, options?: ToastOptions): string {
     return createItem('info', message, options);
   },

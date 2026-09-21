@@ -17,11 +17,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ScheduleTemplate } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
   PENDING_SESSION_ID,
+  scheduleToUserCreateInput,
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
@@ -294,7 +295,7 @@ describe('canSubmitSessionBinding', () => {
     })).toBe(false);
   });
 
-  it('allows script mode to clear an unavailable stale binding', () => {
+  it('allows script edits while the host handles unavailable lifecycle owners', () => {
     expect(canSubmitSessionBinding('script', 'bound', undefined)).toBe(true);
     expect(
       canSubmitSessionBinding('script', 'bound', { sessionId: 'session-1', state: 'deleted' }),
@@ -448,8 +449,11 @@ describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create
     expect(hasKey(input, 'effort')).toBe(false);
   });
 
-  it('空 providerId 不带 key(= 原生默认来源,no-break);显式值才带', () => {
-    expect(hasKey(buildScheduleInput(makeForm()), 'providerId')).toBe(false);
+  it('空 providerId 恒带 key 且值为 undefined（编辑回原生默认来源 → patch 清列）', () => {
+    const unpinned = buildScheduleInput(makeForm());
+    expect(hasKey(unpinned, 'providerId')).toBe(true);
+    expect(unpinned.providerId).toBeUndefined();
+
     const pinned = buildScheduleInput(makeForm({ providerId: 'anthropic' }));
     expect(pinned.providerId).toBe('anthropic');
   });
@@ -862,5 +866,35 @@ describe('formToProjectConfig — preRunHook 序列化(项目自动化)', () => 
     } as never;
     const config = scheduleToProjectConfig(schedule, 'auto-x');
     expect(config.preRunHook).toEqual({ command: 'node scripts/check.mjs', timeoutMs: 30_000 });
+  });
+});
+
+
+describe('scheduleToUserCreateInput', () => {
+  it.each([undefined, 'pi'] as const)('copies the full model choice into an unbound task (override: %s)', (modelAgentKind) => {
+    const original = { id: 'project-job', name: 'Job', source: 'project', projectConfigId: 'project',
+      agentKind: 'codex', modelAgentKind, model: 'shared-model', providerId: 'selected', effort: 'high',
+      fastMode: true, targetSessionId: 'old-target', persistentSession: true,
+    } as Schedule;
+    const input = scheduleToUserCreateInput(original, { name: 'Copy' });
+    expect(input).toMatchObject({ name: 'Copy', agentKind: modelAgentKind ?? 'codex', modelAgentKind,
+      model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: true, persistentSession: true });
+    expect(input).not.toHaveProperty('targetSessionId');
+    expect(input).not.toHaveProperty('projectConfigId');
+    expect(original.agentKind).toBe('codex');
+  });
+});
+
+
+describe('script lifecycle serialization', () => {
+  it('preserves owner and installed gate while keeping script cwd', () => {
+    const input = buildScheduleInput(makeForm({ executionMode: 'script',
+      targetSessionId: 'owner', workingDir: '/watcher', scriptCommand: 'node run.mjs',
+      preRunHookEnabled: true, preRunHookCommand: 'node /watcher/gate.mjs',
+    }));
+    expect(input.targetSessionId).toBe('owner');
+    expect(input.workingDir).toBe('/watcher');
+    expect(input.preRunHook?.command).toBe('node /watcher/gate.mjs');
+    expect(buildScheduleInput(makeForm({ executionMode: 'script', targetSessionId: '__pending__' })).targetSessionId).toBeUndefined();
   });
 });

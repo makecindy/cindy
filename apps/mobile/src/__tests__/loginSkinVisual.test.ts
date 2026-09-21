@@ -44,7 +44,7 @@ describe('loginSkin 白底体系视觉(源码接线 + token 参数)', () => {
     expect(layoutSource).toContain('StartupGateBlockedContent');
     // 文案 key 化契约保持(startupGateCopy 闸门同源)
     expect(layoutSource).toContain("loginText('endpointGateTitle')");
-    expect(layoutSource).toContain("loginText('retry')");
+    expect(layoutSource).toContain("'endpointGateResetToDev' : 'retry'");
   });
 
   it('login-panel-border:面板 1px panelBorder 描边 + panelBg r36(368:1383)', () => {

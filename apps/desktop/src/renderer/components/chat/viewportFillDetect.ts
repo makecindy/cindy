@@ -193,6 +193,8 @@ export type UserIntentFillDecisionArgs = Omit<
 > & {
   /** scroll 容器当前的 scrollTop(判定"停在顶部"用) */
   scrollTop: number;
+  /** Explicit upward input can prefetch before reaching the history boundary. */
+  triggerDistancePx?: number;
 };
 
 /**
@@ -266,9 +268,10 @@ export function decideUserIntentFillAction({
   windowAtTop,
   hasMoreMessages,
   isLoadingMore,
+  triggerDistancePx = TOP_HISTORY_TRIGGER_PX,
 }: UserIntentFillDecisionArgs): AutoFillAction {
   const unscrollable = Math.abs(scrollHeight - clientHeight) <= NO_SCROLL_TOLERANCE_PX;
-  const parkedNearTop = scrollTop < TOP_HISTORY_TRIGGER_PX;
+  const parkedNearTop = scrollTop < triggerDistancePx;
   if (!unscrollable && !parkedNearTop) return 'none';
   // expand 优先于 load,原因同 decideAutoFillAction 的「优先级」注释;expand 不看
   // isLoadingMore(纯本地扩窗与 in-flight IPC 不冲突,与既有语义一致)。

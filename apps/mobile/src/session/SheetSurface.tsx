@@ -1,3 +1,5 @@
+import { useContext, useMemo } from 'react';
+import { FloatingSheetContext, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 /**
  * SheetSurface —— 可拖动底部浮窗的「面板表面」(从 ContextSheet 抽出,非 Modal)。
  *
@@ -15,7 +17,9 @@
 import type { ReactNode, RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
-import { Animated, Pressable, ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { GestureDetector } from '@/platform/gestureHandler';
 import { Text } from '@/components/AppText';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import type { ContextSheetSnap, ContextSheetSnapHeights } from '@/session/contextSheetModel';
@@ -73,8 +77,11 @@ export function SheetSurface({
   const styles = useThemedStyles(makeSheetSurfaceStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const viewport = usePaneViewport();
+  const floating = useContext(FloatingSheetContext);
+  const boundedHeights = useMemo(() => ({ half: Math.min(heights.half, viewport.height), full: Math.min(heights.full, viewport.height) }), [heights, viewport.height]);
   const drag = useContextSheetDrag({
-    heights,
+    heights: boundedHeights,
     onDismiss: onClose,
     onSnapChange,
     snap,
@@ -85,7 +92,10 @@ export function SheetSurface({
       style={[
         styles.sheet,
         variant === 'tasksheet' && styles.sheetTasksheet,
-        { height: drag.animatedHeight, paddingBottom: bottomInset },
+        { paddingBottom: floating ? spacing.md : bottomInset },
+        floating && { borderRadius: radius.container },
+        drag.animatedStyle,
+        { maxHeight: "100%" },
       ]}
       testID={testID}
     >
@@ -93,7 +103,8 @@ export function SheetSurface({
         intensity={32}
         overlayColor={variant === 'tasksheet' ? colors.sheetSurface : colors.surfaceGlassPanel}
       />
-      <View style={styles.dragZone} {...drag.panHandlers}>
+      <GestureDetector gesture={drag.gesture}>
+      <View collapsable={false} style={styles.dragZone} {...drag.panHandlers}>
         <SheetGrabber variant={variant} />
         <View style={styles.header}>
           {onBack ? (
@@ -116,12 +127,12 @@ export function SheetSurface({
           {headerTrailing ?? <View style={styles.headerSpacer} />}
         </View>
       </View>
+      </GestureDetector>
       {pinnedTop ? <View style={styles.pinnedTop}>{pinnedTop}</View> : null}
       <ScrollView
         contentContainerStyle={styles.contentScrollContent}
         keyboardShouldPersistTaps="handled"
         ref={scrollRef}
-        scrollEnabled={!drag.dragging}
         style={styles.contentScroll}
         testID={testID ? `${testID}.scroll` : undefined}
       >

@@ -7,6 +7,14 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
+const automationSessionButtonSource = readFileSync(
+  resolve(sidebarDir, 'AutomationSessionButton.tsx'),
+  'utf8',
+);
+const sessionOrdinalBadgeSource = readFileSync(
+  resolve(sidebarDir, 'sessionOrdinalBadges.tsx'),
+  'utf8',
+);
 const railNavSource = readFileSync(resolve(sidebarDir, 'RailNav.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(
   resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
@@ -43,7 +51,7 @@ describe('SessionCard review regressions', () => {
 
   it('keeps awaiting text in list mode previews', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
+      'const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
     expect(sessionCardSource).toContain('{listPreview}');
   });
@@ -158,8 +166,10 @@ describe('SessionCard review regressions', () => {
     );
     // schedule 绑定与普通自动化都复用 AutomationTimerIcon;绑定态优先承载更多状态。
     expect(sessionCardSource).toMatch(
-      /const renderAutomationMeta = \(iconSize: number\) =>[\s\S]*?showScheduleBindingBadge \? \([\s\S]*?<ScheduleBindingBadge[\s\S]*?schedules=\{boundSchedules\}[\s\S]*?size=\{iconSize\}[\s\S]*?activeForeground=\{isActive\}[\s\S]*?\) : showAutomationTimer \? \([\s\S]*?<AutomationTimerIcon size=\{iconSize\}/,
+      /const renderAutomationMeta = \(iconSize: number\) =>[\s\S]*?showScheduleBindingBadge \? \([\s\S]*?<ScheduleBindingBadge[\s\S]*?schedules=\{boundSchedules\}[\s\S]*?size=\{iconSize\}[\s\S]*?activeForeground=\{isActive\}[\s\S]*?\) : showAutomationTimer \? \([\s\S]*?<AutomationSessionButton[\s\S]*?size=\{iconSize\}/,
     );
+    expect(automationSessionButtonSource.match(/<AutomationTimerIcon\b/g)).toHaveLength(1);
+    expect(automationSessionButtonSource).toContain('size={size}');
     expect(sessionCardSource).toContain('{renderAutomationMeta(10)}');
     expect(sessionCardSource).toContain('{renderAutomationMeta(11)}');
   });
@@ -196,6 +206,7 @@ describe('SessionCard review regressions', () => {
     );
     expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionItemSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
+    expect(sessionOrdinalBadgeSource).toContain('rounded-[4px]');
     expect(sessionCardSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionCardSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
     expect(sessionItemSource).not.toContain(
@@ -230,16 +241,20 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).toContain(
       '!isEditing && !archivePending && ordinalBadgeLabel != null',
     );
-    expect(sessionCardSource).toContain("archivePending && 'invisible opacity-0'");
+    expect(sessionCardSource).toContain(
+      "archivePending && 'invisible opacity-0 w-0 overflow-hidden'",
+    );
   });
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
+      'const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
-    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? bodyPreview');
+    expect(sessionCardSource).toContain(
+      'const cardPreview = awaitingText ?? preparationText ?? bodyPreview',
+    );
     expect(sessionCardSource).not.toContain(
-      'const cardPreview = awaitingText ?? runningDetail ?? bodyPreview',
+      'const cardPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
   });
 
@@ -396,7 +411,10 @@ describe('SessionCard review regressions', () => {
     // 否则红胶囊上 Timer 仍是 meta 灰;普通自动化分支也必须透传 activeForeground。
     expect(sessionCardSource).toContain('activeForeground={isActive}');
     expect(sessionCardSource).toMatch(
-      /showAutomationTimer \? \([\s\S]*?<AutomationTimerIcon[\s\S]*?activeForeground=\{isActive\}/,
+      /showAutomationTimer \? \([\s\S]*?<AutomationSessionButton[\s\S]*?activeForeground=\{isActive\}/,
+    );
+    expect(automationSessionButtonSource).toMatch(
+      /<AutomationTimerIcon[\s\S]*?activeForeground=\{activeForeground\}/,
     );
   });
 

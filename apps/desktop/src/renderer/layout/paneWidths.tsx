@@ -4,9 +4,9 @@ import { createContext, useContext } from 'react';
  * paneWidths —— 引擎面板宽度通道(缝即把手,宽度主权归引擎)。
  *
  * 两个 context:
- * - ContentAvailableWidthContext:内容区可分配总宽(窗口宽 − 左栏宽),由
- *   MainLayout 的既有测量(B1a 的 sidebarBlock 观测)下发给 LayoutRoot;
- * - PaneWidthContext:LayoutRoot 按树上 fraction × 可用宽算出的**各面板像素宽**
+ * - ContentAvailableWidthContext:仅为分割线交互 / 测试提供可用宽提示；生产布局
+ *   不再逐像素发布窗口宽度，起拖时直接测量容器；
+ * - PaneWidthContext:LayoutRoot 按树上 fraction 生成各面板的 CSS 响应式宽度
  *   (按 panelKind 索引;chat-main 弹性吸收剩余,不在表内)。拖动引擎分割线
  *   期间为临时值(实时跟手),松手后回落到树的持久化值。
  *
@@ -21,11 +21,13 @@ export function useContentAvailableWidth(): number | null {
   return useContext(ContentAvailableWidthContext);
 }
 
-export const PaneWidthContext = createContext<Record<string, number> | null>(null);
+export type PaneWidth = number | string;
+
+export const PaneWidthContext = createContext<Record<string, PaneWidth> | null>(null);
 export const PaneWidthProvider = PaneWidthContext.Provider;
 
-/** 读取引擎为某 panelKind 计算的像素宽;null = 引擎未接管,面板自行回落。 */
-export function usePanelWidth(kind: string): number | null {
+/** 读取引擎为某 panelKind 计算的响应式宽度;null = 引擎未接管,面板自行回落。 */
+export function usePanelWidth(kind: string): PaneWidth | null {
   const widths = useContext(PaneWidthContext);
   return widths?.[kind] ?? null;
 }

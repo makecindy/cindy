@@ -4,6 +4,7 @@
  * 消息流里 http(s) 链接的**右键**「打开方式」菜单:在侧边栏浏览器中打开 /
  * 在默认浏览器中打开。左键不再弹菜单——由 openUrlByPreference /
  * openHtmlFileByPreference 按用户偏好(设置 → 个性化 → 链接打开方式)直开。
+ * 外部网页与内部网页(本地 HTML / localhost)是两套默认,互不影响。
  *
  * html 文件 chip 的右键不走本 hook——它们已有 useFileChipContextMenu
  * (复制 / 路径 / 目录 / 浏览器查看),「侧边栏打开 / 查看源文件」以可选项
@@ -22,7 +23,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
 import { toast } from '@/lib/toast';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,12 +31,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
-import { getLinkOpenPreference } from '@/hooks/useLinkOpenPreference';
+import { openUrlInSidebarBrowser, pathToFileUrl } from '@/features/right-sidebar/lib/openInSidebarBrowser';
+import { getLinkOpenPreference, getLinkOpenPreferenceForUrl } from '@/hooks/useLinkOpenPreference';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
+import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
 
 /** 左键"按偏好直开"只对浏览器"作为页面渲染"有意义的 html 家族生效;其余本地
  *  文件保持原有"点击即预览"。右键菜单的 BROWSER_OPENABLE_EXTS 也收敛到
@@ -54,13 +53,13 @@ async function openInSidebar(sessionId: string, url: string, t: TFunction): Prom
   }
 }
 
-/** http(s) 链接左键:按用户偏好直开(sidebar → 内置新页签;external → 系统浏览器)。 */
+/** http(s) / file 链接左键:按 URL 属于外部网页还是内部网页选对应偏好直开。 */
 export async function openUrlByPreference(
   sessionId: string,
   url: string,
   t: TFunction,
 ): Promise<void> {
-  if (getLinkOpenPreference() === 'sidebar') {
+  if (getLinkOpenPreferenceForUrl(url) === 'sidebar') {
     await openInSidebar(sessionId, url, t);
     return;
   }
@@ -68,27 +67,56 @@ export async function openUrlByPreference(
   if (!res.success) toast.error(t('chat.markdownRenderer.openLinkFailed'));
 }
 
-/** 本地 html 文件左键:按用户偏好直开(sidebar → file:// 进内置;external → 系统浏览器)。 */
+/** Local HTML opens in place; remote HTML uses the viewer-local HTTP preview. */
 export async function openHtmlFileByPreference(
   sessionId: string,
   absPath: string,
   t: TFunction,
+  context: { origin: SessionFileOrigin; workingDir: string } = {
+    origin: { kind: 'local' },
+    workingDir: '',
+  },
+  target?: 'sidebar' | 'external',
 ): Promise<void> {
-  if (getLinkOpenPreference() === 'sidebar') {
-    await openInSidebar(sessionId, pathToFileUrl(absPath), t);
+  if (context.origin.kind === 'local') {
+    if ((target ?? getLinkOpenPreference('local')) === 'sidebar' && sessionId) {
+      await openInSidebar(sessionId, pathToFileUrl(absPath), t);
+    } else {
+      try {
+        await window.electronAPI.openFileInBrowser(absPath);
+      } catch (error) {
+        toast.error(t(mapIpcErrorToI18nKey(error, {
+          namespace: 'chat.markdownRenderer', fallback: 'chat.markdownRenderer.openInBrowserFailed',
+        })));
+      }
+    }
     return;
   }
+  let loading: string | null = null;
+  const delayed = setTimeout(() => {
+    loading = toast.loading(t('chat.remoteFile.previewFetching'));
+  }, 600);
   try {
-    await window.electronAPI.openFileInBrowser(absPath);
+    const result = await window.electronAPI.fileBrowser.previewHtml({
+      origin: context.origin,
+      workdir: context.workingDir,
+      absPath,
+    });
+    if ((target ?? getLinkOpenPreference('local')) === 'sidebar' && sessionId) {
+      await openInSidebar(sessionId, result.url, t);
+    } else {
+      const opened = await window.electronAPI.openExternal(result.url);
+      if (!opened.success) toast.error(t('chat.markdownRenderer.openInBrowserFailed'));
+    }
   } catch (error) {
-    toast.error(
-      t(
-        mapIpcErrorToI18nKey(error, {
-          namespace: 'chat.markdownRenderer',
-          fallback: 'chat.markdownRenderer.openInBrowserFailed',
-        }),
-      ),
-    );
+    const code = extractIpcError(error)?.code;
+    const key = code === 'HTML_PREVIEW_TOO_LARGE' ? 'previewTooLarge'
+      : code === 'HTML_PREVIEW_UNSUPPORTED' ? 'previewUnsupported'
+      : code === 'NOT_FOUND' ? 'previewNotFound' : 'previewFailed';
+    toast.error(t(`chat.remoteFile.${key}`));
+  } finally {
+    clearTimeout(delayed);
+    if (loading) toast.dismiss(loading);
   }
 }
 

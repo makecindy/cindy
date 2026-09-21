@@ -55,10 +55,22 @@ export const PLUGIN_MEMBER_UPLOAD_FAILURE_CODES = [
   'MEMBERSHIP_INACTIVE',
   'PUBLISH_NOT_AUTHORIZED',
   'PLUGIN_GHOST_ID_CONFLICT',
+  'PUBLISH_PREFIX_UNREGISTERED',
+  'PUBLISH_GHOST_ID_PREFIX_MISMATCH',
+  'PUBLISH_VERSION_EXISTS',
   'PUBLISH_STORAGE_UNAVAILABLE',
   'PUBLISH_INTERNAL_ERROR',
 ] as const;
 export type PluginMemberUploadFailureCode = (typeof PLUGIN_MEMBER_UPLOAD_FAILURE_CODES)[number];
+
+const PLUGIN_MEMBER_UPLOAD_FAILURE_CODE_MAX_LENGTH = 64;
+const PLUGIN_MEMBER_UPLOAD_FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
+
+export function isPluginMemberUploadFailureCode(
+  value: string,
+): value is PluginMemberUploadFailureCode {
+  return PLUGIN_MEMBER_UPLOAD_FAILURE_CODES.includes(value as PluginMemberUploadFailureCode);
+}
 
 /** Identity and idempotency are carried by verified auth/header context, not this body. */
 export interface PreparePluginMemberUploadRequest {
@@ -83,7 +95,10 @@ export interface CommitPluginMemberUploadResponse {
 }
 
 export interface PluginMemberUploadFailure {
-  code: PluginMemberUploadFailureCode;
+  /** Bounded UPPER_SNAKE code preserved verbatim, including codes from newer servers. */
+  code: string;
+  /** The typed code when this client version recognizes it; otherwise null. */
+  knownCode: PluginMemberUploadFailureCode | null;
   /** Safe, user-facing reason. Must not contain internal object keys or audit details. */
   message: string;
 }
@@ -159,13 +174,13 @@ function reviewStatus(value: unknown, path: string): PluginMemberReleaseReviewSt
 function failure(value: unknown, path: string): PluginMemberUploadFailure | null {
   if (value === null) return null;
   const raw = object(value, path);
+  const code = string(raw.code, `${path}.code`, PLUGIN_MEMBER_UPLOAD_FAILURE_CODE_MAX_LENGTH);
+  if (!PLUGIN_MEMBER_UPLOAD_FAILURE_CODE_PATTERN.test(code)) {
+    throw new PluginProtocolError(`${path}.code 必须是 UPPER_SNAKE 格式`);
+  }
   return {
-    code: enumValue(
-      PLUGIN_MEMBER_UPLOAD_FAILURE_CODES,
-      raw.code,
-      `${path}.code`,
-      '不在成员上传失败码集合中',
-    ),
+    code,
+    knownCode: isPluginMemberUploadFailureCode(code) ? code : null,
     message: string(raw.message, `${path}.message`, 1_000),
   };
 }

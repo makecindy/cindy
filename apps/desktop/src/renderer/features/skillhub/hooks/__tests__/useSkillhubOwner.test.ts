@@ -1,22 +1,44 @@
 // @vitest-environment jsdom
 
+import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast, type ToastOptions } from '@/lib/toast';
+
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
+vi.mock('@/lib/toast', () => ({ toast: {
+  warning: vi.fn(() => 'cleanup-notice'), dismiss: vi.fn(), success: vi.fn(), error: vi.fn(),
+} }));
 
 vi.mock('../useSkillSync', () => ({
   registerSyncStoreSetters: vi.fn(),
   invalidateSkillSyncRequests: vi.fn(),
 }));
 
-import { bootstrapSkillhub, refresh, reset, setSkillhubDataOwner } from '../useSkillhub';
+import {
+  bootstrapSkillhub,
+  refresh,
+  reset,
+  setSkillhubDataOwner,
+  useSkillhub,
+} from '../useSkillhub';
 
 describe('SkillHub data-owner bootstrap', () => {
   const scan = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
-    scan.mockResolvedValue({ success: true, skills: [], sources: [] });
+    scan.mockResolvedValue({
+      success: true,
+      skills: [],
+      sources: [],
+      learnSkillEnabled: true,
+    });
     (window as unknown as { electronAPI: unknown }).electronAPI = {
-      skillhub: { scan },
+      skillhub: {
+        scan,
+        onLocalStateChanged: vi.fn(() => vi.fn()),
+      },
+      onAuthStateChange: vi.fn(() => vi.fn()),
     };
   });
 
@@ -30,6 +52,27 @@ describe('SkillHub data-owner bootstrap', () => {
     await vi.waitFor(() => expect(scan).toHaveBeenCalledTimes(2));
 
     expect(scan).toHaveBeenLastCalledWith({ projects: [] });
+  });
+
+  it('restores cleanup notices from scanning and invalidates old actions across owner changes', async () => {
+    reset();
+    const retry = vi.fn(async () => ({ complete: true }));
+    window.electronAPI.skillhub.retryUninstallCleanup = retry;
+    scan.mockResolvedValue({ success: true, skills: [], sources: [], pendingCleanups: [{ token: 'receipt', name: 'example' }] });
+    await refresh();
+    await refresh();
+    expect(toast.warning).toHaveBeenCalledOnce();
+    const firstAction = (vi.mocked(toast.warning).mock.calls[0]![1] as ToastOptions).action!;
+    setSkillhubDataOwner('another-owner');
+    firstAction.onClick();
+    expect(retry).not.toHaveBeenCalled();
+    await refresh();
+    const newAction = (vi.mocked(toast.warning).mock.calls.at(-1)![1] as ToastOptions).action!;
+    newAction.onClick();
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledOnce());
+    expect(retry).toHaveBeenCalledWith('receipt');
+    await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith('skillhub.management.cleanupComplete'));
+    reset();
   });
 
   it('makes a stale refresh wait for and return the newest scan result', async () => {
@@ -53,5 +96,21 @@ describe('SkillHub data-owner bootstrap', () => {
     resolveSecond({ success: true, skills: [latestSkill], sources: [] });
     await expect(second).resolves.toEqual([latestSkill]);
     await expect(first).resolves.toEqual([latestSkill]);
+  });
+
+  it('keeps Learn availability aligned with its preference when scanning fails', async () => {
+    reset();
+    scan.mockResolvedValue({
+      success: false,
+      error: 'scan failed',
+      learnSkillEnabled: false,
+    });
+    const { result } = renderHook(() => useSkillhub());
+
+    await act(async () => {
+      await refresh();
+    });
+
+    expect(result.current.learnSkillEnabled).toBe(false);
   });
 });

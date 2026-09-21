@@ -23,7 +23,35 @@ function makeChannel(
 }
 
 describe('codexImageClient', () => {
-  it('用 Codex OAuth hosted image_generation tool 生成 gpt-image-2', async () => {
+  it('does not dispatch if the selected account changes while preparing an image', async () => {
+    const doFetch = vi.fn<typeof fetch>();
+    const channel = createCodexImageChannel({
+      providerId: 'openai-account-a',
+      hasOAuthLogin: () => true,
+      getAuth: vi.fn()
+        .mockResolvedValueOnce({ accessToken: 'old', accountId: 'account-a' })
+        .mockResolvedValueOnce({ accessToken: 'new', accountId: 'account-b' }),
+      fetchImplementation: doFetch,
+    });
+    await expect(channel.generateImage({ model: 'openai-account-a/gpt-image-2', prompt: 'p' })).rejects.toThrow('Codex image account changed before dispatch');
+    expect(doFetch).not.toHaveBeenCalled();
+  });
+
+  it('dispatches custom account image models using only that account credentials', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () => sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]));
+    const channel = createCodexImageChannel({
+      providerId: 'openai-account-a',
+      hasOAuthLogin: () => true,
+      getAuth: async () => ({ accessToken: 'account-a-token', accountId: 'account-a' }),
+      fetchImplementation: doFetch,
+    });
+    await channel.generateImage({ model: 'openai-account-a/gpt-image-2', prompt: 'p' });
+    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0]).not.toHaveProperty('model');
+    expect(doFetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer account-a-token', 'ChatGPT-Account-Id': 'account-a' });
+    await expect(channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' })).rejects.toThrow('不支持模型');
+    expect(doFetch).toHaveBeenCalledTimes(1);
+  });
+  it('uses the hosted image tool without an image model selector', async () => {
     const doFetch = vi.fn<typeof fetch>(async () =>
       sseResponse([
         {
@@ -37,6 +65,7 @@ describe('codexImageClient', () => {
       model: 'openai/gpt-image-2',
       prompt: '一只猫',
       aspectRatio: '3:2',
+      quality: 'medium',
     });
 
     expect(result.data[0]?.b64_json).toBe('aW1hZ2U=');
@@ -50,12 +79,29 @@ describe('codexImageClient', () => {
     expect(body.tools).toContainEqual(
       expect.objectContaining({
         type: 'image_generation',
-        model: 'gpt-image-2',
         size: '1536x1024',
         quality: 'medium',
       }),
     );
+    expect(body.tools[0]).not.toHaveProperty('model');
+    expect(body).toMatchObject({ model: 'gpt-5.5' });
     expect(body.tool_choice).toBeUndefined();
+  });
+
+  it('forwards custom dimensions and highest quality without downgrading', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () => sseResponse([{ type: 'image_generation_call', result: 'final' }]));
+    await makeChannel(doFetch).generateImage({
+      model: 'openai/gpt-image-2.5-sunburst', prompt: 'wallpaper', size: '1760x3824', quality: 'max',
+    });
+    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0]).toMatchObject({ size: '1760x3824', quality: 'max' });
+    await expect(makeChannel(doFetch).generateImage({ model: 'openai/gpt-image-2.5-sunburst', prompt: 'p', size: '1320x2868' })).rejects.toThrow('divisible by 16');
+    expect(doFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['eof', 'response.failed', 'response.incomplete'])('never delivers a preview as a completed high-resolution image (%s)', async (ending) => {
+    const tail = ending === 'eof' ? [] : [{ type: ending }];
+    const channel = makeChannel(vi.fn<typeof fetch>(async () => sseResponse([{ partial_image_b64: 'preview' }, ...tail])));
+    await expect(channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' })).rejects.toThrow(ending === 'eof' ? '没有图片' : 'did not complete');
   });
 
   it('未指定画幅时保留 auto 语义;拒绝目录外模型', async () => {
@@ -68,16 +114,25 @@ describe('codexImageClient', () => {
       tools: Array<Record<string, unknown>>;
     };
     expect(body.tools[0]).not.toHaveProperty('size');
+    expect(body.tools[0]).not.toHaveProperty('quality');
 
     await expect(
-      channel.generateImage({ model: 'openai/future-image', prompt: 'p' }),
+      channel.generateImage({ model: 'another/future-image', prompt: 'p' }),
     ).rejects.toThrow('不支持模型');
     expect(doFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('保留流中最新 partial image;派发前重查可阻止出网', async () => {
+  it('keeps legacy catalog handles local and checks availability before dispatch', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () => sseResponse([{ type: 'image_generation_call', result: 'aW1hZ2U=' }]));
+    const beforeDispatch = vi.fn();
+    await makeChannel(doFetch, beforeDispatch).generateImage({ model: 'openai/future-image', prompt: 'p' });
+    expect(JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body)).tools[0]).not.toHaveProperty('model');
+    expect(beforeDispatch).toHaveBeenCalledWith('openai/future-image');
+  });
+
+  it('只交付最终图片;派发前重查可阻止出网', async () => {
     const doFetch = vi.fn<typeof fetch>(async () =>
-      sseResponse([{ partial_image_b64: 'first' }, { partial_image_b64: 'final' }]),
+      sseResponse([{ partial_image_b64: 'first' }, { type: 'image_generation_call', result: 'final' }, { partial_image_b64: 'late-preview' }]),
     );
     const channel = makeChannel(doFetch);
     expect(
@@ -121,7 +176,7 @@ describe('codexImageClient', () => {
   it('兼容单 CR 的 SSE 事件与行结束符', async () => {
     const body = [
       'data: {bad json}\r\r',
-      `data: ${JSON.stringify({ partial_image_b64: 'cr-only' })}\r\r`,
+      `data: ${JSON.stringify({ type: 'image_generation_call', result: 'cr-only' })}\r\r`,
       'data: [DONE]\r\r',
     ].join('');
     const channel = makeChannel(

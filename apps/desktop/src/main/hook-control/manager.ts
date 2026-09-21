@@ -29,6 +29,7 @@ import {
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
+  HOOK_FEATURE_SESSION_NEW,
   HOOK_FEATURE_SLACK_TOOLS,
   HOOK_FEATURE_TURN_DELIVERY,
   makeBindRevoke,
@@ -210,9 +211,15 @@ export interface HookControlManagerDeps {
    * 快照，因此连接抖动不会反复重建；重连到不同版本 server 时会准确刷新。
    */
   onSlackToolProviderEnabledChanged?: (enabled: boolean) => void;
-  /** 目录偏好快照推送(prefs.state 到达时广播; 含请求回执与 /model 卡主动推)。 */
+  /** 目录偏好快照推送：仅 /model 卡主动推送(replyTo null)时调用。回执不再广播。 */
   notifyPrefs?: (view: HookPrefsView) => void;
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
+  /**
+   * Slack / Telegram / X 进入「已连接 ∧ live 已绑定」时通知, 供本机偏好做一次
+   * 迁移导入并镜像到 /model 卡。只在权威绑定快照之后触发, 不用缓存身份在
+   * welcome 时抢跑。可重入, 调用方自行去重。
+   */
+  onHookReadyForPrefsMirror?: (provider: HookProvider) => void;
   notifyTelegramBehavior?: (view: TelegramHookBehaviorState) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
@@ -289,10 +296,11 @@ export interface HookControlManager {
   /** (multi-team)给指定 team 重新授权(bind.start 带 teamId, pin 授权页)。 */
   rebindTeam(teamId: string): boolean;
   /**
-   * (multi-team)解绑指定 team。displaced 行 = 仅清本地缓存(服务端本就没有该
-   * 绑定, 离线也能删); 活跃行 = 发 bind.revoke{teamId} 并乐观移除(需在线)。
+   * (multi-team)解绑指定 team。新 server 的通讯专用行需在线撤销本机 grant；
+   * 旧 server 的 displaced 行仅清本地缓存；Bot 活跃行走 bind.revoke。
    */
-  revokeTeam(teamId: string): boolean;
+  revokeTeam(teamId: string): boolean | Promise<boolean>;
+  setSlackCommunications(teamId: string, enabled: boolean): Promise<HookSlackToolResult>;
   /**
    * (multi-team)取消在途授权: 本地清 pendingBind, 在线时发 bind.revoke
    * {pendingOnly:true} 作废 server 侧登记(pending 授权 / 等安装)。幂等。
@@ -382,14 +390,14 @@ export type HookSlackToolResult =
 /** Slack 工具可用性快照。 */
 export interface HookSlackToolAvailability {
   connected: boolean;
-  /** 绑定已 confirmed(multi-team 下 = 至少一条未 displaced 的绑定)。 */
+  /** 至少一个 workspace 可通讯；新 server 不要求本机是 Bot 接收设备。 */
   bound: boolean;
   /** server 已宣告 slack-tools 能力(welcome.features)。 */
   serverSupportsTools: boolean;
   binding: HookBindingView | null;
   /** server 已宣告 multi-team 能力(true 时非 status 工具必须带 teamId)。 */
   multiTeam: boolean;
-  /** (multi-team)可用绑定清单(不含 displaced 行), 供 slack_status / 工具描述消费。 */
+  /** (multi-team)可通讯的 workspace 清单，供 slack_status / 工具描述消费。 */
   bindings: Array<{ teamId: string; teamName: string | null }>;
 }
 
@@ -621,6 +629,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     notifyStatus,
     onSlackToolProviderEnabledChanged,
     notifyPrefs,
+    onHookReadyForPrefsMirror,
     notifyTelegramBehavior,
     prefsTimeoutMs,
     autoBindDeferMs = AUTO_BIND_DEFER_MS,
@@ -685,6 +694,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 只给 Telegram 声明: msg.op 目前只有 Telegram 的执行器, X 的渲染路径
       // 不接入(#1855 的红线之一)。
       HOOK_FEATURE_MESSAGE_OPS,
+      HOOK_FEATURE_SESSION_NEW,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -960,13 +970,37 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     return multiBindings.filter((b) => !b.displaced);
   }
 
+  /** 自动绑定/授权终态只认实际连接：Bot 绑定或权威通讯授权（含显式关闭）。
+   * displaced 展示缓存不算连接；旧 multi-team 服务端保持只认 Bot 绑定的语义。 */
+  function hasRetainedSlackConnection(): boolean {
+    const communicationsSupported = serverFeatures.includes('slack-communications');
+    return multiBindings.some((row) =>
+      !row.displaced || (communicationsSupported && row.communicationsEnabled !== undefined),
+    );
+  }
+
+  function communicationBindings(): HookTeamBindingView[] {
+    return serverFeatures.includes('slack-communications')
+      ? multiBindings.filter((b) => b.communicationsEnabled === true)
+      : activeBindings();
+  }
+
+  /** Slack 偏好镜像只认 live confirmed, 不含离线乐观绑定。 */
+  function slackBoundForPrefsMirror(): boolean {
+    return multiTeamKnown() ? activeBindings().length > 0 : binding?.state === 'confirmed';
+  }
+
+  function maybeMirrorSlackPrefs(): void {
+    if (slackBoundForPrefsMirror()) onHookReadyForPrefsMirror?.('slack');
+  }
+
   /** 只在 provider 构建期 gate 真翻转时通知 host 失效 Codex MCP 缓存。 */
   function notifySlackToolProviderEnabledIfChanged(): void {
     // multi-team: 至少一条可用绑定 + 总开关打开(关开关不再 revoke, 绑定保留
     // 在本地/服务端, 必须用 enabled 把工具面关掉); 老 server: 关开关会把
     // binding 置 none, confirmed 判据自足, enabled 条件恒真不改变行为。
     const bound = multiTeamKnown()
-      ? activeBindings().length > 0 && store.get().enabled
+      ? communicationBindings().length > 0 && store.get().enabled
       : binding?.state === 'confirmed';
     const next = bound && serverFeatures.includes(HOOK_FEATURE_SLACK_TOOLS);
     if (next === slackToolProviderEnabled) return;
@@ -1270,6 +1304,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       bindings: multiBindings.map((b) => ({ ...b })),
       pendingBind: pendingBind !== null ? { ...pendingBind } : null,
       serverMultiTeam: serverMultiTeam(),
+      serverSlackCommunications: serverFeatures.includes('slack-communications'),
       telegram: laneView(telegramLane),
       x: laneView(xLane),
     };
@@ -1395,13 +1430,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         // 这一刻 lane.binding 可能还是旧值, 用刚确认的 bindingId。
         primeTelegramEmojiReactions(view.bindingId ?? null);
-      } else if (
-        view.state === 'revoked' ||
-        view.state === 'none' ||
-        view.state === 'superseded'
-      ) {
+        onHookReadyForPrefsMirror?.('telegram');
+      } else if (view.state === 'revoked' || view.state === 'none' || view.state === 'superseded') {
         resetTelegramEmojiReactions();
       }
+    } else if (lane.config.provider === 'x' && view.state === 'confirmed') {
+      onHookReadyForPrefsMirror?.('x');
     }
     try {
       if (
@@ -1702,7 +1736,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         autoBindIntent = false;
         openAuthorizeOnNextPending = false;
-        if (activeBindings().length > 0) {
+        if (hasRetainedSlackConnection()) {
           if (transport !== null && status === 'connected') {
             transport.send(makeBindRevoke({ pendingOnly: true }));
           }
@@ -1741,7 +1775,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         if (pendingBind?.state !== 'pending') return;
         autoBindIntent = false;
         openAuthorizeOnNextPending = false;
-        if (activeBindings().length > 0) {
+        if (hasRetainedSlackConnection()) {
           // 已有可用绑定: 只作废这次"添加/重绑"授权(server 侧登记顺手作废),
           // 总开关与既有绑定不受影响
           if (transport !== null && status === 'connected') {
@@ -1813,9 +1847,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
    * (multi-team)发起添加/重绑授权: bind.start 带可选 teamId(重绑时 pin
    * 授权页), 乐观置 pendingBind 并臂授权看门狗。false = 发不出(未连接)。
    */
-  function initiateMultiBind(teamId: string | null): boolean {
+  function initiateMultiBind(teamId: string | null, purpose?: 'communications'): boolean {
     if (transport === null || status !== 'connected') return false;
-    if (!transport.send(makeBindStart(teamId !== null ? { teamId } : {}))) return false;
+    const request = makeBindStart({
+      ...(teamId !== null ? { teamId } : {}),
+      ...(purpose ? { purpose } : {}),
+    });
+    if (!transport.send(request)) return false;
     openAuthorizeOnNextPending = true;
     pendingBind = {
       state: 'pending',
@@ -1825,6 +1863,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       installUrl: null,
       teamId,
       intent: teamId !== null ? 'rebind' : 'add',
+      ...(purpose ? { purpose } : {}),
     };
     armBindWatchdog();
     notifyStatus(toView());
@@ -1891,7 +1930,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       openAuthorizeOnNextPending = false;
       pendingBind = null;
       const teamId = payload.teamId ?? null;
-      if (teamId !== null && payload.slackUserId !== null) {
+      if (teamId !== null && payload.slackUserId !== null && payload.purpose !== 'communications') {
         const row: HookTeamBindingView = {
           teamId,
           teamName: payload.teamName ?? null,
@@ -1928,6 +1967,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // teamId 缺失属异常(multi server 恒下发): 不猜行, 等随后的 bind.state 对齐
       notifySlackToolProviderEnabledIfChanged();
       notifyStatus(toView());
+      maybeMirrorSlackPrefs();
       return;
     }
     if (state === 'revoked') {
@@ -1970,7 +2010,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
     // pending / denied / expired / failed → 在途授权状态
     const authorizeUrl = payload.authorizeUrl ?? null;
+    if (payload.purpose === 'communications') autoBindIntent = false;
     pendingBind = {
+      purpose: payload.purpose ?? pendingBind?.purpose,
       state,
       message: payload.message,
       authorizeUrl,
@@ -2025,7 +2067,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     if (terminal) {
       autoBindIntent = false;
       clearAutoBindDefer();
-      if (activeBindings().length === 0 && store.get().enabled) {
+      if (!hasRetainedSlackConnection() && store.get().enabled) {
         store.setEnabled(false);
         stopSlack();
         log.info(`slack hook auto-disabled on first-bind ${state} (multi-team)`);
@@ -2126,16 +2168,25 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 上一轮)但快照缺失的 team 保留为 displaced 行 —— 覆盖「绑定在本机
       // 离线期间被另一台设备顶掉」的冷启动场景(实时被顶走 revoked 事件)。
       const snap = msg.payload.bindings;
-      const snapIds = new Set(snap.map((e) => e.teamId));
+      const communications = serverFeatures.includes('slack-communications') ? msg.payload.communications ?? [] : [];
+      const grants = new Map(communications.map((e) => [e.teamId, e]));
+      const snapIds = new Set([...snap, ...communications].map((e) => e.teamId));
       const next: HookTeamBindingView[] = snap.map((e) => ({
         teamId: e.teamId,
         teamName: e.teamName,
         slackUserId: e.slackUserId,
         slackUserName: e.slackUserName,
         displaced: false,
+        // 单 workspace 卡代表单一身份；异常跨身份快照 fail closed，不把 U2 权限授予 U1。
+        communicationsEnabled: grants.get(e.teamId)?.slackUserId === e.slackUserId ? grants.get(e.teamId)?.enabled : undefined,
       }));
+      for (const grant of communications) {
+        if (!next.some((row) => row.teamId === grant.teamId)) {
+          next.push({ ...grant, displaced: true, communicationsEnabled: grant.enabled });
+        }
+      }
       for (const row of multiBindings) {
-        if (!snapIds.has(row.teamId)) next.push({ ...row, displaced: true });
+        if (!snapIds.has(row.teamId)) next.push({ ...row, displaced: true, communicationsEnabled: undefined });
       }
       multiBindings = next;
       persistBindingsCache();
@@ -2145,8 +2196,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 先让它走「pending + 意图 → 重新发起」路径签新链接; 短窗内没有任何
       // bind.update 才由计时器发空 bind.start(见 autoBindDefer 声明注释)。
       if (autoBindIntent) {
-        if (activeBindings().length > 0) {
-          autoBindIntent = false; // 已有绑定, 秒恢复, 无需发起授权
+        if (hasRetainedSlackConnection()) {
+          autoBindIntent = false; // 已有绑定或通讯授权, 秒恢复, 无需发起授权
         } else if (autoBindDefer === null) {
           autoBindDefer = setTimeout(() => {
             autoBindDefer = null;
@@ -2158,6 +2209,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
       }
       notifyStatus(toView());
+      maybeMirrorSlackPrefs();
       log.info(`bind.state: ${snap.length} bindings`);
       return;
     }
@@ -2188,8 +2240,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       return;
     }
     if (msg.type === 'prefs.state') {
-      // 全量快照 latest-wins: 回执(replyTo 命中在途请求)与主动推送(/model
-      // 卡写入后)都无条件广播 —— 多窗口/面板保持同步
+      // 回执只配对在途 get/set, 不再广播 —— 设置页读的是本机正本, 回执里的
+      // server 快照不能盖掉本地写入。/model 卡改动走 replyTo=null 主动推。
       const view: HookPrefsView = {
         bound: msg.payload.bound,
         prefs: msg.payload.prefs.map((p) => ({ ...p })),
@@ -2201,6 +2253,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           clearTimeout(pending.timer);
           pending.resolve(view);
         }
+        return;
       }
       notifyPrefs?.(view);
       return;
@@ -2251,13 +2304,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lane.pendingPrefs.delete(msg.payload.replyTo);
         clearTimeout(pending.timer);
         pending.resolve(view);
-      } else {
-        const currentBindingId =
-          lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
-        if (msg.payload.bindingId !== currentBindingId) {
-          log.warn('stale provider prefs push for a different binding, dropped');
-          return;
-        }
+        return;
+      }
+      const currentBindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
+      if (msg.payload.bindingId !== currentBindingId) {
+        log.warn('stale provider prefs push for a different binding, dropped');
+        return;
       }
       deps.notifyProviderPrefs?.(view);
       return;
@@ -2401,6 +2453,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         log.info(`slack hook auto-disabled on bind.update=${msg.payload.state}`);
       }
       notifyStatus(toView());
+      if (msg.payload.state === 'confirmed') maybeMirrorSlackPrefs();
       log.info(`bind.update: ${msg.payload.state}`);
       return;
     }
@@ -2424,6 +2477,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
               )
                 ? (listRecentSessions?.() ?? [])
                 : Promise.reject(new Error('session-picker-v1 was not negotiated')),
+            createSession: (request) => {
+              if (
+                expectedProvider !== 'telegram' ||
+                lane === null ||
+                !lane.serverFeatures.includes(HOOK_FEATURE_SESSION_NEW) ||
+                !dispatcher
+              ) {
+                return Promise.reject(new Error('session-new-v1 was not negotiated'));
+              }
+              return dispatcher.createSession(dispatchId('telegram'), request);
+            },
           },
           msg.payload,
         ).then((response) => {
@@ -2835,7 +2899,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       for (const lane of lanes) {
         if (lane.transport !== null && lane.status === 'connected') {
           attempted = true;
-          sent = lane.transport.send(makeHello(buildHello(lane.config.helloFeatures, false, lane.config.provider))) && sent;
+          sent =
+            lane.transport.send(
+              makeHello(buildHello(lane.config.helloFeatures, false, lane.config.provider)),
+            ) && sent;
         }
       }
       return attempted && sent;
@@ -2874,6 +2941,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     revokeTeam(teamId) {
       const idx = multiBindings.findIndex((b) => b.teamId === teamId);
       if (idx < 0) return true; // 行已不在(重复点击/竞态), 幂等成功
+      if (multiBindings[idx].displaced && serverFeatures.includes('slack-communications')) {
+        const target = multiBindings[idx];
+        return this.callSlackTool('communications.remove', {}, teamId).then((result) => {
+          if (!result.ok && result.error.code !== 'NOT_BOUND') return false;
+          multiBindings = multiBindings.filter((b) => b.teamId !== teamId || !b.displaced || b.slackUserId !== target.slackUserId);
+          persistBindingsCache();
+          notifySlackToolProviderEnabledIfChanged();
+          notifyStatus(toView());
+          return true;
+        });
+      }
       if (multiBindings[idx].displaced) {
         // displaced 行: 服务端本就没有该绑定, 删除 = 仅清本地缓存(离线可用)
         multiBindings.splice(idx, 1);
@@ -2905,6 +2983,30 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       notifyStatus(toView());
       return true;
     },
+    async setSlackCommunications(teamId, enabled) {
+      if (!serverFeatures.includes('slack-communications')) {
+        return { ok: false, error: { code: 'SERVER_TOO_OLD', message: 'Slack server does not support device communications' } };
+      }
+      const target = multiBindings.find((b) => b.teamId === teamId);
+      if (!target) return { ok: false, error: { code: 'NOT_BOUND', message: 'Unknown Slack workspace' } };
+      const pendingBefore = pendingBind;
+      if (pendingBefore?.state === 'pending') {
+        return { ok: false, error: { code: 'BUSY', message: 'Slack authorization is in progress' } };
+      }
+      const result = await this.callSlackTool('communications.set', { enabled }, teamId);
+      if (
+        !result.ok && enabled &&
+        ['NOT_BOUND', 'NO_USER_TOKEN', 'TOKEN_EXPIRED'].includes(result.error.code) &&
+        pendingBind === pendingBefore &&
+        multiBindings.some((b) => b.teamId === teamId && b.slackUserId === target.slackUserId)
+      ) {
+        // 存量被顶设备或撤权后恢复：重新 OAuth 只授予通讯，绝不重新接管 Bot。
+        if (initiateMultiBind(teamId, 'communications')) {
+          return { ok: true, result: { authorizing: true } };
+        }
+      }
+      return result;
+    },
     callSlackTool(tool, args, teamId) {
       const fail = (code: string, message: string): Promise<HookSlackToolResult> =>
         Promise.resolve({ ok: false, error: { code, message } });
@@ -2912,8 +3014,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (t === null || status !== 'connected') {
         return fail('HOOK_NOT_CONNECTED', 'Slack 连接不在线, 请检查 设置 → Slack 开关与网络');
       }
-      const bound = multiTeamKnown() ? activeBindings().length > 0 : binding?.state === 'confirmed';
-      if (!bound) {
+      const isCommunicationControl = serverFeatures.includes('slack-communications') && (tool === 'communications.set' || tool === 'communications.remove');
+      const bound = multiTeamKnown() ? communicationBindings().length > 0 : binding?.state === 'confirmed';
+      if (!bound && !isCommunicationControl && !(tool === 'status' && serverFeatures.includes('slack-communications'))) {
         return fail('NOT_BOUND', '本设备未绑定 Slack, 请先到 设置 → Slack 完成绑定');
       }
       // 老 server 不认识 tool.request(丢帧不应答): 按能力宣告短路, 不打空炮
@@ -2959,12 +3062,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         // 已关的设备上 cindy_slack 工具面仍会挂进新会话(老路径关开关会把
         // binding 归零, confirmed 判据自足)
         bound: multi
-          ? store.get().enabled && activeBindings().length > 0
+          ? store.get().enabled && communicationBindings().length > 0
           : binding?.state === 'confirmed',
         serverSupportsTools: serverFeatures.includes(HOOK_FEATURE_SLACK_TOOLS),
         binding: multi ? legacyBindingView() : binding,
         multiTeam: serverMultiTeam(),
-        bindings: activeBindings().map((b) => ({ teamId: b.teamId, teamName: b.teamName })),
+        bindings: communicationBindings().map((b) => ({ teamId: b.teamId, teamName: b.teamName })),
       };
     },
     getWorkspacePrefs() {
@@ -3000,7 +3103,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           // 幂等重复开启已连接的 Slack 时不会收到新的状态回放，直接消费
           // armAutoBind 意图；首次开启走上面的 startSlack + 服务端回放路径。
           if (serverMultiTeam()) {
-            if (activeBindings().length > 0) autoBindIntent = false;
+            if (hasRetainedSlackConnection()) autoBindIntent = false;
             else if (initiateMultiBind(null)) autoBindIntent = false;
           } else if (binding?.state === 'confirmed') {
             autoBindIntent = false;

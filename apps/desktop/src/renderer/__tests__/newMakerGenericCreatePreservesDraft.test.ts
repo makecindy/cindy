@@ -6,9 +6,8 @@
  * 背景:草稿页(/cc-agent/new)的「对话或选择项目」选择由 newMakerDraft store
  * 持久化。此前展开态 SidebarTopNav.handleNew 与折叠态 CCAgentSidebarUpper.handleNewCCS
  * 都会先重置 newMakerDraft
- * 再 navigate,导致用户选好项目后切到别的会话、再点「新建」回来时选择被重置为默认、
- * 需要重新选。修复后这两个通用入口只 navigate、不清空;清空语义只保留在「新建对话」
- * 等显式入口(handleCreateDialogue)。
+ * 再 navigate,导致用户选好项目后切到别的会话、再点「新建」回来时选择被重置为默认。
+ * 通用入口通过导航请求继承当前任务电脑；同机保留项目，跨机由草稿页集中迁移。
  *
  * 静态扫描风格(renderer 测试环境无 jsdom),与 sidebarUpperSingleButton.test.ts 一致。
  */
@@ -41,6 +40,21 @@ function extractHandlerBlock(source: string, name: string): string {
 }
 
 describe('通用「新建」保留 newMakerDraft 选择', () => {
+  it('草稿保留与目标迁移共用包含 SSH 身份的同机判据', () => {
+    expect(draftRouteSource).toContain(
+      '!isSameNewMakerDevice(dialogueTargetRequest.deviceId, getDraft())',
+    );
+    expect(draftRouteSource).toContain(
+      'const deviceChanged = !isSameNewMakerDevice(req.deviceId, {',
+    );
+  });
+  it('旋钮的新建站使用与侧栏相同的当前任务设备请求', () => {
+    const start = sidebarUpperSource.indexOf("if (target.kind === 'new-task')");
+    const block = sidebarUpperSource.slice(start, sidebarUpperSource.indexOf('return;', start));
+    expect(start).toBeGreaterThan(-1);
+    expect(block).toContain('state: makeGenericNewMakerRouteState(location.pathname)');
+  });
+
   it('展开态 SidebarTopNav.handleNew 只 navigate、不清空 workingDir', () => {
     const block = extractHandlerBlock(topNavSource, 'handleNew');
     expect(block).toMatch(/navigate\(['`]\/cc-agent\/new['`]/);
@@ -52,7 +66,7 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
   it('折叠态 CCAgentSidebarUpper.handleNewCCS 只 navigate、不清空 workingDir', () => {
     const block = extractHandlerBlock(sidebarUpperSource, 'handleNewCCS');
     expect(block).toMatch(
-      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('generic'\)\s*\}\)/,
+      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeGenericNewMakerRouteState\(location.pathname\)\s*\}\)/,
     );
     expect(block).not.toContain('workingDir: null');
   });
@@ -76,7 +90,7 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
   // 通用入口依旧不 patch store(前两条断言不受影响)。
   it('NewMakerDraftRoute mount 时清空 extraDirs(引用目录不跨草稿保留)', () => {
     expect(draftRouteSource).toContain(
-      "if (getDraft().extraDirs.length > 0) patchDraft({ extraDirs: [] });",
+      'if (getDraft().extraDirs.length > 0 || getDraft().writableDirs.length > 0) {',
     );
   });
 });

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { DbClient } from '../localDb/client/DbClient.js';
 
 import {
   MIN_VERSION_COMPARISON_USE_COUNT,
@@ -235,6 +236,38 @@ export function persistSkillUsageAnalysis(
   tx();
 }
 
+export async function persistSkillUsageAnalysisWithClient(
+  client: DbClient,
+  source: SkillUsageSourceRecord,
+  analysis: SkillUsageAnalysisResult,
+): Promise<void> {
+  await client.tx('skillUsage.applyMutation', {
+    kind: 'persist',
+    source,
+    exposures: analysis.exposures.map((exposure) => ({
+      id: exposure.id,
+      rawFilePath: exposure.rawFilePath,
+      rawLineNo: exposure.rawLineNo,
+      sessionId: exposure.sessionId,
+      sdkSessionId: exposure.sdkSessionId,
+      agentKind: exposure.agentKind,
+      skillName: exposure.skillName,
+      skillPath: exposure.skillPath,
+      skillDocumentHash: exposure.skillDocumentHash,
+      exposureContentHash: exposure.exposureContentHash,
+      documentHashSource: exposure.documentHashSource,
+      source: exposure.source,
+      toolUseId: exposure.toolUseId,
+      seenAt: exposure.seenAt,
+      toolCallCount: exposure.observation.toolCallCount,
+      repeatedToolCallCount: exposure.observation.repeatedToolCallCount,
+      toolErrorCount: exposure.observation.toolErrorCount,
+      commandCallCount: exposure.observation.commandCallCount,
+      commandFailureCount: exposure.observation.commandFailureCount,
+    })),
+  });
+}
+
 export function markSkillUsageSourceFailed(
   db: Database.Database,
   source: SkillUsageFailedSourceRecord,
@@ -266,6 +299,32 @@ export function markSkillUsageSourceFailed(
   tx();
 }
 
+export async function markSkillUsageSourceFailedWithClient(
+  client: DbClient,
+  source: SkillUsageFailedSourceRecord,
+): Promise<void> {
+  await client.exec(`
+    INSERT INTO skill_usage_sources (
+      raw_file_path, analyzer_version, agent_kind, session_id, sdk_session_id,
+      mtime_ms, size_bytes, last_scanned_at, status, error
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'failed', ?)
+    ON CONFLICT(raw_file_path) DO UPDATE SET
+      analyzer_version = excluded.analyzer_version,
+      agent_kind = excluded.agent_kind,
+      session_id = excluded.session_id,
+      sdk_session_id = excluded.sdk_session_id,
+      mtime_ms = excluded.mtime_ms,
+      size_bytes = excluded.size_bytes,
+      last_scanned_at = excluded.last_scanned_at,
+      status = 'failed',
+      error = excluded.error
+  `, [
+    source.rawFilePath, source.analyzerVersion, source.agentKind, source.sessionId,
+    source.sdkSessionId, source.mtimeMs, source.sizeBytes, source.scannedAt, source.error,
+  ]);
+}
+
 export function listSkillUsageSourcesWithRecentExposures(
   db: Database.Database,
   analyzerVersion: string,
@@ -284,15 +343,27 @@ export function listSkillUsageSourcesWithRecentExposures(
     ORDER BY MAX(e.seen_at) DESC
   `).all(analyzerVersion, recentSince) as Array<Record<string, unknown>>;
 
-  return rows.map((row) => {
-    const agentKind: SkillUsageAgentKind = stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : 'codex';
-    return {
-      rawFilePath: stringValue(row.rawFilePath),
-      agentKind,
-      sessionId: stringValue(row.sessionId),
-      sdkSessionId: stringValue(row.sdkSessionId),
-    };
-  }).filter((row) => row.rawFilePath && row.sessionId && row.sdkSessionId);
+  return toRecentSourceRecords(rows);
+}
+
+export async function listSkillUsageSourcesWithRecentExposuresFromClient(
+  client: DbClient,
+  analyzerVersion: string,
+  recentSince: number,
+): Promise<SkillUsageRecentSourceRecord[]> {
+  const rows = await client.query<Record<string, unknown>>(`
+    SELECT
+      e.raw_file_path AS rawFilePath,
+      e.agent_kind AS agentKind,
+      e.session_id AS sessionId,
+      e.sdk_session_id AS sdkSessionId
+    FROM skill_usage_exposures e
+    WHERE e.analyzer_version = ?
+      AND e.seen_at >= ?
+    GROUP BY e.raw_file_path
+    ORDER BY MAX(e.seen_at) DESC
+  `, [analyzerVersion, recentSince]);
+  return toRecentSourceRecords(rows);
 }
 
 export function deleteSkillUsageRecordsBefore(
@@ -320,12 +391,28 @@ export function deleteSkillUsageRecordsBefore(
   tx();
 }
 
+export async function deleteSkillUsageRecordsBeforeWithClient(
+  client: DbClient,
+  analyzerVersion: string,
+  recentSince: number,
+): Promise<void> {
+  await client.tx('skillUsage.applyMutation', { kind: 'deleteBefore', analyzerVersion, recentSince });
+}
+
+export async function promoteSkillUsageAnalyzerVersionWithClient(
+  client: DbClient,
+  analyzerVersion: string,
+): Promise<void> {
+  await client.tx('skillUsage.applyMutation', { kind: 'promote', analyzerVersion });
+}
+
 export function getSkillUsageSummaryFromDb(
   db: Database.Database,
   params: SkillUsageQueryScope,
 ): SkillUsageSummary {
   const analyzerVersion = params.analyzerVersion ?? null;
   const recentSince = recentWindowStartMs(params.nowMs ?? Date.now());
+  const filter = skillUsageFilter(params.skillName, analyzerVersion, recentSince);
   const versionRows = db.prepare(`
     SELECT
       skill_document_hash AS skillDocumentHash,
@@ -347,13 +434,11 @@ export function getSkillUsageSummaryFromDb(
       SUM(command_call_count) AS commandCallCount,
       SUM(command_failure_count) AS commandFailureCount
     FROM skill_usage_exposures
-    WHERE skill_name = ?
-      AND (? IS NULL OR analyzer_version = ?)
-      AND seen_at >= ?
+    WHERE ${filter.sql}
       AND skill_document_hash IS NOT NULL
     GROUP BY skill_document_hash
     ORDER BY latestSeenAt DESC
-  `).all(params.skillName, analyzerVersion, analyzerVersion, recentSince) as Array<Record<string, unknown>>;
+  `).all(...filter.params) as Array<Record<string, unknown>>;
 
   const totalRow = db.prepare(`
     SELECT
@@ -370,12 +455,35 @@ export function getSkillUsageSummaryFromDb(
       END) AS passiveUseCount,
       SUM(CASE WHEN skill_document_hash IS NULL THEN 1 ELSE 0 END) AS unversionedUseCount
     FROM skill_usage_exposures
-    WHERE skill_name = ?
-      AND (? IS NULL OR analyzer_version = ?)
-      AND seen_at >= ?
-  `).get(params.skillName, analyzerVersion, analyzerVersion, recentSince) as Record<string, unknown> | undefined;
+    WHERE ${filter.sql}
+  `).get(...filter.params) as Record<string, unknown> | undefined;
 
   const readObservations = getReadObservationsFromDb(db, params.skillName, analyzerVersion, recentSince);
+  const trend = getSkillUsageTrendFromDb(db, params.skillName, analyzerVersion, recentSince);
+  return buildSkillUsageSummary(params, versionRows, totalRow, readObservations, trend);
+}
+
+export async function getSkillUsageSummaryFromClient(
+  client: DbClient,
+  params: SkillUsageQueryScope,
+): Promise<SkillUsageSummary> {
+  const snapshot = await readSkillUsageSnapshotFromClient(client, params, false);
+  return buildSkillUsageSummary(
+    params,
+    snapshot.versionRows,
+    snapshot.totalRow,
+    buildReadObservations(snapshot.readRows),
+    snapshot.trendRows.map(toTrendPointFromRow),
+  );
+}
+
+function buildSkillUsageSummary(
+  params: SkillUsageQueryScope,
+  versionRows: Array<Record<string, unknown>>,
+  totalRow: Record<string, unknown> | undefined,
+  readObservations: { overall: SkillUsageReadObservation; byVersion: Map<string, SkillUsageReadObservation> },
+  trend: SkillUsageTrendPoint[],
+): SkillUsageSummary {
   const documentVersions = versionRows.map((row) => toDocumentVersionSummary(row, readObservations.byVersion));
   const currentDocumentHash = params.currentDocumentHash ?? null;
   const totalUseCount = numberValue(totalRow?.totalUseCount);
@@ -394,8 +502,6 @@ export function getSkillUsageSummaryFromDb(
     ? documentVersions.find((version) => version.skillDocumentHash === currentDocumentHash) ?? null
     : null;
   const latestSeenAt = totalUseCount > 0 ? numberValue(totalRow?.latestSeenAt) : null;
-  const trend = getSkillUsageTrendFromDb(db, params.skillName, analyzerVersion, recentSince);
-
   return {
     skillName: params.skillName,
     currentDocumentHash,
@@ -420,32 +526,18 @@ function getReadObservationsFromDb(
   analyzerVersion: string | null,
   recentSince: number,
 ): { overall: SkillUsageReadObservation; byVersion: Map<string, SkillUsageReadObservation> } {
+  const filter = skillUsageFilter(skillName, analyzerVersion, recentSince);
   const rows = db.prepare(`
     SELECT
       skill_document_hash AS skillDocumentHash,
       COALESCE(NULLIF(sdk_session_id, ''), session_id) AS sessionKey,
       seen_at AS seenAt
     FROM skill_usage_exposures
-    WHERE skill_name = ?
-      AND (? IS NULL OR analyzer_version = ?)
-      AND seen_at >= ?
+    WHERE ${filter.sql}
       AND source IN ('claude_skill_file_read', 'codex_skill_file_read')
     ORDER BY sessionKey ASC, seen_at ASC
-  `).all(skillName, analyzerVersion, analyzerVersion, recentSince) as Array<Record<string, unknown>>;
-
-  const grouped = new Map<string, Array<Record<string, unknown>>>();
-  for (const row of rows) {
-    const hash = stringValue(row.skillDocumentHash);
-    if (!hash) continue;
-    const items = grouped.get(hash) ?? [];
-    items.push(row);
-    grouped.set(hash, items);
-  }
-
-  return {
-    overall: readObservationFromRows(rows),
-    byVersion: new Map([...grouped].map(([hash, items]) => [hash, readObservationFromRows(items)])),
-  };
+  `).all(...filter.params) as Array<Record<string, unknown>>;
+  return buildReadObservations(rows);
 }
 
 export function getSkillUsageDiagnosisContextFromDb(
@@ -490,12 +582,283 @@ export function getSkillUsageDiagnosisContextFromDb(
   };
 }
 
+export async function getSkillUsageDiagnosisContextFromClient(
+  client: DbClient,
+  params: {
+    skillName: string;
+    currentDocumentHash?: string | null;
+    currentDocumentContent?: string | null;
+    analyzerVersion?: string | null;
+    skillPath?: string | null;
+    maxEvidence?: number;
+    nowMs?: number;
+  },
+): Promise<SkillUsageDiagnosisContext> {
+  const currentDocumentHash = params.currentDocumentHash ?? null;
+  const snapshot = await readSkillUsageSnapshotFromClient(client, params, true);
+  const summary = buildSkillUsageSummary(
+    params,
+    snapshot.versionRows,
+    snapshot.totalRow,
+    buildReadObservations(snapshot.readRows),
+    snapshot.trendRows.map(toTrendPointFromRow),
+  );
+  const evidence = selectDiagnosisEvidence(
+    snapshot.evidenceRows.map(toEvidenceIndex),
+    params.maxEvidence ?? 12,
+  );
+  return {
+    skillName: params.skillName,
+    skillPath: params.skillPath ?? null,
+    currentDocumentHash,
+    summary,
+    evidence,
+    prompt: buildSkillUsageDiagnosisPrompt({
+      skillName: params.skillName,
+      skillPath: params.skillPath ?? null,
+      summary,
+      evidence,
+    }),
+  };
+}
+
+interface SkillUsageSnapshotRow {
+  rowKind: 'version' | 'total' | 'read' | 'trend' | 'evidence';
+  payload: string;
+}
+
+interface SkillUsageSnapshot {
+  versionRows: Array<Record<string, unknown>>;
+  totalRow: Record<string, unknown> | undefined;
+  readRows: Array<Record<string, unknown>>;
+  trendRows: Array<Record<string, unknown>>;
+  evidenceRows: Array<Record<string, unknown>>;
+}
+
+/**
+ * Read every derived view from one SQLite statement. The materialized CTE uses
+ * the selective skill/version/time index once, and all aggregates observe the
+ * same snapshot even when a background refresh is queued on the DB worker.
+ */
+async function readSkillUsageSnapshotFromClient(
+  client: DbClient,
+  params: SkillUsageQueryScope,
+  includeEvidence: boolean,
+): Promise<SkillUsageSnapshot> {
+  const analyzerVersion = params.analyzerVersion ?? null;
+  const recentSince = recentWindowStartMs(params.nowMs ?? Date.now());
+  const filter = skillUsageFilter(params.skillName, analyzerVersion, recentSince);
+  const currentDocumentHash = params.currentDocumentHash ?? null;
+  const evidenceHash = currentDocumentHash || null;
+  const evidenceCte = includeEvidence
+    ? `,
+      evidence_rows AS (
+        SELECT *
+        FROM filtered
+        WHERE ${evidenceHash === null
+          ? '1 = 1'
+          : `(
+            NOT EXISTS (
+              SELECT 1 FROM filtered WHERE skill_document_hash = ?
+            )
+            OR skill_document_hash = ?
+          )`}
+        ORDER BY seen_at DESC
+        LIMIT 500
+      )`
+    : '';
+  const evidenceSelect = includeEvidence
+    ? `
+      UNION ALL
+      SELECT 'evidence', json_object(
+        'id', id,
+        'rawFilePath', raw_file_path,
+        'rawLineNo', raw_line_no,
+        'sessionId', session_id,
+        'sdkSessionId', sdk_session_id,
+        'agentKind', agent_kind,
+        'skillName', skill_name,
+        'skillPath', skill_path,
+        'skillDocumentHash', skill_document_hash,
+        'exposureContentHash', exposure_content_hash,
+        'documentHashSource', document_hash_source,
+        'source', source,
+        'toolUseId', tool_use_id,
+        'seenAt', seen_at,
+        'toolCallCount', tool_call_count,
+        'repeatedToolCallCount', repeated_tool_call_count,
+        'toolErrorCount', tool_error_count,
+        'commandCallCount', command_call_count,
+        'commandFailureCount', command_failure_count
+      )
+      FROM evidence_rows`
+    : '';
+  const queryParams = evidenceHash !== null && includeEvidence
+    ? [...filter.params, evidenceHash, evidenceHash]
+    : filter.params;
+  const rows = await client.query<SkillUsageSnapshotRow>(`
+    WITH filtered AS MATERIALIZED (
+      SELECT *
+      FROM skill_usage_exposures
+      WHERE ${filter.sql}
+    ),
+    version_rows AS (
+      SELECT
+        skill_document_hash AS skillDocumentHash,
+        COUNT(*) AS useCount,
+        MIN(seen_at) AS firstSeenAt,
+        MAX(seen_at) AS latestSeenAt,
+        SUM(CASE WHEN agent_kind = 'claude-code' THEN 1 ELSE 0 END) AS claudeUseCount,
+        SUM(CASE WHEN agent_kind = 'codex' THEN 1 ELSE 0 END) AS codexUseCount,
+        SUM(CASE WHEN source = 'claude_skill_tool' THEN 1 ELSE 0 END) AS strongActiveUseCount,
+        SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
+        SUM(CASE
+          WHEN source = 'claude_skill_tool' THEN 0
+          WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 0
+          ELSE 1
+        END) AS passiveUseCount,
+        SUM(tool_call_count) AS toolCallCount,
+        SUM(repeated_tool_call_count) AS repeatedToolCallCount,
+        SUM(tool_error_count) AS toolErrorCount,
+        SUM(command_call_count) AS commandCallCount,
+        SUM(command_failure_count) AS commandFailureCount
+      FROM filtered
+      WHERE skill_document_hash IS NOT NULL
+      GROUP BY skill_document_hash
+    ),
+    total_row AS (
+      SELECT
+        COUNT(*) AS totalUseCount,
+        MAX(seen_at) AS latestSeenAt,
+        SUM(CASE WHEN agent_kind = 'claude-code' THEN 1 ELSE 0 END) AS claudeUseCount,
+        SUM(CASE WHEN agent_kind = 'codex' THEN 1 ELSE 0 END) AS codexUseCount,
+        SUM(CASE WHEN source = 'claude_skill_tool' THEN 1 ELSE 0 END) AS strongActiveUseCount,
+        SUM(CASE WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 1 ELSE 0 END) AS semiActiveUseCount,
+        SUM(CASE
+          WHEN source = 'claude_skill_tool' THEN 0
+          WHEN source IN ('claude_skill_file_read', 'codex_skill_file_read') THEN 0
+          ELSE 1
+        END) AS passiveUseCount,
+        SUM(CASE WHEN skill_document_hash IS NULL THEN 1 ELSE 0 END) AS unversionedUseCount
+      FROM filtered
+    ),
+    read_rows AS (
+      SELECT
+        skill_document_hash AS skillDocumentHash,
+        COALESCE(NULLIF(sdk_session_id, ''), session_id) AS sessionKey,
+        seen_at AS seenAt
+      FROM filtered
+      WHERE source IN ('claude_skill_file_read', 'codex_skill_file_read')
+    ),
+    trend_rows AS (
+      SELECT
+        strftime('%Y-%m-%d', seen_at / 1000, 'unixepoch', 'localtime') AS day,
+        COUNT(*) AS useCount,
+        SUM(tool_call_count) AS toolCallCount,
+        SUM(repeated_tool_call_count) AS repeatedToolCallCount,
+        SUM(command_call_count) AS commandCallCount,
+        SUM(command_failure_count) AS commandFailureCount
+      FROM filtered
+      GROUP BY day
+      ORDER BY day DESC
+      LIMIT 30
+    )${evidenceCte}
+    SELECT 'version' AS rowKind, json_object(
+      'skillDocumentHash', skillDocumentHash,
+      'useCount', useCount,
+      'firstSeenAt', firstSeenAt,
+      'latestSeenAt', latestSeenAt,
+      'claudeUseCount', claudeUseCount,
+      'codexUseCount', codexUseCount,
+      'strongActiveUseCount', strongActiveUseCount,
+      'semiActiveUseCount', semiActiveUseCount,
+      'passiveUseCount', passiveUseCount,
+      'toolCallCount', toolCallCount,
+      'repeatedToolCallCount', repeatedToolCallCount,
+      'toolErrorCount', toolErrorCount,
+      'commandCallCount', commandCallCount,
+      'commandFailureCount', commandFailureCount
+    ) AS payload
+    FROM version_rows
+    UNION ALL
+    SELECT 'total', json_object(
+      'totalUseCount', totalUseCount,
+      'latestSeenAt', latestSeenAt,
+      'claudeUseCount', claudeUseCount,
+      'codexUseCount', codexUseCount,
+      'strongActiveUseCount', strongActiveUseCount,
+      'semiActiveUseCount', semiActiveUseCount,
+      'passiveUseCount', passiveUseCount,
+      'unversionedUseCount', unversionedUseCount
+    )
+    FROM total_row
+    UNION ALL
+    SELECT 'read', json_object(
+      'skillDocumentHash', skillDocumentHash,
+      'sessionKey', sessionKey,
+      'seenAt', seenAt
+    )
+    FROM read_rows
+    UNION ALL
+    SELECT 'trend', json_object(
+      'day', day,
+      'useCount', useCount,
+      'toolCallCount', toolCallCount,
+      'repeatedToolCallCount', repeatedToolCallCount,
+      'commandCallCount', commandCallCount,
+      'commandFailureCount', commandFailureCount
+    )
+    FROM trend_rows
+    ${evidenceSelect}
+  `, queryParams);
+
+  const snapshot: SkillUsageSnapshot = {
+    versionRows: [],
+    totalRow: undefined,
+    readRows: [],
+    trendRows: [],
+    evidenceRows: [],
+  };
+  for (const row of rows) {
+    const payload = parseSkillUsageSnapshotPayload(row.payload);
+    switch (row.rowKind) {
+      case 'version':
+        snapshot.versionRows.push(payload);
+        break;
+      case 'total':
+        snapshot.totalRow = payload;
+        break;
+      case 'read':
+        snapshot.readRows.push(payload);
+        break;
+      case 'trend':
+        snapshot.trendRows.push(payload);
+        break;
+      case 'evidence':
+        snapshot.evidenceRows.push(payload);
+        break;
+    }
+  }
+  snapshot.versionRows.sort((a, b) => numberValue(b.latestSeenAt) - numberValue(a.latestSeenAt));
+  snapshot.trendRows.sort((a, b) => stringValue(b.day).localeCompare(stringValue(a.day)));
+  return snapshot;
+}
+
+function parseSkillUsageSnapshotPayload(payload: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(payload);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('invalid skill usage snapshot payload');
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function getSkillUsageTrendFromDb(
   db: Database.Database,
   skillName: string,
   analyzerVersion: string | null,
   recentSince: number,
 ): SkillUsageTrendPoint[] {
+  const filter = skillUsageFilter(skillName, analyzerVersion, recentSince);
   const rows = db.prepare(`
     SELECT
       strftime('%Y-%m-%d', seen_at / 1000, 'unixepoch', 'localtime') AS day,
@@ -505,23 +868,12 @@ function getSkillUsageTrendFromDb(
       SUM(command_call_count) AS commandCallCount,
       SUM(command_failure_count) AS commandFailureCount
     FROM skill_usage_exposures
-    WHERE skill_name = ?
-      AND (? IS NULL OR analyzer_version = ?)
-      AND seen_at >= ?
+    WHERE ${filter.sql}
     GROUP BY day
     ORDER BY day DESC
     LIMIT 30
-  `).all(skillName, analyzerVersion, analyzerVersion, recentSince) as Array<Record<string, unknown>>;
-  return rows.map((row) =>
-    toTrendPoint({
-      day: stringValue(row.day),
-      useCount: numberValue(row.useCount),
-      toolCallCount: numberValue(row.toolCallCount),
-      repeatedToolCallCount: numberValue(row.repeatedToolCallCount),
-      commandCallCount: numberValue(row.commandCallCount),
-      commandFailureCount: numberValue(row.commandFailureCount),
-    }),
-  );
+  `).all(...filter.params) as Array<Record<string, unknown>>;
+  return rows.map(toTrendPointFromRow);
 }
 
 function readEvidenceCandidates(
@@ -531,6 +883,7 @@ function readEvidenceCandidates(
   analyzerVersion: string | null,
   recentSince: number,
 ): SkillUsageEvidenceIndex[] {
+  const filter = skillUsageEvidenceFilter(skillName, skillDocumentHash, analyzerVersion, recentSince);
   const rows = db.prepare(`
     SELECT
       id,
@@ -553,22 +906,15 @@ function readEvidenceCandidates(
       command_call_count AS commandCallCount,
       command_failure_count AS commandFailureCount
     FROM skill_usage_exposures
-    WHERE skill_name = ?
-      AND (? IS NULL OR analyzer_version = ?)
-      AND (? IS NULL OR skill_document_hash = ?)
-      AND seen_at >= ?
+    WHERE ${filter.sql}
     ORDER BY seen_at DESC
     LIMIT 500
-  `).all(
-    skillName,
-    analyzerVersion,
-    analyzerVersion,
-    skillDocumentHash,
-    skillDocumentHash,
-    recentSince,
-  ) as Array<Record<string, unknown>>;
+  `).all(...filter.params) as Array<Record<string, unknown>>;
+  return rows.map(toEvidenceIndex);
+}
 
-  return rows.map((row) => ({
+function toEvidenceIndex(row: Record<string, unknown>): SkillUsageEvidenceIndex {
+  return {
     id: stringValue(row.id),
     bucket: 'recent',
     rawFilePath: stringValue(row.rawFilePath),
@@ -591,7 +937,7 @@ function readEvidenceCandidates(
       commandCallCount: numberValue(row.commandCallCount),
       commandFailureCount: numberValue(row.commandFailureCount),
     },
-  }));
+  };
 }
 
 function selectDiagnosisEvidence(
@@ -848,6 +1194,17 @@ function toDocumentVersionSummary(
   return addDerivedMetrics(summary);
 }
 
+function toTrendPointFromRow(row: Record<string, unknown>): SkillUsageTrendPoint {
+  return toTrendPoint({
+    day: stringValue(row.day),
+    useCount: numberValue(row.useCount),
+    toolCallCount: numberValue(row.toolCallCount),
+    repeatedToolCallCount: numberValue(row.repeatedToolCallCount),
+    commandCallCount: numberValue(row.commandCallCount),
+    commandFailureCount: numberValue(row.commandFailureCount),
+  });
+}
+
 function toTrendPoint(raw: {
   day: string;
   useCount: number;
@@ -927,6 +1284,23 @@ function readObservationFromRows(rows: Array<Record<string, unknown>>): SkillUsa
   };
 }
 
+function buildReadObservations(
+  rows: Array<Record<string, unknown>>,
+): { overall: SkillUsageReadObservation; byVersion: Map<string, SkillUsageReadObservation> } {
+  const grouped = new Map<string, Array<Record<string, unknown>>>();
+  for (const row of rows) {
+    const hash = stringValue(row.skillDocumentHash);
+    if (!hash) continue;
+    const items = grouped.get(hash) ?? [];
+    items.push(row);
+    grouped.set(hash, items);
+  }
+  return {
+    overall: readObservationFromRows(rows),
+    byVersion: new Map([...grouped].map(([hash, items]) => [hash, readObservationFromRows(items)])),
+  };
+}
+
 function createEmptyReadObservation(): SkillUsageReadObservation {
   return {
     fileReadCount: 0,
@@ -955,6 +1329,48 @@ function estimateDocumentSize(content: string): SkillUsageDocumentSize {
     byteCount: Buffer.byteLength(content, 'utf-8'),
     estimatedTokenCount: content.length === 0 ? 0 : Math.ceil(content.length / 4),
   };
+}
+
+function skillUsageFilter(
+  skillName: string,
+  analyzerVersion: string | null,
+  recentSince: number,
+): { sql: string; params: unknown[] } {
+  const clauses = ['skill_name = ?'];
+  const params: unknown[] = [skillName];
+  if (analyzerVersion !== null) {
+    clauses.push('analyzer_version = ?');
+    params.push(analyzerVersion);
+  }
+  clauses.push('seen_at >= ?');
+  params.push(recentSince);
+  return { sql: clauses.join('\n      AND '), params };
+}
+
+function skillUsageEvidenceFilter(
+  skillName: string,
+  skillDocumentHash: string | null,
+  analyzerVersion: string | null,
+  recentSince: number,
+): { sql: string; params: unknown[] } {
+  const filter = skillUsageFilter(skillName, analyzerVersion, recentSince);
+  if (skillDocumentHash === null) return filter;
+  return {
+    sql: `${filter.sql}\n      AND skill_document_hash = ?`,
+    params: [...filter.params, skillDocumentHash],
+  };
+}
+
+function toRecentSourceRecords(rows: Array<Record<string, unknown>>): SkillUsageRecentSourceRecord[] {
+  return rows.map((row) => {
+    const agentKind: SkillUsageAgentKind = stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : 'codex';
+    return {
+      rawFilePath: stringValue(row.rawFilePath),
+      agentKind,
+      sessionId: stringValue(row.sessionId),
+      sdkSessionId: stringValue(row.sdkSessionId),
+    };
+  }).filter((row) => row.rawFilePath && row.sessionId && row.sdkSessionId);
 }
 
 function stringValue(value: unknown): string {

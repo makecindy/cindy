@@ -4,6 +4,8 @@ import { resolveDesktopDevRegion } from './shared/desktop-dev-region.mjs';
 
 export const DESKTOP_DEV_VERDICT_PREFIX = 'DESKTOP_DEV_VERDICT';
 export const WORKTREE_ISOLATED_ARG = '--isolated=@worktree';
+export const SHARED_USERDATA_ARG = '--shared';
+export const DEFAULT_ISOLATED_ARG = '--isolated=dev';
 const WORKTREE_NAME_DIGEST_LEN = 6;
 
 const VERDICT_FIELDS = Object.freeze([
@@ -87,6 +89,32 @@ export function resolveIsolatedArg(isolatedArg, rootDir, options) {
     return `--isolated=${isolationNameFromWorktree(rootDir, options)}`;
   }
   return isolatedArg;
+}
+
+/**
+ * Dev restart defaults to one stable isolated sandbox shared by every
+ * checkout. The legacy official profile remains opt-in via --shared.
+ */
+export function normalizeDesktopRestartArgv(argv = [], env = process.env) {
+  if (argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated='))) {
+    return argv;
+  }
+  if (env.XDT_ISOLATED === '1') return argv;
+  if (argv.includes(SHARED_USERDATA_ARG) || argv.includes('--preserve-running')) {
+    return argv;
+  }
+  return [...argv, DEFAULT_ISOLATED_ARG];
+}
+
+export function desktopRestartArgvConflictMessage(argv = [], env = process.env) {
+  if (!argv.includes(SHARED_USERDATA_ARG)) return null;
+  if (
+    argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated='))
+    || env.XDT_ISOLATED === '1'
+  ) {
+    return '--shared cannot be combined with --isolated or XDT_ISOLATED=1';
+  }
+  return null;
 }
 
 export function shouldSuggestIsolatedNext({ isolated, code } = {}) {

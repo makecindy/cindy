@@ -48,6 +48,9 @@ function installOverflowGitExec(): void {
       err.message = 'spawn maxBuffer length exceeded';
       throw err;
     }
+    if (args.includes('config') && args.includes('--list')) {
+      return { stdout: '', stderr: '' };
+    }
     if (args.includes('--git-path')) {
       return { stdout: 'no-such-marker\n', stderr: '' };
     }

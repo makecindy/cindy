@@ -15,6 +15,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { MirrorCache } from '../mirrorCacheStore';
+import { decodeRemoteHistory, encodeRemoteHistory } from '../../../shared/remoteHistoryCache';
+import { projectHistoryView, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
 import {
   createMirrorCache,
   MirrorCachePurgeError,
@@ -332,6 +334,41 @@ describe('normalizeDeviceSessions', () => {
 });
 
 describe('readMessages / writeMessages', () => {
+  it('round-trips structured history in the existing guarded file and strips live/media data', async () => {
+    const c = rawCache();
+    const rows = [row('one', '2026-01-01T00:00:00Z', { isStreaming: true, images: [{ base64: 'secret-bytes', url: 'data:image/png;base64,secret' }], retryFiles: ['private'] })];
+    const snapshot: HistoryViewSnapshot<typeof rows[number]> = {
+      items: projectHistoryView(rows, false), details: new Map(), expanded: new Set(),
+      nextCursor: 'older', hasMore: true, ready: true, loading: false, error: null,
+    };
+    const token = await c.readMessagesWithInvalidation('dev', 'session');
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, encodeRemoteHistory(snapshot));
+    const result = await c.readMessagesWithInvalidation('dev', 'session');
+    expect(result.messages).toEqual([]);
+    expect(result.historyView).not.toContain('secret');
+    expect(result.historyView).not.toContain('private');
+    const restored = decodeRemoteHistory(result.historyView)!;
+    expect(restored.hasMore).toBe(true);
+    expect(restored.nextCursor).toBe('older');
+    expect(JSON.stringify(restored.items)).toContain('body-one');
+    expect(JSON.stringify(restored.items)).toContain('"isStreaming":false');
+    // Explicit clear retires both forms, including a delayed structured write.
+    await c.writeMessages('dev', 'session', []);
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, encodeRemoteHistory(snapshot));
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).historyView).toBeUndefined();
+    const fresh = await c.readMessagesWithInvalidation('dev', 'session');
+    await c.writeMessages('dev', 'session', [], fresh.invalidation, fresh.ownerRoot, fresh.accountCounter, encodeRemoteHistory({ ...snapshot, items: [] }));
+    expect(decodeRemoteHistory((await c.readMessagesWithInvalidation('dev', 'session')).historyView)?.items).toEqual([]);
+    await c.writeMessages('dev', 'session', rows, fresh.invalidation, fresh.ownerRoot, fresh.accountCounter);
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).historyView).toBeUndefined();
+  });
+
+  it('rejects corrupt structured message content instead of crashing the renderer', () => {
+    const text = JSON.stringify({ version: 1, items: [{ type: 'messages', key: 'm', messages: [row('m', '2026-01-01', { content: null })] }], details: [], expanded: [], hasMore: false, nextCursor: null });
+    expect(decodeRemoteHistory(text)).toBeNull();
+    expect(decodeRemoteHistory('{')).toBeNull();
+  });
+
   it('写入后可读回,内容与归一化结果一致', async () => {
     const c = cache();
     await c.writeMessages('dev-1', 'sess-1', [
@@ -1771,11 +1808,24 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
   });
 
   it('清某设备期间,另一台设备的写入照常落盘', async () => {
-    const a = cache();
-    const b = cache();
+    // 同代际闸用例:用 rawCache + 清理前显式令牌。withAutoToken 在 writeMessages
+    // 调用时才异步补读,满载 CI 上补读会撞进另一台设备清理的墓碑窗口
+    // (hasPendingClears 不分设备,清理期间一律返回 -1),拿到 -1 的写入在提交时
+    // 与会话计数 0 比对失配被拒 —— 生产令牌在远端请求发起时捕获,早于任何清理,
+    // 这里等价地在清理前捕获。
+    const a = rawCache();
+    const b = rawCache();
+    const cap = await b.readMessagesWithInvalidation('dev-2', 'sess-9');
     await Promise.all([
       a.clearDevice('dev-1'),
-      b.writeMessages('dev-2', 'sess-9', [row('m9', '2026-01-01T00:00:00.000Z')]),
+      b.writeMessages(
+        'dev-2',
+        'sess-9',
+        [row('m9', '2026-01-01T00:00:00.000Z')],
+        cap.invalidation,
+        cap.ownerRoot,
+        cap.accountCounter,
+      ),
     ]);
     expect((await b.readMessages('dev-2', 'sess-9')).map((m) => m.id)).toEqual(['m9']);
   });

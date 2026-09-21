@@ -41,6 +41,9 @@ API keys, or use local models.
 See [cindy.app](https://cindy.app) for service details,
 [pricing](https://cindy.app/#pricing), and [downloads](https://cindy.app/download/).
 
+Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
+for installation, updates, keyring setup and migration from a manual install.
+
 ## Yours to shape
 
 Open source means more than visible — it means changeable:
@@ -121,6 +124,11 @@ auto-updates also come from the official CDN). This is intentional — external
 developers don't need to self-host a server: sign in with your own Cindy
 account in a dev build and develop / test directly against the official
 servers.
+
+Skill Hub migration uses two separate manifest fields: released clients keep
+using `skillhubApiBaseUrl` (the deprecated XD proxy), while current clients use
+`cindySkillHubApiBaseUrl`. The current client deliberately does not fall back to
+the legacy field when the new endpoint is absent.
 
 ## Architecture
 

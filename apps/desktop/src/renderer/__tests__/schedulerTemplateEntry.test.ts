@@ -3,9 +3,12 @@
 import { createElement, type ReactNode } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ScheduleTemplate } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
+import type { ProviderView } from '@cindy/model-providers';
+import type { SessionReference } from '../../shared/sessionReference';
 
 import { SchedulerPage } from '@/features/scheduler/SchedulerPage';
+import { ScheduleFormDialog } from '@/features/scheduler/components/ScheduleFormDialog';
 import {
   oneTimeCronAfterUsageReset,
   systemTimeZone,
@@ -14,6 +17,10 @@ import {
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 
 const createSchedule = vi.fn();
+const modelFixtures = vi.hoisted(() => ({
+  providers: [] as ProviderView[],
+  sessionReferences: new Map<string, SessionReference>(),
+}));
 const toastMocks = vi.hoisted(() => ({
   success: vi.fn(),
   warning: vi.fn(),
@@ -130,12 +137,8 @@ vi.mock('@/features/scheduler/hooks/useScheduleUnreadRunCounts', () => ({
   useScheduleUnreadRunCounts: () => new Map(),
 }));
 
-vi.mock('@/features/scheduler/hooks/useScheduleCostSummaries', () => ({
-  useScheduleCostSummaries: () => ({ summaries: new Map(), loaded: true }),
-}));
-
 vi.mock('@/features/scheduler/hooks/useSessionReferences', () => ({
-  useSessionReferences: () => new Map(),
+  useSessionReferences: () => modelFixtures.sessionReferences,
 }));
 
 vi.mock('@/hooks/useFeishuBot', () => ({
@@ -147,9 +150,12 @@ vi.mock('@/hooks/useProjectPickerOptions', () => ({
 }));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({
+  useAgentCapabilities: (agentKind: string) => ({
     capabilities: {
       availableModels: [
+        ...(agentKind === 'codex' ? [{
+          id: 'gpt-5.5', displayName: 'GPT 5.5', efforts: ['high'], defaultEffort: 'high',
+        }] : []),
         {
           id: 'claude-sonnet-4-6',
           displayName: 'Claude Sonnet 4.6',
@@ -166,13 +172,13 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
           defaultEffort: 'medium',
         },
       ],
-      hasFastMode: false,
+      hasFastMode: agentKind === 'codex',
     },
   }),
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: [] }),
+  useProviders: () => ({ providers: modelFixtures.providers }),
 }));
 
 vi.mock('@/state/newMakerDraft', () => ({
@@ -182,10 +188,16 @@ vi.mock('@/state/newMakerDraft', () => ({
 vi.mock('@/features/scheduler/components/ScheduleChips', async () => {
   const React = await import('react');
   return {
-    AgentTabs: ({ value }: { value: string }) =>
-      React.createElement('div', { 'data-testid': 'agent-kind' }, value),
-    ModelEffortChip: ({ modelValue }: { modelValue: string }) =>
-      React.createElement('div', { 'data-testid': 'model-value' }, modelValue),
+    ModelEffortChip: ({ modelValue, agentKind, fastMode, onChangeFast }: {
+      modelValue: string; agentKind: string; fastMode?: boolean; onChangeFast?: (enabled: boolean) => void;
+    }) =>
+      React.createElement(React.Fragment, null,
+        React.createElement('div', { 'data-testid': 'agent-kind' }, agentKind),
+        React.createElement('div', { 'data-testid': 'model-value' }, modelValue),
+        React.createElement('button', {
+          type: 'button', 'aria-label': 'Toggle Fast',
+          onClick: () => onChangeFast?.(!fastMode),
+        })),
     ProjectChip: () => React.createElement('div'),
     ScheduleChip: ({ cronExpr }: { cronExpr: string }) =>
       React.createElement('div', { 'data-testid': 'cron-expr' }, cronExpr),
@@ -195,6 +207,8 @@ vi.mock('@/features/scheduler/components/ScheduleChips', async () => {
 });
 
 beforeEach(() => {
+  modelFixtures.providers = [];
+  modelFixtures.sessionReferences.clear();
   createSchedule.mockImplementation(async (input) => ({ id: 'created-schedule', ...input }));
   routerMocks.location.pathname = '/cc-agent/scheduled';
   routerMocks.location.search = '';
@@ -449,5 +463,44 @@ describe('Scheduler template entry', () => {
     expect(createSchedule).toHaveBeenCalledWith(
       expect.objectContaining({ model: REMEMBERED, agentKind: 'claude-code' }),
     );
+  });
+});
+
+describe('editing legacy bound automations', () => {
+  it.each([true, false])('persists Fast=%s and the Harness without reselecting the model', async (fastMode) => {
+    const initial: Schedule = {
+      id: 'legacy-bound', name: 'Legacy automation', prompt: 'Continue the task',
+      kind: 'cron', cronExpr: '0 * * * *', timezone: 'UTC', recurring: true, manual: false,
+      agentKind: 'codex', model: 'gpt-5.5', providerId: 'custom-fast', effort: 'high',
+      fastMode: !fastMode, targetSessionId: 'bound-task', workspaceKind: 'dialogue', useWorktree: false,
+      notify: { desktop: true, feishu: false }, status: 'active', createdAt: 1, updatedAt: 1,
+    };
+    expect(initial.modelAgentKind).toBeUndefined();
+    modelFixtures.providers = [{
+      id: 'custom-fast', name: 'Custom Fast', source: 'user', connected: true, agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: { codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' } },
+      models: { codex: [{
+        id: 'gpt-5.5', name: 'GPT 5.5', contextWindow: 200_000,
+        efforts: ['high'], defaultEffort: 'high', supportsFastMode: true,
+      }] },
+    }];
+    modelFixtures.sessionReferences.set('bound-task', {
+      sessionId: 'bound-task', state: 'available', status: 'active', agentKind: 'codex',
+    });
+    const onSubmit = vi.fn(async () => undefined);
+    render(createElement(ScheduleFormDialog, {
+      open: true, onOpenChange: vi.fn(), initial, onSubmit,
+    }));
+
+    // Exercise the current-row Fast callback only: no model-row selection is emitted.
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Fast' }));
+    fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.saveAria' }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'bound-task', agentKind: 'codex', modelAgentKind: 'codex',
+      model: 'gpt-5.5', providerId: 'custom-fast', effort: 'high', fastMode,
+    }), true);
   });
 });

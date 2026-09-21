@@ -22,7 +22,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const translations: Record<string, string> = {
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.xd.title': 'Cindy AI',
+        'settings.providers.xd.accountTier.free': '免费版',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
+        'newChat.modelSelector.trigger.loading': '正在读取模型…',
+        'newChat.modelSelector.trigger.unresolved': '模型信息暂不可用',
         'newChat.modelSelector.trigger.aria': `Select model. Current: ${options?.model ?? ''}`,
         'newChat.modelSelector.trigger.ariaWithEffort': `Select model. Current: ${options?.model ?? ''}, effort: ${options?.effort ?? ''}`,
         'newChat.modelSelector.modelListAria': '模型列表',
@@ -31,6 +34,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.source.disconnected': '已断开',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
+        'newChat.modelSelector.trigger.currentAndNext': `${options?.current} → ${options?.next}`,
         'effortLevels.high': '最高',
       };
       return translations[key] ?? options?.defaultValue ?? key;
@@ -157,6 +161,18 @@ vi.mock('@/hooks/useModelPricing', () => ({
   useReferenceModelPricing: () => ({}),
 }));
 
+const modelAccessState = vi.hoisted(() => ({
+  accountTier: null as 'free' | 'paid' | 'not_applicable' | null,
+}));
+vi.mock('@/hooks/useModelAccessStatus', () => ({
+  useModelAccessStatus: () => ({
+    state: 'ok',
+    source: 'server',
+    endpoint: 'https://gateway.example.com',
+    accountTier: modelAccessState.accountTier,
+  }),
+}));
+
 const providersRef = vi.hoisted(() => {
   const DEFAULT_PROVIDERS = [
     {
@@ -207,10 +223,10 @@ const providersRef = vi.hoisted(() => {
       },
     },
   ] as unknown[];
-  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS };
+  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS, loading: false, loadFailed: false };
 });
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers, providerOrder: [] }),
+  useProviders: () => ({ providers: providersRef.providers, providerOrder: [], loading: providersRef.loading, loadFailed: providersRef.loadFailed }),
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
@@ -230,7 +246,7 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
 const visibleModelsRef = vi.hoisted(() => ({ models: [] as unknown[] }));
 vi.mock('@/lib/providerModels', () => ({
   providerMonogram: (name: string) => name.slice(0, 1).toUpperCase(),
-  isChatBridgedCodexProvider: () => false,
+  isLocalOnlyProviderForAgent: () => false,
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: string | null }) =>
     agentKind ?? 'claude-code',
@@ -264,6 +280,9 @@ beforeEach(() => {
   floatingUiMocks.size.mockClear();
   floatingUiMocks.useFloating.mockClear();
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+  providersRef.loading = false;
+  providersRef.loadFailed = false;
+  modelAccessState.accountTier = null;
   visibleModelsRef.models = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
@@ -273,6 +292,8 @@ beforeEach(() => {
 function renderSelector(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
   return render(
     React.createElement(ModelSelector, {
+      // Compatibility renderer for capabilities-only remote hosts.
+      unifiedPanel: false,
       modelId: 'claude-opus-4-8',
       effort: 'high',
       onModelChange: vi.fn(),
@@ -290,6 +311,188 @@ async function openDropdown(): Promise<void> {
     fireEvent.click(screen.getByRole('button', { name: /Select model/ }));
   });
 }
+
+describe('model selector display identity during switches', () => {
+  const props = {
+    unifiedPanel: false,
+    modelId: 'chatgpt/gpt-6',
+    effort: 'high',
+    vendorKey: 'codex' as const,
+    currentProviderId: 'openai',
+    actualRoute: true,
+    onModelChange: vi.fn(),
+    onEffortChange: vi.fn(),
+  };
+  const provider = {
+    id: 'openai', name: 'OpenAI', source: 'builtin', agents: ['codex'],
+    auth: { method: 'oauth' }, routing: { codex: {} }, connected: true,
+    models: { codex: [{ id: 'gpt-6', name: 'GPT-6', efforts: ['high'] }] },
+  };
+  const trigger = () => screen.getByRole('button');
+
+  it.each([false, true])('resolves implicit aliases using the eligible default source (session=%s)', (actualRoute) => {
+    const gateway = { ...provider, id: 'xd', models: { codex: [{ id: 'gpt-6', name: 'Gateway GPT' }] } };
+    providersRef.providers = [gateway, provider];
+    const implicit = { ...props, currentProviderId: null, actualRoute };
+    const { rerender } = render(<ModelSelector {...implicit} switching />);
+    expect(trigger().textContent).toContain('GPT-6');
+    expect(trigger().textContent).not.toContain('Gateway GPT');
+    providersRef.providers = [gateway, { ...provider, connected: false }];
+    rerender(<ModelSelector {...implicit} />);
+    expect(trigger().textContent).toContain('Gateway GPT');
+  });
+
+  it.each([false, true])('preserves disabled-model eligibility for implicit sources (session=%s)', (actualRoute) => {
+    const gateway = { ...provider, id: 'xd', models: { codex: [{ id: 'gpt-6', name: 'Gateway GPT' }] } };
+    const disabled = { ...provider, models: { codex: [{ id: 'gpt-6', name: 'Saved GPT', disabled: true }] } };
+    providersRef.providers = [gateway, disabled];
+    render(<ModelSelector {...props} currentProviderId={null} actualRoute={actualRoute} />);
+    expect(trigger().textContent).toContain(actualRoute ? 'Saved GPT' : 'Gateway GPT');
+  });
+
+  it('resolves an implicit current model in the pending tooltip', () => {
+    providersRef.providers = [provider];
+    render(<ModelSelector {...props} currentProviderId={null}
+      agentIdentity={{ vendorKey: 'codex', state: 'pending' }}
+      currentSelection={{ agentKind: 'codex', model: props.modelId, providerId: null, effort: 'high', fastMode: false }} />);
+    expect(trigger().title).toContain('Codex · GPT-6 · OpenAI');
+    expect(trigger().title).not.toContain(props.modelId);
+  });
+
+  it.each([false, true])('keeps the long-context product when choosing an implicit source (session=%s)', (actualRoute) => {
+    providersRef.providers = [
+      { ...provider, models: { codex: [{ id: 'glm-5.2', name: 'Standard GLM' }] } },
+      { ...provider, id: 'xd', name: 'Gateway', models: { codex: [{ id: 'glm-5.2[1m]', name: 'GLM 1M' }] } },
+    ];
+    render(<ModelSelector {...props} modelId="glm-5.2[1m]" currentProviderId={null} actualRoute={actualRoute}
+      agentIdentity={{ vendorKey: 'codex', state: 'pending' }}
+      currentSelection={{ agentKind: 'codex', model: 'glm-5.2[1m]', providerId: null, effort: 'high', fastMode: false }} />);
+    expect(trigger().textContent).toContain('GLM 1M');
+    expect(trigger().title).toContain('Codex · GLM 1M · Cindy AI');
+    expect(trigger().title).not.toContain('Standard GLM');
+    expect(trigger().title).not.toContain('OpenAI');
+  });
+
+  it('resolves a wire alias immediately, including while the switch is in flight', () => {
+    providersRef.providers = [provider];
+    const { rerender } = render(<ModelSelector {...props} switching />);
+    expect(trigger().textContent).toContain('GPT-6');
+    expect(trigger().getAttribute('aria-label')).not.toContain(props.modelId);
+    rerender(<ModelSelector {...props} switching={false} />);
+    expect(trigger().textContent).toContain('GPT-6');
+  });
+
+  it('retains the selected name when discovery loses the catalog, then accepts updated names', () => {
+    providersRef.providers = [provider];
+    const { rerender } = render(<ModelSelector {...props} switching />);
+    providersRef.providers = [];
+    rerender(<ModelSelector {...props} switching sourceDisconnected />);
+    expect(trigger().textContent).toContain('GPT-6');
+    expect(trigger().textContent).not.toContain(props.modelId);
+    // A failed switch/refresh must not leave the wire ID behind once in-flight ends.
+    rerender(<ModelSelector {...props} sourceDisconnected />);
+    expect(trigger().textContent).toContain('GPT-6');
+    expect(trigger().textContent).toContain('已断开');
+    providersRef.providers = [{ ...provider, models: { codex: [{ id: 'gpt-6', name: 'Custom GPT label' }] } }];
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('Custom GPT label');
+  });
+
+  it.each([
+    { modelId: 'chatgpt/unknown-model' },
+    { currentProviderId: 'another-account' },
+    { vendorKey: 'pi' as const },
+    { deviceId: 'another-device' },
+  ])('does not reuse the previous name across a selection boundary: %j', (change) => {
+    providersRef.providers = [provider];
+    const { rerender } = render(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+    providersRef.providers = [];
+    rerender(<ModelSelector {...props} {...change} />);
+    expect(trigger().textContent).not.toContain('GPT-6');
+    expect(trigger().textContent).not.toContain(change.modelId ?? props.modelId);
+  });
+
+  it.each([false, true])('distinguishes an unknown saved model from an empty selection (disconnected=%s)', (sourceDisconnected) => {
+    providersRef.providers = [];
+    render(<ModelSelector {...props} sourceDisconnected={sourceDisconnected} />);
+    expect(trigger().textContent).toContain('模型信息暂不可用');
+    expect(trigger().textContent).not.toContain('选择模型');
+    expect(trigger().textContent).not.toContain(props.modelId);
+    expect(trigger().getAttribute('title')).not.toContain(props.modelId);
+    expect(trigger().getAttribute('aria-label')).not.toContain(props.modelId);
+  });
+
+  it('shows loading for a selected model until its catalog arrives, and keeps the name through refresh', () => {
+    providersRef.providers = [];
+    providersRef.loading = true;
+    const { rerender } = render(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('正在读取模型…');
+    providersRef.providers = [provider];
+    providersRef.loading = false;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+    providersRef.providers = [];
+    providersRef.loading = true;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+    expect(trigger().textContent).not.toContain('正在读取模型…');
+  });
+
+  it('still prompts for a model when there is no selection', () => {
+    render(<ModelSelector {...props} modelId="" />);
+    expect(trigger().textContent).toContain('选择模型');
+  });
+
+  it('settles a failed first catalog load, then recovers through retry without clearing the selection', () => {
+    providersRef.providers = [];
+    providersRef.loading = true;
+    const { rerender } = render(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('正在读取模型…');
+
+    providersRef.loadFailed = true;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('模型信息暂不可用');
+    expect(trigger().textContent).not.toContain('正在读取模型…');
+    expect(trigger().textContent).not.toContain('选择模型');
+
+    providersRef.loadFailed = false;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('正在读取模型…');
+    providersRef.providers = [provider];
+    providersRef.loading = false;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+
+    providersRef.providers = [];
+    providersRef.loadFailed = true;
+    rerender(<ModelSelector {...props} />);
+    expect(trigger().textContent).toContain('GPT-6');
+  });
+
+  it('preserves an explicitly supplied diagnostic label', () => {
+    providersRef.providers = [];
+    render(<ModelSelector {...props} unknownModelLabel={() => 'Unavailable saved model'} sourceDisconnected />);
+    expect(trigger().textContent).toContain('Unavailable saved model');
+  });
+
+  it('uses display names in the pending selection tooltip and accessibility label', () => {
+    providersRef.providers = [provider];
+    const pendingProps = {
+      ...props,
+      agentIdentity: { vendorKey: 'codex' as const, state: 'pending' as const },
+      currentSelection: { agentKind: 'codex' as const, model: 'chatgpt/missing', providerId: 'openai', effort: 'high', fastMode: false },
+    };
+    const { rerender } = render(<ModelSelector {...pendingProps} />);
+    providersRef.providers = [];
+    rerender(<ModelSelector {...pendingProps} />);
+    for (const attribute of ['title', 'aria-label']) {
+      expect(trigger().getAttribute(attribute)).toContain('GPT-6');
+      expect(trigger().getAttribute(attribute)).toContain('选择模型');
+      expect(trigger().getAttribute(attribute)).not.toContain('chatgpt/');
+    }
+  });
+});
 
 type FloatingOptions = {
   strategy: string;
@@ -359,6 +562,67 @@ async function waitForSearchInputFocus(): Promise<HTMLElement> {
 }
 
 describe('ModelSelector provider groups', () => {
+  it('offers source navigation with only a connected media provider and no chat candidates', async () => {
+    providersRef.providers = [{
+      id: 'gemini', name: 'Gemini', source: 'builtin', connected: true,
+      agents: [], models: {}, auth: { method: 'api-key' },
+    }];
+    const onNavigateToProviders = vi.fn();
+    renderSelector({
+      unifiedPanel: true, unifiedAgents: ['pi', 'codex'],
+      vendorKey: 'pi', modelId: '', currentProviderId: null,
+      onProviderChange: undefined, onUnifiedSelect: vi.fn(), onNavigateToProviders,
+    });
+    await openDropdown();
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.modelSelector.source.connect' }));
+    expect(onNavigateToProviders).toHaveBeenCalledOnce();
+  });
+
+  it('仅在本机经典 Cindy AI 分组旁显示免费版标签', async () => {
+    providersRef.providers = [
+      ...(providersRef.DEFAULT_PROVIDERS as unknown[]),
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'apiKey' },
+        routing: { 'claude-code': {} },
+        connected: true,
+        models: {
+          'claude-code': [
+            {
+              id: 'cindy-free-model',
+              name: 'Cindy Free Model',
+              contextWindow: 200000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ] as unknown[];
+    modelAccessState.accountTier = 'free';
+
+    const view = renderSelector();
+    await openDropdown();
+    const badge = screen.getByTestId('cindy-ai-model-group-free-tier-badge');
+    expect(badge.textContent).toBe('免费版');
+    expect(badge.classList.contains('ml-auto')).toBe(true);
+
+    view.unmount();
+    modelAccessState.accountTier = 'paid';
+    const paidView = renderSelector();
+    await openDropdown();
+    expect(screen.queryByTestId('cindy-ai-model-group-free-tier-badge')).toBeNull();
+
+    paidView.unmount();
+    modelAccessState.accountTier = 'not_applicable';
+    renderSelector();
+    await openDropdown();
+    expect(screen.queryByTestId('cindy-ai-model-group-free-tier-badge')).toBeNull();
+  });
+
   it('renders a group heading for each provider', async () => {
     renderSelector();
     await openDropdown();
@@ -569,7 +833,7 @@ describe('ModelSelector provider groups', () => {
     expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
   });
 
-  it('reselects the connected fallback source when the stored source is disconnected', async () => {
+  it('does not mark another account selected when the stored source is disconnected', async () => {
     const modelId = 'claude-fable-5';
     const model = {
       id: modelId,
@@ -618,11 +882,12 @@ describe('ModelSelector provider groups', () => {
     const popover = screen.getByTestId('model-options-popover');
     const xdGroup = within(popover).getByRole('group', { name: 'Cindy AI' });
     const fallbackRow = within(xdGroup).getByRole('option', { name: /Fable 5/ });
-    expect(fallbackRow.getAttribute('aria-selected')).toBe('true');
+    expect(fallbackRow.getAttribute('aria-selected')).toBe('false');
 
     fireEvent.click(fallbackRow);
-    expect(onProviderChange).toHaveBeenCalledWith('xd', modelId, undefined);
-    expect(screen.getByRole('group', { name: /Fable 5/ })).toBeTruthy();
+    expect(onProviderChange).toHaveBeenCalledWith('xd', modelId, 'high');
+    // This is a new account selection, not a click on the currently selected row.
+    expect(screen.queryByRole('group', { name: /Fable 5/ })).toBeNull();
   });
 
   it('opens a selected provider configuration without persisting its derived effort', async () => {

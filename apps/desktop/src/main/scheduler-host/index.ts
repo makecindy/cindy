@@ -22,12 +22,15 @@ import type { Logger, ScheduleRunner } from '@cindy/maker-scheduler';
 import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
-import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
+import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
+import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
+  resolveScheduledModelSelectionLive,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -47,12 +50,17 @@ import {
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
 import { MakerScheduleRunner } from './runner';
+import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { buildForcedFailureRun } from './forcedFailureRun';
 import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
+import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { withScheduleLock } from './scheduleLock';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
+import { runSchedulerStartup } from './scheduler-startup-lifecycle';
+import { getRoutineEngine, stopRoutines } from '../routines/service.js';
 
 export interface StartSchedulerDeps {
   maker: Maker;
@@ -67,18 +75,39 @@ export interface StartSchedulerDeps {
 let _scheduler: Scheduler | null = null;
 let _storage: DrizzleScheduleStorage | null = null;
 let _loader: ProjectAutomationLoader | null = null;
+// Reset increments this before awaiting stop(). A start that was already
+// blocked in scheduler.start() must not publish its stale instance after the
+// account boundary has moved on.
+let _startupGeneration = 0;
+// resetScheduler must wait for the old account's complete startup operation,
+// not only fence its eventual publication.
+let _startupPromise: Promise<Scheduler> | null = null;
 
-export async function startScheduler(deps: StartSchedulerDeps): Promise<Scheduler> {
-  if (_scheduler) return _scheduler;
+export function startScheduler(deps: StartSchedulerDeps): Promise<Scheduler> {
+  if (_scheduler) return Promise.resolve(_scheduler);
+  if (_startupPromise) return _startupPromise;
+  const startup = startSchedulerInternal(deps);
+  _startupPromise = startup;
+  void startup.finally(() => {
+    if (_startupPromise === startup) _startupPromise = null;
+  }).catch(() => {});
+  return startup;
+}
+
+async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Scheduler> {
+  const startupGeneration = _startupGeneration;
 
   const storage = new DrizzleScheduleStorage(deps.getDb);
   _storage = storage;
   const notifier = new DesktopNotifier({
+    sendFeishuSessionNotification: async (sessionId, text) => {
+      await sendFeishuSessionNotification(deps.feishuIm, sessionId, text);
+    },
     getMainWindow: deps.getMainWindow,
     feishuIm: deps.feishuIm,
     logger: deps.logger,
-    shouldNotifyDesktop: () =>
-      getDesktopNotificationsEnabled() && !(getAgentIslandService()?.isEnabled() ?? false),
+    shouldNotifyDesktop: getDesktopNotificationsEnabled,
+    isAgentIslandEnabled: () => getAgentIslandService()?.isEnabled() ?? false,
     wecomGroupPublisher: wecomGroupNotificationService,
   });
   const promptRunner = new MakerScheduleRunner({
@@ -87,8 +116,13 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     notifier,
     logger: deps.logger,
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
+    readAutoReviewHistory: async (sessionId) => {
+      await drainPersistQueue();
+      return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
+    },
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    resolveModelSelection: resolveScheduledModelSelectionLive,
     onSessionCreated: broadcastSessionCreated,
     // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。
     checkModelRoute: verdictForModelRoute,
@@ -147,22 +181,28 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     // agent 在对话里建任务时常把自己的 cwd 当 workingDir 传入 —— 引擎据此归一成
     // 对话任务,避免任务/会话错误归入项目分组。path.relative 同时兼容两端分隔符。
     isManagedWorkspaceDir: (dir) => {
-      const rel = path.relative(dialogueWorkspaceRootDir(), dir);
-      return !rel.startsWith('..') && !path.isAbsolute(rel);
+      return dialogueWorkspaceRoots().some((root) => {
+        const rel = path.relative(root, dir);
+        return !rel.startsWith('..') && !path.isAbsolute(rel);
+      });
     },
     // Review sessions are host-owned read-only tasks, not normal unattended
     // automation targets. Re-read their durable source for CRUD and every fire
     // so renderer filtering or a restored schedule row cannot bypass isolation.
-    validateTargetSession: async (targetSessionId) => {
+    validateTargetSession: async (targetSessionId, _operation, selection) => {
       const [row] = await deps
         .getDb()
-        .select({ source: sessions.source })
+        .select({ source: sessions.source, agentKind: sessions.agentKind,
+          status: sessions.status, remoteHostId: sessions.remoteHostId, orcaRole: sessions.orcaRole })
         .from(sessions)
         .where(eq(sessions.id, targetSessionId))
         .limit(1);
       if (isReviewSessionSource(row?.source)) {
         throw new Error('Review tasks cannot be targets of scheduled automations');
       }
+      assertScheduledHarnessSupported(row ? {
+        ...row, agentKind: dbToMakerAgentKind(row.agentKind),
+      } : null, selection.modelAgentKind);
     },
     // 卡死收口的通知出口。通知投递平时住在两个 runner 里(它们各自持 notifier),而
     // 卡死收口刻意绕过 runner —— 要么它压根不返回、要么它把守卫 abort 当普通中断处理。
@@ -190,14 +230,19 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
   promptRunner.attachScheduler(scheduler);
   scriptRunner.attachScheduler(scheduler);
 
-  await scheduler.start();
-  try {
-    const orphans = await storage.deleteOrphanRuns();
-    if (orphans > 0) deps.logger.info?.(`[scheduler-host] cleaned ${orphans} orphan run(s)`);
-  } catch (err) {
-    deps.logger.warn?.(`[scheduler-host] deleteOrphanRuns failed (non-fatal): ${String(err)}`);
-  }
+  await runSchedulerStartup(startupGeneration, () => _startupGeneration, {
+    create: () => scheduler,
+    afterStart: async () => {
+      try {
+        const orphans = await storage.deleteOrphanRuns();
+        if (orphans > 0) deps.logger.info?.(`[scheduler-host] cleaned ${orphans} orphan run(s)`);
+      } catch (err) {
+        deps.logger.warn?.(`[scheduler-host] deleteOrphanRuns failed (non-fatal): ${String(err)}`);
+      }
+    },
+  });
   _scheduler = scheduler;
+  void getRoutineEngine().catch((error) => deps.logger.warn?.('routine startup failed', { error: String(error) }));
   _loader = loader;
   deps.logger.info?.(`[scheduler-host] started${passive ? ' (passive: auto-fire disabled)' : ''}`);
   void loader.reconcileAll().catch((err) => {
@@ -206,6 +251,11 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     );
   });
   return scheduler;
+}
+
+/** Cold-start probe for callers that own a durable deferred queue. */
+export function getSchedulerIfInitialized(): Scheduler | null {
+  return _scheduler;
 }
 
 export function getScheduler(): Scheduler {
@@ -243,6 +293,16 @@ export function getProjectAutomationLoader(): ProjectAutomationLoader {
  * 当前 resetMaker（maker-host:131）也不会调本函数。
  */
 export async function resetScheduler(): Promise<void> {
+  await stopRoutines();
+  _startupGeneration++;
+  const pendingStartup = _startupPromise;
+  if (pendingStartup) {
+    try {
+      await pendingStartup;
+    } catch {
+      // Superseded startup rejects after stopping itself; teardown continues.
+    }
+  }
   if (_scheduler) {
     await _scheduler.stop();
   }

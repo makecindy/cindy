@@ -36,6 +36,8 @@ import { createLogger } from '../logger.js';
 import {
   REMOTE_ALLOWED_SERVER_NAMES,
   REMOTE_COLLAB_SERVER_NAMES,
+  REMOTE_BOT_HELPER_SERVER_NAME,
+  withMcpRouteIdentity,
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
 } from '../mcp-integrations/codexHttpBridge.js';
@@ -184,6 +186,61 @@ export function removeRemoteMcpForwardPref(hostId: string): void {
   writePortPrefs(next);
 }
 
+/**
+ * Endpoint fields changed while the stable SSH alias stayed the same.
+ * Keep the alias's preferred remote port, but discard facts that only apply to
+ * the old machine/connection. The next ensure must rebuild the forward and
+ * bootstrap the new endpoint instead of trusting the old applied fingerprint.
+ */
+export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
+  const current = readPortPrefs()[hostId];
+  if (!current || (!current.appliedFingerprint && !current.bridgeLocalPort)) return;
+  writePortPrefs({
+    ...readPortPrefs(),
+    [hostId]: { remotePort: current.remotePort },
+  });
+}
+
+/** Bind the remote daemon's disabled helper transport to one concrete Session.
+ * Read the port at use time: SSH forwarding is established after host construction.
+ * Only Bot MCP policy enables this transport; ordinary remote threads keep it disabled.
+ */
+export function buildRemoteCodexSessionMcpConfig(
+  hostId: string,
+  sessionInstanceId: string,
+  opts: {
+    bridgeInstanceId: string | null;
+    serverNames: string[];
+    collabEnabled: boolean;
+    makerMemoryEnabled: boolean;
+  },
+): Record<string, unknown> {
+  const prefs = readPortPrefs()[hostId];
+  const token = getRemoteMcpBridgeToken();
+  if (!prefs?.appliedFingerprint || !sessionInstanceId || !token || !opts.bridgeInstanceId) return {};
+  const serverNames = selectRemoteInjectableServerNames(opts.serverNames, {
+    collabEnabled: opts.collabEnabled,
+    memoryEnabled: opts.makerMemoryEnabled,
+    botHelperEnabled: true,
+  });
+  // A written config is not proof that a busy daemon has loaded this generation.
+  // Never combine a new route with its old token or pre-helper server config.
+  if (!serverNames.includes(REMOTE_BOT_HELPER_SERVER_NAME) || prefs.appliedFingerprint !== computeRemoteMcpFingerprint({
+    token,
+    bridgeInstanceId: opts.bridgeInstanceId,
+    remotePort: prefs.remotePort,
+    serverNames,
+  })) return {};
+  return {
+    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.url`]: withMcpRouteIdentity(
+      `http://127.0.0.1:${prefs.remotePort}/mcp/${REMOTE_BOT_HELPER_SERVER_NAME}`,
+      { sessionInstanceId },
+    ),
+    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.bearer_token_env_var`]: TOKEN_ENV,
+    [`mcp_servers.${REMOTE_BOT_HELPER_SERVER_NAME}.enabled`]: false,
+  };
+}
+
 // ── 远端 config.toml 管理段 (纯函数, 便于单测) ──────────────────────────────
 
 /** 生成我们管理的 mcp_servers 配置块 (带 begin/end 标记)。 */
@@ -203,6 +260,7 @@ export function renderManagedMcpBlock(opts: {
       `[mcp_servers.${name}]`,
       `url = "http://127.0.0.1:${opts.remotePort}/mcp/${name}"`,
       `bearer_token_env_var = "${TOKEN_ENV}"`,
+      ...(name === REMOTE_BOT_HELPER_SERVER_NAME ? ['enabled = false'] : []),
       'startup_timeout_sec = 600',
       'tool_timeout_sec = 600',
       '',
@@ -250,7 +308,16 @@ function isManagedResidueLine(line: string): boolean {
   if (t.startsWith(TOKEN_FINGERPRINT_PREFIX)) return true;
   const header = parseTableHeaderKey(t);
   if (header && header[0] === 'mcp_servers') return true;
-  return /^(url|bearer_token_env_var|startup_timeout_sec|tool_timeout_sec)\s*=/.test(t);
+  return isManagedScalarLine(t);
+}
+
+/**
+ * 受管 table 内我们自己写的标量行 (trim 后)。`enabled` 是 cindy_helper 的禁用标记,
+ * 与两个 timeout 同属受管段; 旧版本没把它当受管内容, 刷新时它连同其后的 timeout
+ * 会留在 end 标记之外, 累积两份就是 TOML duplicate-key, codex 起不来 (#4776)。
+ */
+function isManagedScalarLine(t: string): boolean {
+  return /^(url|bearer_token_env_var|enabled|startup_timeout_sec|tool_timeout_sec)\s*=/.test(t);
 }
 
 /**
@@ -259,6 +326,8 @@ function isManagedResidueLine(line: string): boolean {
  *     marker 文本的内容误判成管理段起点;
  *   - managed 段原位剥除后在文末重建 (TOML 与顺序无关, 幂等收敛);
  *     orphan begin (缺 end) 只剥连续的 managed 残留形态行, 不波及用户配置;
+ *     end 之后紧跟的受管标量 (旧版本留下的 enabled / timeout 孤儿) 一并剥除,
+ *     同样遇到 header 或其他 key 即停;
  *   - managed 段之外用户手写的同名 `[mcp_servers.<name>]` table 一并剥离
  *     (重复 table 是非法 TOML, codex 会直接起不来), 由 managed 段接管,
  *     名字经 strippedUserServers 返回给调用方记 warn;
@@ -277,21 +346,31 @@ export function mergeManagedMcpBlock(
   const stripped = new Set<string>();
   const kept: string[] = [];
   let inManaged = false;
+  let afterManagedEnd = false;
   let inUserBlock = false;
   for (const line of existing.split('\n')) {
     const t = line.trim();
     if (t === MANAGED_BEGIN) {
       inManaged = true;
+      afterManagedEnd = false;
       continue;
     }
     if (t === MANAGED_END) {
       inManaged = false;
+      afterManagedEnd = true;
       continue;
     }
     if (inManaged) {
       if (isManagedResidueLine(line)) continue;
       // orphan begin: 用户内容开始, 退出 managed 状态并保留该行。
       inManaged = false;
+    }
+    if (afterManagedEnd) {
+      // end 标记之后紧跟的受管标量是旧版本写出的孤儿 (见 isManagedScalarLine):
+      // TOML 里它们仍归属 end 之前的受管 table, 与重建段重复。只剥这一段连续的
+      // 标量/空行, 遇到任何 header 或其他 key 即停, 用户配置不受影响。
+      if (t === '' || isManagedScalarLine(t)) continue;
+      afterManagedEnd = false;
     }
     const hit = userMcpServerHeader(t, serverNames);
     if (hit) {
@@ -657,12 +736,13 @@ export function hasPendingRemoteMcpDrift(
      * 含 cindy_memory — 与 ensure 内的注入集合同源, 开关翻转构成漂移。
      */
     makerMemoryEnabled: boolean;
+    botHelperAvailable?: boolean;
     token: string | null;
     bridgeInstanceId: string | null;
   },
 ): boolean {
   const applied = readPortPrefs()[hostId]?.appliedFingerprint ?? null;
-  if ((!opts.collabEnabled && !opts.makerMemoryEnabled) || !opts.token) {
+  if ((!opts.collabEnabled && !opts.makerMemoryEnabled && !opts.botHelperAvailable) || !opts.token) {
     // 清理语义:applied 存在 = 待清理 (strip / 清理路径未跑过)。
     return applied !== null;
   }
@@ -680,6 +760,7 @@ export function hasPendingRemoteMcpDrift(
     serverNames: selectRemoteInjectableServerNames([...REMOTE_ALLOWED_SERVER_NAMES], {
       collabEnabled: opts.collabEnabled,
       memoryEnabled: opts.makerMemoryEnabled,
+      botHelperEnabled: opts.botHelperAvailable,
     }),
   });
   return desired !== applied;
@@ -779,6 +860,8 @@ async function doEnsureRemoteCodexMcpBridge(
     let serverNames = selectRemoteInjectableServerNames(bridge.serverNames, {
       collabEnabled,
       memoryEnabled: deps.isMakerMemoryEnabled?.() ?? false,
+      // Shared transport stays disabled; the Bot policy enables it per thread.
+      botHelperEnabled: true,
     });
     if (
       !collabEnabled &&

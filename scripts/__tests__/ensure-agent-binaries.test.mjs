@@ -11,6 +11,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import {
+  binaryRelativePathFor,
   binFileFor,
   isValidBinary,
   isValidDirDist,
@@ -19,12 +20,14 @@ import {
   SUPPORTED_BINARY_KINDS,
   supportsCdnFallback,
   tryReuseFromSiblingWorktree,
+  tryReuseDirDistFromSiblingWorktree,
+  updateScriptForKind,
 } from '../ensure-agent-binaries.mjs';
 import { verifyDirDistManifest, writeDirDistManifest } from '../../tools/shared/dir-dist-manifest.mjs';
 
 test('directory distributions never use the single-binary CDN fallback', () => {
   assert.equal(supportsCdnFallback('pi'), false);
-  assert.equal(supportsCdnFallback('codex'), true);
+  assert.equal(supportsCdnFallback('codex'), false);
 });
 
 test('dev startup prepares every supported runtime, including Pi', () => {
@@ -44,6 +47,43 @@ const LFS_POINTER = [
   '',
 ].join('\n');
 
+test('directory reuse validates all assets, skips mismatches and replaces stale files', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-dir-dist-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const makeSource = (name, version) => {
+    const dir = path.join(root, name);
+    fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'bin', 'codex'), Buffer.alloc(2048, 1), { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'asset.json'), 'good');
+    fs.writeFileSync(path.join(dir, '.version'), version);
+    writeDirDistManifest(dir);
+    return dir;
+  };
+  const old = makeSource('old', '1');
+  const damaged = makeSource('damaged', '2');
+  fs.writeFileSync(path.join(damaged, 'asset.json'), 'evil');
+  const good = makeSource('good', '2');
+  const destDir = makeSource('dest', '1');
+  fs.writeFileSync(path.join(destDir, 'stale'), 'old asset');
+  const options = {
+    binaryRelativePath: path.join('bin', 'codex'),
+    requiredFiles: ['asset.json'], version: '2', destDir,
+  };
+  assert.equal(tryReuseDirDistFromSiblingWorktree({
+    ...options, candidates: [old, damaged, path.join(root, 'missing')],
+  }), null);
+  assert.equal(fs.readFileSync(path.join(destDir, '.version'), 'utf8'), '1');
+  assert.equal(tryReuseDirDistFromSiblingWorktree({
+    ...options, candidates: [damaged, good],
+  }), good);
+  assert.equal(verifyDirDistManifest(destDir), true);
+  assert.equal(fs.existsSync(path.join(destDir, 'stale')), false);
+  assert.equal(fs.readFileSync(path.join(destDir, 'asset.json'), 'utf8'), 'good');
+  fs.writeFileSync(path.join(destDir, 'asset.json'), 'edit');
+  assert.equal(fs.readFileSync(path.join(good, 'asset.json'), 'utf8'), 'good');
+  assert.equal(fs.readdirSync(root).some((name) => name.startsWith('dest.reuse-')), false);
+});
+
 function tmpFile(name, contents) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-bin-test-'));
   const p = path.join(dir, name);
@@ -56,6 +96,12 @@ test('binFileFor: win32 gets .exe, other platforms get bare name', () => {
   assert.equal(binFileFor('rg', 'win32-x64'), 'rg.exe');
   assert.equal(binFileFor('claude', 'darwin-arm64'), 'claude');
   assert.equal(binFileFor('codex', 'linux-x64'), 'codex');
+});
+
+test('Codex dev runtime resolves the complete package entrypoint and updater', () => {
+  assert.equal(binaryRelativePathFor('codex', 'win32-x64'), path.join('bin', 'codex.exe'));
+  assert.equal(binaryRelativePathFor('codex', 'darwin-arm64'), path.join('bin', 'codex'));
+  assert.equal(updateScriptForKind('codex'), 'codex-package');
 });
 
 test('readInstalledVersion: trims content, null on missing/empty', () => {
@@ -99,6 +145,22 @@ test('isValidDirDist: requires the manifest and every sidecar asset, not just th
   // 旁侧资产被删 → 清单校验失败,重新进入下载/promote
   fs.rmSync(path.join(dir, 'theme'), { recursive: true, force: true });
   assert.equal(isValidDirDist(dir, binPath), false);
+});
+
+test('isValidDirDist: required runtime assets must also be present', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-dirdist-required-'));
+  const binPath = path.join(dir, 'pi');
+  fs.writeFileSync(binPath, Buffer.alloc(4096, 1));
+  fs.mkdirSync(path.join(dir, 'theme'));
+  for (const name of ['dark.json', 'light.json', 'theme-schema.json']) {
+    fs.writeFileSync(path.join(dir, 'theme', name), '{}');
+  }
+  writeDirDistManifest(dir);
+
+  const required = ['theme/dark.json', 'theme/light.json', 'theme/theme-schema.json'];
+  assert.equal(isValidDirDist(dir, binPath, required), true);
+  fs.rmSync(path.join(dir, 'theme', 'light.json'));
+  assert.equal(isValidDirDist(dir, binPath, required), false);
 });
 
 test('verifyDirDistManifest: rejects size drift, empty manifests, and malformed entries', () => {

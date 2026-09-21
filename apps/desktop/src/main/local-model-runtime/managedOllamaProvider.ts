@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type {
   AgentKind,
   CustomProviderConfig,
@@ -23,7 +24,7 @@ import {
 } from '../maker-host/custom-provider-store.js';
 
 export type ManagedEnsureResult =
-  | { ok: true; created: boolean; provider: CustomProviderConfig }
+  | { ok: true; created: boolean; changed?: boolean; provider: CustomProviderConfig }
   | { ok: false; code: 'OWNER_CHANGED' }
   | { ok: false; code: 'MANAGED_ID_CONFLICT'; existing: CustomProviderConfig };
 
@@ -96,13 +97,26 @@ export function buildEmptyManagedOllamaProvider(): CustomProviderConfig {
   };
 }
 
+/** Keep the repository identity and quantization visible without the HF transport prefix. */
+function localModelDisplayName(name: string, savedName?: string, nameExplicit?: boolean): string {
+  if (savedName !== undefined && (nameExplicit || (savedName && savedName !== name))) {
+    return savedName;
+  }
+  const curated = curatedOllamaDisplayName(name);
+  if (curated) return curated;
+  const hf = /^hf\.co\/[^/]+\/([^/:]+)(?::([^/]+))?$/.exec(name);
+  if (!hf) return name;
+  const title = hf[1]!.replace(/[-_]GGUF$/i, '').replace(/[-_]+/g, ' ');
+  return hf[2] && hf[2] !== 'latest' ? `${title} (${hf[2]})` : title;
+}
+
 export function toPlainRuntimeModel(
   name: string,
   contextLength?: number,
 ): ProviderRuntimeModelConfig {
   return {
     id: name,
-    name: curatedOllamaDisplayName(name) ?? name,
+    name: localModelDisplayName(name),
     reasoning: false,
     ...(contextLength && contextLength > 0 ? { contextWindow: contextLength } : {}),
   };
@@ -129,12 +143,13 @@ function toAgentModel(
 ): ProviderRuntimeModelConfig {
   const named = {
     ...model,
-    name: curatedOllamaDisplayName(model.id) ?? model.name,
+    name: localModelDisplayName(model.id, model.name, model.nameExplicit),
   };
   if (agent === 'pi') return named;
   return {
     id: named.id,
     name: named.name,
+    ...(named.nameExplicit !== undefined ? { nameExplicit: named.nameExplicit } : {}),
     ...(named.contextWindow ? { contextWindow: named.contextWindow } : {}),
     ...(named.supportsImageInput ? { supportsImageInput: true } : {}),
     ...(named.reasoning
@@ -149,6 +164,24 @@ function toAgentModel(
   };
 }
 
+/** Old imports saved the execution ID as the name. Repair only that fallback,
+ * without probing Ollama or changing saved capabilities and agent membership. */
+function restoreManagedModelNames(provider: CustomProviderConfig): CustomProviderConfig {
+  let next = provider;
+  for (const agent of ['pi', 'claude-code', 'codex'] as const) {
+    const runtime = provider.runtimes[agent];
+    if (!runtime) continue;
+    const models = runtime.models.map((model) => {
+      if (!model.name || model.name !== model.id) return model;
+      const name = localModelDisplayName(model.id, model.name, model.nameExplicit);
+      return name === model.name ? model : { ...model, name };
+    });
+    if (models.every((model, index) => model === runtime.models[index])) continue;
+    next = { ...next, runtimes: { ...next.runtimes, [agent]: { ...runtime, models } } };
+  }
+  return next;
+}
+
 export function migrateManagedOllamaProvider(
   existing: CustomProviderConfig,
 ): CustomProviderConfig | null {
@@ -158,6 +191,7 @@ export function migrateManagedOllamaProvider(
     runtimes: existing.runtimes,
   };
   if (matchesManagedOllamaV2Fingerprint(input)) {
+    existing = restoreManagedModelNames(existing);
     const codex = existing.runtimes.codex;
     if (codex?.wireProtocol === 'openai-responses') {
       return {
@@ -171,20 +205,21 @@ export function migrateManagedOllamaProvider(
     return existing;
   }
   if (!matchesLegacyPiOnlyOllamaFingerprint(input)) return null;
+  existing = restoreManagedModelNames(existing);
   const piModels = existing.runtimes.pi?.models ?? [];
   return {
     ...existing,
     runtimes: {
       pi: emptyPiRuntime(piModels),
-      'claude-code': emptyClaudeRuntime(
-        piModels.map((model) => toAgentModel(model, 'claude-code')),
-      ),
-      codex: emptyCodexRuntime(piModels.map((model) => toAgentModel(model, 'codex'))),
+      // Migration has no capability evidence. Imports populate coding runtimes
+      // only after probing each model; offline legacy models remain Pi-only.
+      'claude-code': emptyClaudeRuntime(),
+      codex: emptyCodexRuntime(),
     },
   };
 }
 
-/** Catalog 加载前调用：不依赖打开设置页，把旧 Responses 行迁成 Chat 桥。 */
+/** Catalog 加载前调用：离线也补齐旧名称，并把旧 Responses 行迁成 Chat 桥。 */
 export async function migrateManagedOllamaOnCatalogLoad(
   stillCurrent: () => boolean = () => true,
 ): Promise<boolean> {
@@ -194,7 +229,7 @@ export async function migrateManagedOllamaOnCatalogLoad(
     if (!existing || !fingerprintOf(existing)) return false;
     const migrated = migrateManagedOllamaProvider(existing);
     if (!migrated) return false;
-    if (JSON.stringify(migrated.runtimes) === JSON.stringify(existing.runtimes)) {
+    if (isDeepStrictEqual(migrated.runtimes, existing.runtimes)) {
       return false;
     }
     if (!stillCurrent()) return false;
@@ -219,7 +254,7 @@ export async function syncManagedOllamaAgentProjections(
     for (const model of piModels) {
       next = applyModelToAgents(next, model, agents, 'upsert');
     }
-    if (JSON.stringify(next.runtimes) === JSON.stringify(existing.runtimes)) return false;
+    if (isDeepStrictEqual(next.runtimes, existing.runtimes)) return false;
     if (ownerChanged(opts)) return false;
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, next);
     return updated !== null;
@@ -274,12 +309,17 @@ export async function upsertManagedOllamaModels(
       next = retainCanonicalModels(next, opts.retainCanonicalIds);
     }
     if (opts?.stillActive && !opts.stillActive()) return { ok: false, code: 'OWNER_CHANGED' };
-    if (JSON.stringify(next.runtimes) === JSON.stringify(latest.runtimes)) {
-      return { ok: true, created: false, provider: latest };
+    if (isDeepStrictEqual(next.runtimes, latest.runtimes)) {
+      return {
+        ok: true,
+        created: ensured.created,
+        changed: ensured.changed === true || ensured.created,
+        provider: latest,
+      };
     }
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, next);
     if (!updated) return { ok: false, code: 'MANAGED_ID_CONFLICT', existing: latest };
-    return { ok: true, created: false, provider: updated };
+    return { ok: true, created: false, changed: true, provider: updated };
   });
 }
 
@@ -325,7 +365,7 @@ export async function removeManagedOllamaModel(
     if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, next);
     if (!updated) return { ok: false, code: 'MANAGED_ID_CONFLICT', existing };
-    return { ok: true, created: false, provider: updated };
+    return { ok: true, created: false, changed: true, provider: updated };
   });
 }
 
@@ -366,7 +406,7 @@ async function ensureManagedOllamaProviderUnlocked(
   if (!existing) {
     try {
       const created = await createCustomProvider(buildEmptyManagedOllamaProvider());
-      return { ok: true, created: true, provider: created };
+      return { ok: true, created: true, changed: true, provider: created };
     } catch {
       if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
       const raced = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
@@ -376,7 +416,7 @@ async function ensureManagedOllamaProviderUnlocked(
         if (migrated !== raced) {
           if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
           const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, migrated);
-          if (updated) return { ok: true, created: false, provider: updated };
+          if (updated) return { ok: true, created: false, changed: true, provider: updated };
         }
         return { ok: true, created: false, provider: raced };
       }
@@ -391,7 +431,7 @@ async function ensureManagedOllamaProviderUnlocked(
     if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, migrated);
     if (!updated) return { ok: false, code: 'MANAGED_ID_CONFLICT', existing };
-    return { ok: true, created: false, provider: updated };
+    return { ok: true, created: false, changed: true, provider: updated };
   }
   return { ok: true, created: false, provider: existing };
 }

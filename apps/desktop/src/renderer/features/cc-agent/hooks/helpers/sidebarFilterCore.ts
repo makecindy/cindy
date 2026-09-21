@@ -11,7 +11,6 @@ import {
   type SidebarPinnedOrderMutation,
   type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
-import { reconcileManualProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
 const log = createLogger('SidebarFilterCore');
@@ -52,8 +51,8 @@ export type FilterStatus = 'active' | 'archived' | 'all';
 export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
-/** M41: vendor filter — 'all' = 全部；'cc' = 仅 Claude；'codex' = 仅 Codex。 */
-export type FilterVendor = 'all' | 'cc' | 'codex';
+/** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
+export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -64,17 +63,18 @@ export type FilterGroupBy = 'project' | 'flat';
 /** 最近活跃范围筛选。默认 all。 */
 export type FilterLastActivity = 'all' | '1d' | '3d' | '7d' | '30d';
 /** Sidebar 主列表任务排序。默认 recency(菜单文案「按时间排序」= 最近活动在前)。
+ *  created = 创建时间倒序,不随任务活动重排。
  *  priority = 等待处理 > 运行中 > 其余按最近活动。
  *  旧值 'manual' 已从排序里拆出,存量回退 recency,并迁移到 projectOrder=custom。
  *  alphabetic / time(旧「最早优先」)同样回退 recency。 */
-export type FilterSortBy = 'recency' | 'priority';
+export type FilterSortBy = 'recency' | 'created' | 'priority';
 /** 按项目分组时的项目行顺序。activity = 跟任务排序走;custom = 拖拽持久序。 */
 export type FilterProjectOrder = 'activity' | 'custom';
 /**
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
  * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost' | 'tags';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -267,7 +267,7 @@ export function removeProjectsFromFilter(
 
 /* ============================== vendor load/persist ============================== */
 
-const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex']);
+const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi']);
 
 export function loadVendor(): FilterVendor {
   const storage = safeStorage();
@@ -456,7 +456,11 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
 
 /* ============================== sortBy load/persist ============================== */
 
-const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>(['recency', 'priority']);
+const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>([
+  'recency',
+  'created',
+  'priority',
+]);
 const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
   'activity',
   'custom',
@@ -552,14 +556,15 @@ const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'worktree',
   'tokens',
   'cost',
+  'tags',
 ]);
-/** 默认只显示最近活动时间（现状行为）。 */
-export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
+/** 默认显示标签和最近活动时间。 */
+export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['tags', 'time'];
 
 /**
- * 读任务行右侧信息复选。存储为 JSON string[]；非法值逐项剔除。
- * 与其它维度不同：空数组是合法状态（用户显式全不选 = 行右侧留空），
- * 只有解析失败 / 未设置才回落默认。
+ * 旧 string[] 没有记录用户是否见过标签开关，升级时补上默认开启的标签，
+ * 保留其他字段及顺序。新版本以带版本号的字段列表记录显式选择，
+ * 包括关闭标签或全不选；后续启动不再覆盖这些选择。
  */
 export function loadTaskInfoFields(): TaskInfoField[] {
   const storage = safeStorage();
@@ -574,15 +579,17 @@ export function loadTaskInfoFields(): TaskInfoField[] {
   if (raw == null) return [...DEFAULT_TASK_INFO_FIELDS];
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...DEFAULT_TASK_INFO_FIELDS];
+    const legacy = Array.isArray(parsed);
+    const values = legacy ? parsed : parsed?.version === 1 ? parsed.fields : null;
+    if (!Array.isArray(values)) return [...DEFAULT_TASK_INFO_FIELDS];
     const seen = new Set<string>();
     const cleaned: TaskInfoField[] = [];
-    for (const value of parsed) {
+    for (const value of values) {
       if (typeof value !== 'string' || !TASK_INFO_VALUES.has(value) || seen.has(value)) continue;
       seen.add(value);
       cleaned.push(value as TaskInfoField);
     }
-    return cleaned;
+    return legacy && !seen.has('tags') ? ['tags', ...cleaned] : cleaned;
   } catch (err) {
     log.warn('[useSidebarFilter] failed to parse taskInfo JSON:', err);
     return [...DEFAULT_TASK_INFO_FIELDS];
@@ -593,7 +600,7 @@ export function persistTaskInfoFields(fields: readonly TaskInfoField[]): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(TASK_INFO_KEY, JSON.stringify(fields));
+    storage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields }));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist taskInfo:', err);
   }
@@ -642,13 +649,29 @@ export function persistManualProjectOrder(order: readonly string[], ownerId: str
 export function normalizeManualProjectOrder(
   prev: readonly string[],
   activeWorkingDirs: readonly string[],
+  localPlatform: string = '',
 ): string[] {
+  const activeKeys = normalizeProjectKeyList(activeWorkingDirs, localPlatform);
+  const activeIdentities = new Set(
+    activeKeys.map((key) => projectKeyComparisonKey(key, localPlatform) ?? key),
+  );
   const prevKeys: string[] = [];
+  const seen = new Set<string>();
   for (const wd of prev) {
     const key = normalizeProjectKey(wd);
-    if (key) prevKeys.push(key);
+    if (!key) continue;
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (!activeIdentities.has(identity) || seen.has(identity)) continue;
+    seen.add(identity);
+    prevKeys.push(key);
   }
-  return reconcileManualProjectOrder(prevKeys, normalizeProjectKeyList(activeWorkingDirs));
+  for (const key of activeKeys) {
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    prevKeys.push(key);
+  }
+  return prevKeys;
 }
 
 export function moveManualProjectOrder(
@@ -657,21 +680,32 @@ export function moveManualProjectOrder(
   sourceWorkingDir: string,
   targetWorkingDir: string,
   position: ManualProjectDropPosition,
+  localPlatform: string = '',
 ): string[] {
-  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs);
+  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs, localPlatform);
   const sourceKey = normalizeProjectKey(sourceWorkingDir);
   const targetKey = normalizeProjectKey(targetWorkingDir);
-  if (!sourceKey || !targetKey || sourceKey === targetKey) return normalized;
-  const sourceIndex = normalized.indexOf(sourceKey);
-  const targetIndex = normalized.indexOf(targetKey);
+  if (!sourceKey || !targetKey) return normalized;
+  const sourceIdentity = projectKeyComparisonKey(sourceKey, localPlatform) ?? sourceKey;
+  const targetIdentity = projectKeyComparisonKey(targetKey, localPlatform) ?? targetKey;
+  if (sourceIdentity === targetIdentity) return normalized;
+  const sourceIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === sourceIdentity,
+  );
+  const targetIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetIdentity,
+  );
   if (sourceIndex < 0 || targetIndex < 0) return normalized;
 
+  const sourceRepresentative = normalized[sourceIndex] as string;
   const withoutSource = normalized.slice();
   withoutSource.splice(sourceIndex, 1);
-  const targetIndexAfterRemoval = withoutSource.indexOf(targetKey);
+  const targetIndexAfterRemoval = withoutSource.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetIdentity,
+  );
   if (targetIndexAfterRemoval < 0) return normalized;
   const insertIndex = position === 'after' ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval;
-  withoutSource.splice(insertIndex, 0, sourceKey);
+  withoutSource.splice(insertIndex, 0, sourceRepresentative);
   return withoutSource;
 }
 
@@ -753,20 +787,23 @@ export function finishManualPinnedOrderLegacyMigration(ownerId: string | null): 
 export function normalizeManualPinnedOrder(
   prev: readonly string[],
   activeEntryIds: readonly string[],
+  comparisonKey: (entryId: string) => string = (entryId) => entryId,
 ): string[] {
-  const activeSet = new Set(activeEntryIds);
+  const activeSet = new Set(activeEntryIds.map(comparisonKey));
   const seen = new Set<string>();
   const next: string[] = [];
 
   for (const id of prev) {
-    if (!activeSet.has(id) || seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (!activeSet.has(identity) || seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
   for (const id of activeEntryIds) {
-    if (seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
@@ -789,12 +826,18 @@ export function normalizeManualPinnedOrder(
 export function mergeVisibleReorder(
   currentFullOrder: readonly string[],
   visibleNewOrder: readonly string[],
+  comparisonKey: (id: string) => string = (id) => id,
 ): string[] {
-  const visibleSet = new Set(visibleNewOrder);
-  const queue = [...visibleNewOrder];
+  const storedRepresentatives = new Map<string, string>();
+  for (const id of currentFullOrder) {
+    const identity = comparisonKey(id);
+    if (!storedRepresentatives.has(identity)) storedRepresentatives.set(identity, id);
+  }
+  const visibleSet = new Set(visibleNewOrder.map(comparisonKey));
+  const queue = visibleNewOrder.map((id) => storedRepresentatives.get(comparisonKey(id)) ?? id);
   const result: string[] = [];
   for (const id of currentFullOrder) {
-    if (visibleSet.has(id)) {
+    if (visibleSet.has(comparisonKey(id))) {
       // 可见项槽位:按新顺序依次填;queue 异常耗尽时保留原 id 不丢。
       result.push(queue.length > 0 ? (queue.shift() as string) : id);
     } else {
@@ -813,9 +856,14 @@ export function mergeVisibleReorder(
 export function snapshotManualProjectOrder(
   visualVisibleKeys: readonly string[],
   baselineKeys: readonly string[],
+  localPlatform: string = '',
 ): string[] {
-  const fullOrder = normalizeManualProjectOrder([], baselineKeys);
-  return mergeVisibleReorder(fullOrder, visualVisibleKeys);
+  const fullOrder = normalizeManualProjectOrder([], baselineKeys, localPlatform);
+  return mergeVisibleReorder(
+    fullOrder,
+    visualVisibleKeys,
+    (projectKey) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+  );
 }
 
 /**
@@ -853,18 +901,14 @@ function normalizeFilterEntry(raw: unknown): string | null {
   return normalizeProjectKey(raw);
 }
 
-function normalizeFilterProjectList(
-  values: readonly unknown[],
-  localPlatform?: string,
-): string[] {
+function normalizeFilterProjectList(values: readonly unknown[], localPlatform?: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = normalizeFilterEntry(value);
     if (!key) continue;
-    const identity = localPlatform == null
-      ? key
-      : (projectFilterEntryIdentity(key, localPlatform) ?? key);
+    const identity =
+      localPlatform == null ? key : (projectFilterEntryIdentity(key, localPlatform) ?? key);
     if (seen.has(identity)) continue;
     seen.add(identity);
     out.push(key);
@@ -872,13 +916,15 @@ function normalizeFilterProjectList(
   return out;
 }
 
-function normalizeProjectKeyList(values: readonly unknown[]): string[] {
+function normalizeProjectKeyList(values: readonly unknown[], localPlatform: string = ''): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = typeof value === 'string' ? normalizeProjectKey(value) : null;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     out.push(key);
   }
   return out;

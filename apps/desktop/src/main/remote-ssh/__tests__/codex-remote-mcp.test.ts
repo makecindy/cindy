@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it, vi, beforeAll } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -13,10 +14,12 @@ import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 import {
   renderManagedMcpBlock,
+  buildRemoteCodexSessionMcpConfig,
   mergeManagedMcpBlock,
   ensureRemoteCodexMcpBridge,
   stripRemoteCodexMcpConfig,
   hasPendingRemoteMcpDrift,
+  invalidateRemoteCodexMcpEndpointState,
 } from '../codex-remote-mcp.js';
 
 // safeStorage 在测试 stub 里 isEncryptionAvailable=false → token 真源恒 null;
@@ -301,6 +304,129 @@ describe('mergeManagedMcpBlock', () => {
     // 自愈后幂等: 再 merge 不再变化。
     const second = mergeManagedMcpBlock(next, block, { serverNames: SERVERS });
     expect(second.changed).toBe(false);
+  });
+});
+
+describe('mergeManagedMcpBlock helper-scalar residue (#4776)', () => {
+  const HELPER_SERVERS = ['cindy_orca', 'cindy_helper'];
+  const block = renderManagedMcpBlock({ remotePort: 47921, serverNames: HELPER_SERVERS, tokenFingerprint: 'fp-new' });
+  const BEGIN = '# >>> cindy-remote-mcp (managed, do not edit) >>>';
+  const END = '# <<< cindy-remote-mcp <<<';
+  /** Everything that is not inside the managed markers. */
+  const outsideManaged = (text: string): string => {
+    const start = text.indexOf(BEGIN);
+    const end = text.indexOf(END);
+    if (start === -1 || end === -1) return text;
+    return text.slice(0, start) + text.slice(end + END.length);
+  };
+  const helperScalar = /^(enabled|startup_timeout_sec|tool_timeout_sec)\s*=/m;
+  const USER_LINES = [
+    'model = "gpt-5.5"',
+    '',
+    '[projects."/home/u/repo"]',
+    'trust_level = "trusted"',
+    '',
+    '[mcp_servers.my_custom]',
+    'url = "http://127.0.0.1:22222/mcp/my_custom"',
+    '',
+    '[history]',
+    'persistence = "save-all"',
+    '',
+  ];
+  /** The pre-fix layout: the helper table was rendered without its disabled flag and timeouts, which sat behind the end marker instead. */
+  const legacyManaged = (orphanCopies: number): string[] => [
+    BEGIN,
+    '# cindy-token-fingerprint: fp-old',
+    '[mcp_servers.cindy_orca]',
+    'url = "http://127.0.0.1:47000/mcp/cindy_orca"',
+    'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+    '',
+    '[mcp_servers.cindy_helper]',
+    'url = "http://127.0.0.1:47000/mcp/cindy_helper"',
+    'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+    END,
+    ...Array.from({ length: orphanCopies }, () => [
+      'enabled = false',
+      'startup_timeout_sec = 600',
+      'tool_timeout_sec = 600',
+    ]).flat(),
+    '',
+  ];
+  const expectUserConfigKept = (next: string) => {
+    const parsed = parseToml(next) as Record<string, any>;
+    expect(parsed.model).toBe('gpt-5.5');
+    expect(parsed.projects['/home/u/repo'].trust_level).toBe('trusted');
+    expect(parsed.mcp_servers.my_custom.url).toBe('http://127.0.0.1:22222/mcp/my_custom');
+    expect(parsed.history.persistence).toBe('save-all');
+    expect(parsed.mcp_servers.cindy_helper.enabled).toBe(false);
+    expect(parsed.mcp_servers.cindy_helper.startup_timeout_sec).toBe(600);
+    expect(parsed.mcp_servers.cindy_orca.url).toBe('http://127.0.0.1:47921/mcp/cindy_orca');
+    return parsed;
+  };
+
+  it('stays valid TOML across five refreshes starting from the pre-fix layout', () => {
+    let config = [...USER_LINES, ...legacyManaged(1)].join('\n');
+    for (let refresh = 0; refresh < 5; refresh += 1) {
+      const { next } = mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS });
+      expect(() => parseToml(next), `refresh ${refresh}`).not.toThrow();
+      expect(next.match(/\[mcp_servers\.cindy_helper\]/g), `refresh ${refresh}`).toHaveLength(1);
+      expect(next.match(/# >>> cindy-remote-mcp/g), `refresh ${refresh}`).toHaveLength(1);
+      expect(outsideManaged(next), `refresh ${refresh}`).not.toMatch(helperScalar);
+      expectUserConfigKept(next);
+      config = next;
+    }
+    // Once converged, a further refresh is a no-op.
+    expect(mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS }).changed).toBe(false);
+  });
+
+  it('recovers a config already broken by duplicated orphan helper scalars', () => {
+    const broken = [...USER_LINES, ...legacyManaged(2)].join('\n');
+    // Two orphan copies are what the user hits: duplicate keys, codex refuses to start.
+    expect(() => parseToml(broken)).toThrow();
+    const { next, changed, strippedUserServers } = mergeManagedMcpBlock(broken, block, { serverNames: HELPER_SERVERS });
+    expect(changed).toBe(true);
+    expect(strippedUserServers).toEqual([]);
+    expect(() => parseToml(next)).not.toThrow();
+    expect(next.match(/\[mcp_servers\.cindy_helper\]/g)).toHaveLength(1);
+    expect(outsideManaged(next)).not.toMatch(helperScalar);
+    expectUserConfigKept(next);
+  });
+
+  it('recovers orphan helper scalars left behind an orphan begin marker', () => {
+    // An interrupted write leaves begin without end; the helper flag must count as managed residue too,
+    // or it and the timeouts behind it survive as user content.
+    const interrupted = [
+      ...USER_LINES,
+      BEGIN,
+      '# cindy-token-fingerprint: fp-old',
+      '[mcp_servers.cindy_helper]',
+      'url = "http://127.0.0.1:47000/mcp/cindy_helper"',
+      'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+      'enabled = false',
+      'startup_timeout_sec = 600',
+      'tool_timeout_sec = 600',
+      '',
+    ].join('\n');
+    const { next } = mergeManagedMcpBlock(interrupted, block, { serverNames: HELPER_SERVERS });
+    expect(() => parseToml(next)).not.toThrow();
+    expect(outsideManaged(next)).not.toMatch(helperScalar);
+    expect(next.match(/\[mcp_servers\.cindy_helper\]/g)).toHaveLength(1);
+    expectUserConfigKept(next);
+  });
+
+  it('does not strip user scalars that merely follow the managed block after a blank line and a header', () => {
+    const existing = [
+      ...USER_LINES,
+      ...legacyManaged(0),
+      '[mcp_servers.other_tool]',
+      'enabled = false',
+      'startup_timeout_sec = 30',
+      '',
+    ].join('\n');
+    const { next } = mergeManagedMcpBlock(existing, block, { serverNames: HELPER_SERVERS });
+    const parsed = expectUserConfigKept(next);
+    expect(parsed.mcp_servers.other_tool.enabled).toBe(false);
+    expect(parsed.mcp_servers.other_tool.startup_timeout_sec).toBe(30);
   });
 });
 
@@ -654,6 +780,28 @@ describe('ensureRemoteCodexMcpBridge server whitelist', () => {
 });
 
 describe('ensureRemoteCodexMcpBridge drift self-heal (appliedFingerprint)', () => {
+
+  it('preserves the alias port but clears endpoint-specific MCP state', async () => {
+    const { host } = fakeHost('host-endpoint-change', '');
+    const result = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: SERVERS,
+        bridgeInstanceId: 'bridge-endpoint-change',
+      }),
+      hasLiveTurnOnHost: () => false,
+    });
+    expect(result.ok).toBe(true);
+    expect(prefsOf('host-endpoint-change')).toMatchObject({
+      remotePort: 47921,
+      appliedFingerprint: expect.any(String),
+      bridgeLocalPort: 38080,
+    });
+
+    invalidateRemoteCodexMcpEndpointState('host-endpoint-change');
+
+    expect(prefsOf('host-endpoint-change')).toEqual({ remotePort: 47921 });
+  });
 
   it('bootstraps on the next ensure once the live turn settles (deferred drift stays persistent)', async () => {
     // defer 语义回归:live turn 期间 config 照写但 bootstrap 推迟;漂移未生效
@@ -1326,4 +1474,71 @@ describe('codex-connector R27 regressions', () => {
     expect(result.reason).toBe('bridge-unavailable');
     expect(execCmds.join('\n')).not.toContain('bootstrap');
   });
+});
+
+
+describe('remote Bot helper transport', () => {
+  const helperConfigOpts = {
+    bridgeInstanceId: 'helper-bridge', serverNames: ['cindy_helper'],
+    collabEnabled: false, makerMemoryEnabled: false,
+  };
+
+  it('keeps the shared helper disabled and binds per-thread URLs with collab and memory off', async () => {
+    const { host, inputs } = fakeHost('host-helper-only', '');
+    const ensured = await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({ port: 38991, serverNames: ['cindy_helper'], bridgeInstanceId: 'helper-bridge' }),
+      isCollabEnabled: () => false, isMakerMemoryEnabled: () => false,
+    });
+    expect(ensured.ok).toBe(true);
+    expect(decodeWrittenConfig(inputs)).toContain('[mcp_servers.cindy_helper]');
+    expect(decodeWrittenConfig(inputs)).toContain('enabled = false');
+    const config = buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', helperConfigOpts);
+    expect(config).toMatchObject({
+      'mcp_servers.cindy_helper.url': 'http://127.0.0.1:47921/mcp/cindy_helper?instance=bot-instance',
+      'mcp_servers.cindy_helper.bearer_token_env_var': 'LIZI_MCP_TOKEN',
+      'mcp_servers.cindy_helper.enabled': false,
+    });
+    expect(buildRemoteCodexSessionMcpConfig('missing-host', 'bot-instance', helperConfigOpts)).toEqual({});
+    expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...helperConfigOpts, serverNames: [] })).toEqual({});
+    expect(hasPendingRemoteMcpDrift(host.id, {
+      collabEnabled: false, makerMemoryEnabled: false, botHelperAvailable: true,
+      token: 'test-persistent-token', bridgeInstanceId: 'helper-bridge',
+    })).toBe(false);
+  });
+
+  it.each(['first-injection', 'helper-added', 'token', 'bridge'] as const)(
+    'withholds the helper during deferred %s and exposes it after bootstrap', async (drift) => {
+      const { host, execCmds } = fakeHost(`host-helper-deferred-${drift}`, '');
+      const bridge = { port: 38991, serverNames: [...SERVERS, 'cindy_helper'], bridgeInstanceId: 'helper-bridge' };
+      const opts = () => ({ ...bridge, collabEnabled: true, makerMemoryEnabled: false });
+      const deps = (live: boolean) => ({
+        ensureBridgeStarted: async () => bridge,
+        hasLiveTurnOnHost: () => live,
+      });
+      try {
+        if (drift !== 'first-injection') {
+          if (drift === 'helper-added') bridge.serverNames = [...SERVERS];
+          expect((await ensureRemoteCodexMcpBridge(host, deps(false))).ok).toBe(true);
+        }
+        bridge.serverNames = [...SERVERS, 'cindy_helper'];
+        if (drift === 'token') vi.mocked(getRemoteMcpBridgeToken).mockReturnValue('test-rotated-token');
+        if (drift === 'bridge') bridge.bridgeInstanceId = 'helper-bridge-next';
+        // Check both before and after ensure: a stale persisted fingerprint must
+        // not be accepted even before the next SSH configuration write.
+        expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', opts())).toEqual({});
+        execCmds.length = 0;
+        expect(await ensureRemoteCodexMcpBridge(host, deps(true)))
+          .toMatchObject({ ok: true, daemonRebootstrapped: false });
+        expect(execCmds.join('\n')).not.toContain('bootstrap');
+        expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', opts())).toEqual({});
+
+        expect(await ensureRemoteCodexMcpBridge(host, deps(false)))
+          .toMatchObject({ ok: true, daemonRebootstrapped: true });
+        expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', opts()))
+          .toHaveProperty('mcp_servers.cindy_helper.url', 'http://127.0.0.1:47921/mcp/cindy_helper?instance=bot-instance');
+      } finally {
+        vi.mocked(getRemoteMcpBridgeToken).mockReturnValue('test-persistent-token');
+      }
+    },
+  );
 });

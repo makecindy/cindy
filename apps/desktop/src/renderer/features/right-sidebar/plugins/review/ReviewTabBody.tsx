@@ -1,3 +1,4 @@
+import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
  * ReviewTabBody — unified workspace and recorded-message review panel.
  *
@@ -92,7 +93,13 @@ import type { ReviewState } from './index';
 import { getReviewDiffsExpanded, setReviewDiffsExpanded } from './diffExpansionPreference';
 import { PlainUnifiedDiff, type DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
 import { MarkdownDiffPreview } from './DiffViewer/MarkdownDiffPreview';
-import { shouldVirtualizeFileList } from './DiffViewer/diffRows';
+import {
+  countDiffRows,
+  DIFF_ROW_VIRTUAL_THRESHOLD,
+  shouldVirtualizeDiffRows,
+  shouldVirtualizeFileList,
+} from './DiffViewer/diffRows';
+
 import {
   buildFilteredReviewFileTree,
   filterReviewFileJumpResults,
@@ -2916,7 +2923,23 @@ export interface WriteActionProps {
   onSectionDiscard?: () => void;
 }
 
-function DiffList({
+export function countEagerExpandedDiffRows(
+  diffs: readonly FileDiff[],
+  expandedSet: ReadonlySet<string>,
+  viewMode: DiffViewMode,
+): number {
+  if (shouldVirtualizeFileList(diffs.length)) return 0;
+  let count = 0;
+  for (const diff of diffs) {
+    if (!expandedSet.has(diff.id)) continue;
+    const rowCount = countDiffRows(diff.hunks, viewMode, DIFF_ROW_VIRTUAL_THRESHOLD);
+    if (!shouldVirtualizeDiffRows(rowCount)) count += rowCount;
+    if (shouldVirtualizeFileList(0, count)) break;
+  }
+  return count;
+}
+
+export function DiffList({
   diffs,
   expandedSet,
   onToggleDiff,
@@ -2976,12 +2999,17 @@ function DiffList({
     (writeAction?.sectionAction && writeAction.onSectionAction) ||
     (writeAction?.sectionDiscardVisible && writeAction.onSectionDiscard),
   );
-  const virtualized = shouldVirtualizeFileList(diffs.length);
+  const eagerExpandedDiffRowCount = useMemo(
+    () => countEagerExpandedDiffRows(diffs, expandedSet, viewMode),
+    [diffs, expandedSet, viewMode],
+  );
+  const virtualizedByExpandedRows = shouldVirtualizeFileList(0, eagerExpandedDiffRowCount);
+  const virtualized = shouldVirtualizeFileList(diffs.length, eagerExpandedDiffRowCount);
   const fileVirtualizer = useVirtualizer({
     count: diffs.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => (expandedSet.has(diffs[index]?.id) ? 360 : 45),
-    overscan: 8,
+    overscan: virtualizedByExpandedRows ? 2 : 8,
     getItemKey: (index) => diffs[index]?.id ?? index,
   });
   const fileTreeVisibility = getReviewFileTreeVisibility({
@@ -3150,9 +3178,10 @@ function DiffList({
     if (diff) scrollToFile(diff);
   }, [diffs, jumpRequest, scrollToFile]);
 
-  const handleImagePreviewLoad = useCallback(() => {
-    requestAnimationFrame(() => fileVirtualizer.measure());
-  }, [fileVirtualizer]);
+  // 不要恢复成 fileVirtualizer.measure(): 那会清空全部已测行高且不回填,整列退回
+  // estimateSize(45/360),卡片互相压叠。异步内容变高由 item wrapper 的
+  // ResizeObserver 兜住。
+  const handleImagePreviewLoad = useCallback(() => undefined, []);
 
   const renderFileRow = (diff: FileDiff) => (
     <FileRow
@@ -3687,26 +3716,23 @@ function DiffViewModeToggle({
     { mode: 'split', label: t('rightSidebar.review.viewMode.split') },
   ];
   return (
-    <div
-      className="inline-flex h-6 shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--surface)] p-0.5"
+    <SegmentedControl
       aria-label={t('rightSidebar.review.viewMode.aria')}
-    >
-      <SlidersHorizontal size={11} className="ml-1 self-center text-[var(--text-tertiary)]" />
-      {options.map((option) => (
-        <button
-          key={option.mode}
-          type="button"
-          onClick={() => onChange(option.mode)}
-          className={cn(
-            'rounded-full px-2 text-10 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-            option.mode === mode &&
-              'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)]',
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+      value={mode}
+      onValueChange={onChange}
+      height={24}
+      optionHeight={18}
+      optionClassName="px-2 text-10"
+      className="shrink-0"
+      prefix={
+        <SlidersHorizontal
+          size={11}
+          aria-hidden="true"
+          className="ml-1 self-center text-[var(--text-tertiary)]"
+        />
+      }
+      options={options.map((option) => ({ value: option.mode, label: option.label }))}
+    />
   );
 }
 

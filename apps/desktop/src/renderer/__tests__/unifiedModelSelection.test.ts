@@ -18,7 +18,9 @@ import type {
 import {
   UNIFIED_FLYOUT_GAP,
   buildUnifiedListSections,
+  engineOfAgentKind,
   entryMatchesModelId,
+  favoriteMatchesSelection,
   wireModelIdOf,
   buildUnifiedRail,
   computeFlyoutPlacement,
@@ -495,10 +497,9 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
     expect(ids).toEqual(['deepseek/deepseek-v4-pro']);
   });
 
-  // Chris 2026-08-19 裁决:同引擎视图只显示**生效引擎 = 当前引擎**的行。候选里有当前引擎、
-  // 但默认落点在别家的行(主场在别处 / override 指到别家)此前会以外引擎形态混进来,点下去
-  // 还触发跨引擎切换 —— 与该视图「选什么都无损」的承诺冲突。裁决是不显示,不是转换。
-  describe('同引擎视图第二道判据:生效引擎(effectiveEngineOf)', () => {
+  // Chris 2026-08-23:同引擎视图的准入是候选,生效引擎只做排序优先级 —— 默认 / 用户选过
+  // 本引擎的在前,仅兼容的在后;不再把后者藏掉。
+  describe('同引擎视图:生效引擎是排序优先级,不是隐藏条件', () => {
     /** 注入侧的真实形态:调用方给的是 resolveUnifiedRowConfig / resolveFavoriteRowConfig 的 engine。 */
     const engineOfRow = (
       overrides: Record<string, 'cc' | 'codex' | 'pi'> = {},
@@ -526,13 +527,15 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
         .flatMap((s) => s.rows)
         .map((row) => row.entry.modelId);
 
-    it('override 指到别的引擎 → 该行在同引擎视图里不显示', () => {
-      // dual 候选含 cc,但用户把它的引擎 override 到了 codex。
-      expect(idsOf([dual], engineOfRow({ 'deepseek/deepseek-v4-pro': 'codex' }))).toEqual([]);
+    it('override 指到别的引擎 → 仍显示,排在优先行后面', () => {
+      // dual 候选含 cc,用户把它的引擎 override 到了 codex → 兼容段,不是消失。
+      expect(idsOf([dual], engineOfRow({ 'deepseek/deepseek-v4-pro': 'codex' }))).toEqual([
+        'deepseek/deepseek-v4-pro',
+      ]);
       expect(idsOf([dual], engineOfRow())).toEqual(['deepseek/deepseek-v4-pro']);
     });
 
-    it('主场在别处的行(pinned 对它不生效)→ 不显示', () => {
+    it('override 指到当前引擎 → 即使主场在别处也排进优先段', () => {
       const gptDual = entryOf({
         providerId: 'xd',
         modelId: 'gpt-5.5',
@@ -541,8 +544,68 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
         nativeAgent: 'codex',
         capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
       });
-      // cc 会话里:gpt 的主场在 codex,pinnedEngine 不生效 → 落点 codex → 不显示。
-      expect(idsOf([dual, gptDual], engineOfRow())).toEqual(['deepseek/deepseek-v4-pro']);
+      const guest = entryOf({
+        providerId: 'xd',
+        modelId: 'gpt-5.6',
+        candidates: ['claude-code', 'codex'],
+        recommended: 'codex',
+        nativeAgent: 'codex',
+        capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
+      });
+      expect(idsOf([guest, gptDual], engineOfRow({ 'gpt-5.5': 'cc' }))).toEqual([
+        'gpt-5.5',
+        'gpt-5.6',
+      ]);
+    });
+
+    it('主场在别处的行排在生效引擎=当前引擎的行后面', () => {
+      const gptDual = entryOf({
+        providerId: 'xd',
+        modelId: 'gpt-5.5',
+        candidates: ['claude-code', 'codex'],
+        recommended: 'codex',
+        nativeAgent: 'codex',
+        capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
+      });
+      // cc 会话里:dual 无主场被 pinned 到 cc(优先),gpt 主场在 codex(兼容)。
+      expect(idsOf([gptDual, dual], engineOfRow())).toEqual([
+        'deepseek/deepseek-v4-pro',
+        'gpt-5.5',
+      ]);
+    });
+
+    it('含优先行的供应商组排在纯兼容供应商组前面,即使 providerOrder 相反', () => {
+      const opus = entryOf({
+        providerId: 'anthropic',
+        modelId: 'claude-opus-5',
+        candidates: ['claude-code', 'pi'],
+        recommended: 'claude-code',
+        nativeAgent: 'claude-code',
+        capabilities: {
+          'claude-code': capability('claude-code'),
+          pi: capability('pi'),
+        },
+      });
+      const grok = entryOf({
+        providerId: 'xai',
+        modelId: 'grok-4.6',
+        candidates: ['pi'],
+        recommended: 'pi',
+        nativeAgent: null,
+        capabilities: { pi: capability('pi') },
+      });
+      const sections = buildUnifiedListSections({
+        entries: [opus, grok],
+        favorites: [],
+        query: '',
+        rail: { kind: 'engine', agent: 'pi' },
+        effectiveEngineOf: (entry) => engineOfAgentKind(entry.recommended),
+        providerOrder: ['anthropic', 'xai'],
+      });
+      expect(sections.flatMap((s) => s.rows.map((row) => row.entry.modelId))).toEqual([
+        'grok-4.6',
+        'claude-opus-5',
+      ]);
     });
 
     it('无主场的行照常跟随 pinnedEngine 通过过滤(§2.1 例外不受影响)', () => {
@@ -700,14 +763,14 @@ describe('buildUnifiedRail', () => {
   });
 });
 
-describe('computeSelectedRowScrollTop(选中行居中,Chris 2026-08-19)', () => {
+describe('computeSelectedRowScrollTop(选中行位于 35% 高度)', () => {
   const base = { scrollTop: 0, clientHeight: 400, scrollHeight: 2000, headerInset: 0 };
 
-  it('把选中行的中心对齐到可视区中心', () => {
-    // 行 [1000,1044] → 中心 1022;可视区高 400 → 目标 scrollTop = 1022 - 200 = 822。
+  it('把选中行的中心对齐到可视区 35%', () => {
+    // 行 [1000,1044] → 中心 1022;可视区高 400 → 目标 scrollTop = 1022 - 140 = 882。
     expect(
       computeSelectedRowScrollTop({ ...base, rowTop: 1000, rowBottom: 1044 }),
-    ).toEqual({ scrollTop: 822, oversized: false });
+    ).toEqual({ scrollTop: 882, oversized: false });
   });
 
   it('列表头部的行夹到 0(不能负滚),尾部的行夹到 scrollHeight - clientHeight', () => {
@@ -723,7 +786,7 @@ describe('computeSelectedRowScrollTop(选中行居中,Chris 2026-08-19)', () => 
     expect(
       computeSelectedRowScrollTop({ ...base, headerInset: 38, rowTop: 1000, rowBottom: 1044 })
         .scrollTop,
-    ).toBe(803);
+    ).toBe(857);
   });
 
   it('行比可视区还高 → 顶对齐并标 oversized(调用方据此一次收工,防振荡)', () => {
@@ -1012,5 +1075,49 @@ describe('默认种子置顶与原生底座排序', () => {
       'claude-opus-5',
       'gpt-5.5',
     ]);
+  });
+});
+
+describe('收藏锚点只代表当前完整配置', () => {
+  const entry = entryOf({
+    providerId: 'openai',
+    modelId: 'gpt-6',
+    candidates: ['codex'],
+    recommended: 'codex',
+    capabilities: { codex: capability('codex', { wireModelId: 'gpt-6', supportsFastMode: true }) },
+  });
+  const item = favoriteOf({
+    providerId: 'openai',
+    modelId: 'gpt-6',
+    agent: 'codex',
+    effort: 'high',
+    fast: true,
+  });
+  const selected = { providerId: 'openai', modelId: 'gpt-6' };
+  const base = { entry, item, selected, agent: 'codex' as const, effort: 'high', fast: true };
+
+  it('同一组合保持选中，关 Fast / 换档 / 换来源 / 换模型 / 换引擎都不冒充收藏', () => {
+    expect(favoriteMatchesSelection(base)).toBe(true);
+    for (const changed of [
+      { fast: false },
+      { effort: 'low' },
+      { effort: '' },
+      { agent: 'claude-code' as const },
+      { agent: null },
+      { selected: { ...selected, providerId: 'xd' } },
+      { selected: { ...selected, providerId: null } },
+      { selected: { ...selected, modelId: 'other' } },
+    ])
+      expect(favoriteMatchesSelection({ ...base, ...changed })).toBe(false);
+  });
+
+  it('收藏不支持的引擎不能静默回落后冒充当前收藏', () => {
+    expect(favoriteMatchesSelection({ ...base, item: { ...item, agent: 'cc' } })).toBe(false);
+  });
+
+  it('同一个归一化模型的 wire id 可以匹配，Fast 仍按该来源能力判断', () => {
+    const aliased = { ...entry, modelId: 'normalized-gpt-6' };
+    expect(favoriteMatchesSelection({ ...base, entry: aliased })).toBe(true);
+    expect(favoriteMatchesSelection({ ...base, agentFastModeCapable: () => false })).toBe(false);
   });
 });

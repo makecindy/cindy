@@ -1,8 +1,9 @@
 /**
  * 用户消息中自动识别出的 http(s) URL。
  *
- * 左键遵循“链接打开方式”偏好；Cmd/Ctrl 点击与无会话上下文场景保留
- * 系统浏览器 fallback。sidebar-embedded 场景通过可见会话 bucket 打开。
+ * 左键遵循“链接打开方式”偏好(外部网页 / 内部网页两套默认)；Cmd/Ctrl
+ * 点击与无会话上下文场景保留系统浏览器 fallback。sidebar-embedded
+ * 场景通过可见会话 bucket 打开。
  */
 
 import type { MouseEvent } from 'react';

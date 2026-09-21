@@ -62,10 +62,10 @@ export {
   type SendToWorkerDeps,
 } from './send_to_worker.js';
 export {
-  registerListWorkerQueueTool,
-  type ListWorkerQueueDeps,
+  registerGetWorkerQueueStatusTool,
+  type GetWorkerQueueStatusDeps,
   type WorkerQueuedMessageEntry,
-} from './list_worker_queue.js';
+} from './get_worker_queue_status.js';
 export {
   registerUpdateQueuedMessageTool,
   type QueuedMessageControlErrorCode,
@@ -75,6 +75,10 @@ export {
   registerCancelQueuedMessageTool,
   type CancelQueuedMessageDeps,
 } from './cancel_queued_message.js';
+export {
+  registerMergeQueuedMessagesTool,
+  type MergeQueuedMessagesDeps,
+} from './merge_queued_messages.js';
 export {
   registerIdleWorkerTool,
   type IdleWorkerDeps,
@@ -112,8 +116,10 @@ export {
   registerSteerSessionTool,
   registerStopSessionTurnTool,
   registerGetSessionRuntimeTool,
+  registerSetSessionRuntimeTool,
   type SessionControlDeps,
   type SessionQueueControlErrorCode,
+  type SessionRuntimeProfile,
   type SessionRuntimeSnapshot,
   type SessionSteerErrorCode,
   type SessionStopErrorCode,
@@ -127,6 +133,22 @@ export {
   type SearchChatHistoryToolDeps,
 } from './search_chat_history.js';
 export {
+  registerBotSkillTools,
+  type BotSkillCallbacks,
+  type BotSkillSummaryWire,
+  type BotSkillToolDeps,
+} from './bot_skills.js';
+export {
+  registerCreateTeammateTool,
+  type CreateTeammateCallbacks,
+} from './create_teammate.js';
+export {
+  registerBotCapabilityTools,
+  buildFindBotCapabilitiesDescription,
+  withCindyGatedBotToolDescriptions,
+  type BotCapabilityCallbacks,
+} from './bot_capabilities.js';
+export {
   registerSubmitGithubIssueTool,
   type SubmitGithubIssueDeps,
   type SubmitGithubIssueHostResult,
@@ -134,6 +156,13 @@ export {
   type SubmitGithubIssueHostErr,
   type SubmitGithubIssueHostErrorCode,
 } from './submit_github_issue.js';
+export {
+  registerStartSkillLearningTool,
+  type AuthorizedSkillLearningContext,
+  type AuthorizeSkillLearningCallback,
+  type StartSkillLearningCallback,
+  type StartSkillLearningParams,
+} from './start_skill_learning.js';
 export type {
   XdtHelperHistoryDeps,
   HistoryAgentKind,

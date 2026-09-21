@@ -117,6 +117,7 @@ export interface UseFileTreeReturn {
 }
 
 const ROOT_KEY = '';
+const EVENT_COALESCE_MS = 50;
 
 /**
  * 结构等价判定 —— name/type/relPath 完全相同(顺序也相同, listDir 是稳定排序),
@@ -177,11 +178,23 @@ interface FileTreeStore {
   /** 同一 relPath 的并发 listDir,latest 赢:每次开 listDir 前 bump,resolve
    *  时比对 —— 不一致就丢结果。 */
   tokens: Map<string, number>;
+  /** Single-flight directory requests plus one dirty bit for a trailing scan. */
+  inFlight: Map<string, DirectoryRefresh>;
+  /** Parent directories observed by the IPC listener in the current turn. */
+  pendingEventParents: Set<string>;
+  eventFlushTimer: ReturnType<typeof setTimeout> | null;
   /** chokidar listener 取消函数。首个挂载时挂、refCount 归 0 时调。 */
   watcherOff: (() => void) | null;
   /** ref count + listeners 用来驱动 lifecycle 和重渲订阅。 */
   refCount: number;
   listeners: Set<() => void>;
+}
+
+interface DirectoryRefresh {
+  promise: Promise<void>;
+  trailing: boolean;
+  /** At most one trailing scan may be queued for this refresh lifecycle. */
+  trailingScheduled: boolean;
 }
 
 /** 全局 stores 表。key 由 storeKey() 算,同 (workdir, options) 共享同一份。 */
@@ -216,6 +229,9 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
       loadError: null,
     },
     tokens: new Map(),
+    inFlight: new Map(),
+    pendingEventParents: new Set(),
+    eventFlushTimer: null,
     watcherOff: null,
     refCount: 0,
     listeners: new Set(),
@@ -226,18 +242,11 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
 
 /** 把 fetchDir 抽成 store 方法 —— 所有订阅者(无论挂在哪个 hook 实例)共享同
  *  一份 entries / loadingPaths 状态。 */
-async function fetchDir(store: FileTreeStore, relPath: string): Promise<void> {
+async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void> {
   const myToken = (store.tokens.get(relPath) ?? 0) + 1;
   store.tokens.set(relPath, myToken);
 
   // loadingPaths 设置
-  {
-    const nextLoading = new Set(store.snapshot.loadingPaths);
-    nextLoading.add(relPath);
-    store.snapshot = { ...store.snapshot, loadingPaths: nextLoading };
-    emit(store);
-  }
-
   try {
     const list = await fileBrowserApiFor(store.deviceId).listDir({
       workdir: store.workdir,
@@ -269,14 +278,105 @@ async function fetchDir(store: FileTreeStore, relPath: string): Promise<void> {
       emit(store);
     }
     // Keep prior state; user can refresh manually.
-  } finally {
-    if (store.tokens.get(relPath) === myToken) {
-      const nextLoading = new Set(store.snapshot.loadingPaths);
-      nextLoading.delete(relPath);
-      store.snapshot = { ...store.snapshot, loadingPaths: nextLoading };
-      emit(store);
-    }
   }
+}
+
+function setDirectoryLoading(store: FileTreeStore, relPath: string, loading: boolean): void {
+  const alreadyLoading = store.snapshot.loadingPaths.has(relPath);
+  if (alreadyLoading === loading) return;
+  const nextLoading = new Set(store.snapshot.loadingPaths);
+  if (loading) nextLoading.add(relPath);
+  else nextLoading.delete(relPath);
+  store.snapshot = { ...store.snapshot, loadingPaths: nextLoading };
+  emit(store);
+}
+
+/**
+ * Fetch one directory at a time. Calls made while the request is running set
+ * one trailing bit; the request loop consumes that bit after the current
+ * result is applied. The trailing budget is capped at one scan per lifecycle,
+ * so a watcher storm cannot keep the loop alive indefinitely.
+ */
+function fetchDir(store: FileTreeStore, relPath: string): Promise<void> {
+  const current = store.inFlight.get(relPath);
+  if (current) {
+    if (!current.trailingScheduled) {
+      current.trailingScheduled = true;
+      current.trailing = true;
+    }
+    return current.promise;
+  }
+
+  const refresh: DirectoryRefresh = {
+    promise: Promise.resolve(),
+    trailing: false,
+    trailingScheduled: false,
+  };
+  refresh.promise = (async () => {
+    do {
+      refresh.trailing = false;
+      await fetchDirOnce(store, relPath);
+    } while (refresh.trailing);
+  })().finally(() => {
+    if (store.inFlight.get(relPath) === refresh) {
+      store.inFlight.delete(relPath);
+    }
+    setDirectoryLoading(store, relPath, false);
+  });
+  store.inFlight.set(relPath, refresh);
+  setDirectoryLoading(store, relPath, true);
+  return refresh.promise;
+}
+
+function parentPath(relPath: string): string {
+  const slashIdx = relPath.lastIndexOf('/');
+  return slashIdx < 0 ? ROOT_KEY : relPath.slice(0, slashIdx);
+}
+
+function addDocModeAncestors(
+  store: FileTreeStore,
+  parent: string,
+  targets: Set<string>,
+): void {
+  let cursor: string | null = parent;
+  while (cursor !== null) {
+    // An ancestor can still be warming during initial restore. Include an
+    // in-flight directory as a target so a watcher event arriving in that
+    // window gets a trailing refresh instead of being lost before the first
+    // result is committed.
+    if (store.snapshot.entries.has(cursor) || store.inFlight.has(cursor)) {
+      targets.add(cursor);
+    }
+    if (cursor === ROOT_KEY) break;
+    cursor = parentPath(cursor);
+  }
+}
+
+/**
+ * Coalesce synchronous IPC deliveries by parent directory. The IPC contract
+ * intentionally remains one event per changed path; only tree refresh work is
+ * merged here. In doc mode every cached ancestor is retained because a
+ * directory can disappear when its last visible descendant is removed.
+ */
+function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
+  store.pendingEventParents.add(parentPath(eventRelPath));
+  if (store.eventFlushTimer) return;
+  store.eventFlushTimer = setTimeout(() => {
+    store.eventFlushTimer = null;
+    const parents = [...store.pendingEventParents];
+    store.pendingEventParents.clear();
+    if (store.refCount === 0) return;
+
+    const targets = new Set<string>();
+    for (const parent of parents) {
+      if (store.docMode) {
+        addDocModeAncestors(store, parent, targets);
+      } else if (store.snapshot.entries.has(parent) || store.inFlight.has(parent)) {
+        targets.add(parent);
+      }
+    }
+    for (const target of targets) void fetchDir(store, target);
+  }, EVENT_COALESCE_MS);
 }
 
 /** 首次挂载触发:initial fetch + 恢复 localStorage expanded + 启动 watcher。
@@ -301,22 +401,7 @@ async function initStore(store: FileTreeStore): Promise<void> {
 
     store.watcherOff = onFileTreeEventFor(store.deviceId, (event) => {
       if (event.workdir !== store.workdir) return;
-      const slashIdx = event.relPath.lastIndexOf('/');
-      const parent = slashIdx < 0 ? ROOT_KEY : event.relPath.slice(0, slashIdx);
-      const currentEntries = store.snapshot.entries;
-      if (store.docMode) {
-        // Doc mode wrinkle (见函数顶部大注释):一条 doc 文件 add/unlink 会改变整条
-        // 祖先链的可见性,需要 refetch 所有已 cache 的祖先。
-        let cursor: string | null = parent;
-        while (cursor !== null) {
-          if (currentEntries.has(cursor)) void fetchDir(store, cursor);
-          if (cursor === ROOT_KEY) break;
-          const idx = cursor.lastIndexOf('/');
-          cursor = idx < 0 ? ROOT_KEY : cursor.slice(0, idx);
-        }
-      } else if (currentEntries.has(parent)) {
-        void fetchDir(store, parent);
-      }
+      queueEventRefresh(store, event.relPath);
     });
   }
 
@@ -332,6 +417,10 @@ async function initStore(store: FileTreeStore): Promise<void> {
 
 /** 最后一个订阅者离开:停 watcher、从 stores 表移除。store 对象被回收。 */
 function disposeStore(store: FileTreeStore): void {
+  if (store.eventFlushTimer) clearTimeout(store.eventFlushTimer);
+  store.eventFlushTimer = null;
+  store.pendingEventParents.clear();
+  store.inFlight.clear();
   if (store.watcherOff) {
     store.watcherOff();
     store.watcherOff = null;

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import en from '../../../../renderer/i18n/locales/en/common.json';
+import ja from '../../../../renderer/i18n/locales/ja/common.json';
+import ko from '../../../../renderer/i18n/locales/ko/common.json';
+import zhCN from '../../../../renderer/i18n/locales/zh-CN/common.json';
+import zhTW from '../../../../renderer/i18n/locales/zh-TW/common.json';
+
 import {
   BOT_COMMANDS,
   type BotCommandDefinition,
@@ -44,6 +50,22 @@ const OFFICIAL_SERVER_COMMANDS = [
 ] as const;
 
 describe('bot command registry', () => {
+  it('Telegram /new menu copy says it creates a session/task in every locale', () => {
+    expect([
+      en.settings.telegramBot.commandMenu.new,
+      zhCN.settings.telegramBot.commandMenu.new,
+      zhTW.settings.telegramBot.commandMenu.new,
+      ja.settings.telegramBot.commandMenu.new,
+      ko.settings.telegramBot.commandMenu.new,
+    ]).toEqual([
+      'Create a new session',
+      '创建新任务',
+      '建立新任務',
+      '新しいセッションを作成',
+      '새 세션 만들기',
+    ]);
+  });
+
   it('个人 bot 菜单顺序、文案 key 与别名逐字节不变', () => {
     expect(PERSONAL_BOT_COMMAND_LOCALE_POLICY).toBe('desktop-app');
     expect(

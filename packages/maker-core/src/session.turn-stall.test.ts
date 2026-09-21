@@ -3,7 +3,8 @@
  *
  * 兜的是各 agent 内部 upstream-idle watchdog 结构上抓不到的洞:那些 watchdog 在
  * **工具执行期间刻意不计时**,所以工具自己 hang(MCP 卡住 / stdio 通道 wedge)时
- * turn 可以永久挂着。这一层不区分球在谁手里,只看"还有没有动静"。
+ * turn 可以永久挂着。这一层不区分球在谁手里,只看有没有产品进展;
+ * status / account_usage 心跳不算。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -12,14 +13,16 @@ import {
   STALL_ABORT_RECOVERY_GRACE_MS,
   Session,
 } from './session.js';
-import type { AgentEvent, SendOrigin } from './types/events.js';
+import type { AgentEvent, InteractionDecision, SendOrigin } from './types/events.js';
 import type { AgentSessionHandle, BackgroundTaskSnapshot } from './agents/base-agent.js';
 
 type LoggedError = { msg: string; meta?: Record<string, unknown> };
 
-function createLogger(sink?: LoggedError[]) {
+function createLogger(sink?: LoggedError[], diagnostics?: LoggedError[]) {
   const logger = {
-    trace() {}, debug() {}, info() {}, warn() {}, fatal() {},
+    trace() {}, debug() {}, fatal() {},
+    info(msg: string, meta?: Record<string, unknown>) { diagnostics?.push({ msg, meta }); },
+    warn(msg: string, meta?: Record<string, unknown>) { diagnostics?.push({ msg, meta }); },
     error(msg: string, meta?: Record<string, unknown>) {
       sink?.push({ msg, meta });
     },
@@ -110,7 +113,7 @@ function createStubHandle(opts?: StubOptions) {
 
 function createSession(
   stub: ReturnType<typeof createStubHandle>,
-  opts?: { turnStallMs?: number; errorSink?: LoggedError[] },
+  opts?: { turnStallMs?: number; errorSink?: LoggedError[]; diagnostics?: LoggedError[] },
 ) {
   return new Session({
     id: 'session-1',
@@ -118,12 +121,102 @@ function createSession(
     workDir: '/repo',
     handle: stub.handle,
     capabilities: {} as never,
-    logger: createLogger(opts?.errorSink) as never,
+    logger: createLogger(opts?.errorSink, opts?.diagnostics) as never,
     turnStallMs: opts?.turnStallMs ?? STALL_MS,
   });
 }
 
 describe('Session turn stall watchdog', () => {
+  it('logs bounded activity refreshes, suspension, resumption and disarming', async () => {
+    vi.useFakeTimers();
+    try {
+      const backgroundTasks: BackgroundTaskSnapshot[] = [];
+      const stub = createStubHandle({ backgroundTasks });
+      const diagnostics: LoggedError[] = [];
+      const session = createSession(stub, { turnStallMs: 120_000, diagnostics });
+      await session.send('work');
+      const tick = async () => {
+        stub.pushEvent({ type: 'text', data: { text: 'progress' }, source: 'claude-code' });
+        await vi.advanceTimersByTimeAsync(0);
+      };
+      for (let i = 0; i < 10; i++) await tick();
+      expect(diagnostics.filter(x => x.msg.endsWith('armed'))).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await tick();
+      expect(diagnostics.find(x => x.msg.endsWith('refreshed'))?.meta).toMatchObject({
+        lastActivityAt: Date.now(), deadlineWithoutSuspendAt: Date.now() + 120_000,
+      });
+      backgroundTasks.push({ taskId: 'background' } as BackgroundTaskSnapshot);
+      await tick();
+      await tick();
+      expect(diagnostics.filter(x => x.msg.endsWith('suspended'))).toEqual([
+        { msg: 'turn stall watchdog suspended', meta: { reason: 'background-task' } },
+      ]);
+      backgroundTasks.length = 0;
+      await tick();
+      expect(diagnostics.filter(x => x.msg === 'turn stall watchdog armed')).toHaveLength(2);
+      await session.close();
+      expect(diagnostics.filter(x => x.msg.endsWith('disarmed'))).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it('closes an idle missing-terminal turn when stall abort never returns', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle({ abortHangs: true });
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((event) => seen.push(event));
+      await session.send('perform a side effect');
+      stub.endTurn();
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error',
+        data: expect.objectContaining({ reason: 'turn_no_event_timeout', isTerminal: true }) }));
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+      expect(session.getStatus()).toBe('aborting');
+      // A paired leftover done would clear the 250ms terminal-error drain. The
+      // hung abort must still force close this diagnosed generation.
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.getStatus()).toBe('aborting');
+      await vi.advanceTimersByTimeAsync(STALL_ABORT_RECOVERY_GRACE_MS + 1);
+      expect(session.getStatus()).toBe('closed');
+      expect(stub.handle.send).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('times out an accepted turn even if the provider went idle without delivering its terminal', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((event) => seen.push(event));
+      await session.send('perform a side effect');
+      stub.endTurn();
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error',
+        data: expect.objectContaining({ reason: 'turn_no_event_timeout', isTerminal: true }) }));
+      expect(stub.handle.send).toHaveBeenCalledOnce();
+      await session.close();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('settles Stop with a missing terminal as cancelled even when abort flips the provider idle', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((event) => seen.push(event));
+      await session.send('work');
+      await session.abort();
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS + 1);
+      expect(session.getStatus()).toBe('closed');
+      expect(seen).toEqual([expect.objectContaining({ type: 'done', data: { status: 'cancelled' } })]);
+      expect(stub.handle.send).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('turn 零事件超阈值 → 推终态 error 并中断 turn', async () => {
     vi.useFakeTimers();
     try {
@@ -146,7 +239,7 @@ describe('Session turn stall watchdog', () => {
     }
   });
 
-  it('每个事件都重置计时:持续有动静的长 turn 不被中断', async () => {
+  it('text 事件重置计时:持续有产品进展的长 turn 不被中断', async () => {
     vi.useFakeTimers();
     try {
       const stub = createStubHandle();
@@ -169,11 +262,159 @@ describe('Session turn stall watchdog', () => {
     }
   });
 
-  it('等用户回应交互期间不计时(离开电脑不该被判卡死)', async () => {
+  it.each([
+    { type: 'status', data: { status: 'Working…', isRunning: true, inputTokens: 1 } },
+    { type: 'text', data: { text: ' \t\n' } },
+    { type: 'text', data: { text: '\u200B\u2060' } },
+    { type: 'thinking', data: { text: ' \t\n' } },
+    { type: 'thinking', data: { text: '\u200B\u2060' } },
+  ] as AgentEvent[])('无进展帧不重置计时: $type $data', async (event) => {
     vi.useFakeTimers();
     try {
       const stub = createStubHandle();
       const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('go');
+      for (let i = 0; i < 5; i++) {
+        await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+        stub.pushEvent({ ...event, source: 'codex' });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      const terminal = seen.find((ev) => ev.type === 'error');
+      expect(terminal).toBeDefined();
+      expect((terminal!.data as { reason?: string }).reason).toBe('turn_no_event_timeout');
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('非终态 error 不重置计时', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('go');
+      await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+      stub.pushEvent({
+        type: 'error',
+        data: { message: 'retrying', willRetry: true, isTerminal: false },
+        source: 'codex',
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_001);
+
+      const stall = seen.find(
+        (ev) => ev.type === 'error' && (ev.data as { reason?: string }).reason === 'turn_no_event_timeout',
+      );
+      expect(stall).toBeDefined();
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('turn_diff 不重置计时', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('go');
+      await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+      stub.pushEvent({
+        type: 'turn_diff',
+        data: { turnId: 't1', diff: '', cwd: '/repo' },
+        source: 'codex',
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_001);
+
+      const stall = seen.find(
+        (ev) => ev.type === 'error' && (ev.data as { reason?: string }).reason === 'turn_no_event_timeout',
+      );
+      expect(stall).toBeDefined();
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('旧 generation 的迟到 text 不重置当前 turn 的计时', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('first');
+      stub.endTurn();
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await session.send('second');
+      await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+      stub.pushEvent({
+        type: 'text',
+        data: { text: 'leftover from gen 1' },
+        sessionTurnGeneration: 1,
+        source: 'claude-code',
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_001);
+
+      const stall = seen.find(
+        (ev) => ev.type === 'error' && (ev.data as { reason?: string }).reason === 'turn_no_event_timeout',
+      );
+      expect(stall).toBeDefined();
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('thinking / tool_use 仍重置计时', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('go');
+      await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+      stub.pushEvent({ type: 'thinking', data: { text: 'hmm' }, source: 'codex' } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+      stub.pushEvent({
+        type: 'tool_use',
+        data: { name: 'Bash', id: 'tool-1' },
+        source: 'codex',
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+
+      expect(seen.some((ev) => ev.type === 'error')).toBe(false);
+      expect(stub.abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('等用户回应交互期间不计时(离开电脑不该被判卡死)', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const diagnostics: LoggedError[] = [];
+      const session = createSession(stub, { diagnostics });
       const seen: AgentEvent[] = [];
       session.onEvent((ev) => seen.push(ev));
       // listener 永不回应 —— 模拟用户离开
@@ -183,6 +424,10 @@ describe('Session turn stall watchdog', () => {
       void stub.callInteraction();
       await vi.advanceTimersByTimeAsync(STALL_MS * 5);
 
+      expect(diagnostics).toContainEqual({
+        msg: 'turn stall watchdog suspended',
+        meta: { reason: 'pending-interaction' },
+      });
       expect(seen.some((ev) => ev.type === 'error')).toBe(false);
       expect(stub.abort).not.toHaveBeenCalled();
     } finally {
@@ -217,6 +462,25 @@ describe('Session turn stall watchdog', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('Host 下载审批等待时挂起看门狗，结束后恢复', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      await session.send('generate');
+      let answer!: (decision: InteractionDecision) => void;
+      const pending = session.runHostInteraction({
+        kind: 'permission', requestId: 'download-1', toolName: 'cindy.media.download', input: {},
+      }, () => new Promise((resolve) => { answer = resolve; }));
+      await vi.advanceTimersByTimeAsync(STALL_MS * 3);
+      expect(stub.abort).not.toHaveBeenCalled();
+      answer({ kind: 'permission', behavior: 'allow' });
+      await pending;
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
   });
 
   it('有后台任务在跑时不计时(后台 Bash / subagent 期间安静是正常的)', async () => {
@@ -255,6 +519,33 @@ describe('Session turn stall watchdog', () => {
 
       expect(seen.some((ev) => ev.type === 'error')).toBe(false);
       expect(stub.abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stamps dequeued terminals with the queued generation and Session instance', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('first');
+      expect(session.getTurnGeneration()).toBe(1);
+      stub.endTurn();
+      await session.send('second');
+      expect(session.getTurnGeneration()).toBe(2);
+      stub.endTurn();
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const done = seen.find((ev) => ev.type === 'done');
+      // The constructor wait starts at generation 0; the send that is current
+      // when that wait finally dequeues owns the event.
+      expect(done?.sessionTurnGeneration).toBe(2);
+      expect(done?.sessionInstanceId).toBe(session.instanceId);
     } finally {
       vi.useRealTimers();
     }

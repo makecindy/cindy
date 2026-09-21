@@ -129,6 +129,75 @@ function clickGroup(label: string) {
 }
 
 describe('WorkGroupBlock — running latest-five preview', () => {
+  it('keeps teammate execution collapsed while streaming and preserves explicit expansion at completion', async () => {
+    const props = { compact: true, blockId: 'work:bot-public', isStreaming: true,
+      childItems: [rendered('progress', 'Checking the market'),
+        tools('tools', [mkTool('search')], new Map([['search', 'original error evidence']]), new Set(['search']))] };
+    const { rerender, container } = render(createElement(WorkGroupBlock, props));
+    expect(container.querySelector('[data-live-work-preview]')).toBeNull();
+    expect(screen.queryByTestId('assistant-progress')).toBeNull();
+    expect(screen.queryByTestId('direct-tool')).toBeNull();
+    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+    clickGroup('chat.workGroup.workDetails');
+    expect(screen.getByTestId('assistant-progress').textContent).toBe('Checking the market');
+    expect(screen.getByTestId('direct-tool').getAttribute('data-result')).toBe('original error evidence');
+    rerender(createElement(WorkGroupBlock, { ...props, isStreaming: false }));
+    expect(screen.getByTestId('assistant-progress')).toBeTruthy();
+    clickGroup('chat.workGroup.workDetails');
+    await waitFor(() => expect(screen.queryByTestId('assistant-progress')).toBeNull());
+  });
+
+  it('keeps lazy teammate history load and retry controls reachable without a live preview', () => {
+    const setVisible = vi.fn();
+    const retry = vi.fn();
+    const props = { compact: true, blockId: 'work:bot-lazy', isStreaming: true, childItems: [],
+      deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: true,
+        toggle: vi.fn(), retry, setVisible } };
+    render(createElement(WorkGroupBlock, props));
+    clickGroup('chat.workGroup.workDetails');
+    expect(setVisible).toHaveBeenLastCalledWith(true, false);
+    fireEvent.click(screen.getByText('chat.errorBanner.retry'));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it('rebinds visible detail interest when the Host changes without changing the group key', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const deferred = (owner: object, setVisible: typeof first) => ({ owner, key: 'range',
+      expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible });
+    const props = { blockId: 'work:same-key', isStreaming: true,
+      childItems: [tools('tools', Array.from({ length: 6 }, (_, index) => mkTool(`t${index}`)))] };
+    const { rerender, unmount } = render(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, first) }));
+    expect(first).toHaveBeenLastCalledWith(false, true);
+    expect(screen.getAllByTestId('direct-tool')).toHaveLength(5);
+    clickGroup('chat.workGroup.working');
+    expect(first).toHaveBeenLastCalledWith(true, true);
+    rerender(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, second) }));
+    expect(first).toHaveBeenLastCalledWith(false, false);
+    expect(second).toHaveBeenLastCalledWith(true, true);
+    unmount();
+    expect(second).toHaveBeenLastCalledWith(false, false);
+  });
+
+  it('keeps an outer summary independent from inner detail visibility and remembers the inner toggle', async () => {
+    const setVisible = vi.fn();
+    const child: WorkGroupChild = { kind: 'group', key: 'inner', blockId: 'work:inner', durationMs: 1000,
+      isStreaming: false, childItems: [tools('tools', [mkTool('inside')])],
+      deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible } };
+    render(createElement(WorkGroupBlock, { blockId: 'work:summary', durationMs: 3000,
+      childItems: [rendered('progress', 'Checking'), child] }));
+    expect(setVisible).not.toHaveBeenCalled();
+    clickGroup('chat.workGroup.worked:3s');
+    expect(setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(screen.queryByTestId('direct-tool')).toBeNull();
+    clickGroup('chat.workGroup.worked:1s');
+    expect(setVisible).toHaveBeenLastCalledWith(true, false);
+    clickGroup('chat.workGroup.worked:3s');
+    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(false, false));
+    clickGroup('chat.workGroup.worked:3s');
+    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(true, false));
+  });
+
   it('keeps the latest five tools/reasoning rows in chronological order and drops empty thinking', async () => {
     const children: WorkGroupChild[] = [
       tools('seg-1', [mkTool('t1'), mkTool('t2')]),

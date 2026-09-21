@@ -16,8 +16,12 @@ import { isIpcError } from '../shared/ipc-errors.js';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
 import {
   normalizeSidebarPinnedOrder,
+  sidebarPinnedEntryComparisonKey,
+  SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES,
   SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
   SIDEBAR_PINNED_ORDER_MAX_ENTRIES,
+  isSidebarGhostId,
+  type SidebarMainViewHiddenWriteRequest,
   type SidebarPinnedOrderMutation,
   type SidebarPinnedOrderWriteRequest,
   type SidebarLegacyRendererOwnerClaim,
@@ -40,7 +44,10 @@ import {
   isLegacyOwnerNamespaceClaimOwnedBy,
   isLegacyOwnerNamespaceClaimedByOtherOwner,
 } from './ownerNamespaceMigration.js';
-import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from './security/trustedAppRenderer.js';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
@@ -48,9 +55,14 @@ import { isAppContentWindow } from './windowFocusClassifier.js';
 interface SidebarSettingsShape {
   pinnedOrder: string[];
   hiddenProjectKeys: string[];
+  hiddenMainViewGhostIds: string[];
 }
 
-const DEFAULTS: SidebarSettingsShape = { pinnedOrder: [], hiddenProjectKeys: [] };
+const DEFAULTS: SidebarSettingsShape = {
+  pinnedOrder: [],
+  hiddenProjectKeys: [],
+  hiddenMainViewGhostIds: [],
+};
 const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024;
@@ -90,11 +102,25 @@ function normalizeHiddenProjectKeys(raw: unknown): string[] {
   return normalized;
 }
 
+function normalizeHiddenMainViewGhostIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of raw) {
+    if (!isSidebarGhostId(entry) || seen.has(entry)) continue;
+    seen.add(entry);
+    normalized.push(entry);
+    if (normalized.length >= SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES) break;
+  }
+  return normalized;
+}
+
 function normalizeSettings(raw: unknown): SidebarSettingsShape {
   const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return {
     pinnedOrder: normalizeSidebarPinnedOrder(value.pinnedOrder),
     hiddenProjectKeys: normalizeHiddenProjectKeys(value.hiddenProjectKeys),
+    hiddenMainViewGhostIds: normalizeHiddenMainViewGhostIds(value.hiddenMainViewGhostIds),
   };
 }
 
@@ -196,6 +222,7 @@ export function loadSidebarSettingsSnapshot(): SidebarSettingsSnapshot {
     pinnedOrderIsAuthoritative: current.pinnedOrderIsAuthoritative,
     pinnedOrder: Array.from(current.settings.pinnedOrder),
     hiddenProjectKeys: Array.from(current.settings.hiddenProjectKeys),
+    hiddenMainViewGhostIds: Array.from(current.settings.hiddenMainViewGhostIds),
   };
 }
 
@@ -258,17 +285,33 @@ function rebasePinnedReorder(
   current: readonly string[],
   baseOrder: readonly string[],
   desiredOrder: readonly string[],
+  localPlatform: string,
 ): string[] {
-  const baseSet = new Set(baseOrder);
-  const currentSet = new Set(current);
-  const result = desiredOrder.filter((entry) => !baseSet.has(entry) || currentSet.has(entry));
-  const resultSet = new Set(result);
+  const identityOf = (entry: string) => sidebarPinnedEntryComparisonKey(entry, localPlatform);
+  const baseIdentities = new Set(baseOrder.map(identityOf));
+  const currentRepresentatives = new Map<string, string>();
+  for (const entry of current) {
+    const identity = identityOf(entry);
+    if (!currentRepresentatives.has(identity)) currentRepresentatives.set(identity, entry);
+  }
 
-  for (let index = 0; index < current.length; index += 1) {
-    const entry = current[index];
-    if (baseSet.has(entry) || resultSet.has(entry)) continue;
+  const result: string[] = [];
+  const resultIdentities = new Set<string>();
+  for (const entry of desiredOrder) {
+    const identity = identityOf(entry);
+    if (resultIdentities.has(identity)) continue;
+    const durableRepresentative = currentRepresentatives.get(identity);
+    if (baseIdentities.has(identity) && durableRepresentative == null) continue;
+    result.push(durableRepresentative ?? entry);
+    resultIdentities.add(identity);
+  }
+
+  const durableEntries = Array.from(currentRepresentatives.entries());
+  for (let index = 0; index < durableEntries.length; index += 1) {
+    const [identity, entry] = durableEntries[index];
+    if (baseIdentities.has(identity) || resultIdentities.has(identity)) continue;
     result.splice(Math.min(index, result.length), 0, entry);
-    resultSet.add(entry);
+    resultIdentities.add(identity);
   }
 
   return normalizeSidebarPinnedOrder(result);
@@ -278,18 +321,29 @@ function applyPinnedMutation(
   current: readonly string[],
   mutation: SidebarPinnedOrderMutation,
   pinnedOrderIsAuthoritative: boolean,
+  localPlatform: string,
 ): string[] {
   switch (mutation.kind) {
-    case 'promote':
-      return current[0] === mutation.entryId
-        ? Array.from(current)
-        : [mutation.entryId, ...current.filter((entry) => entry !== mutation.entryId)];
-    case 'remove':
-      return current.filter((entry) => entry !== mutation.entryId);
+    case 'promote': {
+      const identity = sidebarPinnedEntryComparisonKey(mutation.entryId, localPlatform);
+      const firstMatches =
+        sidebarPinnedEntryComparisonKey(current[0] ?? '', localPlatform) === identity;
+      const remaining = current.filter(
+        (entry) => sidebarPinnedEntryComparisonKey(entry, localPlatform) !== identity,
+      );
+      if (firstMatches && remaining.length === current.length - 1) return Array.from(current);
+      return [firstMatches ? current[0]! : mutation.entryId, ...remaining];
+    }
+    case 'remove': {
+      const identity = sidebarPinnedEntryComparisonKey(mutation.entryId, localPlatform);
+      return current.filter(
+        (entry) => sidebarPinnedEntryComparisonKey(entry, localPlatform) !== identity,
+      );
+    }
     case 'migrate-legacy':
       return pinnedOrderIsAuthoritative ? Array.from(current) : Array.from(mutation.order);
     case 'reorder':
-      return rebasePinnedReorder(current, mutation.baseOrder, mutation.order);
+      return rebasePinnedReorder(current, mutation.baseOrder, mutation.order, localPlatform);
   }
 }
 
@@ -308,6 +362,13 @@ function requireProjectKey(raw: unknown): string {
     throwIpcError('INVALID_PARAMS', 'invalid sidebar project key');
   }
   return projectKey;
+}
+
+function requireGhostId(raw: unknown): string {
+  if (!isSidebarGhostId(raw)) {
+    throwIpcError('INVALID_PARAMS', 'invalid main-view plugin id');
+  }
+  return raw;
 }
 
 function requireWriteRequest(raw: unknown): Record<string, unknown> & DataOwnerPushStamp {
@@ -366,10 +427,24 @@ function broadcastHiddenProjectKeysChanged(
   ownerStamp: DataOwnerPushStamp,
 ): void {
   for (const window of BrowserWindow.getAllWindows()) {
-    if (!isAppContentWindow(window)) continue;
+    if (!isTrustedAppRendererWindow(window)) continue;
     window.webContents.send(
       'sidebar-settings:hidden-project-keys-changed',
       Array.from(projectKeys),
+      ownerStamp,
+    );
+  }
+}
+
+function broadcastHiddenMainViewGhostIdsChanged(
+  ghostIds: readonly string[],
+  ownerStamp: DataOwnerPushStamp,
+): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isAppContentWindow(window)) continue;
+    window.webContents.send(
+      'sidebar-settings:hidden-main-view-ghost-ids-changed',
+      Array.from(ghostIds),
       ownerStamp,
     );
   }
@@ -396,6 +471,7 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
           current.value.pinnedOrder,
           mutation,
           hasAuthoritativePinnedOrder(current.customizedKeys),
+          process.platform,
         );
         changed = !sameStringArray(current.value.pinnedOrder, nextOrder);
         return { pinnedOrder: nextOrder };
@@ -415,6 +491,23 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
     refreshInputDeviceTaskSlotsAfterPinnedOrderChange();
   }
   return Array.from(nextSettings.pinnedOrder);
+}
+
+/** Restore one local project using the same owner fence and broadcast as the sidebar. */
+export async function restoreLocalProjectVisibility(
+  workingDir: string,
+  ownerStamp: DataOwnerPushStamp,
+): Promise<boolean> {
+  return setLocalProjectHidden(workingDir, false, ownerStamp);
+}
+
+/** Host project tools share the sidebar's owner-scoped visibility mutation. */
+export async function setLocalProjectHidden(
+  workingDir: string,
+  hidden: boolean,
+  ownerStamp: DataOwnerPushStamp,
+): Promise<boolean> {
+  return setProjectHidden({ ...ownerStamp, projectKey: normalizeProjectKey(workingDir), hidden });
 }
 
 async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
@@ -470,6 +563,57 @@ async function setProjectHidden(rawRequest: unknown): Promise<boolean> {
     broadcastHiddenProjectKeysChanged(nextSettings.hiddenProjectKeys, ownerStamp);
   }
   return changed;
+}
+
+/** Persist one plugin main-view visibility override in Main's owner-scoped store. */
+async function setMainViewHidden(rawRequest: unknown): Promise<string[]> {
+  const request = requireWriteRequest(rawRequest);
+  const ghostId = requireGhostId(request.ghostId);
+  if (typeof request.hidden !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'invalid main-view hidden state');
+  }
+  const hidden = request.hidden;
+  assertRequestedOwner(request);
+  const scopeKey = activeOwnerScopeKey();
+  const ownerStamp: DataOwnerPushStamp = {
+    dataOwnerId: request.dataOwnerId,
+    ownerGeneration: request.ownerGeneration,
+  };
+  requireSidebarStoreAccess();
+  const store = currentStore();
+  let changed = false;
+  let nextSettings: SidebarSettingsShape;
+  try {
+    nextSettings = await enqueueWrite(scopeKey, () =>
+      store.updateAtomic((current) => {
+        requireSidebarStoreAccess({ rejectSnapshotChange: true });
+        const currentIds = current.value.hiddenMainViewGhostIds;
+        const alreadyHidden = currentIds.includes(ghostId);
+        if (alreadyHidden === hidden) return { hiddenMainViewGhostIds: currentIds };
+        if (hidden && currentIds.length >= SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES) {
+          throwIpcError('INVALID_PARAMS', 'too many hidden main-view plugins');
+        }
+        changed = true;
+        return {
+          hiddenMainViewGhostIds: hidden
+            ? [...currentIds, ghostId]
+            : currentIds.filter((entry) => entry !== ghostId),
+        };
+      }, SIDEBAR_WRITE_OPTIONS),
+    );
+    assertScopeCurrent(scopeKey);
+  } catch (err) {
+    if (isIpcError(err)) throw err;
+    if (activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', 'active account changed during sidebar mutation');
+    }
+    log.error('failed to persist hidden main-view plugins', err);
+    throwIpcError('INTERNAL', 'failed to persist sidebar settings');
+  }
+  if (changed) {
+    broadcastHiddenMainViewGhostIdsChanged(nextSettings.hiddenMainViewGhostIds, ownerStamp);
+  }
+  return Array.from(nextSettings.hiddenMainViewGhostIds);
 }
 
 type SidebarPathState = 'missing' | 'regular-file' | 'blocked';
@@ -530,9 +674,7 @@ function readLegacyRendererOwnerMarker(
       if (backupState === 'missing') return { kind: 'missing' };
     }
 
-    const raw = recoverBackup
-      ? readAtomicFileSync(markerPath)
-      : fs.readFileSync(readPath, 'utf-8');
+    const raw = recoverBackup ? readAtomicFileSync(markerPath) : fs.readFileSync(readPath, 'utf-8');
     if (raw === null) return { kind: 'missing' };
     if (Buffer.byteLength(raw, 'utf-8') > MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES) {
       return { kind: 'blocked' };
@@ -642,8 +784,7 @@ function claimLegacyRendererSidebarOwner(): SidebarLegacyRendererOwnerClaim {
   return {
     ...stamp,
     claimed: marker !== null,
-    canInitialize:
-      marker !== null && exclusiveAtStart && hasExclusiveSharedLegacyUserDataAccess(),
+    canInitialize: marker !== null && exclusiveAtStart && hasExclusiveSharedLegacyUserDataAccess(),
     pinnedLegacyConsumed: marker?.pinnedLegacyConsumed === true,
   };
 }
@@ -768,6 +909,10 @@ export function registerSidebarSettingsIpc(): void {
     assertTrustedAppRendererEvent(event);
     return setProjectHidden(request as SidebarProjectHiddenWriteRequest);
   });
+  ipcMain.handle('sidebar-settings:set-main-view-hidden', (event, request) => {
+    assertTrustedAppRendererEvent(event);
+    return setMainViewHidden(request as SidebarMainViewHiddenWriteRequest);
+  });
 }
 
 export const __testing = {
@@ -775,5 +920,6 @@ export const __testing = {
   MAX_SETTINGS_BYTES,
   LEGACY_RENDERER_OWNER_MARKER_FILE,
   MAX_LEGACY_RENDERER_OWNER_MARKER_BYTES,
+  SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES,
   pendingWriteChainCount: () => writeChains.size,
 };

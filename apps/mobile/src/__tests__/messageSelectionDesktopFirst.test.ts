@@ -32,7 +32,7 @@ describe('mobile message text selection', () => {
     expect(source).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
     expect(source).toContain('uiTextView');
     expect(source).toContain('function MarkdownSelectableSpan(');
-    expect(source).toContain('const SpanText = ctx.SpanText ?? Text;');
+    expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
     expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
 
     // 气泡是纯 View,不挂 Pressable/onLongPress(避免干扰横向 ScrollView 手势)。
@@ -67,6 +67,8 @@ describe('mobile message text selection', () => {
     // 跨段选择:连续纯文本块合并进同一个原生文本视图(text_run),原生选择手柄可横跨段落。
     // Android 上长 selectable Text 分块,避免单个超高原生文本视图干扰列表测高/滚动。
     expect(markdownBodySource).toContain('ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS');
+    expect(markdownBodySource).toContain("const textRunGroupingOptions = Platform.OS === 'android'");
+    expect(markdownBodySource).not.toContain("selectable === true && Platform.OS === 'android'");
     expect(markdownBodySource).toContain('groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions)');
     expect(markdownBodySource).toContain('testID="message.markdownTextRun"');
     expect(markdownBodySource).toContain("lineHeight: layout.markdownBodyGap");

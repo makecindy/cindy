@@ -47,9 +47,12 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
+import * as sessionService from '@/lib/sessionService';
 import {
   markSessionAutomaticHistoryLoadCompleted,
   restoreSessionAutomaticHistoryLoadAttempts,
+  saveSessionScroll,
+  clearSessionScroll,
 } from '@/lib/sessionScrollStore';
 
 const BASE_TIME = new Date('2026-05-20T00:00:00.000Z');
@@ -169,10 +172,84 @@ describe('makerChatStore active view tracking', () => {
 
   afterEach(() => {
     for (const dispose of [...disposers].reverse()) dispose();
-    for (const sessionId of sessionIds) makerChatStore.purgeSession(sessionId);
+    for (const sessionId of sessionIds) {
+      makerChatStore.purgeSession(sessionId);
+      clearSessionScroll(sessionId);
+    }
     makerChatStore.__teardownGlobalListeners();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  async function readingWindow(label: string, count = 350, contentSize = 1) {
+    const id = sid(label);
+    const leave = enter(id);
+    vi.mocked(messageService.list).mockResolvedValueOnce(Array.from({ length: count }, (_, i) =>
+      dbMessage(id, `${i}`, 'x'.repeat(contentSize), new Date(BASE_TIME.getTime() + i * 1000).toISOString()),
+    ));
+    makerChatStore.ensureInitialMessages(id);
+    await flushPromises();
+    saveSessionScroll(id, { windowAnchorKey: null, viewportTopKey: 'msg-client-0',
+      messageClientId: 'client-0', offset: 0, isNearBottom: false });
+    return { id, leave, messages: makerChatStore.getSnapshot(id).messages };
+  }
+
+  it('keeps a bounded old reading window on a hot return without another history read', async () => {
+    const view = await readingWindow('reading');
+    view.leave();
+    expect(makerChatStore.getSnapshot(view.id).messages).toBe(view.messages);
+    enter(view.id);
+    makerChatStore.ensureInitialMessages(view.id);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(view.id).messages).toBe(view.messages);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('cannot resurrect a retained reading window after purge and same-id reopen', async () => {
+    const view = await readingWindow('purged-reading');
+    view.leave();
+    makerChatStore.purgeSession(view.id);
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      dbMessage(view.id, 'fresh', 'new history', BASE_TIME.toISOString()),
+    ]);
+    enter(view.id);
+    makerChatStore.ensureInitialMessages(view.id);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(view.id).messages.map((message) => message.clientId))
+      .toEqual(['client-fresh']);
+  });
+
+  it('trims the displaced third reading window immediately and respects final-view ownership', async () => {
+    const a = await readingWindow('reading-a');
+    const extra = enter(a.id);
+    a.leave();
+    expect(makerChatStore.getSnapshot(a.id).messages).toBe(a.messages);
+    extra();
+    const b = await readingWindow('reading-b'); b.leave();
+    const c = await readingWindow('reading-c'); c.leave();
+    expect(makerChatStore.getSnapshot(a.id).messages).toHaveLength(200);
+    expect(makerChatStore.getSnapshot(b.id).messages).toBe(b.messages);
+    expect(makerChatStore.getSnapshot(c.id).messages).toBe(c.messages);
+  });
+
+  it('does not reserve tail views, oversized row counts or oversized text windows', async () => {
+    const tail = await readingWindow('tail');
+    saveSessionScroll(tail.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-0', offset: 0, isNearBottom: true });
+    tail.leave();
+    expect(makerChatStore.getSnapshot(tail.id).messages).toHaveLength(200);
+    const many = await readingWindow('many', 1001); many.leave();
+    expect(makerChatStore.getSnapshot(many.id).messages).toHaveLength(200);
+    const large = await readingWindow('large', 350, 100_000); large.leave();
+    expect(makerChatStore.getSnapshot(large.id).messages).toHaveLength(200);
+  });
+
+  it('bounds the combined text budget and still demotes retained histories after five minutes', async () => {
+    const a = await readingWindow('budget-a', 350, 50_000); a.leave();
+    const b = await readingWindow('budget-b', 350, 50_000); b.leave();
+    expect(makerChatStore.getSnapshot(a.id).messages).toHaveLength(200);
+    expect(makerChatStore.getSnapshot(b.id).messages).toBe(b.messages);
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(makerChatStore.getSnapshot(b.id).messages).toHaveLength(0);
   });
 
   it('enterView marks a session active and clears lastViewedAt', () => {
@@ -240,9 +317,23 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(otherIds[0]).messages).toHaveLength(0);
   });
 
+  it.each([0, 9_000])('keeps read-projected windows replaceable unless history has %s used tokens', async (contextTokens) => {
+    const sessionId = sid('projected-context');
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false,
+      contextTokens, contextWindow: 272_000, totalCostUsd: 0,
+    } as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(272_000);
+    makerChatStore.setContextWindow(sessionId, 1_000_000);
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow)
+      .toBe(contextTokens > 0 ? 272_000 : 1_000_000);
+  });
+
   it('initial history load backfills to the latest plan boundary', async () => {
     const sessionId = sid('initial-plan-backfill');
-    const latestPage = Array.from({ length: 50 }, (_, i) =>
+    const latestPage = Array.from({ length: 49 }, (_, i) =>
       dbMessage(
         sessionId,
         `latest-${String(i).padStart(2, '0')}`,
@@ -250,16 +341,23 @@ describe('makerChatStore active view tracking', () => {
         new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
       ),
     );
-    const planRow = dbToolUseMessage(
+    const latestPlan = dbToolUseMessage(
+      sessionId,
+      'latest-plan',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 120_000).toISOString(),
+    );
+    const olderPlan = dbToolUseMessage(
       sessionId,
       'older-plan',
       'update_plan',
-      { plan: [{ step: 'Restore pinned plan', status: 'in_progress' }] },
+      { plan: [{ step: 'Older unresolved source', status: 'completed' }] },
       new Date(BASE_TIME.getTime() + 30_000).toISOString(),
     );
     vi.mocked(messageService.list)
-      .mockResolvedValueOnce(latestPage)
-      .mockResolvedValueOnce([planRow]);
+      .mockResolvedValueOnce([...latestPage, latestPlan])
+      .mockResolvedValueOnce([olderPlan]);
 
     makerChatStore.ensureInitialMessages(sessionId);
     await flushPromises();
@@ -276,7 +374,7 @@ describe('makerChatStore active view tracking', () => {
 
   it('shows the latest page before background plan discovery completes', async () => {
     const sessionId = sid('initial-page-first');
-    const latestPage = Array.from({ length: 50 }, (_, i) =>
+    const latestPage = Array.from({ length: 49 }, (_, i) =>
       dbMessage(
         sessionId,
         `latest-${String(i).padStart(2, '0')}`,
@@ -284,9 +382,16 @@ describe('makerChatStore active view tracking', () => {
         new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
       ),
     );
+    const latestPlan = dbToolUseMessage(
+      sessionId,
+      'latest-plan',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 120_000).toISOString(),
+    );
     let resolveOlderPage!: (rows: Message[]) => void;
     vi.mocked(messageService.list)
-      .mockResolvedValueOnce(latestPage)
+      .mockResolvedValueOnce([...latestPage, latestPlan])
       .mockReturnValueOnce(
         new Promise<Message[]>((resolve) => {
           resolveOlderPage = resolve;
@@ -367,7 +472,7 @@ describe('makerChatStore active view tracking', () => {
     expect(snapshot.isLoadingMore).toBe(false);
   });
 
-  it('continues initial history backfill until the latest plan boundary is found', async () => {
+  it('does not page through filler history on open just to find a later plan', async () => {
     const sessionId = sid('initial-plan-backfill-deep');
     vi.mocked(messageService.list).mockClear();
     const page = (prefix: string, startOffsetSeconds: number) =>
@@ -397,15 +502,12 @@ describe('makerChatStore active view tracking', () => {
     makerChatStore.ensureInitialMessages(sessionId);
     await flushPromises();
 
-    expect(messageService.list).toHaveBeenCalledTimes(5);
-    expect(messageService.list).toHaveBeenNthCalledWith(5, sessionId, {
-      limit: 50,
-      before: 'older-3-00',
-    });
-    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-plan');
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('latest-00');
+    expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(true);
   });
 
-  it('caps initial plan discovery backfill for sessions that never used plans', async () => {
+  it('does not probe older pages on open for sessions that never used plans', async () => {
     const sessionId = sid('initial-plan-backfill-no-plan');
     vi.mocked(messageService.list).mockClear();
     const page = (prefix: string, startOffsetSeconds: number) =>
@@ -426,8 +528,151 @@ describe('makerChatStore active view tracking', () => {
     makerChatStore.ensureInitialMessages(sessionId);
     await flushPromises(20);
 
-    expect(messageService.list).toHaveBeenCalledTimes(11);
-    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-9-00');
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('latest-00');
+    expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(true);
+  });
+
+  it('loads one older page after idle when the newest page has no plan', async () => {
+    const sessionId = sid('idle-plan-discovery');
+    enter(sessionId);
+    vi.mocked(messageService.list).mockClear();
+    const latest = Array.from({ length: 50 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (1000 + i) * 1000).toISOString(),
+      ),
+    );
+    const olderPlan = [
+      dbToolUseMessage(
+        sessionId,
+        'idle-plan',
+        'update_plan',
+        { plan: [{ step: 'Idle discovered plan', status: 'in_progress' }] },
+        new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+      ),
+    ];
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latest)
+      .mockResolvedValueOnce(olderPlan);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(20);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises(20);
+
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+    expect(messageService.list).toHaveBeenNthCalledWith(2, sessionId, {
+      limit: 50,
+      before: 'latest-00',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('idle-plan');
+    expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
+  });
+
+  it('continues idle discovery into plan resolution when the extra page is unresolved', async () => {
+    const sessionId = sid('idle-plan-resolution');
+    enter(sessionId);
+    vi.mocked(messageService.list).mockClear();
+    const latest = Array.from({ length: 50 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (2000 + i) * 1000).toISOString(),
+      ),
+    );
+    const unresolvedPage = [
+      ...Array.from({ length: 49 }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `mid-${String(i).padStart(2, '0')}`,
+          `mid message ${i}`,
+          new Date(BASE_TIME.getTime() + (1000 + i) * 1000).toISOString(),
+        ),
+      ),
+      dbToolUseMessage(
+        sessionId,
+        'latest-task-update',
+        'TaskUpdate',
+        { taskId: 'abc', status: 'completed' },
+        new Date(BASE_TIME.getTime() + 1_500_000).toISOString(),
+      ),
+    ];
+    const resolvedPage = [
+      dbToolUseMessage(
+        sessionId,
+        'task-create',
+        'TaskCreate',
+        { subject: 'Collect logs' },
+        new Date(BASE_TIME.getTime() - 2_000).toISOString(),
+      ),
+      dbToolResultMessage(
+        sessionId,
+        'task-create-result',
+        'tool-task-create',
+        'Task #abc created successfully: Collect logs',
+        new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+      ),
+    ];
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latest)
+      .mockResolvedValueOnce(unresolvedPage)
+      .mockResolvedValueOnce(resolvedPage);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(20);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises(20);
+
+    expect(messageService.list).toHaveBeenCalledTimes(3);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('task-create');
+  });
+
+  it('schedules idle plan discovery when a prefetched session later mounts', async () => {
+    const sessionId = sid('prefetch-then-enter');
+    vi.mocked(messageService.list).mockClear();
+    const latest = Array.from({ length: 50 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (1000 + i) * 1000).toISOString(),
+      ),
+    );
+    const olderPlan = [
+      dbToolUseMessage(
+        sessionId,
+        'prefetch-plan',
+        'update_plan',
+        { plan: [{ step: 'Prefetch discovered plan', status: 'in_progress' }] },
+        new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+      ),
+    ];
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latest)
+      .mockResolvedValueOnce(olderPlan);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(20);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises(20);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+
+    enter(sessionId);
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises(20);
+
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('prefetch-plan');
   });
 
   it('continues initial plan backfill past older sources until a latest TaskUpdate can be resolved', async () => {
@@ -820,7 +1065,7 @@ describe('makerChatStore active view tracking', () => {
     await makerChatStore.loadAroundMessage(sessionId, 'hit', { radius: 60 });
     // 阶段一:窗口里只有孤岛 → 必须播种,游标为 null 会让下一次翻页从最新重开、把跳转位置顶掉。
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-hit-context');
-    expect(makerChatStore.getSnapshot(sessionId).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(sessionId).historyWindowIslands).toHaveLength(1);
     expect(makerChatStore.getLightSnapshot(sessionId).historyWindowHasIsland).toBe(true);
 
     resolveInitialList([
@@ -840,8 +1085,8 @@ describe('makerChatStore active view tracking', () => {
     ]);
     // 阶段二:最新页落地 → 游标交还给它的下沿,往上翻才会穿过孤岛与尾段之间的缺失区间。
     expect(snapshot.oldestMessageId).toBe('latest-page-oldest');
-    // 洞还在,孤岛标记不清 —— 下一次跳转仍会尝试补齐。
-    expect(snapshot.historyWindowHasIsland).toBe(true);
+    // 洞还在,孤岛区间不清 —— 下一次跳转仍会尝试补齐。
+    expect(snapshot.historyWindowIslands).toHaveLength(1);
   });
 
   it('keeps loadOlder history chronological after thinking timestamps are backdated', async () => {
@@ -1168,4 +1413,56 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
   });
+
+  // Regression: when ensureInitialMessages backfill is invalidated by an epoch
+  // change (e.g. reloadMessages), isLoadingMore must be released so that
+  // loadOlderMessages is not permanently blocked.
+  it('releases isLoadingMore when initial backfill is invalidated by epoch change', async () => {
+    const sessionId = sid('initial-backfill-invalidation-lock');
+    const latestPage = Array.from({ length: 49 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
+      ),
+    );
+    const latestPlan = dbToolUseMessage(
+      sessionId,
+      'latest-plan',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 120_000).toISOString(),
+    );
+    let resolveOlderPage!: (rows: Message[]) => void;
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...latestPage, latestPlan])
+      .mockReturnValueOnce(
+        new Promise<Message[]>((resolve) => {
+          resolveOlderPage = resolve;
+        }),
+      );
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(4);
+
+    // Backfill is in progress, lock held.
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(true);
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+
+    // Epoch change invalidates the in-flight backfill.
+    makerChatStore.reloadMessages(sessionId);
+    await Promise.resolve();
+
+    // Resolve the pending backfill — it should detect invalidation and exit.
+    resolveOlderPage([
+      dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
+    ]);
+    await flushPromises();
+
+    // isLoadingMore must have been released despite the invalidation path.
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(false);
+  });
+
+
 });

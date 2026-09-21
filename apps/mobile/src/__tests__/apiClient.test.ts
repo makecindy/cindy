@@ -63,6 +63,31 @@ describe('apiFetchRaw', () => {
     }));
   });
 
+  it('passes no-store to fetch and HTTP cache directives for native transports', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ iceServers: [], expiresAt: null }),
+    } as Response));
+    vi.stubGlobal('fetch', fetchMock);
+    await apiFetchRaw('/api/device-link/ice-servers', {
+      baseUrl: 'https://relay.example.com',
+      token: 'access-token',
+      cache: 'no-store',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://relay.example.com/api/device-link/ice-servers',
+      expect.objectContaining({
+        cache: 'no-store',
+        headers: {
+          Authorization: 'Bearer access-token',
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store',
+          Pragma: 'no-cache',
+        },
+      }),
+    );
+  });
+
   it('aborts hung requests instead of leaving the UI in a connecting state', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {

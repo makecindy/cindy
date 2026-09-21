@@ -18,13 +18,12 @@ import { GhostScheduleSlot, isMainShellWindowUrl, type ScheduleSlotDeps } from '
 
 function scheduleGhost(
   options: {
-    slots?: string[];
+    agent?: boolean;
     schedule?: boolean;
     enabled?: boolean;
     background?: boolean;
   } = {},
 ): InstalledGhost {
-  const slots = options.slots ?? ['agent', 'tool'];
   const agentNeeds = {
     ...(options.background === true ? { background: true } : {}),
     ...(options.schedule !== false ? { schedule: true } : {}),
@@ -37,8 +36,7 @@ function scheduleGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots,
-      ...(Object.keys(agentNeeds).length > 0 ? { agent: agentNeeds } : {}),
+      ...(options.agent === false ? {} : { agent: agentNeeds }),
     },
     dir: '/fake/sched-ghost',
     enabled: options.enabled ?? true,
@@ -70,7 +68,7 @@ const validReq = {
 };
 
 describe('GhostScheduleSlot 资格审', () => {
-  it('声明了 agent 槽 + schedule:true 才放行', () => {
+  it('声明了 agent.schedule:true 才放行', () => {
     const { slot, pushes } = makeSlot();
     expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
     expect(pushes).toHaveLength(1);
@@ -92,7 +90,7 @@ describe('GhostScheduleSlot 资格审', () => {
     });
   });
 
-  it('有 agent 槽但没有 schedule 加档 → PERMISSION_DENIED(仅 background 不够)', () => {
+  it('有 agent 能力但没有 schedule 加档 → PERMISSION_DENIED(仅 background 不够)', () => {
     const { slot } = makeSlot({
       getGhost: () => scheduleGhost({ schedule: false, background: true }),
     });
@@ -102,8 +100,8 @@ describe('GhostScheduleSlot 资格审', () => {
     });
   });
 
-  it('写了 schedule 但 slots 没有 agent → PERMISSION_DENIED', () => {
-    const { slot } = makeSlot({ getGhost: () => scheduleGhost({ slots: ['tool'] }) });
+  it('未声明 agent 能力 → PERMISSION_DENIED', () => {
+    const { slot } = makeSlot({ getGhost: () => scheduleGhost({ agent: false }) });
     expect(slot.handleRequest('sched-ghost', validReq)).toMatchObject({
       ok: false,
       errorCode: 'PERMISSION_DENIED',

@@ -1,13 +1,23 @@
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { resolveLoginGroupPlacement } from '@/auth/loginGroupPlacement';
 import { Stack } from 'expo-router';
+import { X } from 'lucide-react-native';
+import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
+import { hasNativeLoginButtons, LoginNativeButton } from '@/components/LoginNativeButton';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Animated, Easing, Keyboard, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Keyboard, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
 import { useAuth } from '@/auth/AuthContext';
 import { LoginCaptchaWebView } from '@/auth/LoginCaptchaWebView';
 import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
+import {
+  getSsoOrgHistorySnapshot,
+  hydrateSsoOrgHistory,
+} from '@/auth/ssoOrgHistory';
 import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import {
   CN_PHONE_PREFIX,
@@ -20,11 +30,7 @@ import { authErrorText, getAuthLocale, loginText } from '@/auth/loginMessages';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from '@/auth/consentGate';
 import { acceptPrivacyConsent } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb } from '@/analytics/mobileTapdb';
-import { isNativeSocialProviderSupported } from '@/auth/nativeSocial';
-import {
-  resolveMobileSocialLoginMode,
-  type MobileSocialLoginMode,
-} from '@/auth/mobileSocialLoginMode';
+import { useMobileSocialProviderModes } from '@/auth/useMobileSocialProviderModes';
 import { Text, TextInput } from '@/components/AppText';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
@@ -44,6 +50,7 @@ import {
   LOGIN_GROUP,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
+  LOGIN_SSO_ORG_HISTORY,
   LOGIN_SSO_ORG_HINT_TOP,
   LOGIN_SUBTITLE,
   LOGIN_TITLE,
@@ -69,6 +76,8 @@ import {
   LoginSocialButton,
   LoginSocialGlyph,
   LoginSocialRow,
+  LoginSsoOrgHistoryList,
+  LoginTextAction,
   LoginTextLinkSlot,
   LoginTitleBlock,
   AppleLogoGlyph,
@@ -79,7 +88,12 @@ import {
 } from '@/components/MobileLoginHandoffStage';
 import { AUTH_REGION, BUILD_AUTH_REGION, getMobileConfigIssues } from '@/config/env';
 import { resolveIdentifierMethod } from '@/auth/loginIdentifierMethod';
-import { fontWeight, lineHeight, loginPalettes, loginSizes, radius, spacing, typeScale } from '@/theme/tokens';
+import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';
+import {
+  remoteSessionStore,
+  useRemoteSessionStoreVersion,
+} from '@/session/remoteSessionStore';
+import { fontWeight, iconSize, iconStroke, lineHeight, loginPalettes, loginSizes, radius, spacing, typeScale } from '@/theme/tokens';
 
 /**
  * Auth-server login presentation(PR4a 全登录态皮肤化,implementation-plan Step 5 WHAT3)。
@@ -88,16 +102,36 @@ import { fontWeight, lineHeight, loginPalettes, loginSizes, radius, spacing, typ
  * 布局改为 MobileLoginHandoffStage(背景+品牌)+ 750 stage 坐标的 Log_in 组
  * (x=35,loginY,680×560,figma §5.1 移动帧;键盘位移归 PR4b)。
  */
-export default function LoginScreen() {
+export interface LoginScreenProps {
+  additionalAccount?: boolean;
+  onClose?: () => void;
+}
+
+const NO_SOCIAL_PROVIDERS: readonly SocialProvider[] = [];
+
+export function LoginScreen({
+  additionalAccount = false,
+  onClose,
+}: LoginScreenProps = {}) {
   // 订阅语言变化:本屏文案走 loginText()(非响应式),useTranslation 保证
   // 手动语言 override 恢复/切换时本屏跟着重渲(P2-a:不依赖 auth 重渲兜底)。
-  useTranslation();
+  const { t } = useTranslation();
   const auth = useAuth();
+  const remoteSessionStoreVersion = useRemoteSessionStoreVersion();
+  const hasRunningTasks = useMemo(
+    () =>
+      remoteSessionStore
+        .getSessions()
+        .some((session) => remoteSessionStore.isSessionRunning(session.id)),
+    [remoteSessionStoreVersion],
+  );
   const stage = useLoginSurface();
+  const loginWindow = useAdaptiveWindow();
+  const systemBack = useSystemNavigationBack() && !additionalAccount;
   const insets = useSafeAreaInsets();
   // 舞台有效主题(首启亮色门可强制 light,与系统主题可能不一致):状态栏样式
   // 必须跟舞台而不是系统,经 screen option 走 VC-based 通道(见 _layout 注释)。
-  const { mode: systemTheme } = useTheme();
+  const { colors, mode: systemTheme } = useTheme();
   const firstLaunchGate = useLoginFirstLaunchLight();
   const stageTheme =
     resolveStartupSplashHandoff(firstLaunchGate, systemTheme).targetTheme ??
@@ -131,6 +165,12 @@ export default function LoginScreen() {
   // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态)
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
+  const [ssoOrgHistory, setSsoOrgHistory] = useState(() =>
+    getSsoOrgHistorySnapshot(),
+  );
+  const [ssoOrgHistoryOpen, setSsoOrgHistoryOpen] = useState(false);
+  const ssoOrgEditedRef = useRef(false);
+  const ssoOrgHistoryBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const realmConfirmation =
     auth.loginState?.step === 'realm-confirmation'
       ? auth.loginState
@@ -173,7 +213,11 @@ export default function LoginScreen() {
     Keyboard.dismiss();
     pendingConsentAction.current = {
       action,
-      stamp: makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated),
+      stamp: makeConsentStamp(
+        auth.loginState?.step,
+        auth.isBusy,
+        auth.isAuthenticated && !additionalAccount,
+      ),
     };
     setConsentDialogOpen(true);
   };
@@ -187,7 +231,11 @@ export default function LoginScreen() {
     pendingConsentAction.current = null;
     if (!pending) return;
     // 复验:弹窗期间认证状态被异步推进(深链回调/另一路完成/步骤切换)则丢弃动作
-    const current = makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated);
+    const current = makeConsentStamp(
+      auth.loginState?.step,
+      auth.isBusy,
+      auth.isAuthenticated && !additionalAccount,
+    );
     if (canResumePendingConsent(pending.stamp, current)) pending.action();
   };
   const dismissConsent = () => {
@@ -200,12 +248,25 @@ export default function LoginScreen() {
   useEffect(() => {
     if (!consentDialogOpen) return;
     const pending = pendingConsentAction.current;
-    const current = makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated);
-    if (auth.isAuthenticated || (pending && current.step !== pending.stamp.step)) {
+    const current = makeConsentStamp(
+      auth.loginState?.step,
+      auth.isBusy,
+      auth.isAuthenticated && !additionalAccount,
+    );
+    if (
+      (auth.isAuthenticated && !additionalAccount) ||
+      (pending && current.step !== pending.stamp.step)
+    ) {
       pendingConsentAction.current = null;
       setConsentDialogOpen(false);
     }
-  }, [consentDialogOpen, auth.isAuthenticated, auth.isBusy, auth.loginState?.step]);
+  }, [
+    additionalAccount,
+    consentDialogOpen,
+    auth.isAuthenticated,
+    auth.isBusy,
+    auth.loginState?.step,
+  ]);
   const openLegalLink = (kind: 'terms' | 'privacy') => {
     // 系统默认浏览器打开(settings.tsx 同款 Linking 模式);URL 按构建区域分流
     void Linking.openURL(
@@ -221,20 +282,59 @@ export default function LoginScreen() {
   const [resendDeadline, setResendDeadline] = useState<number | null>(null);
   const [accountDeletionStatus, setAccountDeletionStatus] =
     useState<AccountDeletionStatus | null>(null);
+  const [accountSwitcherVisible, setAccountSwitcherVisible] = useState(false);
   const styles = useThemedStyles(makeStyles);
   const configIssues = getMobileConfigIssues();
   const disabled = auth.isBusy || !auth.initialized || configIssues.length > 0;
+  const advertisedSocialProviders =
+    auth.loginState?.step === 'identifier'
+      ? auth.loginState.providers.social
+      : NO_SOCIAL_PROVIDERS;
+  const socialProviderModes = useMobileSocialProviderModes({
+    providers: advertisedSocialProviders,
+    region: BUILD_AUTH_REGION,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    void hydrateSsoOrgHistory().then((entries) => {
+      if (!cancelled) setSsoOrgHistory(entries);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ssoOrgMode || ssoOrgEditedRef.current || ssoOrgHistory.length === 0)
+      return;
+    setSsoOrg((current) => current || ssoOrgHistory[0] || '');
+  }, [ssoOrgHistory, ssoOrgMode]);
+
+  useEffect(
+    () => () => {
+      if (ssoOrgHistoryBlurTimerRef.current) {
+        clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (
       !auth.initialized ||
-      auth.isAuthenticated ||
+      (!additionalAccount && auth.isAuthenticated) ||
       initializedLoginRef.current
     )
       return;
     initializedLoginRef.current = true;
     void auth.dispatchLoginAction({ type: 'reset' });
-  }, [auth]);
+  }, [additionalAccount, auth]);
+
+  useEffect(() => {
+    if (additionalAccount || !auth.initialized || auth.isAuthenticated) return;
+    void auth.syncSavedAccounts().catch(() => undefined);
+  }, [additionalAccount, auth.initialized, auth.isAuthenticated, auth.syncSavedAccounts]);
 
   useEffect(() => {
     if (auth.loginState?.step !== 'identifier') return;
@@ -262,7 +362,8 @@ export default function LoginScreen() {
     if (
       !auth.initialized ||
       auth.isAuthenticated ||
-      !auth.accountDeletionReceipt
+      !auth.accountDeletionReceipt ||
+      additionalAccount
     ) {
       setAccountDeletionStatus(null);
       return;
@@ -284,7 +385,7 @@ export default function LoginScreen() {
         if (cancelled || !status) return;
         if (status.status === 'cancelled') {
           stopPolling();
-          await auth.clearAccountDeletionReceipt();
+          await auth.clearAccountDeletionReceipt().catch(() => undefined);
           if (!cancelled) setAccountDeletionStatus(null);
           return;
         }
@@ -296,7 +397,7 @@ export default function LoginScreen() {
           cause.code === 'ACCOUNT_DELETION_RECEIPT_INVALID'
         ) {
           stopPolling();
-          await auth.clearAccountDeletionReceipt();
+          await auth.clearAccountDeletionReceipt().catch(() => undefined);
         } else if (
           cause instanceof AuthApiError &&
           cause.code === 'INVALID_RESPONSE'
@@ -320,6 +421,7 @@ export default function LoginScreen() {
     auth.getAccountDeletionStatus,
     auth.initialized,
     auth.isAuthenticated,
+    additionalAccount,
   ]);
 
   const reset = () => {
@@ -336,6 +438,7 @@ export default function LoginScreen() {
       ? ssoOrgMode
         ? () => {
             auth.clearAuthError();
+            setSsoOrgHistoryOpen(false);
             setSsoOrgMode(false);
           }
         : null
@@ -347,7 +450,16 @@ export default function LoginScreen() {
   const errorNode = error ? (
     <LoginErrorText testID="login.error">{error}</LoginErrorText>
   ) : null;
-  const backNode = backAction ? (
+  const accountRecoveryNode =
+    !additionalAccount && auth.savedAccounts.length > 0 ? (
+      <LoginTextAction
+        disabled={auth.isBusy}
+        label={t('devices.list.accounts.title')}
+        onPress={() => setAccountSwitcherVisible(true)}
+        testID="login.accountSwitcher"
+      />
+    ) : null;
+  const backNode = backAction && !systemBack ? (
     <LoginBackButton
       disabled={auth.isBusy}
       label={loginText('back')}
@@ -360,16 +472,6 @@ export default function LoginScreen() {
     const state = auth.loginState;
     if (state?.step !== 'identifier') return null;
     const providers = state.providers;
-    const socialProviderModes = new Map<SocialProvider, MobileSocialLoginMode>();
-    for (const provider of providers.social) {
-      const mode = resolveMobileSocialLoginMode({
-        provider,
-        region: BUILD_AUTH_REGION,
-        platform: Platform.OS,
-        nativeSupported: isNativeSocialProviderSupported(provider),
-      });
-      if (mode) socialProviderModes.set(provider, mode);
-    }
     const socialProviders = providers.social.filter((provider) =>
       socialProviderModes.has(provider),
     );
@@ -385,50 +487,98 @@ export default function LoginScreen() {
       const submitSsoOrg = () => {
         const value = ssoOrg.trim();
         if (!value) return;
+        setSsoOrgHistoryOpen(false);
         // 先静默发现组织区域；只有跨出安装包区域时 AuthContext 才进入
         // realm-confirmation，并由页面底部弹窗在继续 SSO 前确认。
-        void auth.dispatchLoginAction({
-          type: 'discover-sso-org',
-          org: value,
-        });
+        void auth
+          .dispatchLoginAction({
+            type: 'discover-sso-org',
+            org: value,
+          })
+          .finally(() => {
+            setSsoOrgHistory(getSsoOrgHistorySnapshot());
+          });
+      };
+      const openSsoOrgHistory = () => {
+        if (ssoOrgHistoryBlurTimerRef.current) {
+          clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+          ssoOrgHistoryBlurTimerRef.current = null;
+        }
+        if (ssoOrgHistory.length > 1) setSsoOrgHistoryOpen(true);
+      };
+      const closeSsoOrgHistorySoon = () => {
+        if (ssoOrgHistoryBlurTimerRef.current) {
+          clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+        }
+        ssoOrgHistoryBlurTimerRef.current = setTimeout(() => {
+          ssoOrgHistoryBlurTimerRef.current = null;
+          setSsoOrgHistoryOpen(false);
+        }, 120);
+      };
+      const selectSsoOrgHistory = (entry: string) => {
+        if (ssoOrgHistoryBlurTimerRef.current) {
+          clearTimeout(ssoOrgHistoryBlurTimerRef.current);
+          ssoOrgHistoryBlurTimerRef.current = null;
+        }
+        ssoOrgEditedRef.current = true;
+        setSsoOrg(entry);
+        setSsoOrgHistoryOpen(false);
+        auth.clearAuthError();
+        Keyboard.dismiss();
       };
       return (
-        <LoginPanel testID="login.panel.ssoOrg">
-          {backNode}
-          <LoginTitleBlock
-            title={loginText('ssoOrgTitle')}
-            subtitle={loginText('ssoOrgSubtitle')}
-          />
-          <LoginSkinInput
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect={false}
-            editable={!disabled}
-            error={!!error}
-            maxLength={253}
-            onChangeText={setSsoOrg}
-            onSubmitEditing={submitSsoOrg}
-            placeholder={loginText('ssoOrgPlaceholder')}
-            returnKeyType="go"
-            testID="login.ssoOrgInput"
-            value={ssoOrg}
-          />
-          <LoginTextLinkSlot
-            align="top"
-            tone="secondary"
-            top={LOGIN_SSO_ORG_HINT_TOP}
-          >
-            {loginText('ssoOrgHint')}
-          </LoginTextLinkSlot>
-          <LoginPrimaryButton
-            busy={auth.isBusy}
-            disabled={disabled || !ssoOrg.trim()}
-            label={loginText('continue')}
-            onPress={submitSsoOrg}
-            testID="login.ssoOrgContinueButton"
-          />
-          {errorNode}
-        </LoginPanel>
+        <>
+          <LoginPanel testID="login.panel.ssoOrg">
+            {backNode}
+            <LoginTitleBlock
+              title={loginText('ssoOrgTitle')}
+              subtitle={loginText('ssoOrgSubtitle')}
+            />
+            <LoginSkinInput
+              autoCapitalize="none"
+              autoComplete="off"
+              autoCorrect={false}
+              accessibilityRole="combobox"
+              accessibilityState={{ expanded: ssoOrgHistoryOpen }}
+              editable={!disabled}
+              error={!!error}
+              maxLength={253}
+              onBlur={closeSsoOrgHistorySoon}
+              onChangeText={(value) => {
+                ssoOrgEditedRef.current = true;
+                setSsoOrg(value);
+              }}
+              onFocus={openSsoOrgHistory}
+              onSubmitEditing={submitSsoOrg}
+              placeholder={loginText('ssoOrgPlaceholder')}
+              returnKeyType="go"
+              testID="login.ssoOrgInput"
+              value={ssoOrg}
+            />
+            <LoginTextLinkSlot
+              align="top"
+              tone="secondary"
+              top={LOGIN_SSO_ORG_HINT_TOP}
+            >
+              {loginText('ssoOrgHint')}
+            </LoginTextLinkSlot>
+            <LoginPrimaryButton
+              busy={auth.isBusy}
+              disabled={disabled || !ssoOrg.trim()}
+              label={loginText('continue')}
+              onPress={submitSsoOrg}
+              testID="login.ssoOrgContinueButton"
+            />
+            {errorNode}
+          </LoginPanel>
+          {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 ? (
+            <LoginSsoOrgHistoryList
+              entries={ssoOrgHistory}
+              onSelect={selectSsoOrgHistory}
+              value={ssoOrg}
+            />
+          ) : null}
+        </>
       );
     }
     const submit = () => {
@@ -531,6 +681,7 @@ export default function LoginScreen() {
             onPress={submit}
             testID="login.continueButton"
           />
+          {accountRecoveryNode}
           {identifierErrorNode}
         </LoginPanel>
         {/* Apple 入口为圆钮行第一颗:iOS 走原生 Sign in with Apple,
@@ -607,6 +758,12 @@ export default function LoginScreen() {
               // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
               if (disabled) return;
               auth.clearAuthError();
+              const history = getSsoOrgHistorySnapshot();
+              setSsoOrgHistory(history);
+              if (!ssoOrgEditedRef.current && !ssoOrg.trim()) {
+                setSsoOrg(history[0] ?? '');
+              }
+              setSsoOrgHistoryOpen(false);
               setSsoOrgMode(true);
             }}
             testID="login.ssoEntryButton"
@@ -1005,6 +1162,7 @@ export default function LoginScreen() {
           onPress={reset}
           testID="login.errorRetryButton"
         />
+        {accountRecoveryNode}
         <LoginErrorText testID="login.error">
           {authErrorText(state.code) ?? loginText('errorFallback')}
         </LoginErrorText>
@@ -1058,6 +1216,7 @@ export default function LoginScreen() {
           onPress={reset}
           testID="login.retryButton"
         />
+        {accountRecoveryNode}
         {errorNode}
       </LoginPanel>
     );
@@ -1084,26 +1243,25 @@ export default function LoginScreen() {
   // 组内容缩放 = stage.scale × loginGroupScale(§3.6 pad 构图 0.794117 / 0.655357,
   // 手机 1)。Safe Area:背景 edge-to-edge(stage 宿主不裁),功能区保持 insets 内——
   // 组底边越过 bottom inset 时整组按差值上移(附录 C §3.4 工程定案)。
-  const groupScale = stage.scale * stage.loginGroupScale;
-  const groupLeftPx = stage.offsetX + stage.loginX * stage.scale;
-  const groupTopPxRaw = stage.offsetY + stage.loginY * stage.scale;
-  const bottomLimitPx = stage.viewportHeight - insets.bottom;
+  const keyboard = useLoginKeyboardRect();
+  const foldedLogin = loginWindow.regions.some(r => r.kind === 'division');
+  const scrollForKeyboard = foldedLogin || (stage.mode === 'compact-wide' && stage.viewportHeight < 480
+    && (!keyboard.visible || (keyboard.rect != null && keyboard.rect.width >= loginWindow.width * 0.95)));
   // consent PR:identifier 主视图下方多出协议行(行底 622 超出组高 560 共 62 设计px)。
   // 流程底边全步骤恒取 622(含协议行的最低内容):一防步骤切换时 lift 释放产生
   // 整组纵向跳变(规则 7,codex 审查 P1),二让下方外层/内层容器 bounds 恒包住
   // 协议行——RN(尤其 Android)对父 bounds 外子节点不派发触摸,协议行必须在界内。
   const flowBottomDesignPx = loginSizes.flowHeight + LOGIN_CONSENT_ROW.bottomOverflow;
-  const liftPx = Math.max(
-    0,
-    groupTopPxRaw + flowBottomDesignPx * groupScale - bottomLimitPx,
+  const { x: groupLeftPx, y: groupTopPx, height: groupVisibleHeight, scale: groupScale } = resolveLoginGroupPlacement(
+    loginWindow, stage, flowBottomDesignPx,
+    scrollForKeyboard && keyboard.visible && keyboard.rect && keyboard.rect.width >= loginWindow.width * 0.95
+      ? Math.max(0, loginWindow.height - keyboard.rect.y) : 0,
   );
-  const groupTopPx = Math.max(0, groupTopPxRaw - liftPx);
 
   // 键盘契约(Step 5b.1,方案 B):唯一位移源 = 自定义 translate。
   // v5 冻结测量拓扑:基线只在下方「外层未变换测量 wrapper」上 measureInWindow
   // (天然不含 translate);键盘事件 / viewport 变化(Android resize)后重测,
   // 基线随 resize 更新 → 位移只计一次,无系统/自定义双算。
-  const keyboard = useLoginKeyboardRect();
   const outerGroupRef = useRef<View>(null);
   const [groupBaseline, setGroupBaseline] = useState<{
     x: number;
@@ -1129,11 +1287,20 @@ export default function LoginScreen() {
   // viewport 不缩窗,需独立跟踪全高以算「全高 - 键盘高 - 系统栏底」键盘顶(见
   // loginKeyboardAvoidance computeDockedKeyboardTop)。取 max 抗缩窗/旋转噪声。
   const [fullViewportHeight, setFullViewportHeight] = useState(stage.viewportHeight);
+  const fullViewportWidthRef = useRef(stage.viewportWidth);
   useEffect(() => {
-    setFullViewportHeight((prev) =>
-      stage.viewportHeight > prev ? stage.viewportHeight : prev,
-    );
-  }, [stage.viewportHeight]);
+    const resized = fullViewportWidthRef.current !== stage.viewportWidth;
+    fullViewportWidthRef.current = stage.viewportWidth;
+    setFullViewportHeight(prev => resized || !keyboard.visible ? stage.viewportHeight : Math.max(prev, stage.viewportHeight));
+  }, [stage.viewportHeight, stage.viewportWidth, keyboard.visible]);
+  const ssoOrgHistoryBottom =
+    ssoOrgMode && ssoOrgHistoryOpen && ssoOrgHistory.length > 1
+      ? LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight
+      : LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height;
+  const controlsUnionBottom = Math.max(
+    LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height,
+    ssoOrgHistoryBottom,
+  );
   const shiftResult = useMemo(() => {
     if (groupBaseline == null) {
       return { shift: 0, mode: 'hidden' as const };
@@ -1142,18 +1309,15 @@ export default function LoginScreen() {
       platform: Platform.OS === 'android' ? 'android' : 'ios',
       visible: keyboard.visible,
       keyboard: keyboard.rect,
-      // 停靠贴附锚 = 面板底(Step 5b.1:panelBottom + 10 - keyboardTop)
+      // 候选层已收在面板内，停靠锚始终保持面板底；不同屏幕尺寸只通过
+      // groupScale 与基线测量适配，避免展开列表时整组额外跳动。
       panelBottomY: groupBaseline.y + loginSizes.panelHeight * groupScale,
-      // 悬浮相交判定锚 = 当前输入框 ∪ 主按钮(U-8b;输入框顶到主按钮底)
+      // 悬浮相交判定锚仍覆盖输入框、主按钮与展开后的候选层并集。
       controlsUnion: {
         x: groupBaseline.x + LOGIN_CONTROL.x * groupScale,
         y: groupBaseline.y + LOGIN_CONTROL.inputY * groupScale,
         width: LOGIN_CONTROL.width * groupScale,
-        height:
-          (LOGIN_CONTROL.buttonY +
-            LOGIN_CONTROL.height -
-            LOGIN_CONTROL.inputY) *
-          groupScale,
+        height: (controlsUnionBottom - LOGIN_CONTROL.inputY) * groupScale,
       },
       viewportWidth: stage.viewportWidth,
       viewportHeight: stage.viewportHeight,
@@ -1165,13 +1329,15 @@ export default function LoginScreen() {
     groupBaseline,
     keyboard,
     groupScale,
+    ssoOrgHistoryBottom,
+    controlsUnionBottom,
     stage.viewportWidth,
     stage.viewportHeight,
     insets.top,
     fullViewportHeight,
     insets.bottom,
   ]);
-  const keyboardShift = shiftResult.shift;
+  const keyboardShift = scrollForKeyboard ? 0 : shiftResult.shift;
 
   // handoff 面板入场(demo:300+moveMs 起步,自下而上 20px + 渐显 420ms;
   // reduced-motion/已登录直入由 Provider 收敛为 done,此处直落终态)
@@ -1199,12 +1365,23 @@ export default function LoginScreen() {
     >
       {/* 渲染为 null,仅把状态栏样式写进本屏 screen options。iOS 专用:
           Android 由舞台内组件式 StatusBar 控制,不走 RNS 双轨 */}
+      {!additionalAccount ? <SystemNavigationBack available={!!backAction} disabled={auth.isBusy}
+        label={loginText('back')} onPress={() => backAction?.()} /> : null}
       {Platform.OS === 'ios' ? (
         <Stack.Screen
           options={{
             statusBarStyle: stageTheme === 'dark' ? 'light' : 'dark',
           }}
         />
+      ) : null}
+
+      {additionalAccount && onClose ? (
+        <View style={{ position: 'absolute', right: spacing.lg, top: insets.top + spacing.sm, zIndex: 20 }}>
+          <HomeHeaderGlassButton accessibilityLabel={t('shared.closePanel')}
+            disabled={auth.isBusy} onPress={onClose} testID="login.closeButton">
+            <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+          </HomeHeaderGlassButton>
+        </View>
       ) : null}
       {/* 外层未变换测量 wrapper(v5 冻结拓扑):持布局基线,不参与任何 translate */}
       <View
@@ -1220,7 +1397,7 @@ export default function LoginScreen() {
         ref={outerGroupRef}
         style={{
           // 恒含协议行区间(622 设计px):协议行必须在父 bounds 内才可命中(见 flowBottomDesignPx 注)
-          height: flowBottomDesignPx * groupScale,
+          height: groupVisibleHeight,
           left: groupLeftPx,
           position: 'absolute',
           top: groupTopPx,
@@ -1228,7 +1405,13 @@ export default function LoginScreen() {
         }}
       >
         {/* 内层 translate 容器:键盘位移唯一施加处(方案 B) */}
-        <View style={{ flex: 1, transform: [{ translateY: -keyboardShift }] }}>
+        <ScrollView
+          style={{ flex: 1, transform: [{ translateY: -keyboardShift }] }}
+          contentContainerStyle={{ height: flowBottomDesignPx * groupScale }}
+          keyboardShouldPersistTaps="handled"
+          scrollEnabled={groupVisibleHeight < flowBottomDesignPx * groupScale}
+          showsVerticalScrollIndicator={false}
+        >
           <Animated.View
             style={{
               flex: 1,
@@ -1252,8 +1435,17 @@ export default function LoginScreen() {
               {stateContent}
             </View>
           </Animated.View>
-        </View>
+        </ScrollView>
       </View>
+      <AccountSwitcherSheet
+        hasRunningTasks={hasRunningTasks}
+        onAddAccount={() => {
+          setAccountSwitcherVisible(false);
+          reset();
+        }}
+        onClose={() => setAccountSwitcherVisible(false)}
+        visible={accountSwitcherVisible}
+      />
       {accountDeletionStatus && deletionBubbleFrame ? (
         // 入场门(PR #464 review,与桌面同口径):opacity 结构性跟随面板入场的
         // Animated 值(splash=0 → handoff 渐显 → done=1,同一 usePanelEntrance 输出,
@@ -1275,7 +1467,7 @@ export default function LoginScreen() {
             frame={deletionBubbleFrame}
             onDismiss={
               accountDeletionStatus.status === 'completed'
-                ? () => void auth.clearAccountDeletionReceipt()
+                ? () => void auth.clearAccountDeletionReceipt().catch(() => undefined)
                 : undefined
             }
             status={accountDeletionStatus}
@@ -1301,14 +1493,19 @@ export default function LoginScreen() {
       {realmConfirmation ? (
         <LoginConsentDialog
           scale={groupScale}
-          title={loginText('realmConsentTitle')}
+          title={loginText(realmConfirmation.personalLoginAvailable
+            ? 'realmConsentPersonalTitle' : 'realmConsentTitle')}
           body={loginText(
-            realmConfirmation.targetRegion === 'cn'
-              ? 'realmConsentBodyCn'
-              : 'realmConsentBodyGlobal',
+            realmConfirmation.personalLoginAvailable
+              ? (realmConfirmation.targetRegion === 'cn'
+                ? 'realmConsentPersonalBodyCn' : 'realmConsentPersonalBodyGlobal')
+              : (realmConfirmation.targetRegion === 'cn'
+                ? 'realmConsentBodyCn' : 'realmConsentBodyGlobal'),
           )}
-          agreeLabel={loginText('realmConsentAgree')}
-          disagreeLabel={loginText('realmConsentDisagree')}
+          agreeLabel={loginText(realmConfirmation.personalLoginAvailable
+            ? 'realmConsentEnterpriseLogin' : 'realmConsentAgree')}
+          disagreeLabel={loginText(realmConfirmation.personalLoginAvailable
+            ? 'realmConsentContinuePersonal' : 'realmConsentDisagree')}
           onAgree={() =>
             void auth.dispatchLoginAction({ type: 'confirm-sso-realm' })
           }
@@ -1329,6 +1526,10 @@ export default function LoginScreen() {
       ) : null}
     </MobileLoginHandoffStage>
   );
+}
+
+export default function LoginRoute() {
+  return <LoginScreen />;
 }
 
 /**
@@ -1453,7 +1654,12 @@ function AccountDeletionStatusPanel({
             ? loginText('accountDeletionProcessingCopy')
             : loginText('accountDeletionCompletedCopy')}
       </Text>
-      {onDismiss ? (
+      {onDismiss ? (hasNativeLoginButtons ? (
+        <LoginNativeButton label={loginText('accountDeletionDismiss')} onPress={onDismiss}
+          testID="login.accountDeletionDismissButton" variant="text"
+          width={frame.width - scaled(B.padding) * 2} height={Math.max(44, scaled(B.lineHeight))} fontSize={scaled(B.font)}
+          style={{ marginTop: scaled(B.bodyLinkGap) }} />
+      ) : (
         <Pressable
           accessibilityRole="button"
           hitSlop={resolveDeletionBubbleLinkHitSlop(frame.scale)}
@@ -1470,7 +1676,7 @@ function AccountDeletionStatusPanel({
             {loginText('accountDeletionDismiss')}
           </Text>
         </Pressable>
-      ) : null}
+      )) : null}
     </View>
   );
 }
@@ -1541,6 +1747,21 @@ const configIssueStyles = {
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
+    closeButton: {
+      alignItems: 'center',
+      backgroundColor: colors.surfaceElevated,
+      borderColor: colors.border,
+      borderRadius: radius.pill,
+      borderWidth: StyleSheet.hairlineWidth,
+      height: 44,
+      justifyContent: 'center',
+      position: 'absolute',
+      right: spacing.lg,
+      width: 44,
+      zIndex: 20,
+    },
+    closeButtonPressed: { opacity: 0.72 },
+    closeButtonDisabled: { opacity: 0.48 },
     flex: { flex: 1 },
     safeArea: {
       backgroundColor: colors.surface,

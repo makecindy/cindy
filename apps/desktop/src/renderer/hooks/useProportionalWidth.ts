@@ -29,10 +29,9 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  *   - 主会话:不再依赖宿主显式传 compact 切窄。本 hook 自身按实测容器宽度
  *     `< AUTO_COMPACT_THRESHOLD` 时自动切 compact,与 `opts.compact` 取 OR。
  *     这样右栏打开把主区压窄到阈值之下时,padding 平滑收紧, 既不臃肿也不会
- *     再出现"按 rightSidebarCollapsed 布尔切换"那次尝试的视觉跳变 —— 因为
- *     ResizeObserver 量到的是父区**已经收敛后**的宽度,不存在"主区还没缩、
- *     messageWidth 先扩出去顶过 parent"的中间帧。doc rail 走显式 `compact: true`
- *     仍恒 compact,行为不变。
+ *     再出现"按 rightSidebarCollapsed 布尔切换"那次尝试的视觉跳变。连续宽度
+ *     由 ResizeObserver 直接写入继承 CSS 变量，不经过会话组件 React render；
+ *     compact 只在阈值跨越时更新。doc rail 走显式 `compact: true` 仍恒 compact。
  */
 // 内容封顶宽的历史默认值:调用方不传首参时回落到它(旧行为)。
 const MAX_MESSAGE_WIDTH = 1200;
@@ -59,24 +58,24 @@ export interface UseProportionalWidthOptions {
    * 新建对话页用它保证大屏之外也有一个体面的最小宽度(与对话页同源的 max 对称)。
    */
   minWidth?: number;
+  /**
+   * Optional ascending input-width breakpoints. React only updates when the measured input
+   * width crosses one of these boundaries; continuous width changes stay in CSS variables.
+   */
+  responsiveBreakpoints?: readonly number[];
 }
 
-export function useProportionalWidth(
-  maxWidth?: number,
-  opts: UseProportionalWidthOptions = {},
-) {
+export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWidthOptions = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [messageWidth, setMessageWidth] = useState<number>(0);
-  const [inputWidth, setInputWidth] = useState<number>(0);
-  // inputPad 从恒定派生值改成跟随 effective compact 的 state:
-  // 默认 50→40, auto/explicit compact 时 20→10。消费方(overlay 的
-  // left-[...]/right-[...] 等)读这个值随容器宽度切换。
-  const [inputPad, setInputPad] = useState<number>(DEFAULT_INPUT_PAD);
+  const messageWidthRef = useRef(0);
   // effective compact 标志:= opts.compact || containerWidth < AUTO_COMPACT_THRESHOLD。
   // 消费方据此挂 `chat-rail-compact` 让字号也跟着 padding 一起在 auto compact
   // 时收紧、回到宽态时还原。初始值跟随 opts.compact:doc rail 首帧就是 true,
   // 主会话默认 false,真实值在 useLayoutEffect 同步 compute() 时即被覆写,paint 前对齐。
-  const [isCompact, setIsCompact] = useState<boolean>(!!opts.compact);
+  const [responsiveState, setResponsiveState] = useState(() => ({
+    isCompact: !!opts.compact,
+    inputWidthBand: opts.responsiveBreakpoints?.length ?? 0,
+  }));
 
   const compute = useCallback(
     (containerWidth: number) => {
@@ -96,25 +95,40 @@ export function useProportionalWidth(
         // 地板夹到实测容器宽以内:窄窗仍是"填满容器",不会溢出/裁切。
         nextInput = Math.min(opts.minWidth, containerWidth);
       }
-      setMessageWidth(nextMessage);
-      setInputWidth(nextInput);
-      setInputPad(nextInputPad);
-      setIsCompact(useCompact);
+      messageWidthRef.current = nextMessage;
+
+      // These inherited variables update the already-mounted layout directly. Keeping the
+      // continuously changing pixel values out of React avoids a second full session render and
+      // layout pass on every BrowserWindow resize frame.
+      const el = containerRef.current;
+      if (el) {
+        el.style.setProperty('--cindy-message-width', `${nextMessage}px`);
+        el.style.setProperty('--cindy-input-width', `${nextInput}px`);
+        el.style.setProperty('--cindy-input-pad', `${nextInputPad}px`);
+        el.style.setProperty(
+          '--cindy-input-half-width',
+          `${Math.max(0, (nextInput - 16) * 0.5)}px`,
+        );
+      }
+
+      const nextBand = opts.responsiveBreakpoints?.findIndex((limit) => nextInput < limit) ?? -1;
+      const resolvedBand = nextBand === -1 ? (opts.responsiveBreakpoints?.length ?? 0) : nextBand;
+      setResponsiveState((current) =>
+        current.isCompact === useCompact && current.inputWidthBand === resolvedBand
+          ? current
+          : { isCompact: useCompact, inputWidthBand: resolvedBand },
+      );
     },
-    [maxWidth, opts.compact, opts.minWidth],
+    [maxWidth, opts.compact, opts.minWidth, opts.responsiveBreakpoints],
   );
 
-  // useLayoutEffect + 同步量一次:消除 mount 第一帧 width=0 的视觉跳变。
-  // 之前用 useEffect + ResizeObserver,顺序是 render(state=0) → DOM commit
-  // → paint(用户看到 0 宽:每个汉字单独一行、输入框被压成一条) →
-  // observer 回调 → setState → 再 commit/paint。切 session(remount)时
-  // 必现一帧。改成 useLayoutEffect 后,同步 getBoundingClientRect 设新宽度
-  // 触发同步重渲染,在 paint 前就已经是正确宽度,坏帧吃掉。ResizeObserver
-  // 只负责后续窗口缩放等动态变更。
+  // useLayoutEffect + 同步量一次:在首次 paint 前写好 CSS 变量，消除 width=0 的坏帧。
+  // ResizeObserver 后续只直接更新 DOM 变量；除非跨 compact / 调用方断点，否则不触发
+  // React render，避免窗口 resize 时出现“父容器先变、内容宽度下一次 commit 再追上”。
   //
   // 注:首帧的 compact 判定也走 compute(),所以 mount 进窄容器(<700)时第一
   // 帧就直接是 compact padding,不会出现 50→20 闪烁。后续右栏 transition 收敛
-  // 会触发 ResizeObserver 回调,在父宽已稳定的那一帧切到对应 padding,无跳变。
+  // 会触发 ResizeObserver 回调；CSS 宽度同帧跟随，compact 仅在阈值处切换。
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -126,5 +140,16 @@ export function useProportionalWidth(
     return () => observer.disconnect();
   }, [compute]);
 
-  return { containerRef, messageWidth, inputWidth, inputPad, isCompact };
+  const getMessageWidth = useCallback(() => messageWidthRef.current, []);
+
+  return {
+    containerRef,
+    messageWidth: 'var(--cindy-message-width)',
+    inputWidth: 'var(--cindy-input-width)',
+    inputPad: 'var(--cindy-input-pad)',
+    inputHalfWidth: 'var(--cindy-input-half-width)',
+    isCompact: responsiveState.isCompact,
+    inputWidthBand: responsiveState.inputWidthBand,
+    getMessageWidth,
+  };
 }

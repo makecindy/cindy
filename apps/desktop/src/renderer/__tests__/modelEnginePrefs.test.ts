@@ -110,6 +110,7 @@ describe('modelEnginePrefs store', () => {
     const m = await loadModule();
     expect(m.getModelEngineOverride('anthropic', 'claude-opus-4-8')).toBeUndefined();
     expect(m.hasModelEngineOverride('anthropic', 'claude-opus-4-8')).toBe(false);
+    expect(m.hasAnyModelEngineOverride()).toBe(false);
     expect(memStorage.getItem(m.__STORAGE_KEY)).toBeNull();
   });
 
@@ -118,6 +119,7 @@ describe('modelEnginePrefs store', () => {
     m1.setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     expect(m1.getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
     expect(m1.hasModelEngineOverride('xd', 'gpt-5.5')).toBe(true);
+    expect(m1.hasAnyModelEngineOverride()).toBe(true);
     // 同步写:调用返回时已经落盘(不能靠 debounce / 微任务)。
     expect(JSON.parse(memStorage.getItem(m1.__STORAGE_KEY) ?? '{}')).toEqual({
       'xd:gpt-5.5': { agent: 'cc' },

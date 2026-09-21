@@ -17,6 +17,8 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { skillhubCatalogKey } from '../../../../shared/skillhubCatalog';
+import { syncUninstallCleanupNotices, resetUninstallCleanupNotices } from '../lib/uninstallCleanupNotifications';
 import { invalidateSkillSyncRequests, registerSyncStoreSetters } from './useSkillSync';
 
 interface SkillhubProject {
@@ -37,6 +39,8 @@ interface SkillhubState {
   projects: SkillhubProject[];
   /** True once a first scan has completed (success or failure). */
   bootstrapped: boolean;
+  /** Device/profile-local activation preference for Cindy's built-in Learn Skill. */
+  learnSkillEnabled: boolean;
   /** v0.2.1: sync results map keyed by skill name */
   syncResults: Map<string, SkillhubSyncResult>;
   /** v0.2.1: error from last sync attempt */
@@ -55,6 +59,7 @@ let state: SkillhubState = {
   error: null,
   projects: [],
   bootstrapped: false,
+  learnSkillEnabled: true,
   syncResults: new Map(),
   syncError: null,
   availableUninstalledCount: 0,
@@ -87,13 +92,18 @@ export function refresh(): Promise<SkillhubSkill[]> {
       if (myId !== scanRequestId) {
         return latestScan?.id === scanRequestId ? latestScan.promise : state.skills;
       }
+      const learnSkillEnabled = typeof result.learnSkillEnabled === 'boolean'
+        ? result.learnSkillEnabled
+        : state.learnSkillEnabled;
       if (result.success) {
+        syncUninstallCleanupNotices(result.pendingCleanups ?? [], refresh);
         const skills = result.skills ?? [];
         setState({
           skills,
           sources: result.sources ?? [],
           loading: false,
           bootstrapped: true,
+          learnSkillEnabled,
         });
         return skills;
       }
@@ -101,6 +111,7 @@ export function refresh(): Promise<SkillhubSkill[]> {
         error: result.error ?? 'scan failed with no error message',
         loading: false,
         bootstrapped: true,
+        learnSkillEnabled,
       });
       return state.skills;
     } catch (err) {
@@ -165,7 +176,7 @@ export function setSyncResults(
   availableUninstalledCount?: number,
 ): void {
   const map = new Map<string, SkillhubSyncResult>();
-  for (const r of results) map.set(r.name, r);
+  for (const r of results) map.set(skillhubCatalogKey(r.name, r.catalogScope), r);
   setState({
     syncResults: map,
     syncError: null,
@@ -180,7 +191,7 @@ export function setSyncResults(
  */
 export function mergeSyncResults(results: SkillhubSyncResult[]): void {
   const map = new Map(state.syncResults);
-  for (const r of results) map.set(r.name, r);
+  for (const r of results) map.set(skillhubCatalogKey(r.name, r.catalogScope), r);
   setState({ syncResults: map });
 }
 
@@ -195,6 +206,7 @@ export function setSyncError(err: string | null): void {
  * owner's late result cannot repopulate the new owner's store.
  */
 export function reset(): void {
+  resetUninstallCleanupNotices();
   scanRequestId += 1;
   latestScan = null;
   invalidateSkillSyncRequests();
@@ -206,6 +218,7 @@ export function reset(): void {
     error: null,
     projects: [],
     bootstrapped: false,
+    learnSkillEnabled: true,
     syncResults: new Map(),
     syncError: null,
     availableUninstalledCount: 0,
@@ -223,11 +236,28 @@ export function setSkillhubDataOwner(dataOwnerId: string | null): void {
 // ── Auth change listener — reset store on every data-owner boundary ─────────
 
 let authListenerUnsubscribe: (() => void) | null = null;
+let localStateListenerUnsubscribe: (() => void) | null = null;
 
 function ensureAuthListener(): void {
+  if (!localStateListenerUnsubscribe && window.electronAPI.skillhub.onLocalStateChanged) {
+    localStateListenerUnsubscribe = window.electronAPI.skillhub.onLocalStateChanged(() => { void refresh(); });
+  }
   if (authListenerUnsubscribe) return;
   authListenerUnsubscribe = window.electronAPI.onAuthStateChange((authState) => {
     setSkillhubDataOwner(authState.dataOwnerId);
+  });
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    resetUninstallCleanupNotices();
+    authListenerUnsubscribe?.();
+    localStateListenerUnsubscribe?.();
+    authListenerUnsubscribe = null;
+    localStateListenerUnsubscribe = null;
+    scanRequestId += 1;
+    latestScan = null;
+    listeners.clear();
   });
 }
 

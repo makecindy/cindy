@@ -31,6 +31,9 @@ import {
   withWorktreeRestoreMutation,
 } from './restoreLock';
 import { copyClaudeSiviDirs } from './WorktreeManager';
+import { restoreRecordedWorktree } from './restoreRecovery';
+import { readRecycleRecord, worktreeGeneration } from './recycleJournal';
+import { withWorktreeResourceLock } from './resourceLock';
 import * as store from './worktreeStore';
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
@@ -362,6 +365,15 @@ async function getWorktreeRestorePlan(sessionId: string): Promise<WorktreeRestor
   if (!worktreePath) return { status: { state: 'no-worktree' } };
   const parsed = parseManagedWorktreePath(worktreePath);
   if (!parsed) return { status: { state: 'no-worktree' } };
+  const recovery = await readRecycleRecord(worktreePath, sessionId);
+  if (recovery?.phase === 'restored' && registeredMeta
+    && [recovery.generation, recovery.restoredGeneration].includes(worktreeGeneration(registeredMeta))
+    && await pathExists(worktreePath)) {
+    return { status: { state: 'present', worktreePath, hasSnapshot: false }, parsed };
+  }
+  if (recovery?.snapshot && recovery.archive && ['removed', 'removing', 'restoring'].includes(recovery.phase)) {
+    return { status: { state: 'restorable', worktreePath, hasSnapshot: true }, parsed };
+  }
 
   const registeredForPath =
     registeredMeta && pathKey(registeredMeta.path) === pathKey(worktreePath)
@@ -434,6 +446,14 @@ export async function getWorktreeRestoreStatus(sessionId: string): Promise<Workt
 async function restoreWorktreeForSessionOnce(sessionId: string): Promise<WorktreeRestoreResult> {
   const plan = await getWorktreeRestorePlan(sessionId);
   const { status } = plan;
+  if ('worktreePath' in status) {
+    try {
+      const restored = await restoreRecordedWorktree(sessionId, status.worktreePath);
+      if (restored !== null) return { ok: restored, snapshotApplied: restored, ...(restored ? {} : { reason: 'git-error' as const }) };
+    } catch (error) {
+      return { ok: false, reason: 'git-error', detail: error instanceof Error ? error.message : String(error) };
+    }
+  }
   if (status.state === 'present') {
     const parsed = plan.parsed ?? parseManagedWorktreePath(status.worktreePath);
     if (!parsed) return { ok: true, snapshotApplied: true };
@@ -457,7 +477,7 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
       parsed.name,
     );
     if (!snapshotApplied) {
-      store.del(sessionId);
+      await store.del(sessionId);
       return { ok: true, snapshotApplied: false };
     }
     if (!store.get(sessionId) && plan.branch) {
@@ -486,7 +506,7 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
       parsed.name,
     );
     if (!snapshotApplied) {
-      store.del(sessionId);
+      await store.del(sessionId);
       return { ok: true, snapshotApplied: false };
     }
     await finishRestoredWorktree(sessionId, parsed, status.worktreePath, branch);
@@ -506,8 +526,12 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
 export function restoreWorktreeForSession(sessionId: string): Promise<WorktreeRestoreResult> {
   const existing = restoreInFlight.get(sessionId);
   if (existing) return existing;
-  const tracked = withWorktreeRestoreMutation(sessionId, () =>
-    restoreWorktreeForSessionOnce(sessionId),
+  const tracked = withWorktreeRestoreMutation(sessionId, async () => {
+    const worktreePath = store.get(sessionId)?.path ?? (await readSessionWorktreeBinding(sessionId))?.worktreePath;
+    return worktreePath
+      ? withWorktreeResourceLock(worktreePath, () => restoreWorktreeForSessionOnce(sessionId))
+      : restoreWorktreeForSessionOnce(sessionId);
+  },
   ).finally(() => {
     if (restoreInFlight.get(sessionId) === tracked) {
       restoreInFlight.delete(sessionId);
@@ -535,12 +559,35 @@ async function markSendReadyIfMutationStable(
   return ready;
 }
 
+export type ManagedWorktreeReadiness = 'ready' | 'gone' | 'retry';
+
+// Legacy restore status folds probe errors into `gone`. Require successful probes
+// before letting a send permanently select a conversation fallback.
+async function confirmedMissingWorktree(worktreePath: string): Promise<boolean> {
+  try {
+    await fs.stat(worktreePath);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+  }
+  const parsed = parseManagedWorktreePath(worktreePath);
+  if (!parsed) return false;
+  try {
+    const { stdout } = await gitExec(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin'], parsed.baseRepo);
+    const refs = new Set(stdout.trim().split(/\r?\n/));
+    return getManagedWorktreeBranchCandidates(parsed.name).every((branch) =>
+      !refs.has(localBranchRef(branch)) && !refs.has(originBranchRef(branch)));
+  } catch {
+    return false;
+  }
+}
+
 async function ensureOwnedWorktreeReady(
   ownerSessionId: string,
   worktreePath: string,
-): Promise<boolean> {
+): Promise<ManagedWorktreeReadiness> {
   const worktreeKey = pathKey(worktreePath);
-  if (!worktreeKey) return false;
+  if (!worktreeKey) return 'retry';
   const readinessKey = `${ownerSessionId}\0${worktreeKey}`;
 
   // `git worktree add` creates the directory before a pending snapshot is applied. A second
@@ -551,14 +598,14 @@ async function ensureOwnedWorktreeReady(
       restoreInFlightVersions.get(ownerSessionId) ??
       getWorktreeRestoreMutationVersion(ownerSessionId);
     const result = await restoring;
-    if (!result.ok || result.snapshotApplied === false) return false;
+    if (!result.ok || result.snapshotApplied === false) return result.reason === 'gone' && await confirmedMissingWorktree(worktreePath) ? 'gone' : 'retry';
     const ready = await markSendReadyIfMutationStable(
       ownerSessionId,
       worktreePath,
       readinessKey,
       restoreVersion,
     );
-    return ready ?? ensureOwnedWorktreeReady(ownerSessionId, worktreePath);
+    return ready === null ? ensureOwnedWorktreeReady(ownerSessionId, worktreePath) : ready ? 'ready' : 'retry';
   }
 
   // Recycle cancellation/removal also owns this lock while the snapshot is detached from the
@@ -578,7 +625,7 @@ async function ensureOwnedWorktreeReady(
     sendReadyWorktrees.get(readinessKey) === currentMutationVersion &&
     getWorktreeRestoreMutationVersion(ownerSessionId) === currentMutationVersion
   ) {
-    return true;
+    return 'ready';
   }
 
   const restore = restoreWorktreeForSession(ownerSessionId);
@@ -586,41 +633,41 @@ async function ensureOwnedWorktreeReady(
     restoreInFlightVersions.get(ownerSessionId) ??
     getWorktreeRestoreMutationVersion(ownerSessionId);
   const result = await restore;
-  if (!result.ok || result.snapshotApplied === false) return false;
+  if (!result.ok || result.snapshotApplied === false) return result.reason === 'gone' && await confirmedMissingWorktree(worktreePath) ? 'gone' : 'retry';
   const ready = await markSendReadyIfMutationStable(
     ownerSessionId,
     worktreePath,
     readinessKey,
     restoreVersion,
   );
-  return ready ?? ensureOwnedWorktreeReady(ownerSessionId, worktreePath);
+  return ready === null ? ensureOwnedWorktreeReady(ownerSessionId, worktreePath) : ready ? 'ready' : 'retry';
 }
 
 /**
  * 发送期自愈入口。DB working_dir 必须与 caller cwd 精确相同；cwd 可以是托管
  * worktree 根目录或其子目录。恢复与 snapshot readiness 始终按 owning session 的
  * worktree 根目录串行；其它 session 借用该目录时也必须等待 owner 的 pending
- * snapshot。快照 apply 冲突时返回 false，绝不带着缺失的 WIP 静默继续。
+ * snapshot。快照 apply 冲突时返回 retry，绝不带着缺失的 WIP 静默继续。
  */
-export async function restoreMissingManagedWorktreeForSession(
+export async function getManagedWorktreeReadinessForSession(
   sessionId: string,
   expectedWorkingDir: string,
-): Promise<boolean> {
+): Promise<ManagedWorktreeReadiness> {
   const expectedKey = pathKey(expectedWorkingDir);
-  if (!expectedKey) return false;
+  if (!expectedKey) return 'retry';
 
   let binding: SessionWorktreeBinding | null;
   try {
     binding = await readSessionWorktreeBinding(sessionId);
   } catch {
-    return false;
+    return 'retry';
   }
-  if (pathKey(binding?.workingDir) !== expectedKey) return false;
+  if (pathKey(binding?.workingDir) !== expectedKey) return 'retry';
 
   const worktreePath = findManagedWorktreeRoot(expectedWorkingDir);
-  if (!worktreePath) return false;
+  if (!worktreePath) return 'retry';
   const worktreeKey = pathKey(worktreePath);
-  if (!worktreeKey) return false;
+  if (!worktreeKey) return 'retry';
 
   let ownerSessionId: string | null;
   if (pathKey(binding?.worktreePath) === worktreeKey) {
@@ -629,13 +676,18 @@ export async function restoreMissingManagedWorktreeForSession(
     try {
       ownerSessionId = await readWorktreeOwnerSessionId(worktreePath);
     } catch {
-      return false;
+      return 'retry';
     }
   }
 
   // An unowned managed directory remains usable as an ordinary cwd, but cannot be recreated.
-  if (!ownerSessionId) return await pathIsDirectory(expectedWorkingDir);
+  if (!ownerSessionId) return await pathIsDirectory(expectedWorkingDir) ? 'ready' : 'retry';
 
   const ready = await ensureOwnedWorktreeReady(ownerSessionId, worktreePath);
-  return ready && (await pathIsDirectory(expectedWorkingDir));
+  return ready === 'ready' ? (await pathIsDirectory(expectedWorkingDir) ? 'ready' : 'retry') : ready;
+}
+
+/** Compatibility wrapper for callers that only need readiness. */
+export async function restoreMissingManagedWorktreeForSession(sessionId: string, expectedWorkingDir: string): Promise<boolean> {
+  return await getManagedWorktreeReadinessForSession(sessionId, expectedWorkingDir) === 'ready';
 }

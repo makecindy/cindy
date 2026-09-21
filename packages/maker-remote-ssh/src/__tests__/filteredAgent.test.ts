@@ -113,6 +113,31 @@ describe('FilteredAgent.getIdentities', () => {
     expect(sshFingerprint(keys[0])).toBe(targetFingerprint);
   });
 
+  it('returns multiple keys in configured order rather than upstream order', async () => {
+    const keyA = makeKey(Buffer.from('ordered-a'));
+    const keyB = makeKey(Buffer.from('ordered-b'));
+    const keyC = makeKey(Buffer.from('ordered-c'));
+    const filtered = new FilteredAgent(
+      new MockUpstreamAgent([keyA, keyB, keyC]),
+      [sshFingerprint(keyC), sshFingerprint(keyA), sshFingerprint(keyC)],
+    );
+
+    const keys = await new Promise<ParsedKey[]>((resolve, reject) => {
+      filtered.getIdentities((err, values) => (err ? reject(err) : resolve(values ?? [])));
+    });
+
+    expect(keys.map(sshFingerprint)).toEqual([
+      sshFingerprint(keyC),
+      sshFingerprint(keyA),
+    ]);
+  });
+
+  it('rejects an empty allow-list instead of exposing every agent identity', () => {
+    expect(() => new FilteredAgent(new MockUpstreamAgent([]), [])).toThrow(
+      'requires at least one allowed fingerprint',
+    );
+  });
+
   it('returns empty array when no upstream key matches', async () => {
     const upstream = new MockUpstreamAgent([
       makeKey(Buffer.from('only-key')),

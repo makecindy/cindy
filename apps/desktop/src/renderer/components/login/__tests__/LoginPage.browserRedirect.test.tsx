@@ -13,6 +13,7 @@ const loginHook = vi.hoisted(() => ({
     dispatch: vi.fn(),
     dispatchWithResult: vi.fn(),
     clearError: vi.fn(),
+    listAccounts: vi.fn(),
   },
 }));
 
@@ -40,6 +41,11 @@ vi.mock('@/components/title-bar/WindowControls', () => ({
   WindowControls: () => null,
 }));
 
+vi.mock('@/components/sidebar/AccountSwitcherDialog', () => ({
+  AccountSwitcherDialog: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="account-switcher-dialog" /> : null,
+}));
+
 import { LoginPage } from '../LoginPage';
 
 describe('LoginPage browser redirect waiting state', () => {
@@ -53,6 +59,10 @@ describe('LoginPage browser redirect waiting state', () => {
       dispatch: loginHook.dispatch,
       dispatchWithResult: loginHook.dispatchWithResult,
       clearError: vi.fn(),
+      listAccounts: vi.fn().mockResolvedValue({
+        accounts: [],
+        mutationAllowed: true,
+      }),
     };
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -74,12 +84,21 @@ describe('LoginPage browser redirect waiting state', () => {
     expect(screen.getByText('Google')).toBeTruthy();
   });
 
-  it('still lets the user cancel the pending browser login', () => {
-    render(<LoginPage />);
+  it.each([false, true])(
+    'uses the panel back button to cancel browser login (loading=%s)',
+    (isLoading) => {
+      loginHook.value.isLoading = isLoading;
+      const onClose = vi.fn();
+      render(<LoginPage intent="add-account" onClose={onClose} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'login.cancel' }));
-    expect(loginHook.dispatch).toHaveBeenCalledWith({ type: 'cancel-browser' });
-  });
+      const back = screen.getByRole('button', { name: 'login.cancel' });
+      expect(back.dataset.testid).toBe('login-back-button');
+      expect(screen.getByTestId('login-panel-browser-redirect').contains(back)).toBe(true);
+      fireEvent.click(back);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(loginHook.dispatch).toHaveBeenCalledWith({ type: 'cancel-browser' });
+    },
+  );
 
   it('keeps the local-mode entry available on an authentication error screen', () => {
     loginHook.value = {
@@ -96,6 +115,36 @@ describe('LoginPage browser redirect waiting state', () => {
     expect(screen.getByText('login.localModeDescription')).toBeTruthy();
   });
 
+  it('keeps saved-account switching out of the signed-out error screen', () => {
+    const listAccounts = vi.fn().mockResolvedValue({
+      accounts: [{ accountKey: 'saved-account' }],
+      mutationAllowed: true,
+    });
+    loginHook.value = {
+      isLoading: false,
+      errorCode: 'NETWORK_ERROR',
+      loginState: { step: 'error', code: 'NETWORK_ERROR', recoverTo: 'identifier' },
+      dispatch: loginHook.dispatch,
+      dispatchWithResult: loginHook.dispatchWithResult,
+      clearError: vi.fn(),
+      listAccounts,
+    } as unknown as typeof loginHook.value;
+
+    render(<LoginPage />);
+
+    expect(listAccounts).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'sidebar.accountSwitcher.title' })).toBeNull();
+    expect(screen.queryByTestId('account-switcher-dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'login.localModeEntry' })).toBeTruthy();
+  });
+
+  it('does not load saved accounts while waiting for browser login', () => {
+    render(<LoginPage />);
+
+    expect(loginHook.value.listAccounts).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'sidebar.accountSwitcher.title' })).toBeNull();
+  });
+
   it('disables local entry while a login request is pending', () => {
     loginHook.value = {
       isLoading: true,
@@ -108,8 +157,7 @@ describe('LoginPage browser redirect waiting state', () => {
     render(<LoginPage />);
 
     expect(
-      (screen.getByRole('button', { name: 'login.localModeEntry' }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole('button', { name: 'login.localModeEntry' }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 });

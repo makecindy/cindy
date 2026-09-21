@@ -11,6 +11,14 @@ export const encryptedStripController = createThreadStripController();
 // 缺 id 的 image generation 历史 item 主动剥离 —— always-on(只删上游已拒绝过的坏历史项)。
 export const imageGenerationStripController = createThreadStripController();
 
+// Responses 历史 message/reasoning item 不合规 id 前缀主动剥离(issue #4738: Gemini 历史
+// 切 GPT 后 `chatcmpl-…_msg_0` 被 Responses 拒绝)—— always-on; 恢复一次后该 thread 发送前预洗。
+export const responsesItemIdStripController = createThreadStripController();
+
+// Responses 历史 item id 超长主动改写(issue #4227: Gateway/grok 历史的 `ws_…_call-…` 84 字符
+// id 切 OpenAI 后被 64 上限拒绝)—— always-on; 恢复一次后该 thread 发送前预改写。
+export const responsesItemIdLengthStripController = createThreadStripController();
+
 // 空 thinking 块主动剥离 —— always-on(删空块零成本)。必须与上面是独立实例。
 export const emptyThinkingStripController = createThreadStripController();
 

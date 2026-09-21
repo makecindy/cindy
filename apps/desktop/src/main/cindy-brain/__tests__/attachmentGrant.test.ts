@@ -37,6 +37,31 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
 }
 
 describe('grantAttachmentsToGhost', () => {
+  it.each(['resolveImageUrl', 'readFile', 'writeBlob', 'recordBlob', 'addRef'] as const)(
+    '%s await 后授权失效，不再执行下一步或返回成功',
+    async (phase) => {
+      let current = true;
+      const { deps, writeBlob, recordBlob, addRef } = makeDeps({ isCurrent: () => current });
+      const original = deps[phase];
+      // 包装具体异步边界，模拟等待期间切 Plan/权限代次。
+      Object.assign(deps, {
+        [phase]: async (...args: unknown[]) => {
+          const result = await (original as (...params: unknown[]) => unknown)(...args);
+          current = false;
+          return result;
+        },
+      });
+      const result = await grantAttachmentsToGhost(deps, {
+        ghostId: 'art', urls: ['xdt-image://s/a.png', 'xdt-image://s/b.png'],
+      });
+      expect(result).toMatchObject({ ok: false, message: expect.stringContaining('permissions changed') });
+      expect(result).not.toHaveProperty('hashes');
+      expect(writeBlob).toHaveBeenCalledTimes(['resolveImageUrl', 'readFile'].includes(phase) ? 0 : 1);
+      expect(recordBlob).toHaveBeenCalledTimes(['recordBlob', 'addRef'].includes(phase) ? 1 : 0);
+      expect(addRef).toHaveBeenCalledTimes(phase === 'addRef' ? 1 : 0);
+    },
+  );
+
   it('happy path:逐张落仓 + ghost-grant 记账(originKind=user),按序返回指纹', async () => {
     const { deps, recordBlob, addRef } = makeDeps();
     const r = await grantAttachmentsToGhost(deps, {

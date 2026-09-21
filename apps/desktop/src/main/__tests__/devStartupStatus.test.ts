@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   beginDesktopDevInstance,
@@ -11,7 +11,12 @@ import {
   markDesktopDevWindowReady,
   recordDesktopDevAuthStartupResult,
   recordDesktopDevLocalDbStartupResult,
+  observeDesktopStartupResult,
 } from '../devStartupStatus.js';
+import { withLocalProfileMigrationStartupBarrier } from '../localProfileDataMigration.js';
+
+const readIdentity = vi.hoisted(() => vi.fn());
+vi.mock('../desktopProcessIdentity.js', () => ({ readDesktopProcessIdentity: readIdentity }));
 
 describe('devStartupStatus', () => {
   let tempDir: string;
@@ -23,6 +28,7 @@ describe('devStartupStatus', () => {
     statusPath = path.join(tempDir, 'startup.json');
     process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE = statusPath;
     cleanup = null;
+    readIdentity.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -31,10 +37,11 @@ describe('devStartupStatus', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('marks startup ready only after both the window and application are ready', () => {
+  it('marks startup ready only after both the window and application are ready', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: path.join(tempDir, 'repo'),
       commit: 'abc123',
       mode: 'remote',
@@ -46,26 +53,29 @@ describe('devStartupStatus', () => {
       startedAtMs: 100,
     });
 
-    markDesktopDevWindowReady();
+    const ready = vi.fn();
+    observeDesktopStartupResult(ready);
+    markDesktopDevWindowReady(4343);
+    expect(ready).not.toHaveBeenCalled();
 
     expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toMatchObject({
       state: 'window-ready',
     });
-    expect(JSON.parse(fs.readFileSync(
-      path.join(tempDir, '.dev-instances', '4242.json'),
-      'utf8',
-    ))).toMatchObject({ state: 'starting' });
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8')),
+    ).toMatchObject({ state: 'starting' });
 
     markDesktopDevReady();
+    expect(ready).toHaveBeenCalledExactlyOnceWith(true);
 
     const external = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
-    const persistent = JSON.parse(fs.readFileSync(
-      path.join(tempDir, '.dev-instances', '4242.json'),
-      'utf8',
-    ));
+    const persistent = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8'),
+    );
     expect(external).toMatchObject({ state: 'ready', instance: { commit: 'abc123' } });
     expect(persistent).toMatchObject({
       state: 'ready',
+      rendererPid: 4343,
       rootDir: path.join(tempDir, 'repo'),
       mode: 'remote',
       region: 'cn',
@@ -73,10 +83,129 @@ describe('devStartupStatus', () => {
     });
   });
 
-  it('supports application readiness arriving before ready-to-show', () => {
-    fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+  it('persists OS process identity through readiness updates', async () => {
+    const identity = { startedAtMs: 50, executablePath: path.join(tempDir, 'Cindy') };
+    readIdentity.mockResolvedValue(identity);
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4242,
+      startedAtMs: 100,
+    });
+    markDesktopDevWindowReady();
+    markDesktopDevReady();
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8')),
+    ).toMatchObject({ processIdentity: identity, startedAtMs: 100, state: 'ready' });
+  });
+
+  it('does not delay bootstrap for OS identity and preserves readiness on late enrichment', async () => {
+    const identity = { startedAtMs: 50, executablePath: path.join(tempDir, 'Cindy') };
+    let resolveIdentity!: (value: typeof identity) => void;
+    const pending = new Promise<typeof identity>((resolve) => {
+      resolveIdentity = resolve;
+    });
+    readIdentity.mockReturnValue(pending);
+    // Must settle while the OS query is still pending, before bootstrap can
+    // register its pre-ready protocols. Awaiting the probe here would deadlock.
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4242,
+    });
+    const file = path.join(tempDir, '.dev-instances', '4242.json');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).not.toHaveProperty('processIdentity');
+    markDesktopDevWindowReady();
+    markDesktopDevReady();
+    resolveIdentity(identity);
+    await pending;
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({
+      state: 'ready',
+      processIdentity: identity,
+    });
+  });
+
+  it('does not recreate the registration when an identity query completes after exit', async () => {
+    let resolveIdentity!: (value: { startedAtMs: number; executablePath: string }) => void;
+    const pending = new Promise<{ startedAtMs: number; executablePath: string }>((resolve) => {
+      resolveIdentity = resolve;
+    });
+    readIdentity.mockReturnValue(pending);
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4242,
+    });
+    cleanup();
+    resolveIdentity({ startedAtMs: 50, executablePath: path.join(tempDir, 'Cindy') });
+    await pending;
+    expect(fs.existsSync(path.join(tempDir, '.dev-instances', '4242.json'))).toBe(false);
+  });
+
+  it('does not overwrite a replacement instance with a late identity result', async () => {
+    let resolveIdentity!: (value: { startedAtMs: number; executablePath: string }) => void;
+    const pending = new Promise<{ startedAtMs: number; executablePath: string }>((resolve) => {
+      resolveIdentity = resolve;
+    });
+    readIdentity.mockReturnValueOnce(pending);
+    const oldCleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4242,
+      instanceId: 'old',
+    });
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4242,
+      instanceId: 'replacement',
+    });
+    resolveIdentity({ startedAtMs: 50, executablePath: path.join(tempDir, 'old-Cindy') });
+    await pending;
+    oldCleanup();
+    const record = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8'),
+    );
+    expect(record.instanceId).toBe('replacement');
+    expect(record).not.toHaveProperty('processIdentity');
+  });
+
+  it('still registers when OS identity is unavailable without inventing an identity', async () => {
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4242,
+    });
+    const record = JSON.parse(
+      fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8'),
+    );
+    expect(record.pid).toBe(4242);
+    expect(record).not.toHaveProperty('processIdentity');
+  });
+
+  it('supports application readiness arriving before ready-to-show', async () => {
+    fs.writeFileSync(statusPath, '{"state":"pending"}\n');
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -92,8 +221,9 @@ describe('devStartupStatus', () => {
 
   it('keeps restart pending when logged-out is only the auth timeout fallback', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -102,14 +232,15 @@ describe('devStartupStatus', () => {
     markDesktopDevWindowReady();
 
     let settleAuth!: (state: { isAuthenticated: boolean; user: unknown | null }) => void;
-    const pendingAuth = new Promise<{ isAuthenticated: boolean; user: unknown | null }>((resolve) => {
-      settleAuth = resolve;
-    });
-    recordDesktopDevAuthStartupResult(
-      { isAuthenticated: false, user: null },
-      pendingAuth,
-      () => ({ isAuthenticated: false, user: null }),
+    const pendingAuth = new Promise<{ isAuthenticated: boolean; user: unknown | null }>(
+      (resolve) => {
+        settleAuth = resolve;
+      },
     );
+    recordDesktopDevAuthStartupResult({ isAuthenticated: false, user: null }, pendingAuth, () => ({
+      isAuthenticated: false,
+      user: null,
+    }));
     expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toMatchObject({
       state: 'window-ready',
     });
@@ -122,8 +253,9 @@ describe('devStartupStatus', () => {
 
   it('waits for localDb when manual login supersedes the timed-out refresh', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -134,11 +266,10 @@ describe('devStartupStatus', () => {
     // The stale background flow resolves as logged out after authStateEpoch changes,
     // while authManager's live state already contains the manually logged-in user.
     const pendingAuth = Promise.resolve({ isAuthenticated: false, user: null });
-    recordDesktopDevAuthStartupResult(
-      { isAuthenticated: false, user: null },
-      pendingAuth,
-      () => ({ isAuthenticated: true, user: { id: 'manual-user' } }),
-    );
+    recordDesktopDevAuthStartupResult({ isAuthenticated: false, user: null }, pendingAuth, () => ({
+      isAuthenticated: true,
+      user: { id: 'manual-user' },
+    }));
     await pendingAuth;
     await Promise.resolve();
     expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toMatchObject({
@@ -155,10 +286,11 @@ describe('devStartupStatus', () => {
     });
   });
 
-  it('preserves a concrete main-process failure for the restart waiter', () => {
+  it('preserves a concrete main-process failure for the restart waiter', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       mode: 'remote',
       passive: true,
@@ -177,19 +309,19 @@ describe('devStartupStatus', () => {
       code: 'SINGLE_INSTANCE_OWNED',
       detail: { userDataDir: '/tmp/Cindy' },
     });
-    expect(JSON.parse(fs.readFileSync(
-      path.join(tempDir, '.dev-instances', '4243.json'),
-      'utf8',
-    ))).toMatchObject({
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4243.json'), 'utf8')),
+    ).toMatchObject({
       state: 'failed',
       failure: { code: 'SINGLE_INSTANCE_OWNED' },
     });
   });
 
-  it('forwards the localDb migration code and message to the restart waiter', () => {
+  it('forwards the localDb migration code and message to the restart waiter', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -213,10 +345,11 @@ describe('devStartupStatus', () => {
     });
   });
 
-  it('does not replace a completed startup with a later runtime failure', () => {
+  it('does not replace a completed startup with a later runtime failure', async () => {
     fs.writeFileSync(statusPath, '{"state":"pending"}\n');
-    cleanup = beginDesktopDevInstance({
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -228,15 +361,15 @@ describe('devStartupStatus', () => {
     markDesktopDevStartupFailed('MIGRATE_FAILED', 'late failure');
 
     expect(JSON.parse(fs.readFileSync(statusPath, 'utf8'))).toMatchObject({ state: 'ready' });
-    expect(JSON.parse(fs.readFileSync(
-      path.join(tempDir, '.dev-instances', '4246.json'),
-      'utf8',
-    ))).toMatchObject({ state: 'ready' });
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4246.json'), 'utf8')),
+    ).toMatchObject({ state: 'ready' });
   });
 
-  it('cleanup never deletes a record that has been replaced by another owner', () => {
-    cleanup = beginDesktopDevInstance({
+  it('cleanup never deletes a record that has been replaced by another owner', async () => {
+    cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
       rootDir: tempDir,
       passive: false,
       isolated: false,
@@ -250,5 +383,75 @@ describe('devStartupStatus', () => {
     cleanup = null;
 
     expect(fs.existsSync(instancePath)).toBe(true);
+  });
+
+  it('publishes the instance record only after an in-flight adoption releases its barrier', async () => {
+    let releaseBarrier!: () => void;
+    let barrierEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      barrierEntered = resolve;
+    });
+    const holdBarrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const adoption = withLocalProfileMigrationStartupBarrier(tempDir, 'cindy', async () => {
+      barrierEntered();
+      await holdBarrier;
+    });
+    await entered;
+
+    const registration = beginDesktopDevInstance({
+      userDataDir: tempDir,
+      dbFilePrefix: 'cindy',
+      rootDir: tempDir,
+      passive: false,
+      isolated: false,
+      pid: 4250,
+      instanceId: 'waited-for-adoption',
+    });
+    expect(fs.existsSync(path.join(tempDir, '.dev-instances', '4250.json'))).toBe(false);
+
+    releaseBarrier();
+    await adoption;
+    cleanup = await registration;
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4250.json'), 'utf8')),
+    ).toMatchObject({ instanceId: 'waited-for-adoption' });
+  });
+
+  it('retries a transient Windows rename lock while publishing the mandatory instance record', async () => {
+    const instancePath = path.join(tempDir, '.dev-instances', '4251.json');
+    fs.mkdirSync(path.dirname(instancePath), { recursive: true });
+    fs.writeFileSync(instancePath, '{"instanceId":"stale-owner"}\n');
+
+    const realRename = fs.renameSync;
+    let transientFailures = 2;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from).endsWith('.tmp') && String(to) === instancePath && transientFailures > 0) {
+        transientFailures -= 1;
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    try {
+      cleanup = await beginDesktopDevInstance({
+        userDataDir: tempDir,
+        dbFilePrefix: 'cindy',
+        rootDir: tempDir,
+        passive: false,
+        isolated: false,
+        pid: 4251,
+        instanceId: 'replacement-owner',
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(transientFailures).toBe(0);
+    expect(JSON.parse(fs.readFileSync(instancePath, 'utf8'))).toMatchObject({
+      instanceId: 'replacement-owner',
+      state: 'starting',
+    });
   });
 });

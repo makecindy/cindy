@@ -1,7 +1,7 @@
 /**
  * notifySlot.test.ts — 系统提示槽单测(纯 DI,无 Electron)。
- * 覆盖:happy path(广播带主机填的身份三件套)、卡槽资格审(未声明 notify
- * 槽即拒)、沉睡拒、载荷校验(text 形状/空/超长、tone 白名单)、净化
+ * 覆盖:happy path(广播带主机填的身份三件套)、能力资格审(未声明 notify
+ * 即拒)、沉睡拒、载荷校验(text 形状/空/超长、tone 白名单)、净化
  * (控制字符剥除、\r\n 归一)、每意识限速(注入时钟直测)。
  */
 
@@ -12,7 +12,7 @@ import { GHOST_NOTIFY_MIN_INTERVAL_MS } from '../../../shared/ghost';
 import type { InstalledGhost } from '../../../shared/ghost';
 
 function fakeGhost(
-  overrides: { enabled?: boolean; slots?: string[]; iconDataUrl?: string } = {},
+  overrides: { enabled?: boolean; notify?: boolean; iconDataUrl?: string } = {},
 ): InstalledGhost {
   return {
     manifest: {
@@ -22,7 +22,7 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'notify'],
+      ...(overrides.notify === false ? {} : { notify: true }),
     },
     dir: '/fake/brain/weather',
     enabled: overrides.enabled ?? true,
@@ -63,8 +63,8 @@ describe('GhostNotifySlot', () => {
     expect(broadcast).toHaveBeenCalledWith({ ghostId: 'weather', name: '天气', text: 'hi', tone: 'info' });
   });
 
-  it('未声明 notify 槽即拒(slots 是白名单)', () => {
-    const { slot, broadcast } = makeSlot(fakeGhost({ slots: ['tool'] }));
+  it('未声明 notify 能力即拒', () => {
+    const { slot, broadcast } = makeSlot(fakeGhost({ notify: false }));
     const r = slot.handleNotify('weather', { type: 'notify', text: 'hi' });
     expect(r.ok).toBe(false);
     expect(broadcast).not.toHaveBeenCalled();

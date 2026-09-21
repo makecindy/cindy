@@ -7,6 +7,7 @@
  * that arbitrary third-party code is fully compatible or safe.
  */
 
+import { PI_EXTENSION_UI_CAPABILITIES } from '@cindy/maker-core/pi-extension-ui';
 import { parse } from '@babel/parser';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -54,48 +55,9 @@ interface SemverApi {
 
 const semver = createRequire(import.meta.url)('semver') as SemverApi;
 
-const ISSUE_BY_API: Partial<Record<PiExtensionUiApi, PiPackageCompatibilityIssue>> = {
-  setStatus: 'status-display',
-  setWorkingMessage: 'status-display',
-  setWorkingVisible: 'status-display',
-  setWorkingIndicator: 'status-display',
-  setHiddenThinkingLabel: 'status-display',
-  setWidget: 'widgets',
-  setTitle: 'terminal-title',
-  setEditorText: 'editor-integration',
-  getEditorText: 'editor-integration',
-  pasteToEditor: 'editor-integration',
-  getEditorComponent: 'editor-integration',
-  addAutocompleteProvider: 'editor-integration',
-  setEditorComponent: 'editor-integration',
-  setFooter: 'tui-layout',
-  setHeader: 'tui-layout',
-  setToolsExpanded: 'tui-layout',
-  getToolsExpanded: 'tui-layout',
-  custom: 'custom-ui',
-  getAllThemes: 'theme-control',
-  getTheme: 'theme-control',
-  setTheme: 'theme-control',
-  theme: 'theme-control',
-  onTerminalInput: 'terminal-input',
-  registerShortcut: 'tui-rendering',
-  registerFlag: 'cli-flags',
-  registerMessageRenderer: 'tui-rendering',
-  registerMarkdownTransformer: 'tui-rendering',
-  registerEntryRenderer: 'tui-rendering',
-};
-
-const KNOWN_UI_APIS = new Set<PiExtensionUiApi>([
-  ...(Object.keys(ISSUE_BY_API) as PiExtensionUiApi[]),
-  // RPC exposes these through extension_ui_request. Cindy maps dialogs onto
-  // its cross-device question card and presents notifications in the task
-  // transcript, so they are adapted instead of merely tolerated.
-  'select',
-  'confirm',
-  'input',
-  'editor',
-  'notify',
-]);
+const KNOWN_UI_APIS = new Set<PiExtensionUiApi>(
+  Object.keys(PI_EXTENSION_UI_CAPABILITIES) as PiExtensionUiApi[],
+);
 
 type AstNode = {
   type: string;
@@ -385,10 +347,11 @@ function modeComparison(node: unknown, contextBindings: Set<string>): 'true' | '
   return trueInTui ? 'true' : 'false';
 }
 
-function collectDetectedApis(root: AstNode): Set<PiExtensionUiApi> {
+function collectDetectedApis(root: AstNode): { apis: Set<PiExtensionUiApi>; timedDialog: boolean } {
   const { contextBindings, extensionApiBindings, uiBindings, methodBindings } =
     collectBindings(root);
   const detected = new Set<PiExtensionUiApi>();
+  let timedDialog = false;
 
   const visit = (node: AstNode, tuiOnly: boolean): void => {
     if (node.type === 'IfStatement' && isNode(node.test) && isNode(node.consequent)) {
@@ -434,6 +397,22 @@ function collectDetectedApis(root: AstNode): Set<PiExtensionUiApi> {
         const method = member.property as PiExtensionUiApi;
         if (KNOWN_UI_APIS.has(method)) detected.add(method);
       }
+      const calledUiApi = boundMethod ?? (
+        member && isUiExpression(member.object, contextBindings, uiBindings)
+          ? member.property as PiExtensionUiApi : undefined
+      );
+      // Pi's editor(title, prefill) has no timeout options argument.
+      if (calledUiApi && calledUiApi !== 'editor' && KNOWN_UI_APIS.has(calledUiApi)
+        && PI_EXTENSION_UI_CAPABILITIES[calledUiApi].handling === 'dialog') {
+        const options = Array.isArray(node.arguments) ? node.arguments[2] : undefined;
+        if (isNode(options) && options.type === 'ObjectExpression' && Array.isArray(options.properties)) {
+          timedDialog ||= options.properties.some((property) =>
+            isNode(property) && propertyName(property.key) === 'timeout'
+            && isNode(property.value) && property.value.type === 'NumericLiteral'
+            && typeof property.value.value === 'number' && Number.isFinite(property.value.value),
+          );
+        }
+      }
     }
     if (!tuiOnly) {
       const member = memberParts(node);
@@ -449,7 +428,7 @@ function collectDetectedApis(root: AstNode): Set<PiExtensionUiApi> {
   };
 
   visit(root, false);
-  return detected;
+  return { apis: detected, timedDialog };
 }
 
 function collectImports(root: AstNode): string[] {
@@ -575,6 +554,7 @@ export async function analyzePiExtensionCompatibility(
   const detectedApis = new Set<PiExtensionUiApi>();
   let totalBytes = 0;
   let incomplete = false;
+  let timedDialog = false;
   const startedAt = Date.now();
 
   while (queue.length > 0) {
@@ -602,7 +582,9 @@ export async function analyzePiExtensionCompatibility(
       totalBytes += sourceFile.bytes;
       const parsed = parseModule(sourceFile.source);
       if (parsed.recoveredErrors) incomplete = true;
-      for (const api of collectDetectedApis(parsed.root)) detectedApis.add(api);
+      const detected = collectDetectedApis(parsed.root);
+      for (const api of detected.apis) detectedApis.add(api);
+      timedDialog ||= detected.timedDialog;
       for (const specifier of parsed.imports) {
         const resolved = await resolveLocalModule(file, specifier, canonicalRoot);
         if (resolved && !visited.has(resolved)) queue.push(resolved);
@@ -614,14 +596,15 @@ export async function analyzePiExtensionCompatibility(
   }
 
   const apis = [...detectedApis].sort();
-  const issues = [
+  const issues: PiPackageCompatibilityIssue[] = [
     ...new Set(
       apis.flatMap((api) => {
-        const issue = ISSUE_BY_API[api];
+        const issue = PI_EXTENSION_UI_CAPABILITIES[api].issue;
         return issue ? [issue] : [];
       }),
     ),
   ].sort();
+  if (timedDialog) issues.push('interactive-dialogs');
   if (incomplete) issues.push('analysis-incomplete');
   return {
     compatibility: issues.some((issue) => issue !== 'analysis-incomplete')

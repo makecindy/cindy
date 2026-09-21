@@ -24,18 +24,22 @@ import {
   collectDeleteAnchorClientIds,
   collectStableLocalFileRefs,
   collectTurnFinalAssistantClientIds,
+  isGeneratedFilesTurnSealed,
   findRestorableViewportItemIdx,
+  renderItemContainsClientId,
   groupWorkRuns,
   insertForkOriginItem,
   isScrollNavigationKey,
   pickDeleteCompensationAnchorKey,
   isPlanCardVisibleInViewport,
   planSessionBelongsToLatestUserTurn,
+  reuseGeneratedFilesRenderItems,
+  simplifyBotRenderItems,
   shouldBlockAssistantFork,
   type RenderItem,
 } from '../components/chat/MessageStream';
 import { shouldHandleNavigationKey } from '../components/chat/useNavigationKeyListener';
-import type { ChatMessage } from '@/lib/makerChatStore';
+import { handleStreamEvent, EMPTY_SESSION_STATE, type ChatMessage } from '@/lib/makerChatStore';
 import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
 
 // ── 工厂 / 用例构造工具 ────────────────────────────────────────────────────
@@ -51,6 +55,212 @@ const mkAssistant = (id: string, content = 'ok'): ChatMessage => ({
   clientId: id,
   role: 'assistant',
   content,
+});
+
+it('keeps persistent Cindy Make progress visible in the message timeline', () => {
+  const built = buildRenderItems([
+    mkUser('u1', '之前的消息'),
+    {
+      ...mkAssistant('make-card'),
+      systemCardType: 'cindy-make',
+      systemCardData: { request: 'fix scrolling', report: { runId: 'run-1' } },
+    },
+  ]).items;
+  expect(
+    built.some((item) => item.type === 'message' && item.message.clientId === 'make-card'),
+  ).toBe(true);
+});
+
+it('keeps modal-only Cindy Make cards out of the message timeline', () => {
+  const built = buildRenderItems([
+    mkUser('u1', '之前的消息'),
+    {
+      ...mkAssistant('make-card'),
+      systemCardType: 'cindy-make',
+      systemCardData: { modalOnly: true, report: { runId: 'run-1' } },
+    },
+  ]).items;
+  expect(built.some((item) => item.type === 'message' && item.message.clientId === 'make-card')).toBe(
+    false,
+  );
+});
+
+it('shows completion history unless the local composer owns the testing handoff', () => {
+  const completion: ChatMessage = {
+    ...mkAssistant('completion'), systemCardType: 'cindy-make-complete',
+    systemCardData: { reportedAt: 123, commit: 'a'.repeat(40) },
+  };
+  expect(buildRenderItems([completion]).items.some((item) => renderItemContainsClientId(item, 'completion'))).toBe(true);
+  expect(buildRenderItems([completion], undefined, undefined, { cindyMakeCompletionInComposer: true }).items).toEqual([]);
+  expect(completion.systemCardData?.commit).toBe('a'.repeat(40));
+});
+
+it.each(['running', 'failed', 'cancelled', 'completed'])(
+  'moves its own %s preparation out of the timeline without deleting history or hiding other cards',
+  (status) => {
+    const preparation: ChatMessage = {
+      ...mkAssistant('make-card'),
+      systemCardType: 'cindy-make',
+      systemCardData: {
+        request: 'fix scrolling',
+        report: { runId: 'run-1', status, task: { sessionId: 'make-session' } },
+      },
+    };
+    const otherCard: ChatMessage = {
+      ...preparation,
+      clientId: 'other-card',
+      systemCardData: { report: { runId: 'run-2', task: { sessionId: 'other-session' } } },
+    };
+    const messages = [preparation, otherCard, mkUser('u1', 'original request')];
+    const built = buildRenderItems(messages, undefined, undefined, {
+      cindyMakeSessionId: 'make-session',
+    }).items;
+    expect(built.some((item) => renderItemContainsClientId(item, 'make-card'))).toBe(false);
+    expect(built.some((item) => renderItemContainsClientId(item, 'other-card'))).toBe(true);
+    expect(built.some((item) => renderItemContainsClientId(item, 'u1'))).toBe(true);
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toBe(preparation);
+    // A source task or standalone history view still offers its existing card.
+    const original = buildRenderItems(messages).items;
+    expect(original.some((item) => renderItemContainsClientId(item, 'make-card'))).toBe(true);
+  },
+);
+
+describe('Bot 流式正文呈现', () => {
+  it('preserves consecutive Claude final text blocks only after the turn seal', () => {
+    let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
+    const visibleProse = () => simplifyBotRenderItems(
+      groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
+    ).flatMap((item) => item.type === 'message' && item.message.role === 'assistant'
+      ? [item.message.content] : []);
+    const emitText = (id: string, text: string) => {
+      state = handleStreamEvent(state, {
+        sessionId: 'claude-multi-block', type: 'text', persistId: id,
+        data: { text, isFinal: true },
+      });
+    };
+    emitText('progress', '我查一下：');
+    state = handleStreamEvent(state, {
+      sessionId: 'claude-multi-block', type: 'tool_use', persistId: 'tool',
+      data: { id: 'tool', name: 'Bash', input: { command: 'echo ok' } },
+    });
+    state = handleStreamEvent(state, {
+      sessionId: 'claude-multi-block', type: 'tool_result', persistId: 'result',
+      data: { toolUseId: 'tool', result: 'ok' },
+    });
+    emitText('first', 'first');
+    expect(visibleProse()).toEqual([]);
+    emitText('second', 'second');
+    expect(visibleProse()).toEqual([]);
+    state = handleStreamEvent(state, {
+      sessionId: 'claude-multi-block', type: 'text', persistId: 'second',
+      data: { text: 'second', isFinal: true, isFullText: true },
+      agentMeta: { turnCompleted: true },
+    });
+    expect(visibleProse()).toEqual(['first', 'second']);
+    state = { ...state, isStreaming: false };
+    expect(visibleProse()).toEqual(['first', 'second']);
+  });
+
+  it('运行中从首字收拢未封口正文与工具，保留可展开过程', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('t1', 'Bash'),
+      mkResult('r1', 'tu-t1'),
+      { ...mkAssistant('a1', '正在逐字输出'), isStreaming: true },
+    ];
+    const built = buildRenderItems(messages).items;
+    const visible = simplifyBotRenderItems(groupWorkRuns(built, true), true);
+
+    expect(
+      visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
+    ).toEqual(['u1']);
+    expect(visible.some((item) => item.type === 'work_group')).toBe(true);
+  });
+
+  // Contracts: claude-code/translator assistant text blocks; pi/translator
+  // message_end authoritative full text; codex/translator agentMessage completed.
+  // All three close text messages before tools, independently of the turn seal.
+  it.each(['claude-code', 'pi', 'codex'] as const)(
+    '%s: hides intermediate text at every frame and releases only the sealed answer', (source) => {
+      let state = { ...EMPTY_SESSION_STATE, isStreaming: true, messages: [mkUser('u1')] };
+      const project = () => simplifyBotRenderItems(
+        groupWorkRuns(buildRenderItems(state.messages).items, state.isStreaming), state.isStreaming,
+      );
+      const visibleProse = () => project().flatMap((item) =>
+        item.type === 'message' && item.message.role === 'assistant' ? [item.message.content] : []);
+      for (const [index, text] of ['我查一下：', '已找到线索，继续核实', '这是最终答复'].entries()) {
+        const persistId = `answer-${index}`;
+        state = handleStreamEvent(state, {
+          sessionId: 'bot-event-fixture', type: 'text', persistId,
+          data: { text, isFinal: false, ...(source === 'codex' ? { agentMessageId: persistId } : {}) },
+        });
+        expect(visibleProse()).toEqual([]);
+        state = handleStreamEvent(state, {
+          sessionId: 'bot-event-fixture', type: 'text', persistId,
+          data: { text, isFinal: true,
+            ...(source !== 'claude-code' ? { isFullText: true } : {}),
+            ...(source === 'codex' ? { agentMessageId: persistId, phase: index === 2 ? 'final_answer' : 'commentary' } : {}),
+          },
+        });
+        expect(visibleProse()).toEqual([]);
+        if (index < 2) {
+          state = handleStreamEvent(state, {
+            sessionId: 'bot-event-fixture', type: 'tool_use', persistId: `tool-${index}`,
+            data: { id: `tool-${index}`, name: 'Bash', input: { command: 'echo ok' } },
+          });
+          state = handleStreamEvent(state, {
+            sessionId: 'bot-event-fixture', type: 'tool_result', persistId: `result-${index}`,
+            data: { toolUseId: `tool-${index}`, result: 'ok' },
+          });
+          expect(visibleProse()).toEqual([]);
+        }
+      }
+      // Main stamps the last assistant at done; the renderer projects that meta.
+      state = handleStreamEvent(state, {
+        sessionId: 'bot-event-fixture', type: 'text', persistId: 'answer-2',
+        data: { text: '这是最终答复', isFinal: true, isFullText: true },
+        agentMeta: { turnCompleted: true },
+      });
+      expect(visibleProse()).toEqual(['这是最终答复']);
+      expect(project().filter((item) => item.type === 'work_group')).toHaveLength(1);
+      expect(state.messages.filter((message) => message.role === 'assistant').map((message) => message.content))
+        .toEqual(['我查一下：', '已找到线索，继续核实', '这是最终答复']);
+    },
+  );
+
+  it('伙伴私聊往返期间持续保留双方消息戳', () => {
+    const directMessageStamp = (id: string, direction: 'sent' | 'received'): ChatMessage => ({
+      ...mkAssistant(id, ''),
+      systemCardType: 'bot-direct-message',
+      systemCardData: {
+        v: 1,
+        threadId: 'thread-1',
+        viewerBotId: 'bot-a',
+        peerBotId: 'bot-b',
+        peerBotName: '开发Bot',
+        direction,
+        sequence: direction === 'sent' ? 1 : 2,
+        preview: 'hello',
+      },
+    });
+    const messages = [
+      mkUser('u1'),
+      directMessageStamp('dm-sent', 'sent'),
+      { ...mkUser('dm-trigger'), isSyntheticTrigger: true },
+      directMessageStamp('dm-received', 'received'),
+      { ...mkAssistant('a1', '正在回复'), isStreaming: true },
+    ];
+
+    const visible = simplifyBotRenderItems(
+      groupWorkRuns(buildRenderItems(messages).items, true),
+      true,
+    );
+
+    expect(
+      visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
+    ).toEqual(['u1', 'dm-sent', 'dm-received']);
+  });
 });
 
 const mkCompactBoundary = (id: string): ChatMessage => ({
@@ -336,6 +546,58 @@ describe('collectTurnFinalAssistantClientIds', () => {
   });
 });
 
+describe('isGeneratedFilesTurnSealed', () => {
+  it('stays open on the latest turn until the tail sub-turn finishes', () => {
+    const open = [mkUser('u1'), mkTool('write-1', 'Write', { file_path: 'C:/work/a.md' })];
+    expect(isGeneratedFilesTurnSealed(open, false)).toBe(false);
+
+    const sealed = [...open, { ...mkAssistant('done'), turnCompleted: true }];
+    expect(isGeneratedFilesTurnSealed(sealed, false)).toBe(true);
+  });
+
+  it('does not inherit the previous sub-turn seal after auto-continue', () => {
+    const afterContinue = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+    ];
+    expect(isGeneratedFilesTurnSealed(afterContinue, false)).toBe(false);
+
+    const afterSynthetic = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      { ...mkUser('continue'), isSyntheticTrigger: true },
+    ];
+    expect(isGeneratedFilesTurnSealed(afterSynthetic, false)).toBe(false);
+  });
+
+  it('reseals only after the current tail sub-turn finishes', () => {
+    const resealed = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+      mkResult('write-2-result', 'tu-write-2'),
+      { ...mkAssistant('gate-followup'), turnCompleted: true },
+    ];
+    expect(isGeneratedFilesTurnSealed(resealed, false)).toBe(true);
+  });
+
+  it('treats an explicit failed tail sub-turn as sealed', () => {
+    const failedTail = [
+      mkUser('u1'),
+      { ...mkAssistant('main-summary'), turnCompleted: true },
+      mkTool('write-2', 'Write', { file_path: 'C:/work/b.md' }),
+      { ...mkAssistant('failed'), turnCompleted: false },
+    ];
+    expect(isGeneratedFilesTurnSealed(failedTail, false)).toBe(true);
+  });
+
+  it('seals historical turns that already have a following user boundary', () => {
+    const historical = [mkUser('u1'), mkTool('write-1', 'Write', { file_path: 'C:/work/a.md' })];
+    expect(isGeneratedFilesTurnSealed(historical, true)).toBe(true);
+  });
+});
+
 // ── case 1: 流式追加 token 不改变 message item key ────────────────────────
 
 describe('buildRenderItems — key stability', () => {
@@ -389,6 +651,48 @@ describe('buildRenderItems — key stability', () => {
     expect(cards.map((card) => card.key)).toEqual(['turnchanges-cs1', 'turnchanges-cs2']);
     expect(cards.map((card) => card.changeSet.id)).toEqual(['cs1', 'cs2']);
     expect(items.indexOf(cards[0])).toBeGreaterThan(items.findIndex((item) => item.key === 'msg-a1'));
+  });
+
+  it('places the preceding turn changes before an appended Cindy Make card', () => {
+    const firstUser = mkUser('u1');
+    const makeCard = {
+      ...mkAssistant('make-card', ''),
+      systemCardType: 'cindy-make' as const,
+    };
+    const changeSet: TurnChangeSetSummary = {
+      id: 'cs-before-make',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'codex',
+      providerTurnId: 'turn-1',
+      cwd: 'C:/work',
+      state: 'complete',
+      workspaceState: 'applied',
+      isReversible: true,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [{
+        id: 'turn-1:a.ts',
+        path: 'a.ts',
+        oldPath: null,
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+      }],
+      fileCount: 1,
+      additions: 1,
+      deletions: 0,
+    };
+
+    const { items } = buildRenderItems([firstUser, mkAssistant('a1'), makeCard], undefined, undefined, {
+      turnChangeSets: [changeSet],
+    });
+    const changeIndex = items.findIndex((item) => item.type === 'turn_changes');
+    const cardIndex = items.findIndex((item) => item.key === 'msg-make-card');
+
+    expect(changeIndex).toBeGreaterThanOrEqual(0);
+    expect(cardIndex).toBeGreaterThan(changeIndex);
   });
 
   it('hides all zero-file change cards because they have no reviewable content', () => {
@@ -492,6 +796,166 @@ describe('buildRenderItems — key stability', () => {
       turnChangeSets: [exactFile],
     }).items.filter((item): item is Extract<RenderItem, { type: 'generated_files' }> => item.type === 'generated_files');
     expect(deduped).toHaveLength(0);
+  });
+
+  // 真机验收:伙伴对话里只看到工程 diff 卡「已更改 1 个文件 +137 −0 撤销/审查」,
+  // 交付物卡一次都没出现。根因就在这里 —— changeSet 把本轮文件从产出候选里排它
+  // 剔除,再自己渲染成 turn_changes。伙伴会话的方向是反的。
+  describe('bot sessions hand the turn over to deliverables', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('bash-1', 'Bash', { command: 'make report' }),
+      mkResult('bash-result', 'tu-bash-1'),
+      mkUser('u2'),
+    ];
+    const changeSet: TurnChangeSetSummary = {
+      id: 'cs-bot',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'claude-code',
+      providerTurnId: null,
+      cwd: 'C:/work',
+      state: 'complete',
+      workspaceState: 'applied',
+      isReversible: true,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [
+        {
+          id: 'turn-1:out/report.pdf',
+          path: 'out/report.pdf',
+          oldPath: null,
+          status: 'added',
+          additions: 137,
+          deletions: 0,
+        },
+        {
+          id: 'turn-1:src/main.ts',
+          path: 'src/main.ts',
+          oldPath: null,
+          status: 'modified',
+          additions: 3,
+          deletions: 1,
+        },
+      ],
+      fileCount: 2,
+      additions: 140,
+      deletions: 1,
+    };
+    const build = (botSessionId?: string) =>
+      buildRenderItems(messages, undefined, undefined, {
+        workingDir: 'C:/work',
+        turnChangeSets: [changeSet],
+        ...(botSessionId ? { botSessionId } : {}),
+      }).items;
+
+    it('drops the engineering diff card and promotes changeSet creates to deliverables', () => {
+      const items = build('sess-bot');
+      expect(items.filter((item) => item.type === 'turn_changes')).toEqual([]);
+      const generated = items.filter(
+        (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+          item.type === 'generated_files',
+      );
+      expect(generated).toHaveLength(1);
+      expect(generated[0]?.files.map((file) => file.name)).toEqual(['report.pdf']);
+      // checkpoint 的新建是结构化实锤,与文件工具新建同级(不降级成 command 候选)。
+      expect(generated[0]?.files[0]?.source).toBe('tool');
+    });
+
+    it('never turns an edited file into a deliverable', () => {
+      const generated = build('sess-bot').filter(
+        (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+          item.type === 'generated_files',
+      );
+      expect(generated[0]?.files.some((file) => file.name === 'main.ts')).toBe(false);
+    });
+
+    it('leaves ordinary tasks on the diff card, unchanged', () => {
+      const items = build();
+      expect(items.filter((item) => item.type === 'turn_changes')).toHaveLength(1);
+      expect(items.filter((item) => item.type === 'generated_files')).toEqual([]);
+    });
+  });
+
+  it('reuses the generated-files item when only unrelated messages change', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('write-1', 'Write', { file_path: 'C:/work/report.md', content: 'x' }),
+      mkResult('write-result', 'tu-write-1'),
+      mkAssistant('a1', 'done'),
+    ];
+    const first = buildRenderItems(messages, undefined, undefined, { workingDir: 'C:/work' });
+    const cache = new Map();
+    const reusedOnce = reuseGeneratedFilesRenderItems(first.items, cache);
+    const second = buildRenderItems(
+      [...messages.slice(0, -1), { ...messages[3], content: 'done plus more' }],
+      undefined,
+      undefined,
+      { workingDir: 'C:/work' },
+    );
+    const reusedTwice = reuseGeneratedFilesRenderItems(second.items, cache);
+    const firstCard = reusedOnce.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const secondCard = reusedTwice.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    expect(firstCard).toBeDefined();
+    expect(secondCard).toBe(firstCard);
+  });
+
+  it('unseals generated files when the same visible turn auto-continues after turnCompleted', () => {
+    const workingDir = 'C:/work';
+    const firstWrite = mkTool('write-1', 'Write', { file_path: 'C:/work/a.md', content: 'x' });
+    const firstResult = mkResult('write-1-result', 'tu-write-1');
+    const sealed = buildRenderItems(
+      [mkUser('u1'), firstWrite, firstResult, { ...mkAssistant('main-summary'), turnCompleted: true }],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const continued = buildRenderItems(
+      [
+        mkUser('u1'),
+        firstWrite,
+        firstResult,
+        { ...mkAssistant('main-summary'), turnCompleted: true },
+        mkTool('write-2', 'Write', { file_path: 'C:/work/b.md', content: 'y' }),
+      ],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+    const resealed = buildRenderItems(
+      [
+        mkUser('u1'),
+        firstWrite,
+        firstResult,
+        { ...mkAssistant('main-summary'), turnCompleted: true },
+        mkTool('write-2', 'Write', { file_path: 'C:/work/b.md', content: 'y' }),
+        mkResult('write-2-result', 'tu-write-2'),
+        { ...mkAssistant('gate-followup'), turnCompleted: true },
+      ],
+      undefined,
+      undefined,
+      { workingDir },
+    ).items.find(
+      (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+        item.type === 'generated_files',
+    );
+
+    expect(sealed?.turnSealed).toBe(true);
+    expect(continued?.turnSealed).toBe(false);
+    expect(resealed?.turnSealed).toBe(true);
   });
 
   it('streaming token append to an assistant message keeps the same item key', () => {
@@ -922,6 +1386,38 @@ describe('buildRenderItems — key stability', () => {
     expect(seg?.key).not.toBe(media?.key);
   });
 
+  it('uses tool media as fallback and suppresses it only for an inline image in the same turn', () => {
+    const url = 'cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png';
+    const firstTool = mkTool('img1', 'image_generate');
+    const firstResult = mkResult(
+      'imgr1',
+      'tu-img1',
+      JSON.stringify({ xdt_image_url: url }),
+    );
+    const secondTool = mkTool('img2', 'image_generate');
+    const secondResult = mkResult(
+      'imgr2',
+      'tu-img2',
+      JSON.stringify({ xdt_image_url: url }),
+    );
+    const { items } = buildRenderItems([
+      mkUser('u1'),
+      firstTool,
+      firstResult,
+      mkAssistant('a1', `![生成结果](${url})`),
+      mkUser('u2'),
+      secondTool,
+      secondResult,
+      // 纯文本 URI 不是图片展示，不能压掉可靠兜底；上一轮的 Markdown 也不能跨轮去重。
+      mkAssistant('a2', `文件地址：${url}`),
+    ]);
+
+    const mediaKeys = items
+      .filter((item): item is Extract<RenderItem, { type: 'tool_media' }> => item.type === 'tool_media')
+      .map((item) => item.key);
+    expect(mediaKeys).toEqual(['media-img2']);
+  });
+
   // ── case 7: 末尾混合丢弃类型 + 有效 message,末尾仍是有效 item ──────────
   // 锁住"删自愈 effect 安全"的论证:渲染窗口下移到 item 轴后,allRenderItems
   // 末尾永远是有效 item,U2 "末尾窗口全 orphan / 全被丢弃" 死锁不可能复现。
@@ -1244,6 +1740,61 @@ describe('groupWorkRuns — work-group collapsing', () => {
     expect(findRestorableViewportItemIdx(visibleItems, 'msg-a-draft')).toBe(0);
     expect(findRestorableViewportItemIdx(visibleItems, 'seg-t1')).toBe(0);
   });
+
+  it('restores a completed group after an older activity joins the same turn', () => {
+    const tail = [mkAssistant('draft', 'Reading.'), mkTool('tool-later', 'Read'), mkAssistant('final', 'Done.')];
+    const previous = build([mkUser('user'), ...tail], false).find((item) => item.type === 'work_group')!;
+    const expanded = build([mkUser('user'), mkTool('tool-earlier', 'Bash'), ...tail], false);
+    expect(previous.key).toBe('work-summary-tool-later');
+    const index = findRestorableViewportItemIdx(expanded, previous.key);
+    expect(index).toBe(1);
+    expect(expanded[index].key).toBe('work-summary-tool-earlier');
+  });
+
+  it('restores an anchor to a nested deferred group without requiring loaded children', () => {
+    const group = build(
+      [mkUser('user'), mkTool('tool-earlier', 'Bash'), mkAssistant('final', 'Done.')], false,
+    ).find((item): item is Extract<RenderItem, { type: 'work_group' }> => item.type === 'work_group')!;
+    const deferred = { ...group, key: 'work-tool-later', children: [] };
+    const regrouped = { ...group, children: [deferred] };
+    expect(findRestorableViewportItemIdx([regrouped], 'work-summary-tool-later')).toBe(0);
+    expect(findRestorableViewportItemIdx([regrouped], 'work-summary-missing')).toBe(-1);
+  });
+
+  it.each(['work-rs_old-anchor', 'work-earlier|work-rs_old-anchor', 'work-summary-rs_old-anchor'])(
+    'restores a remote summary through its retained deferred identity: %s',
+    (key) => {
+      const group = build(
+        [mkUser('user'), mkTool('new-anchor', 'Bash'), mkAssistant('final', 'Done.')],
+        false,
+      ).find((item): item is Extract<RenderItem, { type: 'work_group' }> => item.type === 'work_group')!;
+      const child = {
+        ...group,
+        children: [],
+        deferred: {
+          key, expanded: false, loading: false, failed: false,
+          toggle: () => { throw new Error('Recovery must not load details'); },
+          retry: () => { throw new Error('Recovery must not load details'); },
+        },
+      };
+      const items = [{ ...group, children: [child] }];
+      expect(findRestorableViewportItemIdx(items, 'work-summary-rs_old-anchor')).toBe(0);
+      expect(findRestorableViewportItemIdx(items, 'work-rs_old-anchor')).toBe(0);
+      expect(findRestorableViewportItemIdx(items, 'work-summary-anchor')).toBe(-1);
+      expect(findRestorableViewportItemIdx(items, 'work-summary-missing')).toBe(-1);
+      // The same identity must survive the deletion guard, even while its
+      // exact child is unloaded. Near-suffix matches are not identities.
+      expect(renderItemContainsClientId(items[0], 'rs_old-anchor')).toBe(true);
+      expect(renderItemContainsClientId(items[0], 'anchor')).toBe(false);
+      expect(renderItemContainsClientId(items[0], 'missing')).toBe(false);
+      const deleted = {
+        ...items[0],
+        children: [{ ...child, key: 'work-rs_old-anchor', deferred: undefined }],
+      };
+      // A stale group key alone must not keep a genuinely deleted child alive.
+      expect(renderItemContainsClientId(deleted, 'rs_old-anchor')).toBe(false);
+    },
+  );
 
   it('keeps completed prior turns folded while a later turn streams', () => {
     const items = build(
@@ -1734,4 +2285,25 @@ describe('focus scroll takeover keys', () => {
     expect(shouldHandleNavigationKey('PageUp', null)).toBe(true);
     expect(shouldHandleNavigationKey('Enter', null)).toBe(false);
   });
+});
+
+it('places the same Bot task card after its introduction and keeps it through streaming completion replies', () => {
+  const task: ChatMessage = { ...mkAssistant('task-card', ''), systemCardType: 'bot-session-task' };
+  const messages = [mkUser('start'), task, mkAssistant('intro', 'Started'),
+    { ...mkUser('finished-trigger'), isSyntheticTrigger: true }, mkAssistant('done', 'Done')];
+  const project = (streaming: boolean) => simplifyBotRenderItems(
+    buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot' }).items, streaming,
+  ).flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
+  expect(project(true)).toEqual(['start', 'intro', 'task-card']);
+  expect(project(false).filter((id) => id !== 'finished-trigger')).toEqual(['start', 'intro', 'task-card', 'done']);
+});
+
+it.each(['steer', 'new', 'completion'])('keeps task introduction pairing within the actual turn: %s', (kind) => {
+  const task: ChatMessage = { ...mkAssistant('task-card', ''), systemCardType: 'bot-session-task' };
+  const interruption = { ...mkUser('interruption'), ...(kind === 'steer' ? { delivery: 'steer' as const } : {}),
+    ...(kind === 'completion' ? { isSyntheticTrigger: true } : {}) };
+  const items = buildRenderItems([mkUser('start'), task, interruption, mkAssistant('intro', 'Started')],
+    undefined, undefined, { botSessionId: 'bot' }).items;
+  const ids = items.flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
+  expect(ids.indexOf('task-card') > ids.indexOf('intro')).toBe(kind === 'steer');
 });

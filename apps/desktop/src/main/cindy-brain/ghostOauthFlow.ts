@@ -4,7 +4,7 @@
  * 设计定案(2026-07-13 与 Lizi):平台不预设 provider 名单——意识在 ghost.json
  * 里声明"去哪授权、要什么 scope"(authorizeUrl / tokenUrl / scopes / pkce),
  * clientId / clientSecret 由用户在意识设置页自填(input:'ghost' 只写通道同款
- * 纪律),装入确认框全量展示,用户知情自担。
+ * 纪律),插件详情全量展示。
  *
  * 本模块声明化的是**参数**,不是**代码**:授权流程本身(拉浏览器、loopback
  * 回调、state / PKCE 校验、code 换 token、refresh)永远是这份主机可信代码在
@@ -76,8 +76,10 @@ export interface GhostOauthClientConfig {
   /**
    * 可选:XDT server token broker 的 provider slug(如 'jira')。声明后
    * code 换 token 与 refresh 不直连 tokenUrl,改经注入的 broker 调用器
-   * (client secret 在服务端,不随包分发)。仅第一方官方意识可用,门控在
-   * 运行时接线层。broker 模式兼容 PKCE(pkce 缺省开):verifier 经 broker
+   * (client secret 在服务端,不随包分发)。静态官方前缀照旧放行；其余资格由装入
+   * 来源与当前组织事实共同判定。校验层保持纯函数不感知装入语境，门控在运行时
+   * 接线层。broker 模式兼容
+   * PKCE(pkce 缺省开):verifier 经 broker
    * exchange 透传到服务端,由 provider 决定是否消费(feishu 要、jira/slack
    * 显式声明 pkce:false)。
    */
@@ -96,8 +98,8 @@ export interface GhostOauthClientConfig {
    */
   callbackPath?: string;
   /**
-   * 可选:该插件 manifest 的 network.hosts 白名单(装入确认框展示、用户同意
-   * 过的域名面;含最左通配)。跨源 code 投递的允许来源 = authorizeUrl/tokenUrl
+   * 可选:该插件 manifest 的 network.hosts 白名单(插件详情展示的域名面;
+   * 含最左通配)。跨源 code 投递的允许来源 = authorizeUrl/tokenUrl
    * 的 origin + 本白名单命中的 https origin——xAI 这类「授权端点在 auth.x.ai、
    * consent 页从 accounts.x.ai 投递」的服务商,把投递域声明进 hosts 即可,
    * 不引入白名单之外的新信任面。
@@ -118,8 +120,8 @@ const RESERVED_AUTHORIZE_PARAMS: ReadonlySet<string> = new Set(
 // 把同一机制移植进通用引擎。
 //
 // 通用引擎不能绑死某个服务商:允许来源从该插件声明的 authorizeUrl / tokenUrl 的
-// origin 派生,并叠加 manifest network.hosts 白名单命中的 https origin(装入确认框
-// 展示、用户同意过的域名面)——xAI 这类「授权端点在 auth.x.ai、consent 页从
+// origin 派生,并叠加 manifest network.hosts 白名单命中的 https origin(插件详情
+// 展示的域名面)——xAI 这类「授权端点在 auth.x.ai、consent 页从
 // accounts.x.ai 投递」的服务商,把投递域声明进 hosts 即被覆盖;任意其它网站的
 // 预检拿不到 CORS 头。真实性校验仍靠 state(+PKCE),与 302 回调同一套。
 

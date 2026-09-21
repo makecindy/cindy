@@ -231,6 +231,14 @@ function validateSource(v: unknown): string | null {
   if (v === undefined) return null;
   if (!isPlainObject(v)) return 'task.dispatch.source must be an object when present';
   if (!isNonEmptyString(v.im)) return 'task.dispatch.source.im must be a non-empty string';
+  if (v.xContext !== undefined) {
+    const x = v.xContext;
+    if (!isPlainObject(x) || !isNonEmptyString(x.requesterId) ||
+        typeof x.truncated !== 'boolean' ||
+        (x.requesterName !== undefined && typeof x.requesterName !== 'string')) {
+      return 'task.dispatch.source.xContext must contain requesterId, truncated and optional requesterName';
+    }
+  }
   if (v.channelName !== undefined && !isNullableString(v.channelName)) {
     return 'task.dispatch.source.channelName must be a string or null';
   }
@@ -259,6 +267,11 @@ function validateSource(v: unknown): string | null {
       }
       if (typeof entry.text !== 'string') {
         return `task.dispatch.source.threadContext[${i}].text must be a string`;
+      }
+      if ((entry.messageId !== undefined && !isNonEmptyString(entry.messageId)) ||
+          (entry.authorId !== undefined && !isNonEmptyString(entry.authorId)) ||
+          (entry.replyToMessageId !== undefined && !isNullableNonEmptyString(entry.replyToMessageId))) {
+        return `task.dispatch.source.threadContext[${i}] has invalid message identity`;
       }
     }
   }
@@ -540,6 +553,7 @@ function validateMessageOpResult(p: Record<string, unknown>): string | null {
  * 拒收会丢帧, server 就无从判断)。
  */
 function validateBindStart(p: Record<string, unknown>): string | null {
+  if (p.purpose !== undefined && p.purpose !== 'communications') return 'bind.start.purpose must be communications';
   if (p.email !== undefined && (!isNonEmptyString(p.email) || !p.email.includes('@'))) {
     return 'bind.start.email, when present, must be an email-like string';
   }
@@ -550,6 +564,7 @@ function validateBindStart(p: Record<string, unknown>): string | null {
 }
 
 function validateBindUpdate(p: Record<string, unknown>): string | null {
+  if (p.purpose !== undefined && p.purpose !== 'communications') return 'bind.update.purpose must be communications';
   if (!BIND_UPDATE_STATES.includes(p.state as never)) {
     return `bind.update.state must be one of: ${BIND_UPDATE_STATES.join(', ')}`;
   }
@@ -609,6 +624,12 @@ function validateBindRevoke(p: Record<string, unknown>): string | null {
 
 /** bind.state(multi-team): 绑定全量快照。 */
 function validateBindState(p: Record<string, unknown>): string | null {
+  if (p.communications !== undefined) {
+    if (!Array.isArray(p.communications)) return 'bind.state.communications must be an array';
+    const error = validateBindState({ bindings: p.communications });
+    if (error) return error.replace('bindings', 'communications');
+    if (p.communications.some((row) => typeof row.enabled !== 'boolean')) return 'bind.state.communications.enabled must be boolean';
+  }
   if (!Array.isArray(p.bindings)) return 'bind.state.bindings must be an array';
   for (let i = 0; i < p.bindings.length; i++) {
     const b: unknown = p.bindings[i];
@@ -782,6 +803,27 @@ function validateQueryRequest(p: Record<string, unknown>): string | null {
   if (!QUERY_KINDS.includes(p.kind as never)) {
     return `query.request.kind must be one of: ${QUERY_KINDS.join(', ')}`;
   }
+  if (p.kind === 'session-new') {
+    if (!isPlainObject(p.sessionNew)) {
+      return 'query.request.sessionNew must be an object when kind is session-new';
+    }
+    const request = p.sessionNew;
+    if (!isNonEmptyString(request.previousExternalKey)) {
+      return 'query.request.sessionNew.previousExternalKey must be a non-empty string';
+    }
+    if (!isNonEmptyString(request.externalKey)) {
+      return 'query.request.sessionNew.externalKey must be a non-empty string';
+    }
+    if (request.externalKey === request.previousExternalKey) {
+      return 'query.request.sessionNew.externalKey must differ from previousExternalKey';
+    }
+    if (!isNonEmptyString(request.workspace)) {
+      return 'query.request.sessionNew.workspace must be a non-empty string';
+    }
+    const optErr = validateDispatchOptions(request.options);
+    if (optErr) return optErr;
+    return validateSource(request.source);
+  }
   return null;
 }
 
@@ -881,7 +923,10 @@ function validateQueryResponse(p: Record<string, unknown>): string | null {
     return null;
   }
   if (kind === 'models') return validateAgentModels(p.agents);
-  return validateQuerySessions(p.sessions);
+  if (kind === 'sessions') return validateQuerySessions(p.sessions);
+  return isNonEmptyString(p.sessionId)
+    ? null
+    : 'query.response.sessionId must be a non-empty string when kind is session-new';
 }
 
 function validateTaskCancel(p: Record<string, unknown>): string | null {

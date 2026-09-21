@@ -44,9 +44,9 @@ export function pluginUpdateForInstalledVersion(
  * Whether the market install flow may run against an already-installed Plugin.
  *
  * A pending release is the usual case. The same release is also allowed when the
- * install carries no Host approval: re-installing that exact release is how such
- * an install gets reviewed again, and the flow shows every permission as newly
- * requested. An approved install at the current release has nothing to review.
+ * installation record is incomplete: reinstalling that exact release restores
+ * the Host receipt without adding a capability-confirmation step. A verified
+ * install at the current release has nothing to recover.
  */
 export function marketReviewTargetsInstalledGhost(
   item: Pick<PluginMarketItem, 'installState'> | null | undefined,
@@ -61,10 +61,10 @@ export function marketReviewTargetsInstalledGhost(
 }
 
 /**
- * Where an unapproved install gets reviewed again. Market-owned installs replay
- * the market confirmation; anything else needs the user to point at a `.cindy`
- * package. Both routes end in the same permission confirmation — there is no
- * path that restores an install without one.
+ * Where an unverifiable install is recovered. Market-owned installs redownload
+ * the bound release; anything else needs the user to point at a `.cindy` package.
+ * Both routes revalidate real bytes and restore the installation record without
+ * creating a separate capability authorization flow.
  */
 export function ghostReapprovalRoute(
   item: Pick<PluginMarketItem, 'installState'> | null | undefined,

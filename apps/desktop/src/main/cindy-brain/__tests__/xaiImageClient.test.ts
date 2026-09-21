@@ -25,6 +25,33 @@ function channel(fetchImplementation: typeof fetch, overrides: Record<string, un
 }
 
 describe('xaiImageClient', () => {
+  it('uses the xAI API-key source for Imagine generation', async () => {
+    const doFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 }),
+    );
+    const hasApiKey = vi.fn(() => true);
+    const result = await channel(doFetch, {
+      hasApiKey,
+      getApiKey: () => 'xai-platform-key',
+      hasOAuthLogin: () => false,
+      getCredentialGeneration: () => 0,
+    }).generateImage({ model: 'xai/grok-imagine-image', prompt: '一只猫' });
+
+    expect(result.data[0]?.b64_json).toBe('aW1hZ2U=');
+    expect(hasApiKey).toHaveBeenCalled();
+    expect((doFetch.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBe(
+      'Bearer xai-platform-key',
+    );
+
+    const unavailable = channel(doFetch, {
+      hasApiKey: () => false,
+      hasOAuthLogin: () => false,
+      getCredentialGeneration: () => 0,
+    });
+    expect(unavailable.ready()).toBe(false);
+  });
+
   it('复用 SuperGrok OAuth 调 Imagine generation 并保留原生画幅', async () => {
     const doFetch = vi.fn<typeof fetch>(
       async () =>
@@ -38,7 +65,7 @@ describe('xaiImageClient', () => {
     const result = await channel(doFetch).generateImage({
       model: 'xai/grok-imagine-image',
       prompt: '一只猫',
-      aspectRatio: '3:2',
+      aspectRatio: '3:2', resolution: '1k',
     });
 
     expect(result).toEqual({ data: [{ b64_json: 'aW1hZ2U=' }], output_format: 'jpeg' });
@@ -52,6 +79,15 @@ describe('xaiImageClient', () => {
       resolution: '1k',
       response_format: 'b64_json',
     });
+  });
+
+  it('transmits native 2K resolution and phone ratios without injecting defaults', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [{ b64_json: 'image' }] })));
+    const imageChannel = channel(doFetch);
+    await imageChannel.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p', aspectRatio: '9:19.5', resolution: '2k' });
+    for (const [, init] of doFetch.mock.calls) expect(JSON.parse(String(init?.body))).toMatchObject({ aspect_ratio: '9:19.5', resolution: '2k' });
+    await imageChannel.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' });
+    expect(JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body))).not.toHaveProperty('resolution');
   });
 
   it('直接转发类型发现得到的未来图片模型，不依赖型号名白名单', async () => {
@@ -94,12 +130,14 @@ describe('xaiImageClient', () => {
       model: 'xai/grok-imagine-image-quality',
       prompt: '合成一张图',
       imagePaths: paths,
-      aspectRatio: '2:3',
+      aspectRatio: '9:19.5',
+      resolution: '2k',
     });
 
     const [url, init] = doFetch.mock.calls[0]!;
     expect(String(url)).toBe('https://api.x.ai/v1/images/edits');
     const body = JSON.parse(String(init?.body)) as { images: Array<{ type: string; url: string }> };
+    expect(body).toMatchObject({ aspect_ratio: '9:19.5', resolution: '2k' });
     expect(body.images).toHaveLength(2);
     expect(body.images.every((image) => image.type === 'image_url')).toBe(true);
     expect(body.images.every((image) => image.url.startsWith('data:image/png;base64,'))).toBe(true);

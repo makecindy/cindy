@@ -3,6 +3,7 @@ import {
   projectScheduleEvent,
   type ScheduleEventProjection,
 } from '@cindy/maker-shared/schedule-events';
+import { invalidateScheduleIndexForDevice } from '@/session/scheduleIndex';
 
 export interface RemoteScheduleEventSnapshot {
   lastProjection: ScheduleEventProjection | null;
@@ -11,7 +12,7 @@ export interface RemoteScheduleEventSnapshot {
   sessionIndexVersion: number;
   /**
    * 未读清除类事件(unreadImpact = may-clear-schedule / clear-all,即 read / all-read)
-   * 的专用计数:消费方据此对 schedule-index 节流做 force 穿透(见 scheduleIndex 节流注释)。
+   * 的专用计数:事件先使共享索引失效,消费方据此读取同一轮新索引。
    * 单列一个 version 而不让消费方依赖 lastProjection 引用——后者每个事件都换新,
    * 进 effect deps 会让 fired / deferred 等无关事件也触发昂贵的全量拉取。
    */
@@ -49,6 +50,11 @@ export const remoteScheduleEventStore = {
     const prev = snapshots.get(deviceId) ?? emptySnapshot;
     const clearsUnread = projection.unreadImpact === 'may-clear-schedule'
       || projection.unreadImpact === 'clear-all';
+    // Invalidate once before notifying all screens. Consumer-local force loads
+    // otherwise launch competing scans for the same authoritative event.
+    if (projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread) {
+      invalidateScheduleIndexForDevice(deviceId);
+    }
     snapshots.set(deviceId, {
       lastProjection: projection,
       runsVersion: prev.runsVersion + (projection.refresh.runRefresh.mode === 'none' ? 0 : 1),
@@ -73,6 +79,27 @@ export const remoteScheduleEventStore = {
       deviceId,
       (mirrorInvalidationVersions.get(deviceId) ?? 0) + 1,
     );
+    mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
+    emit();
+  },
+
+  /**
+   * 批量失效:同一波(如 presence 整批离线)只 emit 一次。逐台失效时每台各
+   * notify 一轮,所有挂载屏被同步重渲染 N 次,设备数超过 React 嵌套更新上限
+   * 即致命退出(2026-09-10 Android 冷启动,40/80 台隔离复现)。
+   */
+  invalidateDeviceMirrors(deviceIds: readonly string[]): void {
+    let changed = false;
+    for (const deviceId of deviceIds) {
+      if (!deviceId) continue;
+      snapshots.delete(deviceId);
+      mirrorInvalidationVersions.set(
+        deviceId,
+        (mirrorInvalidationVersions.get(deviceId) ?? 0) + 1,
+      );
+      changed = true;
+    }
+    if (!changed) return;
     mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
     emit();
   },

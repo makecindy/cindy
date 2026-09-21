@@ -2,7 +2,7 @@
 
 import { createElement, useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AppShortcutOverrides } from '../../../../shared/appShortcuts';
 import type { LucideIcon } from 'lucide-react';
 
@@ -15,6 +15,15 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   getSessionDeviceId: () => undefined,
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 
 vi.mock('../plugins', () => ({}));
@@ -43,6 +52,7 @@ import {
   type SidebarVisibilityRequestOptions,
 } from '../lib/sidebarCommands';
 import { _resetStore, closeTab, getBucket, setActiveTab } from '../store';
+import { toast } from '@/lib/toast';
 import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
@@ -304,6 +314,160 @@ describe('RightSidebarShell empty state', () => {
     );
 
     await waitFor(() => expect(setActiveSession).toHaveBeenCalledWith({ sessionId: null }));
+  });
+
+  it('hides a persisted Subagents-only sidebar for non-Pi tasks without deleting the tab', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-subagents', kind: 'subagents', state: null }],
+      activeTabId: 'tab-subagents',
+    });
+
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: false,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(onAllTabsClosed).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+    expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: null });
+  });
+
+  it('keeps a persisted Subagents-only sidebar intact while Pi eligibility is loading', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-subagents', kind: 'subagents', state: null }],
+      activeTabId: 'tab-subagents',
+    });
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    // Unknown eligibility keeps the persisted projection rather than folding to
+    // "unavailable" — otherwise the reconciliation below persists a different
+    // active tab and the restored selection is lost before Pi resolves.
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy());
+    // Nothing may be written back while the projection is provisional.
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: true,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy());
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+    // The restored active marker survived the unknown window untouched.
+    expect(getBucket('s1').activeTabId).toBe('tab-subagents');
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+  });
+
+  it('keeps the restored active Subagents tab when eligibility resolves after a mixed-tab cold load', async () => {
+    // Cold load: the persisted active tab is Subagents and a second, always
+    // eligible tab exists. Folding unknown eligibility into "unavailable" made
+    // the projection pick the file tab and persist it as active, so the user's
+    // restored selection was gone by the time Pi eligibility arrived.
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-subagents', kind: 'subagents', state: null },
+      ],
+      activeTabId: 'tab-subagents',
+    });
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+    expect(getBucket('s1').activeTabId).toBe('tab-subagents');
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: true,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy());
+    expect(getBucket('s1').activeTabId).toBe('tab-subagents');
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+  });
+
+  it('still reconciles the active marker once eligibility resolves to unavailable', async () => {
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-subagents', kind: 'subagents', state: null },
+      ],
+      activeTabId: 'tab-subagents',
+    });
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: false,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: 'tab-files' }),
+    );
+    expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
   });
 
   it('mounts only the active body first, then idle-mounts and keeps the rest alive', async () => {
@@ -1150,5 +1314,120 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     });
     expect(getBucket('s2').tabs).toHaveLength(0);
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe('RightSidebarShell add-tab failure toast', () => {
+  const toastError = vi.mocked(toast.error);
+  let tabsIpc: RightSidebarTabsIpcStub;
+
+  beforeEach(() => {
+    toastError.mockClear();
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
+    _resetSidebarCommandsForTests();
+    rsbBrowserCommandListeners = [];
+    rsbBrowserPopupListeners = [];
+    rsbNativePopupEventListeners = [];
+    rsbNativePopupClaim.mockClear();
+    rsbNativePopupClose.mockClear();
+    eagerSpawnAndReport.mockClear();
+    eagerSpawnAndReport.mockImplementation(async () => undefined);
+    tabsIpc = makeRightSidebarTabsIpc();
+    installElectronApi(tabsIpc);
+  });
+
+  afterEach(() => {
+    _resetSidebarCommandsForTests();
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  function renderShellWithTerminalKind(): void {
+    registerTabKind({
+      kind: 'terminal',
+      menu: {
+        kind: 'terminal',
+        labelKey: 'rightSidebar.tabs.kinds.terminal',
+        icon: (() => null) as unknown as LucideIcon,
+        order: 1,
+        enabled: true,
+      },
+      TabPillTitle: () => createElement('span'),
+      TabBody: () => createElement('div'),
+      defaultState: () => null,
+    });
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+  }
+
+  it.each([
+    ['RIGHT_SIDEBAR_TOO_MANY_TABS', 'ipcError.RIGHT_SIDEBAR_TOO_MANY_TABS'],
+    ['RIGHT_SIDEBAR_STATE_TOO_LARGE', 'ipcError.RIGHT_SIDEBAR_STATE_TOO_LARGE'],
+    ['RIGHT_SIDEBAR_UNKNOWN_KIND', 'ipcError.RIGHT_SIDEBAR_UNKNOWN_KIND'],
+  ])('toasts the %s message when addTab fails', async (code, expectedKey) => {
+    tabsIpc.upsert.mockRejectedValueOnce(new Error(`[${code}] tab rejected`));
+    try {
+      renderShellWithTerminalKind();
+      await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+      const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+        x: 20,
+        y: 20,
+        top: 20,
+        right: 44,
+        bottom: 44,
+        left: 20,
+        width: 24,
+        height: 24,
+        toJSON: () => ({}),
+      });
+      fireEvent.click(addButton);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith(expectedKey));
+    } finally {
+      unregisterTabKind('terminal');
+    }
+  });
+
+  it('falls back to the generic addFailed toast for uncoded errors', async () => {
+    tabsIpc.upsert.mockRejectedValueOnce(new Error('boom'));
+    try {
+      renderShellWithTerminalKind();
+      await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+      const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+        x: 20,
+        y: 20,
+        top: 20,
+        right: 44,
+        bottom: 44,
+        left: 20,
+        width: 24,
+        height: 24,
+        toJSON: () => ({}),
+      });
+      fireEvent.click(addButton);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith('rightSidebar.tabs.addFailed'));
+    } finally {
+      unregisterTabKind('terminal');
+    }
   });
 });

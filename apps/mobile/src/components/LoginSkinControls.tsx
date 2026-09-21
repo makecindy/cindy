@@ -4,6 +4,7 @@ import {
   BackHandler,
   Easing,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
   type TextInputProps,
@@ -23,6 +24,7 @@ import {
   LOGIN_METHOD_ROW,
   LOGIN_SOCIAL,
   LOGIN_SPINNER,
+  LOGIN_SSO_ORG_HISTORY,
   LOGIN_SUBTITLE,
   LOGIN_TEXT_LINK,
   LOGIN_TITLE,
@@ -31,12 +33,14 @@ import {
 } from '@/auth/loginSkinLayout';
 import { parseLegalSegments } from '@/auth/legalText';
 import { Text, TextInput } from '@/components/AppText';
+import { hasNativeLoginButtons, LoginNativeButton } from './LoginNativeButton';
 import { useTheme, useThemedStyles } from '@/theme';
 import { fontWeight, loginSizes, radius, type ThemeColors } from '@/theme/tokens';
 
 /**
- * LoginSkinControls —— 移动端登录皮肤组件库(figma-component-spec §4 RN 重建,
- * PR4a Step 5 WHAT2;与桌面 LoginControls.tsx 同参数源对齐)。
+ * LoginSkinControls —— 登录布局与跨平台入口。iOS 按钮交给 LoginNativeButton，
+ * 共用应用的原生玻璃样式、SwiftUI 点击反馈与 ProgressView；以下手绘态系仅为
+ * 非 iOS 回退。输入框、协议勾选与内联法律链接仍沿用 RN 实现。
  *
  * 态系(design.md §2,移动无 hover):
  *  - pressed = 叠遮罩不改布局:主钮/圆钮亮色叠黑 50% / 暗色叠黑 10%(figma
@@ -269,6 +273,10 @@ function ConsentDialogButton({
   const B = LOGIN_CONSENT_DIALOG.button;
   const [pressed, setPressed] = useState(false);
   const primary = kind === 'primary';
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    testID={testID} variant={primary ? 'primary' : 'secondary'}
+    width={B.width} height={B.height} fontSize={B.font}
+    style={{ position: 'absolute', left: x, top: B.y }} />;
   return (
     <Pressable
       accessibilityRole="button"
@@ -501,6 +509,8 @@ export function LoginSkinInput({
   center,
   top = LOGIN_CONTROL.inputY,
   testID,
+  onFocus: onInputFocus,
+  onBlur: onInputBlur,
   ...inputProps
 }: {
   value: string;
@@ -525,9 +535,15 @@ export function LoginSkinInput({
     <TextInput
       {...inputProps}
       editable={editable}
-      onBlur={() => setFocused(false)}
+      onBlur={(event) => {
+        setFocused(false);
+        onInputBlur?.(event);
+      }}
       onChangeText={onChangeText}
-      onFocus={() => setFocused(true)}
+      onFocus={(event) => {
+        setFocused(true);
+        onInputFocus?.(event);
+      }}
       placeholder={placeholder}
       placeholderTextColor={colors.login.controlPlaceholder}
       style={[
@@ -549,6 +565,83 @@ export function LoginSkinInput({
       testID={testID}
       value={value}
     />
+  );
+}
+
+/** Visual-only recent organization menu used by the SSO identifier field. */
+export function LoginSsoOrgHistoryList({
+  entries,
+  value,
+  onSelect,
+}: {
+  entries: readonly string[];
+  value: string;
+  onSelect: (entry: string) => void;
+}) {
+  const { colors } = useTheme();
+  const selectedKey = value.trim().toLowerCase();
+  return (
+    <View
+      accessibilityRole="menu"
+      style={{
+        backgroundColor: colors.login.panelBg,
+        borderColor: colors.login.controlBorder,
+        borderRadius: LOGIN_SSO_ORG_HISTORY.radius,
+        borderWidth: 1,
+        left: LOGIN_SSO_ORG_HISTORY.x,
+        maxHeight: LOGIN_SSO_ORG_HISTORY.maxHeight,
+        overflow: 'hidden',
+        position: 'absolute',
+        top: LOGIN_SSO_ORG_HISTORY.y,
+        width: LOGIN_SSO_ORG_HISTORY.width,
+        zIndex: 4,
+      }}
+      testID="login.ssoOrgHistoryList"
+    >
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {entries.map((entry, index) => {
+          const selected = entry.toLowerCase() === selectedKey;
+          if (hasNativeLoginButtons) return <LoginNativeButton key={entry.toLowerCase()}
+            label={entry} onPress={() => onSelect(entry)} selected={selected} variant="text"
+            width={LOGIN_SSO_ORG_HISTORY.width} height={LOGIN_SSO_ORG_HISTORY.rowMinHeight}
+            fontSize={LOGIN_SSO_ORG_HISTORY.font} testID={`login.ssoOrgHistoryOption.${index}`} />;
+          return (
+            <Pressable
+              accessibilityRole="menuitem"
+              accessibilityState={{ selected }}
+              key={entry.toLowerCase()}
+              onPress={() => onSelect(entry)}
+              style={({ pressed }) => ({
+                backgroundColor:
+                  selected || pressed
+                    ? colors.login.actionControlBg
+                    : 'transparent',
+                borderRadius: LOGIN_SSO_ORG_HISTORY.rowRadius,
+                justifyContent: 'center',
+                minHeight: LOGIN_SSO_ORG_HISTORY.rowMinHeight,
+                paddingHorizontal: LOGIN_SSO_ORG_HISTORY.paddingX,
+                paddingVertical: LOGIN_SSO_ORG_HISTORY.paddingY,
+              })}
+              testID={`login.ssoOrgHistoryOption.${index}`}
+            >
+              <Text
+                style={{
+                  color: colors.login.controlText,
+                  fontSize: LOGIN_SSO_ORG_HISTORY.font,
+                  fontWeight: fontWeight.medium,
+                  lineHeight: LOGIN_SSO_ORG_HISTORY.lineHeight,
+                }}
+              >
+                {entry}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -698,6 +791,10 @@ export function LoginPrimaryButton({
   const inert = disabled || busy;
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={disabled} busy={busy} testID={testID} variant="primary"
+    width={LOGIN_CONTROL.width} height={LOGIN_CONTROL.height} fontSize={LOGIN_CONTROL.font}
+    style={{ position: 'absolute', left: LOGIN_CONTROL.x, top }} />;
   return (
     <Pressable
       accessibilityRole="button"
@@ -802,6 +899,7 @@ export function LoginSocialButton({
    * 圆钮无 disabled 视觉态(§10 拍板 2026-07-21 移除 loading/disabled 态),视觉/交互态不变;
    * 交互 guard 由调用方 onPress 闭包兜(login.tsx SC-SOC-7:`if (disabled) return`),
    * 与本组件对称的桌面 LoginSocialButton `aria-disabled` 语义一致。
+   * iOS 原生路径同时禁用 Button，阻止飞行中的重复激活，保留品牌图标。
    */
   busy?: boolean;
   /** 'apple' = ADR 官方配色圆钮(纯黑/白底 appleCircleBg、无描边 borderWidth 0);
@@ -812,6 +910,10 @@ export function LoginSocialButton({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const isApple = variant === 'apple';
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={busy} testID={testID} variant="circle"
+    width={LOGIN_SOCIAL.size} height={LOGIN_SOCIAL.size} fontSize={LOGIN_CONTROL.font}
+    artworkSize={LOGIN_SOCIAL.icon}>{children}</LoginNativeButton>;
   return (
     <Pressable
       accessibilityLabel={label}
@@ -859,6 +961,14 @@ export function LoginBackButton({
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={disabled} testID={testID} width={LOGIN_BACK.size} height={LOGIN_BACK.size}
+    fontSize={LOGIN_BACK.icon} artworkSize={LOGIN_BACK.icon}
+    style={{ position: 'absolute', left: LOGIN_BACK.x, top: LOGIN_BACK.y, zIndex: 2 }}>
+    <Svg width={LOGIN_BACK.icon} height={LOGIN_BACK.icon} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <Path d="M14.5 5.5 8 12l6.5 6.5" stroke={colors.textPrimary} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  </LoginNativeButton>;
   return (
     <Pressable
       accessibilityLabel={label}
@@ -947,6 +1057,14 @@ export function LoginMethodRow({
   accessibilityLabel?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  if (hasNativeLoginButtons) return <LoginNativeButton label={title} subtitle={subtitle}
+    accessibilityLabel={accessibilityLabel} showLabel artworkSize={LOGIN_METHOD_ROW.leftIcon.size}
+    trailingArtwork={<ShareIcon />}
+    onPress={onPress} disabled={disabled} testID={testID}
+    width={LOGIN_METHOD_ROW.width} height={LOGIN_METHOD_ROW.height} fontSize={LOGIN_METHOD_ROW.titleFont}
+    style={{ position: 'absolute', left: LOGIN_METHOD_ROW.x, top }}>
+    {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
+  </LoginNativeButton>;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel ?? title}
@@ -1088,16 +1206,45 @@ export function LoginResendCountdown({
     );
   }
   return (
+    <LoginTextAction
+      disabled={disabled}
+      label={resendLabel}
+      onPress={onResend}
+      testID={testID}
+    />
+  );
+}
+
+/** 登录面板内的次要文字动作，与验证码重发共用同一定位和视觉。 */
+export function LoginTextAction({
+  disabled,
+  label,
+  onPress,
+  testID,
+  top,
+}: {
+  disabled?: boolean;
+  label: string;
+  onPress: () => void;
+  testID?: string;
+  top?: number;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={disabled} testID={testID} variant="text"
+    width={LOGIN_TEXT_LINK.width} height={LOGIN_TEXT_LINK.height} fontSize={LOGIN_TEXT_LINK.font}
+    style={{ position: 'absolute', left: LOGIN_TEXT_LINK.x, top: top ?? LOGIN_TEXT_LINK.y }} />;
+  return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ disabled }}
       disabled={disabled}
-      onPress={onResend}
-      style={styles.textLinkSlotBox}
+      onPress={onPress}
+      style={[styles.textLinkSlotBox, top != null && { top }]}
       testID={testID}
     >
       <Text numberOfLines={1} style={styles.resendLinkText}>
-        {resendLabel}
+        {label}
       </Text>
     </Pressable>
   );

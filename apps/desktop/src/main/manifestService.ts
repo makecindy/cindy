@@ -19,9 +19,11 @@ import * as canaryFlagStore from './canaryFlagStore';
 
 import { resolveUpdateChannel, type UpdateChannel } from '@cindy/maker-shared/update-channel';
 
+import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { createLogger } from './logger';
 import { getClientEndpoint } from './clientEndpointsService';
 import { isBetaChannelEnabled } from './updateChannelStore';
+import { parseAppUpdateVersion } from './updateVersionPolicy';
 
 const log = createLogger('manifestService');
 
@@ -90,6 +92,7 @@ export interface Manifest {
   /** Linux manifests omit agent assets; packaged Linux uses its official runtime fallback. */
   claudeCode?: ClaudeCodeManifest;
   codex?: CodexManifest;
+  codexPackage?: CodexManifest;
   ripgrep?: RipgrepManifest;
   pi?: PiManifest;
 }
@@ -277,10 +280,29 @@ export function clearCachedManifest(): void {
  * 「manifest 之后才判 isInstalled」顺序)——所以「能不能开」必须提前探明,
  * 而不是等用户重启后才发现坏了。
  *
- * HTTP 200 之后还要能解析出 app.version。截断 JSON / 错误页不能当成渠道可用。
+ * HTTP 200 之后还要能解析出 app.version；Linux 还必须带完整可信的 .deb 元数据。
+ * 截断 JSON / 错误页 / 不完整安装清单都不能当成渠道可用。
  * 不写 cache、不改当前发布通道。dev 不联网,直接返回 true。
  */
+function isUsableBetaManifest(manifest: Manifest): boolean {
+  if (!parseAppUpdateVersion(manifest.app?.version)) return false;
+  if (process.platform !== 'linux') return true;
+
+  const installer = manifest.app.installer;
+  return Boolean(
+    installer &&
+      typeof installer.file === 'string' &&
+      installer.file.endsWith('.deb') &&
+      typeof installer.sha256 === 'string' &&
+      /^[a-f0-9]{64}$/i.test(installer.sha256) &&
+      typeof installer.size === 'number' &&
+      Number.isFinite(installer.size) &&
+      installer.size > 0,
+  );
+}
+
 export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
+  if (!supportsBetaUpdateChannel(process.platform, process.arch)) return Promise.resolve(false);
   if (isDev()) return Promise.resolve(true);
   const url = `${getBaseUrl()}/manifest-${getPlatformKey()}-beta.json?t=${Date.now()}`;
   return new Promise<boolean>((resolve) => {
@@ -310,7 +332,7 @@ export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
         response.on('end', () => {
           try {
             const json = JSON.parse(body) as Manifest;
-            finish(typeof json.app?.version === 'string' && json.app.version.length > 0);
+            finish(isUsableBetaManifest(json));
           } catch {
             finish(false);
           }

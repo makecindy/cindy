@@ -1390,10 +1390,15 @@ pnpm --filter mobile test
 pnpm --filter mobile test:smoke
 pnpm --filter mobile test:web-smoke
 pnpm --filter @cindy/device-link test
-pnpm --filter server test -- deviceLinkClientRelayE2E
+pnpm test:device-link
 ```
 
 ### 12.2 本地三端集成测试
+
+> 拆仓后的现状：本仓可独立运行的连接恢复门禁为 `pnpm test:device-link`，
+> 使用正式客户端与 loopback WebSocket contract fixture。以下三端编排是历史方案与
+> 实机验收目标，依赖旧 server/mock login 的入口尚未适配独立服务端，不属于已验证的
+> 当前门禁。独立 relay 测试环境的要求见 [Device Link 测试说明](../../../packages/device-link/TESTING.md)。
 
 测试进程:
 
@@ -1442,7 +1447,7 @@ pnpm --filter server test -- deviceLinkClientRelayE2E
 - 已新增 `fork_rewind.yaml`,覆盖发送一条消息后执行 rewind preview/confirm,再 fork 会话并进入 forked session。
 - 已新增 `automations.yaml`,覆盖进入远程自动化页、Run now、pause/resume、打开自动化 run 对应会话。
 - 已新增 `automations_create_edit.yaml`,覆盖远程自动化页里的 template gallery 和 create/edit 基础表单锚点。
-- 已新增 `pnpm --filter mobile test:e2e:reconnect:local`,用真实本地 device-link relay 建立 mock host/controller 两条 WS,断开 controller 后让 host 发送离线 push,再重连并验证通过 host-authoritative message reload 补回丢失窗口。
+- `pnpm --filter mobile test:e2e:reconnect:local` 现与根 `pnpm test:device-link` 共用正式客户端的真实 WebSocket 集成套件，不再依赖拆仓前的 server/dev-login。默认使用本仓 contract fixture；独立测试 relay 的显式互操作入口与覆盖边界见 [Device Link 测试说明](../../../packages/device-link/TESTING.md)。
 
 优先用 Maestro 做第一版黑盒流程,原因是脚本短、可读、适合 AI 维护。Detox 留给后面需要深层 native assertion 时再引入。
 
@@ -1560,3 +1565,33 @@ V2 完成标准:
 
 - 手机完整支持协作模式 / Orca。
 - Lead / Worker 切换、创建 worker、switch focus、archive worker、stop collaboration 全部可用。
+
+## HTML 文件预览
+
+消息里的 `xdt-file` 链接与文件浏览共用 `/files/preview/[sessionId]`。HTML 渲染态通过
+`mobileHtmlPreview.ts` 按网页实际请求读取资源，再由 `modules/cindy-html-preview`
+在手机的 `127.0.0.1` 随机端口提供只读 HTTP，交给应用内 WebView。源码查看保持原有文本
+读取和大小限制，不影响完整网页的渲染。
+
+- 新原生接口 `startOnDemand` / `resolveRequest` 通过事件请求单个资源；打开时不枚举目录，
+  不检查目录文件数和总大小。资源复用既有内联、WebRTC 直连/TURN、OSS 回退及 SSH 读取链路。
+  文件通道忙时排队；预览不另设 100 MiB 限制，文件传输上限提高至 2 GiB。完整接收后响应，
+  不是 HTTP Range 流式传输。临时传输总预算为 4 GiB，接收前预留消费者副本与 256 MiB 磁盘余量。
+  接收命令改为 60 秒无落盘进展超时；原生请求含排队的总等待窗口为两小时。
+- 单个资源失败不关闭整个页面。各次请求可能看到不同时间的源文件，不再承诺目录一致快照。
+  资源限于入口父目录，拒绝隐藏路径，并通过源端 realpath 校验阻止符号链接越界。
+- 保留旧 `start(files)` 原生接口兼容；旧安装包继续使用原来的目录快照及 2000 项、100 MiB、
+  32 层限制。按需加载必须配合新原生安装包。
+- 每个 HTML 都先校验 UTF-8 并添加现有 CSP/设备能力守卫；脚本、样式、图片和 fetch
+  可访问同源资源，顶层导航只允许该目录内的 HTML。签名下载地址和账号凭证不进入网页。
+  既有 WebRTC/子 realm 边界仍见 `htmlPreviewCsp.ts`，不能宣称完整隔离或绝对零出网。
+- 离开预览、切到源码、进入后台时取消下载并停止服务；回到前台重新打开预览。
+  临时文件正常关闭时删除，进程异常退出的残留在下次预览时回收。
+- 手机端只承诺应用内预览；切到系统浏览器会使 App 进入后台，不承诺外置浏览器可持续访问。
+  不运行项目的后端、开发服务器或动态构建，也不自动访问快照目录外的资源。
+- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；合并仍遵守
+  `docs/dev-rules/mobile-development.md` 的冷更确认门。服务端不需要新增接口。
+
+定向行为测试为 `htmlDirectorySnapshot.test.ts`、`mobileHtmlPreview.test.ts` 及既有预览/链接
+测试；macOS 可运行 `node apps/mobile/scripts/test-html-preview-native.mjs --on-demand` 验证生产 Swift
+监听器的真实 HTTP、路径/来源限制和关闭行为。该测试不替代手机 WebView 与 Android 实测。

@@ -60,9 +60,13 @@ export interface AgentSkillCommand {
   kind: 'agent-skill';
   name: string;
   description?: string;
+  /** Main-attested Cindy bundle identity; never inferred from user-authored metadata. */
+  builtIn?: boolean;
   /** Whether the skill came from a user-global or project-local directory. */
   source: SlashCommandSource;
   path?: string;
+  /** Package resources need their owning package's management surface. */
+  origin?: 'package';
   scope?: 'global' | 'project' | 'user' | 'repo' | 'system' | 'admin';
   enabled?: boolean;
   /** Pi discovery/runtime state; omitted for engines without a runtime truth layer. */
@@ -76,9 +80,20 @@ export type UnifiedCommand = DesktopCommandMeta | AgentBuiltinCommand | AgentSki
 export interface ListAgentSkillsOptions {
   /** Omit to list only agent-global skills without a project scope. */
   workingDir?: string;
+  /**
+   * SSH workspace owner. When present, discovery must run against this host's
+   * native runtime/filesystem and must never fall back to the local machine.
+   */
+  remoteHostId?: string;
   forceReload?: boolean;
   /** Host-owned Pi boundary; renderer input must never set this directly. */
   includeManagedPiPackages?: boolean;
+}
+
+/** Host-only runtime discovery inputs used for security decisions about the live task. */
+export interface ListRuntimeSkillsOptions extends ListAgentSkillsOptions {
+  /** Exact config directory passed to the local runtime process, when it differs from its default. */
+  runtimeConfigDir?: string;
 }
 
 export interface ListAgentSkillsResult {

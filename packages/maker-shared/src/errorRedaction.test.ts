@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   extractNonSecretErrorSignals,
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isCindyGatewayProxyTokenInvalidError,
+  isGatewayProxyTokenInvalidError,
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
 } from './errorRedaction.js';
@@ -206,6 +209,37 @@ describe('redactSensitiveText', () => {
     expect(redactSensitiveText(output)).toBe(output);
     expect(redactSensitiveText(redactSensitiveText('access_token=secret key=opaque-secret'))).toBe(
       'access_token=[REDACTED] key=[REDACTED]',
+    );
+  });
+});
+
+describe('isGatewayProxyTokenInvalidError', () => {
+  it('matches LiteLLM invalid proxy-token 401 copy after redaction', () => {
+    expect(
+      isGatewayProxyTokenInvalidError(
+        'Failed to authenticate. API Error: 401 Authentication Error, Invalid proxy server token passed. Received API Key = [REDACTED], Key Hash (Token) =[REDACTED] Unable to find token in cache or `LiteLLM_VerificationTokenTable`',
+      ),
+    ).toBe(true);
+    expect(isGatewayProxyTokenInvalidError('Invalid proxy server token passed')).toBe(true);
+    expect(GATEWAY_PROXY_TOKEN_INVALID_REASON).toBe('gateway-proxy-token-invalid');
+  });
+
+  it('does not treat generic 401 or Claude.ai auth failures as gateway token loss', () => {
+    expect(isGatewayProxyTokenInvalidError('401 Unauthorized')).toBe(false);
+    expect(isGatewayProxyTokenInvalidError('authentication_failed')).toBe(false);
+    expect(isGatewayProxyTokenInvalidError('Missing bearer')).toBe(false);
+    expect(isGatewayProxyTokenInvalidError('')).toBe(false);
+  });
+
+  it('scopes Cindy gateway classification away from custom LiteLLM providers', () => {
+    const message = 'Invalid proxy server token; LiteLLM_VerificationTokenTable';
+    expect(
+      isCindyGatewayProxyTokenInvalidError({ reason: GATEWAY_PROXY_TOKEN_INVALID_REASON }),
+    ).toBe(true);
+    expect(isCindyGatewayProxyTokenInvalidError({ message, providerId: null })).toBe(true);
+    expect(isCindyGatewayProxyTokenInvalidError({ message, providerId: 'xd' })).toBe(true);
+    expect(isCindyGatewayProxyTokenInvalidError({ message, providerId: 'custom-litellm' })).toBe(
+      false,
     );
   });
 });

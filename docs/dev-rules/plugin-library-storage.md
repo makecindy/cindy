@@ -1,15 +1,15 @@
-# 插件持久 Library(library 槽)
+# 插件持久 Library 能力
 
 > **状态**：权威开发规则（authoritative）
-> **读取时机**：新增或修改 library 槽（持久作品库）、binding / 目录选择、迁移、
-> 回收站删除、SQLite 语句门、面板 `/library/` 投影，或任何触碰
-> `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
+> **读取时机**：新增或修改 library 能力（持久作品库）、binding / 目录选择、迁移、
+> 回收站删除、SQLite 语句门、面板 `/library/` 投影、会话级只读 extraDirs 注入，
+> 或任何触碰 `libraries/` / `libraries-binding.json` / `libraries-trash/` 落盘布局的改动之前
 
-library 槽给插件一个**用户作品级**的持久存储区，与 fs 槽私有储物柜
+`library: true` 给插件一个**用户作品级**的持久存储区，与 `fs: true` 私有储物柜
 （256MiB/2000 文件配额、卸载即回收）是两个语义：不受配额约束（只受磁盘保留
 水位与软水位约束）、**卸载插件不删数据**、删除必须走设置页独立确认。完整产品
-语义与裁决记录见方案文档（2026-08-20 定案：装入时可选目录 + 随时安全迁移并入
-首期）。
+语义与裁决记录见方案文档。安装直接使用系统管理的默认位置，不增加安装确认步骤；
+用户可在插件详情页随时安全迁移。
 
 ## 事实来源
 
@@ -75,15 +75,83 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
    `/media/` 长缓存刻意不同）。
 10. **known limitation（如实告知，不假装覆盖）**：Windows 上 binding 的文件
     identity（st_ino）多为 0，「同路径删后重建」检不出（POSIX 可检出）；映射
-    网络盘符检测需要 Win32 API，v1 只拒 UNC 路径；市场装入确认框的「存储位置」
-    行尚未接入（装后可从设置页迁移）。
+    网络盘符检测需要 Win32 API，v1 只拒 UNC 路径。
+11. **Agent 只读 extraDirs（会话级，PR0）**：当前 Mivo 会话且 library 可用时，宿主把
+    library 根 realpath 静默写入该会话只读 extraDirs。只读、不弹 picker / 确认卡、
+    不改权限档。library 专用槽不占用户 EXTRA_DIRS_MAX=10。回执 / 握手 / probe 禁绝对
+    路径，相对键 `library:assets/<2>/<hash>/blob.<ext>`。路径不跨 turn 缓存。
+    confirmed 只认宿主 `librarySlot.write` / `writeCommit` ACK 的 64-hex sha256。
+    成功写入回执兼容可选 `libraryGeneration` / `libraryIdentity`：必须在 await 之前从
+    真正执行写入的 session 或 `writeBegin` 按 streamId 捕获的 epoch 带出，禁止事后拼当前
+    全局身份。`libraryIdentity` 是 64-hex opaque 值，须区分 owner / 迁根 / 自定义 A→B→A，且不得
+    出现 owner 原值或绝对根。二元组只表示绑定身份：默认 D→自定义 C→默认 D、owner X→Y→X
+    回到同一默认 binding 时两端可以复用同一对字段，这不证明当前激活有效。激活有效期由插件
+    用握手切换窗口判定（见到不同二元组或 unavailable 后，旧回执即使稍后与当前握手再次相等
+    也不得 confirmed）。宿主不为此新增字段或持久单调计数。旧插件忽略新可选字段仍可用；缺
+    字段旧回执由 PR4 安全恢复，禁止因此要求重装或重授权。仓内无 `libraryConfirmed.ts`（不
+    存在），不得发明该文件。
+    宿主用当前已授权 extraDir 绝对根解析 `library:assets/<2>/<hash>/blob.<ext>`；插件
+    open/status/MCP 回执不得带绝对根。Host-only `LIBRARY_READ_ROOT` 元数据随任务 extraDirs
+    保留专用槽身份，不能从普通用户目录猜根或由 Renderer JSON 提供。三 harness 只向当前
+    任务投影实际授权根；Pi 当轮在工具结果后从权限快照补映射。解析实现位于 maker-core 的
+    `agents/shared/library-native-read.ts`，由生产发送上下文消费；native 工具仍负责实际读取
+    与权限执行，映射本身不授予权限。bootstrap 校验及收窄持久记录仍保留专用槽和 10 个用户目录。
+    Claude 中途授权下一 turn resume+fork 生效；Codex
+    低于 0.144.6 不得假授权；Pi 当轮热更新权限文件。
+12. **切根像素与限额**：正本文件名是 `blob`（路径 `assets/<2>/<hash>/blob.<ext>`），
+    不是 `<hash>.<ext>`。同目录 sidecar `meta.json` / `preview.webp` 禁止当像素。
+    16MiB 是 library 分块阈值（更大走 writeBegin），cindy-media 单件 50MiB、配额
+    1GiB。library 软水位 8GiB + 磁盘保留 1GiB + 5 万文件保险丝。
+13. **只读操作能力合同（capabilities）**：`{op:'capabilities'}` 在资格审与 op 合法性
+    校验之后、会话创建之前返回，不捕获 owner、不解析库根、不 open vault、不弹窗、
+    不碰剪贴板、不泄漏 owner 或绝对库路径。成功形态固定为
+    `{ok:true, op:'capabilities', capabilities:{version:1, operations:['clipboardWrite','saveAs']}}`。
+    `operations` 只表达**实现支持**，不等于此刻有窗口、已授权或库可用。
+    消费规则：仅 `version===1` 且 `operations` 为字符串数组才有效；额外字段忽略，未知
+    operation 忽略，已知项保留；有效 v1 清单缺少某项才是 unsupported；缺字段、错类型、
+    `version` 非 1、或旧宿主 unknown-op 一律 unknown。旧插件无需重装或重授权。
+    实际操作失败仍用旧 `errorCode`，另加稳定 `reason`：无 handler=`IMPLEMENTATION_UNSUPPORTED`，
+    无窗口=`NO_VISIBLE_WINDOW`，权限=`PERMISSION_DENIED`，库不可用=`LIBRARY_UNAVAILABLE`
+    （含 vault 透传的 open/status 失败），非法请求=`INVALID_REQUEST`（含非法/越界
+    `dbPath` 与未知 op），取消=`CANCELLED`。成功 `open`/`status` 的 `state:'unavailable'`
+    仍用结果体 `reason`（如 `disk-missing`），不是失败 `reason` 枚举。查询/传输层本地分类
+    `TIMEOUT` / `TRANSPORT_ERROR`。插件不得解析人类 `message` 猜类别。插件基座改动按仓库白名单人工
+    Approve 才能合并。合同示例：
+
+    ```ts
+    // 旧宿主 unknown-op：没有 capabilities，不得当成全部支持或版本过旧
+    classifyGhostLibraryOperationSupport(
+      { ok: false, errorCode: 'PATH_INVALID', message: 'op 必须是 open / status / …' },
+      'clipboardWrite',
+    ) === 'unknown'
+
+    // 新版支持：只说明实现存在，不等于此刻有窗口 / 已授权 / 库可用
+    classifyGhostLibraryOperationSupport(
+      { ok: true, op: 'capabilities', capabilities: { version: 1, operations: ['clipboardWrite', 'saveAs'] } },
+      'clipboardWrite',
+    ) === 'supported'
+
+    // 新版无窗口：旧 errorCode 仍是 UNSUPPORTED，reason 才区分窗口缺失
+    { ok: false, errorCode: 'UNSUPPORTED', reason: 'NO_VISIBLE_WINDOW' }
+
+    // 新版拒权：能力查询与实际操作都不得越过资格审
+    { ok: false, errorCode: 'NOT_DECLARED', reason: 'PERMISSION_DENIED' }
+
+    // 错类型：数组内混入非字符串，整体 unknown，不得把其中合法项当有效 v1
+    classifyGhostLibraryOperationSupport(
+      { ok: true, op: 'capabilities', capabilities: { version: 1, operations: ['saveAs', 123] } },
+      'saveAs',
+    ) === 'unknown'
+    ```
 
 ## Review 清单
 
-1. 路径/SQL 是否仍只经白名单与相对键？有没有新的绝对路径出口？
+1. 路径/SQL 是否仍只经白名单与相对键？有没有新的绝对路径出口？（saveAs 成功 path 必须是库内相对键，不得把用户另存目标送进沙箱；extraDirs 握手/回执/probe 同禁）
 2. 失败路径是否保持「不可用 ≠ 空」「任一步失败原位原样」？
 3. 生命周期挂点（uninstall/setEnabled/owner 边界）是否补了对应的 dispose？
 4. i18n 五语与中文标点门禁、FORGE_GUIDE §4.10.1 是否同步？
+5. 会话级 extraDirs 是否只读、静默、专用槽不占 EXTRA_DIRS_MAX=10？confirmed 是否只认 writeCommit ACK，有没有发明 `libraryConfirmed.ts`？
+6. capabilities 是否在会话创建前返回？是否把 PERMISSION / UNAVAILABLE / 无窗口误判成旧宿主？失败 `reason` 是否稳定、旧 `errorCode` 是否保留？
 
 最小验证入口：
 

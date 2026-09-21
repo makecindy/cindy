@@ -20,26 +20,57 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { isCindyGatewayProxyTokenInvalidError } from '@cindy/maker-shared/error-redaction';
 import {
   isStreamInterruptedErrorMessage,
   unwrapProviderErrorDisplay,
 } from '@/utils/streamInterruptError';
 import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
 import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { getToolLoopI18nKey } from './toolLoopI18n';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
-export function ErrorMessageCard({ message, reason }: { message: string; reason?: string }) {
+export function ErrorMessageCard({
+  message,
+  reason,
+  providerId,
+  toolLoop,
+}: {
+  message: string;
+  reason?: string;
+  providerId?: string;
+  /** Structured details for a tool-loop terminal error (optional for legacy rows). */
+  toolLoop?: ToolLoopErrorDetails;
+}) {
   const { t } = useTranslation();
   const [showRaw, setShowRaw] = useState(false);
   const decoded = decodeRemoteErrorMessage(message);
   const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
+  const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
+    reason,
+    message: decoded,
+    providerId: providerId ?? null,
+  });
   const unwrapped = unwrapProviderErrorDisplay(decoded);
+  const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
+  const localizedReasonError =
+    toolLoopI18nKey && toolLoop
+      ? t(toolLoopI18nKey, { count: toolLoop.count })
+      : i18nKey
+        ? t(i18nKey)
+        : undefined;
   const text = isStreamInterrupted
     ? t('chat.errorBanner.streamInterruptedNoRetry')
-    : i18nKey
-      ? t(i18nKey)
-      : unwrapped;
-  const showRawToggle = isStreamInterrupted || (!i18nKey && unwrapped !== decoded);
+    : isGatewayProxyTokenInvalid
+      ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
+      : localizedReasonError
+        ? localizedReasonError
+        : unwrapped;
+  const showRawToggle =
+    isStreamInterrupted ||
+    isGatewayProxyTokenInvalid ||
+    (!i18nKey && unwrapped !== decoded);
 
   useEffect(() => {
     setShowRaw(false);

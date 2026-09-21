@@ -45,6 +45,28 @@ CREATE TABLE embedding_jobs (
   locked_at INTEGER,
   UNIQUE(source, source_id, chunk_index, model_id)
 );
+CREATE TABLE task_tags (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  name_customized INTEGER NOT NULL DEFAULT 0,
+  color TEXT NOT NULL,
+  favorite_order INTEGER,
+  sort_order INTEGER,
+  revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE session_task_tags (
+  session_id TEXT NOT NULL,
+  tag_id TEXT NOT NULL,
+  PRIMARY KEY (session_id, tag_id)
+);
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  status TEXT,
+  working_dir TEXT,
+  worktree_path TEXT,
+  source TEXT NOT NULL DEFAULT 'desktop',
+  remote_host_id TEXT
+);
 `;
 
 describe('DbClient in-proc fallback', () => {
@@ -102,6 +124,18 @@ describe('DbClient in-proc fallback', () => {
         [1],
       ),
     ).resolves.toEqual({ id: 1, name: 'alice' });
+
+    await client.exec(
+      'INSERT INTO sessions (id, status, working_dir, worktree_path) VALUES (?, ?, ?, ?)',
+      ['inproc-session', 'active', userDataDir, path.join(userDataDir, 'worktree')],
+    );
+    await expect(client.readLocalWorktreeReferences?.()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'inproc-session',
+        status: 'active',
+        currentDatabase: true,
+      }),
+    ]);
 
     const sourceId = `inproc-source-${Date.now()}`;
     await expect(

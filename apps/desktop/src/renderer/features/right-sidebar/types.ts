@@ -30,7 +30,9 @@ export type BuiltinTabKindId =
   | 'orca-workers'
   | 'subagents'
   | 'background-tasks'
-  | 'resource-usage';
+  | 'routines'
+  | 'resource-usage'
+  | 'cindy-make';
 export type TabKindId = BuiltinTabKindId | `ghost:${string}`;
 
 /** 一个 tab 运行时实例。`state` 由各 plugin 自管理结构 + 序列化,壳子只搬运。 */

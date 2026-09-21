@@ -66,11 +66,27 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
       ? 'ghostGrant.confirm.descriptionAttachments'
       : pending.lane === 'dir'
         ? 'ghostGrant.confirm.descriptionDir'
-        : pending.lane === 'fs_write'
-          ? 'ghostGrant.confirm.descriptionFsWrite'
-          : pending.lane === 'workspace'
-            ? 'ghostGrant.confirm.descriptionWorkspace'
-            : 'ghostGrant.confirm.descriptionSaveDir';
+        : pending.lane === 'reveal_path'
+          ? 'ghostGrant.confirm.descriptionRevealPath'
+          : pending.lane === 'fs_write'
+            ? 'ghostGrant.confirm.descriptionFsWrite'
+            : pending.lane === 'workspace'
+              ? 'ghostGrant.confirm.descriptionWorkspace'
+              : pending.lane === 'forge_source'
+                ? pending.sourceTool === 'ghost_forge_install'
+                  ? 'ghostGrant.confirm.descriptionForgeInstall'
+                  : pending.sourceTool === 'ghost_forge_scaffold'
+                    ? 'ghostGrant.confirm.descriptionForgeScaffold'
+                    : pending.sourceTool === 'ghost_forge_pack'
+                      ? 'ghostGrant.confirm.descriptionForgePack'
+                      : 'ghostGrant.confirm.descriptionForgeSource'
+                : pending.lane === 'outside_workdir'
+                  ? pending.operation === 'read'
+                    ? 'ghostGrant.confirm.descriptionOutsideRead'
+                    : pending.operation === 'write'
+                      ? 'ghostGrant.confirm.descriptionOutsideWrite'
+                      : 'ghostGrant.confirm.descriptionOutsideWorkdir'
+                  : 'ghostGrant.confirm.descriptionSaveDir';
 
   return (
     <div
@@ -82,7 +98,12 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
-            {t('ghostGrant.confirm.title', { name: pending.ghostName })}
+            {t(
+              pending.lane === 'reveal_path'
+                ? 'ghostGrant.confirm.titleRevealPath'
+                : 'ghostGrant.confirm.title',
+              { name: pending.ghostName },
+            )}
           </p>
           <p className="mt-1 text-12 leading-relaxed text-[var(--status-bar-meta)]">
             {t(descriptionKey)}

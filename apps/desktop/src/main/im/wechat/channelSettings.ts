@@ -38,7 +38,7 @@ export function readWechatChannelSettings(rootPath?: string): Promise<WechatChan
   return store.read(rootPath);
 }
 
-/** 生产装配(im/index.ts): 用户目录探测切到 utility-process 执行边界。 */
+/** 生产装配(im/index.ts): 用户目录探测接入 Main 的共享有界执行器。 */
 export function configureWechatChannelProbeExecutor(executor: ChannelUserDirProbeExecutor): void {
   store.setProbeExecutor(executor);
 }

@@ -20,6 +20,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
+import { Session } from '../../../session.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -204,6 +205,9 @@ async function startRewindableSession(
     autoCompactThresholdPct?: number;
     idleTimeoutMs?: number;
     remoteHostId?: string;
+    model?: string;
+    availableModels?: ModelDescriptor[];
+    resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -215,8 +219,12 @@ async function startRewindableSession(
 
   const firstQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(firstQuery);
+  const remoteStartParams: Array<Record<string, unknown>> = [];
   const remoteCcQueryFactory = options.remoteHostId
-    ? (async () => firstQuery as never)
+    ? (async (opts: { startParams: Record<string, unknown> }) => {
+        remoteStartParams.push(opts.startParams);
+        return firstQuery as never;
+      })
     : undefined;
   const infoCalls: string[] = [];
 
@@ -230,18 +238,19 @@ async function startRewindableSession(
         infoCalls.push(message);
       },
     ),
-    capabilityAdditions: { availableModels: TEST_MODELS },
+    capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
+    resolveModelContextLimit: options.resolveModelContextLimit,
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
-    model: 'claude-opus-4-6',
+    model: options.model ?? 'claude-opus-4-6',
     workingDir,
     permissionMode: 'acceptEdits',
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery, infoCalls };
+  return { agent, handle, firstQuery, infoCalls, remoteStartParams };
 }
 
 afterEach(async () => {
@@ -263,6 +272,75 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('does not relabel an in-flight result with a newly saved budget', async () => {
+    let budget = 1_000;
+    const { handle, firstQuery } = await startRewindableSession({ resolveModelContextLimit: () => budget });
+    try {
+      budget = 32_000;
+      firstQuery.stream.emit({
+        type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 6_000, output_tokens: 10 },
+        modelUsage: { 'claude-opus-4-6': { contextWindow: 1_000_000 } },
+      });
+      await vi.waitFor(() => expect(handle.getUsageSnapshot().contextTokens).toBeGreaterThan(0));
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('requires a history-preserving rebuild when the active route budget changes', async () => {
+    let budget: number | null = 80_000;
+    const { handle } = await startRewindableSession({ autoCompactThresholdPct: 90, resolveModelContextLimit: () => budget });
+    try {
+      expect(sdkMock.query.mock.calls[0]?.[0]?.options?.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('80000');
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      budget = 140_000;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+      budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('passes the selected custom-provider window and compact threshold to spawned Claude Code', async () => {
+    const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+    const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    try {
+      const { handle } = await startRewindableSession({
+        model: 'xai/grok-4.6',
+        autoCompactThresholdPct: 80.4,
+        availableModels: [{
+          id: 'xai/grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 372_000.4,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        }],
+      });
+      await handle.close();
+
+      const env = sdkMock.query.mock.calls[0]?.[0]?.options?.env as
+        | Record<string, string>
+        | undefined;
+      expect(env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+      expect(env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+    } finally {
+      if (originalMaxContextTokens === undefined) {
+        delete process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+      } else {
+        process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = originalMaxContextTokens;
+      }
+      if (originalCompactPctOverride === undefined) {
+        delete process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+      } else {
+        process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = originalCompactPctOverride;
+      }
+    }
+  });
+
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 
@@ -309,6 +387,193 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       firstQuery.setModel.mock.invocationCallOrder[0],
     );
     expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
+  it('rebuilds the local Query env when a live switch crosses the Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'gpt-5.6-sol',
+      availableModels: [
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.setModel?.('claude-fable-5');
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-fable-5[1m]');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to fable' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    expect(firstQuery.close).toHaveBeenCalled();
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.forkSession).toBe(true);
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.resumeSessionAt).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('rebuilds the local Query env when a live switch from Fable to GPT re-enables the cap disable flag', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-gpt' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-gpt');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+
+    await handle.setModel?.('gpt-5.6-sol');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to gpt' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.close();
+  });
+
+  it('does not rebuild the Query when a live switch stays on the same Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-same' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-same');
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    await handle.send({ type: 'user', content: 'same-policy switch' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(1);
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote live switch that would desync the Explore inherit-cap env', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap');
+    });
+
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(firstQuery.setModel).not.toHaveBeenCalled();
+    expect(handle.model).toBe('claude-fable-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote Explore inherit-cap switch even while rewind rebuild is pending', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap-rewind' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap-rewind');
+    });
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(handle.model).toBe('claude-fable-5');
 
     await handle.close();
   });
@@ -685,11 +950,10 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
-  it('skips idle auto-compact on local sessions when host will rebuild context', async () => {
-    const shouldHandoff = vi.fn(() => true);
+  it('injects host auto-compact at 75% even when the model-switch handoff callback would fire', async () => {
     const { handle, firstQuery, infoCalls } = await startRewindableSession({
       autoCompactThresholdPct: 50,
-      shouldHandoffAfterContextAssessment: shouldHandoff,
+      shouldHandoffAfterContextAssessment: () => true,
     });
     void (async () => {
       try {
@@ -714,7 +978,72 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
     await handle.setModel?.('claude-sonnet-5');
     expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
-    expect(shouldHandoff).toHaveBeenCalled();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+      'auto-compact triggered',
+    ]);
+
+    await handle.close();
+  });
+
+  it('injects host auto-compact at the 0.1.57 Grok occupancy that is below a full window', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+    expect(handle.getUsageSnapshot().contextTokens).toBe(437_712);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('does not inject host auto-compact when occupancy is already full', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
     expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
 
     await handle.close();
@@ -752,6 +1081,277 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
       'auto-compact triggered',
     ]);
+
+    await handle.close();
+  });
+
+  it('still injects host auto-compact on a full remote session because rollover is local-only', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+      remoteHostId: 'remote-1',
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('latches rollover when idle host auto-compact returns an empty summary', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: summarization produced empty response',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.getUsageSnapshot().needsRollover).toBe(true);
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    firstQuery.stream.emit({
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { input_tokens: 438_000, output_tokens: 0 } },
+    });
+    await Promise.resolve();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.close();
+  });
+
+  it('retries idle host auto-compact after a transient compact failure', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: 401 unauthorized',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  async function waitForIdleHostAutoCompact(
+    handle: Awaited<ReturnType<typeof startRewindableSession>>['handle'],
+    firstQuery: ReturnType<typeof createFakeQuery>,
+    infoCalls: string[],
+  ): Promise<void> {
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+  }
+
+  it('does not re-inject idle host auto-compact after abort until the next user turn', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.abort();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('does not re-inject idle host auto-compact after the upstream idle watchdog', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+      idleTimeoutMs: 20,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+    await vi.waitFor(() => {
+      expect(firstQuery.interrupt).toHaveBeenCalled();
+    });
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('clears idle host auto-compact fired after requestGracefulStop', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.requestGracefulStop?.();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
 
     await handle.close();
   });
@@ -1231,6 +1831,44 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it.each(['compact-running', 'between-turns', 'user-running'] as const)(
+    'shared stall distinguishes the bridge from user execution: %s', async (phase) => {
+      const { agent, handle, firstQuery } = await startRewindableSession({ autoCompactThresholdPct: 50 });
+      firstQuery.stream.emit({ type: 'stream_event', event: {
+        type: 'message_delta', usage: { input_tokens: 400_000, output_tokens: 0 },
+      } });
+      await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+      await handle.setModel?.('claude-sonnet-5');
+      const query = createFakeQuery();
+      sdkMock.query.mockReturnValue(query);
+      const session = new Session({ id: 'bridge-stall', agentKind: 'claude-code',
+        workDir: '/repo', handle, capabilities: agent.capabilities,
+        logger: createNoopLogger(), turnStallMs: 200 });
+      const events: AgentEvent[] = [];
+      session.onEvent((event) => events.push(event));
+      try {
+        await session.send('execute the original instruction');
+        if (phase !== 'compact-running') {
+          query.stream.emit({ type: 'result', stop_reason: 'end_turn',
+            total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+        }
+        if (phase === 'user-running') {
+          query.stream.emit({ type: 'stream_event', event: { type: 'message_start',
+            message: { id: 'real-user-turn', role: 'assistant', content: [],
+              usage: { input_tokens: 0, output_tokens: 0 } } } });
+        }
+        await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+          type: 'error', data: expect.objectContaining({ reason: phase === 'user-running'
+            ? 'turn_no_event_timeout' : 'bridge_turn_no_event_timeout' }),
+        })), { timeout: 2000 });
+        if (phase !== 'user-running') {
+          expect(query.close).toHaveBeenCalled();
+          expect(query.interrupt).not.toHaveBeenCalled();
+        }
+      } finally { await session.close(); }
+    },
+  );
+
   it('upstream-idle watchdog during bridge closes query and rebuilds from rewind point', async () => {
     // 反馈原型 (Codex review 3535664420 / 3536509277): watchdog 是**直接 push eventQueue**
     // 绕过 filter;若打在 bridge /compact 上,只清 counter + interrupt 仍无法追回 SDK 已
@@ -1264,7 +1902,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
           events.some(
             (e) =>
               e.type === 'error' &&
-              (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout',
+              (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout',
           ),
           'watchdog terminal error must reach eventQueue (not swallowed by bridge filter)',
         ).toBe(true);
@@ -1273,7 +1911,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     );
     await vi.waitFor(() => {
       expect(
-        events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout'),
+        events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout'),
       ).toBe(true);
     });
 
@@ -1348,7 +1986,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
           events.some(
             (e) =>
               e.type === 'error' &&
-              (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout',
+              (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout',
           ),
         ).toBe(true);
       },

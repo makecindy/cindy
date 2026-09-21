@@ -16,6 +16,20 @@ export type ThemeMode = 'light' | 'dark';
 
 /** 随主题切换的颜色 token。light / dark 必须有完全一致的 key 集合。 */
 export interface ThemeColors {
+  taskTagRed: string;
+  taskTagOrange: string;
+  taskTagYellow: string;
+  taskTagGreen: string;
+  taskTagBlue: string;
+  taskTagPurple: string;
+  taskTagGray: string;
+  taskTagPink: string;
+  taskTagCoral: string;
+  taskTagTeal: string;
+  taskTagIndigo: string;
+  taskTagWhite: string;
+  taskTagWhiteCheck: string;
+
   /** 页面 Surface 背景 */
   surface: string;
   /** 抬一层的 Card / 弹窗 / 输入框 */
@@ -89,6 +103,10 @@ export interface ThemeColors {
   brandSplashForeground: string;
   /** App 内品牌 splash 二级文案 */
   brandSplashMuted: string;
+  /** Beta 测试渠道已开启徽标红底(用户指定,跨主题不变) */
+  betaChannelBadgeBackground: string;
+  /** Beta 测试渠道已开启徽标白字(与红底对比度 4.98:1) */
+  betaChannelBadgeForeground: string;
   /** Chip / pill / 选中行填充 */
   surfaceChip: string;
   /** 1px 分隔线 / 边框(桌面 Board) */
@@ -366,6 +384,20 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
  */
 export const lightColors: ThemeColors = {
   surface: '#EDEDED',
+  taskTagRed: '#ed615f',
+  taskTagOrange: '#eea34e',
+  taskTagYellow: '#e5c744',
+  taskTagGreen: '#70b568',
+  taskTagBlue: '#609bd4',
+  taskTagPurple: '#ab7bc6',
+  taskTagGray: '#969696',
+  taskTagPink: '#df83b0',
+  taskTagCoral: '#de8970',
+  taskTagTeal: '#53a89d',
+  taskTagIndigo: '#7c83cf',
+  taskTagWhite: '#ffffff',
+  taskTagWhiteCheck: '#525252',
+
   surfaceElevated: '#F8F8F8',
   surfaceTranslucent: 'rgba(237, 237, 237, 0.78)',
   surfaceTranslucentSidebar: 'rgba(246, 246, 246, 0.90)',
@@ -394,6 +426,8 @@ export const lightColors: ThemeColors = {
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
+  betaChannelBadgeBackground: '#DF0C27',
+  betaChannelBadgeForeground: '#FFFFFF',
   surfaceChip: '#F1F1F1',
   border: '#C6C9CE', // 试穿 B 档(原 #DCDFE3,light 对 #EDEDED 仅 1.14:1 太弱 → 1.42:1)
   borderTranslucent: 'rgba(198, 201, 206, 0.62)',
@@ -437,6 +471,19 @@ export const lightColors: ThemeColors = {
  */
 export const darkColors: ThemeColors = {
   surface: '#2A2828',
+  taskTagRed: '#ed615f',
+  taskTagOrange: '#eea34e',
+  taskTagYellow: '#e5c744',
+  taskTagGreen: '#70b568',
+  taskTagBlue: '#609bd4',
+  taskTagPurple: '#ab7bc6',
+  taskTagGray: '#969696',
+  taskTagPink: '#e79fc1',
+  taskTagCoral: '#e6a08c',
+  taskTagTeal: '#75bfb4',
+  taskTagIndigo: '#999fdf',
+  taskTagWhite: '#ffffff',
+  taskTagWhiteCheck: '#525252',
   surfaceElevated: '#312F2F',
   surfaceTranslucent: 'rgba(42, 40, 40, 0.78)',
   surfaceTranslucentSidebar: 'rgba(18, 15, 15, 0.85)',
@@ -466,6 +513,8 @@ export const darkColors: ThemeColors = {
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
+  betaChannelBadgeBackground: '#DF0C27',
+  betaChannelBadgeForeground: '#FFFFFF',
   surfaceChip: '#2F2D2D',
   border: '#434343',
   borderTranslucent: 'rgba(67, 67, 67, 0.62)',
@@ -731,4 +780,22 @@ export const motionEasing = {
   in: [0.4, 0, 1, 1],
   /** 位置 / 尺寸插值 */
   move: [0.4, 0, 0.2, 1],
+} as const;
+
+/** Shared size for floating iOS navigation/menu controls (points). */
+export const navigationChrome = {
+  target: 44,
+  // Match navigation foreground polarity; backing stays local to the glass shape.
+  clear: {
+    light: {
+      foreground: '#000000',
+      scrim: 'rgba(255, 255, 255, 0.35)',
+      selected: 'rgba(0, 0, 0, 0.10)',
+    },
+    dark: {
+      foreground: '#FFFFFF',
+      scrim: 'rgba(0, 0, 0, 0.35)',
+      selected: 'rgba(255, 255, 255, 0.18)',
+    },
+  },
 } as const;

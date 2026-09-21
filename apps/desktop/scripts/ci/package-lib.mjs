@@ -17,6 +17,17 @@ export const SUPPORTED_PLATFORMS = Object.freeze(['win32', 'darwin', 'linux']);
 export const SUPPORTED_REGIONS = Object.freeze(['cn', 'global', 'dev']);
 const VERSION_BUMP_KINDS = Object.freeze(['major', 'minor', 'patch']);
 
+/** Give Forge compilation headroom while keeping an explicit build-machine limit. */
+export function packageNodeOptions(env) {
+  const existing = env.NODE_OPTIONS?.trim() ?? '';
+  // Keep quoted arguments together so a flag-like filename is not an override.
+  const args = existing.match(/(?:[^"\s]|"(?:\\.|[^"\\])*")+/g) ?? [];
+  const hasLimit = args.some((arg) => /^--max[-_]old[-_]space[-_]size(?:=|$)/.test(arg.replaceAll('"', '')));
+  return hasLimit
+    ? existing
+    : [existing, '--max-old-space-size=8192'].filter(Boolean).join(' ');
+}
+
 export const PLATFORM_ARCHS = Object.freeze({
   win32: ['x64'],
   darwin: ['arm64', 'x64'],

@@ -62,4 +62,8 @@ describe('update auto relaunch policy', () => {
   it('blocks for a short cooldown after resume or unlock', () => {
     expect(check({ lastResumeAtMs: BASE.nowMs - 1_000 })).toBe('recent-resume');
   });
+
+  it('blocks unattended relaunch when apply needs interactive auth', () => {
+    expect(check({ requiresInteractiveAuth: true })).toBe('interactive-auth');
+  });
 });

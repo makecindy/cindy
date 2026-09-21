@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * useFileChipContextMenu
  * ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
+import { formatFileLocation, type FileLocation } from '@/lib/fileLocation';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import {
   DropdownMenu,
@@ -57,10 +59,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
-import {
   openDirInSidebarFileBrowser,
   openExternalFileInSidebarFileBrowser,
   openFileInSidebarFileBrowser,
@@ -69,6 +67,7 @@ import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { copyRemoteChatFile, revealRemoteChatFile } from '@/lib/remoteFileOpen';
 import { toWorkdirRel } from '../../../shared/workdirPath';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
+import { openHtmlFileByPreference } from './useOpenWithMenu';
 import { useChatSessionFile } from './ChatSessionFileContext';
 
 export interface UseFileChipContextMenu {
@@ -101,12 +100,15 @@ export function useFileChipContextMenu({
   sidebarFileBrowserKind = 'file',
   sidebarOpenSessionId,
   onViewSource,
+  location,
 }: {
   getAbsPath: () => Promise<string> | string;
   canOpenInBrowser?: boolean;
   sidebarFileBrowserKind?: 'file' | 'directory';
   sidebarOpenSessionId?: string;
   onViewSource?: () => void | Promise<void>;
+  /** Only supplied by resolved Markdown references; existing path-copy stays absolute. */
+  location?: FileLocation;
 }): UseFileChipContextMenu {
   const { t } = useTranslation();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -123,6 +125,20 @@ export function useFileChipContextMenu({
   const remoteOrigin = isRemoteFileOrigin(sessionFileCtx.origin) ? sessionFileCtx.origin : null;
   const sidebarFileTargetSessionId = useSidebarTargetSessionId(sessionFileCtx.sessionId);
   const sidebarBrowserTargetSessionId = useSidebarTargetSessionId(sidebarOpenSessionId);
+  const copyLocation = location && sidebarFileBrowserKind === 'file'
+    ? formatFileLocation(sessionFileCtx.workingDir, location)
+    : null;
+
+  async function handleCopyLocation(): Promise<void> {
+    setMenuPos(null);
+    if (!copyLocation) return;
+    try {
+      await navigator.clipboard.writeText(copyLocation);
+      toast.success(t('chat.markdownRenderer.locationCopied'));
+    } catch {
+      toast.error(t('chat.media.copyFailed'));
+    }
+  }
 
   async function handleCopyFile(): Promise<void> {
     setMenuPos(null);
@@ -162,30 +178,26 @@ export function useFileChipContextMenu({
   async function handleOpenInBrowser(): Promise<void> {
     setMenuPos(null);
     const abs = await getAbsPath();
-    try {
-      await window.electronAPI.openFileInBrowser(abs);
-    } catch (error) {
-      toast.error(
-        t(
-          mapIpcErrorToI18nKey(error, {
-            namespace: 'chat.markdownRenderer',
-            fallback: 'chat.markdownRenderer.openInBrowserFailed',
-          }),
-        ),
-      );
-    }
+    await openHtmlFileByPreference(
+      sidebarBrowserTargetSessionId ?? sidebarFileTargetSessionId ?? '',
+      abs,
+      t,
+      sessionFileCtx,
+      'external',
+    );
   }
 
   async function handleOpenInSidebar(): Promise<void> {
     setMenuPos(null);
     if (!sidebarBrowserTargetSessionId) return;
     const abs = await getAbsPath();
-    try {
-      await openUrlInSidebarBrowser(sidebarBrowserTargetSessionId, pathToFileUrl(abs));
-    } catch {
-      // store 层已 log(addTab 上限 / IPC 异常),这里只给用户反馈。
-      toast.error(t('chat.markdownRenderer.openInSidebarFailed'));
-    }
+    await openHtmlFileByPreference(
+      sidebarBrowserTargetSessionId,
+      abs,
+      t,
+      sessionFileCtx,
+      'sidebar',
+    );
   }
 
   async function handleOpenInSidebarFileBrowser(): Promise<void> {
@@ -243,7 +255,7 @@ export function useFileChipContextMenu({
     setMenuPos(null);
     const abs = await getAbsPath();
     const res = await window.electronAPI.openPath(abs);
-    if (!res.success) toast.error(res.error ?? t('chat.markdownRenderer.openWithAppFailed'));
+    if (shouldShowOpenPathError(res)) toast.error(res.error ?? t('chat.markdownRenderer.openWithAppFailed'));
   }
 
   async function handleOpenWithApp(appId: string): Promise<void> {
@@ -315,7 +327,7 @@ export function useFileChipContextMenu({
             {t('chat.markdownRenderer.openInSidebarFileBrowser')}
           </DropdownMenuItem>
         ) : null}
-        {sidebarBrowserTargetSessionId && !remoteOrigin ? (
+        {sidebarBrowserTargetSessionId ? (
           <DropdownMenuItem onClick={handleOpenInSidebar}>
             <PanelRight className="mr-2 h-4 w-4" />
             {t('chat.markdownRenderer.openInSidebarBrowser')}
@@ -372,13 +384,19 @@ export function useFileChipContextMenu({
           <ClipboardCopy className="mr-2 h-4 w-4" />
           {t('chat.markdownRenderer.copyFilePath')}
         </DropdownMenuItem>
+        {copyLocation ? (
+          <DropdownMenuItem onClick={handleCopyLocation}>
+            <ClipboardCopy className="mr-2 h-4 w-4" />
+            {t('chat.markdownRenderer.copyLocation')}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem onClick={handleReveal}>
           <FolderOpen className="mr-2 h-4 w-4" />
           {remoteOrigin
             ? t('chat.remoteFile.revealLocalCopy')
             : t('chat.markdownRenderer.revealFile')}
         </DropdownMenuItem>
-        {canOpenInBrowser && !remoteOrigin ? (
+        {canOpenInBrowser ? (
           <DropdownMenuItem onClick={handleOpenInBrowser}>
             <Globe className="mr-2 h-4 w-4" />
             {t('chat.markdownRenderer.openInBrowser')}

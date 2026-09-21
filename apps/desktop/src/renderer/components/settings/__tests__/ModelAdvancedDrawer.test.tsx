@@ -1,0 +1,598 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+
+const mocks = vi.hoisted(() => ({
+  setLimit: vi.fn(async () => {}),
+  reset: vi.fn(async () => {}),
+  target: vi.fn(),
+  limit: null as number | null,
+}));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, values?: Record<string, unknown>) =>
+      values?.tokens ? `${key} ${values.tokens}` : key,
+    i18n: { resolvedLanguage: 'en' },
+  }),
+}));
+vi.mock('@/hooks/useModelContextLimit', () => ({
+  useModelContextLimit: (target: unknown) => {
+    mocks.target(target);
+    return {
+      limit: mocks.limit,
+      isCustomized: mocks.limit !== null,
+      loading: false,
+      error: false,
+      setLimit: mocks.setLimit,
+      reset: mocks.reset,
+    };
+  },
+}));
+vi.mock('@/state/modelVisibilityPrefs', () => ({
+  useModelVisibilityVersion: () => 0,
+  isModelEnabled: (_agent: unknown, _provider: unknown, model: { defaultEnabled?: boolean }) => model.defaultEnabled !== false,
+  isModelVisibilityCustomized: () => false,
+  setModelVisibility: vi.fn(),
+  resetModelVisibilities: vi.fn(),
+}));
+vi.mock('@/state/providerModelMemory', () => ({
+  useProviderModelMemoryVersion: () => 0,
+  getProviderModelEffort: vi.fn(() => undefined),
+  setProviderModelEffort: vi.fn(),
+  clearProviderModelEffort: vi.fn(),
+}));
+vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
+import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
+import { setModelVisibility } from '@/state/modelVisibilityPrefs';
+import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
+
+const model: CatalogModel = {
+  id: 'gpt-6',
+  name: 'GPT-6',
+  contextWindow: 272_000,
+  contextWindowMax: 1_050_000,
+  maxOutput: 128_000,
+  efforts: ['low', 'high'],
+  defaultEffort: 'high',
+  modalities: { input: ['text', 'image'], output: ['text'] },
+};
+const provider = {
+  id: 'openai',
+  name: 'OpenAI',
+  source: 'builtin',
+  connected: true,
+  agents: ['codex', 'claude-code'],
+  models: {},
+} as ProviderView;
+function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEfforts = primary.efforts, source = provider) {
+  const row = {
+    id: primary.id,
+    name: primary.name,
+    avail: ['codex', 'claude-code'] as ('codex' | 'claude-code')[],
+    byAgent: {
+      codex: primary,
+      'claude-code': { ...primary, id: `chatgpt/${primary.id}`, defaultEffort: bridgeDefault, efforts: bridgeEfforts },
+    },
+  };
+  return (
+    <ModelAdvancedDrawer
+      provider={source}
+      row={row}
+      open
+      onOpenChange={vi.fn()}
+      pricePresentationOf={() => null}
+      onDisable={vi.fn()}
+      disabled={false}
+      paymentRequired={false}
+    />
+  );
+}
+function draw(primary = model, bridgeDefault = primary.defaultEffort) {
+  return render(drawer(primary, bridgeDefault));
+}
+afterEach(cleanup);
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.limit = null;
+  vi.mocked(getProviderModelEffort).mockReset();
+});
+
+describe('model advanced editor', () => {
+  it('shows the imported API as a label rather than offering unrelated supplier transports', () => {
+    const source = { ...buildUserProvider({ id: 'nous-test', name: 'Hermes', runtimes: {
+      pi: { catalogPresetId: 'nous', baseUrl: 'https://inference-api.nousresearch.com/v1', wireProtocol: 'openai-chat', models: [{ id: 'gpt-6', name: 'GPT-6' }] },
+    } }), connected: true } as ProviderView;
+    const primary = source.models.pi![0];
+    render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
+    expect(screen.getByText(/Chat Completions/)).toBeTruthy();
+  });
+
+  it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
+    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
+      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
+        models: [{ id: 'gpt-6', name: 'GPT-6', route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }, { id: 'other', name: 'Other' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      await screen.findByRole('menuitemradio', { name: 'Chat Completions' });
+      expect(screen.getAllByRole('menuitemradio').map(item => item.textContent)).toEqual(['Messages', 'Responses', 'Chat Completions', 'Google Gemini']);
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Chat Completions' }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      const config = update.mock.calls[0]![0] as unknown as { runtimes: { codex: { models: Array<Record<string, unknown>> } } };
+      expect(config.runtimes.codex.models[0]).toEqual({ id: 'gpt-6', name: 'GPT-6', api: 'openai-completions',
+        route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat' } });
+      expect(config.runtimes.codex.models[1]).toEqual({ id: 'other', name: 'Other' });
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('saves Google selection with its matching wire and official endpoint', async () => {
+    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
+      codex: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat',
+        models: [{ id: 'new-gemini', name: 'New Gemini' }, { id: 'other', name: 'Other' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Google Gemini' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as { runtimes: { codex: { models: unknown[] } } };
+      expect(config.runtimes.codex.models).toEqual([
+        { id: 'new-gemini', name: 'New Gemini', api: 'google-generative-ai', route: {
+          baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai',
+        } }, { id: 'other', name: 'Other' },
+      ]);
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('rejects new small settings but accepts 100K without rewriting existing small overrides', () => {
+    mocks.limit = 1_000;
+    draw();
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    expect(input.value).toBe('1');
+    expect(input.hasAttribute('aria-invalid')).toBe(false);
+    fireEvent.blur(input);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '2' } });
+    fireEvent.blur(input);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '100' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(100_000);
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['cindy-local-ollama', 'ollama', 'cindy-local-lmstudio'])('keeps %s editable at 1K even when the catalog advertises a large window', (id) => {
+    render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id, source: 'user' }));
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(4_000);
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000);
+  });
+
+  it.each([2_048, 4_096, 8_192, 32_768])('keeps a small model with %s native tokens editable below 100K', (window) => {
+    draw({ ...model, contextWindow: window, contextWindowMax: window });
+    const input = screen.getByRole('textbox');
+    const floor = Math.floor(window / 1000);
+    fireEvent.change(input, { target: { value: String(floor - 1) } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: String(floor) } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(floor * 1000);
+  });
+
+
+  it('keeps useful identity fields without exposing internal defaults, normal lifecycle or raw descriptions', () => {
+    draw({ ...model, status: 'active', defaultEnabled: false, description: 'GPT for coding tasks' });
+    expect(screen.queryByText('active')).toBeNull();
+    expect(screen.queryByText('GPT for coding tasks')).toBeNull();
+    expect(screen.queryByText('settings.providers.models.advanced.defaultEnabled')).toBeNull();
+    expect(screen.getByText('settings.providers.models.advanced.modelId')).toBeTruthy();
+  });
+
+  it.each(['alpha', 'deprecated', 'retired'] as const)('localizes the actionable model status %s', (status) => {
+    draw({ ...model, status });
+    expect(screen.queryByText(status)).toBeNull();
+    expect(screen.getByText(`settings.providers.models.advanced.lifecycle.${status}`)).toBeTruthy();
+  });
+
+  it('preserves selected harnesses while disconnected, and restores controls after reconnect', () => {
+    const view = render(
+      <ModelAdvancedDrawer
+        provider={{ ...provider, connected: false }}
+        row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+        open
+        onOpenChange={vi.fn()}
+        pricePresentationOf={() => null}
+        onDisable={vi.fn()}
+        disabled={false}
+        paymentRequired={false}
+      />,
+    );
+    const toggle = screen.getByRole('switch', { name: 'GPT-6 · Codex' }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    expect(setModelVisibility).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.providers.models.manage.connectionRequired')).toBeTruthy();
+    view.rerender(drawer());
+    expect(
+      (screen.getByRole('switch', { name: 'GPT-6 · Codex' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(screen.queryByText('settings.providers.models.manage.connectionRequired')).toBeNull();
+    expect(screen.getByRole('switch', { name: 'GPT-6 · Codex' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(setModelVisibility).not.toHaveBeenCalled();
+  });
+
+  it('shows the exact maximum and includes Codex in shared context edits', () => {
+    draw();
+    expect(screen.getByText('1,050,000')).toBeTruthy();
+    const input = screen.getByRole('textbox', {
+      name: 'settings.providers.models.advanced.contextLimitAria',
+    });
+    expect((input as HTMLInputElement).value).toBe('272');
+    fireEvent.change(input, { target: { value: '500' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(500_000);
+    fireEvent.change(input, { target: { value: '1.5' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledTimes(1);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(mocks.target).toHaveBeenLastCalledWith({
+      providerId: 'openai',
+      agent: 'codex',
+      modelId: 'gpt-6',
+      relatedTargets: [{ providerId: 'openai', agent: 'claude-code', modelId: 'chatgpt/gpt-6' }],
+    });
+  });
+
+  it('edits a Codex-only route without removing the model specification', () => {
+    render(
+      <ModelAdvancedDrawer
+        provider={provider}
+        row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+        open
+        onOpenChange={vi.fn()}
+        pricePresentationOf={() => null}
+        onDisable={vi.fn()}
+        disabled={false}
+        paymentRequired={false}
+      />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
+    expect(screen.getByText('1,050,000')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
+  });
+
+  it('uses the same context editor for custom Codex providers', () => {
+    render(
+      <ModelAdvancedDrawer
+        provider={{ ...provider, id: 'custom', source: 'user' }}
+        row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+        open
+        onOpenChange={vi.fn()}
+        pricePresentationOf={() => null}
+        onDisable={vi.fn()}
+        disabled={false}
+        paymentRequired={false}
+      />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
+    expect(screen.getAllByText('272K').length).toBeGreaterThan(0);
+    expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
+  });
+
+  it('omits an undeclared manufacturer reference instead of presenting it as broken setup', () => {
+    render(drawer({ ...model, nativeApi: undefined }, undefined, undefined, { ...provider, id: 'unknown-provider', source: 'user' }));
+    expect(screen.queryByText('settings.providers.models.advanced.protocol.reference')).toBeNull();
+  });
+
+  it('renders imported OpenRouter Gemini with only Pi enabled, preserving all three supplier interfaces', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const id = 'google/gemini-3.8-flash';
+    const source = { ...buildUserProvider({ id: 'openrouter-test', name: 'OpenRouter', runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { ...preset.runtimes[agent]!, catalogPresetId: preset.id, models: [{ id, name: 'Gemini' }] }]),
+    ) }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true } as ProviderView;
+    const byAgent = Object.fromEntries(agents.map(agent => [agent, source.models[agent]![0]]));
+    render(<ModelAdvancedDrawer provider={source} row={{ id, name: 'Gemini', avail: [...agents], byAgent }} open
+      onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    for (const agent of ['Claude Code', 'Codex', 'Pi']) {
+      const toggle = screen.getByRole('switch', { name: `Gemini · ${agent}` });
+      expect(toggle.getAttribute('aria-checked')).toBe(agent === 'Pi' ? 'true' : 'false');
+      expect(toggle.hasAttribute('data-compatibility')).toBe(agent !== 'Pi');
+    }
+    expect(screen.getByText(/^Messages/)).toBeTruthy();
+    expect(screen.getByText(/^Responses/)).toBeTruthy();
+    expect(screen.getByText(/^Chat Completions/)).toBeTruthy();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('1048');
+  });
+
+  it('shows whole K without rewriting the exact catalog value on untouched blur', () => {
+    draw({ ...model, contextWindow: 1_048_576, contextWindowMax: 1_048_576 });
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    expect(input.value).toBe('1048');
+    expect(
+      screen.getByText('settings.providers.models.advanced.contextLimitRoute 1,048,576'),
+    ).toBeTruthy();
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
+  });
+
+  it('labels both Google compatibility routes and gives Pi the recommendation', async () => {
+    const primary = {
+      ...model,
+      id: 'google/gemini-future',
+      name: 'Gemini',
+      nativeApi: 'google-generative-ai' as const,
+    };
+    const byAgent = {
+      'claude-code': primary,
+      codex: primary,
+      pi: { ...primary, piApi: 'google-generative-ai' as const },
+    };
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    render(
+      <ModelAdvancedDrawer
+        provider={{
+          ...provider,
+          id: 'xd',
+          agents: [...agents],
+          models: Object.fromEntries(agents.map((agent) => [agent, [byAgent[agent]]])),
+          routing: {
+            'claude-code': { wireProtocol: 'anthropic-messages' },
+            codex: { wireProtocol: 'openai-responses' },
+          } as ProviderView['routing'],
+        }}
+        row={{ id: primary.id, name: primary.name, avail: [...agents], byAgent }}
+        open
+        onOpenChange={vi.fn()}
+        pricePresentationOf={() => null}
+        onDisable={vi.fn()}
+        disabled={false}
+        paymentRequired={false}
+      />,
+    );
+    expect(
+      screen.getByText('newChat.modelSelector.unified.recommended').parentElement?.textContent,
+    ).toContain('Pi');
+    for (const agent of ['Claude Code', 'Codex']) {
+      const toggle = screen.getByRole('switch', { name: `Gemini · ${agent}` });
+      expect(toggle.getAttribute('data-compatibility')).toBe('true');
+      expect(
+        document.getElementById(toggle.getAttribute('aria-describedby')!)?.textContent,
+      ).toContain('protocol.compatibility');
+    }
+    expect(
+      screen.getByRole('switch', { name: 'Gemini · Pi' }).hasAttribute('data-compatibility'),
+    ).toBe(false);
+    const notices = screen.getAllByRole('button', {
+      name: 'settings.providers.models.advanced.protocol.compatibility',
+    });
+    expect(notices).toHaveLength(2);
+    fireEvent.click(notices[0]!);
+    expect((await screen.findByRole('tooltip')).textContent).toContain(
+      'protocol.compatibilityHint',
+    );
+    expect(setModelVisibility).not.toHaveBeenCalled();
+  });
+
+  it('preserves an existing precise override, warns above the exact maximum, and resets without rounding writes', () => {
+    mocks.limit = 1_048_900;
+    draw({ ...model, contextWindow: 1_048_576, contextWindowMax: 1_048_576 });
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    expect(input.value).toBe('1048');
+    expect(
+      screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
+    ).toBeTruthy();
+    fireEvent.blur(input);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }),
+    );
+    expect(mocks.reset).toHaveBeenCalledOnce();
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+  });
+
+  it('shows facts beside controls without disclosure and keeps related window values together', () => {
+    draw();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.querySelector('details')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'GPT-6' }));
+    const input = screen.getByRole('textbox');
+    const controlsColumn = input.closest('section')!.parentElement!;
+    expect(controlsColumn.textContent).toContain(
+      'settings.providers.models.advanced.contextWindow',
+    );
+    expect(screen.getByText('settings.providers.models.advanced.imageInput')).toBeTruthy();
+    expect(screen.getByText('settings.providers.models.advanced.modelId')).toBeTruthy();
+    const scrollArea = input.closest('.overflow-y-auto')!;
+    expect(
+      scrollArea.contains(
+        screen.getByRole('button', { name: 'settings.providers.models.disableModel' }),
+      ),
+    ).toBe(false);
+    const close = screen.getByRole('button', { name: 'settings.providers.models.advanced.close' });
+    fireEvent.focus(close);
+    expect(close.getAttribute('aria-describedby')).toBeNull();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it.each([
+    ['anthropic-claude/claude-opus-4-8', ['claude-code', 'codex', 'pi'], 'Claude Code'],
+    ['new-vendor/gpt-9', ['claude-code', 'codex', 'pi'], 'Codex'],
+    ['new-labs/next-model', ['pi'], 'Pi'],
+  ] as const)('uses the shared recommendation for %s', (id, agents, expected) => {
+    const primary = { ...model, id, name: id };
+    const models = Object.fromEntries(agents.map((agent) => [agent, [primary]]));
+    render(
+      <ModelAdvancedDrawer
+        provider={{ ...provider, id: 'xd', agents: [...agents], models }}
+        row={{
+          id,
+          name: id,
+          avail: [...agents],
+          byAgent: Object.fromEntries(agents.map((agent) => [agent, primary])),
+        }}
+        open
+        onOpenChange={vi.fn()}
+        pricePresentationOf={() => null}
+        onDisable={vi.fn()}
+        disabled={false}
+        paymentRequired={false}
+      />,
+    );
+    const marker = screen.getByText('newChat.modelSelector.unified.recommended');
+    expect(marker.parentElement?.textContent).toContain(expected);
+  });
+
+  it('refreshes defaults and controls in an open drawer when the catalog changes', () => {
+    const { rerender } = draw();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('272');
+    rerender(
+      drawer({ ...model, contextWindow: 700_000, efforts: ['high', 'max'], defaultEffort: 'max' }),
+    );
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700');
+    expect(screen.queryByRole('radio', { name: 'effortLevels.low' })).toBeNull();
+    expect(
+      screen.getByRole('radio', { name: 'effortLevels.max' }).getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('allows an intentional override above the maximum and rejects invalid input', () => {
+    draw();
+    const input = screen.getByRole('textbox', {
+      name: 'settings.providers.models.advanced.contextLimitAria',
+    });
+    fireEvent.change(input, { target: { value: '1200' } });
+    expect(
+      screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
+    ).toBeTruthy();
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(1_200_000);
+    fireEvent.change(input, { target: { value: '-1' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenCalledTimes(1);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('retains a mixed saved selection without showing per-engine default labels', () => {
+    draw(model, 'low');
+    expect(screen.getByText('settings.providers.models.advanced.effortMixed')).toBeTruthy();
+    expect(
+      screen.queryByText(/settings.providers.models.advanced.engineDefaultEffort/),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.high' }));
+    expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', 'gpt-6', 'high');
+    expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'high');
+  });
+
+  it('shows one selected depth when another harness needs a supported-level mapping', () => {
+    render(drawer(model, 'low', ['low']));
+    expect(screen.queryByText('settings.providers.models.advanced.effortMixed')).toBeNull();
+    expect(screen.getByRole('radio', { name: 'effortLevels.high' }).getAttribute('aria-checked'))
+      .toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.high' }));
+    expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', 'gpt-6', 'high');
+    expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'low');
+  });
+
+  it('uses provider-declared image capability ahead of family-name heuristics', () => {
+    draw({ ...model, id: 'deepseek-v4', name: 'DeepSeek', supportsImageInput: true });
+    expect(screen.getByText('settings.providers.models.advanced.vision.vision')).toBeTruthy();
+    expect(screen.getByText('settings.providers.models.advanced.inputModalities')).toBeTruthy();
+  });
+});
+
+
+it('shows closed Gateway tiers disabled and re-enables them on catalog refresh', () => {
+  const restricted: CatalogModel = {
+    ...model, efforts: ['high'], defaultEffort: 'high', displayEfforts: ['low', 'high', 'max'],
+  };
+  const view = render(drawer(restricted));
+  const low = screen.getByRole('radio', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  expect(low.disabled).toBe(true);
+  fireEvent.click(low);
+  expect(setProviderModelEffort).not.toHaveBeenCalled();
+  view.rerender(drawer({ ...restricted, efforts: ['low', 'high'] }));
+  const enabledLow = screen.getByRole('radio', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  expect(enabledLow.disabled).toBe(false);
+  fireEvent.click(enabledLow);
+  expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', model.id, 'low');
+  expect((screen.getByRole('radio', { name: 'effortLevels.max' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('keeps the tier row visible when Gateway closes every tier', () => {
+  draw({ ...model, efforts: [], defaultEffort: null, displayEfforts: ['low', 'high'] });
+  for (const effort of ['low', 'high']) {
+    const button = screen.getByRole('radio', { name: `effortLevels.${effort}` }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-checked')).toBe('false');
+  }
+});
+
+
+it('describes an absent Harness route as unconfigured rather than unsupported', () => {
+  render(<ModelAdvancedDrawer provider={{ ...provider, agents: ['codex', 'claude-code', 'pi'] }}
+    row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()}
+    disabled={false} paymentRequired={false} />);
+  expect(screen.getByRole('button', { name: 'Pi · settings.providers.models.advanced.engineNotConfigured' })).toBeTruthy();
+  expect(screen.queryByLabelText(/engineUnsupported/)).toBeNull();
+});
+
+it('limits context and effort reads, writes and resets to the chat runtime', () => {
+  vi.mocked(getProviderModelEffort).mockImplementation((agent) => agent === 'codex' ? 'high' : 'low');
+  const mixedProvider = { ...provider, id: 'private', source: 'user' as const };
+  const row = {
+    id: 'shared', name: 'Shared', avail: ['claude-code', 'codex'] as const,
+    byAgent: {
+      'claude-code': { ...model, id: 'shared', mode: 'image_generation', efforts: ['low'] as typeof model.efforts },
+      codex: { ...model, id: 'shared', mode: 'chat' },
+    },
+  };
+  render(<ModelAdvancedDrawer provider={mixedProvider} row={{ ...row, avail: [...row.avail] }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
+  expect(screen.queryByText('settings.providers.models.advanced.effortMixed')).toBeNull();
+  expect(vi.mocked(getProviderModelEffort).mock.calls.every(([agent]) => agent === 'codex')).toBe(true);
+  fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.low' }));
+  expect(setProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared', 'low');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+  expect(clearProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared');
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value: '128' } });
+  fireEvent.blur(input);
+  expect(mocks.setLimit).toHaveBeenCalledWith(128_000);
+  expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
+});

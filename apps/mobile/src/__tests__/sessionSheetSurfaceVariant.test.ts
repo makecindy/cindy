@@ -42,10 +42,11 @@ describe('mobile session sheet styling variants', () => {
     expect(actionSheet).toContain('colors.sheetActionBorder');
     expect(actionSheet).toContain('colors.destructive');
     expect(actionSheet).not.toContain('colors.statusError');
-    expect(actionSheet).toContain('<BlurBackdrop intensity={32} overlayColor={colors.sheetActionSurface} />');
+    expect(actionSheet).toContain('intensity={32}');
+    expect(actionSheet).toContain('overlayColor={colors.sheetActionSurface}');
   });
 
-  it('keeps the session menu status chips left aligned inside the sheet body', () => {
+  it('centers session menu status chips with the task heading', () => {
     const sessionMenu = readTextLf(resolve(process.cwd(), 'src/session/SessionMenuSheet.tsx'), 'utf8');
     const headerBlockStart = sessionMenu.indexOf('headerBlock: {');
     const headerBlockEnd = sessionMenu.indexOf('chipRow: {', headerBlockStart);
@@ -56,6 +57,6 @@ describe('mobile session sheet styling variants', () => {
 
     expect(headerBlockSource).toContain("alignSelf: 'stretch'");
     expect(chipRowSource).toContain("alignSelf: 'stretch'");
-    expect(chipRowSource).toContain("justifyContent: 'flex-start'");
+    expect(chipRowSource).toContain("justifyContent: 'center'");
   });
 });

@@ -6,6 +6,8 @@ import {
   createMobileScheduleDraft,
   createTemplateParamDefaults,
   deriveMobileScheduleSessionMode,
+  localizeScheduleDraftValidation,
+  localizeTemplateParamValidation,
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
@@ -114,6 +116,58 @@ describe('mobile schedule form model', () => {
     })).toBeNull();
   });
 
+  it('relocalizes a stored draft validation without rerunning validation rules', () => {
+    const draft = createMobileScheduleDraft(null);
+    const oldLocalizer = {
+      translate: () => '旧语言错误',
+    };
+    const validation = validateMobileScheduleDraft(draft, oldLocalizer);
+
+    expect(validation).toMatchObject({
+      field: 'name',
+      message: '旧语言错误',
+      messageKey: 'devices.automations.presentation.validation.name',
+    });
+    expect(validation && localizeScheduleDraftValidation(validation, {
+      translate: () => 'New locale error',
+    })).toBe('New locale error');
+  });
+
+  it('relocalizes a stored template-parameter validation', () => {
+    const template: RemoteScheduleTemplate = {
+      id: 'custom',
+      name: 'Custom',
+      description: 'Custom',
+      category: 'status-reports',
+      source: 'builtin',
+      parameters: [
+        { key: 'project', label: 'Project', type: 'string', required: true },
+      ],
+    };
+    const validation = validateTemplateParamValues(template, {}, {
+      translate: () => '旧语言参数错误',
+    });
+
+    expect(validation).toMatchObject({
+      field: 'prompt',
+      message: '旧语言参数错误',
+      messageKey: 'devices.automations.presentation.validation.templateParameter',
+      messageValues: { label: 'Project' },
+      parameterKey: 'project',
+    });
+    const relocalizedTemplate = {
+      ...template,
+      parameters: [
+        { key: 'project', label: '项目', type: 'string' as const, required: true },
+      ],
+    };
+    expect(validation && localizeTemplateParamValidation(
+      validation,
+      relocalizedTemplate,
+      { translate: (_key, _fallback, values) => `新语言参数：${values?.label}` },
+    )).toBe('新语言参数：项目');
+  });
+
   it('does not require a project path when editing a bound desktop schedule', () => {
     const draft = createMobileScheduleDraft(schedule({
       workingDir: '',
@@ -215,7 +269,13 @@ describe('mobile schedule form model', () => {
       ],
     };
 
-    expect(validateTemplateParamValues(template, {})).toBe('请输入模板参数：Project');
+    expect(validateTemplateParamValues(template, {})).toMatchObject({
+      field: 'prompt',
+      message: '请输入模板参数：Project',
+      messageKey: 'devices.automations.presentation.validation.templateParameter',
+      messageValues: { label: 'Project' },
+      parameterKey: 'project',
+    });
     expect(() => applyMobileTemplateParams('Run {{project}}', {}, template.parameters))
       .toThrow('Missing required template parameter');
   });

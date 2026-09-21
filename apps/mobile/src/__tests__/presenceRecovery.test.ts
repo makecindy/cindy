@@ -495,6 +495,52 @@ describe('presence availability epochs', () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
+  it('refreshes a settled retained link without duplicating an in-flight reopen', async () => {
+    const epochs = createPresenceAvailabilityEpochs();
+    const responseEvidenceEpochs = createPresenceAvailabilityEpochs();
+    const tracked = new Map();
+    let resolveReopen!: (value: string) => void;
+    const reopenPending = new Promise<string>((resolve) => {
+      resolveReopen = resolve;
+    });
+    const create = vi.fn()
+      .mockResolvedValueOnce('first-accept')
+      .mockReturnValueOnce(reopenPending);
+
+    const first = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true },
+    );
+    await expect(first.request).resolves.toBe('first-accept');
+
+    const reopened = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true, refreshSettled: true },
+    );
+    const deduped = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true, refreshSettled: true },
+    );
+
+    expect(reopened).not.toBe(first);
+    expect(deduped).toBe(reopened);
+    expect(create).toHaveBeenCalledTimes(2);
+    resolveReopen('second-accept');
+    await expect(reopened.request).resolves.toBe('second-accept');
+  });
+
   it('does not retain failed requests when successful reuse is enabled', async () => {
     const epochs = createPresenceAvailabilityEpochs();
     const responseEvidenceEpochs = createPresenceAvailabilityEpochs();

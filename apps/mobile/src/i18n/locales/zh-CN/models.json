@@ -11,13 +11,16 @@
     "subscriptionBadgeCompact": "订阅",
     "backToModels": "返回模型列表",
     "agentSwitchHint": "选择模型后，下一条消息将切换到 {{agent}}",
-    "crossAgentEmptyHint": "请先在被控设备连接 {{agent}} 的模型来源",
+    "crossAgentEmptyHint": "请先在远程设备连接 {{agent}} 的模型来源",
     "permissionModeAccessibility": "权限模式：{{mode}}",
     "selectProviderModelAccessibility": "选择来源 {{provider}} 的模型 {{model}}",
     "selectModelAccessibility": "选择模型 {{model}}",
     "configureAccessibility": "配置 {{model}}",
-    "budgetDisabledHint": "该模型需先在被控设备配置 API key 才能使用",
+    "budgetDisabledHint": "该模型需先在远程设备配置 API key 才能使用",
     "priceLine": "输入 {{input}} · 输出 {{output}} / 百万 token",
+    "priceTitle": "每百万 token",
+    "priceAmounts": "输入 {{input}} · 输出 {{output}}",
+    "discountedVsStandard": "折扣中，较标准价省 {{percent}}%",
     "contextSuffix": "{{size}} 上下文",
     "fastTag": "快速"
   },
@@ -36,11 +39,38 @@
       "ultra": "极致"
     }
   },
+  "contextWindowSwitch": {
+    "title": "这个模型装不下当前对话",
+    "remoteTitle": "当前远程任务无法安全切换模型",
+    "description": "当前对话已使用 {{used}}，超过新模型可容纳的 {{total}}（约 {{pct}}%）。继续切换时，Cindy 会先生成简短摘要再继续；对话记录仍会保留，但不会再逐字传给新模型。",
+    "remoteDescription": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
+    "cancel": "保留当前模型",
+    "confirm": "切换并继续"
+  },
   "agentSwitch": {
     "browseAccessibility": "浏览 {{agent}} 模型",
     "confirmTitle": "切换到 {{agent}}？",
     "confirmMessage": "下一条消息发送时，{{appName}} 会把当前任务交接给 {{agent}}。两个 Agent 对上下文和工具的理解可能不同，请确认后再选择目标模型。",
     "cancel": "取消",
     "confirm": "继续选择"
+  },
+  "unified": {
+    "favorites": "收藏",
+    "all": "全部模型",
+    "recommended": "推荐",
+    "source": "来源",
+    "harness": "Harness",
+    "addFavorite": "添加收藏",
+    "removeFavorite": "取消收藏",
+    "restoreRecommended": "恢复推荐",
+    "saveFailed": "未能保存，请重试。",
+    "configure": "设置",
+    "syncFailed": "收藏未能同步。请重新打开重试；被控电脑可能需要更新。",
+    "timeUnit": {
+      "day": "天",
+      "hour": "小时",
+      "minute": "分钟",
+      "second": "秒"
+    }
   }
 }

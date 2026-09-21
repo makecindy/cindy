@@ -11,7 +11,17 @@
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
+import {
+  parseToolLoopErrorDetails,
+  type ToolLoopErrorDetails,
+} from '@cindy/maker-shared/tool-loop-error';
 import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
+
+export {
+  parseToolLoopErrorDetails,
+  type ToolLoopErrorDetails,
+  type ToolLoopErrorKind,
+} from '@cindy/maker-shared/tool-loop-error';
 
 export type AgentEventType =
   | 'text'                  // 流式文本输出（增量或完整）
@@ -59,6 +69,8 @@ export interface AgentErrorEventData {
   willRetry?: boolean;
   sdkError?: string;
   reason?: string;
+  /** Structured details for reason='tool_use_loop_detected'. */
+  toolLoop?: ToolLoopErrorDetails;
   [key: string]: unknown;
 }
 
@@ -68,6 +80,7 @@ export interface AgentTaskUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+  costUsd?: number;
 }
 
 export interface AgentTaskUpdateEventData {
@@ -83,10 +96,17 @@ export interface AgentTaskUpdateEventData {
   description?: string;
   /** Provider summary or final subagent answer. */
   summary?: string;
+  /** Host-only complete terminal return; stripped before renderer/device-link broadcast. */
+  returnedResult?: string;
+  /** Distinguishes an explicit empty terminal return from an omitted field. */
+  returnedResultEmpty?: boolean;
+  /** The durable runner bounded the complete terminal return. */
+  returnedResultTruncated?: boolean;
   outputFile?: string;
   usage?: AgentTaskUsage;
   lastToolName?: string;
   taskType?: string;
+  subagentParentContext?: 'none' | 'snapshot' | 'live';
   workflowName?: string;
   /**
    * 实际模型名；`null` 是子代理多 receiver 观测冲突/显式清除的合法值，
@@ -94,6 +114,8 @@ export interface AgentTaskUpdateEventData {
    */
   model?: string | null;
   reasoningEffort?: string;
+  createdAt?: string;
+  updatedAt?: string;
   receiverThreadIds?: string[];
   /** Explicit durable-workspace identity; control/task-card-only updates omit it. */
   subagentObservation?: SubagentObservation;
@@ -158,6 +180,25 @@ export interface AgentEvent {
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
   /**
+   * Session.turnGeneration captured when runEventLoop started the next() that
+   * dequeued this event. Adoption of a later generation must not overwrite it,
+   * so a leftover terminal keeps the older value after the next send. Host-only.
+   */
+  sessionTurnGeneration?: number;
+  /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
+  sessionInstanceId?: string;
+  /**
+   * Host-only recovery notice, independent of the already completed product turn.
+   * Session delivers it on `onRuntimeRecovery`, never on product `onEvent`.
+   */
+  runtimeRecovery?: true;
+  /**
+   * A complete extension notice, independent of model text assembly and turn
+   * settlement. Hosts deliver it as its own durable message, never as a delta
+   * or a full-text replacement for the currently streaming assistant reply.
+   */
+  standaloneText?: true;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later
@@ -192,6 +233,41 @@ export function isTerminalTurnEvent(event: AgentEvent): boolean {
     return data?.isRunning === false;
   }
   return isTerminalAgentErrorEvent(event);
+}
+
+/**
+ * 会刷新 Session 零事件看门狗 / Codex upstream-idle 计时的事件。
+ *
+ * **白名单**，不是「排除心跳」的黑名单。`status` / `account_usage` 是传输层或用量
+ * 心跳；`turn_diff` / `compact_boundary` / `session_id` / `plan_mode_changed` /
+ * `interaction_dismissed` 是系统或诊断帧；`done` / `error`（含 `willRetry: true`
+ * 的非终态 error）由终态路径自己清 watchdog，不能再当存活证据。把这些算进存活，
+ * 会让卡死的 turn 永远像在跑（典型：自动续跑被 vendor accept 之后只剩 usage-refresh
+ * status，banner 被吞、Continue 进不去）。后台事件同样不是当前 turn 的存活证据。
+ *
+ * 超时后的终态 error 交给 interrupted-turn 自动续跑（与 reconnect-stalled
+ * 同类）；额度耗尽才把 Continue 交还用户。
+ */
+const TURN_WATCHDOG_LIVENESS_TYPES = new Set<AgentEventType>([
+  'text',
+  'thinking',
+  'tool_use',
+  'tool_result',
+  'tool_result_full',
+  'agent_task_update',
+  'image',
+  'interaction_request',
+]);
+
+export function isTurnWatchdogLivenessEvent(event: AgentEvent): boolean {
+  if (event.turnScope === 'background') return false;
+  if (event.type === 'text' || event.type === 'thinking') {
+    const text = isRecord(event.data) ? event.data.text : undefined;
+    // Match Desktop's visible-text semantics: whitespace, format and control
+    // characters alone are not progress. Keep the original event untouched.
+    return typeof text === 'string' && /[^\s\p{Cf}\p{Cc}]/u.test(text);
+  }
+  return TURN_WATCHDOG_LIVENESS_TYPES.has(event.type);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -276,6 +352,11 @@ export type InteractionDecision =
       kind: 'ask_user_question';
       /** 用户对每道问题的回答, key=question(或 header), value=用户回答 */
       answers: Record<string, string>;
+      /**
+       * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
+       * 不是用户 Skip。Codex detached continuation 据此不发起续跑 turn。
+       */
+      dismissed?: boolean;
     }
   | {
       kind: 'plan_review';
@@ -331,6 +412,11 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
+  /**
+   * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
+   * 只由 Claude Code / Pi 的 AutoCompactController 锁存。
+   */
+  needsRollover?: boolean;
 }
 
 /**
@@ -365,6 +451,10 @@ export interface ImageEventData {
 
 export interface RewindFilesResult {
   canRewind: boolean;
+  /** True when conversation rewind can proceed but no file restore plan exists. */
+  conversationOnly?: boolean;
+  /** Git savepoints are disabled, so file restoration was not available. */
+  gitSafetyDisabled?: boolean;
   error?: string;
   filesChanged?: string[];
   insertions?: number;
@@ -377,6 +467,18 @@ export interface RewindCommitOptions {
    * Claude 路径不消费此字段。
    */
   tailTurnsToDrop?: number;
+  /**
+   * Codex 分页线程拒绝 thread/rollback(-32600 "paginated threads do not support
+   * thread/rollback")时的原生边界:回退目标之前最后一个已完成 turn 的原生
+   * turn id(持久化的 nativeForkAnchor)。有它就直接 thread/fork(lastTurnId)。
+   */
+  lastTurnId?: string;
+  /**
+   * 没有持久化锚点时的兜底:回退目标之前最后一条真实模型/工具输出的时间戳
+   * (ms),由 thread/turns/list 解析出对应原生 turn 边界。与 ForkSdkSessionOptions
+   * 的 forkAtTimestampMs 语义一致。
+   */
+  forkAtTimestampMs?: number;
 }
 
 export interface RewindCommitResult {
@@ -405,9 +507,20 @@ export interface ForkSdkSessionOptions {
   upToMessageId: string | undefined;
   /**
    * Fork 后从新 session 尾部移除多少个完整 turn。
-   * Codex 精确 fork 使用 thread/rollback 实现；Claude 路径不消费此字段。
+   * Codex 旧 daemon 使用 thread/rollback；分页 daemon 先查询原生边界。
+   * Claude 路径不消费此字段。
    */
   tailTurnsToDrop?: number;
+  /**
+   * Codex only: provider-native turn boundary for a direct thread/fork.
+   * Old/failed messages can resolve it through native turn metadata instead.
+   */
+  lastTurnId?: string;
+  /**
+   * Codex only: timestamp of the last copied event in the requested native turn.
+   * Used to resolve old/failed history without counting soft-deleted UI retries.
+   */
+  forkAtTimestampMs?: number;
   /** 新 session title (可选, 仅给 SDK 写入 jsonl 头)。 */
   title?: string;
   /** workingDir — 用于定位 Claude SDK project JSONL 并修复 fork 后的 uuid 引用。 */
@@ -436,6 +549,8 @@ export interface ForkSdkSessionResult {
    * upToMessageId 锚点能在新 jsonl 里查到。
    */
   uuidMap: Map<string, string>;
+  /** Codex only: copied native turn ids remain valid in the returned child thread. */
+  usedNativeForkAnchor?: boolean;
   /** Pi-only runtime command catalog captured from the forked runtime, if available. */
   runtimeCapabilities?: PiRuntimeCapabilityManifest;
 }

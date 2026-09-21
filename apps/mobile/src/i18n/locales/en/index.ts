@@ -1,3 +1,4 @@
+import taskTags from './taskTags.json';
 /**
  * 本 locale 的 catalog 组装:每个区域一个 JSON 文件、一个顶级 key,
  * 组装成单一 'common' namespace 的资源对象。
@@ -6,6 +7,8 @@
  */
 
 import apiErrors from './apiErrors.json';
+import remoteDesktop from './remoteDesktop.json';
+import chat from './chat.json';
 import composer from './composer.json';
 import deviceLink from './deviceLink.json';
 import devices from './devices.json';
@@ -21,7 +24,10 @@ import startup from './startup.json';
 import update from './update.json';
 
 export default {
+  taskTags,
+  remoteDesktop,
   apiErrors,
+  chat,
   composer,
   deviceLink,
   devices,

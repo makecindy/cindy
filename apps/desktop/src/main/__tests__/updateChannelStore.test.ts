@@ -94,3 +94,42 @@ describe('tryEnableUncustomizedBetaAtomic', () => {
     });
   });
 });
+
+describe('Beta channel build capability', () => {
+  const originalPlatform = process.platform;
+  const originalArch = process.arch;
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    Object.defineProperty(process, 'arch', { value: originalArch, configurable: true });
+  });
+
+  it('allows Linux x64 to use a persisted beta setting', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    Object.defineProperty(process, 'arch', { value: 'x64', configurable: true });
+    const store = await loadStore();
+    await store.writeEnableBeta(true);
+
+    expect(store.readUpdateChannelSettings().enableBeta).toBe(true);
+    expect(store.isBetaChannelEnabled()).toBe(true);
+  });
+
+  it('keeps Linux arm64 on the release channel even when disk says beta is on', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true });
+    const store = await loadStore();
+    await store.writeEnableBeta(true);
+
+    expect(store.readUpdateChannelSettings().enableBeta).toBe(true);
+    expect(store.isBetaChannelEnabled()).toBe(false);
+  });
+
+  it('keeps the existing beta behavior on non-Linux builds', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true });
+    const store = await loadStore();
+    await store.writeEnableBeta(true);
+
+    expect(store.isBetaChannelEnabled()).toBe(true);
+  });
+});

@@ -26,6 +26,8 @@
  * 提供 button-action 机制),所以组件签名只接 track,不接 actions。
  */
 
+import { MediaScrubber } from '@/components/ui/media-scrubber';
+import { CHAT_MEDIA_PLAY_BUTTON_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, FolderOpen, Music, Pause, Play } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -79,8 +81,6 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
   const displayAudioUrl = useRemoteMediaUrl(track.audioUrl, sessionId);
   const displayCoverUrl = useRemoteMediaUrl(track.coverUrl ?? '', sessionId);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const progressTrackRef = useRef<HTMLDivElement | null>(null);
-  const draggingRef = useRef(false);
   const [coverFailed, setCoverFailed] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -142,10 +142,6 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
   const canReveal = localAudioPath !== null || displayAudioUrl.startsWith('cindy-media://');
   const durationLabel = useMemo(() => formatDuration(duration), [duration]);
   const currentLabel = useMemo(() => formatDuration(currentTime), [currentTime]);
-  const progressPct = useMemo(() => {
-    if (!duration) return 0;
-    return Math.min(100, Math.max(0, (currentTime / duration) * 100));
-  }, [currentTime, duration]);
 
   function handleTogglePlay(): void {
     const el = audioRef.current;
@@ -157,39 +153,6 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
       void el.play().catch(() => undefined);
     } else {
       el.pause();
-    }
-  }
-
-  // scrub 核心:把 clientX 折算成 currentTime,被 click + pointer drag 复用。
-  function seekToClientX(clientX: number): void {
-    const el = audioRef.current;
-    const trackEl = progressTrackRef.current;
-    if (!el || !trackEl || !duration) return;
-    const rect = trackEl.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    el.currentTime = ratio * duration;
-    setCurrentTime(el.currentTime);
-  }
-
-  function handlePointerDown(evt: React.PointerEvent<HTMLDivElement>): void {
-    if (!duration) return;
-    // setPointerCapture 让后续 pointermove / pointerup 即使指针移出 track
-    // 也仍然派发到 track 元素上,拖出去再放手不会丢事件。
-    evt.currentTarget.setPointerCapture(evt.pointerId);
-    draggingRef.current = true;
-    seekToClientX(evt.clientX);
-  }
-
-  function handlePointerMove(evt: React.PointerEvent<HTMLDivElement>): void {
-    if (!draggingRef.current) return;
-    seekToClientX(evt.clientX);
-  }
-
-  function handlePointerUp(evt: React.PointerEvent<HTMLDivElement>): void {
-    if (!draggingRef.current) return;
-    draggingRef.current = false;
-    if (evt.currentTarget.hasPointerCapture(evt.pointerId)) {
-      evt.currentTarget.releasePointerCapture(evt.pointerId);
     }
   }
 
@@ -221,7 +184,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
   return (
     <div
       className={cn(
-        'flex items-center gap-4 rounded-[12px] p-4',
+        'flex items-center gap-4 rounded-xl p-4',
         'border bg-[var(--msg-tool-card-bg)] border-[var(--msg-tool-card-border)]',
       )}
       // 跟 ChatImageView/ChatVideoView 的 tool-output 视觉宽度同步,确保
@@ -280,9 +243,9 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
                 onClick={handleCopyDescription}
                 aria-label={t('chat.media.audioCopyDescription')}
                 className={cn(
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px]',
+                  CHAT_ICON_BUTTON_CLASS,
+                  'h-7 w-7',
                   'text-[var(--msg-tool-card-chevron)] hover:bg-[var(--msg-code-inline-bg)]',
-                  'transition-colors',
                 )}
               >
                 <Copy size={16} />
@@ -309,57 +272,34 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
 
         {/* Player row: play btn + currentTime + progress + duration */}
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={handleTogglePlay}
-            aria-label={playing ? 'Pause' : 'Play'}
-            className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
-              'bg-[var(--msg-tool-card-text)] text-[var(--msg-tool-card-bg)]',
-              'transition-opacity hover:opacity-90',
-            )}
-          >
-            {playing ? (
-              <Pause size={14} fill="currentColor" />
-            ) : (
-              // 把 play 三角往右挪 1px 视觉居中(三角自身重心偏左)
-              <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
-            )}
-          </button>
+          <Tip text={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}>
+            <button
+              type="button"
+              onClick={handleTogglePlay}
+              aria-label={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}
+              className={CHAT_MEDIA_PLAY_BUTTON_CLASS}
+            >
+              {playing ? (
+                <Pause size={14} fill="currentColor" />
+              ) : (
+                // 把 play 三角往右挪 1px 视觉居中(三角自身重心偏左)
+                <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
+              )}
+            </button>
+          </Tip>
 
           <span className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">
             {currentLabel}
           </span>
 
-          {/* Progress track — 点击 / 拖动 scrub。dot 跟着 fill 末端走。
-              用 pointer events 统一处理 mouse + pen + touch;pointerdown
-              里 setPointerCapture 锁定指针,move 过程中持续 seek。 */}
-          <div
-            ref={progressTrackRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
-            className={cn(
-              'relative h-1 flex-1 cursor-pointer rounded-full',
-              'bg-[var(--msg-tool-card-border)]',
-              // 避免拖出 track 外触发浏览器原生 drag/选择
-              'touch-none select-none',
-            )}
-          >
-            <div
-              className="absolute left-0 top-0 h-full rounded-full bg-[var(--msg-tool-card-text)]"
-              style={{ width: `${progressPct}%` }}
-            />
-            <div
-              className="absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-[var(--msg-tool-card-text)]"
-              style={{
-                // 微调 4px 让圆点视觉上压在 fill 末端(否则 dot 中心
-                // 会比 fill 末端再凸出半个圆点宽)
-                left: `calc(${progressPct}% - 5px)`,
-              }}
-            />
-          </div>
+          <MediaScrubber currentTime={currentTime} duration={duration}
+            label={t('chat.media.audioProgress')}
+            onSeek={(seconds) => {
+              const audio = audioRef.current;
+              if (!audio) return;
+              audio.currentTime = seconds;
+              setCurrentTime(audio.currentTime);
+            }} />
 
           <span className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">
             {durationLabel}

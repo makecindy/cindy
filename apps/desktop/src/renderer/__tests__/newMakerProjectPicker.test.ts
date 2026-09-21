@@ -19,6 +19,7 @@ const readSource = (...segments: string[]): string =>
   readFileSync(resolve(__dirname, '..', ...segments), 'utf8').replace(/\r\n?/g, '\n');
 
 const newMakerDraftRouteSource = readSource('features', 'cc-agent', 'NewMakerDraftRoute.tsx');
+const ccAgentSessionViewSource = readSource('features', 'cc-agent', 'CCAgentSessionView.tsx');
 
 const worktreeChipsSource = readSource('components', 'new-chat', 'WorktreeChipsRow.tsx');
 
@@ -55,7 +56,6 @@ const deviceProvidersHookSource = readSource('hooks', 'useDeviceProviders.ts');
 
 const agentCapabilitiesHookSource = readSource('hooks', 'useAgentCapabilities.ts');
 const availableAgentsHookSource = readSource('hooks', 'useAvailableAgents.ts');
-const vendorSwitcherSource = readSource('components', 'new-chat', 'VendorSegmentedSwitcher.tsx');
 
 const scheduleFormDialogSource = readSource(
   'features',
@@ -213,7 +213,7 @@ describe('Shared create project picker', () => {
 
   it('invalidates an in-flight folder restore before applying a same-route dialogue target', () => {
     const effectStart = newMakerDraftRouteSource.indexOf(
-      '// “对话”分组可能在 /cc-agent/new 已经打开时再次导航到同一路由',
+      'handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;',
     );
     const effectEnd = newMakerDraftRouteSource.indexOf(
       '// 弹窗确认添加后的落点',
@@ -551,20 +551,20 @@ describe('Shared create project picker', () => {
     );
     // claude-code → cc 归一,fail-open(未加载不隐藏)。
     expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");
+    expect(availableAgentsHookSource).toContain('refreshLocalCapabilities');
+    expect(availableAgentsHookSource).toContain('evictDeviceCapabilities');
+    expect(availableAgentsHookSource).toContain('prefetchDeviceCapabilities');
     // 未加载完成时不隐藏任何入口(loaded 保持 false → 空 hidden)。
     expect(availableAgentsHookSource).toMatch(/loaded/);
 
-    // 开关按 hiddenVendors 过滤 OPTIONS,但保留当前选中段避免"无选中"过渡帧。
-    expect(vendorSwitcherSource).toContain('hiddenVendors');
-    expect(vendorSwitcherSource).toMatch(
-      /opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/,
-    );
-
-    // 路由:以被控端(deviceId)为准计算 hidden;选中值被隐藏时 coerce 到首个可用。
+    // 路由以被控端(deviceId)为准计算 hidden。不可用性变化只收窄可选入口；不得由
+    // 监听旧 draft 的 effect 再写回选中值，否则会覆盖同轮刚应用的新默认组合。
     expect(newMakerDraftRouteSource).toMatch(
       /useAvailableAgents\(\s*effectiveDeviceLinkDeviceId,?\s*\)/,
     );
-    expect(newMakerDraftRouteSource).toMatch(/hiddenSwitcherVendors\.includes\(draft\.vendor\)/);
+    expect(newMakerDraftRouteSource).not.toMatch(
+      /hiddenSwitcherVendors\.includes\(draft\.vendor\)/,
+    );
 
     // 2026-08-12 统一模型选择器(M5):新会话工具条上的引擎下拉常态已撤除(只在
     // device-link 老被控端的降级分支里保留),上面那条 hiddenVendors 断言因此不再是
@@ -835,7 +835,7 @@ describe('Shared create project picker', () => {
     // extraDirs 只在换设备、或进入「对话」时清 —— 同机换项目那些目录仍然有效,
     // 不传则 store 保持原值。
     expect(action).toContain(
-      '...(deviceChanged || req.workingDir == null ? { extraDirs: [] } : {}),',
+      '...(deviceChanged || req.workingDir == null ? { extraDirs: [], writableDirs: [] } : {}),',
     );
     // 但 worktree 的 repo/branch 探测态照常重置 —— 换项目就是换 repo；用户偏好保留。
     expect(action).toContain('if (deviceChanged || workingDirChanged) {');
@@ -1303,7 +1303,8 @@ describe('Shared create project picker', () => {
     );
     const body = action.slice(0, action.indexOf('      patchDraft({'));
     // 变化判据本身。
-    expect(body).toContain('const deviceChanged = req.deviceId !== prevDeviceId;');
+    expect(body).toContain('const deviceChanged = !isSameNewMakerDevice(req.deviceId, {');
+    expect(body).toContain('remoteHostId: effectiveRemoteHostId,');
     expect(body).toContain('const workingDirChanged = req.workingDir !== draft.workingDir;');
     // mention chip 存**项目相对**路径 → 设备或项目任一变化都要剥(第 29 轮 P1)。
     expect(body).toContain(
@@ -1320,6 +1321,7 @@ describe('Shared create project picker', () => {
     // 判据读 draft.workingDir,必须在依赖数组里,否则闭包比的是上一次渲染的值。
     const deps = action.slice(action.indexOf('    [', action.indexOf('patchDraft({')));
     expect(deps.slice(0, deps.indexOf('  );'))).toContain('draft.workingDir,');
+    expect(deps.slice(0, deps.indexOf('  );'))).toContain('effectiveRemoteHostId,');
   });
 
   // #807 review 第十九轮:被控端能力 / 供应商 / Git safety 快照是「拉一次、无 TTL、只在设备下线
@@ -1400,9 +1402,12 @@ describe('Shared create project picker', () => {
     expect(addedHead).toContain('prefetchDeviceGitSafetySettings(target.deviceId)');
     // ③ 「设备已不可用」类的 evict 不需要配对 —— 那几处刻意不 prefetch,别被这条规则误改。
     //    这里只锁「本仓存在那个正确范例」,它是这条规则的出处。
-    expect(deviceLinkRemoteProjectsSource).toContain('evictDeviceProviders(push.deviceId);');
-    expect(deviceLinkRemoteProjectsSource).toContain(
-      'void prefetchDeviceProviders(push.deviceId);',
+    expect(deviceLinkRemoteProjectsSource).toContain('void refreshRemoteCatalogSnapshot(push.deviceId);');
+    const refreshSource = readSource('lib', 'remoteCatalogSnapshot.ts');
+    expect(refreshSource).toContain('evictDeviceProviders(deviceId)');
+    expect(refreshSource).toContain('prefetchDeviceProviders(deviceId)');
+    expect(refreshSource.indexOf('evictDeviceProviders(deviceId)')).toBeLessThan(
+      refreshSource.indexOf('prefetchDeviceProviders(deviceId)'),
     );
   });
 
@@ -1506,8 +1511,40 @@ describe('Shared create project picker', () => {
     );
     // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
-    expect(chatInputSource).toContain(
-      'hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}',
+    expect(chatInputSource).toMatch(
+      /hasReferenceDirs=\{\s*!settingsLocked\s*&&\s*\(onExtraDirsChange !== undefined \|\| onWritableDirsChange !== undefined\)\s*\}/,
+    );
+  });
+
+  // Writable-directory selection uses the controller's native picker. SSH and device-link
+  // workspaces both execute on another filesystem, so a local absolute path must never be
+  // offered as a remote writable root. Existing remote grants remain visible/removable when
+  // the executing side explicitly supports the setter.
+  it('hides remote add while preserving capability-gated writable grant revocation', () => {
+    expect(newMakerDraftRouteSource).toContain(
+      'isDeviceLinkDraft || isRemoteProjectDraft\n                        ? undefined\n                        : handleWritableDirsChange',
+    );
+    expect(agentCapabilitiesHookSource).toContain('writableDirs?: CapabilityStatus;');
+    expect(ccAgentSessionViewSource).toContain(
+      'canExposeWritableDirsChange({\n      capabilities: sessionCaps,',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'writableDirsChangeSupported ? handleWritableDirsChange : undefined',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'writableDirsChangeSupported ? handleWritableDirRemove : undefined',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      'session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true',
+    );
+    expect(chatInputSource).toMatch(/&&\s*writableGrantScope/);
+    expect(chatInputSource).toMatch(/&&\s*!remoteHostId/);
+    expect(chatInputSource).toMatch(/&&\s*deviceLinkDeviceId === null/);
+    expect(chatInputSource).toContain('!settingsLocked && onWritableDirsChange');
+    expect(chatInputSource).toContain('void onWritableDirRemove(path);');
+    expect(chatInputSource).toContain('(writableDirs ?? []).filter((item) => item !== path)');
+    expect(ccAgentSessionViewSource).toContain(
+      'const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId)',
     );
   });
 
@@ -1692,11 +1729,7 @@ describe('Shared create project picker', () => {
     );
   });
 
-  // #807 review 第二十八轮:本机分支早就用 effectiveSourceIdForModel 校准过来源,device-link 分支
-  // 却原样透传 dlSel.providerId。普通发送不受影响(ChatInput 内部会重算),但「新建目标」是直接拿
-  // 这个值提交给 maker:create-session 的 —— 被控端把该来源断开后,会把未认证来源写进
-  // sessions.provider_id,新目标起不来。校准放在**派生处**,一次覆盖所有消费点。
-  it('clamps the device-link provider through the shared resolver, not just the local branch', () => {
+  it('preserves an explicit device-link connection and resolves only implicit defaults', () => {
     const derive = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const chatInitialProviderId = useMemo<string | null>('),
     );
@@ -1707,10 +1740,7 @@ describe('Shared create project picker', () => {
     expect(body).toContain('effectiveSourceIdForModel(');
     expect(body).toContain('deviceProviders,');
     expect(body).toContain('draftInitialModel,');
-    // 反向防回退:不能再出现原样透传。
-    expect(newMakerDraftRouteSource).not.toContain(
-      'isDeviceLinkDraft\n    ? (deviceLinkInitial?.providerId ?? null)',
-    );
+    expect(body).toContain('return deviceLinkInitial?.providerId || effectiveSourceIdForModel(');
   });
 
   it('keeps recent-folder storage out of project-option selection', () => {

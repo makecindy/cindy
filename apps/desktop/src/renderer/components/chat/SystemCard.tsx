@@ -5,6 +5,7 @@
  * Renders /help, /cost, /context, /pwd, /status as styled info panels in the chat stream.
  */
 
+import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
 import {
   ArrowLeftRight,
@@ -20,15 +21,26 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
+import {
+  hasInterruptionContext,
+  readAutoResumeInfo,
+  type AutoResumeCardInfo,
+} from '@/lib/autoResumePresentation';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import { LearnStatusCard } from '@/features/learn/LearnStatusCard';
 import {
+  isStaleReviewFailureCode,
   readReviewFailureCode,
   reviewFailureCodeFromLegacyError,
   type ReviewFailureCode,
 } from '../../../shared/reviewRun';
+import {
+  BotSessionTaskCard,
+  BotSessionTaskMessageTrace,
+} from '@/features/bots/BotCollaborationCard';
+import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -36,9 +48,14 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { CindyMakeDoctorCard } from './CindyMakeDoctorCard';
+import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
+import { CindyMakeCompleteCard } from '@/components/cindy-make/CindyMakeCompleteCard';
 
 interface SystemCardProps {
   cardType:
+    | 'cindy-make-doctor'
+    | 'cindy-make'
     | 'help'
     | 'cost'
     | 'context'
@@ -48,11 +65,16 @@ interface SystemCardProps {
     | 'cmd'
     | 'goal-complete'
     | 'goal-resumed'
+    | 'cindy-make-complete'
     | 'learn'
     | 'review'
     | 'auto-resume'
     | 'auto-resume-pending'
     | 'agent-switch'
+    | 'bot-session-task-message'
+    | 'bot-session-task'
+    | 'bot-direct-message'
+    | 'bot-authorization'
     | 'context-rebuild';
   data?: Record<string, unknown>;
   /**
@@ -68,7 +90,7 @@ interface SystemCardProps {
 }
 
 const cardClass = cn(
-  'w-full rounded-[12px] border',
+  'w-full rounded-xl border',
   'border-[var(--msg-user-border)]',
   'bg-[var(--msg-user-bg)]',
   'px-5 py-4',
@@ -89,19 +111,38 @@ const codeClass = cn(
 );
 
 function HelpCard({ data }: { data?: Record<string, unknown> }) {
-  const commands = (data?.commands as Array<{ name: string; description?: string; source: string }>) ?? [];
+  const { t } = useTranslation();
+  const commands =
+    (data?.commands as Array<{
+      name: string;
+      description?: string;
+      source: string;
+      builtIn?: boolean;
+    }>) ?? [];
   const desktopCmds = commands.filter((c) => c.source === 'desktop');
   const agentBuiltinCmds = commands.filter((c) => c.source === 'agent-builtin');
   const projectCmds = commands.filter((c) => c.source === 'user' || c.source === 'skill');
 
-  const renderCommandRows = (items: Array<{ name: string; description?: string; source: string }>) => (
+  const renderCommandRows = (
+    items: Array<{
+      name: string;
+      description?: string;
+      source: string;
+      builtIn?: boolean;
+    }>,
+  ) => (
     <div className="flex flex-col gap-[2px]">
-      {items.map((c) => (
-        <div key={c.name} className={rowClass}>
-          <span className={codeClass}>/{c.name}</span>
-          <span className={descClass}>{c.description ?? ''}</span>
-        </div>
-      ))}
+      {items.map((c) => {
+        const descriptionKey = builtInSkillDescriptionKey(c);
+        return (
+          <div key={c.name} className={rowClass}>
+            <span className={codeClass}>/{c.name}</span>
+            <span className={descClass}>
+              {descriptionKey ? t(descriptionKey) : c.description ?? ''}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -117,13 +158,18 @@ function HelpCard({ data }: { data?: Record<string, unknown> }) {
       )}
       {projectCmds.length > 0 && (
         <>
-          <div className={cn(titleClass, (desktopCmds.length > 0 || agentBuiltinCmds.length > 0) && 'mt-3')}>Project Commands</div>
+          <div
+            className={cn(
+              titleClass,
+              (desktopCmds.length > 0 || agentBuiltinCmds.length > 0) && 'mt-3',
+            )}
+          >
+            Project Commands
+          </div>
           {renderCommandRows(projectCmds)}
         </>
       )}
-      {commands.length === 0 && (
-        <div className={labelClass}>No commands available.</div>
-      )}
+      {commands.length === 0 && <div className={labelClass}>No commands available.</div>}
     </div>
   );
 }
@@ -151,9 +197,8 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   const [expandedDetails, setExpandedDetails] = useState<Record<string, boolean>>({});
   // null = session not live / unsupported; undefined = still loading
   const rawUsage = data?.usage;
-  const usage = rawUsage === undefined || rawUsage === null || isContextUsageData(rawUsage)
-    ? rawUsage
-    : null;
+  const usage =
+    rawUsage === undefined || rawUsage === null || isContextUsageData(rawUsage) ? rawUsage : null;
   const error = typeof data?.error === 'string' ? data.error : '';
 
   if (usage === undefined) {
@@ -169,9 +214,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
     return (
       <div className={cardClass}>
         <div className={titleClass}>{t('chat.systemCard.context.title')}</div>
-        <span className={labelClass}>
-          {error || t('chat.systemCard.context.noLiveSession')}
-        </span>
+        <span className={labelClass}>{error || t('chat.systemCard.context.noLiveSession')}</span>
       </div>
     );
   }
@@ -185,10 +228,17 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
     : [];
 
   const totalTokens = Math.max(0, finiteNumber(usage.totalTokens));
-  const rawMaxTokens = Math.max(finiteNumber(usage.rawMaxTokens) || finiteNumber(usage.maxTokens), 0);
-  const pct = rawMaxTokens > 0
-    ? Math.min(100, Math.max(0, finiteNumber(usage.percentage) || (totalTokens / rawMaxTokens) * 100))
-    : 0;
+  const rawMaxTokens = Math.max(
+    finiteNumber(usage.rawMaxTokens) || finiteNumber(usage.maxTokens),
+    0,
+  );
+  const pct =
+    rawMaxTokens > 0
+      ? Math.min(
+          100,
+          Math.max(0, finiteNumber(usage.percentage) || (totalTokens / rawMaxTokens) * 100),
+        )
+      : 0;
   const visibleCategories = categories.filter((cat) => finiteNumber(cat.tokens) > 0);
   const hasDetails =
     mcpTools.length > 0 ||
@@ -240,10 +290,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       count: String(agents.length),
       content: (
         <ContextDetailSection
-          rows={agents.map((agent) => [
-            `${agent.agentType} · ${agent.source}`,
-            agent.tokens,
-          ])}
+          rows={agents.map((agent) => [`${agent.agentType} · ${agent.source}`, agent.tokens])}
           showZeroRows
         />
       ),
@@ -265,10 +312,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
               }),
               usage.skills.tokens,
             ],
-            ...skillFrontmatter.map((skill) => [
-              `${skill.name} · ${skill.source}`,
-              skill.tokens,
-            ] as [string, number]),
+            ...skillFrontmatter.map(
+              (skill) => [`${skill.name} · ${skill.source}`, skill.tokens] as [string, number],
+            ),
           ]}
           showZeroRows
         />
@@ -296,12 +342,14 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       ),
     });
   }
-  const visibleDetailRows = detailRows.filter((row) => finiteNumber(row.tokens) > 0 || row.count !== '0');
+  const visibleDetailRows = detailRows.filter(
+    (row) => finiteNumber(row.tokens) > 0 || row.count !== '0',
+  );
 
   return (
     <div
       className={cn(
-        'w-full rounded-[12px] border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)]',
+        'w-full rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)]',
         'px-3 py-3 text-13 leading-none text-[var(--msg-user-text)] select-text',
       )}
     >
@@ -310,9 +358,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="flex w-full items-center gap-2 text-left"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
-        aria-label={expanded
-          ? t('chat.systemCard.context.collapse')
-          : t('chat.systemCard.context.expand')}
+        aria-label={
+          expanded ? t('chat.systemCard.context.collapse') : t('chat.systemCard.context.expand')
+        }
       >
         <Layers size={14} strokeWidth={1.8} className="shrink-0 text-[var(--msg-user-text)]" />
         <span className="min-w-0 flex-1 truncate text-15 font-medium">
@@ -339,17 +387,19 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="mt-2 flex h-[7px] w-full overflow-hidden rounded-full bg-[var(--msg-tool-card-bg)]"
         aria-label={t('chat.systemCard.context.barAria')}
       >
-        {visibleCategories.filter((cat) => !cat.isDeferred).map((cat) => (
-          <div
-            key={cat.name}
-            className="h-full shrink-0"
-            style={{
-              width: `${rawMaxTokens > 0 ? Math.max((cat.tokens / rawMaxTokens) * 100, cat.tokens > 0 ? 0.6 : 0) : 0}%`,
-              backgroundColor: contextColor(cat),
-              opacity: cat.name === 'Free space' ? 0.24 : 1,
-            }}
-          />
-        ))}
+        {visibleCategories
+          .filter((cat) => !cat.isDeferred)
+          .map((cat) => (
+            <div
+              key={cat.name}
+              className="h-full shrink-0"
+              style={{
+                width: `${rawMaxTokens > 0 ? Math.max((cat.tokens / rawMaxTokens) * 100, cat.tokens > 0 ? 0.6 : 0) : 0}%`,
+                backgroundColor: contextColor(cat),
+                opacity: cat.name === 'Free space' ? 0.24 : 1,
+              }}
+            />
+          ))}
       </div>
 
       <Collapse open={expanded}>
@@ -362,7 +412,10 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
 
           <div className="flex flex-col gap-[5px]">
             {visibleCategories.map((cat) => (
-              <div key={cat.name} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
+              <div
+                key={cat.name}
+                className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3"
+              >
                 <div className="flex min-w-0 items-center gap-1.5">
                   <span
                     className="h-2 w-2 shrink-0 rounded-[2px]"
@@ -392,7 +445,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
           </div>
 
           {hasDetails && (
-            <div className="mt-2 flex flex-col gap-[6px]">
+            <div className="mt-2 flex flex-col gap-1.5">
               {visibleDetailRows.map((row) => {
                 const isDetailExpanded = !!expandedDetails[row.key];
                 return (
@@ -410,18 +463,17 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                         <ChevronRight
                           size={11}
                           strokeWidth={1.8}
-                          className={cn('shrink-0 transition-transform', isDetailExpanded && 'rotate-90')}
+                          className={cn(
+                            'shrink-0 transition-transform',
+                            isDetailExpanded && 'rotate-90',
+                          )}
                         />
                         <span className="min-w-0 truncate">{row.label}</span>
                       </span>
                       <span className="shrink-0 tabular-nums">{fmtContextTokens(row.tokens)}</span>
                       <span className="w-[42px] shrink-0 text-right tabular-nums">{row.count}</span>
                     </button>
-                    {isDetailExpanded && (
-                      <div className="mt-1 pl-[18px]">
-                        {row.content}
-                      </div>
-                    )}
+                    {isDetailExpanded && <div className="mt-1 pl-[18px]">{row.content}</div>}
                   </div>
                 );
               })}
@@ -434,11 +486,23 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                 <ContextDetailSection
                   title={t('chat.systemCard.context.messageBreakdown')}
                   rows={[
-                    [t('chat.systemCard.context.userMessages'), usage.messageBreakdown.userMessageTokens],
-                    [t('chat.systemCard.context.assistantMessages'), usage.messageBreakdown.assistantMessageTokens],
+                    [
+                      t('chat.systemCard.context.userMessages'),
+                      usage.messageBreakdown.userMessageTokens,
+                    ],
+                    [
+                      t('chat.systemCard.context.assistantMessages'),
+                      usage.messageBreakdown.assistantMessageTokens,
+                    ],
                     [t('chat.systemCard.context.toolCalls'), usage.messageBreakdown.toolCallTokens],
-                    [t('chat.systemCard.context.toolResults'), usage.messageBreakdown.toolResultTokens],
-                    [t('chat.systemCard.context.attachments'), usage.messageBreakdown.attachmentTokens],
+                    [
+                      t('chat.systemCard.context.toolResults'),
+                      usage.messageBreakdown.toolResultTokens,
+                    ],
+                    [
+                      t('chat.systemCard.context.attachments'),
+                      usage.messageBreakdown.attachmentTokens,
+                    ],
                   ]}
                 />
               )}
@@ -447,8 +511,14 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                   title={t('chat.systemCard.context.apiUsage')}
                   rows={[
                     [t('chat.systemCard.context.inputTokens'), usage.apiUsage.input_tokens],
-                    [t('chat.systemCard.context.cacheCreate'), usage.apiUsage.cache_creation_input_tokens],
-                    [t('chat.systemCard.context.cacheRead'), usage.apiUsage.cache_read_input_tokens],
+                    [
+                      t('chat.systemCard.context.cacheCreate'),
+                      usage.apiUsage.cache_creation_input_tokens,
+                    ],
+                    [
+                      t('chat.systemCard.context.cacheRead'),
+                      usage.apiUsage.cache_read_input_tokens,
+                    ],
                     [t('chat.systemCard.context.outputTokens'), usage.apiUsage.output_tokens],
                   ]}
                 />
@@ -477,14 +547,16 @@ interface ContextUsageData {
   maxTokens: number;
   rawMaxTokens: number;
   percentage: number;
-  gridRows: Array<Array<{
-    color: string;
-    isFilled: boolean;
-    categoryName: string;
-    tokens: number;
-    percentage: number;
-    squareFullness: number;
-  }>>;
+  gridRows: Array<
+    Array<{
+      color: string;
+      isFilled: boolean;
+      categoryName: string;
+      tokens: number;
+      percentage: number;
+      squareFullness: number;
+    }>
+  >;
   model: string;
   memoryFiles: Array<{ path: string; type: string; tokens: number }>;
   mcpTools: Array<{ name: string; serverName: string; tokens: number; isLoaded?: boolean }>;
@@ -524,9 +596,7 @@ function ContextDetailSection({
 
   return (
     <div>
-      {title && (
-        <div className="mb-1 text-12 font-medium text-[var(--msg-user-text)]">{title}</div>
-      )}
+      {title && <div className="mb-1 text-12 font-medium text-[var(--msg-user-text)]">{title}</div>}
       <div className="flex flex-col gap-[2px]">
         {visibleRows.map(([label, tokens]) => (
           <div key={label} className="flex items-baseline justify-between gap-3 text-12">
@@ -545,7 +615,8 @@ function contextColor(category: { name: string; color?: string }): string {
   const categoryName = category.name;
   if (categoryName === 'Free space') return 'var(--msg-tool-card-border)';
   if (isCssColor(category.color)) return category.color;
-  if (categoryName.includes('buffer') || categoryName.includes('deferred')) return 'var(--text-tertiary)';
+  if (categoryName.includes('buffer') || categoryName.includes('deferred'))
+    return 'var(--text-tertiary)';
   if (categoryName.includes('System prompt')) return 'var(--msg-user-text)';
   if (categoryName.includes('tools')) return 'var(--msg-tool-text)';
   if (categoryName.includes('Messages')) return 'var(--msg-tool-card-chevron)';
@@ -682,8 +753,7 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
   const durationMs = typeof data?.durationMs === 'number' ? data.durationMs : 0;
   const saved = preTokens > postTokens ? preTokens - postTokens : 0;
 
-  const fmtTokens = (n: number) =>
-    n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+  const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
   // Build a single line of stats — only show pieces that have real data so
   // the chip doesn't read "saved 0 tokens · 0 ms" when SDK omits the optional
@@ -691,7 +761,8 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
   const stats: string[] = [];
   if (saved > 0) stats.push(t('chat.systemCard.compact.savedTokens', { tokens: fmtTokens(saved) }));
   if (durationMs > 0) stats.push(`${(durationMs / 1000).toFixed(1)}s`);
-  const triggerLabel = trigger === 'manual' ? t('chat.systemCard.compact.manual') : t('chat.systemCard.compact.auto');
+  const triggerLabel =
+    trigger === 'manual' ? t('chat.systemCard.compact.manual') : t('chat.systemCard.compact.auto');
 
   return (
     <div
@@ -733,7 +804,10 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
   const turnsUsed = typeof data?.turnsUsed === 'number' ? data.turnsUsed : 0;
   const elapsedMs = typeof data?.elapsedMs === 'number' ? data.elapsedMs : 0;
   const reason = typeof data?.reason === 'string' ? data.reason : '';
-  const label = t('goal.complete.record', { turns: turnsUsed, duration: fmtGoalDuration(elapsedMs) });
+  const label = t('goal.complete.record', {
+    turns: turnsUsed,
+    duration: fmtGoalDuration(elapsedMs),
+  });
 
   return (
     <div
@@ -765,11 +839,13 @@ function GoalResumedCard({ data }: { data?: { kind?: string } }) {
   //     假恢复通知, 紧接着又是一次容量失败(review #844 codex P1)。
   // 存档里的 kind 仍是 'capacity-resumed'(已落库的卡片按这个值渲染), 只有文案改。
   const label =
-    data?.kind === 'capacity-resumed'
-      ? t('goal.capacityRetryNotice')
-      : t('goal.usageResumeNotice');
+    data?.kind === 'capacity-resumed' ? t('goal.capacityRetryNotice') : t('goal.usageResumeNotice');
   return (
-    <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
+    <div
+      className="flex w-full items-center gap-3 py-2 select-none"
+      role="separator"
+      aria-label={label}
+    >
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <Target size={12} className="shrink-0" />
@@ -778,52 +854,6 @@ function GoalResumedCard({ data }: { data?: { kind?: string } }) {
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
     </div>
   );
-}
-
-/**
- * silent-stop 自动续跑分隔条:上游空响应静默收尾后,main 守卫自动补发了隐藏的
- * 「继续」。用户不看到用户气泡,只看到这条轻分隔线标记"上一段与下一段之间发生过
- * 一次自动接续"(否则模型"一句话断成两段凭空接着说"会让人怀疑消息丢了)。
- * 复用 CompactBoundaryCard / GoalResumedCard 的分隔条视觉语言。
- */
-/** 活动行需要的展示信息(从 systemCardData 松散读取,缺字段一律降级而不是崩)。 */
-interface AutoResumeCardInfo {
-  error?: string;
-  attempt?: number;
-  maxAttempts?: number;
-  sessionTotal?: number;
-  /** 结果:由 main 在产出 / 再次被打断时回填;缺省 = 还在等结果。 */
-  outcome?: 'succeeded' | 'failed';
-}
-
-/**
- * 这条自动续跑记录属于「中断重连」还是 silent-stop 的「空回复后续跑」。
- *
- * 判据是有没有任何中断上下文（原因 / 次数 / 累计 / 结果）。**必须区分**：silent-stop 那条
- * 路径也走 `auto-resume` 卡，但它不是重连——把三态重连行套上去，历史里那条「已自动继续」
- * 会变成语义错误的「重新连接」（copilot review）。
- */
-function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
-  return (
-    info.error !== undefined ||
-    info.attempt !== undefined ||
-    info.maxAttempts !== undefined ||
-    info.sessionTotal !== undefined ||
-    info.outcome !== undefined
-  );
-}
-
-function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCardInfo {
-  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
-  return {
-    ...(typeof data?.error === 'string' && data.error.length > 0 ? { error: data.error } : {}),
-    ...(num(data?.attempt) !== undefined ? { attempt: num(data?.attempt) } : {}),
-    ...(num(data?.maxAttempts) !== undefined ? { maxAttempts: num(data?.maxAttempts) } : {}),
-    ...(num(data?.sessionTotal) !== undefined ? { sessionTotal: num(data?.sessionTotal) } : {}),
-    ...(data?.outcome === 'succeeded' || data?.outcome === 'failed'
-      ? { outcome: data.outcome }
-      : {}),
-  };
 }
 
 /**
@@ -860,7 +890,11 @@ function AutoResumeSeparator() {
   const { t } = useTranslation();
   const label = t('chat.systemCard.autoResumeSeparator.label');
   return (
-    <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
+    <div
+      className="flex w-full items-center gap-3 py-2 select-none"
+      role="separator"
+      aria-label={label}
+    >
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <RefreshCw size={12} className="shrink-0" />
@@ -944,13 +978,13 @@ function AutoResumeActionRow({
         // 图标与 chevron 都是 aria-hidden,可见文本(动词 + 摘要)本身就是正确的无障碍名。
         disabled={!canExpand}
         className={cn(
-          'flex w-full items-center gap-[6px]',
+          'flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
           'px-2 py-[3px]',
           'text-left outline-none',
           canExpand
             ? cn(
-                'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
+                'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                 ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
                 ACTIVITY_ROW_HOVER_SURFACE_CLASS,
               )
@@ -987,7 +1021,7 @@ function AutoResumeActionRow({
         )}
         <span className="flex-1" />
         <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
-          {canExpand ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
+          {canExpand ? expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} /> : null}
         </span>
       </button>
       {canExpand && expanded && (
@@ -1091,7 +1125,9 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           {toModel && (
             <>
               <span className="opacity-50">·</span>
-              <span title={toModel} className="min-w-0 truncate font-mono">{toModel}</span>
+              <span title={toModel} className="min-w-0 truncate font-mono">
+                {toModel}
+              </span>
             </>
           )}
           {Boolean(data?.resumed) && (
@@ -1138,11 +1174,18 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
-  const reason = data?.reason === 'pi-prompt-timeout' ? 'timeout' : 'overflow';
+  const reason =
+    data?.reason === 'pi-prompt-timeout'
+      ? 'timeout'
+      : data?.reason === 'codex-history-strip'
+        ? 'strip'
+        : 'overflow';
   const label = t(
     reason === 'timeout'
       ? 'chat.systemCard.contextRebuild.labelTimeout'
-      : 'chat.systemCard.contextRebuild.labelOverflow',
+      : reason === 'strip'
+        ? 'chat.systemCard.contextRebuild.labelStrip'
+        : 'chat.systemCard.contextRebuild.labelOverflow',
   );
 
   return (
@@ -1212,14 +1255,18 @@ const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
 function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; workingDir?: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const status =
-    data?.status === 'completed' || data?.status === 'failed' ? data.status : 'running';
   const reviewerSessionId =
     typeof data?.reviewerSessionId === 'string' ? data.reviewerSessionId : '';
   const result = typeof data?.result === 'string' ? data.result : '';
   const error = typeof data?.error === 'string' ? data.error : '';
   const failureCode =
     readReviewFailureCode(data?.failureCode) ?? reviewFailureCodeFromLegacyError(error);
+  const status =
+    data?.status === 'failed' && reviewerSessionId && isStaleReviewFailureCode(failureCode)
+      ? 'stale'
+      : data?.status === 'completed' || data?.status === 'failed'
+        ? data.status
+        : 'running';
   const failureMessage = failureCode
     ? t(REVIEW_FAILURE_I18N_KEY[failureCode])
     : error || t('chat.systemCard.review.noResult');
@@ -1231,6 +1278,8 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           <Spinner size={15} className="text-muted-foreground" />
         ) : status === 'completed' ? (
           <Check size={15} className="shrink-0 text-muted-foreground" />
+        ) : status === 'stale' ? (
+          <RefreshCw size={15} className="shrink-0 text-muted-foreground" />
         ) : (
           <X size={15} className="shrink-0 text-[var(--error-fg)]" />
         )}
@@ -1251,12 +1300,23 @@ function ReviewCard({ data, workingDir }: { data?: Record<string, unknown>; work
           {t('chat.systemCard.review.readOnlyHint')}
         </p>
       )}
-      {status === 'failed' && (
-        <p className="mt-1.5 pl-[23px] text-xs text-[var(--error-fg)]">{failureMessage}</p>
+      {(status === 'stale' || status === 'failed') && (
+        <p
+          className={cn(
+            'mt-1.5 pl-[23px] text-xs',
+            status === 'stale' ? 'text-muted-foreground' : 'text-[var(--error-fg)]',
+          )}
+        >
+          {failureMessage}
+        </p>
       )}
-      {status === 'completed' && result && (
+      {(status === 'completed' || status === 'stale') && result && (
         <div className="mt-3 border-t border-border pt-3">
-          <MarkdownRenderer content={result} workingDir={workingDir ?? ''} />
+          <MarkdownRenderer
+            content={result}
+            workingDir={workingDir ?? ''}
+            allowPrivilegedLinks={status !== 'stale'}
+          />
         </div>
       )}
     </div>
@@ -1271,6 +1331,9 @@ export function SystemCard({
   autoResumeInFlight,
 }: SystemCardProps) {
   switch (cardType) {
+    case 'cindy-make-doctor':
+    case 'cindy-make':
+      return <CindyMakeDoctorCard data={data} sessionId={sessionId} />;
     case 'help':
       return <HelpCard data={data} />;
     case 'cost':
@@ -1289,6 +1352,8 @@ export function SystemCard({
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
       return <GoalResumedCard data={data as { kind?: string } | undefined} />;
+    case 'cindy-make-complete':
+      return <CindyMakeCompleteCard data={data} />;
     case 'auto-resume': {
       // 同一个卡类型承载两套自愈:带中断上下文的是本份的「重连」记录,没有的是 silent-stop
       // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。
@@ -1309,6 +1374,14 @@ export function SystemCard({
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
+    case 'bot-session-task-message':
+      return <BotSessionTaskMessageTrace data={data} />;
+    case 'bot-session-task':
+      return <BotSessionTaskCard data={data} sessionId={sessionId} />;
+    case 'bot-authorization':
+      return <BotAuthorizationCardView data={data} sessionId={sessionId} />;
+    case 'bot-direct-message':
+      return <BotDirectMessageCard data={data} sessionId={sessionId} />;
     default:
       return null;
   }
@@ -1352,13 +1425,13 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   // 不用红色 (违反 §2 grayscale 硬规则)。
   const blockClass = cn(
     'mt-1 max-h-[320px] overflow-auto whitespace-pre-wrap break-words',
-    'rounded-[12px] px-[12px] py-[10px]',
+    'rounded-xl px-[12px] py-[10px]',
     'font-mono text-[length:calc(var(--app-code-font-size)_-_1.5px)] leading-[1.55]',
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-user-text)]',
     'border border-[var(--msg-code-block-border)]',
   );
   const cmdLineClass = cn(
-    'mt-2 px-[12px] py-[8px] rounded-[12px] overflow-x-auto',
+    'mt-2 px-[12px] py-[8px] rounded-xl overflow-x-auto',
     'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-user-text)]',
     'border border-[var(--msg-code-block-border)]',

@@ -6,7 +6,7 @@
  * 由本桥**弹确认卡**——把「拖图进聊天」这个授权动作换成「点一下允许」,
  * 决定权在用户的点击上,被注入的模型只能发起请求、点不了按钮。
  * 当前本地活跃会话为 Full Access 时,mcp-integrations/ghost.ts 会在进入本桥前
- * 按实时 Session 状态自动放行；workspace / fs_write 等其它 lane 不受该旁路影响。
+ * 按实时 Session 状态自动放行；workspace / fs_write / forge_source 同样走本桥。
  *
  * 实现完全对齐 IssueConfirmBridge 的成熟模式:main 侧发起,broadcast 一个
  * kind='ghost_grant_confirm' 的 interaction 到 renderer(复用
@@ -19,19 +19,30 @@
  * 本模块保持 electron-free(broadcast 由 register.ts 注入),单测直接 new。
  */
 
-import { randomUUID } from 'node:crypto';
-
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
+import { createDesktopOnlyConfirmationRequestId } from './desktopOnlyConfirmationProjection.js';
 
 /**
  * 过户通道:attachments = 媒体文件进总仓;dir = 上行读票据;save_dir = 下行
- * 写票据;fs_write = fs 槽写 workdir 文件(会话 permission 为逐条确认档时,
+ * 写票据;reveal_path = 把 Host 已安全解析的单个媒体仓路径返回给当前 Agent;
+ * fs_write = fs 槽写 workdir 文件(会话 permission 为逐条确认档时,
  * 意识每次写入前弹卡;同目录本会话批一次,记忆在 fsSlot);workspace =
  * workspace 槽在会话 workdir 外的目录下创建/复用会话入口(2026-07-25,
- * 不过户字节,只授权"以此目录为工作区建会话")。
+ * 不过户字节,只授权"以此目录为工作区建会话");
+ * forge_source = Forge 打包/骨架/安装的源码目录在会话 workdir 外(会写入
+ * .cindy 产物、骨架文件,或接着安装启用插件,不是过户票据);
+ * outside_workdir = 文档/电脑等内置工具读写会话 workdir 外的路径。
  */
-export type GhostGrantLane = 'attachments' | 'dir' | 'save_dir' | 'fs_write' | 'workspace';
+export type GhostGrantLane =
+  | 'attachments'
+  | 'dir'
+  | 'save_dir'
+  | 'reveal_path'
+  | 'fs_write'
+  | 'workspace'
+  | 'forge_source'
+  | 'outside_workdir';
 
 /** 确认卡上逐条展示的过户对象(路径/大小让用户看清自己在授权什么)。 */
 export interface GhostGrantFileItem {
@@ -55,6 +66,10 @@ export interface GhostGrantConfirmPayload {
   ghostName: string;
   lane: GhostGrantLane;
   items: GhostGrantFileItem[];
+  /** 发起这次确认的工具名,确认卡用来写清具体副作用。 */
+  sourceTool?: string;
+  /** 这次授权对应的读写方向。 */
+  operation?: 'read' | 'write';
 }
 
 export type GhostGrantConfirmDecision =
@@ -101,7 +116,7 @@ export class GhostGrantConfirmBridge {
     sessionId: string,
     payload: GhostGrantConfirmPayload,
   ): Promise<GhostGrantConfirmDecision> {
-    const requestId = randomUUID();
+    const requestId = createDesktopOnlyConfirmationRequestId();
     const request: GhostGrantConfirmInteractionSnapshot = {
       kind: 'ghost_grant_confirm',
       requestId,

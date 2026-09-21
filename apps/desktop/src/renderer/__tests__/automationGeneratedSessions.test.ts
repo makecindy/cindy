@@ -26,6 +26,7 @@ import {
   getAutomationGroupPrimarySession,
   getVisibleAutomationGroupSessions,
   groupAutomationSidebarEntries,
+  unreadSuccessScheduleRunIds,
   type AutomationScheduleSessionInfo,
 } from '@/features/cc-agent/lib/automationSidebarGrouping';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
@@ -36,9 +37,7 @@ import {
   isScheduledSession,
 } from '@/features/cc-agent/lib/scheduledSessionGrouping';
 import { getFocusedScheduleStatusFilter } from '@/features/scheduler/SchedulerPage';
-import { isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
-import { formatUsd } from '@/features/scheduler/lib/formatters';
-
+import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
@@ -90,6 +89,7 @@ const makeScheduleSessionInfo = (
   scheduleId: 'sched-1',
   scheduleName: 'Schedule',
   unreadRunIds: [],
+  unreadFailedRunIds: [],
   hasUnreadRun: false,
   hasUnreadFailedRun: false,
   ...partial,
@@ -103,6 +103,8 @@ describe('automation-generated sessions', () => {
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
     // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
+    // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
+    // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
       'desktop',
       'feishu',
@@ -118,6 +120,9 @@ describe('automation-generated sessions', () => {
       'review',
       'shared',
       'plugin',
+      // /cindy-make 制作个人版创建的代码任务:按源码 workingDir 归入项目分组。
+      'cindy-make',
+      'cindy-make-merge',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
@@ -125,6 +130,7 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('dingtalk');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('review');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('bot');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');
@@ -493,8 +499,48 @@ describe('automation-generated sessions', () => {
   it('keeps schedule run unread semantics shared with the run history badge', () => {
     expect(isUnreadScheduleRun({ status: 'success', readAt: undefined })).toBe(true);
     expect(isUnreadScheduleRun({ status: 'failed', readAt: undefined })).toBe(true);
+    expect(isUnreadScheduleRun({ status: 'interrupted', readAt: undefined })).toBe(true);
+    expect(isUnreadScheduleRun({ status: 'aborted', readAt: undefined })).toBe(false);
     expect(isUnreadScheduleRun({ status: 'running', readAt: undefined })).toBe(false);
     expect(isUnreadScheduleRun({ status: 'success', readAt: 1 })).toBe(false);
+    expect(isUnreadFailedScheduleRun({ status: 'failed', readAt: undefined })).toBe(true);
+    expect(isUnreadFailedScheduleRun({ status: 'interrupted', readAt: undefined })).toBe(true);
+    expect(isUnreadFailedScheduleRun({ status: 'aborted', readAt: undefined })).toBe(false);
+    expect(isUnreadFailedScheduleRun({ status: 'success', readAt: undefined })).toBe(false);
+    expect(
+      unreadSuccessScheduleRunIds({
+        unreadRunIds: ['ok', 'bad'],
+        unreadFailedRunIds: ['bad'],
+      }),
+    ).toEqual(['ok']);
+  });
+
+  it('routes historical failures to the seen receipt while keeping retry scoped to one run', () => {
+    const sessionViewSource = readTextLf(
+      new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
+      'utf8',
+    );
+    const bannerSource = readTextLf(
+      new URL('../components/chat/UnreadFailedScheduleBanner.tsx', import.meta.url),
+      'utf8',
+    );
+    const zh = JSON.parse(
+      readTextLf(new URL('../i18n/locales/zh-CN/common.json', import.meta.url), 'utf8'),
+    );
+
+    expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
+    expect(sessionViewSource).toContain('scheduleSessionInfo.hasFailedRun');
+    expect(sessionViewSource).toContain('shouldShowFailedScheduleNotice({');
+    expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
+    expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
+    expect(sessionViewSource).toContain('latestUnreadFailedRunId');
+    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId], remoteDeviceId ?? undefined)');
+    expect(sessionViewSource).toContain(
+      'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined)',
+    );
+    expect(bannerSource).toContain('scheduleFailureMessageKey(latestFailedRun)');
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有自动运行失败。');
+    expect(sessionViewSource).toContain('latestFailedRun={scheduleSessionInfo.latestFailedRun}');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {
@@ -548,6 +594,77 @@ describe('automation-generated sessions', () => {
         showAll: true,
       }).map((session) => session.id),
     ).toEqual(['jira-3', 'jira-2', 'jira-1']);
+  });
+
+  // review P2(#2938):上层聚合灯为远程活动点亮的子运行,不能藏在「显示全部」后。
+  // 远程 running / 未读不在本地 notifications / runningSessionIds 里,父层通过
+  // foldExemptSessionIds 并入,自动化组的展开态折叠也要认这份豁免。
+  it('keeps remote-lamp exempt automation children visible in the expanded fold', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
+    );
+    const group = { id: 'schedule:sched-remote', title: 'Remote', sessions, attentionSessionIds: [] };
+
+    const withoutExempt = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      showAll: false,
+    });
+    expect(withoutExempt.visibleSessions.map((session) => session.id)).not.toContain('run-6');
+
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      foldExemptSessionIds: new Set(['run-6']),
+      showAll: false,
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toContain('run-6');
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(1);
+  });
+
+  it('merges newly exempt remote runs into a frozen layout without moving its clicked rows', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      makeSession({ id: `run-${index}`, source: 'scheduler' }),
+    );
+    const group = { id: 'schedule:remote-frozen', title: 'Remote', sessions, attentionSessionIds: [] };
+    const options = { notifications: new Set<string>(), showAll: false,
+      frozenVisibleSessionIds: ['run-2', 'run-0'], activeSessionId: 'run-2' };
+    const before = getAutomationGroupChildView(group, options);
+    expect(before.visibleSessions.map((session) => session.id)).toEqual(['run-2', 'run-0']);
+    const view = getAutomationGroupChildView(group, {
+      ...options, foldExemptSessionIds: new Set(['run-0', 'run-6', 'other-group']),
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-2', 'run-0', 'run-6']);
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(4);
+    expect(view.totalCount).toBe(7);
+    expect(getAutomationGroupChildView(group, { ...options, showAll: true }).visibleSessions)
+      .toEqual(sessions);
+  });
+
+  it.each(['unread', 'running'])('keeps newly %s local runs visible in frozen layouts without remote exemptions', (activity) => {
+    const sessions = ['clicked', 'idle', 'active'].map((id) => makeSession({ id, source: 'scheduler' }));
+    const group = { id: 'schedule:local-frozen', title: 'Local', sessions, attentionSessionIds: [] };
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(activity === 'unread' ? ['clicked', 'active', 'other-group'] : []),
+      runningSessionIds: new Set(activity === 'running' ? ['clicked', 'active', 'other-group'] : []),
+      showAll: false, frozenVisibleSessionIds: ['clicked'],
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toEqual(['clicked', 'active']);
+    expect(view.hiddenCount).toBe(1);
+    expect(view.isOverflowing).toBe(true);
+  });
+
+  it('keeps overflow available when a frozen layout still hides idle runs', () => {
+    const sessions = ['visible', 'hidden'].map((id) => makeSession({ id, source: 'scheduler' }));
+    const group = { id: 'schedule:frozen-overflow', title: 'Frozen', sessions, attentionSessionIds: [] };
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(), showAll: false, frozenVisibleSessionIds: ['visible', 'removed'],
+    });
+    expect(view.visibleSessions).toEqual([sessions[0]]);
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(1);
   });
 
   it('caps collapsed automation children at five and overflows the rest like the dialogue list', () => {
@@ -749,7 +866,7 @@ describe('automation-generated sessions', () => {
         activeSessionId: 'manual',
         frozenVisibleSessionIds: ['jira-1'],
       }).map((session) => session.id),
-    ).toEqual(['jira-1']);
+    ).toEqual(['jira-1', 'jira-2']);
     expect(
       getAutomationGroupPrimarySession(group, new Set(['jira-2']), {
         preferredSessionId: 'jira-2',
@@ -763,7 +880,7 @@ describe('automation-generated sessions', () => {
         activeSessionId: 'jira-1',
         frozenVisibleSessionIds: ['jira-1'],
       }).map((session) => session.id),
-    ).toEqual(['jira-1']);
+    ).toEqual(['jira-1', 'jira-2']);
   });
 
   it('freezes the group primary while the clicked automation session is active', () => {
@@ -813,7 +930,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('toggleCollapsed()');
     // 切折叠必须复位轴 2:showAll 被收起告警列表和展开历史列表共用。复位挂在
     // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
-    expect(source).toContain('useLayoutEffect(() => {\n    setShowAll(false);\n  }, [collapsed]);');
+    expect(source).toMatch(/useLayoutEffect\(\(\) => \{\s+setShowAll\(false\);\s+\}, \[collapsed\]\);/);
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
     // 轴 1 收起时只留组头 + 被提上来的未处理告警行,取舍统一由 childView 决定
@@ -824,24 +941,30 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('{hasVisibleChildren && (');
     // 侧栏侧保留「立即运行」直点,低频的编辑 / 暂停恢复 / 删除收回 More 菜单。
     expect(source).toContain("onScheduleAction(group, 'run')");
+    expect(source).toContain('const canMarkRead = collapsedAttention.tone != null');
+    expect(source).toContain('{canMarkRead && (');
+    expect(source).toContain("onScheduleAction(group, 'mark-read')");
     expect(source).toContain("onScheduleAction(group, 'edit')");
     expect(source).toContain("onScheduleAction(group, 'toggle-pause')");
     expect(source).toContain("onScheduleAction(group, 'delete')");
     expect(source).toContain('EllipsisVertical');
     expect(source).toContain('setMenuOpen');
-    expect(source).not.toContain('handleGroupContextMenu');
+    expect(source).toContain('onContextMenu={(event) => {');
+    expect(source).toContain('setMenuOpen(true)');
     // Run / More 图标(lucide Play / EllipsisVertical)必须都在,按钮尺寸与普通会话行对齐。
     expect(source).toMatch(/<Play size=\{14\}/);
     expect(source).toMatch(/<EllipsisVertical size=\{14\}/);
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.runNow');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.more');
+    expect(source).toContain('ccAgent.sidebar.automationGroup.menu.markAllAsRead');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.edit');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.pause');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.resume');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.delete');
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
-    // 组头点击打开组内「最新一条」运行(需求:点折叠组头打开最新 session),不再走 primary。
-    expect(source).toContain('onSessionClick(latestSession.id)');
+    // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
+    expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
+    expect(source).toContain('onSessionClick(targetId)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
     // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。
@@ -1013,8 +1136,9 @@ describe('automation-generated sessions', () => {
     expect(unreadCountsHookSource).not.toContain('RUNS_PER_SCHEDULE_LIMIT');
     expect(unreadCountsHookSource).not.toContain('listRuns(');
     expect(storageSource).toContain('listSidebarIndexRuns');
+    expect(storageSource).toContain('.from(scheduleSessionLatestRuns)');
     expect(storageSource).toContain('isNotNull(scheduleRuns.sessionId)');
-    expect(storageSource).toContain('UNREAD_TERMINAL_RUN_STATUSES');
+    expect(storageSource).toContain('unreadTerminalRunWhere');
     expect(storageSource).toContain('nextFireAt: schedules.nextFireAt');
     expect(storageSource).toContain('listSchedulesByLegacyKey(db)');
     expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
@@ -1026,15 +1150,12 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain("eq(sessions.source, 'scheduler')");
     expect(storageSource).toContain('listDirectScheduleIdsByLegacyKey');
     expect(storageSource).toContain('directScheduleId && directScheduleId !== row.id');
-    expect(scheduleIndexHookSource).toContain('nextFireAt: run.nextFireAt');
+    expect(scheduleIndexHookSource).toContain('projectScheduleSidebarIndex(runs)');
+    expect(readFileSync(new URL('../features/scheduler/lib/projectScheduleSidebarIndex.ts', import.meta.url), 'utf8')).toContain('nextFireAt: run.nextFireAt');
     expect(preloadSource).toContain('listSidebarIndexRuns');
   });
 
-  it('surfaces total automation task cost from deduped schedule sessions', () => {
-    const storageSource = readTextLf(
-      new URL('../../main/scheduler-host/storage.ts', import.meta.url),
-      'utf8',
-    );
+  it('keeps per-run Automation cost without loading cumulative list cost', () => {
     const schedulePageSource = readTextLf(
       new URL('../features/scheduler/SchedulerPage.tsx', import.meta.url),
       'utf8',
@@ -1055,47 +1176,15 @@ describe('automation-generated sessions', () => {
       new URL('../features/scheduler/components/RunHistoryPane.tsx', import.meta.url),
       'utf8',
     );
-    const hookSource = readTextLf(
-      new URL('../features/scheduler/hooks/useScheduleCostSummaries.ts', import.meta.url),
-      'utf8',
-    );
     const preloadSource = readTextLf(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
     const zh = JSON.parse(
       readTextLf(new URL('../i18n/locales/zh-CN/common.json', import.meta.url), 'utf8'),
     );
 
-    expect(formatUsd(0)).toBe('$0.00');
-    expect(formatUsd(0.001)).toBe('<$0.01');
-    expect(formatUsd(1.234)).toBe('$1.23');
-    expect(storageSource).toContain('listCostSummaries');
-    expect(storageSource).toContain('messages.agentMeta');
-    expect(storageSource).toContain('scheduleOriginFromAgentMeta');
-    expect(storageSource).toContain("origin?.kind !== 'scheduler'");
-    expect(storageSource).toContain('turnCostFromAgentMeta');
-    expect(storageSource).toContain('turnCostIsEstimate === true');
-    expect(storageSource).toContain('SQLITE_IN_CHUNK_SIZE');
-    expect(storageSource).toContain("when 'user' then 0 else 1 end");
-    expect(storageSource).toContain('entry.costValues.push(turnCost.costMoney)');
-    expect(storageSource).toContain(
-      'addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency)',
-    );
-    expect(storageSource).toContain('totalMoney');
-    expect(storageSource).toContain('listLegacySessionRuns');
-    expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
-    expect(storageSource).toContain("LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:'");
-    expect(storageSource).toContain('legacyScheduleNameFromSessionTitle(session.title)');
-    expect(storageSource).toContain('listLegacyAliasesForSchedule');
-    expect(storageSource).toContain('inArray(sessions.title, titles)');
-    expect(storageSource).toContain('legacyAliases.has(');
-    expect(storageSource).toContain('directScheduleId && directScheduleId !== schedule.id');
-    expect(preloadSource).toContain('listCostSummaries');
-    expect(hookSource).toContain('onUsageSessionSpendChanged');
-    expect(hookSource).toContain('onUsageMessageTurnCost');
-    expect(hookSource).toContain('maker.schedule.listCostSummaries()');
-    expect(schedulePageSource).toContain('useScheduleCostSummaries(sorted)');
-    expect(taskListPaneSource).toContain('costSummariesLoaded');
-    expect(taskListCellSource).toContain('scheduler.cell.totalCost');
-    expect(taskListCellSource).toContain('formatTurnCostMoney(totalMoney)');
+    expect(preloadSource).not.toContain('listCostSummaries');
+    expect(schedulePageSource).not.toContain('useScheduleCostSummaries');
+    expect(taskListPaneSource).not.toContain('costSummaries');
+    expect(taskListCellSource).not.toContain('scheduler.cell.totalCost');
     expect(runHistoryPaneSource).toContain('groupRunsForHistory');
     expect(runHistoryPaneSource).toContain('PERSISTENT_SESSION_PREVIEW_LIMIT = 3');
     expect(runHistoryPaneSource).toContain('expandRemainingRuns');
@@ -1104,8 +1193,6 @@ describe('automation-generated sessions', () => {
     expect(runHistoryCardSource).toContain("!isLegacySessionRun && run.status !== 'running'");
     expect(runHistoryCardSource).toContain('scheduler.runs.runCost');
     expect(runHistoryCardSource).toContain("run.costAttribution === 'legacy'");
-    expect(zh.scheduler.cell.totalCost).toBe('开销 {{cost}}');
-    expect(zh.scheduler.cell.totalValue).toBe('价值 {{value}}');
     expect(zh.scheduler.runs.sessionCost).toBe('任务开销 {{cost}}');
     expect(zh.scheduler.runs.sessionValue).toBe('任务价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
@@ -1135,6 +1222,14 @@ describe('automation-generated sessions', () => {
     expect(sidebarSource).toContain('useDeleteScheduleWithSessions');
     expect(sidebarSource).toContain('requestDeleteSchedule({');
     expect(sidebarSource).toContain('knownSessionIds: group.sessions.map((session) => session.id)');
+    expect(sidebarSource).toContain("if (action === 'mark-read')");
+    expect(sidebarSource).toContain('unreadSuccessScheduleRunIds(info)');
+    expect(sidebarSource).toContain(
+      "t('ccAgent.layout.markedAsRead', { count: processed.length })",
+    );
+    expect(sidebarSource).not.toContain(
+      "t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length })",
+    );
     expect(schedulerPageSource).toContain('getFocusedScheduleStatusFilter(schedules, focusId)');
     expect(schedulerPageSource).toContain('setEditing(focused)');
     expect(schedulerPageSource).toContain('setFormOpen(true)');

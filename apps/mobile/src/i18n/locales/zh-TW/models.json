@@ -11,13 +11,16 @@
     "subscriptionBadgeCompact": "訂閱",
     "backToModels": "返回模型列表",
     "agentSwitchHint": "選擇模型後，下一條訊息將切換到 {{agent}}",
-    "crossAgentEmptyHint": "請先在被控裝置連線 {{agent}} 的模型來源",
+    "crossAgentEmptyHint": "請先在遠端裝置連線 {{agent}} 的模型來源",
     "permissionModeAccessibility": "權限模式：{{mode}}",
     "selectProviderModelAccessibility": "選擇來源 {{provider}} 的模型 {{model}}",
     "selectModelAccessibility": "選擇模型 {{model}}",
     "configureAccessibility": "配置 {{model}}",
-    "budgetDisabledHint": "該模型需先在被控裝置配置 API key 才能使用",
+    "budgetDisabledHint": "該模型需先在遠端裝置配置 API key 才能使用",
     "priceLine": "輸入 {{input}} · 輸出 {{output}} / 百萬 token",
+    "priceTitle": "每百萬 token",
+    "priceAmounts": "輸入 {{input}} · 輸出 {{output}}",
+    "discountedVsStandard": "折扣中，較標準價省 {{percent}}%",
     "contextSuffix": "{{size}} 上下文",
     "fastTag": "快速"
   },
@@ -36,11 +39,38 @@
       "ultra": "極致"
     }
   },
+  "contextWindowSwitch": {
+    "title": "此模型無法容納目前對話",
+    "remoteTitle": "目前遠端任務無法安全切換模型",
+    "description": "目前對話已使用 {{used}}，超過新模型可容納的 {{total}}（約 {{pct}}%）。若繼續切換，Cindy 會先產生簡短摘要再繼續；對話記錄仍會保留，但不會再逐字傳給新模型。",
+    "remoteDescription": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。",
+    "cancel": "保留目前模型",
+    "confirm": "切換並繼續"
+  },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型",
     "confirmTitle": "切換到 {{agent}}？",
     "confirmMessage": "下一條訊息傳送時，{{appName}} 會把當前任務交接給 {{agent}}。兩個 Agent 對上下文和工具的理解可能不同，請確認後再選擇目標模型。",
     "cancel": "取消",
     "confirm": "繼續選擇"
+  },
+  "unified": {
+    "favorites": "收藏",
+    "all": "全部模型",
+    "recommended": "推薦",
+    "source": "來源",
+    "harness": "Harness",
+    "addFavorite": "加入收藏",
+    "removeFavorite": "取消收藏",
+    "restoreRecommended": "恢復推薦",
+    "saveFailed": "無法儲存，請重試。",
+    "configure": "設定",
+    "syncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
+    "timeUnit": {
+      "day": "天",
+      "hour": "小時",
+      "minute": "分鐘",
+      "second": "秒"
+    }
   }
 }

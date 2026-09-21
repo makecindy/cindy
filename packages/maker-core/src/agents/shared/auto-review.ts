@@ -13,12 +13,12 @@
  *
  * ## 两层判定
  *
- *   - **确定性绿灯 → `auto-approve`**：只读、会话内状态、工作区内文件写、明确只读 shell。
- *   - **灰区 → `prompt`**：交当前会话模型判 allow / block / ask；reviewer 故障时静默 block。
- *   - **确定性红线 → `prompt-each-time`**：凭证、提权、广泛破坏等极高风险动作才允许打扰用户。
+ *   - `auto-approve`：已有明确安全证据，可静态放行。
+ *   - `prompt` / `prompt-each-time`：历史风险等级，均交 AI 判断 allow / block / ask。
  *
- * 这里的 `prompt` 是内部灰区标记，不等于 UI 弹窗。最终只有轻量 reviewer 明确返回 `ask`，
- * 或本地规则命中确定性红线，才弹确认；拿不准与服务不可用都回主 Agent `block`，让它换安全做法。
+ * 本文件只分类风险，不决定弹窗。下面的“必问/逐次确认”注释描述旧等级名称；
+ * Auto 的最终决策统一由 resolveAutoReviewDecision 给出：只有模型 ask 或审阅故障
+ * 才交给用户，高风险名称、路径未知或 requireConsent 本身不能硬转人工。
  *
  * ## 已知静态残口(命令字符串层不可闭合,应在 env / OS / 会话配置层缓解,不在此兜底)
  *
@@ -37,6 +37,9 @@
  *   - **DNS 重绑定 / 符号链接**:见 isInternalFetchTarget / isInsideWorkspace 各自注释;属网络出口过滤 / fs.realpath 层。
  */
 
+import { lstatSync, realpathSync } from 'node:fs';
+import * as nodePath from 'node:path';
+
 import {
   isDotenvCredentialPath,
   isSensitiveCredentialPath,
@@ -48,10 +51,11 @@ import { parseShellInputRedirections } from './shell-input-redirections.js';
 export { isSensitiveCredentialPath } from './sensitive-credential-paths.js';
 
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
+export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
 
 /**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
- *   read          读文件/内省(可带 path:读凭证文件必问;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
+ *   read          读文件/内省(可带 path:读凭证文件需送审;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
  *   session-state 会话内状态/控制,无本地写/外发(todo、后台 shell 读写、subagent 派生)
  *   file-write    带结构化路径的文件写(path 缺失=无法确认在区内→升级)
  *   exec          shell 命令(交给命令分类器)
@@ -59,24 +63,51 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
  *   other         未知/其它 → fail-closed
  */
 export type ReviewableAction =
-  | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
+  | {
+      kind: 'read';
+      path?: string;
+      scope?: 'file' | 'tree';
+      /** Harness 的执行范围会动态收紧时，区外读不得沿用旧 provider allowlist。 */
+      requireWorkspaceBoundary?: boolean;
+    }
   | { kind: 'session-state' }
-  | { kind: 'file-write'; path: string | undefined }
+  | {
+      kind: 'file-write';
+      path: string | undefined;
+      /**
+       * Harness 在实际执行进程中解析出的写目标。`null` 表示 harness 声明会提供
+       * canonical 证据、但本次无法证明；缺省保持不具备 realpath 能力的旧 adapter 语义。
+       */
+      resolvedPath?: string | null;
+      /**
+       * 与 resolvedPath 同一执行文件系统内解析出的可写根。原始 path 仍只按词法根检查，
+       * 避免区外别名借真实根反向洗成绿灯。`null` 表示证据无法证明。
+       */
+      resolvedWritableRoots?: readonly string[] | null;
+    }
   // cwdUnknown:harness 上报了 cwd 字段但内容为空/不可解析 —— 与"未提供 cwd"(按会话工作目录)不同,
   // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
-  | { kind: 'exec'; command: string; cwd?: string; cwdUnknown?: boolean }
+  | {
+      kind: 'exec';
+      command: string;
+      cwd?: string;
+      cwdUnknown?: boolean;
+      /** 远端路径不属于控制端文件系统；无法取得执行端 realpath 时写目标不做静态免审。 */
+      destructivePathResolution?: 'host' | 'unavailable';
+    }
   | { kind: 'network'; target?: string; operation?: string }
   | { kind: 'other'; description?: string; requireConsent?: boolean };
 
 /**
- * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
- * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots[0] 是唯一可写工作目录，
- * 后续项是 additionalDirectories 只读引用目录，均为绝对路径。
+ * 核心裁决。shell 写目标会在实际执行主机上解析最近存在祖先的 realpath，防止授权根内
+ * symlink / junction 越界。远端 adapter 必须显式标记无法取证，
+ * 此时标为需送审。workspaceRoots 是全部可读根；opts.writableRoots 是明确可写根。
+ * 旧调用未提供 writableRoots 时仍只有首个工作目录可写。
  */
 export function reviewAction(
   action: ReviewableAction,
   workspaceRoots: string[],
-  opts?: { platform?: NodeJS.Platform },
+  opts?: { platform?: NodeJS.Platform; writableRoots?: readonly string[] },
 ): ReviewVerdict {
   // macOS firmlink(/private/{var,tmp,etc} == /{var,tmp,etc})仅在 darwin 上成立;在 Linux(含远端 Linux)
   // 上 /private/tmp 与 /tmp 是无关路径,无条件抹平会把区外写误判为区内(codex 报)→ 只在 darwin 上抹平。
@@ -85,6 +116,12 @@ export function reviewAction(
     case 'read':
       // 读凭证/密钥文件(内置 Read/Grep 等,path 命中)必问、不可记住。
       if (action.path && isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
+      if (action.requireWorkspaceBoundary && action.path
+        && !isInsideWorkspace(
+          normalizeTarget(action.path, workspaceRoots),
+          workspaceRoots,
+          aliasFirmlinks,
+        )) return 'prompt-each-time';
       // 目录级递归读(Grep/Glob/LS,scope='tree')的**根目录**在工作区外 → 能遍历进区外的凭证子路径
       // (如 `Grep {path:'/Users/me', pattern:'AKIA'}` 读出 ~/.aws/credentials,而 path 本身不含凭证名,
       // copilot 报)→ 升级。读取范围含额外只读引用目录(整个 workspaceRoots)。单文件读只读一个具名文件。
@@ -95,33 +132,85 @@ export function reviewAction(
       return 'auto-approve';
     case 'file-write': {
       if (!action.path) return 'prompt';
+      // 能提供执行期真实路径的 harness 一旦解析失败，就不能退回字面路径绿灯。
+      // 这不是普通灰区：用户看到的授权根与实际落盘目标可能已经不同，必须逐次确认。
+      if (action.resolvedPath === null || action.resolvedWritableRoots === null) {
+        return 'prompt-each-time';
+      }
+      const writeTargets = action.resolvedPath === undefined
+        ? [action.path]
+        : [action.path, action.resolvedPath];
       // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
-      if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
-      const normalizedWriteTarget = normalizeTarget(action.path, workspaceRoots);
-      // **只有工作目录(workspaceRoots[0])可写**;额外目录(additionalDirectories)是只读引用上下文
-      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写)。相对路径挂到 workspaceRoots[0] 解析。
-      // 区内一律放行 —— 即便工作区本身落在 /var、/root 等下,区内写也不该被系统红线误升(先判区内)。
-      const writableRoots = workspaceRoots.slice(0, 1);
-      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
+      if (writeTargets.some((target) => isSensitiveCredentialPath(target))) {
+        return 'prompt-each-time';
+      }
+      const normalizedWriteTargets = writeTargets.map((target) =>
+        normalizeTarget(target, workspaceRoots));
+      const normalizedWriteTarget = normalizedWriteTargets[0]!;
+      const normalizedResolvedTarget = normalizedWriteTargets[1];
+      // 相对路径始终挂到主工作目录(workspaceRoots[0])解析；绝对路径可落进任一显式可写根。
+      // 主工作目录内一律放行 —— 即便仓库本身落在 /var、/root 等下,区内写也不该被系统红线误升。
+      // 但用户追加的可写根不能把 /etc、/System 等系统红线洗成绿灯；那类目录仍须逐次确认。
+      const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
+      const resolvedWritableRoots = action.resolvedWritableRoots === undefined
+        ? writableRoots
+        : [...action.resolvedWritableRoots];
+      const primaryWorkspaceRoot = workspaceRoots[0];
+      const lexicalTargetIsPrimary = Boolean(
+        primaryWorkspaceRoot
+        && isInsideWorkspace(normalizedWriteTarget, [primaryWorkspaceRoot], aliasFirmlinks)
+      );
+      const lexicalTargetIsWritable = isInsideWorkspace(
+        normalizedWriteTarget,
+        writableRoots,
+        aliasFirmlinks,
+      );
+      if (normalizedResolvedTarget !== undefined) {
+        // 系统与凭证红线必须对实际落盘目标重跑，不能被授权根内的链接名遮住。
+        if (isProtectedSystemPath(canonicalPath(normalizedResolvedTarget, aliasFirmlinks))) {
+          return 'prompt-each-time';
+        }
+        const resolvedTargetIsWritable = isInsideWorkspace(
+          normalizedResolvedTarget,
+          resolvedWritableRoots,
+          aliasFirmlinks,
+        );
+        // 最危险的形态是“看起来在授权内，实际写到授权外”。普通区外写仍保留
+        // 既有灰区语义；链接越界则必须让用户看到真实边界变化并逐次确认。
+        if ((lexicalTargetIsPrimary || lexicalTargetIsWritable) && !resolvedTargetIsWritable) {
+          return 'prompt-each-time';
+        }
+        // 原始路径本身也必须在授权边界内；不能用一个区外别名反向洗成绿灯。
+        if (!lexicalTargetIsPrimary && !lexicalTargetIsWritable) return 'prompt';
+        return 'auto-approve';
+      }
+      if (lexicalTargetIsPrimary) return 'auto-approve';
       // 区外写系统/受保护目录(/etc、/System、C:\Windows 等)是高影响系统级写入,不能交灰区 reviewer
       // 静默 allow(copilot 报)→ 确定性必问。canonical(darwin 抹平 /private firmlink)后判,使
       // `/private/etc/passwd` 也命中 `/etc`。其它区外写 → 灰区 reviewer。
       if (isProtectedSystemPath(canonicalPath(normalizedWriteTarget, aliasFirmlinks))) return 'prompt-each-time';
+      if (lexicalTargetIsWritable) return 'auto-approve';
       return 'prompt';
     }
     case 'exec': {
       const cwdUnknown = action.cwdUnknown === true || (action.cwd !== undefined && action.cwd.trim() === '');
+      const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
       const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
         cwd: cwdUnknown ? undefined : action.cwd,
         cwdUnknown,
         platform: opts?.platform,
+        writableRoots,
+        destructivePathResolution: action.destructivePathResolution === 'unavailable'
+          ? 'unavailable'
+          : (opts?.platform ?? process.platform) === process.platform
+            ? 'host'
+            : 'lexical',
       });
       // cwd 未知 → 相对目标无法证明落在工作区内,不能按"区内"放行(至少升到灰区交 reviewer)。
       if (cwdUnknown) return shellVerdict === 'auto-approve' ? 'prompt' : shellVerdict;
-      // 额外目录是只读引用，不是可执行写入边界。先保留命令分类器识别出的确定性红线，
-      // 其它命令只要 cwd 不在首个可写根内就升级到 reviewer，避免相对写落进 additionalDirectories。
-      const writableRoots = workspaceRoots.slice(0, 1);
+      // 先保留命令分类器识别出的确定性红线；其它命令只要 cwd 不在任一显式可写根内
+      // 就升级到 reviewer，避免相对写落进只读 additionalDirectories。
       if (action.cwd
         && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), writableRoots, aliasFirmlinks)) {
         return shellVerdict === 'prompt-each-time' ? shellVerdict : 'prompt';
@@ -3120,7 +3209,18 @@ type ShellReviewOptions = {
   cwd?: string;
   cwdUnknown?: boolean;
   platform?: NodeJS.Platform;
+  /** 明确可写根；缺省保持历史语义，仅 workspaceRoots[0] 可写。 */
+  writableRoots?: readonly string[];
+  /** reviewAction 才能声明执行端证据；直接分类调用保持兼容的纯字符串语义。 */
+  destructivePathResolution?: 'host' | 'unavailable' | 'lexical';
 };
+
+function resolveWritableRoots(
+  workspaceRoots: readonly string[],
+  explicit?: readonly string[],
+): string[] {
+  return [...(explicit ?? workspaceRoots.slice(0, 1))];
+}
 
 /** 提取普通位置参数；`--` 后即使以 `-` 开头也按目标处理。 */
 function positionalOperands(tokens: string[]): string[] {
@@ -3192,7 +3292,7 @@ function operandsIncludingAttachedPowerShellPaths(
   return out;
 }
 
-/** 破坏性目标是否无法证明被限制在首个可写根的子目录内。 */
+/** 破坏性目标是否无法证明被限制在某个可写根的子目录内。 */
 /**
  * 破坏目标里的字符类 `[…]` 能否展开出路径穿越字符 `.`(0x2E)或 `/`(0x2F)——能则运行期可拼出 `..`/额外
  * 分隔符逃出静态前缀(greptile 报 `rm -rf sub/[.-x][.-x]/etc/passwd`,`[.-x]` 范围含 `.`/`/`)。
@@ -3210,13 +3310,54 @@ function charClassCanTraverse(target: string): boolean {
   return false;
 }
 
+/**
+ * 解析删除目标真正会穿过的路径。目标不存在时从最近存在祖先重建尾部，因此仍能看穿
+ * `/grant/link/missing` 中的 link；存在却无法 realpath 的祖先（悬空/循环链接、权限错误）
+ * 不能继续向上跳过，否则会把未知目标重新伪装成授权根内路径。
+ */
+function resolveDestructiveTargetPath(target: string): string | null {
+  const absoluteTarget = nodePath.resolve(target);
+  try {
+    return normalizeSlashes(realpathSync(absoluteTarget));
+  } catch {
+    try {
+      lstatSync(absoluteTarget);
+      return null;
+    } catch (lstatError) {
+      const code = (lstatError as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    }
+    let ancestor = nodePath.dirname(absoluteTarget);
+    for (let depth = 0; depth < 64; depth += 1) {
+      try {
+        return normalizeSlashes(nodePath.join(
+          realpathSync(ancestor),
+          nodePath.relative(ancestor, absoluteTarget),
+        ));
+      } catch {
+        try {
+          lstatSync(ancestor);
+          return null;
+        } catch (lstatError) {
+          const code = (lstatError as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+        }
+        const parent = nodePath.dirname(ancestor);
+        if (parent === ancestor) return null;
+        ancestor = parent;
+      }
+    }
+    return null;
+  }
+}
+
 function destructiveTargetNeedsConsent(
   target: string,
   workspaceRoots: string[],
   opts: ShellReviewOptions,
 ): boolean {
-  const writableRoot = workspaceRoots[0];
-  if (!writableRoot) return true;
+  const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
+  if (writableRoots.length === 0) return true;
   // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
   if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
   // 字符类能展开出 `.`/`/` → 运行期路径可穿越出静态前缀,不可静态证明在区内 → 必问(greptile 报)。
@@ -3226,10 +3367,8 @@ function destructiveTargetNeedsConsent(
   // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
   const globIndex = target.search(/[*?[\]]/);
   const staticTarget = globIndex >= 0 ? (target.slice(0, globIndex) || '.') : target;
-  const cwd = opts.cwd ?? writableRoot;
+  const cwd = opts.cwd ?? workspaceRoots[0] ?? writableRoots[0];
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const normalizedRoot = canonicalPath(writableRoot, aliasFirmlinks);
-  if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
   const candidates = [staticTarget];
   if (globIndex >= 0) {
     // A bracket expression may itself spell `..` (`[.].`). Check the same
@@ -3239,9 +3378,70 @@ function destructiveTargetNeedsConsent(
   }
   return candidates.some((candidate) => {
     const normalizedTarget = normalizeTarget(candidate, [cwd]);
-    if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
-    return canonicalPath(normalizedTarget, aliasFirmlinks) === normalizedRoot;
+    const matchedRoot = writableRoots.find((root) =>
+      isInsideWorkspace(normalizedTarget, [root], aliasFirmlinks));
+    if (!matchedRoot) return true;
+    const normalizedRoot = canonicalPath(matchedRoot, aliasFirmlinks);
+    if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
+    const lexicalTarget = canonicalPath(normalizedTarget, aliasFirmlinks);
+    if (isProtectedSystemPath(lexicalTarget) || isSensitiveCredentialPath(lexicalTarget)) return true;
+    if (opts.destructivePathResolution === 'unavailable') return true;
+    if (opts.destructivePathResolution !== 'host') return lexicalTarget === normalizedRoot;
+
+    const resolvedTarget = resolveDestructiveTargetPath(normalizedTarget);
+    const resolvedRoot = resolveDestructiveTargetPath(matchedRoot);
+    if (resolvedTarget === null || resolvedRoot === null) return true;
+    const canonicalResolvedTarget = canonicalPath(resolvedTarget, aliasFirmlinks);
+    const canonicalResolvedRoot = canonicalPath(resolvedRoot, aliasFirmlinks);
+    if (
+      isProtectedSystemPath(canonicalResolvedTarget)
+      || isSensitiveCredentialPath(canonicalResolvedTarget)
+    ) return true;
+    if (!isInsideWorkspace(canonicalResolvedTarget, [canonicalResolvedRoot], aliasFirmlinks)) {
+      return true;
+    }
+    return canonicalResolvedTarget === canonicalResolvedRoot;
   });
+}
+
+/** 普通 shell 写目标只有在词法授权内却无法证明真实落点仍在同一授权根时才升级。 */
+function writeTargetNeedsConsent(
+  target: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): boolean {
+  if (/[$`{}]/.test(target) || target.startsWith('~')) {
+    return opts.destructivePathResolution === 'host'
+      || opts.destructivePathResolution === 'unavailable';
+  }
+  if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(target))) return true;
+  const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
+  const cwd = opts.cwd ?? workspaceRoots[0] ?? writableRoots[0];
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const normalizedTarget = normalizeTarget(target, [cwd]);
+  const lexicalTarget = canonicalPath(normalizedTarget, aliasFirmlinks);
+  if (isProtectedSystemPath(lexicalTarget) || isSensitiveCredentialPath(lexicalTarget)) return true;
+  const matchedRoot = writableRoots.find((root) =>
+    isInsideWorkspace(normalizedTarget, [root], aliasFirmlinks));
+  // Ordinary writes outside an authorized root retain the existing grey reviewer path.
+  if (!matchedRoot) return false;
+  if (opts.destructivePathResolution === 'unavailable') return true;
+  if (opts.destructivePathResolution !== 'host') return false;
+
+  const resolvedTarget = resolveDestructiveTargetPath(normalizedTarget);
+  const resolvedRoot = resolveDestructiveTargetPath(matchedRoot);
+  if (resolvedTarget === null || resolvedRoot === null) return true;
+  const canonicalResolvedTarget = canonicalPath(resolvedTarget, aliasFirmlinks);
+  const canonicalResolvedRoot = canonicalPath(resolvedRoot, aliasFirmlinks);
+  if (
+    isProtectedSystemPath(canonicalResolvedTarget)
+    || isSensitiveCredentialPath(canonicalResolvedTarget)
+  ) return true;
+  return !isInsideWorkspace(
+    canonicalResolvedTarget,
+    [canonicalResolvedRoot],
+    aliasFirmlinks,
+  );
 }
 
 function findDeleteRoots(tokens: string[]): string[] {
@@ -3600,7 +3800,7 @@ function matchedPathSentinel(
   if (/[$`{}*?[\]]/.test(root) || root.startsWith('~')) return null;
   const base = opts.cwd ?? workspaceRoots[0];
   if (!isAbsolutePath(toForwardSlashes(root)) && (!base || opts.cwdUnknown)) return null;
-  const resolved = normalizeTarget(root, base ? [base] : []).replace(/\/+$/, '');
+  const resolved = trimTrailingSlashes(normalizeTarget(root, base ? [base] : []));
   return `${resolved}/${MATCHED_PATH_SENTINEL}`;
 }
 
@@ -3668,7 +3868,8 @@ function systemWriteTargetsInSegment(
       if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(concrete))) return true;
       const resolved = canonicalPath(normalizeTarget(concrete, [base]), aliasFirmlinks);
       if (isProtectedProviderPath(resolved) || isProtectedSystemPath(resolved)) return true;
-      return !isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks);
+      if (!isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks)) return true;
+      return writeTargetNeedsConsent(concrete, workspaceRoots, opts);
     }
     // 每个目标查三种形态:原样(保留 Windows `\` 分隔符)、去 POSIX `\` 转义(`/e\tc`→`/etc`)、
     // 去 PowerShell 反引号转义。后者是 codex 报的绕过:PowerShell 里 `` ` `` 转义下一个字符,
@@ -3680,7 +3881,7 @@ function systemWriteTargetsInSegment(
       const forward = toForwardSlashes(v);
       // cwd 未知 + 相对目标 → 无法证明它没落进系统目录,fail-closed。
       if (opts.cwdUnknown && !isAbsolutePath(forward)) return true;
-      return isProtectedSystemPath(canonicalPath(normalizeTarget(v, [base]), aliasFirmlinks));
+      return writeTargetNeedsConsent(v, workspaceRoots, opts);
     });
   });
 }
@@ -3873,8 +4074,6 @@ function pipelineFedWriteTargetNeedsConsent(
   //   · `targets: 'last'` 且不销毁源(Copy-Item)—— 项只被读,不需要同意。
   if (spec.targets === 'last' && spec.sources !== true) return false;
   if (hasExplicitPathArgument(tokens)) return false; // 项写在命令行上 → 已由写目标表判过
-  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const base = opts.cwd ?? workspaceRoots[0];
   // `null` = 上游来源不可证(表外的 pipeline 阶段能返回任意对象)→ 直接要求同意。
   if (upstreamOperands === null) return true;
   const candidates = upstreamOperands.length > 0 ? upstreamOperands : ['.'];
@@ -3889,9 +4088,7 @@ function pipelineFedWriteTargetNeedsConsent(
       .map((part) => (POWERSHELL_WILDCARD.test(part) ? GLOB_COMPONENT_PLACEHOLDER : part))
       .join('');
     if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(concrete))) return true;
-    const resolved = canonicalPath(normalizeTarget(concrete, [base]), aliasFirmlinks);
-    if (isProtectedSystemPath(resolved)) return true;
-    return !isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks);
+    return writeTargetNeedsConsent(concrete, workspaceRoots, opts);
   });
 }
 
@@ -4309,6 +4506,7 @@ const HOST_CONTROL_CHARS = new RegExp('[\\s\\u0000-\\u001f\\u007f]', 'g');
  * 序列)静态不可证清白 → fail-closed。
  */
 function isInternalFetchTarget(t: string): boolean {
+  if (t.length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return true;
   const forms: string[] = [t];
   let cur = t;
   for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {
@@ -5826,7 +6024,11 @@ export function classifyShellCommand(
   workspaceRoots: string[],
   opts: ShellReviewOptions = {},
 ): ReviewVerdict {
-  if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
+  if (typeof command !== 'string') return 'prompt';
+  // Keep the primitive length barrier next to the parsers, including for direct
+  // classifier callers. Auto's outer evidence guard already blocks this action.
+  if (command.length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return 'prompt';
+  if (command.trim().length === 0) return 'prompt';
   // The shared path matcher deliberately accepts only complete path values. Shell
   // commands need argument-aware scanning so a trailing pipe/comment cannot hide a
   // dotenv operand, while jq/grep expressions such as jq .env data.json stay data.
@@ -5953,12 +6155,18 @@ function isAbsolutePath(p: string): boolean {
   return p.startsWith('/') || /^[A-Za-z]:/.test(p);
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end--;
+  return value.slice(0, end);
+}
+
 /** 归一化路径:去包裹引号、统一分隔符,相对路径挂到第一个 workspace root(cwd)。 */
 function normalizeTarget(target: string, workspaceRoots: string[]): string {
   let p = toForwardSlashes(target.replace(/^['"]|['"]$/g, ''));
   if (!isAbsolutePath(p)) {
     const cwd = workspaceRoots[0];
-    if (cwd) p = `${toForwardSlashes(cwd).replace(/\/+$/, '')}/${p.replace(/^\/+/, '')}`;
+    if (cwd) p = `${trimTrailingSlashes(toForwardSlashes(cwd))}/${p.replace(/^\/+/, '')}`;
   }
   return normalizeSlashes(p);
 }

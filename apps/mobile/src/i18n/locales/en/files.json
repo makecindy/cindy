@@ -46,7 +46,47 @@
     "a11yPreviewName": "Preview {{name}}",
     "a11yPreviewNameLine": "Preview {{name}} line {{line}}"
   },
+  "presentation": {
+    "grid": {
+      "today": "Today {{time}}",
+      "yesterday": "Yesterday {{time}}",
+      "empty": "Folder is empty",
+      "summaryMixed": "{{dirs}} folders, {{files}} files",
+      "summaryDirs": "{{count}} folders",
+      "summaryFiles": "{{count}} files",
+      "workdir": "Working directory"
+    },
+    "preview": {
+      "nonText": {
+        "pdf": "PDF files can't be previewed inline on mobile yet. Copy the path and open it on desktop or in a system PDF reader.",
+        "drawio": "Draw.io files can't be previewed inline on mobile yet. Copy the path and continue viewing or editing on desktop.",
+        "office": "Office files can't be previewed inline on mobile yet. Copy the path and open it on desktop or in a system app.",
+        "binary": "This isn't a text file, so mobile won't read its contents. Copy the path to open it on desktop.",
+        "unknown": "The file type can't be determined, so mobile won't read its contents. Copy the path to open it on desktop.",
+        "text": "Text preview is available on demand."
+      },
+      "pathOnly": "Only the file path is available; the preview can't be read from the remote computer.",
+      "loading": "Reading the text preview from the remote computer",
+      "ready": "Text preview loaded · {{size}}",
+      "idle": "The remote text preview is loaded on demand; file contents aren't fetched in bulk in the message list.",
+      "failure": {
+        "oversize": "File exceeds the remote preview limit · {{limit}} · Current size {{size}}",
+        "forbidden": "The remote computer denied access to this path.",
+        "notFound": "The file wasn't found on the remote computer.",
+        "readFailed": "Read failed.",
+        "readFailedWithError": "Read failed: {{error}}",
+        "default": "This file can't be previewed."
+      }
+    }
+  },
   "preview": {
+    "browserBack": "Back",
+    "browserForward": "Forward",
+    "browserMore": "More actions",
+    "browserShowSource": "View source",
+    "browserShowPage": "Back to webpage",
+    "browserAddToTask": "Add to current task",
+    "browserFileInfo": "File information",
     "done": "Done",
     "a11yShare": "Export and share",
     "copyPath": "Copy Path",
@@ -66,6 +106,11 @@
     "readFailed": "Read failed",
     "truncated2mb": "File exceeds 2 MB; showing the first 2 MB only",
     "truncatedLines": "Showing the first {{lines}} lines only",
+    "htmlUpdateMobile": "Update Cindy on this phone to preview webpages. You can still view the source.",
+    "htmlUpdateDesktop": "Update Cindy on the connected computer to preview this webpage.",
+    "htmlSnapshotTooLarge": "This folder is too large to preview. Move the webpage and its assets into a smaller folder.",
+    "htmlSnapshotFailed": "Could not load this webpage. Check the connection and try again.",
+    "htmlReload": "Reload webpage",
     "fetchingHtmlResources": "Fetching page resources…",
     "htmlResourcesMissing": "{{count}} page resource(s) could not be fetched; images or styles may be missing",
     "htmlResourcesTruncated": "Too many page resources; only the first {{limit}} were attempted",
@@ -81,7 +126,13 @@
     "originalFailedThumb": "Couldn't fetch the original; showing the thumbnail",
     "fetchingOriginalHint": "Thumbnail · fetching the original…",
     "a11yExportShareFile": "Export and share the original file",
-    "exportShare": "Export / Share"
+    "exportShare": "Export / Share",
+    "browserAddress": "Address",
+    "browserCancelAddress": "Cancel editing",
+    "browserReturnToFile": "Return to file",
+    "browserCopyAddress": "Copy address",
+    "browserInvalidAddress": "Enter a valid http or https address.",
+    "browserWebsiteFailed": "Unable to open this webpage. Try reloading."
   },
   "export": {
     "exportFailed": "Export failed",

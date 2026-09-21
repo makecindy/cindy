@@ -30,11 +30,21 @@ import {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 const MANIFESTS = [
-  { label: 'cn', filePath: path.join(REPO_ROOT, 'config', 'endpoint.json') },
-  { label: 'global', filePath: path.join(REPO_ROOT, 'config', 'endpoint.global.json') },
+  {
+    label: 'cn',
+    filePath: path.join(REPO_ROOT, 'config', 'endpoint.json'),
+    legacySkillHub: 'https://xd-skillhub.cindy.com.cn',
+    cindySkillHub: 'https://skill-hub.cindy.com.cn',
+  },
+  {
+    label: 'global',
+    filePath: path.join(REPO_ROOT, 'config', 'endpoint.global.json'),
+    legacySkillHub: 'https://xd-skillhub.cindy.app',
+    cindySkillHub: 'https://skill-hub.cindy.app',
+  },
 ] as const;
 
-describe.each(MANIFESTS)('config/endpoint*.json 守门($label)', ({ filePath }) => {
+describe.each(MANIFESTS)('config/endpoint*.json 守门($label)', ({ filePath, legacySkillHub, cindySkillHub }) => {
   const rawText = fs.readFileSync(filePath, 'utf8');
 
   it('必须能被客户端共享 parser 接受(JSON/schema/非空 URL 仍需合法)', () => {
@@ -45,6 +55,13 @@ describe.each(MANIFESTS)('config/endpoint*.json 守门($label)', ({ filePath }) 
   it('schemaVersion 与客户端支持版本一致', () => {
     const parsed = JSON.parse(rawText) as { schemaVersion?: number };
     expect(parsed.schemaVersion).toBe(CLIENT_ENDPOINTS_SCHEMA_VERSION);
+  });
+
+  it('旧客户端地址保持不变，新客户端使用独立字段', () => {
+    const parsed = JSON.parse(rawText) as Record<string, unknown>;
+    expect(parsed.skillhubApiBaseUrl).toBe(legacySkillHub);
+    expect(parsed.cindySkillHubApiBaseUrl).toBe(cindySkillHub);
+    expect(parsed.cindySkillHubApiBaseUrl).not.toBe(parsed.skillhubApiBaseUrl);
   });
 
   it('无未知字段(字段名拼错会被客户端当未知字段忽略,静默不生效)', () => {

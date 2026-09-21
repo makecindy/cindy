@@ -94,6 +94,11 @@ export interface AgentCapabilities {
    * device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
    */
   planMode?: CapabilityStatus;
+  /**
+   * 会话级外部可写目录能力。device-link 老被控端无此字段 → undefined = 不支持，
+   * 控制端必须隐藏会触发新 channel 的入口。
+   */
+  writableDirs?: CapabilityStatus;
   /** Session fork — UserMessage 下方 Fork icon 据此显示 / 隐藏。 */
   fork?: CapabilityStatus;
   /** Session rewind — UserMessage 下方 Rewind icon 据此显示 / 隐藏。 */
@@ -133,6 +138,19 @@ export interface AgentCapabilities {
     supported: CapabilityStatus;
     unsupportedPermissionModes: string[];
   };
+}
+
+/**
+ * 可写目录回调的跨端兼容门：本地沿用既有能力，SSH 等待远端 picker，device-link
+ * 只信任当前被控端明确声明的能力。缺字段、加载中与不支持都 fail closed。
+ */
+export function canExposeWritableDirsChange(options: {
+  capabilities: Pick<AgentCapabilities, 'writableDirs'> | null | undefined;
+  deviceId: string | null | undefined;
+  remoteHostId: string | null | undefined;
+}): boolean {
+  if (options.remoteHostId != null) return false;
+  return options.deviceId == null || options.capabilities?.writableDirs?.supported === true;
 }
 
 /**
@@ -270,6 +288,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
+    !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {
     throw new Error('Invalid agent capabilities response');
@@ -604,7 +623,7 @@ export function beginLocalCapabilitiesRefresh(): number {
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
-  const entries = await Promise.all(
+  const results = await Promise.allSettled(
     ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
       try {
         return [agent, await api.getCapabilities(agent)] as const;
@@ -621,6 +640,10 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
       }
     }),
   );
+  const entries = results.map((result) => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
   return entries.filter(
     (entry): entry is readonly [AgentKind, AgentCapabilities] => entry !== null,
   );

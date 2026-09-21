@@ -99,6 +99,8 @@ export interface DeriveModelListOptions {
    * 的空选态(分段选择器契约)。providerId 为 null 时按 model id 匹配任意供应商行。
    */
   keepSelected?: { providerId: string | null; modelId: string };
+  /** UI-only catalog rows may include paid-locked models; execution callers must keep false. */
+  includePaymentRequired?: boolean;
 }
 
 function resolveRail(
@@ -140,6 +142,7 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
     excludeProvider,
     excludeModel,
     keepSelected,
+    includePaymentRequired = false,
   } = opts;
 
   // first-wins 的占坑表直接记「id → 首见行在 out 里的下标」,选中行替换时 O(1) 定位
@@ -162,7 +165,7 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
         return entry;
       };
       const userProvider = provider.source === 'user';
-      const selectable = selected
+      const selectable = selected || (includePaymentRequired && m.availability === 'requires_payment')
         ? isAgentSelectableModel(m, { userProvider })
         : isModelSelectableForNewRoute(m, { userProvider });
       if (!selectable) continue;
@@ -210,6 +213,7 @@ export function deriveModelSections(
     excludeProvider,
     excludeModel,
     keepSelected,
+    includePaymentRequired = false,
   } = opts;
   const q = (opts.query ?? '').trim().toLowerCase();
 
@@ -221,7 +225,7 @@ export function deriveModelSections(
       if (excludeModel?.(m, provider)) continue;
       const selected = matchesSelected(keepSelected, provider.id, m.id);
       const userProvider = provider.source === 'user';
-      const selectable = selected
+      const selectable = selected || (includePaymentRequired && m.availability === 'requires_payment')
         ? isAgentSelectableModel(m, { userProvider })
         : isModelSelectableForNewRoute(m, { userProvider });
       if (!selectable) continue;

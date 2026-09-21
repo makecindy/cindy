@@ -61,6 +61,46 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.__resetPinnedOriginsForTest();
   });
 
+  it('invalidates and reloads the first snapshot when a tag catalog push arrives first', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    const epoch = remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    const otherEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-B');
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', epoch)).toBe(false);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-B', otherEpoch)).toBe(true);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active']]);
+    const replacementEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', replacementEpoch)).toBe(true);
+  });
+
+  it('reloads an in-flight first archived snapshot without loading untouched history', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active']]);
+    reseed.mockClear();
+    remoteProjectsStore.markSessionStatusLoading('dev-A', 'archived');
+    const epoch = remoteProjectsStore.nextSnapshotEpoch('dev-A', 'archived');
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', epoch, 'archived')).toBe(false);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
+  });
+
+  it('requeues both loaded buckets after invalidating a refresh that may contain new tasks', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('archived', { status: 'archived' })], 'archived');
+    const activeEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    const archivedEpoch = remoteProjectsStore.nextSnapshotEpoch('dev-A', 'archived');
+    remoteProjectsStore.applyTagCatalog('dev-A', []);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', activeEpoch)).toBe(false);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', archivedEpoch, 'archived')).toBe(false);
+    expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
+  });
+
   it('把用户的任务重试动作交给 listing tier 注册的 bootstrap 实现', () => {
     const retry = vi.fn();
     setRemoteSessionBootstrapRetryImpl(retry);
@@ -226,6 +266,63 @@ describe('remoteProjectsStore', () => {
       expect(s.title).toBe('New');
       expect(s.model).toBe('opus-4-8');
       expect(getSessionDeviceId('s1')).toBe('dev-B'); // origin 标记不丢
+    });
+
+    it('合并被控端运行时模型投影并同步有效设置轴', () => {
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
+      remoteProjectsStore.applyPatch('dev-B', 's1', {
+        model: 'gpt-runtime',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+        runtimeGeneration: 3,
+        runtimeBaseline: {
+          agentKind: 'codex',
+          model: 'gpt-baseline',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        },
+        runtimeEffective: {
+          agentKind: 'codex',
+          model: 'gpt-runtime',
+          providerId: 'openai',
+          effort: 'xhigh',
+          fastMode: true,
+        },
+        runtimePending: null,
+      });
+
+      expect(remoteProjectsStore.getMergedRemoteSessions()[0]).toMatchObject({
+        model: 'gpt-runtime',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+        runtimeGeneration: 3,
+        runtimeEffective: { model: 'gpt-runtime', providerId: 'openai' },
+      });
+    });
+
+    it('固定强度运行时模型显式清除旧 effort', () => {
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1', { effort: 'high' })]);
+      remoteProjectsStore.applyPatch('dev-B', 's1', {
+        model: 'fixed-strength-model',
+        providerId: 'openai',
+        effort: '',
+        runtimeEffective: {
+          agentKind: 'codex',
+          model: 'fixed-strength-model',
+          providerId: 'openai',
+          effort: null,
+          fastMode: false,
+        },
+      });
+
+      expect(remoteProjectsStore.getMergedRemoteSessions()[0]).toMatchObject({
+        model: 'fixed-strength-model',
+        effort: '',
+        runtimeEffective: { effort: null },
+      });
     });
 
     it('status=deleted 移出分片，archived 保留完整行供归档筛选展示', () => {

@@ -231,6 +231,8 @@ export interface IMMessageEvent {
     /** 被引消息的附件数(已并入本事件 attachments;0/缺省 = 无)。 */
     attachmentCount?: number;
   };
+  /** Native private topic metadata. Root message id and thread id are distinct. */
+  replyThread?: { rootMessageId: string; threadId: string };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
   /**
@@ -321,7 +323,9 @@ export interface StreamingTextHandle {
    * text) and append-deltas don't fit naturally.
    */
   replace(fullText: string): void;
-  /** Replace card with `finalText` and stop throttling. */
+  /**
+   * Replace the card with `finalText` and stop throttling.
+   */
   finalize(finalText: string): Promise<void>;
   /** Cancel without finalising (still leaves the last rendered text on screen). */
   close(): void;

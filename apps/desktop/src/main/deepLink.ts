@@ -28,7 +28,7 @@
  * Pending 缓存 + pull-on-mount:
  *   - 冷启动期间 mainWindow 还没 ready / renderer 还没挂 listener → 进 pendingDeepLink
  *   - 已登录用户:MainLayout mount 后会通过 IPC 'deep-link:take-pending' 拉一次,
- *     拉到非空 payload 就分发。已运行场景 pendingDeepLink 一直为 null,no-op。
+ *     拉到非空 payload 就分发。供应商导入始终先入 pending，事件仅唤醒同一 take 路径。
  *   - 未登录用户:冷启动 + deep link 后 LoginPage 接管,pendingDeepLink 保留;
  *     用户完成 Feishu OAuth → MainLayout 第一次 mount → 同一条 pull 路径消费 payload,
  *     不会因为登录流程跳过而丢失"点击右键打开"这个意图。
@@ -49,6 +49,7 @@ import {
   isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
+import { cancelProviderImport, createProviderImportDraftFromRest } from './provider-import/providerImport';
 
 const log = createLogger('deepLink');
 
@@ -71,6 +72,8 @@ export type DeepLinkPayload =
    */
   | { type: 'new-session'; workingDir: string }
   | { type: 'share-import'; filePath: string }
+  /** 外部 URL 内的凭证已在 Main 转成短期草稿；跨进程只传随机 id。 */
+  | { type: 'provider-import'; importId: string }
   /**
    * 设置页导航。两个来源:
    *   1. 主进程内部发起(全局浮层等独立窗口把用户带回主窗口的准确设置页);
@@ -100,6 +103,11 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   const prefix = matchDeepLinkPrefix(url);
   if (prefix === null) return null;
   const rest = url.slice(prefix.length);
+  // provider/import 是双段精确路径，必须在通用 type/value 解析前消费。
+  if (rest.startsWith('provider/')) {
+    const importId = createProviderImportDraftFromRest(rest);
+    return importId ? { type: 'provider-import', importId } : null;
+  }
   const slashIdx = rest.indexOf('/');
   if (slashIdx <= 0) return null;
   const type = rest.slice(0, slashIdx);
@@ -276,7 +284,8 @@ export function getDeepLinkMainWindow(): BrowserWindow | null {
 export function handleIncomingDeepLink(url: string, source: string): void {
   const payload = parseDeepLink(url);
   if (!payload) {
-    log.warn('ignoring unparseable url', { url, source });
+    // 入站 URL 现在可能含 API key；失败路径也不能把原文写进持久日志。
+    log.warn('ignoring unparseable deep link', { source });
     return;
   }
   log.info('received deep link', { source, payload });
@@ -404,13 +413,18 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
     return;
   }
   const win = mainWindowRef;
-  // mainWindow 尚未创建(冷启动) / webContents 未就绪 → 缓存等 MainLayout pull
-  if (!win || win.isDestroyed() || !win.webContents || win.webContents.isLoading()) {
+  const windowReady = win && !win.isDestroyed() && win.webContents && !win.webContents.isLoading();
+  // A loaded login/LocalDbGate page has no MainLayout listener yet. Imports stay
+  // in the existing pending slot until the authenticated consumer takes them.
+  if (!windowReady || payload.type === 'provider-import') {
     // 保留"用户最后意图"语义:同一次冷启动如果先后入站多条 (例如 argv 同时含
     // deep link URL 和 --open-folder, 现实场景极罕见但 bootstrap 两条 scan 都
     // 会触发),后到的覆盖前者。但 warn log 留下排查线索,事后能从日志识别这种
     // 情况;若未来收到反馈再改为"先到先得"或"显式拒绝后者"。
     if (pendingDeepLink) {
+      if (pendingDeepLink.type === 'provider-import') {
+        cancelProviderImport(pendingDeepLink.importId);
+      }
       log.warn('overwriting buffered pending payload', {
         previous: pendingDeepLink,
         next: payload,
@@ -420,18 +434,21 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
     log.debug('buffered pending deep link until renderer pull', payload);
     // Agent-key first tap may switch in the background. A buffered deep link
     // from that path must not steal the frontmost app.
-    if (shouldFocus) focusMainWindow();
-    return;
+    if (!windowReady) {
+      if (shouldFocus) focusMainWindow();
+      return;
+    }
   }
-  // 已运行场景:listener 必然挂着(MainLayout 已 mount),直接 send,不进 pending。
+  // Imports use this event only as a wake-up; MainLayout consumes the pending slot.
+  // Other existing navigation events retain their direct-delivery behavior.
   // 同时把窗口拉前台 — open-url / second-instance 本身不会唤起,用户点链接的
   // 意图就是要看到 app。
   if (shouldFocus) focusMainWindow();
-  win.webContents.send('deep-link:navigate', payload);
+  win!.webContents.send('deep-link:navigate', payload);
 }
 
 /**
- * 给 IPC handler 用:取走 pendingDeepLink 并清空。pull-on-mount 路径专用,
+ * 给 IPC handler 用:取走 pendingDeepLink 并清空。供 mount 和导入唤醒事件调用,
  * 重复调用是安全的——第一次拿到 payload,后续调用返回 null,不会双发。
  *
  * 命名上故意用 "take" 而非 "consume" / "get" 表达 pop 语义,避免和老的
@@ -458,6 +475,20 @@ export function findDeepLinkInArgv(argv: readonly string[]): string | null {
     if (typeof arg === 'string' && matchDeepLinkPrefix(arg) !== null) return arg;
   }
   return null;
+}
+
+/**
+ * Remove all provider-import arguments (even invalid/unselected ones), plus every
+ * copy of the consumed URL. The caller retains the selected URL for delivery.
+ * This sanitizes JS argv and future copies, not the OS's original command line.
+ */
+export function redactConsumedDeepLinkInArgv(argv: string[], deepLink?: string): void {
+  for (let i = argv.length - 1; i >= 0; i -= 1) {
+    const arg = argv[i];
+    const prefix = typeof arg === 'string' ? matchDeepLinkPrefix(arg) : null;
+    if (arg !== deepLink && !(prefix && arg.slice(prefix.length).startsWith('provider/'))) continue;
+    argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
+  }
 }
 
 /**

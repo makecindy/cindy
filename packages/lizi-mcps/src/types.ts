@@ -93,6 +93,8 @@ export interface FeishuBotSendMessageResult {
   ok: boolean;
   /** Feishu message id on success. */
   messageId?: string;
+  /** False means delivery succeeded but replies cannot resume the originating session. */
+  sessionLinked?: boolean;
   /** Short reason on failure (e.g. 'SEND_FAIL', 'EMPTY_TEXT'). */
   reason?: string;
 }
@@ -114,6 +116,8 @@ export interface FeishuBotMcpHostDeps {
   sendMessage(
     chatId: string,
     markdown: string,
+    /** Trusted calling session, only for notifications to the bot owner. */
+    notificationSessionId?: string,
   ): Promise<FeishuBotSendMessageResult>;
   /**
    * Return the bot's TOFU-recorded owner openId — i.e. the person who first
@@ -201,6 +205,16 @@ export interface SlackHookMcpDeps {
   /** 当前会话工作目录(out_file 泄洪根; 空 = 不落盘只截断)。 */
   workingDir?: string;
   logger?: LiziMcpLogger;
+}
+
+/** Native routine service; only caller-bound companion tools expose it to agents. */
+export interface RoutineToolService {
+  list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
+  sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
+  save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;
+  history(botId: string, id: string): Promise<import('@cindy/maker-scheduler').RoutineRun[]>;
+  remove(botId: string, id: string): Promise<void>;
+  runNow(botId: string, id: string): Promise<void>;
 }
 
 /**
@@ -317,6 +331,12 @@ export interface SshHostSnapshotLike {
     port: number;
     user: string;
     authMethod: 'agent' | 'key';
+    /** Main-only path metadata used solely to redact model-visible errors. */
+    identityFile?: string;
+    sshAuthentication?: {
+      identityAgent?: string;
+      configuredIdentityFiles?: string[];
+    };
     source: 'ssh-config' | 'manual';
   };
   status:
@@ -374,6 +394,8 @@ export interface SshPoolLike {
 export interface SshMcpDeps {
   getPool(): Promise<SshPoolLike>;
   ensureReady(id: string): Promise<void>;
+  /** Host-owned synchronous boundary redactor. It must not retain its inputs. */
+  redactSensitiveText(snapshot: SshHostSnapshotLike, text: string): string;
   logger?: LiziMcpLogger;
 }
 
@@ -425,6 +447,17 @@ export interface SessionSearchOptions {
   role?: 'user' | 'assistant' | 'system';
   /** 默认 10 */
   limit?: number;
+  /**
+   * Host-owned caller identity used to enforce Bot history isolation. This is
+   * populated by the MCP adapter from the current runtime context and is never
+   * accepted from model tool arguments.
+   */
+  callerSessionId?: string;
+  /**
+   * Host-owned memory namespace. A `bot:` scope without a recoverable caller
+   * Session must fail closed instead of falling back to cross-session search.
+   */
+  callerMemoryScopeKey?: string;
 }
 
 export interface SessionSearchHit {
@@ -450,6 +483,9 @@ export type SessionSearchFn = (
 // 'cindy_slack'(与老 lizi_slack_bot 无关)2026-07-19 上线: Slack 网关工具,
 // 经 hook 通道由 slack-hook-server 以托管 user token 调 Slack 官方 MCP,
 // 接替退役的 cindy-slack 意识。
+// 'cindy_docs'(文档工坊)2026-08-19 上线: PDF / Word / Excel / PPT 的生成与
+// 检查原语。**零系统依赖**——不走任何需要用户先装 LibreOffice / Office 的路径,
+// 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
 export type LiziMcpId =
   | 'android'
   | 'ios_simulator'
@@ -464,6 +500,7 @@ export type LiziMcpId =
   | 'cindy_contacts'
   | 'cindy_helper'
   | 'cindy_orca'
+  | 'cindy_docs'
   | 'cindy_lsp';
 
 // ── Host-callback Result pattern ────────────────────────────────────────────
@@ -504,6 +541,8 @@ export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
   getRuntime(): BrowserControlRuntime;
+  /** Switch the host-wide, persisted automation target; returns the actual mode. */
+  setBackend?(backend: 'external' | 'rsb-webview'): Promise<'external' | 'rsb-webview'>;
   /** Whether the active backend accepts managed resource downloads. */
   supportsResourceDownloads?(): boolean;
   /** Whether the active backend accepts semantic element queries. */
@@ -540,6 +579,7 @@ export type ComputerMcpToolName =
   | 'list_apps'
   | 'list_windows'
   | 'get_window_state'
+  | 'verify_state'
   | 'click'
   | 'double_click'
   | 'right_click'
@@ -592,6 +632,10 @@ export interface ComputerDriverPermissionState {
 
 export interface ComputerMcpCallContext {
   sessionId?: string;
+  /** Host-only observation origin; automatic reads must not authorize resumed input. */
+  observationPurpose?: 'recovery';
+  /** Request cancellation stays on the host side; never serialized to the driver. */
+  signal?: AbortSignal;
   /** Identifies the agent runtime whose MCP server dispatched this call. */
   agentKind?: string;
 }
@@ -859,6 +903,8 @@ export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /** Host-owned memory namespace override shared with the agent prompt path. */
+  memoryScopeKey?: string;
   /**
    * 当前 tool-call 的权威 session ctx accessor。
    *

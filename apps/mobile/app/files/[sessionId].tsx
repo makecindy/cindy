@@ -1,3 +1,4 @@
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 /**
  * 远程文件浏览(网格为主视图,对标 iOS Files)。
  *
@@ -7,6 +8,8 @@
  * Quick Look 预览路由。缩略图经 thumbnail op 懒加载(fileThumbnails 内存缓存)。
  */
 import * as Clipboard from 'expo-clipboard';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { ModalContentArea } from '@/platform/ModalContentArea';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { fsWatchTopic } from '@cindy/device-link';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -49,6 +52,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text, TextInput } from '@/components/AppText';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
@@ -118,7 +122,7 @@ const SEARCH_FILES_CAP = 20000;
 export default function RemoteFileBrowserScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
     deviceId?: string;
@@ -131,7 +135,9 @@ export default function RemoteFileBrowserScreen() {
   const deviceName = readRouteString(params.deviceName) ?? deviceId;
   const relPath = readRouteString(params.relPath) ?? '';
   const router = useRouter();
-  const { width: screenWidth } = useWindowDimensions();
+  const systemBack = useSystemNavigationBack();
+  const fileWindow = useAdaptiveWindow();
+  const screenWidth = fileWindow.width - fileWindow.insets.left - fileWindow.insets.right;
   const auth = useAuth();
   const { connectionIssue, openLink, status, subscribe, unsubscribe } = useDeviceLink();
   const maker = useMobileMakerTransport(deviceId);
@@ -243,7 +249,7 @@ export default function RemoteFileBrowserScreen() {
       });
       if (seq !== loadSeqRef.current) return;
       rawEntriesRef.current = normalizeRemoteOpDirEntries(raw);
-      storeCachedListing(workdir, relPath, rawEntriesRef.current);
+      storeCachedListing(maker.fileBrowser.cacheScope, workdir, relPath, rawEntriesRef.current);
       setItems(buildFileBrowserGridItems(rawEntriesRef.current, sortModeRef.current, Date.now()));
       setLastSyncedAt(Date.now());
     } catch (err) {
@@ -260,7 +266,7 @@ export default function RemoteFileBrowserScreen() {
   useEffect(() => {
     sortModeRef.current = sortMode;
     setItems(buildFileBrowserGridItems(rawEntriesRef.current, sortMode, Date.now()));
-  }, [sortMode]);
+  }, [i18nInstance.language, sortMode]);
 
   // 熔断恢复:目录静默刷新(缓存保留不清列表,规则 7)。首次 listDir 撞上
   // 熔断快速失败、或 open 期间目录停更时,恢复不会有任何文件事件来救——
@@ -279,12 +285,12 @@ export default function RemoteFileBrowserScreen() {
   useEffect(() => {
     if (!workdir) return undefined;
     let cancelled = false;
-    const memoryCached = getCachedListingSync(workdir, relPath);
+    const memoryCached = getCachedListingSync(maker.fileBrowser.cacheScope, workdir, relPath);
     if (memoryCached) {
       rawEntriesRef.current = memoryCached;
       setItems(buildFileBrowserGridItems(memoryCached, sortModeRef.current, Date.now()));
     } else {
-      void readCachedListing(workdir, relPath).then((persisted) => {
+      void readCachedListing(maker.fileBrowser.cacheScope, workdir, relPath).then((persisted) => {
         if (cancelled || !persisted || rawEntriesRef.current.length > 0) return;
         rawEntriesRef.current = persisted;
         setItems(buildFileBrowserGridItems(persisted, sortModeRef.current, Date.now()));
@@ -726,6 +732,7 @@ export default function RemoteFileBrowserScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} testID="files.screen">
+      <SystemNavigationBack label={t('shared.back')} onPress={() => goBackGuarded(router)} />
       {searchOpen ? (
         <SearchHeader
           loading={searchLoading}
@@ -744,11 +751,11 @@ export default function RemoteFileBrowserScreen() {
         />
       ) : (
         <View style={styles.navRow} testID="files.navRow">
-          <ScreenBackButton
+          {!systemBack ? <ScreenBackButton
             hitSlop={8}
             onPress={() => goBackGuarded(router)}
             testID="files.backButton"
-          />
+          /> : null}
           <Pressable
             accessibilityLabel={t('files.browser.a11yTitleMenu')}
             onPress={() => setTitleMenuOpen(true)}
@@ -759,6 +766,7 @@ export default function RemoteFileBrowserScreen() {
             <View style={styles.titleChevronChip}>
               <ChevronDown color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
             </View>
+            <QuietSyncIndicator active={!showConnectionBanner && (loading || status === 'connecting')} />
           </Pressable>
           <Pressable
             accessibilityLabel={t('files.browser.a11ySearch')}
@@ -786,7 +794,6 @@ export default function RemoteFileBrowserScreen() {
           <Text numberOfLines={1} style={styles.sectionLabel}>
             {deviceName}{isRoot ? t('files.browser.workdirSuffix') : ''}
           </Text>
-          {loading && !refreshing ? <ActivityIndicator color={colors.textTertiary} size="small" /> : null}
         </View>
       ) : null}
 
@@ -1330,8 +1337,9 @@ function TitleMenu({
   );
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={open}>
+    <Modal supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']} animationType="fade" onRequestClose={onClose} transparent visible={open}>
       <Pressable onPress={onClose} style={styles.overlay} testID="files.titleMenuOverlay">
+        <ModalContentArea>
         <Pressable onPress={() => undefined} style={styles.titleMenuCard}>
           {levels.map((level, index) => (
             <View key={`level:${level.relPath}`}>
@@ -1370,6 +1378,7 @@ function TitleMenu({
           {row('folder.copy', t('files.browser.copyPath'), false, onCopyCurrentPath,
             <Copy color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
         </Pressable>
+        </ModalContentArea>
       </Pressable>
     </Modal>
   );
@@ -1404,8 +1413,9 @@ function ContextMenu({
   ];
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible>
+    <Modal supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']} animationType="fade" onRequestClose={onClose} transparent visible>
       <Pressable onPress={onClose} style={styles.overlayCenter} testID="files.contextMenuOverlay">
+        <ModalContentArea>
         <View style={styles.liftedCard}>
           <View style={styles.liftedThumbZone}>
             {item.kind === 'dir' ? (
@@ -1433,6 +1443,7 @@ function ContextMenu({
             </View>
           ))}
         </View>
+        </ModalContentArea>
       </Pressable>
     </Modal>
   );
@@ -1500,6 +1511,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minWidth: 0,
   },
   title: {
+    flexShrink: 1,
+    minWidth: 0,
     color: colors.textPrimary,
     fontSize: typeScale.body,
     fontWeight: fontWeight.semibold,
@@ -1703,8 +1716,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
-    marginHorizontal: spacing.xxl * 2 + spacing.sm,
-    marginTop: 96,
+    width: '100%',
+    maxWidth: 360,
     overflow: 'hidden',
   },
   menuRow: {

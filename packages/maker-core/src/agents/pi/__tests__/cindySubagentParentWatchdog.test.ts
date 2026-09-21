@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -21,6 +23,14 @@ import {
  *  - 父进程活着时不能自杀(否则子代理会在正常工作中途消失);
  *  - 父进程被 SIGKILL(最狠的死法,任何父侧钩子都跑不到)后必须自己退出。
  */
+
+const PI_BINARY = process.env.CINDY_TEST_PI_BINARY || path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../../../../apps/pi-bin',
+  `${process.platform}-${process.arch}`,
+  process.platform === 'win32' ? 'pi.exe' : 'pi',
+);
+const piBinaryAvailable = existsSync(PI_BINARY);
 
 const spawned: ChildProcess[] = [];
 const tempDirs: string[] = [];
@@ -130,6 +140,74 @@ describe('cindy-subagent parent watchdog (executed)', () => {
     expect(await waitForExit(child, 15_000)).toBe(true);
     expect(child.exitCode).toBe(0);
   }, 40_000);
+
+  /**
+   * The durable Subagent child is a *real* Pi process, spawned by the runner
+   * with `stdio: ['pipe','pipe','pipe']` and `detached: true`. It loads only
+   * `cindy-bridge.ts`, so it carries no parent-pid watchdog — the extension's
+   * SIGKILL escalation (runner wedged past its SIGTERM grace) therefore has no
+   * hook to reap it, and the durable record goes stale where the sweeps skip it.
+   *
+   * What actually reaps it is the stdio pipe: killing the runner closes the
+   * child's stdin and Pi exits on EOF. That is load-bearing but invisible in
+   * the source, so it is asserted here against the real binary. If someone
+   * switches the runner's child stdio to `ignore`, or Pi stops exiting on EOF,
+   * this fails instead of silently leaking a token-burning orphan.
+   */
+  it.skipIf(!piBinaryAvailable || process.platform === 'win32')(
+    'a real Pi child exits on stdin EOF when its runner is SIGKILLed',
+    async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), 'cindy-pi-eof-'));
+      tempDirs.push(dir);
+      const pidFile = path.join(dir, 'pi-pid');
+      // Stands in for the runner: same spawn shape, then killed with SIGKILL so
+      // no exit handler of its own can run.
+      const harness = path.join(dir, 'fake-runner.cjs');
+      await writeFile(harness, [
+        "'use strict';",
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(${JSON.stringify(PI_BINARY)}, ['--mode', 'rpc', '--no-approve', '--no-extensions'], {`,
+        "  stdio: ['pipe', 'pipe', 'pipe'],",
+        "  detached: process.platform !== 'win32',",
+        "  env: Object.assign({}, process.env, { PI_OFFLINE: '1' }),",
+        '});',
+        'child.stdout.on(\'data\', () => {});',
+        'child.stderr.on(\'data\', () => {});',
+        `fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+        "process.stdout.write('ready\\n');",
+        'setInterval(() => {}, 1000);',
+      ].join('\n'));
+
+      const runner = track(spawn(process.execPath, [harness], { stdio: ['ignore', 'pipe', 'pipe'] }));
+      expect(await waitForStdout(runner, 'ready', 20_000)).toBe(true);
+
+      const piPid = Number(await readFile(pidFile, 'utf8'));
+      expect(Number.isSafeInteger(piPid)).toBe(true);
+      // Confirm the child really came up before proving it goes away.
+      await sleep(1_000);
+      expect(() => process.kill(piPid, 0)).not.toThrow();
+
+      runner.kill('SIGKILL');
+      await waitForExit(runner, 10_000);
+
+      let gone = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        try {
+          process.kill(piPid, 0);
+        } catch (error) {
+          gone = (error as NodeJS.ErrnoException).code === 'ESRCH';
+          if (gone) break;
+        }
+        await sleep(250);
+      }
+      if (!gone) {
+        try { process.kill(piPid, 'SIGKILL'); } catch { /* cleanup */ }
+      }
+      expect(gone).toBe(true);
+    },
+    60_000,
+  );
 
   it('没拿到父 pid 时不装看门狗(不影响独立运行的 pi)', async () => {
     const file = await writeWatchdogHarness();

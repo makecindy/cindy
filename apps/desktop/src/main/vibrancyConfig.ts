@@ -5,10 +5,15 @@
  * 回退不透明。
  */
 import { createLogger } from './logger.js';
+import {
+  CINDY_ACRYLIC_WINDOW_BACKING,
+  isWindowsBackdropMaterial,
+  type WindowsBackdropMaterial,
+} from '../shared/windowBackdrop.js';
+
+export type { WindowsBackdropMaterial } from '../shared/windowBackdrop.js';
 
 const log = createLogger('vibrancyConfig');
-
-export type WindowsBackdropMaterial = 'acrylic' | 'mica' | 'tabbed' | 'none';
 
 export interface VibrancyConfig {
   vibrancy: string | null;
@@ -19,13 +24,6 @@ export interface VibrancyConfig {
 export interface ResolveVibrancyConfigOptions {
   getSystemVersion?: () => string;
 }
-
-const VALID_BACKDROP_MATERIALS = new Set<WindowsBackdropMaterial>([
-  'acrylic',
-  'mica',
-  'tabbed',
-  'none',
-]);
 
 function readWindowsSystemVersion(options?: ResolveVibrancyConfigOptions): string | null {
   try {
@@ -54,11 +52,14 @@ function isWindows11(options?: ResolveVibrancyConfigOptions): boolean {
 function resolveBackdropMaterial(): WindowsBackdropMaterial {
   const raw = process.env.XDT_BACKDROP_MATERIAL;
   if (!raw) return 'acrylic';
-  if (VALID_BACKDROP_MATERIALS.has(raw as WindowsBackdropMaterial)) {
-    return raw as WindowsBackdropMaterial;
-  }
+  if (isWindowsBackdropMaterial(raw)) return raw;
   log.warn(`Invalid XDT_BACKDROP_MATERIAL '${raw}', falling back to acrylic.`);
   return 'acrylic';
+}
+
+function resolveWindowsBackdropColor(material: WindowsBackdropMaterial, isDark: boolean): string {
+  if (material !== 'acrylic') return '#00000000';
+  return isDark ? CINDY_ACRYLIC_WINDOW_BACKING.dark : CINDY_ACRYLIC_WINDOW_BACKING.light;
 }
 
 export function resolveVibrancyConfig(
@@ -80,10 +81,13 @@ export function resolveVibrancyConfig(
   }
   if (platform === 'win32') {
     if (isCindy && isWindows11(options)) {
+      const backgroundMaterial = resolveBackdropMaterial();
       return {
         vibrancy: null,
-        backgroundColor: '#00000000',
-        backgroundMaterial: resolveBackdropMaterial(),
+        // Acrylic 的原生 backing 直接带侧栏染色，左栏稳态不再重复叠 CSS tint。
+        // live resize 全程保持同一材质；连续尺寸变化交给 Renderer 的 CSS 布局处理。
+        backgroundColor: resolveWindowsBackdropColor(backgroundMaterial, isDark),
+        backgroundMaterial,
       };
     }
     return { vibrancy: null, backgroundColor: opaqueBg, backgroundMaterial: 'none' };

@@ -43,6 +43,9 @@ vi.mock('../provider-route', () => ({
   resolveSessionRouteDecision: routeMocks.resolveSessionRouteDecision,
   gatewayDefaultRouteDecision: vi.fn((_agent: string, gatewayKey: string | null) =>
     gatewayKey ? { headerOverride: { 'x-api-key': gatewayKey } } : null),
+  // ①.5 隐式来源解析恒落空 → 回落 ② 段默认,与本套件锁定的记账语义一致。
+  resolveImplicitLocalBridgeRouteResolution: vi.fn(async () => ({ kind: 'none' })),
+  resolveImplicitProviderOAuthRouteDecision: vi.fn(() => null),
 }));
 
 import {
@@ -148,11 +151,14 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(takeClaudeRequestRoute(23)).toEqual({ sessionId: 'sess-1', route: 'gateway' });
   });
 
-  it('does not record ambiguous no-key non-anthropic passthroughs', () => {
+  it('does not record ambiguous no-key non-anthropic passthroughs', async () => {
     const transform = createModelRoutingTransform();
-    const decision = transform(
-      { model: 'gpt-5.5[1m]' },
-      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    // ①.5 隐式来源解析是异步路径(本套件 mock 恒落空 → 回落 ② 段),决策内容不变。
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'gpt-5.5[1m]' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ),
     );
     expect(decision).toBeNull();
     expect(readClaudeSessionRoute('sess-1')).toBeNull();

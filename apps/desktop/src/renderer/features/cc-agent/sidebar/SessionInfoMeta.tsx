@@ -35,6 +35,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Folders, GitPullRequest } from 'lucide-react';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { useTranslation } from 'react-i18next';
@@ -66,6 +67,7 @@ type TFunc = (key: string, options?: Record<string, unknown>) => string;
 export interface SessionInfoPiece {
   key: TaskInfoField;
   text: string;
+  tags?: Session['tags'];
   /** hover 提示(绝对时间 / 字段说明)。 */
   title?: string;
   /** time 片段:渲染成语义化 <time dateTime>(与旧时间槽一致)。 */
@@ -91,6 +93,10 @@ export function buildSessionInfoPieces(
 ): SessionInfoPiece[] {
   const pieces: SessionInfoPiece[] = [];
   for (const field of fields) {
+    if (field === 'tags') {
+      if (session.tags?.length) pieces.push({ key: 'tags', text: '', tags: session.tags });
+      continue;
+    }
     if (field === 'tokens') {
       if (session.totalTokenUsage > 0) {
         pieces.push({
@@ -180,7 +186,7 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
   }, [fetchStatusesForSession, prRef.sessionId]);
   // 按 key 精准订阅(2026-08-13 review P1):整表快照会让任一 PR 的刷新惊动
   // 全部已挂载徽标;usePrStatus 在本 PR 结果未变时快照引用不变、不重渲染。
-  const status = usePrStatus(prStatusKey(prRef));
+  const status = usePrStatus(prRef.sessionId, prStatusKey(prRef));
   const kind = status?.ok ? status.status : null;
   const unresolvedCount = status?.ok ? status.unresolvedCount : null;
   const showDot = shouldShowPrUnresolvedDot(kind, unresolvedCount);
@@ -313,7 +319,9 @@ export function SessionInfoMeta({
               ·
             </span>
           )}
-          {piece.key === 'pr' ? (
+          {piece.key === 'tags' ? (
+            <TaskTagDots tags={piece.tags} />
+          ) : piece.key === 'pr' ? (
             prRef ? (
               <PrNumberPiece prRef={prRef} isActive={isActive} />
             ) : null

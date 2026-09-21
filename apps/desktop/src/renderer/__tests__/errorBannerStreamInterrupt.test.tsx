@@ -17,6 +17,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -33,6 +34,7 @@ vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
 }));
 
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { ErrorMessageCard } from '@/components/chat/ErrorMessageCard';
 import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
 
 const STREAM_RAW =
@@ -82,5 +84,114 @@ describe('ErrorBanner — LiteLLM 流中断', () => {
 
     expect(screen.getByText('chat.errorBanner.streamInterruptedNoRetry')).toBeTruthy();
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+  });
+});
+
+describe('runtime-selection-cancelled 本地化', () => {
+  const fallback =
+    'Deferred model switch was cancelled because safe context rebuild is unsupported. The previous model remains active.';
+  const reason = 'runtime-selection-cancelled';
+  const key = 'newChat.chatInput.switchFailed';
+
+  it('live ErrorBanner uses the stable localized reason instead of the English fallback', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: fallback,
+        errorReason: reason,
+        onRetry: vi.fn(),
+        agentKind: 'pi',
+      }),
+    );
+
+    expect(screen.getByText(key)).toBeTruthy();
+    expect(screen.queryByText(fallback)).toBeNull();
+  });
+
+  it('persisted ErrorMessageCard uses the same localized reason instead of the English fallback', () => {
+    render(createElement(ErrorMessageCard, { message: fallback, reason }));
+
+    expect(screen.getByText(key)).toBeTruthy();
+    expect(screen.queryByText(fallback)).toBeNull();
+  });
+});
+
+describe('ErrorBanner — Codex oversized history', () => {
+  it('hides Retry locally and does not show a strip-fork button', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: 'oversized',
+        errorReason: 'codex_history_oversized',
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        onForkStripEncrypted: vi.fn(),
+        agentKind: 'codex',
+      }),
+    );
+    expect(screen.getByText('logic.errors.codexHistoryOversized')).toBeTruthy();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.forkStripOversizedHistoryTitle')).toBeNull();
+  });
+
+  it('hides Retry on SSH sessions and does not offer a local strip-fork', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: 'oversized',
+        errorReason: 'codex_history_oversized',
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        onForkStripEncrypted: vi.fn(),
+        agentKind: 'codex',
+        remoteHostId: 'ssh-1',
+      }),
+    );
+    expect(screen.getByText('logic.errors.codexHistoryOversizedRemote')).toBeTruthy();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.forkStripOversizedHistoryTitle')).toBeNull();
+  });
+
+  it('hides Retry on device-link and does not show a strip-fork button', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: 'oversized',
+        errorReason: 'codex_history_oversized',
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        onForkStripEncrypted: vi.fn(),
+        agentKind: 'codex',
+        deviceLinkDeviceId: 'device-1',
+      }),
+    );
+    expect(screen.getByText('logic.errors.codexHistoryOversized')).toBeTruthy();
+    expect(screen.queryByText('logic.errors.codexHistoryOversizedRemote')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.forkStripOversizedHistoryTitle')).toBeNull();
+  });
+});
+
+const XAI_REJECTED_RAW = `OpenAI API error (400): ${JSON.stringify({
+  message: `litellm.BadRequestError: XaiException - ${JSON.stringify({
+    error: { message: 'Upstream rejected the request!', type: 'invalid_request_error' },
+  })}`,
+  type: null,
+  param: null,
+  code: '400',
+})}`;
+
+
+describe('ErrorBanner — LiteLLM 外壳拆封', () => {
+  it('展示上游内层原文，协议外壳可展开', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: XAI_REJECTED_RAW,
+        retryText: 'retry-token',
+        onRetry: vi.fn(),
+        agentKind: 'pi',
+      }),
+    );
+
+    expect(screen.getByText('Upstream rejected the request!')).toBeTruthy();
+    expect(screen.queryByText(XAI_REJECTED_RAW)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(XAI_REJECTED_RAW)).toBeTruthy();
   });
 });

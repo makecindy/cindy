@@ -30,7 +30,9 @@ describe('DeferredCodexRestartService', () => {
   }) {
     const restart = overrides?.restart ?? vi.fn(async () => {});
     const service = new DeferredCodexRestartService({
-      restart,
+      restart: async (applyRuntime) => {
+        if (await applyRuntime()) await restart();
+      },
       hasBusyLocalCodexSession: overrides?.hasBusyLocalCodexSession ?? (() => false),
       listLocalCodexSessionIds: overrides?.listLocalCodexSessionIds ?? (() => []),
       onApplied: overrides?.onApplied,
@@ -56,6 +58,29 @@ describe('DeferredCodexRestartService', () => {
     service.onSessionSettled();
     await vi.runOnlyPendingTimersAsync();
     expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves pending bridge work when a concurrent startup prevents guarded preparation', async () => {
+    const applyRuntime = vi.fn(async () => {});
+    let starting = true;
+    const service = new DeferredCodexRestartService({
+      restart: async (apply) => {
+        if (starting) throw new CodexCredentialModeSwitchBusyError(['starting-account']);
+        await apply();
+      },
+      hasBusyLocalCodexSession: () => false,
+      listLocalCodexSessionIds: () => [],
+      logger,
+    });
+    service.schedule('bridge-refresh', applyRuntime);
+    await service.flushBeforeLocalCodexSessionStart();
+    expect(applyRuntime).not.toHaveBeenCalled();
+    expect(service.isPending()).toBe(true);
+    starting = false;
+    await service.flushBeforeLocalCodexSessionStart();
+    expect(applyRuntime).toHaveBeenCalledOnce();
+    expect(service.isPending()).toBe(false);
+    service.clear();
   });
 
   it('无 pending 时 settle 不触发重启', async () => {
@@ -166,6 +191,34 @@ describe('DeferredCodexRestartService', () => {
     await vi.advanceTimersByTimeAsync(1_100);
     expect(restart).toHaveBeenCalledTimes(1);
     expect(service.isPending()).toBe(false);
+  });
+
+  it('等待所有并行本地 Codex turn 都结束后只重启一次', async () => {
+    const restart = vi.fn(async () => {});
+    const busy = new Set(['codex-1', 'codex-2', 'codex-3']);
+    const { service } = createService({
+      restart,
+      hasBusyLocalCodexSession: () => busy.size > 0,
+    });
+    service.schedule('custom-provider-image-generation-enabled');
+
+    for (const sessionId of ['codex-1', 'codex-2']) {
+      busy.delete(sessionId);
+      service.onSessionSettled();
+      await vi.runOnlyPendingTimersAsync();
+      expect(restart).not.toHaveBeenCalled();
+      expect(service.isPending()).toBe(true);
+    }
+
+    busy.delete('codex-3');
+    service.onSessionSettled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(restart).toHaveBeenCalledOnce();
+    expect(service.isPending()).toBe(false);
+
+    service.onSessionSettled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(restart).toHaveBeenCalledOnce();
   });
 
   it('restart 抛 busy(settle 与新 turn 竞态)时保留 pending 且不刷 warn, 之后重试成功', async () => {
@@ -308,7 +361,7 @@ describe('DeferredCodexRestartService', () => {
     expect(service.isPending()).toBe(true);
   });
 
-  it('旧 runtime await 期间新 schedule: 循环接着应用新闭包, 不被旧闭包收口误清', async () => {
+  it.each(['runtime', 'mcp'] as const)('consumes %s work arriving before the bridge snapshot in the same restart', async (kind) => {
     const order: string[] = [];
     let resolveFirst: () => void = () => {};
     const restart = vi.fn(async () => {
@@ -326,20 +379,24 @@ describe('DeferredCodexRestartService', () => {
     service.onSessionSettled();
     await Promise.resolve();
     // 旧 runtime 还挂着时用户再次变更(busy 路径)覆盖登记
-    service.schedule('memory-change', async () => {
+    service.schedule('settings-change', kind === 'mcp' ? undefined : async () => {
       order.push('second');
     });
     resolveFirst();
     await vi.runOnlyPendingTimersAsync();
-    expect(order).toEqual(['first:start', 'second', 'restart']);
+    expect(order).toEqual(kind === 'mcp' ? ['first:start', 'restart'] : ['first:start', 'second', 'restart']);
     expect(service.isPending()).toBe(false);
   });
 
-  it('restart await 期间新 schedule: 本轮不收口, 下一边界应用新 runtime 后再重启', async () => {
+  it.each(['runtime', 'mcp', 'mixed'] as const)('retains %s changes made after the active restart snapshots config', async (kind) => {
     const runtimes: string[] = [];
+    let persistedRevision = 1;
+    const snapshots: number[] = [];
+    const onApplied = vi.fn();
     let resolveRestart: () => void = () => {};
     let restartCalls = 0;
     const restart = vi.fn(() => {
+      snapshots.push(persistedRevision);
       restartCalls += 1;
       if (restartCalls === 1) {
         return new Promise<void>((resolve) => {
@@ -348,7 +405,7 @@ describe('DeferredCodexRestartService', () => {
       }
       return Promise.resolve();
     });
-    const { service } = createService({ restart });
+    const { service } = createService({ restart, onApplied });
     service.schedule('memory-change', async () => {
       runtimes.push('first');
     });
@@ -356,21 +413,67 @@ describe('DeferredCodexRestartService', () => {
     await Promise.resolve();
     await Promise.resolve();
     // 第一次 restart 还挂着时又来一次变更登记
-    service.schedule('memory-change', async () => {
-      runtimes.push('second');
-    });
+    if (kind !== 'mcp') {
+      service.schedule('memory-change', async () => {
+        runtimes.push('second');
+      });
+    }
+    persistedRevision = 2;
+    if (kind !== 'runtime') service.schedule('custom-mcp-change');
+    persistedRevision = 3;
+    if (kind !== 'runtime') service.schedule('contacts-change');
     resolveRestart();
     await Promise.resolve();
     await Promise.resolve();
     // 本轮不收口:pending 保持, second 尚未应用
     expect(service.isPending()).toBe(true);
     expect(runtimes).toEqual(['first']);
+    expect(snapshots).toEqual([1]);
+    expect(onApplied).not.toHaveBeenCalled();
 
     service.onSessionSettled();
     await vi.runOnlyPendingTimersAsync();
-    expect(runtimes).toEqual(['first', 'second']);
+    expect(runtimes).toEqual(kind === 'mcp' ? ['first'] : ['first', 'second']);
+    expect(snapshots).toEqual([1, 3]);
+    expect(onApplied).toHaveBeenCalledOnce();
     expect(restart).toHaveBeenCalledTimes(2);
     expect(service.isPending()).toBe(false);
+  });
+
+  it('retains the pre-close snapshot if an immediate takeover also fails', async () => {
+    let liveIds = ['closed-by-immediate-prepare'];
+    const onApplied = vi.fn();
+    const { service } = createService({ listLocalCodexSessionIds: () => liveIds, onApplied });
+    service.schedule('memory-change');
+    expect(service.listGatedSessionIds()).toEqual(liveIds);
+    liveIds = [];
+    service.schedule('subagent-spawn-config-change');
+    await service.flushBeforeLocalCodexSessionStart();
+    expect(onApplied).toHaveBeenCalledExactlyOnceWith(['closed-by-immediate-prepare']);
+  });
+
+  it('retains closed IDs for immediate takeover but clears them across owner changes', async () => {
+    let liveIds = ['old-owner'];
+    let fail = true;
+    const onApplied = vi.fn();
+    const { service } = createService({
+      listLocalCodexSessionIds: () => liveIds,
+      onApplied,
+      restart: async () => {
+        liveIds = [];
+        if (fail) throw new CodexCredentialModeSwitchBusyError([]);
+      },
+    });
+    service.schedule('memory-change');
+    await service.flushBeforeLocalCodexSessionStart();
+    expect(service.listGatedSessionIds()).toEqual(['old-owner']);
+    service.clear();
+    expect(service.listGatedSessionIds()).toEqual([]);
+    liveIds = ['new-owner'];
+    fail = false;
+    service.schedule('memory-change');
+    await service.flushBeforeLocalCodexSessionStart();
+    expect(onApplied).toHaveBeenCalledExactlyOnceWith(['new-owner']);
   });
 
   it('listGatedSessionIds: pending 时返回 live 会话名单, 无 pending / deps 抛错时为空', () => {
@@ -402,6 +505,34 @@ describe('runMemoryChangeWithCodexRestart', () => {
       logger,
     };
   }
+
+  it.each(['memory-change', 'subagent-spawn-config-change'])(
+    'defers %s for a real auxiliary-host lease and applies after it settles', async (reason) => {
+      const { CodexAgent } = await import('../../../../../../packages/maker-core/src/agents/codex/index.js');
+      const agent = new CodexAgent({ auth: {}, runtimeConfig: {}, binaryPath: process.execPath, logger } as any);
+      const release = (agent as any).acquireHostSessionBindingLease('local-control:oauth-bearer');
+      let guard: Awaited<ReturnType<InstanceType<typeof CodexAgent>['beginLocalHostCredentialChange']>> | undefined;
+      const deps = createDeps();
+      deps.prepare.mockImplementation(async () => {
+        guard = await agent.beginLocalHostCredentialChange('settings refresh', {
+          allLocalHosts: true,
+          busyError: () => new CodexCredentialModeSwitchBusyError([]),
+        });
+        try { guard.assertIdle(); } catch (error) { guard.release(); throw error; }
+      });
+      deps.finalize.mockImplementation(async () => { await guard?.finalize(); });
+      const persist = vi.fn(async () => ({ value: true }));
+      const applyRuntime = reason === 'memory-change' ? vi.fn(async () => {}) : undefined;
+      const parts = { persist, applyRuntime, reason };
+      await expect(runMemoryChangeWithCodexRestart(deps, parts)).resolves.toEqual({ value: true, codexRestartDeferred: true });
+      expect(persist).toHaveBeenCalledOnce();
+      if (applyRuntime) expect(applyRuntime).not.toHaveBeenCalled();
+      expect(deps.scheduleDeferredRestart).toHaveBeenCalledWith(reason, applyRuntime);
+      release();
+      await expect(runMemoryChangeWithCodexRestart(deps, parts)).resolves.toEqual({ value: true, codexRestartDeferred: false });
+      if (applyRuntime) expect(applyRuntime).toHaveBeenCalledOnce();
+    },
+  );
 
   it('prepare 成功: persist → applyRuntime → finalize, 不登记延迟重启, 清掉旧登记', async () => {
     const deps = createDeps();

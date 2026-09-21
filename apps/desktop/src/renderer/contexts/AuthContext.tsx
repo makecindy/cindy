@@ -1,3 +1,4 @@
+import { resetTaskTagCatalogCache } from '@/features/task-tags/taskTagEvents';
 import {
   createContext,
   useCallback,
@@ -24,6 +25,7 @@ import {
   type AuthFlowState,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
+  type DesktopAccountSwitcherSnapshot,
   type User,
 } from '@/lib/authService';
 import {
@@ -33,19 +35,28 @@ import {
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { setUserPromptOwner } from '@/lib/userPromptStore';
 import { bootstrapMemorySettingsFromMain, setMemorySettingsOwner } from '@/lib/memorySettingsStore';
+import {
+  refreshChatEmbeddingFromMain,
+  setChatEmbeddingSettingsOwner,
+} from '@/lib/chatEmbeddingStore';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
+import { setProviderModelMemoryOwner } from '@/state/providerModelMemory';
 import { setFavoriteAnchorMemoryOwner } from '@/state/favoriteAnchorMemory';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
+import { setBotReadStateOwner } from '@/features/bots/botReadState';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
+import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import { awaitDesktopLoginStateLoad } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
 
 /**
@@ -62,6 +73,13 @@ export interface AuthContextValue {
   dataOwnerId: string | null;
   /** Failed auth boundaries remount owner-scoped routes so stale generations can rehydrate. */
   dataOwnerRecoveryEpoch: number;
+  /**
+   * Main-owned owner generation as last pushed. It advances on every owner commit,
+   * including same-owner repairs that keep `dataOwnerId` and never touch
+   * `dataOwnerRecoveryEpoch`; owner-stamped mirrors in main are fenced on it, so a
+   * consumer that pushes such a mirror must re-push when this changes (#4469).
+   */
+  dataOwnerGeneration: number;
   canEnterApp: boolean;
   isAuthenticated: boolean;
   /** 当前账号是否加入 Canary 发布通道。 */
@@ -74,6 +92,11 @@ export interface AuthContextValue {
   loadLoginState: () => Promise<DesktopLoginActionResult>;
   dispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   logout: () => Promise<void>;
+  listAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  syncAccounts: () => Promise<DesktopAccountSwitcherSnapshot>;
+  switchAccount: (accountKey: string) => Promise<void>;
+  beginAddAccount: () => Promise<DesktopLoginActionResult>;
+  cancelAddAccount: () => Promise<void>;
   enterLocalMode: () => Promise<void>;
   exitLocalMode: () => Promise<void>;
   hasAccountDeletionReceipt: boolean;
@@ -101,9 +124,11 @@ const log = createLogger('AuthContext');
 function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?: number): void {
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
   if (previousOwnerId !== dataOwnerId) {
+    resetTaskTagCatalogCache();
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
+  recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());
   setSelectedMachineOwner(dataOwnerId);
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }
@@ -120,6 +145,7 @@ export function AuthProvider({
   const [mode, setMode] = useState<'signed-out' | 'local' | 'cloud'>('signed-out');
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
   const [dataOwnerRecoveryEpoch, setDataOwnerRecoveryEpoch] = useState(0);
+  const [dataOwnerGeneration, setDataOwnerGenerationState] = useState(0);
   const [canEnterApp, setCanEnterApp] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCanary, setIsCanary] = useState(false);
@@ -157,6 +183,7 @@ export function AuthProvider({
         activeDataOwnerIdRef.current,
         activeDataOwnerGenerationRef.current,
       );
+      setDataOwnerGenerationState(activeDataOwnerGenerationRef.current);
       setDataOwnerRecoveryEpoch((epoch) => epoch + 1);
       void preloadLocalCatalogSnapshot();
       throw error;
@@ -185,8 +212,10 @@ export function AuthProvider({
       }
       activeDataOwnerIdRef.current = state.dataOwnerId;
       activeDataOwnerGenerationRef.current = state.ownerGeneration;
+      setDataOwnerGenerationState(state.ownerGeneration);
       setNewMakerDraftOwner(state.dataOwnerId);
-      // 统一模型选择器的两根新轴与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
+      setProviderModelMemoryOwner(state.dataOwnerId);
+      // 模型选择器的持久记忆与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
       // 登出时同样传 null(state.dataOwnerId 在 signed-out 快照里就是 null,分区键退回
       // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。
       setModelEnginePrefsOwner(state.dataOwnerId);
@@ -194,10 +223,19 @@ export function AuthProvider({
       // 收藏**锚点**记忆(面板上哪一行打勾)与收藏本体同分区:漏接同样是多账号串号。
       setFavoriteAnchorMemoryOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
+      setBotReadStateOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
       setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
-      setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
+      void setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
+      const chatEmbeddingOwnerChanged = setChatEmbeddingSettingsOwner(
+        state.dataOwnerId,
+        state.ownerGeneration,
+        state.mode === 'cloud'
+          && state.isAuthenticated
+          && state.user?.membershipKind === 'org',
+      );
+      if (chatEmbeddingOwnerChanged) void refreshChatEmbeddingFromMain();
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();
@@ -334,7 +372,12 @@ export function AuthProvider({
   }, [confirm, enableSessionExpiredPrompt, t]);
 
   const loadLoginState = useCallback(async (): Promise<DesktopLoginActionResult> => {
-    const result = await authServiceRef.current!.getLoginState();
+    // preparing 只允许在 load 进行中出现。settle / throw / 30s 超时都必须落到
+    // identifier 或既有 error 步,避免 AUTH_FLOW_SUPERSEDED + state=null 或 IPC
+    // 挂起把「正在连接登录服务」变成永不结束。
+    const result = await awaitDesktopLoginStateLoad(() =>
+      authServiceRef.current!.getLoginState(),
+    );
     setLoginState(result.state);
     return result;
   }, []);
@@ -347,6 +390,12 @@ export function AuthProvider({
         setLoginState({ step: 'browser-redirect', label: action.label });
       }
       const result = await authServiceRef.current!.dispatchLoginAction(action);
+      // Org discovery can auto-start a sole SSO browser flow below. Persist at
+      // the successful discovery boundary so a later browser cancel/timeout
+      // does not erase a valid organization from local history.
+      if (action.type === 'discover-sso-org' && result.success) {
+        rememberSsoOrgIdentifier(action.org);
+      }
       // 没有真正选择时不停留 method-choice：唯一 SSO 改派 start-browser
       //（确认窗立刻消失、露出等待态）；唯一邮箱验证码直接发码进输码页。
       if (result.success && result.state.step === 'method-choice') {
@@ -389,6 +438,27 @@ export function AuthProvider({
     sessionsStore.reset();
     clearWorkersCache();
   }, [runDataOwnerBoundary]);
+
+  const listAccounts = useCallback(() => authServiceRef.current!.listAccounts(), []);
+
+  const syncAccounts = useCallback(() => authServiceRef.current!.syncAccounts(), []);
+
+  const switchAccount = useCallback(
+    (accountKey: string) =>
+      runDataOwnerBoundary(() => authServiceRef.current!.switchAccount(accountKey)),
+    [runDataOwnerBoundary],
+  );
+
+  const beginAddAccount = useCallback(async () => {
+    const result = await authServiceRef.current!.beginAddAccount();
+    setLoginState(result.state);
+    return result;
+  }, []);
+
+  const cancelAddAccount = useCallback(async () => {
+    await authServiceRef.current!.cancelAddAccount();
+    setLoginState(null);
+  }, []);
 
   const enterLocalMode = useCallback(async () => {
     // 本地模式也是一次 dataOwnerId 切换。必须走 applyIncomingState,不能自己拼半套
@@ -447,6 +517,7 @@ export function AuthProvider({
       mode,
       dataOwnerId,
       dataOwnerRecoveryEpoch,
+      dataOwnerGeneration,
       canEnterApp,
       isAuthenticated,
       isCanary,
@@ -456,6 +527,11 @@ export function AuthProvider({
       loadLoginState,
       dispatchLoginAction,
       logout,
+      listAccounts,
+      syncAccounts,
+      switchAccount,
+      beginAddAccount,
+      cancelAddAccount,
       enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,
@@ -473,6 +549,7 @@ export function AuthProvider({
       mode,
       dataOwnerId,
       dataOwnerRecoveryEpoch,
+      dataOwnerGeneration,
       canEnterApp,
       isAuthenticated,
       isCanary,
@@ -482,6 +559,11 @@ export function AuthProvider({
       loadLoginState,
       dispatchLoginAction,
       logout,
+      listAccounts,
+      syncAccounts,
+      switchAccount,
+      beginAddAccount,
+      cancelAddAccount,
       enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,

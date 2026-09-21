@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import yaml from 'js-yaml';
 import type { CapabilityRoutingPolicy } from '@cindy/maker-core';
@@ -1025,7 +1025,12 @@ export async function writeFileAtomicIfUnchanged(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
-  const tmp = `${file}.xdt-plugins-sync.tmp-${process.pid}-${Date.now()}`;
+  // Concurrent callers in the same process can reach this function during the
+  // same millisecond. A pid/timestamp name lets them share and delete one
+  // temporary file, which makes the winner's rename fail with ENOENT on
+  // Windows. Keep every attempt on its own path so the compare-and-rename
+  // protocol remains race-safe.
+  const tmp = `${file}.xdt-plugins-sync.tmp-${process.pid}-${randomUUID()}`;
   await fsp.writeFile(tmp, content, { encoding: 'utf8', mode });
   try {
     await fsp.chmod(tmp, mode);

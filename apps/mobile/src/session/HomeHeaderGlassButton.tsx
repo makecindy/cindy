@@ -1,25 +1,32 @@
 /**
  * 首页顶栏图标钮:iOS 26+ 走系统 Liquid Glass(UIGlassEffect),其它环境回退成无底图标热区。
  */
-import { GlassView } from 'expo-glass-effect';
-import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
-import { useLiquidGlassAvailable } from '@/session/useLiquidGlassAvailable';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius } from '@/theme/tokens';
+import { GlassView } from "expo-glass-effect";
+import type { ReactNode } from "react";
+import { Pressable, StyleSheet, View } from "react-native";
+import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
+import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
+import { navigationChrome, radius } from "@/theme/tokens";
 
 export function HomeHeaderGlassButton({
   accessibilityLabel,
   children,
   onPress,
   testID,
+  disabled = false,
+  prominent = false,
+  size = navigationChrome.target,
 }: {
   accessibilityLabel: string;
   children: ReactNode;
   onPress(): void;
   testID: string;
+  disabled?: boolean;
+  prominent?: boolean;
+  size?: number;
+  artworkSize?: number;
 }) {
-  const { mode } = useTheme();
+  const { mode, colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const liquidGlass = useLiquidGlassAvailable();
 
@@ -27,8 +34,10 @@ export function HomeHeaderGlassButton({
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
+      disabled={disabled}
+      accessibilityState={{ disabled }}
       onPress={onPress}
-      style={({ pressed }) => [styles.hit, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.hit, { width: size, height: size }, prominent && { backgroundColor: colors.cta, borderRadius: radius.pill }, pressed && styles.pressed, disabled && styles.disabled]}
       testID={testID}
     >
       {liquidGlass ? (
@@ -53,21 +62,22 @@ const makeStyles = (_colors: ThemeColors) =>
   StyleSheet.create({
     hit: {
       flexShrink: 0,
-      height: 44,
-      width: 44,
+      height: navigationChrome.target,
+      width: navigationChrome.target,
     },
     glass: {
-      alignItems: 'center',
+      alignItems: "center",
       borderRadius: radius.pill,
       flex: 1,
-      justifyContent: 'center',
-      overflow: 'hidden',
+      justifyContent: "center",
+      overflow: "hidden",
     },
     iconSlot: {
-      alignItems: 'center',
+      alignItems: "center",
       flex: 1,
-      justifyContent: 'center',
+      justifyContent: "center",
     },
+    disabled: { opacity: 0.46 },
     pressed: {
       opacity: 0.72,
     },

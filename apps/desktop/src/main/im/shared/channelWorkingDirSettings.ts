@@ -35,7 +35,9 @@ const SETTINGS_VERSION = 1;
  * 用户目录 IO 的统一 deadline。取值权衡: 太短会把高延迟但活着的网络盘误判
  * 不可用(/new 会回退托管目录); 太长则设置读取/选目录让用户久等。5s 覆盖
  * 常规网盘抖动, 超过它按「当前不可用」处理 —— 目录恢复后的下一次设置刷新
- * 或新对话会重新探测回来。测试经工厂参数 userDirTimeoutMs 缩小。
+ * 或新对话会在冷却结束、底层 IO 释放后重新探测。若系统 IO 始终不返回,
+ * 生产执行器保留占槽直到进程退出, 不以重试堆积更多 IO。
+ * 测试经工厂参数 userDirTimeoutMs 缩小。
  */
 const USER_DIR_IO_TIMEOUT_MS = 5_000;
 
@@ -50,9 +52,9 @@ export interface ChannelWorkingDirSettingsState extends ChannelWorkingDirSetting
 
 /**
  * 用户目录探测的执行边界。默认实现跑在本进程(单测用它 + fs mock);生产环境
- * 由 im/index.ts 注入 workdir-probe-host 的 utility-process 执行器 —— Node 的
- * fs 调用不可取消, 失联网络盘会把挂死 IO 留在 libuv 线程池里, 子进程化后
- * 超时即终止回收(review P1: 槽位被永久挂起的探针占满会饿死健康目录)。
+ * 由 im/index.ts 注入 workdir-probe-host 的有界 Main 异步执行器。Node 的 fs
+ * 调用不可取消, 超时只结束等待; 底层 IO 结束前继续占槽并保持同目录去重。
+ * 设置类最多占一个槽, 为远程目录操作保留容量。
  * 同目录 single-flight / 超时冷却 / 并发上限在 store 层保留, 作为减少探测
  * 次数的优化。
  */
@@ -71,7 +73,7 @@ export interface ChannelUserDirProbeExecutor {
   availability(candidate: string, timeoutMs: number): Promise<UserDirAvailabilityOutcome>;
 }
 
-/** 进程内默认执行器(单测与兜底); 生产经 setProbeExecutor 换成子进程执行器。 */
+/** 进程内默认执行器(单测与兜底); 生产经 setProbeExecutor 换成共享有界执行器。 */
 function createInProcessUserDirProbeExecutor(): ChannelUserDirProbeExecutor {
   return {
     async validate(selectedPath, timeoutMs) {
@@ -97,7 +99,7 @@ function createInProcessUserDirProbeExecutor(): ChannelUserDirProbeExecutor {
 
 export interface ChannelWorkingDirStore {
   /**
-   * 替换用户目录探测执行边界(im/index.ts 启动时注入 utility-process 执行器)。
+   * 替换用户目录探测执行边界(im/index.ts 启动时注入共享有界执行器)。
    * 在途请求沿用旧执行器跑完; 只影响后续探测。
    */
   setProbeExecutor(executor: ChannelUserDirProbeExecutor): void;
@@ -226,7 +228,7 @@ export function createChannelWorkingDirStore(options: {
       throw Object.assign(new Error(probeTimeoutErrorCode), { code: probeTimeoutErrorCode });
     }
     // 新选择目录采用「严格校验」: realpath → stat → 'wx' 写探针 → 清理整个
-    // 链条跑在探测执行边界内(生产为 utility process, 超时即终止回收), 任一步
+    // 链条跑在探测执行边界内(生产使用共享 deadline, 超时立即返回), 任一步
     // 失败/超时都不进入 commit, 原配置保持不变(与「已保存目录宽大保留」相对 —
     // 后者由 read() 降级为不可用)。
     const outcome = await probeExecutor.validate(selectedPath, userDirTimeoutMs);
@@ -368,8 +370,8 @@ const WORKDIR_PROBE_PREFIX = '.cindy-workdir-probe-';
  *   - **超时冷却**: 某目录探测超时后进入冷却期(PROBE_COOLDOWN_MS), 期间
  *     不再为它发起底层探针, 直接按不可用/超时返回;
  *   - **全局并发上限**: 在途用户目录探针超过 MAX_CONCURRENT_USER_DIR_PROBES
- *     时新请求直接拒绝(不占线程)。真·硬终止需要把探测挪进可杀死的子进程,
- *     不在本轮范围。
+ *     时新请求直接拒绝(不占线程)。生产执行器另有底层 IO 占槽上限, 超时不释放;
+ *     主干弃用 Windows 上消息可能失联的 utility process, 不承诺硬终止。
  */
 const PROBE_COOLDOWN_MS = 30_000;
 const MAX_CONCURRENT_USER_DIR_PROBES = 8;
@@ -420,8 +422,8 @@ function createProbeScheduler(
     async availability(candidate, timeoutMs): Promise<ProbeVerdict> {
       const attempt = acquire(candidate, timeoutMs);
       if (attempt === null) return 'skipped';
-      // 执行边界保证在 timeoutMs 内 settle(子进程被 kill / 进程内 deadline),
-      // 挂死的底层 IO 不会滞留在 Main 的 libuv 线程池, 槽位必然释放。
+      // 执行边界保证在 timeoutMs 内结束等待。底层 IO 可能仍在 Main 运行,
+      // 生产执行器继续占槽并保持去重, 此处只释放 store 层的等待计数。
       const outcome = await attempt;
       if (outcome.ok) return outcome.usable ? 'usable' : 'unusable';
       if (outcome.code === 'PROBE_UNAVAILABLE') {

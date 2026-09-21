@@ -133,7 +133,7 @@ export interface MobileOutboxItem {
    * (图片 = 缩略图方块,文件 = 计数行),previewUri 为本地预览(file://,
    * 上传中即可显示——乐观语义下图从第一帧就该以图的形态出现,不做「附件→图片」跳变)。
    */
-  slotMeta: ReadonlyArray<{ kind: 'image' | 'file'; previewUri: string | null }>;
+  slotMeta: ReadonlyArray<{ kind: 'image' | 'file'; previewUri: string | null; name?: string }>;
   /** 上传任务 localId → 槽位下标。 */
   slotByLocalId: Readonly<Record<string, number>>;
   /** 尚未落定的上传任务。 */
@@ -152,6 +152,8 @@ export interface MobileOutboxThumb {
   uri: string | null;
   /** 已落定槽位的 OSS 引用(sentAttachmentThumbStore 兜底查询键);未落定为 null。 */
   ossRef: string | null;
+  /** Original upload ref, retained when the host materializes ossRef. */
+  previewRef?: string;
   /** 对应上传任务尚未落定(渲染转圈遮罩)。 */
   uploading: boolean;
 }
@@ -169,6 +171,7 @@ export interface MobileOutboxDisplayItem {
   thumbnails: MobileOutboxThumb[];
   /** 非图片附件数(pdf / office 等,渲染「N 个文件」计数行)。 */
   fileCount: number;
+  fileNames?: string[];
   failed: boolean;
   /** 失败原因(附件失败给统一文案,enqueue 失败给 RPC 错误)。 */
   errorText: string | null;
@@ -213,12 +216,14 @@ export function buildOutboxItem(input: {
     failed: boolean;
     kind?: 'image' | 'file';
     previewUri?: string;
+    name?: string;
   }>;
 }): MobileOutboxItem {
   const slots: Array<RemoteSerializedAttachment | null> = [...input.readyAttachments];
-  const slotMeta: Array<{ kind: 'image' | 'file'; previewUri: string | null }> =
+  const slotMeta: Array<{ kind: 'image' | 'file'; previewUri: string | null; name?: string }> =
     input.readyAttachments.map((attachment, index) => ({
       kind: attachment.category === 'image' ? 'image' : 'file',
+      name: attachment.name,
       previewUri: input.readyPreviews?.[index] ?? null,
     }));
   const slotByLocalId: Record<string, number> = {};
@@ -227,7 +232,7 @@ export function buildOutboxItem(input: {
   for (const upload of input.claimedUploads) {
     slotByLocalId[upload.localId] = slots.length;
     slots.push(null);
-    slotMeta.push({ kind: upload.kind ?? 'image', previewUri: upload.previewUri ?? null });
+    slotMeta.push({ kind: upload.kind ?? 'image', previewUri: upload.previewUri ?? null, name: upload.name });
     if (upload.failed) failedIds.push(upload.localId);
     else waitingIds.push(upload.localId);
   }
@@ -416,10 +421,12 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
   const uploadedCount = item.attachmentSlots.filter((slot) => slot !== null).length;
   const thumbnails: MobileOutboxThumb[] = [];
   let fileCount = 0;
+  const fileNames: string[] = [];
   item.attachmentSlots.forEach((slot, index) => {
     const meta = item.slotMeta[index];
     if (meta?.kind !== 'image') {
       fileCount += 1;
+      fileNames.push(slot?.name ?? meta?.name ?? i18n.t('message.queue.attachmentMessage'));
       return;
     }
     thumbnails.push({
@@ -439,6 +446,7 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     uploadedCount,
     thumbnails,
     fileCount,
+    fileNames,
     failed: item.phase === 'failed',
     errorText: item.phase !== 'failed'
       ? null

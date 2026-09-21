@@ -81,6 +81,31 @@ function gatewayInputTokenPriceBands(
   return thresholdBands.length > 0 ? thresholdBands : undefined;
 }
 
+function gatewayPriorityInputTokenPriceBands(
+  model: ModelAccessGatewayModel,
+): ModelPriceQuote['inputTokenPriceBands'] {
+  const thresholdBands = [
+    {
+      minInputTokens: 200_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove200kTokensPriority),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove200kTokensPriority),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove200kTokensPriority),
+    },
+    {
+      minInputTokens: 272_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove272kTokensPriority),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove272kTokensPriority),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove272kTokensPriority),
+    },
+  ].filter(
+    (tier) =>
+      tier.inputPerMtok !== undefined ||
+      tier.outputPerMtok !== undefined ||
+      tier.cacheReadPerMtok !== undefined,
+  );
+  return thresholdBands.length > 0 ? thresholdBands : undefined;
+}
+
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
 export function isPricedGatewayModel(model: ModelAccessGatewayModel): boolean {
   // 币种不影响“是否有价格”的判断，随便传一个具体币种即可。
@@ -106,6 +131,10 @@ export function gatewayModelPriceQuote(
   }
   const cacheReadPerMtok = perMtok(model.cacheReadInputTokenCost);
   const cacheCreatePerMtok = perMtok(model.cacheCreationInputTokenCost);
+  const priorityInputPerMtok = perMtok(model.inputCostPerTokenPriority);
+  const priorityOutputPerMtok = perMtok(model.outputCostPerTokenPriority);
+  const priorityCacheReadPerMtok = perMtok(model.cacheReadInputTokenCostPriority);
+  const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model);
   if (
     inputPerMtok === 0 &&
     outputPerMtok === 0 &&
@@ -129,6 +158,25 @@ export function gatewayModelPriceQuote(
     outputPerMtok,
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+    ...(priorityInputPerMtok !== undefined ||
+    priorityOutputPerMtok !== undefined ||
+    priorityCacheReadPerMtok !== undefined ||
+    priorityInputTokenPriceBands
+      ? {
+          priority: {
+            ...(priorityInputPerMtok !== undefined ? { inputPerMtok: priorityInputPerMtok } : {}),
+            ...(priorityOutputPerMtok !== undefined
+              ? { outputPerMtok: priorityOutputPerMtok }
+              : {}),
+            ...(priorityCacheReadPerMtok !== undefined
+              ? { cacheReadPerMtok: priorityCacheReadPerMtok }
+              : {}),
+            ...(priorityInputTokenPriceBands
+              ? { inputTokenPriceBands: priorityInputTokenPriceBands }
+              : {}),
+          },
+        }
+      : {}),
     ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(costDiscount !== undefined ? { costDiscount } : {}),
     ...(!declaredCurrency && fallbackIsInferred ? { currencyInferred: true } : {}),
@@ -199,16 +247,41 @@ function referencePriceCalendarDate(value: string | Date | undefined): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Selects a dated provider reference tariff, optionally for a specific agent/input size. */
+interface ReferencePriceOptions {
+  officialOnly?: boolean;
+  agent?: AgentKind;
+  inputTokens?: number;
+  at?: string | Date;
+  variant?: 'standard' | 'priority' | 'batch' | 'fast';
+}
+
 export function providerReferencePriceQuote(
   providerId: string,
   modelId: string,
   registry: ModelRegistry | null | undefined,
-  options: {
-    agent?: AgentKind;
-    inputTokens?: number;
-    at?: string | Date;
-    variant?: 'standard' | 'priority' | 'batch' | 'fast';
-  } = {},
+  options: ReferencePriceOptions = {},
+): ModelPriceQuote | undefined {
+  const quote = referencePriceQuoteForVariant(providerId, modelId, registry, options);
+  if (!quote || (options.variant ?? 'standard') !== 'standard') return quote;
+  // Usage segments call Fast "priority". Keep the standard quote for display,
+  // and project the independently declared Fast tariff for the cost calculator.
+  const fast =
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'fast' }) ??
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'priority' });
+  if (!fast || fast.currency !== quote.currency) return quote;
+  const { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands } = fast;
+  return {
+    ...quote,
+    priority: { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands },
+  };
+}
+
+function referencePriceQuoteForVariant(
+  providerId: string,
+  modelId: string,
+  registry: ModelRegistry | null | undefined,
+  options: ReferencePriceOptions = {},
 ): ModelPriceQuote | undefined {
   // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
   // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
@@ -219,7 +292,7 @@ export function providerReferencePriceQuote(
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);
   const variant = options.variant ?? 'standard';
-  const inputTokenPriceBands = resolved.route.referencePrices
+  const inputTokenPriceBands = resolved.prices
     ?.filter(
       (price) =>
         price.variant === variant &&
@@ -346,9 +419,9 @@ export function subscriptionDirectPriceQuote(
   const routedId = exclusiveXaiCatalogModelId(modelId) ?? modelId;
   let quote: ModelPriceQuote | undefined;
   if (routedId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at });
+    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at, officialOnly: true });
   } else if (routedId.startsWith(XAI_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at });
+    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at, officialOnly: true });
   }
   return quote
     ? {

@@ -8,29 +8,73 @@
  *
  * 通过 mock electron ipcMain 捕获真实 handler + 内存 sqlite 全列 sessions 表做集成断言。
  */
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdir, readdir, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
-import { messages, sessions } from '../../schema';
+import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
+import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
+  client: null as { drizzle: ReturnType<typeof drizzle> } | null,
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   relocate: vi.fn(async (): Promise<{ persistedSdkSessionId: string | null }> => ({
     persistedSdkSessionId: null,
   })),
+  closeSession: vi.fn(async (_sessionId: string) => undefined),
   tapWindowBroadcast: vi.fn(),
+  windows: [] as Array<{
+    trusted?: boolean;
+    isDestroyed: ReturnType<typeof vi.fn>;
+    webContents: { send: ReturnType<typeof vi.fn> };
+  }>,
   summarizeSession: vi.fn(async () => undefined),
+  stopAndRemovePiSubagentRuns: vi.fn(async (_root: string) => true),
+  writePiSubagentDeletedTombstone: vi.fn(
+    async (_agentHome: string, _sessionId: string) => undefined,
+  ),
+  clearPiSubagentDeletedTombstone: vi.fn(
+    async (_agentHome: string, _sessionId: string) => undefined,
+  ),
+  getMakerIfReady: vi.fn(
+    (): {
+      isSessionAlive: (id: string) => boolean;
+      closeSession: (id: string) => Promise<void>;
+    } | null => null,
+  ),
+  closeIdleSessionForMove: vi.fn(async (_sessionId: string) => true),
+  withRehydrateCloseSuppressed: vi.fn(async (_sessionId: string, task: () => Promise<void>) =>
+    task(),
+  ),
   setPinnedSectionCardMode: vi.fn(),
+  upsertRecentWorkdir: vi.fn(
+    async (
+      _path: string | null | undefined,
+      _atMs?: number,
+      _platform?: NodeJS.Platform,
+      _client?: { drizzle: ReturnType<typeof drizzle> },
+    ) => true,
+  ),
+  captureOwnerScope: false,
+  ownerCurrent: true,
+  requestRecycle: vi.fn(async () => undefined),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
+  runtimeCleanup: vi.fn(),
+  compactSessionToolResultsBestEffort: vi.fn(async () => undefined),
+  userDataDir: null as string | null,
 }));
 
 vi.mock('electron', () => ({
@@ -39,22 +83,39 @@ vi.mock('electron', () => ({
       h.handlers.set(channel, handler);
     }),
   },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: { getAllWindows: () => h.windows },
+  // status 写路径(removeHookAttachmentDir / removeTurnChangeSetsForSession)会调
+  // app.getPath('userData') 并对真实文件系统做 fire-and-forget fs.rm。这里返回每次
+  // 测试用 mkdtemp 生成的独立目录，避免并发 worktree 共享同一字面量路径互相删 fixture，
+  // 也避免 Windows 把 POSIX 字面量解析成盘符根相对路径。
+  app: { getPath: () => h.userDataDir },
+}));
+vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
+  piSubagentRunRoot: (agentHome: string, sessionId: string) =>
+    path.join(agentHome, 'runtime', 'pi-subagent-runs', sessionId),
+  stopAndRemovePiSubagentRuns: h.stopAndRemovePiSubagentRuns,
+  writePiSubagentDeletedTombstone: h.writePiSubagentDeletedTombstone,
+  clearPiSubagentDeletedTombstone: h.clearPiSubagentDeletedTombstone,
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../client/current', () => ({
-  getDbClient: () => ({ drizzle: h.db }),
+  getDbClient: () => h.client,
+  getCurrentDbClientUserId: () => 'test-user',
 }));
 vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
 vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
-vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
+vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() =>
+    h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
+  ),
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => h.ownerCurrent),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 vi.mock('../../../sessionTaskSummary.js', () => ({
@@ -63,15 +124,45 @@ vi.mock('../../../sessionTaskSummary.js', () => ({
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
+  isTrustedAppRendererWindow: (w: { trusted?: boolean; isDestroyed: () => boolean }) =>
+    !w.isDestroyed() && w.trusted !== false,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../toolResultCompaction.js', () => ({
+  compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
+}));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
+// Loaded dynamically by the cleanup's launcher gate; the real module pulls in
+// the whole Host.
+vi.mock('../../../maker-host/index.js', () => ({
+  getMakerIfReady: h.getMakerIfReady,
+  withRehydrateCloseSuppressed: h.withRehydrateCloseSuppressed,
+}));
+// delete 路径的 removeHookAttachmentDir 会真删 turn change-set;归档路径动态
+// import cindy-brain(重副作用模块)。两者都 mock 掉,本文件只断言广播行为。
+vi.mock('../../../turn-change-set/store.js', () => ({
+  removeTurnChangeSetsForSession: vi.fn(async () => undefined),
+}));
+vi.mock('../../../cindy-brain/index.js', () => ({
+  notifyGhostSessionEvent: vi.fn(),
+}));
 
-import { registerSessionIpc } from '../sessions';
+import {
+  broadcastSessionPatched,
+  patchSessionMetaInDb,
+  persistSessionFields,
+  registerSessionIpc,
+  resumeDeletedPiSubagentCleanup,
+  setSessionRuntimeCleanup,
+  setSessionWorktreeRecycle,
+  updateSessionInDb,
+  touchUserSendInDb,
+} from '../sessions';
+import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
@@ -79,6 +170,20 @@ function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL,
+      favorite_order INTEGER,
+      sort_order INTEGER,
+      revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (
+      session_id TEXT NOT NULL,
+      tag_id TEXT NOT NULL,
+      PRIMARY KEY (session_id, tag_id)
+    );
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New CCS',
@@ -95,6 +200,7 @@ function createDb(): void {
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
+      context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
@@ -110,20 +216,24 @@ function createDb(): void {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       one_m INTEGER NOT NULL DEFAULT 0,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
       remote_host_id TEXT,
       codex_history_has_product_prompt INTEGER,
+      codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
       summary TEXT,
       provider_id TEXT,
-      codex_plan_json TEXT,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
-      last_turn_ended_at INTEGER
+      last_turn_ended_at INTEGER,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -136,6 +246,10 @@ function createDb(): void {
       created_at INTEGER NOT NULL,
       rewind_at INTEGER
     );
+    CREATE TABLE recent_workdirs (
+      path TEXT PRIMARY KEY NOT NULL,
+      last_used_at INTEGER NOT NULL
+    );
   `);
   const insert = sqlite.prepare(`
     INSERT INTO sessions (id, working_dir, agent_kind, remote_host_id, workspace_kind, created_at, updated_at)
@@ -143,6 +257,7 @@ function createDb(): void {
   `);
   insert.run('cc-local', '/old/dir', 'cc', null, 'dialogue');
   insert.run('codex-local', '/old/dir', 'codex', null, 'dialogue');
+  insert.run('pi-local', '/old/dir', 'pi', null, 'dialogue');
   insert.run('cc-remote', '/remote/dir', 'cc', 'host-1', 'project');
   sqlite
     .prepare(
@@ -153,8 +268,18 @@ function createDb(): void {
   `,
     )
     .run('review-local', '/review/dir', 'codex', null, 'dialogue');
+  sqlite
+    .prepare(
+      `
+    INSERT INTO sessions (
+      id, working_dir, agent_kind, remote_host_id, workspace_kind, source, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'bot', 1, 1)
+  `,
+    )
+    .run('bot-local', '/bot/dir', 'pi', null, 'dialogue');
   h.sqlite = sqlite;
-  h.db = drizzle(sqlite, { schema: { messages, sessions } });
+  h.db = drizzle(sqlite, { schema: { messages, recentWorkdirs, sessions } });
+  h.client = { drizzle: h.db };
 }
 
 async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise<unknown> {
@@ -163,21 +288,354 @@ async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise
   return handler({}, id, patch);
 }
 
+async function invokePatchMeta(id: string, patch: Record<string, unknown>): Promise<unknown> {
+  const handler = h.handlers.get('local-db:sessions:patch-meta');
+  if (!handler) throw new Error('patch-meta handler not registered');
+  return handler({}, id, patch);
+}
+
+async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
+  const handler = h.handlers.get('local-db:sessions:create');
+  if (!handler) throw new Error('create handler not registered');
+  return handler({ sender: { id: 7 } }, body);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
+  h.closeSession.mockClear();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
+  h.upsertRecentWorkdir.mockImplementation(async () => true);
+  h.captureOwnerScope = false;
+  h.ownerCurrent = true;
+  h.requestRecycle.mockResolvedValue(undefined);
   h.handlers.clear();
+  h.windows = [];
+  h.stopAndRemovePiSubagentRuns.mockClear();
+  h.stopAndRemovePiSubagentRuns.mockImplementation(async () => true);
+  h.writePiSubagentDeletedTombstone.mockClear();
+  h.writePiSubagentDeletedTombstone.mockImplementation(async () => undefined);
+  h.clearPiSubagentDeletedTombstone.mockClear();
+  h.clearPiSubagentDeletedTombstone.mockImplementation(async () => undefined);
+  h.getMakerIfReady.mockReset();
+  h.closeIdleSessionForMove.mockReset();
+  h.closeIdleSessionForMove.mockImplementation(async (sessionId) => {
+    await h.withRehydrateCloseSuppressed(sessionId, () => h.closeSession(sessionId));
+    return true;
+  });
+  h.withRehydrateCloseSuppressed.mockClear();
+  h.withRehydrateCloseSuppressed.mockImplementation(async (_sessionId, task) => task());
+  h.getMakerIfReady.mockReturnValue({ isSessionAlive: () => false, closeSession: h.closeSession });
+  h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
-  registerSessionIpc();
+  setSessionRuntimeCleanup(h.runtimeCleanup);
+  setSessionWorktreeRecycle(h.requestRecycle);
+  registerSessionIpc(undefined, { closeIdleSessionForMove: h.closeIdleSessionForMove });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  setSessionRuntimeCleanup(null);
+  setSessionWorktreeRecycle(null);
   setSessionRouteLockImplementation(null);
+  const dir = h.userDataDir;
+  if (dir) {
+    rmSync(dir, { recursive: true, force: true });
+    h.userDataDir = null;
+  }
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('rechecks window trust for both movement broadcasts after navigation', async () => {
+    const trusted = {
+      trusted: true,
+      isDestroyed: vi.fn(() => false),
+      webContents: { send: vi.fn() },
+    };
+    const auxiliary = {
+      trusted: false,
+      isDestroyed: vi.fn(() => false),
+      webContents: { send: vi.fn() },
+    };
+    h.windows = [trusted, auxiliary];
+    await invokeUpdate('codex-local', { workingDir: '/new/dir', workspaceKind: 'project' });
+    expect(trusted.webContents.send).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+      path: '/new/dir',
+    });
+    expect(trusted.webContents.send).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
+    expect(auxiliary.webContents.send).not.toHaveBeenCalled();
+
+    trusted.webContents.send.mockClear();
+    trusted.trusted = false;
+    await invokeUpdate('codex-local', { workingDir: '/another/dir', workspaceKind: 'project' });
+    await invokeUpdate('codex-local', { workspaceKind: 'dialogue' });
+    expect(trusted.webContents.send).not.toHaveBeenCalled();
+    expect(auxiliary.webContents.send).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
+  });
+
+  it('isolates device-link and renderer failures while broadcasting a session patch', () => {
+    const failedWindowSend = vi.fn(() => {
+      throw new Error('window closed');
+    });
+    const healthyWindowSend = vi.fn();
+    h.tapWindowBroadcast.mockImplementationOnce(() => {
+      throw new Error('tap unavailable');
+    });
+    h.windows = [
+      { isDestroyed: vi.fn(() => false), webContents: { send: failedWindowSend } },
+      { isDestroyed: vi.fn(() => false), webContents: { send: healthyWindowSend } },
+    ];
+
+    expect(() =>
+      broadcastSessionPatched('s-projection', {
+        contextTokens: 0,
+        contextWindow: 272_000,
+      }),
+    ).not.toThrow();
+    expect(failedWindowSend).toHaveBeenCalledOnce();
+    expect(healthyWindowSend).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 's-projection',
+      patch: { contextTokens: 0, contextWindow: 272_000 },
+    });
+  });
+
+  it('rejects new SSH writable roots because the picker is not on the remote filesystem', async () => {
+    await expect(
+      invokeCreate({
+        id: 'ssh-forged',
+        agentKind: 'codex',
+        workingDir: '/remote/repo',
+        remoteHostId: 'host-1',
+        writableDirs: ['/remote/outside'],
+      }),
+    ).rejects.toThrow(/can only be revoked/i);
+    expect(
+      h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('ssh-forged'),
+    ).toBeUndefined();
+  });
+
+  it('rejects renderer-side directory grant writes outside the atomic maker handlers', async () => {
+    await expect(invokeUpdate('cc-local', { writableDirs: ['/forged'] })).rejects.toThrow(
+      /maker:set-\*-dirs/i,
+    );
+    await expect(invokeUpdate('cc-local', { extraDirs: ['/forged-read'] })).rejects.toThrow(
+      /maker:set-\*-dirs/i,
+    );
+  });
+
+  it('recovers cleanup only for deleted parent tasks after restart', async () => {
+    const userData = h.userDataDir!;
+    const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+    await Promise.all([
+      mkdir(path.join(parentRoot, 'codex-local'), { recursive: true }),
+      mkdir(path.join(parentRoot, 'cc-local'), { recursive: true }),
+    ]);
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledTimes(1);
+    });
+    expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(
+      path.join(parentRoot, 'codex-local'),
+    );
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalledWith(
+      path.join(parentRoot, 'cc-local'),
+    );
+    expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(
+      path.join(userData, 'pi-agent-home'),
+      'codex-local',
+    );
+    expect(h.writePiSubagentDeletedTombstone.mock.invocationCallOrder[0]!).toBeLessThan(
+      h.stopAndRemovePiSubagentRuns.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('reviving a deleted IM session cancels pending cleanup and clears the tombstone', async () => {
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
+    h.writePiSubagentDeletedTombstone.mockImplementation(
+      async () =>
+        new Promise((resolve) => {
+          setTimeout(resolve, 40);
+        }),
+    );
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('pi-local');
+
+    await resumeDeletedPiSubagentCleanup();
+    await retireDeletedPiSubagentState('pi-local');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(h.clearPiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'pi-local');
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
+  });
+
+  it('recovers tombstones for deleted PI tasks that never grew a run root', async () => {
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('pi-local');
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'pi-local');
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(
+        path.join(agentHome, 'runtime', 'pi-subagent-runs', 'pi-local'),
+      );
+    });
+    expect(h.writePiSubagentDeletedTombstone).not.toHaveBeenCalledWith(agentHome, 'cc-local');
+  });
+
+  it('writes the deleted-task tombstone even while this process never loaded the parent', async () => {
+    // Codex P1: another supported instance sharing userData can still have the
+    // parent PI alive. A local Maker miss is not proof that no launcher exists.
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
+    const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
+    await mkdir(path.join(parentRoot, 'codex-local'), { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    h.getMakerIfReady.mockReturnValue(null);
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'codex-local');
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledTimes(1);
+    });
+    expect(h.writePiSubagentDeletedTombstone.mock.invocationCallOrder[0]!).toBeLessThan(
+      h.stopAndRemovePiSubagentRuns.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('raises the deleted-task tombstone while the local parent is still closing', async () => {
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
+    const runRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs', 'codex-local');
+    await mkdir(runRoot, { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    h.getMakerIfReady.mockReturnValue({
+      isSessionAlive: () => true,
+      closeSession: vi.fn(async () => undefined),
+    });
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'codex-local');
+    });
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
+  });
+
+  it('does not run the conclusive scan when the deleted-task tombstone cannot be written', async () => {
+    const userData = h.userDataDir!;
+    const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+    await mkdir(path.join(parentRoot, 'codex-local'), { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    h.writePiSubagentDeletedTombstone.mockRejectedValue(new Error('disk full'));
+
+    await resumeDeletedPiSubagentCleanup();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
+  });
+
+  it('will not run the conclusive scan while the deleted task is still loaded', async () => {
+    // The scan ends by finding an empty run root and deleting it. Only the
+    // parent PI process can launch a durable Subagent, so while it is alive a
+    // launch can enter *after* that scan — recreating the root and spawning a
+    // detached runner on the deleted task's credentials, with cleanup already
+    // reporting success and its retry timer thrown away.
+    const userData = h.userDataDir!;
+    const runRoot = path.join(
+      userData,
+      'pi-agent-home',
+      'runtime',
+      'pi-subagent-runs',
+      'codex-local',
+    );
+    await mkdir(runRoot, { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+
+    let alive = true;
+    // A close that does not confirm termination leaves the session in `error`,
+    // which still reads as alive — the case the gate has to keep refusing on.
+    const closeSession = vi.fn(async () => undefined);
+    h.getMakerIfReady.mockReturnValue({ isSessionAlive: () => alive, closeSession });
+
+    await resumeDeletedPiSubagentCleanup();
+    // Twice, so the gate is pinned to *every* attempt rather than the first:
+    // the backoff retry re-enters the same body, and a parent that was alive
+    // when one attempt gave up is exactly the case the later ones must recheck.
+    await vi.waitFor(
+      () => {
+        expect(closeSession.mock.calls.length).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 5_000 },
+    );
+    expect(closeSession).toHaveBeenCalledWith('codex-local');
+    // Nothing was scanned or removed while the launcher could still fire.
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
+    expect(existsSync(runRoot)).toBe(true);
+
+    // The parent finally goes away; the backoff retry re-runs the same gate.
+    alive = false;
+    await vi.waitFor(
+      () => {
+        expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(runRoot);
+      },
+      { timeout: 5_000 },
+    );
+  }, 20_000);
+
+  it('leaves no runner behind when a launch races the scan of a deleted task', async () => {
+    // The timing the finding describes, end to end: parent alive at cleanup
+    // time, and a launch entering the moment the scan declares the root empty.
+    const userData = h.userDataDir!;
+    const runRoot = path.join(
+      userData,
+      'pi-agent-home',
+      'runtime',
+      'pi-subagent-runs',
+      'codex-local',
+    );
+    await mkdir(runRoot, { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+
+    const spawnedRunDir = path.join(runRoot, '123e4567-e89b-42d3-a456-426614174090');
+    let alive = true;
+    h.getMakerIfReady.mockReturnValue({
+      isSessionAlive: () => alive,
+      // Closing the parent is what actually ends the launcher. The run it had
+      // already published its intent for is still on disk — that one the scan
+      // can see, and must stop.
+      closeSession: vi.fn(async () => {
+        await mkdir(spawnedRunDir, { recursive: true });
+        alive = false;
+      }),
+    });
+    h.stopAndRemovePiSubagentRuns.mockImplementation(async (root: string) => {
+      const entries = await readdir(root).catch(() => [] as string[]);
+      await rm(root, { recursive: true, force: true });
+      // An empty root is the conclusive verdict — and while the parent lives,
+      // a launch lands in exactly the window that verdict just opened.
+      if (entries.length === 0 && alive) await mkdir(spawnedRunDir, { recursive: true });
+      return true;
+    });
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalled();
+    });
+
+    // Cleanup reported success, so nothing will look at this task again: the
+    // root has to be genuinely gone, with no orphan inside it.
+    expect(existsSync(spawnedRunDir)).toBe(false);
+    expect(existsSync(runRoot)).toBe(false);
+  }, 20_000);
+
   it('does not resurrect a deleted task through the generic status writer', async () => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
 
@@ -193,6 +651,23 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
   });
 
+  it('keeps the last legal sessions.effort when a fixed-effort model switch patches null', async () => {
+    await persistSessionFields('pi-local', {
+      model: 'x-ai-grok/grok-4.6',
+      effort: null,
+      fastMode: false,
+    });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT model, effort, fast_mode FROM sessions WHERE id = ?')
+      .get('pi-local') as { model: string; effort: string; fast_mode: number };
+    expect(persisted).toEqual({
+      model: 'x-ai-grok/grok-4.6',
+      effort: 'high',
+      fast_mode: 0,
+    });
+  });
+
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
     await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
       /Review task settings are fixed/,
@@ -203,6 +678,18 @@ describe('local-db:sessions:update handler wiring', () => {
       .sqlite!.prepare('SELECT effort, title FROM sessions WHERE id = ?')
       .get('review-local') as { effort: string; title: string };
     expect(persisted).toEqual({ effort: 'high', title: '审查记录' });
+  });
+
+  it('keeps Bot metadata editable but rejects ordinary lifecycle writes', async () => {
+    await invokeUpdate('bot-local', { title: 'Release Bot' });
+    await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow(
+      /Bot task lifecycle/,
+    );
+
+    const persisted = h
+      .sqlite!.prepare('SELECT title, status FROM sessions WHERE id = ?')
+      .get('bot-local') as { title: string; status: string };
+    expect(persisted).toEqual({ title: 'Release Bot', status: 'active' });
   });
 
   it('persists and broadcasts title-only patches to device-link subscribers', async () => {
@@ -231,6 +718,224 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: { permissionMode: 'ask' },
       }),
     );
+  });
+
+  it('broadcasts status-only patches so secondary windows converge on delete', async () => {
+    await invokeUpdate('cc-local', { status: 'deleted' });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
+      .get('cc-local') as { status: string };
+    expect(persisted.status).toBe('deleted');
+    // #3175 回归:纯 status 变化(无 title / settings / project / pinnedAt)也必须广播
+    // sessions:patched,否则「在新窗口打开」的副窗口收不到删除,仍停留在旧视图。
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({
+        sessionId: 'cc-local',
+        patch: { status: 'deleted' },
+      }),
+    );
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'cc-local' }),
+    );
+  });
+
+  it.each([
+    ['generic', 'archived'],
+    ['generic', 'deleted'],
+    ['patch-meta', 'archived'],
+    ['patch-meta', 'deleted'],
+  ] as const)('preserves project activity through %s %s', async (writer, status) => {
+    h.sqlite!.prepare(
+      "UPDATE sessions SET workspace_kind = 'project', source = 'desktop' WHERE id = ?",
+    ).run('codex-local');
+    // Exercise the real upsert against this test's isolated SQLite database.
+    const real = await vi.importActual<typeof import('../recentWorkdirs')>('../recentWorkdirs');
+    h.upsertRecentWorkdir.mockImplementation(async (dir, atMs, platform) =>
+      real.upsertRecentWorkdir(dir, atMs, platform),
+    );
+    const sentAt = 1_786_500_050_000;
+    await touchUserSendInDb('codex-local', sentAt);
+    h.upsertRecentWorkdir.mockClear();
+
+    if (writer === 'generic') await invokeUpdate('codex-local', { status });
+    else await invokePatchMeta('codex-local', { status });
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT * FROM recent_workdirs').all()).toEqual([
+      { path: '/old/dir', last_used_at: sentAt },
+    ]);
+    // Even physically removing the last task must leave the project's timestamp intact.
+    h.sqlite!.prepare('DELETE FROM sessions WHERE id = ?').run('codex-local');
+    expect(h.sqlite!.prepare('SELECT * FROM recent_workdirs').all()).toEqual([
+      { path: '/old/dir', last_used_at: sentAt },
+    ]);
+  });
+
+  it.each(['archived', 'deleted'] as const)(
+    'does not retain scheduler projects when the generic writer marks them %s',
+    async (status) => {
+      h.sqlite!.prepare(
+        "UPDATE sessions SET workspace_kind = 'project', source = 'scheduler' WHERE id = ?",
+      ).run('codex-local');
+
+      await invokeUpdate('codex-local', { status });
+
+      expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not register a worker directory when its project target changes', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run('codex-local');
+
+    await invokeUpdate('codex-local', { workingDir: '/worker/dir', workspaceKind: 'project' });
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+  });
+
+  it('suppresses the recent-project refresh after an owner switch', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?").run(
+      'codex-local',
+    );
+    h.captureOwnerScope = true;
+    h.windows = [{ isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() } }];
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      h.ownerCurrent = false;
+      return result;
+    });
+
+    await invokeUpdate('codex-local', { workspaceKind: 'project' });
+
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      '/old/dir',
+      expect.any(Number),
+      process.platform,
+      h.client,
+    );
+    expect(h.windows[0]?.webContents.send).not.toHaveBeenCalledWith(
+      'local-db:recent-workdirs:changed',
+      expect.anything(),
+    );
+  });
+
+  it('broadcasts local unarchive status patches to every window (#3175)', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+
+    await invokeUpdate('codex-local', { status: 'active' });
+    await vi.dynamicImportSettled();
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string };
+    expect(persisted.status).toBe('active');
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'active' },
+    });
+    expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
+  });
+
+  // setStatus 的归档形是 { status, pinnedAt: null }:广播沿用置顶合并逻辑,
+  // 归档一并清 pin 与摘要(归档列表不该保留 pin 标记)。
+  it('broadcasts local archive status patches with the unpin merge (#3175)', async () => {
+    await invokeUpdate('codex-local', { status: 'archived', pinnedAt: null });
+    await vi.dynamicImportSettled();
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; pinnedAt: number | null };
+    expect(persisted.status).toBe('archived');
+    expect(persisted.pinnedAt).toBeNull();
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'archived', pinnedAt: null, summary: null },
+    });
+    expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
+  });
+
+  it('cleans runtime state before releasing the local terminal status lock', async () => {
+    const order: string[] = [];
+    h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      order.push('lock-released');
+      h.sqlite!.prepare("UPDATE sessions SET status = 'active' WHERE id = ?").run('codex-local');
+      return result;
+    });
+
+    await invokeUpdate('codex-local', { status: 'archived' });
+
+    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+  });
+
+  it('cleans runtime state before releasing the remote terminal status lock', async () => {
+    const order: string[] = [];
+    h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
+      const result = await task();
+      order.push('lock-released');
+      h.sqlite!.prepare("UPDATE sessions SET status = 'active' WHERE id = ?").run('codex-local');
+      return result;
+    });
+
+    await patchSessionMetaInDb('codex-local', { status: 'archived' });
+
+    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+  });
+
+  // 竞态收敛(review on #3225):写入与查询不在同一串行区间,归档写入后、查询前
+  // 另一窗口可能已把行推进到 deleted。广播必须携带持久化后的 updated.status,
+  // 否则副窗/控制端镜像会被请求值回滚成旧 UI 状态(已删除任务复活)。
+  // routeLock 是测试注入的实现:在锁内写库完成后、handler 继续查询前,模拟
+  // 另一窗口的删除落库。
+  it('broadcasts the persisted status when a concurrent window deletes between write and read', async () => {
+    h.routeLock.mockImplementation(async (_sessionId, task) => {
+      await task();
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    });
+
+    await invokeUpdate('codex-local', { status: 'archived' });
+    await vi.dynamicImportSettled();
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'deleted' },
+    });
+    // 不再出现携带请求值的回滚广播
+    const statusPatches = h.tapWindowBroadcast.mock.calls
+      .filter(([channel]) => channel === 'local-db:sessions:patched')
+      .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
+    expect(statusPatches).toEqual(['deleted']);
+  });
+
+  // 竞态收敛(review on #3225 第二轮):读行与广播之间还有 await(摘要清理 /
+  // recent-workdir / 转录迁移),期间另一窗口可删除并先广播 deleted;本 handler
+  // 恢复后若用旧快照广播 archived,该广播是最后一条,镜像不会自愈——已删任务
+  // 持久复活。upsertRecentWorkdir 是已 mock 的依赖:在其 await 期间模拟删除落库,
+  // 断言广播前重读了状态。
+  it('re-reads status before broadcasting when an await intervenes after the row read', async () => {
+    h.upsertRecentWorkdir.mockImplementationOnce(async () => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('cc-local');
+      return true;
+    });
+
+    await invokeUpdate('cc-local', { status: 'archived', workspaceKind: 'project' });
+    await vi.dynamicImportSettled();
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'cc-local',
+      patch: expect.objectContaining({ status: 'deleted' }),
+    });
+    const statusPatches = h.tapWindowBroadcast.mock.calls
+      .filter(([channel]) => channel === 'local-db:sessions:patched')
+      .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
+    expect(statusPatches).toEqual(['deleted']);
   });
 
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
@@ -290,6 +995,169 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).toHaveBeenCalledWith('cc-local', '/old/dir', '/new/dir');
   });
 
+  it.each([{ workingDir: '/new/dir', workspaceKind: 'project' }, { workspaceKind: 'dialogue' }])(
+    'runs MCP move checks inside the route lock before persisting %j',
+    async (patch) => {
+      let locked = false;
+      h.routeLock.mockImplementation(async (_id, task) => {
+        locked = true;
+        try {
+          return await task();
+        } finally {
+          locked = false;
+        }
+      });
+      const beforeUpdate = vi.fn(async () => {
+        expect(locked).toBe(true);
+        throw Object.assign(new Error('[PRECONDITION_FAILED] move blocked'), {
+          code: 'PRECONDITION_FAILED',
+        });
+      });
+      await expect(
+        updateSessionInDb('cc-local', patch, undefined, {
+          assertCurrent: () => undefined,
+          beforeUpdate,
+        }),
+      ).rejects.toThrow('move blocked');
+      expect(beforeUpdate).toHaveBeenCalledOnce();
+      expect(
+        h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'),
+      ).toEqual({ working_dir: '/old/dir' });
+      expect(h.relocate).not.toHaveBeenCalled();
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it('checks the move account fence again after closing an idle runtime and before writing', async () => {
+    let current = true;
+    h.closeIdleSessionForMove.mockImplementationOnce(async () => {
+      current = false;
+      return true;
+    });
+    await expect(
+      updateSessionInDb('codex-local', { workingDir: '/new/dir' }, undefined, {
+        beforeUpdate: async () => undefined,
+        assertCurrent: () => {
+          if (!current)
+            throw Object.assign(new Error('[PRECONDITION_FAILED] account changed'), {
+              code: 'PRECONDITION_FAILED',
+            });
+        },
+      }),
+    ).rejects.toThrow('account changed');
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+    ).toEqual({ working_dir: '/old/dir' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('retains transcript relocation and returned resume identity for a guarded MCP move', async () => {
+    const updated = await updateSessionInDb(
+      'cc-local',
+      { workingDir: '/new/dir', workspaceKind: 'project' },
+      undefined,
+      {
+        beforeUpdate: async () => undefined,
+        assertCurrent: () => undefined,
+      },
+    );
+    expect(updated.workingDir).toBe('/new/dir');
+    expect(h.relocate).toHaveBeenCalledWith('cc-local', '/old/dir', '/new/dir', {
+      client: h.client,
+      assertCurrent: expect.any(Function),
+    });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({ sessionId: 'cc-local' }),
+    );
+  });
+
+  it.each(['cc-local', 'codex-local', 'pi-local'])(
+    'awaits the final mutable move check after preparing %s',
+    async (id) => {
+      let prepared = false;
+      h.relocate.mockImplementation(async () => {
+        prepared = true;
+        return { persistedSdkSessionId: null };
+      });
+      h.closeIdleSessionForMove.mockImplementation(async () => {
+        prepared = true;
+        return true;
+      });
+      await expect(
+        updateSessionInDb(id, { workingDir: '/new/dir' }, undefined, {
+          beforeUpdate: async () => undefined,
+          assertCurrent: () => undefined,
+          beforeWrite: async () => {
+            await Promise.resolve();
+            if (prepared)
+              throw Object.assign(new Error('[PRECONDITION_FAILED] new worker running'), {
+                code: 'PRECONDITION_FAILED',
+              });
+          },
+        }),
+      ).rejects.toThrow('new worker running');
+      expect(prepared).toBe(true);
+      expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(id)).toEqual({
+        working_dir: '/old/dir',
+      });
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['during relocation', 'after commit'])(
+    'keeps cwd and transcripts aligned when the account switches %s',
+    async (phase) => {
+      let current = true;
+      const readCwd = () =>
+        (
+          h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local') as {
+            working_dir: string;
+          }
+        ).working_dir;
+      h.relocate.mockImplementationOnce(async () => {
+        expect(readCwd()).toBe('/old/dir');
+        if (phase === 'during relocation') current = false;
+        return { persistedSdkSessionId: null };
+      });
+      await expect(
+        updateSessionInDb(
+          'cc-local',
+          { workingDir: '/new/dir', workspaceKind: 'project' },
+          undefined,
+          {
+            beforeUpdate: async () => undefined,
+            assertCurrent: () => {
+              if (phase === 'after commit' && readCwd() === '/new/dir') current = false;
+              if (!current)
+                throw Object.assign(new Error('[PRECONDITION_FAILED] account changed'), {
+                  code: 'PRECONDITION_FAILED',
+                });
+            },
+          },
+        ),
+      ).rejects.toThrow('account changed');
+      expect(h.relocate).toHaveBeenCalledOnce();
+      expect(readCwd()).toBe(phase === 'after commit' ? '/new/dir' : '/old/dir');
+      expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps the original cwd if persistence fails after transcript copying', async () => {
+    h.sqlite!.exec(
+      "CREATE TRIGGER reject_move BEFORE UPDATE OF working_dir ON sessions BEGIN SELECT RAISE(ABORT, 'move write failed'); END",
+    );
+    await expect(invokeUpdate('cc-local', { workingDir: '/new/dir' })).rejects.toThrow(
+      'Worktree is busy or its recovery record could not be saved',
+    );
+    expect(h.relocate).toHaveBeenCalledOnce();
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'),
+    ).toEqual({ working_dir: '/old/dir' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
   it('returns and broadcasts the sdkSessionId persisted during relocation', async () => {
     const liveId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     // 模拟真实编排:迁移把内存 id 持久化进 DB 并上报;handler 必须在迁移后才查
@@ -341,11 +1209,73 @@ describe('local-db:sessions:update handler wiring', () => {
   it('does nothing for codex sessions', async () => {
     await invokeUpdate('codex-local', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
+    expect(h.closeSession).toHaveBeenCalledWith('codex-local');
+  });
+
+  it.each(['codex-local', 'pi-local'])(
+    'uses registered move dependencies when updating %s directly without opts',
+    async (sessionId) => {
+      const workingDir = path.join(os.tmpdir(), 'moved-session');
+      const storedWorkingDir = normalizeWorkingDirForStorage(workingDir);
+
+      const updated = await updateSessionInDb(sessionId, { workingDir });
+
+      expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith(sessionId);
+      expect(updated.workingDir).toBe(storedWorkingDir);
+      expect(
+        h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(sessionId),
+      ).toEqual({ working_dir: storedWorkingDir });
+    },
+  );
+
+  it('honors the registered busy-runtime result when updating directly without opts', async () => {
+    h.closeIdleSessionForMove.mockResolvedValueOnce(false);
+
+    await expect(
+      updateSessionInDb('codex-local', { workingDir: path.join(os.tmpdir(), 'moved-session') }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+
+    expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith('codex-local');
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+    ).toEqual({ working_dir: '/old/dir' });
+  });
+
+  it('closes a local Pi runtime before moving its working directory', async () => {
+    h.sqlite!.prepare('UPDATE sessions SET agent_kind = ? WHERE id = ?').run('pi', 'codex-local');
+
+    await invokeUpdate('codex-local', { workingDir: '/new/dir' });
+
+    expect(h.closeSession).toHaveBeenCalledWith('codex-local');
+    expect(h.withRehydrateCloseSuppressed).toHaveBeenCalledWith(
+      'codex-local',
+      expect.any(Function),
+    );
+  });
+
+  it('rejects moving a local Pi/Codex session whose turn became active', async () => {
+    h.closeIdleSessionForMove.mockResolvedValueOnce(false);
+
+    await expect(invokeUpdate('codex-local', { workingDir: '/new/dir' })).rejects.toThrow(
+      '[PRECONDITION_FAILED]',
+    );
+
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+    ).toEqual({ working_dir: '/old/dir' });
+    expect(h.closeSession).not.toHaveBeenCalled();
+  });
+
+  it('does not reacquire the route lock for a combined workingDir and status patch', async () => {
+    await invokeUpdate('codex-local', { workingDir: '/new/dir', status: 'active' });
+
+    expect(h.routeLock).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing for remote sessions', async () => {
     await invokeUpdate('cc-remote', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
+    expect(h.closeSession).not.toHaveBeenCalled();
   });
 });
 

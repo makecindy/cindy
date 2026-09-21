@@ -190,7 +190,7 @@ export function resolveLoginStage(
       demo resolveMobileStage()/ipadPortrait()/ipadLandscape() 仲裁,纯函数零 RN) ── */
 
 /** 登录 surface 构图模式(§3.6 条4 断点三分支)。 */
-export type LoginSurfaceMode = 'phone' | 'pad-portrait' | 'pad-landscape';
+export type LoginSurfaceMode = 'phone' | 'pad-portrait' | 'pad-landscape' | 'compact-wide';
 
 /** 横屏左右构图断点(§3.6 条4:landscape ∧ w≥1000pt ∧ h≥690pt;dp/pt 归一)。 */
 export const PAD_LANDSCAPE_MIN_WIDTH = 1000;
@@ -216,6 +216,7 @@ export function resolveLoginSurfaceMode(
   ) {
     return 'pad-landscape';
   }
+  if (landscape && viewportWidth >= 560) return 'compact-wide';
   if (!landscape && viewportWidth >= PAD_PORTRAIT_MIN_WIDTH) return 'pad-portrait';
   return 'phone';
 }
@@ -346,8 +347,8 @@ export const LOGIN_PHONE_SPLASH_SPINNER_SIZE = 64;
 
 /**
  * 纯函数:物理 viewport → 登录 surface 构图(§3.6 断点 + 三构图布局统一出口)。
- * phone 分支复用 resolveLoginStage 两档插值;splash 簇偏移 = demo phoneStage
- * off = round((designHeight - cindy.h)/2 - cindy.y),spinner 居字标下方 44。
+ * phone 分支复用 resolveLoginStage 两档插值;横屏 splash 簇按实际视口高度居中
+ * (先除以 scale 换回 stage 坐标),竖屏沿用设计高,spinner 居字标下方 44。
  */
 export function resolveLoginSurface(
   viewportWidth: number,
@@ -360,9 +361,48 @@ export function resolveLoginSurface(
   if (mode === 'pad-landscape') {
     return padSurface(mode, LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight);
   }
+  if (mode === 'compact-wide') {
+    if (viewportWidth < 760 || viewportHeight < 480) {
+      // Short landscape keeps readable controls; overflow belongs to the form's scroll view.
+      const groupScale = Math.min(0.58, (viewportWidth - 192) / 680);
+      const groupWidth = 680 * groupScale;
+      const brandWidth = Math.min(200, viewportWidth - groupWidth - 48);
+      const heroHeight = brandWidth * 579 / 481.430176;
+      const brandTop = Math.max(16, (viewportHeight - heroHeight - 76) / 2);
+      return {
+        ...padSurface('pad-landscape', LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight),
+        mode, scale: 1, offsetX: 0, offsetY: 0,
+        stageWidth: viewportWidth, stageHeight: viewportHeight,
+        cindy: { x: 16, y: brandTop, w: brandWidth, h: heroHeight },
+        word: { x: 16, y: brandTop + heroHeight - 8, w: brandWidth, h: brandWidth / 2.93 },
+        slogan: { x: 16, y: brandTop + heroHeight + brandWidth / 2.93, w: brandWidth, h: brandWidth * 97.2 / 339.16 },
+        loginX: viewportWidth - groupWidth - 16,
+        loginY: Math.max(16, (viewportHeight - 622 * groupScale) / 2),
+        loginGroupScale: groupScale,
+        spinner: { x: 16 + brandWidth / 2 - 12, y: Math.min(viewportHeight - 32, brandTop + heroHeight + 60), size: 24 },
+      };
+    }
+    // Preserve control sizes on medium, short windows instead of magnifying the phone artwork.
+    const base = padSurface('pad-landscape', LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight);
+    const scale = Math.min(viewportWidth / 1180, viewportHeight / 820);
+    const groupScale = Math.min(0.58, (viewportWidth / 2 - 24) / 680, (viewportHeight - 120) / 622);
+    const offsetX = (viewportWidth - 1180 * scale) / 2;
+    const offsetY = (viewportHeight - 820 * scale) / 2;
+    return { ...base, mode, scale, offsetX, offsetY,
+      loginGroupScale: groupScale / scale,
+      loginX: (viewportWidth * 0.75 - 340 * groupScale - offsetX) / scale,
+      loginY: (Math.max(108, (viewportHeight - 622 * groupScale) / 2) - offsetY) / scale,
+      word: { ...base.word, y: (32 - offsetY) / scale },
+    };
+  }
   const stage = resolveLoginStage(viewportWidth, viewportHeight);
+  // designHeight 的上下限只约束登录构图。横屏时它可能高于可见视口，
+  // 用它居中会把启动立绘、字标和 spinner 一起推到屏幕下方。
+  const splashHeight = viewportWidth > viewportHeight
+    ? viewportHeight / stage.scale
+    : stage.designHeight;
   const splashOffset = Math.round(
-    (stage.designHeight - stage.cindy.h) / 2 - stage.cindy.y,
+    (splashHeight - stage.cindy.h) / 2 - stage.cindy.y,
   );
   return {
     mode,
@@ -447,6 +487,28 @@ export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size
 export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20, lineHeight: LOGIN_COPY_LINE_HEIGHT } as const;
 /** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
 export const LOGIN_SSO_ORG_HINT_TOP = 244;
+/**
+ * 最近组织浮层：紧贴输入框下沿并与输入框等宽，作为浮层覆盖后续提示与主按钮。
+ * 它与输入框同处登录组坐标系，phone 短屏/长屏与 pad 都随各自 surface scale
+ * 一起移动；最大高度收在手机 440 高面板内，其余条目在无可见滚动条的浮层内滚动。
+ */
+export const LOGIN_SSO_ORG_HISTORY = {
+  x: LOGIN_CONTROL.x,
+  y: LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8,
+  width: LOGIN_CONTROL.width,
+  maxHeight:
+    LOGIN_ERROR_TEXT.y +
+    LOGIN_ERROR_TEXT.height -
+    (LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8) -
+    10,
+  rowMinHeight: 88,
+  radius: 22,
+  rowRadius: 16,
+  font: 20,
+  lineHeight: LOGIN_COPY_LINE_HEIGHT,
+  paddingX: LOGIN_CONTROL.textPadLeft,
+  paddingY: 16,
+} as const;
 
 /**
  * 协议同意行(consent PR;figma 600:660「服务条款」行,与桌面 CONSENT_ROW 同参数源):
@@ -575,11 +637,17 @@ export function resolveDeletionBubbleFrame(
   if (surface.mode === 'phone') {
     const width = phone.width * scale;
     return {
-      left: clampLeft((surface.viewportWidth - width) / 2, width),
+      left: clampLeft(surface.offsetX + phone.x * scale, width),
       top: safeTop,
       width,
       scale,
     };
+  }
+  if (surface.mode === 'compact-wide') {
+    const groupScale = surface.scale * surface.loginGroupScale;
+    const width = 680 * groupScale;
+    return { left: clampLeft(surface.offsetX + surface.loginX * scale, width),
+      top: Math.max(safeTop, 8), width, scale: width / padLandscape.width };
   }
   if (surface.mode === 'pad-landscape') {
     const width = padLandscape.width * scale;

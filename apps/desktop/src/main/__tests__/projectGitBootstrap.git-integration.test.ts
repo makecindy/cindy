@@ -71,6 +71,19 @@ afterEach(async () => {
 });
 
 describe('projectGitBootstrap', () => {
+  // Windows strips trailing spaces in ordinary directory names; this identity fixture is POSIX-only.
+  it.skipIf(process.platform === 'win32')('initializes only the exact whitespace-suffixed project', async () => {
+    const parent = await makeTempDir();
+    const plain = path.join(parent, 'project');
+    const exact = path.join(parent, 'project ');
+    await fs.mkdir(plain);
+    await fs.mkdir(exact);
+    const request = { workingDir: exact, workspaceKind: 'project', autoSnapshotEnabled: true };
+    expect(await ensureProjectGitInitialized(request)).toMatchObject({ status: 'initialized', repoRoot: exact });
+    expect(await isGitRepo(plain)).toBe(false);
+    expect(await isGitRepo(exact)).toBe(true);
+    expect(await ensureProjectGitInitialized(request)).toMatchObject({ status: 'already-git', repoRoot: exact });
+  });
   it('only considers local project workspaces bootstrap candidates', () => {
     const workingDir = path.resolve('project');
     expect(
@@ -110,6 +123,20 @@ describe('projectGitBootstrap', () => {
       workingDir: dir,
       workspaceKind: 'local',
       autoSnapshotEnabled: false,
+    });
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'git-safety-disabled' });
+    expect(await isGitRepo(dir)).toBe(false);
+  });
+
+  it('does not initialize an empty project in existing-Git-only mode', async () => {
+    const dir = await makeTempDir();
+
+    const result = await ensureProjectGitInitialized({
+      workingDir: dir,
+      workspaceKind: 'local',
+      autoSnapshotEnabled: true,
+      autoInitProjectGit: false,
     });
 
     expect(result).toMatchObject({ status: 'skipped', reason: 'git-safety-disabled' });

@@ -17,8 +17,19 @@
  *
  * 双层校验:控制端发送前(快速失败)+ 被控端执行前(权威)。
  * 新增 channel 不进表即天然不可远程调用(代码保证确定性)。
+ *
+ * 远程桌面专用例外: device-link:remote-desktop:v1 的 permissions/guide 只能
+ * 显示 Cindy 自己的权限引导,需同账号鉴权、远控与远程桌面两个本机 opt-in、未撤销。
+ * 不接受 URL、不直接打开系统设置/请求 OS 授权、不修改开关;系统权限按钮仅本机可信
+ * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
-import { SESSION_ACTIVITY_CHANNEL } from './topics.js';
+import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
+import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
+import {
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
+  REMOTE_RESOURCE_CHANNELS,
+} from './remoteResources.js';
 
 /**
  * 订阅控制帧 channel(控制端 → 被控端,push 驱动):注册 / 注销对某 topic 的变更推送。
@@ -120,23 +131,18 @@ export const DL_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionar
 /**
  * 手机端拉取被控桌面的语音词典快照(只读)。
  *
- * 桌面之间的词典靠 push 帧对等同步,但手机在后台不维持 WebSocket、收不到 push,
- * 所以改为需要时主动拉一份。返回的是**只读投影**:词条文本 + 频次 + 别名,外加一个
+ * 桌面之间的词典靠 push 帧对等同步,手机不参与 CRDT 合并而只接收桌面主动推送的
+ * 只读投影;本 channel 保留作为旧版兼容和丢 push 时的主动刷新兜底。返回的是**只读投影**:
+ * 词条文本 + 频次 + 别名,外加一个
  * 版本向量(`stateVector`)供手机判断多台电脑的快照谁包含谁。化身、墓碑、抑制项、
  * 时钟都不外泄 —— 手机不参与合并,不持有可写状态,避免移动端词典分叉。
  *
  * 符合准入判据:不依赖 event.sender、无本机 UI 副作用、词典真相在被控端。
  *
- * ## 已知限制:与电脑之间的同步不一致
- *
- * invoke 属于 relay 的 CONTROL_KINDS,转发前会校验目标的 remoteControlEnabled;
- * 而电脑之间的词典同步走 push,不受该开关限制。结果是同一个功能有两套前提:用户
- * 开了「词典同步」后电脑之间就通了,手机却还要额外打开「允许同账号设备控制本机」
- * ——那个开关的语义是「允许别人操作我」,和「读一份词典」并不对应,用户撞上时基本
- * 猜不到该去开什么。
- *
- * 后续可改为推送:桌面在 presence 看到手机上线时主动 push 只读投影,零配置且与
- * 电脑之间同一条通道;本 channel 保留作为手机主动刷新的兜底。
+ * invoke 仍属于 relay 的 CONTROL_KINDS,转发前会校验目标的 remoteControlEnabled;
+ * 因此新版本优先使用独立的只读 push 快照通道,即使桌面关闭「允许被控」也能查看词典。
+ * 本 channel 保留用于旧版桌面兼容和 push 丢失后的主动刷新,不能把 REMOTE_DISABLED
+ * 当成“真的没有词条”。
  */
 export const DL_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
 
@@ -200,6 +206,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
   'maker:set-extra-dirs',
+  'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
   // SDK leaf 与 SQLite 可见时间线，不依赖 sender/窗口，真相也只在被控端。
   'maker:get-session-tree',
@@ -217,6 +224,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 数据真相在被控端(其 renderer 草稿),无 sender 依赖、无本机副作用 → 准入。老被控端无此 handler
   // → 控制端收 CHANNEL_NOT_ALLOWED → 回退被控端 capabilities 默认。
   'maker:get-new-maker-defaults',
+  'maker:model-favorites:get',
+  'maker:model-favorites:apply',
   // device-link 草稿「每个模型 effort/fast」写穿(控制端 → 被控端):控制端在远程项目草稿里改
   // 选中 / 非选中模型的 effort/fast 时通知被控端,被控端调它原来的本地 setter(setEffortForModel /
   // setFastModeForModel)写真实草稿;被控端 newMakerDraft 变更自动经既有 maker:sync-new-maker-draft
@@ -250,9 +259,16 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'git-context:get-for-session',
   'git-context:pr-refs:list',
   'git-context:pr-status',
+  // —— 通用远程资源面——
+  // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider
+  // registry 注册资源与动作，后续新增模块或动作不再扩张 device-link channel 表。
+  ...REMOTE_RESOURCE_CHANNELS,
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
+  'local-db:task-tags:execute',
   'local-db:sessions:get',
+  // Bounded metadata reconciliation. Old hosts reject this; controllers fall back to GET.
+  'local-db:sessions:get-many',
   // Read-only indexed task search for the remote Composer @ palette and the
   // controller sidebar task search. Older controlled clients reject this
   // channel and the controller falls back to the bounded legacy sessions:list
@@ -260,6 +276,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
+  // Read-only visible history and recoverable work ranges; same session authorization as list.
+  'local-db:messages:view',
+  'local-db:messages:work-details',
+  'local-db:messages:view-intent',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
   'local-db:messages:around',
   // 以 message clientId 定位上下文,供移动端轻量跳转 / fork 来源定位；只读,与 messages:around 同安全级。
@@ -299,6 +319,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   DL_UNSUBSCRIBE_CHANNEL,
   // 入方向媒体取件(被控端 dispatch 拦截执行,不落 ipcMain handler;契约登记 + 能力探测)。
   DL_MEDIA_FETCH_CHANNEL,
+  FILE_PEER_CHANNEL,
   // 出方向语音转写(被控端 dispatch 拦截执行,不落 ipcMain handler;复用被控端 ASR 配置)。
   DL_VOICE_TRANSCRIBE_CHANNEL,
   // 临时 voice credential 同步(被控端 dispatch 拦截执行,不落 ipcMain handler;禁止泛化)。
@@ -376,6 +397,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 重生成标题(与 generate-title 同一 oneShot 通道)。老被控端无此 channel →
   // CHANNEL_NOT_ALLOWED → 控制端按生成失败提示。
   'maker:regenerate-title',
+  // 输入框推荐提示词：在被控端读取会话素材并使用被控端模型凭证生成。
+  'maker:predict-prompt',
   'maker:get-context-usage',
   // workflow 逐 agent 进度树(只读):handler 纯 fs 读 Claude Code workflow 记录文件,
   // 无 event.sender 依赖、无副作用;记录文件真相在被控端 HOME(控制端本机读必落空)。
@@ -387,6 +410,13 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  // Durable PI Subagent truth and process handles live on the data-owning device.
+  // Reads and exact controls must execute there; the controller must never fall
+  // back to its own pi-agent-home for a remote task.
+  'local-db:subagent-runs:list',
+  'local-db:subagent-runs:detail',
+  'local-db:subagent-runs:transcript',
+  'maker:pi-subagent:control',
   // —— Goal(目标模式;goal 状态机在被控端 GoalController 执行才有意义)——
   'maker:goal:set',
   'maker:goal:clear',
@@ -404,6 +434,25 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 人工 reset。mutation 不接收 creditId,不能泛化成任意账号/凭证控制入口。
   'maker:usage:codex-rate-limits',
   'maker:usage:codex-rate-limit-reset',
+  // Claude 订阅账号余量快照(只读,cached-first):控制端远程会话状态栏 chip 显示
+  // 被控端订阅的 5h/周/分模型窗口剩余(数据真相在被控端 —— turn 在被控端消耗其
+  // 订阅额度)。快照只含利用率百分比、reset 时间与账号归属指纹(单向 scrypt 哈希,
+  // 与本机 renderer 收到的广播 payload 同形),不含凭证材料。无 sender 依赖、无副
+  // 作用;老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端降级为原「仅会话
+  // 金额」占位显示。
+  'maker:usage:claude-subscription',
+  // xAI(SuperGrok)订阅周用量快照(只读):与 claude-subscription 同定位。该 channel
+  // 的 ipcMain handler 挂了 assertTrustedSender(合成 event 必然不可信,那道闸不为
+  // 远程放宽)—— 与 device-link:telegram:* 同先例,由被控端 dispatch 在通用 dispatch
+  // 前拦截、直读 usage reader,不进 ipcMain。列入 allowlist 作契约登记 + 老被控端
+  // CHANNEL_NOT_ALLOWED 供控制端探测降级。
+  'maker:usage:xai-subscription',
+  // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
+  // 控制端远程会话据此判定订阅 / 网关显示形态 —— 路由真值在被控端 proxy 的按请求
+  // 观察 registry 里,控制端拿本机凭证状态重算必然张冠李戴。入参 sessionId,无
+  // sender 依赖、无副作用;老被控端 CHANNEL_NOT_ALLOWED → 控制端对默认路由远程
+  // 会话维持「仅会话金额」占位(与旧行为一致)。
+  'maker:claude-session-route:get',
   // 模型单价表(只读,main 侧 Model Access model-groups 投影缓存):控制端模型选择器展示
   // 被控端视角的单价(与被控端桌面 tooltip 同源)。无 sender 依赖、无副作用;老被控端无此 channel
   // → CHANNEL_NOT_ALLOWED → 控制端隐藏价格(与桌面「无价不显示」口径一致)。
@@ -415,6 +464,16 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // CHANNEL_NOT_ALLOWED → 控制端按 unknown 处理(不置灰)。
   'maker:api-key:present',
   // —— Memory 读(写全局设置不放行)——
+  // Teammate directory: handlers explicitly recognize the authorized device-link
+  // context and return only identity/status/canonical task, without local paths,
+  // memory, prompts, configuration, or native UI/file mutations.
+  'local-db:bots:list',
+  'local-db:bots:get',
+  // Same-account opted-in controllers may inspect and stop a companion's own
+  // child task and read a participant-checked private thread. No profile mutation.
+  'maker:bot-delegations:list',
+  'maker:bot-delegation:cancel',
+  'maker:bot-direct-message-thread:get',
   'maker:memory:get',
   'maker:memory:get-settings',
   // —— 命令 / 技能 / at 资源 列举(只读)——
@@ -539,6 +598,7 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
 export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
+  'device-link:remote-desktop:v1',
   ...CORE_INVOKE_CHANNELS,
   ...EXTENDED_INVOKE_CHANNELS,
 ]);
@@ -548,8 +608,15 @@ export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
  * 命中这些 channel 的事件才会经 link 转发给控制端。
  */
 export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
+  'maker:bot-delegation:changed',
+  'maker:bot-direct-message:changed',
   // maker-ipc MAKER_PUSH
   'maker:event',
+  'maker:history-view-changed',
+  // Device-level runtime Agent roster changes; controllers refresh their local availability cache.
+  'maker:agents:changed',
+  // Host-owned resource provider 的通用失效通知；payload 只含 collection/ref/revision。
+  REMOTE_RESOURCE_CHANGED_CHANNEL,
   'maker:status-changed',
   'maker:input:projection',
   'maker:interaction-request',
@@ -574,10 +641,37 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // sessions:patched,控制端远程会话底部 $ chip 依赖这两条把累计值镜像成被控端真相。
   'usage:session-spend-changed',
   'usage:session-tokens-changed',
+  // Claude 订阅账号余量变化(账号级,无 sessionId → topics.ts 归入 sessions topic):
+  // 控制端远程会话 chip 据此实时镜像被控端订阅窗口剩余。推送频率有上限:被控端
+  // headers 观察器按 (5h,7d,status) 签名去抖、端点刷新 180s 节流,只有数值变化才
+  // 广播,不随 turn 内逐请求刷帧。
+  'usage:claude-subscription-changed',
+  // Codex 账号订阅用量变化(账号级组合 payload:app-server 桶表 + WHAM web 槽):
+  // 控制端远程 codex / chatgpt-bridge 会话 chip 镜像被控端限额窗口。频率上限:
+  // app-server 每 turn 记录一次、WHAM 后台刷新 10s 节流。
+  'usage:codex-account-changed',
+  // Same provider-scoped payloads consumed by the local usage hooks.
+  'usage:codex-provider-account-changed',
+  'usage:subscription-provider-account-changed',
+  // Claude 网关配额变化(LiteLLM 月度/今日,账号级):控制端远程网关形态会话 chip
+  // 镜像被控端 daily/monthly。被控端刷新自带 10s 节流 + turn-done 触发。
+  'usage:claude-account-changed',
+  // xAI 订阅周用量变化(账号级):同上定位;被控端周用量刷新低频。
+  'usage:xai-subscription-changed',
+  // xAI 限流头快照(账号级,纯内存瞬时值):tooltip 尽力显示;bridge 每成功请求
+  // 至多一帧,xai/ 会话低频。
+  'usage:xai-rate-limit-changed',
+  // 独立 xAI 账号的限流头({ providerId, snapshot }):与 codex-provider 同口径按账号分路。
+  'usage:xai-provider-rate-limit-changed',
+  // cc 默认路由会话路由观察值变化(payload 顶层 sessionId → session:<id> topic,
+  // 打开该会话的控制端可见;每会话生命周期通常仅一次)。
+  'maker:claude-session-route-changed',
   // local-db 推送(读模型增量)
   'local-db:sessions:created',
+  'local-db:task-tags:changed',
   'local-db:sessions:patched',
   SESSION_ACTIVITY_CHANNEL,
+  SESSION_SYNC_CHANNEL,
   'local-db:messages:created',
   'local-db:messages:deleted',
   // 被控端 terminal error 落库脏信号:控制端据此把已加载历史的远程会话标脏,下次打开重拉。
@@ -588,6 +682,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →
   // topics.ts 的 ACCOUNT_CHANNELS 把它并入 `sessions` topic(控制端按设备订阅 sessions)。
   'maker:new-maker-draft:changed',
+  'maker:model-favorites:changed',
   // 被控端 repo-scoped worktree 源分支选择变化；无 sessionId，topics.ts 按账号级
   // 并入 sessions topic，控制端再按来源 deviceId + payload.baseRepo 精确消费。
   'maker:new-maker-worktree-branch:changed',
@@ -618,6 +713,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  [FILE_PEER_CHANNEL]: 30_000,
+  // Capture renderer readiness + source enumeration + offer, then reply delivery.
+  "device-link:remote-desktop:v1": REMOTE_DESKTOP_INVOKE_MS,
   // 被控端 CMD_TIMEOUT_MS(30s)+ CMD_KILL_GRACE_MS(5s)+ 5s 回程余量
   'desktop-cmd:run': 40_000,
   // 被控端 worktree:create 含 git worktree add(--no-checkout)+ 白名单文件选择性
@@ -632,6 +730,9 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 10min,压缩恰好到预算上限时会先 INVOKE_TIMEOUT,被误判为「设备无响应」并
   // 可能触发 peer-link 恢复(codex P2)——同 desktop-cmd:run 模式加 1min 余量。
   'maker:compact-session': 11 * 60_000,
+  // Persist drain + credentials refresh + 12s model request + return delivery.
+  // Shared by desktop/mobile; only this invoke gets the longer wait, no peer reset.
+  'maker:predict-prompt': 45_000,
   // 被控端先等 Lead history 最多 30s，再 resume/queue Worker；默认 30s 会与服务端
   // deadline 对撞，把边沿成功误报成 DEVICE_LINK_TIMEOUT。留出派发和回程余量。
   'maker:worker:dispatch-ui-assignment': 65_000,
@@ -640,6 +741,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 不吃满超时),不会误伤首拉重试。
   'local-db:sessions:list': 12_000,
   'local-db:sessions:get': 12_000,
+  'local-db:sessions:get-many': 12_000,
 };
 
 /**

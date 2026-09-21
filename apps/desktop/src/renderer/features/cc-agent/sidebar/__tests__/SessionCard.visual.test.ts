@@ -1,8 +1,28 @@
 // @vitest-environment jsdom
 
 import { createElement, type ReactNode } from 'react';
-import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
+import { createInstance } from 'i18next';
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cindyMakeState } from '@/lib/cindyMakeState';
+import en from '@/i18n/locales/en/common.json';
+import zhCN from '@/i18n/locales/zh-CN/common.json';
+import zhTW from '@/i18n/locales/zh-TW/common.json';
+import ja from '@/i18n/locales/ja/common.json';
+import ko from '@/i18n/locales/ko/common.json';
+
+import {
+  applyRemoteSessionActivity,
+  clearRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
@@ -17,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   pendingPluginSetupSessionIds: new Set<string>(),
   attentionKindBySession: new Map<string, 'done' | 'awaiting' | 'error'>(),
   ensureInitialMessages: vi.fn(),
+  translate: undefined as ((key: string, options?: Record<string, unknown>) => string) | undefined,
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -30,6 +51,7 @@ vi.mock('react-i18next', () => ({
   },
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
+      if (mocks.translate) return mocks.translate(key, options);
       const count = Number(options?.count ?? 0);
       const dict: Record<string, string> = {
         'ccAgent.time.relative.now': '刚刚',
@@ -97,9 +119,16 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
       : null,
 }));
 
-vi.mock('@/contexts/WorktreeContext', () => ({
-  useWorktreeForSession: () => null,
-}));
+vi.mock('@/contexts/WorktreeContext', () => {
+  const reportLiveness = vi.fn();
+  const refreshObserved = vi.fn();
+  return {
+    useWorktreeForSession: () => null,
+    useReportWorktreeLiveness: () => reportLiveness,
+    useObservedWorktreeForSession: () => null,
+    useRefreshObservedWorktree: () => refreshObserved,
+  };
+});
 
 vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivity: (sessionId: string) => {
@@ -154,6 +183,7 @@ vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({
 
 vi.mock('@/features/scheduler/lib/scheduleSidebarIndexRuns', () => ({
   loadScheduleSidebarIndexRuns: async () => [],
+  findLatestSidebarIndexRunForSession: () => undefined,
 }));
 
 function scheduleForCase(id: string, status: 'active' | 'paused') {
@@ -209,6 +239,7 @@ function sessionRowEl(): HTMLElement {
 
 describe('SessionCard visual cases', () => {
   beforeEach(() => {
+    clearRemoteSessionActivity();
     mocks.navigate.mockReset();
     mocks.dropdownMenuOpen = false;
     mocks.boundSchedulesBySession.clear();
@@ -217,11 +248,115 @@ describe('SessionCard visual cases', () => {
     mocks.pendingPluginSetupSessionIds.clear();
     mocks.attentionKindBySession.clear();
     mocks.ensureInitialMessages.mockReset();
+    mocks.translate = undefined;
   });
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
   });
+
+  it.each([
+    { locale: 'en', resource: en },
+    { locale: 'zh-CN', resource: zhCN },
+    { locale: 'zh-TW', resource: zhTW },
+    { locale: 'ja', resource: ja },
+    { locale: 'ko', resource: ko },
+  ])(
+    'renders retained conflict titles with local creation times in $locale',
+    async ({ locale, resource }) => {
+      const i18n = createInstance();
+      await i18n.init({
+        lng: locale,
+        fallbackLng: false,
+        defaultNS: 'common',
+        resources: { en: { common: en }, [locale]: { common: resource } },
+      });
+      mocks.translate = (key, options) => i18n.t(key, options);
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+      for (const variant of ['card', 'list'] as const) {
+        for (const [key, expected] of [
+          ['cindyMake.merge.taskTitle', resource.cindyMake.merge.taskTitle],
+          ['cindyMake.history.mergeTaskTitle', resource.cindyMake.history.mergeTaskTitle],
+          ['cindyMake.history.revertTaskTitle', resource.cindyMake.history.revertTaskTitle],
+        ]) {
+          for (const title of [key, expected, `[fe0a] ${expected}`]) {
+            const view = renderCase(visualCase.id, {
+              variant,
+              session: {
+                ...visualCase.session,
+                source: 'cindy-make-merge',
+                title,
+                createdAt: new Date(2026, 8, 20, 14, 7).toISOString(),
+                workingDir: '/managed/merge-worktrees/fe0a1234',
+              },
+            });
+            expect(
+              screen.getByText(`[fe0a] 09-20 14:07 ${expected}`, {
+                selector: ':not([aria-hidden="true"])',
+              }),
+            ).toBeTruthy();
+            expect(view.container.textContent).not.toMatch(/cindyMake[.]|[{][{]|[?]{2,}|�/);
+            view.unmount();
+          }
+        }
+      }
+      // A task created in another UI language must still get its original creation time.
+      await i18n.changeLanguage('en');
+      renderCase(visualCase.id, {
+        session: {
+          ...visualCase.session,
+          source: 'cindy-make-merge',
+          title: resource.cindyMake.merge.taskTitle,
+          createdAt: new Date(2026, 8, 20, 14, 7).toISOString(),
+          workingDir: '/managed/merge-worktrees/fe0a1234',
+        },
+      });
+      expect(
+        screen.getByText('[fe0a] 09-20 14:07 Resolve Source Update Conflicts', {
+          selector: ':not([aria-hidden="true"])',
+        }),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(['card', 'list'] as const)(
+    'keeps %s active during preparation before the Agent starts',
+    (variant) => {
+      const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+      vi.spyOn(cindyMakeState, 'subscribe').mockReturnValue(() => {});
+      vi.spyOn(cindyMakeState, 'taskForSession').mockReturnValue({
+        runId: 'make-run',
+        platform: 'win32',
+        arch: 'x64',
+        checks: [],
+        status: 'running',
+        task: { sessionId: visualCase.session.id, phase: 'dependencies' },
+      });
+      renderCase(visualCase.id, {
+        variant,
+        isRunning: false,
+        session: { ...visualCase.session, source: 'cindy-make' },
+      });
+      expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+      expect(screen.getByText('cindyMake.code.phases.dependencies')).toBeTruthy();
+      if (variant === 'list') {
+        expect(
+          sessionRowEl().querySelector('[data-sidebar-right-status="running"]'),
+        ).not.toBeNull();
+      }
+
+      cleanup();
+      mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
+      renderCase(visualCase.id, {
+        variant,
+        isRunning: false,
+        session: { ...visualCase.session, source: 'cindy-make' },
+      });
+      expect(screen.getByText('等待插件设置')).toBeTruthy();
+      expect(screen.queryByText('cindyMake.code.phases.dependencies')).toBeNull();
+    },
+  );
 
   it('keeps a broad gallery of title, body, icon, and state combinations', () => {
     expect(sessionCardVisualCases.map((item) => item.id)).toEqual([
@@ -931,5 +1066,46 @@ describe('SessionCard visual cases', () => {
         node.className.includes('bg-[var(--card-status-done)]'),
       ),
     ).toBe(true);
+  });
+  it.each(['card', 'list'] as const)('keeps %s status scoped to the task origin', (variant) => {
+    const base = sessionCardVisualCases[0];
+    const session = { ...base.session, id: 'origin-regression', deviceLinkDeviceId: undefined };
+    applyRemoteSessionActivity('other', { sessionId: session.id, phase: 'running' });
+    const view = renderCase(base.id, {
+      session,
+      variant,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
+    view.unmount();
+
+    // The remote row must not fall back to a same-ID local activity either.
+    mocks.runningDetailBySession.set(session.id, 'local turn is running');
+    renderCase(base.id, {
+      session: { ...session, deviceLinkDeviceId: 'target' },
+      variant,
+      isRunning: false,
+      hasAttentionNotification: false,
+    });
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
+    act(() => applyRemoteSessionActivity('target', { sessionId: session.id, phase: 'running' }));
+    expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+    act(() =>
+      applyRemoteSessionActivity('other', {
+        sessionId: session.id,
+        phase: 'completed',
+        attention: false,
+      }),
+    );
+    expect(sessionRowEl().querySelector('.session-status-breathing')).not.toBeNull();
+    act(() =>
+      applyRemoteSessionActivity('target', {
+        sessionId: session.id,
+        phase: 'completed',
+        attention: false,
+      }),
+    );
+    expect(sessionRowEl().querySelector('.session-status-breathing')).toBeNull();
   });
 });

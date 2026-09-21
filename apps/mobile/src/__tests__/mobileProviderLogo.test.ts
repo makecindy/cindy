@@ -15,6 +15,15 @@ function readSource(relativePath: string): string {
     .trim();
 }
 
+describe('sessionControls identity import', () => {
+  it('does not load the Desktop provider catalog through the package root', () => {
+    const source = readSource('src/session/sessionControls.ts');
+    expect(source).toContain("from '@cindy/model-providers/provider-identity'");
+    expect(source).toContain("from '@cindy/model-providers/types'");
+    expect(source).not.toContain("from '@cindy/model-providers';");
+  });
+});
+
 describe('MobileProviderMark', () => {
   it('renders shared official paths and keeps unknown providers on the monogram fallback', () => {
     const source = readSource('src/session/MobileProviderMark.tsx');

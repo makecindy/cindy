@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveCardState } from '../../hooks/useMarketList';
+import { deriveCardState, deriveLocalInstall, localGroupForItem, type LocalSkillIndex } from '../../hooks/useMarketList';
+import { skillhubCatalogKey } from '../../../../../shared/skillhubCatalog';
 
 const item = (over: Record<string, unknown> = {}) => ({
   name: 'x',
@@ -38,4 +39,58 @@ describe('deriveCardState — isMine 按目录判已装', () => {
   it('installing 优先级最高', () => {
     expect(deriveCardState(item({ isMine: true }), grp(undefined), true)).toBe('installing');
   });
+});
+
+describe('market install catalog matching', () => {
+  const entry = (version: string) => ({
+    version,
+    absolutePath: `/p/${version}`,
+    hasRegistryEntry: true,
+  });
+  const index: LocalSkillIndex = {
+    byCatalogKey: new Map([
+      [skillhubCatalogKey('same', 'market'), { global: entry('1.0.0'), projects: [] }],
+      [skillhubCatalogKey('same', 'team'), { global: entry('2.0.0'), projects: [] }],
+    ]),
+    untrackedByName: new Map(),
+  };
+
+  it('keeps same-slug market and team installs independent', () => {
+    expect(localGroupForItem({ name: 'same', isMine: false, catalogScope: 'market' }, index)?.global?.version)
+      .toBe('1.0.0');
+    expect(localGroupForItem({ name: 'same', isMine: false, catalogScope: 'team' }, index)?.global?.version)
+      .toBe('2.0.0');
+    expect(localGroupForItem({ name: 'same', isMine: false }, index)).toBeUndefined();
+  });
+});
+
+describe('market primary copy update availability', () => {
+  const global = { absolutePath: '/global/x', version: '1.0.0', hasRegistryEntry: true };
+  const project = { ...global, absolutePath: '/project/x' };
+
+  it.each([false, true])('offers an update for a registered copy (isMine=%s)', (isMine) => {
+    expect(deriveLocalInstall({ isMine, latestVersion: '1.0.1' }, { global, projects: [] }))
+      .toMatchObject({ installedLocally: true, updateAvailable: true, installedAbsolutePath: global.absolutePath });
+  });
+
+  it('uses the project copy when there is no global installation', () => {
+    expect(deriveLocalInstall({ isMine: false, latestVersion: '1.0.1' }, { projects: [project] }))
+      .toMatchObject({ updateAvailable: true, installedAbsolutePath: project.absolutePath });
+  });
+
+  it('keeps the status and action on the global copy when multiple locations exist', () => {
+    expect(deriveLocalInstall({ isMine: false, latestVersion: '1.0.1' }, {
+      global: { ...global, version: '1.0.1' }, projects: [project],
+    })).toMatchObject({ updateAvailable: false, installedAbsolutePath: global.absolutePath });
+  });
+
+  it.each(['1.0.0', '0.9.9', 'v1.0.0'])('does not update or downgrade to %s', (latestVersion) => {
+    expect(deriveLocalInstall({ isMine: false, latestVersion }, { global, projects: [] }).updateAvailable).toBe(false);
+  });
+
+  it.each([undefined, { ...global, version: null }, { ...global, hasRegistryEntry: false }])(
+    'does not replace missing, unversioned or authored copies', (entry) => {
+      expect(deriveLocalInstall({ isMine: true, latestVersion: '2.0.0' }, { global: entry, projects: [] }).updateAvailable).toBe(false);
+    },
+  );
 });
