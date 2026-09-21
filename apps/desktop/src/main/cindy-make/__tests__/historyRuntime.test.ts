@@ -18,12 +18,16 @@ const h = vi.hoisted(() => ({
   artifactPath: vi.fn(),
   showItem: vi.fn(),
   build: vi.fn(),
-  testBuild: undefined as { buildId: string; status: string; stopping?: boolean } | undefined,
+  testBuild: undefined as
+    { buildId: string; status: string; stopping?: boolean; sessionId?: string } | undefined,
   cancelTestBuild: vi.fn(),
   testStatus: vi.fn(),
   testUsing: false,
+  testAction: vi.fn(),
+  retryMerge: vi.fn(),
 }));
 const store = {
+  readBuildRollback: () => [],
   readBuild: vi.fn(),
   saveBuild: vi.fn(),
   directory: path.join(os.tmpdir(), 'history-runtime-unit-no-io'),
@@ -50,6 +54,9 @@ const store = {
   },
   receipt: (id: string, receipt: MakeFeatureReceipt) => h.records.get(id)!.receipts.push(receipt),
   version: vi.fn(),
+  hide: vi.fn((id: string) => {
+    h.records.get(id)!.hiddenAt = 6;
+  }),
 };
 vi.mock('electron', () => ({
   app: { getPath: () => path.join(os.tmpdir(), 'history-runtime-profile') },
@@ -72,16 +79,17 @@ vi.mock('../../localDb/sessionRouteLock.js', () => ({
 }));
 vi.mock('../upstreamMergeRuntime.js', () => ({
   integrateMakeHistory: h.merge,
-  actUpstreamMerge: vi.fn(),
+  actUpstreamMerge: h.retryMerge,
 }));
 vi.mock('../taskManagement.js', () => ({ manageCindyMakeTask: h.end }));
 vi.mock('../testRuntime.js', () => ({
-  actCindyMakeTest: vi.fn(),
+  actCindyMakeTest: h.testAction,
   cindyMakeTestController: {
     hasActiveJobs: () => !!h.testBuild || h.testUsing,
     isUsingWorkspace: () => h.testUsing,
     act: h.testStatus,
-    isBuilding: () => !!h.testBuild,
+    isBuilding: (sessionId: string) =>
+      !!h.testBuild && (h.testBuild.sessionId ?? 'session') === sessionId,
     activeBuild: () => h.testBuild,
     cancelBuild: h.cancelTestBuild,
   },
@@ -90,6 +98,7 @@ vi.mock('../testRunner.js', () => ({ verifyMakeTestWorkspace: h.verify }));
 vi.mock('../personalBuild.js', () => ({
   buildCindyPersonal: h.build,
   personalBuildEnvironment: vi.fn(),
+  personalBuildError: (code: string) => Object.assign(new Error(code), { code }),
   personalArtifactPath: h.artifactPath,
 }));
 vi.mock('../versionStartup.js', () => ({
@@ -196,9 +205,58 @@ beforeEach(() => {
         cindyMakeCompletion: { reportedAt: 3, commit: 'f'.repeat(40), tree: 'e'.repeat(40) },
       }),
     },
+    {
+      id: 0,
+      sessionId: 'session',
+      role: 'user',
+      clientId: 'first-request',
+      content: JSON.stringify('First round prompt'),
+      agentMeta: null,
+      createdAt: 2,
+    },
   ];
 });
 describe('history Main admission and owner boundary', () => {
+  it('associates each completion with the preceding user prompt', async () => {
+    const item = (await getCindyMakeHistory('aaaa')).items[0];
+    expect(item.completions.at(-1)?.prompt).toBe('First round prompt');
+    expect(h.records.get('aaaa')?.completions.at(-1)?.prompt).toBe('First round prompt');
+  });
+  it('skips synthetic UI triggers when associating a completion with its user prompt', async () => {
+    h.cards.push({
+      id: 2,
+      sessionId: 'session',
+      role: 'user',
+      clientId: 'synthetic-trigger',
+      content: JSON.stringify('[UI_ACTION_TRIGGER] continue the task'),
+      agentMeta: null,
+      createdAt: 2.5,
+    });
+    const item = (await getCindyMakeHistory('aaaa')).items[0];
+    expect(item.completions.at(-1)?.prompt).toBe('First round prompt');
+  });
+  it('continues into generation after retrying a failed integration', async () => {
+    h.state.upstreamMerge = {
+      id: 'failed-merge',
+      status: 'failed',
+      error: 'checksFailed',
+      hasWorkspace: true,
+      feature: { runId: 'aaaa', action: 'integrate' },
+    };
+    h.retryMerge.mockImplementationOnce(async () => {
+      h.state.upstreamMerge = undefined;
+    });
+    await actCindyMakeHistory('aaaa', 'retry');
+    expect(h.retryMerge).toHaveBeenCalledWith({ action: 'resolve' });
+    expect(h.testAction).toHaveBeenCalledWith('session', 'complete', 'build');
+  });
+  it('generates a completed task through the same integration and build controller as its completion card', async () => {
+    const item = (await getCindyMakeHistory('aaaa')).items[0];
+    expect(item.actions).toContain('build');
+    await actCindyMakeHistory('aaaa', 'build');
+    expect(h.testAction).toHaveBeenCalledWith('session', 'complete', 'build');
+    expect(h.build).not.toHaveBeenCalled();
+  });
   it.each(['starting', 'ready', 'failed', 'stopped'] as const)(
     'projects the completion card test receipt: %s',
     async (status) => {
@@ -291,6 +349,24 @@ describe('history Main admission and owner boundary', () => {
     expect(state).toMatchObject({ busy: false, canBuild: true });
     expect(state.items[0].actions).toContain('integrate');
     cindyMakeManager.forgetTask(runId);
+  });
+  it('keeps builds and integrations blocked until cancellation finishes even if its directory is gone', async () => {
+    h.state.upstreamMerge = {
+      id: 'update',
+      status: 'failed',
+      error: 'cancelFailed',
+      hasWorkspace: false,
+      cancellationRequested: true,
+    };
+    const blocked = await getCindyMakeHistory('aaaa');
+    expect(blocked).toMatchObject({ busy: true, canBuild: false });
+    expect(blocked.items[0].actions).not.toContain('integrate');
+    await expect(actCindyMakeHistory('aaaa', 'integrate')).rejects.toThrow('unavailable');
+    expect(h.merge).not.toHaveBeenCalled();
+    h.state.upstreamMerge = { id: 'update', status: 'cancelled', hasWorkspace: false };
+    const released = await getCindyMakeHistory('aaaa');
+    expect(released).toMatchObject({ busy: false, canBuild: true });
+    expect(released.items[0].actions).toContain('integrate');
   });
   it('shows and stops a completion-card build by the same identity without marking it interrupted', async () => {
     h.testBuild = { buildId: 'card-build', status: 'packaging' };
@@ -419,7 +495,7 @@ describe('history Main admission and owner boundary', () => {
     expect((await getCindyMakeHistory('aaaa')).items[0]).toMatchObject({
       lifecycle: 'ended',
       integration: 'unknown',
-      actions: ['open', 'build'],
+      actions: ['open'],
     });
     h.exists = false;
     expect((await getCindyMakeHistory('aaaa')).items[0]).toMatchObject({
@@ -467,14 +543,54 @@ describe('history Main admission and owner boundary', () => {
     expect((await getCindyMakeHistory('aaaa')).items[0].actions).not.toContain('integrate');
     await expect(actCindyMakeHistory('aaaa', 'integrate')).rejects.toThrow();
   });
-  it('returns busy immediately for a stale cleanup action on the running task', async () => {
-    h.running = true;
-    await expect(actCindyMakeHistory('aaaa', 'hide')).rejects.toThrow('busy');
-    expect(h.end).not.toHaveBeenCalled();
-  });
+  it.each(['running', 'testing', 'cleaning'] as const)(
+    'rejects a stale cleanup action when the target task becomes %s',
+    async (activity) => {
+      expect((await getCindyMakeHistory('aaaa')).items[0].canHide).toBe(true);
+      if (activity === 'running') h.running = true;
+      else if (activity === 'testing') h.testUsing = true;
+      else {
+        h.busy = true;
+        h.state.taskActions = { session: { status: 'running' } };
+      }
+      await expect(actCindyMakeHistory('aaaa', 'hide')).rejects.toThrow('busy');
+      expect(h.end).not.toHaveBeenCalled();
+      expect(store.hide).not.toHaveBeenCalled();
+    },
+  );
   it('keeps cleanup available for an idle history record while another task owns global work', async () => {
     h.busy = true;
     expect((await getCindyMakeHistory('aaaa')).items[0].actions).toContain('end');
+    const state = await actCindyMakeHistory('aaaa', 'hide');
+    expect(h.end).toHaveBeenCalledWith('session', 'end');
+    expect(store.hide).toHaveBeenCalledWith('aaaa');
+    expect(state).toMatchObject({ busy: true, canBuild: false, items: [] });
+  });
+  it('cleans an ended history entry while another build continues', async () => {
+    await getCindyMakeHistory('aaaa');
+    const record = h.records.get('aaaa')!;
+    record.endedAt = 5;
+    h.rows[0].status = 'deleted';
+    h.testBuild = {
+      buildId: 'other-build',
+      sessionId: 'other-session',
+      status: 'packaging',
+    };
+    store.readBuild.mockImplementation(() => h.testBuild);
+    const item = (await getCindyMakeHistory('aaaa')).items[0];
+    expect(item).toMatchObject({
+      lifecycle: 'ended',
+      actions: [],
+      actionReason: 'busy',
+      canHide: true,
+    });
+    const state = await actCindyMakeHistory('aaaa', 'hide');
+    expect(state).toMatchObject({ busy: true, canBuild: false, items: [], build: h.testBuild });
+    expect(store.hide).toHaveBeenCalledWith('aaaa');
+    expect(record.completions).toHaveLength(1);
+    expect(h.end).not.toHaveBeenCalled();
+    expect(h.cancelTestBuild).not.toHaveBeenCalled();
+    expect(h.merge).not.toHaveBeenCalled();
   });
   it('never writes captured task data into an owner that changed while the read was pending', async () => {
     h.current = false;

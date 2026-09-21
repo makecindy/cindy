@@ -17,6 +17,8 @@ export interface MakeFeatureReceipt {
 }
 export interface MakeHistoryCompletion extends CindyMakeCompletionMeta {
   id: string;
+  /** The user prompt that led to this completed editing round. */
+  prompt?: string;
 }
 export interface MakeHistoryVersion {
   operationId: string;
@@ -138,11 +140,6 @@ export function makeHistoryActions(facts: {
     return [...actions, 'end'];
   }
   if (facts.recoverableFailure) return [...actions, 'retry'];
-  if (
-    (facts.buildFailed || facts.needsBuild) &&
-    (facts.buildSourceAvailable ?? facts.sourceAvailable)
-  )
-    actions.push('build');
   if (facts.conflict) return [...actions, 'resolve'];
   if (facts.lifecycle === 'cleanup') return [...actions, 'retry-cleanup'];
   if (facts.lifecycle === 'preparing' || facts.lifecycle === 'running') return actions;
@@ -177,5 +174,13 @@ export function makeHistoryActions(facts: {
     } else if (facts.integration === 'integrated' || facts.integration === 'changed')
       actions.push('revert');
   }
+  if (
+    (facts.buildSourceAvailable ?? facts.sourceAvailable) &&
+    (actions.includes('integrate') ||
+      actions.includes('reapply') ||
+      ((facts.buildFailed || facts.needsBuild) && facts.integration !== 'changed') ||
+      (facts.completed && facts.integration === 'integrated'))
+  )
+    actions.push('build');
   return actions;
 }

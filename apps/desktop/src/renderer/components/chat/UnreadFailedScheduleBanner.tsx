@@ -16,7 +16,6 @@ interface BannerProps {
   dataOwnerId: string | null;
   sessionId: string;
   latestFailedRun: FailedScheduleRunSnapshot;
-  onViewDetails?: (scheduleId: string) => void;
   className?: string;
   style?: CSSProperties;
 }
@@ -35,12 +34,10 @@ function FailedScheduleNotice({
   dataOwnerId,
   sessionId,
   latestFailedRun,
-  onViewDetails,
   className,
   style,
 }: BannerProps) {
   const { t } = useTranslation();
-  const scheduleId = latestFailedRun.scheduleId;
   // 关闭是本机 UI 偏好，不修改运行记录或已读回执。
   const prefix = dataOwnerId ? failedScheduleDismissalPrefix(dataOwnerId, sessionId) : null;
   const [dismissedRun, setDismissedRun] = useState(() =>
@@ -95,16 +92,6 @@ function FailedScheduleNotice({
       <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
         {t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
       </span>
-      {scheduleId && onViewDetails && (
-        <button
-          type="button"
-          data-split-pane-route-action=""
-          onClick={() => onViewDetails(scheduleId)}
-          className="shrink-0 cursor-pointer text-xs text-[var(--error-fg)] underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
-        >
-          {t('chat.unreadFailedScheduleBanner.viewDetails')}
-        </button>
-      )}
       <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>
         <button
           type="button"

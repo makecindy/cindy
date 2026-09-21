@@ -52,6 +52,7 @@
 import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
+import { listCindyMakePendingFailureSessionIds } from './cindyMakeAttention';
 import {
   getSessionInterruptionBootAt,
   setSessionInterruptionBootAtForTests,
@@ -440,10 +441,13 @@ export async function listErrorTailPendingRows(): Promise<
   return rows;
 }
 
-/** 同上,只要会话 id —— 红点派生用。 */
+/** Native Make failures use the same unresolved-alert projection, not synthetic error rows. */
 export async function listErrorTailPendingSessionIds(): Promise<string[]> {
-  const rows = await listErrorTailPendingRows();
-  return [...new Set(rows.map((r) => r.sessionId))];
+  const [rows, makeFailures] = await Promise.all([
+    listErrorTailPendingRows(),
+    listCindyMakePendingFailureSessionIds(),
+  ]);
+  return [...new Set([...rows.map((r) => r.sessionId), ...makeFailures])];
 }
 
 /**

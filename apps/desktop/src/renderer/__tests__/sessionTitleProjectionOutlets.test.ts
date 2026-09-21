@@ -31,7 +31,7 @@ const draftRoute = read('features/cc-agent/NewMakerDraftRoute.tsx');
 describe('desktop 会话标题投影出口', () => {
   it('rail 置顶瓷砖、aria-label 与悬浮预览卡都用显示标题', () => {
     expect(railNav).toContain(
-      "const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));",
+      "const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t);",
     );
     expect(railNav).toContain('aria-label={displayTitle}');
     expect(railNav).toContain('{pinnedTileLabel(displayTitle)}');

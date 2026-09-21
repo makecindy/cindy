@@ -29,6 +29,8 @@ import {
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createResponsesItemIdPrefixRecoveryRule,
+  createResponsesItemIdLengthRecoveryRule,
   createInstructionsInjectionTransform,
   createInstructionsRegistry,
   createXaiModelInputRecoveryRule,
@@ -38,6 +40,8 @@ import {
   sanitizeXaiModelInputFromBody,
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
+  stripNonCanonicalResponsesItemIdsFromBody,
+  shortenOversizedResponsesItemIdsFromBody,
   stripNonAnthropicFields,
   type ForwardLifecycleFailure,
   type ForwardLifecycleObserver,
@@ -109,6 +113,8 @@ import { xaiServerSideTools } from './xai-server-side-tools.js';
 import {
   encryptedStripController,
   imageGenerationStripController,
+  responsesItemIdStripController,
+  responsesItemIdLengthStripController,
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
@@ -200,6 +206,12 @@ const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
   onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
 });
+const responsesItemIdPrefixRecoveryRule = createResponsesItemIdPrefixRecoveryRule({
+  onRetry: (threadId, model) => responsesItemIdStripController.markActive(threadId, model),
+});
+const responsesItemIdLengthRecoveryRule = createResponsesItemIdLengthRecoveryRule({
+  onRetry: (threadId, model) => responsesItemIdLengthStripController.markActive(threadId, model),
+});
 const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
   onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
 });
@@ -207,6 +219,8 @@ const vllmResponsesCompatibilityRule = createVllmResponsesCompatibilityRule();
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
   imageGenerationIdRecoveryRule,
+  responsesItemIdPrefixRecoveryRule,
+  responsesItemIdLengthRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
 ] as const;
@@ -257,10 +271,12 @@ export function armCodexHttpRecovery(args: {
   }
   httpRecoveryReasonByThread.set(threadId, reason);
   let disconnectedWebSockets = 0;
+  let provenScopedWebSocket = false;
   for (const handle of activeCodexProxyHandles()) {
     disconnectedWebSockets += handle.disconnectWebSocketsForThread?.(threadId) ?? 0;
+    provenScopedWebSocket ||= handle.hasProvenWebSocketForThread?.(threadId) === true;
   }
-  if (disconnectedWebSockets === 0) {
+  if (disconnectedWebSockets === 0 && !provenScopedWebSocket) {
     httpRecoveryReasonByThread.delete(threadId);
     // startup-prewarm 没有稳定 thread header，且 shared app-server 会跨业务 session
     // 复用这些连接。不能为恢复 thread A 而全局断开匿名连接（可能正承载 thread B）；
@@ -272,6 +288,10 @@ export function armCodexHttpRecovery(args: {
     });
     return null;
   }
+  // disconnectedWebSockets === 0 但 provenScopedWebSocket：该 thread 曾成功完成 thread 级
+  // WS 握手，只是 Codex 在收到上游 400 后自己先关掉了连接（client-close），等到这里已无
+  // socket 可断。它的下一次 upgrade 仍带同一 thread 头，resolveWebSocketUpstream 会据
+  // 标记回 426、确定性落回 HTTP；撤销标记反而让同一轮历史每次都先撞 400（#4773）。
   if (sessionId && !existingSessionId) {
     // recovery 只需要让 unregister 能清掉 thread 标记，不能调用 bindThreadToSession：
     // 子 Agent thread 与主 thread 属于同一业务 session，但 bind 会把它当成主 thread
@@ -286,6 +306,7 @@ export function armCodexHttpRecovery(args: {
     threadId,
     reason,
     disconnectedWebSockets,
+    ...(disconnectedWebSockets === 0 ? { scopedSocketAlreadyClosed: true } : {}),
   });
   return reason;
 }
@@ -2899,6 +2920,19 @@ function createTransformRequestChain(
       controller: xaiModelInputStripController,
       enabled: () => true,
       strip: sanitizeXaiModelInputFromBody,
+    }),
+    // issue #4738: 上游拒绝过一次不合规 message/reasoning id 后, 该 thread 后续每次发送
+    // 前都预洗, 避免每轮先 400 再重试。
+    createActiveStripTransform({
+      controller: responsesItemIdStripController,
+      enabled: () => true,
+      strip: stripNonCanonicalResponsesItemIdsFromBody,
+    }),
+    // issue #4227: 同理, 上游拒绝过一次超长 item id 后, 该 thread 后续发送前预改写。
+    createActiveStripTransform({
+      controller: responsesItemIdLengthStripController,
+      enabled: () => true,
+      strip: shortenOversizedResponsesItemIdsFromBody,
     }),
     // Providers that explicitly lack Responses custom tools still accept ordinary
     // functions. Adapt before provider sanitizers, then restore custom_tool_call

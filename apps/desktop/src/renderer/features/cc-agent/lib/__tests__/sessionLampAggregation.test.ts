@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 该 helper 是 rail 段钮 / rail 浮层面板项目行 / 展开态项目行 / 「对话」组行 /
  * 设备段头共用的唯一事实源。这里钉住三件事:
- *   1. 任务入口只显示 awaiting > done；urgent 不遮住 awaiting;
+ *   1. tone 优先级:error > awaiting > done;urgent(定时任务失败未读)提升为 error;
  *   2. 未读集合之外的会话不点灯(attention kind 存在也不行);
  *   3. device-link 远程镜像并入:running / needs-interaction / error / 完成未读
  *      与本地链路合并取最高档(否则远程「行亮而上层入口不亮」)。
@@ -40,15 +40,9 @@ describe('dotToneOf', () => {
     expect(dotToneOf('a', c.notifications, c.attentionKinds, c.urgentSessionIds)).toBeNull();
   });
 
-  it('失败的自动运行不显示提醒点', () => {
+  it('urgent 会话提升为 error(定时任务失败未读兜底)', () => {
     const c = ctx({ notifications: ['a'], urgent: ['a'] });
-    expect(dotToneOf('a', c.notifications, c.attentionKinds, c.urgentSessionIds)).toBeNull();
-  });
-
-  it('同一任务旧失败不遮住待回复，运行标记也保持独立', () => {
-    const c = ctx({ notifications: ['a'], kinds: { a: 'awaiting' }, urgent: ['a'], running: ['a'] });
-    expect(dotToneOf('a', c.notifications, c.attentionKinds, c.urgentSessionIds)).toBe('awaiting');
-    expect(aggregateSessionLamps([{ id: 'a' }], c)).toEqual({ running: true, dotTone: 'awaiting' });
+    expect(dotToneOf('a', c.notifications, c.attentionKinds, c.urgentSessionIds)).toBe('error');
   });
 
   it('kind 缺失的未读回落绿 done', () => {
@@ -62,14 +56,14 @@ describe('aggregateSessionLamps', () => {
     expect(aggregateSessionLamps([], ctx({}))).toEqual({ running: false, dotTone: null });
   });
 
-  it('错误不遮住等待回复与成功未读提醒', () => {
+  it('tone 取聚合最高档:done < awaiting < error', () => {
     const c = ctx({
       notifications: ['a', 'b', 'c'],
       kinds: { b: 'awaiting', c: 'error' },
     });
     expect(aggregateSessionLamps([{ id: 'a' }], c).dotTone).toBe('done');
     expect(aggregateSessionLamps([{ id: 'a' }, { id: 'b' }], c).dotTone).toBe('awaiting');
-    expect(aggregateSessionLamps([{ id: 'a' }, { id: 'b' }, { id: 'c' }], c).dotTone).toBe('awaiting');
+    expect(aggregateSessionLamps([{ id: 'a' }, { id: 'b' }, { id: 'c' }], c).dotTone).toBe('error');
   });
 
   it('running 与未读点相互独立,可同时成立', () => {
@@ -92,7 +86,7 @@ describe('aggregateSessionLamps', () => {
     expect(agg).toEqual({ running: true, dotTone: 'awaiting' });
   });
 
-  it('远程成功未读仍显示绿点，不被本地错误遮住', () => {
+  it('远程完成未读(attention 存续期条目)记绿 done;本地 error 仍压过它', () => {
     applyRemoteSessionActivity('device-1', {
       sessionId: 'remote-done',
       phase: 'completed',
@@ -101,12 +95,12 @@ describe('aggregateSessionLamps', () => {
     });
     expect(aggregateSessionLamps([{ id: 'remote-done', deviceLinkDeviceId: 'device-1' }], ctx({})).dotTone).toBe('done');
     const c = ctx({ notifications: ['local-err'], kinds: { 'local-err': 'error' } });
-    expect(aggregateSessionLamps([{ id: 'remote-done', deviceLinkDeviceId: 'device-1' }, { id: 'local-err' }], c).dotTone).toBe('done');
+    expect(aggregateSessionLamps([{ id: 'remote-done', deviceLinkDeviceId: 'device-1' }, { id: 'local-err' }], c).dotTone).toBe('error');
   });
 });
 
 describe('remoteLampOf', () => {
-  it('无镜像与远程错误均不显示提醒点', () => {
+  it('无镜像条目 → null;error phase → error tone', () => {
     expect(remoteLampOf('nope', undefined)).toBeNull();
     applyRemoteSessionActivity('device-1', {
       sessionId: 'remote-err',
@@ -114,7 +108,7 @@ describe('remoteLampOf', () => {
       attention: true,
       compactDetail: '',
     });
-    expect(remoteLampOf('remote-err', 'device-1')).toEqual({ running: false, tone: null });
+    expect(remoteLampOf('remote-err', 'device-1')).toEqual({ running: false, tone: 'error' });
   });
 });
 

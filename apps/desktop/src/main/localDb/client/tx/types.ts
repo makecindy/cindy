@@ -1,4 +1,7 @@
+import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
+
 export type DbTxName =
+  | 'taskTags.execute'
   | 'codex.importMessages'
   | 'claude.importMessages'
   | 'rewind.commit'
@@ -1175,6 +1178,7 @@ export type DbTxArgsByName = {
   'sessions.setStatus': SessionsSetStatusArgs;
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
+  'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
@@ -1247,6 +1251,7 @@ export type DbTxResultByName = {
   'sessions.setStatus': SessionsSetStatusResultItem[];
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
+  'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
     projectKey: string;
     alias: string;

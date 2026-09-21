@@ -1,29 +1,12 @@
 import {
   projectSessionActivity,
-  resolveSessionRightStatus,
   type SessionActivitySnapshot,
   type SessionInterruptionState,
 } from '@cindy/maker-shared/session-activity';
 
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
 
-/** Desktop task-entry tones; stale failures must not hide pending input. */
-export function resolveSidebarAttentionTone(
-  kind: AttentionKind | undefined,
-  urgent: boolean,
-): 'awaiting' | 'done' | null {
-  if (kind === 'awaiting') return 'awaiting';
-  return urgent || kind === 'error' ? null : 'done';
-}
-
-type SidebarSessionActivity = SessionActivitySnapshot & { waitingForUser?: boolean };
-
-/** Errors stay in the task; the sidebar only signals running, input and unread results. */
-export function resolveSidebarRightStatus(activity: SidebarSessionActivity) {
-  if (activity.waitingForUser) return 'awaiting';
-  if (activity.phase === 'error') return activity.currentTurnActive ? 'running' : 'time';
-  return resolveSessionRightStatus(activity);
-}
+export { resolveSessionRightStatus as resolveSidebarRightStatus } from '@cindy/maker-shared/session-activity';
 export type { SessionRightStatus as SidebarRightStatusKind } from '@cindy/maker-shared/session-activity';
 
 export interface SidebarRightStatusInput {
@@ -65,12 +48,12 @@ export function projectSidebarSessionActivity({
   isUrgentFromContext,
   isRunning,
   hasAttentionNotification,
-}: SidebarRightStatusInput): SidebarSessionActivity {
+}: SidebarRightStatusInput): SessionActivitySnapshot {
   const errorAttention =
     isUrgentFromContext || (hasAttentionNotification && attentionKind === 'error');
   const awaitingAttention = hasAttentionNotification && attentionKind === 'awaiting';
   const doneAttention = hasAttentionNotification && !errorAttention && !awaitingAttention;
-  const activity = projectSessionActivity({
+  return projectSessionActivity({
     interruption,
     sessionId,
     recordStatus: liveActivity?.recordStatus ?? recordStatus,
@@ -86,14 +69,7 @@ export function projectSidebarSessionActivity({
     interactionKind: liveActivity?.interactionKind,
     // Automation failure urgency intentionally lives outside the regular
     // attention-notification store. Preserve it in the canonical projection so
-    // restart/expiry/acknowledgement cannot erase the error itself. The sidebar
-    // status resolver hides its dot without changing this activity projection.
+    // restart/expiry/acknowledgement cannot erase the existing red error state.
     attention: liveActivity?.attention === true || hasAttentionNotification || isUrgentFromContext,
   });
-  // Renderer-only facet: retain pending input lost behind canonical error priority.
-  // Canonical phase/attention remain intact for system notification counts.
-  return {
-    ...activity,
-    waitingForUser: awaitingAttention || liveActivity?.phase === 'needs-interaction',
-  };
 }

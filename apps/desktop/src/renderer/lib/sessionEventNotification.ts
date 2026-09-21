@@ -11,8 +11,34 @@ import {
   getSoundNotificationsEnabled,
 } from '@/hooks/useNotificationSettings';
 import { playSessionEventSound } from '@/lib/notificationSound';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 export type SessionEventNotificationKind = 'done' | 'error' | 'needs-reply';
+
+/** Find a session in the snapshots available to a notification owner. */
+export function findSessionNotificationSession<T extends { id: string; title?: unknown }>(
+  sessionId: string,
+  sources: readonly (readonly T[])[],
+): T | null {
+  let fallback: T | null = null;
+  for (const source of sources) {
+    const session = source.find((candidate) => candidate.id === sessionId);
+    if (!session) continue;
+    fallback ??= session;
+
+    // A stale visible snapshot can still contain the session with its initial
+    // placeholder title. Keep looking for a complete or remote snapshot with
+    // a title that can be shown in the notification.
+    if (
+      typeof session.title === 'string'
+      && session.title.trim()
+      && !isDefaultDraftSessionTitle(session.title)
+    ) {
+      return session;
+    }
+  }
+  return fallback;
+}
 
 /** Resolve Bot-owned tasks omitted from the ordinary desktop session list. */
 export async function botOwnedSessionNotificationTitle(sessionId: string): Promise<string | null> {
@@ -60,6 +86,7 @@ export function sendSessionEventNotification(
     if (deliveryClaim?.status === 'suppressed') return;
     const deliveryToken = deliveryClaim?.status === 'deliver' ? deliveryClaim.token : undefined;
     if (!isDataOwnerGenerationCurrent(ownerAtNotification)) return;
+    void window.electronAPI.notificationMarkSessionAttention(sessionId);
 
     // The local sound may wait for autoplay permission or resource startup. Abort
     // it when the user returns to Cindy, then suppress the whole external event.

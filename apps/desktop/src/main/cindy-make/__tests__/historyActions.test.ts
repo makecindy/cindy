@@ -35,7 +35,14 @@ describe('history action admission', () => {
     },
   );
   it('keeps Open available and adds Continue for verified completed edits', () => {
-    expect(makeHistoryActions(ready)).toEqual(['open', 'continue', 'test', 'integrate', 'end']);
+    expect(makeHistoryActions(ready)).toEqual([
+      'open',
+      'continue',
+      'test',
+      'integrate',
+      'end',
+      'build',
+    ]);
     expect(makeHistoryActions({ ...ready, integration: 'unknown' })).toEqual(['open', 'end']);
     expect(makeHistoryActions({ ...ready, integration: 'unchanged' })).toEqual([
       'open',
@@ -54,6 +61,7 @@ describe('history action admission', () => {
       'test',
       'end',
       'revert',
+      'build',
     ]);
     expect(makeHistoryActions({ ...ready, integration: 'reverted', hasReceipts: true })).toEqual([
       'open',
@@ -61,6 +69,7 @@ describe('history action admission', () => {
       'test',
       'end',
       'reapply',
+      'build',
     ]);
     expect(
       makeHistoryActions({
@@ -69,7 +78,7 @@ describe('history action admission', () => {
         hasReceipts: true,
         newChanges: true,
       }),
-    ).toEqual(['open', 'continue', 'test', 'integrate', 'end']);
+    ).toEqual(['open', 'continue', 'test', 'integrate', 'end', 'build']);
     expect(
       makeHistoryActions({
         ...ready,
@@ -78,7 +87,7 @@ describe('history action admission', () => {
         integration: 'reverted',
         hasReceipts: true,
       }),
-    ).toEqual(['open', 'reapply']);
+    ).toEqual(['open', 'reapply', 'build']);
   });
   it('does not offer editing or cleanup again for ended history, but still permits retained undo', () => {
     expect(
@@ -89,9 +98,9 @@ describe('history action admission', () => {
         integration: 'integrated',
         hasReceipts: true,
       }),
-    ).toEqual(['open', 'revert']);
+    ).toEqual(['open', 'revert', 'build']);
     expect(makeHistoryActions({ ...ready, lifecycle: 'ended', workspaceAvailable: false })).toEqual(
-      ['open', 'integrate'],
+      ['open', 'integrate', 'build'],
     );
   });
   it('replaces mutations with conflict recovery or the specific failed preparation/cleanup action', () => {
@@ -107,8 +116,8 @@ describe('history action admission', () => {
     ]);
     expect(makeHistoryActions({ ...ready, lifecycle: 'ended', buildFailed: true })).toEqual([
       'open',
-      'build',
       'integrate',
+      'build',
     ]);
     expect(
       makeHistoryActions({
@@ -153,5 +162,15 @@ describe('history action admission', () => {
     expect(actions).not.toContain('integrate');
     expect(actions).not.toContain('revert');
     expect(actions).not.toContain('reapply');
+  });
+  it('offers the same generation action before and after a failed generation, never for unfinished new edits', () => {
+    expect(makeHistoryActions(ready)).toContain('build');
+    expect(makeHistoryActions({ ...ready, buildFailed: true })).toContain('build');
+    expect(
+      makeHistoryActions({ ...ready, integration: 'changed', completed: false, needsBuild: true }),
+    ).not.toContain('build');
+    expect(makeHistoryActions({ ...ready, conflict: true, buildFailed: true })).not.toContain(
+      'build',
+    );
   });
 });

@@ -1,10 +1,10 @@
 /**
  * sessionLampAggregation — 会话「灯语」聚合的唯一事实源
  * ---------------------------------------------------------------------------
- * 灯语 = running(呼吸橙)+ 未读点 tone(蓝 awaiting > 绿 done,
+ * 灯语 = running(呼吸橙)+ 未读点 tone(红 error > 蓝 awaiting > 绿 done,
  * AttentionDot 色表)。聚合口径:
  *   - 本地链路:runningSessionIds / notifications + attentionKinds + urgent
- *     (普通错误与定时任务失败未读均不显示提醒点);
+ *     (定时任务失败未读按 error 提升,与 SessionItem.isUrgentFromContext 同语义);
  *   - device-link 远程镜像(remoteLampOf):本地链路对被控端后台会话是盲区,
  *     必须并入,否则「行亮而入口不亮」(codex review,rail 聚合灯先例)。
  *
@@ -22,7 +22,6 @@ import { getRemoteSessionActivity } from '@/features/device-link/remoteSessionAc
 import { getStartingSessionIds } from '@/lib/sessionStartingStore';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
-import { resolveSidebarAttentionTone } from '../sidebar/sidebarRightStatus';
 
 const TONE_RANK: Record<AttentionKind, number> = { error: 3, awaiting: 2, done: 1 };
 
@@ -35,7 +34,7 @@ export function remoteLampOf(id: string, deviceId: string | null | undefined): {
   return {
     running: false,
     tone:
-      remote.phase === 'error' ? null : remote.phase === 'needs-interaction' ? 'awaiting' : 'done',
+      remote.phase === 'error' ? 'error' : remote.phase === 'needs-interaction' ? 'awaiting' : 'done',
   };
 }
 
@@ -47,7 +46,10 @@ export function dotToneOf(
   urgentSessionIds: ReadonlySet<string>,
 ): AttentionKind | null {
   if (!notifications.has(id)) return null;
-  return resolveSidebarAttentionTone(attentionKinds.get(id), urgentSessionIds.has(id));
+  const kind = attentionKinds.get(id);
+  if (kind === 'error' || urgentSessionIds.has(id)) return 'error';
+  if (kind === 'awaiting') return 'awaiting';
+  return 'done';
 }
 
 export interface SessionLampContext {

@@ -126,7 +126,9 @@ export class CindyMakeManager {
       this.isProjectBusy(root) ||
       (!!this.states.upstreamMerge &&
         this.states.upstreamMerge.status !== 'merged' &&
+        this.states.upstreamMerge.status !== 'cancelled' &&
         (this.states.upstreamMerge.hasWorkspace === true ||
+          this.states.upstreamMerge.cancellationRequested === true ||
           this.states.upstreamMerge.status !== 'failed'))
     );
   }
@@ -261,7 +263,10 @@ export class CindyMakeManager {
       );
     }
     if (input.signal.aborted) return input.cancelled();
-    if (this.states.upstreamMerge?.hasWorkspace && this.states.upstreamMerge.status !== 'merged')
+    if (
+      this.states.upstreamMerge?.cancellationRequested ||
+      (this.states.upstreamMerge?.hasWorkspace && this.states.upstreamMerge.status !== 'merged')
+    )
       throw Object.assign(new Error('upstream merge is pending'), { code: 'busy' });
     if (
       input.clearOnly &&

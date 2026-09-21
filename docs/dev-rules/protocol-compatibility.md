@@ -11,6 +11,18 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## 任务列表标签目录
+
+`sessions:list` 第三个参数可追加 `tagCatalog: 1`。支持的主机仅对该请求返回
+`{ format: 'session-tag-catalog-v1', sessions, tags }`；任务行的 `tagIds` 是响应内
+目录索引，保留全部任务、标签与顺序。共享 DeviceLinkClient 解包后，上层仍读取原数组。
+新控制端兼容旧主机的数组回复；旧控制端不声明此字段，新主机仍返回数组。
+缓存／outbox 重发先解包并重新检查任务可见性，再从可见行生成目录，不能残留隐藏任务的标签。
+此扩展不改变 relay、帧限制或服务器权限，也不靠截断数据降低体积。
+
+标签的可选 `nameCustomized` 标记区分显式改名与预设本地化。新版更新请求仅在明确改名时
+提交 `nameCustomized: true`；旧端换色时携带相同原名不会误置标记。缺省字段沿用旧显示规则。
+
 ## 远程桌面临时分辨率
 
 被控端以可选能力 `resolutionRestore` 声明系统分辨率的连接级恢复支持。
@@ -93,6 +105,32 @@ X 快照有请求正文时，按原始 triggerMessageId 排除引用列表中的
 
 ### Skill Hub 目录与管理契约
 
+- 原作者发布更新比较：服务端摘要新增可选 `isCreator`，仅表示当前成员是原始上传者，
+  独立于组织归属 `isMine` 和管理员管理权 `canManage`。Desktop 自动提示只使用
+  `isCreator === true` 的新鲜服务端结果；缺字段、离线、摘要不完整均为未知。
+  `GET /skills/:slug/files?version=...&includeHashes=1` 需认证及该 Skill 的管理权，
+  返回每个文件原始字节的可选 `sha256`；普通 files 请求保持原预览结构。
+  `fileHash` 仍是 ZIP 校验和，绝不作为本地 `folderHash`。
+  新包在校验时写入现有 release.fileIndex；历史包按需校验不可变 ZIP 并回填 JSON，
+  不改数据库 schema、版本或下载计数。两仓分别保留同名 `published-content.json`
+  fixture，覆盖文本、二进制、空文件及 ZIP 元数据变化。
+- Desktop 的 `skillhub:compare-published` 只开放给受信任的本地 Renderer，
+  Main 从发送窗口的最新扫描记录解析路径、slug 和 catalog，不接受 Renderer 指定远端
+  身份；读取前后复核账号代次、项目授权和目录身份，不扩展 device-link allowlist。
+  比较遵循现有打包排除规则，包含 SKILL.md 的 version 字段；2,000 文件限额只计算
+  实际打包的普通文件，不计目录和符号链接。审核中优先比较已提交版本，Main 与 Renderer
+  共用 `skillhubPublishedStatus.ts`，统一识别机审、人工审核、隔离及历史状态别名。
+  公开目录仅以已有列表版本判断下载更新，不逐项比较发布内容。本地列表先以批量同步确认
+  原作者；本地列表和详情在进入、切换及回到窗口时复用同账号 30 秒内的比较结果，
+  本地写入主动失效对应 Skill 缓存，最多并行 3 个比较，离页取消未开始的请求，无后台轮询。
+  `unavailable.reason` 可选为 `service`，仅用于 Main 确认的网络失败、408、429 或 5xx；
+  此时同账号队列冷却 30 秒，之后在下一次进入/聚焦时重试。缺字段、本地读取、摘要或身份
+  失败只影响该 Skill，本地修复/保存立即清除其缓存，不阻塞其它 Skill。
+  冷却仅影响发布差异提示，不停用列表、编辑、下载或手动发布能力。
+  差异预览锚定线上具体版本；二进制、大文件或无法完整校验的文本仅展示变更和大小，
+  文本预览总计最多 4 MiB、单文件 1 MiB、远端预览最多 16 次。更新仍复用原发布审核流程，
+  下载覆盖仍复用用户确认和备份。新旧两端可分别升级，旧端缺少摘要时不推断相同或不同。
+
 - Desktop 本地技能管理用扫描条目 `id` 区分不同 scope / 项目中的同源记录；启停与卸载
   的本地 IPC 可选携带 `skillId`，Main 同时匹配路径、当前发送窗口的扫描记录和项目授权，
   缺省字段保留旧调用行为，不向 device-link 新开放管理能力。启停偏好仍按物理身份共享；
@@ -113,7 +151,10 @@ X 快照有请求正文时，按原始 triggerMessageId 排除引用列表中的
   worktree 同时保留分组后的基仓与任务实际 cwd：分组路径只作目录归并，不能代替
   原生技能发现路径。Renderer 项目目录和 Main 白名单使用同样的两组路径，排除远程任务。
   扫描结果可选携带按物理路径关联的 `registrySkillName`，市场详情按此原始注册 slug
-  与 catalog scope 匹配；保留实际目录名用于本地展示。未注册或旧扫描缺少该字段时，
+  与 catalog scope 匹配；批量 sync 的生产方与 registry 回填消费方同样使用此键，
+  保留实际目录名用于本地展示。更新同一 catalog 的 published 注册记录时保留该来源身份，
+  仅刷新下载版本和内容基线；切换 catalog 安装则记录新的 catalog + installed 来源。
+  authorId 与 Hub 摘要保持相同 owner slug，不把组织 ID 替换为当前成员 ID。未注册或旧扫描缺少该字段时，
   只按精确名称匹配，不用大小写折叠推断两个目录属于同一市场技能。
   源目录形状不能单独证明归属：同一分组必须有直接、非符号链接的发现入口，才可按独立
   实体卸载；检查覆盖入口、发现根及引擎配置目录各级，拒绝其中的符号链接，保留发现

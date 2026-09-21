@@ -17,6 +17,8 @@ vi.mock('../activationPreferences', () => ({
 }));
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>();
+const comparePublishedSkill = vi.fn();
+vi.mock('../publishedComparison', () => ({ comparePublishedSkill }));
 const showOpenDialog = vi.fn();
 const showMessageBox = vi.fn();
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
@@ -158,6 +160,7 @@ describe('registerSkillhubIpc usage handlers', () => {
     isCindyLearnSkillEnabled.mockReturnValue(true);
     handlers.clear();
     vi.clearAllMocks();
+    comparePublishedSkill.mockReset().mockResolvedValue({ status: 'same', version: '1.0.0', pending: false });
     renameLocalSkill.mockReset();
     getManagedSkillRoots.mockReturnValue([]);
     getCurrentDataOwnerId.mockReturnValue('local-v1');
@@ -188,6 +191,48 @@ describe('registerSkillhubIpc usage handlers', () => {
       publishService: { publish, cancel } as never,
     });
   });
+
+  it.each(['unchanged', 'generation', 'revoked', 'failure', '429', '503', 'network', '404'] as const)(
+    'binds publication comparison to the scanned local identity and original account: %s', async (transition) => {
+      const sender = { id: 75, on: vi.fn(), once: vi.fn() };
+      const source = fs.mkdtempSync(path.join(fixtureRoot, 'compare-'));
+      const absolutePath = fs.realpathSync.native(source);
+      getAllowedProjectRoots.mockResolvedValue([source]);
+      const scannedSkill = {
+        id: 'demo', kind: 'skill', name: 'local-name', registrySkillName: 'registered-slug',
+        absolutePath, discoveredPath: source,
+        scope: 'project', projectRoot: source,
+      };
+      scanAllSkills.mockResolvedValueOnce({ skills: [scannedSkill], sources: [] });
+      await handlers.get('skillhub:scan')!({ sender }, { projects: [] });
+      const params = { absolutePath, skillId: 'demo', includeDiff: true };
+      await expect(handlers.get('skillhub:compare-published')!({ sender: { id: 76 } }, params))
+        .rejects.toThrow('Refresh the Skill list');
+      await expect(handlers.get('skillhub:compare-published')!({ sender }, { ...params, skillId: 'other' }))
+        .rejects.toThrow('Refresh the Skill list');
+      expect(comparePublishedSkill).not.toHaveBeenCalled();
+      comparePublishedSkill.mockImplementationOnce(async () => {
+        if (transition === 'generation') ownerState.generation++;
+        if (transition === 'revoked') getAllowedProjectRoots.mockResolvedValueOnce([]);
+        if (transition === 'failure') throw new Error('unreadable local directory');
+        if (['429', '503', 'network', '404'].includes(transition)) {
+          const { ServerApiError } = await import('../../serverApiClient');
+          throw new ServerApiError('TEST_ERROR', transition === 'network' ? 0 : Number(transition), 'remote failure');
+        }
+        return { status: 'different', version: '1.0.0', pending: false, changes: [{ oldContent: 'private content' }] };
+      });
+      const response = await Promise.resolve(handlers.get('skillhub:compare-published')!({ sender }, params))
+        .catch((error) => ({ error }));
+      expect(assertTrustedAppRendererEvent).toHaveBeenCalledWith({ sender });
+      expect(comparePublishedSkill).toHaveBeenCalledWith(scannedSkill, marketService, true);
+      if (transition === 'unchanged') expect(response).toMatchObject({ status: 'different' });
+      else {
+        if (transition === 'generation' || transition === 'revoked') expect(response).toMatchObject({ error: expect.any(Error) });
+        else expect(response).toEqual({ status: 'unavailable', ...(['429', '503', 'network'].includes(transition) ? { reason: 'service' } : {}) });
+        expect(JSON.stringify(response)).not.toContain('private content');
+      }
+    },
+  );
 
   it('delivers private publication feedback only to currently trusted app windows', async () => {
     const { BrowserWindow } = await import('electron');

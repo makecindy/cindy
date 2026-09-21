@@ -265,6 +265,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   ...REMOTE_RESOURCE_CHANNELS,
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
+  'local-db:task-tags:execute',
   'local-db:sessions:get',
   // Bounded metadata reconciliation. Old hosts reject this; controllers fall back to GET.
   'local-db:sessions:get-many',
@@ -667,6 +668,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:claude-session-route-changed',
   // local-db 推送(读模型增量)
   'local-db:sessions:created',
+  'local-db:task-tags:changed',
   'local-db:sessions:patched',
   SESSION_ACTIVITY_CHANNEL,
   SESSION_SYNC_CHANNEL,

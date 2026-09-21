@@ -32,6 +32,25 @@ it('preserves real checking stages and known failures while filtering private or
   store.saveBuild({ status: 'checking' });
   expect(store.readBuild()).toEqual({ status: 'checking' });
 });
+it('keeps only bounded known build log entries and preparation stages', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'make-build-log-'));
+  dirs.push(dir);
+  const store = new CindyMakeHistoryStore(dir);
+  store.saveBuild({
+    status: 'waiting',
+    preparationStep: 'environment',
+    logs: [
+      { step: 'environment', at: 1 },
+      { step: 'private-output' as never, at: 2 },
+      { step: 'ready', at: Number.NaN },
+      ...Array.from({ length: 90 }, (_, index) => ({ step: 'packaging' as const, at: index + 3 })),
+    ],
+  });
+  const build = store.readBuild();
+  expect(build?.preparationStep).toBe('environment');
+  expect(build?.logs).toHaveLength(80);
+  expect(build?.logs?.every((entry) => entry.step === 'packaging')).toBe(true);
+});
 it('keeps ended history, deduplicates operation receipts, and does not confuse build state with a task record', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'make-history-store-'));
   dirs.push(dir);

@@ -78,7 +78,7 @@ describe('project lamp after upstream sidebar merge', () => {
   });
 
   it.each([null, 'done', 'error'] as const)(
-    'keeps awaiting visible alongside %s',
+    'shows awaiting ahead of %s unless an error needs attention',
     (collapsedAttentionTone) => {
       const { container } = render(
         <ProjectNode
@@ -88,7 +88,7 @@ describe('project lamp after upstream sidebar merge', () => {
         />,
       );
       const header = container.querySelector('[data-project-header]')!;
-      const tone = 'awaiting';
+      const tone = collapsedAttentionTone === 'error' ? 'error' : 'awaiting';
       expect(header.querySelector(`[data-sidebar-right-status="${tone}"]`)).not.toBeNull();
       expect(header.querySelectorAll('.rounded-full')).toHaveLength(1);
     },

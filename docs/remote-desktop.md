@@ -376,12 +376,34 @@ reads revoke prior permission, and older concurrent reads cannot restore it.
 Empty connection
 heartbeats do not claim input ownership.
 
+Agent inputs in the same Cindy process share FIFO admission with a cancellable
+five-second wait (`DESKTOP_INPUT_BUSY` on expiry). A logical text input keeps its
+place across chunks; human input still preempts at a chunk boundary. The host
+rechecks cancellation, session lifetime and observation freshness after waiting,
+before dispatch. Input from another task invalidates prior observations, including
+pending reads; captures overlapping any Agent input cannot authorize later actions.
+New or recreated task sessions must observe after prior Agent input as well.
+Interrupted multi-chunk text reports completed, attempted and remaining character
+counts without replaying the prefix. Timeout/cancellation during native input keeps
+ownership until driver teardown settles. See
+[`inputOwnership.ts`](../apps/desktop/src/main/remote-desktop/inputOwnership.ts)
+and the [Computer Use regression tests](../apps/desktop/src/main/mcp-integrations/__tests__/computer.test.ts).
+
 The native macOS/Windows helper acknowledges a batch only after posting all its
 events; the Windows service forwards that acknowledgement. Main retains ownership
 through native shutdown when stopping held input. The guard coordinates only
 remote input and CUA calls in this Cindy process: physical keyboard/mouse input,
 other applications, and separate Cindy processes are outside it. Native event
 posting is not proof that an application has finished handling those events.
+
+On macOS, a drag without `delivery_mode` uses `background` when the driver
+advertises that parameter. A background refusal is returned without an automatic
+foreground retry. Explicit `foreground` remains available, but agents must
+coordinate desktop use with the person before requesting it. Legacy drivers
+without the parameter retain their native behavior. Background delivery itself
+does not guarantee focus isolation: the driver may temporarily change application
+or window focus. Cindy does not currently verify restoration of the original
+focused window or text field, and does not force focus back after an action.
 
 ## Wayland capture lifetime
 

@@ -501,6 +501,10 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 
 Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。
 
+### Tag
+
+任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。
+
 ### Teammate
 
 Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。

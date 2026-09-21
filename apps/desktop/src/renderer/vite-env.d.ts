@@ -3494,6 +3494,8 @@ interface ElectronAPI {
       error?: string;
       errorCode?: string;
     }>;
+    comparePublished: (params: import('../shared/skillhubPublishComparison').SkillhubPublishComparisonParams) => Promise<import('../shared/skillhubPublishComparison').SkillhubPublishComparison>;
+
     getFolderHash: (absolutePath: string) => Promise<{
       success: boolean;
       error?: string;
@@ -4847,6 +4849,17 @@ interface ElectronAPI {
           ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
         ) => void,
       ) => () => void;
+    };
+    taskTags: {
+      onChanged: (
+        cb: (
+          payload: { tags: import('@cindy/maker-shared').TaskTag[] },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
+      execute: (
+        request: import('@cindy/maker-shared').TaskTagRequest,
+      ) => Promise<import('@cindy/maker-shared').TaskTagResult>;
     };
     projectAliases: {
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
@@ -7117,13 +7130,14 @@ type SkillhubSyncResult =
       catalogScope?: 'market' | 'team';
       exists: true;
       isMine: boolean;
+      isCreator?: boolean;
       canManage: boolean;
       /** server 权威 authorId,用于本地 registry 回填及离线归属判定。 */
       authorId?: string;
       authorName?: string;
       publisherName?: string;
       latestVersion: string;
-      folderHash: string;
+      folderHash?: string;
       visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
       marketVersion?: string;
       pendingVersion?: {
@@ -7145,9 +7159,10 @@ interface SkillhubInfoResult {
   authorName: string;
   publisherName?: string;
   isMine: boolean;
+  isCreator?: boolean;
   canManage: boolean;
   latestVersion: string;
-  folderHash: string;
+  folderHash?: string;
   visibility: 'PUBLIC' | 'DEPARTMENT_SCOPED';
   publishedVisibility?: 'private' | 'shared' | 'public';
   ownerType?: string;

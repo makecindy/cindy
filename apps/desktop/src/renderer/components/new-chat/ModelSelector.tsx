@@ -749,7 +749,7 @@ interface ModelSelectorProps {
   /** 点击当前已选模型行时打开该行的配置浮层，而不是直接收起选择器。 */
   selectedRowClickOpensConfiguration?: boolean;
   /**
-   * modelId 非空但不在可见清单时的 trigger 文案（默认落「选择模型」占位符）。
+   * modelId 非空但不在可见清单时的诊断文案（默认提示模型信息暂不可用）。
    * 供展示已持久化偏好的调用方给出诊断性文案，避免把「存过但当前不可用」显示成「没选过」。
    */
   unknownModelLabel?: (modelId: string) => string;
@@ -3386,6 +3386,10 @@ export function ModelSelector({
   });
   const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
   const remoteModelLoadFailed = !!deviceId && remoteModelListStatus === 'error';
+  const localModelLoading = !deviceId && !(!providersOverride && localProviders.loadFailed) && (
+    (!providersOverride && localProviders.loading) ||
+    (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
+  );
   const visibleModels = useMemo(
     () =>
       selectVisibleModels({
@@ -3442,7 +3446,11 @@ export function ModelSelector({
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
       (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
-      t('newChat.modelSelector.trigger.placeholder'));
+      (modelId
+        ? t(localModelLoading
+            ? 'newChat.modelSelector.trigger.loading'
+            : 'newChat.modelSelector.trigger.unresolved')
+        : t('newChat.modelSelector.trigger.placeholder')));
   const agentName =
     agentIdentity && !fallbackOption?.active
       ? agentIdentity.vendorKey === 'cc'

@@ -30,6 +30,7 @@ import {
   prepareFeatureMerge,
   applyFeatureMerge,
   cleanupMergedCandidate,
+  cancelUpstreamMerge,
   type MergeGit,
 } from './upstreamMerge.js';
 
@@ -150,6 +151,8 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
       },
       running: isRunning,
       refresh,
+      cancel: async (state, isCurrent) =>
+        cancelUpstreamMerge(userData, state, await git(), isCurrent),
       cleanup: async (state) => {
         if (state.sessionId) return;
         // Only reclaim the exact file tree already adopted by the personal checkout.
@@ -180,9 +183,16 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
 export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeState | undefined> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
     throwIpcError('INVALID_PARAMS', 'Invalid upstream merge request');
-  const { action, createOptions } = raw as Record<string, unknown>;
-  if (!['update', 'resolve', 'status'].includes(String(action)))
+  const { action, createOptions, operationId } = raw as Record<string, unknown>;
+  if (!['update', 'resolve', 'cancel', 'status'].includes(String(action)))
     throwIpcError('INVALID_PARAMS', 'Invalid upstream merge action');
+  if (
+    (operationId !== undefined &&
+      (typeof operationId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operationId))) ||
+    (action === 'cancel' && operationId === undefined)
+  )
+    throwIpcError('INVALID_PARAMS', 'Invalid upstream merge operation');
   const options = validateCindyMakeTaskStart({
     runId: 'merge',
     request: 'merge',
@@ -195,8 +205,10 @@ export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeStat
     return action === 'update'
       ? await controller.update(options)
       : action === 'resolve'
-        ? await controller.resolve(options)
-        : controller.status();
+        ? await controller.resolve(options, operationId as string | undefined)
+        : action === 'cancel'
+          ? await controller.cancel(operationId as string)
+          : controller.status();
   } catch {
     throwIpcError('PRECONDITION_FAILED', 'Upstream merge is unavailable');
   }

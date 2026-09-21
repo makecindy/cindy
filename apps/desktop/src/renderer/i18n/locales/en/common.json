@@ -8066,6 +8066,8 @@
       "trigger": {
         "currentAndNext": "Current: {{current}}\nNext message: {{next}}",
         "placeholder": "Select model",
+        "loading": "Loading model…",
+        "unresolved": "Model Details Unavailable",
         "aria": "Select model. Current: {{model}}",
         "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
         "pendingAria": "Select model. Next message: {{agent}} · {{model}}",
@@ -8859,10 +8861,9 @@
     },
     "unreadFailedScheduleBanner": {
       "text": "An automatic run failed.",
-      "precheck": "A previous automatic run did not start because its pre-run check failed.",
-      "rateLimited": "A previous automatic run did not start because its pre-run check was rate-limited.",
-      "dismissTitle": "Dismiss past failure notice",
-      "viewDetails": "View Details"
+      "precheck": "Automatic checks are temporarily blocked.",
+      "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
+      "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
       "text": "This session's worktree has been cleaned up (directory missing).",
@@ -11208,6 +11209,21 @@
     "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
   },
   "skillhub": {
+    "unifiedDetail": {
+      "contentSource": "Content source",
+      "local": "Local",
+      "market": "Market",
+      "marketUnavailable": "Market details are unavailable. You can still use your local copy.",
+      "retry": "Retry"
+    },
+    "publishComparison": {
+      "updateAvailable": "Update available to publish",
+      "pendingChanges": "Further local changes since submission",
+      "unavailable": "Unable to check for publication updates",
+      "diffTitle": "Changes from online v{{version}}",
+      "summaryBadge": "Summary",
+      "summaryNote": "Binary or large file, or full text unavailable. Showing file sizes."
+    },
     "home": {
       "title": "Skills",
       "description": "Manage local skills, or discover and install more from Skill Hub.",
@@ -11435,6 +11451,8 @@
       "installError": "Unknown error"
     },
     "marketCard": {
+      "updateAvailable": "Get update",
+      "updateFailed": "Update failed. Please try again.",
       "visibilityPublic": "Public",
       "visibilityDept": "Team",
       "visibilityPrivate": "Personal",
@@ -12765,6 +12783,19 @@
   },
   "cindyMake": {
     "beta": "Beta",
+    "preflight": {
+      "closeTitle": "Close Cindy Make?",
+      "closeConfirm": "Close Cindy Make",
+      "keepOpen": "Keep Viewing",
+      "creating": "Creating the build session, please wait…",
+      "closeDescription": {
+        "environment": "Environment preparation is still running. Closing will stop it, including the same preparation shown in Settings. Installed tools will be kept.",
+        "source": "Source preparation is still running. Closing will stop it, including the same preparation shown in Settings. The prepared environment and source will be kept.",
+        "upstream": "The upstream PR search is still running. Closing will stop the search. The prepared environment and source will be kept.",
+        "ready": "Preparation is complete, but work has not started. Closing will not create a build session. The prepared environment and source will be kept.",
+        "incomplete": "Preparation did not finish and work has not started. Closing will not create a build session. The prepared environment and source will be kept."
+      }
+    },
     "description": "Check and prepare local tools for a personal Cindy build. Usage: /cindy-make [request]",
     "localOnly": "/cindy-make currently supports local desktop sessions only. Switch to this device to use it.",
     "usage": "Use /cindy-make or /cindy-make request. Environment checks do not yet accept attachments, references or comments. Your input is preserved.",
@@ -12905,17 +12936,18 @@
       },
       "missing": "No source is prepared",
       "details": {
-        "unknown": "Update source to check",
+        "unknown": "Not read",
         "latest": {
           "dev": "Online main",
           "beta": "Latest Beta",
           "release": "Latest Release",
-          "same": "(up to date)",
-          "behind_one": "({{count}} commit behind)",
-          "behind_other": "({{count}} commits behind)",
-          "ahead_one": "({{count}} commit ahead)",
-          "ahead_other": "({{count}} commits ahead)",
-          "difference": "({{behind}} behind, {{ahead}} ahead)"
+          "same": "Matches {{target}}, 0 change records behind",
+          "behind_one": "Local main is {{count}} change record behind",
+          "behind_other": "Local main is {{count}} change records behind",
+          "ahead_one": "Local main is {{count}} change record ahead",
+          "ahead_other": "Local main is {{count}} change records ahead",
+          "difference": "Local main: {{behind}} change records behind, {{ahead}} change records ahead",
+          "unknown": "Online version"
         }
       }
     },
@@ -12972,15 +13004,17 @@
       "switchVersion": "Switch version",
       "personalCode": "Personal source",
       "localMain": "Local main",
-      "lookupUnavailable": "Could not check the latest version. Sync latest source to check again.",
-      "comparisonUnavailable": "(comparison unavailable)",
+      "lookupUnavailable": "Lookup failed",
+      "comparisonUnavailable": "Local main comparison unavailable",
       "comparison": {
-        "same": "Personal source matches local main",
-        "personalAhead": "Includes local main · personal commits: {{ahead}}",
-        "mainAhead": "Commits ahead on local main: {{behind}}",
-        "diverged": "Commits ahead on local main: {{behind}} · personal commits: {{ahead}}",
-        "unknown": "Commit comparison unavailable. Sync latest source to try again."
-      }
+        "same": "Same SHA as local main",
+        "personalAhead": "Includes local main · personal change records: {{ahead}}",
+        "mainAhead": "Local main change records not yet included: {{behind}}",
+        "diverged": "Local main change records not yet included: {{behind}} · personal change records: {{ahead}}",
+        "different": "Different SHA from local main; difference unknown",
+        "unknown": "Difference from local main unknown"
+      },
+      "personal": "cindy-personal"
     },
     "versions": {
       "title": "My Versions",
@@ -13013,6 +13047,10 @@
       "open": "Show Installer",
       "description": "Merge these changes with your personal version, then save the new version after checks and packaging pass.",
       "readyHint": "Installer {{name}} is ready. Open its folder to install it.",
+      "preparationStep": {
+        "environment": "Preparing the build environment…",
+        "original": "Checking the current version…"
+      },
       "checkStep": {
         "dependencies": "Installing build dependencies…",
         "tests": "Running automated tests; this may take several minutes…",
@@ -13027,6 +13065,22 @@
         "ready": "Personal Version Built",
         "failed": "Personal Version Could Not Be Built"
       },
+      "buildLog": {
+        "title": "Build log",
+        "steps": {
+          "environment": "Prepare build environment",
+          "original": "Check current version",
+          "merging": "Merge changes",
+          "checking-dependencies": "Install build dependencies",
+          "checking-tests": "Run automated tests",
+          "checking-types": "Check code types",
+          "packaging": "Package personal version",
+          "publishing": "Save personal version",
+          "ready": "Personal version built",
+          "failed": "Build failed",
+          "cancelled": "Build stopped"
+        }
+      },
       "errors": {
         "unavailable": "The build record or installer is unavailable. Build the personal version again.",
         "changed": "The task directory or code has changed. Finish editing before building again.",
@@ -13037,7 +13091,7 @@
         "baselineChanged": "The personal version changed during the build. Build again to include the latest changes.",
         "buildFailed": "Packaging did not finish. Retry or continue editing before building again.",
         "cancelled": "Generation cancelled. You can generate again.",
-        "cleanupFailed": "Generation stopped, but temporary files could not all be cleaned. Restart Cindy and try again.",
+        "cleanupFailed": "Automatic cleanup is incomplete. Select Generate personal version to try again.",
         "interrupted": "The build stopped. You can build the personal version again."
       }
     },
@@ -13068,9 +13122,9 @@
         "environment": "The test environment is not ready. Check Cindy Make in Settings and retry.",
         "launchFailed": "The test build could not start. Retry or return to editing.",
         "timeout": "The test build took too long to start. Retry the launch.",
-        "interrupted": "The previous test was interrupted. Launch the isolated build again."
+        "interrupted": "The previous test was interrupted. Launch the isolated build again.",
+        "stopFailed": "The test version has not exited. Close its window, then try again."
       },
-      "retry": "Retry Launch",
       "startingHint": "Editing is paused until startup finishes. Wait for the current step to complete.",
       "currentStep": "Current step: {{step}}",
       "failedStep": "Interrupted step: {{step}}",
@@ -13109,6 +13163,8 @@
       },
       "counts": "{{total}} total · {{pending}} pending integration · {{integrated}} integrated",
       "filterLabel": "Filter make history",
+      "mergeTaskTitle": "Resolve Integration Conflicts",
+      "revertTaskTitle": "Resolve Undo Integration Conflicts",
       "filters": {
         "all": "All builds",
         "pending": "Pending integration",
@@ -13166,7 +13222,6 @@
         "resolve": "Resolve conflicts",
         "retry": "Retry",
         "build": "Generate personal version",
-        "retryBuild": "Retry generation",
         "end": "End build",
         "retry-prepare": "Retry preparation",
         "retry-cleanup": "Retry cleanup"
@@ -13188,12 +13243,20 @@
     },
     "merge": {
       "getLatest": "Sync latest source",
+      "taskTitle": "Resolve Source Update Conflicts",
       "updateHint": "Update official source and reapply your personal changes.",
       "confirmTitle": "Update to the latest source?",
-      "confirmDescription": "Your personal changes will be kept. If conflicts occur, a separate task will help resolve them.",
+      "confirmDescription": "Your personal changes will be kept. If conflicts occur, you will be asked before a resolution session starts.",
+      "conflictConfirm": {
+        "title": "Source update has conflicts",
+        "description": "Confirm to create a separate session where the Agent will resolve the conflicts automatically. Cancel to abandon this integration and keep your current personal version.",
+        "confirm": "Confirm and resolve",
+        "cancel": "Cancel update"
+      },
       "confirm": "Update source",
       "openTask": "Open resolution task",
       "resolve": "Resolve conflicts",
+      "retryCancel": "Retry cancellation",
       "resolveHint": "Open a separate task to resolve conflicts and check the result.",
       "otherAccount": "Another account started this operation. Switch back to that account to continue.",
       "status": {
@@ -13203,7 +13266,8 @@
         "resolving": "Resolving conflicts",
         "checking": "Checking changes…",
         "merged": "Source changes integrated",
-        "failed": "Source integration failed"
+        "failed": "Source integration failed",
+        "cancelled": "Source update cancelled"
       },
       "errors": {
         "busy": "Another operation is running. Wait and retry.",
@@ -13214,8 +13278,63 @@
         "baselineChanged": "The personal source has changed. Retry using its latest state.",
         "checksFailed": "The changes did not pass checks. Open the resolution task to continue.",
         "interrupted": "The operation was interrupted. Your changes are kept; please retry.",
-        "startFailed": "Could not open the resolution task. Please retry."
+        "startFailed": "Could not open the resolution task. Please retry.",
+        "cancelFailed": "Could not cancel this update. Please retry. Your personal source has been kept."
       }
     }
+  },
+  "taskTags": {
+    "loadFailed": "Could not load tags. Try again.",
+    "retry": "Retry",
+    "editLabel": "Edit “{{name}}”",
+    "reorderLabel": "Reorder “{{name}}”",
+    "reorderHint": "Drag to reorder, or use the up and down arrow keys",
+    "addLabel": "Add “{{name}}”",
+    "removeLabel": "Remove “{{name}}”",
+    "title": "Tags",
+    "more": "More tags",
+    "settings": "Tag settings",
+    "name": "Name",
+    "color": "Color",
+    "favorite": "Favorite (up to 7)",
+    "create": "Create",
+    "save": "Save",
+    "done": "Done",
+    "back": "Back",
+    "delete": "Delete tag",
+    "cancel": "Cancel",
+    "deleteConfirm": "Delete “{{name}}” from {{count}} tasks? Tasks and messages will be kept.",
+    "loading": "Loading…",
+    "unavailable": "This computer needs an update to support tags.",
+    "offline": "Connect to the source computer to edit tags.",
+    "failed": "Could not save. Please try again.",
+    "conflict": "Tags changed elsewhere. Reload and try again.",
+    "favoritesFull": "Only seven favorite tags are allowed.",
+    "alreadyExists": "A tag with this name already exists.",
+    "empty": "No tags yet.",
+    "red": "Red",
+    "orange": "Orange",
+    "yellow": "Yellow",
+    "green": "Green",
+    "blue": "Blue",
+    "purple": "Purple",
+    "gray": "Gray",
+    "none": "No color",
+    "pink": "Pink",
+    "coral": "Coral",
+    "teal": "Teal",
+    "indigo": "Indigo",
+    "white": "White",
+    "add": "Add tag",
+    "editTitle": "Edit tag",
+    "editHint": "Changes apply to all tasks using this tag.",
+    "addHint": "Added tags are selected for this task.",
+    "selectedCount": "{{count}} selected",
+    "presetImportant": "Important",
+    "presetFollowUp": "Follow up",
+    "presetWork": "Work",
+    "presetLife": "Life",
+    "presetIdeas": "Ideas",
+    "presetReference": "Reference"
   }
 }

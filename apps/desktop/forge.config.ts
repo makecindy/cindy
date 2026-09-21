@@ -21,6 +21,7 @@ import {
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
+import { preparePackagedNodePty } from './forge-node-pty';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 import {
   swiftTargetTriple,
@@ -190,8 +191,8 @@ const NATIVE_RUNTIME_DEPS = [
   // 无需带运行时闭包。注意: 该 runtime 用 CDP 接管用户已装 Chrome, 不需要
   // playwright 自带的浏览器二进制, 故只带 JS 模块即可。
   'playwright-core',
-  // node-pty (RSB 终端 tab 的 PTY 后端): .node 原生模块, 跟 better-sqlite3 同款 ——
-  // 必须 electron-rebuild (Node ABI ≠ Electron ABI), 必须随 packaged app 带,
+  // node-pty (RSB 终端 tab 的 PTY 后端): macOS/Windows 使用包内 N-API 预编译件，
+  // Linux 通过 electron-rebuild 编译；各平台都必须随 packaged app 带,
   // AutoUnpackNativesPlugin 会把 .node 提取到 app.asar.unpacked/。main 进程通过
   // createRequire 在运行时 require, 不让 vite bundle (见 vite.main.config.ts external)。
   'node-pty',
@@ -405,24 +406,26 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
   copyRuntimeDependencyTrees(READ_SHEET_RUNTIME_PACKAGES, destModules);
 }
 
-// 针对 packaged buildPath 的 node_modules 强制重建 better-sqlite3 —— force:true 确保
-// 即使根 node_modules 里的 .node 是 Node ABI（pnpm install 默认），也会被 Electron ABI
-// 覆盖重编。编完的 .node 落在 build/Release/better_sqlite3.node,下游
-// AutoUnpackNativesPlugin 会在 asar 打包时把它提取到 app.asar.unpacked/。
+// better-sqlite3 仍按 Electron ABI 重编。node-pty 在 macOS/Windows 使用 npm 包内
+// 的 N-API 预编译件；缺件意味着依赖不完整，不能悄悄转入源码编译。Linux 继续重编。
 async function rebuildNativeDepsInPackage(
   buildPath: string,
   electronVersion: string,
+  platform: string,
   arch: string,
 ): Promise<void> {
+  const nodePty = preparePackagedNodePty(buildPath, platform, arch);
+  const modules = ['better-sqlite3'];
+  if (nodePty.rebuild) modules.push('node-pty');
   console.log(
-    `[forge:afterCopy] rebuilding native modules (better-sqlite3, node-pty) for Electron ${electronVersion} (${arch})...`,
+    `[forge:afterCopy] rebuilding native modules (${modules.join(', ')}) for Electron ${electronVersion} (${arch})...`,
   );
   await electronRebuild({
     buildPath,
     electronVersion,
     arch,
     force: true,
-    onlyModules: ['better-sqlite3', 'node-pty'],
+    onlyModules: modules,
   });
   const sqliteNative = path.join(
     buildPath,
@@ -435,18 +438,9 @@ async function rebuildNativeDepsInPackage(
   if (!fs.existsSync(sqliteNative)) {
     throw new Error(`[forge:afterCopy] rebuild reported success but ${sqliteNative} is missing`);
   }
-  // node-pty 的 .node 在 build/Release/pty.node;Windows 上同名,Linux/macOS 同名。
-  // 跟 better-sqlite3 一样,缺了直接抛出,避免发出无法启动 PTY 的包。
-  const ptyNative = path.join(
-    buildPath,
-    'node_modules',
-    'node-pty',
-    'build',
-    'Release',
-    'pty.node',
-  );
+  const ptyNative = nodePty.nativePath;
   if (!fs.existsSync(ptyNative)) {
-    throw new Error(`[forge:afterCopy] rebuild reported success but ${ptyNative} is missing`);
+    throw new Error(`[forge:afterCopy] node-pty native module missing: ${ptyNative}`);
   }
 
   // node-pty 被整目录纳入 asar.unpack（为放出 spawn-helper / winpty 等运行时二进制），
@@ -1739,6 +1733,9 @@ if (isWin) {
   makers.unshift(
     new MakerNSIS({
       getAppBuilderConfig: async () => ({
+        directories: {
+          buildResources: path.join(__dirname, 'resources'),
+        },
         // NSIS installer(Setup.exe)与 uninstaller(Uninstall <App>.exe)的签名。
         // 这是签卸载器的唯一入口(Issue #998):uninstaller 由 NSIS 编译期两遍生成后
         // 嵌入 installer,postPackage 阶段还不存在、也没有独立成品文件可事后补签,
@@ -1976,7 +1973,7 @@ const config: ForgeConfig = {
         (async () => {
           try {
             bundleNativeDeps(buildPath, platform, arch);
-            await rebuildNativeDepsInPackage(buildPath, electronVersion, arch);
+            await rebuildNativeDepsInPackage(buildPath, electronVersion, platform, arch);
             copySqliteVecBinary(buildPath, platform, arch);
             callback();
           } catch (err) {

@@ -578,6 +578,35 @@ describe('skillhub/installService', () => {
     expect(shell.trashItem).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { scope: undefined, origin: 'published', expectedOrigin: 'published' },
+    { scope: 'market', origin: 'published', expectedOrigin: 'installed' },
+    { scope: undefined, origin: 'installed', expectedOrigin: 'installed' },
+  ] as const)('preserves publication provenance only when updating the same catalog ($scope/$origin)', async ({ scope, origin, expectedOrigin }) => {
+    const name = 'google-play-console';
+    const finalDir = path.join(TEST_ROOT, 'skills', name);
+    fs.mkdirSync(finalDir, { recursive: true });
+    fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'old content');
+    const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
+    await setupInstallDownload(name, zipBuf);
+    const { registryService } = await import('../registry');
+    const { serverApiFetch } = await import('../../serverApiClient');
+    const fetch = vi.mocked(serverApiFetch).getMockImplementation()!;
+    vi.mocked(serverApiFetch).mockImplementation(async (url, options) => url.includes('/batch-detail')
+      ? { items: [{ slug: name, owner: { slug: 'org-owner' }, isMine: true }] }
+      : fetch(url, options));
+    vi.mocked(registryService.getInstall).mockResolvedValue({
+      version: '1.0.0', origin, authorId: 'org-owner', folderHash: 'old-hash', installedAt: 1, updatedAt: 1,
+    });
+    const { install } = await import('../installService');
+    expect(await install({ name, installPath: finalDir, version: '1.0.1', catalogScope: scope, force: true, skipBackup: false }, () => {}))
+      .toMatchObject({ success: true, version: '1.0.1' });
+    expect(registryService.addInstall).toHaveBeenCalledWith(name, finalDir, expect.objectContaining({
+      version: '1.0.1', origin: expectedOrigin, authorId: 'org-owner', ...(scope ? { catalogScope: scope } : {}),
+    }));
+    expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf8')).toBe('new content');
+  });
+
   it('keeps the previous install intact when extraction fails during forced update', async () => {
     const finalDir = path.join(TEST_ROOT, 'skills', 'broken-skill');
     fs.mkdirSync(finalDir, { recursive: true });

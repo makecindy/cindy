@@ -87,10 +87,19 @@ describe('portable Cindy Make cards', () => {
 
   it('locks editing during the shared build and identifies the exact build to stop', () => {
     const state = snapshot();
-    state.sharedBuild = { buildId: 'build', status: 'checking', checkStep: 'dependencies' };
+    state.sharedBuild = {
+      buildId: 'build',
+      status: 'checking',
+      checkStep: 'dependencies',
+      logs: [{ step: 'merging', at: 1 }, { step: 'checking-dependencies', at: 2 }],
+    };
     const card = project(state);
     expect(card.actions?.slice(0, 3).every((action) => action.disabled)).toBe(true);
     expect(card.actions?.at(-1)).toMatchObject({ id: 'build:build:stop', disabled: false });
+    expect(card.blocks?.[0].fallbackMarkdown).toContain(en.cindyMake.personal.buildLog.title);
+    expect(card.blocks?.[0].fallbackMarkdown).toContain(
+      en.cindyMake.personal.buildLog.steps['checking-dependencies'],
+    );
     state.sharedBuild.stopping = true;
     expect(project(state).actions?.at(-1)?.disabled).toBe(true);
   });

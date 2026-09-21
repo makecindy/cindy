@@ -28,7 +28,7 @@ describe('local SkillHub routes', () => {
     const other = entry({ scope: 'global', absolutePath: '/home/.agents/skills/demo' });
     for (const path of ['/shared/a & b/SKILL.md', '/repo/.claude/skills/demo/skill.md']) {
       const url = new URL(buildLocalSkillPathRoute(path), 'https://cindy.local');
-      expect(url.pathname).toBe('/skillhub/local/by-path');
+      expect(url.pathname).toBe('/skillhub/detail');
       expect(url.searchParams.get('path')).toBe(path);
       expect(findLocalSkillRouteEntry([other, target], {}, url.searchParams)).toBe(target);
     }
@@ -75,9 +75,9 @@ describe('local SkillHub routes', () => {
     )).toBe(renamed);
   });
 
-  it('keeps the existing URL shape for an unambiguous skill', () => {
+  it('builds the shared route with the complete local identity', () => {
     expect(buildLocalSkillRoute(entry())).toBe(
-      '/skillhub/local/skill/project/abcd1234/demo?engine=pi',
+      '/skillhub/detail?view=local&kind=skill&scope=project&name=demo&engine=pi&project=abcd1234',
     );
   });
 
@@ -93,7 +93,7 @@ describe('local SkillHub routes', () => {
     const search = new URL(route, 'https://cindy.local').searchParams;
 
     expect(route).toBe(
-      '/skillhub/local/skill/project/abcd1234/demo?engine=pi&source=pi-source',
+      '/skillhub/detail?view=local&kind=skill&scope=project&name=demo&engine=pi&project=abcd1234&source=pi-source',
     );
     expect(findLocalSkillRouteEntry(
       [addedLater, original],
@@ -113,7 +113,7 @@ describe('local SkillHub routes', () => {
     const params = { kind: 'skill', projectHash: 'abcd1234', name: 'demo' };
 
     expect(buildLocalSkillRoute(pi)).toBe(
-      '/skillhub/local/skill/project/abcd1234/demo?engine=pi&source=pi-source',
+      '/skillhub/detail?view=local&kind=skill&scope=project&name=demo&engine=pi&project=abcd1234&source=pi-source',
     );
     expect(
       findLocalSkillRouteEntry(

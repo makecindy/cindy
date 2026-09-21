@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   botOwnedSessionNotificationTitle,
+  findSessionNotificationSession,
   sendSessionEventNotification,
 } from '@/lib/sessionEventNotification';
 import {
@@ -39,6 +40,7 @@ vi.mock('@/lib/notificationSound', () => ({
 }));
 
 const showSessionEvent = vi.fn(() => Promise.resolve());
+const markAttention = vi.fn(() => Promise.resolve());
 const claimSessionEvent = vi.fn<
   (
     sessionId: string,
@@ -59,6 +61,7 @@ describe('shared session event notifications', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       notificationClaimSessionEvent: claimSessionEvent,
+      notificationMarkSessionAttention: markAttention,
       notificationShowSessionEvent: showSessionEvent,
       localDb: { bots: { list: vi.fn(async () => []) } },
     };
@@ -74,6 +77,7 @@ describe('shared session event notifications', () => {
     await sendSessionEventNotification('session-1', 'LiZi · 修复登录', 'needs-reply');
 
     expect(claimSessionEvent).toHaveBeenCalledWith('session-1', 'needs-reply');
+    expect(markAttention).toHaveBeenCalledWith('session-1');
     expect(showSessionEvent).toHaveBeenCalledWith({
       sessionId: 'session-1',
       title: 'LiZi · 修复登录',
@@ -104,6 +108,7 @@ describe('shared session event notifications', () => {
     void sendSessionEventNotification('session-3', 'Dash', 'error');
 
     expect(claimSessionEvent).not.toHaveBeenCalled();
+    expect(markAttention).not.toHaveBeenCalled();
     expect(showSessionEvent).not.toHaveBeenCalled();
   });
 
@@ -141,6 +146,7 @@ describe('shared session event notifications', () => {
     await sendSessionEventNotification('session-duplicate', 'Cindy', 'done');
 
     expect(sound.play).not.toHaveBeenCalled();
+    expect(markAttention).not.toHaveBeenCalled();
     expect(showSessionEvent).not.toHaveBeenCalled();
   });
 
@@ -184,5 +190,28 @@ describe('shared session event notifications', () => {
 
     await expect(botOwnedSessionNotificationTitle('bot-session')).resolves.toBe('LiZi · 修复登录');
     await expect(botOwnedSessionNotificationTitle('missing')).resolves.toBeNull();
+  });
+
+  it('looks up a notification session across complete and remote snapshots', () => {
+    const localVisible = [{ id: 'visible', title: 'Visible' }];
+    const allLocal = [{ id: 'archived', title: 'Renamed archived task' }];
+    const remote = [{ id: 'remote', title: 'Renamed remote task' }];
+
+    expect(findSessionNotificationSession('archived', [localVisible, allLocal, remote])).toEqual(
+      allLocal[0],
+    );
+    expect(findSessionNotificationSession('remote', [localVisible, allLocal, remote])).toEqual(
+      remote[0],
+    );
+    expect(findSessionNotificationSession('missing', [localVisible, allLocal, remote])).toBeNull();
+  });
+
+  it('prefers a named snapshot when the visible snapshot still has the draft title', () => {
+    const visible = [{ id: 'same-session', title: 'New Maker' }];
+    const complete = [{ id: 'same-session', title: 'Renamed task' }];
+
+    expect(findSessionNotificationSession('same-session', [visible, complete])).toEqual(
+      complete[0],
+    );
   });
 });

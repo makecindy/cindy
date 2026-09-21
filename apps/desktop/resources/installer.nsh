@@ -7,8 +7,8 @@
 ; 接受);dev 仍独立名,dev 安装器绝不误伤同机并存的正式安装。注册表键名
 ; Windows 大小写不敏感,shell 键 "Cindy" 与历史写入的 "cindy" 是同一个键,
 ; 行为零变化。
-!include "winget-shortcuts.nsh"
-!include "installer-directory.nsh"
+!include "${BUILD_RESOURCES_DIR}\winget-shortcuts.nsh"
+!include "${BUILD_RESOURCES_DIR}\installer-directory.nsh"
 
 !ifndef BUILD_UNINSTALLER
 !macro customInit

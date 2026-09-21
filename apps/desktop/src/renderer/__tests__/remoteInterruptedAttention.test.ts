@@ -13,7 +13,7 @@ const interruption = {
 };
 
 describe('persisted interruption on remote Desktop', () => {
-  it('keeps interrupted tasks without a red dot', () => {
+  it('keeps the red dot after reading without relying on the local notification store', () => {
     const input = {
       sessionId: 'remote',
       interruption,
@@ -22,7 +22,7 @@ describe('persisted interruption on remote Desktop', () => {
       isRunning: false,
       hasAttentionNotification: false,
     };
-    expect(resolveSidebarRightStatus(projectSidebarSessionActivity(input))).toBe('time');
+    expect(resolveSidebarRightStatus(projectSidebarSessionActivity(input))).toBe('error');
     expect(
       resolveSidebarRightStatus(
         projectSidebarSessionActivity({
@@ -42,7 +42,7 @@ describe('persisted interruption on remote Desktop', () => {
       urgentSessionIds: new Set<string>(),
       remotePhaseOf: () => undefined,
     };
-    expect(resolveCollapsedAttention(input)).toEqual({ tone: null, errorSessionIds: ['old'] });
+    expect(resolveCollapsedAttention(input)).toEqual({ tone: 'error', errorSessionIds: ['old'] });
     expect(
       resolveCollapsedAttention({
         ...input,

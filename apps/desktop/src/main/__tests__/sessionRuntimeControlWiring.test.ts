@@ -11,6 +11,10 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const runtimeControlSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const deviceLinkHostSource = readFileSync(
   resolve(mainRoot, 'device-link/index.ts'),
   'utf8',
@@ -931,9 +935,10 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('setSessionRuntimeProjector((session) =>');
     expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) =>');
     expect(registerSource).toContain('broadcastSessionRuntimeProjection(sessionId');
-    expect(registerSource).toContain('runtimeEffective: effective');
-    expect(registerSource).toContain('runtimePending: control.pending');
-    expect(registerSource).toContain("effort: effective.effort ?? '',");
+    expect(registerSource).toContain('projectSessionRuntimeControl(session.id');
+    expect(runtimeControlSource).toContain('runtimeEffective: effective');
+    expect(runtimeControlSource).toContain('runtimePending: control.pending');
+    expect(runtimeControlSource).toContain("effort: effective.effort ?? '',");
   });
   // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 

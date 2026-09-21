@@ -1115,18 +1115,25 @@ function isExpectedTurnIdMismatchError(error: unknown): boolean {
 }
 
 /**
- * Only the app-server's canonical missing-rollout response permits replacing
- * a thread. Keep this fail-closed: a wrapped message, a different JSON-RPC
- * code, or populated error data may describe a different resume failure.
+ * Match the app-server's canonical missing-rollout response. This alone does
+ * not prove a thread was unused; indexed history also needs a metadata check.
+ * Wrapped messages, other JSON-RPC codes, or populated data are not equivalent.
  */
 export function isExactNoRolloutThreadResumeError(error: unknown, threadId: string): boolean {
+  return isExactThreadLookupError(error,
+    `codex app-server thread/resume error -32600: no rollout found for thread id ${threadId}`);
+}
+
+function isExactUnloadedThreadReadError(error: unknown, threadId: string): boolean {
+  return isExactThreadLookupError(error,
+    `codex app-server thread/read error -32600: thread not loaded: ${threadId}`);
+}
+
+function isExactThreadLookupError(error: unknown, message: string): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const candidate = error as { code?: unknown; data?: unknown; message?: unknown };
-  if (candidate.code !== -32600 || !Object.hasOwn(error, 'data') || candidate.data !== undefined) {
-    return false;
-  }
-  return candidate.message ===
-    `codex app-server thread/resume error -32600: no rollout found for thread id ${threadId}`;
+  return candidate.code === -32600 && Object.hasOwn(error, 'data') && candidate.data === undefined
+    && candidate.message === message;
 }
 
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
@@ -6282,7 +6289,7 @@ export class CodexAgent extends BaseAgent {
           ? await this.deps.prepareCodexResumeSession(opts.resumeSessionId, { codexHome: sessionCodexHome, providerId: accountProviderId })
           : await this.deps.prepareCodexResumeSession(opts.resumeSessionId);
       } catch (e) {
-        if (accountSessionHost || e instanceof CodexResumePreparationBlockedError) {
+        if (accountSessionHost || sessionStorage?.rolloutPath || e instanceof CodexResumePreparationBlockedError) {
           releaseHostBindingLeaseIfNeeded();
           throw e;
         }
@@ -6292,12 +6299,39 @@ export class CodexAgent extends BaseAgent {
         });
       }
     }
+    // Native resume reports "no rollout" for both unused threads and deleted
+    // history. Metadata survives a missing file, so check the original native
+    // index before permitting the existing unused-thread fallback.
+    const indexedRolloutMissing = !!sessionStorage?.rolloutPath && !preparedResumePath;
+    let indexedThreadAbsent = false;
+    let indexedModelProvider: string | undefined;
+    if (indexedRolloutMissing && opts.resumeSessionId) {
+      try {
+        const { thread } = await host.request<{ thread: { id: string; path?: string; modelProvider?: string } }>(
+          'thread/read', { threadId: opts.resumeSessionId, includeTurns: false }, {
+            timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+          },
+        );
+        if (thread.id !== opts.resumeSessionId) {
+          throw new CodexResumePreparationBlockedError('Codex native metadata does not match indexed history');
+        }
+        indexedModelProvider = thread.modelProvider;
+      } catch (error) {
+        if (!isExactUnloadedThreadReadError(error, opts.resumeSessionId)) {
+          releaseHostBindingLeaseIfNeeded();
+          throw error;
+        }
+        indexedThreadAbsent = true;
+      }
+    }
     const localSummaryProvider = opts.remoteHostId ? null : host.getLocalCompactionProviderId?.();
     if (localSummaryProvider && opts.resumeSessionId && isLikelyValidThreadId(opts.resumeSessionId)) {
       // Native modelProvider is durable thread metadata. Read it before overriding
       // resume defaults so recovery survives closing/reopening this same task.
       try {
-        const savedProvider = preparedResumePath
+        const savedProvider = indexedRolloutMissing
+          ? indexedModelProvider
+          : preparedResumePath
           ? await readCodexRolloutModelProvider(preparedResumePath, opts.resumeSessionId)
           : (await host.request<{ thread: { modelProvider?: string } }>(
           'thread/read', { threadId: opts.resumeSessionId, includeTurns: false },
@@ -6307,7 +6341,7 @@ export class CodexAgent extends BaseAgent {
       } catch (error) {
         // Let the existing resume path recover an unused thread without a rollout.
         // Other read failures must not silently reset a saved summary identity.
-        if (preparedResumePath || !isExactNoRolloutThreadResumeError(error, opts.resumeSessionId)) {
+        if (preparedResumePath || !isExactUnloadedThreadReadError(error, opts.resumeSessionId)) {
           releaseHostBindingLeaseIfNeeded();
           throw error;
         }
@@ -6575,7 +6609,20 @@ export class CodexAgent extends BaseAgent {
           // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
           mutableCatalogModel = resp.model;
         }
-        if (preparedResumePath && resp.thread.id !== opts.resumeSessionId) throw new Error('Codex resumed an unexpected thread');
+        if ((preparedResumePath || sessionStorage?.rolloutPath) && resp.thread.id !== opts.resumeSessionId) {
+          throw new Error('Codex resumed an unexpected thread');
+        }
+        // A missing indexed path is not permission to select an older copy by ID.
+        // If it materialized during startup, only that same canonical file may resume.
+        if (indexedRolloutMissing && sessionStorage?.rolloutPath) {
+          if (typeof resp.thread.path !== 'string') throw new Error('Codex resumed without a history location');
+          if (path.resolve(resp.thread.path) !== path.resolve(sessionStorage.rolloutPath)) {
+            const [actual, expected] = await Promise.all([
+              fs.realpath(resp.thread.path), fs.realpath(sessionStorage.rolloutPath),
+            ]);
+            if (actual !== expected) throw new Error('Codex resumed an unexpected history location');
+          }
+        }
         threadId = resp.thread.id;
         await recordNativeThreadLocation(resp.thread);
         codexThreadModelProviderId = resp.modelProvider?.trim() || undefined;
@@ -6625,12 +6672,22 @@ export class CodexAgent extends BaseAgent {
         });
       } catch (e) {
         let freshThreadStarted = false;
-        if (!preparedResumePath && isExactNoRolloutThreadResumeError(e, opts.resumeSessionId)) {
-          // Codex gives an exact, provider-owned proof that this thread has
-          // never crossed a turn boundary. Only this error may switch the
-          // continuation from resume to a fresh thread/start.
+        if (!preparedResumePath && (!indexedRolloutMissing || indexedThreadAbsent)
+          && isExactNoRolloutThreadResumeError(e, opts.resumeSessionId)) {
+          // For indexed threads, both native metadata and rollout must be absent.
+          // A no-rollout error alone also occurs after persisted history is lost.
           log.info('thread/resume reported no rollout; starting a fresh thread');
           try {
+            if (sessionStorage?.rolloutPath) {
+              const materialized = await fs.lstat(sessionStorage.rolloutPath).then(
+                () => true,
+                (error: NodeJS.ErrnoException) => {
+                  if (error.code === 'ENOENT') return false;
+                  throw error;
+                },
+              );
+              if (materialized) throw new CodexResumePreparationBlockedError('Codex history materialized during resume');
+            }
             await startFreshThread();
             freshThreadStarted = true;
           } catch (freshStartError) {
@@ -14274,6 +14331,11 @@ export class CodexAgent extends BaseAgent {
       note: 'Codex 精确 fork: 独立一次性 host 上 thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
     });
     try {
+      const forkStorage = await this.deps.resolveCodexThreadStorage?.(opts.sourceSdkSessionId);
+      // Fork requires actual history; it must never use resume's unused-thread recovery.
+      if (forkStorage?.rolloutPath && !(await fs.lstat(forkStorage.rolloutPath)).isFile()) {
+        throw new CodexResumePreparationBlockedError('Codex fork history is unavailable');
+      }
       // Source history inspection must not depend on the credentials we are leaving.
       let preparedSourcePath = opts.stripEncryptedReasoning
         ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId)
@@ -14285,7 +14347,6 @@ export class CodexAgent extends BaseAgent {
       }
       // ID-only turn queries must use the source thread's index even when the
       // account supplying credentials has changed. Keep the child in that index.
-      const forkStorage = await this.deps.resolveCodexThreadStorage?.(opts.sourceSdkSessionId);
       const forkSqliteHome = forkStorage?.sqliteHome;
       stage = 'host-create';
       const leased = await this.acquireHostOperation(async () => {

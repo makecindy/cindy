@@ -3,7 +3,7 @@ import { ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useTranslation } from 'react-i18next';
-import { skillhubCatalogKey } from '../../../../shared/skillhubCatalog';
+import { marketLocalCopies } from '../lib/marketLocalCopies';
 import { useSkillhub } from '../hooks/useSkillhub';
 import type { MarketSkill } from '../hooks/useMarketList';
 import { LocalSkillControls } from './LocalSkillControls';
@@ -15,16 +15,7 @@ export function MarketLocalSkills({ skill }: {
   const { t } = useTranslation();
   const { skills } = useSkillhub();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const copies = skills.filter((local) => {
-    // Use the physically joined registry identity; casing alone cannot prove
-    // ownership on case-sensitive volumes. Old scans keep exact-name matching.
-    const localName = local.registryEntry ? local.registrySkillName ?? local.name : local.name;
-    if (local.kind !== 'skill' || localName !== skill.name) return false;
-    return local.registryEntry
-      ? skillhubCatalogKey(localName, local.registryEntry.catalogScope)
-        === skillhubCatalogKey(skill.name, skill.catalogScope)
-      : skill.isMine;
-  });
+  const copies = marketLocalCopies(skills, skill);
   if (copies.length === 0) return null;
 
   const selected = copies.find((local) => local.id === selectedId) ?? copies[0]!;

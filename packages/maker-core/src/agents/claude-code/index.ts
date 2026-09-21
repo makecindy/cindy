@@ -3863,7 +3863,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
-          ...(this.deps.registerLocalAgentProcess
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
             ? {
                 spawnClaudeCodeProcess: (spawnOptions) =>
                   spawnObservedClaudeProcess({
@@ -3874,6 +3874,9 @@ export class ClaudeCodeAgent extends BaseAgent {
                         kind: 'claude',
                         role: 'task-host',
                       }),
+                    trackDebugFile: process.env.XDT_CC_DEBUG_NET === '1' && ccDebugFile
+                      ? () => this.deps.trackCcDebugFile?.(ccDebugFile, opts.sessionId) ?? (() => {})
+                      : undefined,
                     onStderr: vo.onStderrLine as ((line: string) => void) | undefined,
                   }),
               }

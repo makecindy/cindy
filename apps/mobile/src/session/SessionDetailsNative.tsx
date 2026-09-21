@@ -9,6 +9,7 @@ export interface SessionDetailsNativeProps {
   onBack?: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  contentPaddingTop?: number;
 }
 
 export interface SessionDetailsAction {
@@ -20,6 +21,11 @@ export interface SessionDetailsAction {
 }
 
 export function SessionDetailsNative(_props: SessionDetailsNativeProps) {
+  return null;
+}
+export function SessionDetailsNativeHeading(
+  _props: Pick<SessionDetailsNativeProps, 'title' | 'backLabel' | 'onBack'>,
+) {
   return null;
 }
 export function SessionDetailsNativeActions(_props: {

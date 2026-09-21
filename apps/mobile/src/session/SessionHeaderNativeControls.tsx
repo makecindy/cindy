@@ -6,6 +6,8 @@ export interface SessionHeaderNativeBackProps {
 }
 
 export interface SessionHeaderNativeTitleProps {
+  onTagsPress?: () => void;
+  tags?: import('@cindy/maker-shared').TaskTag[];
   title: string;
   pinned: boolean;
   syncing: boolean;

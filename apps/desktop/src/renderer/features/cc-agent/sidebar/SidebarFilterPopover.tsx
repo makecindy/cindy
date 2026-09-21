@@ -47,6 +47,7 @@ import {
   Info,
   LayoutList,
   SlidersHorizontal,
+  Tags,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
@@ -87,6 +88,7 @@ import type {
   UseSidebarFilterReturn,
 } from '../hooks/useSidebarFilter';
 import { DIALOGUE_FILTER_KEY, projectFilterIncludes } from '../hooks/helpers/sidebarFilterCore';
+import { DEFAULT_TASK_INFO_FIELDS } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
 import {
   MENU_CONTENT_CLASS,
@@ -173,6 +175,7 @@ const PROJECT_ORDER_OPTIONS: ReadonlyArray<Option<FilterProjectOrder>> = [
  * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
+  { value: 'tags', labelKey: 'taskTags.title', Icon: Tags },
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
   { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },
@@ -530,7 +533,8 @@ export function SidebarFilterPopover({
           )
           .join(t('ccAgent.sidebar.taskInfoSummarySeparator'))
       : t('ccAgent.sidebar.taskInfoSummaryNone');
-  const taskInfoIsDefault = taskInfoFields.length === 1 && taskInfoFields[0] === 'time';
+  const taskInfoIsDefault = taskInfoFields.length === DEFAULT_TASK_INFO_FIELDS.length &&
+    DEFAULT_TASK_INFO_FIELDS.every((field, index) => taskInfoFields[index] === field);
 
   const ariaLabel = t('ccAgent.sidebar.filterAria', {
     status: statusValue,

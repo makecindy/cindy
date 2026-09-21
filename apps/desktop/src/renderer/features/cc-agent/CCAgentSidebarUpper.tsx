@@ -102,6 +102,7 @@ import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
 import {
   botOwnedSessionNotificationTitle,
+  findSessionNotificationSession,
   sendSessionEventNotification,
 } from '@/lib/sessionEventNotification';
 import type { Session } from '@/lib/ccAgent.types';
@@ -745,6 +746,8 @@ export function CCAgentSidebarUpper() {
             >
               <ExpandedView
                 sessionsHook={sessionsHook}
+                allSessionsForAttention={allSessionsForAttention}
+                remoteSessionsForNotification={remoteProjectSessions}
                 navigate={navigate}
                 activeSessionId={activeSessionId}
                 // 兜底直接用路由参数而非 filesSession?.id:filesSession 只从本地
@@ -794,6 +797,8 @@ type SessionsHook = ReturnType<typeof useCCSessions>;
 
 interface ExpandedProps {
   sessionsHook: SessionsHook;
+  allSessionsForAttention: Session[];
+  remoteSessionsForNotification: Session[];
   navigate: ReturnType<typeof useNavigate>;
   activeSessionId: string | undefined;
   /** 「正在被用户注视」的会话 —— 供 attention 语义(running-status 通知豁免 /
@@ -830,6 +835,8 @@ const CONFIRM_INITIAL: ConfirmState = {
 
 function ExpandedView({
   sessionsHook,
+  allSessionsForAttention,
+  remoteSessionsForNotification,
   navigate,
   activeSessionId,
   viewedSessionId,
@@ -1061,19 +1068,29 @@ function ExpandedView({
   // 不会因此重跑 transition effect。通道、失焦与灵动岛去重由共享入口收口。
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  // 通知不能只查当前侧栏桶：活跃筛选、归档切换和远程会话镜像都可能让目标
+  // 不在 sessionsRef 里。保留同步查找和原有兜底，避免标题解析影响通知发送。
+  const allSessionsForNotificationRef = useRef(allSessionsForAttention);
+  allSessionsForNotificationRef.current = allSessionsForAttention;
+  const remoteSessionsForNotificationRef = useRef(remoteSessionsForNotification);
+  remoteSessionsForNotificationRef.current = remoteSessionsForNotification;
   // 通知文案里的「尚未起名」兜底。走 ref 与 sessionsRef 同款:fireSessionNotification
   // 是 `[]` 依赖的稳定回调,直接闭包 t 会钉住首次渲染的语言。
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    async (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+    (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
       // The sound path may await autoplay permission or resource startup. Capture the
       // current account boundary before that await and drop the event if the user logs
       // out or switches accounts while the old session notification is still pending.
       const dataOwnerAtNotification = getDataOwnerGeneration();
       // 失焦才推 —— 见上注释。
       if (typeof document !== 'undefined' && document.hasFocus()) return;
-      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      const session = findSessionNotificationSession(sessionId, [
+        sessionsRef.current,
+        allSessionsForNotificationRef.current,
+        remoteSessionsForNotificationRef.current,
+      ]);
       // Orca worker 自身状态翻转不发独立通知 —— 等 lead 接到 worker_report 处理完
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。

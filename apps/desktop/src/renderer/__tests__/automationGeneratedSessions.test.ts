@@ -962,8 +962,8 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.resume');
     expect(source).toContain('ccAgent.sidebar.automationGroup.menu.delete');
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
-    // 组头始终打开最新运行，错误运行通过独立子行打开。
-    expect(source).toContain('const targetId = latestSessionId;');
+    // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
+    expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
     expect(source).toContain('onSessionClick(targetId)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');

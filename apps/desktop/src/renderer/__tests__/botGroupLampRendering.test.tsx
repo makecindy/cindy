@@ -85,7 +85,7 @@ function activity(phase: typeof phases[number]) {
 }
 
 describe.each([false, true])('Bot groups with device grouping %s', (groupDevice) => {
-  it.each(phases)('renders the collapsed Bot header indicator for remote %s', (phase) => {
+  it.each(phases)('renders the collapsed Bot header lamp for remote %s', (phase) => {
     activity(phase);
     render(<ProjectsSection {...props(groupDevice)} />);
     expect(Boolean(screen.queryByText('Remote device'))).toBe(groupDevice);
@@ -99,12 +99,9 @@ describe.each([false, true])('Bot groups with device grouping %s', (groupDevice)
       const marker = header.querySelector('[data-running-marker]')!;
       expect(marker.getAttribute('data-running-marker')).toBe('ring');
       expect(marker.className).toContain('ring-[var(--status-bar-accent)]');
-    } else if (phase === 'error') {
-      expect(header.querySelector('[class*="--card-status-"]')).toBeNull();
-      expect(header.querySelector('[data-running-marker]')).toBeNull();
     } else {
       expect(header.querySelector('[data-running-marker]')).toBeNull();
-      const tone = phase === 'needs-interaction' ? 'awaiting' : 'done';
+      const tone = phase === 'needs-interaction' ? 'awaiting' : phase === 'error' ? 'error' : 'done';
       expect(header.querySelector(`[class*="--card-status-${tone}"]`)).not.toBeNull();
     }
   });
@@ -152,7 +149,7 @@ function deviceHeader(name: string) { return screen.getByText(name).closest('but
 function expectLamp(header: Element, phase: typeof phases[number] | null) {
   expect(Boolean(header.querySelector('.session-status-breathing'))).toBe(phase === 'running');
   for (const tone of ['awaiting', 'error', 'done']) {
-    const expected = phase === 'needs-interaction' ? 'awaiting' : phase === 'completed' ? 'done' : null;
+    const expected = phase === 'needs-interaction' ? 'awaiting' : phase === 'completed' ? 'done' : phase;
     expect(Boolean(header.querySelector(`[class*="--card-status-${tone}"], [data-sidebar-right-status="${tone}"]`))).toBe(tone === expected);
   }
 }

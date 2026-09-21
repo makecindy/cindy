@@ -1,4 +1,8 @@
 import { isPeerResetRetryableReadChannel } from './invokePolicy.js';
+import {
+  requestSessionTagCatalog,
+  decodeSessionTagCatalog,
+} from './sessionListTransport.js';
 import { CongestionSendBudget } from './congestionSendBudget.js';
 import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js';
 import {
@@ -1317,11 +1321,17 @@ export class DeviceLinkClient {
   /** 控制端:远程 invoke,等待 invoke-result */
   async invoke(dst: string, payload: InvokePayload, timeoutMs?: number): Promise<InvokeResultPayload> {
     const env = await this.request(
-      { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload },
+      { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: requestSessionTagCatalog(payload) },
       'invoke-result',
       timeoutMs,
     );
-    return env.payload as InvokeResultPayload;
+    const result = env.payload as InvokeResultPayload;
+    return result.ok
+      ? {
+          ...result,
+          result: decodeSessionTagCatalog(payload.channel, result.result),
+        }
+      : result;
   }
 
   /** 被控端:回 invoke-result(对应入站 invoke 的 id) */

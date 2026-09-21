@@ -1,3 +1,4 @@
+import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
 import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
 // inproc 回滚口：仅在 XDT_DB_INPROC=true 时使用。
@@ -83,6 +84,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return recentWorkdirsMergeWindowsIdentity(db, txArgs);
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
+    case 'taskTags.execute':
+      return runTaskTagsTransaction(db, txArgs);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(db, txArgs);
     case 'toolResults.compactSession':
@@ -574,7 +577,8 @@ function botsReconcileCanonicalLink(
   db: Database.Database,
   args: unknown,
 ): {
-  status: 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
+  status:
+    | 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
   canonicalSessionId: string | null;
 } {
   const p = asRecord(args, 'bots.reconcileCanonicalLink args');
@@ -582,8 +586,7 @@ function botsReconcileCanonicalLink(
   const now = expectNumber(p.now, 'now');
   return db.transaction(() => {
     const bot = db.prepare(`SELECT canonical_session_id AS canonicalSessionId,
-      current_version AS currentVersion FROM bot_profiles WHERE id = ?`).get(botId) as
-      | { canonicalSessionId: string | null; currentVersion: number } | undefined;
+      current_version AS currentVersion FROM bot_profiles WHERE id = ?`).get(botId) as { canonicalSessionId: string | null; currentVersion: number } | undefined;
     if (!bot) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
 
     const links = db.prepare(`SELECT id, session_id AS sessionId, profile_version AS profileVersion
@@ -601,7 +604,7 @@ function botsReconcileCanonicalLink(
     const authoritative = links[0]?.sessionId ?? null;
     if (authoritative) {
       const session = db.prepare('SELECT status FROM sessions WHERE id = ?').get(authoritative) as
-        | { status: string } | undefined;
+        { status: string } | undefined;
       if (!session || session.status === 'deleted') {
         return { status: 'missing-session' as const, canonicalSessionId: null };
       }
@@ -635,8 +638,7 @@ function botsReconcileCanonicalLink(
       return { status: 'conflict' as const, canonicalSessionId: null };
     }
     const existingLink = db.prepare(`SELECT bot_id AS botId, role FROM bot_session_links
-      WHERE session_id = ?`).get(bot.canonicalSessionId) as
-      | { botId: string; role: string } | undefined;
+      WHERE session_id = ?`).get(bot.canonicalSessionId) as { botId: string; role: string } | undefined;
     if (existingLink) {
       return { status: 'conflict' as const, canonicalSessionId: null };
     }
@@ -1038,7 +1040,7 @@ function botsDeleteProfile(
   const status: 'archived' | 'deleted' = keepTaskHistory ? 'archived' : 'deleted';
   return db.transaction(() => {
     const profile = db.prepare('SELECT status FROM bot_profiles WHERE id = ?').get(botId) as
-      | { status: string }
+      { status: string }
       | undefined;
     if (!profile) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
     if (profile.status !== 'archived') throw Object.assign(
@@ -1584,7 +1586,7 @@ function messageDelete(
     );
     const targets = clientIds.map((clientId) => {
       const target = selectTarget.get(sessionId, clientId) as
-        | { id: string; clientId: string; toolUseId: string | null }
+        { id: string; clientId: string; toolUseId: string | null }
         | undefined;
       if (!target) {
         throw Object.assign(new Error(`Message 不存在或不可删除: ${clientId}`), {
@@ -1778,7 +1780,8 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
         expectedCurrentTitle,
         expectedUpdatedAtMs,
         expectedUpdatedAtMs,
-      ) as { id: string; title: string | null; workingDir: string | null; updatedAt: number } | undefined;
+      ) as
+        | { id: string; title: string | null; workingDir: string | null; updatedAt: number } | undefined;
       if (!updated) {
         throw Object.assign(new Error(`Session 标题或 updatedAt 已变化: ${sessionId}`), {
           code: 'PRECONDITION_FAILED',

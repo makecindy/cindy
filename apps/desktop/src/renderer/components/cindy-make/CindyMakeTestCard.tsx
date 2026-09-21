@@ -16,6 +16,7 @@ import type {
   CindyMakePersonalBuildState,
 } from '../../../shared/cindyMakeSession';
 import { CindyMakeCompleteCard } from './CindyMakeCompleteCard';
+import { CindyMakeBuildLog } from './CindyMakeBuildLog';
 import { CindyMakeTestStep } from './CindyMakeTestStep';
 
 type CompletedTestProps = {
@@ -225,10 +226,16 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       }
     } catch (error) {
       if (current()) {
-        const code = extractIpcError(error)?.message;
+        const code = extractIpcError(error)?.message.replace(/^\[PRECONDITION_FAILED\]\s*/, '');
         setError({
-          mode: action === 'build' || action === 'open-build' ? 'build' : 'test',
-          code: code === 'changed' || code === 'environment' ? code : 'unavailable',
+          mode:
+            code !== 'stopFailed' && (action === 'build' || action === 'open-build')
+              ? 'build'
+              : 'test',
+          code:
+            code === 'changed' || code === 'environment' || code === 'stopFailed'
+              ? code
+              : 'unavailable',
         });
       }
     } finally {
@@ -248,8 +255,6 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
       pending === 'build' ||
       pending === 'open-build' ||
       (error?.mode ?? meta.lastAction ?? (meta.personal ? 'build' : 'test')) === 'build');
-  const retryTest =
-    !starting && (testStatus === 'failed' || testStatus === 'stopped' || error?.mode === 'test');
   const stopping = building && (stoppingBuild || personal?.stopping === true);
   const stopBuild = async () => {
     if (!personal?.buildId || stopping || !current()) return;
@@ -283,9 +288,11 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
         buildMode && buildStatus
           ? stopping
             ? 'cindyMake.history.stopping'
-            : buildStatus === 'checking' && personal?.checkStep
-              ? 'cindyMake.personal.checkStep.' + personal.checkStep
-              : 'cindyMake.personal.status.' + buildStatus
+            : buildStatus === 'waiting' && personal?.preparationStep
+              ? 'cindyMake.personal.preparationStep.' + personal.preparationStep
+              : buildStatus === 'checking' && personal?.checkStep
+                ? 'cindyMake.personal.checkStep.' + personal.checkStep
+                : 'cindyMake.personal.status.' + buildStatus
           : 'cindyMake.test.status.' + testStatus,
       )}
       description={t(
@@ -303,11 +310,13 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
         { name: personal?.artifactName ?? '' },
       )}
       detail={
-        !buildMode ? (
+        buildMode ? (
+          <CindyMakeBuildLog build={personal} openWhileActive={building || Boolean(errorCode)} />
+        ) : (
           <CindyMakeTestStep
             test={pending === 'start' ? { status: 'starting', step: 'waiting' } : meta.test}
           />
-        ) : undefined
+        )
       }
     >
       {versions.error && (
@@ -347,13 +356,7 @@ function CindyMakeCompletedTest({ sessionId, completionId, meta, onContinue }: C
           loading={starting}
           onClick={() => void act('start')}
         >
-          {t(
-            testStatus === 'ready'
-              ? 'cindyMake.test.started'
-              : retryTest
-                ? 'cindyMake.test.retry'
-                : 'cindyMake.test.start',
-          )}
+          {t(testStatus === 'ready' ? 'cindyMake.test.started' : 'cindyMake.test.start')}
         </Button>
         <Button
           variant="secondary"

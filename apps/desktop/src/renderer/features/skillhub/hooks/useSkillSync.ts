@@ -38,8 +38,9 @@ function uniqueSkillRefs(skills: SkillhubSkill[]): Array<{ slug: string; catalog
   for (const skill of skills) {
     if (skill.kind !== 'skill') continue;
     const catalogScope = skill.registryEntry?.catalogScope;
-    byKey.set(skillhubCatalogKey(skill.name, catalogScope), {
-      slug: skill.name,
+    const slug = skill.registrySkillName ?? skill.name;
+    byKey.set(skillhubCatalogKey(slug, catalogScope), {
+      slug,
       ...(catalogScope ? { catalogScope } : {}),
     });
   }

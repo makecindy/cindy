@@ -381,6 +381,15 @@ export interface ProxyHandle {
    * 重新走一次真实上游握手，不能继承旧路由的 Cindy 侧保活资格。
    */
   forgetWebSocketStateForThread?(threadId: string): number;
+  /**
+   * 指定 thread 是否仍持有一次成功上游 101 的握手证明（`retryProvenWebSocketUpgrades`）。
+   *
+   * 证明在 Codex 自己关掉连接后仍保留，直到 `forgetWebSocketStateForThread` 或协商
+   * 变化把它撤销。宿主据此判断「该 thread 走的是 thread 级 WS、只是此刻没有活连接」：
+   * 这种 thread 的下一次 upgrade 必然带同一 thread 头，拒绝它就能确定地把 transport
+   * 导回 HTTP；而从未握手过的 thread 只可能挂在匿名/预热连接上，拒绝无从下手。
+   */
+  hasProvenWebSocketForThread?(threadId: string): boolean;
   /** 优雅关闭 —— close listener + 等待 in-flight 请求结束(2s 超时强关) */
   dispose(): Promise<void>;
 }

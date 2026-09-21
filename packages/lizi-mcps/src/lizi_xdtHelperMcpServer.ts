@@ -1,3 +1,4 @@
+import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
 /**
  * lizi_xdtHelperMcpServer.ts
  * ---------------------------------------------------------------------------
@@ -156,8 +157,9 @@ interface SessionTaskCallbacks {
 interface BotMessagingCallbacks {
   checkMessage?(params: { callerSessionId: string; messageId: string }): Promise<
     { ok: true } | { ok: false; errorCode: string; message: string }>;
-  listAgents?(params: { callerSessionId: string }): Promise<
-    { ok: true; agents: unknown[]; unavailableDevices: unknown[] }
+  listAgents?(params: { callerSessionId: string;
+  }): Promise<
+    | { ok: true; agents: unknown[]; unavailableDevices: unknown[] }
     | { ok: false; errorCode: string; message: string }>;
 
   messageAgent(params: {
@@ -647,6 +649,7 @@ export interface XdtHelperMcpDeps {
   /** Register an existing local directory as a Cindy project without starting a task. */
   createProject?: CreateProjectCallback;
   moveSession?: MoveSessionCallback;
+  sessionTags?: SessionTagsCallback;
   projectManagement?: ProjectManagementCallbacks;
   /** Cindy Bot-only background Session-task controls. Host validates the caller Session. */
   sessionTasks?: SessionTaskCallbacks;
@@ -727,6 +730,11 @@ export function createXdtHelperMcpServer(
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
   });
 
+  if (deps.sessionTags)
+    registerSessionTagTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      execute: deps.sessionTags,
+    });
   if (deps.setCurrentSessionTitle) {
     registerSetCurrentSessionTitleTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
