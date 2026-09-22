@@ -16298,6 +16298,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let runtimeRouteChanged =
         currentRuntimeModel !== undefined &&
         (currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId);
+      // 任务级窗口预算（用户显式值，null = 跟随默认）：切模/校验统一按目标路由
+      // 重新收敛（min(预算, 目标路由模型级上限, 目录物理上限)），否则预算会被目录
+      // 默认值顶掉或被目标窗口校验抹平。**必须在冷 Pi 预检之前读**：预检拿
+      // 「目标窗口对已知占用有余量」当跳过冷启动核实的依据，而运行期真正会应用的是
+      // 含预算的窗口；用不带预算的目录默认大窗去比，占用再高也显得有余量，缩窗交接 /
+      // 二次确认就被整条绕过，既有上下文会直接落进过载窗口（Greptile P1，2026-09-22）。
+      const sessionContextWindowBudget = await readStoredSessionContextWindowBudget(sessionId);
       if (runtimeAgentKind === 'pi' && runtimeRouteChanged) {
         if (isSessionInTurn(sessionId)) {
           return deferLockedSelection();
@@ -16318,10 +16325,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // 后可能低报真实占用，拿它证明「目标还有余量」会绕过缩窗交接
           // （Greptile P1，2026-09-21）；进程重启 / 硬杀后没有缓存时自动回退到核实。
           // 无原生会话的冷 Pi 也不在本预检范围内（维持既有 fail-closed 语义）。
+          // 目标窗口与后面的 resolveWindowForRoute 同源（都带任务预算），否则
+          // 「有余量」是对默认大窗说的，实际生效的小预算窗早已进 danger/overflow。
           const coldPiLastLiveUsage = getSessionLastLiveUsage(sessionId);
           const coldPiTargetContextWindow = lookupVerifiedContextWindow(
             (_agentKind, modelId, pid) =>
-              resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId),
+              resolveConfiguredContextWindow(
+                getActiveCatalog(), 'pi', pid, modelId, sessionContextWindowBudget,
+              ),
             model,
             targetRouteProviderId,
             'pi',
@@ -16341,6 +16352,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               contextWindow: coldPiLastLiveUsage?.contextWindow ?? null,
               capturedAtMs: coldPiLastLiveUsage?.capturedAtMs ?? null,
               targetContextWindow: coldPiTargetContextWindow,
+              sessionContextWindowBudget,
               fromModel: currentRuntimeModel ?? null,
               toModel: model,
               currentProviderId,
@@ -16376,10 +16388,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let budgetCompareWindow: number | undefined;
       let modelWindowContextNeedsProtection = false;
       let modelWindowRebuilt = false;
-      // 任务级窗口预算（用户显式值，null = 跟随默认）：切模/校验统一按目标路由
-      // 重新收敛（min(预算, 目标路由模型级上限, 目录物理上限)），否则预算会被目录
-      // 默认值顶掉或被目标窗口校验抹平。
-      const sessionContextWindowBudget = await readStoredSessionContextWindowBudget(sessionId);
       const resolveWindowForRoute = (
         agentKind: AgentKind,
         routeModelId: string,
