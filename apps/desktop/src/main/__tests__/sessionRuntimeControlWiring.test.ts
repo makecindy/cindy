@@ -998,15 +998,63 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('Pi current runtime could not be verified');
   });
 
+  it('applies Pi route changes without failing closed when the native context was cleared', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    // 删消息 / clear / resume 回落会清空 sdk_session_id。此时没有原生会话可 resume,
+    // 没有当前窗口可核实,也没有旧窗口要保护:选择必须落到目标 route,由下一次发送
+    // 按目标窗口懒创建,不能拿 MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN fail closed
+    // (与 prepareModelWindowSwitch 的 '!sdkSessionId → not-needed' 同口径)。
+    const plan = setModel.indexOf('planColdPiWindowVerification({');
+    const coldRemoteReject = setModel.indexOf(
+      'cold remote Pi runtime cannot verify the target window',
+    );
+    const skipNoNative = setModel.indexOf(
+      "coldPiWindowVerification === 'skip-without-native-session'",
+    );
+    const rehydrate = setModel.indexOf(
+      'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(plan).toBeGreaterThan(-1);
+    expect(setModel).toContain('nativeSessionId: runtimeStatus.sdkSessionId,');
+    expect(plan).toBeLessThan(coldRemoteReject);
+    expect(coldRemoteReject).toBeLessThan(skipNoNative);
+    expect(skipNoNative).toBeLessThan(rehydrate);
+    expect(rehydrate).toBeLessThan(apply);
+    // rehydrate 必须锁在 plan 明确要求的分支里:退回无条件的冷会话核实会重新把
+    // 无原生会话的冷 Pi 拖进 rehydrate 并报错。
+    const rehydrateGuard = setModel.indexOf(
+      "if (coldPiWindowVerification === 'rehydrate-cold-runtime') {",
+    );
+    expect(rehydrateGuard).toBeGreaterThan(-1);
+    expect(rehydrateGuard).toBeLessThan(rehydrate);
+    expect(rehydrate - rehydrateGuard).toBeLessThan(200);
+    // 终态活进程核验必须同步跳过,否则只是换成 'Pi target runtime could not be verified'。
+    const finalBlockStart = setModel.indexOf('const piSessionAfterRouteChange =');
+    const finalVerification = setModel.indexOf(
+      'Pi target runtime could not be verified',
+      finalBlockStart,
+    );
+    expect(finalBlockStart).toBeGreaterThan(-1);
+    expect(finalVerification).toBeGreaterThan(finalBlockStart);
+    expect(setModel.slice(finalBlockStart, finalVerification)).toContain(
+      '!coldPiRouteWithoutLiveWindowCheck',
+    );
+  });
+
   it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
-    // 冷启动核实(2~3s)必须经预检：目标窗口对**已知占用**有余量时不再拉起运行时，
+    // 冷启动核实(2~3s)必须经压力预检：目标窗口对**已知占用**有余量时不再拉起运行时，
     // 路由照常落定、下一次发送按目标窗口懒重建；danger/overflow 仍走原核实路径。
-    const pressurePreflight = setModel.indexOf('shouldSkipColdPiWindowRehydration({');
+    const pressurePreflight = setModel.indexOf('resolveColdPiWindowVerificationExecution(');
     const rehydrate = setModel.indexOf(
       'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
     );
@@ -1018,7 +1066,7 @@ describe('session runtime control wiring', () => {
     expect(liveUsageRead).toBeGreaterThan(-1);
     expect(liveUsageRead).toBeLessThan(pressurePreflight);
     expect(setModel).toContain('set-model: skipped cold Pi window verification');
-    expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true;');
+    expect(setModel).toContain("coldPiWindowVerification === 'skip-without-live-verification'");
     // 终态活进程核验必须同步跳过，否则只是换成 'Pi target runtime could not be verified'。
     const finalBlockStart = setModel.indexOf('const piSessionAfterRouteChange =');
     const finalVerification = setModel.indexOf(
@@ -1031,7 +1079,8 @@ describe('session runtime control wiring', () => {
       '!coldPiRouteWithoutLiveWindowCheck',
     );
     // 固化点：每个会话关闭时先记 live 用量，再走关闭清理。
-    const closeCaptureLine = 'rememberSessionLastLiveUsage(session.id, session.getUsageSnapshot?.());';
+    const closeCaptureLine =
+      'rememberSessionLastLiveUsage(session.id, session.getUsageSnapshot?.());';
     const closeCapture = registerSource.indexOf(closeCaptureLine);
     const closeHook = registerSource.indexOf(
       'finalizeClosedSession: (session: WiredSession, context) => {',

@@ -83,7 +83,14 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
 `switch_session`，必须重新 `set_model` 并用 `get_state` 校验
 provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
-子代理 route 保持 pending，失败则终止该 live 任务。Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
+子代理 route 保持 pending，失败则终止该 live 任务。本地冷 Pi 会话没有 live runtime 时按两类情形处理：
+`sdk_session_id` 为空（如删消息 / clear 后的 context rebuild 待重建态）时，没有当前窗口
+可核实，也没有旧窗口要保护：目标 route 直接落库，下一次发送按目标窗口重建全新 runtime，
+不因核实不到窗口拒绝切换；`sdk_session_id` 非空时，仅在目标窗口对 runtime 关闭时固化的
+live 占用仍有富余（`shouldSkipColdPiWindowRehydration` 预检通过）才跳过冷启动核实，
+占用已到 danger / overflow 或没有 live 读数时仍须核实。已有 live runtime 时仍须核验；
+冷远端即使没有原生会话仍拒绝切换。
+Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。

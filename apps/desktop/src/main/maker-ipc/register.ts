@@ -118,7 +118,9 @@ import {
   applyWithVerifiedModelWindow,
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
+  planColdPiWindowVerification,
   planUserRuntimeModelSwitch,
+  resolveColdPiWindowVerificationExecution,
   shouldSkipColdPiWindowRehydration,
 } from '../../shared/runtimeModelSwitchGate.js';
 import type { DesktopCommandContext } from '../commands/index.js';
@@ -16112,10 +16114,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       let liveSessionBeforeRouteChange = maker.getSession(sessionId);
       let rehydratedColdPiRuntime: typeof liveSessionBeforeRouteChange = undefined;
-      // 冷 Pi 但没做活进程窗口核验（本轮新增：目标窗口对已知占用有余量、压力预检证明
-      // 核实不可能改变结论，于是跳过了冷启动核实）：目标 route 照常落定，由下一次发送
-      // 按目标窗口懒创建；apply 之后的终态活进程核验必须同步跳过，否则只会换成
-      // 'Pi target runtime could not be verified'。
+      // 冷 Pi 但没做活进程窗口核验的两类情形：
+      //  - 没有原生会话(删消息 / clear / resume 回落留下的 context rebuild 待重建态)；
+      //  - 有原生会话、但目标窗口对已知占用有余量，压力预检证明核实不可能改变结论，
+      //    跳过了冷启动核实。
+      // 两种情况下目标 route 都照常落库，由下一次发送按目标窗口懒创建；apply 之后的
+      // 终态活进程核验必须同步跳过，否则只会换成 'Pi target runtime could not be verified'。
       let coldPiRouteWithoutLiveWindowCheck = false;
       const targetProviderId =
         effectiveProviderId === undefined
@@ -16176,71 +16180,80 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (isSessionInTurn(sessionId)) {
           return deferLockedSelection();
         }
-        if (!liveSessionBeforeRouteChange && runtimeStatus.remoteHostId) {
+        // 冷启动核实(2~3s)只在它可能改变决策时才做：目标窗口对**已知占用**已到
+        // danger/overflow 才可能需要缩窗交接 / 二次确认；有余量时任何「当前窗口」
+        // 读数都不会触发交接（见 assessRuntimeModelSwitchGate 的 fail-open 矩阵），
+        // 让用户白等一次 Pi 冷启动就是纯卡顿（2026-09-21 实报）。
+        // 占用取 runtime **关闭时固化的 live 读数**（sessionLastLiveUsage），不读
+        // sessions.context_tokens：后者只在 turn 正常收尾时落库，中断 / 崩溃后可能
+        // 低报真实占用，拿它证明「目标还有余量」会绕过缩窗交接（Greptile P1，
+        // 2026-09-21）；进程重启 / 硬杀后没有缓存时自动回退到核实。
+        const coldPiLastLiveUsage = getSessionLastLiveUsage(sessionId);
+        const coldPiTargetContextWindow = lookupVerifiedContextWindow(
+          (_agentKind, modelId, pid) =>
+            resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId),
+          model,
+          targetRouteProviderId,
+          'pi',
+        );
+        const coldPiWindowVerification = resolveColdPiWindowVerificationExecution(
+          planColdPiWindowVerification({
+            hasLiveSession: liveSessionBeforeRouteChange !== undefined,
+            remoteHostId: runtimeStatus.remoteHostId,
+            nativeSessionId: runtimeStatus.sdkSessionId,
+          }),
+          {
+            contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
+            targetContextWindow: coldPiTargetContextWindow,
+          },
+        );
+        if (coldPiWindowVerification === 'reject-cold-remote') {
           throwIpcError(
             localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
             'cold remote Pi runtime cannot verify the target window; runtime selection was not changed',
           );
         }
-        if (!liveSessionBeforeRouteChange) {
-          // 冷启动核实(2~3s)只在它可能改变决策时才做：目标窗口对**已知占用**已到
-          // danger/overflow 才可能需要缩窗交接 / 二次确认；有余量时任何「当前窗口」
-          // 读数都不会触发交接（见 assessRuntimeModelSwitchGate 的 fail-open 矩阵），
-          // 让用户白等一次 Pi 冷启动就是纯卡顿（2026-09-21 实报）。
-          // 占用取 runtime **关闭时固化的 live 读数**（sessionLastLiveUsage），
-          // 不读 sessions.context_tokens：后者只在 turn 正常收尾时落库，中断 / 崩溃
-          // 后可能低报真实占用，拿它证明「目标还有余量」会绕过缩窗交接
-          // （Greptile P1，2026-09-21）；进程重启 / 硬杀后没有缓存时自动回退到核实。
-          // 无原生会话的冷 Pi 也不在本预检范围内（维持既有 fail-closed 语义）。
-          const coldPiLastLiveUsage = getSessionLastLiveUsage(sessionId);
-          const coldPiTargetContextWindow = lookupVerifiedContextWindow(
-            (_agentKind, modelId, pid) =>
-              resolveConfiguredContextWindow(getActiveCatalog(), 'pi', pid, modelId),
-            model,
-            targetRouteProviderId,
-            'pi',
-          );
-          const skipColdPiWindowVerification =
-            !!runtimeStatus.sdkSessionId &&
-            shouldSkipColdPiWindowRehydration({
-              contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
-              targetContextWindow: coldPiTargetContextWindow,
-            });
-          if (skipColdPiWindowVerification) {
-            coldPiRouteWithoutLiveWindowCheck = true;
-            log.info('set-model: skipped cold Pi window verification', {
-              sessionId,
-              reason: 'target-window-has-headroom',
-              contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
-              contextWindow: coldPiLastLiveUsage?.contextWindow ?? null,
-              capturedAtMs: coldPiLastLiveUsage?.capturedAtMs ?? null,
-              targetContextWindow: coldPiTargetContextWindow,
-              fromModel: currentRuntimeModel ?? null,
-              toModel: model,
-              currentProviderId,
-              nextProviderId: targetRouteProviderId,
-            });
-          } else {
-            try {
-              await rehydrateColdPiRuntimeForWindowVerification(sessionId);
-            } catch {
-              throwIpcError(
-                localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-                'Pi current runtime could not be verified; runtime selection was not changed',
-              );
-            }
-            liveSessionBeforeRouteChange = maker.getSession(sessionId);
-            if (!liveSessionBeforeRouteChange) {
-              throwIpcError(
-                localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
-                'Pi current runtime could not be verified; runtime selection was not changed',
-              );
-            }
-            rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
-            currentRuntimeModel = liveSessionBeforeRouteChange.model;
-            runtimeRouteChanged =
-              currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
+        // 没有活 runtime 可核实（没有原生会话 = 下一轮必然重建；或目标窗口对已知占用
+        // 有余量、压力预检证明核实不可能改变结论）：目标 route 照常落库，由下一次发送
+        // 按目标窗口懒创建；不能拿「核实不到当前窗口」把切换挡住（与
+        // prepareModelWindowSwitch 的 '!sdkSessionId → not-needed' 同口径）。
+        coldPiRouteWithoutLiveWindowCheck =
+          coldPiWindowVerification === 'skip-without-native-session' ||
+          coldPiWindowVerification === 'skip-without-live-verification';
+        if (coldPiWindowVerification === 'skip-without-live-verification') {
+          log.info('set-model: skipped cold Pi window verification', {
+            sessionId,
+            reason: 'target-window-has-headroom',
+            contextTokens: coldPiLastLiveUsage?.contextTokens ?? null,
+            contextWindow: coldPiLastLiveUsage?.contextWindow ?? null,
+            capturedAtMs: coldPiLastLiveUsage?.capturedAtMs ?? null,
+            targetContextWindow: coldPiTargetContextWindow,
+            fromModel: currentRuntimeModel ?? null,
+            toModel: model,
+            currentProviderId,
+            nextProviderId: targetRouteProviderId,
+          });
+        }
+        if (coldPiWindowVerification === 'rehydrate-cold-runtime') {
+          try {
+            await rehydrateColdPiRuntimeForWindowVerification(sessionId);
+          } catch {
+            throwIpcError(
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+              'Pi current runtime could not be verified; runtime selection was not changed',
+            );
           }
+          liveSessionBeforeRouteChange = maker.getSession(sessionId);
+          if (!liveSessionBeforeRouteChange) {
+            throwIpcError(
+              localModelWindowSwitchErrorCode('MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'),
+              'Pi current runtime could not be verified; runtime selection was not changed',
+            );
+          }
+          rehydratedColdPiRuntime = liveSessionBeforeRouteChange;
+          currentRuntimeModel = liveSessionBeforeRouteChange.model;
+          runtimeRouteChanged =
+            currentRuntimeModel !== model || currentProviderId !== targetRouteProviderId;
         }
       }
       let targetContextWindow: number | undefined;
@@ -16625,6 +16638,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return { deferred: false, superseded: true };
         }
         const piSessionAfterRouteChange = maker.getSession(sessionId);
+        // 无原生会话的冷 Pi 没有活进程可读终态窗口:route 已提交,下一次发送按
+        // 目标窗口懒创建,这里跳过活进程快照核验(与 runtimeRetired 同语义)。
         if (
           runtimeAgentKind === 'pi' &&
           runtimeRouteChanged &&
