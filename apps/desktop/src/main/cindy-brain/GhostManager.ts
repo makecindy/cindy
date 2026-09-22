@@ -2925,6 +2925,7 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      namespace?: string | null;
       beforePackagePlacement?: () => void;
     },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
@@ -3056,7 +3057,7 @@ export class GhostManager {
           revision: receiptRevision,
           ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
           ...(opts?.installOrigin ? { installOrigin: opts.installOrigin } : {}),
-          namespace: opts?.namespace ?? null,
+          ...this.persistedNamespaceFields(opts ?? {}, null),
         });
         await this.receiptStore.write(receipt, { skillSourceDir: finalDir, relId });
         let tombstoneClearPending = false;
@@ -3132,7 +3133,7 @@ export class GhostManager {
       approval: { state: 'approved', revision: receipt.revision },
       trust,
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
-      namespace: opts?.namespace ?? null,
+      ...this.persistedNamespaceFields(opts ?? {}, null),
     };
     this.options.log?.info('ghost installed', { id: manifest.id, version: manifest.version });
     const projected = this.projectCommittedMutationResult(ghost);

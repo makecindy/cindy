@@ -2537,6 +2537,32 @@ describe('GhostManager · install', () => {
     expect(onChanged.mock.calls[0][0].map((c: InstalledGhost) => c.manifest.id)).toEqual(['hello']);
   });
 
+  it('omits namespace from receipts when install did not receive one', async () => {
+    const cindy = await makeCindy('hello.cindy', goodManifest());
+    const result = await manager.install(cindy);
+    expect('ghost' in result).toBe(true);
+    const { ghost } = result as { ghost: InstalledGhost };
+    expect(Object.prototype.hasOwnProperty.call(ghost, 'namespace')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(manager.list()[0]!, 'namespace')).toBe(false);
+    const receipt = JSON.parse(
+      fs.readFileSync(path.join(workDir, 'ghosts-install-state', 'hello.json'), 'utf8'),
+    ) as { namespace?: unknown };
+    expect(Object.prototype.hasOwnProperty.call(receipt, 'namespace')).toBe(false);
+  });
+
+  it('persists explicit root namespace when install receives null', async () => {
+    const cindy = await makeCindy('hello.cindy', goodManifest());
+    const result = await manager.install(cindy, { namespace: null });
+    expect(result).toMatchObject({
+      ghost: { manifest: { id: 'hello' }, namespace: null, dir: path.join(rootDir, 'hello') },
+    });
+    const receipt = JSON.parse(
+      fs.readFileSync(path.join(workDir, 'ghosts-install-state', 'hello.json'), 'utf8'),
+    ) as { namespace?: unknown };
+    expect(receipt.namespace).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(receipt, 'namespace')).toBe(true);
+  });
+
   it('installs an organization instance beside a root plugin with the same ghostId', async () => {
     const rootCindy = await makeCindy('hello-root.cindy', goodManifest());
     await expect(manager.install(rootCindy)).resolves.toMatchObject({
