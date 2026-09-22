@@ -5800,6 +5800,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: CustomProviderUpdateOptions,
     ): Promise<CustomProviderUpdateResult> =>
       ipcRenderer.invoke('maker:provider:custom:update', config, keys, options),
+    previewCcSwitchProviders: (): Promise<
+      import('../shared/ccSwitchProviderSync').CcSwitchProviderSyncPreview
+    > => ipcRenderer.invoke('maker:provider:cc-switch:preview'),
+    confirmCcSwitchProviders: (
+      importId: string,
+      interrupt?: true,
+    ): Promise<import('../shared/ccSwitchProviderSync').CcSwitchProviderSyncResult> =>
+      ipcRenderer.invoke('maker:provider:cc-switch:confirm', importId, interrupt),
     disconnectCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> => ipcRenderer.invoke('maker:provider:custom:disconnect', providerId, ownerScope, options),
     deleteCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> =>
       ipcRenderer.invoke('maker:provider:custom:delete', providerId, ownerScope, options),

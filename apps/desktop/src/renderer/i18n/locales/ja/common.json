@@ -2153,6 +2153,24 @@
         }
       },
       "addProvider": "プロバイダーを追加",
+      "ccSwitch": {
+        "action": "CC Switch から同期",
+        "loading": "CC Switch から同期中…",
+        "title": "CC Switch からプロバイダーを同期",
+        "description": "{{count}} 件のローカル接続を確認してから Cindy に同期します。",
+        "create": "新規",
+        "update": "更新",
+        "skipped": "未対応または無効な項目 {{count}} 件をスキップしました。",
+        "secretNote": "API key とヘッダーは Main でのみ扱い、Cindy の安全な認証情報ストアに保存します。",
+        "confirm": "プロバイダーを同期",
+        "cancel": "同期をキャンセル",
+        "done": "CC Switch の同期完了：{{created}} 件を追加、{{updated}} 件を更新",
+        "doneWithPending": "CC Switch の同期完了：{{created}} 件を追加、{{updated}} 件を更新。{{pending}} 件の接続はモデル検出が必要です",
+        "failedCount": "{{count}} 件の接続を同期できませんでした。再試行してください",
+        "notFound": "CC Switch のデータベースを読み取れませんでした。CC Switch を一度開き、ファイルを確認してから再試行してください。",
+        "empty": "対応する CC Switch プロバイダー接続が見つかりません。",
+        "failed": "CC Switch の同期に失敗しました。ソースアプリを確認して再試行してください。"
+      },
       "detail": {
         "singleAgentNote": "{{agent}} のみ対応",
         "emptyModels": "ログイン後に利用可能なモデルを自動取得",

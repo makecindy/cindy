@@ -518,6 +518,9 @@ export const MAKER_INVOKE = {
   PROVIDER_CUSTOM_CREATE: 'maker:provider:custom:create',
   PROVIDER_CUSTOM_UPDATE: 'maker:provider:custom:update',
   PROVIDER_CUSTOM_DELETE: 'maker:provider:custom:delete',
+  /** Main-only read of ~/.cc-switch/cc-switch.db followed by an explicit reviewed sync. */
+  PROVIDER_CC_SWITCH_PREVIEW: 'maker:provider:cc-switch:preview',
+  PROVIDER_CC_SWITCH_CONFIRM: 'maker:provider:cc-switch:confirm',
   /** 本机模型（Ollama）探测 / 后台启动 / 列表 / 拉取。renderer 不传 URL 或路径。 */
   LOCAL_MODEL_STATUS: 'maker:local-model:status',
   LOCAL_MODEL_START: 'maker:local-model:start',

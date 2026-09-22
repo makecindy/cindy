@@ -2118,6 +2118,8 @@ export function ProvidersSection() {
     agent?: AgentKind;
   } | null>(null);
   const [providerImportId, setProviderImportId] = useState<string | null>(null);
+  const [ccSwitchSyncing, setCcSwitchSyncing] = useState(false);
+  const ccSwitchSyncingRef = useRef(false);
   const closeProviderImport = useCallback(() => setProviderImportId(null), []);
   const finishProviderImport = useCallback(
     (providerId: string) => {
@@ -2127,6 +2129,102 @@ export function ProvidersSection() {
     },
     [refetch],
   );
+  const syncFromCcSwitch = useCallback(async () => {
+    if (ccSwitchSyncingRef.current) return;
+    ccSwitchSyncingRef.current = true;
+    setCcSwitchSyncing(true);
+    try {
+      const preview = await window.electronAPI.maker.previewCcSwitchProviders();
+      const confirmed = await confirm({
+        presentation: 'standard',
+        title: t('settings.providers.ccSwitch.title'),
+        description: t('settings.providers.ccSwitch.description', { count: preview.items.length }),
+        content: (
+          <div
+            className="max-h-64 space-y-2 overflow-y-auto rounded-lg border p-3 text-12"
+            style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+          >
+            {preview.items.map((item) => (
+              <div key={item.providerId} className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {item.name}
+                  </div>
+                  <div className="truncate">{item.agent} · {item.baseUrl}</div>
+                </div>
+                <span
+                  className="shrink-0 rounded-full px-2 py-0.5 text-11"
+                  style={{ backgroundColor: 'var(--surface-chip)' }}
+                >
+                  {item.action === 'create'
+                    ? t('settings.providers.ccSwitch.create')
+                    : t('settings.providers.ccSwitch.update')}
+                </span>
+              </div>
+            ))}
+            {preview.skippedCount > 0 && (
+              <div className="border-t pt-2" style={{ borderColor: 'var(--border-default)' }}>
+                {t('settings.providers.ccSwitch.skipped', { count: preview.skippedCount })}
+              </div>
+            )}
+            <div className="border-t pt-2" style={{ borderColor: 'var(--border-default)' }}>
+              {t('settings.providers.ccSwitch.secretNote')}
+            </div>
+          </div>
+        ),
+        describeContent: true,
+        contentSelectable: true,
+        maxWidth: 460,
+        confirmText: t('settings.providers.ccSwitch.confirm'),
+        cancelText: t('settings.providers.ccSwitch.cancel'),
+      });
+      if (!confirmed) return;
+
+      let result = await window.electronAPI.maker.confirmCcSwitchProviders(preview.importId);
+      if (!result.ok && result.confirmationRequired === 'codex-image-generation-reload') {
+        const interrupt = await confirm({
+          presentation: 'standard',
+          title: t('settings.providers.custom.imageGenerationReload.title'),
+          description: t('settings.providers.custom.imageGenerationReload.description', {
+            count: result.busyCount,
+          }),
+          confirmText: t('settings.providers.custom.imageGenerationReload.interrupt'),
+          cancelText: t('settings.providers.custom.imageGenerationReload.cancel'),
+        });
+        if (!interrupt) return;
+        result = await window.electronAPI.maker.confirmCcSwitchProviders(preview.importId, true);
+      }
+      if (!result.ok) return;
+      toast.success(
+        t(
+          result.modelsPending > 0
+            ? 'settings.providers.ccSwitch.doneWithPending'
+            : 'settings.providers.ccSwitch.done',
+          {
+            created: result.created,
+            updated: result.updated,
+            pending: result.modelsPending,
+          },
+        ),
+      );
+      if (result.failed > 0) {
+        toast.error(t('settings.providers.ccSwitch.failedCount', { count: result.failed }));
+      }
+      await refetch();
+    } catch (error) {
+      const code = extractIpcError(error)?.code;
+      toast.error(
+        code === 'NOT_FOUND'
+          ? t('settings.providers.ccSwitch.notFound')
+          : code === 'INVALID_PARAMS'
+            ? t('settings.providers.ccSwitch.empty')
+            : t('settings.providers.ccSwitch.failed'),
+      );
+    } finally {
+      ccSwitchSyncingRef.current = false;
+      setCcSwitchSyncing(false);
+    }
+  }, [confirm, refetch, t]);
   const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
@@ -2740,19 +2838,41 @@ export function ProvidersSection() {
               className="border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
-              <button
-                ref={addProviderButtonRef}
-                type="button"
-                onClick={() => setWizard({})}
-                className="flex h-9 w-full items-center justify-center gap-1.5 rounded-full border border-dashed text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                style={{
-                  borderColor: 'var(--settings-btn-secondary-border)',
-                  color: 'var(--settings-section-desc)',
-                }}
-              >
-                <Plus size={15} />
-                {t('settings.providers.addProvider')}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void syncFromCcSwitch()}
+                  disabled={ccSwitchSyncing}
+                  className="flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-60"
+                  style={{
+                    borderColor: 'var(--settings-btn-secondary-border)',
+                    color: 'var(--settings-section-desc)',
+                  }}
+                  aria-busy={ccSwitchSyncing}
+                >
+                  <span className={ccSwitchSyncing ? 'inline-flex motion-safe:animate-spin' : 'inline-flex'}>
+                    <RefreshCw size={14} />
+                  </span>
+                  <span className="truncate">
+                    {ccSwitchSyncing
+                      ? t('settings.providers.ccSwitch.loading')
+                      : t('settings.providers.ccSwitch.action')}
+                  </span>
+                </button>
+                <button
+                  ref={addProviderButtonRef}
+                  type="button"
+                  onClick={() => setWizard({})}
+                  className="flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border border-dashed text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                  style={{
+                    borderColor: 'var(--settings-btn-secondary-border)',
+                    color: 'var(--settings-section-desc)',
+                  }}
+                >
+                  <Plus size={15} />
+                  <span className="truncate">{t('settings.providers.addProvider')}</span>
+                </button>
+              </div>
             </div>
           </div>
 

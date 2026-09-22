@@ -866,6 +866,7 @@ import { refreshOpenAiMediaModels } from '../maker-host/model-discovery/openai-m
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels, fetchSavedOAuthProviderModels } from '../maker-host/provider-model-fetch.js';
+import { readCcSwitchProviderCandidates } from '../maker-host/cc-switch-provider-sync.js';
 import {
   beginProviderRouteMutation,
   setPendingCredentialSwitchReader,
@@ -5628,6 +5629,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     refreshBuiltinModels: refreshProviderModelsManually,
     requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
+    readCcSwitchProviders: () =>
+      readCcSwitchProviderCandidates(path.join(app.getPath('home'), '.cc-switch', 'cc-switch.db')),
     // 「模型 / 供应商停用」override 写入(main 侧持久化,handler 写后广播 PROVIDER_CHANGED)。
     setModelsDisabled: (providerId, modelIds, disabled) =>
       setModelsDisabled(providerId, modelIds, disabled),

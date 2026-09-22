@@ -1,4 +1,5 @@
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { randomUUID } from 'node:crypto';
 /**
  * provider:* IPC handlers。
  *
@@ -18,6 +19,7 @@ import { setProviderPresentation, retainProviderPresentationAfterAuthChange } fr
 import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
   PI_MODEL_APIS,
+  mergeDiscoveredRuntimeModels,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   runtimeCustomProviderId,
@@ -36,6 +38,10 @@ import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../../shared/customProviderUpdate.js';
+import type {
+  CcSwitchProviderSyncPreview,
+  CcSwitchProviderSyncResult,
+} from '../../shared/ccSwitchProviderSync.js';
 import { notifyManagedOllamaRemoved } from '../local-model-runtime/ipc.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type {
@@ -97,6 +103,10 @@ import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
 } from '../maker-host/provider-model-fetch.js';
+import type {
+  CcSwitchProviderReadResult,
+  CcSwitchProviderSyncCandidate,
+} from '../maker-host/cc-switch-provider-sync.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -388,6 +398,8 @@ export interface ProviderHandlerDeps {
    * 单测注入 stub 不碰真实 home)。只 stat 不读内容(规则 23)。
    */
   scanLocalCli(): Promise<LocalCliDetection[]>;
+  /** Read CC Switch's fixed local database path. Production opens it read-only; tests inject rows. */
+  readCcSwitchProviders?(): Promise<CcSwitchProviderReadResult> | CcSwitchProviderReadResult;
   /**
    * 「模型 / 供应商停用」override 写入(生产 = model-disable-store 的 setModelsDisabled /
    * setProviderDisabled)。写成功后由 handler 统一广播 PROVIDER_CHANGED。
@@ -567,6 +579,23 @@ export function registerProviderHandlers(
   registry: IpcHandlerRegistry,
   deps: ProviderHandlerDeps,
 ): void {
+  type CcSwitchDraft = {
+    createdAt: number;
+    owner: { dataOwnerId: string | null; generation: number } | undefined;
+    candidates: CcSwitchProviderSyncCandidate[];
+  };
+  const ccSwitchDrafts = new Map<string, CcSwitchDraft>();
+  const pruneCcSwitchDrafts = (): void => {
+    const cutoff = Date.now() - 10 * 60_000;
+    for (const [id, draft] of ccSwitchDrafts) {
+      if (draft.createdAt < cutoff) ccSwitchDrafts.delete(id);
+    }
+    while (ccSwitchDrafts.size > 16) {
+      const oldest = ccSwitchDrafts.keys().next().value as string | undefined;
+      if (!oldest) break;
+      ccSwitchDrafts.delete(oldest);
+    }
+  };
   const oauthMutationGeneration = new Map<string, symbol>();
   const beginOAuthMutation = (providerId: string): symbol => {
     // Unique token avoids ABA when a completed entry is deleted and the same provider starts again.
@@ -2076,6 +2105,185 @@ export function registerProviderHandlers(
   }
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, (event, input, keys, options) =>
     updateProviderFromInput(event, input, keys, options),
+  );
+
+  const mergeCcSwitchConfig = (
+    current: CustomProviderConfig,
+    incoming: CustomProviderConfig,
+    agent: AgentKind,
+  ): CustomProviderConfig => {
+    const incomingRuntime = incoming.runtimes[agent]!;
+    const currentRuntime = current.runtimes[agent];
+    const models = currentRuntime?.models.map((model) => ({ ...model })) ?? [];
+    for (const imported of incomingRuntime.models) {
+      const index = models.findIndex((model) => model.id === imported.id);
+      if (index < 0) models.push({ ...imported });
+      else models[index] = { ...models[index], ...imported };
+    }
+    return {
+      ...current,
+      name: incoming.name,
+      auth: { method: 'apiKey' },
+      runtimes: {
+        ...current.runtimes,
+        [agent]: { ...incomingRuntime, models },
+      },
+    };
+  };
+
+  const discoverCcSwitchModels = async (
+    candidate: CcSwitchProviderSyncCandidate,
+  ): Promise<void> => {
+    const runtime = candidate.config.runtimes[candidate.agent];
+    if (!runtime || runtime.models.length > 0) return;
+    try {
+      const fetched = await deps.fetchModels({
+        agent: candidate.agent,
+        baseUrl: runtime.baseUrl,
+        authMethod: 'apiKey',
+        wireProtocol: runtime.wireProtocol,
+        modelsUrl: runtime.modelsUrl ?? null,
+        apiKey: candidate.keys[candidate.agent] ?? null,
+        headers: runtime.headers,
+      });
+      if (!fetched.ok || !fetched.models?.length) return;
+      assertProviderImportModels(fetched.models);
+      runtime.models = mergeDiscoveredRuntimeModels(runtime.models, fetched.models);
+    } catch {
+      // The provider is still imported. Settings can retry discovery with the saved credential.
+    }
+  };
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_CC_SWITCH_PREVIEW,
+    async (event): Promise<CcSwitchProviderSyncPreview> => {
+      assertTrustedProviderMutationSender(event);
+      if (!deps.readCcSwitchProviders) {
+        throwIpcError('NOT_FOUND', 'CC Switch provider import is unavailable');
+      }
+      const ownerAtIngress = captureProviderOwnerSession();
+      pruneCcSwitchDrafts();
+      let source: CcSwitchProviderReadResult;
+      try {
+        source = await deps.readCcSwitchProviders();
+      } catch (error) {
+        log.warn('CC Switch provider database could not be read', {
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+        throwIpcError('NOT_FOUND', 'CC Switch provider database is unavailable');
+      }
+      assertProviderMutationOwner(ownerAtIngress);
+      const candidates: CcSwitchProviderSyncCandidate[] = [];
+      const items: CcSwitchProviderSyncPreview['items'] = [];
+      let skippedCount = source.skippedCount;
+      for (const candidate of source.candidates) {
+        const validation = validateCustomProviderConfig(candidate.config);
+        const runtime = candidate.config.runtimes[candidate.agent];
+        if (!validation.ok || !runtime) {
+          skippedCount += 1;
+          continue;
+        }
+        const action = (await customProviderExists(candidate.config.id)) ? 'update' : 'create';
+        assertProviderMutationOwner(ownerAtIngress);
+        candidates.push(candidate);
+        items.push({
+          providerId: candidate.config.id,
+          name: candidate.config.name,
+          sourceApp: candidate.sourceApp,
+          agent: candidate.agent,
+          baseUrl: runtime.baseUrl,
+          protocol:
+            runtime.wireProtocol ??
+            (candidate.agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
+          modelCount: runtime.models.length,
+          hasApiKey: Boolean(candidate.keys[candidate.agent]),
+          headerCount: Object.keys(runtime.headers ?? {}).length,
+          action,
+        });
+      }
+      if (candidates.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'CC Switch has no compatible provider configurations');
+      }
+      const importId = randomUUID();
+      ccSwitchDrafts.set(importId, {
+        createdAt: Date.now(),
+        owner: ownerAtIngress,
+        candidates: candidates.sort((left, right) =>
+          left.agent === right.agent ? 0 : left.agent === 'codex' ? -1 : right.agent === 'codex' ? 1 : 0,
+        ),
+      });
+      pruneCcSwitchDrafts();
+      return { importId, items, skippedCount };
+    },
+  );
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_CC_SWITCH_CONFIRM,
+    async (event, importId: unknown, interrupt?: unknown): Promise<CcSwitchProviderSyncResult> => {
+      assertTrustedProviderMutationSender(event);
+      if (typeof importId !== 'string' || !/^[0-9a-f-]{36}$/.test(importId)) {
+        throwIpcError('INVALID_PARAMS', 'invalid CC Switch import id');
+      }
+      if (interrupt !== undefined && interrupt !== true) {
+        throwIpcError('INVALID_PARAMS', 'invalid interruption consent');
+      }
+      pruneCcSwitchDrafts();
+      const draft = ccSwitchDrafts.get(importId);
+      if (!draft) throwIpcError('NOT_FOUND', 'CC Switch import preview expired');
+      const currentOwner = captureProviderOwnerSession();
+      if (
+        draft.owner &&
+        currentOwner &&
+        (draft.owner.dataOwnerId !== currentOwner.dataOwnerId ||
+          draft.owner.generation !== currentOwner.generation)
+      ) {
+        ccSwitchDrafts.delete(importId);
+        throwIpcError('PERMISSION_DENIED', 'active account changed during CC Switch import');
+      }
+
+      let created = 0;
+      let updated = 0;
+      let modelsPending = 0;
+      let failed = 0;
+      const providerIds: string[] = [];
+      const options = interrupt === true
+        ? { source: 'manual-settings' as const, codexImageGenerationRestartPolicy: 'interrupt' as const }
+        : { source: 'manual-settings' as const };
+
+      for (const candidate of draft.candidates) {
+        try {
+          assertProviderMutationOwner(draft.owner);
+          await discoverCcSwitchModels(candidate);
+          if ((candidate.config.runtimes[candidate.agent]?.models.length ?? 0) === 0) {
+            modelsPending += 1;
+          }
+          const exists = await customProviderExists(candidate.config.id);
+          assertProviderMutationOwner(draft.owner);
+          const result = exists
+            ? await updateProviderFromInput(
+                event,
+                candidate.config,
+                candidate.keys,
+                options,
+                (current) => mergeCcSwitchConfig(current, candidate.config, candidate.agent),
+              )
+            : await createProviderFromInput(event, candidate.config, candidate.keys, options);
+          if (!result.ok) return result;
+          if (exists) updated += 1;
+          else created += 1;
+          providerIds.push(candidate.config.id);
+        } catch (error) {
+          assertProviderMutationOwner(draft.owner);
+          failed += 1;
+          log.warn('CC Switch provider sync skipped a failed candidate', {
+            providerId: candidate.config.id,
+            error: error instanceof Error ? error.name : 'unknown',
+          });
+        }
+      }
+      ccSwitchDrafts.delete(importId);
+      return { ok: true, created, updated, modelsPending, failed, providerIds };
+    },
   );
 
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, async (event, providerId: unknown, ownerScope?: unknown, optionsInput?: unknown) => {

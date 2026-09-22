@@ -2153,6 +2153,24 @@
         }
       },
       "addProvider": "添加供应商",
+      "ccSwitch": {
+        "action": "从 CC Switch 同步",
+        "loading": "正在从 CC Switch 同步…",
+        "title": "从 CC Switch 同步供应商",
+        "description": "请先查看 {{count}} 个本地供应商连接，再同步到 Cindy。",
+        "create": "新增",
+        "update": "更新",
+        "skipped": "已跳过 {{count}} 个不支持或无效的条目。",
+        "secretNote": "API key 和请求头只在 Main 进程中处理，并通过 Cindy 的安全凭证存储保存。",
+        "confirm": "同步供应商",
+        "cancel": "取消供应商同步",
+        "done": "CC Switch 同步完成：新增 {{created}} 个，更新 {{updated}} 个",
+        "doneWithPending": "CC Switch 同步完成：新增 {{created}} 个，更新 {{updated}} 个；{{pending}} 个连接尚未发现模型",
+        "failedCount": "有 {{count}} 个连接未能同步，请重试",
+        "notFound": "无法读取 CC Switch 数据库。请先打开 CC Switch，检查文件后重试。",
+        "empty": "没有找到可导入的 CC Switch 供应商连接。",
+        "failed": "CC Switch 同步失败，请检查源应用后重试。"
+      },
       "detail": {
         "singleAgentNote": "仅支持 {{agent}}",
         "emptyModels": "登录后自动获取可用模型",

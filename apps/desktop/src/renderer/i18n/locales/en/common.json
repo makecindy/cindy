@@ -2154,6 +2154,24 @@
         }
       },
       "addProvider": "Add provider",
+      "ccSwitch": {
+        "action": "Sync from CC Switch",
+        "loading": "Syncing from CC Switch…",
+        "title": "Sync providers from CC Switch",
+        "description": "Review {{count}} local provider connections before updating Cindy.",
+        "create": "New",
+        "update": "Update",
+        "skipped": "{{count}} unsupported or invalid entries were skipped.",
+        "secretNote": "API keys and headers stay in Main and are saved through Cindy’s secure credential store.",
+        "confirm": "Sync providers",
+        "cancel": "Cancel provider sync",
+        "done": "CC Switch sync finished: {{created}} added, {{updated}} updated",
+        "doneWithPending": "CC Switch sync finished: {{created}} added, {{updated}} updated. Models for {{pending}} connection(s) need discovery.",
+        "failedCount": "{{count}} connection(s) could not be synced. Retry to try them again.",
+        "notFound": "The CC Switch database could not be read. Open CC Switch once, then check its files and try again.",
+        "empty": "No compatible CC Switch provider connections were found.",
+        "failed": "CC Switch sync failed. Check the source app and try again."
+      },
       "detail": {
         "singleAgentNote": "{{agent}} only",
         "emptyModels": "Available models are discovered after sign-in",
