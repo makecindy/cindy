@@ -9,10 +9,22 @@
  * not expose cancellation for fs promises.
  */
 
-import { mkdir, realpath, readdir, stat } from 'node:fs/promises';
+import { mkdir, realpath, readdir, stat, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { WorkdirProbeRequest, WorkdirProbeResult } from './protocol';
+import type {
+  WorkdirProbeRequest,
+  WorkdirProbeResult,
+  WorkdirOperationKind,
+  WorkdirOperationResult,
+  WorkdirValidateResult,
+  WorkdirAvailabilityResult,
+} from './protocol';
+import {
+  runValidateJob,
+  runAvailabilityJob,
+  type ChannelWorkdirProbeFs,
+} from './channelWorkdirProbe';
 import { workdirDiagnosticErrorCode, workdirDiagnosticId } from '../workdirDiagnostics';
 
 export interface MainProcessWorkdirProbeLogger {
@@ -20,7 +32,7 @@ export interface MainProcessWorkdirProbeLogger {
   warn(...args: unknown[]): void;
 }
 
-export interface MainProcessWorkdirProbeFs {
+export interface MainProcessWorkdirProbeFs extends ChannelWorkdirProbeFs {
   stat(dir: string): Promise<{ isDirectory(): boolean; dev?: number }>;
   mkdir(dir: string): Promise<void>;
   realpath(dir: string): Promise<string>;
@@ -48,18 +60,18 @@ export class MainProcessWorkdirProbeError extends Error {
 }
 
 interface ProbeEntry {
-  kind: WorkdirProbeRequest['kind'];
+  kind: WorkdirOperationKind;
   id: number;
   dir: string;
   key: string;
   deadline: number;
   enqueuedAt: number;
   startedAt?: number;
-  resolve: (result: WorkdirProbeResult) => void;
+  resolve: (result: WorkdirOperationResult) => void;
   reject: (error: Error) => void;
   queueTimer?: ReturnType<typeof setTimeout>;
   probeTimer?: ReturnType<typeof setTimeout>;
-  inFlightPromise?: Promise<WorkdirProbeResult>;
+  inFlightPromise?: Promise<WorkdirOperationResult>;
   settled?: boolean;
 }
 
@@ -73,6 +85,8 @@ const defaultFs: MainProcessWorkdirProbeFs = {
   },
   realpath: (dir) => realpath(dir),
   readdir: async (dir) => readdir(dir),
+  writeFile: (file, data, options) => writeFile(file, data, options),
+  rm: (file, options) => rm(file, options),
 };
 
 export class MainProcessWorkdirProbeClient {
@@ -81,7 +95,7 @@ export class MainProcessWorkdirProbeClient {
   private readonly fs: MainProcessWorkdirProbeFs;
   private readonly queue: ProbeEntry[] = [];
   private readonly activeEntries = new Set<ProbeEntry>();
-  private readonly inFlightByPath = new Map<string, Promise<WorkdirProbeResult>>();
+  private readonly inFlightByPath = new Map<string, Promise<WorkdirOperationResult>>();
   private active = 0;
   private nextId = 1;
   private disposed = false;
@@ -98,18 +112,49 @@ export class MainProcessWorkdirProbeClient {
     timeoutMs: number,
     kind: WorkdirProbeRequest['kind'] = 'probe',
   ): Promise<WorkdirProbeResult> {
+    return this.request(dir, key, timeoutMs, kind);
+  }
+
+  validate(dir: string, key: string, timeoutMs: number): Promise<WorkdirValidateResult> {
+    return this.request(dir, key, timeoutMs, 'validate');
+  }
+
+  availability(dir: string, key: string, timeoutMs: number): Promise<WorkdirAvailabilityResult> {
+    return this.request(dir, key, timeoutMs, 'availability');
+  }
+
+  private request(
+    dir: string,
+    key: string,
+    timeoutMs: number,
+    kind: WorkdirProbeRequest['kind'],
+  ): Promise<WorkdirProbeResult>;
+  private request(
+    dir: string,
+    key: string,
+    timeoutMs: number,
+    kind: 'validate',
+  ): Promise<WorkdirValidateResult>;
+  private request(
+    dir: string,
+    key: string,
+    timeoutMs: number,
+    kind: 'availability',
+  ): Promise<WorkdirAvailabilityResult>;
+  private request(
+    dir: string,
+    key: string,
+    timeoutMs: number,
+    kind: WorkdirOperationKind,
+  ): Promise<WorkdirOperationResult> {
     if (this.disposed) {
       return Promise.reject(this.unavailable('probe host is disposed', dir, kind, 'disposed'));
     }
     const dedupeKey = `${kind}:${key}`;
     const existing = this.inFlightByPath.get(dedupeKey);
     if (existing) return existing;
-    if (this.queue.length >= this.maxQueued) {
-      return Promise.reject(this.unavailable('probe queue is full', dir, kind, 'queue-full'));
-    }
-
     let entry!: ProbeEntry;
-    const promise = new Promise<WorkdirProbeResult>((resolve, reject) => {
+    const promise = new Promise<WorkdirOperationResult>((resolve, reject) => {
       const enqueuedAt = Date.now();
       entry = {
         kind,
@@ -121,13 +166,48 @@ export class MainProcessWorkdirProbeClient {
         resolve,
         reject,
       };
-      this.queue.push(entry);
-      this.armQueueTimer(entry);
-      this.drain();
     });
     entry.inFlightPromise = promise;
     this.inFlightByPath.set(dedupeKey, promise);
+    // Register before scheduling: an already-expired request must also clear dedupe.
+    this.schedule(entry);
     return promise;
+  }
+
+  private isSettings(kind: WorkdirOperationKind): boolean {
+    return kind === 'validate' || kind === 'availability';
+  }
+
+  private hasCapacity(kind: WorkdirOperationKind): boolean {
+    if (this.active >= this.maxInFlight) return false;
+    if (!this.isSettings(kind)) return true;
+    // Timed-out I/O still consumes capacity regardless of its original kind.
+    const occupancy = [...this.activeEntries].filter(
+      (entry) => this.isSettings(entry.kind) || entry.settled,
+    ).length;
+    return occupancy < Math.max(1, this.maxInFlight - 1);
+  }
+
+  private schedule(entry: ProbeEntry): void {
+    if (this.remainingMs(entry) <= 0) {
+      this.rejectEntry(
+        entry,
+        this.timeout('directory probe deadline elapsed'),
+        'deadline-before-dispatch',
+      );
+    } else if (this.hasCapacity(entry.kind)) {
+      this.start(entry);
+    } else if (this.queue.length >= this.maxQueued) {
+      // A full optional-probe queue must not block an immediately runnable remote operation.
+      this.rejectEntry(
+        entry,
+        this.unavailable('probe queue is full', entry.dir, entry.kind, 'queue-full'),
+        'queue-full',
+      );
+    } else {
+      this.queue.push(entry);
+      this.armQueueTimer(entry);
+    }
   }
 
   dispose(): void {
@@ -146,7 +226,12 @@ export class MainProcessWorkdirProbeClient {
   private drain(): void {
     if (this.disposed) return;
     while (this.active < this.maxInFlight && this.queue.length > 0) {
-      const entry = this.queue.shift()!;
+      // Remote stat/recovery operations take priority over optional settings probes.
+      let index = this.queue.findIndex((entry) => !this.isSettings(entry.kind));
+      if (index < 0) index = this.hasCapacity(this.queue[0]!.kind) ? 0 : -1;
+      if (index < 0) return;
+      const [entry] = this.queue.splice(index, 1);
+      if (!entry) return;
       if (entry.queueTimer) clearTimeout(entry.queueTimer);
       if (this.remainingMs(entry) <= 0) {
         this.rejectEntry(
@@ -181,8 +266,11 @@ export class MainProcessWorkdirProbeClient {
     }, remainingMs);
     entry.probeTimer.unref?.();
 
-    void this.execute(entry.kind, entry.dir).then(
+    void this.execute(entry).then(
       (result) => {
+        if (!entry.settled && this.remainingMs(entry) <= 0) {
+          this.rejectEntry(entry, this.timeout('directory probe timed out'), 'response-timeout');
+        }
         if (!entry.settled) {
           this.clearProbeTimer(entry);
           if (!result.ok) {
@@ -202,13 +290,15 @@ export class MainProcessWorkdirProbeClient {
           this.clearProbeTimer(entry);
           this.rejectEntry(
             entry,
-            this.unavailable(
-              'probe filesystem operation failed',
-              entry.dir,
-              entry.kind,
-              'filesystem-failure',
-              error,
-            ),
+            error instanceof MainProcessWorkdirProbeError
+              ? error
+              : this.unavailable(
+                  'probe filesystem operation failed',
+                  entry.dir,
+                  entry.kind,
+                  'filesystem-failure',
+                  error,
+                ),
             'filesystem-failure',
           );
         }
@@ -225,10 +315,19 @@ export class MainProcessWorkdirProbeClient {
     this.release();
   }
 
-  private async execute(
-    kind: WorkdirProbeRequest['kind'],
-    dir: string,
-  ): Promise<WorkdirProbeResult> {
+  private async execute(entry: ProbeEntry): Promise<WorkdirOperationResult> {
+    const { kind, dir } = entry;
+    const assertActive = () => {
+      if (this.disposed)
+        throw new MainProcessWorkdirProbeError(
+          'WORKDIR_PROBE_UNAVAILABLE',
+          'probe host is disposed',
+        );
+      if (entry.settled || this.remainingMs(entry) <= 0)
+        throw this.timeout('directory probe timed out');
+    };
+    if (kind === 'validate') return runValidateJob(dir, this.fs, assertActive);
+    if (kind === 'availability') return runAvailabilityJob(dir, this.fs, assertActive);
     try {
       if (kind === 'mkdir') {
         await this.fs.mkdir(dir);
@@ -312,7 +411,7 @@ export class MainProcessWorkdirProbeClient {
   private unavailable(
     message: string,
     dir: string,
-    kind: WorkdirProbeRequest['kind'],
+    kind: WorkdirOperationKind,
     reason: string,
     cause?: unknown,
   ): MainProcessWorkdirProbeError {

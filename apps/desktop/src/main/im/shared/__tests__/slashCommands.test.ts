@@ -355,6 +355,32 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.new);
   });
 
+  it('asks /new to refresh the working directory when the channel declares it', async () => {
+    const prepared = { ...defaultRow, agentKind: 'codex' as const, model: 'gpt-5.5' };
+    const repo = makeRepo({ prepareNewSession: vi.fn(async () => prepared) });
+    const { handlers } = makeHarness({
+      repo,
+      adapterOverrides: {
+        channel: 'wecom',
+        sessions: {
+          source: 'wecom',
+          sessionIdFor: () => 'wecom-session',
+          defaultTitle: () => 'WeCom',
+          ensureWorkingDir: () => '/tmp/wecom',
+          refreshWorkingDirOnNew: true,
+          extraInsertColumns: () => ({}),
+        },
+      },
+    });
+    await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'ou_user' });
+    expect(mocks.resetSessionToDefaults).toHaveBeenCalledWith(
+      'feishu-session',
+      expect.anything(),
+      prepared,
+      { channel: 'wecom', refreshWorkingDir: true },
+    );
+  });
+
   it('keeps /ctr attached when Telegram task rotation fails', async () => {
     const createFreshSession = vi.fn(async () => {
       throw new Error('db unavailable');

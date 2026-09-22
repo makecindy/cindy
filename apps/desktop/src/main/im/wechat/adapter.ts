@@ -1,11 +1,10 @@
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
-import { resolveWechatWorkingDir } from './channelSettings';
+import {
+  ensureWechatManagedWorkingDir,
+  resolveWechatWorkingDirForNewConversation,
+} from './channelSettings';
 import { ui } from './uiText';
 import { sessionIdFor, type WechatIM } from './WechatIM';
-
-function ensureWorkingDir(botId: string): string {
-  return resolveWechatWorkingDir(botId);
-}
 
 export function buildWechatAdapter(
   wechatIm: WechatIM,
@@ -27,7 +26,12 @@ export function buildWechatAdapter(
       defaultTitle: (peerId) => `微信 · ${peerId.slice(-6)}`,
       generatedTitlePrefix: '微信 · ',
       workspaceKind: 'dialogue',
-      ensureWorkingDir,
+      // 同步兜底只回稳定托管目录; 实际目录(读配置+探测用户盘)在首次对话 /
+      // /new 边界经 resolveWorkingDirForNew 异步解析。
+      ensureWorkingDir: ensureWechatManagedWorkingDir,
+      resolveWorkingDirForNew: resolveWechatWorkingDirForNewConversation,
+      // 设置页可改渠道托管目录: /new 边界刷新到最新解析结果。
+      refreshWorkingDirOnNew: true,
       extraInsertColumns: (botId, peerId) => ({
         imBotContextId: botId,
         imUserId: peerId,

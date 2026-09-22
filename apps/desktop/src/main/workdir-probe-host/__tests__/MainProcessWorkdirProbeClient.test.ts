@@ -37,6 +37,15 @@ describe('MainProcessWorkdirProbeClient', () => {
       await expect(
         client.probe(path.join(root, 'missing'), `${root}/missing`, 1_000),
       ).resolves.toEqual({ ok: false, code: 'ENOENT' });
+      await expect(client.validate(root, root, 1_000)).resolves.toEqual({
+        ok: true,
+        realPath: await fs.realpath(root),
+      });
+      await expect(client.availability(root, root, 1_000)).resolves.toEqual({
+        ok: true,
+        usable: true,
+      });
+      expect(await fs.readdir(root)).toEqual(['created']);
     } finally {
       client.dispose();
       await fs.rm(root, { recursive: true, force: true });
@@ -64,6 +73,8 @@ describe('MainProcessWorkdirProbeClient', () => {
       mkdir: async () => undefined,
       realpath: async (dir) => dir,
       readdir: async () => [],
+      writeFile: async () => undefined,
+      rm: async () => undefined,
     };
     const client = new MainProcessWorkdirProbeClient({ log, fs: fsMock, maxInFlight: 1 });
     const first = client.probe('/slow/a', '/slow/a', 20).catch((error) => error);
@@ -96,6 +107,8 @@ describe('MainProcessWorkdirProbeClient', () => {
       mkdir: async () => undefined,
       realpath: async (dir) => dir,
       readdir: async () => [],
+      writeFile: async () => undefined,
+      rm: async () => undefined,
     };
     const client = new MainProcessWorkdirProbeClient({ log, fs: fsMock });
     const first = client.probe('/slow', '/slow', 20);
@@ -130,6 +143,8 @@ describe('MainProcessWorkdirProbeClient', () => {
       mkdir: async () => undefined,
       realpath: async (dir) => dir,
       readdir: async () => [],
+      writeFile: async () => undefined,
+      rm: async () => undefined,
     };
     const client = new MainProcessWorkdirProbeClient({ log, fs: fsMock });
     const probe = client.probe('/slow', '/slow', 5_000).catch((error) => error);

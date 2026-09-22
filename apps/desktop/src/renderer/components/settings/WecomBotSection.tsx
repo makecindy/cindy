@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Eye, EyeOff, Loader2, Send, Trash2 } from 'lucide-react';
 
@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { ImWorkingDirectorySection } from './ImWorkingDirectorySection';
 
 const STATUS_KEY: Record<WecomBotTransportStatus['kind'], string> = {
   idle: 'settings.wecomBot.status.needsConfig',
@@ -54,14 +55,19 @@ export function WecomBotSection({
     setSecret,
     ownerUserId,
     status,
+    channelSettings,
     validationError,
     isSaving,
     isDisconnecting,
+    isUpdatingWorkingDir,
     canConnect,
     canReconnect,
     connect,
     reconnect,
     disconnect,
+    chooseWorkingDirectory,
+    resetWorkingDirectory,
+    refreshChannelSettings,
   } = useWecomBot();
   const [showSecret, setShowSecret] = useState(false);
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wecom');
@@ -69,6 +75,25 @@ export function WecomBotSection({
   const { t } = useTranslation();
   const wecomGroup = useWecomGroupNotificationSettings();
   const [webhookUrl, setWebhookUrl] = useState('');
+
+  // 展开设置卡 / 窗口重新聚焦时重拉渠道设置: 目录可能在折叠或失焦期间被删/
+  // 拔盘/收回权限, 只在挂载时读一次会让「不可用」警告永远不出现。展开首帧由
+  // hook 的挂载请求覆盖, 跳过避免双拉。
+  const firstExpandRun = useRef(true);
+  useEffect(() => {
+    if (firstExpandRun.current) {
+      firstExpandRun.current = false;
+      return;
+    }
+    if (expanded) void refreshChannelSettings();
+  }, [expanded, refreshChannelSettings]);
+  useEffect(() => {
+    const refreshOnFocus = (): void => {
+      void refreshChannelSettings();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    return () => window.removeEventListener('focus', refreshOnFocus);
+  }, [refreshChannelSettings]);
 
   const handleDisconnect = useCallback(async () => {
     const approved = await confirm({
@@ -118,6 +143,15 @@ export function WecomBotSection({
       }
     >
       <ImDefaultSettingsSection channel="wecom" embedded onSummaryChange={setRouteSummary} />
+      <div className="h-px w-full bg-[var(--border-default)]" />
+
+      <ImWorkingDirectorySection
+        i18nKeyPrefix="settings.wecomBot"
+        settings={channelSettings}
+        pending={isUpdatingWorkingDir}
+        onChoose={() => void chooseWorkingDirectory()}
+        onReset={() => void resetWorkingDirectory()}
+      />
       <div className="h-px w-full bg-[var(--border-default)]" />
 
       {status.kind === 'connected' ? (

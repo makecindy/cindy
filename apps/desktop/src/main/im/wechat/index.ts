@@ -5,13 +5,18 @@ import { buildWechatAdapter } from './adapter';
 import type { WechatIM } from './WechatIM';
 
 export function wireWechatOrchestrator(wechatIm: WechatIM, config: ImOrchestratorConfig): void {
-  const orchestrator = createImOrchestrator(buildWechatAdapter(wechatIm, config));
+  const adapter = buildWechatAdapter(wechatIm, config);
+  const orchestrator = createImOrchestrator(adapter);
   wechatIm.attachTurnRuntime({
     runner: orchestrator.turnRunner,
     repo: orchestrator.repo,
     config,
+    // WechatIM 自带 /new 流程,与 shared slashCommands 走同一份渠道能力声明。
     resetSessionToDefaults: (sessionId, nextConfig, prepared) =>
-      resetSessionToDefaults(sessionId, nextConfig, prepared, 'wechat'),
+      resetSessionToDefaults(sessionId, nextConfig, prepared, {
+        channel: 'wechat',
+        refreshWorkingDir: adapter.sessions.refreshWorkingDirOnNew === true,
+      }),
   });
 }
 
