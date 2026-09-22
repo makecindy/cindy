@@ -1,4 +1,5 @@
 import { companionConversationItems } from '@/session/companionConversationPresentation';
+import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
@@ -9452,6 +9453,8 @@ export default function SessionScreen() {
                   ]}
                 >
                   <ComposerActivityStatus
+                    key={JSON.stringify([auth.user?.id, deviceId, sessionId])}
+                    sessionKey={JSON.stringify([auth.user?.id, deviceId, sessionId])}
                     reconnectAttempt={remoteSessionRunStatus.reconnectAttempt}
                     sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}
                     startedAt={composerActivityStartedAtMs}
@@ -11201,6 +11204,7 @@ function ComposerRuntimePill({
 }
 
 function ComposerActivityStatus({
+  sessionKey,
   reconnectAttempt,
   sideTaskRunning,
   startedAt,
@@ -11211,6 +11215,7 @@ function ComposerActivityStatus({
   generationActive,
   visible,
 }: {
+  sessionKey: string;
   reconnectAttempt: RemoteSessionRunStatus['reconnectAttempt'];
   sideTaskRunning: boolean;
   startedAt: number | null;
@@ -11239,17 +11244,21 @@ function ComposerActivityStatus({
     return () => clearInterval(interval);
   }, [startedAt, visible]);
 
+  const rateHistory = useRunningTokenRateHistory({
+    sessionKey,
+    startedAt,
+    outputTokens,
+    generationDurationMs,
+    generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning,
+  });
+
   if (!visible) return null;
 
   const elapsedText = formatComposerActivityElapsed(elapsed);
   const tokenCount = formatComposerActivityTokenCount(tokenUsage);
   const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
-  const rateValue = formatComposerActivityRateValue(
-    outputTokens,
-    generationDurationMs,
-    generationReliable,
-  );
+  const rateValue = formatComposerActivityRateValue(rateHistory.latestRate);
   const rateText = rateValue
     ? t('session.screen.tokenRate', { rate: rateValue })
     : null;
@@ -11331,16 +11340,9 @@ function formatComposerActivityTokenCount(tokenUsage: number): string {
   return safeTokens >= 1000 ? `${(safeTokens / 1000).toFixed(1)}k` : `${safeTokens}`;
 }
 
-function formatComposerActivityRateValue(
-  outputTokens: number,
-  durationMs: number,
-  generationReliable: boolean,
-): string | null {
-  if (!generationReliable || outputTokens <= 0 || !Number.isFinite(durationMs) || durationMs <= 0) {
-    return null;
-  }
-  const rate = (outputTokens * 1000) / durationMs;
-  if (!Number.isFinite(rate) || rate <= 0) return null;
+function formatComposerActivityRateValue(rate: number | null): string | null {
+  if (rate === null || !Number.isFinite(rate) || rate < 0) return null;
+  if (rate === 0) return '0';
   return rate < 0.1 ? '<0.1' : rate >= 100 ? rate.toFixed(0) : rate.toFixed(1).replace(/\.0$/, '');
 }
 
