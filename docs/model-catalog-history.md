@@ -3,7 +3,7 @@
 > 参考记录，不是当前配置或部署状态。当前维护规则见 [模型配置与下发](dev-rules/model-catalog-maintenance.md)。
 > 下列文字记录各批次当时的事实，不能相互当作后续状态的证明。引用时须带日期、来源和验证范围。
 
-## 小米 MiMo V2.6 系列（2026-09-22）
+## 小米 MiMo V2.6 系列（2026-09-22，同日第一批）
 
 客户端 `catalog/providers.json` 两个 MiMo 预设（`xiaomi-mimo-api-cn` / `xiaomi-mimo-token-plan-cn`）
 的推荐模型清单从 V2.5 系列替换为 `mimo-v2.6-pro` / `mimo-v2.6-flash`（api 预设的 Pi 另含
@@ -18,13 +18,14 @@ UltraSpeed 为定制服务，同窗口/输出。按量定价与前代持平：�
 Flash ¥1/¥2、Pro ¥3/¥6、UltraSpeed ¥30/¥60；缓存命中另价（Pro ¥0.025、Flash ¥0.02），
 缓存写入限时免费；预设模型不携带价格字段，实价继续走实报与参考价发布链。
 
-本次仅改客户端预设推荐名单（`providers.json` 的 `presets[].runtimes`，手维护，不被
-`pnpm sync:pi-model-catalog` 重写）。未改 Server 正本、未改 Registry（Registry 尚无 MiMo
-公共条目，新增需走 Server 协同）；Pi 上游目录（pi.dev）核验日仍为 V2.5 系列，
-`provider-models.json` 待上游更新后再同步。OpenCode 渠道的 MiMo 逐模型证据与
+本批（同日第一批）仅改客户端预设推荐名单（`providers.json` 的 `presets[].runtimes`，手
+维护，不被 `pnpm sync:pi-model-catalog` 重写）。当时 Registry 尚无 MiMo 公共条目；同日
+第二批已补 Registry 公共条目（客户端 revision `2026-09-22T00:00:00.002Z`，见下条），
+勿以本句判断当前同步状态。未改 Server 正本；Pi 上游目录（pi.dev）核验日仍为 V2.5
+系列，`provider-models.json` 待上游更新后再同步。OpenCode 渠道的 MiMo 逐模型证据与
 `upstream-profiles.json` 的 opencode-go 档位映射本次未动（无 V2.6 实证）。
 
-## 小米 MiMo V2.6 能力配置补齐（2026-09-22）
+## 小米 MiMo V2.6 能力配置补齐（2026-09-22，同日第二批）
 
 修复会话反馈的两个配置问题：Cindy 套用通用推理档位、把 `reasoning_effort: "max"` 发给
 MiMo 2.6 Pro 被 400 拒绝；Pi 的 `mimo-v2.6-pro` 被标成仅文本输入、带图消息被本地拦下。
@@ -49,7 +50,8 @@ MiMo 2.6 Pro 被 400 拒绝；Pi 的 `mimo-v2.6-pro` 被标成仅文本输入、
   UltraSpeed $4.35/$8.7（命中 $0.036）。两组均出自官方计费页「按量付费」实时推理表
   （同页国内/海外两表，单位分别为元/美元每百万 tokens），2026-09-22 核验。缓存写入限时
   免费未记；批量推理（半价）等其它计费项未收录，与国内组口径保持一致。
-- 预设模型行保留 `supportsImageInput: true`（新连接快照）；不把推理档位写进预设模型，
+- 预设模型行（pi）保留 `supportsImageInput: true`（新连接快照；cc/codex 行不攃能力
+  字段，由 Registry 公共投影供片）；不把推理档位写进预设模型，
   免得旧快照盖住 Registry 后续修订。V2.5 推荐清单下架事项见前一条记录。
 
 ## Grok 4.7 / Pi（2026-09-22）
