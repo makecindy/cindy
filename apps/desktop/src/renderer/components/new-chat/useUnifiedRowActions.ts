@@ -20,7 +20,7 @@ import type { FavoriteStore } from '@/state/useRemoteModelFavorites';
 
 import { useEffect, useRef, useState } from 'react';
 
-import type { UnifiedModelEntry } from '@cindy/model-providers';
+import { clampEffortToSupported, type UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -610,7 +610,15 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 选中行强制按 live 引擎显示(UnifiedModelPanel.configOf.forceEngine),只写 override
     // 的话显示纹丝不动,胶囊就成了假按钮。
     if (isLiveRow(entry, config)) {
-      const next = resolveEngineConfig?.(entry, engine);
+      const resolved = resolveEngineConfig?.(entry, engine);
+      // Switching the Harness does not express a new depth preference. Keep the
+      // current choice, adapting only when the target cannot execute that tier.
+      // Do not rewrite the source Harness's saved preference on this path.
+      const next = resolved && {
+        ...resolved,
+        effort: resolved.efforts.length === 0 ? null
+          : (clampEffortToSupported(config.effort, resolved.efforts) ?? resolved.effort),
+      };
       if (sessionEngineFilter && sessionAgent !== undefined) {
         const targetAgent = agentKindOfEngine(engine);
         // 已在真实引擎上、也没有待发送意图 → 无事可做。真实引擎未知、或挂着意图时

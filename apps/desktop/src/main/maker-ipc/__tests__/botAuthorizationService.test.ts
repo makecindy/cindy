@@ -7,6 +7,7 @@ import {
   type BotAuthorizationAdapter,
 } from '../botAuthorizationService';
 import type { BotAuthorizationCard } from '../../../shared/botAuthorization';
+import { getRemoteOauthContext, withRemoteOauthContext, type RemoteOauthContext } from '../../plugin-oauth/context';
 
 function harness() {
   let ready = false;
@@ -104,6 +105,34 @@ async function flush() {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 describe('Bot authorization transcript lifecycle (Grok parity)', () => {
+  it('dedicates the bridge to current plugin OAuth cards, without a fake Renderer sender', async () => {
+    const h = harness();
+    const context: RemoteOauthContext = { scope: 'tx', assertCurrent: vi.fn(), authorize: vi.fn(), finish: vi.fn() };
+    try {
+      await h.service.request('s', { kind: 'plugin', id: 'p' });
+      const action = { requestId: h.card().snapshot.requestId, actionId: 'connect', expectedRevision: h.card().snapshot.revision };
+      expect(await h.service.bindRemoteOauth({ ...action, expectedRevision: -1 })).toBeNull();
+      expect(await h.service.bindRemoteOauth({ ...action, actionId: 'open-settings' })).toBeNull();
+      expect(await h.service.resolveRemoteOauth(action)).toBe(false);
+      h.adapter.execute = vi.fn(async () => {
+        expect(getRemoteOauthContext()).toBe(context);
+        return { ok: false as const, errorCode: 'ACTION_FAILED' as const };
+      });
+      expect(await withRemoteOauthContext(context, () => h.service.resolveRemoteOauth(action))).toBe(true);
+      await flush();
+      expect(h.adapter.execute).toHaveBeenCalledOnce();
+      expect(context.finish).toHaveBeenCalledWith(false);
+      expect(h.deps.openExternal).not.toHaveBeenCalled();
+    } finally { await h.service.dispose(); }
+    const local = harness();
+    try {
+      await local.service.request('s', { kind: 'host', id: 'grok' });
+      const action = { requestId: local.card().snapshot.requestId, actionId: 'connect', expectedRevision: local.card().snapshot.revision };
+      expect(await local.service.bindRemoteOauth(action)).toBeNull();
+      expect(await withRemoteOauthContext(context, () => local.service.resolveRemoteOauth(action))).toBe(false);
+      expect(local.adapter.execute).not.toHaveBeenCalled();
+    } finally { await local.service.dispose(); }
+  });
   it('returns the card without opening a browser or holding the model turn; duplicate requests reuse it', async () => {
     const h = harness();
     const result = await h.service.request('s', { kind: 'host', id: 'grok' });

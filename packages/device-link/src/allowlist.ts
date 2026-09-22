@@ -601,6 +601,8 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
 export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
   // Same-account owner controls only; guest task dispatch has its own deny-by-default gate.
   'maker:shared-task',
+  // Dedicated Host-only OAuth transaction. Args/replies are never forwarded to Renderer.
+  'device-link:plugin-oauth:v3',
   'device-link:remote-desktop:v1',
   ...CORE_INVOKE_CHANNELS,
   ...EXTENDED_INVOKE_CHANNELS,

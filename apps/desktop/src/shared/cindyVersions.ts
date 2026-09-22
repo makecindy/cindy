@@ -17,8 +17,12 @@ export interface CindyVersionsState {
   selectedId: string;
   switching: boolean;
   versions: CindyVersionInfo[];
+  /** Running binary metadata may lag the single personal slot until the user restarts. */
+  currentVersion?: CindyVersionInfo;
+  personalUpdateAvailable?: boolean;
 }
 
 export type CindyVersionAction = 'switch' | 'remove';
 export const CINDY_ORIGINAL_VERSION = 'original';
+export const CINDY_PERSONAL_VERSION = 'personal';
 export const CINDY_VERSION_PROTOCOL = 1;

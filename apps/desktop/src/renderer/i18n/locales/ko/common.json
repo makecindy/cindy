@@ -648,12 +648,16 @@
         "agentProxyEnvPending": "환경 변수 적용 대기 중 → {{url}} (호스트 연결 후 자동 적용)"
       },
       "startSession": {
+        "unsupportedCodexSource": "SSH Codex는 현재 기본 OpenAI 구독 모델만 지원하며, 다른 로컬 제공자 설정은 전달하지 않습니다. 새 작업 화면에서 해당 연결의 모델을 선택하고 원격 로그인 상태를 동기화하세요.",
         "title": "이 원격에서 Codex 세션 시작",
         "hint": "이 머신에 고정된 새 Maker 를 만듭니다. Codex 는 원격에서 실행되고 여기서 채팅합니다. 작업 디렉토리는 ~ 확장을 지원하며, 없으면 확인 후 생성합니다.",
         "start": "시작",
         "created": "{{hostId}} 에 원격 세션을 만들었습니다",
         "createFailed": "원격 세션 생성 실패",
         "errorWorkdirEmpty": "원격 작업 디렉토리를 입력하세요",
+        "modelCatalogLoading": "모델 목록이 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요",
+        "modelCatalogFailed": "모델 목록을 불러오지 못했습니다. 모델 설정에서 새로고침한 후 다시 시도하세요",
+        "noCompatibleModel": "SSH에서 사용할 수 있는 모델이 없습니다. 먼저 모델 설정에서 호환되는 제공자에 연결하세요",
         "errorWorkdirIsFile": "{{path}} 가 이미 존재하지만 디렉토리가 아닙니다, 다른 경로를 선택하세요",
         "confirmCreateTitle": "디렉토리가 존재하지 않습니다, 만들까요?",
         "confirmCreateDescription": "{{path}} 가 {{hostId}} 에 존재하지 않습니다. 확인을 누르면 원격에서 mkdir -p 를 실행한 다음 세션에 진입합니다.",
@@ -5905,6 +5909,12 @@
       },
       "description": "아래 카드에서 이 컴퓨터의 환경을 확인하고 필요한 휴대용 도구를 설치할 수 있습니다. 네이티브 컴파일 도구가 없으면 공식 설치 안내를 표시합니다.",
       "checking": "환경 확인 중…",
+      "syncBeforeBuild": {
+        "title": "빌드 전 최신 소스 동기화",
+        "description": "켜면 개인 버전을 생성하거나 다시 생성하기 전에 현재 채널의 최신 공식 소스를 개인 버전에 먼저 동기화합니다. 기본값은 꺼짐입니다.",
+        "ariaLabel": "빌드 전 최신 소스 동기화",
+        "saveFailed": "빌드 전 동기화 설정을 저장하지 못했습니다. 다시 시도하세요."
+      },
       "forceManaged": {
         "title": "설치 테스트: 시스템 도구 무시",
         "description": "개발 버전 전용입니다. 휴대용 도구는 Cindy 관리 복사본만 확인하고 Windows 컴파일 도구가 없는 상태를 재현합니다. 스위치를 바꾸면 다시 확인만 하며 설치는 시작하지 않습니다.",
@@ -8026,6 +8036,23 @@
       "stop": "생성 중지"
     },
     "pluginSetup": {
+      "account": {
+        "opening": "인증 페이지 여는 중",
+        "connected": "계정 연결됨",
+        "cancelled": "연결 취소됨",
+        "expired": "인증 시간이 만료되었습니다",
+        "ended": "인증이 종료되었습니다",
+        "failed": "계정에 연결하지 못했습니다",
+        "waiting": "브라우저 인증 대기 중",
+        "verifying": "인증 결과 확인 중",
+        "continue": "작업이 계속됩니다.",
+        "reconnectHint": "다시 연결하여 인증을 계속하세요.",
+        "waitingHint": "브라우저에서 인증을 완료하면 작업이 자동으로 계속됩니다.",
+        "remoteHint": "이 컴퓨터의 브라우저에서 인증하여 원격 기기의 Cindy가 이 계정을 사용하도록 허용합니다.",
+        "codeInstructions": "{{host}}에서 코드 입력",
+        "remaining": "{{time}} 후 만료",
+        "reconnect": "다시 연결"
+      },
       "reopen": "다시 열기",
       "title": "{{name}} 설정",
       "assessmentReadFailed": "플러그인 설정 상태를 읽을 수 없습니다.",
@@ -8034,6 +8061,16 @@
       "chooseOne": "설정 방법을 하나 선택하세요",
       "restoreAria": "{{name}} 설정 펼치기",
       "minimizeAria": "{{name}} 설정 접기",
+      "remoteOauthHint": "이 컴퓨터의 브라우저에서 인증하면 현재 원격 기기에 계정이 연결됩니다. 다른 설정은 원격 기기에서 완료하세요.",
+      "connection": {
+        "host": "인스턴스 주소",
+        "hostHint": "서비스의 HTTPS 주소를 기본 포트로 입력하세요.",
+        "hostInvalid": "경로, 쿼리 또는 사용자 지정 포트가 없는 HTTPS 도메인을 입력하세요.",
+        "token": "액세스 토큰",
+        "tokenInvalid": "올바른 액세스 토큰을 입력하세요(최대 4096자).",
+        "hint": "현재 원격 기기의 이 플러그인에만 저장됩니다. 토큰은 입력한 주소에만 전송되며 채팅 기록에 남지 않습니다."
+      },
+      "remoteSecretHint": "여기에 입력한 키는 현재 원격 기기의 이 플러그인에만 저장됩니다. 채팅 기록에는 남지 않습니다.",
       "completeOnDesktop": "원격 컴퓨터에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
       "cancel": "취소",
       "cancelling": "취소 중…",
@@ -8041,6 +8078,8 @@
       "saveConfiguration": "설정 저장",
       "saving": "저장 중…",
       "error": {
+        "REMOTE_UNSUPPORTED": "원격 기기의 Cindy가 아직 이 인증 방식을 지원하지 않습니다. 해당 기기의 Cindy를 업데이트한 후 다시 시도하세요.",
+        "REMOTE_FAILED": "원격 인증을 시작하지 못했습니다. 두 기기가 모두 온라인인지 확인한 후 다시 시도하세요.",
         "ACTION_FAILED": "설정 작업을 완료할 수 없습니다. 다시 시도하세요.",
         "ACTION_STALE": "설정 내용이 변경되었습니다. 설정 작업을 다시 선택하세요.",
         "AUTH_CANCELLED": "인증이 취소되었습니다. 필요한 경우 다시 인증하세요.",
@@ -8094,7 +8133,20 @@
       "inlineSecretStoreFailed": "자격 증명 저장에 실패했습니다",
       "targetNotFound": "대상 플러그인이 제거되었거나 현재 사용할 수 없습니다",
       "targetDisabled": "대상 플러그인이 비활성화되었습니다",
-      "targetDisabledInWorkdir": "사용자가 현재 작업 디렉토리에서 이 플러그인을 비활성화했습니다. 재시도하지 마세요."
+      "targetDisabledInWorkdir": "사용자가 현재 작업 디렉토리에서 이 플러그인을 비활성화했습니다. 재시도하지 마세요.",
+      "deviceCode": {
+        "label": "기기 코드",
+        "copied": "기기 코드를 복사했습니다",
+        "copiedHint": "기기 코드를 자동으로 복사했습니다. 여기에서 다시 복사할 수 있습니다.",
+        "instructions": "{{host}}에서 계정을 선택한 후 이 코드를 입력란에 붙여넣고 인증을 계속하세요.",
+        "copyAgain": "코드 다시 복사",
+        "reopen": "인증 페이지 다시 열기",
+        "remaining": "인증을 기다리는 중… 이번 시도 남은 시간 {{time}}",
+        "completed": "계정이 연결되어 기기 코드를 지웠습니다",
+        "expired": "이번 인증이 만료되었습니다. 작업에서 연결을 다시 시작하여 새 코드를 받으세요.",
+        "ended": "이번 인증이 종료되었습니다. 작업에서 연결을 다시 시작하세요.",
+        "actionFailed": "작업을 완료하지 못했습니다. 다시 시도하세요. 인증이 종료되었다면 연결을 다시 시작하세요."
+      }
     },
     "createAgent": {
       "quickStart": "빠른 시작",
@@ -13055,7 +13107,7 @@
       "details": {
         "unknown": "미확인",
         "latest": {
-          "dev": "온라인 main",
+          "dev": "GitHub main",
           "beta": "최신 beta",
           "release": "최신 정식 버전",
           "same": "최신 상태 ({{target}}), 뒤처진 변경 기록 0개",
@@ -13082,6 +13134,7 @@
         "waiting": "프로젝트 준비 대기 중",
         "environment": "환경 준비 중",
         "source": "개인 프로젝트 소스 준비 중",
+        "updatingSource": "개인 버전 소스 업데이트 중",
         "workspace": "작업 브랜치와 작업 디렉터리 생성 중",
         "dependencies": "작업 의존성 설치 중",
         "starting": "작업 자동 시작 중",
@@ -13129,13 +13182,13 @@
         "updateAvailable": "업데이트 있음",
         "unverified": "버전 상태 미확인",
         "upToDateDescription": "개인 버전 코드에 {{target}}의 모든 업데이트가 포함되어 있습니다",
-        "personalChanges": "개인 변경 기록 {{ahead}}개 추가"
+        "personalChanges": "개인 소스에 변경 기록 {{ahead}}개 추가"
       },
       "comparison": {
         "same": "로컬 main과 SHA가 같음",
-        "personalAhead": "로컬 main을 포함하며 개인 변경 기록 {{ahead}}개 추가",
+        "personalAhead": "로컬 main을 포함하며 개인 소스에 변경 기록 {{ahead}}개 추가",
         "mainAhead": "로컬 main의 변경 기록 {{behind}}개가 아직 반영되지 않음",
-        "diverged": "로컬 main의 변경 기록 {{behind}}개 미반영, 개인 변경 기록 {{ahead}}개 추가",
+        "diverged": "로컬 main의 변경 기록 {{behind}}개 미반영, 개인 소스에 변경 기록 {{ahead}}개 추가",
         "different": "로컬 main과 SHA가 다름, 차이 알 수 없음",
         "unknown": "로컬 main과의 차이 알 수 없음"
       },
@@ -13149,6 +13202,7 @@
       "development": "개발 환경",
       "current": "현재 사용",
       "using": "사용 중",
+      "updatePersonal": "다시 시작하여 업데이트",
       "switch": "전환 후 다시 시작",
       "switchPersonal": "이 개인 버전으로 전환",
       "remove": "버전 삭제",
@@ -13158,6 +13212,8 @@
       "unavailable": "이 버전의 앱 파일을 사용할 수 없습니다.",
       "incompatible": "현재 데이터와 호환되지 않습니다. 현재 기본 버전에서 다시 빌드하세요.",
       "readyHint": "개인 버전이 준비되었습니다. 전환하면 Cindy가 다시 시작되며 계정, 설정, 작업은 유지됩니다.",
+      "updateHint": "개인 버전에 새 내용이 있습니다. 다시 시작하면 계정, 설정, 작업을 유지한 채 최신 버전을 사용합니다.",
+      "usingHint": "최신 개인 버전을 사용 중입니다.",
       "errors": {
         "busy": "작업, 테스트 또는 빌드가 진행 중입니다. 완료한 후 버전을 전환하거나 삭제하세요.",
         "incompatible": "데이터 구조가 다릅니다. 현재 기본 버전에서 개인 버전을 다시 빌드하세요.",
@@ -13194,6 +13250,7 @@
       },
       "status": {
         "waiting": "개인 버전 빌드 대기 중…",
+        "syncing": "최신 소스 동기화 중…",
         "merging": "수정 사항 병합 중…",
         "checking": "개인 버전 검사 중…",
         "packaging": "개인 버전 패키징 중…",
@@ -13208,6 +13265,7 @@
           "cleaning-merge": "병합 파일 정리",
           "environment": "빌드 환경 준비",
           "original": "현재 버전 확인",
+          "syncing": "최신 소스 동기화",
           "merging": "수정 사항 병합",
           "checking-dependencies": "빌드 의존성 설치",
           "checking-tests": "자동 테스트 실행",
@@ -13224,6 +13282,7 @@
         "changed": "작업 디렉터리나 코드가 변경되었습니다. 수정을 완료한 후 다시 빌드하세요.",
         "environment": "빌드 도구가 준비되지 않았습니다. Cindy Make 환경을 확인한 후 다시 시도하세요.",
         "missingShell": "자동 검사에는 Git Bash가 필요합니다. Git for Windows를 설치한 후 다시 시도하세요.",
+        "sourceSyncFailed": "최신 소스를 동기화하지 못해 패키징을 시작하지 않았습니다. 네트워크를 확인하거나 동기화 충돌을 해결한 후 다시 시도하세요.",
         "checksFailed": "병합한 코드가 검사를 통과하지 못했습니다. 수정을 계속한 후 다시 빌드하세요.",
         "conflict": "현재 개인 버전과 수정 사항이 충돌합니다. 편집을 계속하여 충돌을 해결하세요.",
         "baselineChanged": "빌드 중에 개인 버전이 변경되었습니다. 최신 수정 사항을 포함하려면 다시 빌드하세요.",
@@ -13278,6 +13337,7 @@
     },
     "history": {
       "title": "제작 기록",
+      "taskCount": "작업 {{count}}개",
       "batch": {
         "make": "개인 버전 만들기",
         "selected": "선택한 변경 {{count}}개로 만들기",
@@ -13291,6 +13351,7 @@
         "restartTest": "격리 버전 다시 시작"
       },
       "build": "개인 버전 생성",
+      "regeneratePersonal": "개인 버전 다시 생성",
       "buildDescription": "현재 개인 소스로 새 버전을 생성합니다. 아직 반영하지 않은 이전 변경 사항은 포함되지 않습니다.",
       "building": "개인 버전 생성 중…",
       "stop": "제작 중지",
@@ -13301,6 +13362,7 @@
       "stopping": "중지 중…",
       "progress": {
         "waiting": "시작 대기 중",
+        "syncing": "최신 소스 동기화 중",
         "merging": "변경 사항 병합 중",
         "checking": "검사 실행 중",
         "packaging": "개인 버전 패키징 중",
@@ -13315,7 +13377,7 @@
         "busy": "다른 제작 또는 검사가 진행 중입니다. 완료 후 다시 시도하세요.",
         "checking": "이 제작 기록을 확인하는 중입니다. 잠시 후 다시 시도하세요."
       },
-      "counts": "전체 {{total}}회 · 반영 대기 {{pending}}회 · 반영 완료 {{integrated}}회",
+      "counts": "제작 작업 {{total}}개 · 반영 대기 {{pending}}개 · 반영 완료 {{integrated}}개",
       "filterLabel": "제작 기록 필터",
       "mergeTaskTitle": "반영 충돌 해결",
       "revertTaskTitle": "반영 취소 충돌 해결",
@@ -13348,7 +13410,7 @@
       "cleanWorkspace": "남아 있는 제작 브랜치와 작업 폴더를 삭제합니다. 커밋하지 않은 변경 사항은 사라집니다.",
       "cleanKeep": "개인 버전에 반영된 변경 사항과 생성된 앱 버전은 유지됩니다.",
       "endConfirm": "이 제작을 종료하고 작업 폴더를 정리할까요? 제작 기록과 저장된 변경 사항은 유지됩니다.",
-      "revertConfirm": "이 제작에서 개인 소스에 반영한 변경 사항을 취소할까요? 다른 제작과 생성된 앱은 유지됩니다.",
+      "revertConfirm": "이 제작의 변경 사항을 개인 버전에서 제거할까요? 기록을 다시 쓰지 않고 새로운 역방향 변경으로 남깁니다. 다른 제작과 생성된 앱은 유지됩니다.",
       "lifecycle": {
         "preparing": "준비 중",
         "running": "수정 중",
@@ -13371,8 +13433,8 @@
         "continue": "수정 계속",
         "test": "격리 테스트 버전 실행",
         "integrate": "개인 버전에 반영",
-        "revert": "반영 취소",
-        "reapply": "다시 반영",
+        "revert": "개인 버전에서 제거",
+        "reapply": "개인 버전에 다시 추가",
         "resolve": "충돌 해결",
         "retry": "다시 시도",
         "build": "개인 버전 생성",
@@ -13424,7 +13486,8 @@
       "errors": {
         "busy": "다른 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요.",
         "dirty": "소스에 커밋되지 않은 변경 사항이 있습니다. 저장한 후 다시 시도해 주세요.",
-        "localMain": "main 브랜치에 로컬 커밋이 있습니다. 확인한 후 업데이트해 주세요.",
+        "localMain": "Cindy Make 소스의 로컬 main과 대상 버전의 이력이 갈라졌습니다. 차이를 확인한 후 동기화해 주세요.",
+        "localMainAhead": "Cindy Make 소스의 로컬 main이 대상 버전보다 앞서 있어 직접 되돌릴 수 없습니다. 동기화 대상을 확인해 주세요.",
         "unavailable": "소스 또는 작업 기록을 사용할 수 없습니다. 새로 고친 후 다시 시도해 주세요.",
         "gitFailed": "Git 작업을 완료하지 못했습니다. 다시 시도해 주세요.",
         "baselineChanged": "개인 소스가 변경되었습니다. 최신 상태에서 다시 시도해 주세요.",
@@ -13488,5 +13551,9 @@
     "presetLife": "생활",
     "presetIdeas": "아이디어",
     "presetReference": "자료"
+  },
+  "pluginDeviceAuthorization": {
+    "title": "플러그인 로그인 인증",
+    "description": "이 기기에서 {{host}}를 열어 이 작업을 실행하는 플러그인을 인증하세요. 인증 정보는 인증을 시작한 기기에 저장됩니다."
   }
 }

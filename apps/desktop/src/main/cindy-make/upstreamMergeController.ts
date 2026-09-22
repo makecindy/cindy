@@ -33,6 +33,8 @@ export function parseSavedUpstreamMerge(raw: string, userData: string): SavedUps
     (state.cancellationRequested !== undefined &&
       typeof state.cancellationRequested !== 'boolean') ||
     (state.cleanupPending !== undefined && typeof state.cleanupPending !== 'boolean') ||
+    (state.taskOwned !== undefined &&
+      (typeof state.taskOwned !== 'boolean' || (state.taskOwned && !saved.sessionOwner))) ||
     (state.feature !== undefined && (!validFeaturePlan(state.feature) || !saved.sessionOwner)) ||
     (state.tree !== undefined && !/^[0-9a-f]{40,64}$/i.test(state.tree)) ||
     (state.baselineCommit !== undefined && !/^[0-9a-f]{40}$/i.test(state.baselineCommit)) ||
@@ -77,6 +79,7 @@ export interface UpstreamMergeDependencies {
   prepare: (
     state: CindyMakeMergeState,
     publish: (state: CindyMakeMergeState) => Promise<void>,
+    isCurrent: () => boolean,
   ) => Promise<CindyMakeMergeState>;
   apply: (
     state: CindyMakeMergeState,
@@ -111,6 +114,7 @@ const errors = new Set([
   'busy',
   'dirty',
   'localMain',
+  'localMainAhead',
   'unavailable',
   'gitFailed',
   'baselineChanged',
@@ -196,10 +200,10 @@ export class UpstreamMergeController {
         } catch (error) {
           return finish(undefined, error);
         }
-        // A deliberate later message may resume the task, never the stopped build.
+        // A deliberate later message may resume the resolver, never the stopped operation.
         interrupted ||=
           this.stopGeneration !== stopGeneration || this.interruption?.operationId === operationId;
-        // Adoption and cleanup share the active operation. Do not resume a build between them.
+        // Adoption and cleanup share the active operation. Do not resume its caller between them.
         if (this.active) return;
         if (interrupted) finish(undefined, mergeError('interrupted'));
         else if (state.status === 'merged') finish(state);
@@ -210,8 +214,8 @@ export class UpstreamMergeController {
       signal.addEventListener('abort', check, { once: true });
       check();
     }).catch(async (error) => {
-      // Only Stop Making carries this reason. Shutdown and ordinary task Stop
-      // preserve the resolver for a later visit. Keep the build waiting for cleanup.
+      // Only an owning preparation/build Stop carries this reason. Shutdown and an ordinary
+      // resolver-task Stop preserve the resolver for a later visit and keep the caller waiting.
       if (signal.aborted && (signal.reason as { code?: string })?.code === 'cancelled')
         await this.cancelBuild(operationId);
       throw error;
@@ -286,7 +290,7 @@ export class UpstreamMergeController {
   }
   async finishPreviousCleanup(): Promise<void> {
     const state = this.saved?.state;
-    if (state?.feature && state.cancellationRequested) {
+    if ((state?.feature || state?.taskOwned) && state.cancellationRequested) {
       await this.cancelBuild(state.id);
       return;
     }
@@ -329,27 +333,99 @@ export class UpstreamMergeController {
     }
     return this.status();
   }
-  async update(_options?: CindyMakeTaskOptions): Promise<CindyMakeMergeState | undefined> {
+  async update(
+    options?: CindyMakeTaskOptions,
+    signal?: AbortSignal,
+  ): Promise<CindyMakeMergeState | undefined> {
+    signal?.throwIfAborted();
     await this.finishPreviousCleanup();
     const owner = this.deps.owner();
-    return this.run(async () => {
-      if (
+    // Task preparation may only wait on or cancel the source update it actually started.
+    if (
+      signal &&
+      (!owner ||
+        this.active ||
         this.saved?.state.cancellationRequested ||
-        (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged')
+        (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged'))
+    )
+      throw mergeError('busy');
+    let operationId: string | undefined;
+    const markCancelled = () => {
+      if (
+        operationId &&
+        this.saved?.state.id === operationId &&
+        this.deps.owner() === owner &&
+        (signal?.reason as { code?: string })?.code === 'cancelled'
+      ) {
+        try {
+          this.save({ ...this.saved.state, cancellationRequested: true });
+          this.interruption = { operationId };
+        } catch {
+          // The awaited cancellation path retries the durable decision.
+        }
+      }
+    };
+    try {
+      const result = await this.run(async () => {
+        // A request stopped while waiting for the Git lock owns no new operation.
+        // Leave any previous result intact.
+        if (signal && (signal.aborted || this.deps.owner() !== owner)) return;
+        if (
+          this.saved?.state.cancellationRequested ||
+          (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged')
+        )
+          return;
+        this.saved = {
+          sessionOwner: owner || undefined,
+          state: {
+            id: randomUUID(),
+            status: 'fetching',
+            ref: '',
+            upstreamCommit: '',
+            ...(signal ? { taskOwned: true } : {}),
+          },
+        };
+        this.save(this.saved.state);
+        operationId = this.saved.state.id;
+        signal?.addEventListener('abort', markCancelled, { once: true });
+        markCancelled();
+        signal?.throwIfAborted();
+        const latest = await this.deps.latest();
+        signal?.throwIfAborted();
+        if (signal && this.deps.owner() !== owner) throw mergeError('busy');
+        this.save({ ...this.saved!.state, ref: latest.ref, upstreamCommit: latest.commit });
+        // An in-flight adoption may finish on Stop, but never under another account.
+        const result = await this.deps.prepare(
+          this.saved!.state,
+          async (next) => this.save(next),
+          () => !signal || this.deps.owner() === owner,
+        );
+        this.save(result);
+        // Task preparation authorizes its existing dedicated conflict task.
+        // Manual Settings updates still wait for the explicit resolve decision.
+        if (
+          signal &&
+          !signal.aborted &&
+          this.deps.owner() === owner &&
+          result.status === 'conflict'
+        )
+          await this.createResolutionTask(options, owner, signal);
+        await this.deps.refresh().catch(() => undefined);
+      });
+      if (signal && !operationId) {
+        signal.throwIfAborted();
+        throw mergeError('busy');
+      }
+      return result;
+    } finally {
+      signal?.removeEventListener('abort', markCancelled);
+      if (
+        operationId &&
+        signal?.aborted &&
+        (signal.reason as { code?: string })?.code === 'cancelled'
       )
-        return;
-      this.saved = {
-        sessionOwner: owner || undefined,
-        state: { id: randomUUID(), status: 'fetching', ref: '', upstreamCommit: '' },
-      };
-      this.save(this.saved.state);
-      const latest = await this.deps.latest();
-      this.save({ ...this.saved!.state, ref: latest.ref, upstreamCommit: latest.commit });
-      const result = await this.deps.prepare(this.saved!.state, async (next) => this.save(next));
-      this.save(result);
-      // Conflicts wait for an explicit resolve/cancel decision before any Agent task exists.
-      await this.deps.refresh().catch(() => undefined);
-    });
+        await this.cancelBuild(operationId);
+    }
   }
   async resolve(
     options?: CindyMakeTaskOptions,
@@ -399,7 +475,11 @@ export class UpstreamMergeController {
   }
   async cancel(operationId: string): Promise<CindyMakeMergeState | undefined> {
     const state = this.saved?.state;
-    if (state?.id === operationId && state.feature && state.cancellationRequested)
+    if (
+      state?.id === operationId &&
+      (state.feature || state.taskOwned) &&
+      state.cancellationRequested
+    )
       return this.cancelBuild(operationId);
     const owner = this.deps.owner();
     if (
@@ -433,12 +513,12 @@ export class UpstreamMergeController {
       await this.deps.refresh().catch(() => undefined);
     });
   }
-  /** Bound to a build-owned operation, never used for an ordinary session Stop or app exit. */
+  /** Bound to task preparation, never used for an ordinary session Stop or app exit. */
   async cancelBuild(operationId: string): Promise<CindyMakeMergeState | undefined> {
     const state = this.saved?.state;
     const owner = this.deps.owner();
     if (
-      !state?.feature ||
+      !(state?.feature || state?.taskOwned) ||
       state.id !== operationId ||
       this.saved?.sessionOwner !== owner ||
       !this.deps.discard

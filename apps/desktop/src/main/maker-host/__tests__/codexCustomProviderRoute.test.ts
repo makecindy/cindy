@@ -294,6 +294,13 @@ describe('Codex custom Provider identity', () => {
     };
     expect(codexCustomProviderConfigSignature(routeChanged)).not.toBe(baseline);
 
+    const effortChanged = structuredClone(config);
+    effortChanged.runtimes.codex!.models![0]!.reasoning = true;
+    effortChanged.runtimes.codex!.models![0]!.reasoningEfforts = ['high'];
+    expect(codexCustomProviderConfigSignature(effortChanged)).not.toBe(baseline);
+    expect(codexCustomProviderRouteSignature(catalog(buildUserProvider(effortChanged))))
+      .not.toBe(codexCustomProviderRouteSignature(catalog(buildUserProvider(config))));
+
     const disabled = structuredClone(config);
     delete disabled.runtimes.codex?.supportsImageGeneration;
     expect(codexCustomProviderConfigSignature(disabled)).toBe('');

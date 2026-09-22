@@ -78,7 +78,13 @@ it('preserves real checking stages and known failures while filtering private or
   }
   store.saveBuild({ status: 'merging', mergeStep: 'private-output' as never });
   expect(store.readBuild()).toEqual({ status: 'merging' });
-  for (const error of ['checksFailed', 'missingShell', 'baselineChanged', 'interrupted'] as const) {
+  for (const error of [
+    'checksFailed',
+    'missingShell',
+    'sourceSyncFailed',
+    'baselineChanged',
+    'interrupted',
+  ] as const) {
     store.saveBuild({ status: 'failed', error });
     expect(store.readBuild()).toEqual({ status: 'failed', error });
   }
@@ -93,6 +99,8 @@ it('preserves real checking stages and known failures while filtering private or
   }
   store.saveBuild({ status: 'checking' });
   expect(store.readBuild()).toEqual({ status: 'checking' });
+  store.saveBuild({ status: 'syncing', syncLatestSource: true });
+  expect(store.readBuild()).toEqual({ status: 'syncing', syncLatestSource: true });
 });
 it('keeps only bounded known build log entries and preparation stages', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'make-build-log-'));

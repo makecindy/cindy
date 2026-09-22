@@ -22,6 +22,7 @@ export type CindyMakeMergeError =
   | 'busy'
   | 'dirty'
   | 'localMain'
+  | 'localMainAhead'
   | 'unavailable'
   | 'gitFailed'
   | 'baselineChanged'
@@ -51,6 +52,8 @@ export interface CindyMakeMergeState {
   rebaseReview?: boolean;
   /** Native feature integration/undo shares the same retained conflict lifecycle. */
   feature?: MakeFeatureMergePlan;
+  /** Source sync started while preparing a task; stopping preparation owns its candidate. */
+  taskOwned?: boolean;
   tree?: string;
   commit?: string;
   sessionId?: string;

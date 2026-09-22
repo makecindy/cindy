@@ -64,7 +64,14 @@ export interface CindyMakeTaskPreparation {
   sessionId: string;
   originSessionId?: string;
   phase:
-    'waiting' | 'environment' | 'source' | 'workspace' | 'dependencies' | 'starting' | 'completed';
+    | 'waiting'
+    | 'environment'
+    | 'source'
+    | 'updatingSource'
+    | 'workspace'
+    | 'dependencies'
+    | 'starting'
+    | 'completed';
   dependencies?: MakeDependencyProgress;
   /** Settings projection; preparation completion is not production completion. */
   sessionStatus?: 'active' | 'archived' | 'deleted';

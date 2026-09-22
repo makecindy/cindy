@@ -648,12 +648,16 @@
         "agentProxyEnvPending": "等待应用环境变量 → {{url}}（主机连接后自动生效）"
       },
       "startSession": {
+        "unsupportedCodexSource": "SSH Codex 目前仅支持默认 OpenAI 订阅模型，不会转发本机其他供应商的配置。请在新建任务页选择该来源的模型，并同步远端登录态",
         "title": "在这台远端开新 Codex 任务",
         "hint": "新建一个绑定到这台机器的 Maker。Codex 跑在远端，你在这里和它聊。工作目录支持 ~ 展开，不存在会确认后创建。",
         "start": "开始",
         "created": "已在 {{hostId}} 上创建远端任务",
         "createFailed": "创建远端任务失败",
         "errorWorkdirEmpty": "请输入远端工作目录",
+        "modelCatalogLoading": "模型目录尚未就绪，请稍后重试",
+        "modelCatalogFailed": "模型目录读取失败，请在模型设置中刷新后重试",
+        "noCompatibleModel": "没有可用于 SSH 远端的模型，请先在模型设置中连接兼容的供应商",
         "errorWorkdirIsFile": "{{path}} 已存在但不是目录，换一个路径",
         "confirmCreateTitle": "目录不存在，创建吗？",
         "confirmCreateDescription": "{{path}} 在 {{hostId}} 上不存在。点确认会在远端跑 mkdir -p 创建它，然后进入任务。",
@@ -5905,6 +5909,12 @@
       },
       "description": "下方卡片会检查本机环境，并可安装缺少的便携工具。原生编译工具缺失时会显示官方下载指引。",
       "checking": "正在检查环境…",
+      "syncBeforeBuild": {
+        "title": "生成前同步最新源码",
+        "description": "开启后，每次生成或重新生成个人版前，会先把当前渠道的最新官方源码同步到个人版。默认关闭。",
+        "ariaLabel": "生成前同步最新源码",
+        "saveFailed": "未能保存生成前同步设置，请重试。"
+      },
       "forceManaged": {
         "title": "测试安装：忽略系统工具",
         "description": "仅开发版可用。便携工具只检查 Cindy 管理的副本，并模拟 Windows 原生编译工具缺失。切换开关只重新检查，不会开始安装。",
@@ -8026,6 +8036,23 @@
       "stop": "停止生成"
     },
     "pluginSetup": {
+      "account": {
+        "opening": "正在打开授权页",
+        "connected": "账号已连接",
+        "cancelled": "已取消连接",
+        "expired": "本次授权已过期",
+        "ended": "本次授权已结束",
+        "failed": "未能连接账号",
+        "waiting": "等待浏览器授权",
+        "verifying": "正在确认授权结果",
+        "continue": "任务将继续。",
+        "reconnectHint": "重新连接以继续授权。",
+        "waitingHint": "请在浏览器中完成授权，完成后任务会自动继续。",
+        "remoteHint": "在本机浏览器中授权，账号将供远程设备上的 Cindy 使用。",
+        "codeInstructions": "在 {{host}} 输入验证码",
+        "remaining": "{{time}} 后过期",
+        "reconnect": "重新连接"
+      },
       "reopen": "重新打开",
       "title": "{{name}} 设置",
       "assessmentReadFailed": "无法读取插件配置状态。",
@@ -8034,6 +8061,16 @@
       "chooseOne": "选择一种配置方式",
       "restoreAria": "展开 {{name}} 设置",
       "minimizeAria": "收起 {{name}} 设置",
+      "remoteOauthHint": "在这台电脑的浏览器中授权，账号将连接到当前远程设备。其他设置仍需在远程设备上完成。",
+      "connection": {
+        "host": "实例地址",
+        "hostHint": "填写服务的 HTTPS 地址，使用默认端口。",
+        "hostInvalid": "请填写单个 HTTPS 域名，不带路径、查询参数或自定义端口。",
+        "token": "访问令牌",
+        "tokenInvalid": "请填写有效的访问令牌，最多 4096 个字符。",
+        "hint": "仅保存到当前远程设备的这个插件。令牌只用于你填写的地址，不进入对话记录。"
+      },
+      "remoteSecretHint": "在此填写，仅保存到当前远程设备的这个插件。内容不会进入对话记录。",
       "completeOnDesktop": "请在远程电脑完成设置，本卡片会自动更新状态。",
       "cancel": "取消",
       "cancelling": "正在取消…",
@@ -8041,6 +8078,8 @@
       "saveConfiguration": "保存配置",
       "saving": "保存中…",
       "error": {
+        "REMOTE_UNSUPPORTED": "远程设备上的 Cindy 尚不支持此授权方式，请更新该设备的 Cindy 后重试",
+        "REMOTE_FAILED": "未能发起远程授权，请确认两端在线后重试",
         "ACTION_FAILED": "设置操作未完成，请重试。",
         "ACTION_STALE": "设置已更新，请重新选择配置操作。",
         "AUTH_CANCELLED": "授权已取消，您可以重新授权。",
@@ -8094,7 +8133,20 @@
       "inlineSecretStoreFailed": "凭证保存失败",
       "targetNotFound": "目标插件已卸载或当前不可用",
       "targetDisabled": "目标插件已被停用",
-      "targetDisabledInWorkdir": "用户已在当前工作目录停用该插件；不要重试。"
+      "targetDisabledInWorkdir": "用户已在当前工作目录停用该插件；不要重试。",
+      "deviceCode": {
+        "label": "设备验证码",
+        "copied": "验证码已复制",
+        "copiedHint": "验证码已自动复制，也可在这里再次复制",
+        "instructions": "在 {{host}} 选择账号后，将此 验证码粘贴到输入框，再继续授权。",
+        "copyAgain": "再次复制验证码",
+        "reopen": "重新打开授权页",
+        "remaining": "等待授权，本次操作剩余 {{time}}",
+        "completed": "账号已连接，验证码已清除",
+        "expired": "本次授权已过期，请在任务中重新发起连接获取新码",
+        "ended": "本次授权已结束，请在任务中重新发起连接",
+        "actionFailed": "操作未完成，请重试；若授权已结束，请重新发起连接"
+      }
     },
     "createAgent": {
       "quickStart": "快速开始",
@@ -13055,7 +13107,7 @@
       "details": {
         "unknown": "未读取",
         "latest": {
-          "dev": "线上 main",
+          "dev": "GitHub main",
           "beta": "最新 beta",
           "release": "最新正式版",
           "same": "与{{target}} 一致，落后 0 条修改记录",
@@ -13082,6 +13134,7 @@
         "waiting": "等待准备项目",
         "environment": "正在准备环境",
         "source": "正在准备个人项目源码",
+        "updatingSource": "正在更新个人版源码",
         "workspace": "正在创建任务分支和工作目录",
         "dependencies": "正在安装任务依赖",
         "starting": "正在自动开始任务",
@@ -13129,13 +13182,13 @@
         "updateAvailable": "有更新",
         "unverified": "版本状态未确认",
         "upToDateDescription": "个人版代码已包含{{target}}的全部更新",
-        "personalChanges": "另有 {{ahead}} 条个人修改记录"
+        "personalChanges": "个人版源码中另有 {{ahead}} 条修改记录"
       },
       "comparison": {
         "same": "与本地 main 的 SHA 相同",
-        "personalAhead": "已包含本地 main，另有 {{ahead}} 条个人修改记录",
-        "mainAhead": "尚缺本地 main 的 {{behind}} 条修改记录",
-        "diverged": "尚缺本地 main 的 {{behind}} 条修改记录，另有 {{ahead}} 条个人修改记录",
+        "personalAhead": "已包含本地 main，个人版源码中另有 {{ahead}} 条修改记录",
+        "mainAhead": "尚缺本地 main 中的 {{behind}} 条修改记录",
+        "diverged": "尚缺本地 main 中的 {{behind}} 条修改记录，个人版源码中另有 {{ahead}} 条修改记录",
         "different": "SHA 与本地 main 不同，差距未知",
         "unknown": "与本地 main 的差距未知"
       },
@@ -13149,6 +13202,7 @@
       "development": "开发环境",
       "current": "当前使用",
       "using": "正在使用",
+      "updatePersonal": "重启更新",
       "switch": "切换并重启",
       "switchPersonal": "切换到此个人版",
       "remove": "删除版本",
@@ -13158,6 +13212,8 @@
       "unavailable": "此版本的应用文件已不可用。",
       "incompatible": "此版本与当前数据不兼容，请基于当前原版重新生成。",
       "readyHint": "个人版已准备好。切换后会重启 Cindy，并保留当前账号、设置和任务。",
+      "updateHint": "个人版已有新内容。重启后会使用最新个人版，并保留当前账号、设置和任务。",
+      "usingHint": "正在使用最新个人版。",
       "errors": {
         "busy": "还有任务、测试或构建正在进行，请结束后再切换或删除版本。",
         "incompatible": "数据结构不同，暂时不能切换到这份版本。请基于当前原版重新生成个人版。",
@@ -13194,6 +13250,7 @@
       },
       "status": {
         "waiting": "等待生成个人版…",
+        "syncing": "正在同步最新源码…",
         "merging": "正在合并修改…",
         "checking": "正在检查个人版…",
         "packaging": "正在打包个人版…",
@@ -13208,6 +13265,7 @@
           "cleaning-merge": "清理合并文件",
           "environment": "准备生成环境",
           "original": "检查当前版本",
+          "syncing": "同步最新源码",
           "merging": "合入修改",
           "checking-dependencies": "安装构建依赖",
           "checking-tests": "运行自动测试",
@@ -13224,6 +13282,7 @@
         "changed": "制作目录或代码已有变化，请完成修改后重新生成。",
         "environment": "构建工具尚未就绪，请检查 Cindy Make 环境后重试。",
         "missingShell": "自动检查需要 Git Bash，请安装 Git for Windows 后重试。",
+        "sourceSyncFailed": "最新源码同步失败，尚未开始打包。请检查网络或处理同步冲突后重试。",
         "checksFailed": "合并后的代码未通过检查，请继续修改后重新生成。",
         "conflict": "与当前个人版的修改有冲突，请继续修改并解决冲突。",
         "baselineChanged": "生成期间个人版已有更新，请重新生成以包含最新修改。",
@@ -13278,6 +13337,7 @@
     },
     "history": {
       "title": "制作历史",
+      "taskCount": "{{count}} 个任务",
       "batch": {
         "make": "制作个人版",
         "selected": "制作所选 {{count}} 项",
@@ -13291,6 +13351,7 @@
         "restartTest": "重新启动隔离版"
       },
       "build": "生成个人版",
+      "regeneratePersonal": "重新生成个人版",
       "buildDescription": "将当前个人源码生成新版本，未合入的历史改动不会包含在内。",
       "building": "正在生成个人版…",
       "stop": "停止制作",
@@ -13301,6 +13362,7 @@
       "stopping": "正在停止…",
       "progress": {
         "waiting": "等待开始",
+        "syncing": "正在同步最新源码",
         "merging": "正在合入修改",
         "checking": "正在运行检查",
         "packaging": "正在打包个人版",
@@ -13315,7 +13377,7 @@
         "busy": "另一个制作或检查正在进行，请稍后再试。",
         "checking": "正在核对这条制作记录，请稍后再试。"
       },
-      "counts": "共 {{total}} 次 · 待合入 {{pending}} 次 · 已合入 {{integrated}} 次",
+      "counts": "共 {{total}} 个制作任务 · 待合入 {{pending}} 个 · 已合入 {{integrated}} 个",
       "filterLabel": "筛选制作历史",
       "mergeTaskTitle": "处理合入冲突",
       "revertTaskTitle": "处理撤销合入冲突",
@@ -13348,7 +13410,7 @@
       "cleanWorkspace": "删除仍存在的制作分支和工作目录，其中未提交的改动将丢失。",
       "cleanKeep": "保留已合入个人版的改动和已生成的应用版本。",
       "endConfirm": "结束这次制作并清理工作目录？制作历史与已保存的改动会保留。",
-      "revertConfirm": "撤销这次制作合入个人源码的改动？其他制作和已生成的应用会保留。",
+      "revertConfirm": "从个人版移除这次制作的改动？系统会新增一条反向修改记录，不会改写历史；其他制作和已生成的应用会保留。",
       "lifecycle": {
         "preparing": "准备中",
         "running": "正在修改",
@@ -13371,8 +13433,8 @@
         "continue": "继续修改",
         "test": "启动隔离测试版",
         "integrate": "合入个人版",
-        "revert": "撤销合入",
-        "reapply": "重新合入",
+        "revert": "从个人版移除",
+        "reapply": "重新加入个人版",
         "resolve": "处理冲突",
         "retry": "重试",
         "build": "生成个人版",
@@ -13424,7 +13486,8 @@
       "errors": {
         "busy": "其他操作正在进行，请稍后重试。",
         "dirty": "源码有未提交的改动，请先保存再重试。",
-        "localMain": "main 分支存在本地提交，请检查后再更新。",
+        "localMain": "Cindy Make 源码中的本地 main 与目标版本的历史已分叉，请检查差异后再同步",
+        "localMainAhead": "Cindy Make 源码中的本地 main 已领先目标版本，无法直接回退，请检查同步目标",
         "unavailable": "源码或操作记录不可用，请刷新后重试。",
         "gitFailed": "Git 未能完成操作，请重试。",
         "baselineChanged": "个人源码已发生变化，请基于最新状态重试。",
@@ -13488,5 +13551,9 @@
     "presetLife": "生活",
     "presetIdeas": "灵感",
     "presetReference": "资料"
+  },
+  "pluginDeviceAuthorization": {
+    "title": "授权插件登录",
+    "description": "在这台设备打开 {{host}}，为执行此任务的插件授权。凭据保存在发起授权的设备上。"
   }
 }

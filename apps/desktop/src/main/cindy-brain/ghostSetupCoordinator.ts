@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { getRemoteOauthContext } from '../plugin-oauth/context.js';
 import type {
   GhostSetupAllowedAction,
   GhostSetupAssessment,
@@ -63,7 +64,24 @@ export type GhostSetupActionResult =
       message?: string;
     };
 
+/** Main-only capability for one card submission; never serialized to an IPC or model. */
+export interface GhostSetupInlineCommit {
+  readonly replaceExisting: boolean;
+  assertCurrent(ghostId: string, actionId: string, requirementRef: string): void;
+  /** Called only after the vault write, before readiness/change broadcasts. */
+  onCommitted(): void;
+}
+
+export interface GhostSetupInlineActionInput {
+  sessionId: string;
+  ghostId: string;
+  action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
+  value: string;
+  commit?: GhostSetupInlineCommit;
+}
+
 export interface GhostSetupCoordinatorDeps {
+  remoteConnection?: true;
   changeBus: GhostSetupChangeBus;
   bridge: GhostSetupInteractionBridge;
   assess: (ghostId: string) => Promise<GhostSetupAssessment> | GhostSetupAssessment;
@@ -83,12 +101,7 @@ export interface GhostSetupCoordinatorDeps {
     action: GhostSetupAllowedAction;
     responseTarget?: GhostSetupInteractionResponseTarget;
   }) => Promise<GhostSetupActionResult>;
-  executeInlineAction?: (args: {
-    sessionId: string;
-    ghostId: string;
-    action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
-    value: string;
-  }) => Promise<GhostSetupActionResult>;
+  executeInlineAction?: (args: GhostSetupInlineActionInput) => Promise<GhostSetupActionResult>;
   timeoutMs?: number;
   terminalGraceMs?: number;
   timeoutMessage?: () => string;
@@ -106,6 +119,10 @@ export interface GhostSetupEnsureRequest {
   /** Captured call scope; revalidated after every setup/policy change. */
   workingDir?: string | null;
   plan?: GhostSetupPlan;
+  /** Explicit credential reconfiguration; never removes the existing value first. */
+  reauthorize?: boolean;
+  /** The original MCP call owns this waiter, including while its card is open. */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_SETUP_TIMEOUT_MS = 10 * 60 * 1000;
@@ -131,15 +148,25 @@ export class GhostSetupCoordinator {
   }
 
   async ensureReady(request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> {
+    const cancelled = (): GhostSetupEnsureResult => ({
+      ok: false, errorCode: 'SETUP_CANCELLED', message: 'Plugin setup was cancelled; no plugin operation was executed.',
+    });
+    if (request.signal?.aborted) return cancelled();
     let assessment: GhostSetupAssessment;
     let unsubscribe = () => {};
     let wakeVerify: (() => void) | null = null;
     let assessmentDirty = false;
+    const reconnectedActions = new Set<string>();
+    let localConnectionAction: { id: string; ref: string; revision: number } | undefined;
 
     // Subscribe before the initial read. A committed settings write racing the
     // first assessment will then keep the read loop running until one complete
     // assessment observes a quiet revision.
-    unsubscribe = this.deps.changeBus.subscribe(request.ghostId, () => {
+    unsubscribe = this.deps.changeBus.subscribe(request.ghostId, event => {
+      if (localConnectionAction && event.source === 'connection' && event.ref === localConnectionAction.ref &&
+          event.revision > localConnectionAction.revision) {
+        reconnectedActions.add(localConnectionAction.id);
+      }
       assessmentDirty = true;
       if (wakeVerify) wakeVerify();
     });
@@ -177,8 +204,15 @@ export class GhostSetupCoordinator {
     // ready 态的重连建议是非阻塞的:仅 Agent 主动带 plan 且本回合有交互面时才进
     // 卡流程;无 sessionId 的回合(IM/定时任务)丢弃 plan 直接放行,绝不把 ready
     // 插件拦成 SETUP_REQUIRED。
+    if (request.signal?.aborted) {
+      unsubscribe();
+      return cancelled();
+    }
+    const requestedReauth = (next: GhostSetupAssessment): GhostSetupAssessment | null =>
+      toReauthInteractionAssessment(next) ??
+      (request.reauthorize ? toExplicitReauthInteractionAssessment(next, reconnectedActions) : null);
     const reauthAssessment =
-      request.plan && request.sessionId ? toReauthInteractionAssessment(assessment) : null;
+      (request.plan || request.reauthorize) && request.sessionId ? requestedReauth(assessment) : null;
     const reauthMode = reauthAssessment !== null;
     if (assessment.state === 'ready' && !reauthMode) {
       unsubscribe();
@@ -212,6 +246,8 @@ export class GhostSetupCoordinator {
         ? validateReauthPlan(request.plan, assessment)
         : validatePlan(request.plan, assessment)) ?? defaultPlan(assessment);
     let snapshot = toSnapshot(requestId, identity, assessment, plan);
+    if (this.deps.executeInlineAction) snapshot.remoteSecret = true;
+    if (this.deps.remoteConnection) snapshot.remoteConnection = true;
     let settled = false;
     let verifying: Promise<void> | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -226,6 +262,7 @@ export class GhostSetupCoordinator {
       ): void => {
         if (settled) return;
         settled = true;
+        request.signal?.removeEventListener('abort', onAbort);
         unsubscribe();
         if (timeoutId) clearTimeout(timeoutId);
         // The terminal card may remain visible for a short grace period, but
@@ -271,6 +308,8 @@ export class GhostSetupCoordinator {
           activeActionId,
           allPendingSteps,
         });
+        if (this.deps.executeInlineAction) snapshot.remoteSecret = true;
+        if (this.deps.remoteConnection) snapshot.remoteConnection = true;
         this.deps.bridge.update(snapshot);
       };
 
@@ -321,7 +360,7 @@ export class GhostSetupCoordinator {
             return;
           }
           const next = current.assessment;
-          const nextReauthAssessment = reauthMode ? toReauthInteractionAssessment(next) : null;
+          const nextReauthAssessment = reauthMode ? requestedReauth(next) : null;
           if (next.state === 'ready' && !nextReauthAssessment) {
             publishSatisfied(next);
             settle({ ok: true, assessment: next }, 'ready');
@@ -344,64 +383,80 @@ export class GhostSetupCoordinator {
         expectedRevision: number,
         responseTarget?: GhostSetupInteractionResponseTarget,
       ): Promise<void> => {
-        if (settled) return;
-        if (expectedRevision !== snapshot.revision) {
-          await verify();
-          return;
-        }
-        const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
-        if (!target.ok) {
-          settleTargetFailure(target);
-          return;
-        }
-        const action = findAllowedAction(assessment, actionId);
-        if (!action) {
-          await verify();
-          return;
-        }
-        activeActionId = action.id;
-        publish(assessment, 'action_running');
-        // OAuth is a Host-global flow and remains shared. Navigation actions
-        // belong to a session + responding window: two sessions displayed in
-        // one window must each receive a route carrying its own sessionId.
-        const flightScope =
-          action.kind === 'oauth_connect'
-            ? 'shared'
-            : responseTarget
-              ? `session:${sessionId}:target:${responseTarget.id}`
-              : `session:${sessionId}`;
-        const flightKey = `${request.ghostId}\u0000${action.id}\u0000${flightScope}`;
-        let flight = this.actionFlights.get(flightKey);
-        if (!flight) {
-          flight = this.trackAction(
-            this.deps
-              .executeAction({
-                sessionId,
-                ghostId: request.ghostId,
-                action,
-                ...(responseTarget ? { responseTarget } : {}),
-              })
-              .finally(() => this.actionFlights.delete(flightKey)),
-          );
-          this.actionFlights.set(flightKey, flight);
-        }
-        let result: GhostSetupActionResult;
+        const remoteOauth = getRemoteOauthContext();
         try {
-          result = await flight;
-        } catch (error) {
-          result = {
-            ok: false,
-            errorCode: 'ACTION_FAILED',
-            message: error instanceof Error ? error.message : '插件设置操作失败',
-          };
+          if (settled) return;
+          if (expectedRevision !== snapshot.revision) {
+            await verify();
+            return;
+          }
+          const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
+          if (!target.ok) {
+            settleTargetFailure(target);
+            return;
+          }
+          const action = findAllowedAction(assessment, actionId);
+          if (!action) {
+            await verify();
+            return;
+          }
+          activeActionId = action.id;
+          if (action.kind === 'manage_connection' && !remoteOauth) {
+            localConnectionAction = { id: action.id, ref: action.id.slice('manage_connection:connection:'.length),
+              revision: this.deps.changeBus.currentRevision(request.ghostId) };
+          }
+          publish(assessment, 'action_running');
+          // Local OAuth actions remain shared; remote ones belong to their transaction. Navigation actions
+          // belong to a session + responding window: two sessions displayed in
+          // one window must each receive a route carrying its own sessionId.
+          const flightScope =
+            action.kind === 'oauth_connect'
+              ? (getRemoteOauthContext()?.scope ?? 'shared')
+              : responseTarget
+                ? `session:${sessionId}:target:${responseTarget.id}`
+                : `session:${sessionId}`;
+          const flightKey = `${request.ghostId}\u0000${action.id}\u0000${flightScope}`;
+          let flight = this.actionFlights.get(flightKey);
+          if (!flight) {
+            flight = this.trackAction(
+              this.deps
+                .executeAction({
+                  sessionId,
+                  ghostId: request.ghostId,
+                  action,
+                  ...(responseTarget ? { responseTarget } : {}),
+                })
+                .finally(() => this.actionFlights.delete(flightKey)),
+            );
+            this.actionFlights.set(flightKey, flight);
+          }
+          let result: GhostSetupActionResult;
+          try {
+            result = await flight;
+          } catch (error) {
+            result = {
+              ok: false,
+              errorCode: 'ACTION_FAILED',
+              message: error instanceof Error ? error.message : '插件设置操作失败',
+            };
+          }
+          if (settled) return;
+          if (!result.ok) {
+            if (localConnectionAction?.id === action.id) localConnectionAction = undefined;
+            publish(assessment, 'failed', result.errorCode ?? 'ACTION_FAILED');
+            return;
+          }
+          if (action.kind === 'oauth_connect') {
+            reconnectedActions.add(action.id);
+            assessmentDirty = true;
+          }
+          if (result.waitingExternal) publish(assessment, 'waiting_external');
+          await verify(result.waitingExternal ? 'waiting_external' : undefined);
+        } finally {
+          // Success is sealed at credential commit, before readiness broadcasts.
+          // Early validation/action failures must also settle the remote request.
+          remoteOauth?.finish(false);
         }
-        if (settled) return;
-        if (!result.ok) {
-          publish(assessment, 'failed', result.errorCode ?? 'ACTION_FAILED');
-          return;
-        }
-        if (result.waitingExternal) publish(assessment, 'waiting_external');
-        await verify(result.waitingExternal ? 'waiting_external' : undefined);
       };
 
       const onCommand = async (
@@ -428,7 +483,7 @@ export class GhostSetupCoordinator {
         await runAction(command.actionId, command.expectedRevision, responseTarget);
       };
 
-      const submitInline = async (submit: {
+      const submitInlineCurrent = async (submit: {
         actionId: string;
         expectedRevision: number;
         value: string;
@@ -454,9 +509,29 @@ export class GhostSetupCoordinator {
           await verify();
           return;
         }
+        const boundItem = assessment.groups.flatMap(group => group.items)
+          .find(item => item.actions.some(candidate => candidate.id === action.id));
+        if (!boundItem) return;
         inlineSubmitting = true;
         activeActionId = action.id;
         publish(assessment, 'action_running');
+        let committed = false;
+        const commit: GhostSetupInlineCommit = {
+          replaceExisting: request.reauthorize === true && reauthMode,
+          assertCurrent: (ghostId, actionId, requirementRef) => {
+            if (settled || committed || request.signal?.aborted || !inlineSubmitting ||
+                activeActionId !== action.id || ghostId !== request.ghostId ||
+                actionId !== action.id || requirementRef !== boundItem.ref ||
+                !this.deps.validateTarget(request.ghostId, request.tool, request.workingDir).ok) {
+              throw new Error('PLUGIN_SETUP_INLINE_STALE');
+            }
+          },
+          onCommitted: () => {
+            committed = true;
+            reconnectedActions.add(action.id);
+            assessmentDirty = true;
+          },
+        };
         let result: GhostSetupActionResult;
         try {
           result = this.deps.executeInlineAction
@@ -466,6 +541,7 @@ export class GhostSetupCoordinator {
                   ghostId: request.ghostId,
                   action,
                   value: submit.value,
+                  commit,
                 }),
               )
             : {
@@ -490,10 +566,30 @@ export class GhostSetupCoordinator {
         await verify();
       };
 
+      const submitInline = async (submit: Parameters<typeof submitInlineCurrent>[0]): Promise<void> => {
+        const remote = getRemoteOauthContext();
+        try { remote?.assertCurrent(); await submitInlineCurrent(submit); }
+        finally { remote?.finish(false); }
+      };
+
+      const onAbort = (): void => {
+        publish(assessment, 'cancelled', undefined, true);
+        settle(cancelled(), 'cancelled', 0);
+      };
       try {
-        this.deps.bridge.open(sessionId, snapshot, onCommand, submitInline);
+        this.deps.bridge.open(sessionId, snapshot, onCommand, submitInline, actionId => {
+          if (settled) return;
+          reconnectedActions.add(actionId);
+          assessmentDirty = true;
+          void verify();
+        });
       } catch (error) {
         settle(this.internalFailure('插件设置卡片打开失败', error), 'open-failed', 0);
+        return;
+      }
+      request.signal?.addEventListener('abort', onAbort, { once: true });
+      if (request.signal?.aborted) {
+        onAbort();
         return;
       }
       timeoutId = setTimeout(() => {
@@ -635,6 +731,26 @@ export function toReauthInteractionAssessment(
       },
     ],
   };
+}
+
+/** Reopen current credential actions without deleting the previously stored values. */
+function toExplicitReauthInteractionAssessment(
+  assessment: GhostSetupAssessment,
+  completedActions: ReadonlySet<string>,
+): GhostSetupAssessment | null {
+  if (assessment.state !== 'ready') return null;
+  const groups = assessment.groups.flatMap((group) => {
+    if (group.items.some(item => item.actions.some(action => completedActions.has(action.id)))) return [];
+    const items = group.items.flatMap(item => {
+      const actions = item.actions.filter(action => !completedActions.has(action.id) &&
+        ((item.kind === 'oauth' && action.kind === 'oauth_connect') ||
+          (item.kind === 'connection' && action.kind === 'manage_connection') ||
+          (item.kind === 'secret' && action.kind === 'inline_form')));
+      return actions.length ? [{ ...item, state: 'expired' as const, actions }] : [];
+    });
+    return items.length ? [{ ...group, items }] : [];
+  });
+  return groups.length ? { ...assessment, state: 'required', groups } : null;
 }
 
 export function defaultPlan(assessment: GhostSetupAssessment): GhostSetupPlan {

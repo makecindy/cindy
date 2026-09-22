@@ -1192,6 +1192,22 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
+  it('materializes the inherited picker tiers as the exact Pi runtime map', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    const catalog = getActiveCatalog();
+    const descriptors = deriveAvailableModels(catalog, 'pi');
+    const runtime = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567/');
+    for (const id of ['chatgpt/gpt-6-astra', 'chatgpt/gpt-5.6-sol']) {
+      const model = catalog.providers.find(p => p.id === 'openai')!.models.pi!.find(m => m.id === id)!;
+      const native = runtime.providers.find(p => p.id === 'openai-codex')!.models.find(m => m.id === id)!;
+      expect(descriptors.find(m => m.id === id)?.efforts).toEqual(model.efforts);
+      expect(Object.entries(native.thinkingLevelMap!).filter(([, value]) => value !== null)
+        .map(([level]) => level)).toEqual(model.efforts);
+      expect(native.thinkingLevelMap?.minimal).toBeNull();
+      expect(native.thinkingLevelMap?.max).toBe('max');
+    }
+  });
+
   it('keeps a retired OpenAI profile private to its native subscription resume', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const openai = catalog.providers.find((provider) => provider.id === 'openai')!;

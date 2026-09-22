@@ -159,7 +159,7 @@ export function CindyMakeSourceDetails({
           )}
         </dd>
       </div>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <dt>
           <Tip text={showComparison ? personalStatusDescription : undefined}>
             <span
@@ -185,10 +185,7 @@ export function CindyMakeSourceDetails({
             </span>
           </Tip>
         </dt>
-        <dd className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="font-mono" title={source.commit}>
-            {source.commit?.slice(0, 12) ?? unknown}
-          </span>
+        <dd className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           {showComparison && personalDetail && <span className="text-12">{personalDetail}</span>}
         </dd>
       </div>

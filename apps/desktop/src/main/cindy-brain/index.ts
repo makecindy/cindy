@@ -1,4 +1,6 @@
 import { registerGhostCardRemoteProvider, persistGhostCardWithRemoteChange } from './cardRemoteResource.js';
+import { openDeviceAuthorizationCard, openPluginAuthorizationCard } from '../plugin-oauth/deviceCard.js';
+import { t as authorizationText } from '../i18n.js';
 import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
 import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
 import { handleRoutineRequest } from './routineSlot.js';
@@ -74,6 +76,7 @@ import {
   type GhostLibraryOverview,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { getRemoteOauthContext } from '../plugin-oauth/context.js';
 import { withGhostSkillProjectionReconcile } from '../authBoundaryQuarantine.js';
 import {
   activeOwnerScopeKey,
@@ -155,12 +158,15 @@ import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
 import {
   getGhostSetupCoordinator,
   type GhostSetupActionResult,
+  type GhostSetupInlineActionInput,
 } from './ghostSetupCoordinator.js';
 import {
   getGhostSetupInteractionBridge,
   type GhostSetupInteractionResponseTarget,
 } from './ghostSetupInteractionBridge.js';
 import { executeGhostSetupInlineSubmission } from './ghostSetupInlineExecutor.js';
+import { requestNodeSecretSetup } from './nodeSecretSetup.js';
+import { executeGhostSetupConnectionSubmission } from './ghostSetupConnectionExecutor.js';
 import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
@@ -391,6 +397,7 @@ import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import {
   formatAuxiliaryModelRefLabel,
@@ -1748,8 +1755,45 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
   if (!nodeRuntimeBrokerSingleton) {
     nodeRuntimeBrokerSingleton = new GhostNodeRuntimeBroker({
       getGhost: findAvailableGhost,
+      getCallSignal: (ghostId, callId) => getGhostPipeDispatcher().getPendingCallSignal(ghostId, callId),
+      getCallSessionId: (ghostId, callId) =>
+        getGhostPipeDispatcher().getPendingCallSessionId(ghostId, callId),
+      openSecretInput: input => {
+        const bridge = getGhostSetupInteractionBridge();
+        if (!bridge) throw new Error('NODE_SECRET_INPUT_UNAVAILABLE');
+        return requestNodeSecretSetup({
+          bridge,
+          changeBus: getGhostSetupChangeBus(),
+          getManifest: ghostId => findAvailableGhost(ghostId)?.manifest ?? null,
+          secretSaved: ghostSecretSaved,
+          storeSecret: storeGhostSecret,
+        }, input);
+      },
+      openDeviceAuthorization: (input) => {
+        const bridge = getGhostSetupInteractionBridge();
+        if (!bridge) throw new Error('DEVICE_AUTHORIZATION_UNAVAILABLE');
+        return openDeviceAuthorizationCard(input, {
+          bridge,
+          openExternal: (url) => shell.openExternal(url),
+          copy: {
+            title: authorizationText('pluginDeviceAuthorization.title'),
+            description: authorizationText('pluginDeviceAuthorization.description'),
+          },
+        });
+      },
+      openAuthorization: input => {
+        const bridge = getGhostSetupInteractionBridge();
+        if (!bridge) throw new Error('PLUGIN_AUTHORIZATION_UNAVAILABLE');
+        return openPluginAuthorizationCard(input, {
+          bridge, openExternal: url => shell.openExternal(url),
+          copyDeviceCode: code => copyPrivateDeviceCode(clipboard, code),
+          copy: { title: authorizationText('pluginDeviceAuthorization.title'),
+            description: authorizationText('pluginDeviceAuthorization.description') },
+        });
+      },
       ownerScope: ghostOwnerScope,
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
+      secretSaved: ghostSecretSaved,
       resolveOauthSecret: async (ghostId, secretKey, accountId) => {
         const ghost = findAvailableGhost(ghostId);
         const source = ghost
@@ -5042,21 +5086,30 @@ export async function executeGhostSetupAction(args: {
         message: '当前安装来源或组织身份无权使用授权 broker',
       };
     }
-    const connected = await getGhostOauthAccountManager().connectAccount(
-      args.ghostId,
-      secretKey,
-      decl,
-      { deliveryHosts: runtimeManifest.network?.hosts, onAuthorizationUrl: args.onAuthorizationUrl, assertCurrent: args.assertCurrent, beforeCommit: args.beforeCommit },
-    );
-    return connected.ok
-      ? { ok: true }
-      : {
-          ok: false,
-          errorCode: mapGhostOauthConnectError(connected.error),
-          // interaction snapshot 只传稳定 errorCode；detail 可能含服务路径或
-          // 上游诊断，留在 Main，不下放 Renderer。
-          message: connected.detail ?? connected.error,
-        };
+    const remote = getRemoteOauthContext();
+    try {
+      remote?.assertCurrent();
+      const connected = await getGhostOauthAccountManager().connectAccount(
+        args.ghostId,
+        secretKey,
+        decl,
+        { deliveryHosts: runtimeManifest.network?.hosts, remote, onAuthorizationUrl: remote ? undefined : args.onAuthorizationUrl, assertCurrent: args.assertCurrent, beforeCommit: args.beforeCommit },
+      );
+      remote?.finish(connected.ok);
+      return connected.ok
+        ? { ok: true }
+        : {
+            ok: false,
+            errorCode: mapGhostOauthConnectError(connected.error),
+            // interaction snapshot 只传稳定 errorCode；detail 可能含服务路径或
+            // 上游诊断，留在 Main，不下放 Renderer。
+            message: connected.detail ?? connected.error,
+          };
+    } catch (error) {
+      remote?.finish(false);
+      if (remote) return { ok: false, errorCode: 'AUTH_FAILED', message: 'Remote authorization unavailable' };
+      throw error;
+    }
   }
 
   const navigation = ghostSetupNavigationForAction(args.ghostId, args.action);
@@ -5086,12 +5139,7 @@ export async function executeGhostSetupAction(args: {
  * 仅供 trusted Desktop inline-setup IPC 调用。Secret 值不经过通用
  * InteractionDecision，也不进入 assessment、snapshot 或日志。
  */
-export async function executeGhostSetupInlineAction(args: {
-  sessionId: string;
-  ghostId: string;
-  action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
-  value: string;
-}): Promise<GhostSetupActionResult> {
+export async function executeGhostSetupInlineAction(args: GhostSetupInlineActionInput): Promise<GhostSetupActionResult> {
   return executeGhostSetupInlineSubmission(
     {
       getAssessment: getGhostSetupAssessment,
@@ -5116,6 +5164,22 @@ export async function executeGhostSetupInlineAction(args: {
     },
     args,
   );
+}
+
+/** Only called under the authenticated remote connection-card context. */
+export function bindGhostSetupConnectionAction(args: { ghostId: string; actionId: string; onCommitted(): void }):
+  ((value: import('@cindy/device-link').PluginConnectionInput) => boolean) | null {
+  const manifest = findAvailableGhost(args.ghostId)?.manifest;
+  if (!manifest) return null;
+  const expectedManifest = JSON.stringify(manifest);
+  return value => executeGhostSetupConnectionSubmission({
+    getAssessment: getGhostSetupAssessment,
+    getManifest: ghostId => findAvailableGhost(ghostId)?.manifest ?? null,
+    manager: getGhostConnectionManager(),
+    emitChange: (ghostId, key) => {
+      getGhostSetupChangeBus().emit(ghostId, { source: 'connection', ref: key });
+    },
+  }, { ...args, value, expectedManifest });
 }
 
 /**

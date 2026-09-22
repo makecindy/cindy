@@ -83,6 +83,78 @@ function harness(initial?: SavedUpstreamMerge, actualWorkspace = !!initial?.stat
   };
 }
 describe('upstream merge lifecycle', () => {
+  it('automatically resolves a task-owned source conflict and waits for adoption and cleanup', async () => {
+    const h = harness();
+    h.deps.prepare = vi.fn(async (state) => {
+      h.setWorkspace(true);
+      return { ...state, status: 'conflict', hasWorkspace: true };
+    });
+    const abort = new AbortController();
+    const options = { agentKind: 'codex' as const, model: 'selected-model' };
+    const state = await h.controller.update(options, abort.signal);
+    expect(state).toMatchObject({
+      status: 'resolving',
+      taskOwned: true,
+      sessionId: 'merge-session',
+    });
+    expect(h.deps.session).toHaveBeenCalledWith(
+      expect.objectContaining({ taskOwned: true }),
+      options,
+      expect.any(Function),
+      expect.any(Function),
+    );
+    let done = false;
+    const waiting = h.controller.waitForCompletion(state!.id, abort.signal).then((result) => {
+      done = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(done).toBe(false);
+    h.controller.prepareTurn('merge-session')();
+    await h.controller.finish('merge-session');
+    expect(await waiting).toMatchObject({ status: 'merged', hasWorkspace: false });
+    expect(h.deps.cleanup).toHaveBeenCalledOnce();
+  });
+  it('stops and cleans up a task-owned source resolver without cancelling manual updates', async () => {
+    const h = harness({
+      state: { ...candidate, taskOwned: true, sessionId: 'resolver' },
+      sessionOwner: 'alice',
+    });
+    const abort = new AbortController();
+    const waiting = h.controller
+      .waitForCompletion(candidate.id, abort.signal)
+      .catch((error) => error);
+    abort.abort(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
+    expect(await waiting).toMatchObject({ code: 'cancelled' });
+    expect(h.deps.discard).toHaveBeenCalledOnce();
+    expect(h.saved()?.state).toMatchObject({ status: 'cancelled', hasWorkspace: false });
+    const manual = harness({ state: candidate, sessionOwner: 'alice' });
+    await expect(
+      manual.controller.update(undefined, new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'busy' });
+    expect(manual.deps.discard).not.toHaveBeenCalled();
+    expect(manual.deps.latest).not.toHaveBeenCalled();
+  });
+  it('cancels during a source fetch without dispatching a resolver or adopting a candidate', async () => {
+    const h = harness();
+    let release!: () => void;
+    h.deps.latest = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { ref: 'main', commit: 'a'.repeat(40) };
+    });
+    const abort = new AbortController();
+    const updating = h.controller.update(undefined, abort.signal);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    abort.abort(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
+    release();
+    await updating;
+    expect(h.deps.prepare).not.toHaveBeenCalled();
+    expect(h.deps.session).not.toHaveBeenCalled();
+    expect(h.deps.discard).toHaveBeenCalledOnce();
+    expect(h.saved()?.state).toMatchObject({ status: 'cancelled', hasWorkspace: false });
+  });
   it('retains an unresolved feature step in the same task instead of dispatching another resolver', async () => {
     const h = harness({
       state: {
@@ -386,22 +458,31 @@ describe('upstream merge lifecycle', () => {
     expect(h.deps.discard).toHaveBeenCalledOnce();
     expect(h.saved()?.state.hasWorkspace).toBe(false);
   });
-  it('does not cancel an older candidate when a new build stops while waiting for the Git lock', async () => {
-    const initial = { ...candidate, feature, status: 'merged' as const, hasWorkspace: false };
-    const h = harness({ state: initial, sessionOwner: 'alice' });
-    const abort = new AbortController();
-    h.deps.prepareFeature = vi.fn();
-    h.deps.exclusive = async (run) => {
-      abort.abort(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
-      return run();
-    };
-    await expect(h.controller.feature(feature, undefined, abort.signal)).rejects.toMatchObject({
-      code: 'cancelled',
-    });
-    expect(h.deps.prepareFeature).not.toHaveBeenCalled();
-    expect(h.deps.discard).not.toHaveBeenCalled();
-    expect(h.saved()?.state).toEqual(initial);
-  });
+  it.each(['feature', 'source'] as const)(
+    'does not cancel an older candidate when a %s build stops while waiting for the Git lock',
+    async (kind) => {
+      const initial = { ...candidate, feature, status: 'merged' as const, hasWorkspace: false };
+      const h = harness({ state: initial, sessionOwner: 'alice' });
+      const abort = new AbortController();
+      h.deps.prepareFeature = vi.fn();
+      h.deps.exclusive = async (run) => {
+        abort.abort(Object.assign(new Error('cancelled'), { code: 'cancelled' }));
+        return run();
+      };
+      const updating =
+        kind === 'feature'
+          ? h.controller.feature(feature, undefined, abort.signal)
+          : h.controller.update(undefined, abort.signal);
+      await expect(updating).rejects.toMatchObject({
+        code: 'cancelled',
+      });
+      expect(h.deps.prepareFeature).not.toHaveBeenCalled();
+      expect(h.deps.prepare).not.toHaveBeenCalled();
+      expect(h.deps.latest).not.toHaveBeenCalled();
+      expect(h.deps.discard).not.toHaveBeenCalled();
+      expect(h.saved()?.state).toEqual(initial);
+    },
+  );
   it('finishes an in-flight adoption receipt before cancelling so the build can roll it back', async () => {
     const h = harness({
       state: { ...candidate, feature, sessionId: 'resolver', status: 'resolving' },
@@ -428,11 +509,16 @@ describe('upstream merge lifecycle', () => {
     expect(h.deps.discard).toHaveBeenCalledOnce();
     expect(h.saved()?.state.status).toBe('cancelled');
   });
-  it.each([false, true])(
-    'retains failed build cancellation for retry after restart (directory remains=%s)',
-    async (workspace) => {
+  it.each([
+    { workspace: false, operation: { feature } },
+    { workspace: true, operation: { feature } },
+    { workspace: false, operation: { taskOwned: true } },
+    { workspace: true, operation: { taskOwned: true } },
+  ])(
+    'retains failed build cancellation for retry after restart (%j)',
+    async ({ workspace, operation }) => {
       const h = harness({
-        state: { ...candidate, feature, sessionId: 'resolver' },
+        state: { ...candidate, ...operation, sessionId: 'resolver' },
         sessionOwner: 'alice',
       });
       h.deps.discard = vi.fn(async () => {

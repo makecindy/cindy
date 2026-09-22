@@ -33,9 +33,11 @@ type Filter = 'all' | 'pending' | 'integrated' | 'ended';
 /** Historical facts and allowed actions come from Main; an old button cannot authorize a write. */
 export function CindyMakeHistoryPanel({
   active = true,
+  hasPersonalVersion = false,
   onState,
 }: {
   active?: boolean;
+  hasPersonalVersion?: boolean;
   onState?: (state: CindyMakeHistoryState) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -119,6 +121,12 @@ export function CindyMakeHistoryPanel({
     });
   }, [active, owner, refresh]);
   useEffect(() => {
+    if (!active) return;
+    return window.electronAPI.onCindyMakeHistoryChanged?.((stamp) => {
+      if (isDataOwnerGenerationCurrent(owner) && isDataOwnerPushCurrent(stamp)) void refresh();
+    });
+  }, [active, owner, refresh]);
+  useEffect(() => {
     if (state) onState?.(state);
   }, [state, onState]);
   const items = state?.items ?? [];
@@ -173,13 +181,15 @@ export function CindyMakeHistoryPanel({
     state?.build?.status === 'failed' &&
     !!state.build.buildId &&
     selectedBuild?.buildId === state.build.buildId;
+  const building = !!state?.build && !['ready', 'failed'].includes(state.build.status);
   const selectedActions: MakeHistoryAction[] = selected
     ? (
         [
-          'build',
           'test',
           'continue',
           'open',
+          'revert',
+          'reapply',
           'resolve',
           'retry',
           'retry-prepare',
@@ -343,7 +353,35 @@ export function CindyMakeHistoryPanel({
       }
     }
   };
-  const building = !!state?.build && !['ready', 'failed'].includes(state.build.status);
+  const rebuildPersonal = async () => {
+    if (
+      acting.current ||
+      !hasPersonalVersion ||
+      !state?.canBuild ||
+      building ||
+      !isDataOwnerGenerationCurrent(owner)
+    )
+      return;
+    acting.current = true;
+    request.current += 1;
+    const actionId = ++actionGeneration.current;
+    setPending('rebuild-personal');
+    try {
+      const next = await window.electronAPI.generateCindyMakePersonal();
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      update(next);
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) {
+        toast.error(t('cindyMake.history.actionFailed'));
+        await refresh();
+      }
+    } finally {
+      if (actionId === actionGeneration.current) {
+        acting.current = false;
+        if (isDataOwnerGenerationCurrent(owner)) setPending(undefined);
+      }
+    }
+  };
   const buildSelected = async () => {
     if (acting.current || !checked.length || !isDataOwnerGenerationCurrent(owner)) return;
     const pins: MakeHistoryBuildSelection[] = checked.map((item) => ({
@@ -442,8 +480,19 @@ export function CindyMakeHistoryPanel({
       <div className="space-y-2 border-b border-[var(--border-default)] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="font-medium">
-            {t('cindyMake.history.title')} · {items.length}
+            {t('cindyMake.history.title')} ·{' '}
+            {t('cindyMake.history.taskCount', { count: items.length })}
           </h3>
+          {hasPersonalVersion && (
+            <Button
+              variant="secondary"
+              disabled={!!pending || failed || !state?.canBuild || building}
+              loading={pending === 'rebuild-personal'}
+              onClick={() => void rebuildPersonal()}
+            >
+              {t('cindyMake.history.regeneratePersonal')}
+            </Button>
+          )}
         </div>
         {!building && (
           <>
@@ -756,7 +805,7 @@ export function CindyMakeHistoryPanel({
               {selectedActions.map((action) => (
                 <Button
                   key={action}
-                  variant={action === 'build' || action === 'retry' ? 'primary' : 'secondary'}
+                  variant={action === 'retry' ? 'primary' : 'secondary'}
                   disabled={!!pending || failed}
                   loading={pending === action}
                   onClick={() => void act(action)}
@@ -764,13 +813,11 @@ export function CindyMakeHistoryPanel({
                   {t(
                     action === 'hide'
                       ? 'cindyMake.history.cleanTask'
-                      : action === 'retry'
-                        ? 'cindyMake.history.actions.build'
-                        : action === 'test'
-                          ? selected.test?.status === 'ready'
-                            ? 'cindyMake.history.batch.restartTest'
-                            : 'cindyMake.test.start'
-                          : 'cindyMake.history.actions.' + action,
+                      : action === 'test'
+                        ? selected.test?.status === 'ready'
+                          ? 'cindyMake.history.batch.restartTest'
+                          : 'cindyMake.test.start'
+                        : 'cindyMake.history.actions.' + action,
                   )}
                 </Button>
               ))}

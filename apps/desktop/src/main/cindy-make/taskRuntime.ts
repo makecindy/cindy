@@ -31,6 +31,7 @@ import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeCon
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import {
   isMakeEnvironmentReady,
+  type CindyMakeTaskOptions,
   type CindyMakeTaskStart,
   type MakeDoctorReport,
   type MakeTaskWorkspace,
@@ -257,6 +258,19 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
     ? await db.select().from(sessions).where(eq(sessions.id, input.originSessionId)).limit(1)
     : [];
   checkCurrent();
+  const effective = origin
+    ? getSessionRuntimeControlSnapshot(origin.id).effectiveOverride
+    : undefined;
+  const preferences = origin ?? input.createOptions ?? {};
+  const taskOptions: CindyMakeTaskOptions = {
+    agentKind: normalizeDbAgentKind(effective?.agentKind ?? preferences.agentKind),
+    model: effective?.model ?? preferences.model ?? undefined,
+    effort: effective ? (effective.effort ?? '') : preferences.effort,
+    providerId: effective ? effective.providerId : preferences.providerId,
+    fastMode: effective?.fastMode ?? preferences.fastMode,
+    planModeEnabled: preferences.planModeEnabled,
+    permissionMode: preferences.permissionMode,
+  };
   const userData = app.getPath('userData');
   const root = makeSourceRoot(userData);
   const clientId = 'cindy-make-preparation-' + input.runId;
@@ -406,10 +420,6 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
           throwIpcError('NOT_FOUND', 'Origin task is unavailable');
         if (origin?.remoteHostId)
           throwIpcError('UNSUPPORTED_CAPABILITY', 'Cindy Make requires a local task');
-        const effective = origin
-          ? getSessionRuntimeControlSnapshot(origin.id).effectiveOverride
-          : undefined;
-        const preferences = origin ?? input.createOptions ?? {};
         sessionId = createBusinessSessionId();
         const row = sessionCreateToRow(
           sessionId,
@@ -418,13 +428,7 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
             workingDir: makeTaskWorktreePath(userData, input.runId),
             workspaceKind: 'project',
             source: 'cindy-make',
-            agentKind: normalizeDbAgentKind(effective?.agentKind ?? preferences.agentKind),
-            model: effective?.model ?? preferences.model,
-            effort: effective ? (effective.effort ?? '') : preferences.effort,
-            providerId: effective ? effective.providerId : preferences.providerId,
-            fastMode: effective?.fastMode ?? preferences.fastMode,
-            planModeEnabled: preferences.planModeEnabled,
-            permissionMode: preferences.permissionMode,
+            ...taskOptions,
           },
           Date.now(),
         );
@@ -532,6 +536,16 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
       signal.throwIfAborted();
       report = { ...report, source };
       cindyMakeManager.setSourceStatus(source);
+      // The task worktree must branch from the latest verified personal source.
+      // Keep the visible task shell while this runs so conflicts and Stop remain recoverable.
+      phase('updatingSource', publish);
+      const { syncSourceBeforeCindyMakeTask } = await import('./upstreamMergeRuntime.js');
+      await syncSourceBeforeCindyMakeTask(signal, taskOptions);
+      checkPreparationCurrent();
+      signal.throwIfAborted();
+      source = await readCurrentCindySourceStatus(root, env);
+      report = { ...report, source };
+      publish(report);
       phase('workspace', publish);
       await untilAborted(
         cindyMakeManager.withProject(

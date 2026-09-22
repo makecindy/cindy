@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/context.js';
+import type { PluginOauthAction } from '@cindy/device-link';
+import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import type {
   GhostSetupAllowedAction,
@@ -333,6 +336,25 @@ export class BotAuthorizationService {
     return true;
   }
 
+  /** Separate remote entry: plugin OAuth only; host login, navigation and secrets stay local. */
+  async bindRemoteOauth(action: PluginOauthAction): Promise<OauthCardBinding | null> {
+    const entry = await this.get(action.requestId);
+    if (!entry || entry.closed || entry.cancelled || entry.action || entry.card.target.kind !== 'plugin' ||
+      entry.card.snapshot.terminal || entry.card.snapshot.revision !== action.expectedRevision ||
+      !entry.card.snapshot.steps.some(s => s.action?.id === action.actionId && s.action.kind === 'oauth_connect')) return null;
+    return { ghostId: entry.card.target.id, current: () => !entry.closed && !entry.cancelled && !entry.card.snapshot.terminal };
+  }
+  async resolveRemoteOauth(action: PluginOauthAction): Promise<boolean> {
+    const binding = await this.bindRemoteOauth(action);
+    const context = getRemoteOauthContext();
+    if (!binding || !context) return false;
+    context.assertCurrent();
+    const entry = this.entries.get(action.requestId);
+    if (!entry) return false;
+    this.start(entry, action.actionId);
+    return true;
+  }
+
   async submit(requestId: string, raw: unknown): Promise<boolean> {
     const submit = parseGhostSetupInlineSubmit(raw);
     if (!submit) return false;
@@ -353,6 +375,7 @@ export class BotAuthorizationService {
     value?: string,
   ) {
     if (entry.action) return;
+    const remoteOauth = getRemoteOauthContext();
     const assertBoundary = this.deps.captureRequestGuard?.(entry.card.sessionId);
     const assertCurrent = () => {
       if (entry.closed || entry.cancelled) throw new Error('Authorization action is no longer active');
@@ -412,6 +435,7 @@ export class BotAuthorizationService {
       })
       .finally(() => {
         entry.action = undefined;
+        remoteOauth?.finish(false); // No-op after commit; settle stale/early-return actions too.
       });
   }
   private async execute(
@@ -432,7 +456,7 @@ export class BotAuthorizationService {
         assertCurrent();
       },
     };
-    const key = `${entry.card.target.kind}:${entry.card.target.id}:${action.id}`;
+    const key = `${entry.card.target.kind}:${entry.card.target.id}:${action.id}:${getRemoteOauthContext()?.scope ?? 'local'}`;
     let flight = this.oauthFlights.get(key);
     if (!flight) {
       const listeners = new Set<(url: string) => void>([onUrl]);
@@ -605,6 +629,7 @@ export class BotAuthorizationService {
   }
   private close(entry: Entry) {
     entry.closed = true;
+    notifyOauthCardClosed(entry.card.snapshot.requestId);
     entry.unsubscribe();
     this.stopPoll(entry);
     if (entry.expiry) clearTimeout(entry.expiry);

@@ -211,13 +211,13 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。
 
-### Reapply integration
+### Add back to personal version
 
 重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。
 
-### Undo integration
+### Remove from personal version
 
-撤销单次制作已合入个人源码的全部改动，保留其他制作与已有应用成品；通过新的反向提交实现。
+从个人版移除单次制作已经加入的全部改动，保留其他制作与已有应用成品；底层通过新的反向提交实现，不改写 Git 历史。
 
 ### Version Control
 

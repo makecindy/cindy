@@ -89,6 +89,8 @@ import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
+import { PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+import { requestPluginOauth, invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import { dispatchLocalInvoke } from './invoke-registry';
 import {
   assertRemoteBotInvocationAllowed, projectRemoteSessionResult, projectRemoteBotPush,
@@ -2278,6 +2280,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       }
       clearRemoteInvokeStateFor(src);
       stopFilePeers(src);
+      invalidatePluginOauth(src);
       remoteDesktop.stop(src);
       void remoteCredentialHost.close(src).catch(() => remoteCredentialHost.dispose());
       offlinePushQueue.clear(src);
@@ -3703,6 +3706,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   if (payload.channel === FILE_PEER_CHANNEL) {
     try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0]) }; }
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } }; }
+  }
+  if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
+    if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };
+    try { return { ok: true, result: await requestPluginOauth(src, payload.args[0]) }; }
+    catch { return { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] Remote authorization unavailable' } }; }
   }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
     try { return { ok: true, result: await requestRemoteDesktop(src, payload.args?.[0]) }; }

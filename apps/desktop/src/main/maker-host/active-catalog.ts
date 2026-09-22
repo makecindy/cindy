@@ -40,6 +40,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import {
   BUNDLED_CATALOG,
+  PI_REASONING_EFFORTS,
   buildUserProvider,
   runtimeUserModelMetadata,
   clampEffortToSupported,
@@ -1001,12 +1002,17 @@ function declaredPiModels(providerId: string, discovered: readonly CatalogModel[
   const fallbackById = new Map(bundled.map((model) => [normalizePiModelId(providerId, model.id), model]));
   const declared = (explicit ?? bundled).map((model) => {
     const id = normalizePiModelId(providerId, model.id);
+    // Legacy efforts/defaultEffort are defaults. The optional reasoning fields
+    // explicitly declare a Pi protocol constraint, separate from that fallback.
+    const constrainedEfforts = model.reasoning === false ? [] : model.reasoningEfforts;
     return {
       ...fallbackById.get(id), ...model, id,
       // Do not let the fallback SDK's discovery provenance override explicit
       // server fields when the shared metadata resolver runs below.
       ...(explicit !== undefined ? {
-        discoveredMetadata: model.discoveredMetadata,
+        discoveredMetadata: constrainedEfforts !== undefined
+          ? { ...model.discoveredMetadata, efforts: constrainedEfforts }
+          : model.discoveredMetadata,
       } : {}),
     };
   });
@@ -1025,9 +1031,17 @@ function declaredPiModels(providerId: string, discovered: readonly CatalogModel[
     if (model.status === 'retired' || findModelRegistryRoute(
       (base ?? BUNDLED_CATALOG).modelRegistry, providerId, model.id,
     )?.entry.status === 'retired') continue;
+    // A sibling Harness discovers membership, not Pi-specific thinking tiers.
+    // Keep portable tiers as a fallback for unknown models; known models inherit
+    // the Registry, and Codex-only labels cannot become Pi capabilities.
+    const { efforts: _efforts, defaultEffort: _defaultEffort, ...metadata } =
+      model.discoveredMetadata ?? catalogModelMetadata(model);
+    const efforts = model.efforts.filter(effort => PI_REASONING_EFFORTS.some(level => level === effort));
     byId.set(id, {
-      ...model, id, piApi,
-      discoveredMetadata: model.discoveredMetadata ?? catalogModelMetadata(model),
+      ...model, id, piApi, efforts,
+      defaultEffort: efforts.length === 0 ? null
+        : (clampEffortToSupported(model.defaultEffort, efforts) as Effort | null),
+      discoveredMetadata: metadata,
     });
   }
   return [...byId.values()];
@@ -1671,6 +1685,8 @@ function computeMerged(): Catalog {
                 agent === 'pi' ? model.discoveredMetadata : model.discoveredMetadata ?? catalogModelMetadata(model),
                 model.userModelConfig ? runtimeUserModelMetadata(model.userModelConfig) : undefined,
                 agent,
+                undefined,
+                agent === 'pi' ? model.reasoningDefaultEffort : undefined,
               ),
             );
           }

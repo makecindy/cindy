@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
@@ -32,17 +33,44 @@ function ResolveMergeButton({
   );
 }
 
+/** Source updates keep recovery in the same action slot as their normal update button. */
+export function CindyMakeMergeActions({
+  state,
+  busy,
+  children,
+}: {
+  state?: CindyMakeMergeState;
+  busy?: boolean;
+  children?: ReactNode;
+}) {
+  if (!state || state.ownedByAnotherAccount) return children;
+  const active = ['fetching', 'merging', 'checking'].includes(state.status);
+  const canResolve =
+    (!state.sessionId || (state.status === 'failed' && state.error !== 'interrupted')) &&
+    !active &&
+    (state.hasWorkspace || state.cancellationRequested || state.error === 'cancelFailed') &&
+    state.status !== 'merged' &&
+    state.status !== 'cancelled';
+  if (!state.sessionId && !canResolve) return children;
+  return (
+    <>
+      {state.sessionId && <CindyMakeMergeTaskLink sessionId={state.sessionId} />}
+      {canResolve && <ResolveMergeButton state={state} disabled={busy} />}
+    </>
+  );
+}
+
 export function CindyMakeMergeNotice({
   state,
   busy,
+  showActions = true,
 }: {
   state: CindyMakeMergeState;
   busy?: boolean;
+  showActions?: boolean;
 }) {
   const { t } = useTranslation();
   const active = ['fetching', 'merging', 'checking'].includes(state.status);
-  const canResolve =
-    !state.sessionId || (state.status === 'failed' && state.error !== 'interrupted');
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-4 py-3 text-12">
       <div className="min-w-0 flex-1 space-y-1 text-[var(--text-secondary)]" role="status">
@@ -55,15 +83,7 @@ export function CindyMakeMergeNotice({
         )}
         {state.ownedByAnotherAccount && <p>{t('cindyMake.merge.otherAccount')}</p>}
       </div>
-      {state.sessionId && !state.ownedByAnotherAccount && (
-        <CindyMakeMergeTaskLink sessionId={state.sessionId} />
-      )}
-      {canResolve &&
-        !active &&
-        (state.hasWorkspace || state.cancellationRequested || state.error === 'cancelFailed') &&
-        state.status !== 'merged' &&
-        state.status !== 'cancelled' &&
-        !state.ownedByAnotherAccount && <ResolveMergeButton state={state} disabled={busy} />}
+      {showActions && <CindyMakeMergeActions state={state} busy={busy} />}
     </div>
   );
 }

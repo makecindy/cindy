@@ -88,6 +88,44 @@ async function fixture(conflict: boolean) {
   }
 }
 
+it.each(['ahead', 'diverged'] as const)(
+  'keeps local main and personal files when main is %s of the sync target',
+  async (relation) => {
+    const h = await fixture(false);
+    try {
+      // Ahead reproduces a Dev main accidentally compared with an older release.
+      if (relation === 'ahead') {
+        await h.git(['fetch', h.remote, h.state.upstreamCommit], h.source);
+        await h.git(['branch', '--force', 'main', h.state.upstreamCommit], h.source);
+      } else {
+        await h.commit(h.source, 'local main changes');
+        await h.git(['branch', '--force', 'main', 'HEAD'], h.source);
+        await writeFile(path.join(h.source, 'feature.txt'), 'keep uncommitted edits\n');
+      }
+      const beforeMain = await h.git(['rev-parse', 'main'], h.source);
+      const beforePersonal = await h.git(['rev-parse', 'cindy-personal'], h.source);
+      const beforeFiles = await readFile(path.join(h.source, 'feature.txt'), 'utf8');
+      await expect(
+        prepareUpstreamMerge(
+          h.userData,
+          {
+            ...h.state,
+            upstreamCommit: relation === 'ahead' ? h.baselineCommit : h.state.upstreamCommit,
+          },
+          h.git,
+          async () => {},
+        ),
+      ).rejects.toMatchObject({ code: relation === 'ahead' ? 'localMainAhead' : 'localMain' });
+      expect(await h.git(['rev-parse', 'main'], h.source)).toBe(beforeMain);
+      expect(await h.git(['rev-parse', 'cindy-personal'], h.source)).toBe(beforePersonal);
+      expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe(beforeFiles);
+      expect(await h.git(['branch', '--list', mergeBranch(h.state.id)], h.source)).toBe('');
+    } finally {
+      await h.clean();
+    }
+  },
+);
+
 it.each([false, true])(
   'discards only the confirmed feature candidate and keeps original changes (partial Windows residue=%s)',
   async (residue) => {
@@ -140,6 +178,56 @@ it.each([false, true])(
       expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('local feature\n');
       expect(await readFile(path.join(h.remote, 'feature.txt'), 'utf8')).toBe('upstream fix\n');
       expect(await readFile(path.join(external, 'keep.txt'), 'utf8')).toBe('shared data');
+    } finally {
+      await h.clean();
+    }
+  },
+  30_000,
+);
+
+it.each([true, false])(
+  'cancels only the task-owned source candidate and preserves source and task files (conflict=%s)',
+  async (conflict) => {
+    const h = await fixture(conflict);
+    try {
+      const task = path.join(h.userData, 'original-task');
+      await h.git(['worktree', 'add', '-b', 'original-task', task, h.baselineCommit], h.source);
+      await writeFile(path.join(task, 'task-edit.txt'), 'keep task edits');
+      const state = await prepareUpstreamMerge(
+        h.userData,
+        { ...h.state, taskOwned: true },
+        h.git,
+        async () => {},
+      );
+      expect(state).toMatchObject({ taskOwned: true, status: conflict ? 'conflict' : 'merged' });
+      const worktree = mergeWorktree(h.userData, state.id);
+      if (conflict) expect(await h.git(['branch', '--show-current'], worktree)).toBe('');
+      await writeFile(path.join(worktree, 'resolver-edit.txt'), 'disposable resolver edits');
+      await writeFile(path.join(h.source, 'personal-edit.txt'), 'keep new personal edits');
+      const head = await h.git(['rev-parse', 'HEAD'], h.source);
+      expect(await discardFeatureMerge(h.userData, state, h.git, () => true)).toBe(false);
+      const stopped = { ...state, sessionId: 'resolver', cancellationRequested: true };
+      expect(await discardFeatureMerge(h.userData, stopped, h.git, () => false)).toBe(false);
+      expect(await readFile(path.join(worktree, 'resolver-edit.txt'), 'utf8')).toBe(
+        'disposable resolver edits',
+      );
+      expect(await discardFeatureMerge(h.userData, stopped, h.git, () => true)).toBe(true);
+      expect(await discardFeatureMerge(h.userData, stopped, h.git, () => true)).toBe(true);
+      await expect(stat(worktree)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await h.git(['branch', '--list', mergeBranch(state.id)], h.source)).toBe('');
+      expect(await h.git(['rev-parse', 'HEAD'], h.source)).toBe(head);
+      expect(await h.git(['rev-parse', 'HEAD'], task)).toBe(h.baselineCommit);
+      expect(await readFile(path.join(task, 'task-edit.txt'), 'utf8')).toBe('keep task edits');
+      expect(await readFile(path.join(h.source, 'personal-edit.txt'), 'utf8')).toBe(
+        'keep new personal edits',
+      );
+      expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('local feature\n');
+      if (!conflict) {
+        expect(await h.git(['rev-parse', PERSONAL_UPSTREAM_REF], h.source)).toBe(
+          h.state.upstreamCommit,
+        );
+        expect(await readFile(path.join(h.source, 'upstream.txt'), 'utf8')).toBe('upstream fix\n');
+      }
     } finally {
       await h.clean();
     }
