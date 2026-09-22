@@ -8863,6 +8863,11 @@ export function ChatInput({
                     // Claude Code 回退冒充);草稿直接取当前引擎。
                     engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}
                     unifiedPanel={unifiedPanelActive}
+                    // 「最近使用」只记**对话**入口(新任务草稿 / 会话内,本组件就是这两个),且
+                    // 远程不记:被控端目录的模型写进本机列表只会得到一行永远不可路由的记录。
+                    // deviceLinkDeviceId 为 undefined = 归属尚未解析(冷启动) —— 宁可这一帧
+                    // 不记,也不把远程选择写成本地记录。
+                    recordRecentUsage={!remoteHostId && deviceLinkDeviceId === null}
                     // 联合列表只列**运行时已注册**的引擎(撤掉 AgentSelect 后接住它的
                     // hiddenVendors 门禁);未加载时不传 = 不隐藏任何引擎。会话内没有
                     // 跨引擎切换事务可走时锁定当前引擎(见 inSessionEngineLocked)。

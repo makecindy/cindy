@@ -8137,8 +8137,11 @@
       },
       "unified": {
         "railFavorites": "즐겨찾기",
+        "railRecent": "최근",
         "railAll": "전체",
         "favoritesGroup": "즐겨찾기",
+        "recentGroup": "최근",
+        "recentEmpty": "최근 사용한 모델이 없습니다 — 모델을 선택하면 여기에 표시됩니다",
         "favoritesEmpty": "즐겨찾기가 없습니다 — 모델 행에 마우스를 올리고 ☆를 눌러 저장하세요",
         "addFavorite": "즐겨찾기에 저장",
         "customize": "사용자 지정",
