@@ -160,7 +160,7 @@ describe('Cindy Make local versions', () => {
     expect((update as HTMLButtonElement).disabled).toBe(true);
     expect(update.getAttribute('title')).toBe('cindyMake.versions.unavailable');
   });
-  it('shows the busy reason while another Make operation blocks switching', async () => {
+  it('keeps switching available while another Make operation is running', async () => {
     h.get.mockResolvedValue({
       ...versions,
       currentId: 'personal',
@@ -169,9 +169,13 @@ describe('Cindy Make local versions', () => {
     });
     render(<CindyMakeVersionsPanel busy />);
     const update = await screen.findByRole('button', {
-      name: 'cindyMake.versions.errors.busy',
+      name: 'cindyMake.versions.updatePersonal',
     });
-    expect((update as HTMLButtonElement).disabled).toBe(true);
-    expect(update.getAttribute('title')).toBe('cindyMake.versions.errors.busy');
+    expect((update as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(update);
+    await waitFor(() => expect(h.act).toHaveBeenCalledWith('switch', 'personal'));
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.overview.switchVersion' }));
+    const remove = await screen.findByRole('button', { name: 'cindyMake.versions.remove' });
+    expect((remove as HTMLButtonElement).disabled).toBe(true);
   });
 });
