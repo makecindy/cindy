@@ -92,9 +92,9 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
   const current = () =>
     isDataOwnerBroadcastScopeCurrent(scope) && app.getPath('userData') === profile;
   try {
-    // Switching is a restart boundary. The current process is stopped and the target
-    // version restores interrupted work on startup, so active tasks must not prevent
-    // switching. Removing the personal version still requires the old busy guard below.
+    // An explicit switch may interrupt active work. Normal quit preserves Agent turn
+    // markers for continuing after startup; background jobs are not replayed.
+    // Removing the personal version still requires the busy guard below.
     if ((action === 'remove' && makeBusy()) || isCindyVersionSwitching())
       throwIpcError('PRECONDITION_FAILED', 'busy');
     if (action === 'switch') {

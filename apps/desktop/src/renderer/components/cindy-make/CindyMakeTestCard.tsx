@@ -210,6 +210,8 @@ export function CindyMakeTestCard({
   };
   const switching = !!versions.pending || versions.state?.switching === true;
   const personalVersion = versions.state?.versions.find((version) => version.kind === 'personal');
+  const switchesPersonal =
+    personal?.status === 'ready' && !!personal.versionId && !!personalVersion;
   const generatesPersonal =
     personal?.status !== 'ready' || (!!personal.versionId && !!versions.state && !personalVersion);
   const usingPersonal =
@@ -313,16 +315,14 @@ export function CindyMakeTestCard({
         <Button
           variant="secondary"
           disabled={
-            !!pending ||
-            building ||
-            starting ||
+            (!switchesPersonal && (!!pending || building || starting)) ||
             switching ||
             usingPersonal ||
             (generatesPersonal && sourceMergePending) ||
             !meta.commit ||
             (personal?.status === 'ready' && !!personal.versionId && !versions.state)
           }
-          loading={building || switching || pending === 'open-build'}
+          loading={switching || (!switchesPersonal && (building || pending === 'open-build'))}
           onClick={() => {
             if (personal?.status === 'ready' && personal.versionId) {
               if (personalVersion) void versions.act('switch', personalVersion.id);
