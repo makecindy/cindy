@@ -57,6 +57,18 @@ function bundledWithoutRegistry(): Catalog {
   return catalog;
 }
 
+/**
+ * 去掉 xai 在 bundled 目录里的 grok-4.7 Pi 声明。
+ * Grok 4.7 补齐(2026-09)后它已是公开声明,而「纯发现型条目」用例必须先把它摘掉,
+ * 否则清空 discovery 后仍会命中 bundled 条目,验证不到发现链路本身。
+ */
+function bundledWithoutGrok47Declaration(): Catalog {
+  const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+  const xai = catalog.providers.find((p) => p.id === 'xai');
+  if (xai?.models.pi) xai.models.pi = xai.models.pi.filter((m) => m.id !== 'grok-4.7');
+  return catalog;
+}
+
 /** legacy v1 远端目录形态:openai 仍带静态 codex/bridge 条目(过渡期兼容)。 */
 function legacyCatalog(): Catalog {
   const legacy = bundledWithoutRegistry();
@@ -378,7 +390,7 @@ describe('active-catalog discovered augment', () => {
   });
 
   it('adds a newly discovered Grok model to Pi without a bundled model or public declaration', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    setActiveCatalog(bundledWithoutGrok47Declaration());
     setXaiDiscoveredModels([{
       id: 'xai/grok-4.7', name: 'Grok 4.7', contextWindow: 500_000,
       maxOutput: 64_000, efforts: ['xhigh', 'high', 'medium', 'low'], defaultEffort: 'high',
