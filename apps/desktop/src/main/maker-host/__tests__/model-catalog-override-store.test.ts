@@ -21,8 +21,12 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
 }));
 
-const { MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES, readModelCatalogOverrides } =
-  await import('../model-catalog-override-store.js');
+const {
+  MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
+  readModelCatalogOverrides,
+  readModelCatalogImageInput,
+  setModelCatalogImageInput,
+} = await import('../model-catalog-override-store.js');
 
 const patchEntry = { base: { name: 'Renamed' } };
 
@@ -32,6 +36,71 @@ function writeOwnerFile(value: unknown): string {
   fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
   return file;
 }
+
+describe('model-catalog-override-store / 图片输入能力声明', () => {
+  const target = { providerId: 'opencode-go', modelId: 'mimo-v2.6-flash' };
+  const key = 'opencode-go:mimo-v2.6-flash';
+
+  it('写入 true/false 落到 base patch，读回 isCustomized 区分「跟随目录」与「显式声明」', async () => {
+    owner.current = 'owner-image-write';
+    expect(readModelCatalogImageInput(target)).toEqual({ value: null, isCustomized: false });
+
+    await setModelCatalogImageInput(target, true);
+    expect(readModelCatalogOverrides().patches[key]?.base?.supportsImageInput).toBe(true);
+    expect(readModelCatalogImageInput(target)).toEqual({ value: true, isCustomized: true });
+
+    await setModelCatalogImageInput(target, false);
+    expect(readModelCatalogImageInput(target)).toEqual({ value: false, isCustomized: true });
+  });
+
+  it('value=null 删除该键回到跟随目录，条目空掉时整条删除', async () => {
+    owner.current = 'owner-image-reset';
+    await setModelCatalogImageInput(target, true);
+    await setModelCatalogImageInput(target, null);
+    expect(readModelCatalogOverrides().patches[key]).toBeUndefined();
+    expect(readModelCatalogImageInput(target)).toEqual({ value: null, isCustomized: false });
+  });
+
+  it('只动 supportsImageInput：同条目其它字段与其它条目原样保留', async () => {
+    owner.current = 'owner-image-preserve';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        [key]: {
+          agents: ['pi'],
+          base: { name: 'Mimo', contextWindow: 128_000 },
+          perAgent: { pi: { maxOutput: 8_192 } },
+        },
+        'openai:gpt-6': { base: { name: 'Renamed' } },
+      },
+    });
+
+    await setModelCatalogImageInput(target, true);
+    const entry = readModelCatalogOverrides().patches[key]!;
+    expect(entry.base).toEqual({
+      name: 'Mimo',
+      contextWindow: 128_000,
+      supportsImageInput: true,
+    });
+    expect(entry.perAgent).toEqual({ pi: { maxOutput: 8_192 } });
+    expect(entry.agents).toEqual(['pi']);
+    expect(readModelCatalogOverrides().patches['openai:gpt-6']).toEqual({ base: { name: 'Renamed' } });
+
+    // 复位后条目里仍留着用户自己写的字段，不能被一并删掉。
+    await setModelCatalogImageInput(target, null);
+    expect(readModelCatalogOverrides().patches[key]).toEqual({
+      agents: ['pi'],
+      base: { name: 'Mimo', contextWindow: 128_000 },
+      perAgent: { pi: { maxOutput: 8_192 } },
+    });
+  });
+
+  it('providerId 里的冒号经 encodeURIComponent 转义，不与 modelId 的分隔符混淆', async () => {
+    owner.current = 'owner-image-escape';
+    await setModelCatalogImageInput({ providerId: 'a:b', modelId: 'm' }, true);
+    expect(readModelCatalogOverrides().patches['a%3Ab:m']?.base?.supportsImageInput).toBe(true);
+  });
+});
 
 describe('model-catalog-override-store', () => {
   it('读取显式 v1 文件', () => {

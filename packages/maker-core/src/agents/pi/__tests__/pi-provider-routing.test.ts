@@ -4267,6 +4267,216 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("picks up an image-capability declaration made after session start when the user switches models", async () => {
+    // 会话启动时目录未声明图片能力(快照 input=['text'])，带图消息被客户端门拒收；用户随后在
+    // 设置里声明(本机目录 override，只落在活动目录)。旧会话的快照与 models.json 都还是启动时
+    // 那份，所以要借切模这个同步点：同路由 setModel(心跳走的也是这条)先做能力对账，不一致就
+    // 热写 models.json 并 switch_session 让子进程 ModelConfig.load 重载。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-declared",
+              name: "Native Declared",
+              baseUrl: "http://declared.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      // 活动目录(含本机 override)的声明：未声明 undefined / 声明后 true。
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-declared" && modelId === "local-model" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-declared-after-start",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-declared",
+    });
+    const imagePath = path.join(cwd, "declared.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/declared.png",
+        },
+      ],
+    };
+    const readNativeInput = (): string[] => {
+      const modelsJson = JSON.parse(
+        readFileSync(
+          path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"),
+          "utf8",
+        ),
+      ) as {
+        providers: Record<string, { models: Array<{ id: string; input: string[] }> }>;
+      };
+      const block =
+        modelsJson.providers["native-declared"] ??
+        modelsJson.providers["cindy-byom-native-declared"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+
+    // 基线：声明前客户端门拒收，请求根本不出去，models.json 也没有 image。
+    captured.requests.length = 0;
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: "PI_IMAGE_INPUT_UNSUPPORTED",
+    });
+    expect(captured.requests).toHaveLength(0);
+    expect(readNativeInput()).toEqual(["text"]);
+
+    // 用户在设置里声明「支持图片输入」(目录变化，快照不变)。
+    declared.image = true;
+
+    // 切模(目标 = 当前同路由，与心跳同路径)触发对账：热写 + 子进程重载。
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-declared" });
+    expect(readNativeInput()).toEqual(["text", "image"]);
+    expect(captured.requests.map((request) => request.type)).toContain("switch_session");
+
+    // 同一条消息现在放行。
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests).toContainEqual(
+      expect.objectContaining({
+        type: "prompt",
+        images: [expect.objectContaining({ type: "image" })],
+      }),
+    );
+    await handle.close();
+  });
+
+  it("does not rewrite models.json or reload the runtime when the catalog already matches the snapshot", async () => {
+    // 心跳会反复以同路由下发 setModel；声明与会话快照一致时必须零 I/O —— 不热写、不 switch_session。
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-vision",
+              name: "Native Vision",
+              baseUrl: "http://vision.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text", "image"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: () => true,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-already-matches",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-vision",
+    });
+    const modelsPath = path.join(
+      captured.env.PI_CODING_AGENT_DIR as string,
+      "models.json",
+    );
+    const before = readFileSync(modelsPath, "utf8");
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-vision" });
+    expect(readFileSync(modelsPath, "utf8")).toBe(before);
+    expect(captured.requests.map((request) => request.type)).not.toContain("switch_session");
+    await handle.close();
+  });
+
+  it("refreshes on the first image send when a capability declaration appears after session start without a model switch", async () => {
+    // 声明可能发生在会话启动之后、且用户不切模直接发图：客户端门在拒收前就地补一次能力
+    // 对账(与切模路径同一函数、同一失败语义)，补上即放行；盘上 models.json 同步热写、
+    // 子进程 switch_session 重载。未声明时仍拒收(见另一用例的基线)，且对账零副作用。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-send-refresh",
+              name: "Native Send Refresh",
+              baseUrl: "http://send-refresh.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: () => (declared.image ? true : undefined),
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-declared-send-only",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-send-refresh",
+    });
+    const imagePath = path.join(cwd, "send-refresh.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/send-refresh.png",
+        },
+      ],
+    };
+    const modelsPath = path.join(
+      captured.env.PI_CODING_AGENT_DIR as string,
+      "models.json",
+    );
+    const readSendRefreshInput = (): string[] => {
+      const modelsJson = JSON.parse(readFileSync(modelsPath, "utf8")) as {
+        providers: Record<string, { models: Array<{ id: string; input: string[] }> }>;
+      };
+      const block =
+        modelsJson.providers["native-send-refresh"] ??
+        modelsJson.providers["cindy-byom-native-send-refresh"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+    expect(readSendRefreshInput()).toEqual(["text"]);
+
+    // 会话启动后才声明；不切模，直接发图。
+    declared.image = true;
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+
+    // 对账生效：盘上热写 + 子进程重载 + prompt 带图放行。
+    expect(readSendRefreshInput()).toEqual(["text", "image"]);
+    expect(captured.requests.map((request) => request.type)).toContain("switch_session");
+    expect(captured.requests).toContainEqual(
+      expect.objectContaining({
+        type: "prompt",
+        images: [expect.objectContaining({ type: "image" })],
+      }),
+    );
+    await handle.close();
+  });
+
   it("waits through Pi preflight compaction when accepting a prompt", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({ providers: [], env: {} })),

@@ -844,6 +844,7 @@ import {
   getDesktopSelectableCatalog,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
+  syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../maker-host/createDesktopProviderService.js';
 import { readOrcaWorkerProviderRoutingContext } from './orcaProviderRoutingContext.js';
 import {
@@ -862,6 +863,10 @@ import {
   readModelContextLimit,
   writeModelContextLimitsWithRefresh,
 } from '../maker-host/model-context-limit-store.js';
+import {
+  readModelCatalogImageInput,
+  setModelCatalogImageInput,
+} from '../maker-host/model-catalog-override-store.js';
 import { refreshOpenAiMediaModels } from '../maker-host/model-discovery/openai-media.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
@@ -5686,6 +5691,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         target.modelId,
       ),
     }),
+    readModelCatalogImageInput: (target) =>
+      readModelCatalogImageInput({ providerId: target.providerId, modelId: target.modelId }),
+    writeModelCatalogImageInput: async (target, value) => {
+      await setModelCatalogImageInput(
+        { providerId: target.providerId, modelId: target.modelId },
+        value,
+      );
+    },
+    syncLocalCatalogOverrides: () => syncLocalCatalogOverridesIntoActiveCatalog(),
     validateModelContextLimit: async (targets, limit) => {
       for (const target of targets.filter((t) => t.agent === 'codex')) {
         const binaryPath = getCachedBinaryStatus('codex').binaryPath;

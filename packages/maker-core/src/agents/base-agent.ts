@@ -856,6 +856,14 @@ export interface AgentDeps {
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
+   * Pi-only:读**活动目录**(含本机 override 合并)里某模型的图片输入能力声明。
+   * `undefined` = 目录未声明(按 override 的「缺字段继承」语义不动会话快照)。
+   * 只用于旧会话切模时的能力对账(见 pi/index.ts refreshImageCapabilityOnSwitch),
+   * 不参与准入 —— 准入仍由会话快照的 input 与 assertImageInputSupported 负责。
+   */
+  readModelImageInput?: (providerId: string, modelId: string) => boolean | undefined;
+
+  /**
    * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，
    * 以及恢复已 retired 模型时补齐当前 session 的私有 models.json；结果不得进入公开
    * availableModels 或授予新选择准入。

@@ -27,6 +27,7 @@ import {
   setXdGatewayModels,
 } from '../active-catalog.js';
 import {
+  applyExistingModelLocalPatch,
   EMPTY_MODEL_CATALOG_OVERRIDES,
   sanitizeModelCatalogOverrides,
   type ModelCatalogOverrides,
@@ -740,6 +741,57 @@ describe('retired tombstone 与 discovery 回补', () => {
       status: 'active',
     });
     expect(models('openai', 'pi').find((m) => m.id === 'chatgpt/gpt-dead')).toBeUndefined();
+  });
+});
+
+describe('图片输入能力的本地声明(未声明 → 显式声明)', () => {
+  // 自定义连接（例如 opencode-go）的模型常常没有声明 supportsImageInput，
+  // 运行期 pi/index.ts 的 assertImageInputSupported 只认 `=== true`，于是带图消息在
+  // 客户端就被拒收。这里证明「写本机 patch」确实能把它变成显式声明 ——
+  // 用户无需改动连接配置（那样会让 preset 连接脱离官方目录）。
+  const customModel = (id: string): CatalogModel =>
+    ({ id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null }) as CatalogModel;
+
+  const patchFor = (modelId: string, value: boolean): ModelCatalogOverrides =>
+    sanitizeModelCatalogOverrides({
+      version: 1,
+      additions: {},
+      patches: {
+        [`opencode-go:${modelId}`]: { base: { supportsImageInput: value } },
+      },
+    }).overrides;
+
+  it('把未声明的模型改成显式支持，false 也如实落成明确关闭', () => {
+    const overrides = patchFor('mimo-v2.6-flash', true);
+    const patched = applyExistingModelLocalPatch(
+      'opencode-go',
+      'pi',
+      customModel('mimo-v2.6-flash'),
+      overrides,
+    );
+    expect(patched.supportsImageInput).toBe(true);
+    // 运行期门读的就是这个字段（`=== true` 才放行图片）。
+    expect(patched.supportsImageInput === true).toBe(true);
+
+    const denied = applyExistingModelLocalPatch(
+      'opencode-go',
+      'pi',
+      customModel('mimo-v2.6-flash'),
+      patchFor('mimo-v2.6-flash', false),
+    );
+    expect(denied.supportsImageInput).toBe(false);
+  });
+
+  it('不影响同 provider 的其它模型，也不影响别的 provider', () => {
+    const overrides = patchFor('mimo-v2.6-flash', true);
+    expect(
+      applyExistingModelLocalPatch('opencode-go', 'pi', customModel('other'), overrides)
+        .supportsImageInput,
+    ).toBeUndefined();
+    expect(
+      applyExistingModelLocalPatch('openai', 'pi', customModel('mimo-v2.6-flash'), overrides)
+        .supportsImageInput,
+    ).toBeUndefined();
   });
 });
 

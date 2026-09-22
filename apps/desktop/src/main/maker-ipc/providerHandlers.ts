@@ -434,6 +434,25 @@ export interface ProviderHandlerDeps {
   readModelContextLimit?(target: ModelPriceOverrideTarget): ModelContextLimitView;
   validateModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number): Promise<void>;
   writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void | Promise<void>;
+  /**
+   * 单模型图片输入能力的本地目录 override。value=null 删除 override(回到跟随目录)；
+   * isCustomized 让 UI 区分「跟随目录」与「显式声明了一个等于目录的值」。
+   * 可选 —— 未注入(单测最小桩)时对应 handler 报 INTERNAL 而不是静默成功。
+   */
+  readModelCatalogImageInput?(target: ModelPriceOverrideTarget): ModelCatalogImageInputView;
+  writeModelCatalogImageInput?(
+    target: ModelPriceOverrideTarget,
+    value: boolean | null,
+  ): void | Promise<void>;
+  /** 写入后把 override 文件重新注入 active-catalog(写盘不会自动生效)。 */
+  syncLocalCatalogOverrides?(): void;
+}
+
+/** 图片输入能力的读回视图。 */
+export interface ModelCatalogImageInputView {
+  /** null = 没有本地声明(跟随目录)。 */
+  value: boolean | null;
+  isCustomized: boolean;
 }
 
 /** 上下文上限的读回视图(与写入返回同形，UI 一次拿齐当前值与是否自定义)。 */
@@ -1851,6 +1870,76 @@ export function registerProviderHandlers(
             throwIpcError('INTERNAL', 'failed to reset model context limit');
           }
           return readContextTargets(targets);
+        }),
+      );
+    },
+  );
+
+  const requireCatalogImageInputDeps = (): {
+    read: NonNullable<ProviderHandlerDeps['readModelCatalogImageInput']>;
+    write: NonNullable<ProviderHandlerDeps['writeModelCatalogImageInput']>;
+  } => {
+    if (!deps.readModelCatalogImageInput || !deps.writeModelCatalogImageInput) {
+      throwIpcError('INTERNAL', 'model catalog image input override is not wired');
+    }
+    return {
+      read: deps.readModelCatalogImageInput,
+      write: deps.writeModelCatalogImageInput,
+    };
+  };
+  const parseCatalogImageInputTarget = (input: unknown): ModelPriceOverrideTarget =>
+    parsePriceTarget(input);
+  // value 只在 SET 上校验：GET 请求本来就没有这个字段。
+  const parseCatalogImageInputValue = (input: unknown): boolean | null => {
+    const value = (input as { value?: unknown }).value;
+    if (value !== null && typeof value !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'image input override value must be boolean or null');
+    }
+    return value;
+  };
+
+  registry.handle(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const target = parseCatalogImageInputTarget(input);
+    // 读不做目录成员校验：目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
+    return requireCatalogImageInputDeps().read(target);
+  });
+
+  registry.handle(
+    MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET,
+    async (event, input: unknown) => {
+      assertTrustedProviderMutationSender(event);
+      const target = parseCatalogImageInputTarget(input);
+      const value = parseCatalogImageInputValue(input);
+      const { read, write } = requireCatalogImageInputDeps();
+      // 目标必须在活动目录里：否则会把 override 写到一条不存在的路由上，
+      // 用户看不到任何效果却以为已经生效(与价格 override 同一道门)。
+      await requirePriceTargetModel(target);
+      const ownerAtIngress = captureProviderOwnerSession();
+      return withProviderConfigMutation(target.providerId, () =>
+        enqueuePriceMutation(async () => {
+          assertProviderMutationOwner(
+            ownerAtIngress,
+            'active account changed before persisting image input override',
+          );
+          try {
+            await write(target, value);
+          } catch (err) {
+            log.warn('model catalog image input override persist failed', {
+              providerId: target.providerId,
+              agent: target.agent,
+              modelId: target.modelId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throwIpcError('INTERNAL', 'failed to persist model catalog image input override');
+          }
+          // 写盘不会自动生效：先重读 override 注入活动目录，再刷新目录并广播
+          // PROVIDER_CHANGED（不是 pricing 通道 —— 能力变了要让 renderer 重拉 provider
+          // 视图，抽屉据此刷新；价格通道只推价格）。
+          deps.syncLocalCatalogOverrides?.();
+          await refreshCatalogAfterCommit();
+          deps.broadcastChanged();
+          return read(target);
         }),
       );
     },

@@ -5983,16 +5983,21 @@ export class PiAgent extends BaseAgent {
       }
     };
 
-    const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
+    const assertImageInputSupported = async (images: readonly PiPromptImage[]): Promise<void> => {
       if (images.length === 0) return;
-      const supportsImageInput =
+      const supportsNow = (): boolean =>
         mutablePiProviderId === PI_PROVIDER_ID
           ? gatewayImageInputByModel.get(mutableModel) === true
           : nativeProviderById
               .get(mutablePiProviderId)
               ?.models.find((candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel))
               ?.input?.includes('image') === true;
-      if (supportsImageInput) return;
+      if (supportsNow()) return;
+      // 快照是 startSession 一次性解析的；目录可能在会话启动后才声明图片能力(本机 override)。
+      // 就地补一次能力对账(与切模路径同一个函数、同一失败语义)：补上就放行，补不上仍拒收
+      // —— 不依赖用户是否记得切一次模。无图消息在上面直接 return，纯文本发送零成本。
+      await refreshImageCapabilityOnSwitch(mutableModel, mutablePiProviderId);
+      if (supportsNow()) return;
       throw new PiImageInputUnsupportedError();
     };
 
@@ -6152,6 +6157,143 @@ export class PiAgent extends BaseAgent {
         return false;
       }
     };
+    /**
+     * 会话启动后用户可能才在设置里声明图片输入(本机目录 override)。快照是 startSession 一次
+     * 性解析的、Pi 的 set_model 又不重读 models.json —— 旧会话里「声明完仍被
+     * assertImageInputSupported 拒收」。切模是用户可见的自然同步点:目标模型的**目录声明**与
+     * 会话快照不一致时,只对齐该模型的 input(不整体换 providers:活会话的 env/代理 token 是
+     * 启动时注入的,整体换会踩 xAI 热刷新已知的坑),原子热写 models.json,再 switch_session
+     * (createRuntime → ModelConfig.load)让子进程真正加载 —— 与 xAI 登录后热刷新同一机制、
+     * 同一失败语义。
+     * 心跳会反复下发同路由(见 switchModel 开头的同路由 no-op),所以对账只做一次目录内存查找:
+     * 无变化零 I/O。目录未声明(undefined)按 override 的「缺字段继承」语义不动快照。
+     * 网关(xd)模型的图片能力不在本机声明面内(设置里也没有该入口),不走此路径。
+     */
+    const refreshImageCapabilityOnSwitch = async (
+      nextModel: string,
+      nextRequestedProviderId: string | null | undefined,
+    ): Promise<void> => {
+      const specProviderId = resolveProviderForModel(nextModel, nextRequestedProviderId);
+      if (specProviderId === PI_PROVIDER_ID) {
+        this.deps.logger.debug('pi image capability refresh skipped', {
+          reason: 'gateway-route',
+          model: nextModel,
+        });
+        return;
+      }
+      const fresh = this.deps.readModelImageInput?.(
+        resolveSourceProvider(specProviderId),
+        nextModel,
+      );
+      if (fresh === undefined) {
+        this.deps.logger.debug('pi image capability refresh skipped', {
+          reason: 'catalog-undeclared',
+          model: nextModel,
+          provider: specProviderId,
+        });
+        return;
+      }
+      const specModelId = resolveNativeModelId(specProviderId, nextModel);
+      const currentSpec = nativeProviderById.get(specProviderId)
+        ?.models.find((candidate) => candidate.id === specModelId);
+      const wantsImage = fresh === true;
+      if ((currentSpec?.input?.includes('image') ?? false) === wantsImage) {
+        this.deps.logger.debug('pi image capability refresh skipped', {
+          reason: 'matches-snapshot',
+          model: nextModel,
+          provider: specProviderId,
+        });
+        return;
+      }
+      this.deps.logger.info('pi image capability refresh applying', {
+        model: nextModel,
+        provider: specProviderId,
+        wantsImage,
+        hadImage: currentSpec?.input?.includes('image') ?? false,
+      });
+
+      const previousProviders = nativeProviders.slice();
+      const nextProviders: PiNativeProviderSpec[] = previousProviders.map((provider) =>
+        provider.id !== specProviderId
+          ? provider
+          : {
+              ...provider,
+              models: provider.models.map((modelSpec) =>
+                modelSpec.id !== specModelId
+                  ? modelSpec
+                  : {
+                      ...modelSpec,
+                      input: (wantsImage
+                        ? ['text', 'image']
+                        : ['text']) as Array<'text' | 'image'>,
+                    },
+              ),
+            },
+      );
+      try {
+        const written = await this.writeModelsJson(
+          configHome,
+          nextProviders,
+          retainedRuntimeModel,
+          authProviderId,
+          {
+            remote,
+            fileOps,
+            contextWindow: ctx.contextWindow || startupContextWindow,
+            workingContextWindow: ctx.workingContextWindow,
+            piCompactionPct: sessionPiAutoCompactPct,
+            packages: nativePackagePaths,
+            disabledSkills: disabledSkillLaunch,
+          },
+        );
+        nativeProviders = nextProviders;
+        nativeProviderById.clear();
+        nativeProviderBySourceId.clear();
+        for (const spec of nextProviders) {
+          if (spec.id === PI_PROVIDER_ID) continue;
+          nativeProviderById.set(spec.id, spec);
+          nativeProviderBySourceId.set(spec.sourceProviderId ?? spec.id, spec);
+        }
+        gatewayApiByModel.clear();
+        for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
+        gatewayImageInputByModel.clear();
+        for (const [key, value] of written.gatewayImageInputByModel) {
+          gatewayImageInputByModel.set(key, value);
+        }
+      } catch (err) {
+        // 原子写保证盘上要么是旧的完整文件要么是新的完整文件；回滚把两种情况都收敛成旧状态，
+        // 与内存一致(写失败时内存还没换)。
+        this.deps.logger.warn('pi image capability refresh persist failed', {
+          model: nextModel,
+          provider: specProviderId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        await restoreNativeCatalogOrTerminate(previousProviders);
+        throw new Error(
+          `pi: failed to persist refreshed image capability: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // 与 xAI 热刷新同口径:set_model 不重读 models.json,只有 switch_session → createRuntime
+      // → ModelConfig.load 才让子进程加载新清单。无 sdkSessionId 时无法 switch_session,
+      // 只保证 host 侧(准入门读的快照)已对齐。
+      if (!sdkSessionId) return;
+      let reloaded;
+      try {
+        reloaded = await proc.request({
+          type: 'switch_session',
+          sessionPath: sdkSessionId,
+        });
+      } catch (err) {
+        // reject/超时 = 不知道子进程有没有吃到新 models.json,回滚和放行都可能分叉。
+        return await terminateUnconfirmedCatalogReload(err);
+      }
+      if (!reloaded.success) {
+        await restoreNativeCatalogOrTerminate(previousProviders);
+        throw new Error(
+          `pi: failed to reload models after image capability update: ${reloaded.error ?? 'unknown'}`,
+        );
+      }
+    };
     const switchModel = async (
       model: string,
       setOpts?: { providerId?: string | null; effort?: Effort },
@@ -6206,6 +6348,9 @@ export class PiAgent extends BaseAgent {
           );
         }
       };
+      // 能力对账必须在同路由 no-op **之前**:心跳与「声明后切回同模型」走的都是那条早返回。
+      // 无目录变化时这里只花一次内存查找(见函数注释),心跳不受影响。
+      await refreshImageCapabilityOnSwitch(model, requestedProviderId);
       if (
         model === mutableModel &&
         requestedProviderId !== undefined &&
@@ -6657,7 +6802,9 @@ export class PiAgent extends BaseAgent {
           let { text, images } = await buildPiPrompt(message, { remote });
           const pinnedSkill = sendOpts?.[PINNED_SKILL_INVOCATION];
           rejectIfCancelled(sendOpts, 'send');
-          assertImageInputSupported(images);
+          await assertImageInputSupported(images);
+          // 对账可能 await 过(仅目录已声明的失败路径)，期间 signal 可能被撤：投递前再查一次。
+          rejectIfCancelled(sendOpts, 'send');
           setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
           reviewIntentUpdated = true;
           const managedPackageRoute = await routeManagedPackageCommand(
@@ -6901,7 +7048,9 @@ export class PiAgent extends BaseAgent {
         }
         let { text, images } = await buildPiPrompt(message, { remote });
         rejectIfCancelled(sendOpts, 'steer');
-        assertImageInputSupported(images);
+        await assertImageInputSupported(images);
+        // 同上：对账 await 后重新确认未被取消。
+        rejectIfCancelled(sendOpts, 'steer');
         setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
         // A steered channel message can add confirmation requirements to the
         // running turn, but must not remove the current sender's restrictions.

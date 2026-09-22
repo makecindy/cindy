@@ -3341,6 +3341,77 @@ describe('provider:custom:* CRUD handlers', () => {
   });
 });
 
+describe('model catalog image input handlers', () => {
+  const target = { providerId: 'opencode-go', agent: 'pi' as const, modelId: 'mimo-v2.6-flash' };
+
+  function imageDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps {
+    return makeDeps({
+      listProviders: async () => [catalogView('opencode-go', { pi: ['mimo-v2.6-flash'] })],
+      readModelCatalogImageInput: vi.fn(() => ({ value: null, isCustomized: false })),
+      writeModelCatalogImageInput: vi.fn(async () => {}),
+      syncLocalCatalogOverrides: vi.fn(() => {}),
+      ...over,
+    });
+  }
+
+  it('writes the declaration, re-syncs the catalog and broadcasts', async () => {
+    const harness = new IpcHarness();
+    const deps = imageDeps();
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, { ...target, value: true });
+    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith(target, true);
+    // 写盘不会自动生效：必须重读 override 注入活动目录并刷新/广播。
+    expect(deps.syncLocalCatalogOverrides).toHaveBeenCalledTimes(1);
+    expect(deps.refreshCatalog).toHaveBeenCalledTimes(1);
+    // 能力变更必须走 PROVIDER_CHANGED，renderer 靠它重拉 provider 视图。
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
+    expect(deps.broadcastPricingChanged).not.toHaveBeenCalled();
+  });
+
+  it('passes null through as the "follow the catalog" reset', async () => {
+    const harness = new IpcHarness();
+    const deps = imageDeps();
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, { ...target, value: null });
+    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith(target, null);
+  });
+
+  it('reads without a catalog membership check so stale overrides stay visible and clearable', async () => {
+    const harness = new IpcHarness();
+    const deps = imageDeps({ listProviders: async () => [] });
+    registerProviderHandlers(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_GET, target)).resolves.toEqual({
+      value: null,
+      isCustomized: false,
+    });
+  });
+
+  it('rejects a non-catalog target, a malformed value, and an unwired host', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, imageDeps());
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, {
+        ...target,
+        modelId: 'missing',
+        value: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, { ...target, value: 'yes' }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+
+    const bare = new IpcHarness();
+    registerProviderHandlers(bare, makeDeps());
+    await expect(bare.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_GET, target)).rejects.toThrow(
+      /INTERNAL/,
+    );
+  });
+});
+
 describe('model price override handlers', () => {
   const target = {
     providerId: 'openrouter',

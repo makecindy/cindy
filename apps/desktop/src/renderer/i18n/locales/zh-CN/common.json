@@ -177,7 +177,7 @@
     "MODEL_SWITCH_TASK_RUNNING": "模型未切换：当前任务仍在运行。请等待本次回复结束后再试",
     "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "模型未切换：正在整理当前任务的上下文。请等待完成后再试",
     "SESSION_RUNNING": "当前任务正在运行，请稍后再试。",
-    "PI_IMAGE_INPUT_UNSUPPORTED": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
+    "PI_IMAGE_INPUT_UNSUPPORTED": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后切换一次模型或新建 Pi 任务。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任务中运行，本次来源切换未生效（本任务仍使用原来源）。等它结束后再试。",
     "PI_CATALOG_RELOAD_UNCONFIRMED": "模型目录重载未确认，已终止本任务。请重新打开任务后再切换模型。",
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "目标模型或来源需要不同的远端路由，请关闭并重新创建远程任务后生效。",
@@ -2043,6 +2043,13 @@
           "capability": "能力",
           "capabilityHint": "优先使用当前供应商声明的能力；未声明时，图片能力参考模型名称。",
           "imageInput": "图片输入",
+          "imageInputOverride": {
+            "label": "图片输入能力声明",
+            "inherit": "跟随供应商",
+            "declaredTrue": "支持图片输入",
+            "declaredFalse": "不支持图片输入",
+            "saveFailed": "保存图片输入能力失败"
+          },
           "supported": "支持",
           "unsupported": "不支持",
           "undeclared": "未声明",

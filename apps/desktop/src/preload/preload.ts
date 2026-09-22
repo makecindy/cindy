@@ -6089,6 +6089,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
     ): Promise<import('../shared/modelContextLimit').ModelContextLimitView> =>
       ipcRenderer.invoke('maker:model-context-limit:set', target, limit, owner),
+    getModelCatalogImageInput: (
+      target: import('../shared/modelCatalogImageInput').ModelCatalogImageInputTarget,
+    ): Promise<import('../shared/modelCatalogImageInput').ModelCatalogImageInputView> =>
+      ipcRenderer.invoke('maker:model-catalog-image-input:get', target),
+    setModelCatalogImageInput: (
+      target: import('../shared/modelCatalogImageInput').ModelCatalogImageInputTarget,
+      value: boolean | null,
+    ): Promise<import('../shared/modelCatalogImageInput').ModelCatalogImageInputView> =>
+      ipcRenderer.invoke('maker:model-catalog-image-input:set', { ...target, value }),
     resetModelContextLimit: (
       target: import('../shared/modelContextLimit').ModelContextLimitTarget,
       owner: import('../shared/modelContextLimit').ModelContextLimitOwner,
