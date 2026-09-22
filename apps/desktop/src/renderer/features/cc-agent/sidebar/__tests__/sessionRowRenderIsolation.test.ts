@@ -97,9 +97,12 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
 
 vi.mock('@/contexts/WorktreeContext', () => {
   const reportLiveness = vi.fn();
+  const refreshObserved = vi.fn();
   return {
     useWorktreeForSession: () => null,
     useReportWorktreeLiveness: () => reportLiveness,
+    useObservedWorktreeForSession: () => null,
+    useRefreshObservedWorktree: () => refreshObserved,
   };
 });
 
@@ -178,6 +181,37 @@ afterEach(() => {
 // ── 不变量 1:memo 包裹(结构断言 + 源码断言双保险) ──────────────────────────
 
 describe('SessionItem — Cindy Make preparation', () => {
+  it('keeps a personal build running outside an Agent turn without waking unrelated rows', () => {
+    let state: CindyMakeGlobalState = {};
+    const listeners = new Set<() => void>();
+    vi.spyOn(cindyMakeState, 'getSnapshot').mockImplementation(() => state);
+    vi.spyOn(cindyMakeState, 'subscribe').mockImplementation((listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    });
+    const makeA = { ...sessionA, source: 'cindy-make' as const };
+    const makeB = { ...sessionB, source: 'cindy-make' as const };
+    const remote = { ...makeSession('remote-build'), source: 'cindy-make' as const, deviceLinkDeviceId: 'other-device' };
+    render(rowsElement([makeA, makeB, remote], new Set()));
+    const baselineB = renderCounts.get(makeB.id);
+    const baselineRemote = renderCounts.get(remote.id);
+    const publish = (next: CindyMakeGlobalState) => act(() => {
+      state = next;
+      listeners.forEach((listener) => listener());
+    });
+    publish({ personalBuildSessionIds: [makeA.id, remote.id] });
+    expect(screen.getByTestId(makeA.id).getAttribute('data-running')).toBe('true');
+    expect(screen.getByTestId(makeB.id).getAttribute('data-running')).toBe('false');
+    expect(screen.getByTestId(remote.id).getAttribute('data-running')).toBe('false');
+    const baselineA = renderCounts.get(makeA.id);
+    publish({ personalBuildSessionIds: [makeA.id, remote.id], source: { status: 'ready', path: 'source' } });
+    expect(renderCounts.get(makeA.id)).toBe(baselineA);
+    expect(renderCounts.get(makeB.id)).toBe(baselineB);
+    expect(renderCounts.get(remote.id)).toBe(baselineRemote);
+    // Completion/failure/cancellation all release the same Main-owned build lease.
+    publish({});
+    expect(screen.getByTestId(makeA.id).getAttribute('data-running')).toBe('false');
+  });
   it('shows preparation as activity and redraws only when this task changes phase', () => {
     let state: CindyMakeGlobalState = {};
     const listeners = new Set<() => void>();
@@ -566,9 +600,16 @@ describe('父层 — 行级 handler 的引用稳定性', () => {
       resolve(__dirname, '..', 'AutomationSessionGroupItem.tsx'),
       'utf8',
     );
-    expect(sessionCard).toMatch(/export const SessionCard = memo\(/);
+    const navigationAdapter = readFileSync(
+      resolve(__dirname, '..', 'sidebarNavigation.tsx'),
+      'utf8',
+    );
+    expect(navigationAdapter).toMatch(/const Row = memo\(Component\)/);
+    expect(sessionCard).toMatch(/export const SessionCard = withSidebarNavigation</);
     expect(projectNode).toMatch(/export const ProjectNode = memo\(/);
-    expect(automationGroup).toMatch(/export const AutomationSessionGroupItem = memo\(/);
+    expect(automationGroup).toMatch(
+      /export const AutomationSessionGroupItem = withSidebarNavigation</,
+    );
   });
 
   it('runningSessionIds 必须 memo 化(否则每渲染 new Set 打穿整表)', () => {

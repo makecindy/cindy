@@ -152,7 +152,6 @@ describe('desktop MCP approval policy', () => {
       'cindy_slack',
       'cindy_scheduler',
       'cindy_memory',
-      'cindy_helper',
       // worker → lead 回报通道:执行边界在工具内部 fail-closed, 逐次弹窗
       // 会让远端 daemon 等审批超时断链。
       'orca_worker_bridge',
@@ -270,6 +269,16 @@ describe('desktop MCP approval policy', () => {
           toolParams: { name: 'open_simulator_url', args },
         }),
       ).toBe('prompt-each-time');
+    }
+  });
+
+  it('keeps external project builds on the existing task permission policy', () => {
+    const route = { instanceId: 'instance-a', generation: 2, leaseId: 'lease-a' };
+    for (const projectDir of [undefined, '/projects/worktree-b', '../worktree-b']) {
+      expect(getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_ios_simulator', toolName: 'call_tool',
+        toolParams: { name: 'build_app', args: { ...route, projectDir } },
+      })).toBe('prompt-each-time');
     }
   });
 
@@ -430,9 +439,85 @@ describe('desktop MCP approval policy', () => {
 
 describe('Cindy market action authorization', () => {
   it('allows catalog discovery but reviews each selected installation', () => {
-    expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_search'})).toBe('auto-approve');
-    expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_install'})).toBe('prompt-each-time');
-    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy__ghost_market_install');
+    expect(
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_market_search' }),
+    ).toBe('auto-approve');
+    expect(
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_market_install' }),
+    ).toBe('prompt-each-time');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain(
+      'mcp__cindy__ghost_market_install',
+    );
+  });
+});
+
+describe('helper task workspace and SkillHub publication authorization', () => {
+  const policy = (toolName: string | undefined, toolParams?: unknown) =>
+    getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName, toolParams });
+
+  it.each([
+    { mode: 'create', visibility: 'public' },
+    { mode: 'create', visibility: 'private' },
+    { mode: 'create', visibility: 'shared', visible_slugs: ['engineering'] },
+    { mode: 'update' },
+  ])('reviews each publication with %j across payload representations', (publication) => {
+    const input = { ...publication, path: 'skills/release-notes', name: 'release-notes' };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('publish_skill', args)).toBe('prompt-each-time');
+      for (const name of ['publish_skill', ' publish_skill ']) {
+        const params = { name, args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe('prompt-each-time');
+          expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+        }
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__publish_skill');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
+  });
+
+  it('reviews each move across progressive payload representations', () => {
+    for (const working_dir of ['/project', null]) {
+      for (const args of [
+        { session_id: 'target', working_dir },
+        JSON.stringify({ session_id: 'target', working_dir }),
+      ]) {
+        const params = { name: 'move_session', args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe('prompt-each-time');
+          expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+        }
+      }
+    }
+    expect(policy('move_session', { session_id: 'target', working_dir: '/project' })).toBe(
+      'prompt-each-time',
+    );
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
+  });
+
+  it('does not infer a safe helper action from missing or malformed evidence', () => {
+    for (const params of [undefined, null, [], 'invalid JSON', {}, { name: '' }, { name: 42 }]) {
+      expect(policy('call_tool', params)).toBe('prompt-each-time');
+      expect(policy(undefined, params)).toBe('prompt-each-time');
+    }
+  });
+
+  it('preserves discovery and other existing helper actions', () => {
+    expect(policy('list_tools')).toBe('auto-approve');
+    for (const name of [
+      'list_projects',
+      'create_project',
+      'rename_project',
+      'remove_project',
+      'send_to_session',
+      'search_skills',
+      'list_my_published_skills',
+      'get_skill_publish_status',
+    ]) {
+      expect(policy(name, {})).toBe('auto-approve');
+      expect(policy('call_tool', { name, args: {} })).toBe('auto-approve');
+      expect(policy(undefined, JSON.stringify({ name, args: {} }))).toBe('auto-approve');
+    }
   });
 });
 
@@ -456,7 +541,9 @@ describe('Orca Worker directory authorization', () => {
 
   it('preserves inherited-directory creation and other Orca operations', () => {
     expect(policy('create_worker', { label: 'inherits' })).toBe('auto-approve');
-    expect(policy('create_workers', { workers: [{ label: 'a' }, { label: 'b' }] })).toBe('auto-approve');
+    expect(policy('create_workers', { workers: [{ label: 'a' }, { label: 'b' }] })).toBe(
+      'auto-approve',
+    );
     expect(policy('send_to_worker', { worker_id: 'a', message: 'continue' })).toBe('auto-approve');
     expect(policy('list_workers')).toBe('auto-approve');
   });

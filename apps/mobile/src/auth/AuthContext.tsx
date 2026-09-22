@@ -3023,11 +3023,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       path: string,
       opts: Omit<ApiFetchOptions, 'token'>,
     ): Promise<T> => {
+      opts.assertCurrent?.();
       const token = await getAccessToken();
+      opts.assertCurrent?.();
       if (!token) throw new Error('UNAUTHENTICATED');
       try {
         return await apiFetchRaw<T>(path, { ...opts, token });
       } catch (error) {
+        opts.assertCurrent?.();
         if (!(error instanceof ApiError) || error.status !== 401) throw error;
         if (error.code === 'ACCOUNT_UNAVAILABLE') {
           if (userRef.current) {
@@ -3038,6 +3041,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!isRefreshableUnauthorizedCode(error.code)) throw error;
 
         const fresh = await refresh();
+        opts.assertCurrent?.();
         if (!fresh) {
           if (userRef.current) await terminateSession();
           throw error;
@@ -3045,6 +3049,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           return await apiFetchRaw<T>(path, { ...opts, token: fresh });
         } catch (retryError) {
+          opts.assertCurrent?.();
           if (
             retryError instanceof ApiError &&
             retryError.status === 401 &&

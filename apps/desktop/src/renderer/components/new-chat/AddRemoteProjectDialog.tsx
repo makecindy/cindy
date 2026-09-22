@@ -24,9 +24,14 @@ import { X, Folder, FolderSymlink, ChevronLeft, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { Spinner } from '@/components/ui/spinner';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import {
+  SshModelSelectionError,
+  sshModelSelectionErrorKeys,
+} from '@/features/cc-agent/sshSessionModelSelection';
 import { useControllableDevices } from '@/hooks/useControllableDevices';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import {
@@ -324,7 +329,11 @@ export function AddRemoteProjectDialog({
       }
       onOpenChange(false);
     } catch (err) {
-      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.addFailed' })));
+      toast.error(t(
+        err instanceof SshModelSelectionError
+          ? sshModelSelectionErrorKeys[err.reason]
+          : mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.addFailed' }),
+      ));
     } finally {
       setBusy(false);
     }
@@ -348,6 +357,8 @@ export function AddRemoteProjectDialog({
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',
             border: '1px solid var(--border-default, #d4d4d4)',
+            // Keep the centered shell still across mode changes and async list loading.
+            height: noTargets ? undefined : 660,
             maxHeight: '88vh',
           }}
           onEscapeKeyDown={busy ? (e) => e.preventDefault() : undefined}
@@ -363,7 +374,7 @@ export function AddRemoteProjectDialog({
         >
           {/* Header */}
           <div
-            className="flex flex-col gap-1 px-5 py-4"
+            className="flex shrink-0 flex-col gap-1 px-5 py-4"
             style={{ borderBottom: '1px solid var(--border-default, #d4d4d4)' }}
           >
             <div className="flex items-center justify-between">
@@ -391,7 +402,7 @@ export function AddRemoteProjectDialog({
           </div>
 
           {/* Body */}
-          <div className="flex flex-col gap-3 px-5 py-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
             {noTargets ? (
               <div className="text-13 py-8 text-center" style={{ color: 'var(--text-secondary)' }}>
                 {t(emptyIsPiSshFiltered
@@ -401,7 +412,7 @@ export function AddRemoteProjectDialog({
             ) : (
               <>
                 {/* Target selector — optgroup 区分 SSH 主机 / 我的设备 */}
-                <label className="flex flex-col gap-1">
+                <label className="flex shrink-0 flex-col gap-1">
                   <span
                     className="text-12 font-medium"
                     style={{ color: 'var(--text-secondary)' }}
@@ -458,51 +469,26 @@ export function AddRemoteProjectDialog({
                 </label>
 
                 {/* Mode toggle — 默认「已有项目」,「浏览文件夹」为次要入口 */}
-                <div
-                  className="flex items-center gap-1 rounded-lg border p-0.5"
-                  style={{ borderColor: 'var(--border-default)' }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMode('existing');
-                      setPath('');
-                    }}
-                    disabled={busy}
-                    className={cn(
-                      'flex-1 h-7 rounded-md text-12 font-medium transition-colors',
-                      busy && 'cursor-not-allowed opacity-60',
-                    )}
-                    style={
-                      mode === 'existing'
-                        ? { backgroundColor: 'var(--settings-menu-bg-selected)', color: 'var(--text-primary)' }
-                        : { color: 'var(--text-secondary)' }
-                    }
-                  >
-                    {t('newChat.addRemoteProject.tabExisting')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode('browse')}
-                    disabled={busy}
-                    className={cn(
-                      'flex-1 h-7 rounded-md text-12 font-medium transition-colors',
-                      busy && 'cursor-not-allowed opacity-60',
-                    )}
-                    style={
-                      mode === 'browse'
-                        ? { backgroundColor: 'var(--settings-menu-bg-selected)', color: 'var(--text-primary)' }
-                        : { color: 'var(--text-secondary)' }
-                    }
-                  >
-                    {t('newChat.addRemoteProject.tabBrowse')}
-                  </button>
-                </div>
+                <SegmentedControl
+                  className="shrink-0"
+                  aria-label={t('newChat.addRemoteProject.title')}
+                  value={mode}
+                  disabled={busy}
+                  fullWidth
+                  onValueChange={(next) => {
+                    setMode(next);
+                    if (next === 'existing') setPath('');
+                  }}
+                  options={[
+                    { value: 'existing', label: t('newChat.addRemoteProject.tabExisting') },
+                    { value: 'browse', label: t('newChat.addRemoteProject.tabBrowse') },
+                  ]}
+                />
 
                 {mode === 'existing' ? (
                   /* 已有项目列表 — 单击选中、双击直接添加;空则给「浏览文件夹」兜底入口 */
                   <div
-                    className="max-h-[340px] overflow-y-auto rounded-lg border"
+                    className="min-h-0 flex-1 overflow-y-auto rounded-lg border"
                     style={{ borderColor: 'var(--border-default)' }}
                   >
                     {existingLoading ? (
@@ -565,7 +551,7 @@ export function AddRemoteProjectDialog({
                 ) : (
                   <>
                     {/* Path bar */}
-                    <label className="flex flex-col gap-1">
+                    <label className="flex shrink-0 flex-col gap-1">
                       <span
                         className="text-12 font-medium"
                         style={{ color: 'var(--text-secondary)' }}
@@ -622,7 +608,7 @@ export function AddRemoteProjectDialog({
 
                     {/* Entries list */}
                     <div
-                      className="max-h-[296px] overflow-y-auto rounded-lg border"
+                      className="min-h-0 flex-1 overflow-y-auto rounded-lg border"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
                       {entries.length === 0 ? (
@@ -675,7 +661,7 @@ export function AddRemoteProjectDialog({
           {/* Footer — 按钮走通用弹窗标准(DESIGN §Dialog / confirm-dialog.tsx):
               主按钮实心 CTA(--confirm-btn-primary-*),取消描边(--confirm-btn-secondary-*),pill。 */}
           <div
-            className="flex justify-end gap-2.5 px-5 py-3"
+            className="flex shrink-0 justify-end gap-2.5 px-5 py-3"
             style={{ borderTop: '1px solid var(--border-default)' }}
           >
             <Dialog.Close asChild disabled={busy}>

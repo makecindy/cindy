@@ -56,6 +56,7 @@ import {
 import { providerCatalogForPi, providerModelRecord } from '@cindy/model-providers';
 import type {
   Catalog,
+  ModelCost,
   CustomProviderConfig,
   PiModelApi,
   PiReasoningEffort,
@@ -278,7 +279,7 @@ function parsePiBundledModel(value: unknown): PiBundledModelInfo | null {
     name: typeof value.name === 'string' ? value.name : value.id,
     reasoning: value.reasoning === true,
     ...(thinkingLevelMap && Object.keys(thinkingLevelMap).length > 0 ? { thinkingLevelMap } : {}),
-    input: input.length > 0 ? input : ['text'],
+    input: Array.isArray(value.input) ? input : ['text', 'image'],
     contextWindow:
       typeof value.contextWindow === 'number' && value.contextWindow > 0
         ? value.contextWindow
@@ -505,12 +506,7 @@ export async function readPiBundledModels(
   return catalog;
 }
 
-function catalogCostForPiNative(cost: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-} | undefined): { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined {
+function catalogCostForPiNative(cost: ModelCost | undefined): PiNativeModelSpec['cost'] {
   if (
     !cost ||
     (typeof cost.input !== 'number' &&
@@ -525,6 +521,13 @@ function catalogCostForPiNative(cost: {
     output: cost.output ?? 0,
     cacheRead: cost.cacheRead ?? 0,
     cacheWrite: cost.cacheWrite ?? 0,
+    ...(cost.tiers ? { tiers: cost.tiers.map(tier => ({
+      inputTokensAbove: tier.inputTokensAbove,
+      input: tier.input ?? cost.input ?? 0,
+      output: tier.output ?? cost.output ?? 0,
+      cacheRead: tier.cacheRead ?? cost.cacheRead ?? 0,
+      cacheWrite: tier.cacheWrite ?? cost.cacheWrite ?? 0,
+    })) } : {}),
   };
 }
 
@@ -689,7 +692,7 @@ export function buildPiSubscriptionNativeProviders(
             ? { maxTokens: model.maxOutput ?? template?.maxTokens } : {}),
           reasoning: model.efforts.length > 0,
           input: model.supportsImageInput === undefined
-            ? [...(template?.input ?? ['text'])]
+            ? [...(template?.input ?? ['text', 'image'])]
             : model.supportsImageInput ? ['text', 'image'] : ['text'],
           thinkingLevelMap: catalogThinkingLevelMap(model.efforts, thinking),
           ...(cost ? { cost: { ...cost } } : {}),
@@ -1507,27 +1510,14 @@ export async function buildXaiPiNativeProvider(
 ): Promise<PiNativeProvidersResult> {
   const catalogModels =
     getActiveCatalog().providers.find((provider) => provider.id === providerId)?.models.pi ?? [];
-  const officialById = new Map(
-    (officialPiModels('xai') ?? []).map((candidate) => [candidate.id, candidate]),
-  );
-  const models = catalogModels.map((catalogModel) => ({
-    ...(officialById.get(catalogModel.id) ??
-      configuredPiModel({
-        id: catalogModel.id,
-        name: catalogModel.name,
-        supportsImageInput:
-          catalogModel.supportsImageInput === true ||
-          catalogModel.modalities?.input.includes('image') === true,
-        reasoning: catalogModel.efforts.length > 0,
-        reasoningEfforts: catalogModel.efforts.filter(
-          (effort): effort is PiReasoningEffort => effort !== 'ultra',
-        ),
-      })),
-    id: `xai/${catalogModel.id}`,
-    wireId: catalogModel.id,
-    // Keep the exact API from Pi's catalog. The host forwarder authenticates and forwards both
-    // native shapes without sending the request through the Claude Messages bridge.
-    api: catalogModel.piApi ?? officialById.get(catalogModel.id)?.api ?? 'openai-responses',
+  // Reuse the subscription projection so SSH and local xAI receive identical
+  // capacity, reasoning and input metadata, including newly discovered models.
+  const projected = buildPiSubscriptionNativeProviders(getActiveCatalog(), getClaudeEndpoint())
+    .providers.find(provider => provider.sourceProviderId === providerId);
+  const models: PiNativeModelSpec[] = (projected?.models ?? []).map(model => ({
+    ...model,
+    id: `xai/${model.wireId ?? model.id}`,
+    wireId: model.wireId ?? model.id,
   }));
   const aliases = Object.fromEntries(
     catalogModels.flatMap((candidate) => [
@@ -1645,14 +1635,21 @@ export function resolvePiCindyGatewayModelSpec(
   const api = resolvePiCindyGatewayModelApi(_selectedProviderId, modelId, context);
   if (api === undefined || api === null) return api;
   const bundled = resolveBundledPiGatewayModelProfile(modelId);
+  const probed = context?.remote ? undefined : resolveProbedPiGatewayModel(modelId);
+  const compatibleBundled = bundled?.api === api ? bundled : undefined;
+  const compatibleProbed = probed?.api === api ? probed : undefined;
+  let compat = compatibleProbed?.compat ?? compatibleBundled?.compat;
+  // Gateway routing needs Pi's native session identity on every Chat/Messages request.
+  // This is a Gateway transport policy, not a change to direct BYOM/subscription providers.
+  if (api === 'openai-completions' || api === 'anthropic-messages') {
+    compat = { ...compat, sendSessionAffinityHeaders: true };
+  }
   // Remote execution never receives metadata from the Desktop binary probe. The version-matched
   // static client profile remains the second authority and is injected only when its API matches.
   if (context?.remote) {
     return {
       api,
-      ...(bundled?.api === api && bundled.compat
-        ? { compat: structuredClone(bundled.compat) }
-        : {}),
+      ...(compat ? { compat: structuredClone(compat) } : {}),
       ...(bundled?.api === api && bundled.samplingParams
         ? { samplingParams: structuredClone(bundled.samplingParams) }
         : {}),
@@ -1661,17 +1658,12 @@ export function resolvePiCindyGatewayModelSpec(
         : {}),
     };
   }
-  const probed = resolveProbedPiGatewayModel(modelId);
   // Provider quirks are API-specific. Local metadata may fill omissions only when it agrees with
   // the final API; never apply stale compat across a protocol change. The exact current binary
   // probe takes precedence over the checked-in snapshot when both match that API.
-  const compatibleBundled = bundled?.api === api ? bundled : undefined;
-  const compatibleProbed = probed?.api === api ? probed : undefined;
   return {
     api,
-    ...(compatibleProbed?.compat ?? compatibleBundled?.compat
-      ? { compat: structuredClone(compatibleProbed?.compat ?? compatibleBundled?.compat) }
-      : {}),
+    ...(compat ? { compat: structuredClone(compat) } : {}),
     ...(compatibleProbed?.samplingParams ?? compatibleBundled?.samplingParams
       ? {
           samplingParams: structuredClone(

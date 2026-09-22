@@ -14,6 +14,12 @@ const mockState = vi.hoisted(() => ({
   collabService: null as null | {
     [key: string]: ReturnType<typeof vi.fn>;
   },
+  learnEnabled: true,
+  learnController: {} as object | null,
+  consumeLearnInvocationGrant: vi.fn(async (
+    _request: unknown,
+    _sessionInstanceId: string | undefined,
+  ) => ({ ok: true as const })),
   capturedProvidersConfig: null as null | Record<string, unknown>,
 }));
 
@@ -29,6 +35,7 @@ vi.mock('../../logger.js', () => ({
 
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
+  isSessionInTurn: () => false,
 }));
 
 vi.mock('@cindy/mcps', () => ({
@@ -86,6 +93,19 @@ vi.mock('../../maker-host/session-search.js', () => ({
 
 vi.mock('../../maker-host/lsp-mode-store.js', () => ({
   readLspModeSettings: () => ({ enabled: true }),
+}));
+
+vi.mock('../../skillhub/activationPreferences.js', () => ({
+  isCindyLearnSkillEnabled: () => mockState.learnEnabled,
+}));
+
+vi.mock('../../learn-host/index.js', () => ({
+  getLearnController: () => mockState.learnController,
+}));
+
+vi.mock('../../learn-host/invocationGrant.js', () => ({
+  consumeLearnInvocationGrant: (request: unknown, sessionInstanceId: string | undefined) =>
+    mockState.consumeLearnInvocationGrant(request, sessionInstanceId),
 }));
 
 vi.mock('../../localDb/chatHistoryReader.js', () => ({
@@ -163,6 +183,10 @@ describe('collab send outcome semantics', () => {
     mockState.logger.trace.mockClear();
     mockState.logger.fatal.mockClear();
     mockState.collabService = null;
+    mockState.learnEnabled = true;
+    mockState.learnController = {};
+    mockState.consumeLearnInvocationGrant.mockReset();
+    mockState.consumeLearnInvocationGrant.mockResolvedValue({ ok: true });
     mockState.capturedProvidersConfig = null;
     vi.clearAllMocks();
   });
@@ -195,6 +219,137 @@ describe('collab send outcome semantics', () => {
         workingDir: 'C:/projects/cindy',
       } as never),
     ).toBe(true);
+  });
+
+  it('rejects start_skill_learning after the built-in Learn Skill is disabled', async () => {
+    mockState.learnEnabled = false;
+    createDesktopMcpProviders({
+      botCapabilities,
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      skillLearning: (input: {
+        callerSessionId: string;
+        input: string;
+        sourceKind: 'session';
+      }) => Promise<Record<string, unknown>>;
+    };
+
+    await expect(xdtHelper.skillLearning({
+      callerSessionId: 'session-1',
+      input: '',
+      sourceKind: 'session',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'SKILL_DISABLED',
+      message: 'Cindy Learn is disabled in Local Skills.',
+    });
+  });
+
+  it('authorizes Learn only for the live local Session instance bound to its dispatch grant', async () => {
+    const isCurrentLocalSessionInstance = vi.fn(() => false);
+    createDesktopMcpProviders({
+      botCapabilities,
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+      isCurrentLocalSessionInstance,
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      authorizeSkillLearning: (input: {
+        callerSessionId: string;
+        input: string;
+        sourceKind: 'freetext';
+      }, context: { sessionInstanceId: string }) => Promise<Record<string, unknown>>;
+    };
+    const request = {
+      callerSessionId: 'session-1',
+      input: 'release flow',
+      sourceKind: 'freetext' as const,
+    };
+
+    const context = { sessionInstanceId: 'instance-1' };
+    await expect(xdtHelper.authorizeSkillLearning(request, context)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'USER_REQUEST_REQUIRED',
+    });
+    expect(isCurrentLocalSessionInstance).toHaveBeenLastCalledWith(
+      'session-1',
+      'instance-1',
+    );
+    expect(mockState.consumeLearnInvocationGrant).not.toHaveBeenCalled();
+
+    isCurrentLocalSessionInstance.mockReturnValue(true);
+    await expect(xdtHelper.authorizeSkillLearning(request, context)).resolves.toEqual({
+      ok: true,
+      sessionInstanceId: 'instance-1',
+    });
+    expect(mockState.consumeLearnInvocationGrant).toHaveBeenCalledWith(request, 'instance-1');
+  });
+
+  it('revalidates the authorized Session instance immediately before Learn starts', async () => {
+    const startLearn = vi.fn(async () => ({ runId: 'run-1' }));
+    mockState.learnController = { startLearn };
+    const isCurrentLocalSessionInstance = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    createDesktopMcpProviders({
+      botCapabilities,
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true } as never,
+      resolveIOSSimulatorAccess: () => ({ allowed: true }),
+      invokeRemote: vi.fn(),
+      isCurrentLocalSessionInstance,
+    });
+    const xdtHelper = mockState.capturedProvidersConfig?.xdtHelper as {
+      authorizeSkillLearning: (
+        input: {
+          callerSessionId: string;
+          input: string;
+          sourceKind: 'session';
+        },
+        context: { sessionInstanceId: string },
+      ) => Promise<Record<string, unknown>>;
+      skillLearning: (
+        input: {
+          callerSessionId: string;
+          input: string;
+          sourceKind: 'session';
+        },
+        authorization: { sessionInstanceId: string },
+      ) => Promise<Record<string, unknown>>;
+    };
+    const request = {
+      callerSessionId: 'session-1',
+      input: '',
+      sourceKind: 'session' as const,
+    };
+
+    const authorization = await xdtHelper.authorizeSkillLearning(request, {
+      sessionInstanceId: 'instance-1',
+    });
+    expect(authorization).toEqual({ ok: true, sessionInstanceId: 'instance-1' });
+
+    await expect(xdtHelper.skillLearning(request, {
+      sessionInstanceId: 'instance-1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'USER_REQUEST_REQUIRED',
+      message: 'Cindy Learn is not authorized for this task instance.',
+    });
+    expect(isCurrentLocalSessionInstance).toHaveBeenNthCalledWith(
+      2,
+      'session-1',
+      'instance-1',
+    );
+    expect(startLearn).not.toHaveBeenCalled();
   });
 
   it('reports enable_collab_mode delegate_task created-and-dispatched distinctly', async () => {

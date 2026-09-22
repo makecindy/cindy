@@ -96,6 +96,28 @@ it("requires public effort defaults to stand alone even without registry routes"
   expect(parseModelRegistry(r).ok).toBe(true);
 });
 describe("model metadata precedence", () => {
+  it("keeps one model default across Harness recommendations and adapts only to real capabilities", () => {
+    const r = structuredClone(registry);
+    r.models[0].routes[0].agents = ["claude-code", "codex"];
+    for (const agent of ["claude-code", "codex", "pi"]) {
+      expect(resolveModelMetadata(r, "supplier", "model", {
+        efforts: ["low", "high"], defaultEffort: "high",
+      }, undefined, agent)).toMatchObject({ efforts: ["low", "high"], defaultEffort: "low" });
+      expect(resolveModelMetadata(r, "supplier", "model", {
+        efforts: ["high"], defaultEffort: "high",
+      }, undefined, agent).defaultEffort).toBe("high");
+    }
+    r.models[0].perAgent = { codex: { defaultEffort: "high" } };
+    expect(resolveModelMetadata(r, "supplier", "model", undefined, undefined, "codex").defaultEffort)
+      .toBe("high");
+    expect(resolveModelMetadata(r, "supplier", "model", undefined, undefined, "pi").defaultEffort)
+      .toBe("low");
+    expect(resolveModelMetadata(r, "supplier", "model", undefined, { defaultEffort: "low" }, "codex").defaultEffort)
+      .toBe("low");
+    expect(resolveModelMetadata(undefined, "supplier", "unknown", { defaultEffort: "high" }).defaultEffort)
+      .toBe("high");
+  });
+
   it("inherits per field and lets supplier data beat defaults, explicit force beat supplier and user beat force", () => {
     expect(parseModelRegistry(registry).ok).toBe(true);
     expect(resolveModelMetadata(registry, "supplier", "model")).toMatchObject({
@@ -147,7 +169,7 @@ describe("model metadata precedence", () => {
       supportsFastMode: false,
     });
     expect(
-      resolveModelMetadata(registry, "supplier", "model", {
+      resolveModelMetadata(registry, "supplier", "model", undefined, {
         defaultEffort: null,
       }).defaultEffort,
     ).toBeNull();

@@ -208,6 +208,22 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     );
   });
 
+  it('retains host-stamped sharedTask attribution when the queue drains outside the original invoke', async () => {
+    const h = createHarness();
+    const sid = 'sharedTask-task';
+    const author = { sharedTaskId: 'sharedTask', sessionId: sid, memberId: 'member', accountId: 'guest', displayName: 'Guest' };
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('sharedTask-input', 'hello', { sharedTaskAuthor: author, userName: author.displayName }));
+    expect(h.coordinator.getProjection(sid).pendingQueue[0].sharedTaskAuthor).toEqual(author);
+    h.setRunning(false);
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      sid, expect.anything(), expect.anything(),
+      expect.objectContaining({ userName: 'Guest', persistUserMessage: expect.objectContaining({ sharedTaskAuthor: author }) }),
+    );
+  });
+
   it('restores first, reserves at the head with a host stamp, deduplicates, and emits once', async () => {
     const h = createHarness();
     const sid = 'priority-worker';
@@ -3505,6 +3521,7 @@ describe('AgentInputCoordinator send transaction', () => {
     const second = h.supersedeRetriedUserTurn.mock.calls[1]?.[1];
     expect(second?.supersededUserClientId).toBe(firstClone);
     expect(second?.retryUserClientId).not.toBe(firstClone);
+    expect(h.onDispatchedUserTurn.mock.calls[2]?.[1]?.retrySourceClientId).toBe('q-first');
   });
 
   it('does not supersede when the retry dispatch fails before the clone is persisted', async () => {
@@ -10966,7 +10983,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     const sid = 'replace-after-clear';
     await h.coordinator.ensureQueueRestored(sid);
     h.setRunning(true);
-    h.coordinator.enqueue(sid, makeItem('q-1', 'before'));
+    h.coordinator.enqueue(sid, { ...makeItem('q-1', 'before'), retrySourceClientId: 'original-retry-source' });
     await flush();
 
     const projected = h.coordinator.getProjection(sid).pendingQueue[0];
@@ -10984,6 +11001,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       clientId: 'q-1',
       text: 'after',
       hostAcceptedAtMs: acceptedAtMs,
+      retrySourceClientId: 'original-retry-source',
     });
 
     const restarted = createHarness();
@@ -11566,6 +11584,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect.objectContaining({
         autoResume: true,
         autoResumeInfo: TAKEOVER_INFO,
+        retrySourceClientId: 'q-first',
         supersedesUserClientId: undefined,
       }),
     );

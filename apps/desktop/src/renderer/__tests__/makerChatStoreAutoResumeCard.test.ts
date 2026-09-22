@@ -57,6 +57,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
+import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import * as messageService from '@/lib/messageService';
 import type { Message } from '@/lib/ccAgent.types';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -506,6 +507,42 @@ describe('applyInputProjection 自愈进行中提示', () => {
 });
 
 describe('Codex 原生重连进行态与终态接管交棒', () => {
+  const composerReconnect = (state: typeof EMPTY_SESSION_STATE) => findActiveReconnect({
+    messages: state.messages,
+    sessionRunning: state.agentStatus.isRunning || state.isStreaming,
+    continuationTurnClientId: state.continuationTurnClientId,
+    projectionCapability: state.continuationInFlightProjectionCapability,
+  });
+
+  it.each(['codex', 'pi'] as const)('%s reconnect overrides stale generation until substantive output or termination', (source) => {
+    const generating = {
+      ...EMPTY_SESSION_STATE,
+      agentStatus: { ...EMPTY_SESSION_STATE.agentStatus, isRunning: true, status: 'Generating...',
+        startedAt: 1, outputTokens: 465, generationDurationMs: 10000 },
+    };
+    const pending = handleStreamEvent(generating, {
+      sessionId: SID, source, type: 'error',
+      data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+    });
+    expect(composerReconnect(pending)).toMatchObject({ attempt: 1, maxAttempts: 5 });
+    const whitespace = handleStreamEvent(pending, {
+      sessionId: SID, source, type: 'text', data: { text: ' ', isFinal: false },
+    });
+    expect(composerReconnect(whitespace)).not.toBeNull();
+    const statusOnly = handleStreamEvent(whitespace, {
+      sessionId: SID, source, type: 'status', data: { status: 'Generating...' },
+    });
+    expect(composerReconnect(statusOnly)).not.toBeNull();
+    for (const event of [
+      { type: 'text' as const, data: { text: 'Recovered', isFinal: false } },
+      { type: 'tool_use' as const, data: { toolName: 'shell', toolUseId: 't1', input: { command: 'pwd' } } },
+      { type: 'done' as const, data: {} },
+      { type: 'error' as const, data: { message: 'Retries exhausted', isTerminal: true } },
+    ]) {
+      expect(composerReconnect(handleStreamEvent(statusOnly, { ...event, source, sessionId: SID }))).toBeNull();
+    }
+  });
+
   const reconnectEvent = (message: string, isTerminal: boolean) => ({
     sessionId: SID,
     type: 'error' as const,
@@ -896,6 +933,24 @@ describe('同一次中断事件的多次重连折叠成一行', () => {
         ...(outcome ? { autoResumeOutcome: outcome } : {}),
       } as Message['agentMeta'],
     });
+
+  it('keeps separate resume groups with substantive boundaries and trailing normal rows', async () => {
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      resumeRow('r1', 1), resumeRow('r2', 2),
+      serverMessage({ clientId: 'boundary', role: 'assistant', content: 'visible', createdAt: '2026-06-12T00:00:05.000Z' }),
+      resumeRow('r3', 1, undefined, '2026-06-12T00:00:1'),
+      resumeRow('r4', 2, undefined, '2026-06-12T00:00:1'),
+      serverMessage({ clientId: 'tail', role: 'assistant', content: 'done', createdAt: '2026-06-12T00:00:20.000Z' }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+    expect(makerChatStore.getSnapshot(SID).messages.filter((m) => m.systemCardType === 'auto-resume')
+      .map((m) => m.clientId)).toEqual(['r2', 'r4']);
+    const messages = makerChatStore.getSnapshot(SID).messages;
+    inputProjectionCb!(projection());
+    expect(makerChatStore.getSnapshot(SID).messages).toBe(messages);
+  });
 
   it('连续三次重连只渲染最后一条(带最新计数),前两条退回隐藏占位', async () => {
     vi.mocked(messageService.list).mockResolvedValueOnce([

@@ -267,22 +267,12 @@ function AskUserQuestionForm({
         <div className={skipClass}>{t('chat.askUserQuestion.skip')}</div>
         {showNext && (
           <div className={nextClass}>
-            {isLastQuestion
-              ? t('chat.askUserQuestion.submit')
-              : t('chat.askUserQuestion.next')}
+            {isLastQuestion ? t('chat.askUserQuestion.submit') : t('chat.askUserQuestion.next')}
           </div>
         )}
       </>
     );
-  }, [
-    currentIndex,
-    isMultiSelect,
-    isLastQuestion,
-    existingAnswer,
-    selectedLabels,
-    customInput,
-    t,
-  ]);
+  }, [currentIndex, isMultiSelect, isLastQuestion, existingAnswer, selectedLabels, customInput, t]);
 
   // ── Advance to next question or submit all ──
   const advance = useCallback(
@@ -531,9 +521,7 @@ function AskUserQuestionForm({
                   : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
               )}
             >
-              {isLastQuestion
-                ? t('chat.askUserQuestion.submit')
-                : t('chat.askUserQuestion.next')}
+              {isLastQuestion ? t('chat.askUserQuestion.submit') : t('chat.askUserQuestion.next')}
             </button>
           )}
         </>
@@ -553,9 +541,14 @@ function AskUserQuestionForm({
       minimizeDisabled={isAnimating}
       headerLeading={
         currentQ?.header ? (
-          <span className="inline-block rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-12 font-medium text-[var(--ask-badge-text)]">
-            {currentQ.header}
-          </span>
+          <Tip text={currentQ.header}>
+            <span
+              tabIndex={0}
+              className="mr-3 inline-block min-w-0 truncate rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-12 font-medium text-[var(--ask-badge-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              {currentQ.header}
+            </span>
+          </Tip>
         ) : null
       }
       footer={footerActions}

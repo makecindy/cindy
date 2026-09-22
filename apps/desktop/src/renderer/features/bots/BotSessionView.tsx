@@ -26,9 +26,10 @@ type BotSessionGate =
   | { kind: 'error'; message: string };
 
 function readBotChatIdentity(bot: unknown, botId: string): BotChatIdentity {
-  const candidate = (bot ?? {}) as { name?: unknown; avatar?: unknown; avatarColor?: unknown };
+  const candidate = (bot ?? {}) as { name?: unknown; avatar?: unknown; avatarColor?: unknown; templateId?: unknown };
   return {
     id: botId,
+    templateId: typeof candidate.templateId === 'string' ? candidate.templateId : undefined,
     name: typeof candidate.name === 'string' ? candidate.name : '',
     avatar: typeof candidate.avatar === 'string' ? candidate.avatar : null,
     avatarColor: typeof candidate.avatarColor === 'string' ? candidate.avatarColor : null,

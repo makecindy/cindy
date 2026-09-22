@@ -1,3 +1,4 @@
+import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 /**
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@
  * DraggableCardColumns 错落瀑布(每列独立 SortableJS 实例 + 跨列 group,多列也可整卡拖拽)。
  */
 
-import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type {
   DragEvent as ReactDragEvent,
   MouseEvent as ReactMouseEvent,
@@ -30,6 +31,7 @@ import type {
 } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 
 import { cn } from '@/lib/utils';
 import { SessionStatusIcon } from './SessionStatusIcon';
@@ -89,7 +91,7 @@ import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './side
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { useCindyMakeActivity } from './useCindyMakeActivity';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
@@ -135,7 +137,8 @@ export type SessionCardProps = SessionItemProps & {
   hideBottomDivider?: boolean;
 };
 
-export const SessionCard = memo(function SessionCard({
+export const SessionCard = withSidebarNavigation<SessionCardProps>(function SessionCard({
+  navigate,
   session,
   isActive,
   isRunning,
@@ -153,11 +156,14 @@ export const SessionCard = memo(function SessionCard({
   variant = 'card',
   isFirst = false,
   hideBottomDivider = false,
-}: SessionCardProps) {
+  navigationOnly = false,
+}: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
-  const cindyMakePreparing = useCindyMakePreparing(session);
+  const cindyMakeActivity = useCindyMakeActivity(session);
+  const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
-  const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
+  const ordinalBadge = useSessionOrdinalBadge(session.id);
+  const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
   // list 变体与文字模式共用右侧状态优先级:
@@ -177,7 +183,7 @@ export const SessionCard = memo(function SessionCard({
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
     isRunning: session.deviceLinkDeviceId
       ? remoteActivity?.phase === 'running'
-      : isRunning || cindyMakePreparing != null,
+      : isRunning || cindyMakeActivity != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
@@ -193,6 +199,16 @@ export const SessionCard = memo(function SessionCard({
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
     ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const tagMenu = (
+    <TaskTagMenuSection
+      session={session}
+      onMore={() => {
+        setTagEditorOpen(true);
+        setMenuPos(null);
+      }}
+    />
+  );
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   const boundSchedules = useSessionBoundSchedules(session.id);
@@ -205,10 +221,11 @@ export const SessionCard = memo(function SessionCard({
         ? 'cindyMake.code.taskName'
         : 'ccAgent.common.unnamedSession',
     ),
+    t,
   );
-  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const isArchived = session.status === 'archived';
-  const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
+  const canQuickArchive = !navigationOnly && !isArchived && !isEmpty && !remoteWritesBlocked;
   // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;
   // card + 置顶才用稳定任务摘要,完成后由 summary 更新。
   const bodyPreview = resolveSessionCardBody({
@@ -339,7 +356,7 @@ export const SessionCard = memo(function SessionCard({
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
-  const splitDragEnabled = isSplitGroupDragSource({
+  const splitDragEnabled = !navigationOnly && isSplitGroupDragSource({
     editing: isEditing,
     orcaRole: session.orcaRole,
     ...dragContainerState,
@@ -396,7 +413,7 @@ export const SessionCard = memo(function SessionCard({
     (e: React.MouseEvent) => {
       // 已在编辑态时不重复进入:编辑器内部元素漏拦的 dblclick 冒泡到这里会
       // setEditValue 重置草稿(与 handleClick 的 isEditing 守卫对称)。
-      if (isEditing) return;
+      if (isEditing || navigationOnly) return;
       e.stopPropagation();
       e.preventDefault();
       if (remoteWritesBlocked) {
@@ -407,12 +424,12 @@ export const SessionCard = memo(function SessionCard({
       committedRef.current = false;
       setIsEditing(true);
     },
-    [displayTitle, isEditing, remoteWritesBlocked, t],
+    [displayTitle, isEditing, navigationOnly, remoteWritesBlocked, t],
   );
 
   useEffect(() => {
-    if (isActive) scrollIntoNearestView(cardRef.current);
-  }, [isActive]);
+    if (isActive && !navigationOnly) scrollIntoNearestView(cardRef.current);
+  }, [isActive, navigationOnly]);
 
   // archive 两步确认生命周期（redesign 稿：3s 超时 + 点外面撤回）
   useEffect(() => {
@@ -614,7 +631,8 @@ export const SessionCard = memo(function SessionCard({
       data-session-id={session.id}
       // 多选范围选取靠 getVisibleSidebarSessionIds 扫 [data-sidebar-session-row][data-session-id];
       // 卡片也打这个标记,shift 范围选才能把卡片纳入"可见行"。
-      data-sidebar-session-row="true"
+      data-sidebar-session-row={navigationOnly ? undefined : 'true'}
+      data-sidebar-navigation-row={navigationOnly ? 'true' : undefined}
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
@@ -634,7 +652,7 @@ export const SessionCard = memo(function SessionCard({
         finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
       }}
       onPointerDown={(e) => {
-        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+        if (!navigationOnly && shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
           makerChatStore.ensureInitialMessages(session.id);
         }
       }}
@@ -656,6 +674,7 @@ export const SessionCard = memo(function SessionCard({
         }
         e.preventDefault();
         e.stopPropagation();
+        if (navigationOnly) return;
         prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
@@ -672,11 +691,12 @@ export const SessionCard = memo(function SessionCard({
               // 把下方所有行整体推移,选中/取消时列表跳动(2026-08-12 用户反馈)。
               // inset shadow 画在盒内、不参与布局,行高与未选中时逐像素一致。
               isActive
-                ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+                ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
                 : cn(
-                    'hover:bg-sidebar-item-hover',
+                    'hover:bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
                     // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
-                    menuPos !== null && 'bg-sidebar-item-hover',
+                    menuPos !== null &&
+                      'bg-sidebar-item-hover [--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
                   ),
             )
           : cn(
@@ -684,8 +704,8 @@ export const SessionCard = memo(function SessionCard({
               // 负责分配列;卡片高度随标题/摘要自然变化。
               'rounded-xl bg-[var(--surface-elevated)] border',
               isActive
-                ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active text-sidebar-item-active-foreground'
-                : 'border-sidebar-border hover:!bg-sidebar-item-hover',
+                ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground'
+                : 'border-sidebar-border [--task-tag-ring-bg:var(--surface-elevated)] hover:!bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
             ),
         // 多选选中态(与列表 SessionItem 同款):内描边软高亮,不与 active 互斥。
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
@@ -800,6 +820,7 @@ export const SessionCard = memo(function SessionCard({
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
+                navigationOnly={navigationOnly}
                 pieces={cardInfoPieces}
                 prRef={cardInfoPrRef}
                 worktree={cardInfoWorktree ?? undefined}
@@ -857,7 +878,7 @@ export const SessionCard = memo(function SessionCard({
         <div className="relative flex h-full flex-col px-[10px] pt-[8px] pb-[8px]">
           {/* 右上角 hover 操作钮(More + Archive/Undo);archivePending 时换成红色确认胶囊。
             时间在右下角(见下),操作钮放右上角空位、不和时间挤在一起。 */}
-          {!isEditing && !archivePending && (
+          {!navigationOnly && !isEditing && !archivePending && (
             <div
               className={cn(
                 'absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
@@ -1044,7 +1065,7 @@ export const SessionCard = memo(function SessionCard({
       )}
 
       {/* 右键菜单——与 SessionItem 同款 coordinate-anchored DropdownMenu */}
-      {!isEditing && (
+      {!navigationOnly && !isEditing && (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {
@@ -1088,6 +1109,7 @@ export const SessionCard = memo(function SessionCard({
                 </DropdownMenuItem>
                 {exportShareMenuItem}
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1107,6 +1129,7 @@ export const SessionCard = memo(function SessionCard({
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1145,6 +1168,7 @@ export const SessionCard = memo(function SessionCard({
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1166,6 +1190,8 @@ export const SessionCard = memo(function SessionCard({
         </DropdownMenu>
       )}
 
+      {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
+
       {shareExportOpen && (
         <SessionShareExportDialog
           open={shareExportOpen}
@@ -1182,6 +1208,7 @@ export const SessionCard = memo(function SessionCard({
  *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
+  navigationOnly = false,
   pieces,
   prRef,
   worktree,
@@ -1199,6 +1226,7 @@ function TimeActionsSlot({
   yieldToOrdinalBadge = false,
   ordinalBadgeLabel,
 }: {
+  navigationOnly?: boolean;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
   worktree?: SessionWorktreeInfo;
@@ -1220,20 +1248,26 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
+      {pieces.find((piece) => piece.key === 'tags')?.tags?.length ? (
+        <span className="mr-1 inline-flex shrink-0 items-center">
+          <TaskTagDots tags={pieces.find((piece) => piece.key === 'tags')?.tags} />
+        </span>
+      ) : null}
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
         {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
         <div
           className={cn(
             // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
             'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
-            !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
-            (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
+            !navigationOnly && !archivePending &&
+              'group-hover/card:opacity-0 group-hover/card:w-0 group-hover/card:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
+            (menuOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
             // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
-            archivePending && 'invisible opacity-0',
+            archivePending && 'invisible opacity-0 w-0 overflow-hidden',
           )}
         >
           <SessionInfoMeta
-            pieces={pieces}
+            pieces={pieces.filter((piece) => piece.key !== 'tags')}
             prRef={prRef}
             worktree={worktree}
             isActive={isActive}
@@ -1278,7 +1312,7 @@ function TimeActionsSlot({
           </button>
         )}
 
-        {!archivePending && (
+        {!navigationOnly && !archivePending && (
           <>
             <div
               aria-hidden

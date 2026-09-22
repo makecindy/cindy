@@ -1,3 +1,5 @@
+import { isSharedTaskPeer } from '@cindy/device-link';
+
 /**
  * connectionBannerVisibility.ts — ConnectionBanner 可见性判定的决策核。
  * 纯函数(不依赖 React / react-native),node 可单测;useShowConnectionBanner
@@ -54,6 +56,20 @@ export function resolveConnectionBannerSyncActionVisibility(input: {
  */
 export type HomeDeviceFailure = { deviceId: string; deviceName: string; error: string };
 export type HomeConnectionError = string | HomeDeviceFailure | HomeDeviceFailure[] | null;
+
+/** Shared task peers have scoped membership checks, not account device presence. */
+export function resolveHomeDeviceDisconnected(
+  devices: readonly { deviceId: string | null; sessionCount: number; available: boolean }[],
+  selectedDeviceId: string | null,
+  connecting: boolean,
+): boolean {
+  if (connecting) return false;
+  const scoped = devices.filter((device) => device.deviceId !== null
+    && !isSharedTaskPeer(device.deviceId)
+    && (!selectedDeviceId || device.deviceId === selectedDeviceId));
+  return scoped.some((device) => device.sessionCount > 0)
+    && !scoped.some((device) => device.available);
+}
 
 /** A recovering device must not mask another device's actionable failure on Home. */
 export function resolveHomeConnectionFeedback(

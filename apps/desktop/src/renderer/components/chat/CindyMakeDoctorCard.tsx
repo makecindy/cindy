@@ -224,7 +224,7 @@ function StepStatusIcon({ state }: { state: StepState }) {
   return (
     <Minus
       size={14}
-      className={`shrink-0 ${state === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]'}`}
+      className={`shrink-0 ${state === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]'}`}
       aria-hidden
     />
   );
@@ -250,6 +250,7 @@ export function MakeDoctorReportCard({
   showSource = true,
   compactPrepare = false,
   readOnly = false,
+  showUpstreamActions = true,
 }: {
   report: MakeDoctorReport;
   request?: string;
@@ -272,6 +273,8 @@ export function MakeDoctorReportCard({
   showSource?: boolean;
   compactPrepare?: boolean;
   readOnly?: boolean;
+  /** Settings preflight places the personal-version action beside Cancel. */
+  showUpstreamActions?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
@@ -378,7 +381,7 @@ export function MakeDoctorReportCard({
     source?.status === 'failed' ||
     upstream?.status === 'failed' ||
     status === 'failed'
-      ? 'text-[var(--status-danger)]'
+      ? 'text-[var(--error-fg)]'
       : running ||
           startingCode ||
           report.status === 'cancelled' ||
@@ -593,7 +596,7 @@ export function MakeDoctorReportCard({
                     </div>
                   )}
                   {source.error && (
-                    <p className="text-[var(--status-danger)]">
+                    <p className="text-[var(--error-fg)]">
                       {t(`cindyMake.source.errors.${source.error}`)}
                     </p>
                   )}
@@ -716,7 +719,8 @@ export function MakeDoctorReportCard({
         {!readOnly &&
           (upstream?.status === 'found' || upstream?.status === 'notFound') &&
           !decision &&
-          !searching && (
+          !searching &&
+          showUpstreamActions && (
             <div className="flex shrink-0 flex-wrap justify-end gap-2">
               <Button
                 variant="secondary"
@@ -841,14 +845,14 @@ function CompactMakePreparationCard({
           <p className="break-all font-mono text-12 text-[var(--text-secondary)]">{source.path}</p>
         )}
         <p
-          className={`flex items-center gap-2 text-13 ${failed ? 'text-[var(--status-danger)]' : cancelled ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]'}`}
+          className={`flex items-center gap-2 text-13 ${failed ? 'text-[var(--error-fg)]' : cancelled ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]'}`}
           role="status"
         >
           {running ? <Spinner size={14} /> : failed ? <Minus size={14} /> : <Check size={14} />}
           <span>{t(statusKey)}</span>
         </p>
         {failed && source?.error && (
-          <p className="text-12 text-[var(--status-danger)]">
+          <p className="text-12 text-[var(--error-fg)]">
             {t(`cindyMake.source.errors.${source.error}`)}
           </p>
         )}

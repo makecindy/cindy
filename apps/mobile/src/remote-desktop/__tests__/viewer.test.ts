@@ -16,7 +16,7 @@ const desktopTransform = vm.runInNewContext(
   fillHeight?: boolean,
 ) => { x: number; y: number; width: number; height: number; scale: number };
 
-function viewer(rtc = false, frameCallback = true) {
+function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   const messages: Array<{
     type: string;
     epoch: string;
@@ -70,7 +70,7 @@ function viewer(rtc = false, frameCallback = true) {
   const bgDraws: unknown[][] = [];
   const bgContext = {
     setTransform() {},
-    clearRect() {},
+    clearRect: vi.fn(),
     drawImage: (...args: unknown[]) => {
       bgDraws.push(args);
     },
@@ -105,6 +105,7 @@ function viewer(rtc = false, frameCallback = true) {
       }
     >
   )["image"].naturalHeight = 1080;
+  Object.assign(elements.image, { complete: true });
   const intervals: Array<() => void> = [];
   const frames = new Map<number, () => void>();
   const videoFrames = new Map<number, () => void>();
@@ -136,7 +137,7 @@ function viewer(rtc = false, frameCallback = true) {
   }
   let now = 0;
   let orientation: number | undefined;
-  const source = remoteDesktopViewerHtml("#fff", "#111").match(
+  const source = remoteDesktopViewerHtml("#fff", "#111", nativeMedia).match(
     /<script>([\s\S]*)<\/script>/,
   )![1];
   vm.runInNewContext(source, {
@@ -181,6 +182,7 @@ function viewer(rtc = false, frameCallback = true) {
     messages,
     elements,
     bgDraws,
+    bgClear: bgContext.clearRect,
     videoFrames,
     playVideo: () => {
       const config = messages.findLast((m) => m.type === "iceConfig");
@@ -242,7 +244,98 @@ function viewer(rtc = false, frameCallback = true) {
   };
 }
 
+describe("native media overlay", () => {
+  it("leaves RTC negotiation to native and shares the exact input geometry", () => {
+    const v = viewer(true, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    expect(v.messages.some((m) => m.type === "iceConfig")).toBe(false);
+    const viewport = v.messages.findLast(
+      (m) => m.type === "nativeViewport",
+    ) as unknown as { x: number; y: number; width: number; height: number };
+    expect(v.elements.image.style.left).toBe(viewport.x + "px");
+    expect(v.elements.image.style.top).toBe(viewport.y + "px");
+    expect(v.elements.image.style.width).toBe(viewport.width + "px");
+    expect(v.elements.image.style.height).toBe(viewport.height + "px");
+    v.send({ type: "videoSettings", audio: true });
+    expect(v.messages.some((m) => m.type === "iceConfig")).toBe(false);
+  });
+
+  it("shares backdrop fit policy across native video and orientation changes", () => {
+    const v = viewer(false, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    const viewport = () =>
+      v.messages.findLast((m) => m.type === "nativeViewport");
+    expect(viewport()).toMatchObject({ fillHeight: false });
+    v.send({ type: "nativeVideo", epoch: "native", active: true });
+    v.send({ type: "viewport", fillHeight: true });
+    expect(viewport()).toMatchObject({ fillHeight: false });
+    v.send({ type: "fit" });
+    expect(viewport()).toMatchObject({ fillHeight: false });
+    expect(v.elements.bg.style.display).toBe("none");
+    v.send({ type: "viewport", fillHeight: false });
+    expect(viewport()).toMatchObject({ fillHeight: false });
+  });
+
+  it("keeps browser pixels out of native video and restores JPEG after stop/reconnect", () => {
+    const v = viewer(false, true, true);
+    v.send({ type: "init", epoch: "first", width: 1920, height: 1080 });
+    v.send({ type: "nativeVideo", epoch: "first", active: true });
+    v.send({ type: "fit" });
+    v.frame();
+    expect(v.elements.image.style.visibility).toBe("hidden");
+    expect(v.elements.bg.style.display).toBe("none");
+    v.send({ type: "stop" });
+    expect(v.elements.image.style.visibility).toBe("visible");
+    v.send({ type: "init", epoch: "next", width: 1920, height: 1080 });
+    v.send({ type: "nativeVideo", epoch: "first", active: true });
+    expect(v.elements.image.style.visibility).toBe("visible");
+    v.send({ type: "nativeVideo", epoch: "next", active: true });
+    v.send({ type: "nativeVideo", epoch: "next", active: false });
+    expect(v.elements.image.style.visibility).toBe("visible");
+  });
+});
+
 describe("remote desktop viewport", () => {
+  it('maps lower-pane relative motion against the upper video viewport and rejects invalid input', () => {
+    const v = viewer();
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true, topInset: 0, bottomInset: 0 });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 40 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toContainEqual({ kind: 'move', x: 0.6, y: 0.6 });
+    v.ack();
+    const count = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', dx: Number.NaN, dy: 20 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(count);
+    v.send({ type: 'control', enabled: false });
+    const afterRelease = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 40 });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(afterRelease);
+  });
+  it('allows touchpad taps with hidden buttons and does not release an active drag', () => {
+    const v = viewer();
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: false });
+    v.send({ type: 'nativeTouchpad', tap: true });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toEqual([
+      { kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 },
+      { kind: 'button', button: 0, down: false, x: 0.5, y: 0.5 },
+    ]);
+    v.ack();
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    v.send({ type: 'nativeMouse', control: 'left', event: 'pointerdown', id: 0, y: 100 });
+    v.ack();
+    const beforeTap = v.messages.flatMap(m => m.events ?? []).length;
+    v.send({ type: 'nativeTouchpad', tap: true });
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(beforeTap);
+  });
   it.each([0, 59])(
     "fits between the top safe area (%s) and toolbar with correct touch coordinates",
     (topInset) => {
@@ -450,10 +543,25 @@ describe("remote desktop viewport", () => {
       { kind: "scroll", dx: 0, dy: -30 },
     ]);
   });
-  it("fills landscape height for wide desktops and restores portrait fitting", () => {
-    const v = viewer();
-    v.elements.stage.clientWidth = 678;
-    v.elements.stage.clientHeight = 402;
+  it('fits the folded desktop above the touchpad without shrinking the background stage', () => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 900;
+    v.elements.stage.clientHeight = 1400;
+    v.send({ type: 'init', epoch: 'fold', width: 1920, height: 1080 });
+    v.send({ type: 'mouseButtons', fitToInsets: true, topInset: 80, bottomInset: 720 });
+    expect(v.messages.findLast(m => m.type === 'nativeViewport')).toMatchObject({
+      x: 0, y: 126.875, width: 900, height: 506.25,
+    });
+    expect(v.elements.stage.clientHeight).toBe(1400);
+    v.send({ type: 'mouseButtons', fitToInsets: false, topInset: 0, bottomInset: 0 });
+    expect(v.messages.findLast(m => m.type === 'nativeViewport')).toMatchObject({
+      x: 0, y: 446.875, width: 900, height: 506.25,
+    });
+  });
+  it.each([[678, 402], [1366, 1024]])("fits the complete desktop in landscape %sx%s and after rotation", (vw, vh) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = vw;
+    v.elements.stage.clientHeight = vh;
     v.send({
       type: "init",
       epoch: "landscape",
@@ -462,12 +570,16 @@ describe("remote desktop viewport", () => {
       fillHeight: true,
     });
     for (const element of [v.elements.image, v.elements.video]) {
-      expect(element.style.height).toBe("402px");
-      expect(element.style.top).toBe("0px");
-      expect(parseFloat(element.style.width)).toBeGreaterThan(678);
+      expect(parseFloat(element.style.width)).toBe(vw);
+      expect(parseFloat(element.style.height)).toBeCloseTo(vw * 1080 / 2560);
+      expect(parseFloat(element.style.left)).toBe(0);
+      expect(parseFloat(element.style.top)).toBeCloseTo((vh - vw * 1080 / 2560) / 2);
     }
+    expect(v.messages.findLast(m => m.type === "nativeViewport")).toMatchObject({
+      fillHeight: false, width: vw, height: vw * 1080 / 2560,
+    });
     v.send({ type: "fit" });
-    expect(v.elements.image.style.top).toBe("0px");
+    expect(parseFloat(v.elements.image.style.top)).toBeGreaterThan(0);
     v.elements.stage.clientWidth = 400;
     v.elements.stage.clientHeight = 700;
     v.send({ type: "viewport", fillHeight: false });
@@ -528,7 +640,7 @@ describe("remote desktop viewport", () => {
       for (let i = 0; i < 30; i++) v.frame();
       const width = v.elements.image.style.width;
       expect(parseFloat(v.elements.image.style.height)).toBeCloseTo(
-        400 * scale,
+        (800 - 50 - 80) * 1080 / 1920 * scale,
       );
       // Removing the toolbar before the keyboard has a measured height must not shift the image.
       const originalLeft = v.elements.image.style.left;
@@ -562,7 +674,7 @@ describe("remote desktop viewport", () => {
         for (let i = 0; i < 30; i++) v.frame();
         const image = v.elements.image.style;
         expect(image.width).toBe(width);
-        expect(parseFloat(image.height)).toBeCloseTo(400 * scale);
+        expect(parseFloat(image.height)).toBeCloseTo((800 - 50 - 80) * 1080 / 1920 * scale);
         expect(
           parseFloat(image.left) + cursorX * parseFloat(image.width),
         ).toBeCloseTo(expectedCursorX);
@@ -600,6 +712,12 @@ describe("remote desktop viewport", () => {
       rightInset: 80,
     });
     const before = { ...v.elements.image.style };
+    const expectUnchanged = () => {
+      for (const key of ["left", "top", "width", "height"]) {
+        expect(parseFloat(v.elements.image.style[key])).toBeCloseTo(parseFloat(before[key]));
+      }
+      expect(v.elements.image.style.visibility).toBe(before.visibility);
+    };
     for (let i = 0; i < 2; i++) {
       v.send({
         type: "mouseButtons",
@@ -615,10 +733,10 @@ describe("remote desktop viewport", () => {
         leftInset: 50,
         rightInset: 80,
       });
-      expect(v.elements.image.style).toEqual(before);
+      expectUnchanged();
       v.blur();
       for (let j = 0; j < 30; j++) v.frame();
-      expect(v.elements.image.style).toEqual(before);
+      expectUnchanged();
     }
   });
   it("initializes when the native engine cannot serialize function source", () => {
@@ -1059,7 +1177,7 @@ describe("remote desktop three-segment backdrop", () => {
   it("hides the backdrop when the fitted picture covers the whole stage", () => {
     const v = landscapeViewer();
     v.bgDraws.length = 0;
-    v.send({ type: "init", epoch: "bg-wide", width: 2560, height: 1080 });
+    v.send({ type: "init", epoch: "bg-wide", width: 1748, height: 804 });
     v.send({ type: "viewport", fillHeight: true });
     v.frame();
     expect(v.elements.bg.style.display).toBe("none");
@@ -1076,6 +1194,37 @@ describe("remote desktop three-segment backdrop", () => {
     expect(drawsOf(v)).toHaveLength(3);
     for (const draw of drawsOf(v)) expect(draw[0]).toBe(v.elements.image);
   });
+
+  it.each([
+    { complete: false, naturalWidth: 0, naturalHeight: 0 },
+    { complete: false, naturalWidth: 1920, naturalHeight: 1080 },
+    { complete: true, naturalWidth: 0, naturalHeight: 0 },
+  ])(
+    "preserves the previous backdrop until a JPEG is drawable: %j",
+    (pending) => {
+      const v = landscapeViewer();
+      expect(drawsOf(v)).toHaveLength(3);
+      v.bgDraws.length = 0;
+      v.bgClear.mockClear();
+      // Receiving a frame schedules a cursor-driven repaint before JPEG load.
+      v.send({ type: "frame", jpeg: "QUJD" });
+      const image = Object.assign(v.elements.image, pending);
+      v.frame();
+      expect(v.bgClear).not.toHaveBeenCalled();
+      expect(drawsOf(v)).toHaveLength(0);
+
+      Object.assign(image, {
+        complete: true,
+        naturalWidth: 1920,
+        naturalHeight: 1080,
+      });
+      (image as unknown as { onload: () => void }).onload();
+      v.frame();
+      expect(v.bgClear).toHaveBeenCalledTimes(1);
+      expect(drawsOf(v)).toHaveLength(3);
+      for (const draw of drawsOf(v)) expect(draw[0]).toBe(image);
+    },
+  );
 
   it("fills side bars for a portrait desktop on a landscape stage", () => {
     const v = viewer();

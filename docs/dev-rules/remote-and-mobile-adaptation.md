@@ -114,6 +114,12 @@ enum 编译分支，也不接受任意 HTML、React 或无限 UI DSL。
 结构化 Session 内容必须携带可读 `fallbackMarkdown`，旧客户端至少能阅读并继续任务。只有新增
 移动端此前无法表达的内容或交互原语时，才要求客户端发版。
 
+任务内状态卡使用 collection placement `session:<source>`，资源 id 为任务 id。
+Mobile 根据 manifest 发现卡片，不写死具体业务状态；`session-controls` 原语仅声明
+输入是否可用与是否忙碌，详情保留可读 fallback，动作 id 为不透明标识。
+动作的 disabled 是呈现提示，主机仍须按最新状态、账号与任务身份复核。重连只重读，
+不得重放写操作；旧客户端不识别此 placement 时继续原有消息流程。
+
 ## 本机与远程共用查询策略
 
 本机独立使用、远程操作、两端同时使用应共享数据语义与通用查询策略；远程连接状态

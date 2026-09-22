@@ -11,6 +11,28 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 工具循环与无响应的分工
+
+工具持续返回但反复原地搜索时，复用
+`agents/shared/loop-guard.ts` 的 `ToolLoopGuard`，不能靠缩短无事件超时处理。
+Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在 `Session` 中配对
+当前产品轮次的 `tool_use` 与 `tool_result_full`，不重复统计结果摘要、后台事件或旧轮次。
+Pi / Codex 的归一事件尚无可靠模型响应批次标识，因此不启用“参数各不相同、同类契约
+错误连续被拒”的重试计数规则，避免把单批并行失败当成多次重试；重复调用检测仍保留。
+Claude Code 沿用既有按批次计数的契约错误规则。
+循环错误沿用 `tool_use_loop_detected` 和既有中断复核，Orca 消费普通终态链路；
+该 reason 不进入 interrupted-turn 自动续跑白名单，避免熔断后立即重复原循环。
+
+短窗口判据保持原样；较长的只读搜索轮转只在最近 128 次读/搜结果至多包含 32 种
+完整调用指纹，且至少 90% 的结果属于重复至少 4 次的指纹时判定。参数与输出都参与
+指纹，不修改实际工具结果；写入或命令结果打断该只读窗口，原生等待工具不计数。
+成功的简单 `tail` / PowerShell `Get-Content -Tail` 日志轮询同样不计数
+（只认字面 `.log` 路径，可串联多个日志读取）；
+失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
+这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
+回归见 `loop-guard.test.ts`、`session.tool-loop.test.ts` 和 Claude Code 的
+`upstream-idle-watchdog.test.ts`。
+
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
@@ -43,16 +65,20 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
 推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
-Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装得进当前约束就不动；
-字节预算破了（可剥的超大内联图）就剥图；token 预算破了或剥图失败，就交接重建。
-决定函数见 `cindyContextCompression.ts`。字节预算目前只有 Codex 能测量。工具输出
-不另开一档：官方 compact 会先清旧工具结果；官方失败后交接不带 tool_result 正文。
+Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了
+（可剥的超大内联图）或 token 预算破了，都直接交接重建。Codex 索引历史归原生运行时
+所有，不再先尝试改写历史／剥图。决定函数见 `cindyContextCompression.ts`。
+字节预算目前只有 Codex 能测量。工具输出不另开一档：图片恢复的交接保留受长度限制、
+带调用关联的文本结果摘要，省略图片数据；其他交接继续沿用原有结果省略规则。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援摘要不得依赖额外模型调用。
-Codex 剥图保留原生历史后，普通用户任务可在同一任务内自动续接未完成工作，
-不重放原用户请求或已完成的工具操作；每条用户输入最多自动续接一次。
+Codex 图片历史重建后，普通用户任务可在同一任务内自动续接未完成工作。交接包含原请求
+和本轮已有进展，新原生线程只接收隐藏的继续指令，不重放原用户请求或已完成的工具操作。
+结果不明确时先核实当前状态，不盲目重试；旧原生执行句柄不能跨线程恢复。
+每条用户输入最多自动恢复一次，沿用重建记录与输入身份去重；已有助手／工具消息只禁止
+原请求 replay，不阻止本次图片恢复的 CONTINUE。普通 context overflow 的 replay 保护不变。
 停止／清空或新输入接管会取消待续接的恢复；已有排队输入时不抢先续接。
-取消也覆盖剥图失败后的重建、提交与发送边界。interrupt／unsubscribe 等待期间到达的
+取消覆盖重建、提交与发送边界。interrupt／unsubscribe 等待期间到达的
 权威成功结果优先于 oversized 错误；事件队列关闭前统一结算，不能再触发自动续接。
 续接沿用原输入的插件能力选择，不把隐藏续接提示或历史授权当作新选择。
 外部分发者仍拥有自己的重试；IM 原生任务、仍绑定 IM 的任务及尚未结束的外部分发 turn
@@ -119,7 +145,11 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
 Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
-不得用 `remote compaction v2` 文案驱动恢复动作。普通 timeout、纯文本大历史和网络失败
+不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
+改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
+开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复
+普通重连规则。重连中断结算前的成功完成优先，不得提前发错误触发重建。
+普通 timeout、纯文本大历史和网络失败
 不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
 心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`
 只有包含实质文字才刷新；仅空白、Unicode 格式字符或控制字符不算进展，原事件仍无损传递。

@@ -11,7 +11,7 @@ import { categorize, type Provider } from '@cindy/model-providers';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { createLogger, type Logger } from '../../logger.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
-import { setDiscoveredProviderMediaModels } from '../active-catalog.js';
+import { setDiscoveredProviderMediaModels, setOpenAiImagesApiKeyConfigured } from '../active-catalog.js';
 import { outboundFetch } from '../outbound-fetch.js';
 
 const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
@@ -392,8 +392,12 @@ const discovery = createOpenAiMediaDiscovery({
   log,
 });
 
-export const refreshOpenAiMediaModels = (): Promise<boolean> => discovery.refresh();
+export const refreshOpenAiMediaModels = (): Promise<boolean> => {
+  setOpenAiImagesApiKeyConfigured(Boolean(imagesApiKey()));
+  return discovery.refresh();
+};
 export const clearOpenAiMediaModels = (): void => {
+  setOpenAiImagesApiKeyConfigured(Boolean(imagesApiKey()));
   credentialGeneration += 1;
   discovery.clear();
 };
@@ -408,6 +412,7 @@ export function notifyOpenAiMediaCredentialChanged(): void {
 
 /** Codex login/logout does not change the Images API key; keep a successful key snapshot. */
 export function syncOpenAiMediaAfterCodexAuthChange(): void {
+  setOpenAiImagesApiKeyConfigured(Boolean(imagesApiKey()));
   if (!imagesApiKey()) {
     clearOpenAiMediaModels();
   }

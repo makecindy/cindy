@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-12T00:00:00.000Z",
+  "generatedAt": "2026-09-22T00:00:00.000Z",
   "source": "pi",
   "providers": {
     "amazon-bedrock": [
@@ -12806,7 +12806,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -12831,6 +12830,9 @@
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsReasoningEffort": false
+            },
+            "thinkingLevelMap": {
+              "minimal": null
             }
           }
         }
@@ -14416,7 +14418,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -14432,7 +14433,8 @@
           "pi": {
             "api": "google-generative-ai",
             "thinkingLevelMap": {
-              "off": null
+              "off": null,
+              "minimal": null
             }
           }
         }
@@ -15041,7 +15043,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -15057,7 +15058,8 @@
           "pi": {
             "api": "google-vertex",
             "thinkingLevelMap": {
-              "off": null
+              "off": null,
+              "minimal": null
             }
           }
         }
@@ -24608,7 +24610,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -24624,7 +24625,8 @@
           "pi": {
             "api": "google-generative-ai",
             "thinkingLevelMap": {
-              "off": null
+              "off": null,
+              "minimal": null
             }
           }
         }
@@ -49057,7 +49059,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -49071,7 +49072,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "thinkingLevelMap": {
+              "minimal": null
+            }
           }
         }
       },
@@ -54880,6 +54884,60 @@
             "compat": {
               "supportsLongCacheRetention": false,
               "supportsReasoningEffort": true
+            }
+          }
+        }
+      },
+      {
+        "id": "grok-4.7",
+        "name": "Grok 4.7",
+        "upstream": "https://api.x.ai/v1",
+        "contextWindow": 500000,
+        "maxOutput": 500000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high",
+        "cost": {
+          "input": 2,
+          "output": 6,
+          "cacheRead": 0.5,
+          "cacheWrite": 0,
+          "tiers": [
+            {
+              "inputTokensAbove": 199999,
+              "input": 4,
+              "output": 12,
+              "cacheRead": 1,
+              "cacheWrite": 0
+            }
+          ]
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-responses",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "xhigh",
+              "max": null
             }
           }
         }

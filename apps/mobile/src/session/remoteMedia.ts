@@ -83,7 +83,8 @@ export const REMOTE_MEDIA_NEVER_EXPIRES = "9999-12-31T00:00:00.000Z";
  * 按不同键隔离,查看器取原图不会命中缩略图缓存。
  */
 export type ResolveRemoteMediaFn = (
-  media: Pick<NormalizedToolMedia, "kind" | "url" | "previewable"> & {
+  media: Pick<NormalizedToolMedia, "url" | "previewable"> & {
+    kind: NormalizedToolMedia["kind"] | "file";
     thumbnail?: boolean;
   },
   opts?: {
@@ -99,11 +100,14 @@ export function isDesktopLocalMediaUrl(url: unknown): url is string {
 }
 
 export function isDirectPreviewableMediaUrl(url: unknown): url is string {
-  return isPayloadDirectPreviewableUrl(url);
+  return (
+    isPayloadDirectPreviewableUrl(url)
+    || (typeof url === "string" && (url.startsWith("data:audio/") || url.startsWith("data:video/")))
+  );
 }
 
 export function canPreviewResolvedRemoteMedia(
-  kind: NormalizedToolMedia["kind"],
+  kind: NormalizedToolMedia["kind"] | "file",
   mimeType: string,
 ): boolean {
   if (kind === "image") return mimeType.startsWith("image/");
@@ -155,7 +159,7 @@ export function isResolvedRemoteMediaFresh(
 }
 
 export async function resolveMobileRemoteMedia(
-  media: Pick<NormalizedToolMedia, "kind" | "url">,
+  media: { kind: NormalizedToolMedia["kind"] | "file"; url: string },
   deps: MobileRemoteMediaResolverDeps,
   opts?: MobileRemoteMediaResolveOptions,
 ): Promise<MobileResolvedRemoteMedia> {
@@ -183,8 +187,9 @@ export async function resolveMobileRemoteMedia(
       expiresAt: peerMediaExpiry(fetched)!,
       previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
     };
-  // inline 缩略图回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
-  // url 先给 data URI 保证任何情况下可渲染;宿主(会话屏)会把字节落盘并换成 file://。
+  // inline 回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
+  // 缩略图给 data:image;小音视频若仍以内联回包到达,也走 data URI,由播放器直接打开。
+  // 图片宿主(会话屏)会把字节落盘并换成 file://。
   if (isValidInlineResult(fetched)) {
     return {
       url: `data:${fetched.mimeType};base64,${fetched.inlineBase64}`,

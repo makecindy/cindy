@@ -127,7 +127,9 @@
   },
   "rewind": {
     "readError": "되감기 미리보기를 읽을 수 없습니다. 다시 동기화한 후 시도하세요.",
-    "noFilesNote": "롤백할 파일이 없습니다. 이 메시지 이후의 대화 기록만 잘립니다.",
+    "noFilesNote": "이 메시지 이후 프로젝트 파일 변경이 감지되지 않았습니다. 계속하면 이후 채팅이 삭제됩니다.",
+    "conversationOnlyNote": "사용할 수 있는 Git 저장 지점이 없어 프로젝트 파일을 복원할 수 없습니다. 계속하면 이 메시지 이후의 채팅이 삭제되고 파일은 이전 상태로 돌아가지 않습니다.",
+    "gitSafetyDisabledNote": "Git 안전 저장 지점이 비활성화되어 프로젝트 파일을 복원할 수 없습니다. 컴퓨터 설정에서 켜세요. 계속하면 이 메시지 이후의 채팅이 삭제됩니다.",
     "moreFiles": "파일 {{count}}개 더",
     "stats": "파일 {{count}}개 · +{{insertions}} / -{{deletions}} 줄",
     "gotIt": "확인",
@@ -141,7 +143,8 @@
     "titleError": "되감을 수 없음",
     "detailLoading": "컴퓨터에서 파일 되감기 미리보기를 읽는 중입니다.",
     "detailDefault": "아래 파일을 롤백하고 이 메시지 이후의 대화 기록을 자릅니다.",
-    "detailEmpty": "롤백할 파일이 없습니다. 확인하면 이 메시지 이후의 대화 기록만 잘립니다.",
+    "detailEmpty": "이 메시지 이후 프로젝트 파일 변경이 감지되지 않았습니다.",
+    "detailConversationOnly": "프로젝트 파일은 이전 상태로 돌아가지 않습니다.",
     "detailError": "컴퓨터가 이 되감기를 거부했습니다."
   },
   "collab": {
@@ -233,7 +236,9 @@
     "inlineFormActionGeneric": "컴퓨터에서 설정 입력"
   },
   "presentation": {
-    "action": { "submitting": "제출 중" },
+    "action": {
+      "submitting": "제출 중"
+    },
     "permission": {
       "highRiskTitle": "고위험 권한은 한 번 더 확인해야 합니다",
       "highRiskDetail": "명령 내용을 확인한 뒤 허용을 다시 누르세요. 확실하지 않으면 거부하세요.",
@@ -271,6 +276,18 @@
         "plugin_setup": "설정은 컴퓨터에서 완료해야 합니다. 여기에서는 이 요청을 취소할 수 있습니다.",
         "fallback": "모바일은 데스크톱에서 보낸 순서대로 원격 요청을 처리합니다."
       }
+    }
+  },
+  "companion": {
+    "operation": "작업",
+    "details": "세부 정보",
+    "fields": {
+      "path": "파일",
+      "file_path": "파일",
+      "url": "주소",
+      "command": "명령",
+      "ghost_id": "플러그인",
+      "tool": "도구"
     }
   }
 }

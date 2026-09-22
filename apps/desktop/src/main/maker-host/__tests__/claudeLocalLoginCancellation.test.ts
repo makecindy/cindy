@@ -6,8 +6,9 @@ vi.mock('electron', () => ({ shell: { openExternal: vi.fn() }, app: { getPath: (
 import { beginClaudeLocalLogin, cancelClaudeOAuthLogin } from '../claude-oauth-login.js';
 
 const source = readFileSync(new URL('../../bootstrap-electron.ts', import.meta.url), 'utf8');
-const start = source.indexOf('  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN,');
-const end = source.indexOf('  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT,', start);
+const start = source.search(/ipcMain\.handle\(\s*MAKER_IPC_INVOKE\.CLAUDE_OAUTH_LOGIN,/);
+const end = source.search(/ipcMain\.handle\(\s*MAKER_IPC_INVOKE\.CLAUDE_OAUTH_LOGOUT,/);
+if (start < 0 || end <= start) throw new Error('Claude login handler boundaries not found');
 const compiled = transpileModule(source.slice(start, end), { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
 
 it.each(['scan', 'proxy'] as const)('does not bind a cancelled local login while waiting for %s', async (stage) => {

@@ -33,8 +33,14 @@ const h = vi.hoisted(() => ({
     persistedSdkSessionId: null,
   })),
   closeSession: vi.fn(async (_sessionId: string) => undefined),
+  closeSharedTask: vi.fn(async (_sessionId: string, _database: unknown): Promise<void> => undefined),
+  prepareSharedTaskClosure: vi.fn(async (_sessionId: string, _database: unknown): Promise<{ sessionId: string; marker: number; rowIds: number[] } | null> => null),
+  rollbackSharedTaskClosure: vi.fn(async (_database: unknown, _prepared: unknown) => undefined),
+  finalizeSharedTaskClosure: vi.fn(async (_database: unknown, _prepared: unknown) => undefined),
+  commitBotProfileDeletion: vi.fn(async (): Promise<{ status: 'archived' | 'deleted'; sessionIds: string[] }> => ({ status: 'archived', sessionIds: [] })),
   tapWindowBroadcast: vi.fn(),
   windows: [] as Array<{
+    trusted?: boolean;
     isDestroyed: ReturnType<typeof vi.fn>;
     webContents: { send: ReturnType<typeof vi.fn> };
   }>,
@@ -103,11 +109,20 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => h.client,
   getCurrentDbClientUserId: () => 'test-user',
 }));
+vi.mock('../../botProfileDeletionStore.js', () => ({
+  commitBotProfileDeletion: h.commitBotProfileDeletion,
+}));
 vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
 vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../device-link/sharedTaskRuntime.js', () => ({
+  closeSharedTaskForTask: h.closeSharedTask,
+  prepareSharedTaskClosureForTask: h.prepareSharedTaskClosure,
+  rollbackPreparedSharedTaskClosure: h.rollbackSharedTaskClosure,
+  finalizePreparedSharedTaskClosure: h.finalizeSharedTaskClosure,
+}));
 vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: vi.fn(() =>
@@ -123,6 +138,8 @@ vi.mock('../../../sessionTaskSummary.js', () => ({
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
+  isTrustedAppRendererWindow: (w: { trusted?: boolean; isDestroyed: () => boolean }) =>
+    !w.isDestroyed() && w.trusted !== false,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
@@ -150,6 +167,7 @@ vi.mock('../../../cindy-brain/index.js', () => ({
 
 import {
   broadcastSessionPatched,
+  deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
   persistSessionFields,
   registerSessionIpc,
@@ -167,6 +185,20 @@ function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL,
+      favorite_order INTEGER,
+      sort_order INTEGER,
+      revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (
+      session_id TEXT NOT NULL,
+      tag_id TEXT NOT NULL,
+      PRIMARY KEY (session_id, tag_id)
+    );
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New CCS',
@@ -286,6 +318,7 @@ async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
 beforeEach(() => {
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
+  h.commitBotProfileDeletion.mockResolvedValue({ status: 'archived', sessionIds: [] });
   h.closeSession.mockClear();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.upsertRecentWorkdir.mockImplementation(async () => true);
@@ -329,6 +362,40 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  it('rechecks window trust for both movement broadcasts after navigation', async () => {
+    const trusted = {
+      trusted: true,
+      isDestroyed: vi.fn(() => false),
+      webContents: { send: vi.fn() },
+    };
+    const auxiliary = {
+      trusted: false,
+      isDestroyed: vi.fn(() => false),
+      webContents: { send: vi.fn() },
+    };
+    h.windows = [trusted, auxiliary];
+    await invokeUpdate('codex-local', { workingDir: '/new/dir', workspaceKind: 'project' });
+    expect(trusted.webContents.send).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+      path: '/new/dir',
+    });
+    expect(trusted.webContents.send).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
+    expect(auxiliary.webContents.send).not.toHaveBeenCalled();
+
+    trusted.webContents.send.mockClear();
+    trusted.trusted = false;
+    await invokeUpdate('codex-local', { workingDir: '/another/dir', workspaceKind: 'project' });
+    await invokeUpdate('codex-local', { workspaceKind: 'dialogue' });
+    expect(trusted.webContents.send).not.toHaveBeenCalled();
+    expect(auxiliary.webContents.send).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({ sessionId: 'codex-local' }),
+    );
+  });
+
   it('isolates device-link and renderer failures while broadcasting a session patch', () => {
     const failedWindowSend = vi.fn(() => {
       throw new Error('window closed');
@@ -735,6 +802,14 @@ describe('local-db:sessions:update handler wiring', () => {
     },
   );
 
+  it('does not register a worker directory when its project target changes', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run('codex-local');
+
+    await invokeUpdate('codex-local', { workingDir: '/worker/dir', workspaceKind: 'project' });
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+  });
+
   it('suppresses the recent-project refresh after an owner switch', async () => {
     h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?").run(
       'codex-local',
@@ -800,7 +875,12 @@ describe('local-db:sessions:update handler wiring', () => {
 
   it('cleans runtime state before releasing the local terminal status lock', async () => {
     const order: string[] = [];
+    h.prepareSharedTaskClosure.mockImplementationOnce(async () => {
+      order.push('sharing-prepared');
+      return { sessionId: 'codex-local', marker: 1, rowIds: [7] };
+    });
     h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.closeSharedTask.mockImplementationOnce(async () => { order.push('sharing-closed'); });
     h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
       const result = await task();
       order.push('lock-released');
@@ -810,13 +890,19 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await invokeUpdate('codex-local', { status: 'archived' });
 
-    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(order).toEqual(['sharing-prepared', 'runtime-cleanup', 'sharing-closed', 'lock-released']);
     expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+    expect(h.closeSharedTask).toHaveBeenCalledWith('codex-local', h.client);
   });
 
   it('cleans runtime state before releasing the remote terminal status lock', async () => {
     const order: string[] = [];
+    h.prepareSharedTaskClosure.mockImplementationOnce(async () => {
+      order.push('sharing-prepared');
+      return { sessionId: 'codex-local', marker: 1, rowIds: [7] };
+    });
     h.runtimeCleanup.mockImplementationOnce(() => order.push('runtime-cleanup'));
+    h.closeSharedTask.mockImplementationOnce(async () => { order.push('sharing-closed'); });
     h.routeLock.mockImplementationOnce(async (_sessionId, task) => {
       const result = await task();
       order.push('lock-released');
@@ -826,8 +912,45 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await patchSessionMetaInDb('codex-local', { status: 'archived' });
 
-    expect(order).toEqual(['runtime-cleanup', 'lock-released']);
+    expect(order).toEqual(['sharing-prepared', 'runtime-cleanup', 'sharing-closed', 'lock-released']);
     expect(h.runtimeCleanup).toHaveBeenCalledOnce();
+    expect(h.closeSharedTask).toHaveBeenCalledWith('codex-local', h.client);
+  });
+
+  it('does not commit a terminal status when the shared-task journal cannot be prepared', async () => {
+    h.prepareSharedTaskClosure.mockRejectedValueOnce(new Error('disk failed'));
+
+    await expect(invokeUpdate('codex-local', { status: 'archived' })).rejects.toThrow(
+      'Worktree is busy or its recovery record could not be saved',
+    );
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
+    expect(h.closeSharedTask).not.toHaveBeenCalled();
+    expect(h.rollbackSharedTaskClosure).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a prepared shared-task journal when the terminal status write fails', async () => {
+    h.prepareSharedTaskClosure.mockImplementationOnce(async () => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+      return { sessionId: 'codex-local', marker: 1, rowIds: [7] };
+    });
+
+    await expect(invokeUpdate('codex-local', { status: 'archived' })).rejects.toThrow('已删除的任务不能恢复或归档');
+    expect(h.rollbackSharedTaskClosure).toHaveBeenCalledWith(h.client, {
+      sessionId: 'codex-local', marker: 1, rowIds: [7],
+    });
+    expect(h.closeSharedTask).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('closes shared tasks when Bot deletion transitions sessions to terminal status (keep=%s)', async (keepTaskHistory) => {
+    h.commitBotProfileDeletion.mockResolvedValue({
+      status: keepTaskHistory ? 'archived' : 'deleted',
+      sessionIds: ['bot-local', 'bot-local'],
+    });
+
+    await deleteBotProfileAndDetachSessionsInDb('bot-1', ['bot-local'], keepTaskHistory);
+    await vi.dynamicImportSettled();
+
+    expect(h.closeSharedTask).toHaveBeenCalledExactlyOnceWith('bot-local', h.client);
   });
 
   // 竞态收敛(review on #3225):写入与查询不在同一串行区间,归档写入后、查询前
@@ -934,6 +1057,169 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.relocate).toHaveBeenCalledTimes(1);
     expect(h.relocate).toHaveBeenCalledWith('cc-local', '/old/dir', '/new/dir');
+  });
+
+  it.each([{ workingDir: '/new/dir', workspaceKind: 'project' }, { workspaceKind: 'dialogue' }])(
+    'runs MCP move checks inside the route lock before persisting %j',
+    async (patch) => {
+      let locked = false;
+      h.routeLock.mockImplementation(async (_id, task) => {
+        locked = true;
+        try {
+          return await task();
+        } finally {
+          locked = false;
+        }
+      });
+      const beforeUpdate = vi.fn(async () => {
+        expect(locked).toBe(true);
+        throw Object.assign(new Error('[PRECONDITION_FAILED] move blocked'), {
+          code: 'PRECONDITION_FAILED',
+        });
+      });
+      await expect(
+        updateSessionInDb('cc-local', patch, undefined, {
+          assertCurrent: () => undefined,
+          beforeUpdate,
+        }),
+      ).rejects.toThrow('move blocked');
+      expect(beforeUpdate).toHaveBeenCalledOnce();
+      expect(
+        h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'),
+      ).toEqual({ working_dir: '/old/dir' });
+      expect(h.relocate).not.toHaveBeenCalled();
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it('checks the move account fence again after closing an idle runtime and before writing', async () => {
+    let current = true;
+    h.closeIdleSessionForMove.mockImplementationOnce(async () => {
+      current = false;
+      return true;
+    });
+    await expect(
+      updateSessionInDb('codex-local', { workingDir: '/new/dir' }, undefined, {
+        beforeUpdate: async () => undefined,
+        assertCurrent: () => {
+          if (!current)
+            throw Object.assign(new Error('[PRECONDITION_FAILED] account changed'), {
+              code: 'PRECONDITION_FAILED',
+            });
+        },
+      }),
+    ).rejects.toThrow('account changed');
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+    ).toEqual({ working_dir: '/old/dir' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('retains transcript relocation and returned resume identity for a guarded MCP move', async () => {
+    const updated = await updateSessionInDb(
+      'cc-local',
+      { workingDir: '/new/dir', workspaceKind: 'project' },
+      undefined,
+      {
+        beforeUpdate: async () => undefined,
+        assertCurrent: () => undefined,
+      },
+    );
+    expect(updated.workingDir).toBe('/new/dir');
+    expect(h.relocate).toHaveBeenCalledWith('cc-local', '/old/dir', '/new/dir', {
+      client: h.client,
+      assertCurrent: expect.any(Function),
+    });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({ sessionId: 'cc-local' }),
+    );
+  });
+
+  it.each(['cc-local', 'codex-local', 'pi-local'])(
+    'awaits the final mutable move check after preparing %s',
+    async (id) => {
+      let prepared = false;
+      h.relocate.mockImplementation(async () => {
+        prepared = true;
+        return { persistedSdkSessionId: null };
+      });
+      h.closeIdleSessionForMove.mockImplementation(async () => {
+        prepared = true;
+        return true;
+      });
+      await expect(
+        updateSessionInDb(id, { workingDir: '/new/dir' }, undefined, {
+          beforeUpdate: async () => undefined,
+          assertCurrent: () => undefined,
+          beforeWrite: async () => {
+            await Promise.resolve();
+            if (prepared)
+              throw Object.assign(new Error('[PRECONDITION_FAILED] new worker running'), {
+                code: 'PRECONDITION_FAILED',
+              });
+          },
+        }),
+      ).rejects.toThrow('new worker running');
+      expect(prepared).toBe(true);
+      expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(id)).toEqual({
+        working_dir: '/old/dir',
+      });
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['during relocation', 'after commit'])(
+    'keeps cwd and transcripts aligned when the account switches %s',
+    async (phase) => {
+      let current = true;
+      const readCwd = () =>
+        (
+          h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local') as {
+            working_dir: string;
+          }
+        ).working_dir;
+      h.relocate.mockImplementationOnce(async () => {
+        expect(readCwd()).toBe('/old/dir');
+        if (phase === 'during relocation') current = false;
+        return { persistedSdkSessionId: null };
+      });
+      await expect(
+        updateSessionInDb(
+          'cc-local',
+          { workingDir: '/new/dir', workspaceKind: 'project' },
+          undefined,
+          {
+            beforeUpdate: async () => undefined,
+            assertCurrent: () => {
+              if (phase === 'after commit' && readCwd() === '/new/dir') current = false;
+              if (!current)
+                throw Object.assign(new Error('[PRECONDITION_FAILED] account changed'), {
+                  code: 'PRECONDITION_FAILED',
+                });
+            },
+          },
+        ),
+      ).rejects.toThrow('account changed');
+      expect(h.relocate).toHaveBeenCalledOnce();
+      expect(readCwd()).toBe(phase === 'after commit' ? '/new/dir' : '/old/dir');
+      expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps the original cwd if persistence fails after transcript copying', async () => {
+    h.sqlite!.exec(
+      "CREATE TRIGGER reject_move BEFORE UPDATE OF working_dir ON sessions BEGIN SELECT RAISE(ABORT, 'move write failed'); END",
+    );
+    await expect(invokeUpdate('cc-local', { workingDir: '/new/dir' })).rejects.toThrow(
+      'Worktree is busy or its recovery record could not be saved',
+    );
+    expect(h.relocate).toHaveBeenCalledOnce();
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'),
+    ).toEqual({ working_dir: '/old/dir' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
 
   it('returns and broadcasts the sdkSessionId persisted during relocation', async () => {

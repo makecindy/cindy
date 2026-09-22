@@ -11,6 +11,7 @@ export interface RateSample extends RateCounters {
 
 // Millisecond-scale usage batches are not meaningful throughput measurements.
 const MIN_SAMPLE_DURATION_MS = 1000;
+export const RATE_SAMPLE_FRESH_MS = 60_000;
 
 export interface RateHistory {
   startedAt: number | null;
@@ -20,6 +21,7 @@ export interface RateHistory {
   samples: RateSample[];
   peak: number;
   latestRate: number | null;
+  latestSampleAt?: number;
 }
 
 export function emptyRateHistory(startedAt: number | null): RateHistory {
@@ -36,6 +38,7 @@ export function recordRunningTokenRate(
     outputTokens: number;
     generationDurationMs: number;
     generationReliable: boolean;
+    now?: number;
   },
 ): RateHistory {
   const { outputTokens, generationDurationMs, generationReliable } = input;
@@ -105,6 +108,7 @@ export function recordRunningTokenRate(
     samples,
     peak: Math.max(...samples.map((sample) => sample.rate)),
     latestRate: rate,
+    latestSampleAt: input.now ?? Date.now(),
   };
 }
 

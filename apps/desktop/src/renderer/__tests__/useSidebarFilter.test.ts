@@ -365,8 +365,8 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
   beforeEach(() => installMemoryLocalStorage());
   afterEach(() => uninstallLocalStorage());
 
-  it("defaults to ['time'] when storage is empty", () => {
-    expect(loadTaskInfoFields()).toEqual(['time']);
+  it("defaults to ['tags', 'time'] when storage is empty", () => {
+    expect(loadTaskInfoFields()).toEqual(['tags', 'time']);
   });
 
   it('空数组是合法状态（用户显式全不选），不回落默认', () => {
@@ -378,14 +378,32 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
     persistTaskInfoFields(['pr', 'worktree', 'tokens', 'cost', 'time']);
     expect(loadTaskInfoFields()).toEqual(['pr', 'worktree', 'tokens', 'cost', 'time']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'bogus', 'time', 42, 'cost']));
-    expect(loadTaskInfoFields()).toEqual(['time', 'cost']);
+    expect(loadTaskInfoFields()).toEqual(['tags', 'time', 'cost']);
+  });
+
+  it('enables tags for upgraded preferences while retaining other choices and their order', () => {
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['cost', 'time', 'pr']));
+    expect(loadTaskInfoFields()).toEqual(['tags', 'cost', 'time', 'pr']);
+    localStorage.setItem(TASK_INFO_KEY, '[]');
+    expect(loadTaskInfoFields()).toEqual(['tags']);
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'tags']));
+    expect(loadTaskInfoFields()).toEqual(['time', 'tags']);
+  });
+
+  it('retains an explicit tag opt-out after upgrading and saving again', () => {
+    localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time']));
+    const upgraded = loadTaskInfoFields();
+    persistTaskInfoFields(nextTaskInfoAfterToggle(upgraded, 'tags'));
+    expect(loadTaskInfoFields()).toEqual(['time']);
+    persistTaskInfoFields(loadTaskInfoFields());
+    expect(loadTaskInfoFields()).toEqual(['time']);
   });
 
   it('falls back to default on broken JSON or shape mismatch', () => {
     localStorage.setItem(TASK_INFO_KEY, '{not-json');
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['tags', 'time']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ fields: ['time'] }));
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['tags', 'time']);
   });
 
   it('nextTaskInfoAfterToggle toggles membership and allows empty', () => {

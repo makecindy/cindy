@@ -9,6 +9,7 @@
  */
 
 export { registerGetCapabilitiesTool } from './get_capabilities.js';
+export { registerSkillhubTools, type SkillhubAgentCallback, type SkillhubAgentRequest } from './skillhub.js';
 export {
   registerGetCurrentSessionIdTool,
   type GetCurrentSessionIdDeps,
@@ -156,6 +157,13 @@ export {
   type SubmitGithubIssueHostErr,
   type SubmitGithubIssueHostErrorCode,
 } from './submit_github_issue.js';
+export {
+  registerStartSkillLearningTool,
+  type AuthorizedSkillLearningContext,
+  type AuthorizeSkillLearningCallback,
+  type StartSkillLearningCallback,
+  type StartSkillLearningParams,
+} from './start_skill_learning.js';
 export type {
   XdtHelperHistoryDeps,
   HistoryAgentKind,

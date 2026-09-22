@@ -19,6 +19,8 @@
 /** 协议版本:整数,只升不降;不兼容改动 +1。 */
 export const PROTOCOL_VERSION = 1;
 
+export * from './sharedTask.js';
+
 /** 单帧最大字节数(超过即回 PAYLOAD_TOO_LARGE 并丢弃,不断连;发送方应先行拒绝/裁剪) */
 export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 
@@ -54,6 +56,8 @@ export interface Envelope {
   src?: string;
   /** 目标 deviceId(隧道层帧必填) */
   dst?: string;
+  /** Optional cross-account task scope; absent means legacy same-account routing. */
+  sharedTask?: import('./sharedTask.js').SharedTaskScope;
   payload?: unknown;
 }
 
@@ -105,6 +109,8 @@ export interface HelloPayload {
   remoteControlEnabled: boolean;
   busy: boolean;
   deviceInfo?: DeviceInfo;
+  /** Optional endpoint capabilities; sharedTask peers require explicit bilateral support. */
+  capabilities?: string[];
 }
 
 /** hello-ack 帧 payload(server→client) */

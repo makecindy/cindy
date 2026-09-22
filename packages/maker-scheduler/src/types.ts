@@ -241,6 +241,7 @@ export interface Schedule {
   workspaceKind: ScheduleWorkspaceKind;
   workingDir?: string;
   useWorktree: boolean;
+  /** Script mode: lifecycle owner and sole dispatch target; no agent turn is started by the runner. */
   targetSessionId?: string;
   /**
    * 持续会话模式：true → runner 在第一次 fire 成功创建 session 后自动把 sessionId

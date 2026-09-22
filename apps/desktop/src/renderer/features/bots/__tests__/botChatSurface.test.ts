@@ -53,7 +53,7 @@ describe('消息流的头像挂载', () => {
     // space invisibly. User messages and internal tool/work cards still bypass it.
     expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(3);
     expect(messageStream).toContain("simplifiedBotConversation && message.systemCardType === 'bot-session-task'");
-    expect(messageStream).toContain('<span aria-hidden="true" className="invisible">{assistantAvatar}</span>');
+    expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
   });
 });
 
@@ -66,7 +66,7 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 
   it('伙伴仍可使用权限快捷键，锁定任务不能切换', () => {
-    expect(chatInput).toContain('settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
+    expect(chatInput).toContain('settingsLocked || sharedGuest ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
     expect(chatInput).not.toContain('settingsLocked || hideRuntimeControls');
   });
 

@@ -1,19 +1,19 @@
 import { Button, Image, ProgressView, Text, Toggle } from '@expo/ui/swift-ui';
-import { buttonStyle, controlSize, disabled, font, foregroundStyle, frame } from '@expo/ui/swift-ui/modifiers';
+import { disabled, font, foregroundStyle, frame } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { iconSize, useTheme } from '@/theme';
 import { ComposerSheet } from './ComposerSheet';
 import { ComposerNativeRow } from './ComposerNativeRow';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import { newSessionText } from './newSessionMessages';
-import { useLiquidGlassAvailable } from './useLiquidGlassAvailable';
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import type { NewTaskSelectionSheetProps } from './NewTaskSelectionSheet';
 
 /** One full-width native presentation, including navigation into remote folders. */
 export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const glass = useLiquidGlassAvailable();
+  const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   const browsing = p.page === 'directory';
   const unavailable = p.busy || p.loading;
   const icon = (name: 'laptopcomputer' | 'folder' | 'bubble.left' | 'folder.badge.plus' | 'chevron.right' | 'arrow.up') =>
@@ -30,7 +30,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
       footer={browsing ? (
         <Button
           onPress={() => { if (p.path && !unavailable && !p.error) p.onChoose(p.path); }}
-          modifiers={[buttonStyle(glass ? 'glassProminent' : 'borderedProminent'), controlSize('large'), disabled(unavailable || !p.path || !!p.error)]}
+          modifiers={[...glassStyle, disabled(unavailable || !p.path || !!p.error)]}
           testID="newSession.remoteBrowseSelectCurrent"
         >
           <Text modifiers={[frame({ maxWidth: Infinity, minHeight: 44 })]}>{t('session.new.useCurrent')}</Text>

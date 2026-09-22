@@ -3,7 +3,12 @@ import { DESKTOP_VIEWER_SOURCE } from "./viewerSource";
 export function remoteDesktopViewerHtml(
   surface: string,
   foreground: string,
-  config: { net: unknown; iceServers: unknown; keyCodes: readonly string[] },
+  config: {
+    net: unknown;
+    iceServers: unknown;
+    keyCodes: readonly string[];
+    nativeMedia?: boolean;
+  },
 ): string {
   // Only theme token colors enter markup. No device names, SDP, or remote HTML.
   const color = (v: string) =>
@@ -32,6 +37,7 @@ export function remoteDesktopViewerHtml(
   #mouse-wheel>*{pointer-events:none}
   #mouse-wheel-grip{width:20px;height:34px}
   @media(max-height:400px){#mouse-wheel{bottom:12px}}
+  ${config.nativeMedia ? "html,body{background:transparent}" : ""}
   </style></head><body><div id="stage"><div id="bg"><canvas id="bg-canvas"></canvas></div><div id="network-status"></div><img id="image" alt=""><video id="video" autoplay muted playsinline></video><div id="cursor"><img id="cursor-image" alt=""></div></div>
   <div id="mouse-buttons">
     ${(["left", "right"] as const).map((button) => `<button type="button" id="mouse-${button}" class="mouse-button" aria-pressed="false"><svg viewBox="0 0 24 32" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="2" width="18" height="28" rx="9"/><path d="M12 2v12M3 14h18"/><path d="${button === "left" ? "M11 3C6 3 4 6 4 10v3h7Z" : "M13 3c5 0 7 3 7 7v3h-7Z"}" fill="currentColor" stroke="none"/></svg></button>`).join("")}

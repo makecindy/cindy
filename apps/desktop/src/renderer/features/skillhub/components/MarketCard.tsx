@@ -22,6 +22,7 @@ import {
 } from '../lib/publishedStatus';
 import { SkillIcon } from './SkillIcon';
 import { SkillTagList } from './SkillTagList';
+import { MarketInstallStatus, type MarketInstallStatusProps } from './MarketInstallStatus';
 
 function visibilityLabel(skill: MarketSkill, allowPrivateLabel: boolean): string {
   return i18n.t(marketVisibilityLabelKey({
@@ -34,8 +35,7 @@ function visibilityLabel(skill: MarketSkill, allowPrivateLabel: boolean): string
 /** 卡片「管理」菜单里的动作(详情统一走浮窗,菜单只收管理类操作) */
 export type MarketCardManageAction = 'edit' | 'manageVisibility' | 'clone' | 'delete';
 
-interface MarketCardProps {
-  skill: MarketSkill;
+interface MarketCardProps extends MarketInstallStatusProps {
   primaryAction?: MarketCardPrimaryAction;
   allowPrivateVisibilityLabel?: boolean;
   /** Clone 按钮点击 → 打开 InstallTargetPicker */
@@ -149,6 +149,8 @@ export function MarketCard({
   onManageAction,
   onClick,
   selected,
+  onUpdate,
+  updating,
 }: MarketCardProps) {
   // useTranslation: subscribe to language change so footer / visibility re-render.
   const { t, i18n: i18next } = useTranslation();
@@ -226,7 +228,7 @@ export function MarketCard({
 
       {/* Footer: 时间戳 + 按钮 */}
       <div
-        className="flex w-full items-center justify-between"
+        className="flex w-full flex-wrap items-center justify-between"
         style={{ gap: '8px', minHeight: '36px' }}
       >
         <div
@@ -252,16 +254,19 @@ export function MarketCard({
             <span>{downloads}</span>
           </span>
         </div>
-        {primaryAction === 'manage' && onManageAction ? (
-          <ManageMenu skill={skill} onAction={onManageAction} />
-        ) : primaryAction === 'clone' ? (
-          <CloneButton
-            onClick={(e) => {
-              e.stopPropagation();
-              onClone(skill);
-            }}
-          />
-        ) : null}
+        <div className="flex max-w-full flex-wrap items-center gap-2">
+          <MarketInstallStatus skill={skill} onUpdate={onUpdate} updating={updating} />
+          {primaryAction === 'manage' && onManageAction ? (
+            <ManageMenu skill={skill} onAction={onManageAction} />
+          ) : primaryAction === 'clone' && !skill.updateAvailable && !updating ? (
+            <CloneButton
+              onClick={(e) => {
+                e.stopPropagation();
+                onClone(skill);
+              }}
+            />
+          ) : null}
+        </div>
       </div>
     </div>
   );

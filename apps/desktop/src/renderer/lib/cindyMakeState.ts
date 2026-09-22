@@ -13,6 +13,7 @@ let loaded = false;
 let unsubscribe: (() => void) | undefined;
 const listeners = new Set<() => void>();
 let connection = 0;
+let runningSessionIds: ReadonlySet<string> = new Set();
 
 function connect(): void {
   if (!isDataOwnerGenerationCurrent(owner)) {
@@ -25,6 +26,7 @@ function connect(): void {
   if (unsubscribe || typeof window === 'undefined' || !window.electronAPI) return;
   const generation = owner;
   const connectionId = ++connection;
+  const previous = state;
   let pushed = false;
   const apply = (next: CindyMakeGlobalState) => {
     if (
@@ -44,12 +46,28 @@ function connect(): void {
     }) ?? (() => {});
   void Promise.resolve(window.electronAPI.getCindyMakeState?.())
     .then((next) => {
-      if (next && !pushed) apply(next);
+      if (next && !pushed && state === previous) apply(next);
     })
     .catch(() => undefined);
 }
 
 export const cindyMakeState = {
+  async manageTask(sessionId: string, action: 'end' | 'finish' | 'delete'): Promise<void> {
+    const generation = getDataOwnerGeneration();
+    await window.electronAPI.manageCindyMakeTask(sessionId, action);
+    if (!isDataOwnerGenerationCurrent(generation)) return;
+    // Main only acknowledges success after cleanup and its completion marker.
+    // Apply that fact immediately; a delayed snapshot must not keep the task spinning.
+    const tasks = Object.fromEntries(
+      Object.entries(state.tasks ?? {}).filter(
+        ([, report]) => report.task?.sessionId !== sessionId,
+      ),
+    );
+    const taskActions = { ...state.taskActions };
+    delete taskActions[sessionId];
+    state = { ...state, tasks: Object.keys(tasks).length ? tasks : undefined, taskActions };
+    for (const listener of listeners) listener();
+  },
   async refresh(): Promise<void> {
     const generation = getDataOwnerGeneration();
     const previous = state;
@@ -88,7 +106,30 @@ export const cindyMakeState = {
       (report) => report.task?.sessionId === sessionId,
     );
   },
+  getRunningSessionIds(): ReadonlySet<string> {
+    const snapshot = cindyMakeState.getSnapshot();
+    const next = new Set(snapshot.personalBuildSessionIds);
+    for (const report of Object.values(snapshot.tasks ?? {})) {
+      if (report.status === 'running' && report.task) next.add(report.task.sessionId);
+    }
+    if (
+      next.size !== runningSessionIds.size ||
+      [...next].some((id) => !runningSessionIds.has(id))
+    )
+      runningSessionIds = next;
+    return runningSessionIds;
+  },
 };
+
+/** Display activity only: native Make work must not synthesize Agent turn transitions. */
+export function useCindyMakeRunningSessionIds(): ReadonlySet<string> {
+  const generation = getDataOwnerGeneration();
+  const subscribe = useCallback(
+    (listener: () => void) => cindyMakeState.subscribe(listener),
+    [generation.dataOwnerId, generation.generation],
+  );
+  return useSyncExternalStore(subscribe, cindyMakeState.getRunningSessionIds);
+}
 
 export function useCindyMakeState(): CindyMakeGlobalState {
   const generation = getDataOwnerGeneration();

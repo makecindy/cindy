@@ -127,7 +127,9 @@
   },
   "rewind": {
     "readError": "Couldn't read the rewind preview. Sync again and retry.",
-    "noFilesNote": "No files to roll back; only the chat after this message will be truncated.",
+    "noFilesNote": "No project file changes were detected after this message. Continuing will remove the later chat.",
+    "conversationOnlyNote": "Project files cannot be restored because no Git savepoint is available. Continuing will remove the chat after this message; files will not return to their earlier state.",
+    "gitSafetyDisabledNote": "Git safety savepoints are disabled, so project files cannot be restored. Enable them in Settings on your computer; continuing will remove the chat after this message.",
     "moreFiles": "{{count}} more files",
     "stats": "{{count}} files · +{{insertions}} / -{{deletions}} lines",
     "gotIt": "Got it",
@@ -141,7 +143,8 @@
     "titleError": "Can't rewind",
     "detailLoading": "Reading the file rewind preview from your computer.",
     "detailDefault": "This rolls back the files below and truncates the chat after this message.",
-    "detailEmpty": "No files to roll back; confirming truncates only the chat after this message.",
+    "detailEmpty": "No project file changes were detected after this message.",
+    "detailConversationOnly": "Project files will not return to their earlier state.",
     "detailError": "Your computer declined this rewind."
   },
   "collab": {
@@ -233,7 +236,9 @@
     "inlineFormActionGeneric": "Enter one setting on your computer"
   },
   "presentation": {
-    "action": { "submitting": "Submitting" },
+    "action": {
+      "submitting": "Submitting"
+    },
     "permission": {
       "highRiskTitle": "High-risk permission needs confirmation",
       "highRiskDetail": "Review the command, then confirm again to allow it. Deny it if you're unsure.",
@@ -271,6 +276,18 @@
         "plugin_setup": "Setup must be completed on the computer; you can cancel this request here.",
         "fallback": "Mobile handles remote requests in the order sent by the desktop."
       }
+    }
+  },
+  "companion": {
+    "operation": "Operation",
+    "details": "Details",
+    "fields": {
+      "path": "File",
+      "file_path": "File",
+      "url": "Address",
+      "command": "Command",
+      "ghost_id": "Plugin",
+      "tool": "Tool"
     }
   }
 }

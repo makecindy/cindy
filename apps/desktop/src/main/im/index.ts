@@ -557,20 +557,28 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
 
 const connectionLifecycle = createSerializedConnectionLifecycle({
   startConnection: initializeImConnection,
+  beforeStopConnection: async () => {
+    // A start already in flight may have activated ingress after the initial
+    // synchronous stop gate. Re-close and drain it on the serialized boundary
+    // before retaining outbound clients for the bounded card expiry attempt.
+    const closingGeneration = captureImAccountGeneration();
+    deactivateImAccountBoundary();
+    if (closingGeneration !== null) {
+      await waitForImAccountGenerationIdle(closingGeneration);
+    }
+    await Promise.all(listImOrchestrators().map(async (orchestrator) => {
+      try {
+        await orchestrator.disposeAllSessions();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`disposeAllSessions channel=${orchestrator.channel} failed: ${msg}`);
+      }
+    }));
+  },
   stopConnection: async (reason) => {
-    // Transports stop first so no new message can enter while account-scoped
-    // orchestrator and binding caches are being discarded.
     try {
       await im.dispose();
     } finally {
-      for (const orchestrator of listImOrchestrators()) {
-        try {
-          await orchestrator.disposeAllSessions();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`disposeAllSessions channel=${orchestrator.channel} failed: ${msg}`);
-        }
-      }
       bindingStore.resetRuntime();
       // 普通退出、登出、换账号与模式切换都只清内存热缓存, 保留本地 DB 游标；
       // 只有明确删除账号数据时才清持久表。Telegram bot 解绑由 hook-control 的

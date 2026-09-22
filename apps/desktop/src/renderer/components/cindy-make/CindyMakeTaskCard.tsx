@@ -5,26 +5,45 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { CindyMakeDependencyProgress } from './CindyMakeDependencyProgress';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
+import { formatCindyMakeTitle } from '@/lib/cindyMakeTitle';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { MakeDoctorReport } from '../../../shared/cindyMakeDoctor';
 
-const phases = ['environment', 'source', 'workspace', 'dependencies', 'starting'] as const;
+const phases = [
+  'environment',
+  'source',
+  'updatingSource',
+  'workspace',
+  'dependencies',
+  'starting',
+] as const;
 
 export function CindyMakeTaskCard({
   report,
   request,
   onOpenTask,
   readOnly = false,
+  variant = 'default',
 }: {
   report: MakeDoctorReport;
   request?: string;
   onOpenTask?: () => void;
   readOnly?: boolean;
+  variant?: 'default' | 'composer';
 }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const task = report.task;
   if (!task) return null;
+  const displayTitle = formatCindyMakeTitle(
+    task.title ?? t('cindyMake.code.taskName'),
+    report.runId,
+  );
+  const inComposer = variant === 'composer';
+  const borderClass = inComposer
+    ? 'border-[var(--chat-input-border)]'
+    : 'border-[var(--border-default)]';
   const canOperate = () =>
     !readOnly &&
     !getStickySessionDeviceId(task.sessionId) &&
@@ -47,7 +66,7 @@ export function CindyMakeTaskCard({
           originSessionId: task.originSessionId,
           runId: report.runId,
           request,
-          title: task.title ?? t('cindyMake.code.taskName'),
+          title: displayTitle,
         });
       }
     } catch {
@@ -58,16 +77,26 @@ export function CindyMakeTaskCard({
   };
   return (
     <section
-      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-13 text-[var(--text-primary)]"
+      className={cn(
+        'w-full rounded-xl border text-13 text-[var(--text-primary)]',
+        borderClass,
+        inComposer
+          ? 'flex max-h-[min(420px,50vh)] flex-col overflow-hidden bg-[var(--chat-input-bg)]'
+          : 'bg-[var(--surface-elevated)]',
+      )}
       aria-label={t('cindyMake.code.taskName')}
     >
-      <div className="flex items-center gap-2 px-4 py-3">
-        <span className="min-w-0 flex-1 break-words font-medium">
-          {task.title ?? t('cindyMake.code.taskName')}
-        </span>
+      <div className="flex shrink-0 items-center gap-2 px-4 py-3">
+        <span className="min-w-0 flex-1 break-words font-medium">{displayTitle}</span>
         {running && <Spinner size={14} />}
       </div>
-      <div className="space-y-3 border-t border-[var(--border-default)] px-4 py-3">
+      <div
+        className={cn(
+          'space-y-3 border-t px-4 py-3',
+          borderClass,
+          inComposer && 'min-h-0 overflow-y-auto overscroll-contain',
+        )}
+      >
         <ol className="space-y-2">
           {phases.map((phase, index) => (
             <li key={phase} className="flex items-center gap-2">
@@ -91,7 +120,7 @@ export function CindyMakeTaskCard({
         <div
           role="status"
           aria-live="polite"
-          className={failed ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]'}
+          className={failed ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]'}
         >
           {t(
             completed
@@ -137,27 +166,27 @@ export function CindyMakeTaskCard({
           </p>
         )}
         {failed && report.source?.error && (
-          <p className="text-12 text-[var(--status-danger)]">
+          <p className="text-12 text-[var(--error-fg)]">
             {t('cindyMake.source.errors.' + report.source.error)}
           </p>
         )}
       </div>
       {interactive && onOpenTask && (
-        <div className="flex justify-end px-4 pb-3">
+        <div className="flex shrink-0 justify-end px-4 pb-3">
           <Button variant="secondary" onClick={() => canOperate() && onOpenTask()}>
             {t('cindyMake.code.open')}
           </Button>
         </div>
       )}
       {interactive && !completed && task.phase !== 'starting' && (running || request) && (
-        <div className="flex justify-end border-t border-[var(--border-default)] px-4 py-3">
+        <div className={cn('flex shrink-0 justify-end border-t px-4 py-3', borderClass)}>
           <Button variant="secondary" disabled={pending} onClick={() => void operate()}>
             {t(running ? 'cindyMake.prepare.stop' : 'cindyMake.prepare.retry')}
           </Button>
         </div>
       )}
       {interactive && !running && task.phase === 'starting' && request && (
-        <div className="flex justify-end border-t border-[var(--border-default)] px-4 py-3">
+        <div className={cn('flex shrink-0 justify-end border-t px-4 py-3', borderClass)}>
           <Button variant="secondary" disabled={pending} onClick={() => void operate()}>
             {t('cindyMake.prepare.retry')}
           </Button>

@@ -30,6 +30,8 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
   let prefix: string;
   const installer = path.resolve(__dirname, '../../../resources/linux/install-user.sh');
   const packages = new Map<string, { file: string; digest: string; size: number }>();
+  // Six bsdtar+ar fixtures under a contended Linux unit shard exceed vitest's
+  // 10s hookTimeout (CI: 10758ms). Spawn timeouts below are already 15s.
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-install-test-'));
     prefix = path.join(root, 'home', "Cindy's space $literal");
@@ -54,7 +56,7 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
       const bytes = fs.readFileSync(file);
       packages.set(version, { file, digest: createHash('sha256').update(bytes).digest('hex'), size: bytes.length });
     }
-  });
+  }, 30_000);
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
   function run(version: string, apply = false, overrides: { prefix?: string; digest?: string; version?: string; region?: string; env?: NodeJS.ProcessEnv } = {}) {
     const pkg = packages.get(version)!;

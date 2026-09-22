@@ -1,3 +1,5 @@
+import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
+import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
 import type { OpenAiAccountProvider } from './sessionControls';
 /**
  * SessionMenuSheet —— 会话右上角「…」菜单浮窗(取代旧三 tab 的会话设置面板)。
@@ -19,10 +21,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   Archive,
   ArchiveRestore,
-  ChevronRight,
   Copy,
-  GitBranch,
   Link2,
+  LogOut,
   Pencil,
   Pin,
   PinOff,
@@ -49,6 +50,7 @@ import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { MobileMakerTransport, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { writeClipboardText } from '@/session/messageActions';
 import { normalizeExtraDirs } from '@/session/newSession';
@@ -100,6 +102,7 @@ export interface SessionExtraDirBrowserState {
 }
 
 export interface SessionMenuSheetProps {
+  tagDeviceId?: string;
   providerName?: string;
   messageOnly?: boolean;
   onOpenSearch?: () => void;
@@ -132,8 +135,9 @@ export interface SessionMenuSheetProps {
   onRegenerateTitle(): Promise<{ title: string | null }>;
   /** 打开工作目录(复用文件浏览页);调用方负责关 sheet 并跳转。 */
   onOpenWorkspace(): void;
-  /** Pi 原生会话树入口；只有 host runtime 真正返回 Pi 会话时由父级注入。 */
-  onOpenSessionTree?: () => void;
+  onOpenSharing?: () => void;
+  onLeaveSharing?: () => void;
+  leavingSharing?: boolean;
   onTogglePinned(): void;
   onArchive(): void;
   onRestore(): void;
@@ -144,6 +148,7 @@ export interface SessionMenuSheetProps {
 }
 
 export function SessionMenuSheet({
+  tagDeviceId,
   providerName,
   messageOnly = false,
   onOpenSearch,
@@ -167,7 +172,9 @@ export function SessionMenuSheet({
   onRename,
   onRegenerateTitle,
   onOpenWorkspace,
-  onOpenSessionTree,
+  onOpenSharing,
+  onLeaveSharing,
+  leavingSharing = false,
   onTogglePinned,
   onArchive,
   onRestore,
@@ -481,10 +488,11 @@ export function SessionMenuSheet({
     [codexRateLimits, i18nInstance.language],
   );
   const workspace = buildSessionInfoWorkspace(session);
-  const showExtraDirs = sessionInfoShowsExtraDirs(session);
+  const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
+  const showExtraDirs = !sharedGuest && sessionInfoShowsExtraDirs(session);
 
-  const mainActions = messageOnly ? [] : actions.filter((action) => action.id !== 'delete');
-  const deleteAction = messageOnly ? undefined : actions.find((action) => action.id === 'delete');
+  const mainActions = messageOnly ? [] : actions.filter((action) => sharedGuest ? action.id === 'copyLink' : action.id !== 'delete' && action.id !== 'archive');
+  const deleteAction = messageOnly ? undefined : sharedGuest ? undefined : actions.find((action) => action.id === 'delete');
 
   const confirmCodexReset = useCallback(() => {
     if (!resetSummary?.canReset || codexResetBusy) return;
@@ -503,6 +511,7 @@ export function SessionMenuSheet({
     );
   }, [codexRateLimits, codexResetBusy, onResetCodexRateLimits, resetSummary, t]);
 
+  const tagsSheet = useTaskTagsSheet(visible, onClosed);
   const menuContent = (
     <View style={styles.menuBody} testID="session.menuSheetBody">
       {renaming ? (
@@ -551,29 +560,59 @@ export function SessionMenuSheet({
         </View>
       ) : (
         <>
-          <View style={styles.headerBlock} testID="session.menuHeader">
-            <Text style={styles.detailTitle}>{header.title}</Text>
-            {header.chips.length > 0 ? (
-              <View style={styles.chipRow}>
-                {header.chips.map((chip) => (
-                  <View key={chip.id} style={styles.chip} testID={`session.menuChip.${chip.id}`}>
-                    <Text style={styles.chipText}>{chip.label}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            <Text numberOfLines={1} style={styles.metaLine} testID="session.menuMetaLine">
-              {header.metaLine}
-            </Text>
-            {readOnlyReason ? (
-              <Text style={styles.readOnlyText} testID="session.menuReadOnlyNotice">
-                {readOnlyReason}
-              </Text>
-            ) : null}
-          </View>
+          {(header.chips.length > 0 ||
+            (!messageOnly && !!session.tags?.length) ||
+            !!readOnlyReason) && (
+            <View style={styles.headerBlock} testID="session.menuHeader">
+              {!messageOnly && !!session.tags?.length && (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    gap: spacing.xs,
+                  }}
+                >
+                  <TaskTagLabels tags={session.tags} />
+                </View>
+              )}
+              {header.chips.length > 0 ? (
+                <View style={styles.chipRow}>
+                  {header.chips.map((chip) => (
+                    <View key={chip.id} style={styles.chip} testID={`session.menuChip.${chip.id}`}>
+                      <Text style={styles.chipText}>{chip.label}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {readOnlyReason ? (
+                <Text style={styles.readOnlyText} testID="session.menuReadOnlyNotice">
+                  {readOnlyReason}</Text>
+              ) : null}
+            </View>
+                )}
 
           {!messageOnly ? <SessionUsageSummary providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} onPress={openInfo} translucent={Platform.OS === 'ios'} /> : null}
 
+          {!messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('sharedTask.leave'), danger: true, disabled: leavingSharing,
+              onPress: onLeaveSharing, testID: 'session.leaveSharingButton',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={LogOut} label={t('sharedTask.leave')} danger disabled={leavingSharing}
+                onPress={onLeaveSharing} testID="session.leaveSharingButton" />
+            </View>
+          ) : !messageOnly && onOpenSharing && !isSharedTaskPeer(session.deviceLinkDeviceId) ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('sharedTask.title'),
+              onPress: onOpenSharing,
+              testID: 'session.sharingButton',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={Link2} label={t('sharedTask.title')}
+                onPress={onOpenSharing} testID="session.sharingButton" />
+            </View>
+          ) : null}
           {Platform.OS === 'ios' ? (
             <SessionDetailsNativeActions actions={mainActions.map(action => ({
               label: action.id === 'copyLink' ? copyLabel(action.label, 'copyLink', t('session.menu.linkCopied')) : action.label,
@@ -596,18 +635,6 @@ export function SessionMenuSheet({
             ))}
           </View>}
 
-          {!messageOnly && session.agentKind === 'pi' && onOpenSessionTree ? (
-            <View style={styles.actionGroup}>
-              <MenuActionRow
-                icon={GitBranch}
-                label={t('session.menu.branches')}
-                onPress={onOpenSessionTree}
-                testID="session.branchesButton"
-                trailing={<ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
-              />
-            </View>
-          ) : null}
-
           {onOpenSearch ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
               label: t('session.presentation.overview.actions.search.label'),
@@ -618,8 +645,49 @@ export function SessionMenuSheet({
             </View>
           ) : null}
 
+          {!messageOnly && (
+            <TaskTagsPanel
+              key={`${tagDeviceId ?? session.deviceLinkDeviceId}:${session.id}`}
+              session={session}
+              deviceId={tagDeviceId}
+              disabled={busy || !!readOnlyReason}
+              expanded={false}
+              onExpandedChange={(open) => {
+                if (open) tagsSheet.open();
+              }}
+            />
+          )}
+          {!messageOnly &&
+            actions
+              .filter((action) => action.id === 'archive')
+              .map((action) =>
+                Platform.OS === 'ios' ? (
+            <SessionDetailsNativeActions
+                    key={action.id}
+                    actions={[
+                      {
+                        label: action.label,
+                        disabled: action.disabled,
+                        testID: action.testID,
+                        onPress: () => handleAction(action),
+                      },
+                    ]}
+                  />
+                ) : (
+                  <View key={action.id} style={styles.actionGroup}>
+                    <MenuActionRow
+                      disabled={action.disabled}
+                      icon={menuActionIcon(action, session)}
+                      label={action.label}
+                      onPress={() => handleAction(action)}
+                      testID={action.testID}
+                    />
+                  </View>
+                ),
+              )}
           {deleteAction ? Platform.OS === 'ios' ? (
-            <SessionDetailsNativeActions actions={[{ label: deleteAction.label, testID: deleteAction.testID, disabled: deleteAction.disabled, danger: true, onPress: () => handleAction(deleteAction) }]} />
+              <SessionDetailsNativeActions
+                actions={[{ label: deleteAction.label, testID: deleteAction.testID, disabled: deleteAction.disabled, danger: true, onPress: () => handleAction(deleteAction) }]} />
           ) : (
             <View style={styles.actionGroup}>
               <MenuActionRow
@@ -706,6 +774,7 @@ export function SessionMenuSheet({
           <View style={styles.infoActionRow}>
             <MenuPillButton
               label={t('session.menu.openDir')}
+              disabled={sharedGuest}
               onPress={onOpenWorkspace}
               testID="session.openWorkspaceButton"
             />
@@ -835,32 +904,47 @@ export function SessionMenuSheet({
     />
   ) : undefined;
 
+  const tagEditor = tagsSheet.mounted ? (
+    <TaskTagsSheet
+      session={session}
+      deviceId={tagDeviceId}
+      disabled={busy || !!readOnlyReason}
+      visible={tagsSheet.visible}
+      onClose={tagsSheet.close}
+      onClosed={tagsSheet.closed}
+    />
+  ) : null;
   if (Platform.OS === 'ios') {
     const showingInfo = !messageOnly && view === 'info';
     return (
-      <SessionDetailsNative
-        visible={visible}
-        title={t(showingInfo ? 'session.menu.sessionInfo' : 'session.menu.details')}
-        backLabel={t('session.menu.backToMenu')}
-        onBack={showingInfo ? () => setView('menu') : undefined}
+      <>
+        <SessionDetailsNative
+        visible={tagsSheet.parentVisible}
+        title={showingInfo ? t('session.menu.sessionInfo') : header.title}
+          contentPaddingTop={showingInfo ? undefined : spacing.xs}
+          backLabel={t('session.menu.backToMenu')}
+          onBack={showingInfo ? () => setView('menu') : undefined}
         onClose={onClose}
-        onClosed={onClosed}
+        onClosed={tagsSheet.parentClosed}
         footer={renameFooter}
       >
         {showingInfo ? infoContent : menuContent}
       </SessionDetailsNative>
+        {tagEditor}
+      </>
     );
   }
 
   return (
-    <SheetModal
+    <>
+      <SheetModal
       backdropTestID="session.settingsBackdrop"
       keyboardAvoiding
       keyboardAvoidingBehavior={keyboardAvoidingBehavior}
       onBackdropPress={onClose}
-      onClosed={onClosed}
+      onClosed={tagsSheet.parentClosed}
       onRequestClose={handleRequestClose}
-      visible={visible}
+      visible={tagsSheet.parentVisible}
     >
       <SheetSurface
         bottomInset={insets.bottom}
@@ -871,7 +955,7 @@ export function SessionMenuSheet({
         onSnapChange={setPrimarySnap}
         snap={primarySnap}
         testID="session.menuSheet"
-        title={t('session.menu.details')}
+        title={header.title}
         variant="tasksheet"
       >
         {menuContent}
@@ -904,6 +988,8 @@ export function SessionMenuSheet({
         </Animated.View>
       ) : null}
     </SheetModal>
+      {tagEditor}
+    </>
   );
 }
 
@@ -1032,74 +1118,78 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   headerBlock: {
     alignSelf: 'stretch',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.xs,
-  },
-  detailTitle: {
-    color: colors.textPrimary,
-    fontSize: typeScale.body,
-    fontWeight: fontWeight.semibold,
-  },
-  chipRow: {
-    alignSelf: 'stretch',
-    justifyContent: 'flex-start',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-  },
-  chip: {
-    backgroundColor: colors.surfaceChip,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  chipText: {
-    color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-  },
-  metaLine: {
-    color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
-  readOnlyText: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
-  actionGroup: {
-    backgroundColor: colors.sheetActionSurface,
-    borderColor: colors.sheetActionBorder,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    overflow: 'hidden',
-  },
-  actionRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.md,
-    minHeight: 45,
-    paddingHorizontal: spacing.lg,
-  },
-  actionLabel: {
-    color: colors.sheetActionText,
-    flexShrink: 1,
-    fontSize: typeScale.listBody,
-    fontWeight: fontWeight.semibold,
-    lineHeight: lineHeight.listBody,
-  },
-  actionLabelDanger: {
-    color: colors.destructive,
-  },
-  actionTrailing: {
-    marginLeft: 'auto',
-  },
-  renameBlock: {
     gap: spacing.sm,
-    paddingHorizontal: spacing.xs,
+      paddingHorizontal: spacing.xs,
+      paddingBottom: spacing.sm,
+    },
+    detailTitle: {
+      textAlign: 'center',
+      color: colors.textPrimary,
+      fontSize: typeScale.body,
+      fontWeight: fontWeight.semibold,
+    },
+    chipRow: {
+      alignSelf: 'stretch',
+      justifyContent: 'center',
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.xs,
+    },
+    chip: {
+      backgroundColor: colors.surfaceChip,
+      borderColor: colors.border,
+      borderRadius: radius.pill,
+      borderWidth: StyleSheet.hairlineWidth,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 2,
+    },
+    chipText: {
+      color: colors.textSecondary,
+      fontSize: typeScale.caption,
+      fontWeight: fontWeight.medium,
+    },
+    metaLine: {
+      textAlign: 'center',
+      color: colors.textSecondary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
+    readOnlyText: {
+      textAlign: 'center',
+      color: colors.textTertiary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
+    actionGroup: {
+      backgroundColor: colors.sheetActionSurface,
+      borderColor: colors.sheetActionBorder,
+      borderRadius: radius.container,
+      borderWidth: StyleSheet.hairlineWidth,
+      overflow: 'hidden',
+    },
+    actionRow: {
+      alignItems: 'center',
+      flexDirection: 'row',
+      gap: spacing.md,
+      minHeight: 45,
+      paddingHorizontal: spacing.lg,
+    },
+    actionLabel: {
+      color: colors.sheetActionText,
+      flexShrink: 1,
+      fontSize: typeScale.listBody,
+      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.listBody,
+    },
+    actionLabelDanger: {
+      color: colors.destructive,
+    },
+    actionTrailing: {
+      marginLeft: 'auto',
+    },
+    renameBlock: {
+      gap: spacing.sm,
+      paddingHorizontal: spacing.xs,
   },
   renameInputWrap: {
     justifyContent: 'center',
@@ -1111,77 +1201,77 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     fontSize: typeScale.body,
-    minHeight: 44,
-    paddingLeft: spacing.md,
-    paddingRight: 44,
-  },
-  renameAiButton: {
-    alignItems: 'center',
-    bottom: 0,
+      minHeight: 44,
+      paddingLeft: spacing.md,
+      paddingRight: 44,
+    },
+    renameAiButton: {
+      alignItems: 'center',
+      bottom: 0,
+      justifyContent: 'center',
+      position: 'absolute',
+      right: 0,
+      top: 0,
+      width: 44,
+    },
+    renameErrorText: {
+      color: colors.errorText,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
+    infoBody: {
+      gap: spacing.md,
+      paddingBottom: spacing.lg,
+    },
+    infoSection: {
+      backgroundColor: colors.surfaceElevated,
+      borderColor: colors.border,
+      borderRadius: radius.container,
+      borderWidth: StyleSheet.hairlineWidth,
+      gap: spacing.sm,
+      padding: spacing.md,
+    },
+    infoSectionHeader: {
+      alignItems: 'center',
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+    },
+    infoSectionTitle: {
+      color: colors.textTertiary,
+      fontSize: typeScale.footnote,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
+    },
+    refreshButton: {
+      alignItems: 'center',
     justifyContent: 'center',
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    width: 44,
-  },
-  renameErrorText: {
-    color: colors.errorText,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
-  infoBody: {
-    gap: spacing.md,
-    paddingBottom: spacing.lg,
-  },
-  infoSection: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.sm,
-    padding: spacing.md,
-  },
-  infoSectionHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  infoSectionTitle: {
-    color: colors.textTertiary,
-    fontSize: typeScale.footnote,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.caption,
-  },
-  refreshButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 32,
-    minWidth: 32,
-  },
-  infoRow: {
-    gap: 2,
-  },
-  infoLabel: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-  },
-  infoValue: {
-    color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
-  infoValueMono: {
-    color: colors.textSecondary,
-    fontFamily: monoFont,
-  },
-  infoCaption: {
-    color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
-  infoActionRow: {
-    flexDirection: 'row',
+      minHeight: 32,
+      minWidth: 32,
+    },
+    infoRow: {
+      gap: 2,
+    },
+    infoLabel: {
+      color: colors.textTertiary,
+      fontSize: typeScale.caption,
+      fontWeight: fontWeight.medium,
+    },
+    infoValue: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
+    infoValueMono: {
+      color: colors.textSecondary,
+      fontFamily: monoFont,
+    },
+    infoCaption: {
+      color: colors.textSecondary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
+    infoActionRow: {
+      flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
@@ -1210,57 +1300,57 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.container,
+      borderWidth: StyleSheet.hairlineWidth,
+      gap: spacing.sm,
+      padding: spacing.md,
+    },
+    browsePath: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+    },
+    browseList: {
+      gap: spacing.sm,
+    },
+    browseRow: {
+      alignItems: 'center',
+      borderColor: colors.border,
+      borderRadius: radius.container,
+      borderWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row',
+      gap: spacing.sm,
+      minHeight: 48,
+      padding: spacing.sm,
+    },
+    browseEntryButton: {
+      flex: 1,
+      minWidth: 0,
+    },
+    browseEntryName: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      fontWeight: fontWeight.medium,
+    },
+    browseEntryPath: {
+      color: colors.textTertiary,
+      fontSize: typeScale.micro,
+      marginTop: 2,
+    },
+    pillButton: {
+      alignItems: 'center',
+      borderColor: colors.borderStrong,
+      borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.sm,
-    padding: spacing.md,
-  },
-  browsePath: {
-    color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
-  browseList: {
-    gap: spacing.sm,
-  },
-  browseRow: {
-    alignItems: 'center',
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 48,
-    padding: spacing.sm,
-  },
-  browseEntryButton: {
-    flex: 1,
-    minWidth: 0,
-  },
-  browseEntryName: {
-    color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
-  },
-  browseEntryPath: {
-    color: colors.textTertiary,
-    fontSize: typeScale.micro,
-    marginTop: 2,
-  },
-  pillButton: {
-    alignItems: 'center',
-    borderColor: colors.borderStrong,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    justifyContent: 'center',
-    minHeight: 36,
-    minWidth: 72,
-    paddingHorizontal: spacing.md,
-  },
-  pillButtonPrimary: {
-    backgroundColor: colors.cta,
-    borderColor: colors.cta,
-  },
-  pillButtonText: {
+      justifyContent: 'center',
+      minHeight: 36,
+      minWidth: 72,
+      paddingHorizontal: spacing.md,
+    },
+    pillButtonPrimary: {
+      backgroundColor: colors.cta,
+      borderColor: colors.cta,
+    },
+    pillButtonText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
     fontWeight: fontWeight.medium,

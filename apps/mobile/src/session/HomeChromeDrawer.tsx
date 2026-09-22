@@ -51,6 +51,9 @@ import {
   typeScale,
 } from "@/theme/tokens";
 
+import { HomeModeSwitch } from './HomeModeSwitch';
+import type { HomeMode } from './homeViewPreferenceStore';
+
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
 const DRAWER_MAX_WIDTH = 320;
@@ -63,9 +66,12 @@ export function HomeChromeDrawer({
   onOpenSearch,
   onOpenAccounts,
   onOpenDevices,
+  onOpenSharedSession,
   onOpenSettings,
   onLogout,
   loggingOut = false,
+  mode = 'tasks',
+  onModeChange,
   open,
   user,
 }: {
@@ -76,9 +82,12 @@ export function HomeChromeDrawer({
   onOpenSearch(): void;
   onOpenAccounts(): void;
   onOpenDevices(): void;
+  onOpenSharedSession?(): void;
   onOpenSettings(): void;
   onLogout(): void;
   loggingOut?: boolean;
+  mode?: HomeMode;
+  onModeChange?(mode: HomeMode): void;
   open: boolean;
   user: {
     avatar: string | null;
@@ -281,7 +290,7 @@ export function HomeChromeDrawer({
             {
               paddingBottom: insets.bottom,
               paddingLeft: insets.left,
-              paddingTop: insets.top,
+              paddingTop: insets.top + spacing.xl,
               width: panelWidth,
             },
             panelStyle,
@@ -305,6 +314,7 @@ export function HomeChromeDrawer({
           </View>
 
           <View style={styles.divider} />
+          {onModeChange ? <HomeModeSwitch mode={mode} onModeChange={onModeChange} /> : null}
 
           <Pressable
             accessibilityLabel={t("devices.list.a11y.openSearch")}
@@ -333,6 +343,16 @@ export function HomeChromeDrawer({
             <Monitor color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
             <Text numberOfLines={1} style={styles.menuLabel}>{t('devices.management.title')}</Text>
           </Pressable>
+
+          {onOpenSharedSession && <Pressable
+            accessibilityLabel={t('sharedTask.join')}
+            accessibilityRole="button"
+            onPress={onOpenSharedSession}
+            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
+          >
+            <UsersRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+            <Text numberOfLines={1} style={styles.menuLabel}>{t('sharedTask.join')}</Text>
+          </Pressable>}
 
           <Pressable
             accessibilityLabel={t("devices.list.a11y.openSettings")}

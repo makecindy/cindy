@@ -1,6 +1,8 @@
+import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
 import { FAVORITE_HOST_READY, FAVORITE_HOST_REQUEST, FAVORITE_HOST_REPLY, FAVORITE_HOST_CHANGED, type ModelFavoritesHostApi } from '../shared/modelFavoritesSync';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
+import type { LocalPluginOauthRequest, LocalPluginSecretRequest } from '../shared/pluginOauth';
 import { REMOTE_VIEWER } from '../shared/remoteDesktopViewer';
 import type { RoutineInput } from '@cindy/maker-scheduler';
 import {
@@ -14,6 +16,7 @@ import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
+import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
 import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
@@ -3019,6 +3022,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       skills?: import('../main/skillhub/scanner').Skill[];
       sources?: import('../main/skillhub/scanner').SourceReport[];
       pendingCleanups?: Array<{ token: string; name: string }>;
+      learnSkillEnabled?: boolean;
     }> => ipcRenderer.invoke('skillhub:scan', params),
 
     readSkill: (params: {
@@ -3304,6 +3308,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 计算本地 skill 文件夹 hash（30s 缓存在 renderer 侧）
     // manifest 是参与 hash 的文件清单(path + sha256),用于 dirty 排查
+    comparePublished: (params: import('../shared/skillhubPublishComparison').SkillhubPublishComparisonParams): Promise<import('../shared/skillhubPublishComparison').SkillhubPublishComparison> => ipcRenderer.invoke('skillhub:compare-published', params),
+
     getFolderHash: (
       absolutePath: string,
     ): Promise<{
@@ -3442,7 +3448,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uninstall: (
       absolutePath: string,
       skillId?: string,
-    ): Promise<{ success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }> =>
+    ): Promise<
+      | { success: true; cleanupToken?: string } | { success: false; errorCode: string; message: string }> =>
       ipcRenderer.invoke('skillhub:uninstall', { absolutePath, skillId }),
 
     retryUninstallCleanup: (token: string): Promise<{ complete: boolean }> =>
@@ -3856,10 +3863,52 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getCindyMakeSourceStatus: (): Promise<import('../shared/cindyMakeDoctor').MakeSourceStatus> =>
     ipcRenderer.invoke('app:get-cindy-make-source-status'),
+  cindyMakeMerge: (
+    input: import('../shared/cindyMakeMerge').CindyMakeMergeRequest,
+  ): Promise<import('../shared/cindyMakeMerge').CindyMakeMergeState | undefined> =>
+    ipcRenderer.invoke('app:cindy-make-merge', input),
+  getCindyMakeSettings: (): Promise<import('../shared/cindyMakeSettings').CindyMakeSettings> =>
+    ipcRenderer.invoke('app:get-cindy-make-settings'),
+  setCindyMakeSyncLatestBeforeBuild: (
+    enabled: boolean,
+  ): Promise<import('../shared/cindyMakeSettings').CindyMakeSettings> =>
+    ipcRenderer.invoke('app:set-cindy-make-sync-latest-before-build', enabled),
+  getCindyMakeHistory: (
+    selected?: string,
+  ): Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState> =>
+    ipcRenderer.invoke('app:cindy-make-history', selected),
+  actCindyMakeHistory: (
+    runId: string,
+    action: import('../shared/cindyMakeHistory').MakeHistoryAction,
+  ): Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState> =>
+    ipcRenderer.invoke('app:cindy-make-history-action', runId, action),
+  generateCindyMakePersonal: (
+    selection?: import('../shared/cindyMakeHistory').MakeHistoryBuildSelection[],
+  ): Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState> =>
+    ipcRenderer.invoke('app:cindy-make-history-build', selection),
+  cancelCindyMakePersonal: (
+    buildId: string,
+  ): Promise<import('../shared/cindyMakeHistory').CindyMakeHistoryState> =>
+    ipcRenderer.invoke('app:cindy-make-history-cancel-build', buildId),
+  openCindyMakeHistoryBuild: (): Promise<void> =>
+    ipcRenderer.invoke('app:cindy-make-history-open-build'),
+  cindyMakeTest: (
+    sessionId: string,
+    completionId: string,
+    action: import('../shared/cindyMakeSession').CindyMakeTestAction,
+  ): Promise<import('../shared/cindyMakeSession').CindyMakeCompletionMeta> =>
+    ipcRenderer.invoke('app:cindy-make-test', sessionId, completionId, action),
+  getCindyVersions: (): Promise<import('../shared/cindyVersions').CindyVersionsState> =>
+    ipcRenderer.invoke('app:cindy-versions-state'),
+  actCindyVersion: (
+    action: import('../shared/cindyVersions').CindyVersionAction,
+    id: string,
+  ): Promise<import('../shared/cindyVersions').CindyVersionsState> =>
+    ipcRenderer.invoke('app:cindy-versions-action', action, id),
 
   getCindyMakeState: (): Promise<import('../shared/cindyMakeDoctor').CindyMakeGlobalState> =>
     ipcRenderer.invoke('app:get-cindy-make-state'),
-  manageCindyMakeTask: (sessionId: string, action: 'finish' | 'delete'): Promise<void> =>
+  manageCindyMakeTask: (sessionId: string, action: 'end' | 'finish' | 'delete'): Promise<void> =>
     ipcRenderer.invoke('app:manage-cindy-make-task', sessionId, action),
 
   onCindyMakeState: (
@@ -3871,6 +3920,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ) => listener(state);
     ipcRenderer.on('maker:cindy-make:state-changed', wrapped);
     return () => ipcRenderer.removeListener('maker:cindy-make:state-changed', wrapped);
+  },
+  onCindyMakeHistoryChanged: (
+    listener: (ownerStamp?: DataOwnerPushStamp) => void,
+  ): (() => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, ownerStamp: unknown) => {
+      if (ownerStamp === undefined || isDataOwnerPushStamp(ownerStamp)) listener(ownerStamp);
+    };
+    ipcRenderer.on('cindy-make:history-changed', wrapped);
+    return () => ipcRenderer.removeListener('cindy-make:history-changed', wrapped);
   },
 
   openCindyMakeSourceDir: (): Promise<{ success: boolean }> =>
@@ -3895,8 +3953,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runId: string,
   ): Promise<import('../shared/cindyMakeDoctor').MakeTaskWorkspace> =>
     ipcRenderer.invoke('app:prepare-cindy-make-workspace', runId),
-  startCindyMakeTask: (input: import('../shared/cindyMakeDoctor').CindyMakeTaskStart): Promise<string> =>
-    ipcRenderer.invoke('app:start-cindy-make-task', input),
+  startCindyMakeTask: (
+    input: import('../shared/cindyMakeDoctor').CindyMakeTaskStart,
+  ): Promise<string> => ipcRenderer.invoke('app:start-cindy-make-task', input),
   cancelCindyMakeTask: (runId: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:cancel-cindy-make-task', runId),
 
@@ -3907,7 +3966,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('log-upload:settings-get'),
   setLogUploadCrashAuto: (enabled: boolean): Promise<LogUploadSettingsPayload> =>
     ipcRenderer.invoke('log-upload:set-crash-auto', enabled === true),
-  /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
+  /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
   resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
     ipcRenderer.invoke('log-upload:reset-crash-auto'),
   /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
@@ -4135,9 +4194,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('image-cache:cleanup-files', urls),
 
   // ── 媒体总仓存储管理(关于页存储空间卡片)──
+  worktreeRecycle: {
+    list: (): Promise<WorktreeRecycleStatus[]> => ipcRenderer.invoke('worktree-recycle:list'),
+    control: (input: WorktreeRecycleAction): Promise<void> => ipcRenderer.invoke('worktree-recycle:control', input),
+  },
   // 占用统计 / 清理预检(报数)/ 执行清理 / 对账体检。scan 与 cleanup 的
   // draftUrls 由 renderer 从 composerDraftStore 现场收集(main 读不到
   // renderer 内存,草稿附件是合法的零引用 blob,必须随参取证防误删)。
+  dialogueWorkspace: {
+    open: (): Promise<{ success: boolean }> => ipcRenderer.invoke('dialogue-workspace:open'),
+    get: (): Promise<DialogueWorkspaceSettingsState> => ipcRenderer.invoke('dialogue-workspace:get'),
+    choose: (): Promise<DialogueWorkspaceSettingsState> => ipcRenderer.invoke('dialogue-workspace:choose'),
+    reset: (): Promise<DialogueWorkspaceSettingsState> => ipcRenderer.invoke('dialogue-workspace:reset'),
+  },
+
   cindyMediaStorage: {
     /**
      * 本窗口草稿附件 URL 变化时上报(composerDraftStore mutator 尾部调用,
@@ -4328,6 +4398,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     windowsSupport: (enabled) => ipcRenderer.invoke(DESKTOP_LOCAL.WINDOWS_SUPPORT, enabled),
     stop: () => ipcRenderer.invoke(DESKTOP_LOCAL.STOP),
   } satisfies RemoteDesktopApi,
+  sharedTask: {
+    host: (command: import('@cindy/device-link').SharedTaskHostCommand): Promise<unknown> =>
+      ipcRenderer.invoke('maker:shared-task', command),
+    account: (command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown> =>
+      ipcRenderer.invoke('shared-task:account', command),
+  },
   deviceLink: {
     getState: (): Promise<{
       remoteControlEnabled: boolean;
@@ -5382,6 +5458,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Small invalidation push; consumers re-read through list/detail. */
       onChanged: createIpcFanOut('local-db:subagent-runs:changed'),
     },
+    taskTags: {
+      onChanged: createIpcFanOut('local-db:task-tags:changed'),
+      execute: (
+        request: import('@cindy/maker-shared').TaskTagRequest,
+      ): Promise<import('@cindy/maker-shared').TaskTagResult> =>
+        ipcRenderer.invoke('local-db:task-tags:execute', request),
+    },
     projectAliases: {
       list: (): Promise<unknown> => ipcRenderer.invoke('local-db:project-aliases:list'),
       set: (input: { projectKey: string; alias: string }): Promise<unknown> =>
@@ -6060,11 +6143,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Renderer 通过这四个调用合并三路数据 + 触发 desktop 命令 execute。
     // 老 scanSlashCommands 已下线 —— 数据等价于 listAgentSkills, 改名是为了和
     // listAgentCommands / listDesktopCommands 形成清晰的 "三源 + execute" 命名族。
-    listDesktopCommands: (): Promise<{
+    listDesktopCommands: (ctx?: { deviceId?: string }): Promise<{
       success: boolean;
       error?: string;
       commands?: Array<{ kind: 'desktop'; name: string; description: string }>;
-    }> => ipcRenderer.invoke('maker:list-desktop-commands'),
+    }> => ipcRenderer.invoke('maker:list-desktop-commands', ctx),
 
     executeDesktopCommand: (
       name: string,
@@ -6472,6 +6555,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ accepted: boolean }> =>
       ipcRenderer.invoke('maker:resolve-interaction', requestId, decision),
 
+    /** Opens a remote Host's registered OAuth transaction. Returns no authorization material. */
+    assistPluginOauth: (request: LocalPluginOauthRequest): Promise<{ accepted: boolean }> =>
+      ipcRenderer.invoke('plugin-oauth:assist', request),
+    /** Dedicated signed input transport; never uses the ordinary remote invoke API. */
+    submitRemotePluginSecret: (request: LocalPluginSecretRequest): Promise<{ accepted: boolean }> =>
+      ipcRenderer.invoke('plugin-oauth:submit-secret', request),
+    submitRemotePluginConnection: (request: import('../shared/pluginOauth').LocalPluginConnectionRequest): Promise<{ accepted: boolean }> =>
+      ipcRenderer.invoke('plugin-oauth:submit-connection', request),
+
+    /** Ephemeral user-entered device code for this frame's active card; no callback code or token. */
+    pluginOauthDeviceCode: (request: import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeRequest): Promise<import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeView | null> =>
+      ipcRenderer.invoke('plugin-oauth:device-code', request),
+
     /** Local-only Secret handoff; Main verifies this is Cindy's trusted top-level frame. */
     submitPluginSetupInline: (request: {
       requestId: string;
@@ -6832,22 +6928,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:chat-embedding:reset', owner),
 
     // Git safety workflow —— 控制 turn end 自动 XDT snapshot commit。
-    // 默认 false; Codex rewind 按钮跟随该开关显示。
+    // 三态默认只覆盖已有 Git 项目；Codex 对话编辑不依赖此开关。
     gitSafetyGet: (): Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }> => ipcRenderer.invoke('maker:git-safety:get'),
     gitSafetySet: (
-      enabled: boolean,
+      mode: 'off' | 'existing-git' | 'all-projects' | boolean,
     ): Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
-    }> => ipcRenderer.invoke('maker:git-safety:set', enabled),
+    }> => ipcRenderer.invoke('maker:git-safety:set', mode),
     gitSafetyReset: (): Promise<{
+      mode: 'off' | 'existing-git' | 'all-projects';
       autoSnapshotEnabled: boolean;
+      autoInitProjectGit: boolean;
       isCustomized: boolean;
+      defaultMode: 'off' | 'existing-git' | 'all-projects';
       defaultAutoSnapshotEnabled: boolean;
     }> => ipcRenderer.invoke('maker:git-safety:reset'),
 
@@ -7168,7 +7273,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     rewindCommit: (
       sessionId: string,
       clientId: string,
-      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean },
+      opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean; allowFileRestore?: boolean },
     ): Promise<unknown> => ipcRenderer.invoke('maker:rewind:commit', sessionId, clientId, opts),
     fork: (sourceSessionId: string, messageClientId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:fork', sourceSessionId, messageClientId),

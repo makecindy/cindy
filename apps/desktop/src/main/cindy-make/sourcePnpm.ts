@@ -3,6 +3,8 @@ import { constants } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { CindyMakeTaskPreparation } from '../../shared/cindyMakeDoctor.js';
+import { createMakeBuildOutput } from './buildDiagnostic.js';
+import { createMakeBuildLineOutput } from './buildProgress.js';
 
 export function parseMakeDependencyProgress(
   text: string,
@@ -75,8 +77,8 @@ function killTree(child: ChildProcess, environment: NodeJS.ProcessEnv): void {
 
 /**
  * Run pnpm from the same PATH the Make toolchain resolved (system first, managed
- * copy otherwise). Arguments are fixed by callers, never user input; only the tail
- * of the output is kept for the error message.
+ * copy otherwise). Arguments are fixed by callers, never user input; output stays
+ * bounded for diagnostics and the optional scrubbed live-status line.
  */
 export async function runSourcePnpm(
   env: NodeJS.ProcessEnv,
@@ -84,11 +86,12 @@ export async function runSourcePnpm(
   cwd: string,
   signal: AbortSignal,
   onProgress?: (progress: NonNullable<CindyMakeTaskPreparation['dependencies']>) => void,
+  onOutput?: (line: string) => void,
 ): Promise<void> {
   signal.throwIfAborted();
   // Keep progress visible in a non-TTY/CI process, including lifecycle scripts.
   args = ['install', 'fetch'].includes(args[0]) ? [...args, '--reporter=append-only'] : args;
-  if (args.some((arg) => !/^[\w.=-]+$/.test(arg))) {
+  if (args.some((arg) => !/^[\w.:=-]+$/.test(arg))) {
     throw Object.assign(new Error('unsafe pnpm argument'), { code: 'installFailed' });
   }
   const file = await resolvePnpm(env);
@@ -98,6 +101,7 @@ export async function runSourcePnpm(
     throw Object.assign(new Error('unsafe pnpm path'), { code: 'installFailed' });
   }
   await new Promise<void>((resolve, reject) => {
+    const output = createMakeBuildOutput();
     const environment: NodeJS.ProcessEnv = { ...env, CI: '1' };
     const child = batch
       ? spawn(
@@ -121,8 +125,9 @@ export async function runSourcePnpm(
     let tail = '';
     let lastProgress = '';
     let previousProgress: CindyMakeTaskPreparation['dependencies'];
-    const collect = (chunk: Buffer) => {
-      tail = (tail + chunk.toString('utf8')).slice(-OUTPUT_TAIL_CHARS);
+    const collect = (chunk: string) => {
+      output.append(chunk);
+      tail = (tail + chunk).slice(-OUTPUT_TAIL_CHARS);
       if (onProgress && !signal.aborted) {
         const progress = parseMakeDependencyProgress(tail, previousProgress);
         if (progress && JSON.stringify(progress) !== lastProgress) {
@@ -132,16 +137,31 @@ export async function runSourcePnpm(
         }
       }
     };
-    child.stdout?.on('data', collect);
-    child.stderr?.on('data', collect);
+    const lines = [child.stdout, child.stderr].map((stream) => {
+      const lineOutput = createMakeBuildLineOutput(
+        onOutput
+          ? (line) => {
+              if (!signal.aborted) onOutput(line);
+            }
+          : undefined,
+      );
+      stream?.setEncoding('utf8');
+      stream?.on('data', (chunk: string) => {
+        collect(chunk);
+        lineOutput.append(chunk);
+      });
+      return lineOutput;
+    });
     const abort = () => killTree(child, environment);
     signal.addEventListener('abort', abort, { once: true });
     child.once('error', (error) => {
       signal.removeEventListener('abort', abort);
-      reject(Object.assign(error, { code: 'installFailed' }));
+      output.append('\n' + error.message);
+      reject(Object.assign(error, { code: 'installFailed', diagnostic: output.failure() }));
     });
     child.once('close', (code) => {
       signal.removeEventListener('abort', abort);
+      for (const lineOutput of lines) lineOutput.finish();
       if (signal.aborted) {
         reject(Object.assign(new Error('pnpm cancelled'), { code: 'cancelled' }));
         return;
@@ -150,6 +170,7 @@ export async function runSourcePnpm(
         reject(
           Object.assign(new Error(`pnpm exited with ${code}: ${tail.trim()}`), {
             code: 'installFailed',
+            diagnostic: output.failure(code ?? undefined),
           }),
         );
         return;

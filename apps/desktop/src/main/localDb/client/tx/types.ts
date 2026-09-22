@@ -1,4 +1,7 @@
+import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
+
 export type DbTxName =
+  | 'taskTags.execute'
   | 'codex.importMessages'
   | 'claude.importMessages'
   | 'rewind.commit'
@@ -19,6 +22,7 @@ export type DbTxName =
   | 'orca.reconcileInactiveTeamWorkersForLead'
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
+  | 'sessions.setTerminalStatus'
   | 'recentWorkdirs.mergeWindowsIdentity'
   | 'recentWorkdirs.removeWindowsIdentity'
   | 'projectAliases.replaceIdentity'
@@ -340,6 +344,12 @@ export interface SessionsRenameTitleResult {
 export interface SessionsSetStatusArgs {
   sessionIds: string[];
   status: 'active' | 'archived';
+  closeSharedTasks?: boolean;
+}
+
+export interface SessionsSetTerminalStatusArgs {
+  sessionId: string;
+  status: 'archived' | 'deleted';
 }
 
 /** resume 停泊失败后的原子回落:清失效绑定并把边界改成全量交接。 */
@@ -610,6 +620,8 @@ export interface BotsCreateProfileArgs {
 
 export interface BotsUpdateProfileArgs {
   id: string;
+  /** Explicit settings changes also update the permanent chat in this transaction. */
+  canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;
   description?: string;
   avatar?: string;
@@ -716,6 +728,8 @@ export interface BotsFinishRuntimeArgs {
   eventPayloadJson: string;
 }
 export interface BotsFinishDelegationArgs {
+  expectedRunSequence?: number;
+  expectedExecution?: { instanceId: string; generation: number };
   delegationId: string;
   status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
   resultSummary: string | null;
@@ -727,6 +741,8 @@ export interface BotsFinishDelegationArgs {
 
 export interface BotsFinishDelegationResult {
   id: string;
+  targetBotId: string | null;
+  runSequence: number;
   parentSessionId: string | null;
   childSessionId: string | null;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
@@ -1169,8 +1185,10 @@ export type DbTxArgsByName = {
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
+  'sessions.setTerminalStatus': SessionsSetTerminalStatusArgs;
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
+  'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
@@ -1241,8 +1259,10 @@ export type DbTxResultByName = {
   'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
+  'sessions.setTerminalStatus': SessionsSetStatusResultItem;
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
+  'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
     projectKey: string;
     alias: string;

@@ -14,6 +14,7 @@
  */
 
 import { installResponseGuard } from './response-guard.js';
+import { collectRecoverableBody } from './oversized-attachments.js';
 import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -667,10 +668,11 @@ function respondRequestTooLarge(opts: {
   /** Content-Length 预检命中时的声明字节数;流式守卫命中时为 null。 */
   declaredBytes: number | null;
   receivedBytes: number;
-  reason?: 'request_body_too_large';
+  reason?: 'request_body_too_large' | 'attachment_recovery_storage_exhausted';
 }): void {
   const { req, res, logger } = opts;
-  logger.warn?.('✖ request body exceeds proxy limit → 413', {
+  const storageExhausted = opts.reason === 'attachment_recovery_storage_exhausted';
+  logger.warn?.(storageExhausted ? 'attachment recovery has insufficient temporary disk space → 507' : '✖ request body exceeds proxy limit → 413', {
     reqId: opts.reqId,
     method: opts.method,
     url: opts.url,
@@ -683,10 +685,10 @@ function respondRequestTooLarge(opts: {
     error: {
       type: 'proxy_error',
       reason: opts.reason ?? 'request_body_too_large',
-      message: `request body too large: ${opts.declaredBytes ?? `>${opts.receivedBytes}`} bytes exceeds proxy limit of ${opts.limitBytes} bytes`,
+      message: storageExhausted ? 'Not enough free disk space to recover this request. Free disk space and retry; the original conversation is unchanged.' : `request body too large: ${opts.declaredBytes ?? `>${opts.receivedBytes}`} bytes exceeds proxy limit of ${opts.limitBytes} bytes`,
     },
   }));
-  res.writeHead(413, {
+  res.writeHead(storageExhausted ? 507 : 413, {
     'content-type': 'application/json',
     'content-length': String(payload.length),
     connection: 'close',
@@ -2065,6 +2067,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
+    let recoverOversized: ReturnType<NonNullable<ProxyOptions['oversizedRequestRecovery']>> = null;
+    // Capture the owner before receiving bytes. Compressed/opaque bodies retain
+    // their existing behavior; recovery must never interpret compressed JSON.
+    if (contentType.toLowerCase().startsWith('application/json') && !req.headers['content-encoding']) {
+      try { recoverOversized = opts.oversizedRequestRecovery?.(requestCtx) ?? null; }
+      catch { /* No stable owner: retain the existing bounded request path. */ }
+    }
     let requestGuard: ReturnType<NonNullable<ProxyOptions['requestGuard']>>;
     try {
       requestGuard = opts.requestGuard?.(requestCtx) ?? null;
@@ -2197,7 +2206,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 只有 chunked 上传才落到 collectRequestBody 的流式守卫)。
     // 注意读原始 req.headers —— flattenRequestHeaders 会剥掉 content-length(转发时重算)。
     const declaredBytes = Number(req.headers['content-length'] ?? '');
-    if (Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
+    if (!recoverOversized && Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
       respondRequestTooLarge({
         req, res, logger, reqId, method, url, headers,
         limitBytes: maxBodyBytes,
@@ -2208,14 +2217,33 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
 
     let rawBody: Buffer;
+    const recoveryAbort = new AbortController();
+    const abortRecovery = () => recoveryAbort.abort();
+    res.once('close', abortRecovery);
     try {
-      rawBody = await collectRequestBody(req, requestIngressBytes);
+      rawBody = recoverOversized
+        ? await collectRecoverableBody(req, maxBodyBytes, async body => {
+            try {
+              const recovered = await recoverOversized!(body, maxBodyBytes);
+              if (recovered) logger.info?.('oversized attachments preserved outside request', {
+                reqId, originalBytes: body.bytes, recoveredBytes: recovered.length,
+              });
+              return recovered;
+            } catch (error) {
+              if (error instanceof Error && error.message === 'RECOVERY_STORAGE_EXHAUSTED') throw error;
+              // Do not leak paths, payloads or credentials in recovery errors.
+              logger.warn?.('oversized attachment recovery failed', { reqId });
+              return null;
+            }
+          }, recoveryAbort.signal)
+        : await collectRequestBody(req, requestIngressBytes);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg === 'REQUEST_TOO_LARGE') {
+      if (msg === 'REQUEST_TOO_LARGE' || msg === 'RECOVERY_STORAGE_EXHAUSTED') {
         respondRequestTooLarge({
           req, res, logger, reqId, method, url, headers,
           limitBytes: maxBodyBytes,
+          reason: msg === 'RECOVERY_STORAGE_EXHAUSTED' ? 'attachment_recovery_storage_exhausted' : 'request_body_too_large',
           declaredBytes: null,
           receivedBytes: (err as { receivedBytes?: number }).receivedBytes ?? 0,
         });
@@ -2225,6 +2253,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       res.writeHead(400);
       res.end();
       return;
+    } finally {
+      res.off('close', abortRecovery);
     }
 
     if (requestGuard) {
@@ -3103,6 +3133,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       if (!normalized) return 0;
       provenWebSocketHandshakes.delete(normalized);
       return disconnectWebSocketsForThread(normalized);
+    },
+    hasProvenWebSocketForThread(threadId) {
+      const normalized = threadId.trim();
+      return normalized !== '' && provenWebSocketHandshakes.has(normalized);
     },
     async dispose() {
       logger.debug?.('anthropic-compat-proxy disposing', { inflight });

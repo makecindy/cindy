@@ -15,7 +15,7 @@
  * 捕获用的 spy / 数组放进 vi.hoisted —— vi.mock 工厂被提升到文件顶,不能引用普通顶层变量。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => {
   const updateSetCalls: Array<Record<string, unknown>> = [];
@@ -24,10 +24,13 @@ const h = vi.hoisted(() => {
   // 需要非默认结果（no-op/MAX updatedAt）的测试先 push 目标行再调函数。
   const selectResults: Array<Array<Record<string, unknown>>> = [];
   const updateErrors: unknown[] = [];
+  const route = { row: null as Record<string, unknown> | null };
 
   const makeUpdateChain = () => {
     const chain: Record<string, unknown> = {};
+    let update: Record<string, unknown> = {};
     chain.set = (payload: Record<string, unknown>) => {
+      update = payload;
       updateSetCalls.push(payload);
       // 自动填充"UPDATE 落地"场景（验证 SELECT 返回该行，广播触发）。
       // 若测试预先 push 了结果，队列非空，跳过自动填充，使用预设值。
@@ -38,7 +41,14 @@ const h = vi.hoisted(() => {
     };
     chain.where = () => {
       const error = updateErrors.shift();
-      return error === undefined ? Promise.resolve(undefined) : Promise.reject(error);
+      const committed = error === undefined ? Promise.resolve(undefined) : Promise.reject(error);
+      return Object.assign(committed, {
+        returning: () => committed.then(() => {
+          if (!route.row) return [];
+          Object.assign(route.row, update);
+          return [{ ...route.row }];
+        }),
+      });
     };
     return chain;
   };
@@ -66,6 +76,7 @@ const h = vi.hoisted(() => {
     updateSetCalls,
     selectResults,
     updateErrors,
+    route,
     fakeDb: {
       update: vi.fn(() => makeUpdateChain()),
       select: vi.fn(() => makeSelectChain()),
@@ -79,8 +90,18 @@ vi.mock('electron', () => ({
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: h.webContentsSend } }],
   },
 }));
+// These broadcast fixtures represent mounted, trusted app windows.
+vi.mock('../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
+  isTrustedAppRendererWindow: (w: { isDestroyed: () => boolean }) => !w.isDestroyed(),
+}));
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+// Route admission is injected into the switch handler; this fixture exercises
+// persistence and projection without loading live provider credentials.
+vi.mock('../maker-host/model-route-guard-live.js', () => ({
+  shouldApplyExclusiveProviderRerouteLive: vi.fn(() => false),
 }));
 // 被 sessions.ts 顶层 import 但与本测试无关的副作用模块,全部 stub 掉避免触碰 electron app 路径。
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
@@ -109,7 +130,21 @@ import {
   clearSessionContextInDb,
   touchUserSendInDb,
   persistSessionFields,
+  applyAgentSwitchToSessionRow,
+  broadcastSessionPatched,
 } from '../localDb/ipc/sessions.js';
+import { setSessionRuntimeProjector } from '../localDb/mapper';
+import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion';
+import {
+  clearAllSessionRuntimeControlStates, projectSessionRuntimeControl, recordUserSessionRuntimeMutation,
+  type SessionRuntimeProfile,
+} from '../maker-ipc/sessionRuntimeControl';
+import {
+  applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, performSessionAgentSwitch,
+  type MakerSessionAgentSwitchHandlerDeps, type PublicAgentSwitchIntent,
+} from '../maker-ipc/sessionAgentSwitchHandler';
+import { resolveComposerModelSelection } from '../../renderer/components/new-chat/composerModelSelection';
+import { createSessionSnapshotPatchBuffer } from '../../renderer/features/cc-agent/lib/sessionSnapshotPatchBuffer';
 import {
   backgroundTurnPredatesSessionClear,
   noteSessionClearBoundary,
@@ -117,12 +152,154 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tapWindowBroadcast.mockReset();
   h.ownerCurrent = true;
   h.captureOwnerScope = false;
   h.upsertRecentWorkdir.mockResolvedValue(true);
   h.updateSetCalls.length = 0;
   h.selectResults.length = 0;
   h.updateErrors.length = 0;
+  h.route.row = null;
+});
+
+afterEach(() => {
+  setSessionRuntimeProjector(null);
+  clearAllSessionRuntimeControlStates();
+});
+
+describe('cross-agent committed model projection', () => {
+  const profiles: SessionRuntimeProfile[] = [
+    { agentKind: 'claude-code', model: 'glm-5.3-flash', providerId: 'xd', effort: 'high', fastMode: false },
+    { agentKind: 'codex', model: 'gpt-6', providerId: 'openai', effort: 'medium', fastMode: true },
+    { agentKind: 'pi', model: 'grok-4.6', providerId: 'xai', effort: 'low', fastMode: false },
+  ];
+
+  function harness(initial: SessionRuntimeProfile) {
+    const id = 'switch-projection';
+    h.route.row = { id, ...initial, agentKind: makerToDbAgentKind(initial.agentKind) };
+    setSessionRuntimeProjector((session) => projectSessionRuntimeControl(session.id, {
+      agentKind: dbToMakerAgentKind(session.agentKind), model: session.model,
+      providerId: session.providerId ?? null, effort: session.effort as SessionRuntimeProfile['effort'], fastMode: session.fastMode,
+    }));
+    const pending = createPendingAgentSwitchRegistry();
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches: pending,
+      getSessionRow: async () => ({
+        id, agentKind: String(h.route.row!.agentKind), model: String(h.route.row!.model),
+        providerId: h.route.row!.providerId as string | null, status: 'active',
+        remoteHostId: null, orcaRole: null, sdkSessionId: null,
+      }),
+      getLiveSession: () => null,
+      closeSession: vi.fn(async () => {}),
+      listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: applyAgentSwitchToSessionRow,
+      setSessionProvider: vi.fn(),
+      insertBoundaryMessage: vi.fn(async () => 'boundary'),
+      applyResumeFallbackAtomically: vi.fn(async () => {}),
+      setPendingHandoff: vi.fn(),
+      bootstrapSwitchedSession: vi.fn(async () => {}),
+      withCloseSuppressed: (_id, fn) => fn(),
+      onPendingSwitchChanged: (sessionId, intent) => {
+        if (intent) recordUserSessionRuntimeMutation(sessionId);
+        broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
+      },
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+    type Snapshot = {
+      agentKind: string; model: string; providerId: string | null; effort: SessionRuntimeProfile['effort'];
+      fastMode: boolean; runtimeEffective: SessionRuntimeProfile; agentSwitchIntent: PublicAgentSwitchIntent | null;
+    };
+    let snapshot: Snapshot = { ...initial, agentKind: makerToDbAgentKind(initial.agentKind), runtimeEffective: initial, agentSwitchIntent: null };
+    const buffer = createSessionSnapshotPatchBuffer<Snapshot>();
+    buffer.setSession(id);
+    const displays: ReturnType<typeof resolveComposerModelSelection>[] = [];
+    h.tapWindowBroadcast.mockImplementation((channel, event) => {
+      if (channel !== 'local-db:sessions:patched') return;
+      buffer.stage(id, event.patch);
+      snapshot = buffer.merge(id, snapshot);
+      const intent = snapshot.agentSwitchIntent;
+      displays.push(resolveComposerModelSelection({
+        current: { ...snapshot, agentKind: dbToMakerAgentKind(snapshot.agentKind) },
+        effective: snapshot.runtimeEffective,
+        intent: intent ? { ...intent, target: intent.targetAgentKind, effort: intent.effort as SessionRuntimeProfile['effort'] } : null,
+      }));
+      buffer.acknowledgeCommitted(id, snapshot);
+    });
+    return {
+      deps, pending, displays, snapshot: () => snapshot,
+      choose: (profile: SessionRuntimeProfile) => performSessionAgentSwitch(deps, {
+        sessionId: id, targetAgentKind: profile.agentKind, model: profile.model,
+        providerId: profile.providerId, effort: profile.effort, fastMode: profile.fastMode,
+      }),
+      send: () => applyPendingAgentSwitchIfIdle(deps, id),
+    };
+  }
+
+  it.each(profiles.flatMap((from) => profiles.filter((to) => to.agentKind !== from.agentKind).map((to) => ({ from, to }))))(
+    'publishes every model axis before clearing $from.agentKind → $to.agentKind', async ({ from, to }) => {
+      const h = harness(from);
+      await h.choose(to);
+      expect(h.displays.at(-1)).toEqual({ current: from, display: to, pending: true });
+      await h.send();
+      expect(h.snapshot()).toMatchObject({ model: to.model, runtimeEffective: to, agentSwitchIntent: null });
+      expect(h.displays.at(-1)).toEqual({ current: to, display: to, pending: false });
+      expect(h.displays.every((frame) => JSON.stringify(frame.display) === JSON.stringify(to))).toBe(true);
+      // Every frame after commit has the new profile, even before intent cleanup.
+      const pushed = h.displays.find((frame) => frame.current.model === to.model);
+      expect(pushed?.current).toEqual(to);
+    },
+  );
+
+  it('applies only the last of repeated cross-agent choices before send, then supports repeated sends', async () => {
+    const h = harness(profiles[0]);
+    await h.choose(profiles[1]);
+    await h.choose(profiles[2]);
+    const final = { ...profiles[1], model: 'gpt-6-astra', providerId: 'xd', fastMode: false };
+    await h.choose(final);
+    expect(h.deps.insertBoundaryMessage).not.toHaveBeenCalled();
+    await h.send();
+    expect(h.deps.insertBoundaryMessage).toHaveBeenCalledTimes(1);
+    expect(h.displays.at(-1)?.display).toEqual(final);
+    for (const profile of [profiles[2], profiles[0], profiles[1]]) {
+      await h.choose(profile);
+      await h.send();
+      expect(h.displays.at(-1)).toEqual({ current: profile, display: profile, pending: false });
+    }
+  });
+
+  it('does not erase a newer choice to the same target agent while the first switch commits', async () => {
+    const h = harness(profiles[0]);
+    const newer = { ...profiles[2], model: 'another-pi-model', providerId: 'other-source', effort: 'high' as const };
+    await h.choose(profiles[2]);
+    let release!: () => void;
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+    const persist = h.deps.applyAgentSwitchToDb;
+    h.deps.applyAgentSwitchToDb = async (sessionId, patch) => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      await persist(sessionId, patch);
+    };
+    const send = h.send();
+    await enteredPromise;
+    await h.choose(newer);
+    release();
+    await send;
+    expect(h.pending.get('switch-projection')?.model).toBe(newer.model);
+    expect(h.displays.at(-1)).toEqual({ current: profiles[2], display: newer, pending: true });
+  });
+
+  it('retains the selection after a failed commit and converges on retry', async () => {
+    const test = harness(profiles[0]);
+    await test.choose(profiles[2]);
+    h.updateErrors.push(new Error('write failed'));
+    await test.send();
+    expect(test.snapshot().runtimeEffective).toEqual(profiles[0]);
+    expect(test.displays.at(-1)?.display).toEqual(profiles[2]);
+    expect(test.pending.get('switch-projection')).toBeDefined();
+    await test.send();
+    expect(test.displays.at(-1)).toEqual({ current: profiles[2], display: profiles[2], pending: false });
+  });
 });
 
 describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收敛)', () => {
@@ -157,6 +334,8 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
   });
 
   it.each([
+    { source: 'desktop', workspaceKind: 'project', remoteHostId: null, orcaRole: 'worker' },
+    { source: 'plugin', workspaceKind: 'project', remoteHostId: null, orcaRole: 'worker' },
     { source: 'scheduler', workspaceKind: 'project', remoteHostId: null },
     { source: 'desktop', workspaceKind: 'dialogue', remoteHostId: null },
     { source: 'desktop', workspaceKind: 'project', remoteHostId: 'ssh-host' },

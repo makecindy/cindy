@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
@@ -22,7 +22,7 @@ describe('mobile Home connection feedback', () => {
   });
 
   it('wires Home itself to the shared recovery indicator instead of an unconditional retry button', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     expect(source).toContain('resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError)');
     expect(source).toContain('deviceUnresponsive: homeDeviceRecovery,');
     expect(source).toContain('const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility(');
@@ -33,7 +33,7 @@ describe('mobile Home connection feedback', () => {
     const hydrate = source.slice(source.indexOf('const hydrateDeviceSessions = useCallback('), source.indexOf('const probeRevokedDeviceAccess'));
     expect(hydrate.indexOf("updateDeviceConnectionState(device.deviceId, 'syncing')")).toBeLessThan(hydrate.indexOf('const promise = hydrateDeviceSessionsOnce('));
     expect(source).toContain('useDelayedConnectionNotice(showConnectionRow)');
-    const row = source.slice(source.indexOf('{showConnectionNotice ? ('), source.indexOf('<SectionList'));
+    const row = source.slice(source.indexOf('{showConnectionNotice ? ('), source.indexOf('</ConnectionNoticeOverlay>'));
     expect(row).toMatch(/showHomeSyncAction\s*\?\s*<Pressable/);
     const progress = row.slice(row.indexOf(': showHomeRecoveryProgress ?'));
     expect(progress).toContain('<ConnectionRecoveryProgress');
@@ -155,7 +155,7 @@ describe('mobile Home startup reads', () => {
 
 describe('mobile home desktop-first surface', () => {
   it('surfaces durable logout failures from the home drawer', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     const logoutStart = source.indexOf('const logout = useCallback');
     const logoutBody = source.slice(
       logoutStart,
@@ -179,10 +179,10 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('keeps the home list leaner than device detail surfaces', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     const removedListTokenPrefix = 'home' + 'List';
 
-    expect(source).toContain('export default function HomeScreen()');
+    expect(source).toContain('export function MobileHome(props: MobileHomeProps)');
     expect(source).not.toContain('export default function DevicesScreen()');
     expect(source).not.toContain('styles.deviceChipBadge');
     expect(source).not.toContain('styles.worktreeBadge');
@@ -217,9 +217,15 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('testID="home.displaySettingsButton"');
     expect(source).toContain('<HomeChromeDrawer');
     expect(source).toContain('<HomeHeaderGlassButton');
-    const headerGlass = readSource('src/session/HomeHeaderGlassButton.tsx');
-    expect(headerGlass).toMatch(/from ['"]expo-glass-effect['"]/);
-    expect(headerGlass).toContain('glassEffectStyle="regular"');
+    const headerGlass = readSource('src/session/HomeHeaderGlassButton.ios.tsx');
+    expect(headerGlass).toContain('<NativeChromeButton');
+    const nativeBack = readSource('src/platform/chrome/NativeChromeBackButton.ios.tsx');
+    expect(nativeBack).toContain('<NativeChromeButton');
+    const systemBack = readSource('src/platform/chrome/SystemNavigationBack.tsx');
+    expect(systemBack).toContain('<Stack.Toolbar.Button');
+    expect(systemBack).not.toContain('<Stack.Toolbar.View');
+    expect(systemBack).not.toContain('<NativeChromeButton');
+    expect(headerGlass).not.toContain('expo-glass-effect');
     expect(source).toContain('<HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>');
     expect(source).toContain('</HomeChromeFrost>');
     expect(source).toContain('<HomeNativeStackHeader');
@@ -284,10 +290,14 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain('styles.sessionBadge');
     expect(source).toContain('backgroundColor: colors.surface');
     expect(source).toContain('borderBottomColor: colors.border');
-    expect(source).toContain('colors.homeListFab');
-    // 2026-07-21 通栏回退:FAB 图标退回 XD-Maker 原版 SquarePen(用户定稿),尺寸/描边同回原档。
-    expect(source).toContain('SquarePen,');
-    expect(source).toContain('<SquarePen color={colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />');
+    expect(source).not.toContain('<GlassView');
+    expect(source).toContain('<HomeHeaderGlassButton');
+    const floatingAction = readSource('src/session/HomeNewTaskButton.tsx');
+    expect(source).toContain('<HomeNewTaskButton');
+    expect(floatingAction).toContain('prominent size={HOME_NEW_TASK_SIZE} artworkSize={iconSize.xxl}');
+    // Preserve SquarePen artwork while adopting the shared native action size.
+    expect(floatingAction).toContain('SquarePen');
+    expect(floatingAction).toContain('<SquarePen color={colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />');
     expect(source).not.toContain('<Send');
     expect(source).not.toContain('function HomeNewChatGlyph');
     expect(source).not.toContain("import Svg, { Path } from 'react-native-svg';");
@@ -295,14 +305,14 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain(`colors.${removedListTokenPrefix}Divider`);
     expect(source).not.toContain(`colors.${removedListTokenPrefix}Shadow`);
     expect(source).toContain('fontWeight: fontWeight.medium');
-    expect(source).toContain('testID="home.newChatButton"');
-    expect(source).toContain("position: 'absolute'");
-    expect(source).toContain('bottom: CINDY_LIST_FAB_BOTTOM');
-    expect(source).toContain('right: CINDY_LIST_GUTTER');
+    expect(floatingAction).toContain('testID="home.newChatButton"');
+    expect(floatingAction).toContain("position: 'absolute'");
+    expect(floatingAction).toContain('bottom: 45 + bottomInset');
+    expect(floatingAction).toContain('right: 20');
   });
 
   it('opens desktop-parity search filters from the search sliders, not display settings', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     const searchBar = readSource('src/session/HomeSearchBar.tsx');
     const filterSheet = readSource('src/session/ConversationSearchFilterSheet.tsx');
 
@@ -326,7 +336,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('uses TapTap blue for the online dot treatment', () => {
-    const homeSource = readSource('app/devices/index.tsx');
+    const homeSource = readSource('src/session/HomeSurface.tsx');
     const primitivesSource = readSource('src/components/MobilePrimitives.tsx');
     const tokenSource = readSource('src/theme/tokens.ts');
     const removedListTokenPrefix = 'home' + 'List';
@@ -346,7 +356,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('mirrors the desktop sidebar Agent identity slot and running treatment', () => {
-    const homeSource = readSource('app/devices/index.tsx');
+    const homeSource = readSource('src/session/HomeSurface.tsx') + readSource('src/session/HomeListVisuals.tsx');
     const vendorIconSource = readSource('src/components/MobileVendorIcon.tsx');
     const agentMarkSource = readSource('src/components/MobileAgentMark.tsx');
     const providerMarkSource = readSource('src/session/MobileProviderMark.tsx');
@@ -411,7 +421,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('uses desktop-style attention dots for unread automation on the home list without extra row text', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     const scheduleIndexSource = readSource('src/session/scheduleIndex.ts');
 
     expect(source).toContain('const [scheduleIndex, setScheduleIndex]');
@@ -458,7 +468,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('gives device chips stable per-device e2e anchors for multi-device local smoke', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     const maestroSource = readSource('scripts/maestro-e2e.mjs');
     const localSmokeSource = readSource('scripts/local-device-link-smoke.mjs');
     const deviceDetailFlow = readSource('e2e/maestro/session_list_controls.yaml');
@@ -474,7 +484,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('keeps device management in the drawer and scope selection direct', () => {
-    const home = readSource('app/devices/index.tsx');
+    const home = readSource('src/session/HomeSurface.tsx');
     const drawer = readSource('src/session/HomeChromeDrawer.tsx');
     const management = readSource('app/devices/manage.tsx');
 
@@ -488,7 +498,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('scopes multi-device connection feedback to the affected device chip', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
 
     expect(source).toContain("type HomeDeviceConnectionState = 'idle' | 'syncing' | 'failed';");
     expect(source).toContain('const [rawDeviceConnectionStates, setDeviceConnectionStates]');
@@ -512,7 +522,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('keeps project and session rows at desktop sidebar information density', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     const automationTimerSource = readSource('src/session/AutomationTimerIcon.tsx');
     const desktopProjectNode = readSource(
       '../../apps/desktop/src/renderer/features/cc-agent/sidebar/sections/ProjectNode.tsx',
@@ -524,7 +534,7 @@ describe('mobile home desktop-first surface', () => {
     const sessionRowEnd = source.indexOf('function SessionStatusMark', sessionRowStart);
     const sessionRowSource = source.slice(sessionRowStart, sessionRowEnd);
     const stylesStart = source.indexOf('const makeStyles');
-    const stylesSource = source.slice(stylesStart);
+    const stylesSource = source.slice(stylesStart) + readSource('src/session/HomeListVisuals.tsx');
 
     expect(desktopProjectNode).toContain('const Chevron = isCollapsed ? ChevronRight : ChevronDown;');
     expect(projectRowSource).toContain('project.title');
@@ -547,7 +557,7 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');
     expect(sessionRowSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
-    expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
+    expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned || !!sharedRole;');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');
@@ -589,7 +599,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('keeps presence global while reconnecting only the visible Home sync scope', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
 
     expect(source).toContain('void loadHome({ visible: false });');
     expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
@@ -601,7 +611,7 @@ describe('mobile home desktop-first surface', () => {
       source.indexOf('// 卸载时取消所有延后中的 schedule-index hydration'),
     );
     expect(preferenceHydration).toContain('homeAccountGenerationRef.current !== expectedAccountGeneration');
-    expect(preferenceHydration).toContain('if (!cancelled) setHomeViewPreferencesHydrated(true);');
+    expect(preferenceHydration).toContain("if (!cancelled) { viewSession.write('preferencesHydrated', true); setHomeViewPreferencesHydrated(true); }");
     expect(source).toContain('const deviceIdentityCachePersistPendingRef = useRef(false);');
     // 重连(connectionEpoch 变化)必须无条件重拉全量设备 REST:presence 只在变化时广播、无全量重放,
     // 后台漏掉的上/下线事件只能靠重连快照兜底；每设备列表 fan-out 再按可见 scope 收窄。
@@ -637,7 +647,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('mergeDeviceViewsWithFreshPresence(');
     expect(source).toContain('markPresenceFresh(presenceFreshnessRef.current, lastPresenceSnapshot.deviceId);');
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
-    expect(source).toContain('progressViewOffset={chromeHeight}');
+    expect(source).toContain('progressViewOffset={residentList.enabled ? 0 : chromeHeight}');
     expect(source).toContain('onRefresh={() => void loadHome({ visible: true })}');
     expect(source).toContain('onPress={() => void loadHome({ visible: true })}');
     expect(source).toContain('patchDeviceViewsWithPresence(');
@@ -649,7 +659,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('starts the silent list sync on Home focus and Android foreground activation', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
     const silentSync = source.slice(
       source.indexOf('const startSilentHomeSync = useCallback'),
       source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'),
@@ -667,7 +677,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('binds every Home device projection and async continuation to the active account generation', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
 
     // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
     // stores is insufficient: page-local refs/state must disappear before the next paint too.
@@ -696,7 +706,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('does not show the no-device empty state before startup sync settles', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
 
     expect(source).toContain('const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;');
     expect(source).toContain('const initialHomeLoading = !initialHomeSettled && !connectionError;');
@@ -712,7 +722,7 @@ describe('mobile home desktop-first surface', () => {
   });
 
   it('renders the remote-access onboarding guide for the no-device empty state', () => {
-    const source = readSource('app/devices/index.tsx');
+    const source = readSource('src/session/HomeSurface.tsx');
 
     // 无可控制电脑时不再是一句话空态,而是产品模式引导(按 reason 分场景 + 云端 Cindy 预告);
     // 启动同步失败(initialHomeError)仍走同步失败空态,不冒充引导。
@@ -723,7 +733,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('testID="home.remoteAccessGuide"');
     // 引导态没有可筛选的对话:表头退化为纯品牌标题(无下拉菜单),新建 FAB 不渲染。
     expect(source).toContain('{showRemoteGuide ? (');
-    expect(source).toContain("{showRemoteGuide || taskSuggestionsPending || taskSuggestionsMode === 'empty' ? null : (");
+    expect(source).toContain("{newSessionInSystemBar || showRemoteGuide || taskSuggestionsPending || taskSuggestionsMode === 'empty' ? null : (");
 
     const guideSource = readSource('src/components/RemoteAccessGuide.tsx');
     // 文案已 i18n 化,断言改查 zh-CN catalog(单一事实源);源码只保留结构/交互契约。
@@ -741,5 +751,33 @@ describe('mobile home desktop-first surface', () => {
     // 未来形态预告:云端 Cindy 上线后手机版可脱离电脑直接使用。
     expect(t('deviceLink.cloudTeaserTitle')).toBe('云端 Cindy 筹备中');
     expect(t('deviceLink.cloudTeaserCopy')).toBe('上线后无需电脑，手机版即可直接使用。');
+  });
+});
+
+describe('home menu native header ownership', () => {
+  it('hosts the Duo top-left menu inside the native bar instead of under its touch surface', () => {
+    const home = readSource('src/session/HomeSurface.tsx');
+    const header = readSource('src/platform/chrome/HomeNativeStackHeader.tsx');
+    expect(home).toContain("nativeHomeHeader && homeGeometry.barEdge !== 'none'");
+    expect(home).toContain('keepMenuTopLeft={keepMenuTopLeft}');
+    expect(home).not.toContain('{keepMenuTopLeft ? (');
+    const leftToolbar = header.split('<Stack.Toolbar placement="left">')[1].split('</Stack.Toolbar>')[0];
+    expect(leftToolbar).toContain('<Stack.Toolbar.View hidesSharedBackground>');
+    expect(leftToolbar).toContain('onPress={onOpenMenu}');
+    expect(leftToolbar).toContain('testID="home.chromeMenu"');
+    // Ordinary system toolbar actions keep their native adaptation.
+    expect(leftToolbar).toContain('<Stack.Toolbar.Button');
+  });
+});
+
+describe('home menu presentation', () => {
+  it('keeps iOS on the left drawer instead of shadowing it with a bottom sheet', () => {
+    expect(existsSync(resolve(process.cwd(), 'src/session/HomeChromeDrawer.ios.tsx'))).toBe(false);
+    const drawer = readSource('src/session/HomeChromeDrawer.tsx');
+    expect(drawer).toContain('translateX:');
+    expect(drawer).toContain('FullWindowOverlay');
+    expect(drawer).toContain('onPress={onClose}');
+    expect(drawer).toContain('Gesture.Pan()');
+    expect(drawer).not.toContain('ComposerSheet');
   });
 });

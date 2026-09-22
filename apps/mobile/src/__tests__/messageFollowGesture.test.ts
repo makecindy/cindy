@@ -21,7 +21,7 @@ const callbackNames = [
   'scrollToBottom', 'handleScroll', 'handleHistoryTouchStart', 'maybeTriggerHistoryTouch',
   'handleHistoryTouchMove', 'handleHistoryTouchEnd', 'handleHistoryTouchCancel',
   'handleScrollBeginDrag', 'handleScrollEndDrag', 'handleMomentumScrollBegin',
-  'handleMomentumScrollEnd', 'handleContentSize',
+  'handleMomentumScrollEnd', 'handleContentSize', 'reconcileReopeningAnchor',
 ] as const;
 type CallbackName = typeof callbackNames[number];
 const declarations = renderer!.body!.statements.filter((node) => (
@@ -49,6 +49,8 @@ const renderOpacity = new Function('listRevealed', 'initialRevealProgress',
 function harness() {
   const ref = <T>(current: T) => ({ current });
   const state = {
+    historyActiveRef: ref(true),
+    historyPositioningRef: ref(true),
     nearBottomRef: ref(true), readingOlderRef: ref(false),
     isDraggingRef: ref(false), isMomentumScrollingRef: ref(false),
     historyTouchStartYRef: ref<number | null>(null), historyTouchTriggeredRef: ref(false),
@@ -59,6 +61,9 @@ function harness() {
     programmaticScrollSettleAtRef: ref(0), mvcpSettleAtRef: ref(0),
     tailFollowerRef: ref(null),
     initialAnchorDoneRef: ref(true),
+    reopeningAnchorRef: ref<{ anchor: { key: string; viewportOffset: number }; expires: number; corrections: number } | null>(null),
+    reopeningFrameRef: ref<number | null>(null),
+    readingPositionActiveRef: ref(() => true),
     initialRevealAnimationRef: ref<{ stop: () => void } | null>({ stop: vi.fn() }),
     historyPrependTransactionRef: ref(null), nativeScrollEventSequenceRef: ref(0),
     shareSelectionActiveRef: ref(false),
@@ -69,9 +74,15 @@ function harness() {
     metrics.offsetY = metrics.contentHeight - metrics.viewportHeight;
   });
   const environment = {
+    readingPosition: { write: vi.fn() }, reopeningPosition: undefined,
+    captureCurrentHistoryAnchor: vi.fn((): { key: string; viewportOffset: number } | null => null),
+    getCurrentHistoryTopOffsetAdjustment: vi.fn(() => 0),
+    resolveMobileMessageHistoryAnchorOffset: vi.fn(() => 600),
     ...scrollModel, ...state, createMobileTailFollower, mobileDebugEnabled, mobileDebugLog,
     initialRevealProgress: { setValue: vi.fn() }, setListRevealed: vi.fn(),
     listRef: ref({
+      getState: () => ({ scrollLength: 800, scroll: state.scrollMetricsRef.current.offsetY,
+        data: [{ key: 'saved' }], sizeAtIndex: () => 1000 }),
       scrollToEnd: tailScroll,
       scrollToIndex: vi.fn(),
       scrollToOffset: ({ offset, animated }: { offset: number; animated: boolean }) => {
@@ -96,6 +107,8 @@ function harness() {
   } });
   return {
     ...callbacks, state, tailScroll, scrollEvent,
+    readingPosition: environment.readingPosition,
+    captureCurrentHistoryAnchor: environment.captureCurrentHistoryAnchor,
     initialRevealProgress: environment.initialRevealProgress,
     setListRevealed: environment.setListRevealed,
     handleScrollEndDrag: (event = scrollEvent(state.scrollMetricsRef.current.offsetY)) => (
@@ -114,6 +127,68 @@ beforeEach(() => {
 afterEach(() => { setMobileDebugSink(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  it('ignores scroll and content growth while its retained task is hidden', () => {
+    const h = harness();
+    h.state.historyActiveRef.current = false;
+    h.state.historyPositioningRef.current = false;
+    h.handleScroll(h.scrollEvent(50));
+    h.handleContentSize(400, 2600);
+    settle();
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(1200);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+  it('finishes preload geometry before focus without publishing the offscreen position', () => {
+    const h = harness();
+    h.state.historyActiveRef.current = false;
+    h.handleScroll(h.scrollEvent(700));
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(700);
+    h.handleContentSize(400, 2600);
+    settle();
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(1800);
+    expect(h.setListRevealed).toHaveBeenCalledWith(true);
+    const calls = h.tailScroll.mock.calls.length;
+    h.state.historyActiveRef.current = true;
+    h.runStickToLatestVerify();
+    settle();
+    expect(h.tailScroll).toHaveBeenCalledTimes(calls);
+  });
+  it('saves user movement during an older-page request and its final momentum sample', () => {
+    const h = harness();
+    h.state.readingOlderRef.current = true;
+    h.state.isMomentumScrollingRef.current = true;
+    h.captureCurrentHistoryAnchor.mockImplementation(() => ({
+      key: 'long', viewportOffset: -h.state.scrollMetricsRef.current.offsetY,
+    }));
+    h.handleScroll(h.scrollEvent(600));
+    expect(h.readingPosition.write).toHaveBeenLastCalledWith({
+      anchor: { key: 'long', viewportOffset: -600 }, atEnd: false,
+    });
+    h.handleMomentumScrollEnd(h.scrollEvent(650));
+    expect(h.readingPosition.write).toHaveBeenLastCalledWith({
+      anchor: { key: 'long', viewportOffset: -650 }, atEnd: false,
+    });
+    h.readingPosition.write.mockClear();
+    h.handleScroll(h.scrollEvent(900)); // Layout-only event during prepend.
+    expect(h.readingPosition.write).not.toHaveBeenCalled();
+  });
+  it.each([true, false])('ends bookmark correction after native acknowledgment (focused=%s)', (focused) => {
+    const h = harness();
+    h.state.historyActiveRef.current = focused;
+    h.state.nearBottomRef.current = false;
+    h.state.reopeningAnchorRef.current = {
+      anchor: { key: 'saved', viewportOffset: -20 }, expires: Date.now() + 1500, corrections: 0,
+    };
+    // Reveal timeout is not proof of positioning, and must not block later acknowledgment.
+    h.state.initialRevealAnimationRef.current = null;
+    h.handleScroll(h.scrollEvent(500));
+    expect(h.state.reopeningAnchorRef.current).not.toBeNull();
+    h.reconcileReopeningAnchor(); // A correction is already queued before native acknowledgment.
+    h.handleScroll(h.scrollEvent(600));
+    expect(h.state.reopeningAnchorRef.current).toBeNull();
+    h.handleContentSize(400, 2600);
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
   it('keeps revealed history opaque after a delayed native stop value and keyboard rerenders', () => {
     const h = harness();
     const progress = { value: 0 };

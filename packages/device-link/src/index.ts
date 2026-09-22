@@ -32,4 +32,19 @@ export * from "./fileAccess.js";
 export * from "./filePeerRuntime.js";
 
 export { FILE_PEER_RUNTIME_SOURCE } from "./filePeerRuntimeSource.js";
+export * from "./sharedTask.js";
+export * from "./sharedTaskApi.js";
+export * from "./sharedTaskProbe.js";
 export * from "./modelFavorites.js";
+export * from "./sessionListTransport.js";
+
+export * from "./clipboardSync.js";
+export * from "./clipboardSyncFailure.js";
+export * from "./clipboardTransfer.js";
+
+export * from "./pluginOauth.js";
+export * from "./pluginAuthorization.js";
+export * from "./pluginSecretSubmission.js";
+export * from "./pluginConnectionSubmission.js";
+export * from "./pluginDeviceAuthorization.js";
+export * from "./pluginOauthAuthentication.js";

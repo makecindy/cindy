@@ -525,7 +525,7 @@ export function PiPackagesSection() {
                 </div>
 
                 {expanded && (
-                  <div className="flex flex-col gap-2 border-t border-[var(--settings-theme-card-border)] bg-[var(--surface-subtle)] px-4 py-3">
+                  <div className="flex flex-col gap-2 border-t border-[var(--settings-theme-card-border)] bg-[var(--surface-elevated-soft)] px-4 py-3">
                     <p className="break-all font-mono text-11 text-[var(--settings-section-desc)]">
                       {pkg.source}
                     </p>

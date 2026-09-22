@@ -22,7 +22,6 @@ import { isLegacyGptContextProfile } from './legacy-context-profiles.js';
  */
 
 import {
-  PI_REASONING_EFFORTS,
   isAgentSelectableModel,
   isModelSelectableForNewRoute,
   type Catalog,
@@ -37,51 +36,20 @@ interface ModelCapabilitiesTarget {
   getCapabilities(agent: AgentKind): { availableModels: ModelDescriptor[] };
 }
 
-interface DescriptorProjectionOptions {
-  preserveExplicitPiEfforts?: boolean;
-}
-
-function isOfficialGrok46Id(modelId: string): boolean {
-  return modelId === 'grok-4.6' || modelId.endsWith('/grok-4.6');
-}
-
 interface SeenModelProjection {
   index: number;
   includesUserProvider: boolean;
 }
 
-function hasValidPiReasoningCapabilities(m: CatalogModel): boolean {
-  const efforts = m.reasoningEfforts;
-  return (
-    Array.isArray(efforts) &&
-    efforts.length > 0 &&
-    efforts.every((effort) => PI_REASONING_EFFORTS.includes(effort)) &&
-    typeof m.reasoningDefaultEffort === 'string' &&
-    efforts.includes(m.reasoningDefaultEffort)
-  );
-}
-
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
-function toDescriptor(
-  m: CatalogModel,
-  agent: AgentKind,
-  options: DescriptorProjectionOptions = {},
-): ModelDescriptor {
-  // 缺少或格式错误的 Pi 能力字段继续走旧目录 minimal 兼容补档。合法独立 Pi 目录的
-  // reasoningEfforts 与 BYOM 声明都是协议能力，不能额外公布 models.json 禁用的档位。
-  const efforts =
-    agent === 'pi' &&
-    options.preserveExplicitPiEfforts !== true &&
-    !hasValidPiReasoningCapabilities(m) &&
-    m.efforts.length > 0 &&
-    !m.efforts.includes('minimal')
-      ? (['minimal', ...m.efforts] as const)
-      : m.efforts;
+function toDescriptor(m: CatalogModel): ModelDescriptor {
+  // The resolved catalog owns capability membership. Projection must not add
+  // Harness aliases: Pi materializes models.json from this same effort list.
   const d: ModelDescriptor = {
     id: m.id,
     displayName: m.name,
     contextWindow: m.contextWindow,
-    efforts,
+    efforts: m.efforts,
     defaultEffort: m.defaultEffort,
   };
   // 刻意**不**透传 contextWindowVerified:availableModels 是跨 provider 去重后的扁平表,
@@ -163,12 +131,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       const userProvider = provider.source === 'user';
       if (isLegacyGptContextProfile(provider, m.id)) continue;
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
-      const descriptor = toDescriptor(m, agent, {
-        preserveExplicitPiEfforts:
-          userProvider ||
-          provider.id === 'xd' ||
-          (provider.id === 'xai' && isOfficialGrok46Id(m.id)),
-      });
+      const descriptor = toDescriptor(m);
       const previous = seen.get(m.id);
       if (previous) {
         let merged = out[previous.index];
@@ -212,12 +175,7 @@ export function resolvePiRuntimeModelDescriptor(
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
-      return toDescriptor(model, 'pi', {
-        preserveExplicitPiEfforts:
-          provider.source === 'user' ||
-          provider.id === 'xd' ||
-          (provider.id === 'xai' && isOfficialGrok46Id(model.id)),
-      });
+      return toDescriptor(model);
     }
   }
 

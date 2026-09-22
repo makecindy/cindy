@@ -104,7 +104,7 @@ import {
   retryUnsubscribeAfterWindowGone,
   type DeviceLinkIpcDeps,
 } from '../device-link/ipc';
-import { DeviceLinkError } from '@cindy/device-link';
+import { DeviceLinkError, PLUGIN_OAUTH_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL } from '@cindy/device-link';
 import { invokeWithClosedLinkRecovery } from '../device-link/linkRecovery';
 import { ServerApiError } from '../serverApiClient';
 import {
@@ -165,6 +165,11 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
 }
 
 describe('device-link IPC handlers', () => {
+  it.each([PLUGIN_OAUTH_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL])('never forwards %s from the generic Renderer tunnel', async channel => {
+    const deps = makeDeps();
+    await expect(handleInvoke(deps, 'cloud', channel, [{ op: 'capabilities' }])).rejects.toThrow('PERMISSION_DENIED');
+    expect(deps.invoke).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;

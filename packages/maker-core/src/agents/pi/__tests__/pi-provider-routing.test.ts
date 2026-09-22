@@ -3974,13 +3974,13 @@ describe("Pi provider-aware model routing", () => {
   it.each([
     { input: ["text", "image"] as Array<"text" | "image">, supported: true },
     { input: ["text"] as Array<"text" | "image">, supported: false },
-    { input: undefined, supported: false },
-  ])("uses the native ChatGPT image snapshot for models.json, send and steer: $input", async ({ input, supported }) => {
+    { input: undefined, supported: true },
+  ].flatMap((row) => [true, false].map((inheritModels) => ({ ...row, inheritModels }))))("uses the native image snapshot for models.json, send and steer: $input, inherit=$inheritModels", async ({ input, supported, inheritModels }) => {
     const modelId = "chatgpt/gpt-5.6-sol";
     const agent = new PiAgent(byomDeps(async () => ({
       providers: [{
         id: "openai-codex", sourceProviderId: "openai", name: "ChatGPT",
-        baseUrl: "http://127.0.0.1:9", inheritModels: true,
+        baseUrl: "http://127.0.0.1:9", api: "openai-codex-responses", inheritModels,
         models: [{
           id: modelId, wireId: "gpt-5.6-sol", api: "openai-codex-responses", input,
         }],
@@ -3999,7 +3999,7 @@ describe("Pi provider-aware model routing", () => {
       ));
       expect(config.providers["openai-codex"].models).toEqual([
         expect.objectContaining({
-          id: "gpt-5.6-sol", api: "openai-codex-responses", input: input ?? ["text"],
+          id: "gpt-5.6-sol", api: "openai-codex-responses", input: input ?? ["text", "image"],
         }),
       ]);
       const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -4154,7 +4154,7 @@ describe("Pi provider-aware model routing", () => {
           id: "gateway-vision",
           input: ["text", "image"],
         }),
-        expect.objectContaining({ id: "gateway-unknown", input: ["text"] }),
+        expect.objectContaining({ id: "gateway-unknown", input: ["text", "image"] }),
       ]),
     );
 
@@ -4227,11 +4227,17 @@ describe("Pi provider-aware model routing", () => {
       ),
     ).toBe(false);
 
-    // 能力未知同样 fail closed；活动会话只认启动时写入 models.json 的能力快照。
+    // 未声明能力默认放行图片；活动会话仍只认启动时写入 models.json 的能力快照。
     await handle.setModel!("gateway-unknown", { providerId: null });
-    await expect(handle.send(imageMessage)).rejects.toMatchObject({
-      code: "PI_IMAGE_INPUT_UNSUPPORTED",
-    });
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    await handle.steer!(imageMessage);
+    for (const type of ["prompt", "steer"]) {
+      expect(captured.requests).toContainEqual(expect.objectContaining({
+        type,
+        images: [expect.objectContaining({ type: "image", mimeType: "image/png" })],
+      }));
+    }
     gatewayModels[0]!.supportsImageInput = true;
     await handle.setModel!("gateway-text", { providerId: null });
     await expect(handle.send(imageMessage)).rejects.toMatchObject({
@@ -4477,6 +4483,32 @@ describe("Pi provider-aware model routing", () => {
       await handle.close();
     },
   );
+
+  it("projects only the persisted task library grant into native read context", async () => {
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: "library-native-context", workingDir: cwd, model: "local-model", permissionMode: "ask",
+    });
+    const ref = `library:assets/aa/${"a".repeat(64)}/blob.png`;
+    await handle.setExtraDirs!(["/refs/user", "/refs/library-a"], "/refs/library-a");
+    captured.requests.length = 0;
+    await handle.send({ type: "user", content: ref });
+    const first = String(captured.requests.find((r) => r.type === "prompt")?.message);
+    expect(first).toContain('"libraryRoot":"/refs/library-a"');
+    expect(first).toContain(JSON.stringify({ ref, path: path.join("/refs/library-a", "assets", "aa", "a".repeat(64), "blob.png") }));
+    await handle.setExtraDirs!(["/refs/user", "/refs/library-b"], "/refs/library-b");
+    captured.requests.length = 0;
+    await handle.send({ type: "user", content: ref });
+    const second = String(captured.requests.find((r) => r.type === "prompt")?.message);
+    expect(second).toContain('"libraryRoot":"/refs/library-b"');
+    expect(second).not.toContain("/refs/library-a");
+    await handle.setExtraDirs!(["/refs/user"], null);
+    captured.requests.length = 0;
+    await handle.send({ type: "user", content: ref });
+    const revoked = String(captured.requests.find((r) => r.type === "prompt")?.message);
+    expect(revoked).toContain('"libraryRoot":null');
+    expect(revoked).not.toContain("/refs/library-b");
+    await handle.close();
+  });
 
   it("keeps a leading /skill: command at the prompt start even when Extra Dirs are configured", async () => {
     const agent = new PiAgent(

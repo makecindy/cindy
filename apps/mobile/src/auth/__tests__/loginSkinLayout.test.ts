@@ -40,6 +40,19 @@ function expectBox(actual: LoginStageBox, expected: LoginStageBox) {
 }
 
 describe("loginSkin 750 stage 布局引擎", () => {
+  it('keeps the full login flow inside medium landscape windows', () => {
+    for (const [width, height] of [[800, 600], [900, 680], [760, 480]]) {
+      const surface = resolveLoginSurface(width!, height!);
+      expect(surface.mode).toBe('compact-wide');
+      const left = surface.offsetX + surface.loginX * surface.scale;
+      const top = surface.offsetY + surface.loginY * surface.scale;
+      const scale = surface.scale * surface.loginGroupScale;
+      expect(left).toBeGreaterThanOrEqual(width! / 2);
+      expect(left + 680 * scale).toBeLessThanOrEqual(width!);
+      expect(top).toBeGreaterThanOrEqual(100);
+      expect(top + 622 * scale).toBeLessThanOrEqual(height!);
+    }
+  });
   it("scale 与 designHeight clamp:vw/750 缩放,dh clamp [600,1800]", () => {
     const layout = resolveLoginStage(390, 844);
     expect(layout.scale).toBeCloseTo(390 / 750, 10);
@@ -285,6 +298,12 @@ describe("loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
   ])("%i×%i 启动立绘按实际视口居中，字标与加载圈不越出屏幕", (width, height) => {
     const surface = resolveLoginSurface(width, height);
     const { scale, splashOffset, cindy, word, spinner } = surface;
+    if (surface.mode === 'compact-wide') {
+      expect(surface.offsetY + cindy.y * scale).toBeGreaterThanOrEqual(0);
+      expect(surface.offsetY + (cindy.y + cindy.h) * scale).toBeLessThanOrEqual(height);
+      expect(surface.offsetY + (spinner.y + spinner.size) * scale).toBeLessThanOrEqual(height);
+      return;
+    }
     expect(surface.mode).toBe("phone");
     const heroTop = (cindy.y + splashOffset) * scale;
     const heroBottom = heroTop + cindy.h * scale;
@@ -324,16 +343,16 @@ describe("loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     // 手机竖屏 → phone
     expect(resolveLoginSurfaceMode(393, 852)).toBe("phone");
     // 手机横屏(landscape 但 w<1000)→ phone 回退(§3.6 条4:不满足横屏断点落竖排)
-    expect(resolveLoginSurfaceMode(852, 393)).toBe("phone");
+    expect(resolveLoginSurfaceMode(852, 393)).toBe("compact-wide");
     // landscape 满足宽但不满足高(600<690)→ phone 回退
-    expect(resolveLoginSurfaceMode(1100, 600)).toBe("phone");
+    expect(resolveLoginSurfaceMode(1100, 600)).toBe("compact-wide");
     // portrait 窄窗(Split View 320pt)→ phone
     expect(resolveLoginSurfaceMode(320, 768)).toBe("phone");
     // 断点边界含等号:恰好 1000×690 → pad-landscape;700×1000 → pad-portrait
     expect(resolveLoginSurfaceMode(1000, 690)).toBe("pad-landscape");
     expect(resolveLoginSurfaceMode(700, 1000)).toBe("pad-portrait");
     // 边界外一点:999×690 landscape → phone;699×1000 portrait → phone
-    expect(resolveLoginSurfaceMode(999, 690)).toBe("phone");
+    expect(resolveLoginSurfaceMode(999, 690)).toBe("compact-wide");
     expect(resolveLoginSurfaceMode(699, 1000)).toBe("phone");
   });
 
@@ -423,9 +442,9 @@ describe("loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     expect(s.scale).toBeCloseTo(393 / 750, 10); // resolveLoginStage 750 stage scale
     // 手机横屏(landscape w<1000)→ phone 回退,非 pad-landscape
     const horiz = resolveLoginSurface(852, 393);
-    expect(horiz.mode).toBe("phone");
-    expect(horiz.loginGroupScale).toBe(1);
-    expect(horiz.phone).toBeDefined();
+    expect(horiz.mode).toBe("compact-wide");
+    expect(horiz.scale * horiz.loginGroupScale * LOGIN_CONTROL.height).toBeGreaterThanOrEqual(44);
+    expect(horiz.phone).toBeNull();
   });
 });
 

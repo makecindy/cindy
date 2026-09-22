@@ -44,6 +44,7 @@ export * from './sessionList.js';
 export * from './sessionListCollapse.js';
 export * from './sessionOperation.js';
 export * from './sessionSelection.js';
+export * from './sharedTask.js';
 export * from './syntheticTrigger.js';
 export * from './subagentObservation.js';
 export * from './subagentWorkspace.js';
@@ -58,3 +59,6 @@ export * from './urlTextBoundary.js';
 export * from './workActivityProjection.js';
 export * from './worktreePaths.js';
 export * from './sessionPrRefs.js';
+export * from './taskTags';
+
+export * from './workingStatus.js';

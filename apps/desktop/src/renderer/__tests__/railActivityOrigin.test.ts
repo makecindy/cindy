@@ -4,11 +4,15 @@ import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { markSessionStarting, clearSessionStarting, resetSessionStartingStoreForTests } from '@/lib/sessionStartingStore';
 import { aggregateRailActivity } from '@/features/cc-agent/sidebar/railActivity';
 import { railPanelStore, type RailLampSession } from '@/features/cc-agent/sidebar/railPanelStore';
 
 afterEach(() => {
   clearRemoteSessionActivity();
+  resetSessionStartingStoreForTests();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
   railPanelStore.setLampScope(null);
 });
 
@@ -47,4 +51,23 @@ it('publishes a source-only scope change but keeps equal snapshots stable', () =
   applyRemoteSessionActivity('a', { sessionId: 'same', phase: 'running' });
   expect(aggregate(railPanelStore.getSnapshot().lampScope!.projectSessions).running).toBe(false);
   expect(aggregate([{ id: 'same' }]).running).toBe(false);
+});
+
+
+it('lights the remote rail during optimistic start only for the known device, then clears', () => {
+  const remote = { id: 'starting', deviceLinkDeviceId: 'a' };
+  remoteProjectsStore.pinSessionOrigin('a', 'starting');
+  markSessionStarting('starting');
+  expect(aggregate([remote]).running).toBe(true);
+  expect(aggregate([{ id: 'starting', deviceLinkDeviceId: 'b' }]).running).toBe(false);
+  expect(aggregate([{ id: 'starting' }]).running).toBe(false);
+  clearSessionStarting('starting');
+  expect(aggregate([remote]).running).toBe(false);
+});
+
+it('does not treat an unowned starting ID or local display-running as remote activity', () => {
+  markSessionStarting('unknown');
+  expect(aggregate([{ id: 'unknown', deviceLinkDeviceId: 'a' }]).running).toBe(false);
+  expect(aggregateRailActivity([{ id: 'local', deviceLinkDeviceId: 'a' }],
+    new Set(['local']), new Set(), new Map(), new Set()).running).toBe(false);
 });

@@ -16,6 +16,11 @@ import type { ServerResponse } from "node:http";
 import type { Transform } from "node:stream";
 
 import type { OutboundProxyResolver } from "./outbound-proxy.js";
+import type { OversizedBody } from './oversized-attachments.js';
+
+/** Capture request ownership synchronously; only overflow invokes the returned recovery. */
+export type OversizedRequestRecovery = (ctx: RequestTransformCtx) =>
+  ((body: OversizedBody, targetBytes: number) => Promise<Buffer | null>) | null;
 
 /**
  * A bounded, request-local compactor used only when the inbound body is over
@@ -274,12 +279,15 @@ export interface ProxyOptions {
   /** 监听 host,默认 127.0.0.1 (loopback only;不要改成 0.0.0.0) */
   host?: string;
   /**
-   * 可选: 单条请求 body 上限(字节),超限回 413。默认 32MB(Claude Code 场景足够)。
+   * 可选: 单条上游请求 body 上限(字节)。默认 32 MiB；无法恢复的超限请求回 413。
    * Codex 走 Responses API 每轮全量重发 thread 历史,长会话(贴图 base64 / 加密
    * reasoning blob)会越过默认值,desktop 侧对 codex proxy 显式调大。
-   * 注意: body 会整段缓冲进内存并 JSON.parse,该值同时就是单请求的内存 / 解析停顿预算。
+   * 正常 body 整段缓冲并 JSON.parse；启用附件恢复后，超限部分先落临时文件，
+   * 恢复到此上限以内才进入普通解析和转发。
    */
   maxRequestBodyBytes?: number;
+  /** Disk-backed, attachment-preserving recovery, only after the normal byte limit is exceeded. */
+  oversizedRequestRecovery?: OversizedRequestRecovery;
   /**
    * Optional compactor for bodies that exceed maxRequestBodyBytes.  Enabling
    * this also permits a bounded ingress window so the compactor can inspect a
@@ -373,6 +381,15 @@ export interface ProxyHandle {
    * 重新走一次真实上游握手，不能继承旧路由的 Cindy 侧保活资格。
    */
   forgetWebSocketStateForThread?(threadId: string): number;
+  /**
+   * 指定 thread 是否仍持有一次成功上游 101 的握手证明（`retryProvenWebSocketUpgrades`）。
+   *
+   * 证明在 Codex 自己关掉连接后仍保留，直到 `forgetWebSocketStateForThread` 或协商
+   * 变化把它撤销。宿主据此判断「该 thread 走的是 thread 级 WS、只是此刻没有活连接」：
+   * 这种 thread 的下一次 upgrade 必然带同一 thread 头，拒绝它就能确定地把 transport
+   * 导回 HTTP；而从未握手过的 thread 只可能挂在匿名/预热连接上，拒绝无从下手。
+   */
+  hasProvenWebSocketForThread?(threadId: string): boolean;
   /** 优雅关闭 —— close listener + 等待 in-flight 请求结束(2s 超时强关) */
   dispose(): Promise<void>;
 }

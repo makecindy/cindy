@@ -146,6 +146,7 @@ export function expandMakerEventBatchPayload(payload: unknown): unknown[] {
  */
 const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:created',
+  'local-db:task-tags:changed',
   'local-db:sessions:patched',
   'local-db:session:error-persisted',
   SESSION_ACTIVITY_CHANNEL,

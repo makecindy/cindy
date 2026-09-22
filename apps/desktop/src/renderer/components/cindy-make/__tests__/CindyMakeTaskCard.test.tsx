@@ -84,10 +84,18 @@ describe('Cindy Make preparation card', () => {
   );
   it('shows all stages and real dependency counts without a fake overall percentage', () => {
     render(<CindyMakeTaskCard report={report} request="original request" />);
-    expect(screen.getAllByRole('listitem')).toHaveLength(5);
+    expect(screen.getAllByRole('listitem')).toHaveLength(6);
     expect(screen.getByRole('status').textContent).toBe('cindyMake.code.phases.dependencies');
     expect(screen.getByText(/dependencyProgress/).textContent).toContain('"downloaded":7');
     expect(screen.queryByRole('progressbar')).toBeNull();
+  });
+  it('shows personal source updating as its own preparation step', () => {
+    render(
+      <CindyMakeTaskCard
+        report={{ ...report, task: { ...report.task!, phase: 'updatingSource' } }}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toBe('cindyMake.code.phases.updatingSource');
   });
   it('shows startup and script activity even when no package counts have arrived', () => {
     const initial = { ...report, task: { ...report.task!, dependencies: undefined } };
@@ -122,7 +130,7 @@ describe('Cindy Make preparation card', () => {
         originSessionId: 'origin',
         runId: 'make-run',
         request: 'original request',
-        title: report.task!.title,
+        title: '[make] Cindy Make: scrolling',
       }),
     );
   });

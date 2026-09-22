@@ -87,7 +87,11 @@ export function LocalSkillControls({ skill, disabled = false, onUninstalled }: {
             className="gap-2 rounded-lg text-13">
             <Trash2 size={14} />{t('skillhub.detail.uninstall')}
           </DropdownMenuItem>
-          {!skill.canUninstall && <p className="max-w-56 px-2 py-1 text-11 text-[var(--text-secondary)]">{t(skill.managedByPlugin ? 'skillhub.management.managedByPlugin' : 'skillhub.management.managedElsewhere')}</p>}
+          {!skill.canUninstall && <p className="max-w-56 px-2 py-1 text-11 text-[var(--text-secondary)]">{t(skill.managedByPlugin
+            ? 'skillhub.management.managedByPlugin'
+            : skill.builtIn
+              ? 'skillhub.management.builtInManaged'
+              : 'skillhub.management.managedElsewhere')}</p>}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

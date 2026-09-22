@@ -10,6 +10,13 @@ import {
   prepareCindyMakeWorkspace,
 } from '../taskWorkspace';
 
+vi.mock('../sourceContent', () => ({
+  contentRef: vi.fn(async () => undefined),
+  snapshotContent: vi.fn(async () => 'f'.repeat(40)),
+  applyContent: vi.fn(async () => {}),
+  taskContentRef: (run: string) => 'refs/cindy-make/tasks/' + run + '/base',
+}));
+
 describe('prepareCindyMakeWorkspace', () => {
   let userData: string;
   beforeEach(async () => {
@@ -22,10 +29,11 @@ describe('prepareCindyMakeWorkspace', () => {
 
   it('branches a new worktree off the personal baseline and installs dependencies', async () => {
     const git = vi.fn(async (_env: NodeJS.ProcessEnv, args: string[]) => {
+      if (args[0] === 'branch' && args[1] === '--show-current') return 'cindy-personal';
       if (args[0] === 'branch' && args[2] === 'cindy-personal') return '  cindy-personal\n';
       if (args[0] === 'branch') return '';
       if (args[0] === 'rev-parse') return 'abcdef1234567\n';
-      if (args[0] === 'worktree') return '';
+      if (args[0] === 'worktree' || args[0] === 'update-ref') return '';
       throw new Error(`unexpected ${args.join(' ')}`);
     });
     const pnpm = vi.fn(async () => undefined);
@@ -65,6 +73,7 @@ describe('prepareCindyMakeWorkspace', () => {
     const git = vi.fn(async (_env: NodeJS.ProcessEnv, args: string[], cwd: string) => {
       if (args[0] === 'branch')
         return args[2] === 'cindy-personal' ? 'cindy-personal' : 'cindy-make/run-2';
+      if (args.includes('--git-common-dir')) return path.join(userData, 'cindy-make/source/.git');
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
         expect(cwd).toBe(worktreePath);
         return 'cindy-make/run-2';
@@ -127,9 +136,10 @@ describe('split Cindy Make workspace preparation', () => {
     try {
       await mkdir(path.join(userData, 'cindy-make', 'source', '.git'), { recursive: true });
       const git = vi.fn(async (_env: NodeJS.ProcessEnv, args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'cindy-personal';
         if (args[0] === 'branch' && args[2] === 'cindy-personal') return 'cindy-personal\n';
         if (args[0] === 'rev-parse') return 'base123\n';
-        if (args[0] === 'worktree') return '';
+        if (args[0] === 'worktree' || args[0] === 'update-ref') return '';
         return '';
       });
       const pnpm = vi.fn(async () => undefined);
@@ -140,12 +150,11 @@ describe('split Cindy Make workspace preparation', () => {
         { processEnvironment: {}, git, pnpm },
       );
       expect(pnpm).not.toHaveBeenCalled();
-      await installCindyMakeWorktree(
-        userData,
-        workspace,
-        new AbortController().signal,
-        { processEnvironment: {}, git, pnpm },
-      );
+      await installCindyMakeWorktree(userData, workspace, new AbortController().signal, {
+        processEnvironment: {},
+        git,
+        pnpm,
+      });
       expect(pnpm).toHaveBeenCalledOnce();
     } finally {
       await rm(userData, { recursive: true, force: true });

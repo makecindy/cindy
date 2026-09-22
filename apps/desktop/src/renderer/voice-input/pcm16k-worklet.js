@@ -11,8 +11,16 @@ class PCM16kWorklet extends AudioWorkletProcessor {
     this.previousSample = 0;
     this.chunkIndex = 0;
     this.active = true;
+    this.disposed = false;
 
     this.port.onmessage = (event) => {
+      if (this.disposed) return;
+      if (event.data?.type === 'dispose') {
+        this.disposed = true;
+        this.active = false;
+        this.pending = [];
+        return;
+      }
       if (event.data?.type === 'config') {
         this.targetSampleRate = event.data.targetSampleRate || 16000;
         this.chunkSamples = Math.max(
@@ -43,6 +51,10 @@ class PCM16kWorklet extends AudioWorkletProcessor {
   }
 
   process(inputs) {
+    // Disconnecting the node does not stop a processor that keeps returning
+    // true. The shared context outlives recordings, so permanent disposal must
+    // explicitly release the processor's active-source lifetime.
+    if (this.disposed) return false;
     const input = inputs[0]?.[0];
     if (!input || input.length === 0) return true;
     if (!this.active) return true;

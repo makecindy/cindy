@@ -1,5 +1,29 @@
+import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerLoginItemIpc } from './login-item-ipc.js';
+import {
+  createLatestSourceVersionReader,
+  sourceChannel,
+} from './cindy-make/latestSourceVersion.js';
+import { refreshCindySourceStatus } from './cindy-make/sourceStatusRefresh.js';
+import {
+  configureUpstreamMerge,
+  actUpstreamMerge,
+  refreshUpstreamMergeProjection,
+} from './cindy-make/upstreamMergeRuntime.js';
+import {
+  configureMakeHistory,
+  getCindyMakeHistory,
+  actCindyMakeHistory,
+  generateHistoryPersonalVersion,
+  cancelHistoryPersonalVersion,
+  openHistoryPersonalBuild,
+  stopMakeHistoryBuild,
+} from './cindy-make/historyRuntime.js';
+import {
+  readCindyMakeSettings,
+  writeCindyMakeSyncLatestBeforeBuild,
+} from './cindy-make/settingsStore.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
 import { codexAccountState } from './maker-host/codex-account-auth.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
@@ -13,7 +37,10 @@ import {
   auditRegisteredWorktrees,
 } from './worktree/recycleMaintenance';
 import { requestWorktreeRecycle } from './worktree/managedRecycle';
-import { patchSessionMetaInDb, recycleSessionWorktreeForStatusChange } from './localDb/ipc/sessions';
+import {
+  patchSessionMetaInDb,
+  recycleSessionWorktreeForStatusChange,
+} from './localDb/ipc/sessions';
 import { tryGetDbClient } from './localDb/client/current';
 import {
   app,
@@ -249,6 +276,11 @@ import {
 } from './im';
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
+import { createAuthCredentialRecovery } from './authCredentialRecovery';
+import {
+  evaluateRelaunchBusyActivity,
+  type RelaunchBusyActivitySources,
+} from './relaunchBusyActivity';
 import { hasPersistedSessionHint } from './authSessionHint';
 import {
   hasExclusiveSharedLegacyUserDataAccess,
@@ -283,7 +315,10 @@ import {
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
-import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
+import {
+  invalidatePiEnvironment,
+  shutdownPiEnvironment,
+} from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
 import {
@@ -321,16 +356,45 @@ import {
   subscribeCindySourceStatus,
 } from './cindy-make/sourcePreparation.js';
 import { broadcastCindyMakeSourceStatus } from './cindy-make/sourceStatusBroadcast.js';
+import { broadcastCindyMakeHistoryChanged } from './cindy-make/historyBroadcast.js';
 import { cindyMakeManager } from './cindy-make/manager.js';
 import { broadcastCindyMakeState } from './cindy-make/stateBroadcast.js';
 import {
   createMakeToolchainEnvironment,
   resolveMakeToolEnvironment,
 } from './cindy-make/toolchainEnvironment.js';
-import { CINDY_MAKE_RUN_ID_PATTERN } from './cindy-make/sourcePaths.js';
+import {
+  CINDY_MAKE_RUN_ID_PATTERN,
+  isCindyMakeManagedWorktreePath,
+} from './cindy-make/sourcePaths.js';
 import { prepareCindyMakeWorkspace } from './cindy-make/taskWorkspace.js';
-import { restoreCindyMakeTaskState, startCindyMakeTask } from './cindy-make/taskRuntime.js';
-import { configureCindyMakeTaskManagement, manageCindyMakeTask } from './cindy-make/taskManagement.js';
+import { restoreCindyMakeTaskState, startCindyMakeTask, configureCindyMakeEditingGuard } from './cindy-make/taskRuntime.js';
+import { registerMakeRemoteResources } from './cindy-make/remoteRuntime.js';
+import {
+  configureCindyMakeTaskManagement,
+  manageCindyMakeTask,
+  refreshCindyMakeTaskIntegration,
+} from './cindy-make/taskManagement.js';
+import {
+  actCindyMakeTest,
+  cindyMakeTestController,
+  configureCindyMakeTestRuntime,
+} from './cindy-make/testRuntime.js';
+import {
+  actCindyVersion,
+  configureCindyVersions,
+  getCindyVersions,
+} from './cindy-make/versionService.js';
+import {
+  deliverCindyVersionOpenEvents,
+  finishCindyVersionStartup,
+  isCindyVersionLaunchPending,
+  watchCindyVersionStartupResult,
+} from './cindy-make/versionStartup.js';
+import {
+  getCindyVersionLockScope,
+  isCindyPersonalRuntime,
+} from './cindy-make/versionRuntimeIdentity.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   collectDatabaseSizeWarningStatus,
@@ -400,6 +464,15 @@ import {
 } from './database-size-warning-settings';
 import { createDatabaseSizeWarningSettingsWatcher } from './database-size-warning-settings-watcher.js';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
+import {
+  createDialogueWorkspaceHandlers,
+  checkDialogueDirectoryWritable,
+  customDialogueWorkspaceRoot,
+} from './dialogue-workspace-ipc.js';
+import {
+  readDialogueWorkspaceSettings,
+  writeDialogueWorkspaceDirectory,
+} from './dialogue-workspace-settings.js';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
   cancelDbSlimmingStartupProgress,
@@ -517,9 +590,14 @@ import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectory
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
+  getDeviceLinkStatus,
+  isSharedTaskAvailable,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
 } from './device-link';
+import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js';
+import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
+import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
@@ -573,10 +651,15 @@ import { listAllowedSkillhubProjectRoots } from './skillhub/allowedProjectRoots'
 import { SkillhubMarketService } from './skillhub/marketService';
 import { skillhubAutoSyncService } from './skillhub/autoSyncService';
 import { rehydrateCloseSuppression } from './maker-host/rehydrateCloseSuppression.js';
+import {
+  builtInSkillDescriptors,
+} from './maker-host/built-in-skills.js';
+import { isCindyLearnSkillEnabled } from './skillhub/activationPreferences';
 // Maker Core 一阶段重构（新链路）—— 静态 import 避免 dynamic import 触发 vite chunking
 // 让 imageProtocol 等需要 app.ready 前注册的模块跑在错误时机。getMaker() 是 lazy 的，
 // 静态 import 不会触发 Maker / Agent 的实例化。
 import {
+  desktopClaudeAuthAdapter,
   getMaker as getMakerCore,
   getMakerIfReady,
   resetMaker,
@@ -670,6 +753,7 @@ import {
   anySessionInTurn,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
+  scheduleDeferredCodexRestart,
   clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
@@ -809,7 +893,8 @@ import { createChatEmbeddingSettingsWatcher } from './maker-host/chat-embedding-
 import {
   readGitSafetySettingsState,
   resetGitSafetySettings,
-  writeGitSafetyAutoSnapshotEnabled,
+  writeGitSafetyMode,
+  type GitSafetyMode,
 } from './maker-host/git-safety-settings-store.js';
 import {
   CHAT_EMBED_MODEL_ID,
@@ -878,8 +963,10 @@ import {
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
+  focusMainWindow as activateMainWindow,
   takePendingDeepLink,
 } from './deepLink.js';
+import { createMakeTestWindowBehavior } from './cindy-make/testWindowBehavior.js';
 import { registerFolderContextMenu } from './folderContextMenu.js';
 import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
 import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
@@ -1215,7 +1302,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     startLearnHost({
       maker,
       broadcast: broadcastLearnEvent,
-      fetchHubSkill: (slug, catalogScope) => fetchHubSkillReference(learnMarketService, slug, catalogScope),
+      fetchHubSkill: (slug, catalogScope) =>
+        fetchHubSkillReference(learnMarketService, slug, catalogScope),
       ...automationGitBaselineHooks,
     });
   } catch (err) {
@@ -1381,8 +1469,8 @@ function scheduleChatEmbeddingRuntimeReconcile(): Promise<void> {
   chatEmbeddingRuntimeReconcile = chatEmbeddingRuntimeReconcile
     .then(async () => {
       if (
-        isChatEmbeddingAvailable()
-        && readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled
+        isChatEmbeddingAvailable() &&
+        readChatEmbeddingSettings(chatEmbeddingDefaultContext()).enabled
       ) {
         attemptStartEmbeddingHost();
       } else {
@@ -1454,7 +1542,7 @@ import {
   keepRecentSync,
   keepRecentSessionCcDebugSync,
   createLogger,
-  writeCcDebugLine,
+  setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
 initLogger();
@@ -1585,10 +1673,10 @@ function markAccountBoundaryAbortedMidTeardown(reason: string): void {
   if (accountBoundaryAbortedMidTeardown !== null) return;
   accountBoundaryAbortedMidTeardown = reason;
   authBoundaryLog.error(
-    `account handover on ${reason} was aborted after teardown had already run — this `
-    + 'account keeps its custom provider catalog cleared and its IM, scheduler, '
-    + 'embedding, Ghost projection and Learn services stopped until the app is '
-    + 'restarted or a later handover succeeds',
+    `account handover on ${reason} was aborted after teardown had already run — this ` +
+      'account keeps its custom provider catalog cleared and its IM, scheduler, ' +
+      'embedding, Ghost projection and Learn services stopped until the app is ' +
+      'restarted or a later handover succeeds',
   );
 }
 
@@ -1970,14 +2058,14 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
       // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
       // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
-      try {
-        await releaseDeviceLinkOwnershipBeforeLogout();
-      } catch (err) {
-        authBoundaryLog.error(
-          `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
-          err,
-        );
-      }
+      await closeSharedTasksBeforeAccountHandover({
+        closeSharedTasks: closeSharedTasksBeforeLogout,
+        releaseOwnership: releaseDeviceLinkOwnershipBeforeLogout,
+        onClosureFailure: () => markAccountBoundaryAbortedMidTeardown(reason),
+        onReleaseFailure: (err) => authBoundaryLog.error(
+          `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`, err,
+        ),
+      });
       await lifecycleDbClientManager.dispose(reason);
     } finally {
       releaseEndedSuppression();
@@ -1994,14 +2082,14 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
   // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
   // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
-  try {
-    await releaseDeviceLinkOwnershipBeforeLogout();
-  } catch (err) {
-    authBoundaryLog.error(
-      `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
-      err,
-    );
-  }
+  await closeSharedTasksBeforeAccountHandover({
+    closeSharedTasks: closeSharedTasksBeforeLogout,
+    releaseOwnership: releaseDeviceLinkOwnershipBeforeLogout,
+    onClosureFailure: () => markAccountBoundaryAbortedMidTeardown(reason),
+    onReleaseFailure: (err) => authBoundaryLog.error(
+      `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`, err,
+    ),
+  });
   try {
     await lifecycleDbClientManager.dispose(reason);
   } finally {
@@ -2035,8 +2123,8 @@ authManager.setProjectionRepairTeardown(teardownGhostProjectionBoundary);
 // mid-relaunch) would otherwise refuse this instance's Subagent launches for as
 // long as the file sits there. Only fences whose owner is gone are dropped, so a
 // concurrent instance genuinely mid-relaunch keeps its own.
-void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agent-home'))
-  .catch((err: unknown) => {
+void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agent-home')).catch(
+  (err: unknown) => {
     piSubagentLog.warn('stale Subagent launch fence cleanup failed (non-fatal):', err);
   },
 );
@@ -3121,6 +3209,61 @@ const updatePresentationRecovery = isUpdateRelaunchCandidate
 // 直接 show 回来,renderer 不重新加载。Cmd+Q / before-quit 时把这个标志置 true,
 // 让窗口 close handler 放行真正的销毁。
 let isQuitting = false;
+const authCredentialRecoveryLog = createLogger('auth-credential-recovery');
+
+function readRelaunchActivitySources(): RelaunchBusyActivitySources {
+  return {
+    anySessionInTurn: () => {
+      const maker = getMakerIfReady();
+      return maker ? anySessionInTurn(maker) : false;
+    },
+    listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
+    anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
+    // run_in_background 的 Bash 不调模型、也不折算 running,前两个来源都看不到它。
+    anyBackgroundBashRunning: () =>
+      getMakerIfReady()
+        ?.listActiveSessions()
+        .some((session) => session.listBackgroundTasks().length > 0) ?? false,
+    // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
+    // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
+    anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
+    // Scope to this process: `pi-agent-home` is shared with a concurrent
+    // dev/packaged/`--passive` instance, and its running Subagents are not
+    // a reason to hold up *our* quit.
+    anyPiSubagentRunning: () =>
+      hasActivePiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
+        hostPid: process.pid,
+      }),
+    // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
+    anySchedulerRunRunning: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
+  };
+}
+
+const authCredentialRecovery = createAuthCredentialRecovery({
+  enabled: process.platform === 'darwin' && app.isPackaged,
+  argv: process.argv.slice(1),
+  needsRecovery: () => authManager.needsCredentialProcessRecovery(),
+  readScreenState: () => powerMonitor.getSystemIdleState(1),
+  isQuitting: () => isQuitting,
+  isBusy: () =>
+    hasUpdateRelaunchBusyActivity({
+      readSynchronousBusy: () =>
+        isAppSessionBoundaryPending() ||
+        authManager.isAuthFlowBusy() ||
+        getUpdateRelaunchControllers().length > 0 ||
+        hasInFlightRemoteInvokes(),
+      readScheduleBusy: async () =>
+        (await evaluateRelaunchBusyActivity(readRelaunchActivitySources())).busy,
+    }),
+  relaunch: (args) => {
+    app.relaunch({ args });
+    app.quit(); // Normal lifecycle: flush storage and dispose background services.
+  },
+  schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+  cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  onEvent: (event) => authCredentialRecoveryLog.info(event),
+});
+
 let windowsTray: Tray | null = null;
 // 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
@@ -3375,6 +3518,7 @@ app.on('before-quit', () => {
   linuxClosePromptFallback.dispose();
   destroyWindowsTray();
   disposeUpdatePresentationRecovery();
+  authCredentialRecovery.dispose();
 });
 
 function handleUpdatePresentationLock(): void {
@@ -3528,7 +3672,8 @@ function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): numb
 //     写注册表 / .desktop entry; macOS 走 Info.plist, 此调用是兜底)
 //   - app.on('open-url') 是 macOS-only 事件, 冷启动时也会在 ready 之前 fire,
 //     提前 attach 才能接住
-registerDeepLinkProtocol();
+watchCindyVersionStartupResult();
+if (!isCindyPersonalRuntime()) registerDeepLinkProtocol();
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleIncomingDeepLink(url, 'open-url');
@@ -3580,16 +3725,22 @@ app.on('open-file', (event, filePath) => {
 // reader lease 阻止之后的 primary 抢跑 migration。
 // 隔离数据实例走 `--isolated[=<名字>]`(独立 userData → 独立锁域,见 docs/dev-rules/desktop-development.md)。
 if (
+  getCindyVersionLockScope() !== null ||
   shouldRequestSingleInstanceLock({
     isPackaged: app.isPackaged,
     schedulerPassive: process.env.XDT_SCHEDULER_PASSIVE === '1',
   })
 ) {
   const realUserDataDir = app.getPath('userData');
-  const lockScopeDir = resolveSingleInstanceLockUserDataDir({
-    isPackaged: app.isPackaged,
-    userDataDir: realUserDataDir,
-  });
+  const lockScopeDir =
+    getCindyVersionLockScope() === 'profile'
+      ? realUserDataDir
+      : getCindyVersionLockScope() === 'dev'
+        ? path.join(realUserDataDir, 'dev-single-instance-lock')
+        : resolveSingleInstanceLockUserDataDir({
+            isPackaged: app.isPackaged,
+            userDataDir: realUserDataDir,
+          });
   let gotTheLock: boolean;
   if (lockScopeDir === realUserDataDir) {
     gotTheLock = app.requestSingleInstanceLock();
@@ -3613,6 +3764,7 @@ if (
     );
     app.quit();
   } else {
+    finishCindyVersionStartup();
     app.on('second-instance', (_event, argv) => {
       // Windows: 用户点 cindy://(或历史 xdt-maker://)链接 / 右键 "通过 Cindy 打开" 时,
       // OS 会再起一个本 app 实例; 单例锁把它 redirect 成 second-instance 事件,
@@ -3652,6 +3804,16 @@ if (
     });
   }
 }
+
+if (
+  app.hasSingleInstanceLock() ||
+  (getCindyVersionLockScope() === null &&
+    !shouldRequestSingleInstanceLock({
+      isPackaged: app.isPackaged,
+      schedulerPassive: process.env.XDT_SCHEDULER_PASSIVE === '1',
+    }))
+)
+  deliverCindyVersionOpenEvents();
 
 // 冷启动 argv 扫描 — Windows 上首次点链接 / 右键 "通过 Cindy 打开" 启动 app
 // 时, URL 或 --open-folder 在 process.argv 末尾。macOS deep link 走 open-url
@@ -3716,15 +3878,15 @@ const createWindow = () => {
   // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
   // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
   const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
-  const isDark = process.platform === 'win32'
+  const isDark =
+    process.platform === 'win32'
       ? resolveAppThemeIsDark(
           nativeTheme.shouldUseDarkColors,
           persistedTheme?.mode,
           persistedTheme?.resolvedIsDark,
         )
       : nativeTheme.shouldUseDarkColors;
-  const bgColor =
-    process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
+  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
@@ -3829,8 +3991,15 @@ const createWindow = () => {
   });
   // Main-window close policy is explicit because hidden utility windows (for
   // example the prewarmed global voice overlay) can keep the process alive.
+  const makeTestWindow = createMakeTestWindowBehavior({
+    isPackaged: app.isPackaged,
+    environment: process.env,
+    focus: () => activateMainWindow(),
+    quit: () => app.quit(),
+  });
   mainWindow.on('close', (event) => {
     if (isQuitting) return;
+    if (makeTestWindow.close(event)) return;
     // macOS: keep the window + renderer alive and hide only, so Dock activation
     // can restore it without remounting the renderer.
     if (process.platform === 'darwin') {
@@ -3929,8 +4098,10 @@ const createWindow = () => {
     showMainWindowAndRestoreFullscreen(mainWindow, {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
+    makeTestWindow.ready();
     refreshWindowsAppBadge();
-    if (!app.isPackaged) markDesktopDevWindowReady();
+    if (!app.isPackaged || isCindyVersionLaunchPending())
+      markDesktopDevWindowReady(mainWindow.webContents.getOSProcessId());
     void runComputerUseSmokeIfRequested();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
     // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
@@ -4159,7 +4330,8 @@ function checkDatabaseSizeWarningAtStartup(): void {
   if (
     startupDatabaseSizeWarningStatusChecked &&
     startupDatabaseSizeWarningOwnerScope === ownerScope
-  ) return;
+  )
+    return;
   startupDatabaseSizeWarningStatus = collectCurrentDatabaseSizeWarningStatus();
   startupDatabaseSizeWarningStatusChecked = true;
   startupDatabaseSizeWarningOwnerScope = ownerScope;
@@ -4177,10 +4349,7 @@ function syncPluginMarketForActiveOwner(minIntervalMs = 0): void {
   const scope = activeOwnerScopeKey();
   if (scope === pluginMarketSyncInFlightScope) return;
   const now = Date.now();
-  if (
-    scope === lastPluginMarketSyncScope &&
-    now - lastPluginMarketSyncAt < minIntervalMs
-  ) {
+  if (scope === lastPluginMarketSyncScope && now - lastPluginMarketSyncAt < minIntervalMs) {
     return;
   }
   pluginMarketSyncInFlightScope = scope;
@@ -4418,9 +4587,7 @@ const registerIpcHandlers = () => {
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
 
-  ipcMain.on(
-    'theme:apply-vibrancy',
-    (event, rawPayload: unknown) => {
+  ipcMain.on('theme:apply-vibrancy', (event, rawPayload: unknown) => {
     assertTrustedAppRendererEvent(event);
     const payload = parseWindowThemeVibrancyPayload(rawPayload);
     if (!payload) return;
@@ -4679,7 +4846,9 @@ const registerIpcHandlers = () => {
     resetCompactionPct();
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.COMPACTION_SET_PCT,
+    async (event, pct: unknown, owner: unknown) => {
       assertTrustedAppRendererEvent(event);
       if (typeof pct !== 'number' || !Number.isFinite(pct)) {
         throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
@@ -4704,7 +4873,9 @@ const registerIpcHandlers = () => {
     resetPiCompactionPct();
     return piCompactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT,
+    async (event, pct: unknown, owner: unknown) => {
       assertTrustedAppRendererEvent(event);
       if (typeof pct !== 'number' || !Number.isFinite(pct)) {
         throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
@@ -4784,7 +4955,12 @@ const registerIpcHandlers = () => {
   });
 
   // 智能通讯录 IPC —— 设置开关 + 数据 CRUD(设置页管理 UI 通道), 提前注册。
-  registerContactsIpc();
+  registerContactsIpc({
+    restartCodexAfterAuthModeChange,
+    shutdownCodexEnvironment,
+    scheduleDeferredCodexRestart,
+    invalidatePiEnvironment,
+  });
 
   // 聊天嵌入开关 IPC —— 与 compat-mode 同理提前注册:
   // renderer 启动 bootstrap 同步 localStorage 镜像, 远早于 splash 完成。
@@ -4826,9 +5002,7 @@ const registerIpcHandlers = () => {
       return chatEmbeddingWire();
     },
   );
-  ipcMain.handle(
-    MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET,
-    async (_e, owner: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET, async (_e, owner: unknown) => {
     assertChatEmbeddingMutationOwner(owner);
     try {
       await resetChatEmbeddingSettings(chatEmbeddingDefaultContext());
@@ -4851,11 +5025,12 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_GET, async () => {
     return gitSafetyWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_SET, async (_e, enabled: unknown) => {
-    if (typeof enabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'git safety enabled required (boolean)');
+  ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_SET, async (_e, mode: unknown) => {
+    if (typeof mode === 'boolean') mode = mode ? 'all-projects' : 'off';
+    if (mode !== 'off' && mode !== 'existing-git' && mode !== 'all-projects') {
+      throwIpcError('INVALID_PARAMS', 'git safety mode required');
     }
-    writeGitSafetyAutoSnapshotEnabled(enabled);
+    writeGitSafetyMode(mode as GitSafetyMode);
     return gitSafetyWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_RESET, async () => {
@@ -4903,32 +5078,44 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN, async (event, loginKey?: string) => {
     assertTrustedAppRendererEvent(event);
     const owner = activeOwnerScopeKey();
-    if (isAppSessionBoundaryPending() || !getActiveAppSession().dataOwnerId) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (isAppSessionBoundaryPending() || !getActiveAppSession().dataOwnerId)
+      return { ok: false, reason: 'login_cancelled', authorized: false };
     const signal = beginClaudeLocalLogin(loginKey);
     resetProviderModelAutoRefreshCooldowns('anthropic');
     await clearAnthropicDiscoveredModels();
-    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      return { ok: false, reason: 'login_cancelled', authorized: false };
     await ensureAnthropicCompatProxyReady();
-    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
-    if (!reconnectClaudeAiOAuth()) return { ok: false, reason: 'local_unavailable', authorized: false };
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (!reconnectClaudeAiOAuth())
+      return { ok: false, reason: 'local_unavailable', authorized: false };
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
     void refreshAnthropicModelsFromHttp();
     return { ok: true, authorized: hasClaudeAiOAuth() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT,
+    async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
       assertTrustedAppRendererEvent(event);
       const active = getActiveAppSession();
       const owner = activeOwnerScopeKey();
-    if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
+      if (
+        isAppSessionBoundaryPending() ||
+        (ownerScope &&
+          (ownerScope.dataOwnerId !== active.dataOwnerId ||
+            ownerScope.ownerGeneration !== active.generation))
+      ) {
         throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       }
       // Cancel pending Cindy login/refresh before revoking the binding; keep native credentials.
       try {
         cancelClaudeOAuthLogin();
         await disconnectClaudeAiOAuth();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
+        if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+          return { authorized: false };
         resetProviderModelAutoRefreshCooldowns('anthropic');
       } catch (err) {
         throwIpcError(
@@ -4937,7 +5124,8 @@ const registerIpcHandlers = () => {
         );
       }
       await broadcastClaudeAuthStateChanged();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { authorized: false };
       // Binding revoked: read() clears the Cindy quota snapshot and broadcasts null.
       syncClaudeSubscriptionUsageForAuthChange();
       // 模型清单动态发现:登出完成前清空清单 + 删磁盘缓存,并等待旧 SDK 写盘收尾。
@@ -4990,19 +5178,22 @@ const registerIpcHandlers = () => {
     // reason 是 renderer 决定提示用的结构化数据,不抛 throwIpcError(规则 13 查询型例外)。
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
     const result = await runGrokOAuthLogin();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      return { ok: false, reason: 'login_cancelled', authorized: false };
     if (result.ok) {
       void retainProviderPresentationAfterAuthChange('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
       // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
       await clearXaiSubscriptionUsageSnapshot();
-    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
       // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
       clearXaiDiscoveredModels();
       await discardXaiModelsDiskCache();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧账号凭证。先跨授权边界清掉旧账号发现快照，再补拉新账号；
       // 旧在途请求由 discovery generation + owner scope 双重守卫作废。
       clearXaiMediaModels();
@@ -5011,7 +5202,8 @@ const registerIpcHandlers = () => {
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
       clearXaiRateLimitSnapshot();
       await syncXaiSubscriptionUsageForAuthChange();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       broadcastXaiAuthStateChanged();
       void refreshXaiModelsFromHttp();
       void refreshProviderModelsManually('xai').catch((error) => {
@@ -5023,11 +5215,18 @@ const registerIpcHandlers = () => {
     }
     return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT,
+    async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
       assertTrustedAppRendererEvent(event);
       const active = getActiveAppSession();
       const owner = activeOwnerScopeKey();
-    if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
+      if (
+        isAppSessionBoundaryPending() ||
+        (ownerScope &&
+          (ownerScope.dataOwnerId !== active.dataOwnerId ||
+            ownerScope.ownerGeneration !== active.generation))
+      ) {
         throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       }
       try {
@@ -5037,7 +5236,8 @@ const registerIpcHandlers = () => {
         resetProviderModelAutoRefreshCooldowns('xai');
         await clearXaiSubscriptionUsageSnapshot();
         await presentation;
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+        if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+          return { ok: false, reason: 'login_cancelled', authorized: false };
         clearXaiDiscoveredModels();
         clearXaiMediaModels();
       } catch (err) {
@@ -5050,7 +5250,8 @@ const registerIpcHandlers = () => {
       // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
       clearXaiRateLimitSnapshot();
       await syncXaiSubscriptionUsageForAuthChange();
-      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+        return { ok: false, reason: 'login_cancelled', authorized: false };
       broadcastXaiAuthStateChanged();
       return { authorized: hasGrokOAuthLogin() };
     },
@@ -5264,87 +5465,12 @@ const registerIpcHandlers = () => {
   }
   // per-session raw (sessions/<id>/cc-debug.raw.log) 同样在启动期砍头保尾 —— 它不经 emit,
   // 平时只靠 cleanupOldSessions 30 天整目录删, 期间一个开着 NODE_DEBUG 的活跃 session 能把单个
-  // raw 写爆磁盘。内容已被下面的 tailer 汇入 <date>.ndjson, raw 只是中转, 砍掉旧头不丢有效信息。
+  // raw 写爆磁盘。tailer 尽量汇入 <date>.ndjson；背压或进程退出时未汇入的部分仍留在 raw。
   keepRecentSessionCcDebugSync();
 
-  // cc-debug.raw.log → 统一 agent 流 (agent-<date>.ndjson, source=cc-debug):
-  // cc 子进程通过 SDK debugFile 直接 fopen 写 raw, 不经 logger; 这里轮询读增量,
-  // 逐行调 writeCcDebugLine() 解析行首 UTC-ISO 时间戳后归一化写入当天 agent 流,
-  // 跟 maker / proxy 两源合并、共用按天 rotate + 保留策略。
-  //
-  // - 轮询 2s: cc-debug 不是高频热点, 不需要 fs.watch 的实时性 (排序按解析出的 ts,
-  //   不受 2s 轮询延迟影响, 延迟只影响"多久可见")
-  // - cc 持有 fd 期间我们 rotate 不掉 raw 文件 (Windows rename 失败, Linux truncate
-  //   留稀疏空洞, 都不安全), 所以反向走 ─ 读出内容汇入 agent 流, raw 仅启动期 trim
-  // - 检测到文件 size 倒退 (truncate / 启动 rename), 重置 read offset 从 0 开始
-  // - 跨读保留尾部不完整行, 跟下一段拼起来再切, 不切坏 multi-line 信息
-  // - timer.unref() 防止进程关闭时被卡住
-  // per-file tail 状态: filePath → { offset, leftover }。同时 tail 全局 fallback raw
-  // (无 sessionId 的 cc, 罕见) + 各 sessions/<id>/cc-debug.raw.log; sessionId 从路径
-  // 提取后传给 writeCcDebugLine, 让 cc 网络 debug 归到对应 session 的 <date>.ndjson。
-  const ccLogRootDir = path.dirname(ccDebugLogPath);
-  const ccTailState = new Map<string, { offset: number; leftover: string }>();
-
-  function tailOneCcFile(filePath: string, sessionId: string): void {
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(filePath);
-    } catch {
-      return;
-    }
-    const st = ccTailState.get(filePath);
-    if (!st) {
-      // 首次发现: 从当前末尾开始, 跳过已有内容 (避免 app 重启后把旧 session 的 raw 重复
-      // 灌进 ndjson)。代价是漏掉文件被发现前 ≤ 轮询间隔 的几行初始 cc 日志, 可接受。
-      ccTailState.set(filePath, { offset: stat.size, leftover: '' });
-      return;
-    }
-    if (stat.size < st.offset) {
-      st.offset = 0;
-      st.leftover = '';
-    }
-    if (stat.size === st.offset) return;
-    let fd: number;
-    try {
-      fd = fs.openSync(filePath, 'r');
-    } catch {
-      return;
-    }
-    try {
-      const len = stat.size - st.offset;
-      const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, st.offset);
-      st.offset = stat.size;
-      st.leftover += buf.toString('utf8');
-      const lines = st.leftover.split('\n');
-      st.leftover = lines.pop() ?? '';
-      for (const line of lines) {
-        if (line.length > 0) writeCcDebugLine(line, sessionId);
-      }
-    } finally {
-      try {
-        fs.closeSync(fd);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  function tailCcDebugOnce(): void {
-    tailOneCcFile(ccDebugLogPath, ''); // 全局 fallback (无 sessionId 的 cc)
-    const sessionsBase = path.join(ccLogRootDir, 'sessions');
-    let dirs: fs.Dirent[];
-    try {
-      dirs = fs.readdirSync(sessionsBase, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const d of dirs) {
-      if (!d.isDirectory()) continue;
-      tailOneCcFile(path.join(sessionsBase, d.name, 'cc-debug.raw.log'), d.name);
-    }
-  }
-  setInterval(tailCcDebugOnce, 2000).unref();
+  // Current-process CC writers register on spawn and release on exit.
+  // The tailer has a shared read budget and pauses behind the NDJSON writer.
+  setCcDebugTailingEnabled(process.env.XDT_CC_DEBUG_NET === '1');
 
   // dev 模式不再启动期硬开(2026-07-11 Lizi 定案):NODE_DEBUG=http,https,net,tls
   // 会顺着 cc 子进程继承进 agent 的 Bash 子命令——所有命令输出被调试日志刷屏,
@@ -5378,6 +5504,7 @@ const registerIpcHandlers = () => {
         levelBeforeDebugNet = null;
       }
     }
+    setCcDebugTailingEnabled(enabled);
     ccDebugNetLog.info(`set ${enabled ? 'on' : 'off'} via renderer`);
     return { ok: true };
   });
@@ -5663,7 +5790,13 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       const active = getActiveAppSession();
-      if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+      if (
+        isAppSessionBoundaryPending() ||
+        (ownerScope &&
+          (ownerScope.dataOwnerId !== active.dataOwnerId ||
+            ownerScope.ownerGeneration !== active.generation))
+      )
+        throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
       await retainProviderPresentationAfterAuthChange(
         builtinApiKeyPresentationId(providerId as string),
@@ -5676,13 +5809,15 @@ const registerIpcHandlers = () => {
   ipcMain.handle('auth:initialize', async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
-      const state = await authManager.initialize({
-        onColdStartPending: (completion) => {
-          pendingCompletion = completion;
-        },
-      });
+      const state = await authManager
+        .initialize({
+          onColdStartPending: (completion) => {
+            pendingCompletion = completion;
+          },
+        })
+        .finally(() => authCredentialRecovery.request());
       await authManager.ensureStableOwnerPostCommitTasks('auth-initialize');
-      if (!app.isPackaged) {
+      if (!app.isPackaged || isCindyVersionLaunchPending()) {
         recordDesktopDevAuthStartupResult(state, pendingCompletion, () =>
           authManager.getAuthState(),
         );
@@ -5950,29 +6085,7 @@ const registerIpcHandlers = () => {
       //
       // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
       // 且远程控制端不会代替用户点被控端的更新重启。
-      registerRelaunchBusyActivityIpc(() => ({
-        anySessionInTurn: () => anySessionInTurn(getMakerCore()),
-        listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
-        anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
-        // run_in_background 的 Bash 不调模型、也不折算 running,前两个来源都看不到它。
-        anyBackgroundBashRunning: () =>
-          getMakerCore()
-            .listActiveSessions()
-            .some((session) => session.listBackgroundTasks().length > 0),
-        // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
-        // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
-        anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
-        // Scope to this process: `pi-agent-home` is shared with a concurrent
-        // dev/packaged/`--passive` instance, and its running Subagents are not
-        // a reason to hold up *our* quit.
-        anyPiSubagentRunning: () =>
-          hasActivePiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
-            hostPid: process.pid,
-          }),
-        // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
-        anySchedulerRunRunning: () =>
-          readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
-      }));
+      registerRelaunchBusyActivityIpc(readRelaunchActivitySources);
       // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
       // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
       getMakerCore();
@@ -6049,14 +6162,15 @@ const registerIpcHandlers = () => {
       registerBuiltinDesktopCommands(getDesktopCommandRegistry(), {
         getGoalController,
         getLearnController,
+        isLearnEnabled: isCindyLearnSkillEnabled,
         remoteInvoke: (deviceId, channel, args) =>
           deviceLinkHandleInvoke(deviceLinkIpcDeps(), deviceId, channel, args),
       });
       // desktop-cmd:run —— /cmd 的被控端远程执行 handler(仅隧道 dispatch 消费,
       // 本机 /cmd 仍在 builtins 内联执行,不走 IPC 往返)。
       registerRemoteCmdIpc();
-      // learn:* handler 提前一次性注册(eager,同 goal);handler 内部 getLearnController()
-      // 取单例,invoke 时 controller 已由 startLearnHost 启动。
+      // learn:* handler 提前一次性注册(eager,同 goal);handler 内部读取 controller
+      // 单例,invoke 时 controller 已由 startLearnHost 启动。
       registerLearnIpc();
       // maker:schedule:* handler 提前一次性注册;handler 内部 awaitReady 等真实
       // scheduler 实例(由后续 attemptStartScheduler 通过 attachSchedulerEventListeners
@@ -6353,7 +6467,8 @@ const registerIpcHandlers = () => {
           isGlobalVoiceInputOverlaySender(candidate.sender) &&
           candidate.senderFrame === candidate.sender.mainFrame &&
           isTrustedCindyRendererWindow(overlayWindow)
-        ) return;
+        )
+          return;
         assertTrustedAppRendererEvent(candidate);
       },
       openExternal: (url) => shell.openExternal(url),
@@ -6667,6 +6782,10 @@ const registerIpcHandlers = () => {
   registerSkillhubIpc({
     getMaker: getMakerCore,
     getManagedSkillRoots: () => getGhostManager().managedRootDirs(),
+    getBuiltInSkills: () => builtInSkillDescriptors(
+      app.getPath('userData'),
+      app.getPath('appData'),
+    ),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
@@ -7389,27 +7508,43 @@ const registerIpcHandlers = () => {
 
   // Settings → Cindy Make: open Cindy's private managed-tool directory.
   // The path is derived in main so the renderer cannot choose an arbitrary folder.
-  ipcMain.handle(
-    'app:open-cindy-make-tools-dir',
-    async (event): Promise<{ success: boolean }> => {
+  ipcMain.handle('app:open-cindy-make-tools-dir', async (event): Promise<{ success: boolean }> => {
     assertTrustedAppRendererEvent(event);
     return openMakeToolsDirectory(app.getPath('userData'), {
       openPath: (directory) => shell.openPath(directory),
     });
   });
 
+  const readLatestSourceVersion = createLatestSourceVersionReader((url, init) =>
+    net.fetch(url, init),
+  );
+  configureUpstreamMerge((id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false);
+  ipcMain.handle('app:cindy-make-merge', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return actUpstreamMerge(input);
+  });
   ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
     assertTrustedAppRendererEvent(event);
     const userData = app.getPath('userData');
-    let env: Awaited<ReturnType<typeof createMakeToolchainEnvironment>> | undefined;
-    try {
-      env = await createMakeToolchainEnvironment(userData);
-    } catch {
-      // The persisted status remains usable when tool discovery is unavailable.
-    }
-    return cindyMakeManager.refreshSourceStatus(() =>
-      readCurrentCindySourceStatus(makeSourceRoot(userData), env),
-    );
+    const root = makeSourceRoot(userData);
+    const channel = !app.isPackaged
+      ? 'dev'
+      : /-beta(?:\.|$)/i.test(app.getVersion())
+        ? 'beta'
+        : 'release';
+    return refreshCindySourceStatus(cindyMakeManager, {
+      readSummary: () => readCurrentCindySourceStatus(root),
+      readLocal: async () => {
+        let env: Awaited<ReturnType<typeof createMakeToolchainEnvironment>> | undefined;
+        try {
+          env = await createMakeToolchainEnvironment(userData);
+        } catch {
+          // The persisted status remains usable when tool discovery is unavailable.
+        }
+        return readCurrentCindySourceStatus(root, env);
+      },
+      readLatest: (source) => readLatestSourceVersion(source, sourceChannel(source, channel)),
+    });
   });
   // 源码准备是全局单例:进度广播给所有窗口,任意窗口都能停止它。
   subscribeCindySourceStatus(broadcastCindyMakeSourceStatus);
@@ -7417,44 +7552,165 @@ const registerIpcHandlers = () => {
   configureCindyMakeTaskManagement({
     isAlive: (id) => getMakerIfReady()?.isSessionAlive(id),
     isRunning: (id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false,
+    isWorkspaceBusy: (workingDir) => cindyMakeTestController.isUsingWorkspace(workingDir),
     setStatus: patchSessionMetaInDb,
     recycle: recycleSessionWorktreeForStatusChange,
   });
+  configureCindyMakeTestRuntime(
+    (id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false,
+    broadcastCindyMakeHistoryChanged,
+  );
+  configureCindyMakeEditingGuard((id) => cindyMakeTestController.isUsingSession(id));
+  registerMakeRemoteResources((id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false);
+  configureMakeHistory(
+    (id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false,
+    broadcastCindyMakeHistoryChanged,
+  );
+  ipcMain.handle('app:get-cindy-make-settings', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readCindyMakeSettings();
+  });
+  ipcMain.handle(
+    'app:set-cindy-make-sync-latest-before-build',
+    (event, enabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof enabled !== 'boolean')
+        throwIpcError('INVALID_PARAMS', 'Invalid Cindy Make setting');
+      return writeCindyMakeSyncLatestBeforeBuild(enabled);
+    },
+  );
+  ipcMain.handle('app:cindy-make-history', async (event, selected?: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (
+      selected !== undefined &&
+      (typeof selected !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(selected))
+    )
+      throwIpcError('INVALID_PARAMS', 'Invalid history selection');
+    try {
+      return await getCindyMakeHistory(selected as string | undefined);
+    } catch (error) {
+      const details = error as { name?: unknown; code?: unknown; message?: unknown };
+      const message =
+        typeof details.message === 'string'
+          ? details.message
+              .replace(/[A-Za-z]:[\\/][^\r\n]{0,240}|\\\\[^\r\n]{0,240}/g, '<path>')
+              .slice(0, 240)
+          : String(error).slice(0, 240);
+      createLogger('cindy-make:history').warn('history read failed', {
+        errorName: typeof details.name === 'string' ? details.name : undefined,
+        errorCode: typeof details.code === 'string' ? details.code : undefined,
+        errorMessage: message,
+      });
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  ipcMain.handle(
+    'app:cindy-make-history-action',
+    async (event, runId: unknown, action: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      try {
+        return await actCindyMakeHistory(runId, action);
+      } catch (error) {
+        const message = (error as { message?: unknown }).message;
+        const reason =
+          typeof message === 'string'
+            ? /^\[PRECONDITION_FAILED\]\s*(busy|dirty|conflict|cleanupFailed|directoryBusy|unavailable|stopFailed)$/.exec(
+                message,
+              )?.[1]
+            : undefined;
+        throwIpcError('PRECONDITION_FAILED', reason ?? 'unavailable');
+      }
+    },
+  );
+  ipcMain.handle('app:cindy-make-history-build', async (event, selection: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await generateHistoryPersonalVersion(selection);
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  app.once('will-quit', stopMakeHistoryBuild);
+  ipcMain.handle('app:cindy-make-history-cancel-build', async (event, buildId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await cancelHistoryPersonalVersion(buildId);
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  ipcMain.handle('app:cindy-make-history-open-build', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      await openHistoryPersonalBuild();
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  configureCindyVersions(
+    () => cindyMakeTestController.hasActiveJobs() || cindyMakeManager.hasActiveWork(),
+  );
+  ipcMain.handle('app:cindy-versions-state', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await getCindyVersions();
+    } catch {
+      throwIpcError('PRECONDITION_FAILED', 'unavailable');
+    }
+  });
+  ipcMain.handle('app:cindy-versions-action', async (event, action: unknown, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return actCindyVersion(action, id);
+  });
+  onQuit('cindy-make-tests', () => cindyMakeTestController.stopAllAndWait(), 'async');
+  app.once('will-quit', () => cindyMakeTestController.stopAll());
+  ipcMain.handle(
+    'app:cindy-make-test',
+    async (event, sessionId: unknown, completionId: unknown, action: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      return actCindyMakeTest(sessionId, completionId, action);
+    },
+  );
   cindyMakeManager.setProjectBusyProbe(
     (root) =>
       getMakerIfReady()
         ?.listActiveSessions()
         .some((session) => {
-          const relative = path.relative(path.join(root, 'worktrees'), session.workDir);
           return (
             session.isTurnRunning() &&
-            relative.length > 0 &&
-            !relative.startsWith('..') &&
-            !path.isAbsolute(relative)
+            root === makeSourceRoot(app.getPath('userData')) &&
+            isCindyMakeManagedWorktreePath(app.getPath('userData'), session.workDir)
           );
         }) ?? false,
   );
   ipcMain.handle('app:get-cindy-make-state', async (event) => {
     assertTrustedAppRendererEvent(event);
+    refreshUpstreamMergeProjection();
     try {
       await restoreCindyMakeTaskState();
       for (const [runId, report] of Object.entries(cindyMakeManager.getState().tasks ?? {})) {
-        if (report.task) cindyMakeManager.projectTaskSession(runId, {
-          executing: getMakerIfReady()?.getSession(report.task.sessionId)?.isTurnRunning() ?? false,
-        });
+        if (report.task)
+          cindyMakeManager.projectTaskSession(runId, {
+            executing:
+              getMakerIfReady()?.getSession(report.task.sessionId)?.isTurnRunning() ?? false,
+          });
       }
+      void refreshCindyMakeTaskIntegration();
     } catch {
       throwIpcError('INTERNAL', 'Could not restore Cindy Make preparation state');
     }
     return cindyMakeManager.getState();
   });
-  ipcMain.handle('app:manage-cindy-make-task', async (event, sessionId: unknown, action: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    await manageCindyMakeTask(sessionId, action).catch((error) => {
-      if (error instanceof Error && error.message.startsWith('[')) throw error;
-      throwIpcError('INTERNAL', 'cleanupFailed');
-    });
-  });
+  ipcMain.handle(
+    'app:manage-cindy-make-task',
+    async (event, sessionId: unknown, action: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      await manageCindyMakeTask(sessionId, action).catch((error) => {
+        if (error instanceof Error && error.message.startsWith('[')) throw error;
+        throwIpcError('INTERNAL', 'cleanupFailed');
+      });
+    },
+  );
   ipcMain.handle('app:cancel-cindy-make-source', async (event): Promise<{ success: boolean }> => {
     assertTrustedAppRendererEvent(event);
     return { success: cancelCindySourcePreparation() };
@@ -7877,6 +8133,16 @@ const registerIpcHandlers = () => {
     },
   );
 
+  // Local storage controls never accept a filesystem path from the renderer.
+  ipcMain.handle('worktree-recycle:list', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return listWorktreeRecycleStatus();
+  });
+  ipcMain.handle('worktree-recycle:control', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    await controlWorktreeRecycle(input);
+  });
+
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。
   {
@@ -8052,6 +8318,48 @@ const registerIpcHandlers = () => {
       }),
     );
 
+    // Native folder selection belongs to this computer; intentionally not exposed via device-link.
+    const dialogueWorkspaceHandlers = createDialogueWorkspaceHandlers({
+      captureScope: () => {
+        if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+          throwIpcError('PRECONDITION_FAILED', 'dialogue workspace requires an active owner');
+        }
+        return activeOwnerScopeKey();
+      },
+      isScopeCurrent: (scope) => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scope,
+      read: readDialogueWorkspaceSettings,
+      write: writeDialogueWorkspaceDirectory,
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.dialogueDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      // Dedicated owner subtree prevents unrelated folders from being treated as managed tasks.
+      resolveDirectory: (selected) =>
+        customDialogueWorkspaceRoot(selected, path.basename(ownerScopedUserDataPath())),
+      checkWritable: checkDialogueDirectoryWritable,
+      openDirectory: (directory) => shell.openPath(directory),
+    });
+    for (const action of ['get', 'choose', 'reset', 'open'] as const) {
+      ipcMain.handle('dialogue-workspace:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await dialogueWorkspaceHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('dialogue workspace settings request failed', { action });
+          throwIpcError('INTERNAL', 'dialogue workspace settings request failed');
+        }
+      });
+    }
+
     const localDbMaintenanceHandlers = createLocalDbMaintenanceIpcHandlers({
       captureOwner: () => {
         const ownerId = getActiveAppSession().dataOwnerId;
@@ -8078,7 +8386,8 @@ const registerIpcHandlers = () => {
           >,
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
-        const result = ownerWindow && !ownerWindow.isDestroyed()
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
             ? await dialog.showOpenDialog(ownerWindow, options)
             : await dialog.showOpenDialog(options);
         return result.canceled ? null : (result.filePaths[0] ?? null);
@@ -8106,7 +8415,8 @@ const registerIpcHandlers = () => {
           noLink: true,
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
-        const result = ownerWindow && !ownerWindow.isDestroyed()
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
             ? await dialog.showMessageBox(ownerWindow, options)
             : await dialog.showMessageBox(options);
         return result.response === 0;
@@ -8126,7 +8436,8 @@ const registerIpcHandlers = () => {
           noLink: true,
         };
         const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
-        const result = ownerWindow && !ownerWindow.isDestroyed()
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
             ? await dialog.showMessageBox(ownerWindow, options)
             : await dialog.showMessageBox(options);
         return result.response === 0;
@@ -8530,6 +8841,18 @@ app.on('ready', async () => {
   }
 
   await ensureMainAppPresence('app-ready');
+
+  // Cindy-owned Skill activation and all home-level projections happen through
+  // one stable-owner boundary. Passive shared-userData instances may consume the
+  // active bundle but cannot switch it or its projections.
+  try {
+    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+  } catch (error) {
+    // A broken optional Skill must not block the desktop from starting.
+    createLogger('built-in-skills').warn('built-in Skill preparation failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   // macOS App Translocation fix: when the user launches the app without
   // dragging it to /Applications first, macOS runs it from a read-only
@@ -9230,6 +9553,7 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerFilePeerIpc();
   registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);
   void startupPurgeDrain
@@ -9266,6 +9590,7 @@ app.on('ready', async () => {
 
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
+    authCredentialRecovery.request();
     authManager.handleResume();
     handleProviderModelSystemResume();
     syncPluginMarketForActiveOwner(30_000);
@@ -9273,6 +9598,18 @@ app.on('ready', async () => {
     handleDeviceLinkSystemResume();
   });
   powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
+  powerMonitor.on('lock-screen', authCredentialRecovery.onScreenLock);
+  powerMonitor.on('unlock-screen', authCredentialRecovery.onScreenUnlock);
+  onQuit(
+    'auth-credential-recovery',
+    () => {
+      authCredentialRecovery.dispose();
+      powerMonitor.removeListener('lock-screen', authCredentialRecovery.onScreenLock);
+      powerMonitor.removeListener('unlock-screen', authCredentialRecovery.onScreenUnlock);
+    },
+    'sync',
+  );
+  authCredentialRecovery.request();
 
   // Memory diagnostics — dev only, log per-process memory every 30s
   if (!app.isPackaged) {
@@ -9477,9 +9814,9 @@ onQuit(
       });
       if (!stopped) {
         piSubagentLog.error(
-          'PI Subagent runners survived stop and identity-verified kill on quit — '
-          + 'runners this app could not confirm as stopped are still running with their '
-          + 'inherited credentials',
+          'PI Subagent runners survived stop and identity-verified kill on quit — ' +
+            'runners this app could not confirm as stopped are still running with their ' +
+            'inherited credentials',
         );
       }
     }
@@ -9501,8 +9838,8 @@ onQuit(
     // failure means the parent is *not* confirmed down and the fence stays up.
     if (piSessionFailures > 0) {
       piSubagentLog.error(
-        `${piSessionFailures} PI session(s) failed to detach during quit — holding the `
-        + 'launch fence, since a surviving parent could still start a durable runner',
+        `${piSessionFailures} PI session(s) failed to detach during quit — holding the ` +
+          'launch fence, since a surviving parent could still start a durable runner',
       );
       return;
     }
@@ -9577,8 +9914,8 @@ onQuit(
       });
       if (!stopped) {
         piSubagentLog.error(
-          'PI Subagent runners appeared after the first quit sweep and could not be '
-          + 'confirmed stopped — they are still running with their inherited credentials',
+          'PI Subagent runners appeared after the first quit sweep and could not be ' +
+            'confirmed stopped — they are still running with their inherited credentials',
         );
       }
       // No fence and no proof the parent is down: this pass is not conclusive,
@@ -9627,9 +9964,9 @@ onQuit(
         // could still launch — so the fence stays up until the process exits,
         // and the next instance's stale sweep removes the file.
         piSubagentLog.error(
-          'parent shutdown was not confirmed complete on quit — holding the PI Subagent '
-          + 'launch fence until this process exits so a still-live parent cannot start '
-          + 'a durable runner nothing is left to reclaim',
+          'parent shutdown was not confirmed complete on quit — holding the PI Subagent ' +
+            'launch fence until this process exits so a still-live parent cannot start ' +
+            'a durable runner nothing is left to reclaim',
         );
       } else {
         // Neither guarantee is available: the fence could not be raised on
@@ -9639,9 +9976,9 @@ onQuit(
         // thing narrowing the window; state the exposure instead of implying it
         // is closed.
         piSubagentLog.error(
-          'quit ended with no PI Subagent launch fence and no proof the parent is down — '
-          + 'a surviving parent could still publish a durable runner after the last scan, '
-          + 'and it would keep running with the credentials it inherited',
+          'quit ended with no PI Subagent launch fence and no proof the parent is down — ' +
+            'a surviving parent could still publish a durable runner after the last scan, ' +
+            'and it would keep running with the credentials it inherited',
         );
       }
     }
@@ -9898,8 +10235,11 @@ function chatEmbeddingWire() {
 function gitSafetyWire() {
   const state = readGitSafetySettingsState();
   return {
+    mode: state.value.mode,
     autoSnapshotEnabled: state.value.autoSnapshotEnabled,
+    autoInitProjectGit: state.value.autoInitProjectGit,
     isCustomized: state.isCustomized,
+    defaultMode: state.defaults.mode,
     defaultAutoSnapshotEnabled: state.defaults.autoSnapshotEnabled,
   };
 }
@@ -9949,8 +10289,10 @@ let lastWorktreeMaintenanceDb: ReturnType<typeof tryGetDbClient> = null;
 /** Worktree maintenance needs both storage and runtime-close services. */
 function startReadyWorktreeMaintenance(): void {
   startWorktreeRecycleMaintenance({
-    isReady: () => worktreeRuntimeCloseReady && getMakerIfReady() !== null && tryGetDbClient() !== null,
-    recycleCurrentSession: (sessionId, status) => recycleSessionWorktreeForStatusChange(sessionId, status),
+    isReady: () =>
+      worktreeRuntimeCloseReady && getMakerIfReady() !== null && tryGetDbClient() !== null,
+    recycleCurrentSession: (sessionId, status) =>
+      recycleSessionWorktreeForStatusChange(sessionId, status),
     onAttemptComplete: auditRegisteredWorktrees,
   });
   const db = tryGetDbClient();

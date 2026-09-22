@@ -70,6 +70,11 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
+图片能力未声明时，Pi 的模型配置与发送校验默认允许图片输入，不因新型号缺少能力资料而
+提前拦截。目录、原生模型资料或用户配置明确声明 `supportsImageInput: false` / `input: ['text']`
+时仍保持仅文本；此默认值不写回用户配置，也不代表上游接口保证支持图片。活动任务沿用启动时
+能力快照。回归见 `pi-provider-routing.test.ts` 与 `piNativeProviders.test.ts`。
+
 Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.maxRetries=6`
 （`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC
 `set_auto_compaction{enabled:true}` / `set_thinking_level`。Pi 原生负责 threshold 与 overflow 压缩；
@@ -386,7 +391,8 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
   user-provider 派生 → pi-host `resolvePiNativeProviders` → PiAgent writeModelsJson 原生块 +
   provider 感知 setModel。真二进制测试证明直连原生端点、网关零请求。
 - ✅ **统一会话树**(已交付):Cindy session fork 与 Pi append-only entry tree 的后端/
-  对话框实现仍在。头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
-  `agentKind=pi` 露出。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
+  对话框实现仍在。桌面头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
+  `agentKind=pi` 露出；手机版暂隐 Pi「任务分支」入口，保留树组件与 transport 能力。
+  入口呈现见 `apps/mobile/src/session/SessionMenuSheet.tsx`。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
   SQLite 可见时间线原子重投影与上下文 usage 恢复;device-link / mobile transport
   contract 同步开放。切换不回滚工作区文件。

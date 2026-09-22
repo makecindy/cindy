@@ -1270,6 +1270,37 @@
       "sidebar-user-card-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-user-card-text}"
+      },
+      "slider-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-track}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-fill": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-fill}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-thumb": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-thumb}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "segmented-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-selected-bg}"
+      },
+      "segmented-selected-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-selected-border}"
+      },
+      "segmented-option-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-option-fg}"
+      },
+      "segmented-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-hover-bg}"
       }
     },
     "cindy-light": {
@@ -2143,6 +2174,37 @@
       "create-agent-send-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-send-icon}"
+      },
+      "slider-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-track}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-fill": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-fill}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-thumb": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-thumb}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "segmented-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-selected-bg}"
+      },
+      "segmented-selected-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-selected-border}"
+      },
+      "segmented-option-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-option-fg}"
+      },
+      "segmented-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-hover-bg}"
       }
     },
     "default-dark": {
@@ -4690,7 +4752,7 @@
       },
       "search-match-fg": {
         "$type": "color",
-        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY_HSL}"
+        "$value": "{reference.themes.solarized-light.value-search-match-fg}"
       },
       "secondary": {
         "$type": "color",
@@ -4779,6 +4841,10 @@
       "form-field-hint": {
         "$type": "color",
         "$value": "{reference.themes.solarized-light.palette-HINT_TEXT}"
+      },
+      "search-match-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-search-match-bg}"
       }
     }
   }

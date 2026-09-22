@@ -64,11 +64,22 @@ export interface CindyMakeTaskPreparation {
   sessionId: string;
   originSessionId?: string;
   phase:
-    'waiting' | 'environment' | 'source' | 'workspace' | 'dependencies' | 'starting' | 'completed';
+    | 'waiting'
+    | 'environment'
+    | 'source'
+    | 'updatingSource'
+    | 'workspace'
+    | 'dependencies'
+    | 'starting'
+    | 'completed';
   dependencies?: MakeDependencyProgress;
   /** Settings projection; preparation completion is not production completion. */
   sessionStatus?: 'active' | 'archived' | 'deleted';
   executing?: boolean;
+  /** Live file comparison for Settings, never inferred from preparation or build success. */
+  integration?: 'integrated' | 'unintegrated' | 'unknown';
+  /** An explicitly confirmed end left cleanup unfinished; restart never replays deletion. */
+  cleanupPending?: boolean;
   /** Persisted only after the task directory and branch have both been reclaimed. */
   finished?: boolean;
 }
@@ -117,12 +128,14 @@ export const CINDY_MAKE_TASK_ERROR_CODES = [
 ] as const;
 export type CindyMakeTaskError = (typeof CINDY_MAKE_TASK_ERROR_CODES)[number];
 export interface CindyMakeTaskActionState {
-  action: 'finish' | 'delete';
+  /** Legacy finish/delete callers retain their existing semantics. */
+  action: 'end' | 'finish' | 'delete';
   status: 'running' | 'failed';
   error?: CindyMakeTaskError;
 }
 
 export interface CindyMakeGlobalState {
+  upstreamMerge?: import('./cindyMakeMerge').CindyMakeMergeState;
   ownerStamp?: import('./dataOwnerPush').DataOwnerPushStamp;
   environmentCheck?: CindyMakeOperationSnapshot;
   environmentPrepare?: CindyMakeOperationSnapshot;
@@ -131,6 +144,8 @@ export interface CindyMakeGlobalState {
   source?: MakeSourceStatus;
   reports?: Record<string, MakeDoctorReport>;
   tasks?: Record<string, MakeDoctorReport>;
+  /** Live build owners only; absent after the job (including stop cleanup) settles. */
+  personalBuildSessionIds?: string[];
   /** Current-owner cleanup jobs, keyed by session ID; independent of Settings lifetime. */
   taskActions?: Record<string, CindyMakeTaskActionState>;
 }
@@ -153,6 +168,9 @@ export interface MakeSourcePreparation {
   mainRemoteCommit?: string;
   mainBehind?: number;
   mainAhead?: number;
+  /** Commits unique to cindy-personal / main, respectively. */
+  personalBehind?: number;
+  personalAhead?: number;
   error?:
     | 'unsupportedVersion'
     | 'tagNotFound'
@@ -195,6 +213,14 @@ export interface MakeSourceGitProgress {
   message?: string;
 }
 
+/** Live upstream lookup; never inferred from a cached origin/main ref or persisted on disk. */
+export type MakeSourceLatestVersion = {
+  channel: 'dev' | 'beta' | 'release';
+} & (
+  | { status: 'unavailable' }
+  | { status: 'ready'; ref: string; commit: string; ahead?: number; behind?: number }
+);
+
 /** Persisted summary of the managed Cindy source checkout. */
 export interface MakeSourceStatus {
   status: 'missing' | 'preparing' | 'ready' | 'failed' | 'cancelled';
@@ -210,6 +236,10 @@ export interface MakeSourceStatus {
   mainRemoteCommit?: string;
   mainBehind?: number;
   mainAhead?: number;
+  /** Commits unique to cindy-personal / main, respectively. */
+  personalBehind?: number;
+  personalAhead?: number;
+  latestVersion?: MakeSourceLatestVersion;
   error?: MakeSourcePreparation['error'];
   phase?: MakeSourcePreparation['phase'];
   progress?: MakeSourceGitProgress;

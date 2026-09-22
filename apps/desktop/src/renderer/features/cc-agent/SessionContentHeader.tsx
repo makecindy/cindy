@@ -82,6 +82,9 @@ import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
+import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
+import { SharedTaskButton } from '@/features/device-link/SharedTaskButton';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 const log = createLogger('SessionContentHeader');
 
@@ -147,6 +150,7 @@ export function SessionContentHeader({
   // 会停留在旧值(Codex review P2)。prop 兜底覆盖 archived 等不在
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
+  const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   const { confirm: confirmDialog } = useConfirmDialog();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
@@ -156,7 +160,7 @@ export function SessionContentHeader({
   // Draft 判定与 SessionItem 同口径:标题仍是默认哨兵且无消息。
   const isEmpty = isEmptyDraftSession(session);
   const remoteWritesBlocked =
-    readOnly || remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
+    readOnly || sharedGuest || remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   // 「移动到项目」/「导出会话…」可见性与 SessionItem 同条件。
   const canMoveToProject =
     !isEmpty && !session.remoteHostId && !session.deviceLinkDeviceId && !isArchived;
@@ -170,7 +174,7 @@ export function SessionContentHeader({
   // heartbeat schedule 绑定标识,与 SessionItem 同源数据;删除/过期后自动消失。
   const boundSchedules = useSessionBoundSchedules(session.id);
   const displayTitle =
-    getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'))?.trim() ||
+    getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t)?.trim() ||
     t('ccAgent.sessionHeader.untitled');
   const remoteIconKind = session.deviceLinkDeviceId
     ? 'device-link'
@@ -184,6 +188,21 @@ export function SessionContentHeader({
   /* ---- 行内重命名（与 SessionItem 同交互：双击进入，Enter 提交 / Esc 取消 / Blur 提交，
           输入框本体 + Magic AI 改名按钮统一在 SessionRenameInput） ---- */
   const [isEditing, setIsEditing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  useEffect(() => {
+    setMenuOpen(false);
+    setTagEditorOpen(false);
+  }, [session.id, session.deviceLinkDeviceId]);
+  const tagMenu = (
+    <TaskTagMenuSection
+      session={session}
+      onMore={() => {
+        setMenuOpen(false);
+        setTagEditorOpen(true);
+      }}
+    />
+  );
   const [editValue, setEditValue] = useState(displayTitle);
   // Enter 提交后 input 卸载又触发 onBlur 的二次提交，用 ref 拦掉。
   const committedRef = useRef(false);
@@ -522,7 +541,7 @@ export function SessionContentHeader({
   ]);
 
   return (
-    <div className="flex min-w-0 items-center gap-0.5 pl-1">
+    <div className="flex w-full min-w-0 items-center gap-0.5 pl-1">
       {isPinned && (
         <Pin
           size={13}
@@ -573,7 +592,7 @@ export function SessionContentHeader({
         // 双击(死区内)不动窗、正常进入改名。
         <span
           {...titleManualDrag}
-          onDoubleClick={startEdit}
+          onDoubleClick={sharedGuest ? undefined : startEdit}
           title={displayTitle}
           className="min-w-0 max-w-[40vw] cursor-default truncate text-sm font-medium text-foreground"
           style={WINDOW_NO_DRAG_STYLE}
@@ -582,11 +601,29 @@ export function SessionContentHeader({
         </span>
       )}
 
-      {!isEditing && !readOnly && (
+      {!isEditing && !!session.tags?.length && (
+        <span
+          className="mx-1 shrink-0 [--task-tag-ring-bg:hsl(var(--content-area))]"
+          style={WINDOW_NO_DRAG_STYLE}
+        >
+          <TaskTagDots tags={session.tags} />
+        </span>
+      )}
+
+      {/* Task identity stays left; shared-task actions belong to the trailing toolbar. */}
+      {!readOnly && session.status === 'active' && <>
+        <GitContextBadge session={session} />
+        <div className="min-w-0 flex-1" aria-hidden />
+        <SharedTaskButton key={session.id} session={session} />
+      </>}
+
+      {!isEditing && !readOnly && !sharedGuest && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
         <DropdownMenu
+          open={menuOpen}
           onOpenChange={(open) => {
+            setMenuOpen(open);
             if (open) prefetchDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId);
           }}
         >
@@ -656,6 +693,7 @@ export function SessionContentHeader({
                     {t('ccAgent.sidebar.sessionMenu.sessionBranches')}
                   </DropdownMenuItem>
                 )}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -680,6 +718,7 @@ export function SessionContentHeader({
                 >
                   {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
                 </DropdownMenuItem>
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -767,6 +806,7 @@ export function SessionContentHeader({
                     {t('ccAgent.sidebar.sessionMenu.exportShare')}
                   </DropdownMenuItem>
                 )}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -789,7 +829,9 @@ export function SessionContentHeader({
       )}
 
       {/* session-git-pr-context:当前分支 + 关联 PR 徽标(非 git 目录 / dialogue 会话自动隐藏) */}
-      <GitContextBadge session={session} />
+      {(readOnly || session.status !== 'active') && <GitContextBadge session={session} />}
+
+      {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
 
       {/* 导出 .cshare 弹窗:仅打开时挂载,与 SessionItem 同款。 */}
       {shareExportOpen && (

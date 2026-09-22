@@ -5,6 +5,7 @@ import {
   applyWithVerifiedModelWindow,
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
+  shouldSkipColdPiWindowRehydration,
 } from '../runtimeModelSwitchGate';
 
 const million = 1_000_000;
@@ -210,6 +211,53 @@ describe('assessRuntimeModelSwitchGate', () => {
     },
   ])('$name', ({ input, want }) => {
     expect(assessRuntimeModelSwitchGate(input)).toEqual(want);
+  });
+});
+
+describe('shouldSkipColdPiWindowRehydration', () => {
+  it.each([
+    {
+      name: 'live usage far below the target window → skip the 2~3s cold start',
+      input: { contextTokens: 26_921, targetContextWindow: million },
+      want: true,
+    },
+    {
+      name: 'empty context → nothing to protect, skip',
+      input: { contextTokens: 0, targetContextWindow: twoHundredK },
+      want: true,
+    },
+    {
+      name: 'warn band still hot-applies (no rebuild) → skip',
+      input: { contextTokens: 150_000, targetContextWindow: twoHundredK },
+      want: true,
+    },
+    {
+      name: 'danger band can need the shrink handoff → verify',
+      input: { contextTokens: 185_000, targetContextWindow: twoHundredK },
+      want: false,
+    },
+    {
+      name: 'overflow can need confirmation → verify',
+      input: { contextTokens: 240_000, targetContextWindow: twoHundredK },
+      want: false,
+    },
+    {
+      name: 'missing live usage must not skip verification',
+      input: { contextTokens: null, targetContextWindow: twoHundredK },
+      want: false,
+    },
+    {
+      name: 'unknown target window must not skip verification',
+      input: { contextTokens: 26_921, targetContextWindow: null },
+      want: false,
+    },
+    {
+      name: 'non-positive target window is not a verified ceiling',
+      input: { contextTokens: 26_921, targetContextWindow: 0 },
+      want: false,
+    },
+  ])('$name', ({ input, want }) => {
+    expect(shouldSkipColdPiWindowRehydration(input)).toBe(want);
   });
 });
 

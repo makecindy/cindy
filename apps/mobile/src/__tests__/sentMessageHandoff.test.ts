@@ -23,6 +23,50 @@ const queueInput = (current: readonly QueuedRemoteMessage[] = [], overrides: Par
 });
 
 describe('sent message handoff', () => {
+  it.each([false, true])('keeps a new send after history-only replies (echo=%s)', async (hasEcho) => {
+    const previousUser = { ...echo, id: 'previous-user', clientId: 'previous-user', createdAt: '2026-09-16T23:59:00Z' };
+    const previousReply: RemoteMessage = { ...echo, id: 'previous-reply', clientId: 'previous-reply', role: 'assistant', createdAt: '2026-09-16T23:59:10Z' };
+    const freshReply: RemoteMessage = { ...previousReply, id: 'fresh-reply', clientId: 'fresh-reply', createdAt: '2026-09-16T23:59:20Z' };
+    const nextReply: RemoteMessage = { ...previousReply, id: 'next-reply', clientId: 'next-reply', createdAt: '2026-09-17T00:00:10Z' };
+    let history = [previousUser, previousReply];
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView(history, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const handoff = new HistoryViewHandoff<RemoteMessage>(() => true);
+    const snapshot = view.getSnapshot();
+    const displayed = handoff.reconcile(snapshot, []).messages;
+    let slots = appendOptimisticUserMessage([], [], queued, 's', displayed);
+    // A fresh push received before React renders must also precede the send.
+    const freshSlots = appendOptimisticUserMessage([], [freshReply], queued, 's', displayed);
+    expect(projectOptimisticUserMessages([...displayed, freshReply, nextReply], freshSlots)
+      .map((row) => row.clientId)).toEqual(['previous-user', 'previous-reply', 'fresh-reply', 'sent', 'next-reply']);
+    const raw = [...(hasEcho ? [echo] : []), nextReply];
+    const render = () => {
+      const snapshot = view.getSnapshot();
+      slots = reconcileOptimisticUserMessages(slots, raw, new Set(['sent']), confirmedHistoryUserClientIds(snapshot, raw));
+      const state = handoff.reconcile(snapshot, raw);
+      return buildMobileHistoryRenderItems({ view, snapshot,
+        messages: projectOptimisticUserMessages(state.messages, slots), pendingHandoff: state.pending,
+        localUserClientIds: new Set(slots.map((entry) => entry.message.clientId)), streaming: false, sessionId: 's' })
+        .map((item) => item.key);
+    };
+    const expected = [
+      'message-previous-user', 'message-previous-reply', 'message-sent', 'message-next-reply',
+    ];
+    expect(render()).toEqual(expected);
+    await view.refresh(); // A stale history refresh must retain the same position.
+    expect(render()).toEqual(expected);
+    history = [previousUser, previousReply, echo, nextReply];
+    await view.refresh();
+    expect(render()).toEqual(expected);
+    expect(slots).toEqual([]);
+    expect(appendOptimisticUserMessage([], [], queued, 's', history)).toEqual([]);
+    view.setActive(false);
+  });
+
   it.each([false, true])('keeps exactly one user row across a stale history page (initially ready=%s)', async (ready) => {
     let history: RemoteMessage[] = [];
     const view = new HistoryViewController<RemoteMessage>({

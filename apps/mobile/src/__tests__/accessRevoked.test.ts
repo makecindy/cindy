@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, PROTOCOL_VERSION, type Envelope } from '@cindy/device-link';
 import {
   applyAccessRevokedFrame,
+  markDeviceAccessRevoked,
   isAccessRevokedError,
   withAccessRevokedHandling,
 } from '@/device-link/accessRevoked';
@@ -87,6 +88,20 @@ describe('mobile device-link access revocation', () => {
     expect(revokedDevicesStore.has('dev-1')).toBe(true);
 
     await expect(withAccessRevokedHandling('dev-1', vi.fn(async () => 'ok'))).resolves.toBe('ok');
+    expect(revokedDevicesStore.has('dev-1')).toBe(false);
+  });
+
+  it.each([false, true])('late success cannot clear a newer revocation (initially revoked: %s)', async initiallyRevoked => {
+    if (initiallyRevoked) markDeviceAccessRevoked('dev-1');
+    let resolve!: (value: string) => void;
+    const result = withAccessRevokedHandling('dev-1', () => new Promise<string>(done => { resolve = done; }));
+    markDeviceAccessRevoked('dev-1');
+    resolve('old success');
+    await result;
+    expect(revokedDevicesStore.has('dev-1')).toBe(true);
+    await withAccessRevokedHandling('dev-2', async () => 'unaffected');
+    expect(revokedDevicesStore.has('dev-1')).toBe(true);
+    await withAccessRevokedHandling('dev-1', async () => 'new authorization');
     expect(revokedDevicesStore.has('dev-1')).toBe(false);
   });
 });

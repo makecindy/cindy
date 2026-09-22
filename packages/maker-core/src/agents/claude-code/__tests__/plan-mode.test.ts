@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { PINNED_SKILL_INVOCATION } from '../../base-agent.js';
 import type { AgentDeps, RemoteClaudeRoute } from '../../base-agent.js';
 import type { AuthAdapter, AuthAdapterOptions } from '../../../interfaces/auth-adapter.js';
 import type { PermissionMode } from '../../../types/common.js';
@@ -273,6 +274,40 @@ describe('ClaudeCodeAgent plan mode', () => {
         text: `@"${realMarkdownPath}" @"${realPdfPath}" Review the Markdown, PDF, and image evidence.`,
       },
     ]);
+    await handle.close();
+  });
+
+  it('expands the exact Host-pinned Skill before Claude resolves slash commands by name', async () => {
+    const { handle, queryPrompt, workingDir } = await startPlanSession(false);
+    const skillFile = path.join(workingDir, 'system-skills', 'v10', 'learn', 'SKILL.md');
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.writeFile(skillFile, [
+      '---',
+      'name: learn',
+      'description: Start Cindy Learn.',
+      '---',
+      '',
+      '# Trusted Learn instructions',
+      '',
+      'Call the Cindy Learn host exactly once.',
+    ].join('\n'));
+    const nextInput = queryPrompt[Symbol.asyncIterator]().next();
+
+    await handle.send(
+      { type: 'user', content: '/learn release flow' },
+      { [PINNED_SKILL_INVOCATION]: { name: 'learn', path: skillFile } },
+    );
+
+    const sdkInput = (await nextInput).value;
+    expect(sdkInput?.message?.content).toBe([
+      '<command-name>learn</command-name>',
+      '<command-message>/learn</command-message>',
+      '<command-args>release flow</command-args>',
+      '',
+      '# Trusted Learn instructions',
+      '',
+      'Call the Cindy Learn host exactly once.',
+    ].join('\n'));
     await handle.close();
   });
 

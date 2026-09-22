@@ -24,6 +24,7 @@ import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDis
  * 写「尚未支持」。跨设备控制仍走 device-link, 在目标设备本地启动 Pi。
  */
 
+import { LIBRARY_READ_ROOT, libraryNativeReadContext } from '../shared/library-native-read.js';
 import os from 'node:os';
 import path from 'node:path';
 import { constants as fsConstants, promises as fs } from 'node:fs';
@@ -65,6 +66,7 @@ import {
   AgentStartupStoppedError,
   BaseAgent,
   MAIN_OWNED_SEND_CONTEXT,
+  PINNED_SKILL_INVOCATION,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
   projectPiPackageCommandDiagnostic,
@@ -117,6 +119,9 @@ import {
   listPiSubagentRunDiagnostics,
   listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
+  scanPiSubagentRuns,
+  PI_SUBAGENT_ACTIVE_POLL_MS,
+  PI_SUBAGENT_IDLE_POLL_MS,
   piSubagentRunRoot,
   piSubagentApprovalScope,
   piSubagentRuntimeOwnerId,
@@ -193,6 +198,7 @@ import type { PiRemoteFileOps } from '../base-agent.js';
 import {
   capturePiRuntimeCapabilityManifest,
   identifyManagedPiPackageCommandNames,
+  preparePinnedPiSkillInvocation,
   snapshotManagedPiPackageSkills,
 } from './runtime-capabilities.js';
 import {
@@ -1601,7 +1607,7 @@ function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readon
     const labels = [...new Set(readOnlyDirs.map(extraDirBasename))];
     sections.push(
       '<cindy-extra-reference-directories>',
-      'This task can read the plugin library and extra references as read-only. Do not modify them:',
+      'This task can read extra references as read-only. If a plugin library root is authorized as a host-owned extraDir, resolve the latest library:assets/<2>/<hash>/blob.<ext> relative key against that root; do not cache roots across directory changes. Do not modify them.',
       ...labels.map((label) => `- ${label}`),
       '</cindy-extra-reference-directories>',
     );
@@ -2254,7 +2260,9 @@ export class PiAgent extends BaseAgent {
       }
       const modelBaseUrl = endpoint ? piGatewayModelBaseUrl(endpoint, api) : undefined;
       gatewayApiByModel.set(m.id, api);
-      const supportsImageInput = m.supportsImageInput === true;
+      // Missing capability metadata must not disable newly discovered vision models.
+      // Explicit text-only declarations still take precedence over this default.
+      const supportsImageInput = m.supportsImageInput !== false;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
       const thinkingLevelMap = gatewayThinkingLevelMap(m.efforts, resolvedSpec?.thinkingLevelMap);
       return [{
@@ -2333,7 +2341,7 @@ export class PiAgent extends BaseAgent {
           ...(m.api ? { api: m.api } : {}),
           reasoning: m.reasoning ?? false,
           ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-          input: m.input ?? ['text'],
+          input: m.input ?? ['text', 'image'],
           contextWindow,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
           ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
@@ -3172,6 +3180,7 @@ export class PiAgent extends BaseAgent {
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode =
       reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
+    let mutableLibraryRoot: string | null | undefined = opts.remoteHostId || reviewMode ? undefined : (opts[LIBRARY_READ_ROOT] ?? undefined);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
     let reviewReadGrants: Awaited<ReturnType<typeof buildReviewReadGrants>> = [];
@@ -3197,6 +3206,7 @@ export class PiAgent extends BaseAgent {
     type PermissionSnapshot = {
       mode: 'ask' | 'auto' | 'bypassPermissions';
       readOnlyRoots: string[];
+      libraryRoot?: string | null;
       writableRoots: string[];
       reviewReadPaths?: string[];
       reviewOnly?: true;
@@ -3205,12 +3215,14 @@ export class PiAgent extends BaseAgent {
     let requestedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      ...(mutableLibraryRoot !== undefined ? { libraryRoot: mutableLibraryRoot } : {}),
       writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
     };
     let persistedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      ...(mutableLibraryRoot !== undefined ? { libraryRoot: mutableLibraryRoot } : {}),
       writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
     };
@@ -3269,6 +3281,7 @@ export class PiAgent extends BaseAgent {
       requestedPermissionSnapshot = {
         mode: next.mode,
         readOnlyRoots: [...next.readOnlyRoots],
+        ...(next.libraryRoot !== undefined ? { libraryRoot: next.libraryRoot } : {}),
         writableRoots: [...next.writableRoots],
         ...reviewPathSnapshot,
       };
@@ -3318,6 +3331,7 @@ export class PiAgent extends BaseAgent {
               // 放宽失败时 permissionMode 仍是旧的已提交 mode，同样达到回滚效果。
               mode: permissionMode,
               readOnlyRoots: [...persistedPermissionSnapshot.readOnlyRoots],
+              libraryRoot: persistedPermissionSnapshot.libraryRoot,
               writableRoots: [...persistedPermissionSnapshot.writableRoots],
               ...reviewPathSnapshot,
             };
@@ -3329,10 +3343,12 @@ export class PiAgent extends BaseAgent {
         if (gen === permissionWriteGen) {
           permissionMode = snapshot.mode;
           mutableExtraDirs = [...snapshot.readOnlyRoots];
+          mutableLibraryRoot = snapshot.libraryRoot;
           mutableWritableDirs = [...snapshot.writableRoots];
           persistedPermissionSnapshot = {
             mode: snapshot.mode,
             readOnlyRoots: [...snapshot.readOnlyRoots],
+            libraryRoot: snapshot.libraryRoot,
             writableRoots: [...snapshot.writableRoots],
             ...reviewPathSnapshot,
           };
@@ -3962,7 +3978,9 @@ export class PiAgent extends BaseAgent {
      * approvals.
      */
     let piProcessExited = false;
-    const piSubagentStatuses = new Map<string, PiSubagentRunStatus>();
+    type PiSubagentStatusSummary = Pick<PiSubagentRunStatus,
+      'runId' | 'taskId' | 'state' | 'startedAt' | 'updatedAt' | 'title' | 'description'>;
+    const piSubagentStatuses = new Map<string, PiSubagentStatusSummary>();
     const piSubagentFingerprints = new Map<string, string>();
     const piSubagentApprovalRequests = new Set<string>();
     const piSubagentApprovalDeliveries = new Set<string>();
@@ -4020,6 +4038,8 @@ export class PiAgent extends BaseAgent {
       }
     };
     let piSubagentRefreshInFlight = false;
+    let piSubagentNextRefreshAt = 0;
+    let piSubagentRefreshGeneration = 0;
     // Approval delivery belongs to the *detached run* lifecycle, not to the
     // parent handle. After a navigation close the foreground refresh timer is
     // gone, but `deferProxyDisposalForDetachedRuns` keeps polling durable status
@@ -4063,7 +4083,7 @@ export class PiAgent extends BaseAgent {
       const taskId = status.taskId;
       const projectedStatus = status.state === 'queued' ? 'running' : status.state;
       if (isPiSubagentTerminal(status.state)) clearPiSubagentApprovalState(status.runId);
-      const fingerprint = JSON.stringify([
+      const fingerprint = createHash('sha256').update(JSON.stringify([
         status.runId,
         status.state,
         status.totalTokens,
@@ -4077,7 +4097,7 @@ export class PiAgent extends BaseAgent {
           task.error,
           task.pendingApproval?.id,
         ]),
-      ]);
+      ])).digest('hex');
       if (piSubagentFingerprints.get(taskId) === fingerprint) return;
       piSubagentFingerprints.set(taskId, fingerprint);
       const taskModels = new Set(status.tasks.map((task) => task.model ?? null));
@@ -4153,7 +4173,7 @@ export class PiAgent extends BaseAgent {
      * that is merely unreadable is held, not buried.
      */
     const emitPiSubagentDiagnostic = (
-      previous: PiSubagentRunStatus,
+      previous: PiSubagentStatusSummary,
       diagnostic: PiSubagentRunDiagnostic,
     ): void => {
       queue.push({
@@ -4612,16 +4632,28 @@ export class PiAgent extends BaseAgent {
     };
     const refreshPiSubagentRuns = async (): Promise<void> => {
       if (closed || piSubagentRefreshInFlight) return;
+      const generation = piSubagentRefreshGeneration;
+      const refreshStartedAt = Date.now();
       piSubagentRefreshInFlight = true;
+      let active = false;
+      let succeeded = false;
       try {
-        const statuses = await listPiSubagentRuns(subagentRunRoot);
-        if (closed) return;
-        const newestTaskIds = new Set<string>();
-        for (const status of statuses) {
+        const seenRunIds = new Set<string>();
+        for await (const status of scanPiSubagentRuns(subagentRunRoot, { latestPerTask: true })) {
           if (closed) break;
-          if (newestTaskIds.has(status.taskId)) continue;
-          newestTaskIds.add(status.taskId);
-          piSubagentStatuses.set(status.taskId, status);
+          seenRunIds.add(status.runId);
+          const previous = piSubagentStatuses.get(status.taskId);
+          if (previous && (previous.startedAt > status.startedAt
+            || (previous.startedAt === status.startedAt && previous.runId.localeCompare(status.runId) > 0))) continue;
+          const terminal = isPiSubagentTerminal(status.state);
+          if (!terminal) active = true;
+          // Disk/DB remain the history source. Output is delivered below, but
+          // never pinned by this live handle's discovery or fingerprint cache.
+          piSubagentStatuses.set(status.taskId, {
+            runId: status.runId, taskId: status.taskId, state: status.state,
+            startedAt: status.startedAt, updatedAt: status.updatedAt,
+            ...(!terminal ? { title: status.title, description: status.description } : {}),
+          });
           emitPiSubagentStatus(status);
           for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
         }
@@ -4631,7 +4663,7 @@ export class PiAgent extends BaseAgent {
         // deleted the approval dedupe state, so the same pendingApproval was
         // offered again the instant the file parsed and two decisions raced for
         // one request. Ask the directory set what actually happened.
-        const missing = [...piSubagentStatuses].filter(([taskId]) => !newestTaskIds.has(taskId));
+        const missing = [...piSubagentStatuses].filter(([, status]) => !seenRunIds.has(status.runId));
         if (missing.length > 0) {
           const [runIds, diagnostics] = await Promise.all([
             listPiSubagentRunDirectoryIds(subagentRunRoot),
@@ -4660,18 +4692,31 @@ export class PiAgent extends BaseAgent {
             if (stale) emitPiSubagentDiagnostic(previous, stale);
           }
         }
+        // Unreadable statuses are not proof that a previously active run ended.
+        active ||= [...piSubagentStatuses.values()].some((status) => !isPiSubagentTerminal(status.state));
+        succeeded = true;
       } catch (error) {
         deps.logger.warn('pi subagent durable status refresh failed', {
           message: error instanceof Error ? error.message : String(error),
         });
       } finally {
         piSubagentRefreshInFlight = false;
+        if (generation === piSubagentRefreshGeneration) {
+          piSubagentNextRefreshAt = refreshStartedAt + (succeeded && !active
+            ? PI_SUBAGENT_IDLE_POLL_MS : PI_SUBAGENT_ACTIVE_POLL_MS);
+        }
       }
+    };
+    const requestPiSubagentRefresh = async (): Promise<void> => {
+      piSubagentRefreshGeneration++;
+      piSubagentNextRefreshAt = 0;
+      await refreshPiSubagentRuns();
     };
     const piSubagentRefreshTimer = localSubagentSupported
       ? setInterval(() => {
+          if (Date.now() < piSubagentNextRefreshAt) return;
           void refreshPiSubagentRuns();
-        }, 500)
+        }, PI_SUBAGENT_ACTIVE_POLL_MS)
       : null;
     let piSubagentRefreshTimerCleared = false;
     const clearPiSubagentRefreshTimer = (): void => {
@@ -4680,7 +4725,7 @@ export class PiAgent extends BaseAgent {
       if (piSubagentRefreshTimer) clearInterval(piSubagentRefreshTimer);
     };
     piSubagentRefreshTimer?.unref?.();
-    if (localSubagentSupported) void refreshPiSubagentRuns();
+    if (localSubagentSupported) void requestPiSubagentRefresh();
     // Cindy 侧对 pi plan 模式的镜像态;setPlanMode 经 /plan toggle 驱动,与 pi 内部
     // planModeEnabled 保持一致(RPC 下 Execute/Refine 选择框被 auto-cancel,pi 不会自行
     // 翻转,故镜像不漂移)。
@@ -4957,19 +5002,26 @@ export class PiAgent extends BaseAgent {
           // cannot rule out a launch already in flight inside it, even if the
           // process exits before the scan returns.
           const scanFollowsExit = piProcessExited;
-          const [directoryCount, statuses] = await Promise.all([
+          const [directoryCount, inspected] = await Promise.all([
             countPiSubagentRunDirectories(subagentRunRoot),
-            listPiSubagentRuns(subagentRunRoot),
+            (async () => {
+              let readable = 0;
+              const activeStatuses: PiSubagentRunStatus[] = [];
+              for await (const status of scanPiSubagentRuns(subagentRunRoot)) {
+                readable++;
+                if (!isPiSubagentTerminal(status.state)) activeStatuses.push(status);
+              }
+              return { readable, activeStatuses };
+            })(),
           ]);
-          const active = statuses.some((status) => !isPiSubagentTerminal(status.state));
-          const allDirectoriesReadable = statuses.length === directoryCount;
+          const active = inspected.activeStatuses.length > 0;
+          const allDirectoriesReadable = inspected.readable === directoryCount;
           settleInitialInspection();
           // Approval delivery keeps running while any detached run is live. The
           // decision/delivery dedupe sets are the same ones the foreground timer
           // used, so a request already answered before close is never re-asked.
           if (localSubagentSupported && !leaseDisposed) {
-            for (const status of statuses) {
-              if (isPiSubagentTerminal(status.state)) continue;
+            for (const status of inspected.activeStatuses) {
               for (const task of status.tasks) dispatchPiSubagentApproval(status, task);
             }
           }
@@ -5268,6 +5320,7 @@ export class PiAgent extends BaseAgent {
                       'PI Subagent runner request is unavailable',
                     );
                 }
+                void requestPiSubagentRefresh();
                 return true;
               },
               emitExtensionNotification: (message, event) => {
@@ -5283,8 +5336,13 @@ export class PiAgent extends BaseAgent {
                 }
                 const notification: AgentEvent = {
                   type: 'text',
-                  data: { text, isFinal: false },
+                  data: { text, isFinal: true },
                   source: 'pi',
+                  standaloneText: true,
+                  turnScope: 'background',
+                  // Freeze the notice's origin before the async queue: a later
+                  // /clear must discard it even when delivery happens afterward.
+                  backgroundTurnStartedAt: Date.now(),
                 };
                 queue.push(notification);
                 return notification;
@@ -5929,13 +5987,13 @@ export class PiAgent extends BaseAgent {
 
     const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
       if (images.length === 0) return;
+      const nativeModel = nativeProviderById
+        .get(mutablePiProviderId)
+        ?.models.find((candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel));
       const supportsImageInput =
         mutablePiProviderId === PI_PROVIDER_ID
           ? gatewayImageInputByModel.get(mutableModel) === true
-          : nativeProviderById
-              .get(mutablePiProviderId)
-              ?.models.find((candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel))
-              ?.input?.includes('image') === true;
+          : nativeModel !== undefined && (nativeModel.input ?? ['text', 'image']).includes('image');
       if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
     };
@@ -6599,6 +6657,7 @@ export class PiAgent extends BaseAgent {
             await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
           }
           let { text, images } = await buildPiPrompt(message, { remote });
+          const pinnedSkill = sendOpts?.[PINNED_SKILL_INVOCATION];
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
           setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
@@ -6615,12 +6674,18 @@ export class PiAgent extends BaseAgent {
           // erase the user message/receipt while leaving an installed package.
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           await awaitRuntimeCapabilitiesForSlashCommand(text);
+          if (pinnedSkill && !runtimeCapabilityManifest) {
+            await runtimeCapabilityRefreshPromise;
+          }
+          if (pinnedSkill) {
+            text = preparePinnedPiSkillInvocation(text, pinnedSkill, runtimeCapabilityManifest);
+          }
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
           // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
           const promptText = composePiPromptText(
             text,
-            piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
+            [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
             runtimeCapabilityManifest,
           );
           const managedExtensionCommandName = managedExtensionSlashCommandName(
@@ -6863,7 +6928,7 @@ export class PiAgent extends BaseAgent {
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
         const promptText = composePiPromptText(
           text,
-          piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
+          [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
           runtimeCapabilityManifest,
         );
         const managedExtensionCommandName = managedExtensionSlashCommandName(
@@ -6908,7 +6973,7 @@ export class PiAgent extends BaseAgent {
         await controlPiSubagentRuns(subagentRunRoot, taskId, 'stop', {
           runtimeOwnerId: subagentRuntimeOwnerId,
         });
-        await refreshPiSubagentRuns();
+        await requestPiSubagentRefresh();
       },
 
       async resumeBackgroundTask(taskId: string, message: string, childId?: string): Promise<void> {
@@ -6937,7 +7002,7 @@ export class PiAgent extends BaseAgent {
             runtimeSnapshot: { modelsJson, bridgeSource, runnerSource },
           }, childId);
           if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
-          await refreshPiSubagentRuns();
+          await requestPiSubagentRefresh();
         })();
         // close() waits for every resume that entered while this handle was
         // live before inspecting durable runs and transferring the proxy-token
@@ -7185,11 +7250,12 @@ export class PiAgent extends BaseAgent {
         }
       },
 
-      async setExtraDirs(dirs: string[]): Promise<void> {
+      async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
         if (reviewMode) return;
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
           readOnlyRoots: [...dirs],
+          libraryRoot: remote ? undefined : (libraryRoot ?? (requestedPermissionSnapshot.libraryRoot === undefined ? undefined : null)),
         });
       },
 

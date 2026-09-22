@@ -18,10 +18,14 @@ import {
 } from './toolchainEnvironment.js';
 import { manageCindyMakeWorkspace, taskError, type MakeTaskAction } from './taskCleanup.js';
 import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
+import { captureMakeHistoryReport } from './historyCapture.js';
+import { captureMakeHistoryStore } from './historyOwner.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
 interface TaskManagementRuntime {
   isAlive(sessionId: string): boolean | undefined;
   isRunning(sessionId: string): boolean;
+  isWorkspaceBusy?(workingDir: string): boolean;
   setStatus(
     sessionId: string,
     patch: { status: 'archived' | 'deleted'; pinnedAt: null },
@@ -32,6 +36,141 @@ let runtime: TaskManagementRuntime | undefined;
 /** The composition root supplies runtime shutdown and canonical session writes. */
 export function configureCindyMakeTaskManagement(deps: TaskManagementRuntime): void {
   runtime = deps;
+}
+
+/** Close the disposable resolution task before reclaiming its working directory. */
+export async function cleanupCompletedMakeMergeTask(
+  sessionId: string,
+  workingDir: string,
+  ownerCurrent: () => boolean,
+  cleanup: (canCleanup: () => boolean) => Promise<boolean>,
+  stopRunning = false,
+): Promise<boolean> {
+  const client = getDbClient();
+  const owner = captureDataOwnerBroadcastScope();
+  const current = () => {
+    try {
+      return ownerCurrent() && isDataOwnerBroadcastScopeCurrent(owner) && getDbClient() === client;
+    } catch {
+      return false;
+    }
+  };
+  const valid = (row: typeof sessions.$inferSelect | undefined) =>
+    row?.source === 'cindy-make-merge' &&
+    !row.remoteHostId &&
+    normalizeWorkingDirForStorage(row.workingDir) === normalizeWorkingDirForStorage(workingDir);
+  const read = async () =>
+    (await client.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1))[0];
+  const row = await read();
+  if (
+    !current() ||
+    !runtime ||
+    !row ||
+    !valid(row) ||
+    (!stopRunning && runtime.isRunning(sessionId))
+  )
+    return false;
+  if (row.status === 'active')
+    await runtime.setStatus(sessionId, { status: 'archived', pinnedAt: null });
+  if (!current()) return false;
+  await runtime.recycle(sessionId, row.status === 'deleted' ? 'deleted' : 'archived');
+  return withSessionRouteLock(sessionId, async () => {
+    const closed = await read();
+    const canCleanup = () =>
+      current() &&
+      !!runtime &&
+      !runtime.isAlive(sessionId) &&
+      !runtime.isRunning(sessionId) &&
+      !runtime.isWorkspaceBusy?.(workingDir);
+    if (!canCleanup() || !closed || !valid(closed) || closed.status === 'active') return false;
+    const borrowers = await client.drizzle
+      .select({ id: sessions.id, status: sessions.status })
+      .from(sessions)
+      .where(eq(sessions.workingDir, normalizeWorkingDirForStorage(workingDir)!));
+    if (
+      borrowers.some(
+        (other) =>
+          other.id !== sessionId && (other.status === 'active' || runtime!.isAlive(other.id)),
+      )
+    )
+      return false;
+    return cleanup(canCleanup);
+  });
+}
+
+let integrationRefresh: { isCurrent: () => boolean; done: Promise<void> } | undefined;
+
+/** Refresh cell facts in the background; opening Settings never waits for Git file scans. */
+export function refreshCindyMakeTaskIntegration(): Promise<void> {
+  if (integrationRefresh?.isCurrent()) return integrationRefresh.done;
+  const client = getDbClient();
+  const owner = captureDataOwnerBroadcastScope();
+  const userData = app.getPath('userData');
+  const isCurrent = () => {
+    try {
+      return (
+        isDataOwnerBroadcastScopeCurrent(owner) &&
+        getDbClient() === client &&
+        app.getPath('userData') === userData
+      );
+    } catch {
+      return false;
+    }
+  };
+  const job = { isCurrent, done: Promise.resolve() };
+  integrationRefresh = job;
+  job.done = (async () => {
+    const reports = Object.values(cindyMakeManager.getState().tasks ?? {});
+    if (!reports.length) return;
+    const environment = await createMakeToolchainEnvironment(userData);
+    const env = await resolveMakeToolEnvironment(environment, ['git'], AbortSignal.timeout(15_000));
+    for (const report of reports) {
+      if (!isCurrent()) return;
+      if (!report.task || report.task.finished) continue;
+      await cindyMakeManager.withProject(makeSourceRoot(userData), async () => {
+        if (!isCurrent() || !cindyMakeManager.taskReport(report.runId)?.task) return;
+        const busy = () =>
+          !runtime ||
+          runtime.isRunning(report.task!.sessionId) ||
+          cindyMakeManager.isTaskPreparing(report.task!.sessionId) ||
+          !!cindyMakeManager.getState().taskActions?.[report.task!.sessionId];
+        let integration: NonNullable<MakeDoctorReport['task']>['integration'] = 'unknown';
+        if (!busy()) {
+          try {
+            integration = (await manageCindyMakeWorkspace(
+              userData,
+              report.runId,
+              'inspect',
+              env,
+              AbortSignal.timeout(15_000),
+              {
+                checkCurrent: () => {
+                  if (!isCurrent()) throw taskError('unavailable');
+                },
+              },
+            ))
+              ? 'integrated'
+              : 'unintegrated';
+          } catch {
+            /* Unknown must not be presented as already integrated. */
+          }
+        }
+        if (isCurrent())
+          cindyMakeManager.projectTaskSession(report.runId, {
+            integration: busy() ? 'unknown' : integration,
+          });
+      });
+    }
+  })()
+    .catch(() => {
+      if (!isCurrent()) return;
+      for (const runId of Object.keys(cindyMakeManager.getState().tasks ?? {}))
+        cindyMakeManager.projectTaskSession(runId, { integration: 'unknown' });
+    })
+    .finally(() => {
+      if (integrationRefresh === job) integrationRefresh = undefined;
+    });
+  return job.done;
 }
 
 /** Called under the existing terminal-session route lock, after all writers stop. */
@@ -59,8 +198,16 @@ export async function recycleCindyMakeTask(
     return;
   }
   if (action === 'finish' && row.status !== 'archived') throw taskError('unavailable');
+  if (!action && row.status === 'archived') return;
   const workingDir = row.workingDir;
   const runId = path.basename(workingDir);
+  const featureOperation = cindyMakeManager.getState().upstreamMerge;
+  if (
+    featureOperation?.feature?.taskSessionId === sessionId &&
+    featureOperation.status !== 'merged' &&
+    featureOperation.hasWorkspace
+  )
+    throw taskError('busy');
   const [card] = await db
     .select({ content: messages.content, clientId: messages.clientId })
     .from(messages)
@@ -80,7 +227,10 @@ export async function recycleCindyMakeTask(
     }
   })();
   const report = content?.__cindyMakeCard?.data?.report as MakeDoctorReport | undefined;
+  const history = captureMakeHistoryStore();
+  if (report) captureMakeHistoryReport(report, history, row.createdAt);
   if (report?.task?.finished) {
+    history.end(runId);
     cindyMakeManager.forgetTask(runId);
     return;
   }
@@ -90,7 +240,7 @@ export async function recycleCindyMakeTask(
   if (!runtime) throw taskError('busy');
   await cindyMakeManager.runTaskAction(
     sessionId,
-    row.status === 'deleted' ? 'delete' : 'finish',
+    action ?? (row.status === 'deleted' ? 'delete' : 'finish'),
     isCurrent,
     () =>
       cindyMakeManager.withProject(makeSourceRoot(userData), async () => {
@@ -100,7 +250,8 @@ export async function recycleCindyMakeTask(
         const env = await resolveMakeToolEnvironment(environment, ['git'], signal);
         // Recheck after waiting for project operations and tool discovery. A failed
         // close, or another session borrowing this directory, must preserve it.
-        if (runtime!.isAlive(sessionId)) throw taskError('busy');
+        if (runtime!.isAlive(sessionId) || runtime!.isWorkspaceBusy?.(workingDir))
+          throw taskError('busy');
         const borrowers = await db
           .select({ id: sessions.id, status: sessions.status })
           .from(sessions)
@@ -112,6 +263,12 @@ export async function recycleCindyMakeTask(
           )
         )
           throw taskError('busy');
+        if (action === 'end' && card && report?.task && !report.task.cleanupPending) {
+          report.task.cleanupPending = true;
+          await updateMessageContent(sessionId, card.clientId, content);
+          checkCurrent();
+          cindyMakeManager.projectTaskSession(runId, { cleanupPending: true });
+        }
         const cleaned = await manageCindyMakeWorkspace(
           userData,
           runId,
@@ -131,7 +288,10 @@ export async function recycleCindyMakeTask(
           },
         );
         checkCurrent();
-        if (!cleaned) return;
+        if (!cleaned) {
+          if (action) throw taskError('dirty');
+          return;
+        }
         if (card && report?.task) {
           await updateMessageContent(sessionId, card.clientId, {
             ...content,
@@ -139,12 +299,16 @@ export async function recycleCindyMakeTask(
               ...content.__cindyMakeCard,
               data: {
                 ...content.__cindyMakeCard.data,
-                report: { ...report, task: { ...report.task, finished: true } },
+                report: {
+                  ...report,
+                  task: { ...report.task, finished: true, cleanupPending: false },
+                },
               },
             },
           });
         }
         checkCurrent();
+        history.end(runId);
         cindyMakeManager.forgetTask(runId);
       }),
     true,
@@ -156,7 +320,7 @@ export async function manageCindyMakeTask(sessionId: unknown, action: unknown): 
   if (
     typeof sessionId !== 'string' ||
     !/^[a-zA-Z0-9-]{1,128}$/.test(sessionId) ||
-    (action !== 'finish' && action !== 'delete')
+    (action !== 'end' && action !== 'finish' && action !== 'delete')
   )
     throwIpcError('INVALID_PARAMS', 'Invalid Cindy Make action');
   const client = getDbClient();
@@ -180,10 +344,18 @@ export async function manageCindyMakeTask(sessionId: unknown, action: unknown): 
     row.remoteHostId ||
     !row.workingDir ||
     !isCindyMakeWorktreePath(app.getPath('userData'), row.workingDir) ||
-    (row.status === 'deleted' && action !== 'delete')
+    (row.status === 'deleted' && action === 'finish')
   )
     throwIpcError('NOT_FOUND', 'Cindy Make task unavailable');
   if (!runtime) throwIpcError('PRECONDITION_FAILED', 'busy');
+  const featureOperation = cindyMakeManager.getState().upstreamMerge;
+  if (
+    featureOperation?.feature?.taskSessionId === sessionId &&
+    featureOperation.status !== 'merged' &&
+    featureOperation.hasWorkspace
+  )
+    throwIpcError('PRECONDITION_FAILED', 'busy');
+  if (runtime.isWorkspaceBusy?.(row.workingDir)) throwIpcError('PRECONDITION_FAILED', 'busy');
   if (
     action === 'finish' &&
     (cindyMakeManager.isTaskPreparing(sessionId) || runtime.isRunning(sessionId))
@@ -192,7 +364,8 @@ export async function manageCindyMakeTask(sessionId: unknown, action: unknown): 
   if (!isCurrent()) throwIpcError('PRECONDITION_FAILED', 'unavailable');
   try {
     await cindyMakeManager.runTaskAction(sessionId, action, isCurrent, async () => {
-      const status = action === 'delete' ? 'deleted' : 'archived';
+      // Ending keeps the conversation. Old deleted tasks may only finish their cleanup.
+      const status = action === 'delete' || row.status === 'deleted' ? 'deleted' : 'archived';
       await runtime!.setStatus(sessionId, { status, pinnedAt: null });
       await runtime!.recycle(sessionId, status);
       if (!isCurrent()) throw taskError('unavailable');

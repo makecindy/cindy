@@ -2,6 +2,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
+import { frame } from "@expo/ui/swift-ui/modifiers";
 import {
   RemoteDesktopPanel,
   RemoteDesktopToolbar,
@@ -88,19 +89,25 @@ vi.mock("@expo/ui/swift-ui/modifiers", () =>
       "presentationDetents",
       "presentationDragIndicator",
     ]
-      .map((name) => [name, (value: unknown) => ({ name, value })])
+      .map((name) => [name, vi.fn((value: unknown) => ({ name, value }))])
       .concat([
         ["shapes", { capsule: vi.fn(), circle: vi.fn(), rectangle: vi.fn() }],
       ] as any),
   ),
 );
 vi.mock("lucide-react-native", () => ({
+  ArrowLeft: () => null,
+  ArrowRight: () => null,
+  Menu: () => null,
   Keyboard: () => null,
   SlidersHorizontal: () => null,
 }));
 vi.mock("../RemoteDesktopIcons", () => ({
   AllWindowsIcon: () => null,
   ShowDesktopIcon: () => null,
+  WorkspaceLeftIcon: () => <span data-icon="workspace-left" />,
+  WorkspaceRightIcon: () => <span data-icon="workspace-right" />,
+  OmarchyMenuIcon: () => <span data-icon="omarchy" />,
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -109,6 +116,7 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => state.safe,
 }));
 vi.mock("@/theme", () => ({
+  navigationChrome: { target: 44, clear: { dark: { foreground: '#FFFFFF', scrim: 'rgba(0, 0, 0, 0.35)', selected: 'rgba(255, 255, 255, 0.18)' }, light: { foreground: '#000000', scrim: 'rgba(255, 255, 255, 0.35)', selected: 'rgba(0, 0, 0, 0.10)' } } },
   iconSize: { action: 24 },
   typeScale: { body: 16, caption: 12 },
   iconStroke: { regular: 2 },
@@ -169,6 +177,58 @@ it("keeps operations usable without control, with compact landscape order", () =
   expect(desktop).not.toHaveBeenCalled();
   v.close();
 });
+
+it.each([false, true])(
+  "shows Omarchy desktop navigation with five accessible targets (landscape=%s)",
+  (landscape) => {
+    const left = vi.fn(),
+      right = vi.fn(),
+      menu = vi.fn();
+    const props = {
+      landscape,
+      canControl: true,
+      keyboard: false,
+      operations: false,
+      onWindows: vi.fn(),
+      onDesktop: vi.fn(),
+      onKeyboard: vi.fn(),
+      onOperations: vi.fn(),
+      onWorkspaceLeft: left,
+      onWorkspaceRight: right,
+      onOmarchyMenu: menu,
+    };
+    const v = mount(<RemoteDesktopToolbar {...props} />);
+    for (const icon of ["workspace-left", "workspace-right", "omarchy"])
+      expect(v.host.querySelector(`[data-icon="${icon}"]`)).not.toBeNull();
+    for (const key of ["workspaceLeft", "workspaceRight", "omarchyMenu"])
+      act(() =>
+        v.host
+          .querySelector<HTMLButtonElement>(
+            `[data-testid="remoteDesktop.${key}"]`,
+          )!
+          .click(),
+      );
+    expect(left).toHaveBeenCalledOnce();
+    expect(right).toHaveBeenCalledOnce();
+    expect(menu).toHaveBeenCalledOnce();
+    expect(v.host.querySelectorAll("button")).toHaveLength(5);
+    const surface = v.host.firstElementChild as HTMLElement;
+    expect(landscape ? surface.style.height : surface.style.width).toBe(
+      "220px",
+    );
+    expect(
+      v.host.querySelector('[data-testid="remoteDesktop.showDesktop"]'),
+    ).toBeNull();
+    v.render(<RemoteDesktopToolbar {...props} canControl={false} />);
+    for (const key of ["workspaceLeft", "workspaceRight", "omarchyMenu"])
+      expect(
+        v.host.querySelector<HTMLButtonElement>(
+          `[data-testid="remoteDesktop.${key}"]`,
+        )!.disabled,
+      ).toBe(true);
+    v.close();
+  },
+);
 
 it.each([false, true])(
   "keeps one hosted surface while navigating and updating the header (landscape=%s)",
@@ -258,8 +318,8 @@ it("anchors the popover to the centered rail and opens inward after either rotat
     v.render(<RemoteDesktopPanel {...props} toolbarOnLeft={islandRight} />);
     const anchor = v.host.firstElementChild as HTMLElement;
     expect(anchor.style.top).toBe("102.5px");
-    expect(anchor.style.left).toBe(islandRight ? "20px" : "");
-    expect(anchor.style.right).toBe(islandRight ? "" : "20px");
+    expect(anchor.style.left).toBe(islandRight ? "16px" : "");
+    expect(anchor.style.right).toBe(islandRight ? "" : "16px");
     expect(state.presentation.attachmentAnchor).toBe(
       islandRight ? "trailing" : "leading",
     );
@@ -267,5 +327,26 @@ it("anchors the popover to the centered rail and opens inward after either rotat
       islandRight ? "leading" : "trailing",
     );
   }
+  v.render(<RemoteDesktopPanel {...props} toolbarActionCount={5} />);
+  expect((v.host.firstElementChild as HTMLElement).style.top).toBe("80.5px");
+  v.close();
+});
+
+it("offers a useful ideal popover height without forcing that height on a smaller presentation", () => {
+  vi.mocked(frame).mockClear();
+  state.safe = { top: 0, bottom: 21, left: 62, right: 0 };
+  const v = mount(
+    <RemoteDesktopPanel landscape topInset={0} title="Operations" caption="Computer" onClose={vi.fn()}>
+      <span>Controls</span>
+    </RemoteDesktopPanel>,
+  );
+  const frames = vi.mocked(frame).mock.calls.map(([value]) => value);
+  // The RN scroll view has no intrinsic preferred height. Only a maximum
+  // collapses it; a fixed height instead overflows the system popover bounds.
+  expect(frames).toContainEqual({ minHeight: 44, idealHeight: 365, maxHeight: 365 });
+  expect(frames.filter((value) => value.height !== undefined)).toEqual([
+    { width: 44, height: 44 },
+  ]);
+  expect(v.host.textContent).toContain("Controls");
   v.close();
 });

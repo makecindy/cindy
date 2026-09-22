@@ -63,17 +63,27 @@ describe('messageHistoryAnchor', () => {
     });
   });
 
-  it('captures the closest measured row when LegendList has not resolved its visible range', () => {
+  it('captures the containing row when LegendList has not resolved its visible range', () => {
     expect(captureMobileHistoryAnchor({
       data: [{ key: 'm1' }, { key: 'm2' }],
       positionAtIndex: (index) => [40, 190][index],
       scroll: 170,
       start: -1,
     }, (item) => item.key)).toEqual({
-      key: 'm2',
-      viewportOffset: 20,
-      fallbacks: [{ key: 'm1', viewportOffset: -130 }],
+      key: 'm1',
+      viewportOffset: -130,
+      fallbacks: [{ key: 'm2', viewportOffset: 20 }],
     });
+  });
+
+  it('restores inside a long message even when the following row measurement changes', () => {
+    const data = [{ key: 'long' }, { key: 'next' }];
+    const anchor = captureMobileHistoryAnchor({ data, start: -1, scroll: 1800,
+      positionAtIndex: index => [0, 2400][index] }, item => item.key)!;
+    expect(anchor.key).toBe('long');
+    expect(resolveMobileHistoryAnchorOffset(anchor, {
+      positionByKey: key => key === 'long' ? 0 : 3200,
+    })).toBe(1800);
   });
 
   it('uses logarithmic position lookup and only captures nearby fallback rows', () => {

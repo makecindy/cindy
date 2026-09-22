@@ -12,6 +12,7 @@
 
 import type { AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import { randomUUID } from 'node:crypto';
+import { ToolLoopGuard } from './agents/shared/loop-guard.js';
 import type { ReviewableAction } from './agents/shared/auto-review.js';
 import type { AutoReviewDecision } from './agents/shared/auto-review-decision.js';
 
@@ -361,6 +362,8 @@ export type SessionGracefulStopResult =
 
 type TurnControlState = {
   generation: number;
+  toolLoopGuard: ToolLoopGuard | null;
+  pendingToolLoop: { toolUseId: string; verdict: Extract<ReturnType<ToolLoopGuard['onToolResult']>, { kind: 'hard' }> } | null;
   activeToolIds: Set<string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
@@ -507,6 +510,8 @@ export class Session {
   // ── turn 零事件看门狗（见 DEFAULT_TURN_STALL_MS）────────────────────────
   private readonly turnStallMs: number;
   private turnStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private turnStallDiagnosticState = 'idle';
+  private turnStallLastDiagnosticAt = 0;
   /** 还需要"清醒地"静默多久才判卡死;按分片递减(见 armTurnStallSlice)。 */
   private turnStallRemainingMs = 0;
   /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
@@ -1975,7 +1980,7 @@ export class Session {
    * 不写 DB —— 持久化由调用方 (main IPC 协调 local-db:sessions:update) 负责,
    * 跟 setModel/setEffort 双 IPC 协调先例一致。
    */
-  async setExtraDirs(dirs: string[]): Promise<void> {
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
       throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
@@ -1983,7 +1988,7 @@ export class Session {
     if (!this.handle.setExtraDirs) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setExtraDirs(dirs);
+    await this.handle.setExtraDirs(dirs, libraryRoot);
   }
 
   /**
@@ -2099,7 +2104,7 @@ export class Session {
   ): Promise<InteractionDecision> {
     this.pendingInteractions += 1;
     const runtime = this.observeInteractionStarted(request);
-    this.clearTurnStallWatchdog();
+    this.armTurnStallWatchdog();
     try {
       return await resolve();
     } finally {
@@ -2149,6 +2154,16 @@ export class Session {
   private beginTurnControl(generation: number): void {
     this.turnControlState = {
       generation,
+      // Claude owns per-sidechain guards before translation. Pi/Codex share
+      // the same detector here, paired with this product turn's lifecycle.
+      toolLoopGuard: this.agentKind === 'claude-code' ? null : new ToolLoopGuard({
+        // These normalized events do not identify model-response batches.
+        // Distinct malformed calls can belong to one parallel attempt, so do
+        // not enable the retry-count rule without that evidence. Claude keeps
+        // its existing batch-aware contract rule; repetition rules stay active.
+        contractConsecutiveLimit: Number.POSITIVE_INFINITY,
+      }),
+      pendingToolLoop: null,
       activeToolIds: new Set(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
@@ -2729,15 +2744,72 @@ export class Session {
     } else if (isCurrentGeneration && isTurnWatchdogLivenessEvent(event)) {
       this.armTurnStallWatchdog();
     }
+    // Deliver the completed tool result before the loop error; never discard
+    // evidence or count both full and summary projections of the same result.
+    if (isCurrentGeneration) this.observeToolLoop(event, resolvedGeneration);
   }
 
-  private clearTurnStallWatchdog(): void {
+  private observeToolLoop(event: AgentEvent, generation: number): void {
+    if (event.type !== 'tool_use' && event.type !== 'tool_result_full' && event.type !== 'tool_result') return;
+    const control = this.turnControlState;
+    if (!control?.toolLoopGuard || control.generation !== generation ||
+      generation !== this.turnGeneration || this.status !== 'active' || this.closePromise ||
+      event.turnScope === 'background' || event.sessionInstanceId !== this.instanceId ||
+      this.pendingInteractions > 0 || control.gracefulStopState !== 'none') return;
+    const data = event.data && typeof event.data === 'object'
+      ? event.data as Record<string, unknown> : {};
+    if (data.runtimeActivity === 'snapshot') return;
+    if (event.type === 'tool_result') {
+      const pending = control.pendingToolLoop;
+      if (!pending || !Array.isArray(data.toolUseIds) || !data.toolUseIds.includes(pending.toolUseId)) return;
+      control.pendingToolLoop = null;
+      this.interruptToolLoop(pending.verdict, generation);
+      return;
+    }
+    if (typeof data.toolUseId !== 'string' || control.pendingToolLoop) return;
+    if (event.type === 'tool_use') {
+      control.toolLoopGuard.onToolUse(data.toolUseId, data.toolName, data.input);
+      return;
+    }
+    if (event.type !== 'tool_result_full' || typeof data.fullText !== 'string') return;
+    const verdict = control.toolLoopGuard.onToolResult(data.toolUseId, data.fullText, data.isError === true);
+    if (verdict.kind !== 'hard') return;
+    // Both translators enqueue full text before its summary. Let listeners
+    // consume both projections before terminal cleanup clears their pairing.
+    // This belongs to TurnControlState so termination/takeover discards it.
+    control.pendingToolLoop = { toolUseId: data.toolUseId, verdict };
+  }
+
+  private interruptToolLoop(verdict: Extract<ReturnType<ToolLoopGuard['onToolResult']>, { kind: 'hard' }>, generation: number): void {
+    this.fanOutEvent({
+      type: 'error',
+      data: {
+        message: `Repeated tool calls (${verdict.count}) indicate a tool loop; this turn was interrupted. You can send the next message to continue.`,
+        isTerminal: true,
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: verdict.reason, count: verdict.count },
+      },
+      source: this.agentKind,
+    });
+    // A listener can synchronously take over. Never interrupt its replacement.
+    if (generation !== this.turnGeneration) return;
+    // abort() already owns confirmation/rebuild fallback; no second watchdog.
+    void this.abort().catch((error) => {
+      this.logger.warn('tool loop interrupt failed', { error: String(error) });
+    });
+  }
+
+  private clearTurnStallWatchdog(refresh = false): void {
     if (this.turnStallTimer) {
       clearTimeout(this.turnStallTimer);
       this.turnStallTimer = null;
     }
     this.turnStallRemainingMs = 0;
     this.turnStallSliceStartedAt = 0;
+    if (!refresh && this.turnStallDiagnosticState === 'armed') {
+      this.logger.info('turn stall watchdog disarmed', { status: this.status });
+      this.turnStallDiagnosticState = 'idle';
+    }
   }
 
   private clearTerminalErrorDrain(): void {
@@ -2776,14 +2848,33 @@ export class Session {
    * 后两条是误杀防护(见 DEFAULT_TURN_STALL_MS)。
    */
   private armTurnStallWatchdog(): void {
-    this.clearTurnStallWatchdog();
-    if (this.turnStallMs <= 0) return;
-    if (this.status !== 'active') return;
-    if (this.closePromise) return;
-    if (!this.isTurnRunning() && !this.hasUnsettledTurn()) return;
-    if (this.pendingInteractions > 0) return;
-    if (this.hasRunningBackgroundTasks()) return;
+    this.clearTurnStallWatchdog(true);
+    const reason = this.turnStallMs <= 0 ? 'disabled'
+      : this.status !== 'active' ? this.status
+      : this.closePromise ? 'closing'
+      : !this.isTurnRunning() && !this.hasUnsettledTurn() ? 'no-active-turn'
+      : this.pendingInteractions > 0 ? 'pending-interaction'
+      : this.hasRunningBackgroundTasks() ? 'background-task' : null;
+    if (reason) {
+      if (this.turnStallDiagnosticState !== reason) {
+        this.logger.info('turn stall watchdog suspended', { reason });
+        this.turnStallDiagnosticState = reason;
+      }
+      return;
+    }
     this.turnStallRemainingMs = this.turnStallMs;
+    const now = Date.now();
+    // Bound refresh diagnostics to once per minute, independent of token volume.
+    if (this.turnStallDiagnosticState !== 'armed' || now - this.turnStallLastDiagnosticAt >= 60_000) {
+      this.logger.info(this.turnStallDiagnosticState !== 'armed'
+        ? 'turn stall watchdog armed' : 'turn stall watchdog refreshed', {
+        timeoutMs: this.turnStallMs,
+        lastActivityAt: now,
+        deadlineWithoutSuspendAt: now + this.turnStallMs,
+      });
+      this.turnStallLastDiagnosticAt = now;
+    }
+    this.turnStallDiagnosticState = 'armed';
     this.armTurnStallSlice();
   }
 

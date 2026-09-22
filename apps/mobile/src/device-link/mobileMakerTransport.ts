@@ -428,6 +428,14 @@ export type MobileWorktreeCreateResult =
     };
 
 export interface MobileMakerTransport {
+  /** 在被控端生成当前任务完成后的输入框推荐提示词。 */
+  predictNextPrompt(request: {
+    sessionId: string;
+    agentKind: MobileAgentKind;
+    turnGen: number;
+    completionRevision: number;
+    cacheOnly?: boolean;
+  }): Promise<{ prompt: string | null }>;
   createSession(opts: CreateSessionOptions): Promise<CreateSessionResult>;
   getCapabilities(agentKind: MobileAgentKind): Promise<unknown>;
   /**
@@ -662,7 +670,11 @@ export interface MobileMakerTransport {
     sessionId: string,
     clientId: string,
   ): Promise<RewindPreviewPayload>;
-  rewindCommit(sessionId: string, clientId: string): Promise<RemoteSession>;
+  rewindCommit(
+    sessionId: string,
+    clientId: string,
+    opts?: { allowFileRestore?: boolean },
+  ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
     clientId: string,
@@ -1047,6 +1059,7 @@ export function createMobileMakerTransport({
       call("maker:apply-new-maker-draft-pref", [pref]),
     getNewMakerDefaults: (agentKind) =>
       call("maker:get-new-maker-defaults", [agentKind]),
+    predictNextPrompt: (request) => call('maker:predict-prompt', [request]),
     applyNewMakerWorktreePref: (worktreeEnabled) =>
       call("maker:apply-new-maker-worktree-pref", [{ worktreeEnabled }]),
     getNewMakerWorktreeBranchPref: (baseRepo) =>
@@ -1092,8 +1105,11 @@ export function createMobileMakerTransport({
       call("maker:fork", [sourceSessionId, messageClientId]),
     rewindPreview: (sessionId, clientId) =>
       call("maker:rewind:preview", [sessionId, clientId]),
-    rewindCommit: (sessionId, clientId) =>
-      call("maker:rewind:commit", [sessionId, clientId]),
+    rewindCommit: (sessionId, clientId, opts) =>
+      call(
+        "maker:rewind:commit",
+        opts ? [sessionId, clientId, opts] : [sessionId, clientId],
+      ),
     deleteMessage: (sessionId, clientId) =>
       call("maker:message:delete", [sessionId, clientId]),
     closeSession: (sessionId) => call("maker:close-session", [sessionId]),

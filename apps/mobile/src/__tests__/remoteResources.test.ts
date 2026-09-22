@@ -3,6 +3,7 @@ import { DeviceLinkError } from '@cindy/device-link';
 
 import {
   MOBILE_REMOTE_RESOURCE_PRIMITIVES,
+  getRemoteResource,
   discoverRemoteHomeCollections,
   remoteResourceDiscoveryTargets,
   isRemoteResourcesUnsupported,
@@ -33,7 +34,7 @@ describe('remote resource discovery', () => {
   });
 
   it('advertises only primitives implemented by the current mobile shell', () => {
-    expect(MOBILE_REMOTE_RESOURCE_PRIMITIVES).toEqual(['status', 'session-link']);
+    expect(MOBILE_REMOTE_RESOURCE_PRIMITIVES).toEqual(['status', 'session-link', 'session-controls']);
   });
 
   it('merges host-advertised home collections without knowing their feature module', async () => {
@@ -198,5 +199,32 @@ describe('remote resource route targets', () => {
     expect(parseRemoteResourceTargets('{broken')).toEqual([]);
     expect(parseRemoteResourceTargets(JSON.stringify([{ deviceId: '', deviceName: 'Nope' }])))
       .toEqual([]);
+  });
+});
+
+describe('portable task controls', () => {
+  it('preserves only bounded actions and known primitive data, keeping unknown blocks readable', async () => {
+    const ref = { collectionId: 'workflow', kind: 'session', id: 'task' };
+    const invoke = vi.fn(async () => ({
+      ref, revision: '2', display: { title: 'Test' }, links: [],
+      actions: [
+        { id: 'start', label: 'Start' }, { id: 'continue', label: 'Continue', disabled: true },
+        { id: 'form', label: 'Form', fields: [{ id: 'secret' }] },
+        { id: 'confirm', label: 'Confirm', confirmation: { title: 'Sure?' } },
+        { id: 'bad-confirm', label: 'Bad', confirmation: { title: '' } },
+        { id: 'bad-body', label: 'Bad', confirmation: { title: 'Sure?', body: 42 } },
+        { id: 'null-confirm', label: 'Bad', confirmation: null },
+        { id: 'x'.repeat(161), label: 'Too long' },
+      ],
+      blocks: [
+        { id: 'workflow', primitive: 'session-controls', fallbackMarkdown: 'Installing dependencies', data: { input: 'blocked', busy: true, path: '/private' } },
+        { id: 'future', primitive: 'future-widget', fallbackMarkdown: 'Readable fallback', data: { html: '<script>' } },
+      ],
+    })) as RemoteInvoke;
+    const card = await getRemoteResource(invoke, targets[0], ref);
+    expect(card.actions).toEqual([{ id: 'start', label: 'Start', disabled: false }, { id: 'continue', label: 'Continue', disabled: true }, { id: 'confirm', label: 'Confirm', disabled: false, confirmation: { title: 'Sure?' } }]);
+    expect(card.blocks?.[0].data).toEqual({ input: 'blocked', busy: true });
+    expect(card.blocks?.[1]).toEqual({ id: 'future', primitive: 'future-widget', fallbackMarkdown: 'Readable fallback' });
+    expect(JSON.stringify(card)).not.toContain('/private');
   });
 });

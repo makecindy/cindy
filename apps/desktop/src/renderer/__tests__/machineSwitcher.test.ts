@@ -1,3 +1,4 @@
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
@@ -50,6 +51,15 @@ function mkDevice(
 function mkSession(id: string, deviceLinkDeviceId?: string): Session {
   return { id, status: 'active', deviceLinkDeviceId } as unknown as Session;
 }
+
+it('never lists shared-task peers as devices, including disconnected and rejected peers', () => {
+  const peer = sharedTaskHostPeer('share-1', 'desktop');
+  expect(buildSwitcherDevices({
+    fullList: [mkDevice('real-pc'), mkDevice(peer)],
+    syncedDevices: [{ deviceId: peer, deviceName: 'Shared task', sessionCount: 1, connected: false }],
+    revoked: new Set([peer]),
+  }).map(device => device.deviceId)).toEqual(['real-pc']);
+});
 
 describe('selectVisibleSessions', () => {
   afterEach(() => remoteProjectsStore.clear());

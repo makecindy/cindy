@@ -21,7 +21,9 @@
   `safeStorage` 边界。不要新增自定义明文凭证文件，也不要把秘密下放给 Renderer、插件
   或不受信任页面。
 - 可信 Node Worker 的显式例外：`node.secretBindings[].oauthSecret` 只能引用本插件
-  已声明的 OAuth key。Host 根据本次 `authAccount`（省略时为默认账号）刷新并注入
+  已声明的 OAuth key；这是调用时的凭证解析边界，不是发布或安装的能力支持门禁。
+  引用尚不可用时保留声明，在调用时返回不支持／配置错误，不读取其他插件凭证。
+  Host 根据本次 `authAccount` 刷新并注入
   短期 access token；不得注入 refresh token、返回 Renderer/Agent、写日志或落盘。
   Worker 启动第三方 CLI 时仅用该次子进程环境传递，不修改全局环境或复用他账号配置。
   这是高权限 Node 的受审查信任边界，不是系统沙箱或对恶意 Worker 的隔离保证。
@@ -30,6 +32,11 @@
 - 插件自定义的账号昵称、展示偏好和业务配置属于插件数据，使用现有隔离 `/kv`，
   不扩充 Host OAuth 账号模型、凭证库或专用接口。插件按账号 ID 合并这些数据用于展示
   和选择账号；传给 Host 的授权身份仍是账号 ID，不能用昵称替代。
+- 远程声明式 API Key/PAT 可通过 [签名输入桥](../remote-plugin-oauth.md) 的密码卡一次性
+  提交；专用本机 IPC 验证设备、插件、卡片、完整字段展示后加密交给目标 Host 原 executor。
+  只写已声明的单个 user Secret，不读回、不批量同步、不开放账号 vault。值只短暂存在于
+  输入组件/Main 调用中，不进入 Renderer store、Agent、普通远控、日志或历史。CLI PKCE
+  的私有回调也只交给发起的可信 Node RPC，不能返回沙箱 main.js 或业务 stdout。
 - access token 等只需短期使用的秘密优先保留在内存中。日志、错误、遥测和调试输出不得
   包含凭证明文、完整鉴权头或可直接复用的授权材料。
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
@@ -69,6 +76,11 @@
 - 钥匙串条目名与 userData profile 的存量密文一一绑定：**不得**在共享既有 profile 的
   进程里改 `app.name`——换名后新写入的密文对共用该 profile 的其它身份不可解，双向串坏。
   改动条目名属存量凭证迁移，按上方增量适用原则必须单独设计兼容/回滚/验证方案。
+- Cindy Make 的托管个人版按已验证的本机启动交接继承原版的 profile、设备身份与钥匙串
+  名称；Dev 和安装版同属原版。它只能沿用现有身份，不能认领另一套钥匙串或复制凭证。
+  已有 `keychain-identity` 必须与交接身份一致；无标记只接受默认身份。原版入口和普通
+  packaged 启动的原规则不变，不开放任意环境变量的 packaged profile 覆写。
+  见 [versionStartup](../../apps/desktop/src/main/cindy-make/versionStartup.ts)。
 - 同机装过 cn 与 global 双版的机器上，后启动的版本首次访问 `safeStorage` 会触发系统
   钥匙串授权弹窗，属 macOS 按预期征求同意；应引导用户点「始终允许」。点「拒绝」后
   加解密降级失败，authManager 的 safeStorage helpers 会按原因落一次 warn 日志。
@@ -83,8 +95,17 @@
 | 可丢弃的临时数据 | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录 |
 | 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
 | Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |
+| 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁 |
 | 跨 profile 的共享 Skill 文件互斥 | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称 |
+| 跨 profile 的 worktree 借用租约 | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，模拟器工程借用时在原 profile 租约之外发布共享副本；回收器同时读取两处，源目录 I/O 结束后显式释放，释放失败由现有 `.release` 回执重试；不能因进程退出就移除保护 |
+| 旧版 worktree 回收器兼容锁 | 验证 linked worktree 的 Git 元数据与反向链接后，在源目录外的 `<commonGitDir>/worktrees/<id>/locked` 创建 Git 标准锁，避免构建中的 `git clean` 删除保护；旧版删除/池化复用已识别此锁。不覆盖用户锁，仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除。清理失败在共享租约 `.release` 中保留路径及原文件身份，由现有维护重试；旧回执仍按原身份清理 `.worktree-keep` |
+| 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，按日志目录哈希登记原 profile 日志位置，启动日志监听和写入回收记录前原子发布；借用方只读目标资源的原始日志，不复制恢复状态、不代替 owner 执行恢复。索引跨重启保留，原日志不存在时不产生回收意图 |
 | 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
+
+- 内置 Skill 的官方身份只授予当前 manifest 已提交且指纹匹配的 bundle：`.active` 必须是
+  指向该版本的合法链接，版本目录与 Skill 内容不能经替换的符号链接越界。物化失败或目录
+  存在本身不构成官方身份；扫描、命令标记与 Learn 发现共用经验证的描述符。异常占位内容
+  不覆盖、不认领。实现与回归见 `maker-host/built-in-skills.ts` 及其同名单测。
 
 - 禁止把 `process.cwd()`、仓库根或源码目录作为 userData、凭证目录或临时目录的默认回退。
   特别不要写 `process.env.TEMP ?? process.cwd()` 一类跨平台会落入仓库的逻辑。

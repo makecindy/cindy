@@ -1,3 +1,4 @@
+import { sharedTaskGuestPeer } from '@cindy/device-link';
 /**
  * dispatchWeakNetwork.test.ts — 被控端弱网收尾行为契约。
  * -------------------------------------------------------------------------
@@ -13,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkClient,
+  SHARED_TASK_CAPABILITY,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DL_SUBSCRIBE_CHANNEL,
@@ -47,6 +49,12 @@ vi.mock('../../logger', async (importOriginal) => ({
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
+const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
+vi.mock('../sharedTaskDispatch.js', async (original) => ({
+  ...await original<typeof import('../sharedTaskDispatch.js')>(),
+  refreshSharedTaskPeer: sharedTask.refresh,
+  captureSharedTaskPeer: sharedTask.capture,
+}));
 
 import {
   __testing,
@@ -59,6 +67,7 @@ import {
   wireInboundDispatch,
 } from '../dispatch';
 import * as subscriptions from '../subscriptions';
+import { remoteDesktop } from '../../remote-desktop';
 
 function mkClient(
   over: Partial<{
@@ -232,9 +241,28 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  it('refreshes first-join authority and ignores an older failed open after a newer success', async () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const peer = sharedTaskGuestPeer('m', 'g', 'd');
+    const payload = { controllerName: 'Guest', protocolVersion: PROTOCOL_VERSION, appVersion: '0.0.0-test', capabilities: [SHARED_TASK_CAPABILITY] };
+    let rejectOld!: (error: Error) => void;
+    sharedTask.capture.mockReturnValue({ author: { displayName: 'Guest' } });
+    sharedTask.refresh.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOld = reject; })).mockResolvedValue(undefined);
+    __testing.handleLinkOpen(client as never, peer, 'old', payload);
+    expect(client.sendLinkAccept).not.toHaveBeenCalled();
+    __testing.handleLinkOpen(client as never, peer, 'new', payload);
+    await Promise.resolve();
+    expect(client.sendLinkAccept).toHaveBeenCalledWith(peer, 'new', expect.anything());
+    rejectOld(new Error('old network failure'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(client.closeLink).not.toHaveBeenCalled();
+    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
+  });
   it('declares history projection support in the host accept, including for legacy controllers', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);
@@ -649,6 +677,8 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
 
 describe('[6] active controller 生命周期与故障半径', () => {
   it('真实双 peer 链路中 A 的 DEVICE_OFFLINE 不清 B，B 的在途请求仍能完成', async () => {
+    const lost = vi.spyOn(remoteDesktop, 'signalingLost');
+    const stop = vi.spyOn(remoteDesktop, 'stop');
     vi.useRealTimers();
     const relay = new DispatchTestRelay();
     const target = makeDispatchTestClient(relay, 'target');
@@ -697,9 +727,14 @@ describe('[6] active controller 生命周期与故障半径', () => {
     // 模拟 relay 对 target→A 的真实路由错误:DeviceLinkClient 先发 typed offline,
     // 再由 host 接入唯一的 deactivateController 状态转换。
     relay.offline.add('ctrl-a');
+    lost.mockClear();
+    stop.mockClear();
     target.sendInvokeResult('ctrl-a', 'offline-probe', { ok: true, result: null });
 
     expect(routeChanges).toContain('ctrl-a:offline');
+    expect(lost).toHaveBeenCalledWith('ctrl-a');
+    expect(lost).not.toHaveBeenCalledWith('ctrl-b');
+    expect(stop).not.toHaveBeenCalledWith('ctrl-b');
     expect(__testing.getActiveControllers().map((controller) => controller.deviceId).sort()).toEqual([
       'ctrl-b',
     ]);

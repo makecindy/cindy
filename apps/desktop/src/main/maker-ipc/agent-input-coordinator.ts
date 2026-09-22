@@ -1,4 +1,6 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -227,6 +229,7 @@ export interface AgentInputSendOpts {
   /** Session reservation 时回调本轮 vendor generation；必须在 send 返回前绑定 leftover。 */
   onVendorTurnReserved?: (generation: number) => void;
   persistUserMessage?: {
+    sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
     clientId: string;
     content: string;
     /** Overflow 重放用的 agent-facing wire payload（mention / 标注附件等）。 */
@@ -494,6 +497,7 @@ export interface AgentInputCoordinatorDeps {
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
+    restoredFromSnapshot?: boolean,
   ) => void | Promise<void>;
   /**
    * Awaited only after vendor dispatch is irreversible (`accepted=true`).
@@ -1037,6 +1041,7 @@ export class AgentInputCoordinator {
    * emit 会因"未恢复"跳过持久化,旧快照删不掉,下次打开会话又诈尸。
    */
   private readonly restoredQueueSessions = new Set<string>();
+  private readonly restoredQueueItems = new WeakSet<AgentInputQueuedMessage>();
   private readonly restoreAttempted = new Set<string>();
   private readonly queueRestorePromises = new Map<string, Promise<void>>();
   private readonly lastQueueSnapshotJson = new Map<string, string>();
@@ -1348,6 +1353,7 @@ export class AgentInputCoordinator {
       state.activeTurn === null &&
       state.steeringQueueClientIds.length === 0 &&
       !this.deps.isTurnRunning(sessionId);
+    for (const item of restored) this.restoredQueueItems.add(item);
     state.pendingQueue = [...restored, ...state.pendingQueue];
     if (wasQuiet) {
       state.queuePaused = true;
@@ -1540,6 +1546,7 @@ export class AgentInputCoordinator {
   ): AgentInputProjection {
     const state = this.getState(sessionId);
     item = captureOriginalSyntheticTrigger(item);
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机
     // 断连自动重试 / 用户对 ack 丢失的消息重发)在补发同一条消息,不是新消息。
     // 直接返回当前 projection、不再入队——否则同一条消息双入队、agent 跑两轮。
@@ -1945,6 +1952,8 @@ export class AgentInputCoordinator {
       (opts?.expectedTurnGeneration === undefined ||
         this.deps.getTurnGeneration?.(sessionId) === opts.expectedTurnGeneration);
     if (!matchesExpectedTurn()) return false;
+    const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+    assertSharedTaskQueueMutation(sharedTask, sessionId, 'input.send');
     const state = this.getState(sessionId);
     // Capture the clear boundary before any screening/reference/steer await.  The
     // live state may advance when `/clear` wins the race; this turn must retain
@@ -1954,6 +1963,7 @@ export class AgentInputCoordinator {
     let steersStoredQueueItem = false;
     if (opts?.removeFromQueue) {
       const storedItem = state.pendingQueue.find((queued) => queued.clientId === item.clientId);
+      if (sharedTask) assertSharedTaskQueueMutation(sharedTask, sessionId, 'input.edit', storedItem);
       if (storedItem) {
         steersStoredQueueItem = true;
         // Renderer projections intentionally omit trusted reference bodies. The main-owned
@@ -2166,6 +2176,7 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
+        ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: item.autoReviewUserText ?? '',
         ...(readAutoReviewUserText(item.persistedContent) === null
           ? { [AUTO_REVIEW_USER_INTENT]: item.autoReviewUserText ?? '' } : {}),
@@ -2515,6 +2526,9 @@ export class AgentInputCoordinator {
     sessionId: string,
     opts?: { keepQueue?: boolean; pauseQueue?: boolean; resumeOnUserInput?: boolean },
   ): AgentInputProjection {
+    const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+    assertSharedTaskQueueMutation(sharedTask, sessionId, 'agent.stop');
+    if (sharedTask) opts = { ...opts, keepQueue: true };
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
     this.supersedePendingAutoResumeRecoveries(sessionId);
@@ -2614,6 +2628,7 @@ export class AgentInputCoordinator {
   }
 
   resume(sessionId: string): AgentInputProjection {
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     const state = this.getState(sessionId);
     const recovery = state.recovery;
     const pausedQueueHeadRecoveryClientId =
@@ -2815,6 +2830,7 @@ export class AgentInputCoordinator {
           // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
           // 一并误藏(窗口从更早的行一直铺到本条)。
+          retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
           supersedesUserClientId: undefined,
           // 自动恢复不是计划批准：保留原 Plan/权限选项，不能因隐藏 CONTINUE
           // 降到 Full access。人工 Retry 仍沿用既有合成 UI 动作策略。
@@ -2878,6 +2894,7 @@ export class AgentInputCoordinator {
           autoResumeInfo: opts?.auto ? (previousAutoResumeInfo ?? undefined) : undefined,
           // 自动 clone 自身会被 renderer 隐藏，不能再软删原始可见 user 行；人工 Retry
           // 才用可见克隆取代旧行。显式覆盖也避免继承上一轮的隐藏标记。
+          retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
           supersedesUserClientId: opts?.auto ? undefined : recovery.item.clientId,
           chatMessage: {
             ...(retryItem ?? recovery.item).chatMessage,
@@ -2946,6 +2963,7 @@ export class AgentInputCoordinator {
 
   remove(sessionId: string, clientId: string): AgentInputProjection {
     const state = this.getState(sessionId);
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.withdraw', state.pendingQueue.find((item) => item.clientId === clientId));
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     const before = state.pendingQueue.length;
     const removed = state.pendingQueue.find((q) => q.clientId === clientId);
@@ -2990,6 +3008,7 @@ export class AgentInputCoordinator {
     const trimmed = newText.trim();
     if (!trimmed) return this.getProjection(sessionId);
     const state = this.getState(sessionId);
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.edit', state.pendingQueue.find((item) => item.clientId === clientId));
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     state.pendingQueue = state.pendingQueue.map((entry) => {
       if (entry.clientId !== clientId) return entry;
@@ -3008,9 +3027,9 @@ export class AgentInputCoordinator {
         delete updated.sessionReferencesRequireTrustedSnapshot;
         delete updated.trustedSessionReferenceContexts;
       }
-      return finalizeUpdatedMessage && newText !== entry.text
+      return this.preserveRestoredQueueProvenance(entry, finalizeUpdatedMessage && newText !== entry.text
         ? finalizeUpdatedMessage(updated)
-        : updated;
+        : updated);
     });
     this.emit(sessionId);
     return this.getProjection(sessionId);
@@ -3054,6 +3073,7 @@ export class AgentInputCoordinator {
     if (index < 0) return { projection: this.getProjection(sessionId), updated: false };
     const current = state.pendingQueue[index];
     const updated = updateQueuedMessageContent(current, next);
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.edit', current);
     const authorizationContentChanged = updated.text !== current.text
       || updated.persistedContent !== current.persistedContent
       || updated.files !== current.files
@@ -3061,12 +3081,21 @@ export class AgentInputCoordinator {
       || updated.sessionRefs !== current.sessionRefs
       || updated.agentReferences !== current.agentReferences;
     const nextQueue = [...state.pendingQueue];
-    nextQueue[index] = finalizeUpdatedMessage && authorizationContentChanged
+    nextQueue[index] = this.preserveRestoredQueueProvenance(current, finalizeUpdatedMessage && authorizationContentChanged
       ? finalizeUpdatedMessage(updated)
-      : updated;
+      : updated);
     state.pendingQueue = nextQueue;
     this.emit(sessionId);
     return { projection: this.getProjection(sessionId), updated: true };
+  }
+
+  private preserveRestoredQueueProvenance(current: AgentInputQueuedMessage, replacement: AgentInputQueuedMessage): AgentInputQueuedMessage {
+    if (current.clientId === replacement.clientId) {
+      if (this.restoredQueueItems.has(current)) this.restoredQueueItems.add(replacement);
+      // Editing content cannot erase or forge the host's stable retry lineage.
+      replacement.retrySourceClientId = current.retrySourceClientId;
+    }
+    return replacement;
   }
 
   /**
@@ -3099,7 +3128,7 @@ export class AgentInputCoordinator {
     if (current.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
     else replacement.hostAcceptedAtMs = current.hostAcceptedAtMs;
     const nextQueue = [...state.pendingQueue];
-    nextQueue[index] = replacement;
+    nextQueue[index] = this.preserveRestoredQueueProvenance(current, replacement);
     state.pendingQueue = nextQueue;
     this.emit(sessionId);
     return true;
@@ -3154,7 +3183,7 @@ export class AgentInputCoordinator {
     const removed = presentTargets.slice(1);
     state.pendingQueue = [
       ...state.pendingQueue.slice(0, firstIndex),
-      replacement,
+      this.preserveRestoredQueueProvenance(survivor, replacement),
       ...state.pendingQueue.slice(firstIndex + presentTargets.length),
     ];
     const removedIds = new Set(removed.map((item) => item.clientId));
@@ -3202,6 +3231,7 @@ export class AgentInputCoordinator {
   }
 
   setExpanded(sessionId: string, expanded: boolean): AgentInputProjection {
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     const state = this.getState(sessionId);
     state.queueExpanded = expanded;
     this.emit(sessionId);
@@ -3265,6 +3295,7 @@ export class AgentInputCoordinator {
 
   setEditLock(sessionId: string, clientId: string, locked: boolean): AgentInputProjection {
     const state = this.getState(sessionId);
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.edit', state.pendingQueue.find((item) => item.clientId === clientId));
     state.queueEditLocks = toggleList(state.queueEditLocks, clientId, locked);
     this.emit(sessionId);
     if (!locked) {
@@ -4458,6 +4489,7 @@ export class AgentInputCoordinator {
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         persistUserMessage: {
+          ...(head.sharedTaskAuthor ? { sharedTaskAuthor: head.sharedTaskAuthor } : {}),
           clientId: head.clientId,
           content: head.persistedContent,
           agentFacingWireContent: makerUserMessage,
@@ -4503,7 +4535,11 @@ export class AgentInputCoordinator {
             // host 把排队 orca 消息的 accepted 副作用挂在这个 hook 上(置 running /
             // autoBridgePending), 必须 await 完才能放行 vendor turn —— fire-and-forget
             // 会让快 worker 在状态可见前结束 turn, 桥接被 turn-end handler 误跳过。
-            await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+            if (this.restoredQueueItems.has(head)) {
+              await this.deps.onAcceptedQueuedMessage?.(sessionId, head, true);
+            } else {
+              await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+            }
             if (!this.isActiveTurnCurrent(sessionId, active)) {
               throw new Error(
                 '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
@@ -6162,6 +6198,7 @@ export class AgentInputCoordinator {
           content: item.persistedContent,
           agentMeta: {
             uuid: active.messageUuid,
+            ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
             ...(item.autoReviewUserText !== undefined ? { autoReviewUserText: item.autoReviewUserText } : {}),
             sdkSessionId,
             delivery: active.delivery,

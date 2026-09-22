@@ -264,7 +264,7 @@ export function SessionBranchTreeDialog({
           </div>
 
           {session.agentKind === 'pi' && (
-            <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-subtle)' }}>
+            <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-elevated-soft)' }}>
               <label className="flex items-center gap-2 text-12 text-[var(--text-primary)]">
                 <input
                   type="checkbox"

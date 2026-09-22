@@ -1,3 +1,4 @@
+import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 /**
  * SessionItem — 单条 CCS 会话行
  * ---------------------------------------------------------------------------
@@ -29,10 +30,11 @@
  *   Agent → Timer 沿用原 Clock 的 gap-1.5(6px),Timer → 标题同为 6px。
  */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
+import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
@@ -104,7 +106,7 @@ import {
   startSessionDrag,
 } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { useCindyMakeActivity } from './useCindyMakeActivity';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
@@ -208,7 +210,7 @@ export function SidebarTitleMarquee({ children, className, title }: SidebarTitle
   }, [startMarquee, title]);
 
   useEffect(() => {
-    const row = containerRef.current?.closest('[data-sidebar-session-row="true"]');
+    const row = containerRef.current?.closest('[data-sidebar-session-row="true"], [data-sidebar-navigation-row="true"]');
     if (!(row instanceof HTMLElement)) return undefined;
 
     const onEnter = () => {
@@ -253,6 +255,8 @@ export function SidebarTitleMarquee({ children, className, title }: SidebarTitle
 }
 
 export interface SessionItemProps {
+  /** Shared-group entries reuse the presentation without task-management actions or selection. */
+  navigationOnly?: boolean;
   session: Session;
   isActive: boolean;
   /** F-SB-7: Whether this session's agent is currently running. */
@@ -264,7 +268,11 @@ export interface SessionItemProps {
   /** Multi-select visual state in the sidebar. */
   isSelected?: boolean;
   onClick: SessionClickHandler;
-  onAction: (sessionId: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (
+    sessionId: string,
+    action: 'delete' | 'archive' | 'archive-now' | 'unarchive',
+    sharedTaskId?: string,
+  ) => void;
   onRename: (sessionId: string, newTitle: string) => void;
   onTogglePin: (sessionId: string, currentlyPinned: boolean) => void;
   onMoveSession?: (sessionId: string, target: SessionMoveTarget) => void;
@@ -318,7 +326,8 @@ export function hasSessionSelectionModifier(modifiers?: SessionClickModifiers): 
  * 背景:2026-07 切换会话卡顿,实测整栏重画单次 80-96ms、每次切换连跑 3 遍,
  * 根源就是行内全表订阅 + 无 memo。
  */
-export const SessionItem = memo(function SessionItem({
+export const SessionItem = withSidebarNavigation<SessionItemProps>(function SessionItem({
+  navigate,
   session,
   isActive,
   isRunning,
@@ -335,9 +344,11 @@ export const SessionItem = memo(function SessionItem({
   matchIndices,
   sourceLabel,
   insideAutomationGroup = false,
-}: SessionItemProps) {
+  navigationOnly = false,
+}: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
-  const cindyMakePreparing = useCindyMakePreparing(session);
+  const cindyMakeActivity = useCindyMakeActivity(session);
+  const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   const prRefs = usePrRefsForSession(session.id);
   // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
@@ -352,7 +363,8 @@ export const SessionItem = memo(function SessionItem({
   }, [wantsPrInfo, remoteDeviceId, session.id, registerPrConsumer]);
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅(性能不变量第 2 条),
   // 非按住态恒为 null,不惊动 memo。
-  const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
+  const ordinalBadge = useSessionOrdinalBadge(session.id);
+  const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   // 取 userSendAt 与 updatedAt 中较新的值，兼容存量 DB 行（旧版只写 userSendAt），
@@ -414,7 +426,7 @@ export const SessionItem = memo(function SessionItem({
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
     isRunning: session.deviceLinkDeviceId
       ? remoteActivity?.phase === 'running'
-      : isRunning || cindyMakePreparing != null,
+      : isRunning || cindyMakeActivity != null,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
@@ -428,7 +440,17 @@ export const SessionItem = memo(function SessionItem({
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
     ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
-  const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const tagMenu = (
+    <TaskTagMenuSection
+      session={session}
+      onMore={() => {
+        setTagEditorOpen(true);
+        setMenuPos(null);
+      }}
+    />
+  );
+  const remoteWritesBlocked = isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   // heartbeat schedule 绑定标识(targetSessionId 指向本会话);schedule 删除/过期后
   // schedulesStore 'changed' 刷新 → 列表为空 → 徽章消失。
@@ -496,8 +518,9 @@ export const SessionItem = memo(function SessionItem({
         ? 'cindyMake.code.taskName'
         : 'ccAgent.common.unnamedSession',
     ),
+    t,
   );
-  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const titleContent =
     matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
       ? highlightSegments(session.title, matchIndices, {
@@ -513,7 +536,7 @@ export const SessionItem = memo(function SessionItem({
   //   - 左侧 status icon 由 CircleDashed 换成 Archive
   //   - 右侧 ⋮ 菜单只显示 Rename + Unarchive（屏蔽 Pin/Delete/Archive 等无意义项）
   const isArchived = session.status === 'archived';
-  const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
+  const canQuickArchive = !navigationOnly && !isArchived && !isEmpty && !remoteWritesBlocked;
 
   // 右键菜单弹出位置：null = 关闭；{x,y} = 在该屏幕坐标处弹出（fixed 定位的
   // 隐形 trigger 锚定到这里）。与 ProjectNode 同款 coordinate-anchored 模式。
@@ -591,7 +614,7 @@ export const SessionItem = memo(function SessionItem({
     (e: React.MouseEvent) => {
       // 已在编辑态时不重复进入:编辑器内部元素漏拦的 dblclick 冒泡到这里会
       // setEditValue 重置草稿(与 handleClick 的 isEditing 守卫对称)。
-      if (isEditing) return;
+      if (isEditing || navigationOnly) return;
       e.stopPropagation();
       e.preventDefault();
       if (remoteWritesBlocked) {
@@ -602,7 +625,7 @@ export const SessionItem = memo(function SessionItem({
       committedRef.current = false;
       setIsEditing(true);
     },
-    [displayTitle, isEditing, remoteWritesBlocked, t],
+    [displayTitle, isEditing, navigationOnly, remoteWritesBlocked, t],
   );
 
   // 置顶段使用原生 Sortable DnD：Sortable 负责侧栏内排序，原生 dragstart 同时写入
@@ -623,7 +646,7 @@ export const SessionItem = memo(function SessionItem({
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
-  const splitDragEnabled = isSplitGroupDragSource({
+  const splitDragEnabled = !navigationOnly && isSplitGroupDragSource({
     editing: isEditing,
     orcaRole: session.orcaRole,
     ...dragContainerState,
@@ -649,7 +672,10 @@ export const SessionItem = memo(function SessionItem({
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
   // 同 active 重渲染 / 其它字段更新不触发(useEffect deps 只有 isActive)。
   useEffect(() => {
-    if (isActive) scrollIntoNearestView(rowRef.current);
+    if (isActive && !navigationOnly) scrollIntoNearestView(rowRef.current);
+  // navigationOnly is fixed for the lifetime of a mounted row; shared role switches
+  // unmount the old list, so the active-session scroll contract stays isActive-only.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
 
   // archivePending 生命周期：进入 pending → 起 4s 自动撤回 timer + document mousedown
@@ -886,7 +912,8 @@ export const SessionItem = memo(function SessionItem({
     <div
       ref={rowRef}
       data-session-id={session.id}
-      data-sidebar-session-row="true"
+      data-sidebar-session-row={navigationOnly ? undefined : 'true'}
+      data-sidebar-navigation-row={navigationOnly ? 'true' : undefined}
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
@@ -910,7 +937,7 @@ export const SessionItem = memo(function SessionItem({
         finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
       }}
       onPointerDown={(e) => {
-        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+        if (!navigationOnly && shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
           makerChatStore.ensureInitialMessages(session.id);
         }
       }}
@@ -938,6 +965,7 @@ export const SessionItem = memo(function SessionItem({
         }
         e.preventDefault();
         e.stopPropagation();
+        if (navigationOnly) return;
         prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
@@ -963,13 +991,14 @@ export const SessionItem = memo(function SessionItem({
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
         isActive
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+          ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
           : isSelected
-            ? 'bg-[var(--chat-input-chip-bg)] text-foreground'
+            ? 'bg-[var(--chat-input-chip-bg)] [--task-tag-ring-bg:var(--chat-input-chip-bg)] text-foreground'
             : cn(
-                'text-foreground hover:bg-sidebar-item-hover',
+                'text-foreground hover:bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
                 // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
-                menuPos !== null && 'bg-sidebar-item-hover',
+                menuPos !== null &&
+                  'bg-sidebar-item-hover [--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
               ),
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
       )}
@@ -1069,6 +1098,11 @@ export const SessionItem = memo(function SessionItem({
           槽宽取信息层与按钮的较大值——不再绝对定位盖到标题上。 */}
       {!isEditing && (
         <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
+          {infoPieces.find((piece) => piece.key === 'tags')?.tags?.length ? (
+            <span className="mr-1 inline-flex shrink-0 items-center">
+              <TaskTagDots tags={session.tags} />
+            </span>
+          ) : null}
           {/* 任务信息同步 fade-out:hover/菜单打开/archivePending 时
               一起让位,确保只有 action buttons 占住右侧。fade 容器复用同一份条件,
               避免两个元素 fade 时机不一致产生闪烁。
@@ -1082,11 +1116,12 @@ export const SessionItem = memo(function SessionItem({
                 'col-start-1 row-start-1 flex items-center gap-1',
                 // duration 与 action 按钮组的渐显同拍(120ms),让位/回归一进一出同步。
                 'transition-opacity duration-[120ms]',
-                !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
-                menuPos !== null && 'opacity-0',
-                archivePending && 'opacity-0',
+                !navigationOnly && !archivePending &&
+                  'group-hover:opacity-0 group-hover:w-0 group-hover:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
+                menuPos !== null && 'opacity-0 w-0 overflow-hidden',
+                archivePending && 'opacity-0 w-0 overflow-hidden',
                 // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
-                ordinalBadgeLabel != null && 'opacity-0',
+                ordinalBadgeLabel != null && 'opacity-0 w-0 overflow-hidden',
               )}
             >
               {cindyMakePreparing && rightStatusKind === 'running' ? (
@@ -1106,7 +1141,7 @@ export const SessionItem = memo(function SessionItem({
                 // 任务信息复选:按用户勾选拼装 pr / worktree / tokens / cost / time;默认仅
                 // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
                 <SessionInfoMeta
-                  pieces={infoPieces}
+                  pieces={infoPieces.filter((piece) => piece.key !== 'tags')}
                   prRef={infoPrRef}
                   worktree={infoWorktree ?? undefined}
                   isActive={isActive}
@@ -1155,7 +1190,7 @@ export const SessionItem = memo(function SessionItem({
                   按钮立即还原,符合用户对 "撤回 = 回到点击前" 的直觉预期。
                 - archived：More + Undo（lucide Undo），单击直接走 unarchive，
                   不像 Archive 那样需要二次确认 pill（unarchive 非破坏性）。 */}
-            {!archivePending && (
+            {!navigationOnly && !archivePending && (
               <>
                 {/* 入流占位只负责把标题挤窄;真正的按钮保持可聚焦,不能 display:none。 */}
                 <div
@@ -1210,7 +1245,7 @@ export const SessionItem = memo(function SessionItem({
       {/* 右键菜单：与 ProjectNode 同款 coordinate-anchored DropdownMenu —
           隐形 fixed-position trigger 锚定到 onContextMenu 捕获的鼠标坐标，
           Radix 自动处理打开/关闭、ESC、点外面关闭等行为。 */}
-      {!isEditing && (
+      {!navigationOnly && !isEditing && (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {
@@ -1257,6 +1292,7 @@ export const SessionItem = memo(function SessionItem({
                 </DropdownMenuItem>
                 {exportShareMenuItem}
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1277,6 +1313,7 @@ export const SessionItem = memo(function SessionItem({
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
                 {copySessionIdSubmenu}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1316,6 +1353,7 @@ export const SessionItem = memo(function SessionItem({
                   {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
+                {tagMenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1338,6 +1376,7 @@ export const SessionItem = memo(function SessionItem({
       )}
 
       {/* 导出 .cshare 弹窗:仅打开时挂载,避免侧栏每行常驻 Dialog 实例。 */}
+      {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
       {shareExportOpen && (
         <SessionShareExportDialog
           open={shareExportOpen}
@@ -1409,3 +1448,4 @@ function SessionAction({
     </Tip>
   );
 }
+import { isSharedTaskPeer } from '@cindy/device-link';

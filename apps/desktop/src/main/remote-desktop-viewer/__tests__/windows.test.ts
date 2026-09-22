@@ -8,6 +8,7 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => null },
+  screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
   clipboard: { readText: () => '', writeText: vi.fn() },
   ipcMain: { handle: (name: string, fn: Function) => fixture.handlers.set(name, fn) },
 }));
@@ -20,6 +21,23 @@ vi.mock('../../appSessionState', () => ({
 }));
 vi.mock('../../appCapabilities', () => ({
   getAppCapabilities: () => ({ canUseDeviceLink: true }),
+}));
+vi.mock('../preferences', () => ({
+  readViewerPreferences: () => ({
+    audio: true,
+    privacyScreen: false,
+    hostMute: false,
+    clipboardSync: false,
+    lockOnExit: false,
+  }),
+  writeViewerPreferences: async (_target: string, patch: object) => ({
+    audio: true,
+    privacyScreen: false,
+    hostMute: false,
+    clipboardSync: false,
+    lockOnExit: false,
+    ...patch,
+  }),
 }));
 vi.mock('../../i18n', () => ({ t: (s: string) => s }));
 vi.mock('../../device-link/index', () => ({
@@ -62,6 +80,12 @@ vi.mock('../../resource-usage-window/window', () => ({
       isFullScreen: () => false,
       setTitle: vi.fn(),
       setFullScreen: vi.fn(),
+      isMaximized: () => false,
+      unmaximize: vi.fn(),
+      getBounds: () => ({ x: 100, y: 100, width: 1000, height: 700 }),
+      getContentBounds: () => ({ x: 100, y: 100, width: 1000, height: 680 }),
+      getMinimumSize: () => [720, 420],
+      setBounds: vi.fn(),
       restore: vi.fn(),
       focus: vi.fn(),
       isFocused: () => visible,
@@ -95,7 +119,7 @@ afterEach(() => {
 const event = (win: any) => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame });
 const call = (channel: string, win: any, ...args: unknown[]) =>
   fixture.handlers.get(channel)!(event(win), ...args);
-it('routes native close and the close shortcut to confirmation without ending the lease', () => {
+it('routes native close and the close shortcut to confirmation without ending the lease', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);
   manager.register();
@@ -122,12 +146,12 @@ it('routes native close and the close shortcut to confirmation without ending th
   );
   expect(win.isVisible()).toBe(true);
   expect(call(REMOTE_VIEWER.STATE, win).active).toBe(true);
-  call(REMOTE_VIEWER.CLOSE, win, state.generation - 1);
+  await call(REMOTE_VIEWER.CLOSE, win, state.generation - 1);
   expect(win.isVisible()).toBe(true);
-  call(REMOTE_VIEWER.CLOSE, win, state.generation);
+  await call(REMOTE_VIEWER.CLOSE, win, state.generation);
   expect(win.isVisible()).toBe(false);
   manager.open(sender, { deviceId: 'a', name: 'A' });
-  call(REMOTE_VIEWER.CLOSE, win, state.generation);
+  await call(REMOTE_VIEWER.CLOSE, win, state.generation);
   expect(call(REMOTE_VIEWER.STATE, win).active).toBe(true);
   expect(win.isVisible()).toBe(true);
 });
@@ -179,4 +203,51 @@ it('rejects subframes and stale window/account generations even with a valid cha
     call(REMOTE_VIEWER.REQUEST, a, state.generation, { op: 'capabilities' }),
   ).rejects.toThrow('DESKTOP_STOPPED');
   expect(fixture.calls).toHaveLength(0);
+});
+
+it('resizes only the bound active viewer and clamps actual size to the display work area', () => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  const { generation } = call(REMOTE_VIEWER.STATE, win);
+  call(REMOTE_VIEWER.RESIZE, win, generation, 1280, 780);
+  expect(win.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 50, width: 1280, height: 800 });
+  call(REMOTE_VIEWER.RESIZE, win, generation, 3840, 2220);
+  expect(win.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1920, height: 1080 });
+  expect(() => call(REMOTE_VIEWER.RESIZE, win, generation, NaN, 600)).toThrow(
+    'Invalid viewer size',
+  );
+  expect(() => call(REMOTE_VIEWER.RESIZE, win, generation - 1, 800, 600)).toThrow(
+    'DESKTOP_STOPPED',
+  );
+  expect(() =>
+    fixture.handlers.get(REMOTE_VIEWER.RESIZE)!(
+      { sender: win.webContents, senderFrame: {} },
+      generation,
+      800,
+      600,
+    ),
+  ).toThrow('Invalid viewer');
+});
+
+it('waits for fullscreen exit and rejects delayed resize after a session replacement', () => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  const { generation } = call(REMOTE_VIEWER.STATE, win);
+  win.isFullScreen = () => true;
+  call(REMOTE_VIEWER.RESIZE, win, generation, 1280, 780);
+  expect(win.setFullScreen).toHaveBeenCalledWith(false);
+  expect(win.setBounds).not.toHaveBeenCalled();
+  win.emit('leave-full-screen');
+  expect(win.setBounds).toHaveBeenCalledOnce();
+  call(REMOTE_VIEWER.RESIZE, win, generation, 1280, 780);
+  manager.reset();
+  win.setBounds.mockClear();
+  win.emit('leave-full-screen');
+  expect(win.setBounds).not.toHaveBeenCalled();
 });

@@ -10,6 +10,17 @@ import type {
   RemoteDesktopDisplayMode,
 } from '@cindy/device-link';
 import { HumanDesktopInput } from './inputOwnership';
+import { resolveLinuxInputBinary } from './linuxInput';
+import { readLinuxUnlockState } from './linuxCredentials';
+import { WAYLAND_DISPLAY_ID } from './waylandCapture';
+import {
+  readLinuxDisplayModes,
+  setLinuxDisplayMode,
+  lockLinuxDesktop,
+  linuxMonitors,
+  linuxInputMapping,
+} from './linuxDesktop';
+import { linuxClipboardVersion, linuxSelection } from './linuxClipboard';
 import {
   openWindowsDesktopConnection,
   readWindowsDesktopSupport,
@@ -21,6 +32,7 @@ const binaryName =
   process.platform === 'darwin' ? 'cindy-macos-desktop-input' : 'cindy-windows-desktop-input.exe';
 let build: Promise<string> | null = null;
 async function resolveBinary(): Promise<string> {
+  if (process.platform === 'linux') return resolveLinuxInputBinary();
   if (app.isPackaged)
     return path.join(process.resourcesPath, 'tools', 'remote-desktop', binaryName);
   if (build) return build;
@@ -48,6 +60,7 @@ async function resolveBinary(): Promise<string> {
     if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
     if (process.platform === 'win32') {
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
+      digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'privacy.rs')));
       digest.update(
         await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'selection.rs')),
       );
@@ -108,8 +121,13 @@ async function resolveBinary(): Promise<string> {
   return build;
 }
 
+export { resolveBinary as resolveDesktopInputBinary };
+
 /** Probe the actual input process, never CuaDriver's or Electron's AX grant. */
 export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'unavailable'> {
+  if (process.platform === 'linux') {
+    return readLinuxUnlockState();
+  }
   if (process.platform !== 'darwin') return 'unavailable';
   try {
     const { stdout } = await exec(await resolveBinary(), ['--lock-state'], {
@@ -157,6 +175,7 @@ export async function lockDesktopScreen(
   isCurrent: () => boolean,
   signal: AbortSignal,
 ): Promise<void> {
+  if (process.platform === 'linux') return lockLinuxDesktop(isCurrent, signal);
   if (process.platform !== 'darwin') throw new Error('DESKTOP_LOCK_UNAVAILABLE');
   const binary = await resolveBinary();
   if (signal.aborted || !isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
@@ -193,6 +212,8 @@ export class DesktopInputHost {
   private generation = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private stopping: Promise<void> = Promise.resolve();
+  private privacyPaused = false;
+  private linuxPoint: ((x: number, y: number) => { x: number; y: number }) | null = null;
   constructor(
     private readonly onFailure: () => void,
     private readonly runtime: {
@@ -207,12 +228,27 @@ export class DesktopInputHost {
   async start(displayId: string): Promise<void> {
     this.stop();
     const platform = this.runtime.platform ?? process.platform;
-    if (platform !== 'darwin' && platform !== 'win32') throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+    if (platform !== 'darwin' && platform !== 'win32' && platform !== 'linux')
+      throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+    if (
+      platform === 'linux' &&
+      displayId !== WAYLAND_DISPLAY_ID &&
+      !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(displayId)
+    )
+      throw new Error('DESKTOP_DISPLAY_MISSING');
+    // A replacement helper is not usable until its ready handshake completes.
+    // In particular, canceling a privacy confirmation must keep dropping input
+    // throughout teardown, binary preparation and startup, without losing control.
+    this.privacyPaused = true;
     const generation = this.generation;
     await this.stopping;
     if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
     this.activity = new HumanDesktopInput();
     try {
+      if (platform === 'linux' && displayId !== WAYLAND_DISPLAY_ID) {
+        this.linuxPoint = linuxInputMapping(await linuxMonitors(), displayId);
+        if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
+      } else this.linuxPoint = null;
       if (
         platform === 'win32' &&
         !this.runtime.platform &&
@@ -227,6 +263,7 @@ export class DesktopInputHost {
         this.windows = connection;
         this.displayId = displayId;
         this.heartbeat = setInterval(() => this.write([]), 2000);
+        this.privacyPaused = false;
         return;
       }
       const binary = await this.runtime.resolveBinary();
@@ -247,7 +284,8 @@ export class DesktopInputHost {
         const finish = (error?: Error) => {
           clearTimeout(timer);
           child.stdout.off('data', receive);
-          error ? reject(error) : resolve();
+          if (error) reject(error);
+          else resolve();
         };
         const receive = (data: Buffer) => {
           text += data.toString();
@@ -277,12 +315,43 @@ export class DesktopInputHost {
         }
       });
       this.heartbeat = setInterval(() => this.write([]), 2000);
+      this.privacyPaused = false;
     } catch (error) {
-      if (generation === this.generation) this.stop();
+      if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
+      this.stop();
       throw error;
     }
   }
   input(events: DesktopInput[]): void {
+    if (this.privacyPaused) return;
+    if ((this.runtime.platform ?? process.platform) === 'linux') {
+      if (!this.child) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+      // Native text is paced for Wayland clients/IMEs. Bound each acknowledged
+      // command so long phone pastes cannot exceed the helper heartbeat timeout.
+      let pending: DesktopInput[] = [];
+      const flush = () => {
+        if (pending.length && this.child) this.write(pending, this.activity!.begin(pending));
+        pending = [];
+      };
+      for (const event of events) {
+        if (event.kind !== 'text') {
+          pending.push(
+            (event.kind === 'move' || event.kind === 'button') && this.linuxPoint
+              ? { ...event, ...this.linuxPoint(event.x, event.y) }
+              : event,
+          );
+          continue;
+        }
+        flush();
+        const chars = Array.from(event.text);
+        for (let i = 0; i < chars.length; i += 256) {
+          pending = [{ kind: 'text', text: chars.slice(i, i + 256).join('') }];
+          flush();
+        }
+      }
+      flush();
+      return; // Wayland's virtual pointer maps normalized coordinates to the output layout.
+    }
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
     if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     if (events.length === 0) return;
@@ -326,7 +395,8 @@ export class DesktopInputHost {
             const finish = (error?: Error) => {
               clearTimeout(timer);
               if (this.acknowledge === finish) this.acknowledge = null;
-              error ? reject(error) : resolve();
+              if (error) reject(error);
+              else resolve();
             };
             this.acknowledge = finish;
             child!.stdin.write(line, (error) => {
@@ -351,8 +421,33 @@ export class DesktopInputHost {
     this.stop();
     await this.stopping;
   }
+  /** Drain/release native input before a local-only confirmation gains focus.
+   * Restart only this input helper on cancel, never the media session or lease.
+   */
+  async pauseForPrivacy(): Promise<() => Promise<void>> {
+    if (!this.child && !this.windows) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    const displayId = this.displayId;
+    this.stop();
+    // The old activity stays owned until native exit. Hold a separate existing
+    // activity reservation for the local confirmation, released by stop/start.
+    this.activity = new HumanDesktopInput();
+    this.activity.holdUntilExit();
+    this.privacyPaused = true;
+    const generation = this.generation;
+    await this.stopping;
+    return async () => {
+      if (generation !== this.generation) return;
+      try {
+        await this.start(displayId);
+      } catch (error) {
+        if (!(error instanceof Error && error.message === 'DESKTOP_LEASE_EXPIRED'))
+          this.onFailure();
+      }
+    };
+  }
   stop(): void {
     this.generation++;
+    this.privacyPaused = false;
     this.acknowledge?.(new Error('DESKTOP_LEASE_EXPIRED'));
     const windows = this.windows;
     const writing = this.writing;
@@ -407,6 +502,7 @@ export class DesktopInputHost {
 export async function readDesktopDisplayModes(
   displayId: string,
 ): Promise<RemoteDesktopDisplayMode[]> {
+  if (process.platform === 'linux') return readLinuxDisplayModes(displayId);
   if (process.platform !== 'darwin' || !/^[0-9]{1,10}$/.test(displayId))
     throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
   const { stdout } = await exec(await resolveBinary(), ['--display-modes', displayId], {
@@ -442,6 +538,8 @@ export async function setDesktopDisplayMode(
   if (changingResolution) throw new Error('DESKTOP_DISPLAY_BUSY');
   changingResolution = true;
   try {
+    if (process.platform === 'linux')
+      return await setLinuxDisplayMode(displayId, modeId, beforeChange);
     if (
       process.platform !== 'darwin' ||
       !/^[0-9]{1,10}$/.test(displayId) ||
@@ -466,6 +564,7 @@ export async function setDesktopDisplayMode(
 
 /** Counter only: clipboard text never crosses a helper's stdout/log boundary. */
 export async function readDesktopClipboardVersion(portable = false): Promise<string> {
+  if (process.platform === 'linux') return linuxClipboardVersion();
   if (process.platform !== 'darwin' && process.platform !== 'win32')
     throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
   try {
@@ -500,6 +599,7 @@ export async function readDesktopClipboardVersion(portable = false): Promise<str
 }
 
 export async function readDesktopSelection(portable = false): Promise<string> {
+  if (process.platform === 'linux') return linuxSelection();
   try {
     const { stdout } = await exec(
       await resolveBinary(),

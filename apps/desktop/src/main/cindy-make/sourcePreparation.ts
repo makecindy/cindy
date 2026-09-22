@@ -112,9 +112,12 @@ export async function readCurrentCindySourceStatus(
     const sourcePath = path.resolve(root, 'source');
     if (env && (await exists(path.join(sourcePath, '.git')))) {
       const signal = new AbortController().signal;
-      const personalCommit = await git(env, ['rev-parse', 'HEAD'], sourcePath, signal).catch(
-        () => '',
-      );
+      const personalCommit = await git(
+        env,
+        ['rev-parse', '--verify', `refs/heads/${CINDY_PERSONAL_BRANCH}^{commit}`],
+        sourcePath,
+        signal,
+      ).catch(() => '');
       const upstreamRef = status.ref
         ? status.ref === 'main'
           ? 'refs/remotes/origin/main^{commit}'
@@ -133,6 +136,9 @@ export async function readCurrentCindySourceStatus(
       return {
         ...status,
         ...revisions,
+        ...(personalCommit && /^[0-9a-f]{7,64}$/i.test(personalCommit)
+          ? { commit: personalCommit }
+          : {}),
         branch: CINDY_PERSONAL_BRANCH,
       };
     }
@@ -169,6 +175,8 @@ function toSourceStatus(progress: SourcePreparationProgress): MakeSourceStatus {
     mainRemoteCommit: progress.mainRemoteCommit,
     mainBehind: progress.mainBehind,
     mainAhead: progress.mainAhead,
+    personalBehind: progress.personalBehind,
+    personalAhead: progress.personalAhead,
     ...(progress.error ? { error: progress.error } : {}),
     ...(progress.phase ? { phase: progress.phase } : {}),
     ...(progress.progress ? { progress: progress.progress } : {}),
@@ -516,8 +524,8 @@ async function prepareCindySourceInternal(
             progress,
           }),
       );
-      // Nobody works in the managed checkout itself (tasks use their own worktrees),
-      // so uncommitted changes here mean an older layout or outside tampering.
+      // Successful personal builds intentionally leave uncommitted content here.
+      // Never carry those files across a branch switch.
       await emitProgress({
         status: 'preparing',
         path: sourcePath,
@@ -525,7 +533,12 @@ async function prepareCindySourceInternal(
         phase: 'checkingLocal',
       });
       const dirty = await git(env, ['status', '--porcelain'], sourcePath, signal);
-      if (dirty) throw Object.assign(new Error('dirty'), { code: 'dirty' });
+      if (
+        dirty &&
+        (await git(env, ['branch', '--show-current'], sourcePath, signal)).trim() !==
+          CINDY_PERSONAL_BRANCH
+      )
+        throw Object.assign(new Error('dirty'), { code: 'dirty' });
     }
     if (!(await exists(gitDir))) {
       if (await exists(sourcePath)) {

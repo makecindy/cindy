@@ -32,8 +32,17 @@ interface MutationContext {
 }
 const mutationContext = new AsyncLocalStorage<MutationContext[]>();
 
+export interface SkillMutationWaitOptions {
+  /** Total bounded wait shared across every requested Skill lock. */
+  waitMs?: number;
+}
+
 /** Nested projections reuse only leases in their own async call chain. */
-export async function withSkillMutation<T>(names: readonly string[], operation: () => Promise<T>): Promise<T | undefined> {
+export async function withSkillMutation<T>(
+  names: readonly string[],
+  operation: () => Promise<T>,
+  options: SkillMutationWaitOptions = {},
+): Promise<T | undefined> {
   const requested = skillMutationNames(names);
   const held = (mutationContext.getStore() ?? []).filter((lease) => lease.active()
     && requested.some((name) => lease.names.includes(name)));
@@ -42,7 +51,7 @@ export async function withSkillMutation<T>(names: readonly string[], operation: 
   // caller starts releasing the lease without awaiting that child.
   const run = held.reduceRight<() => Promise<T>>((next, lease) => () => lease.run(next), operation);
   if (!missing.length) return run();
-  const lease = await acquireSharedSkillMutationLease(missing);
+  const lease = await acquireSharedSkillMutationLease(missing, undefined, options);
   if (!lease) return undefined;
   try { return await lease.run(run); }
   finally { await lease(); }
@@ -82,6 +91,7 @@ function readPending(root: string, keys: string[]): PendingMutation[] {
 export async function acquireSharedSkillMutationLease(
   names: readonly string[],
   pendingToken?: string,
+  options: SkillMutationWaitOptions = {},
 ): Promise<SkillMutationRelease | null> {
   let root: string;
   try {
@@ -98,6 +108,7 @@ export async function acquireSharedSkillMutationLease(
   let release!: () => void;
   const released = new Promise<void>((resolve) => { release = resolve; });
   let finished: Promise<void>;
+  const waitDeadline = Date.now() + Math.max(0, options.waitMs ?? 0);
   const acquire = async (index: number): Promise<void> => {
     if (index === keys.length) {
       const matchesKeys = (record: PendingMutation) =>
@@ -164,7 +175,10 @@ export async function acquireSharedSkillMutationLease(
     }
     const key = keys[index]!;
     await withCrossProcessLock(path.join(root, `${key}.lock`),
-      { label: 'skill-mutation', waitMs: 0 }, async (status) => {
+      {
+        label: 'skill-mutation',
+        waitMs: Math.max(0, waitDeadline - Date.now()),
+      }, async (status) => {
         if (status.held) await acquire(index + 1);
       });
   };

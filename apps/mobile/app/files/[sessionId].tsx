@@ -1,3 +1,4 @@
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 /**
  * 远程文件浏览(网格为主视图,对标 iOS Files)。
  *
@@ -7,6 +8,8 @@
  * Quick Look 预览路由。缩略图经 thumbnail op 懒加载(fileThumbnails 内存缓存)。
  */
 import * as Clipboard from 'expo-clipboard';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { ModalContentArea } from '@/platform/ModalContentArea';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { fsWatchTopic } from '@cindy/device-link';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -132,7 +135,9 @@ export default function RemoteFileBrowserScreen() {
   const deviceName = readRouteString(params.deviceName) ?? deviceId;
   const relPath = readRouteString(params.relPath) ?? '';
   const router = useRouter();
-  const { width: screenWidth } = useWindowDimensions();
+  const systemBack = useSystemNavigationBack();
+  const fileWindow = useAdaptiveWindow();
+  const screenWidth = fileWindow.width - fileWindow.insets.left - fileWindow.insets.right;
   const auth = useAuth();
   const { connectionIssue, openLink, status, subscribe, unsubscribe } = useDeviceLink();
   const maker = useMobileMakerTransport(deviceId);
@@ -727,6 +732,7 @@ export default function RemoteFileBrowserScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} testID="files.screen">
+      <SystemNavigationBack label={t('shared.back')} onPress={() => goBackGuarded(router)} />
       {searchOpen ? (
         <SearchHeader
           loading={searchLoading}
@@ -745,11 +751,11 @@ export default function RemoteFileBrowserScreen() {
         />
       ) : (
         <View style={styles.navRow} testID="files.navRow">
-          <ScreenBackButton
+          {!systemBack ? <ScreenBackButton
             hitSlop={8}
             onPress={() => goBackGuarded(router)}
             testID="files.backButton"
-          />
+          /> : null}
           <Pressable
             accessibilityLabel={t('files.browser.a11yTitleMenu')}
             onPress={() => setTitleMenuOpen(true)}
@@ -1331,8 +1337,9 @@ function TitleMenu({
   );
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={open}>
+    <Modal supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']} animationType="fade" onRequestClose={onClose} transparent visible={open}>
       <Pressable onPress={onClose} style={styles.overlay} testID="files.titleMenuOverlay">
+        <ModalContentArea>
         <Pressable onPress={() => undefined} style={styles.titleMenuCard}>
           {levels.map((level, index) => (
             <View key={`level:${level.relPath}`}>
@@ -1371,6 +1378,7 @@ function TitleMenu({
           {row('folder.copy', t('files.browser.copyPath'), false, onCopyCurrentPath,
             <Copy color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
         </Pressable>
+        </ModalContentArea>
       </Pressable>
     </Modal>
   );
@@ -1405,8 +1413,9 @@ function ContextMenu({
   ];
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible>
+    <Modal supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']} animationType="fade" onRequestClose={onClose} transparent visible>
       <Pressable onPress={onClose} style={styles.overlayCenter} testID="files.contextMenuOverlay">
+        <ModalContentArea>
         <View style={styles.liftedCard}>
           <View style={styles.liftedThumbZone}>
             {item.kind === 'dir' ? (
@@ -1434,6 +1443,7 @@ function ContextMenu({
             </View>
           ))}
         </View>
+        </ModalContentArea>
       </Pressable>
     </Modal>
   );
@@ -1706,8 +1716,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
-    marginHorizontal: spacing.xxl * 2 + spacing.sm,
-    marginTop: 96,
+    width: '100%',
+    maxWidth: 360,
     overflow: 'hidden',
   },
   menuRow: {

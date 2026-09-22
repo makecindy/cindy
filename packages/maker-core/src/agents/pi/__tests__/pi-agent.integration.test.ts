@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
+import { providerCatalogForPi, BUNDLED_CATALOG } from '@cindy/model-providers';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -1015,6 +1016,95 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  it('runs Grok 4.7 with all efforts, image input and encrypted tool history after resume',
+    { timeout: 60_000 }, async () => {
+      const row = providerCatalogForPi().providers.xai.find(model => model.id === 'grok-4.7')!;
+      const api = row.api;
+      if (api !== 'openai-responses') throw new Error(`Unexpected Grok 4.7 API: ${api}`);
+      const catalog = BUNDLED_CATALOG.providers.find(provider => provider.id === 'xai')!
+        .models.pi!.find(model => model.id === row.id)!;
+      const deps = buildDeps();
+      deps.capabilityAdditions = { availableModels: [{
+        id: row.id, displayName: row.name, contextWindow: catalog.contextWindow,
+        maxOutputTokens: catalog.maxOutput, supportsImageInput: true,
+        efforts: catalog.efforts, defaultEffort: catalog.defaultEffort,
+      }] };
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [{
+          id: 'xai', sourceProviderId: 'xai', name: 'xAI',
+          baseUrl: `${endpoint}/v1`, inheritModels: true,
+          models: [{ ...row, api, input: row.input.filter((kind): kind is 'text' | 'image' => kind === 'text' || kind === 'image'),
+            cost: { ...row.cost, input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,
+              cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0 },
+            baseUrl: `${endpoint}/v1`, wireId: row.id }],
+        }], env: {},
+      });
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-grok47-'));
+      let handle: AgentSessionHandle | undefined;
+      const before = seenRequests.length;
+      const reasoning = { type: 'reasoning', id: 'rs_grok47', summary: [], encrypted_content: 'opaque-grok47-state' };
+      const tool = { type: 'function_call', id: 'fc_grok47', call_id: 'call_grok47', name: 'read',
+        arguments: JSON.stringify({ path: path.join(workingDir, 'proof.txt') }), status: 'completed' };
+      const response = { id: 'resp_grok47', object: 'response', model: row.id, status: 'completed',
+        output: [reasoning, tool], usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 } };
+      const stream = [
+        { type: 'response.created', response: { ...response, output: [], status: 'in_progress' } },
+        { type: 'response.output_item.added', output_index: 0, item: { ...reasoning, encrypted_content: null } },
+        { type: 'response.output_item.done', output_index: 0, item: reasoning },
+        { type: 'response.output_item.added', output_index: 1, item: { ...tool, arguments: '', status: 'in_progress' } },
+        { type: 'response.function_call_arguments.delta', output_index: 1, delta: tool.arguments },
+        { type: 'response.output_item.done', output_index: 1, item: tool },
+        { type: 'response.completed', response },
+      ];
+      try {
+        writeFileSync(path.join(workingDir, 'proof.txt'), 'GROK47_TOOL_OK');
+        const imagePath = path.join(workingDir, 'pixel.png');
+        writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64'));
+        handle = await agent.startSession({ sessionId: 'grok47-native', workingDir,
+          model: row.id, providerId: 'xai', effort: 'high', permissionMode: 'bypassPermissions' });
+        const send = async (image = false) => {
+          const events: AgentEvent[] = [];
+          const done = (async () => { for await (const event of handle!.events()) {
+            events.push(event); if (event.type === 'done') break;
+          } })();
+          await handle!.send({ type: 'user', content: image
+            ? [{ type: 'text', text: 'Read proof.txt and inspect this image.' }, { type: 'image', path: imagePath }]
+            : 'Continue.' });
+          await done;
+          expect(events.filter(event => event.type === 'error')).toEqual([]);
+        };
+        scriptedResponses.push(sse(stream.map((data, sequence_number) => ({ event: data.type, data: { ...data, sequence_number } }))),
+          responsesStreamBody('tool complete', row.id));
+        await send(true);
+        const first = seenRequests.slice(before).map(request => JSON.parse(request.body));
+        expect(first).toHaveLength(2);
+        expect(first[0]).toMatchObject({ model: row.id, reasoning: { effort: 'high' } });
+        expect(JSON.stringify(first[0].input)).toContain('data:image/png;base64,');
+        expect(first[1].input).toEqual(expect.arrayContaining([expect.objectContaining(reasoning),
+          expect.objectContaining({ type: 'function_call_output', call_id: tool.call_id, output: expect.stringContaining('GROK47_TOOL_OK') })]));
+        const resumeSessionId = handle.id;
+        await handle.close();
+        handle = await agent.startSession({ sessionId: 'grok47-native', workingDir, model: row.id,
+          providerId: 'xai', resumeSessionId, effort: 'high', permissionMode: 'bypassPermissions' });
+        for (const effort of ['low', 'medium', 'high', 'xhigh'] as const) {
+          await handle.setEffort!(effort);
+          scriptedResponses.push(responsesStreamBody(`reply ${effort}`, row.id));
+          await send();
+          const request = JSON.parse(seenRequests.at(-1)!.body);
+          expect(request.reasoning.effort).toBe(effort);
+          expect(request.input).toEqual(expect.arrayContaining([expect.objectContaining(reasoning)]));
+          expect(request.prompt_cache_key).toBe(first[0].prompt_cache_key);
+        }
+        expect(first[0].prompt_cache_key).toEqual(expect.any(String));
+        expect(seenRequests.slice(before).every(request => request.url === '/v1/responses')).toBe(true);
+      } finally {
+        await handle?.close();
+        scriptedResponses.length = 0;
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    });
+
   it(
     'accepts a turn permission policy in ask, rejects it in Full Access, and honors steer cancellation before RPC',
     { timeout: 60_000 },
@@ -1449,6 +1539,51 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(handle.getPlanMode?.()).toBe(false);
 
         expect(seenRequests.length).toBe(seenBefore);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(['anthropic-messages', 'openai-completions'] as const)(
+    'keeps native plan notifications separate from replies using %s',
+    { timeout: 60_000 },
+    async (api) => {
+      const deps = buildDeps();
+      deps.resolvePiGatewayModelApi = () => api;
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-reply-'));
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await new PiAgent(deps).startSession({
+          sessionId: `plan-reply-${api}`, workingDir, model: 'pi-test-model',
+        });
+        for (const enabled of [true, false, true]) {
+          await handle.setPlanMode?.(enabled);
+          const events: AgentEvent[] = [];
+          const done = (async () => {
+            for await (const event of handle!.events()) {
+              events.push(event);
+              if (event.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'Reply with a short greeting.' });
+          await done;
+          const notices = events.filter((event) => event.standaloneText);
+          expect(notices).toHaveLength(1);
+          expect(notices[0]).toMatchObject({
+            type: 'text', source: 'pi', turnScope: 'background',
+            data: { isFinal: true, text: expect.stringContaining(enabled ? 'enabled' : 'disabled') },
+          });
+          const reply = events.filter((event) => event.type === 'text' && !event.standaloneText);
+          expect(reply.at(-1)?.data).toMatchObject({
+            text: 'pong from fake gateway', isFinal: true, isFullText: true,
+          });
+          expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+            status: 'completed', result: 'pong from fake gateway',
+          });
+          expect(events.filter((event) => event.type === 'error')).toEqual([]);
+        }
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });

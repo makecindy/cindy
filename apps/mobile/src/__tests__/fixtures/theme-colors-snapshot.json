@@ -48,6 +48,8 @@
     "statusDone": "#2AAE5B",
     "permAutoAccent": "#417CDD",
     "errorText": "#3C3F43",
+    "sharedTaskConfirmBackground": "#ac3535",
+    "sharedTaskConfirmForeground": "#fffefa",
     "destructive": "#f43d3f",
     "errorBorder": "#686B72",
     "overlay": "rgba(38, 38, 38, 0.35)",
@@ -101,7 +103,20 @@
       "overlaySecondaryPressed": "rgba(0, 0, 0, 0.1)",
       "deletionBubbleBg": "#FFFFFF",
       "deletionBubbleBorder": "#D7D7D4"
-    }
+    },
+    "taskTagRed": "#ed615f",
+    "taskTagOrange": "#eea34e",
+    "taskTagYellow": "#e5c744",
+    "taskTagGreen": "#70b568",
+    "taskTagBlue": "#609bd4",
+    "taskTagPurple": "#ab7bc6",
+    "taskTagGray": "#969696",
+    "taskTagPink": "#df83b0",
+    "taskTagCoral": "#de8970",
+    "taskTagTeal": "#53a89d",
+    "taskTagIndigo": "#7c83cf",
+    "taskTagWhite": "#ffffff",
+    "taskTagWhiteCheck": "#525252"
   },
   "dark": {
     "surface": "#2A2828",
@@ -151,6 +166,8 @@
     "statusDone": "#2AAE5B",
     "permAutoAccent": "#417CDD",
     "errorText": "#D4D4D4",
+    "sharedTaskConfirmBackground": "#ec9898",
+    "sharedTaskConfirmForeground": "#272727",
     "destructive": "#f43d3f",
     "errorBorder": "#BFC1C4",
     "overlay": "rgba(0, 0, 0, 0.45)",
@@ -204,6 +221,19 @@
       "overlaySecondaryPressed": "rgba(0, 0, 0, 0.2)",
       "deletionBubbleBg": "#1F1F1E",
       "deletionBubbleBorder": "#3C3C3A"
-    }
+    },
+    "taskTagRed": "#ed615f",
+    "taskTagOrange": "#eea34e",
+    "taskTagYellow": "#e5c744",
+    "taskTagGreen": "#70b568",
+    "taskTagBlue": "#609bd4",
+    "taskTagPurple": "#ab7bc6",
+    "taskTagGray": "#969696",
+    "taskTagPink": "#e79fc1",
+    "taskTagCoral": "#e6a08c",
+    "taskTagTeal": "#75bfb4",
+    "taskTagIndigo": "#999fdf",
+    "taskTagWhite": "#ffffff",
+    "taskTagWhiteCheck": "#525252"
   }
 }

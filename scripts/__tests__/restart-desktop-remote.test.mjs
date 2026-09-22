@@ -55,6 +55,7 @@ import {
 	shouldSuggestIsolatedNext,
 } from "../desktop-dev-verdict.mjs";
 import {
+	applyLinuxRendererEvidence,
 	collectDesktopWhoamiReport,
 	identifyDesktopProcesses,
 	mergeDesktopInstanceRecords,
@@ -600,6 +601,23 @@ test("desktop restart runner keeps the kill-before-deps order by default", () =>
 	]);
 });
 
+test("desktop restart reports each real step before running it and stops progress on failure", () => {
+	const events = [];
+	const run = (step) => {
+		events.push('run:' + step.progress);
+		if (step.progress === 'assets') throw new Error('missing runtime');
+	};
+	assert.throws(() => runDesktopRestart(
+		['--isolated=progress-test'], '/repo/cindy', run,
+		(step) => events.push('step:' + step),
+	), /missing runtime/);
+	assert.deepEqual(events, [
+		'step:stopping', 'run:stopping',
+		'step:dependencies', 'run:dependencies',
+		'step:assets', 'run:assets',
+	]);
+});
+
 test("desktop restart process-control phase does not initialize startup configuration", () => {
 	const processControlEnv = {};
 	assert.equal(
@@ -931,6 +949,17 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	assert.equal(
 		prefix,
 		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && set "CINDY_CUA_SMOKE=0" && ',
+	);
+});
+
+test("devEnvPrefix carries the Cindy Make test-window marker through restart", () => {
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "darwin"),
+		"XDT_CINDY_MAKE_TEST='1' CINDY_CUA_SMOKE='0' ",
+	);
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "win32"),
+		'set "XDT_CINDY_MAKE_TEST=1" && set "CINDY_CUA_SMOKE=0" && ',
 	);
 });
 
@@ -1328,4 +1357,30 @@ test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", (
 		),
 		(error) => error instanceof DesktopRestartStepError && error.alreadyHasVerdict === true,
 	);
+});
+
+test('Linux readiness binds the reported renderer to a live descendant in the same checkout', () => {
+  const rootDir = path.resolve('/repo/cindy');
+  const executable = path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron');
+  const scanned = [{ pid: 10, rootDir, ready: false, state: 'starting' }];
+  const records = [{ pid: 10, rootDir, state: 'ready', rendererPid: 12 }];
+  const processes = [
+    { pid: 10, ppid: 1, command: `${executable} .` },
+    { pid: 11, ppid: 10, command: `${executable} --type=zygote` },
+    { pid: 12, ppid: 11, command: `${executable} --type=zygote` },
+  ];
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'linux')[0].ready, true);
+  for (const recordsVariant of [[], [{ ...records[0], rendererPid: 99 }],
+    [{ ...records[0], rootDir: path.resolve('/other') }], [{ ...records[0], state: 'starting' }]]) {
+    assert.equal(applyLinuxRendererEvidence(scanned, recordsVariant, processes, 'linux')[0].ready, false);
+  }
+  for (const replacement of [
+    { ...processes[2], ppid: 99 },
+    { ...processes[2], command: '/other/electron --type=zygote' },
+    { ...processes[2], command: `${executable} --type=utility` },
+  ]) {
+    assert.equal(applyLinuxRendererEvidence(scanned, records, [...processes.slice(0, 2), replacement], 'linux')[0].ready, false);
+  }
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'darwin')[0].ready, false);
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'win32')[0].ready, false);
 });

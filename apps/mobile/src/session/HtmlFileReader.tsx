@@ -33,21 +33,57 @@
  * 会被 RNW 交给 RN `Linking` 试着让系统处理 —— 于是 `tel:` / `mailto:` / 自定义 scheme
  * 会拉起外部应用,把下面这段策略整个绕过去。放到 `['*']` 之后,回调是唯一决策点。
  */
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { WebView } from 'react-native-webview';
-import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
+import { WebView, type WebViewProps } from 'react-native-webview';
+import type { ShouldStartLoadRequest, WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 
 import { interceptHtmlNavigation, interceptSnapshotNavigation } from '@/session/htmlNavigationPolicy';
 import { withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
 import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
+import { useHtmlBrowserViewport } from '@/session/useHtmlBrowserViewport';
+import { browserViewportScrollScript } from '@/session/htmlBrowserViewport';
 
 /** The server serves only the downloaded manifest; every HTML has the same CSP and device guard. */
-export function HtmlSnapshotReader({ preview, onError }: { preview: MobileHtmlPreview; onError(): void }) {
+export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInsets, onNavigationStateChange }: {
+  preview: MobileHtmlPreview;
+  onError(): void;
+  webViewRef?: RefObject<WebView | null>;
+  viewportInsets?: WebViewProps['contentInset'];
+  onNavigationStateChange?(preview: MobileHtmlPreview, state: WebViewNavigation): void;
+}) {
   const source = useMemo(() => ({ uri: preview.url }), [preview.url]);
-  return <WebView
+  const localRef = useRef<WebView>(null);
+  const readerRef = webViewRef ?? localRef;
+  const { viewRef, measure, script, viewportStyle, obscuredContentInsets } = useHtmlBrowserViewport({
+    top: viewportInsets?.top ?? 0, bottom: viewportInsets?.bottom ?? 0,
+    left: viewportInsets?.left ?? 0, right: viewportInsets?.right ?? 0,
+  });
+  useEffect(() => { if (script) readerRef.current?.injectJavaScript(script); }, [script, readerRef, preview]);
+  const currentPreview = useRef<MobileHtmlPreview | null>(preview);
+  useEffect(() => {
+    currentPreview.current = preview;
+    return () => { currentPreview.current = null; };
+  }, [preview]);
+  return <View ref={viewRef} onLayout={measure} collapsable={false} style={[styles.fill, viewportStyle]}><View style={styles.viewport}><WebView
+    key={preview.url}
+    ref={readerRef}
     testID="filePreview.htmlRendered"
     source={source}
+    // Pair WebKit layout occlusion with the scroll range needed to reveal both ends.
+    automaticallyAdjustContentInsets={false}
+    contentInsetAdjustmentBehavior="never"
+    obscuredContentInsets={obscuredContentInsets}
+    contentInset={obscuredContentInsets}
+    injectedJavaScriptBeforeContentLoaded={script}
+    injectedJavaScript={script}
+    onLoadEnd={() => { if (currentPreview.current === preview && script) readerRef.current?.injectJavaScript(script); }}
+    onScroll={({ nativeEvent: { contentOffset } }) => {
+      if (currentPreview.current === preview) readerRef.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
+    }}
+    onNavigationStateChange={(state) => {
+      if (currentPreview.current === preview) onNavigationStateChange?.(preview, state);
+    }}
     originWhitelist={['*']}
     onShouldStartLoadWithRequest={(request) => interceptSnapshotNavigation(request.url, preview.url, preview.documents, preview.onDemand)}
     setSupportMultipleWindows={false}
@@ -62,7 +98,7 @@ export function HtmlSnapshotReader({ preview, onError }: { preview: MobileHtmlPr
     }}
     incognito
     style={styles.fill}
-  />;
+  /></View></View>;
 }
 
 export function HtmlFileReader({ html, testID }: { html: string; testID?: string }) {
@@ -124,4 +160,5 @@ export function HtmlFileReader({ html, testID }: { html: string; testID?: string
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
+  viewport: { flex: 1, minHeight: 0, overflow: 'hidden' },
 });

@@ -40,6 +40,7 @@ import {
   type PendingAskUser,
   type PendingPluginSetup,
   type PluginSetupCommandInFlight,
+  type PluginSetupCommandError,
   type PluginSetupInlineFormValues,
   type PluginSetupViewerState,
   type PendingIssueConfirm,
@@ -219,6 +220,7 @@ interface UseCCAgentChatReturn {
   pendingPluginSetup: PendingPluginSetup | null;
   pluginSetupViewerState: PluginSetupViewerState;
   pluginSetupCommandInFlight: PluginSetupCommandInFlight | null;
+  pluginSetupCommandError: PluginSetupCommandError | null;
   setPluginSetupViewerState: (next: PluginSetupViewerState) => void;
   respondToPluginSetup: (
     requestId: string,
@@ -884,6 +886,7 @@ export function useCCAgentChat(
     pendingPluginSetup: lightState.pendingPluginSetup,
     pluginSetupViewerState: lightState.pluginSetupViewerState,
     pluginSetupCommandInFlight: lightState.pluginSetupCommandInFlight,
+    pluginSetupCommandError: lightState.pluginSetupCommandError,
     setPluginSetupViewerState,
     respondToPluginSetup,
     askUserViewerState: lightState.askUserViewerState,

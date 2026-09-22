@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SettingsSegmentedControl } from './SettingsSegmentedControl';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
   Sun,
   Moon,
@@ -821,7 +821,7 @@ export function AppearanceSection() {
             </p>
           </div>
 
-          <SettingsSegmentedControl
+          <SegmentedControl
             aria-label={t('settings.appearance.sidebarCardMode.aria')}
             value={sidebarViewMode}
             onValueChange={setSidebarViewMode}
@@ -846,7 +846,7 @@ export function AppearanceSection() {
             </p>
           </div>
 
-          <SettingsSegmentedControl
+          <SegmentedControl
             aria-label={t('settings.appearance.sidebarMainListMode.aria')}
             value={sidebarMainViewMode}
             onValueChange={setSidebarMainViewMode}
@@ -870,7 +870,7 @@ export function AppearanceSection() {
             </p>
           </div>
 
-          <SettingsSegmentedControl
+          <SegmentedControl
             aria-label={t('settings.appearance.ghostPanelRestore.aria')}
             value={ghostPanelRestoreMode}
             onValueChange={setGhostPanelRestoreMode}

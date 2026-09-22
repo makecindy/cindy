@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent } from '@cindy/maker-core';
 
@@ -25,6 +25,42 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it('finishes mandatory runtime cleanup when optional remote refresh throws at an owner boundary', () => {
+    const start = source.indexOf('function cleanupClosedSessionRuntime(');
+    const code = source.slice(start, source.indexOf('\n// Keep holder reads', start));
+    const js = transpileModule(code, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+    const cleared = vi.fn();
+    const deps = {
+      pendingCredentialSwitchHolder: null, deferredCodexRestartHolder: null,
+      agentInputCoordinatorHolder: null,
+      refreshRemoteCodexMcpOnTurnSettledHolder: () => { throw new Error('App session is switching'); },
+      gitSnapshotCoordinator: { onSessionClosed: vi.fn() },
+      clearOrcaMcpHydrated: vi.fn(), knownNonOrcaSessionIds: new Set(),
+      lastReportedCostUsdBySession: new Map(), lastReportedModelUsageBySession: new Map(),
+      turnModelPromiseBySession: new Map(), turnUsageContextBySession: new Map(),
+      productTurnWallClockTracker: { clear: cleared }, productTurnUsageTargetTracker: { clear: vi.fn() },
+      claudeOutputLagTimingGuard: { clear: vi.fn() }, clearClaudeSessionBackgroundActivity: vi.fn(),
+      clearSessionPersistState: vi.fn(), clearSubagentObservationRewindState: () => true,
+      handleAgentIslandSessionClosedAfterCleanup: vi.fn(), log: { warn: vi.fn() },
+    };
+    const cleanup = new Function(...Object.keys(deps), `${js}; return cleanupClosedSessionRuntime;`)(...Object.values(deps));
+    expect(() => cleanup({ id: 'departing-task' })).not.toThrow();
+    expect(cleared).toHaveBeenCalledWith('departing-task');
+    expect(deps.clearSessionPersistState).toHaveBeenCalledWith('departing-task');
+    expect(deps.handleAgentIslandSessionClosedAfterCleanup).toHaveBeenCalledWith('departing-task', 'process-closed');
+  });
+
+  it('does not read the guarded Maker during account-boundary remote refresh', () => {
+    const start = source.indexOf('refreshRemoteCodexMcpOnTurnSettledHolder = (sessionId: string): void => {');
+    const prefix = source.slice(start, source.indexOf('    const remoteHostId', start));
+    const js = transpileModule(`let refreshRemoteCodexMcpOnTurnSettledHolder; ${prefix}\n};`, {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    const getSession = vi.fn(() => { throw new Error('App session is switching'); });
+    const refresh = new Function('isAppSessionBoundaryPending', 'maker', `${js}; return refreshRemoteCodexMcpOnTurnSettledHolder;`)(() => true, { getSession });
+    expect(() => refresh('departing-task')).not.toThrow();
+    expect(getSession).not.toHaveBeenCalled();
+  });
   it.each([undefined, null, { text: 'Restart Cindy before using Pi again.', isFinal: true }])(
     'strips Host recovery metadata from the boundary copy with data %j',
     (data) => {
@@ -642,7 +678,7 @@ describe('maker:event hot path ordering', () => {
       'const goalPause = pauseGoalBeforeExplicitStop(sid);',
       'inputCoordinator.stop(',
     );
-    expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await goalPause;');
+    expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await Promise.all([goalPause, makeInterrupted]);');
     expect(goalPauseStart).toBeGreaterThanOrEqual(0);
     expect(goalPauseSource).toContain('catch (err)');
     expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');

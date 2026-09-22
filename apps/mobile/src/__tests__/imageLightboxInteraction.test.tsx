@@ -2,6 +2,8 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAttachmentPayload } from '@/session/messagePayload';
+import { svgAttachmentForDisplay } from '@/session/messageAttachments';
 import {
   ImageLightbox,
   type ImageLightboxProps,
@@ -28,7 +30,8 @@ const runtime = vi.hoisted(() => ({
 vi.mock("expo-router", () => ({
   useNavigation: () => ({ setOptions: () => undefined }),
 }));
-vi.mock("react-i18next", () => ({
+vi.mock("react-i18next", async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock("@/session/remoteMedia", () => ({
@@ -80,6 +83,9 @@ vi.mock("react-native", async () => {
 });
 vi.mock("@/components/AppText", async () => ({
   Text: (await import("react-native")).Text,
+}));
+vi.mock("expo-image", async () => ({
+  Image: (await import("react-native")).Image,
 }));
 vi.mock("@/platform/gestureHandler", async () => {
   const { View } = await import("react-native");
@@ -141,7 +147,7 @@ vi.mock("react-native-reanimated", async () => {
     done?: Animation["done"],
   ) => ({ target, done });
   return {
-    default: { View: native.View, Image: native.Image },
+    default: { View: native.View, createAnimatedComponent: (component: unknown) => component },
     useSharedValue: (initial: number) => {
       const ref = useRef<Value | null>(null);
       if (!ref.current) {
@@ -214,6 +220,50 @@ function mount(overrides: Partial<ImageLightboxProps> = {}) {
   render();
   return { props, render };
 }
+
+describe('SVG images in the shared lightbox', () => {
+  it.each([
+    { name: 'diagram', mimeType: 'image/svg+xml; charset=utf-8' },
+    { name: 'diagram.svg' },
+  ])('keeps opaque SVG attachment URLs unannotatable: %j', async (metadata) => {
+    const url = 'https://example.invalid/download?id=1';
+    const attachment = svgAttachmentForDisplay({
+      kind: 'file', path: url, previewable: false, ...metadata,
+    });
+    const payload = buildAttachmentPayload(attachment);
+    if (payload.kind !== 'media') throw new Error('Expected an image payload');
+    const onShareImage = vi.fn();
+    mount({
+      images: [{ key: 'svg', title: attachment.name, url, payload }], initialUrl: url,
+      annotation: { submitLabel: 'Send', onSubmit: vi.fn() }, onShareImage,
+    });
+    expect(runtime.nodes.has('message.imageLightboxAnnotateButton')).toBe(false);
+    await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
+    expect(onShareImage).toHaveBeenCalledWith(payload.media, url, 'image/svg+xml', undefined);
+  });
+
+  it.each([
+    'https://example.invalid/diagram.svg?version=2',
+    'data:image/svg+xml;base64,PHN2Zy8+',
+    'file:///cache/diagram.svg',
+  ])('loads %s with image gestures and without raster annotation', (url) => {
+    const image = {
+      key: 'svg', title: 'Diagram', url,
+      payload: { kind: 'media', media: { kind: 'image', url, previewable: true } },
+    } as ImageLightboxProps['images'][number];
+    mount({ images: [image], initialUrl: url, annotation: { submitLabel: 'Send', onSubmit: vi.fn() } });
+    const props = runtime.nodes.get('Image');
+    expect(props.source.uri).toBe(url);
+    expect(props.contentFit).toBe('contain');
+    act(() => props.onLoad({ source: { width: 1600, height: 900 } }));
+    doubleTapAtCorner();
+    finishAnimations();
+    expect(transform().scale).toBe(2.5);
+    expect(transform().y).toBe(0);
+    expect(runtime.nodes.has('message.imageLightboxAnnotateButton')).toBe(false);
+  });
+});
+
 function gestures(node = runtime.gesture!): GestureNode[] {
   return node.children ? node.children.flatMap(gestures) : [node];
 }
@@ -319,7 +369,7 @@ describe("image viewer gesture lifecycle", () => {
     act(() =>
       runtime.nodes
         .get("Image")
-        .onLoad({ nativeEvent: { source: { width: 1600, height: 900 } } }),
+        .onLoad({ source: { width: 1600, height: 900 } }),
     );
     finishAnimations();
     expect(transform().y).toBe(0);
@@ -348,7 +398,7 @@ describe("image viewer actions", () => {
 
   it('reclamps zoom after rotation and still returns to the centered image', () => {
     const harness = mount();
-    act(() => runtime.nodes.get('Image').onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }));
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     doubleTapAtCorner(); finishAnimations();
     runtime.dimensions = { width: 800, height: 400 };
     runtime.insets = { top: 0, bottom: 20, left: 59, right: 0 };
@@ -375,7 +425,7 @@ describe("image viewer actions", () => {
     let complete!: () => void;
     const onSubmit = vi.fn(() => new Promise<void>((resolve) => { complete = resolve; }));
     mount({ annotation: { submitLabel: 'Send', onSubmit } });
-    act(() => runtime.nodes.get('Image').onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }));
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     press('message.imageLightboxAnnotateButton');
     const draw = gestures().find(g => g.kind === 'Pan' && g.options.minDistance === 0)!;
     fire(draw, 'onStart', { x: 100, y: 200 });
@@ -393,7 +443,7 @@ describe("image viewer actions", () => {
     let reject!: (error: Error) => void;
     const onSubmit = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
     mount({ annotation: { submitLabel: 'Send', onSubmit } });
-    act(() => runtime.nodes.get('Image').onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }));
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     press('message.imageLightboxAnnotateButton');
     const draw = () => gestures().find(g => g.kind === 'Pan' && g.options.minDistance === 0)!;
     fire(draw(), 'onStart', { x: 100, y: 200 });
@@ -433,7 +483,7 @@ describe("image viewer actions", () => {
     act(() =>
       runtime.nodes
         .get("Image")
-        .onLoad({ nativeEvent: { source: { width: 400, height: 800 } } }),
+        .onLoad({ source: { width: 400, height: 800 } }),
     );
     expect(props.onClose).not.toHaveBeenCalled();
     expect(runtime.nodes.get("Image").source.uri).toBe(props.initialUrl);

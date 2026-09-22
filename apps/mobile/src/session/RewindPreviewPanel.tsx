@@ -140,7 +140,9 @@ function titleForState(state: RewindPreviewState, t: TFunction): string {
 function detailForState(state: RewindPreviewState, t: TFunction): string | null {
   if (state.kind === 'loading') return t('interaction.rewind.detailLoading');
   if (state.kind === 'default') return t('interaction.rewind.detailDefault');
-  if (state.kind === 'empty') return t('interaction.rewind.detailEmpty');
+  if (state.kind === 'empty') {
+    return state.note ? t('interaction.rewind.detailConversationOnly') : t('interaction.rewind.detailEmpty');
+  }
   return t('interaction.rewind.detailError');
 }
 

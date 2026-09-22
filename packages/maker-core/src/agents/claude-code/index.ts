@@ -22,6 +22,7 @@
  * 文件结构对标 codex/index.ts，方便对照阅读。
  */
 
+import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,6 +60,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupStoppedError,
   TurnPermissionPolicyUnsupportedError,
+  PINNED_SKILL_INVOCATION,
   type AgentSessionHandle,
   type AgentDeps,
   type StartSessionOptions,
@@ -66,6 +68,7 @@ import {
   type SendOptions,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
+import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
@@ -167,6 +170,7 @@ import type {
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
+  ListRuntimeSkillsOptions,
 } from '../../types/palette.js';
 import { CLAUDE_CODE_AGENT_COMMANDS } from './commands.js';
 import type {
@@ -296,26 +300,6 @@ function legacyToSdkModelString(model: string): string {
 
 function isProviderRoutedModel(model: string): boolean {
   return !model.startsWith('claude-');
-}
-
-/**
- * 结果感知的硬中断目前覆盖 DeepSeek、原生 Claude 与 xai Grok 系列
- * (Grok 为 2026-08 维护者确认新增:单 turn 在 4 个不同 Grep 里轮转上千次调用的实锤)。
- * 其他 provider-routed 模型需要独立确认产品口径,不能因共用 Claude Code harness
- * 就自动扩大行为。会话级判断用 maker-core 公开 model id(deepseek/…、xai/…);
- * sidechain 的判断来自 SDK 流内的原始 id(可能是裸 deepseek-… / grok-… 形态,
- * 同 toSdkModelString 的双形态),因此按家族前缀匹配,不带 [1m] 的 SDK 改写。
- * grok 家族按 model-providers classification 口径同时认三种形态:xai/(订阅直连)、
- * x-ai/(网关命名空间,toSdkModelString 原样透传)与裸 grok-(sidechain 原始 id)。
- */
-function shouldUseToolLoopGuard(model: string): boolean {
-  return (
-    model.startsWith('deepseek')
-    || model.startsWith('claude-')
-    || model.startsWith('xai/')
-    || model.startsWith('x-ai/')
-    || model.startsWith('grok-')
-  );
 }
 
 /** URL → host(路由决策日志用,失败返回 undefined,不抛)。 */
@@ -1012,6 +996,35 @@ export class ClaudeCodeAgent extends BaseAgent {
         scope: c.scope,
         enabled: c.enabled,
       })),
+    };
+  }
+
+  override async listRuntimeSkills(opts: ListRuntimeSkillsOptions): Promise<ListAgentSkillsResult> {
+    if (opts.remoteHostId) return this.listAgentSkills(opts);
+    if (!opts.workingDir) return { skills: [] };
+    let result: Awaited<ReturnType<typeof scanClaudeRuntimeSkills>>;
+    try {
+      result = await scanClaudeRuntimeSkills(opts.workingDir, opts.runtimeConfigDir);
+    } catch (error) {
+      return {
+        skills: [],
+        errors: [{
+          path: opts.workingDir,
+          message: error instanceof Error ? error.message : String(error),
+        }],
+      };
+    }
+    return {
+      skills: result.items.map((item) => ({
+        kind: 'agent-skill' as const,
+        name: item.name,
+        description: item.description,
+        source: item.kind === 'skill' ? 'skill' as const : 'user' as const,
+        path: item.mdPath,
+        scope: item.scope === 'project' ? 'project' as const : 'global' as const,
+        enabled: true,
+      })),
+      ...(result.errors.length > 0 ? { errors: result.errors } : {}),
     };
   }
 
@@ -2400,7 +2413,10 @@ export class ClaudeCodeAgent extends BaseAgent {
     const disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
     const disabledSkillOverrides = disabledSkillPaths.length > 0
-      ? claudeDisabledSkillOverrides((await scanClaudeRuntimeSkills(opts.workingDir)).items, currentDisabledSkillLaunchPaths(disabledSkillLaunch))
+      ? claudeDisabledSkillOverrides(
+        (await scanClaudeRuntimeSkills(opts.workingDir, env.CLAUDE_CONFIG_DIR)).items,
+        currentDisabledSkillLaunchPaths(disabledSkillLaunch),
+      )
       : {};
     const buildSettings = (): Settings => {
       const settings = buildClaudeFlagSettings({
@@ -2561,14 +2577,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         return decision;
       });
     };
-    // guard 桶常驻(每 turn 清空):适用性不再是会话级一票制,而是每个 scope 单独判。
+    // All models share the same detector, with independent per-sidechain history.
     const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
     /**
-     * guard 适用性判定用的模型:sidechain 用该 subagent 的实际模型
+     * 错误归属用的模型:sidechain 用该 subagent 的实际模型
      * (Agent 异步回执的 resolvedModel 优先,其次 sidechain 流内消息的 model),
      * 两者都未知时回落会话模型(维持旧行为);顶层恒用会话模型。
-     * 否则 claude 会话下的 provider-routed subagent 会被越权硬中断,
-     * provider-routed 会话下的 claude subagent 反而失去保护(PR #2779 review 指出)。
      * runtimeState 声明在后,仅在 forward loop 回调期调用,无 TDZ 风险。
      */
     const toolLoopGuardModelForScope = (parentToolUseId?: string): string => {
@@ -2580,8 +2594,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       return mutableModel;
     };
-    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard | null => {
-      if (!shouldUseToolLoopGuard(toolLoopGuardModelForScope(parentToolUseId))) return null;
+    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard => {
       const scopeKey = parentToolUseId ?? null;
       let guard = toolLoopGuards.get(scopeKey);
       if (!guard) {
@@ -2644,12 +2657,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     // Fast 模式运行时态:启动取 opts.fastMode 快照,setFastMode 覆盖。buildSettings 每次读最新值;
     // host 只在「该 model 支持 + 走官方供应商」时才传 true(renderer 配置门控),agent 忠实消费。
     let mutableFastMode = opts.fastMode === true;
-    // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖, buildQuery
-    // 每 turn 读最新值传给 SDK options.additionalDirectories — 即时生效。
+    // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖。
+    // SDK additionalDirectories 在 Query 创建时冻结;代际不一致时下一次 send
+    // 走 rewind 同款 resume+fork 重建,下一 turn 生效,不用 fresh:true。
+    let mutableLibraryRoot: string | null | undefined = opts.remoteHostId || reviewMode ? undefined : (opts[LIBRARY_READ_ROOT] ?? undefined);
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
     let mutableWritableDirs: string[] = Array.isArray(opts.writableDirs) ? [...opts.writableDirs] : [];
     let autoReviewDirectoryGeneration = 0;
     let activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
+    let activeQueryReadonlyDirs = [...mutableExtraDirs];
     let extraDirsRebuildAttempted = false;
     // 本机热切跨过 Explore inherit-cap 策略后,子进程 env 必须随 Query 重建。
     // 代际与 extraDirs 同款:setModel 只加代,buildQuery 才把当前 Query 标成已吃进
@@ -3754,6 +3770,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const additionalDirectories = [...new Set([...mutableExtraDirs, ...mutableWritableDirs])];
       activeQueryHasDirectoryGrants = additionalDirectories.length > 0;
       activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
+      activeQueryReadonlyDirs = [...mutableExtraDirs];
       extraDirsRebuildAttempted = false;
       activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
@@ -3823,7 +3840,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
-          ...(this.deps.registerLocalAgentProcess
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
             ? {
                 spawnClaudeCodeProcess: (spawnOptions) =>
                   spawnObservedClaudeProcess({
@@ -3834,6 +3851,9 @@ export class ClaudeCodeAgent extends BaseAgent {
                         kind: 'claude',
                         role: 'task-host',
                       }),
+                    trackDebugFile: process.env.XDT_CC_DEBUG_NET === '1' && ccDebugFile
+                      ? () => this.deps.trackCcDebugFile?.(ccDebugFile, opts.sessionId) ?? (() => {})
+                      : undefined,
                     onStderr: vo.onStderrLine as ((line: string) => void) | undefined,
                   }),
               }
@@ -6028,9 +6048,20 @@ export class ClaudeCodeAgent extends BaseAgent {
               reviewReadGrants,
             );
           }
+          const pinnedSkill = sendOpts?.[PINNED_SKILL_INVOCATION];
+          let providerContent = message.content;
+          if (pinnedSkill) {
+            if (typeof providerContent !== 'string') {
+              throw new Error('Pinned Claude Skill invocation must be text-only.');
+            }
+            providerContent = await preparePinnedClaudeSkillInvocation(
+              providerContent,
+              pinnedSkill,
+            );
+          }
           // SSH 图片路径属于远端主机，不能在桌面端压缩或读取；保留路径引用交给远端 SDK。
           const content = await toClaudeSdkContent(
-            message.content,
+            withLibraryNativeReadContext(providerContent, mutableLibraryRoot, activeQueryReadonlyDirs),
             undefined,
             !opts.remoteHostId,
           );
@@ -6789,7 +6820,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             triggerAutoCompactIfNeeded();
           }
         }
-        // 适用性在 getToolLoopGuard 里按已更新的 mutableModel 逐 scope 判,这里只清状态。
+        // A model change begins a fresh observation history in every scope.
         resetToolLoopGuards();
         if (exploreInheritCapNeedsRebuild && liveEnv && !opts.remoteHostId) {
           applyExploreInheritCapEnv(liveEnv, sdkModel, 'replace');
@@ -6949,12 +6980,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         return mutablePlanMode || planTurnActive || sdkInPlanMode;
       },
 
-      async setExtraDirs(newDirs: string[]) {
+      async setExtraDirs(newDirs: string[], libraryRoot?: string | null) {
         if (reviewMode) return;
         // 只覆盖 closure。SDK 没有运行时 setAdditionalDirectories 入口, 但 buildQuery
         // 是 turn-by-turn 装配的 (rewind 重启 / fork 都走 buildQuery), 改完下一 turn
         // 自动用新值。当前 in-flight turn 不会变 (允许的 — 用户在 turn 中加目录
         // 通常意图是"下一 turn 让你看到新目录")。
+        mutableLibraryRoot = opts.remoteHostId ? undefined : (libraryRoot ?? (mutableLibraryRoot === undefined ? undefined : null));
         if (
           mutableExtraDirs.length === newDirs.length
           && mutableExtraDirs.every((dir, index) => dir === newDirs[index])

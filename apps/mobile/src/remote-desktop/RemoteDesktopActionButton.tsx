@@ -8,6 +8,7 @@ export type RemoteDesktopActionButtonProps = Pick<
   | "disabled"
   | "testID"
   | "accessibilityLabel"
+  | "accessibilityHint"
   | "accessibilityState"
   | "accessibilityRole"
 > & { onPress(): void; variant?: "plain" | "glass"; systemImage?: string };
