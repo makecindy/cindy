@@ -6,16 +6,37 @@ export interface OrganizationAutoInstallSkill {
   catalogScope: 'team';
 }
 
-/** Server owns the department decision. Do not accept or submit department IDs here. */
+const DISTRIBUTION_TIMEOUT_MS = 5_000;
+type FetchPage = (path: string, options: { timeoutMs: number }) => Promise<unknown>;
+
+/** Bound the entire paginated lookup, including authentication refresh. */
 export async function fetchOrganizationAutoInstallSkills(
-  fetchPage: (path: string) => Promise<unknown> = (path) => skillhubApiFetch(path),
+  fetchPage: FetchPage = (path, options) => skillhubApiFetch(path, options),
 ): Promise<OrganizationAutoInstallSkill[]> {
+  const deadline = Date.now() + DISTRIBUTION_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      loadPages(fetchPage, deadline),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Organization skill distribution timed out')), DISTRIBUTION_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** Server owns the department decision; never send client-supplied department IDs. */
+async function loadPages(fetchPage: FetchPage, deadline: number): Promise<OrganizationAutoInstallSkill[]> {
   const skills = new Map<string, OrganizationAutoInstallSkill>();
   let cursor: string | null = null;
   const seen = new Set<string>();
   do {
     const path = '/api/skills-hub/auto-install' + (cursor ? `?cursor=${encodeURIComponent(cursor)}` : '');
-    const raw = await fetchPage(path);
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs <= 0) throw new Error('Organization skill distribution timed out');
+    const raw = await fetchPage(path, { timeoutMs });
     if (!raw || typeof raw !== 'object') throw new Error('Invalid organization skill distribution');
     const page = raw as Record<string, unknown>;
     if (!Array.isArray(page.skills) || page.skills.length > 100

@@ -131,7 +131,7 @@ export class SkillhubAutoSyncService {
     if (!userId) return Promise.resolve();
     if (this.completedUserId === userId) return Promise.resolve();
     if (this.inFlight) {
-      if (this.inFlightUserId === userId) return this.inFlight;
+      if (this.inFlightUserId === userId && !this.externalCancelRequested) return this.inFlight;
       return this.inFlight.finally(() => this.runOnceAfterLogin());
     }
 
@@ -486,7 +486,7 @@ export class SkillhubAutoSyncService {
 
   private assertAuthUnchanged(): void {
     const currentUserId = this.deps.getCurrentUserId();
-    if (!currentUserId || currentUserId !== this.inFlightUserId) {
+    if (this.externalCancelRequested || !currentUserId || currentUserId !== this.inFlightUserId) {
       throw new Error('auth user changed during auto sync');
     }
   }
