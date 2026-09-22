@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useGhostMainViews } from '@/cindy-brain/ghostMainViews';
 import { GhostPanelError, GhostWebviewBody } from '@/cindy-brain/ghostPanelBody';
 import { useGhostRuntimeState } from '@/cindy-brain/runtimeStates';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 
 /** Route boundary that resolves only an approved, enabled manifest main-view entry. */
 export function GhostMainViewHost() {
@@ -11,7 +12,9 @@ export function GhostMainViewHost() {
   const navigate = useNavigate();
   const { routeCapable } = useGhostMainViews();
   const item = routeCapable.find((candidate) => candidate.ghostId === ghostId);
-  const runtimeState = useGhostRuntimeState(ghostId);
+  const runtimeState = useGhostRuntimeState(
+    item ? installedGhostStoragePart(item.installedGhost) : ghostId,
+  );
 
   useEffect(() => {
     if (!item) navigate('/plugins', { replace: true });
@@ -19,7 +22,7 @@ export function GhostMainViewHost() {
 
   if (!item) return <div className="h-full w-full bg-content-area" />;
 
-  const { manifest } = item;
+  const { manifest, installedGhost } = item;
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
   return (
     <section
@@ -27,9 +30,9 @@ export function GhostMainViewHost() {
       aria-label={item.title}
     >
       {broken ? (
-        <GhostPanelError manifest={manifest} state={runtimeState} />
+        <GhostPanelError ghost={installedGhost} state={runtimeState} />
       ) : (
-        <GhostWebviewBody key={manifest.id} manifest={manifest} html={manifest.mainView?.html} />
+        <GhostWebviewBody key={installedGhostStoragePart(installedGhost)} ghost={installedGhost} html={manifest.mainView?.html} />
       )}
     </section>
   );

@@ -147,6 +147,22 @@ describe('providerSecrets registry', () => {
     expect(() => ghostSecretStorageKey('ok', 'k.ey')).toThrow(/illegal characters/);
   });
 
+  it('企业实例 storage part 与 root 凭证键隔离,且不继承官方别名', () => {
+    expect(ghostSecretStorageKey('helper', 'token')).toBe('ghost_secret_helper_token');
+    expect(ghostSecretStorageKey('_ns__acme__helper', 'token')).toBe(
+      'ghost_secret__ns__acme__helper_token',
+    );
+    expect(ghostSecretHintStorageKey('_ns__acme__helper', 'token')).toBe(
+      'ghost_hint__ns__acme__helper_token',
+    );
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).toBe(
+      'ghost_secret__ns__xd__xd-mivo_mivo_api_key',
+    );
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).not.toBe(
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key'),
+    );
+  });
+
   it('官方别名:cindy-web-search 的凭证映射到历史 brave/tavily 存储键(老用户零迁移)', () => {
     // 与「工具密钥」时代同一 .enc 文件:老用户已填 key 对意识立即生效,
     // lizi_web_search MCP 也照读同一份。

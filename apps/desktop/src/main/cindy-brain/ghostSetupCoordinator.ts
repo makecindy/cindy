@@ -109,6 +109,8 @@ export interface GhostSetupCoordinatorDeps {
   logger?: {
     warn: (message: string, context?: Record<string, unknown>) => void;
   };
+  /** Map MCP/logical ghostId onto the credential/store instance id. */
+  resolveStoreId?: (ghostId: string) => string;
 }
 
 export interface GhostSetupEnsureRequest {
@@ -158,11 +160,12 @@ export class GhostSetupCoordinator {
     let assessmentDirty = false;
     const reconnectedActions = new Set<string>();
     let localConnectionAction: { id: string; ref: string; revision: number } | undefined;
+    const storeId = this.deps.resolveStoreId?.(request.ghostId) ?? request.ghostId;
 
     // Subscribe before the initial read. A committed settings write racing the
     // first assessment will then keep the read loop running until one complete
     // assessment observes a quiet revision.
-    unsubscribe = this.deps.changeBus.subscribe(request.ghostId, event => {
+    unsubscribe = this.deps.changeBus.subscribe(storeId, event => {
       if (localConnectionAction && event.source === 'connection' && event.ref === localConnectionAction.ref &&
           event.revision > localConnectionAction.revision) {
         reconnectedActions.add(localConnectionAction.id);
@@ -177,13 +180,13 @@ export class GhostSetupCoordinator {
     > => {
       for (;;) {
         assessmentDirty = false;
-        const startRevision = this.deps.changeBus.currentRevision(request.ghostId);
+        const startRevision = this.deps.changeBus.currentRevision(storeId);
         const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
         if (!target.ok) return { ok: false, target };
         const next = await this.deps.assess(request.ghostId);
         if (
           !assessmentDirty &&
-          this.deps.changeBus.currentRevision(request.ghostId) === startRevision
+          this.deps.changeBus.currentRevision(storeId) === startRevision
         ) {
           return { ok: true, assessment: next };
         }

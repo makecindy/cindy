@@ -1499,6 +1499,7 @@ describe('Manual-only Ghost discovery and read gates', () => {
       expect(ghosts).toHaveLength(2);
       expect(ghosts[0]).toEqual({
         ...roster[0],
+        namespace: null,
         tools: [],
         manual: [{ name: 'ios-simulator', description: 'Simulator workflow' }],
         setup: { state: 'ready', revision: 0, groups: [] },

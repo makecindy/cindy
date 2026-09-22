@@ -50,6 +50,18 @@ describe('cindy-brain · ghostKvStore(意识自定义参数持久化)', () => {
     expect(fs.existsSync(path.join(root, 'beta.json'))).toBe(true);
   });
 
+  it('root helper 与企业 _ns__acme__helper 落成不同文件', () => {
+    store.write('helper', { from: 'root' });
+    store.write('_ns__acme__helper', { from: 'acme' });
+    expect(store.read('helper')).toEqual({ from: 'root' });
+    expect(store.read('_ns__acme__helper')).toEqual({ from: 'acme' });
+    expect(fs.existsSync(path.join(root, 'helper.json'))).toBe(true);
+    expect(fs.existsSync(path.join(root, '_ns__acme__helper.json'))).toBe(true);
+    store.remove('helper');
+    expect(store.read('helper')).toEqual({});
+    expect(store.read('_ns__acme__helper')).toEqual({ from: 'acme' });
+  });
+
   it('损坏 JSON → 读回 {} 且不抛', () => {
     fs.writeFileSync(path.join(root, 'demo.json'), '{broken', 'utf8');
     expect(store.read('demo')).toEqual({});
@@ -131,7 +143,7 @@ describe('cindy-brain · ghostKvStore(意识自定义参数持久化)', () => {
   });
 
   it('非法 ghostId:写抛 INVALID_GHOST_ID,读回 {},删静默——文件名安全双保险', () => {
-    for (const bad of ['../evil', 'UPPER', 'a/b', '']) {
+    for (const bad of ['../evil', 'UPPER', 'a/b', '', '_ns/acme/helper']) {
       expect(() => store.write(bad, { a: 1 }), bad).toThrowError(GhostKvError);
       expect(store.read(bad), bad).toEqual({});
       expect(() => store.remove(bad), bad).not.toThrow();

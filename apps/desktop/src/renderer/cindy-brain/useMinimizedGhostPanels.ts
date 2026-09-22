@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 
 import type { InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import type { GhostPanelWindowsState } from '../../shared/ghostPanelWindow';
 import {
   useGhostPanelBubbleState,
@@ -23,8 +24,8 @@ export function selectMinimizedGhostPanels(
       ghost.enabled !== false &&
       ghost.manifest.panel !== undefined &&
       ghost.manifest.panel.position !== 'tab' &&
-      bubbles[ghost.manifest.id]?.minimized === true &&
-      windows[ghost.manifest.id]?.detached !== true,
+      bubbles[installedGhostStoragePart(ghost)]?.minimized === true &&
+      windows[installedGhostStoragePart(ghost)]?.detached !== true,
   );
 }
 

@@ -15,6 +15,7 @@ import {
 } from '../../../shared/ghost.js';
 import { getActiveAppSession, type ActiveAppSession } from '../../appSessionState.js';
 import { ownerScopedGhostPartition } from '../ghostWebviewPartition.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { GHOST_BOOT_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
 import { handleGhostKvRequest, readBoundedBodyText } from './ghostKvEndpoint.js';
 import { resolveHashRef as resolveBlobHashRef } from '../../cindy-media/blobStore.js';
@@ -252,7 +253,7 @@ export function ensureGhostProtocolRegistered(
   ghost: InstalledGhost,
   owner: ActiveAppSession = getActiveAppSession(),
 ): void {
-  const partition = ownerScopedGhostPartition(ghost.manifest.id, owner);
+  const partition = ownerScopedGhostPartition(installedGhostStoragePart(ghost), owner);
   if (!partition) throw new Error('ghost protocol requires an active data owner');
   registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(owner));
 }
@@ -285,6 +286,7 @@ function registerGhostProtocol(
   // 实际无 handler,面板与电子脑一起哑火(review P0 的中毒模式)。
   const ses = session.fromPartition(partition);
   const ghostId = ghost.manifest.id;
+  const storagePart = installedGhostStoragePart(ghost);
   // 每个 owner 都会得到新的内存 session；权限与下载必须显式拒绝，不能
   // 因为分区是新建的就依赖 Electron 默认行为。
   ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -324,19 +326,19 @@ function registerGhostProtocol(
       // 账本验归属(出生自本意识或挂本意识画廊),通过才从字节仓读——
       // 查无此账与不属于你统一 404,不给沙箱探测面。
       if (url.pathname.startsWith('/media/')) {
-        return serveGhostMedia(ghostId, url.pathname.slice('/media/'.length), request.headers.get('range'));
+        return serveGhostMedia(storagePart, url.pathname.slice('/media/'.length), request.headers.get('range'));
       }
       // /library/<相对路径>:面板只读投影本意识的持久作品库文件(图片/视频/
       // 导出物)。解析器由 cindy-brain/index 注入(binding 根 + vault 路径纪律,
       // 与电子脑 read 同源校验);内容可变,Cache-Control 走 no-cache(与
       // 内容寻址的 /media 长缓存不同)。失败统一折叠 404。
       if (url.pathname.startsWith('/library/')) {
-        return serveGhostLibraryFile(ghostId, decodeURIComponent(url.pathname.slice('/library/'.length)), request.headers.get('range'));
+        return serveGhostLibraryFile(storagePart, decodeURIComponent(url.pathname.slice('/library/'.length)), request.headers.get('range'));
       }
       // /gallery:本意识画廊清单(重启回放)。分区专属通道天然只答自己的账;
       // 内容只有指纹地址与备注字符串,零文件字节。
       if (url.pathname === '/gallery') {
-        return serveGhostGallery(ghostId);
+        return serveGhostGallery(storagePart, ghostId);
       }
       // /wake:面板叫醒自己的电子脑(§4"确实有活才开门"的面板侧入口)。
       // spawn 幂等(已在跑立即返回);沉睡/熔断由注入的 handler 拒绝。
@@ -344,7 +346,7 @@ function registerGhostProtocol(
       // 只回状态字符串,不回任何细节。
       if (url.pathname === '/wake') {
         if (!ghostWakeHandler) return new Response(null, { status: 503 });
-        const wake = await ghostWakeHandler(ghostId);
+        const wake = await ghostWakeHandler(storagePart);
         return new Response(JSON.stringify(wake), {
           status: 200,
           headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' },
@@ -378,7 +380,7 @@ function registerGhostProtocol(
           return new Response(null, { status: 400 });
         }
         if (!ghostMediaModelsProvider) return new Response(null, { status: 503 });
-        const result = await ghostMediaModelsProvider(ghostId, type);
+        const result = await ghostMediaModelsProvider(storagePart, type);
         return new Response(JSON.stringify(result), {
           status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
           headers: {
@@ -398,7 +400,7 @@ function registerGhostProtocol(
           // 不受信 body 永不全量进主进程内存——沙箱允许死,主机不能被 OOM。
           readBodyText: () => readBoundedBodyText(request),
           store: ghostKvStore,
-          ghostId,
+          ghostId: storagePart,
           log,
         });
         return new Response(out.body ?? null, {
@@ -416,7 +418,7 @@ function registerGhostProtocol(
       if (url.pathname === '/secrets' || url.pathname.startsWith('/secrets/')) {
         if (!ghostSecretsHandler) return new Response(null, { status: 503 });
         const out = await ghostSecretsHandler({
-          ghostId,
+          ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,
           readBodyText: () => readBoundedBodyText(request),
@@ -437,7 +439,7 @@ function registerGhostProtocol(
       if (url.pathname === '/oauth' || url.pathname.startsWith('/oauth/')) {
         if (!ghostOauthHandler) return new Response(null, { status: 503 });
         const out = await ghostOauthHandler({
-          ghostId,
+          ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,
           readBodyText: () => readBoundedBodyText(request),
@@ -458,7 +460,7 @@ function registerGhostProtocol(
       if (url.pathname === '/connections' || url.pathname.startsWith('/connections/')) {
         if (!ghostConnectionsHandler) return new Response(null, { status: 503 });
         const out = await ghostConnectionsHandler({
-          ghostId,
+          ghostId: storagePart,
           method: request.method,
           pathname: url.pathname,
           readBodyText: () => readBoundedBodyText(request),
@@ -645,16 +647,16 @@ function mediaTypeForLibraryPath(relPath: string): string {
 }
 
 /** 画廊清单响应:[{src, caption}](新的在前;账本不可用时回空数组不报错)。 */
-async function serveGhostGallery(ghostId: string): Promise<Response> {
+async function serveGhostGallery(storagePart: string, protocolHost: string): Promise<Response> {
   let items: Awaited<ReturnType<typeof listGhostGalleryFromLedger>> = [];
   try {
-    items = await listGhostGalleryFromLedger(ghostId);
+    items = await listGhostGalleryFromLedger(storagePart);
   } catch (err) {
     // 账本未就绪(登录早期等):回空墙,面板照常渲染空态,不给沙箱报错面。
-    log.warn('ghost gallery list unavailable', { ghostId, error: err instanceof Error ? err.message : String(err) });
+    log.warn('ghost gallery list unavailable', { ghostId: storagePart, error: err instanceof Error ? err.message : String(err) });
   }
   const payload = items.map((it) => ({
-    src: `${SCHEME}://${ghostId}/media/${it.hash}${it.ext}`,
+    src: `${SCHEME}://${protocolHost}/media/${it.hash}${it.ext}`,
     caption: it.label ?? '',
   }));
   return new Response(JSON.stringify(payload), {
@@ -670,7 +672,7 @@ class ElectronSandboxHandle implements SandboxHandle {
 
   constructor(private readonly ghost: InstalledGhost) {
     const activeOwner = getActiveAppSession();
-    const partition = ownerScopedGhostPartition(ghost.manifest.id, activeOwner);
+    const partition = ownerScopedGhostPartition(installedGhostStoragePart(ghost), activeOwner);
     if (!partition) throw new Error('ghost sandbox requires an active data owner');
     registerGhostProtocol(partition, ghost, ghostProtocolOwnerSnapshot(activeOwner));
     this.win = new BrowserWindow({
@@ -692,7 +694,7 @@ class ElectronSandboxHandle implements SandboxHandle {
       },
     });
     ghostWebContentsIds.add(this.win.webContents.id);
-    logicWebContentsToGhost.set(this.win.webContents.id, ghost.manifest.id);
+    logicWebContentsToGhost.set(this.win.webContents.id, installedGhostStoragePart(ghost));
     this.win.webContents.on('render-process-gone', (_event, details) => {
       if (this.destroyed) return;
       // 延迟一拍再收尸:不在 Chromium 事件分发中途销毁窗口(重入风险)。

@@ -6,6 +6,11 @@
  * An installed Ghost without a matching market record remains local.
  */
 import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
+import {
+  createPluginLogicalIdentity,
+  hasDeliveryNamespace,
+  pluginStoragePart,
+} from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
@@ -74,17 +79,47 @@ export function ghostReapprovalRoute(
     : 'local-package';
 }
 
+/** True when this market row is the update/origin route for this installed instance. */
+export function marketItemMatchesInstalledGhost(
+  item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>,
+  ghost: { manifest: { id: string }; namespace?: string | null },
+): boolean {
+  if (item.ghostId !== ghost.manifest.id) return false;
+  if (hasDeliveryNamespace(item) && hasDeliveryNamespace(ghost)) {
+    return item.namespace === ghost.namespace;
+  }
+  return true;
+}
+
+function installedItemForMarketItem<TInstalled extends { id: string; ghostId?: string }>(
+  installedItems: readonly TInstalled[],
+  marketItem: PluginMarketItem,
+): TInstalled | undefined {
+  const matches = installedItems.filter((item) => (item.ghostId ?? item.id) === marketItem.ghostId);
+  if (matches.length <= 1) return matches[0];
+  if (hasDeliveryNamespace(marketItem)) {
+    const logicalPart = pluginStoragePart(
+      createPluginLogicalIdentity(marketItem.namespace, marketItem.ghostId),
+    );
+    return (
+      matches.find((item) => item.id === logicalPart) ??
+      matches.find((item) => item.id === marketItem.ghostId) ??
+      matches[0]
+    );
+  }
+  return matches.find((item) => item.id === marketItem.ghostId) ?? matches[0];
+}
+
 /**
  * Keeps the complete catalog in server order while rendering an installed card
  * for market records already owned by this client. Local-only installs have no
  * server position, so they remain visible after the ordered market catalog.
  */
-export function orderPluginCatalogItems<TInstalled extends { id: string }>(
+export function orderPluginCatalogItems<TInstalled extends { id: string; ghostId?: string }>(
   marketItems: readonly PluginMarketItem[],
   installedItems: readonly TInstalled[],
   availableMarketItems: readonly PluginMarketItem[],
 ): PluginCatalogPresentationItem<TInstalled>[] {
-  const installedByGhostId = new Map(installedItems.map((item) => [item.id, item]));
   const availableByPluginId = new Map(availableMarketItems.map((item) => [item.pluginId, item]));
   const emittedInstalledIds = new Set<string>();
   const ordered: PluginCatalogPresentationItem<TInstalled>[] = [];
@@ -104,7 +139,7 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
     ) {
       continue;
     }
-    const installedItem = installedByGhostId.get(marketItem.ghostId);
+    const installedItem = installedItemForMarketItem(installedItems, marketItem);
     if (!installedItem || emittedInstalledIds.has(installedItem.id)) continue;
     emittedInstalledIds.add(installedItem.id);
     ordered.push({ kind: 'installed', item: installedItem });

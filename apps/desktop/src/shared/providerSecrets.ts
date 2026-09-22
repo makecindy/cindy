@@ -239,8 +239,8 @@ export function ghostSecretStorageKey(ghostId: string, secretKey: string): strin
  * 意识凭证「尾 4 位指纹」的 safeStorage 键名前缀。指纹在**入库那一刻**由
  * deriveGhostSecretTail 截取、与密文分键保管——读路径(/secrets GET)只回
  * 这个预截好的指纹,从头到尾不存在"读明文再现场截"的环节,只写通道的
- * 结构保持干净。前缀与 ghost_secret_ 平行且零碰撞(ghostId 不含下划线,
- * ghost_secret_ 命名空间内第一个 `_` 前必是 ghostId,拼不出 hint_ 开头)。
+ * 结构保持干净。前缀与 ghost_secret_ 平行且零碰撞(root ghostId 不含下划线;
+ * 企业实例使用 `_ns__<namespace>__<ghostId>` storage part,仍拼不出 hint_ 开头)。
  * 账号切换清理(clearAll)与卸载清理(removeGhostSecrets)都要连它一起扫。
  */
 export const GHOST_SECRET_HINT_PREFIX = 'ghost_hint_';

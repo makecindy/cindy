@@ -12,7 +12,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 
-import { GHOST_SCHEME, ghostPartition, type GhostManifest } from '../../shared/ghost';
+import { GHOST_SCHEME, ghostPartition, type InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
 import {
   clearGhostUnread,
@@ -35,18 +36,20 @@ import {
  * 「关闭意识」(转沉睡,面板收起,可到设置里再唤醒)。
  */
 export function GhostPanelError({
-  manifest,
+  ghost,
   state,
   onReload,
 }: {
-  manifest: GhostManifest;
+  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'>;
   state: string;
   /** 重载动作;缺省走 ghosts:reload(离屏沙箱路径),面板 webview 路径传本地重挂载。 */
   onReload?: () => void;
 }): ReactNode {
   const { t } = useTranslation();
+  const { manifest } = ghost;
+  const instanceId = installedGhostStoragePart(ghost);
   const reload =
-    onReload ?? (() => void window.electronAPI.ghosts.reload(manifest.id).catch(() => {}));
+    onReload ?? (() => void window.electronAPI.ghosts.reload(instanceId).catch(() => {}));
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4">
       <CircleAlert size={22} className="text-[var(--error-fg)]" />
@@ -71,7 +74,7 @@ export function GhostPanelError({
           compact
           type="button"
           onClick={() =>
-            void window.electronAPI.ghosts.setEnabled(manifest.id, false).catch(() => {})
+            void window.electronAPI.ghosts.setEnabled(instanceId, false).catch(() => {})
           }
         >
           {t('settings.ghosts.panelError.close')}
@@ -188,14 +191,16 @@ export function pickGhostPanelMediaUri(
  * webview 崩溃 = 本地错误接管态(重载 = 原地重挂载,不经主机)。
  */
 export function GhostWebviewBody({
-  manifest,
+  ghost,
   html,
   onHostNode,
 }: {
-  manifest: GhostManifest;
+  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'>;
   html: string | undefined;
   onHostNode?: (node: HTMLDivElement | null) => void;
 }): ReactNode {
+  const { manifest } = ghost;
+  const instanceId = installedGhostStoragePart(ghost);
   const [crashed, setCrashed] = useState(false);
   const [generation, setGeneration] = useState(0);
   const [mediaMenu, setMediaMenu] = useState<GhostPanelMediaMenuState | null>(null);
@@ -213,7 +218,10 @@ export function GhostWebviewBody({
     const host = hostRef.current;
     if (!host) return;
     const webview = document.createElement('webview') as WebviewTag;
-    webview.setAttribute('partition', ghostPartition(manifest.id));
+    webview.setAttribute(
+      'partition',
+      ghostPartition(instanceId),
+    );
     webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${html}`);
     webview.setAttribute('style', 'display:flex;flex:1 1 auto;width:100%;height:100%;');
     let disposed = false;
@@ -286,12 +294,12 @@ export function GhostWebviewBody({
     };
     // version 入依赖:原位更新换版后 webview 重挂载,面板立刻跑新代码
     // (供片协议直读安装目录,不重挂会一直渲染旧版缓存的页面)。
-  }, [crashed, generation, manifest.id, manifest.version, manifest.resolvedLocale, html]);
+  }, [crashed, generation, instanceId, manifest.id, manifest.version, manifest.resolvedLocale, html]);
 
   if (crashed) {
     return (
       <GhostPanelError
-        manifest={manifest}
+        ghost={ghost}
         state="crashed"
         onReload={() => {
           setGeneration((g) => g + 1);
@@ -316,7 +324,12 @@ export function GhostWebviewBody({
  * 芯片型意识面板 wrapper。未读清零刻意留在 panel 生命周期，main-view
  * 即使展示同一个插件也不能误清 panel 的 badge。
  */
-export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): ReactNode {
+export function GhostChipPanelBody({
+  ghost,
+}: {
+  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'>;
+}): ReactNode {
+  const { manifest } = ghost;
   /**
    * 面板体挂载 = 未读已读(badge 槽的 explicit 清零)。
    *
@@ -344,6 +357,10 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
   }, [manifest.id, unread, foreground, visible]);
 
   return (
-    <GhostWebviewBody manifest={manifest} html={manifest.panel?.html} onHostNode={observeHost} />
+    <GhostWebviewBody
+      ghost={ghost}
+      html={manifest.panel?.html}
+      onHostNode={observeHost}
+    />
   );
 }

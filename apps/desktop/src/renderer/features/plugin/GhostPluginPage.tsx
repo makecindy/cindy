@@ -83,6 +83,7 @@ import {
   type GhostSetupStatus,
   type InstalledGhost,
 } from '../../../shared/ghost';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type {
   PluginMarketDetail,
   PluginMarketInstallOptions,
@@ -134,6 +135,7 @@ import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker'
 import {
   canOfferMarketInstall,
   ghostReapprovalRoute,
+  marketItemMatchesInstalledGhost,
   marketReviewTargetsInstalledGhost,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
@@ -150,6 +152,18 @@ import './plugin-motion.css';
 const PLUGIN_CATALOG_TOOLBAR_CLASS =
   'plugin-catalog-toolbar mb-5 flex items-center justify-between gap-4';
 type PluginPresentationFilter = 'all' | PluginPresentationOrigin;
+
+function marketItemForInstalledGhost(
+  items: readonly PluginMarketItem[],
+  ghost: InstalledGhost,
+): PluginMarketItem | null {
+  return (
+    items.find(
+      (item) => item.installState !== 'conflict' && marketItemMatchesInstalledGhost(item, ghost),
+    ) ?? null
+  );
+}
+
 type PresentedGhostPluginItem = GhostPluginListItem & {
   origin: PluginPresentationOrigin;
   /** 市场存在更新时的市场记录;列表卡片据此显示更新徽标与直达入口。 */
@@ -687,15 +701,6 @@ export function GhostPluginPage({
     [marketSnapshot?.customSourceNames],
   );
   const [addMarketplaceOpen, setAddMarketplaceOpen] = useState(false);
-  const marketByGhostId = useMemo(() => {
-    const map = new Map<string, PluginMarketItem>();
-    for (const item of marketItems) {
-      // 非当前路由的同 id 条目只出现在「可替换」市场卡片，
-      // 不得投影成已装卡片的普通更新。
-      if (item.installState !== 'conflict') map.set(item.ghostId, item);
-    }
-    return map;
-  }, [marketItems]);
   const allInstalledItems = useMemo<PresentedGhostPluginItem[]>(
     () =>
       ghosts
@@ -707,7 +712,7 @@ export function GhostPluginPage({
             !ghosts.some((candidate) => candidate.manifest.id === 'xd-mivo'),
         )
         .map((ghost) => {
-          const marketItem = marketByGhostId.get(ghost.manifest.id) ?? null;
+          const marketItem = marketItemForInstalledGhost(marketItems, ghost);
           const presentation = marketPresentationForInstalledGhost(ghost, marketItem);
           return {
             ...toGhostPluginListItem(ghost, presentation),
@@ -717,7 +722,7 @@ export function GhostPluginPage({
             marketUpdate: pluginUpdateForInstalledVersion(marketItem),
           };
         }),
-    [ghosts, marketByGhostId],
+    [ghosts, marketItems],
   );
   const installedItems = useMemo(
     () =>
@@ -879,19 +884,19 @@ export function GhostPluginPage({
     (updatableInstalledItems.length > 0 &&
       (currentRoundKey === '' || ignoredRound !== currentRoundKey));
   const selectedGhost = selectedId
-    ? (ghosts.find((ghost) => ghost.manifest.id === selectedId) ?? null)
+    ? (findInstalledGhostByInstanceId(ghosts, selectedId) ?? null)
     : null;
   const selectedPresentation = selectedGhost
     ? marketPresentationForInstalledGhost(
         selectedGhost,
-        marketByGhostId.get(selectedGhost.manifest.id),
+        marketItemForInstalledGhost(marketItems, selectedGhost),
       )
     : null;
   const selectedDetail = selectedGhost
     ? toGhostPluginDetail(selectedGhost, selectedPresentation)
     : null;
-  const selectedMarketInstall = selectedDetail
-    ? (marketByGhostId.get(selectedDetail.id) ?? null)
+  const selectedMarketInstall = selectedGhost
+    ? marketItemForInstalledGhost(marketItems, selectedGhost)
     : null;
   const selectedMarketUpdate = selectedDetail
     ? pluginUpdateForInstalledVersion(selectedMarketInstall)
@@ -903,10 +908,10 @@ export function GhostPluginPage({
   // ── 面板收束:页面独占的插件面板宿主;停用/卸载/换形态自动失效 ──
   const openPanelGhost = useMemo(() => {
     if (!openPanelId) return null;
-    const ghost = ghosts.find((candidate) => candidate.manifest.id === openPanelId);
+    const ghost = findInstalledGhostByInstanceId(ghosts, openPanelId) ?? null;
     if (!ghost) return null;
     if (ghost.manifest.panel?.position !== 'tab') return null;
-    if (!effectiveEnabled(ghost.manifest.id, ghost.enabled)) return null;
+    if (!effectiveEnabled(installedGhostStoragePart(ghost), ghost.enabled)) return null;
     return ghost;
   }, [effectiveEnabled, ghosts, openPanelId]);
   useEffect(() => {
@@ -994,9 +999,11 @@ export function GhostPluginPage({
 
   // 目录详情用于发现与能力展示；点击更新后由 Main 下载并校验真实包后直接落位。
   const handleMarketUpdate = useCallback(
-    async (ghostId: string) => {
-      const marketItem = marketByGhostId.get(ghostId);
-      const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
+    async (instanceId: string) => {
+      const installedGhost = findInstalledGhostByInstanceId(ghosts, instanceId) ?? null;
+      const marketItem = installedGhost
+        ? marketItemForInstalledGhost(marketItems, installedGhost)
+        : null;
       if (
         !marketItem ||
         !marketReviewTargetsInstalledGhost(marketItem, installedGhost?.approval.state)
@@ -1052,7 +1059,7 @@ export function GhostPluginPage({
       ghosts,
       isMarketBusyLeaseActive,
       installMarketPackage,
-      marketByGhostId,
+      marketItems,
       refreshMarket,
       releaseMarketBusy,
       showPluginMarketActionError,
@@ -1075,15 +1082,19 @@ export function GhostPluginPage({
    * 完整安装记录，不新增能力确认。
    */
   const handleRecoverInstall = useCallback(
-    async (ghostId: string) => {
-      if (ghosts.find((ghost) => ghost.manifest.id === ghostId)?.builtin) return;
-      if (ghostReapprovalRoute(marketByGhostId.get(ghostId)) === 'market') {
-        await handleMarketUpdate(ghostId);
+    async (instanceId: string) => {
+      const installedGhost = findInstalledGhostByInstanceId(ghosts, instanceId) ?? null;
+      if (installedGhost?.builtin) return;
+      if (
+        ghostReapprovalRoute(installedGhost ? marketItemForInstalledGhost(marketItems, installedGhost) : null) ===
+        'market'
+      ) {
+        await handleMarketUpdate(instanceId);
         return;
       }
-      await pickAndUpdateGhost(ghostId, { t });
+      await pickAndUpdateGhost(instanceId, { t });
     },
-    [ghosts, handleMarketUpdate, marketByGhostId, t],
+    [ghosts, handleMarketUpdate, marketItems, t],
   );
 
   const handleUpdateFromFile = useCallback(async () => {
@@ -1136,9 +1147,9 @@ export function GhostPluginPage({
     await installGhostFromFile(picked.filePath, {
       t,
       // 已在插件页:tab 型插件安装后原地打开面板。
-      openPluginPanel: (ghostId) => {
+      openPluginPanel: (instanceId) => {
         setSelectedId(null);
-        setOpenPanelId(ghostId);
+        setOpenPanelId(instanceId);
       },
     });
   }, [t]);
@@ -1193,7 +1204,7 @@ export function GhostPluginPage({
 
   const handleUseGhost = useCallback(
     async (id: string, displayName: string) => {
-      const ghost = ghosts.find((candidate) => candidate.manifest.id === id);
+      const ghost = findInstalledGhostByInstanceId(ghosts, id) ?? null;
       if (!ghost) return;
       const opensIOSSimulator = ghost.manifest.iosSimulator === true;
       if (!ghost.manifest.command && !opensIOSSimulator) return;
@@ -1408,13 +1419,13 @@ export function GhostPluginPage({
         marketDetail.installState === 'conflict';
       try {
         let installedGhost =
-          ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+          ghosts.find((ghost) => marketItemMatchesInstalledGhost(marketDetail, ghost)) ?? null;
         if (isUpdate && !installedGhost) {
           try {
             installedGhost =
               window.electronAPI.ghosts
                 .listSync()
-                .ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+                .ghosts.find((ghost) => marketItemMatchesInstalledGhost(marketDetail, ghost)) ?? null;
           } catch {
             // bridge 不可用或状态切换时保持 null；下面按状态变化安全终止。
           }
@@ -1460,7 +1471,7 @@ export function GhostPluginPage({
           setMarketDetail((current) =>
             current?.pluginId === marketDetail.pluginId ? null : current,
           );
-          setSelectedId(ghost.manifest.id);
+          setSelectedId(installedGhostStoragePart(ghost));
         } else {
           await refreshVisibleMarketDetail(marketDetail.pluginId).catch(() => undefined);
         }
@@ -1517,7 +1528,7 @@ export function GhostPluginPage({
     // key 纳入 owner 代际:双保险。即便将来某条路径漏了上面的清空,换身份也会
     // 强制卸载重建宿主(webview 连同它的 DOM/内存态一起丢),不会跨账号复用。
     <GhostPagePanelHost
-      key={`${panelOwnerKey}:${openPanelGhost.manifest.id}`}
+      key={`${panelOwnerKey}:${installedGhostStoragePart(openPanelGhost)}`}
       ghost={openPanelGhost}
       onClose={() => setOpenPanelId(null)}
     />
@@ -1559,7 +1570,7 @@ export function GhostPluginPage({
               panelStatus={panelStatus}
               enabledOverride={
                 selectedGhost
-                  ? effectiveEnabled(selectedGhost.manifest.id, selectedGhost.enabled)
+                  ? effectiveEnabled(installedGhostStoragePart(selectedGhost), selectedGhost.enabled)
                   : undefined
               }
               onBack={() => {
@@ -1581,7 +1592,7 @@ export function GhostPluginPage({
               // 官方保留前缀(cindy-/filo-/xd-)的插件走本地装入会被拒,
               // 导出产物无法重装,不提供导出项。
               onExport={
-                selectedGhost && !isOfficialGhostId(selectedDetail.id)
+                selectedGhost && !isOfficialGhostId(selectedDetail.ghostId)
                   ? () => void handleExport()
                   : undefined
               }

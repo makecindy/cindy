@@ -74,6 +74,7 @@ import {
   type GhostSetupAssessment,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
@@ -1571,7 +1572,7 @@ function visibleChipGhosts(
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
         ghost.manifest.kind === 'chip' &&
         (ghostHasTools(ghost) || ghostHasManual(ghost)) &&
-        !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
+        !isGhostDisabledForWorkdir(installedGhostStoragePart(ghost), workdir),
     );
 }
 
@@ -1592,6 +1593,9 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
     const recall = ghostRecall(ghost);
     return {
       id: ghost.manifest.id,
+      namespace: Object.prototype.hasOwnProperty.call(ghost, 'namespace')
+        ? ghost.namespace ?? null
+        : null,
       name: ghost.manifest.name,
       ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
       ...(recall ? { recall } : {}),
@@ -1615,6 +1619,9 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
   }
   return {
     id: ghost.manifest.id,
+    namespace: Object.prototype.hasOwnProperty.call(ghost, 'namespace')
+      ? ghost.namespace ?? null
+      : null,
     name: ghost.manifest.name,
     ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
     ...(recall ? { recall } : {}),
@@ -1830,15 +1837,15 @@ export function getCindyGhostsMcpDeps(
       return visibleChipGhosts(workdir)
         .map(toCindyGhostInfo);
     },
-    async getAwakeGhost(ghostId) {
+    async getAwakeGhost(ghostId, namespace) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir).find(
-        (ghost) => ghost.manifest.id === ghostId,
+      const visible = visibleChipGhosts(workdir).some(
+        (ghost) => ghost === visibility.ghost || ghost.dir === visibility.ghost.dir,
       );
       if (visible) {
-        return { ok: true, ghost: toCindyGhostInfo(visible) };
+        return { ok: true, ghost: toCindyGhostInfo(visibility.ghost) };
       }
       return {
         ok: false,
@@ -1846,9 +1853,9 @@ export function getCindyGhostsMcpDeps(
         message: GHOST_NO_AGENT_SURFACE_MESSAGE,
       };
     },
-    async readGhostManual({ ghostId, path: manualPath }) {
+    async readGhostManual({ ghostId, namespace, path: manualPath }) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
       if (!visibility.ok) {
         return {
           ok: false,
@@ -1871,6 +1878,7 @@ export function getCindyGhostsMcpDeps(
     },
     async callGhostTool({
       ghostId,
+      namespace,
       tool,
       args,
       attachments,
@@ -1889,6 +1897,7 @@ export function getCindyGhostsMcpDeps(
         ghostId,
         sessionWorkdir,
         ghostVisibilityDeps,
+        namespace,
       );
       if (!initialVisibility.ok) return initialVisibility;
       const target = initialVisibility.ghost;
@@ -2102,7 +2111,7 @@ export function getCindyGhostsMcpDeps(
         if (dirConfirm.isCurrent) handoffChecks.push(dirConfirm.isCurrent);
         if (handoffExpired()) return handoffDenied;
         const deposited = getDirDepositVault().deposit({
-          ghostId,
+          ghostId: installedGhostStoragePart(target),
           dirAbs: dirConfirm.userGranted ? dirConfirm.approvedRealPath : dir,
           workdirAbs: sessionWorkdir,
           userGranted: dirConfirm.userGranted,
@@ -2133,7 +2142,7 @@ export function getCindyGhostsMcpDeps(
         if (saveConfirm.isCurrent) handoffChecks.push(saveConfirm.isCurrent);
         if (handoffExpired()) return handoffDenied;
         const saveDeposited = getSaveDepositVault().deposit({
-          ghostId,
+          ghostId: installedGhostStoragePart(target),
           dirAbs: saveConfirm.userGranted ? saveConfirm.approvedRealPath : saveDir,
           workdirAbs: sessionWorkdir,
           userGranted: saveConfirm.userGranted,
@@ -2240,8 +2249,9 @@ export function getCindyGhostsMcpDeps(
       const callId = randomUUID();
       const cardService = getGhostCardService();
       const callSessionContext = resolveSessionContext();
+      const instanceId = installedGhostStoragePart(postCtx);
       cardService.registerCall(callId, {
-        ghostId,
+        ghostId: instanceId,
         toolUseId: agentToolUseId ?? null,
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
@@ -2255,6 +2265,7 @@ export function getCindyGhostsMcpDeps(
       // 原样透传;类型层若有漂移 tsc 会拦。
       const result = await getGhostPipeDispatcher().callGhostTool({
         ghostId,
+        ...(namespace !== undefined ? { namespace } : {}),
         tool,
         args: mergedArgs,
         callId,
@@ -2264,7 +2275,7 @@ export function getCindyGhostsMcpDeps(
       // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
       // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
-      const producedMedia = drainGhostCallMedia(ghostId, callId);
+      const producedMedia = drainGhostCallMedia(instanceId, callId);
       const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
       if (!finalized.ok) return finalized;
       // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。

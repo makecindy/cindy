@@ -7,6 +7,7 @@ import {
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { ghostInstallErrorKey } from './installErrorKey';
 
 /**
@@ -35,7 +36,7 @@ async function showInstallError(error: unknown, deps: InstallFlowDeps): Promise<
 function findInstalled(id: string): InstalledGhost | null {
   try {
     const { ghosts } = window.electronAPI.ghosts.listSync();
-    return ghosts.find((g) => g.manifest.id === id) ?? null;
+    return findInstalledGhostByInstanceId(ghosts, id) ?? null;
   } catch {
     return null;
   }
@@ -101,7 +102,7 @@ export async function installGhostFromFile(
     });
     toast.success(t('settings.ghosts.toast.installed', { name: ghost.manifest.name }));
     if (willOpenPanel) {
-      deps.openPluginPanel?.(ghost.manifest.id);
+      deps.openPluginPanel?.(installedGhostStoragePart(ghost));
     }
   } catch (err) {
     await showInstallError(err, deps);
@@ -127,13 +128,19 @@ export async function pickAndUpdateGhost(expectedId: string, deps: InstallFlowDe
     await showInstallError(err, deps);
     return;
   }
-  if (manifest.id !== expectedId) {
+  const installed = findInstalled(expectedId);
+  if (installed && manifest.id !== installed.manifest.id) {
+    toast.error(
+      t('settings.ghosts.errors.updateIdMismatch', { id: manifest.id, expected: installed.manifest.id }),
+    );
+    return;
+  }
+  if (!installed && manifest.id !== expectedId) {
     toast.error(
       t('settings.ghosts.errors.updateIdMismatch', { id: manifest.id, expected: expectedId }),
     );
     return;
   }
-  const installed = findInstalled(expectedId);
   if (!installed) {
     // 详情页开着的意识刚被别处抽离——极端竞态,按通用错误提示。
     toast.error(t('settings.ghosts.errors.generic'));

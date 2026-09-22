@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 
-import type { PluginScope } from '@cindy/plugin-protocol';
+import { isValidPluginNamespace, type PluginScope } from '@cindy/plugin-protocol';
 import { ghostManifestToLegacyV2DigestFormat } from '../../shared/ghost.js';
 import {
   atomicWriteFileSync,
@@ -24,6 +24,8 @@ export interface PluginMarketInstallationRecord {
   sha256: string;
   scope: PluginScope;
   organizationId: string | null;
+  /** Missing is a pre-namespace record. null is root; a string is an organization. */
+  namespace?: string | null;
   source: 'market' | 'legacy-adopted' | 'git-market' | 'local-market';
   installed: boolean;
   updatedAt: string;
@@ -123,6 +125,9 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
       record.scope === 'organization' ||
       record.scope === 'personal') &&
     (record.organizationId === null || typeof record.organizationId === 'string') &&
+    (record.namespace === undefined ||
+      record.namespace === null ||
+      isValidPluginNamespace(record.namespace)) &&
     (record.source === 'market' ||
       record.source === 'legacy-adopted' ||
       record.source === 'git-market' ||
@@ -306,6 +311,23 @@ export class PluginMarketLedger {
     const data = this.read();
     data.installations[record.ghostId] = record;
     this.write(data);
+  }
+
+  /**
+   * Stamp namespace onto a pre-namespace market row. Known namespace is never
+   * replaced; a mismatch leaves the existing value in place.
+   */
+  stampNamespaceIfAbsent(ghostId: string, namespace: string | null): boolean {
+    if (namespace !== null && !isValidPluginNamespace(namespace)) return false;
+    const data = this.read();
+    const current = data.installations[ghostId];
+    if (!current) return false;
+    if (Object.prototype.hasOwnProperty.call(current, 'namespace')) {
+      return current.namespace === namespace;
+    }
+    data.installations[ghostId] = { ...current, namespace };
+    this.write(data);
+    return true;
   }
 
   /**

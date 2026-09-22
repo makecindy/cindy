@@ -29,6 +29,12 @@ const DECL: GhostOauthDecl = {
   identity: { url: 'https://api.example.com/userinfo', labelPath: 'email' },
 };
 
+/** §4.4: 特权不再随官方前缀默认放行，测试夹具显式授予。 */
+const FIRST_PARTY_HOST = {
+  isTokenBrokerAuthorized: () => true,
+  isHostPrimitiveAuthorized: () => true,
+} as const;
+
 function memoryVault(
   seed?: Record<string, string>,
 ): GhostOauthVault & { data: Map<string, string> } {
@@ -152,6 +158,33 @@ describe('插件 OAuth clientId 迁移', () => {
       secretKey: KEY,
       status: 'expired',
     });
+  });
+
+  it('migrates accounts stored under a namespaced vault id', () => {
+    const vaultId = '_ns__xd__xd-feishu';
+    const vault = memoryVault();
+    vault.store(
+      vaultId,
+      `${KEY}-accounts`,
+      JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [{ id: 'acc-1', label: 'a@b.com', status: 'connected', createdAt: 1 }],
+      }),
+    );
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+    expect(
+      mgr.expireAccountsForChangedClients(
+        oauthManifest('old-client'),
+        oauthManifest('new-client'),
+        vaultId,
+      ),
+    ).toBe(1);
+    expect(mgr.listAccounts(vaultId, KEY)[0]?.status).toBe('expired');
+    expect(mgr.listAccounts(GHOST, KEY)).toEqual([]);
   });
 
   it('clientId 未变化或用户使用自定义 clientId 时不改变账号状态', () => {
@@ -791,21 +824,22 @@ describe('connectAccount', () => {
         redirectPort: heldPort,
       };
       const reclaimPort = vi.fn(async () => false);
-      const mkMgr = (): GhostOauthAccountManager =>
+      const mkMgr = (hostPrimitive: boolean): GhostOauthAccountManager =>
         new GhostOauthAccountManager({
           vault: memoryVault(),
           fetchImpl: vi.fn() as unknown as typeof fetch,
           openExternal: vi.fn(),
           reclaimPort,
+          isHostPrimitiveAuthorized: () => hostPrimitive,
         });
       // 第三方 id:门控挡住,占用直接报错,回收器(杀进程)绝不能被调用。
-      await expect(mkMgr().connectAccount('evil-tools', KEY, decl)).resolves.toMatchObject({
+      await expect(mkMgr(false).connectAccount('evil-tools', KEY, decl)).resolves.toMatchObject({
         ok: false,
         error: 'LISTEN_FAILED',
       });
       expect(reclaimPort).not.toHaveBeenCalled();
-      // 官方前缀 id:回收器放行被调用(此处回收失败仍 LISTEN_FAILED,只验门控)。
-      await expect(mkMgr().connectAccount('cindy-google', KEY, decl)).resolves.toMatchObject({
+      // 经第一方宿主原语授权后才调用回收器(此处回收失败仍 LISTEN_FAILED,只验门控)。
+      await expect(mkMgr(true).connectAccount('cindy-google', KEY, decl)).resolves.toMatchObject({
         ok: false,
         error: 'LISTEN_FAILED',
       });
@@ -934,6 +968,7 @@ describe('connectAccount', () => {
       vault,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: autoBrowser(),
+      ...FIRST_PARTY_HOST,
     });
 
     const result = await mgr.connectAccount(GHOST, KEY, avatarDecl);
@@ -1014,6 +1049,7 @@ describe('connectAccount', () => {
       vault: memoryVault({ [`${KEY}-client-id`]: 'cid' }),
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: autoBrowser(),
+      ...FIRST_PARTY_HOST,
     });
     const result = await mgr.connectAccount(GHOST, KEY, avatarDecl);
     expect(result.ok).toBe(true);
@@ -1637,6 +1673,7 @@ describe('多实例共库的 RT 轮换竞态(invalid_grant 防误删)', () => {
       openExternal: vi.fn(),
       broker: { exchange: vi.fn(), refresh },
       sleep: instantSleep,
+      ...FIRST_PARTY_HOST,
     });
     const brokerDecl: GhostOauthDecl = {
       authorizeUrl: 'https://auth.example.com/authorize',
@@ -1769,6 +1806,7 @@ describe('tokenBroker 模式', () => {
         autoBrowser('c-bk')(url);
       },
       broker: { exchange, refresh: vi.fn() },
+      ...FIRST_PARTY_HOST,
     });
 
     const result = await mgr.connectAccount(GHOST, KEY, BROKER_DECL);
@@ -1778,6 +1816,21 @@ describe('tokenBroker 模式', () => {
     expect(exchange).toHaveBeenCalledTimes(1);
     // token 交换不直连 tokenUrl。
     expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(BROKER_DECL.tokenUrl);
+  });
+
+  it('connect: missing first-party grant denies even an official-looking id', async () => {
+    const openExternal = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault: memoryVault(),
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal,
+      broker: { exchange: vi.fn(), refresh: vi.fn() },
+    });
+    await expect(mgr.connectAccount(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('clientConfigured:brokered + 内置 clientId 恒 true,与保险库无关', () => {
@@ -1812,6 +1865,7 @@ describe('tokenBroker 模式', () => {
         })),
         refresh: vi.fn(),
       },
+      ...FIRST_PARTY_HOST,
     });
     await expect(
       mgr.connectAccount(GHOST, KEY, BROKER_DECL, { clientId: 'global-cid' }),
@@ -1824,6 +1878,7 @@ describe('tokenBroker 模式', () => {
       fetchImpl: vi.fn() as unknown as typeof fetch,
       openExternal: blockedOpenExternal,
       broker: { exchange: vi.fn(), refresh: vi.fn() },
+      ...FIRST_PARTY_HOST,
     });
     await expect(
       blocked.connectAccount(GHOST, KEY, BROKER_DECL, { clientId: 'foreign-cid' }),
@@ -1851,6 +1906,7 @@ describe('tokenBroker 模式', () => {
       openExternal: vi.fn(),
       broker: { exchange: vi.fn(), refresh },
       sleep: instantSleep,
+      ...FIRST_PARTY_HOST,
     });
     await expect(mgr.getFreshAccessToken(GHOST, KEY, BROKER_DECL)).resolves.toMatchObject({
       ok: false,
@@ -1943,6 +1999,7 @@ describe('brokerBounce(双地址弹跳回调)', () => {
       fetchImpl: vi.fn() as unknown as typeof fetch,
       openExternal: openExternal1,
       broker: { exchange: vi.fn(), refresh: vi.fn() },
+      ...FIRST_PARTY_HOST,
     });
     await expect(
       mgrNoResolver.connectAccount(GHOST, KEY, bounceDecl(53699)),
@@ -1960,6 +2017,7 @@ describe('brokerBounce(双地址弹跳回调)', () => {
       openExternal: openExternal2,
       broker: { exchange: vi.fn(), refresh: vi.fn() },
       resolveBrokerPublicUrl: vi.fn(() => null),
+      ...FIRST_PARTY_HOST,
     });
     await expect(
       mgrNullResolver.connectAccount(GHOST, KEY, bounceDecl(53699)),
@@ -2014,6 +2072,7 @@ describe('brokerBounce(双地址弹跳回调)', () => {
       },
       broker: { exchange, refresh: vi.fn() },
       resolveBrokerPublicUrl,
+      ...FIRST_PARTY_HOST,
     });
     const result = await mgr.connectAccount(GHOST, KEY, bounceDecl(freePort));
     expect(result).toMatchObject({ ok: true });
@@ -2335,6 +2394,7 @@ describe('identity.avatarPath 头像回填', () => {
       vault,
       fetchImpl: avatarFetch() as unknown as typeof fetch,
       openExternal: vi.fn(),
+      ...FIRST_PARTY_HOST,
     });
     await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({
       ok: true,
@@ -2419,6 +2479,7 @@ describe('identity.avatarPath 头像回填', () => {
       vault,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       openExternal: vi.fn(),
+      ...FIRST_PARTY_HOST,
     });
     await expect(mgr.getFreshAccessToken(GHOST, KEY, AVATAR_DECL)).resolves.toMatchObject({
       ok: true,

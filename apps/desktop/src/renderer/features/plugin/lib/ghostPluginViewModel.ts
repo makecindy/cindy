@@ -15,7 +15,9 @@ import {
   type GhostToolDecl,
   type InstalledGhost,
 } from '../../../../shared/ghost';
+import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+import { marketItemMatchesInstalledGhost } from './pluginMarketPresentation';
 
 /**
  * cindy 详单里**可钉后端**的类目 —— 详情页给每个申请到的动作渲染一行模型选择。
@@ -29,7 +31,10 @@ import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 const PINNABLE_CINDY_CATEGORIES = ['image', 'video', 'text', 'embed'] as const;
 
 export interface GhostPluginListItem {
+  /** Instance key (storage part). Use this for enable/uninstall/panel IPC. */
   id: string;
+  /** Logical plugin id from the manifest. */
+  ghostId: string;
   name: string;
   description: string;
   version: string;
@@ -108,7 +113,7 @@ export interface GhostPluginMarketPresentation {
 export function marketPresentationForInstalledGhost(
   ghost: Pick<InstalledGhost, 'manifest' | 'iconDataUrl'>,
   marketItem:
-    | Pick<
+    | (Pick<
         PluginMarketItem,
         | 'ghostId'
         | 'installState'
@@ -118,13 +123,14 @@ export function marketPresentationForInstalledGhost(
         | 'author'
         | 'icon'
         | 'sourceType'
-      >
+      > &
+        Pick<PluginMarketItem, 'namespace'>)
     | null
     | undefined,
 ): GhostPluginMarketPresentation | null {
   if (
     !marketItem ||
-    marketItem.ghostId !== ghost.manifest.id ||
+    !marketItemMatchesInstalledGhost(marketItem, ghost) ||
     marketItem.installState !== 'installed' ||
     marketItem.version !== ghost.manifest.version
   ) {
@@ -169,7 +175,7 @@ export function filterGhostPluginItems<T extends GhostPluginListItem>(
 ): T[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   return items.filter((item) =>
-    `${item.name} ${item.description} ${item.id}`.toLocaleLowerCase().includes(normalizedQuery),
+    `${item.name} ${item.description} ${item.ghostId} ${item.id}`.toLocaleLowerCase().includes(normalizedQuery),
   );
 }
 
@@ -270,7 +276,8 @@ export function toGhostPluginListItem(
     iconDataUrl: ghost.iconDataUrl,
   };
   return {
-    id: manifest.id,
+    id: installedGhostStoragePart(ghost),
+    ghostId: manifest.id,
     name: display.name,
     description: display.description,
     version: manifest.version,

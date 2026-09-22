@@ -125,6 +125,7 @@ const permissions: GhostPermissionItem[] = [
 
 const detail: GhostPluginDetail = {
   id: 'builtin.example',
+  ghostId: 'builtin.example',
   name: 'Example',
   description: 'Example plugin',
   version: '1.2.3',
@@ -688,7 +689,7 @@ describe('Ghost plugin detail sections', () => {
     vi.stubEnv('DEV', false);
     // 显式标注类型:JSX prop 位置的内联展开会让 tsc 现推一个巨大的匿名类型,
     // desktop 的 typecheck 本就贴着 CI 的 4GB 堆上限跑,能省则省。
-    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art' };
+    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art', ghostId: 'cindy-art' };
     render(
       <GhostPluginDetailView
         ghost={null}

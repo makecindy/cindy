@@ -2,7 +2,16 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 
+import {
+  createPluginLogicalIdentity,
+  hasDeliveryNamespace,
+  isValidPluginInstallRelId,
+  parsePluginInstallRelId,
+  PLUGIN_NS_INSTALL_ROOT,
+  pluginInstallRelId,
+} from '../../shared/pluginIdentity.js';
 import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
@@ -54,6 +63,8 @@ const ICON_DATA_URL_RE = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/
 export interface GhostInstallReceipt {
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
+  /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
+  namespace?: string | null;
   revision: string;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
@@ -194,6 +205,15 @@ export class GhostInstallReceiptStore {
     return path.resolve(this.getRootDir());
   }
 
+  private receiptRelId(receipt: { id: string; namespace?: string | null }): string {
+    return pluginInstallRelId(
+      createPluginLogicalIdentity(
+        hasDeliveryNamespace(receipt) ? receipt.namespace : null,
+        receipt.id,
+      ),
+    );
+  }
+
   private realRootDirSync(): string {
     return fs.realpathSync(this.rootDir());
   }
@@ -232,7 +252,8 @@ export class GhostInstallReceiptStore {
     } catch (error) {
       return { state: 'invalid', reason: error instanceof Error ? error.message : String(error) };
     }
-    const validated = validateReceipt(parsed, id);
+    const expectedGhostId = parsePluginInstallRelId(id)?.ghostId ?? id;
+    const validated = validateReceipt(parsed, expectedGhostId);
     return validated.ok
       ? { state: 'approved', receipt: validated.receipt }
       : { state: 'invalid', reason: validated.reason };
@@ -248,14 +269,19 @@ export class GhostInstallReceiptStore {
    */
   async write(
     receipt: GhostInstallReceipt,
-    options: { skillSourceDir?: string; requireSkillSnapshot?: boolean } = {},
+    options: { skillSourceDir?: string; requireSkillSnapshot?: boolean; relId?: string } = {},
   ): Promise<void> {
     const validated = validateReceipt(receipt, receipt.id);
     if (!validated.ok)
       throw new Error(`refusing to write invalid ghost receipt: ${validated.reason}`);
 
     const root = this.rootDir();
-    await fs.promises.mkdir(root, { recursive: true });
+    const relId = options.relId ?? this.receiptRelId(receipt);
+    if (parsePluginInstallRelId(relId)?.ghostId !== receipt.id) {
+      throw new Error('ghost receipt relId does not match receipt id');
+    }
+    const receiptFile = this.receiptPath(relId);
+    await fs.promises.mkdir(path.dirname(receiptFile), { recursive: true });
     try {
       await this.ensureSkillSnapshot(receipt, options.skillSourceDir);
     } catch (error) {
@@ -277,12 +303,12 @@ export class GhostInstallReceiptStore {
     // writer may have observed it and committed the receipt; pathname-based
     // rollback could remove that install's only durable migration guard.
     if (!this.hasMigrationLedger()) {
-      await this.ensureMigrationMarker(receipt.id);
+      await this.ensureMigrationMarker(this.receiptRelId(receipt));
     }
-    const target = this.receiptPath(receipt.id);
+    const target = receiptFile;
     const temp = path.join(
       root,
-      `.${receipt.id}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
+      `.${this.receiptRelId(receipt).replaceAll('/', '.')}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
     );
     const persistedReceipt = {
       ...validated.receipt,
@@ -352,10 +378,10 @@ export class GhostInstallReceiptStore {
   }
 
   skillSnapshotRoot(id: string, revision: string): string {
-    if (!isValidGhostId(id) || !isRevision(revision)) {
+    if (!isValidPluginInstallRelId(id) || !isRevision(revision)) {
       throw new Error('invalid ghost skill snapshot identity');
     }
-    return path.join(this.rootDir(), 'skill-snapshots', id, revision);
+    return path.join(this.rootDir(), 'skill-snapshots', ...id.split('/'), revision);
   }
 
   /**
@@ -535,8 +561,8 @@ export class GhostInstallReceiptStore {
    * 时用它区分"安装了 receipt 之前就是 legacy"与"新模型安装后 receipt 被删"。
    */
   private migrationMarkerPath(id: string): string {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for migration marker path');
-    return path.join(this.rootDir(), `.migrated-${id}`);
+    if (!isValidPluginInstallRelId(id)) throw new Error('invalid ghost id for migration marker path');
+    return path.join(this.rootDir(), `.migrated-${id.replaceAll('/', '.')}`);
   }
 
   /**
@@ -557,7 +583,7 @@ export class GhostInstallReceiptStore {
     const root = this.rootDir();
     await fs.promises.mkdir(root, { recursive: true });
     const target = this.migrationMarkerPath(id);
-    const temp = path.join(root, `.migrated-${id}-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
+    const temp = path.join(root, `.migrated-${id.replaceAll('/', '.')}-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
     try {
       await fs.promises.writeFile(temp, '', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
       // Publish via hard-link first so the operation is no-clobber:
@@ -648,18 +674,27 @@ export class GhostInstallReceiptStore {
 
   /** 事务标记路径。点开头,不与 `<id>.json` receipt 或 `.legacy-migration.json` 撞名。 */
   private pendingMutationPath(id: string): string {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for pending mutation path');
-    return path.join(this.rootDir(), `.pending-${id}.json`);
+    const identity = parsePluginInstallRelId(id);
+    if (!identity) throw new Error('invalid ghost id for pending mutation path');
+    if (identity.namespace === null) {
+      return path.join(this.rootDir(), `.pending-${identity.ghostId}.json`);
+    }
+    return path.join(
+      this.rootDir(),
+      PLUGIN_NS_INSTALL_ROOT,
+      identity.namespace,
+      `.pending-${identity.ghostId}.json`,
+    );
   }
 
   /** 事务开始:装入/更新 rename 动盘**之前**落标记(原子 temp+rename;re-begin 覆盖)。 */
   async writePendingMutation(id: string, entry: GhostPendingMutation): Promise<void> {
     const root = this.rootDir();
-    await fs.promises.mkdir(root, { recursive: true });
     const target = this.pendingMutationPath(id);
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
     const temp = path.join(
       root,
-      `.pending-${id}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
+      `.pending-${id.replaceAll('/', '.')}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
     );
     try {
       await fs.promises.writeFile(temp, `${JSON.stringify({ version: 1, id, ...entry })}\n`, {
@@ -825,12 +860,38 @@ export class GhostInstallReceiptStore {
       if (isValidGhostId(match[1])) ids.push(match[1]);
       else blocked = true;
     }
+    try {
+      const nsRoot = path.join(this.rootDir(), PLUGIN_NS_INSTALL_ROOT);
+      for (const nsEntry of fs.readdirSync(nsRoot, { withFileTypes: true })) {
+        if (!nsEntry.isDirectory()) continue;
+        let pendingNames = [];
+        try {
+          pendingNames = fs.readdirSync(path.join(nsRoot, nsEntry.name));
+        } catch {
+          continue;
+        }
+        for (const name of pendingNames) {
+          if (!name.startsWith('.pending-') || !name.endsWith('.json')) continue;
+          const ghostId = name.slice('.pending-'.length, -'.json'.length);
+          const relId = PLUGIN_NS_INSTALL_ROOT + '/' + nsEntry.name + '/' + ghostId;
+          if (isValidPluginInstallRelId(relId)) ids.push(relId);
+          else blocked = true;
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return {
+          state: 'unreadable',
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
     return { state: 'ok', ids, blocked };
   }
 
   private receiptPath(id: string): string {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for receipt path');
-    return path.join(this.rootDir(), `${id}.json`);
+    if (!isValidPluginInstallRelId(id)) throw new Error('invalid ghost id for receipt path');
+    return path.join(this.rootDir(), ...id.split('/').slice(0, -1), `${id.split('/').at(-1)}.json`);
   }
 
   private async ensureSkillSnapshot(
@@ -1030,6 +1091,7 @@ export function createGhostInstallReceipt(input: {
   revision?: string;
   iconDataUrl?: string;
   installOrigin?: string;
+  namespace?: string | null;
 }): GhostInstallReceipt {
   if (input.installOrigin !== undefined && !isPersistableInstallOrigin(input.installOrigin)) {
     throw new Error('receipt installOrigin 不合法');
@@ -1037,6 +1099,9 @@ export function createGhostInstallReceipt(input: {
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
     id: input.manifest.id,
+    ...(Object.prototype.hasOwnProperty.call(input, 'namespace')
+      ? { namespace: input.namespace ?? null }
+      : {}),
     revision: input.revision ?? crypto.randomUUID(),
     manifest: input.manifest,
     localeResources: input.localeResources,
@@ -1198,6 +1263,13 @@ function validateReceipt(
     if (!validated.ok) return { ok: false, reason: `receipt locale 不合法:${localePath}` };
     localeResources[localePath] = validated.resource;
   }
+  let namespace: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, 'namespace')) {
+    if (value.namespace !== null && !isValidPluginNamespace(value.namespace)) {
+      return { ok: false, reason: 'receipt namespace 不合法' };
+    }
+    namespace = value.namespace === null ? null : value.namespace;
+  }
   let installOrigin: string | undefined;
   if (value.installOrigin !== undefined) {
     if (
@@ -1222,6 +1294,7 @@ function validateReceipt(
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),
+      ...(namespace !== undefined ? { namespace } : {}),
     },
   };
 }

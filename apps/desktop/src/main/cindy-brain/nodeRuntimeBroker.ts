@@ -39,6 +39,7 @@ import type {
   GhostPipeNodeResult,
   InstalledGhost,
 } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import {
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
@@ -785,9 +786,13 @@ export class GhostNodeRuntimeBroker {
     return `${ghostId}::${entryRel}`;
   }
 
+  private static instanceId(ghost: InstalledGhost): string {
+    return installedGhostStoragePart(ghost);
+  }
+
   stateOf(ghostId: string): 'off' | 'running' {
     for (const entry of this.workers.values()) {
-      if (entry.ghost.manifest.id === ghostId) return 'running';
+      if (GhostNodeRuntimeBroker.instanceId(entry.ghost) === ghostId) return 'running';
     }
     return 'off';
   }
@@ -795,21 +800,21 @@ export class GhostNodeRuntimeBroker {
   /** resident 档在插件启用/启动时调用；按需档保持零进程。常驻只覆盖主入口。
    *  同时也是 stop() 的对称点:上层完成更新/重启后调用此方法,清除停止标记。 */
   async startResident(ghost: InstalledGhost): Promise<void> {
-    this.stoppedGhosts.delete(ghost.manifest.id);
+    this.stoppedGhosts.delete(GhostNodeRuntimeBroker.instanceId(ghost));
     if (!ghost.enabled || ghost.manifest.node?.lifecycle !== 'resident') return;
     const ownerScopeSnapshot = this.captureOwnerScope();
     const entry = await this.ensureWorker(ghost, ghost.manifest.node.entry, ownerScopeSnapshot);
-    this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
+    this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
     if (ghost.manifest.node.protocol === 'mcp-stdio') await this.ensureMcpInitialized(entry);
   }
 
   /** Recovery-only restart for a runtime that was already running on demand. */
   async startForRecovery(ghost: InstalledGhost): Promise<void> {
-    this.stoppedGhosts.delete(ghost.manifest.id);
+    this.stoppedGhosts.delete(GhostNodeRuntimeBroker.instanceId(ghost));
     if (!ghost.enabled || !ghost.manifest.node) return;
     const ownerScopeSnapshot = this.captureOwnerScope();
     const entry = await this.ensureWorker(ghost, ghost.manifest.node.entry, ownerScopeSnapshot);
-    this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
+    this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
     if (ghost.manifest.node.protocol === 'mcp-stdio') await this.ensureMcpInitialized(entry);
   }
 
@@ -1116,7 +1121,7 @@ export class GhostNodeRuntimeBroker {
 
   /** worker 引导层上行控制帧的总入口:形状不合静默丢,资格逐项查。 */
   private handleWorkerControl(entry: WorkerEntry, raw: unknown): void {
-    if (!this.ownerScopeUsable(entry.ghost.manifest.id, entry.ownerScopeSnapshot)) return;
+    if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     const message = parseGhostNodeChildToHostMessage(raw);
     if (!message) return;
     if (message.type === 'device-authorize' || message.type === 'plugin-authorize') {
@@ -1226,7 +1231,7 @@ export class GhostNodeRuntimeBroker {
   private childCountOf(ghostId: string): number {
     let count = 0;
     for (const entry of this.workers.values()) {
-      if (entry.ghost.manifest.id === ghostId) count += entry.children.size;
+      if (GhostNodeRuntimeBroker.instanceId(entry.ghost) === ghostId) count += entry.children.size;
     }
     return count;
   }
@@ -1238,7 +1243,7 @@ export class GhostNodeRuntimeBroker {
   private readonly childReservations = new Map<string, number>();
 
   private replyToWorker(entry: WorkerEntry, message: GhostNodeChildToWorkerMessage): void {
-    if (!this.ownerScopeUsable(entry.ghost.manifest.id, entry.ownerScopeSnapshot)) return;
+    if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     entry.child.sendControl?.(message);
   }
 
@@ -1252,7 +1257,7 @@ export class GhostNodeRuntimeBroker {
     entry: WorkerEntry,
     message: Extract<GhostNodeChildToHostMessage, { type: 'spawn-child' }>,
   ): Promise<void> {
-    const ghostId = entry.ghost.manifest.id;
+    const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
     const fail = (reason: string): void => {
       this.deps.log?.warn('ghost node child spawn rejected', { ghostId, reason });
       this.replyToWorker(entry, {
@@ -1482,7 +1487,7 @@ export class GhostNodeRuntimeBroker {
       this.stopStartingChild(starting);
     }
     for (const [key, entry] of [...this.workers]) {
-      if (entry.ghost.manifest.id === ghostId) this.stopWorker(key, entry);
+      if (GhostNodeRuntimeBroker.instanceId(entry.ghost) === ghostId) this.stopWorker(key, entry);
     }
   }
 
@@ -1687,18 +1692,18 @@ export class GhostNodeRuntimeBroker {
     entryRel: string,
     ownerScopeSnapshot: unknown,
   ): Promise<WorkerEntry> {
-    const key = GhostNodeRuntimeBroker.keyOf(ghost.manifest.id, entryRel);
+    const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(ghost), entryRel);
     const inflight = this.startingWorkers.get(key);
     if (inflight) {
       const entry = await inflight;
-      this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
-      this.assertOwnerScopeUsable(ghost.manifest.id, entry.ownerScopeSnapshot);
+      this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
+      this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), entry.ownerScopeSnapshot);
       return entry;
     }
     const existing = this.workers.get(key);
     if (existing) {
-      this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
-      this.assertOwnerScopeUsable(ghost.manifest.id, existing.ownerScopeSnapshot);
+      this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
+      this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), existing.ownerScopeSnapshot);
       return existing;
     }
     this.startingWorkerScopes.set(key, ownerScopeSnapshot);
@@ -1718,8 +1723,8 @@ export class GhostNodeRuntimeBroker {
     key: string,
     ownerScopeSnapshot: unknown,
   ): Promise<WorkerEntry> {
-    this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
-    if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) {
+    this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
+    if (this.destroyed || this.stoppedGhosts.has(GhostNodeRuntimeBroker.instanceId(ghost))) {
       throw new WorkerStartError('Node 工作进程启动已取消', false, true);
     }
     this.sendStatus(ghost, 'starting', undefined, entryRel);
@@ -1728,11 +1733,11 @@ export class GhostNodeRuntimeBroker {
     for (let attempt = 1; attempt <= WORKER_START_ATTEMPTS; attempt++) {
       if (attempt > 1) {
         await this.delay(WORKER_START_RETRY_DELAYS_MS[attempt - 2] ?? 750);
-        this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
+        this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
         // 退避期间插件可能被停用/卸载/更新/停止,主机也可能正在退出:
         // 现查现用;已停用/已收摊/已停止就不再拉进程,也不补发状态事件。
-        if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) throw lastError;
-        const fresh = this.deps.getGhost(ghost.manifest.id);
+        if (this.destroyed || this.stoppedGhosts.has(GhostNodeRuntimeBroker.instanceId(ghost))) throw lastError;
+        const fresh = this.deps.getGhost(GhostNodeRuntimeBroker.instanceId(ghost));
         if (!fresh?.enabled) throw lastError;
         // 跨更新边界时重验入口:新 manifest 可能已不再申报该 entry。
         if (!fresh.manifest.node) throw lastError;
@@ -1814,7 +1819,7 @@ export class GhostNodeRuntimeBroker {
     ownerScopeSnapshot: unknown,
     attemptDiagnostic: StartAttemptDiagnostic,
   ): Promise<WorkerEntry> {
-    this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
+    this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
     const node = ghost.manifest.node;
     if (!node) throw new WorkerStartError('ghost.json 缺少 node 工作进程详单', false);
     const entryPath = path.resolve(ghost.dir, ...entryRel.split('/'));
@@ -1835,7 +1840,7 @@ export class GhostNodeRuntimeBroker {
         { error: 'utility-process-fork-threw' },
       );
     }
-    this.trackLiveProcess(ghost.manifest.id, child);
+    this.trackLiveProcess(GhostNodeRuntimeBroker.instanceId(ghost), child);
     const readChildDiagnosticPid = (): number | undefined => readDiagnosticPid(child);
     attemptDiagnostic.pid = readChildDiagnosticPid();
     const entry: WorkerEntry = {
@@ -1907,7 +1912,7 @@ export class GhostNodeRuntimeBroker {
       // 诊断订阅失败不能改变 ready / retry 语义。
     }
     this.workers.set(key, entry);
-    if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) {
+    if (this.destroyed || this.stoppedGhosts.has(GhostNodeRuntimeBroker.instanceId(ghost))) {
       this.workers.delete(key);
       try { child.kill('SIGKILL'); } catch { /* already gone */ }
       throw new WorkerStartError('Node 工作进程启动已取消', false, true);
@@ -1946,7 +1951,7 @@ export class GhostNodeRuntimeBroker {
       // 进程已退出后不再续命——定时器已冻结,由 settleExit 统一结算。
       if (
         !entry.exitDrain
-        && this.ownerScopeUsable(entry.ghost.manifest.id, entry.ownerScopeSnapshot)
+        && this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)
       ) {
         // stderr 是手册钦定的日志口——构建刷日志就是活着的证据,给续命请求重置沉默窗口。
         this.renewPendingOnActivity(entry);
@@ -2044,7 +2049,7 @@ export class GhostNodeRuntimeBroker {
       throw error;
     }
     entry.startupPhase = false;
-    this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
+    this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(ghost), ownerScopeSnapshot);
     this.sendStatus(ghost, 'running', undefined, entryRel);
     this.scheduleIdleStop(entry);
     return entry;
@@ -2069,7 +2074,7 @@ export class GhostNodeRuntimeBroker {
         },
         10_000,
       ).then(() => {
-        this.assertOwnerScopeUsable(entry.ghost.manifest.id, entry.ownerScopeSnapshot);
+        this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot);
         this.writeLine(entry, {
           jsonrpc: '2.0',
           method: 'notifications/initialized',
@@ -2095,7 +2100,7 @@ export class GhostNodeRuntimeBroker {
     callId?: string,
     secretInputCompleted = false,
   ): Promise<unknown> {
-    this.assertOwnerScopeUsable(entry.ghost.manifest.id, ownerScopeSnapshot);
+    this.assertOwnerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), ownerScopeSnapshot);
     if (signal?.aborted) return Promise.reject(new NodeRpcError('cancelled', 'The tool call was cancelled'));
     this.clearIdleTimer(entry);
     const id = String(entry.nextId++);
@@ -2205,9 +2210,9 @@ export class GhostNodeRuntimeBroker {
   }
 
   private handleStdout(entry: WorkerEntry, chunk: Buffer | string): void {
-    const key = GhostNodeRuntimeBroker.keyOf(entry.ghost.manifest.id, entry.entryRel);
+    const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
-    if (!this.ownerScopeUsable(entry.ghost.manifest.id, entry.ownerScopeSnapshot)) return;
+    if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     entry.stdoutBuffer += entry.stdoutDecoder.write(
       Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8'),
     );
@@ -2236,7 +2241,7 @@ export class GhostNodeRuntimeBroker {
   }
 
   private handleRpcMessage(entry: WorkerEntry, message: unknown): void {
-    if (!this.ownerScopeUsable(entry.ghost.manifest.id, entry.ownerScopeSnapshot)) return;
+    if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       this.failProtocol(entry, 'Node 返回的 JSON-RPC 消息必须是对象');
       return;
@@ -2266,7 +2271,7 @@ export class GhostNodeRuntimeBroker {
       entry.pending.delete(String(msg.id));
       this.clearTimer(pending.timer);
       pending.cleanup();
-      if (!this.ownerScopeUsable(entry.ghost.manifest.id, pending.ownerScopeSnapshot)) {
+      if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), pending.ownerScopeSnapshot)) {
         pending.reject(new NodeRpcError('exit', 'Plugin owner boundary changed before response'));
         return;
       }
@@ -2298,7 +2303,7 @@ export class GhostNodeRuntimeBroker {
       return;
     }
     if (typeof msg.method === 'string') {
-      this.deps.sendToGhost?.(entry.ghost.manifest.id, {
+      this.deps.sendToGhost?.(GhostNodeRuntimeBroker.instanceId(entry.ghost), {
         type: 'event',
         name: 'node-notification',
         method: msg.method,
@@ -2339,7 +2344,7 @@ export class GhostNodeRuntimeBroker {
     // already belongs to the new owner. The runtime-level invalidation callback
     // is only safe when no fresh generation exists for the same ghost.
     for (const [key, entry] of [...this.workers]) {
-      if (entry.ghost.manifest.id !== ghostId) continue;
+      if (GhostNodeRuntimeBroker.instanceId(entry.ghost) !== ghostId) continue;
       if (isGhostOwnerScopeUsable(this.deps.ownerScope, entry.ownerScopeSnapshot)) {
         hasCurrentWorker = true;
         continue;
@@ -2374,7 +2379,7 @@ export class GhostNodeRuntimeBroker {
     signal: string | null,
     error: Error | null,
   ): void {
-    const ghostId = entry.ghost.manifest.id;
+    const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
     const key = GhostNodeRuntimeBroker.keyOf(ghostId, entry.entryRel);
     if (this.workers.get(key) !== entry) {
       // stopWorker 已先移除 map。只有真实 exit 才能取消强杀；error 仍可能
@@ -2451,7 +2456,7 @@ export class GhostNodeRuntimeBroker {
       entry.stderrSegments.push({ text: tail, at: this.now() });
       entry.stderrTotalChars += tail.length;
     }
-    const ghostId = entry.ghost.manifest.id;
+    const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
     const exitHint = this.exitStderrHint(entry, exitedAt);
     const detail = `${this.redactSecrets(entry, error?.message ?? `code=${code}, signal=${signal ?? 'none'}`)}${
       exitHint ? `:${exitHint}` : ''
@@ -2537,7 +2542,7 @@ export class GhostNodeRuntimeBroker {
   }
 
   private scheduleIdleStop(entry: WorkerEntry): void {
-    const key = GhostNodeRuntimeBroker.keyOf(entry.ghost.manifest.id, entry.entryRel);
+    const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
     if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0) return;
     // 有代启子进程在世时不空闲回收——收 worker 会级联杀掉正在干活的代理。
@@ -2578,7 +2583,7 @@ export class GhostNodeRuntimeBroker {
   ): void {
     // entry 字段只在非主入口时携带("缺省 = 主入口"的协议语义;老包零变化)。
     const isExtraEntry = entryRel !== undefined && entryRel !== ghost.manifest.node?.entry;
-    this.deps.sendToGhost?.(ghost.manifest.id, {
+    this.deps.sendToGhost?.(GhostNodeRuntimeBroker.instanceId(ghost), {
       type: 'event',
       name: 'node-status',
       state,

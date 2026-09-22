@@ -62,6 +62,10 @@ describe('plugin recommendation state', () => {
     forgetGhostRecommendations('example');
     expect(readGhostRecommendationEntries()).toEqual([]);
   });
+  it('accepts namespaced instance ids used by the pipe binding', () => {
+    expect(replaceGhostRecommendations('_ns__xd__helper', [item])).toEqual({ ok: true });
+    expect(readGhostRecommendationEntries()[0].id).toBe('_ns__xd__helper');
+  });
   it('rejects invalid replacement without losing previous tasks', () => {
     replaceGhostRecommendations('example', [item]);
     expect(replaceGhostRecommendations('example', [{ ...item, pluginId: 'other' }]).ok).toBe(false);

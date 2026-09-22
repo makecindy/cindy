@@ -22,6 +22,11 @@ import type {
   GhostFirstPartyFacts,
   GhostFirstPartyMarketRecord,
 } from './ghostFirstPartyPrivilege.js';
+import {
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+  pluginInstallRelId,
+} from '../../shared/pluginIdentity.js';
 
 export type GhostFirstPartyFactsPurpose = 'install' | 'runtime';
 
@@ -113,6 +118,12 @@ export function loadGhostFirstPartyFactsLoader(
 ): GhostFirstPartyFactsLoader {
   return {
     load(ghostId, purpose, identity, overrides) {
+      const parsed =
+        parsePluginStoragePart(ghostId) ?? parsePluginInstallRelId(ghostId);
+      const logicalGhostId = parsed?.ghostId ?? ghostId;
+      // Receipts / origin live under install rel id (`helper` or `_ns/acme/helper`).
+      // Runtime oauth may pass a storage part (`_ns__acme__helper`).
+      const installRelId = parsed ? pluginInstallRelId(parsed) : ghostId;
       const unavailable = (
         reason: GhostFirstPartyFactsUnavailableReason,
       ): GhostFirstPartyFactsLoad => ({
@@ -134,7 +145,7 @@ export function loadGhostFirstPartyFactsLoader(
         installOrigin = overrides.installOrigin;
       } else {
         try {
-          installOrigin = options.readInstallOrigin(ghostId);
+          installOrigin = options.readInstallOrigin(installRelId);
         } catch {
           installOrigin = 'manual';
         }
@@ -145,9 +156,9 @@ export function loadGhostFirstPartyFactsLoader(
         marketRecord = overrides.marketRecord;
       } else {
         try {
-          const installation = options.readMarketInstallation(ghostId);
+          const installation = options.readMarketInstallation(logicalGhostId);
           marketRecord = installation
-            ? toMarketRecord(installation, options.readApprovedPackageSha256(ghostId))
+            ? toMarketRecord(installation, options.readApprovedPackageSha256(installRelId))
             : null;
         } catch {
           // Builtin official plugins and explicit Forge self-tests do not depend
@@ -163,7 +174,7 @@ export function loadGhostFirstPartyFactsLoader(
         return {
           kind: 'ready',
           facts: {
-            ghostId,
+            ghostId: logicalGhostId,
             builtin,
             marketRecord,
             currentOrganization: null,
@@ -189,7 +200,7 @@ export function loadGhostFirstPartyFactsLoader(
        */
       const builtinOnlyFacts = (): GhostFirstPartyFactsLoad => ({
         kind: 'ready',
-        facts: { ghostId, builtin, marketRecord, currentOrganization: null, installOrigin },
+        facts: { ghostId: logicalGhostId, builtin, marketRecord, currentOrganization: null, installOrigin },
       });
 
       let lookup: OrganizationPrefixLookup;
@@ -204,7 +215,7 @@ export function loadGhostFirstPartyFactsLoader(
         return {
           kind: 'ready',
           facts: {
-            ghostId,
+            ghostId: logicalGhostId,
             builtin,
             marketRecord,
             currentOrganization: {

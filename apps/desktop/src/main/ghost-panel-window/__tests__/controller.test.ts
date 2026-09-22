@@ -398,6 +398,18 @@ describe('multi-instance isolation', () => {
     h.controller.open('b');
     expect(winB.show).toHaveBeenCalled();
   });
+  it('same ghostId in different namespaces get independent windows', () => {
+    const h = makeHarness(new Set(['helper', '_ns__acme__helper']));
+    h.controller.setDetached('helper', true);
+    h.controller.setDetached('_ns__acme__helper', true);
+    expect(h.created).toHaveLength(2);
+    expect(h.created[0].ghostId).toBe('helper');
+    expect(h.created[1].ghostId).toBe('_ns__acme__helper');
+    h.controller.setDetached('helper', false);
+    expect(h.created[0].win.isDestroyed()).toBe(true);
+    expect(h.created[1].win.isDestroyed()).toBe(false);
+  });
+
 
   it('setDetached(false) on one ghost does not affect another', () => {
     const h = makeHarness(new Set(['a', 'b']));
@@ -528,6 +540,17 @@ describe('reconcile', () => {
     expect(h.created[0].win.isDestroyed()).toBe(true);
     expect(h.entries().a).toEqual({ detached: false, lastOpen: false });
   });
+  it('reconcile keeps a namespaced detached window and does not treat it as the root id', () => {
+    const h = makeHarness(new Set(['_ns__acme__helper']));
+    h.controller.setDetached('_ns__acme__helper', true);
+    const org = ghost('helper');
+    org.namespace = 'acme';
+    org.dir = '/fake/_ns/acme/helper';
+    h.controller.reconcile([org]);
+    expect(h.created[0].win.isDestroyed()).toBe(false);
+    expect(h.entries()['_ns__acme__helper']).toEqual({ detached: true, lastOpen: true });
+  });
+
 });
 
 describe('two-phase ready + sender guard', () => {

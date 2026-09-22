@@ -545,6 +545,36 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     broker.destroyAll();
   });
 
+
+  it('同 ghostId 的 root 与企业实例可同时跑 Node 进程', async () => {
+    const rootGhost = fakeGhost();
+    const orgGhost: InstalledGhost = { ...fakeGhost(), namespace: 'acme', dir: '/fake/_ns/acme/node-ghost' };
+    const children: FakeNodeProcess[] = [];
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: (id) => {
+        if (id === '_ns__acme__node-ghost') return orgGhost;
+        if (id === 'node-ghost') return rootGhost;
+        return null;
+      },
+      spawnProcess: () => {
+        const child = makeAutoReplyProcess();
+        children.push(child);
+        return child as unknown as NodeWorkerProcess;
+      },
+    });
+
+    expect(await broker.handleRequest('node-ghost', rpcRequest('root'))).toMatchObject({ ok: true });
+    expect(await broker.handleRequest('_ns__acme__node-ghost', rpcRequest('org'))).toMatchObject({
+      ok: true,
+    });
+    expect(children).toHaveLength(2);
+    expect(broker.stateOf('node-ghost')).toBe('running');
+    expect(broker.stateOf('_ns__acme__node-ghost')).toBe('running');
+    broker.stop('node-ghost');
+    expect(broker.stateOf('node-ghost')).toBe('off');
+    expect(broker.stateOf('_ns__acme__node-ghost')).toBe('running');
+    broker.destroyAll();
+  });
   it('停用式 stop 立即拒绝在途请求并关闭进程', async () => {
     const ghost = fakeGhost();
     const child = new FakeNodeProcess(); // 不回 response，保持在途

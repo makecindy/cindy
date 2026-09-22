@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 
 import { app } from 'electron';
 
+import { authorDeclaredNamespaceReason } from '@cindy/plugin-protocol';
 import {
   ghostNetworkAuthorizationWithinCap,
   ghostNodeSecretAuthorizationWithinCap,
@@ -145,6 +146,10 @@ export async function installCustomMarketPlugin(input: {
   // reason 会插值 ghost.json 里的未知字段值(不受长度约束的不可信内容),
   // packed.message 会带 fs 错误自附的宿主绝对路径——进 IPC 前一律脱敏+截断,
   // 完整原文只留 main 日志。
+  const reservedNamespace = authorDeclaredNamespaceReason(raw);
+  if (reservedNamespace) {
+    throwIpcError('GHOST_FILE_INVALID', sanitizeInstallDetail(reservedNamespace));
+  }
   const validated = validateGhostManifest(raw);
   if (!validated.ok) {
     throwIpcError('GHOST_FILE_INVALID', sanitizeInstallDetail(validated.reason));

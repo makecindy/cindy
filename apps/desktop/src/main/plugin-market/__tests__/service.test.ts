@@ -4511,6 +4511,43 @@ describe('organization default Plugin takeover', () => {
     ).toBe(false);
   });
 
+  it('does not take over a known root instance for an organization namespace', () => {
+    const item = organizationDefaultSummary({ namespace: 'acme' });
+    const installed = {
+      manifest: manifest(item.ghostId),
+      dir: '/not-read-for-cross-namespace',
+      enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      trust: {
+        level: 'unverified',
+        publisherSigned: false,
+        publisherVerified: false,
+        reviewed: false,
+      },
+    } satisfies InstalledGhost;
+    expect(
+      organizationDefaultTakeoverEligibility({
+        summary: item,
+        currentOrganization: { organizationId: 'org-1', pluginPrefix: 'acme' },
+        uniqueGhostId: true,
+        installed,
+        record: {
+          ...recordForTest(item),
+          pluginId: `c${'d'.repeat(24)}`,
+          source: 'market',
+          scope: 'public',
+          organizationId: null,
+          namespace: null,
+        },
+        installOrigin: 'manual',
+        runtimeAvailable: true,
+        optedOut: false,
+        builtinRemoved: false,
+        busy: false,
+      }),
+    ).toEqual({ eligible: false, reason: 'cross-namespace' });
+  });
+
   it('skips busy work without backoff and retries after it becomes idle', async () => {
     setCurrentOrganization();
     const item = organizationDefaultSummary();
@@ -4864,6 +4901,30 @@ describe('market detail 响应身份绑定', () => {
     await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
     h.api.detail.mockImplementation(async () => detail({ ...item, id: 'plg_other' }));
     await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
+  });
+
+  it('rejects list/detail namespace drift and mismatched download identity', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    h.api.detail.mockImplementationOnce(async () => detail({ ...item, namespace: 'acme' }));
+    await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
+
+    const enterprise = summary({ namespace: 'acme' });
+    const h2 = harness([enterprise]);
+    h2.api.download.mockResolvedValue({
+      pluginId: enterprise.id,
+      releaseId: enterprise.currentRelease.id,
+      ghostId: enterprise.ghostId,
+      namespace: null,
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 42,
+    });
+    await expect(
+      h2.service.install(enterprise.id, reviewedInstallOptions(enterprise)),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 });
 
