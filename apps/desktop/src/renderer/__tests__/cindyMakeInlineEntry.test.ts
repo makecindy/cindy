@@ -73,6 +73,9 @@ describe('Cindy Make composer presentation', () => {
     }
     expect(sessionView).toContain('if (cindyMakeInputLocked) return false;');
     expect(sessionView).not.toContain('CindyMakeResumeCard');
+    const testCard = sessionView.indexOf('<CindyMakeTestCard', mask);
+    expect(testCard).toBeGreaterThan(mask);
+    expect(testCard).toBeLessThan(input);
   });
 
   it('keeps recovery actions in the ordinary input top slot with the current task and message', () => {
