@@ -116,11 +116,13 @@ describe('GhostManager namespace migration census', () => {
 
     const planted = await makeCindy('helper');
     const installed = await manager.install(planted);
-    expect(installed).toMatchObject({
-      ghost: { manifest: { id: 'helper' }, namespace: null },
-    });
+    expect('ghost' in installed).toBe(true);
+    const helperGhost = (installed as { ghost: { manifest: { id: string }; namespace?: unknown } }).ghost;
+    expect(helperGhost.manifest.id).toBe('helper');
+    expect(Object.prototype.hasOwnProperty.call(helperGhost, 'namespace')).toBe(false);
     const helper = manager.list().find((ghost) => ghost.manifest.id === 'helper');
-    expect(helper?.namespace).toBe(null);
+    expect(helper).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(helper, 'namespace')).toBe(false);
     expect(helper?.namespaceMigration).toBeUndefined();
   });
 
