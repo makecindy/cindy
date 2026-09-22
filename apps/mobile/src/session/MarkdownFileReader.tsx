@@ -5,7 +5,7 @@
  * 代码块/图片与聊天观感一致),但与消息气泡的 SelectableMarkdownWebView 是
  * 两种载体:这里 WebView 自身滚动(flex:1),不做测高/揭开门——文档可能几
  * 千 px 高,气泡那套"整块撑高嵌进列表"的模型在全屏阅读场景既无必要也费内存。
- * 链接点击一律拦截转系统浏览器;mermaid 以代码块形态显示(渲染成图留二期)。
+ * 链接点击一律拦截转系统浏览器；mermaid 用随包 runtime 原位升级为图，失败保留源码。
  *
  * chat-text-quote:传入 onQuoteSelection 时,经 WebView 原生 `menuItems` 在
  * 系统文字选择菜单里插入「添加到对话」项(与聊天流 UITextView 的菜单项同款
@@ -38,7 +38,7 @@ export function MarkdownFileReader({
   testID?: string;
 }) {
   const { t } = useTranslation();
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const quoteEnabled = !!onQuoteSelection;
   // 菜单项在渲染时构造(而非模块常量):label 走 i18n;依赖 t 使语言切换后随重渲更新。
   const quoteMenuItems = useMemo(
@@ -48,6 +48,7 @@ export function MarkdownFileReader({
   const html = useMemo(() => buildSelectableMarkdownHtml(markdown, {
     borderColor: colors.border,
     chipColor: colors.surfaceChip,
+    dark: mode === 'dark',
     inlineCodeColor: colors.chatInlineCodeText,
     fontSize: typeScale.body,
     // body(16/22)行高比 1.375,低于 DESIGN.md §3 正文区间 1.43–1.56 下限;
@@ -66,7 +67,7 @@ export function MarkdownFileReader({
     },
     textColor: colors.textPrimary,
     ...(targetLine ? { targetLine } : {}),
-  }), [colors, markdown, targetLine]);
+  }), [colors, markdown, mode, targetLine]);
 
   // 回调走 ref:onQuoteSelection 引用变化(页面重渲)不应重建 handler,
   // 更不应让 WebView 重载。
