@@ -6001,6 +6001,14 @@ export class PiAgent extends BaseAgent {
       await runExclusivePiRpc(() =>
         refreshImageCapabilityOnSwitch(mutableModel, mutablePiProviderId),
       );
+      // 宿主快照已对齐但子进程还没吃到新清单（回合在跑，重载被延后）：本次不得放行 —— 图片
+      // 会发给一个仍按旧清单判定的子进程。缓存已对齐，下一轮回合结束/下一次同步点自动生效。
+      if (imageCapabilityReloadPending && supportsNow()) {
+        throw new Error(
+          '[PI_IMAGE_CAPABILITY_REFRESH_FAILED] 图片输入能力已更新，但子进程要等当前回合结束后才能加载新清单；' +
+            '请稍后重发这张图（或切一次模型）。',
+        );
+      }
       if (supportsNow()) return;
       throw new PiImageInputUnsupportedError();
     };
@@ -6201,34 +6209,65 @@ export class PiAgent extends BaseAgent {
         );
       }
       // switch_session 按进程启动时的 --provider/--model 重建 AgentSession（与本文件其余 4 处
-      // switch_session 同一坑，见 switchModel 内注释）：不重放当前路由，子进程会静默回到启动
-      // 时的模型，而宿主与子代理快照仍以为在当前模型上 —— 同路由 no-op、发图、steer 之后都不
-      // 会再打 set_model，提示词会发给错误的模型且没有任何报错。所以重放路由 + get_state 读回，
-      // 任何一步不确认都终止会话（fail-closed，与 switch_session reject 同口径）。
+      // switch_session 同一坑，见 switchModel 内注释）：重建后子进程回到 spawn 路由，而宿主与
+      // 子代理快照仍以为在当前路由上 —— 同路由 no-op、发图、steer 之后都不会再打 set_model，
+      // 提示词会发给错误的模型且没有任何报错。
+      // 但重放**不能无条件发**：spawn 能靠 custom model id 跑在 Pi 自带目录没有的路由上
+      // （如 SuperGrok），对这种路由重发 set_model 反而会被 Pi 拒（见 switchModel 开头同路由
+      // no-op 的说明与对应测试）—— 先 get_state 读回，读回就等于当前路由时什么都不做。
+      let verifiedModel: { provider?: unknown; id?: unknown } | null | undefined;
       try {
-        const reapplied = await proc.request({
-          type: 'set_model',
-          provider: mutablePiProviderId,
-          modelId: mutableWireModel,
-        });
-        if (!reapplied.success) throw new Error(reapplied.error ?? 'set_model failed');
         const verified = await proc.request({ type: 'get_state' });
-        const verifiedModel = (verified.success
-          ? (verified.data as { model?: { provider?: unknown; id?: unknown } | null } | undefined)
-              ?.model
-          : undefined);
-        if (
-          !verified.success ||
-          verifiedModel?.provider !== mutablePiProviderId ||
-          verifiedModel.id !== mutableWireModel
-        ) {
-          throw new Error(
-            `route read-back mismatch (expected ${String(mutablePiProviderId)}/${mutableWireModel}, ` +
-              `got ${String(verifiedModel?.provider)}/${String(verifiedModel?.id)})`,
+        if (!verified.success) throw new Error(`get_state failed: ${verified.error ?? 'unknown'}`);
+        verifiedModel = (
+          verified.data as { model?: { provider?: unknown; id?: unknown } | null } | undefined
+        )?.model;
+      } catch (err) {
+        // 读不到状态 = 不知道子进程在哪条路由上，放行与回滚都可能分叉。
+        return await terminateUnconfirmedCatalogReload(err);
+      }
+      const routeMatches =
+        verifiedModel?.provider === mutablePiProviderId && verifiedModel.id === mutableWireModel;
+      if (!routeMatches) {
+        let reapplied;
+        try {
+          reapplied = await proc.request({
+            type: 'set_model',
+            provider: mutablePiProviderId,
+            modelId: mutableWireModel,
+          });
+        } catch (err) {
+          // 请求本身失败 = 变更结果未知。
+          return await terminateUnconfirmedCatalogReload(err);
+        }
+        if (!reapplied.success) {
+          // 子进程确实没被切回当前路由：继续用它会静默发到错误的模型上，而保留 pending
+          // 重试也修不好“已经跑在错路由上”这个事实 —— 终止（fail-closed）。
+          return await terminateUnconfirmedCatalogReload(
+            reapplied.error ?? 'set_model rejected during image capability reload',
           );
         }
-      } catch (err) {
-        return await terminateUnconfirmedCatalogReload(err);
+        let reverifiedModel: { provider?: unknown; id?: unknown } | null | undefined;
+        try {
+          const reverified = await proc.request({ type: 'get_state' });
+          if (!reverified.success) {
+            throw new Error(`get_state failed: ${reverified.error ?? 'unknown'}`);
+          }
+          reverifiedModel = (
+            reverified.data as { model?: { provider?: unknown; id?: unknown } | null } | undefined
+          )?.model;
+        } catch (err) {
+          return await terminateUnconfirmedCatalogReload(err);
+        }
+        if (
+          reverifiedModel?.provider !== mutablePiProviderId ||
+          reverifiedModel.id !== mutableWireModel
+        ) {
+          return await terminateUnconfirmedCatalogReload(
+            `route read-back mismatch (expected ${String(mutablePiProviderId)}/${mutableWireModel}, ` +
+              `got ${String(reverifiedModel?.provider)}/${String(reverifiedModel?.id)})`,
+          );
+        }
       }
       imageCapabilityReloadPending = false;
       this.deps.logger.debug('pi image capability refresh reloaded', {
@@ -6286,13 +6325,23 @@ export class PiAgent extends BaseAgent {
         return;
       }
       if (mismatch) {
+        // 会话快照里根本没有这条模型行（启动后才新增的 BYOM/目录行）：nextProviders 是在旧
+        // 快照的 models 数组上 map，写不出这一行 —— 写盘是空操作，却会置 pending 并触发一次
+        // 有终止风险的子进程重载，而准入门读的快照始终没变（声明永远不会生效）。显式跳过。
+        if (currentSpec === undefined) {
+          this.deps.logger.warn('pi image capability refresh skipped', {
+            reason: 'row-not-in-snapshot',
+            model: nextModel,
+            provider: specProviderId,
+          });
+          return;
+        }
         // inheritModels 的订阅行只有带 api/catalogAddition 才写进 models.json(见 writeModelsJson
         // 的 models 过滤):这类行改 input 落不到子进程,只翻宿主快照会造成 host/child 分叉。
         // 当前目录数据里订阅行都带 api,这里显式挡住未来的例外。
         const providerSpec = nativeProviders.find((candidate) => candidate.id === specProviderId);
         if (
           providerSpec?.inheritModels === true &&
-          currentSpec !== undefined &&
           currentSpec.api === undefined &&
           currentSpec.catalogAddition !== true
         ) {

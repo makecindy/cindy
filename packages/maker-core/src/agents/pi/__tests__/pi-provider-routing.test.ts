@@ -4600,6 +4600,163 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("skips the route replay when read-back already matches (spawn-only routes)", async () => {
+    // spawn 能靠 custom model id 跑在 Pi 自带目录没有的路由上，对这种路由重发 set_model 会
+    // 被 Pi 拒（见 switchModel 开头同路由 no-op 的说明）；而重放失败会 terminate 整个任务 ——
+    // 只改一个能力声明就杀掉正在跑的任务。switch_session 后先 get_state 读回，读回已经等于
+    // 当前路由时不得再发 set_model。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-spawn-only",
+              name: "Native Spawn Only",
+              baseUrl: "http://spawn-only.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-spawn-only" && modelId === "local-model" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-spawn-only-route",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-spawn-only",
+    });
+
+    declared.image = true;
+    captured.requests.length = 0;
+    // 真机上的 spawn-only 路由：任何 set_model 都会被拒。
+    captured.requestHandler = async (command) =>
+      command.type === "set_model"
+        ? { success: false, error: 'Model "local-model" not found for provider "xai"' }
+        : { success: true, data: {} };
+    await handle.setModel!("local-model", { providerId: "native-spawn-only" });
+
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("switch_session");
+    expect(requestTypes).not.toContain("set_model");
+    expect(captured.closes).toBe(0);
+    // 会话仍然可用：对账后路由没被拽走。
+    expect(captured.runtimeModel).toBe("local-model");
+    await handle.send({ type: "user", content: "still alive" });
+    expect(captured.requests.map((request) => request.type)).toContain("prompt");
+    await handle.close();
+  });
+
+  it("terminates the session when the route cannot be replayed onto a different model", async () => {
+    // 会话内切过模：switch_session 会把子进程拽回启动路由，读回与当前路由不一致就必须重放。
+    // 重放被拒 = 子进程确实跑在错误的路由上，继续用会把提示词静默发给错误的模型 ——
+    // 保留 pending 重试也修不好，只能 fail-closed 终止（且不留下“已重载”的错误结论）。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-route-lost",
+              name: "Native Route Lost",
+              baseUrl: "http://route-lost.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"] },
+                { id: "model-b", input: ["text"] },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-route-lost" && modelId === "model-b" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-route-replay-rejected",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-route-lost",
+    });
+    await handle.setModel!("model-b", { providerId: "native-route-lost" });
+    expect(captured.runtimeModel).toBe("model-b");
+
+    declared.image = true;
+    const baselineSetModels = captured.requests.filter(
+      (request) => request.type === "set_model",
+    ).length;
+    captured.requestHandler = async (command) =>
+      command.type === "get_state" && captured.runtimeModel === "model-b"
+        ? { success: true, data: { model: { provider: "native-route-lost", id: "model-b" } } }
+        : command.type === "set_model"
+          ? { success: false, error: 'Model "model-b" not found for provider "native-route-lost"' }
+          : { success: true, data: {} };
+    await expect(
+      handle.setModel!("model-b", { providerId: "native-route-lost" }),
+    ).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
+    expect(captured.closes).toBe(1);
+    expect(
+      captured.requests.filter((request) => request.type === "set_model").length,
+    ).toBeGreaterThan(baselineSetModels);
+    await handle.close();
+  });
+
+  it("replays the previous route but lands on the new model when switching models", async () => {
+    // 非 no-op 切模：对账在 set_model 之前跑，重放恢复的是**旧**路由，随后切模再指向目标 ——
+    // 最终必须落在目标模型上，不能因为对账的重放把切模吃掉。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-switch-route",
+              name: "Native Switch Route",
+              baseUrl: "http://switch-route.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"] },
+                { id: "model-b", input: ["text"] },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-switch-route" && modelId === "model-b" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-switch-lands-on-target",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-switch-route",
+    });
+
+    // 目标模型 model-b 的声明与会话快照不一致 → 切模路径里先对账后切模。
+    declared.image = true;
+    captured.requests.length = 0;
+    await handle.setModel!("model-b", { providerId: "native-switch-route" });
+    expect(captured.runtimeModel).toBe("model-b");
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("switch_session");
+    expect(requestTypes.lastIndexOf("set_model")).toBeGreaterThan(
+      requestTypes.indexOf("switch_session"),
+    );
+    await handle.close();
+  });
+
   it("waits through Pi preflight compaction when accepting a prompt", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({ providers: [], env: {} })),

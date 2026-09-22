@@ -1,4 +1,5 @@
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { ModelCatalogOverrideLossError } from '../maker-host/model-catalog-override-store.js';
 /**
  * provider:* IPC handlers。
  *
@@ -1977,6 +1978,10 @@ export function registerProviderHandlers(
               modelId: target.modelId,
               error: err instanceof Error ? err.message : String(err),
             });
+            // 手改文件里有本版本无法保留的条目：把指引带给用户（可执行），而不是「保存失败」。
+            if (err instanceof ModelCatalogOverrideLossError) {
+              throwIpcError('PRECONDITION_FAILED', err.message);
+            }
             throwIpcError('INTERNAL', 'failed to persist model catalog image input override');
           }
           // 写盘不会自动生效：先重读 override 注入活动目录，再刷新目录并广播

@@ -27,12 +27,16 @@ export function useModelCatalogImageInput(target: ModelCatalogImageInputTarget |
   const generation = useRef(0);
   /** 在途写入数：广播触发的回读可能在写盘前拿到旧值，不得顶掉写入自己的回声。 */
   const writesInFlight = useRef(0);
+  /** 在途写入的目标 key：只有在途写与本次读取是同一个 target 时才跳过回读（见下）。 */
+  const writesInFlightKey = useRef<string | null>(null);
 
   const run = useCallback(
     async (write?: { value: boolean | null }): Promise<boolean> => {
       // 写在途时不发 GET：广播（含本次写入自己触发的那次）可能在写盘前到达，其结果比写入的
       // 回声旧，却会顶掉 generation 使写入结果被丢弃 —— UI 会停在旧值而写其实已经成功。
-      if (!write && writesInFlight.current > 0) return true;
+      // 只对**同一个 target**的在途写生效：否则刚写 A 行就打开 B 行时，B 的回读会被跳过、
+      // 界面永远停在 loading（显示成「跟随供应商」且点击无效）。
+      if (!write && writesInFlight.current > 0 && writesInFlightKey.current === key) return true;
       const request = ++generation.current;
       if (!stableTarget) {
         setState({ ...EMPTY, key, loading: false, saving: false, error: false });
@@ -49,7 +53,10 @@ export function useModelCatalogImageInput(target: ModelCatalogImageInputTarget |
         saving: write !== undefined,
         error: false,
       }));
-      if (write) writesInFlight.current += 1;
+      if (write) {
+        writesInFlight.current += 1;
+        writesInFlightKey.current = key;
+      }
       try {
         const view = write
           ? await window.electronAPI.maker.setModelCatalogImageInput(stableTarget, write.value)
@@ -74,7 +81,10 @@ export function useModelCatalogImageInput(target: ModelCatalogImageInputTarget |
         }
         return false;
       } finally {
-        if (write) writesInFlight.current -= 1;
+        if (write) {
+          writesInFlight.current -= 1;
+          if (writesInFlight.current <= 0) writesInFlightKey.current = null;
+        }
       }
     },
     [stableTarget, key],

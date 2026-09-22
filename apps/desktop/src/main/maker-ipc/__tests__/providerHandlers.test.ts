@@ -3429,6 +3429,26 @@ describe('model catalog image input handlers', () => {
     expect(deps.writeModelCatalogImageInput).not.toHaveBeenCalled();
   });
 
+  it('surfaces the "refuse rather than drop hand-edited entries" guard as an actionable precondition', async () => {
+    // 写入会静默丢掉手改条目时 store 拒绝落盘；不能退化成笼统的「保存失败」——用户需要知道
+    // 该去修哪个文件。PRECONDITION_FAILED 携带 store 给出的指引。
+    const { ModelCatalogOverrideLossError } = await import(
+      '../../maker-host/model-catalog-override-store.js'
+    );
+    const harness = new IpcHarness();
+    const deps = imageDeps({
+      writeModelCatalogImageInput: vi.fn(async () => {
+        throw new ModelCatalogOverrideLossError('请先修正 model-catalog-overrides.json');
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, { ...target, value: true }),
+    ).rejects.toThrow(/PRECONDITION_FAILED.*请先修正/);
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
   it('reads without a catalog membership check so stale overrides stay visible and clearable', async () => {
     const harness = new IpcHarness();
     const deps = imageDeps({ listProviders: async () => [] });

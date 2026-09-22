@@ -135,6 +135,38 @@ describe('model catalog image input override', () => {
     expect(hook.result.current).toMatchObject({ value: true, isCustomized: true, saving: false });
   });
 
+  it('still reads a different model while a write for another row is in flight', async () => {
+    // 写在途时跳过回读只对同一个 target 生效：否则写 A 行后立刻打开 B 行，B 的回读会被跳过、
+    // 界面永远停在 loading（显示成「跟随供应商」且点击无效）。
+    const pendingWrite = deferred<ReturnType<typeof view>>();
+    get.mockResolvedValue(view(null));
+    set.mockReturnValue(pendingWrite.promise);
+    const hook = renderHook(({ modelId }) => useModelCatalogImageInput({ ...target, modelId }), {
+      initialProps: { modelId: 'mimo-v2.6-flash' },
+    });
+    await act(async () => {});
+    act(() => {
+      void hook.result.current.setValue(true);
+    });
+
+    get.mockResolvedValue(view(false));
+    await act(async () => {
+      hook.rerender({ modelId: 'gpt-6' });
+    });
+    // 新行的读取没有被在途写吞掉，拿到的是自己的值。
+    expect(get).toHaveBeenLastCalledWith({ ...target, modelId: 'gpt-6' });
+    expect(hook.result.current).toMatchObject({
+      value: false,
+      isCustomized: true,
+      loading: false,
+    });
+
+    await act(async () => {
+      pendingWrite.resolve(view(true));
+    });
+    hook.unmount();
+  });
+
   it('drops a response that lands after the data owner changed', async () => {
     const pending = deferred<ReturnType<typeof view>>();
     get.mockReturnValue(pending.promise);

@@ -23,6 +23,7 @@ vi.mock('../../appSessionState.js', () => ({
 
 const {
   MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
+  ModelCatalogOverrideLossError,
   readModelCatalogOverrides,
   readModelCatalogImageInput,
   setModelCatalogImageInput,
@@ -149,6 +150,10 @@ describe('model-catalog-override-store / 图片输入能力声明', () => {
     });
 
     await expect(setModelCatalogImageInput(target, true)).rejects.toThrow(/无法保留/);
+    // 独立错误类型让 IPC 层能把它映射成可执行的 PRECONDITION_FAILED（而不是笼统的 INTERNAL）。
+    await expect(setModelCatalogImageInput(target, true)).rejects.toBeInstanceOf(
+      ModelCatalogOverrideLossError,
+    );
     // 文件没被动过：那条手改还在（修好后下一次写入自动恢复）。
     const raw = JSON.parse(
       fs.readFileSync(path.join(tmpDir, owner.current, 'model-catalog-overrides.json'), 'utf8'),

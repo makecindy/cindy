@@ -41,6 +41,14 @@ const log = desktopMakerLogger.child('model-catalog-overrides');
 /** main 同步读取的硬上限；目录 override 正常只有数 KB。 */
 export const MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES = 1_048_576;
 
+/**
+ * 写入会丢掉手改条目时抛出（写在锁内、不落盘）。用独立类型而不是普通 Error，
+ * 让 IPC 层能把它映射成可执行的 PRECONDITION_FAILED（带指引），而不是笼统的 INTERNAL。
+ */
+export class ModelCatalogOverrideLossError extends Error {
+  override readonly name = 'ModelCatalogOverrideLossError';
+}
+
 function normalize(raw: unknown): ModelCatalogOverrides {
   const { overrides, invalid } = sanitizeModelCatalogOverrides(raw);
   if (invalid.length > 0) {
@@ -139,7 +147,7 @@ function assertNoPatchEntriesWouldBeLost(): void {
     (entry) => entry === 'patches' || entry.startsWith('patches:'),
   );
   if (lostKeys.length > 0 || patchSectionInvalid.length > 0) {
-    throw new Error(
+    throw new ModelCatalogOverrideLossError(
       'model-catalog-overrides.json 里有本版本无法保留的 patches 条目' +
         `（${[...new Set([...lostKeys, ...patchSectionInvalid])].slice(0, 5).join(', ')}）；` +
         '请先修正该文件再在设置里改动图片输入能力，以免手改内容被静默丢弃。',

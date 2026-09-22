@@ -58,7 +58,10 @@ import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
-import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
+import {
+  isPiImageCapabilityRefreshFailedError,
+  isPiImageInputUnsupportedError,
+} from '../../../shared/inputError';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 interface ErrorBannerProps {
@@ -354,6 +357,9 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexResumeNotReady');
   } else if (isPiImageInputUnsupportedError(error)) {
     displayError = t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
+  } else if (isPiImageCapabilityRefreshFailedError(error)) {
+    // 能力声明已写入目录、但子进程还没加载（回合在跑或重载被拒）：可重试，不是模型不支持。
+    displayError = t('ipcError.PI_IMAGE_CAPABILITY_REFRESH_FAILED');
   } else if (isCredentialSwitchBusy) {
     displayError = t('chat.errorBanner.credentialSwitchBusy');
   } else if (isCodexAppServerForceRetired) {
