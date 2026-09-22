@@ -240,14 +240,15 @@ export function ContextWindowBudgetChip({
       ? modelLimitView.limit
       : null);
 
-  // 有效默认档 = min(路由默认, 更紧的上限)：模型级上限比目录默认更紧时（用户设过「上下文上限」），
-  // main 把「跟随默认」也收敛到上限；这里显示目录默认值会让用户看到一个点不到的真值。
+  // 有效默认档 = 「跟随默认」在运行期真正得到的窗口。main 的 resolveConfiguredContextWindow 在
+  // **没有任务预算**时用的就是模型级「上下文上限」（它同时是用户强行解开路由配置的逃生口，
+  // 刻意不按目录夹），只有它为空时才落到目录默认窗口。所以这里不能用 min(默认, 上限)：
+  // 自定义连接未声明窗口时目录默认只有 200K 兜底，而会话实际跑在模型级上限 1.05M 上，
+  // 用 min 会让 chip 报 200K、与圆环和运行期打架（用户实测报障）。
   const ceiling = [maxWindow, modelLimit]
     .filter((value): value is number => typeof value === 'number' && value > 0)
     .reduce<number | null>((min, value) => (min === null || value < min ? value : min), null);
-  const effectiveDefaultWindow = defaultWindow !== null && ceiling !== null
-    ? Math.min(defaultWindow, ceiling)
-    : defaultWindow;
+  const effectiveDefaultWindow = modelLimit ?? defaultWindow;
 
   // 已存值可能来自手改偏好文件（写入口拦不住已存在的数据）：先按同一口径归一化，
   // 否则会在选项里补出一个「点了必失败」的档（update 入口对非整数直接拒绝）。

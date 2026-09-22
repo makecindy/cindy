@@ -302,6 +302,27 @@ function chipText(): string {
     });
   });
 
+  it('uses the model-level limit as the effective default when the catalog only has a fallback window', async () => {
+    // 自定义连接（未声明窗口）的真实形态：目录 working default 只有兜底 200K，用户把模型级
+    // 「上下文上限」设成了 1.05M。运行期窗口 = 模型级上限（main 的 resolveConfiguredContextWindow
+    // 在无任务预算时就用它，且刻意不按目录夹），所以 chip 的当前档与档位基准都必须是 1.05M ——
+    // 否则会跟圆环报的窗口打架（用户实测报障：圆环 1.0M / chip 200K）。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: null,
+      modelLimit: 1_048_000,
+    })));
+
+    // providers=null：模拟真实形态里 renderer 侧也拿不到该路由的目录上限（只有 main 的权威边界）。
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    const defaultOption = options.find((el) => el.getAttribute('data-token') === '1048000');
+    expect(defaultOption?.textContent).toContain('optionDefault');
+    await waitFor(() => {
+      expect(chipText()).toContain('optionPercent#{"percent":100}');
+    });
+  });
+
   it('lets a post-save authoritative answer override the optimistic tier', async () => {
     // 别的控制端改过值 / 写被夹紧 → 保存后回来的权威值与本机乐观值不同：以权威值收口。
     let calls = 0;
