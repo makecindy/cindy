@@ -281,8 +281,11 @@ export function ModelAdvancedDrawer({
   // 'inherit' = 删除本机 override，回到跟随供应商。失败由 hook 回读真值，这里只负责提示。
   const setImageInput = async (next: string) => {
     const value = next === 'inherit' ? null : next === 'true';
-    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。
-    if (value === null ? !imageInput.isCustomized : imageInput.isCustomized && value === imageInput.value) {
+    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。但各引擎键分叉时
+    // 必须放行 —— 否则“重选当前项”被 no-op 挡掉，分叉永远修不掉（UI 显示一侧、运行期读另一侧）。
+    const already =
+      value === null ? !imageInput.isCustomized : imageInput.isCustomized && value === imageInput.value;
+    if (already && !imageInput.diverged) {
       return;
     }
     const persisted = await imageInput.setValue(value);

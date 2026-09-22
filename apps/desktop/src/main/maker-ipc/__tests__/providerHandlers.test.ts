@@ -3449,6 +3449,45 @@ describe('model catalog image input handlers', () => {
     expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 
+  it('reports a split declaration and shows the runtime-effective (Pi) value', async () => {
+    // 存量数据：手工改文件或旧版单键写入可能让同一行两个引擎键各存一个值。展示值必须取运行期
+    // 真正消费该能力的 Pi 那一侧，否则 UI 显示“支持”而 Pi 实际拒收；同时用 diverged 标出分叉，
+    // 让抽屉允许“重选当前项”把两个键写回一致。
+    const harness = new IpcHarness();
+    const piTarget = { providerId: 'openai', agent: 'pi' as const, modelId: 'chatgpt/gpt-5.6-sol' };
+    const codexTarget = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-5.6-sol' };
+    const deps = imageDeps({
+      readModelCatalogImageInput: vi.fn((candidate) =>
+        candidate.modelId === 'chatgpt/gpt-5.6-sol'
+          ? { value: true, isCustomized: true }
+          : { value: false, isCustomized: true },
+      ),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_GET, {
+        ...codexTarget,
+        relatedTargets: [piTarget],
+      }),
+    ).resolves.toEqual({ value: true, isCustomized: true, diverged: true });
+  });
+
+  it('does not flag divergence when every engine key agrees', async () => {
+    const harness = new IpcHarness();
+    const deps = imageDeps({
+      readModelCatalogImageInput: vi.fn(() => ({ value: true, isCustomized: true })),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_GET, {
+        ...target,
+        relatedTargets: [{ ...target, agent: 'codex' as const }],
+      }),
+    ).resolves.toEqual({ value: true, isCustomized: true });
+  });
+
   it('reads without a catalog membership check so stale overrides stay visible and clearable', async () => {
     const harness = new IpcHarness();
     const deps = imageDeps({ listProviders: async () => [] });

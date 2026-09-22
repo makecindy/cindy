@@ -20,4 +20,10 @@ export interface ModelCatalogImageInputTarget extends ModelPriceOverrideTarget {
 export interface ModelCatalogImageInputView {
   value: boolean | null;
   isCustomized: boolean;
+  /**
+   * 该行各引擎的声明**不一致**(手工改文件/旧版单键写入留下的存量数据)。展示值取运行期
+   * 真正消费该能力的引擎(Pi)那一侧，但 UI 必须允许用户“重选当前项”把分裂写回一致 ——
+   * 否则同值 no-op 会让分叉永远修不掉。
+   */
+  diverged?: boolean;
 }

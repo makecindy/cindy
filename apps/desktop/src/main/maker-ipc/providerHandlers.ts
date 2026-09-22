@@ -1922,9 +1922,20 @@ export function registerProviderHandlers(
   const readCatalogImageInputTargets = (targets: readonly ModelPriceOverrideTarget[]) => {
     const { read } = requireCatalogImageInputDeps();
     const views = targets.map((target) => read(target));
+    // 展示值优先取运行期真正消费该能力的引擎（Pi）那一侧：它才是“会不会真的收图”的答案。
+    // 仅当各引擎声明不一致（手改文件/旧版单键写入的存量数据）时两者才会不同。
+    const piIndex = targets.findIndex((target) => target.agent === 'pi');
+    const ordered = piIndex >= 0 ? [views[piIndex]!, ...views.filter((_, i) => i !== piIndex)] : views;
+    const firstNonNull = ordered.find((view) => view.value !== null)?.value ?? null;
+    const head = views[0]!;
     return {
-      value: views.find((view) => view.value !== null)?.value ?? null,
+      value: firstNonNull,
       isCustomized: views.some((view) => view.isCustomized),
+      // 任一引擎与首个引擎的 (value, isCustomized) 不同 = 分叉（含“一边声明、一边跟随目录”）。
+      // UI 据此允许“重选当前项”把各引擎键写回一致。
+      ...(views.some((view) => view.value !== head.value || view.isCustomized !== head.isCustomized)
+        ? { diverged: true }
+        : {}),
     };
   };
   // value 只在 SET 上校验：GET 请求本来就没有这个字段。

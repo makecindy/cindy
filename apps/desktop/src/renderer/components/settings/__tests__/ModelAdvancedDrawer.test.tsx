@@ -35,6 +35,7 @@ const imageInputMocks = vi.hoisted(() => ({
   target: vi.fn(),
   value: null as boolean | null,
   isCustomized: false,
+  diverged: false,
   saving: false,
   loading: false,
 }));
@@ -44,6 +45,7 @@ vi.mock('@/hooks/useModelCatalogImageInput', () => ({
     return {
       value: imageInputMocks.value,
       isCustomized: imageInputMocks.isCustomized,
+      diverged: imageInputMocks.diverged,
       loading: imageInputMocks.loading,
       saving: imageInputMocks.saving,
       error: false,
@@ -122,6 +124,7 @@ beforeEach(() => {
   mocks.limit = null;
   imageInputMocks.value = null;
   imageInputMocks.isCustomized = false;
+  imageInputMocks.diverged = false;
   imageInputMocks.saving = false;
   imageInputMocks.loading = false;
   vi.mocked(getProviderModelEffort).mockReset();
@@ -319,6 +322,41 @@ describe('model advanced editor', () => {
       }),
     );
     await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(null));
+  });
+
+  it('allows re-selecting the current value to repair a split across engine keys', async () => {
+    // 各引擎键分叉（手工改文件/旧版单键写入的存量数据）时，同值 no-op 会把“重选当前项”
+    // 挡掉 —— 分叉永远修不掉，UI 显示一侧而运行期读另一侧。diverged 时必须放行写入。
+    imageInputMocks.value = true;
+    imageInputMocks.isCustomized = true;
+    imageInputMocks.diverged = true;
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
+  });
+
+  it('skips the write when the user picks the state it is already in', async () => {
+    imageInputMocks.value = true;
+    imageInputMocks.isCustomized = true;
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    expect(imageInputMocks.setValue).not.toHaveBeenCalled();
   });
 
   it('keeps the control usable and visually stable while a provider refresh refetches', () => {
