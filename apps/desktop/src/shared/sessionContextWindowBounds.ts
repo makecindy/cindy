@@ -40,6 +40,16 @@ export interface SessionContextWindowBounds {
    * `resolveVerifiedContextWindow` / `declaredMax` 里做过一次，重推必与运行期分叉。
    */
   defaultEffectiveWindow: number | null;
+  /**
+   * main 实际会施加的**物理上限**（= `resolveVerifiedContextWindow` 里的
+   * `contextWindowMax ?? contextWindow`，仅当路由唯一且 `contextWindowVerified === true` 时有值；
+   * 未核实路由没有这道夹，返回 null）。
+   *
+   * 档位基准不能只看目录声明的 `maxWindow`：已核实但**未声明** `contextWindowMax` 的路由，
+   * 运行期照样被 `contextWindow` 夹住；renderer 不知道 `contextWindowVerified`，所以这个值由
+   * main 算好下发，避免档位表给出运行期根本达不到的档。
+   */
+  maxEffectiveWindow: number | null;
 }
 
 /** 被控端/主进程返回值的形状收敛：缺字段或非法值一律按「未知」处理（不猜上限）。 */
@@ -61,6 +71,7 @@ export function normalizeSessionContextWindowBounds(
     budget: positive(raw.budget),
     budgetCustomized: raw.budgetCustomized === true,
     defaultEffectiveWindow: positive(raw.defaultEffectiveWindow),
+    maxEffectiveWindow: positive(raw.maxEffectiveWindow),
   };
 }
 

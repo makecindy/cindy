@@ -245,7 +245,10 @@ export function ContextWindowBudgetChip({
   // 刻意不按目录夹），只有它为空时才落到目录默认窗口。所以这里不能用 min(默认, 上限)：
   // 自定义连接未声明窗口时目录默认只有 200K 兜底，而会话实际跑在模型级上限 1.05M 上，
   // 用 min 会让 chip 报 200K、与圆环和运行期打架（用户实测报障）。
-  const ceiling = [maxWindow, modelLimit]
+  // 物理上限以 main 下发的为准（已核实路由即使没声明 contextWindowMax 也会被 contextWindow 夹住）；
+  // 老被控端不返回时退回目录声明的 maxWindow。
+  const effectiveMaxWindow = authoritativeBounds?.maxEffectiveWindow ?? maxWindow;
+  const ceiling = [effectiveMaxWindow, modelLimit]
     .filter((value): value is number => typeof value === 'number' && value > 0)
     .reduce<number | null>((min, value) => (min === null || value < min ? value : min), null);
   // 「模型默认」档的真实含义 = 清掉任务预算后跟随默认会得到的窗口，由 main / 被控端按同一套
@@ -298,7 +301,7 @@ export function ContextWindowBudgetChip({
     if (effectiveDefaultWindow === null) return [];
     const base = buildContextWindowBudgetOptions({
       defaultWindow: effectiveDefaultWindow,
-      maxWindow,
+      maxWindow: effectiveMaxWindow,
       modelLimit,
     });
     // 已保存的预算可能不在当前档位集合里（目录默认值变过、或它来自模型级上限口径）。
@@ -315,7 +318,7 @@ export function ContextWindowBudgetChip({
     return [...base, { tokens: current, kind: 'current' as const }].sort(
       (a, b) => a.tokens - b.tokens,
     );
-  }, [storedBudget, effectiveDefaultWindow, maxWindow, modelLimit, ceiling]);
+  }, [storedBudget, effectiveDefaultWindow, effectiveMaxWindow, modelLimit, ceiling]);
 
   useEffect(() => {
     if (options.length === 0) return;

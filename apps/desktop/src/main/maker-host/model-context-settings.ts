@@ -117,6 +117,11 @@ export function resolveSessionContextWindowBounds(input: {
     defaultEffectiveWindow: resolveConfiguredContextWindow(
       input.catalog, input.agent, source, input.modelId, null,
     ),
+    // main 会施加的物理上限。用同一支 resolveVerifiedContextWindow 传一个极大的预算取回它的
+    // `contextWindowMax ?? contextWindow`（不为任何值做第二套推导）；路由不唯一/未核实 → null。
+    maxEffectiveWindow: resolveVerifiedContextWindow(
+      input.catalog, input.agent, source, input.modelId, Number.MAX_SAFE_INTEGER,
+    ),
     modelLimit: typeof modelLimit === 'number' && Number.isFinite(modelLimit) && modelLimit > 0
       ? modelLimit : null,
     budget,

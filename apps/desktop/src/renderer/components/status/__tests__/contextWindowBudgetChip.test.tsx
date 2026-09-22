@@ -148,7 +148,7 @@ function triggerLabel(chip: Element | null): string {
 function boundsView(
   over: Partial<
     Record<
-      "budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit" | "defaultEffectiveWindow",
+      "budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit" | "defaultEffectiveWindow" | "maxEffectiveWindow",
       unknown
     >
   > = {},
@@ -161,6 +161,7 @@ function boundsView(
     budget: null,
     budgetCustomized: false,
     defaultEffectiveWindow: null,
+    maxEffectiveWindow: null,
     ...over,
   };
 }
@@ -373,6 +374,26 @@ function chipText(): string {
     expect(tierTokens()).toContain('500000');
     expect(options.find((el) => el.getAttribute('data-token') === '500000')?.textContent)
       .not.toContain('optionDefault');
+  });
+
+  it('caps the ladder by the physical max main applies even when the catalog omits contextWindowMax', async () => {
+    // 已核实但没声明 contextWindowMax 的路由：main 会用 contextWindow 当物理上限
+    // （resolveVerifiedContextWindow 的 contextWindowMax ?? contextWindow）。renderer 看不到
+    // contextWindowVerified，所以基准必须用 main 下发的 maxEffectiveWindow，否则档位表会给出
+    // 运行期被夹回 200K 的 800K 档。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: null,
+      modelLimit: 800_000,
+      maxEffectiveWindow: 200_000,
+      defaultEffectiveWindow: 200_000,
+    })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    expect(tierTokens()).not.toContain('800000');
+    expect(options.find((el) => el.textContent?.includes('optionDefault'))?.getAttribute('data-token'))
+      .toBe('200000');
   });
 
   it('lets a post-save authoritative answer override the optimistic tier', async () => {
