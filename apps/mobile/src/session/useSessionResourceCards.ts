@@ -3,6 +3,7 @@ import { Alert, AppState } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import {
+  isSharedTaskPeer,
   resolveRemoteText,
   type RemoteCollectionDescriptor,
   type RemoteResource,
@@ -74,7 +75,9 @@ export function useSessionResourceCards(
   const request = useRef<{ binding: string } | null>(null);
   useFocusEffect(
     useCallback(() => {
-      if (!deviceId || !sessionId || !source || status !== 'online') return;
+      // These cards discover device-wide workflows. A shared guest uses the
+      // existing single-task history/input APIs, never the host resource catalog.
+      if (!deviceId || isSharedTaskPeer(deviceId) || !sessionId || !source || status !== 'online') return;
       let disposed = false;
       let reading = false;
       let dirty = false;

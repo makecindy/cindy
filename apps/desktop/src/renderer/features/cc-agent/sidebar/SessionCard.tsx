@@ -156,12 +156,14 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   variant = 'card',
   isFirst = false,
   hideBottomDivider = false,
+  navigationOnly = false,
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
-  const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
+  const ordinalBadge = useSessionOrdinalBadge(session.id);
+  const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
   // list 变体与文字模式共用右侧状态优先级:
@@ -223,7 +225,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const isArchived = session.status === 'archived';
-  const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
+  const canQuickArchive = !navigationOnly && !isArchived && !isEmpty && !remoteWritesBlocked;
   // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;
   // card + 置顶才用稳定任务摘要,完成后由 summary 更新。
   const bodyPreview = resolveSessionCardBody({
@@ -354,7 +356,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
-  const splitDragEnabled = isSplitGroupDragSource({
+  const splitDragEnabled = !navigationOnly && isSplitGroupDragSource({
     editing: isEditing,
     orcaRole: session.orcaRole,
     ...dragContainerState,
@@ -411,7 +413,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     (e: React.MouseEvent) => {
       // 已在编辑态时不重复进入:编辑器内部元素漏拦的 dblclick 冒泡到这里会
       // setEditValue 重置草稿(与 handleClick 的 isEditing 守卫对称)。
-      if (isEditing) return;
+      if (isEditing || navigationOnly) return;
       e.stopPropagation();
       e.preventDefault();
       if (remoteWritesBlocked) {
@@ -422,12 +424,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       committedRef.current = false;
       setIsEditing(true);
     },
-    [displayTitle, isEditing, remoteWritesBlocked, t],
+    [displayTitle, isEditing, navigationOnly, remoteWritesBlocked, t],
   );
 
   useEffect(() => {
-    if (isActive) scrollIntoNearestView(cardRef.current);
-  }, [isActive]);
+    if (isActive && !navigationOnly) scrollIntoNearestView(cardRef.current);
+  }, [isActive, navigationOnly]);
 
   // archive 两步确认生命周期（redesign 稿：3s 超时 + 点外面撤回）
   useEffect(() => {
@@ -629,7 +631,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       data-session-id={session.id}
       // 多选范围选取靠 getVisibleSidebarSessionIds 扫 [data-sidebar-session-row][data-session-id];
       // 卡片也打这个标记,shift 范围选才能把卡片纳入"可见行"。
-      data-sidebar-session-row="true"
+      data-sidebar-session-row={navigationOnly ? undefined : 'true'}
+      data-sidebar-navigation-row={navigationOnly ? 'true' : undefined}
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
@@ -649,7 +652,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
       }}
       onPointerDown={(e) => {
-        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+        if (!navigationOnly && shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
           makerChatStore.ensureInitialMessages(session.id);
         }
       }}
@@ -671,6 +674,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         }
         e.preventDefault();
         e.stopPropagation();
+        if (navigationOnly) return;
         prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
@@ -816,6 +820,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
+                navigationOnly={navigationOnly}
                 pieces={cardInfoPieces}
                 prRef={cardInfoPrRef}
                 worktree={cardInfoWorktree ?? undefined}
@@ -873,7 +878,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         <div className="relative flex h-full flex-col px-[10px] pt-[8px] pb-[8px]">
           {/* 右上角 hover 操作钮(More + Archive/Undo);archivePending 时换成红色确认胶囊。
             时间在右下角(见下),操作钮放右上角空位、不和时间挤在一起。 */}
-          {!isEditing && !archivePending && (
+          {!navigationOnly && !isEditing && !archivePending && (
             <div
               className={cn(
                 'absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
@@ -1060,7 +1065,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       )}
 
       {/* 右键菜单——与 SessionItem 同款 coordinate-anchored DropdownMenu */}
-      {!isEditing && (
+      {!navigationOnly && !isEditing && (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {
@@ -1203,6 +1208,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
  *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
+  navigationOnly = false,
   pieces,
   prRef,
   worktree,
@@ -1220,6 +1226,7 @@ function TimeActionsSlot({
   yieldToOrdinalBadge = false,
   ordinalBadgeLabel,
 }: {
+  navigationOnly?: boolean;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
   worktree?: SessionWorktreeInfo;
@@ -1252,7 +1259,7 @@ function TimeActionsSlot({
           className={cn(
             // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
             'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
-            !archivePending &&
+            !navigationOnly && !archivePending &&
               'group-hover/card:opacity-0 group-hover/card:w-0 group-hover/card:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
             (menuOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
             // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
@@ -1305,7 +1312,7 @@ function TimeActionsSlot({
           </button>
         )}
 
-        {!archivePending && (
+        {!navigationOnly && !archivePending && (
           <>
             <div
               aria-hidden

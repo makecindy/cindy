@@ -90,6 +90,7 @@ import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { getLearnController } from '../learn-host/index.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
+import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 
 export interface DesktopMcpProvidersDeps {
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
@@ -765,6 +766,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         save: (params) => saveBotSkillForSession(params),
         list: (params) => listBotSkillsForSession(params),
       },
+      skillhub: createSkillhubAgentTools({
+        isCurrentSession: (context) => !!context.sessionId
+          && deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) === true,
+        authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
+      }),
       history: {
         resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {
           try {

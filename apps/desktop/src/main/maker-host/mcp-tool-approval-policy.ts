@@ -237,14 +237,17 @@ export function getDesktopMcpToolApprovalPolicy(
   if (canAutoApproveCindyArtGhostCall(context)) {
     return 'auto-approve';
   }
-  // Rebinding another task's workspace delegates its execution root. Review
-  // the specific move, never reuse the trusted helper server shortcut/grant.
+  // Rebinding a task's workspace delegates its execution root; publishing a Skill
+  // uploads local files under the signed-in account. Review each action instead
+  // of reusing the trusted helper server shortcut/grant. Session modes still apply.
   if (serverName === 'cindy_helper') {
-    if (toolName === 'move_session') return 'prompt-each-time';
+    if (toolName === 'move_session' || toolName === 'publish_skill') return 'prompt-each-time';
     if (!toolName || toolName === 'call_tool') {
       const params = readJsonObject(toolParams);
       const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
-      if (!innerName || innerName === 'move_session') return 'prompt-each-time';
+      if (!innerName || innerName === 'move_session' || innerName === 'publish_skill') {
+        return 'prompt-each-time';
+      }
     }
   }
   // Choosing a new Worker root delegates filesystem access. Do not let the

@@ -47,9 +47,13 @@ export async function withAccessRevokedHandling<T>(
   deviceId: string,
   operation: () => Promise<T>,
 ): Promise<T> {
+  const revocationToken = revokedDevicesStore.getRevocationToken(deviceId);
   try {
     const result = await operation();
-    clearDeviceAccessRevoked(deviceId);
+    // A response started before a new revocation cannot restore access.
+    if (revokedDevicesStore.getRevocationToken(deviceId) === revocationToken) {
+      clearDeviceAccessRevoked(deviceId);
+    }
     return result;
   } catch (err) {
     if (isAccessRevokedError(err)) markDeviceAccessRevoked(deviceId);

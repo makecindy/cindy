@@ -3,6 +3,25 @@ import { piSupportedEfforts } from "../../packages/model-providers/src/piThinkin
 /** Pi is an import source. Persist Cindy's public field names, with transport-specific data
  * confined to execution.pi. Never copy credentials or arbitrary headers into a public catalog. */
 export function toCindyProviderModel(row) {
+  // Exact known routes only: Gemini 3.8 Flash rejects minimal. Keep the correction
+  // in the import path so both online refreshes and bundle imports retain it.
+  // https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash
+  const gemini38Ids = {
+    google: "gemini-3.8-flash",
+    "google-vertex": "gemini-3.8-flash",
+    opencode: "gemini-3.8-flash",
+    "github-copilot": "gemini-3.8-flash",
+    "vercel-ai-gateway": "google/gemini-3.8-flash",
+  };
+  if (
+    Object.hasOwn(gemini38Ids, row.provider) &&
+    gemini38Ids[row.provider] === row.id
+  ) {
+    row = {
+      ...row,
+      thinkingLevelMap: { ...row.thinkingLevelMap, minimal: null },
+    };
+  }
   const efforts = piSupportedEfforts(row);
   const { id, provider, baseUrl, api } = row;
   if (

@@ -95,9 +95,12 @@ import {
   hasRemoteBotSessionLookup, setRemoteBotSessionLookup,
 } from './remoteBotSessionBoundary.js';
 import { getControllerPlatform } from './controllerPlatform';
-import { runDeviceLinkInvokeContext } from './invoke-context';
+import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from './invoke-context';
+import { isSharedTaskPeer, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
+import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
+import { refreshSharedTaskPeer } from './sharedTaskDispatch.js';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
@@ -184,6 +187,10 @@ function sendBotCheckedPush(
   dst: string, channel: string, payload: unknown, send: (payload: unknown) => void,
   failed: (error: unknown) => void,
 ): void | Promise<void> {
+  const sharedTaskFence = captureSharedTaskPush(dst, channel, payload);
+  if (!sharedTaskFence) return;
+  const deliver = send;
+  send = (projected) => { if (sharedTaskFence()) deliver(projected); };
   if (!hasRemoteBotSessionLookup()) { send(payload); return; }
   let size: number;
   try { size = byteLength(JSON.stringify(payload)); } catch (error) { failed(error); return; }
@@ -925,7 +932,9 @@ function shouldAcquireRemoteInvokeBusyLease(
   payload: InvokePayload | undefined,
 ): boolean {
   if (!payload || typeof payload.channel !== 'string') return false;
-  if (!readDeviceLinkSettings().remoteControlEnabled) return false;
+  if (isSharedTaskPeer(src)) {
+    if (!captureSharedTaskPeer(src)?.isCurrent()) return false;
+  } else if (!readDeviceLinkSettings().remoteControlEnabled) return false;
   if (isControllerRevoked(src)) return false;
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) return false;
   if (
@@ -1546,6 +1555,7 @@ function stageSessionPatch(dst: string, payload: unknown, ownerStamp?: PushOwner
   const patch = payload as SessionPatch | null;
   if (!patch || typeof patch.sessionId !== 'string' || !patch.sessionId
     || !patch.patch || typeof patch.patch !== 'object' || Array.isArray(patch.patch)) return;
+  const subscriptionTopic = isSharedTaskPeer(dst) ? sharedTaskMetadataTopic('local-db:sessions:patched', patch)! : 'sessions';
   let stage = sessionPatchStages.get(dst);
   if (stage && !makerEventBatchOwnerStampEquals(stage.ownerStamp, ownerStamp)) {
     clearSessionPatchStage(dst);
@@ -1556,7 +1566,7 @@ function stageSessionPatch(dst: string, payload: unknown, ownerStamp?: PushOwner
     stage = new SessionPatchStage(ownerStamp,
       () => {
         if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
-          || !subscriptions.getControllersForTopic('sessions').includes(dst)) {
+          || !subscriptions.getControllersForTopic(subscriptionTopic).includes(dst)) {
           clearSessionPatchStage(dst);
           return false;
         }
@@ -1568,7 +1578,7 @@ function stageSessionPatch(dst: string, payload: unknown, ownerStamp?: PushOwner
         let failure: unknown;
         await sendBotCheckedPush(dst, 'local-db:sessions:patched', item, (projected) => {
           if (!isCurrent() || !broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
-            || !subscriptions.getControllersForTopic('sessions').includes(dst)) return;
+            || !subscriptions.getControllersForTopic(subscriptionTopic).includes(dst)) return;
           if (!activeClient || activeClient.canSendPush?.(dst) === false) {
             throw new DeviceLinkError('NOT_CONNECTED', 'peer mirror paused');
           }
@@ -1636,6 +1646,10 @@ function drainSessionActivityStage(dst: string, stage: SessionActivityStage): vo
       | undefined;
     if (!next) return;
     const [key, item] = next;
+    if (isSharedTaskPeer(dst) && !subscriptions.getControllersForTopic(`session:${key}`).includes(dst)) {
+      stage.queue.delete(key);
+      continue;
+    }
     try {
       let backpressured = false;
       sendBotCheckedPush(dst, SESSION_ACTIVITY_CHANNEL, item.payload, (projected) => {
@@ -1761,7 +1775,16 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   if (channel === MAKER_PUSH.INTERACTION_DISMISSED) {
     remotePayload = projectInteractionDismissedForRemote(remotePayload);
   }
-  const dsts = subscriptions.getControllersForTopic(topic);
+  const sharedTaskTopic = sharedTaskMetadataTopic(channel, remotePayload);
+  const targetsFor = (known: boolean): string[] => {
+    const lookup = known ? subscriptions.getKnownControllersForTopic : subscriptions.getControllersForTopic;
+    const ordinary = lookup(topic);
+    if (!sharedTaskTopic) return ordinary;
+    const shared = lookup(sharedTaskTopic).filter((dst) => isSharedTaskPeer(dst)
+      && captureSharedTaskPush(dst, channel, remotePayload)?.() === true);
+    return [...new Set([...ordinary, ...shared])];
+  };
+  const dsts = targetsFor(false);
   // The active registry describes peer topic intent, not whether this host can
   // currently write to the relay. During host-side reconnects sendPush is a
   // silent no-op, so route queueable pushes through the offline backlog instead.
@@ -1800,16 +1823,16 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   const historySessionId = readPushSessionId(remotePayload);
   const deferred = historySessionId !== null && isDeferredHistoryPush(channel, remotePayload,
     (id) => readHistoryToolName(historySessionId, id));
-  const offlineTargets = subscriptions
-    .getKnownControllersForTopic(topic)
+  const offlineTargets = targetsFor(true)
     .filter((dst) => !liveTargets.includes(dst));
   for (const dst of offlineTargets) {
     if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId)) continue;
-    if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel)) {
+    const sharedMetadata = isSharedTaskPeer(dst) && sharedTaskTopic !== null;
+    if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel) || sharedMetadata) {
       offlinePushQueue.enqueue(dst, {
         channel,
         payload: payloadFor(dst),
-        topic,
+        topic: sharedMetadata ? sharedTaskTopic : topic,
         ...(ownerStamp ? { ownerStamp } : {}),
       });
     }
@@ -1912,7 +1935,8 @@ function sendPushBestEffortAuthorized(
   const sessionId = readPushSessionId(payload);
   const markForRecovery = () => {
     if (sessionId && channel !== SESSION_SYNC_CHANNEL
-      && topicForPush(channel, payload) === `session:${sessionId}`) {
+      && (topicForPush(channel, payload) === `session:${sessionId}`
+        || isSharedTaskPeer(dst) && sharedTaskMetadataTopic(channel, payload) === `session:${sessionId}`)) {
       stageSessionSync(dst, sessionId, channel !== 'maker:event' || !isNonFinalTextPush(payload));
     }
   };
@@ -2293,11 +2317,13 @@ function isControllerRevoked(deviceId: string): boolean {
  */
 const LINK_ACCEPT_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
 const linkAcceptRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingSharedTaskOpens = new Map<string, object>();
 /** 已撤权控制端反复 open 时，closeLink 与 warn 的最小间隔。 */
 const REVOKED_LINK_OPEN_REJECT_INTERVAL_MS = 30_000;
 const revokedLinkOpenRejectAt = new Map<string, number>();
 
 function cancelLinkAcceptRetry(src: string): void {
+  pendingSharedTaskOpens.delete(src);
   const timer = linkAcceptRetryTimers.get(src);
   if (!timer) return;
   clearTimeout(timer);
@@ -2305,6 +2331,7 @@ function cancelLinkAcceptRetry(src: string): void {
 }
 
 function cancelAllLinkAcceptRetries(): void {
+  pendingSharedTaskOpens.clear();
   for (const src of [...linkAcceptRetryTimers.keys()]) cancelLinkAcceptRetry(src);
 }
 
@@ -2340,9 +2367,57 @@ function handleLinkOpen(
   requestId: string,
   payload: LinkOpenPayload | undefined,
   acceptAttempt = 0,
+  authorityReady = false,
 ): void {
   // 同 src 的新 link-open / 本轮执行顶掉遗留的 accept 重试(requestId 已过时)
   cancelLinkAcceptRetry(src);
+  // Cross-account logical peers never enter the same-account legacy wildcard.
+  if (isSharedTaskPeer(src)) {
+    if (!authorityReady) {
+      const attempt = {};
+      const epoch = client.getConnectionEpoch();
+      pendingSharedTaskOpens.set(src, attempt);
+      const current = () => pendingSharedTaskOpens.get(src) === attempt && activeClient === client &&
+        client.getConnectionEpoch() === epoch && client.getStatus() === 'online';
+      void refreshSharedTaskPeer(src).then(() => {
+        if (current()) {
+          handleLinkOpen(client, src, requestId, payload, acceptAttempt, true);
+        }
+      }).catch(() => {
+        // Authority fetch failure is transient, not a permanent user revocation.
+        if (current()) {
+          pendingSharedTaskOpens.delete(src);
+          client.closeLink(src, 'transport-timeout', 'inbound');
+        }
+      });
+      return;
+    }
+    const sharedTask = captureSharedTaskPeer(src);
+    if (!sharedTask) {
+      const failure = sharedTaskAccessFailure(src);
+      client.closeLink(src, !failure.ok && failure.error.code === 'ACCESS_REVOKED' ? 'revoked' : 'transport-timeout', 'inbound');
+      return;
+    }
+    if (!sanitizeControllerCapabilities(payload?.capabilities).includes(SHARED_TASK_CAPABILITY)) {
+      client.closeLink(src, 'revoked', 'inbound');
+      return;
+    }
+    try {
+      client.sendLinkAccept(src, requestId, {
+        appVersion: app.getVersion(), allowlistHash: computeAllowlistHash(),
+        capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, SHARED_TASK_CAPABILITY],
+      });
+    } catch {
+      scheduleLinkAcceptRetry(client, src, requestId, payload, acceptAttempt + 1);
+      return;
+    }
+    markControllerLinkActive(client, src);
+    acceptedLinkControllers.add(src);
+    topicSubscriptionControllers.add(src);
+    subscriptions.updateControllerMetadata(src, sharedTask.author.displayName, sanitizeControllerCapabilities(payload?.capabilities));
+    flushRemoteInvokeResultOutbox(src);
+    return;
+  }
   // 第二道开关校验(server 已是第一道)
   if (!readDeviceLinkSettings().remoteControlEnabled) {
     // server 正常不会转发到这里;真到了说明状态不一致,静默不 accept
@@ -2688,6 +2763,7 @@ function settleRemoteInvokeWithOrphanDeadline(
 }
 
 function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload | null {
+  if (isSharedTaskPeer(src)) return captureSharedTaskPeer(src) ? null : sharedTaskAccessFailure(src);
   if (!readDeviceLinkSettings().remoteControlEnabled) {
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
   }
@@ -2954,6 +3030,15 @@ function trySendInvokeResult(
   args?: unknown[],
   logFailure = true,
 ): { sent: true; result: InvokeResultPayload } | { sent: false; result: InvokeResultPayload } {
+  if (isSharedTaskPeer(src)) {
+    const sharedTask = captureSharedTaskPeer(src);
+    try {
+      if (!sharedTask || !channel) throw new Error('SharedTask unavailable');
+      assertSharedTaskInvoke(sharedTask, { channel, args: args ?? [] }, undefined, 'result');
+    } catch {
+      result = sharedTaskAccessFailure(src, sharedTask);
+    }
+  }
   let candidate = result;
   try {
     client.sendInvokeResult(src, requestId, candidate);
@@ -3470,8 +3555,17 @@ function isRemoteSubscriptionTopic(value: unknown): value is Topic {
 }
 
 function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeResultPayload {
+  if (isSharedTaskPeer(src)) {
+    const sharedTask = captureSharedTaskPeer(src);
+    try {
+      if (!sharedTask) throw new Error('SharedTask unavailable');
+      assertSharedTaskInvoke(sharedTask, payload);
+    } catch {
+      return sharedTaskAccessFailure(src, sharedTask);
+    }
+  }
   // 被控开关(server 已 gate invoke,这里二次兜底)
-  if (!readDeviceLinkSettings().remoteControlEnabled) {
+  if (!isSharedTaskPeer(src) && !readDeviceLinkSettings().remoteControlEnabled) {
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
   }
   // 逐设备黑名单:已撤销 → 拒绝订阅(控制端据此 ACCESS_REVOKED 标记「已撤销」+ 移除该设备)。
@@ -3562,6 +3656,25 @@ export async function runInvoke(
   payload: InvokePayload | undefined,
   timing = new RemoteInvokeTiming(),
 ): Promise<InvokeResultPayload> {
+  if (!isSharedTaskPeer(src)) return runAuthorizedInvoke(src, payload, timing);
+  const sharedTask = captureSharedTaskPeer(src);
+  try {
+    if (!sharedTask || !payload) throw new Error('SharedTask unavailable');
+    assertSharedTaskInvoke(sharedTask, payload);
+    const result = await runDeviceLinkInvokeContext(
+      { controllerDeviceId: src, channel: payload.channel, sharedTask, sharedTaskSetting: { admitted: false } },
+      () => runAuthorizedInvoke(src, payload, timing),
+    );
+    if (!sharedTask.isCurrent()) throw new Error('SharedTask revoked');
+    return result;
+  } catch {
+    return sharedTaskAccessFailure(src, sharedTask);
+  }
+}
+
+async function runAuthorizedInvoke(
+  src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
+): Promise<InvokeResultPayload> {
   return withRemoteDbAdmission(payload?.channel, () => executeRemoteInvoke(src, payload, timing));
 }
 
@@ -3570,7 +3683,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     return { ok: false, error: { code: 'INTERNAL', message: 'malformed invoke payload' } };
   }
   // 双层校验之一:被控开关
-  if (!readDeviceLinkSettings().remoteControlEnabled) {
+  if (!isSharedTaskPeer(src) && !readDeviceLinkSettings().remoteControlEnabled) {
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
   }
   // 逐设备黑名单:已撤销访问权限的控制端直接拒绝(早于 allowlist)。
@@ -3772,6 +3885,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       {
         controllerDeviceId: src,
         channel: payload.channel,
+        sharedTask: getDeviceLinkInvokeContext()?.sharedTask,
+        sharedTaskSetting: getDeviceLinkInvokeContext()?.sharedTaskSetting,
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
         // 帧内字段(allowlist 只挡 channel 不挡 args,见下方 dispatchLocalInvoke 前的说明)。
         controllerPlatform: getControllerPlatform(src),
@@ -3789,6 +3904,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     handlerCompleted = true;
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeAfter', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
+    if (getDeviceLinkInvokeContext()?.sharedTask?.isCurrent() === false &&
+        !getDeviceLinkInvokeContext()?.sharedTaskSetting?.admitted) throw new Error('[PERMISSION_DENIED] SharedTask task access denied');
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
     // 镜像收敛到被控端真相(取代控制端乐观覆盖)。本机会话不走这条(走 renderer update)。
     await timing.measure('persist', () => persistRemoteSetting(payload.channel, payload.args ?? [], result));

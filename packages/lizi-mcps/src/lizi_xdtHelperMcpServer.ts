@@ -59,8 +59,10 @@ import {
   registerSearchChatHistoryTool,
   registerSubmitGithubIssueTool,
   registerStartSkillLearningTool,
+  registerSkillhubTools,
 } from './xdt-helper/index.js';
 import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js';
+import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
@@ -226,7 +228,7 @@ function registerListToolsEntry(
                 tools: tools.map((t) => ({
                   name: t.name,
                   description: t.description,
-                  ...(t.category === 'bots' ? {
+                  ...(t.category === 'bots' || t.category === 'skills' ? {
                     inputSchema: z.toJSONSchema(z.strictObject(registry.get(t.name)!.inputShape)),
                   } : {}),
                 })),
@@ -644,6 +646,8 @@ export interface XdtHelperMcpDeps {
   sendToSession?: SendToSessionCallback;
   /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
   skillLearning?: StartSkillLearningCallback;
+  /** Search catalogs and publish the current user's Skills through the host's SkillHub service. */
+  skillhub?: SkillhubAgentCallback;
   /** Host-owned, one-shot authorization for the current direct Learn invocation. */
   authorizeSkillLearning?: AuthorizeSkillLearningCallback;
   /** Register an existing local directory as a Cindy project without starting a task. */
@@ -824,6 +828,12 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       authorizeSkillLearning: deps.authorizeSkillLearning,
       startSkillLearning: deps.skillLearning,
+    });
+  }
+  if (deps.skillhub) {
+    registerSkillhubTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      execute: deps.skillhub,
     });
   }
   // 伙伴消息与 Session 任务控制统一进入 bots 类目，由调用时的任务身份限制发现与执行。

@@ -1,4 +1,5 @@
 import type { ImMessageSource } from '../../../shared/imMessageSource';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { hasEmbeddedImPrompt } from './userMessageDisplayText';
 /**
  * UserMessage
@@ -142,6 +143,7 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  sharedAuthorName?: string;
   /** F2: session cwd used to resolve relative paths in inline @-chip refs.
    *  Stable per-session — only changes on session switch. */
   workingDir: string;
@@ -940,6 +942,7 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  sharedAuthorName,
   workingDir,
   allowPrivilegedLinks = true,
   content,
@@ -977,6 +980,7 @@ export function UserMessage({
   // context 更新会穿透 memo 触发重渲,替代旧的 render 期一次性读取)。
   const sessionFileCtx = useChatSessionFile();
   const remoteDeviceId = originDeviceId(sessionFileCtx.origin);
+  const sharedGuest = isSharedTaskPeer(remoteDeviceId ?? '');
   const remoteMediaOrigin = useMemo(
     () => toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir),
     [sessionFileCtx],
@@ -1218,6 +1222,7 @@ export function UserMessage({
   // 同时按 capabilities.fork.supported gate (Codex 现支持; 未来若 agent 不支持自动隐藏)。
   const navigationMode = useSessionNavigationMode();
   const canFork =
+    !sharedGuest &&
     isInteractiveSessionNavigationMode(navigationMode) &&
     Boolean(sessionId && messageClientId) &&
     !isFirstUserMessage &&
@@ -1270,6 +1275,7 @@ export function UserMessage({
   // NO_PRIOR_ASSISTANT。直接藏掉按钮，避免无效点击。
   // 同时按 capabilities.rewind.supported gate；文件恢复能力由实际 Git 保存点决定。
   const canRewind =
+    !sharedGuest &&
     Boolean(sessionId && messageClientId) &&
     !isFirstUserMessage &&
     rewindSupported &&
@@ -1286,9 +1292,9 @@ export function UserMessage({
   // 普通重发(onCommitOverride),故可编辑条件与 rewind 无关——只要有
   // session/clientId 就能改了重发。
   const isBlocked = Boolean(blockedByGhost);
-  const canEdit = isBlocked
+  const canEdit = !sharedGuest && (isBlocked
     ? Boolean(sessionId && messageClientId)
-    : canRewind && Boolean(isLastUserMessage);
+    : canRewind && Boolean(isLastUserMessage));
 
   // 中断运行中的 turn——Stop 语义与输入框的 Stop 按钮完全一致
   // (useCCAgentChat.stopSession):有排队消息时 keepQueue+pauseQueue(停当前 +
@@ -1363,7 +1369,7 @@ export function UserMessage({
       onFork={!isBlocked && canFork ? handleFork : undefined}
       onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
       onShareAsImage={handleShareAsImage}
-      onDelete={!isBlocked && sessionId && messageClientId ? handleDelete : undefined}
+      onDelete={!sharedGuest && !isBlocked && sessionId && messageClientId ? handleDelete : undefined}
       onEdit={canEdit ? handleEdit : undefined}
       onRewind={!isBlocked && canRewind ? handleRewind : undefined}
       rewindInFlight={rewindOpen}
@@ -1443,6 +1449,7 @@ export function UserMessage({
               : 'max-w-[488px] items-end',
         )}
       >
+        {sharedAuthorName && <span className="text-12 text-[var(--text-secondary)]">{sharedAuthorName}</span>}
         {orcaCommunication ? (
           <div
             className={cn(

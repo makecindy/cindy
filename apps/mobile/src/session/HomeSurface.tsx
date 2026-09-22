@@ -36,7 +36,9 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
-import { DeviceLinkError, type DeviceView, type PresenceSnapshot } from '@cindy/device-link';
+import { DeviceLinkError, isSharedTaskPeer, type DeviceView, type PresenceSnapshot } from '@cindy/device-link';
+import { useSharedTasks } from '@/device-link/useSharedTasks';
+import { splitSharedHomeGroup, type SharedHomeRole } from '@/session/sharedHomeGroup';
 import {
   Archive,
   Check,
@@ -45,6 +47,7 @@ import {
   Ellipsis,
   Folder,
   FolderOpen,
+  FileText,
   Hammer,
   LoaderCircle,
   Menu,
@@ -128,7 +131,7 @@ import {
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
 import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
-import { resolveConnectionBannerVisibility, resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
+import { resolveConnectionBannerVisibility, resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, resolveHomeDeviceDisconnected, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
@@ -382,6 +385,8 @@ export function MobileHome(props: MobileHomeProps) {
 }
 
 function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newSessionInSystemBar = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {
+  const ownedSharedTasks = useSharedTasks();
+  const [sharedCollapsed, setSharedCollapsed] = useState(false);
   // The retained page and its visible sidebar must never release each other's subscriptions.
   const HOME_LIST_SUBSCRIPTION_OWNER = `device-list:${useId()}`;
   const embedded = width !== undefined;
@@ -1043,7 +1048,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       const ghostDeviceIds = new Set<string>();
       for (const session of remoteSessionStore.getSessions()) {
         const shardId = session.deviceLinkDeviceId;
-        if (shardId && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
+        if (shardId && !isSharedTaskPeer(shardId) && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
       }
       for (const deviceId of ghostDeviceIds) {
         invalidateScheduleIndexForDevice(deviceId);
@@ -1809,8 +1814,12 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   );
   const displayedProjectOrder = displayed.projectOrder;
   const displayedManualProjectOrder = displayed.manualProjectOrder;
+  const sharedGroup = useMemo(() => splitSharedHomeGroup(home, ownedSharedTasks, {
+    sessions: homeSessions, searchQuery, statusFilter,
+  }), [home, ownedSharedTasks, homeSessions, searchQuery, statusFilter]);
+  const sharedRows = shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? [] : sharedGroup.rows;
   const homeSections = useMemo(
-    () => buildHomeSections(home, groupByProject, pinnedCollapsed, {
+    () => buildHomeSections(sharedGroup.home, groupByProject, pinnedCollapsed, {
       dialogueTitle: t('devices.list.menu.dialogueFolder'),
       groupDialogue,
       manualProjectOrder: displayedManualProjectOrder,
@@ -1818,7 +1827,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       projectOrder: displayedProjectOrder,
       sortBy,
     }),
-    [displayedManualProjectOrder, displayedProjectOrder, groupByProject, groupDialogue, home, pinnedCollapsed, priorityContext, sortBy, t],
+    [displayedManualProjectOrder, displayedProjectOrder, groupByProject, groupDialogue, sharedGroup.home, pinnedCollapsed, priorityContext, sortBy, t],
   );
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
@@ -1902,10 +1911,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
-  const selectedDeviceDisconnected = status !== 'connecting' && home.deviceFilters.some((item) => item.deviceId !== null
-    && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.sessionCount > 0)
-    && !home.deviceFilters.some((item) => item.deviceId !== null
-      && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.available);
+  const selectedDeviceDisconnected = resolveHomeDeviceDisconnected(home.deviceFilters, selectedDeviceId, status === 'connecting');
   const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility({
     offline: status !== 'online',
     connecting: status === 'connecting',
@@ -1943,7 +1949,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   // 无可控制电脑的引导态(landing)可见性,与 ListEmptyComponent 的分支同口径。
   // 引导态下首页没有可筛选的对话:表头「所有对话 ▾」退化为纯品牌标题、新建 FAB 隐藏,
   // 避免在产品说明页上摆一堆无意义的入口。
-  const homeListItemCount = sections.reduce((count, section) => count + section.data.length, 0);
+  const homeListItemCount = sharedRows.length + sections.reduce((count, section) => count + section.data.length, 0);
   const showRemoteGuide = homeListItemCount === 0
     && !initialHomeLoading
     && !initialHomeError
@@ -2575,6 +2581,64 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           restoreListPosition();
         }}
         sections={sections}
+        ListHeaderComponent={sharedRows.length > 0 ? <View style={styles.projectGroup} testID="home.sharedGroup">
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('sharedTask.title')}
+            accessibilityState={{ expanded: !sharedCollapsed }}
+            onPress={() => { configureCollapseAnimation(); setSharedCollapsed(value => !value); }}
+            style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
+            testID="home.sharedHeader"
+          >
+            {sharedCollapsed
+              ? <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+              : <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />}
+            <UsersRound color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
+            <Text style={styles.projectTitle} numberOfLines={1}>{t('sharedTask.title')}</Text>
+          </Pressable>
+          {!sharedCollapsed && sharedRows.map((row, index) => {
+            if (row.item) {
+              const content = <HomeSessionRow
+                key={row.key}
+                indented
+                hideDivider={index === sharedRows.length - 1}
+                item={row.item}
+                sharedRole={row.role}
+                expandedAutomationGroups={expandedAutomationGroups}
+                onToggleAutomationGroup={toggleAutomationGroup}
+                onOpenSession={openSession}
+                onOpenAutomationGroup={openAutomationGroup}
+                swipe={sessionSwipeControls}
+                testID="home.sharedSessionRow"
+              />;
+              if (row.item.automationGroup || !conversationSearchAllowsLocalWrites(row.item)) return content;
+              return <SwipeableSessionRow key={row.key} session={row.item.session as RemoteSession}
+                registry={swipeRegistry} onArchive={archiveSession} onShowOptions={showSessionOptions} onTogglePin={toggleSessionPinned}
+                testID="home.sharedSessionRow.swipe">{content}</SwipeableSessionRow>;
+            }
+            return <Pressable
+            key={row.key}
+            accessibilityRole="button"
+            accessibilityLabel={row.task.title}
+            onPress={() => guardedPush({ pathname: '/shared-session', params: { sharedTaskId: row.task.sharedTaskId } })}
+            style={({ pressed }) => [styles.sessionListRow, styles.sessionListRowIndented, pressed && styles.pressed]}
+            testID="home.sharedOwnerRow"
+          >
+            <View style={styles.sessionIconCell}>
+              <FileText color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
+            </View>
+            <View style={[styles.sessionListContent, index === sharedRows.length - 1 && styles.sessionListContentNoDivider]}>
+              <View style={styles.sessionTitleRow}>
+                <Text style={styles.sessionTitle} numberOfLines={1} ellipsizeMode="tail">{row.task.title}</Text>
+              </View>
+              <View style={[styles.sessionPreviewRow, styles.sharedOwnerRoleCell]}>
+                <View style={styles.sharedRoleBadge} testID="home.sharedOwnerRoleBadge">
+                  <Text style={styles.sharedRoleBadgeText}>{t('sharedTask.roleOwnedBadge')}</Text>
+                </View>
+              </View>
+            </View>
+          </Pressable>; })}
+        </View> : null}
         style={styles.homeList}
         keyExtractor={(item) => item.key}
         initialNumToRender={HOME_LIST_INITIAL_RENDER_COUNT}
@@ -2610,7 +2674,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           if (section.key !== 'pinned' || !section.title) return null;
           return (
             <Pressable
-              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: home.pinned.length })}
+              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: sharedGroup.home.pinned.length })}
               accessibilityRole="button"
               accessibilityState={{ expanded: !pinnedCollapsed }}
               onPress={togglePinned}
@@ -2624,7 +2688,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
               )}
               <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
               <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
-              <Text style={styles.projectCount} numberOfLines={1}>{home.pinned.length}</Text>
+              <Text style={styles.projectCount} numberOfLines={1}>{sharedGroup.home.pinned.length}</Text>
             </Pressable>
           );
         }}
@@ -2635,7 +2699,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
             <View style={styles.pinnedFooter} testID="home.pinnedFooter" />
           ) : null}
         ListEmptyComponent={
-          initialHomeLoading || taskSuggestionsPending ? (
+          sharedRows.length > 0 ? null : initialHomeLoading || taskSuggestionsPending ? (
             <HomeInitialLoadingState
               style={{
                 marginTop: spacing.xxl,
@@ -2950,6 +3014,12 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         onOpenSettings={() => {
           pendingMenuActionRef.current = null;
           guardedPush('/settings');
+          setChromeMenuCloseInstant(true);
+          setChromeMenuOpen(false);
+        }}
+        onOpenSharedSession={() => {
+          pendingMenuActionRef.current = null;
+          guardedPush('/shared-session');
           setChromeMenuCloseInstant(true);
           setChromeMenuOpen(false);
         }}
@@ -3929,6 +3999,7 @@ function HomeSessionRowInner({
   selected = false,
   selectionMarkTestID,
   selectionMode = false,
+  sharedRole,
   sourceLabel,
   suppressBlockTopBorder = false,
   swipe,
@@ -3967,6 +4038,8 @@ function HomeSessionRowInner({
   selected?: boolean;
   selectionMarkTestID?: string;
   selectionMode?: boolean;
+  /** Shared-task role shown as a compact, non-interactive badge in the row metadata slot. */
+  sharedRole?: SharedHomeRole;
   /** 平铺时标题旁的来源标签(项目名 /「对话」);分组模式下不传。 */
   sourceLabel?: string;
   /** 块模式下,前一行也是块时不画自己的顶线(前块的底线已经是这根线)。 */
@@ -4021,8 +4094,8 @@ function HomeSessionRowInner({
         { running },
       );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；但定时任务与置顶
-  // 标记仍占用右下状态槽，因此继续使用双行布局。
-  const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;
+  // 标记和共享角色仍占用右下状态槽，因此继续使用双行布局。
+  const showPreviewLine = !!preview?.trim() || showSchedule || showPinned || !!sharedRole;
   // 组行点击语义对齐桌面版侧边栏:收起且有需关注内容(未读运行 / 待处理)时,点行直接打开
   // 该看的那条会话(共享层 primary:运行中 > 有未读 > 最新);想展开点行首箭头(独立热区)。
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
@@ -4185,6 +4258,13 @@ function HomeSessionRowInner({
                     />
                   ) : null}
                   {showPinned ? <Pin color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} /> : null}
+                </View>
+              ) : null}
+              {sharedRole ? (
+                <View style={styles.sharedRoleBadge} testID={`home.sharedRoleBadge.${sharedRole}.${item.session.id}`}>
+                  <Text style={styles.sharedRoleBadgeText}>
+                    {t(sharedRole === 'owned' ? 'sharedTask.roleOwnedBadge' : 'sharedTask.roleJoinedBadge')}
+                  </Text>
                 </View>
               ) : null}
             </View>
@@ -4846,6 +4926,22 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minWidth: 0,
   },
 
+  sharedOwnerRoleCell: {
+    justifyContent: 'flex-end',
+  },
+  sharedRoleBadge: {
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    paddingHorizontal: spacing.xs,
+  },
+  sharedRoleBadgeText: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+  },
   selectionMark: {
     alignItems: 'center',
     alignSelf: 'center',

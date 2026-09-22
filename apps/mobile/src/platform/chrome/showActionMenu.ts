@@ -78,6 +78,7 @@ export function showConfirm(input: {
   cancelLabel: string;
   confirmLabel: string;
   destructive?: boolean;
+  cancelable?: boolean;
 }): Promise<boolean> {
   return new Promise((resolve) => {
     Alert.alert(input.title, input.message, [
@@ -91,6 +92,6 @@ export function showConfirm(input: {
         text: input.confirmLabel,
         onPress: () => resolve(true),
       },
-    ]);
+    ], { cancelable: input.cancelable ?? false, onDismiss: () => resolve(false) });
   });
 }

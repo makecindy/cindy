@@ -144,6 +144,17 @@ afterEach(() => {
 });
 
 describe('ChatGPT image capability authority (#2674)', () => {
+  it.each([true, false, undefined])('defaults new subscription models to images while preserving %s', (supportsImageInput) => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [{
+      id: 'chatgpt/new-model-without-metadata', name: 'New model', contextWindow: 128_000,
+      efforts: [], defaultEffort: null, supportsImageInput,
+    }];
+    const model = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567/', new Map())
+      .providers.find((provider) => provider.id === 'openai-codex')?.models[0];
+    expect(model?.input).toEqual(supportsImageInput === false ? ['text'] : ['text', 'image']);
+  });
+
   it.each(['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra'])(
     'keeps %s visual through the independent Pi catalog despite text-only Codex discovery',
     (id) => {

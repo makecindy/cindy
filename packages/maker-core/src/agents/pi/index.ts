@@ -2260,7 +2260,9 @@ export class PiAgent extends BaseAgent {
       }
       const modelBaseUrl = endpoint ? piGatewayModelBaseUrl(endpoint, api) : undefined;
       gatewayApiByModel.set(m.id, api);
-      const supportsImageInput = m.supportsImageInput === true;
+      // Missing capability metadata must not disable newly discovered vision models.
+      // Explicit text-only declarations still take precedence over this default.
+      const supportsImageInput = m.supportsImageInput !== false;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
       const thinkingLevelMap = gatewayThinkingLevelMap(m.efforts, resolvedSpec?.thinkingLevelMap);
       return [{
@@ -2339,7 +2341,7 @@ export class PiAgent extends BaseAgent {
           ...(m.api ? { api: m.api } : {}),
           reasoning: m.reasoning ?? false,
           ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-          input: m.input ?? ['text'],
+          input: m.input ?? ['text', 'image'],
           contextWindow,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
           ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
@@ -5985,13 +5987,19 @@ export class PiAgent extends BaseAgent {
 
     const assertImageInputSupported = async (images: readonly PiPromptImage[]): Promise<void> => {
       if (images.length === 0) return;
-      const supportsNow = (): boolean =>
-        mutablePiProviderId === PI_PROVIDER_ID
-          ? gatewayImageInputByModel.get(mutableModel) === true
-          : nativeProviderById
-              .get(mutablePiProviderId)
-              ?.models.find((candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel))
-              ?.input?.includes('image') === true;
+      // 目录未声明 input 时按**支持**图片处理（上游 #4854：未知能力默认放行，不再一律拒收），
+      // 与本文件其余判定口径一致；本机声明面（override）只用来把「确实不支持」的模型挡下来。
+      const supportsNow = (): boolean => {
+        if (mutablePiProviderId === PI_PROVIDER_ID) {
+          return gatewayImageInputByModel.get(mutableModel) === true;
+        }
+        const nativeModel = nativeProviderById
+          .get(mutablePiProviderId)
+          ?.models.find(
+            (candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel),
+          );
+        return nativeModel !== undefined && (nativeModel.input ?? ['text', 'image']).includes('image');
+      };
       // 双向对账必须先于信任快照：声明可能从「支持」被改成「不支持」，此时旧快照仍是 true，
       // 先查 supportsNow() 会直接把图片放给一个已声明不支持的模型。对账在判定之前跑
       // (目录未声明 / 与快照一致时只花一次内存查找)。
@@ -6314,8 +6322,10 @@ export class PiAgent extends BaseAgent {
       const currentSpec = nativeProviderById.get(specProviderId)
         ?.models.find((candidate) => candidate.id === specModelId);
       const wantsImage = fresh === true;
-      const mismatch =
-        fresh !== undefined && (currentSpec?.input?.includes('image') ?? false) !== wantsImage;
+      // 快照基线口径必须与准入门一致（上游 #4854）：目录未声明 input 时按「支持图片」算，
+      // 否则对一个没写 input 的模型声明 false 会被当成「无变化」，声明永远落不下去。
+      const hadImage = (currentSpec?.input ?? ['text', 'image']).includes('image');
+      const mismatch = fresh !== undefined && hadImage !== wantsImage;
       if (!mismatch && !imageCapabilityReloadPending) {
         this.deps.logger.debug('pi image capability refresh skipped', {
           reason: 'matches-snapshot',
@@ -6356,7 +6366,7 @@ export class PiAgent extends BaseAgent {
           model: nextModel,
           provider: specProviderId,
           wantsImage,
-          hadImage: currentSpec?.input?.includes('image') ?? false,
+          hadImage,
         });
       }
 

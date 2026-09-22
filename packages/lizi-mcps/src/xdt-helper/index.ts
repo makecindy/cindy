@@ -9,6 +9,7 @@
  */
 
 export { registerGetCapabilitiesTool } from './get_capabilities.js';
+export { registerSkillhubTools, type SkillhubAgentCallback, type SkillhubAgentRequest } from './skillhub.js';
 export {
   registerGetCurrentSessionIdTool,
   type GetCurrentSessionIdDeps,

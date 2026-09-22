@@ -12806,7 +12806,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -12831,6 +12830,9 @@
               "supportsStore": false,
               "supportsDeveloperRole": false,
               "supportsReasoningEffort": false
+            },
+            "thinkingLevelMap": {
+              "minimal": null
             }
           }
         }
@@ -14416,7 +14418,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -14432,7 +14433,8 @@
           "pi": {
             "api": "google-generative-ai",
             "thinkingLevelMap": {
-              "off": null
+              "off": null,
+              "minimal": null
             }
           }
         }
@@ -15041,7 +15043,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -15057,7 +15058,8 @@
           "pi": {
             "api": "google-vertex",
             "thinkingLevelMap": {
-              "off": null
+              "off": null,
+              "minimal": null
             }
           }
         }
@@ -24608,7 +24610,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -24624,7 +24625,8 @@
           "pi": {
             "api": "google-generative-ai",
             "thinkingLevelMap": {
-              "off": null
+              "off": null,
+              "minimal": null
             }
           }
         }
@@ -49057,7 +49059,6 @@
         "supportsImageInput": true,
         "reasoning": true,
         "efforts": [
-          "minimal",
           "low",
           "medium",
           "high"
@@ -49071,7 +49072,10 @@
         },
         "execution": {
           "pi": {
-            "api": "anthropic-messages"
+            "api": "anthropic-messages",
+            "thinkingLevelMap": {
+              "minimal": null
+            }
           }
         }
       },

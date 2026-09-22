@@ -25,6 +25,10 @@ import {
   type RelayErrorPayload,
 } from '@cindy/device-link-protocol';
 
+export { SHARED_TASK_RELAY_CAPABILITY, sharedTaskDeviceId, parseSharedTaskScope, type SharedTaskScope } from '@cindy/device-link-protocol';
+export { sharedTaskHostPeer, sharedTaskGuestPeer, isSharedTaskPeer, parseSharedTaskPeer } from './sharedTaskPeer.js';
+export type { SharedTaskPeer } from './sharedTaskPeer.js';
+
 export {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,

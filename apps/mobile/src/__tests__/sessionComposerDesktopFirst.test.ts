@@ -255,7 +255,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
     expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
     expect(source).toContain('<SessionHeaderNativeBlur height=');
-    expect(source).toMatch(/<SessionHeaderNativeTitle\s+title=\{title\}/);
+    expect(source).toMatch(/<SessionHeaderNativeTitle\s+title=\{sharedTaskEnded \? t\('sharedTask.ended'\) : title\}/);
     expect(source).toContain('<SessionHeaderNativeActions');
     expect(source).toContain("sessionHeaderBar: {\n    alignItems: 'center',\n    backgroundColor: 'transparent'");
     expect(source).toContain('sessionBottomLayer: {\n    backgroundColor: colors.surface');

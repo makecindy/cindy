@@ -65,15 +65,19 @@ it('cancels the shared executor only after the last consumer releases it', async
   const secondController = new AbortController();
   let release!: () => void;
   const pause = new Promise<void>((resolve) => { release = resolve; });
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => { started = resolve; });
   let transferSignal!: AbortSignal;
   const executor = vi.fn(async (dest: string, _progress: unknown, signal?: AbortSignal) => {
     transferSignal = signal!;
     await fs.writeFile(dest, 'old');
+    started();
     await pause;
     if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
   });
   const first = fetchRemoteFileToCache(id, executor, vi.fn(), firstController.signal);
-  await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+  await ready;
+  expect(executor).toHaveBeenCalledOnce();
   const second = fetchRemoteFileToCache(id, executor, vi.fn(), secondController.signal);
   firstController.abort();
   await expect(first).rejects.toThrow('FILE_PEER_CANCELLED');

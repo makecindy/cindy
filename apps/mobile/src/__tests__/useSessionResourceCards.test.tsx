@@ -6,6 +6,7 @@ import type {
   RemoteResource,
   RemoteResourceChangedPayload,
 } from '@cindy/device-link';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
   get: vi.fn(),
@@ -143,6 +144,19 @@ function foreground(next: string) {
     h.app.listeners.forEach((listener) => listener(next));
   });
 }
+it('does not discover host-wide cards or retry them for a shared-task guest', async () => {
+  const peer = sharedTaskHostPeer('shared-task', 'desktop');
+  root = createRoot(document.createElement('div'));
+  await act(async () => root!.render(createElement(Probe, { device: peer })));
+  expect(h.manifest).not.toHaveBeenCalled();
+  expect(views.get(peer)).toMatchObject({ resources: [], failed: false, blocked: false });
+  act(() => views.get(peer)!.refresh());
+  foreground('background'); foreground('active');
+  await advance(10_000);
+  expect(h.manifest).not.toHaveBeenCalled();
+  expect(h.get).not.toHaveBeenCalled();
+  expect(h.link.subscribe).not.toHaveBeenCalled();
+});
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();

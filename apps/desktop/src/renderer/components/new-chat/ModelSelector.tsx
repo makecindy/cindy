@@ -2948,7 +2948,8 @@ function ModelSelectorContentView({
                   ...(nextEffort ? { effort: nextEffort } : {}),
                   engine: rowConfig.engine,
                   fast: rowConfig.fast,
-                  favoriteUid: null,
+                  favoriteUid: rowConfig.favoriteUid,
+                  ...(rowConfig.resetToRecommended ? { resetToRecommended: true as const } : {}),
                 });
               }
               return applyUnifiedSessionSelect({
@@ -3331,7 +3332,7 @@ export function ModelSelector({
 
   // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁。成功后关掉选单(确认已经变成「下一条才生效」的意图,应露出 composer 提示);
+  // 保命锁。模型行选中成功后关掉选单；配置浮层切换成功后保持展开；
   // 取消 / 失败留在原地,方便重选。
   //
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
@@ -3349,23 +3350,29 @@ export function ModelSelector({
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
+    const switchEngine = async (
+      args: Parameters<typeof onCrossEngineSelect>[0],
+      configuring: boolean,
+    ): Promise<boolean> => {
+      setKeepOpenForAgentConfirmation(true);
+      try {
+        const applied = await onCrossEngineSelect(args);
+        // 配置浮层里的切换保持展开；选中模型行成功后才收起。
+        setOpenWithoutAutoRefresh(configuring || applied === false);
+        return applied !== false;
+      } catch {
+        setOpenWithoutAutoRefresh(true);
+        return false;
+      } finally {
+        setKeepOpenForAgentConfirmation(false);
+      }
+    };
     return {
       ...sessionEngineFilter,
-      onCrossEngineSelect: async (
-        args: Parameters<typeof onCrossEngineSelect>[0],
-      ): Promise<boolean> => {
-        setKeepOpenForAgentConfirmation(true);
-        try {
-          const applied = await onCrossEngineSelect(args);
-          // 成功后收起选单:确认切换已经落成「下一条才生效」的意图,胶囊用「下条：」标明;
-          // 窗口留着会让轨跟着意图翻到目标 Harness,再点任意模型又弹一次确认。
-          // 取消 / 失败留在原地,方便重选。
-          setOpenWithoutAutoRefresh(applied === false);
-          return applied !== false;
-        } finally {
-          setKeepOpenForAgentConfirmation(false);
-        }
-      },
+      onCrossEngineSelect: (args: Parameters<typeof onCrossEngineSelect>[0]) =>
+        switchEngine(args, false),
+      onCrossEngineConfigure: (args: Parameters<typeof onCrossEngineSelect>[0]) =>
+        switchEngine(args, true),
     };
   }, [sessionEngineFilter, setOpenWithoutAutoRefresh]);
 

@@ -6,6 +6,13 @@
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
+      "id": "shared-session",
+      "status": "proposed",
+      "en": "Shared Session",
+      "translations": { "zh-CN": "共享任务", "zh-TW": "共享任務", "ja": "共有セッション", "ko": "공유 세션" },
+      "note": "远程连接的多人版本，按单个任务共享完整上下文和同一 Agent，不作为独立会议产品。"
+    },
+    {
       "id": "chat-workspace",
       "status": "proposed",
       "en": "Chat workspace",

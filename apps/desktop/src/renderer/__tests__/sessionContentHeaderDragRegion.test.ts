@@ -10,10 +10,10 @@ const gitContextBadgeSource = readFileSync(resolve(ccAgentDir, 'GitContextBadge.
 describe('SessionContentHeader window drag region', () => {
   it('does not mark the whole injected session header as no-drag', () => {
     expect(sessionHeaderSource).toContain(
-      '<div className="flex min-w-0 items-center gap-0.5 pl-1">',
+      '<div className="flex w-full min-w-0 items-center gap-0.5 pl-1">',
     );
     expect(sessionHeaderSource).not.toMatch(
-      /<div\s+className="flex min-w-0 items-center gap-0\.5 pl-1"[\s\S]{0,160}WebkitAppRegion: 'no-drag'/,
+      /<div\s+className="flex w-full min-w-0 items-center gap-0\.5 pl-1"[\s\S]{0,160}WebkitAppRegion: 'no-drag'/,
     );
   });
 
@@ -32,7 +32,7 @@ describe('SessionContentHeader window drag region', () => {
     // 标题 span 留在 drag region 会让 onDoubleClick 被窗口拖拽区吞掉,
     // 双击改名整体失效(d7dc967df 回归)。
     expect(sessionHeaderSource).toMatch(
-      /onDoubleClick=\{startEdit\}[\s\S]{0,240}style=\{WINDOW_NO_DRAG_STYLE\}/,
+      /onDoubleClick=\{sharedGuest \? undefined : startEdit\}[\s\S]{0,240}style=\{WINDOW_NO_DRAG_STYLE\}/,
     );
   });
 
@@ -40,7 +40,7 @@ describe('SessionContentHeader window drag region', () => {
     // no-drag 之后拖窗习惯必须用 useManualWindowDrag 补回:按住标题移动
     // 依旧拖动窗口,双击仍进改名(两者缺一都是回归)。
     expect(sessionHeaderSource).toMatch(
-      /\{\.\.\.titleManualDrag\}[\s\S]{0,80}onDoubleClick=\{startEdit\}/,
+      /\{\.\.\.titleManualDrag\}[\s\S]{0,80}onDoubleClick=\{sharedGuest \? undefined : startEdit\}/,
     );
     expect(sessionHeaderSource).toContain(
       'const titleManualDrag = useManualWindowDrag();',

@@ -179,6 +179,9 @@ it('defers an occupied completion until the draft is cleared', async () => {
   await render({ running: false, revision: 20 }); await advance();
   expect(request).not.toHaveBeenCalled();
   await act(async () => composerSource.setDocument(textComposerDocument('')));
+  // Draft occupancy is published on the next frame; let React commit it before
+  // advancing the prediction's own debounce timer.
+  await act(async () => vi.advanceTimersToNextFrame());
   await advance();
   expect(request).toHaveBeenCalledTimes(1);
   expect(value.prompt).toBe('Suggested next step');

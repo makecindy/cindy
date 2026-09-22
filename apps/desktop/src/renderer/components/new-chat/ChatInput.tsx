@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
 import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
@@ -1156,6 +1157,7 @@ export function ChatInput({
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
+  const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
@@ -1229,7 +1231,7 @@ export function ChatInput({
   // 会话内「新建目标」对本机与 device-link 远程会话都开放:远程会话的 setGoal / 状态
   // 订阅经 goalApiFor / subscribeGoalStatusChanged 隧道到被控端 goal-host(目标随会话
   // 在被控端自主续跑)。历史上 device-link 曾被排除(reviewer #354,当时无隧道路由)。
-  const inSessionGoalEnabled = !!sessionId;
+  const inSessionGoalEnabled = !!sessionId && !sharedGuest;
   // 无参 `/goal` 命令 → 等同点「新建目标」:main 广播 goalAction:'open-dialog',
   // 这里按 sessionId 过滤后打开本会话的弹窗(命令侧已确保有 session)。
   useEffect(() => {
@@ -1853,8 +1855,8 @@ export function ChatInput({
   // 与下拉菜单看到的顺序一致。伙伴保留这两个入口；任务设置锁定时一起禁用。
   const permissionCycleOptions = useMemo(
     () =>
-      settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? []),
-    [activeAgentCapabilities, settingsLocked],
+      settingsLocked || sharedGuest ? [] : (activeAgentCapabilities?.permissionModes ?? []),
+    [activeAgentCapabilities, settingsLocked, sharedGuest],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -1868,7 +1870,7 @@ export function ChatInput({
   // 计划模式入口门控:agent capability(device-link 老被控端无此字段 → 隐藏)+ 父组件接线。
   const planModeSupported = activeAgentCapabilities?.planMode?.supported === true;
   const planModeEntry =
-    !settingsLocked && planModeSupported && onPlanModeChange
+    !sharedGuest && !settingsLocked && planModeSupported && onPlanModeChange
       ? { enabled: planModeEnabled, onToggle: (next: boolean) => void onPlanModeChange(next) }
       : undefined;
   // 当前 activeModel 归属的 agent runtime —— 用于 send 预检里按 (model, agent) 查
@@ -8739,7 +8741,7 @@ export function ChatInput({
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}
                   deviceId={deviceLinkDeviceId ?? undefined}
-                  disabled={composerEditorLocked || settingsLocked}
+                  disabled={composerEditorLocked || settingsLocked || sharedGuest}
                   dense={effectiveDenseToolbar}
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}

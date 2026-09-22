@@ -14,6 +14,7 @@
  *   - 页面卸载时 hook 自动 dispose(在途上传完成后回收 OSS 中转对象)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { parseSharedTaskPeer } from '@cindy/device-link';
 import { useTranslation } from 'react-i18next';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
@@ -59,6 +60,7 @@ export interface UseMobileLocalAttachmentsOptions {
    * 标注异步入口与上传完成结果不得写入新作用域。省略时保持旧的单作用域行为。
    */
   attachmentScopeKey?: string;
+  deviceId?: string;
   getAccessToken: () => Promise<string | null>;
   /** 当前已入列附件数(限额用;pending 由 hook 自己计入)。 */
   getAttachmentCount: () => number;
@@ -267,7 +269,7 @@ export function useMobileLocalAttachments(
       if (candidate.kind === 'image') assertMobileImageSize(size);
       else assertMobileDocumentSize(size);
     },
-    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, opts),
+    upload: (candidate, fileUri, opts) => uploadMobileAttachmentFromFile(candidate, fileUri, { ...opts, sharedTaskId: candidate.sharedTaskId }),
     discard: (attachment) => discardMobileUploadedAttachment(attachment, {
       getToken: () => optionsRef.current.getAccessToken(),
     }),
@@ -366,6 +368,7 @@ export function useMobileLocalAttachments(
             ...candidate,
             attachmentScopeGeneration,
             attachmentScopeKey,
+            sharedTaskId: parseSharedTaskPeer(optionsRef.current.deviceId ?? '')?.sharedTaskId,
           })),
       opts,
     );

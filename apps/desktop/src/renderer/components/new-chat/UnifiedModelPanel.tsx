@@ -158,6 +158,8 @@ export interface UnifiedModelPanelProps {
     runtimeAgent?: AgentKind;
     /** 已登记、下一条消息才落地的切换目标。缺省 = 没有挂着的意图。 */
     pendingTarget?: AgentKind;
+    /** Configuration edits keep the menu open after applying the switch. */
+    onCrossEngineConfigure?: NonNullable<UnifiedModelPanelProps['sessionEngineFilter']>['onCrossEngineSelect'];
     /**
      * 返回 `false` = 调用方**没有**执行这次切换(典型:跨引擎确认弹窗被取消)。
      * 面板本身不消费返回值,但包在外面的 ModelSelector 靠它决定「收起面板」还是
@@ -334,14 +336,11 @@ export function UnifiedModelPanel({
   const predicatesRef = useRef({ isVisible, excludeProvider, excludeModel });
   predicatesRef.current = { isVisible, excludeProvider, excludeModel };
   const agentsKey = agents ? agents.join(',') : 'all';
-  // 「正在用的引擎」的单一口径:会话内以 sessionAgent 为准(已确认的会话引擎 ⊕ **待切换
-  // 意图目标** —— 调用方 ChatInput 在跨引擎意图登记后把 currentAgent 换成意图目标,
-  // 2026-08-17 review:意图期内 selected.modelId / effort / fast 全是目标值,引擎口径不跟上
-  // 会把目标模型画成旧引擎、浮层摆出旧引擎档位而回调写目标引擎;liveAgentKind 在元数据
-  // 未到时可能回退成 cc),草稿才用 liveAgentKind(= 草稿 vendor)。选中行豁免
-  // (keepModel.agent)、isLiveRow 与选中行的 forceEngine 必须用**同一个**口径,否则强制显示
-  // 出来的引擎反而让 isLiveRow 判不中(2026-08-14 测试当场抓到)。
-  const liveEngineAgent = sessionAgent ?? liveAgentKind;
+  // 选中配置与 ChatInput 的展示快照一致:意图期的 model / effort / fast 已是目标值,
+  // Harness 也取 pendingTarget。currentAgent 仍用于其它行的默认引擎,
+  // runtimeAgent 仍用于切换确认;显示目标不代表运行时已经切换。
+  // keepModel、isLiveRow 与选中行 forceEngine 共用这一口径。
+  const liveEngineAgent = sessionEngineFilter?.pendingTarget ?? sessionAgent ?? liveAgentKind;
   /**
    * 选中行豁免(`keepModel`)只对**已建会话**开:
    *   - `scope:'session'` = 面板画的是一个正在跑的会话,它选中的模型即便被下架 / 停用也必须

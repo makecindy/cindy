@@ -13,12 +13,16 @@ import { Tooltip } from '@/components/ui/tooltip';
 export interface ConfirmDialogProps {
   /** Explicit pilot opt-in; unselected callers retain their existing presentation. */
   presentation?: 'standard';
+  /** Explicit design opt-in for standard dialogs; existing callers keep confirm-first order. */
+  cancelFirst?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description?: string;
   /** 可选的标题与正文样式；富内容区与按钮不受影响。 */
   textClassName?: string;
+  /** 可选的正文样式；不改变标题字号。 */
+  descriptionClassName?: string;
   /**
    * 富内容区(如装意识的逐项权限清单):渲染在 description 之后、复选框之前。
    * 与 description 独立 —— Radix Description 是 <p>,块级列表不能塞进去。
@@ -97,10 +101,12 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog({
   open,
   presentation,
+  cancelFirst = false,
   onOpenChange,
   title,
   description,
   textClassName,
+  descriptionClassName,
   content,
   maxWidth,
   confirmText,
@@ -160,6 +166,14 @@ export function ConfirmDialog({
     });
     return () => cancelAnimationFrame(raf);
   }, [open]);
+  const standardCancel = showCancel && (
+    <AlertDialog.Cancel asChild>
+      <Button size="lg" variant="secondary" disabled={loading} onClick={() => onCancel?.()}
+        className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] border-[var(--confirm-btn-secondary-border)] bg-transparent py-1.5 text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]">
+        {resolvedCancelText}
+      </Button>
+    </AlertDialog.Cancel>
+  );
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
@@ -276,7 +290,7 @@ export function ConfirmDialog({
               >
                 {description && (
                   <AlertDialog.Description
-                    className={cn('text-base text-[var(--confirm-desc)]', textClassName)}
+                    className={cn('text-base text-[var(--confirm-desc)]', textClassName, descriptionClassName)}
                   >
                     {description}
                   </AlertDialog.Description>
@@ -339,6 +353,7 @@ export function ConfirmDialog({
             )}
             {presentation === 'standard' ? (
               <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+                {cancelFirst && standardCancel}
                 <AlertDialog.Action asChild>
                   <Button
                     ref={confirmBtnRef}
@@ -374,19 +389,7 @@ export function ConfirmDialog({
                     {tertiaryText}
                   </Button>
                 )}
-                {showCancel && (
-                  <AlertDialog.Cancel asChild>
-                    <Button
-                      size="lg"
-                      variant="secondary"
-                      disabled={loading}
-                      onClick={() => onCancel?.()}
-                      className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] border-[var(--confirm-btn-secondary-border)] bg-transparent py-1.5 text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
-                    >
-                      {resolvedCancelText}
-                    </Button>
-                  </AlertDialog.Cancel>
-                )}
+                {!cancelFirst && standardCancel}
               </div>
             ) : (
               <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">

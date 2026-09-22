@@ -25,6 +25,7 @@ import {
 } from '@/features/device-link/remoteSessionActivityStore';
 
 import { SessionCard } from '../SessionCard';
+import { SessionItem } from '../SessionItem';
 import { sessionCardVisualCases } from '../__fixtures__/sessionCardVisualCases';
 import { SPLIT_GROUP_SESSION_MIME } from '../../splitGroupDnd';
 
@@ -254,6 +255,50 @@ describe('SessionCard visual cases', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it.each(['list', 'text'] as const)('reuses the %s presentation for shared navigation without task actions', (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, preview: 'Shared message preview' };
+    const onClick = vi.fn();
+    const onRename = vi.fn();
+    const onAction = vi.fn();
+    const onTogglePin = vi.fn();
+    const props = { session, isActive: false, isRunning: false, hasAttentionNotification: false, navigationOnly: true, onClick, onRename, onAction, onTogglePin };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    const row = view.container.querySelector<HTMLElement>('[data-sidebar-navigation-row="true"]')!;
+    expect(row).toBeTruthy();
+    expect(view.container.querySelector('[data-sidebar-session-row="true"]')).toBeNull();
+    expect(row.draggable).toBe(false);
+    expect(row.querySelector('button')).toBeNull();
+    if (variant === 'list') expect(row.textContent).toContain(session.preview);
+    const context = createEvent.contextMenu(row);
+    fireEvent(row, context);
+    expect(context.defaultPrevented).toBe(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.doubleClick(row);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.pointerDown(row, { button: 0, isPrimary: true });
+    expect(mocks.ensureInitialMessages).not.toHaveBeenCalled();
+    fireEvent.click(row);
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(onClick).toHaveBeenCalledTimes(2);
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onTogglePin).not.toHaveBeenCalled();
+  });
+
+  it('uses ordinary running and awaiting preview text in shared navigation rows', () => {
+    const visualCase = sessionCardVisualCases.find(item => item.id === 'short-idle-cc')!;
+    mocks.runningDetailBySession.set(visualCase.session.id, 'Reading shared files');
+    const view = renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
+    expect(screen.getByText('Reading shared files')).toBeTruthy();
+    view.unmount();
+    mocks.runningDetailBySession.clear();
+    mocks.pendingPluginSetupSessionIds.add(visualCase.session.id);
+    renderCase(visualCase.id, { variant: 'list', navigationOnly: true });
+    expect(screen.getByText('等待插件设置')).toBeTruthy();
   });
 
   it.each([

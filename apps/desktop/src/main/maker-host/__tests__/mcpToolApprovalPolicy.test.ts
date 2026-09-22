@@ -451,9 +451,30 @@ describe('Cindy market action authorization', () => {
   });
 });
 
-describe('helper task workspace authorization', () => {
+describe('helper task workspace and SkillHub publication authorization', () => {
   const policy = (toolName: string | undefined, toolParams?: unknown) =>
     getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName, toolParams });
+
+  it.each([
+    { mode: 'create', visibility: 'public' },
+    { mode: 'create', visibility: 'private' },
+    { mode: 'create', visibility: 'shared', visible_slugs: ['engineering'] },
+    { mode: 'update' },
+  ])('reviews each publication with %j across payload representations', (publication) => {
+    const input = { ...publication, path: 'skills/release-notes', name: 'release-notes' };
+    for (const args of [input, JSON.stringify(input)]) {
+      expect(policy('publish_skill', args)).toBe('prompt-each-time');
+      for (const name of ['publish_skill', ' publish_skill ']) {
+        const params = { name, args };
+        for (const toolName of ['call_tool', undefined]) {
+          expect(policy(toolName, params)).toBe('prompt-each-time');
+          expect(policy(toolName, JSON.stringify(params))).toBe('prompt-each-time');
+        }
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__publish_skill');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
+  });
 
   it('reviews each move across progressive payload representations', () => {
     for (const working_dir of ['/project', null]) {
@@ -489,8 +510,13 @@ describe('helper task workspace authorization', () => {
       'rename_project',
       'remove_project',
       'send_to_session',
+      'search_skills',
+      'list_my_published_skills',
+      'get_skill_publish_status',
     ]) {
+      expect(policy(name, {})).toBe('auto-approve');
       expect(policy('call_tool', { name, args: {} })).toBe('auto-approve');
+      expect(policy(undefined, JSON.stringify({ name, args: {} }))).toBe('auto-approve');
     }
   });
 });

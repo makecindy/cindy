@@ -279,7 +279,7 @@ function parsePiBundledModel(value: unknown): PiBundledModelInfo | null {
     name: typeof value.name === 'string' ? value.name : value.id,
     reasoning: value.reasoning === true,
     ...(thinkingLevelMap && Object.keys(thinkingLevelMap).length > 0 ? { thinkingLevelMap } : {}),
-    input: input.length > 0 ? input : ['text'],
+    input: Array.isArray(value.input) ? input : ['text', 'image'],
     contextWindow:
       typeof value.contextWindow === 'number' && value.contextWindow > 0
         ? value.contextWindow
@@ -692,7 +692,7 @@ export function buildPiSubscriptionNativeProviders(
             ? { maxTokens: model.maxOutput ?? template?.maxTokens } : {}),
           reasoning: model.efforts.length > 0,
           input: model.supportsImageInput === undefined
-            ? [...(template?.input ?? ['text'])]
+            ? [...(template?.input ?? ['text', 'image'])]
             : model.supportsImageInput ? ['text', 'image'] : ['text'],
           thinkingLevelMap: catalogThinkingLevelMap(model.efforts, thinking),
           ...(cost ? { cost: { ...cost } } : {}),
