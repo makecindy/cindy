@@ -3,6 +3,55 @@
 > 参考记录，不是当前配置或部署状态。当前维护规则见 [模型配置与下发](dev-rules/model-catalog-maintenance.md)。
 > 下列文字记录各批次当时的事实，不能相互当作后续状态的证明。引用时须带日期、来源和验证范围。
 
+## 小米 MiMo V2.6 系列（2026-09-22）
+
+客户端 `catalog/providers.json` 两个 MiMo 预设（`xiaomi-mimo-api-cn` / `xiaomi-mimo-token-plan-cn`）
+的推荐模型清单从 V2.5 系列替换为 `mimo-v2.6-pro` / `mimo-v2.6-flash`（api 预设的 Pi 另含
+`mimo-v2.6-pro-ultraspeed`）；Pro / Flash 均声明 Pi 图片输入。V2.5 系列官方公告于
+2026-10-21 10:00（北京时间）下线，从推荐清单移除；未删除用户已有连接、开关或历史模型 ID，
+下线前仍可经列模型发现手动添加。
+
+依据 [官方模型列表](https://mimo.mi.com/docs/zh-CN/quick-start/summary/model)与
+[API 定价](https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go)（核验日 2026-09-22）：
+Pro / Flash 为原生全模态（文本、图像、视频、音频输入）+ 深度思考，上下文 1M、最大输出 128K；
+UltraSpeed 为定制服务，同窗口/输出。按量定价与前代持平：每百万 tokens 输入/输出
+Flash ¥1/¥2、Pro ¥3/¥6、UltraSpeed ¥30/¥60；缓存命中另价（Pro ¥0.025、Flash ¥0.02），
+缓存写入限时免费；预设模型不携带价格字段，实价继续走实报与参考价发布链。
+
+本次仅改客户端预设推荐名单（`providers.json` 的 `presets[].runtimes`，手维护，不被
+`pnpm sync:pi-model-catalog` 重写）。未改 Server 正本、未改 Registry（Registry 尚无 MiMo
+公共条目，新增需走 Server 协同）；Pi 上游目录（pi.dev）核验日仍为 V2.5 系列，
+`provider-models.json` 待上游更新后再同步。OpenCode 渠道的 MiMo 逐模型证据与
+`upstream-profiles.json` 的 opencode-go 档位映射本次未动（无 V2.6 实证）。
+
+## 小米 MiMo V2.6 能力配置补齐（2026-09-22）
+
+修复会话反馈的两个配置问题：Cindy 套用通用推理档位、把 `reasoning_effort: "max"` 发给
+MiMo 2.6 Pro 被 400 拒绝；Pi 的 `mimo-v2.6-pro` 被标成仅文本输入、带图消息被本地拦下。
+
+- 能力依据：官方「深度思考」文档（`thinking.type: enabled|disabled`，开/关开关、默认开，
+  参数走 `extra_body`）+ 2026-09-22 客户端对照实测（同账号同接口同短消息：
+  `reasoning_effort: "high"` → 200、`"max"` → 400、省略 → 200）。MiMo 的深度思考不是
+  OpenAI `reasoning_effort` 档位模型。
+- `model-registry.json`（客户端 revision `2026-09-22T00:00:00.002Z`，Server 正本待同步）：
+  新增 `xiaomi/mimo-v2.6-pro` / `xiaomi/mimo-v2.6-flash` / `xiaomi/mimo-v2.6-pro-ultraspeed`
+  公共条目与接入条目（nativeApi `openai-completions`，routes 覆盖 `xiaomi-mimo-api-cn` /
+  `xiaomi-mimo-token-plan-cn` 两个 CN 预设，UltraSpeed 仅 API 按量渠道）。公共资料如实声明
+  `efforts: []` + `defaultEffort: null`（深度思考只有开/关、无档位；缺资料不发伪档位，
+  让供应商默认行为决定）；Pro/Flash 按官方全模态声明 `supportsImageInput: true`，
+  UltraSpeed 能力未公开保持未知；窗口 1M、最大输出 128K。
+- Registry 公共资料按 model id/alias 合并进所有连接（含存量自定义连接，用户显式配置仍
+  优先）：存量连接上这两个问题无需用户改配置即修复；若用户手动覆盖过档位或图像能力，
+  需自行清除覆盖才会回到公共资料。
+- 参考价只记已核实的官方按量付费标准价：中国大陆（CNY）Pro ¥3/¥6（缓存命中 ¥0.025）、
+  Flash ¥1/¥2（缓存命中 ¥0.02）、UltraSpeed ¥30/¥60（缓存命中 ¥0.25）；海外（USD）
+  Pro $0.435/$0.87（命中 $0.0036）、Flash $0.14/$0.28（命中 $0.0028）、
+  UltraSpeed $4.35/$8.7（命中 $0.036）。两组均出自官方计费页「按量付费」实时推理表
+  （同页国内/海外两表，单位分别为元/美元每百万 tokens），2026-09-22 核验。缓存写入限时
+  免费未记；批量推理（半价）等其它计费项未收录，与国内组口径保持一致。
+- 预设模型行保留 `supportsImageInput: true`（新连接快照）；不把推理档位写进预设模型，
+  免得旧快照盖住 Registry 后续修订。V2.5 推荐清单下架事项见前一条记录。
+
 ## Grok 4.7 / Pi（2026-09-22）
 
 新增 `xai/grok-4.7` 公共资料、Claude Code / Codex 路由及独立 Pi 成员 `grok-4.7`。

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-22T00:00:00.001Z",
+  "updatedAt": "2026-09-22T00:00:00.002Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -2097,6 +2097,66 @@
         }
       ],
       "nativeApi": "xai-videos"
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "name": "MiMo V2.6 Pro",
+      "status": "active",
+      "sortOrder": 55,
+      "routes": [
+        {
+          "providerId": "xiaomi-mimo-api-cn",
+          "modelId": "mimo-v2.6-pro",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        },
+        {
+          "providerId": "xiaomi-mimo-token-plan-cn",
+          "modelId": "mimo-v2.6-pro",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "xiaomi/mimo-v2.6-pro"
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-flash",
+      "name": "MiMo V2.6 Flash",
+      "status": "active",
+      "sortOrder": 56,
+      "routes": [
+        {
+          "providerId": "xiaomi-mimo-api-cn",
+          "modelId": "mimo-v2.6-flash",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        },
+        {
+          "providerId": "xiaomi-mimo-token-plan-cn",
+          "modelId": "mimo-v2.6-flash",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "xiaomi/mimo-v2.6-flash"
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "name": "MiMo V2.6 Pro UltraSpeed",
+      "status": "active",
+      "sortOrder": 57,
+      "routes": [
+        {
+          "providerId": "xiaomi-mimo-api-cn",
+          "modelId": "mimo-v2.6-pro-ultraspeed",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "cn"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "xiaomi/mimo-v2.6-pro-ultraspeed"
     }
   ],
   "nativeApiRules": [
@@ -5573,6 +5633,161 @@
           "output": ["embedding"]
         }
       }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "aliases": ["mimo-v2.6-pro"],
+      "defaults": {
+        "name": "MiMo V2.6 Pro",
+        "description": "小米 MiMo V2.6 Pro 全模态推理模型（深度思考为开/关开关，无 reasoning_effort 档位）；1M 上下文 / 128K 最大输出",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": [],
+        "defaultEffort": null,
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 6,
+              "cacheReadPerMtok": 0.025,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.435,
+              "outputPerMtok": 0.87,
+              "cacheReadPerMtok": 0.0036,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-flash",
+      "aliases": ["mimo-v2.6-flash"],
+      "defaults": {
+        "name": "MiMo V2.6 Flash",
+        "description": "小米 MiMo V2.6 Flash 全模态推理模型（深度思考为开/关开关，无 reasoning_effort 档位）；1M 上下文 / 128K 最大输出",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": [],
+        "defaultEffort": null,
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 2,
+              "cacheReadPerMtok": 0.02,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.14,
+              "outputPerMtok": 0.28,
+              "cacheReadPerMtok": 0.0028,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "aliases": ["mimo-v2.6-pro-ultraspeed"],
+      "defaults": {
+        "name": "MiMo V2.6 Pro UltraSpeed",
+        "description": "小米 MiMo V2.6 Pro UltraSpeed 低时延定制服务；1M 上下文 / 128K 最大输出",
+        "group": "china",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "efforts": [],
+        "defaultEffort": null
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 30,
+              "outputPerMtok": 60,
+              "cacheReadPerMtok": 0.25,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        },
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4.35,
+              "outputPerMtok": 8.7,
+              "cacheReadPerMtok": 0.036,
+              "effectiveFrom": "2026-09-22",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go",
+                "verifiedAt": "2026-09-22"
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }
