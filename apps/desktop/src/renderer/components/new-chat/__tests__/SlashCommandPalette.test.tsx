@@ -3,11 +3,21 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import zhCNCommon from '@/i18n/locales/zh-CN/common.json';
-import type { UnifiedCommand } from '@/lib/slashCommands';
+import { mergeCommands, type UnifiedCommand } from '@/lib/slashCommands';
 import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../../shared/cindyBuiltInSkills';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, options?: Record<string, number>) => {
+      if (key === 'commandPalette.moreResults' && options) {
+        return `${key}:${options.count}:${options.visible}:${options.total}`;
+      }
+      if (key === 'commandPalette.resultCount' && options) {
+        return `${key}:${options.visible}:${options.total}`;
+      }
+      return options?.count === undefined ? key : `${key}:${options.count}`;
+    },
+  }),
 }));
 
 import { SlashCommandPalette } from '../SlashCommandPalette';
@@ -36,7 +46,107 @@ const discoveredProjectSkill: UnifiedCommand = {
   runtimeStatus: 'discovered',
 };
 
+const issue4788Target = 'run-cindy-e2e-pr-testcase';
+const issue4788Commands = mergeCommands([], [], [
+  ...Array.from({ length: 32 }, (_, index) => ({
+    kind: 'agent-skill' as const,
+    name: `cindy-e2e-${String(index + 1).padStart(2, '0')}`,
+    source: 'skill' as const,
+    description: 'Cindy E2E fixture Skill',
+  })),
+  {
+    kind: 'agent-skill' as const,
+    name: issue4788Target,
+    source: 'skill' as const,
+    description: 'Run the Cindy E2E PR testcase',
+  },
+  ...Array.from({ length: 4 }, (_, index) => ({
+    kind: 'agent-skill' as const,
+    name: `z-skill-${String(index + 1).padStart(2, '0')}`,
+    source: 'skill' as const,
+    description: 'Trailing fixture Skill',
+  })),
+]);
+
 describe('SlashCommandPalette project Skill rows', () => {
+  it('shows the issue #4788 hint for broad queries and reveals the target after narrowing', () => {
+    const { rerender } = render(<SlashCommandPalette query="" commands={issue4788Commands} focusedIndex={0}
+      onFocusedIndexChange={vi.fn()} onSelect={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getAllByRole('button')).toHaveLength(25);
+    expect(screen.queryByRole('button', { name: issue4788Target })).toBeNull();
+    const hint = screen.getByText('commandPalette.moreResults:12:25:37');
+    const liveRegion = hint.closest('[aria-live="polite"]');
+    expect(liveRegion?.tagName).toBe('DIV');
+    expect(liveRegion?.getAttribute('aria-live')).toBe('polite');
+
+    rerender(<SlashCommandPalette query="cindy" commands={issue4788Commands} focusedIndex={0}
+      onFocusedIndexChange={vi.fn()} onSelect={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getAllByRole('button')).toHaveLength(25);
+    expect(screen.queryByRole('button', { name: issue4788Target })).toBeNull();
+    expect(screen.getByText('commandPalette.moreResults:8:25:33')).not.toBeNull();
+
+    rerender(<SlashCommandPalette query="run" commands={issue4788Commands} focusedIndex={0}
+      onFocusedIndexChange={vi.fn()} onSelect={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByRole('button', { name: issue4788Target })).not.toBeNull();
+    expect(screen.queryByText(/commandPalette\.moreResults/)).toBeNull();
+  });
+
+  it('does not show the truncation hint when all matching commands are visible', () => {
+    const commands: UnifiedCommand[] = Array.from({ length: 25 }, (_, index) => ({
+      kind: 'desktop',
+      name: `command-${index}`,
+      description: '',
+    }));
+
+    render(<SlashCommandPalette query="" commands={commands} focusedIndex={0}
+      onFocusedIndexChange={vi.fn()} onSelect={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.queryByText('commandPalette.moreResults:0')).toBeNull();
+  });
+
+  it('reveals the next page only after the explicit show-more action', () => {
+    const onShowMore = vi.fn();
+    const onFocusedIndexChange = vi.fn();
+    const { rerender } = render(
+      <SlashCommandPalette
+        query=""
+        commands={issue4788Commands}
+        focusedIndex={0}
+        onFocusedIndexChange={onFocusedIndexChange}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        visibleLimit={25}
+        onShowMore={onShowMore}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: issue4788Target })).toBeNull();
+    expect(screen.queryByText('commandPalette.moreResults:12:25:37')).toBeNull();
+    const showMore = screen.getByRole('button', {
+      name: 'commandPalette.showMore: commandPalette.resultCount:25:37',
+    });
+    fireEvent.mouseDown(showMore);
+    fireEvent.click(showMore);
+    expect(onShowMore).toHaveBeenCalledOnce();
+    expect(onFocusedIndexChange).not.toHaveBeenCalled();
+
+    rerender(
+      <SlashCommandPalette
+        query=""
+        commands={issue4788Commands}
+        focusedIndex={0}
+        onFocusedIndexChange={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        visibleLimit={50}
+        onShowMore={onShowMore}
+      />,
+    );
+    expect(screen.getByRole('button', { name: issue4788Target })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'commandPalette.showMore:0' })).toBeNull();
+  });
+
   it('opens details from the portaled information panel without inserting the Skill', () => {
     const command: UnifiedCommand = { ...discoveredProjectSkill, path: '/repo/.pi/skills/demo/SKILL.md' };
     const onSelect = vi.fn();

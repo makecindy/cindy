@@ -15,13 +15,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowUpRight } from 'lucide-react';
+import { ArrowUpRight, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 
 import { cn } from '@/lib/utils';
 import {
-  filterSlashCommands,
+  DEFAULT_SLASH_COMMAND_LIMIT,
+  filterSlashCommandsWithMeta,
   isCindyOfficialSlashCommand,
   isSlashCommandUnavailable,
   type UnifiedCommand,
@@ -59,13 +60,18 @@ interface SlashCommandPaletteProps {
   onTooltipHoverChange?: (hovered: boolean) => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
+  /** Number of command rows currently revealed. More rows are opt-in via the footer action. */
+  visibleLimit?: number;
+  /** Reveals the next page without changing the current query or ordering. */
+  onShowMore?: () => void;
 }
 
-/** 右侧小标签文案 —— skill 显示 source(user/skill), agent-builtin 显示 'agent-cmd'
- * (避免和"agent 本身"混淆), desktop 不打标签(内置默认)。 */
-function metaLabel(cmd: UnifiedCommand): string | null {
-  if (cmd.kind === 'agent-skill') return cmd.source; // 'user' | 'skill'
-  if (cmd.kind === 'agent-builtin') return 'agent-cmd';
+/** 右侧小标签键 —— 解释性文案跟随界面语言,命令名本身保持原样可复制。 */
+function metaLabelKey(cmd: UnifiedCommand): string | null {
+  if (cmd.kind === 'agent-skill') {
+    return cmd.source === 'user' ? 'commandPalette.source.user' : 'commandPalette.source.skill';
+  }
+  if (cmd.kind === 'agent-builtin') return 'commandPalette.source.agentCommand';
   return null; // 'desktop' 不显示标签 (内置默认)
 }
 
@@ -80,11 +86,17 @@ export function SlashCommandPalette({
   allowProjectSkillDetails = true,
   onTooltipHoverChange,
   maxHeight = 400,
+  visibleLimit = DEFAULT_SLASH_COMMAND_LIMIT,
+  onShowMore,
 }: SlashCommandPaletteProps) {
   const { t } = useTranslation();
-  const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
+  const filtered = useMemo(
+    () => filterSlashCommandsWithMeta(commands, query, visibleLimit),
+    [commands, query, visibleLimit],
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   // Track panel scroll so the tooltip follows the focused row's visual position.
   const [panelScroll, setPanelScroll] = useState(0);
@@ -97,11 +109,11 @@ export function SlashCommandPalette({
   // below the current focus). This is the only piece of derived state we
   // own; everything else is driven by props.
   useEffect(() => {
-    if (filtered.length === 0) return;
-    if (focusedIndex < 0 || focusedIndex >= filtered.length) {
+    if (filtered.items.length === 0) return;
+    if (focusedIndex < 0 || focusedIndex >= filtered.items.length) {
       onFocusedIndexChange(0);
     }
-  }, [filtered.length, focusedIndex, onFocusedIndexChange]);
+  }, [filtered.items.length, focusedIndex, onFocusedIndexChange]);
 
   // Dismiss on outside click — the hosting component (ChatInput) already
   // exposes the palette via its own state machine, but a mouse click
@@ -128,7 +140,7 @@ export function SlashCommandPalette({
     focusedRef.current?.scrollIntoView({ block: 'nearest' });
   }, [focusedIndex]);
 
-  const focusedCmd = filtered[focusedIndex];
+  const focusedCmd = filtered.items[focusedIndex];
   const focusedDescriptionKey = focusedCmd?.kind === 'agent-skill'
     ? builtInSkillDescriptionKey(focusedCmd)
     : undefined;
@@ -186,7 +198,7 @@ export function SlashCommandPalette({
       window.removeEventListener('resize', handle);
       window.removeEventListener('scroll', handle, true);
     };
-  }, [focusedCmd, focusedIndex, panelScroll, filtered.length, maxHeight, tooltipHeight]);
+  }, [focusedCmd, focusedIndex, panelScroll, filtered.items.length, maxHeight, tooltipHeight]);
 
   const tooltipVisible = !!focusedCmd && !!tooltipPos;
   useEffect(() => {
@@ -223,9 +235,8 @@ export function SlashCommandPalette({
       {/* Panel */}
       <div
         ref={panelRef}
-        onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
         className={cn(
-          'w-[320px] overflow-y-auto',
+          'w-[320px] flex flex-col overflow-hidden',
           'rounded-[12px] border p-[6px]',
           'bg-[var(--cmd-palette-bg)]',
           'border-[var(--cmd-palette-border)]',
@@ -235,7 +246,7 @@ export function SlashCommandPalette({
         )}
         style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
       >
-        {filtered.length === 0 ? (
+        {filtered.items.length === 0 ? (
           <div
             className={cn(
               'flex items-center justify-center',
@@ -246,47 +257,103 @@ export function SlashCommandPalette({
             No matching commands
           </div>
         ) : (
-          filtered.map((cmd, idx) => {
-            const focused = idx === focusedIndex;
-            const unavailable = isSlashCommandUnavailable(cmd);
-            const official = isCindyOfficialSlashCommand(cmd);
-            return (
-              <button
-                key={cmd.name}
-                ref={focused ? focusedRef : undefined}
-                type="button"
-                aria-disabled={unavailable}
-                aria-label={unavailable ? `${cmd.name}: ${t('commandPalette.projectSkillNotLoaded')}` : cmd.name}
-                title={unavailable ? t('commandPalette.projectSkillNotLoaded') : undefined}
-                // `onMouseDown` instead of `onClick` so the textarea
-                // keeps focus — click would fire after blur.
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  if (unavailable) return;
-                  onSelect(cmd);
-                }}
-                onMouseEnter={() => onFocusedIndexChange(idx)}
+          <>
+            <div
+              ref={listRef}
+              onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
+              className="min-h-0 flex-1 overflow-y-auto"
+            >
+              {filtered.items.map((cmd, idx) => {
+                const focused = idx === focusedIndex;
+                const unavailable = isSlashCommandUnavailable(cmd);
+                const official = isCindyOfficialSlashCommand(cmd);
+                const labelKey = metaLabelKey(cmd);
+                return (
+                  <button
+                    key={cmd.name}
+                    ref={focused ? focusedRef : undefined}
+                    type="button"
+                    aria-disabled={unavailable}
+                    aria-label={unavailable ? `${cmd.name}: ${t('commandPalette.projectSkillNotLoaded')}` : cmd.name}
+                    title={unavailable ? t('commandPalette.projectSkillNotLoaded') : undefined}
+                    // `onMouseDown` instead of `onClick` so the textarea
+                    // keeps focus — click would fire after blur.
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      if (unavailable) return;
+                      onSelect(cmd);
+                    }}
+                    onMouseEnter={() => onFocusedIndexChange(idx)}
+                    className={cn(
+                      'flex w-full items-center justify-between',
+                      'h-[36px] px-[10px] rounded-[6px]',
+                      'text-left text-14 font-medium',
+                      'text-[var(--cmd-palette-item-text)]',
+                      'outline-none transition-colors',
+                      focused && 'bg-[var(--cmd-palette-item-hover)]',
+                      unavailable && 'cursor-not-allowed opacity-50',
+                    )}
+                  >
+                    <span className="truncate">{cmd.name}</span>
+                    {official ? (
+                      <OfficialSkillBadge />
+                    ) : labelKey && (
+                      <span className="shrink-0 text-12 font-normal text-[var(--cmd-palette-item-meta)]">
+                        {t(labelKey)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {filtered.hasMore && (
+              <div
+                aria-live="polite"
                 className={cn(
-                  'flex w-full items-center justify-between',
-                  'h-[36px] px-[10px] rounded-[6px]',
-                  'text-left text-14 font-medium',
-                  'text-[var(--cmd-palette-item-text)]',
-                  'outline-none transition-colors',
-                  focused && 'bg-[var(--cmd-palette-item-hover)]',
-                  unavailable && 'cursor-not-allowed opacity-50',
+                  'shrink-0 border-t px-[10px] py-[6px] text-12 leading-[1.4]',
+                  'border-[var(--cmd-palette-border)]',
+                  'text-[var(--cmd-palette-item-meta)]',
                 )}
               >
-                <span className="truncate">{cmd.name}</span>
-                {official ? (
-                  <OfficialSkillBadge />
-                ) : metaLabel(cmd) && (
-                  <span className="shrink-0 text-12 font-normal text-[var(--cmd-palette-item-meta)]">
-                    {metaLabel(cmd)}
+                {onShowMore ? (
+                  <button
+                    type="button"
+                    className={cn(
+                      'flex w-full items-center justify-between gap-2 rounded-full px-1 py-0.5',
+                      'text-12 font-medium text-[var(--cmd-palette-item-text)]',
+                      'outline-none transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
+                      'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                    )}
+                    aria-label={`${t('commandPalette.showMore')}: ${t('commandPalette.resultCount', {
+                      visible: filtered.items.length,
+                      total: filtered.totalMatches,
+                    })}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={onShowMore}
+                  >
+                    <span className="min-w-0 truncate">{t('commandPalette.showMore')}</span>
+                    <span className="flex shrink-0 items-center gap-2 text-[var(--cmd-palette-item-meta)]">
+                      <span>
+                        {t('commandPalette.resultCount', {
+                          visible: filtered.items.length,
+                          total: filtered.totalMatches,
+                        })}
+                      </span>
+                      <ChevronDown size={13} aria-hidden />
+                    </span>
+                  </button>
+                ) : (
+                  <span>
+                    {t('commandPalette.moreResults', {
+                      count: filtered.totalMatches - filtered.items.length,
+                      visible: filtered.items.length,
+                      total: filtered.totalMatches,
+                    })}
                   </span>
                 )}
-              </button>
-            );
-          })
+              </div>
+            )}
+          </>
         )}
       </div>
 

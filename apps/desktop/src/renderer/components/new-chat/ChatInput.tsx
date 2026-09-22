@@ -252,6 +252,7 @@ import {
   beginSlashCommandRosterLoad,
   EMPTY_SLASH_COMMANDS,
   failSlashCommandRosterLoad,
+  DEFAULT_SLASH_COMMAND_LIMIT,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
@@ -261,6 +262,7 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  SLASH_COMMAND_PAGE_SIZE,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -4229,9 +4231,19 @@ export function ChatInput({
   }, [ghostsForCommand, isGhostSigil, t]);
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
   const paletteCommands = isGhostSigil ? ghostCommandItems : composerSlashCommands;
+  const slashPaletteQuery = trigger.kind === 'slash' ? trigger.query : '';
+  const slashPaletteTrigger = trigger.kind === 'slash'
+    ? `${trigger.sigil}:${trigger.from}`
+    : 'none';
+  const [slashVisibleLimit, setSlashVisibleLimit] = useState(DEFAULT_SLASH_COMMAND_LIMIT);
+  useEffect(() => {
+    setSlashVisibleLimit(DEFAULT_SLASH_COMMAND_LIMIT);
+  }, [slashPaletteQuery, slashPaletteTrigger]);
   const filteredCommands = useMemo(
-    () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
-    [paletteCommands, trigger],
+    () => (trigger.kind === 'slash'
+      ? filterSlashCommands(paletteCommands, slashPaletteQuery, slashVisibleLimit)
+      : []),
+    [paletteCommands, slashPaletteQuery, slashVisibleLimit, trigger.kind],
   );
 
   // At-panel scan state
@@ -9082,6 +9094,8 @@ export function ChatInput({
               }}
               onTooltipHoverChange={setPaletteTooltipHover}
               maxHeight={paletteMaxHeight}
+              visibleLimit={slashVisibleLimit}
+              onShowMore={() => setSlashVisibleLimit((current) => current + SLASH_COMMAND_PAGE_SIZE)}
             />
           )}
 

@@ -289,11 +289,22 @@ export function hasUnavailableProjectSkillPreview(commands: UnifiedCommand[]): b
  * `/`、`$` 两类命令都复用这套筛选，输入命令中间的关键词也能命中，
  * 与 `@` 资源面板的搜索体验保持一致。
  */
-export function filterSlashCommands(
+export interface SlashCommandFilterResult {
+  items: UnifiedCommand[];
+  totalMatches: number;
+  hasMore: boolean;
+}
+
+/** Default first page size for the slash-command palette. */
+export const DEFAULT_SLASH_COMMAND_LIMIT = 25;
+/** Number of additional commands revealed by one explicit "show more" action. */
+export const SLASH_COMMAND_PAGE_SIZE = 25;
+
+export function filterSlashCommandsWithMeta(
   commands: UnifiedCommand[],
   query: string,
-  limit = 25,
-): UnifiedCommand[] {
+  limit = DEFAULT_SLASH_COMMAND_LIMIT,
+): SlashCommandFilterResult {
   const q = query.trim().toLowerCase();
   const filtered = commands
     .map((command, index) => {
@@ -309,7 +320,20 @@ export function filterSlashCommands(
       || a.index - b.index
     ))
     .map((entry) => entry.command);
-  return filtered.length > limit ? filtered.slice(0, limit) : filtered;
+  const hasMore = filtered.length > limit;
+  return {
+    items: hasMore ? filtered.slice(0, limit) : filtered,
+    totalMatches: filtered.length,
+    hasMore,
+  };
+}
+
+export function filterSlashCommands(
+  commands: UnifiedCommand[],
+  query: string,
+  limit = DEFAULT_SLASH_COMMAND_LIMIT,
+): UnifiedCommand[] {
+  return filterSlashCommandsWithMeta(commands, query, limit).items;
 }
 
 /**

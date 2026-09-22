@@ -11206,7 +11206,15 @@
   },
   "commandPalette": {
     "viewSkillDetails": "查看技能详情",
-    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载",
+    "moreResults": "当前显示 {{visible}} 条，共 {{total}} 条命令；继续输入以缩小范围",
+    "showMore": "显示更多",
+    "resultCount": "{{visible}} / 共 {{total}} 条",
+    "source": {
+      "skill": "技能",
+      "user": "用户",
+      "agentCommand": "内置命令"
+    }
   },
   "skillhub": {
     "unifiedDetail": {

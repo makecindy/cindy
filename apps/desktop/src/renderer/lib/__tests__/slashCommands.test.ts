@@ -4,6 +4,7 @@ import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkil
 import {
   commandsForHelpCard,
   filterSlashCommands,
+  filterSlashCommandsWithMeta,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
@@ -28,6 +29,22 @@ const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' 
   source: 'skill' as const,
   ...overrides,
 });
+
+const ISSUE_4788_TARGET = 'run-cindy-e2e-pr-testcase';
+
+function issue4788Commands(): UnifiedCommand[] {
+  return mergeCommands([], [], [
+    ...Array.from({ length: 32 }, (_, index) => skill({
+      name: `cindy-e2e-${String(index + 1).padStart(2, '0')}`,
+      description: 'Cindy E2E fixture Skill',
+    })),
+    skill({ name: ISSUE_4788_TARGET, description: 'Run the Cindy E2E PR testcase' }),
+    ...Array.from({ length: 4 }, (_, index) => skill({
+      name: `z-skill-${String(index + 1).padStart(2, '0')}`,
+      description: 'Trailing fixture Skill',
+    })),
+  ]);
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -274,6 +291,46 @@ describe('filterSlashCommands', () => {
         { kind: 'desktop' as const, name: 'drive', description: '' },
       ], 'drive', 25).map((command) => command.name),
     ).toContain('drive');
+  });
+
+  it('reproduces issue #4788 with a Skill ranked beyond the visible limit', () => {
+    const commands = issue4788Commands();
+    expect(commands).toHaveLength(37);
+    expect(commands[32]?.name).toBe(ISSUE_4788_TARGET);
+
+    for (const query of ['', 'cindy', 'e2e']) {
+      const result = filterSlashCommandsWithMeta(commands, query);
+      expect(result.items).toHaveLength(25);
+      expect(result.hasMore).toBe(true);
+      expect(result.items.some((command) => command.name === ISSUE_4788_TARGET)).toBe(false);
+    }
+
+    expect(filterSlashCommandsWithMeta(commands, '').totalMatches).toBe(37);
+    expect(filterSlashCommandsWithMeta(commands, 'cindy').totalMatches).toBe(33);
+    expect(filterSlashCommandsWithMeta(commands, 'e2e').totalMatches).toBe(33);
+    expect(filterSlashCommandsWithMeta(commands, 'run').items.map((command) => command.name)).toEqual([
+      ISSUE_4788_TARGET,
+    ]);
+    expect(filterSlashCommandsWithMeta(commands, 'testcase').items.map((command) => command.name)).toEqual([
+      ISSUE_4788_TARGET,
+    ]);
+  });
+
+  it('reports truncation metadata without changing the ranked visible items', () => {
+    const commands = [
+      { kind: 'desktop' as const, name: 'drive-sync', description: '' },
+      { kind: 'desktop' as const, name: 'archive-drive', description: '' },
+      { kind: 'desktop' as const, name: 'drive', description: '' },
+    ];
+
+    expect(filterSlashCommandsWithMeta(commands, 'drive', 2)).toEqual({
+      items: [commands[2], commands[0]],
+      totalMatches: 3,
+      hasMore: true,
+    });
+    expect(filterSlashCommands(commands, 'drive', 2)).toEqual(
+      filterSlashCommandsWithMeta(commands, 'drive', 2).items,
+    );
   });
 });
 

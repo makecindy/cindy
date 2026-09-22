@@ -11206,7 +11206,15 @@
   },
   "commandPalette": {
     "viewSkillDetails": "スキルの詳細を見る",
-    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
+    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。",
+    "moreResults": "全{{total}}件中{{visible}}件を表示しています。入力を続けて絞り込めます。",
+    "showMore": "さらに表示",
+    "resultCount": "{{visible}} / 全{{total}}件",
+    "source": {
+      "skill": "スキル",
+      "user": "ユーザー",
+      "agentCommand": "組み込みコマンド"
+    }
   },
   "skillhub": {
     "unifiedDetail": {

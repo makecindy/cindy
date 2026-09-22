@@ -11206,7 +11206,15 @@
   },
   "commandPalette": {
     "viewSkillDetails": "스킬 상세 보기",
-    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
+    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다.",
+    "moreResults": "전체 {{total}}개 중 {{visible}}개를 표시합니다. 계속 입력해 목록을 좁혀 보세요.",
+    "showMore": "더 보기",
+    "resultCount": "{{visible}} / 전체 {{total}}개",
+    "source": {
+      "skill": "스킬",
+      "user": "사용자",
+      "agentCommand": "기본 제공 명령"
+    }
   },
   "skillhub": {
     "unifiedDetail": {

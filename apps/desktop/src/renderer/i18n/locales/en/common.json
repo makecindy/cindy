@@ -11222,7 +11222,15 @@
   },
   "commandPalette": {
     "viewSkillDetails": "View skill details",
-    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
+    "moreResults": "Showing {{visible}} of {{total}} commands. Keep typing to narrow the list.",
+    "showMore": "Show more",
+    "resultCount": "{{visible}} / {{total}}",
+    "source": {
+      "skill": "Skill",
+      "user": "User",
+      "agentCommand": "Built-in command"
+    }
   },
   "skillhub": {
     "unifiedDetail": {
