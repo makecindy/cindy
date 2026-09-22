@@ -25,7 +25,8 @@ export function CindyMakeVersionsPanel({
   const { confirm } = useConfirmDialog();
   const [expanded, setExpanded] = useState(false);
   const listId = useId();
-  const disabled = busy || !!versions.pending || versions.state?.switching;
+  const switchDisabled = !!versions.pending || versions.state?.switching;
+  const removeDisabled = busy || switchDisabled;
   const supported = typeof window.electronAPI.getCindyVersions === 'function';
   useEffect(() => onState?.(versions.state), [onState, versions.state]);
   const current =
@@ -39,7 +40,7 @@ export function CindyMakeVersionsPanel({
       : t('cindyMake.versions.personal');
   const personal = versions.state?.versions.find((version) => version.kind === 'personal');
   const switchBlockedReason = (version: CindyVersionInfo) => {
-    if (disabled) return 'busy' as const;
+    if (switchDisabled) return 'busy' as const;
     if (!version.available) return 'unavailable' as const;
     if (!version.compatible) return 'incompatible' as const;
     return undefined;
@@ -183,7 +184,9 @@ export function CindyMakeVersionsPanel({
                       {version.kind === 'personal' && (
                         <Button
                           variant="secondary"
-                          disabled={disabled || versions.state?.selectedId === version.id}
+                          disabled={
+                            removeDisabled || versions.state?.selectedId === version.id
+                          }
                           onClick={async () => {
                             if (
                               await confirm({

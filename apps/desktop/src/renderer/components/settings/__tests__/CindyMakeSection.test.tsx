@@ -732,7 +732,7 @@ describe('Settings > Cindy Make', () => {
       expect(h.api.cindyMakeMerge).toHaveBeenCalledTimes(1);
     },
   );
-  it('allows version switching with retained conflicts but disables it during active work', async () => {
+  it('allows version switching with retained conflicts and during active work', async () => {
     const history = { busy: true, activeWork: false };
     const h = harness(history);
     const versions = {
@@ -769,7 +769,7 @@ describe('Settings > Cindy Make', () => {
     await waitFor(() => expect(switchVersion).toHaveBeenCalledWith('switch', 'original'));
     history.activeWork = true;
     await h.pushState({ source, upstreamMerge: { ...conflict } });
-    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(true));
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
     history.activeWork = false;
     await h.pushState({ source, upstreamMerge: { ...conflict } });
     await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));

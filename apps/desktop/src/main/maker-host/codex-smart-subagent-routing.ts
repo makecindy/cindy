@@ -116,8 +116,7 @@ export function codexSmartSubagentRoutingSignature(
   return `smart:${catalogRevision}:${JSON.stringify(candidates.map(({ providerId, model }) => [providerId, model.id]))}`;
 }
 
-function reasoningLevels(model: CatalogModel, fallback: unknown): unknown {
-  if (model.efforts.length === 0) return fallback;
+function reasoningLevels(model: CatalogModel): unknown {
   return model.efforts.map((effort) => ({
     effort,
     description: `${model.name} ${effort} reasoning`,
@@ -159,11 +158,8 @@ export function buildCodexSmartModelCatalog(
       description: candidate.model.description ?? record.description,
       context_window: candidate.model.contextWindow,
       max_context_window: candidate.model.contextWindow,
-      default_reasoning_level: candidate.model.defaultEffort ?? record.default_reasoning_level,
-      supported_reasoning_levels: reasoningLevels(
-        candidate.model,
-        record.supported_reasoning_levels,
-      ),
+      default_reasoning_level: candidate.model.defaultEffort,
+      supported_reasoning_levels: reasoningLevels(candidate.model),
       ...fullPromptCompatibility(candidate.model.id),
       multi_agent_version: 'v2',
       visibility: 'list',
@@ -187,11 +183,8 @@ export function buildCodexSmartModelCatalog(
       priority,
       context_window: candidate.model.contextWindow,
       max_context_window: candidate.model.contextWindow,
-      default_reasoning_level: candidate.model.defaultEffort ?? template.default_reasoning_level,
-      supported_reasoning_levels: reasoningLevels(
-        candidate.model,
-        template.supported_reasoning_levels,
-      ),
+      default_reasoning_level: candidate.model.defaultEffort,
+      supported_reasoning_levels: reasoningLevels(candidate.model),
       ...fullPromptCompatibility(candidate.model.id),
       multi_agent_version: 'v2',
       visibility: 'list',

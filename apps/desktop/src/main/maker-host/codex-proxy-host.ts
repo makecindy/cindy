@@ -1,7 +1,8 @@
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
 import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
-import { providerModelRecord } from '@cindy/model-providers';
+import { providerModelRecord, type Effort } from '@cindy/model-providers';
+import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
@@ -530,6 +531,28 @@ function applyReasoningEffortOverride(
   if (Object.keys(reasoning).length > 0) next.reasoning = reasoning;
   else delete next.reasoning;
   return next;
+}
+
+/** Saved harness preferences are not a capability declaration for this route. */
+function reconcileProviderReasoningEffort(
+  body: Record<string, unknown>,
+  providerId: string,
+  modelId: string,
+): Record<string, unknown> {
+  const model = getActiveCatalog().providers.find(provider => provider.id === providerId)
+    ?.models.codex?.find(candidate => candidate.id === modelId);
+  // A missing row is unknown capability, including models removed since a task was saved.
+  // Never retain a saved effort or borrow another provider's declaration in that case.
+  return reconcileResponsesReasoningEffort(body, model?.efforts ?? []);
+}
+
+function reconcileResponsesReasoningEffort(
+  body: Record<string, unknown>,
+  efforts: readonly Effort[],
+): Record<string, unknown> {
+  if (!isPlainObject(body.reasoning) || !Object.hasOwn(body.reasoning, 'effort')) return body;
+  const effort = reconcileOutboundReasoningEffort(body.reasoning.effort, efforts);
+  return effort === body.reasoning.effort ? body : applyReasoningEffortOverride(body, effort ?? null);
 }
 
 function observedReasoningEffort(body: Record<string, unknown>): string | undefined {
@@ -1213,6 +1236,9 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
   }
   if (isPlainObject(body)) {
     body = applyReasoningEffortOverride(body, opts.reasoningEffortOverride);
+    if (isPlainObject(body) && typeof body.model === 'string') {
+      body = reconcileProviderReasoningEffort(body, opts.providerId, body.model);
+    }
   }
   if (opts.instructions && isPlainObject(body)) {
     const existing = body.instructions;
@@ -1819,7 +1845,7 @@ function createXaiResponsesCompatTransform(): RequestTransform {
   };
 }
 
-function responsesCompatibilityRouting(
+function responsesCompatibilityRoute(
   body: Record<string, unknown>,
   ctx: RequestTransformCtx,
   frozenAuthInjection?: CodexProxyAuthInjection,
@@ -1829,6 +1855,7 @@ function responsesCompatibilityRouting(
   const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
   const implicitProviderId = inferProviderIdForModel(requestModel, 'codex');
   let routing: ReturnType<typeof getProviderRoutingDescriptor> = null;
+  let providerId = providerContext.providerId;
 
   if (providerContext.subagentRoute) {
     routing = getProviderRoutingDescriptor(
@@ -1847,6 +1874,7 @@ function responsesCompatibilityRouting(
       undefined,
       authInjection,
     );
+    providerId = adopted ? providerContext.providerId : 'xd';
     routing = adopted
       ? getSessionRoutingDescriptor(providerContext.sessionId!, 'codex', requestModel)
       : getProviderRoutingDescriptor('xd', 'codex', requestModel);
@@ -1855,6 +1883,7 @@ function responsesCompatibilityRouting(
     // user/API-key provider merely sharing a model id does not win routing.
     const inferred = getProviderRoutingDescriptor(implicitProviderId, 'codex', requestModel);
     routing = inferred?.authStrategy === 'provider-oauth-header' ? inferred : null;
+    if (routing) providerId = implicitProviderId;
   }
 
   if (!routing) {
@@ -1866,9 +1895,18 @@ function responsesCompatibilityRouting(
         ? 'openai'
         : 'xd';
     routing = getProviderRoutingDescriptor(defaultProviderId, 'codex', requestModel);
+    providerId = defaultProviderId;
   }
 
-  return routing;
+  return { routing, providerId, catalogModel: providerContext.catalogModel };
+}
+
+function responsesCompatibilityRouting(
+  body: Record<string, unknown>,
+  ctx: RequestTransformCtx,
+  frozenAuthInjection?: CodexProxyAuthInjection,
+) {
+  return responsesCompatibilityRoute(body, ctx, frozenAuthInjection).routing;
 }
 
 /**
@@ -2101,8 +2139,19 @@ function createMiniMaxResponsesCompatTransform(): RequestTransform {
   };
 }
 
-function createProviderModelRewriteTransform(): RequestTransform {
+function createProviderModelRewriteTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RequestTransform {
   return (body, ctx) => {
+    let normalized = body;
+    const original = body;
+    if (isPlainObject(body) && typeof body.model === 'string') {
+      const route = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
+      if (route.providerId) {
+        normalized = reconcileProviderReasoningEffort(body, route.providerId, route.catalogModel);
+      }
+    }
+    body = normalized;
     if (isPlainObject(body) && typeof body.model === 'string') {
       const subagentRoute = subagentRouteFromHeaders(ctx.headers);
       if (subagentRoute) {
@@ -2119,8 +2168,10 @@ function createProviderModelRewriteTransform(): RequestTransform {
     }
     const sessionId = sessionIdFromTransformCtx(ctx);
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
-    if (sessionId && explicitProviderId) return rewriteSessionModelIdForRoute(sessionId, 'codex', body);
-    return rewriteImplicitModelIdForRoute('codex', body);
+    const rewritten = sessionId && explicitProviderId
+      ? rewriteSessionModelIdForRoute(sessionId, 'codex', body)
+      : rewriteImplicitModelIdForRoute('codex', body);
+    return rewritten ?? (normalized !== original ? normalized : null);
   };
 }
 
@@ -2564,6 +2615,26 @@ function createCodexImageGenerationForwardLifecycleObserver(
   };
 }
 
+function customProviderRouteSnapshot(routeId: string, frozenRoutes?: readonly CodexCustomProviderRoute[]) {
+  return frozenRoutes === undefined
+    ? findCodexAppliedCustomProviderRoute(routeId)
+    : frozenRoutes.find(candidate => candidate.routeId === routeId);
+}
+
+function createCustomProviderReasoningTransform(
+  frozenRoutes?: readonly CodexCustomProviderRoute[],
+): RequestTransform {
+  return (body, ctx) => {
+    const path = parseCodexCustomProviderPath(ctx.url);
+    if (path.kind !== 'route' || path.pathKind !== 'responses'
+      || !isPlainObject(body) || typeof body.model !== 'string') return null;
+    const route = customProviderRouteSnapshot(path.routeId, frozenRoutes);
+    if (!route?.responseModels.includes(body.model)) return null;
+    const next = reconcileResponsesReasoningEffort(body, route.responseEffortsByModel[body.model] ?? []);
+    return next === body ? null : next;
+  };
+}
+
 function resolveCodexCustomProviderRoutingDecision(
   body: unknown,
   ctx: RequestTransformCtx,
@@ -2575,9 +2646,7 @@ function resolveCodexCustomProviderRoutingDecision(
     return codexCustomProviderRouteFailure(400, 'invalid_custom_provider_route');
   }
 
-  const route = frozenRoutes === undefined
-    ? findCodexAppliedCustomProviderRoute(parsed.routeId)
-    : frozenRoutes.find((candidate) => candidate.routeId === parsed.routeId);
+  const route = customProviderRouteSnapshot(parsed.routeId, frozenRoutes);
   if (!route) return codexCustomProviderRouteFailure(403, 'custom_provider_route_unavailable');
 
   if (parsed.pathKind === 'images' && route.capabilities.imageGeneration !== true) {
@@ -2951,7 +3020,7 @@ function createTransformRequestChain(
     createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
-    createProviderModelRewriteTransform(),
+    createProviderModelRewriteTransform(frozenAuthInjection),
     providerRequestTransform,
     // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
@@ -3071,7 +3140,8 @@ function createCodexProxyHandle(
     transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter).map(
       (transform): RequestTransform => {
         // Namespaced Responses use a frozen Provider route. Preserve its native
-        // fields and model; only repair known tool ID mismatches on this path.
+        // fields and model. The dedicated transform below reconciles effort
+        // against that same snapshot; ordinary session/catalog transforms stay out.
         if (transform === normalizeResponsesToolItemIds) return transform;
         const scoped: RequestTransform = (body, ctx) =>
           isCodexCustomProviderNamespacePath(ctx.url) ? null : transform(body, ctx);
@@ -3080,7 +3150,7 @@ function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ),
+    ).concat(createCustomProviderReasoningTransform(frozenCustomProviderRoutes)),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);

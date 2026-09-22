@@ -11,6 +11,7 @@ async function runBridge(
   upstream: string,
   onRequest: (url: string, init?: RequestInit) => void,
   extras: Partial<Parameters<typeof createClaudeProviderBridge>[0]> = {},
+  effort = 'high',
 ) {
   const handler = createClaudeProviderBridge({
     url: `https://supplier.example/v1/${protocol === 'openai-chat' ? 'chat/completions' : 'responses'}`,
@@ -28,7 +29,7 @@ async function runBridge(
     req.on('end', () => {
       void handler.handle({ parsedBody: JSON.parse(Buffer.concat(chunks).toString()),
         ctx: { reqId: 1, method: 'POST', url: req.url!, headers: {} }, res,
-        prefs: { reasoningEffort: 'high' },
+        prefs: { reasoningEffort: effort },
       }).catch(() => { res.statusCode = 500; res.end(); });
     });
   });
@@ -50,6 +51,19 @@ const chatStream = [
 ].map(frame => `data: ${JSON.stringify(frame)}\r\n\r\n`).join('') + 'data: [DONE]\r\n\r\n';
 
 describe('Claude Code custom provider translation', () => {
+  it.each(['openai-chat', 'openai-responses'] as const)(
+    'reconciles saved effort against current capabilities before %s forwarding', async protocol => {
+      const sent: unknown[] = [];
+      for (const efforts of [['high', 'max'], ['high'], [], ['high', 'max']] as const) {
+        await runBridge(protocol, true, chatStream, (_url, init) => {
+          const request = JSON.parse(String(init?.body));
+          sent.push(protocol === 'openai-chat' ? request.reasoning_effort : request.reasoning?.effort);
+        }, { efforts }, 'max');
+      }
+      expect(sent).toEqual(['max', 'high', undefined, 'max']);
+    },
+  );
+
   it.each([true, false])('translates chat requests and replies with streaming=%s', async stream => {
     const result = await runBridge('openai-chat', stream, chatStream, (url, init) => {
       expect(url).toBe('https://supplier.example/v1/chat/completions');
