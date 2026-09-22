@@ -92,6 +92,9 @@ it('keeps native editor identity through name changes and submits the edited tim
   expect(hour.hasAttribute('maxlength')).toBe(false);
   expect(h.nativeWrites).not.toHaveBeenCalled();
   expect(container.querySelector('[data-testid="native-form"]')).not.toBeNull();
+  const save = container.querySelector('[data-testid="companion.automation.save"]');
+  expect(save?.closest('section')).not.toBeNull();
+  expect(save?.closest('[data-testid="native-form"]')).toBe(hour.closest('[data-testid="native-form"]'));
   await click('save');
   expect(h.invoke).toHaveBeenCalledOnce();
   expect(h.invoke.mock.calls[0][2]).toMatchObject({ actionId: 'opaque-create', input: { revision: 1, definition: { name: '应该', prompt: 'Check the inbox', triggers: [{ expression: '05 08 * * *' }] } } });
