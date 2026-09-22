@@ -170,6 +170,8 @@ describe('resolveSessionContextWindowBounds', () => {
       modelLimit: 800_000,
       budget: null,
       budgetCustomized: false,
+      // 生效窗口 = min(模型级上限 800K, 物理上限 1M) —— 已核实路由由 main 夹一次。
+      effectiveWindow: 800_000,
     });
   });
 
@@ -187,6 +189,7 @@ describe('resolveSessionContextWindowBounds', () => {
       modelLimit: null,
       budget: 262_144,
       budgetCustomized: true,
+      effectiveWindow: 262_144,
     });
   });
 

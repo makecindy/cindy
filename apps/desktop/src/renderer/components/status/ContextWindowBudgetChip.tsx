@@ -248,7 +248,10 @@ export function ContextWindowBudgetChip({
   const ceiling = [maxWindow, modelLimit]
     .filter((value): value is number => typeof value === 'number' && value > 0)
     .reduce<number | null>((min, value) => (min === null || value < min ? value : min), null);
-  const effectiveDefaultWindow = modelLimit ?? defaultWindow;
+  // 优先用 main / 被控端下发的**生效窗口**（它是 resolveConfiguredContextWindow 的结果：
+  // 已核实路由会被物理上限夹一次，未核实路由才直接用模型级上限）。老被控端不返回该字段时才
+  // 退回本地推导（模型级上限 ?? 目录默认）。
+  const effectiveDefaultWindow = authoritativeBounds?.effectiveWindow ?? (modelLimit ?? defaultWindow);
 
   // 已存值可能来自手改偏好文件（写入口拦不住已存在的数据）：先按同一口径归一化，
   // 否则会在选项里补出一个「点了必失败」的档（update 入口对非整数直接拒绝）。

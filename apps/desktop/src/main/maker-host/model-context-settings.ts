@@ -111,6 +111,9 @@ export function resolveSessionContextWindowBounds(input: {
     providerId: source,
     defaultWindow: bounds?.defaultWindow ?? null,
     maxWindow: bounds?.maxWindow ?? null,
+    // 运行期真正会用的窗口：把同一套 resolveConfiguredContextWindow 的结果一起下发，
+    // 调用方不必（也不该）自己按 defaultWindow/modelLimit 重推「跟随默认得到多少」。
+    effectiveWindow: resolveConfiguredContextWindow(input.catalog, input.agent, source, input.modelId, budget),
     modelLimit: typeof modelLimit === 'number' && Number.isFinite(modelLimit) && modelLimit > 0
       ? modelLimit : null,
     budget,

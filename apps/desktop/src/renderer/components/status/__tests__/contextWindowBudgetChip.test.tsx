@@ -146,7 +146,12 @@ function triggerLabel(chip: Element | null): string {
 
 /** 权威边界的形状（本地 `maker:get-context-window-bounds` / 远程 device-link 同名 channel）。 */
 function boundsView(
-  over: Partial<Record<"budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit", unknown>> = {},
+  over: Partial<
+    Record<
+      "budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit" | "effectiveWindow",
+      unknown
+    >
+  > = {},
 ) {
   return {
     providerId: "xd",
@@ -155,6 +160,7 @@ function boundsView(
     modelLimit: null,
     budget: null,
     budgetCustomized: false,
+    effectiveWindow: null,
     ...over,
   };
 }
@@ -311,12 +317,34 @@ function chipText(): string {
       defaultWindow: 200_000,
       maxWindow: null,
       modelLimit: 1_048_000,
+      effectiveWindow: 1_048_000,
     })));
 
     // providers=null：模拟真实形态里 renderer 侧也拿不到该路由的目录上限（只有 main 的权威边界）。
     renderChip({ providers: null });
     const options = await openTierCard();
     const defaultOption = options.find((el) => el.getAttribute('data-token') === '1048000');
+    expect(defaultOption?.textContent).toContain('optionDefault');
+    await waitFor(() => {
+      expect(chipText()).toContain('optionPercent#{"percent":100}');
+    });
+  });
+
+  it('clamps the effective default to the physical max the way main does', async () => {
+    // Greptile 复审 P1 的形态：已核实路由上模型级上限（1.05M）高于物理上限（200K）时，
+    // main 的 resolveVerifiedContextWindow 会夹到物理上限；chip 不能把 1.05M 当成默认档，
+    // 否则会显示/选中一个运行期根本达不到的窗口。生效窗口由 main 下发，这里只消费。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: 200_000,
+      modelLimit: 1_048_000,
+      effectiveWindow: 200_000,
+    })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    expect(tierTokens()).not.toContain('1048000');
+    const defaultOption = options.find((el) => el.getAttribute('data-token') === '200000');
     expect(defaultOption?.textContent).toContain('optionDefault');
     await waitFor(() => {
       expect(chipText()).toContain('optionPercent#{"percent":100}');

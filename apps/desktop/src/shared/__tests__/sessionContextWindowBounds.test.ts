@@ -11,11 +11,11 @@ describe('normalizeSessionContextWindowBounds', () => {
     expect(
       normalizeSessionContextWindowBounds({
         providerId: 'xd', defaultWindow: 200_000, maxWindow: 1_000_000, modelLimit: 100_000,
-        budget: 250_000, budgetCustomized: true,
+        budget: 250_000, budgetCustomized: true, effectiveWindow: 100_000,
       }),
     ).toEqual({
       providerId: 'xd', defaultWindow: 200_000, maxWindow: 1_000_000, modelLimit: 100_000,
-      budget: 250_000, budgetCustomized: true,
+      budget: 250_000, budgetCustomized: true, effectiveWindow: 100_000,
     });
     // 任务预算随边界一起回来（偏好文件里的条目），缂少/非法时按「未自定义」处理。
     expect(
@@ -24,16 +24,16 @@ describe('normalizeSessionContextWindowBounds', () => {
       }),
     ).toEqual({
       providerId: 'xd', defaultWindow: 200_000, maxWindow: null, modelLimit: null,
-      budget: null, budgetCustomized: false,
+      budget: null, budgetCustomized: false, effectiveWindow: null,
     });
     expect(
       normalizeSessionContextWindowBounds({
         providerId: 'xd', defaultWindow: 200_000, maxWindow: null, modelLimit: null,
-        budget: -5, budgetCustomized: 'yes',
+        budget: -5, budgetCustomized: 'yes', effectiveWindow: 0,
       }),
     ).toEqual({
       providerId: 'xd', defaultWindow: 200_000, maxWindow: null, modelLimit: null,
-      budget: null, budgetCustomized: false,
+      budget: null, budgetCustomized: false, effectiveWindow: null,
     });
   });
 
@@ -52,7 +52,7 @@ describe('normalizeSessionContextWindowBounds', () => {
       }),
     ).toEqual({
       providerId: null, defaultWindow: null, maxWindow: 400_000, modelLimit: null,
-      budget: null, budgetCustomized: false,
+      budget: null, budgetCustomized: false, effectiveWindow: null,
     });
     expect(normalizeSessionContextWindowBounds({ defaultWindow: 0, maxWindow: Number.NaN })).toBeNull();
   });
