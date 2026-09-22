@@ -35,6 +35,8 @@ export type IpcErrorCode =
   | 'CREDENTIAL_SWITCH_BUSY'
   // Pi 热切 SuperGrok 时 switch_session 未确认，任务已终止。
   | 'PI_CATALOG_RELOAD_UNCONFIRMED'
+  // Pi 图片输入能力对账失败:写 models.json / 子进程重载被拒。会话仍可用(已回滚或保留 pending)。
+  | 'PI_IMAGE_CAPABILITY_REFRESH_FAILED'
   // 远端 Claude 路由 materialization 失败(remote-claude-route.ts):
   // 供应商凭证 mutation 窗口(稍后重试)/ 远端不可表达(换来源)/ 订阅未连接(连接 Claude.ai)。
   | 'REMOTE_PROVIDER_UPDATING'
@@ -301,6 +303,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SESSION_RUNNING',
   'CREDENTIAL_SWITCH_BUSY',
   'PI_CATALOG_RELOAD_UNCONFIRMED',
+  'PI_IMAGE_CAPABILITY_REFRESH_FAILED',
   'REMOTE_PROVIDER_UPDATING',
   'REMOTE_PROVIDER_UNSUPPORTED',
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',

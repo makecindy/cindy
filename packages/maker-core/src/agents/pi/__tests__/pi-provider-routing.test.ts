@@ -4477,6 +4477,129 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("keeps the session route when a late capability declaration is reconciled on a same-route model switch", async () => {
+    // switch_session 按进程启动时的 --provider/--model 重建 AgentSession：对账里如果只
+    // switch_session 而不重放当前路由，会话内切过模的会话会被静默拽回启动路由 —— 同路由
+    // no-op 与发图都不会再打 set_model，提示词发给错误的模型且没有任何报错。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-route-keep",
+              name: "Native Route Keep",
+              baseUrl: "http://route-keep.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"] },
+                { id: "model-b", input: ["text"] },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-route-keep" && modelId === "model-b" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-route-keep",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-route-keep",
+    });
+    await handle.setModel!("model-b", { providerId: "native-route-keep" });
+    expect(captured.runtimeModel).toBe("model-b");
+
+    // 会话里已切到 model-b；用户此刻声明图片能力，下一次心跳以同路由 setModel(model-b)
+    // 触发对账（与 no-op 分支同路径）。
+    declared.image = true;
+    captured.requests.length = 0;
+    await handle.setModel!("model-b", { providerId: "native-route-keep" });
+
+    // 对账生效，且子进程仍在 model-b（而不是被 switch_session 拽回 model-a）。
+    expect(captured.runtimeModel).toBe("model-b");
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("switch_session");
+    expect(requestTypes.indexOf("set_model")).toBeGreaterThan(
+      requestTypes.indexOf("switch_session"),
+    );
+    await handle.close();
+  });
+
+  it("rejects images when the declaration flips to unsupported without a model switch", async () => {
+    // 反向对账：会话启动时快照是「支持图片」，用户后来把声明改成不支持且不切模 ——
+    // 先查快照就放行会把图片发给一个已声明不支持的模型。对账必须在信任快照之前跑。
+    const declared = { image: true };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-revoke",
+              name: "Native Revoke",
+              baseUrl: "http://revoke.test",
+              api: "openai-completions",
+              models: [{ id: "local-model", input: ["text", "image"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: () => declared.image,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-revoked-after-start",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-revoke",
+    });
+    const imagePath = path.join(cwd, "revoke.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/revoke.png",
+        },
+      ],
+    };
+    const readRevokeInput = (): string[] => {
+      const modelsJson = JSON.parse(
+        readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"), "utf8"),
+      ) as { providers: Record<string, { models: Array<{ id: string; input: string[] }> }> };
+      const block =
+        modelsJson.providers["native-revoke"] ?? modelsJson.providers["cindy-byom-native-revoke"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+
+    // 基线：声明支持时放行。
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests.map((request) => request.type)).toContain("prompt");
+
+    // 改成「不支持图片」，不切模直接发图：必须拒收，且盘上快照同步回纯文本。
+    declared.image = false;
+    captured.requests.length = 0;
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: "PI_IMAGE_INPUT_UNSUPPORTED",
+    });
+    expect(captured.requests.map((request) => request.type)).not.toContain("prompt");
+    expect(readRevokeInput()).toEqual(["text"]);
+    await handle.close();
+  });
+
   it("waits through Pi preflight compaction when accepting a prompt", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({ providers: [], env: {} })),

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import type {
   ModelCatalogImageInputTarget,
@@ -12,24 +16,30 @@ const EMPTY: ModelCatalogImageInputView = { value: null, isCustomized: false };
 /**
  * 单模型图片输入能力的本地目录 override。
  *
- * 与 `useModelContextLimit` 同一套纪律：请求不跨 target 存活(generation 守卫)，
- * 失败时回读真值而不是把乐观值留在界面上。写入成功后 main 会广播 PROVIDER_CHANGED，
- * 这里同时订阅该事件，让「跟随供应商」的括注随目录变化刷新。
+ * 与 `useModelContextLimit` 同一套纪律：请求不跨 target 存活(generation 守卫)、不跨账号
+ * 存活(owner 守卫)、失败时回读真值而不是把乐观值留在界面上。写入成功后 main 会广播
+ * PROVIDER_CHANGED，这里同时订阅该事件，让「跟随供应商」的括注随目录变化刷新。
  */
 export function useModelCatalogImageInput(target: ModelCatalogImageInputTarget | null) {
   const key = JSON.stringify(target);
   const stableTarget = useMemo<ModelCatalogImageInputTarget | null>(() => JSON.parse(key), [key]);
   const [state, setState] = useState({ ...EMPTY, key, loading: true, saving: false, error: false });
   const generation = useRef(0);
+  /** 在途写入数：广播触发的回读可能在写盘前拿到旧值，不得顶掉写入自己的回声。 */
+  const writesInFlight = useRef(0);
 
   const run = useCallback(
     async (write?: { value: boolean | null }): Promise<boolean> => {
+      // 写在途时不发 GET：广播（含本次写入自己触发的那次）可能在写盘前到达，其结果比写入的
+      // 回声旧，却会顶掉 generation 使写入结果被丢弃 —— UI 会停在旧值而写其实已经成功。
+      if (!write && writesInFlight.current > 0) return true;
       const request = ++generation.current;
       if (!stableTarget) {
         setState({ ...EMPTY, key, loading: false, saving: false, error: false });
         return false;
       }
-      const current = () => request === generation.current;
+      const owner = getDataOwnerGeneration();
+      const current = () => request === generation.current && isDataOwnerGenerationCurrent(owner);
       // 乐观更新：写入时立即反映新值，标签点击即变；失败时由下方的回读把真值盖回来，
       // 不会把乐观值留在界面上冒充已保存。刷新(GET)保留原值，不产生明暗/文案跳变。
       setState((prev) => ({
@@ -39,6 +49,7 @@ export function useModelCatalogImageInput(target: ModelCatalogImageInputTarget |
         saving: write !== undefined,
         error: false,
       }));
+      if (write) writesInFlight.current += 1;
       try {
         const view = write
           ? await window.electronAPI.maker.setModelCatalogImageInput(stableTarget, write.value)
@@ -62,6 +73,8 @@ export function useModelCatalogImageInput(target: ModelCatalogImageInputTarget |
           setState({ ...EMPTY, key, loading: false, saving: false, error: true });
         }
         return false;
+      } finally {
+        if (write) writesInFlight.current -= 1;
       }
     },
     [stableTarget, key],

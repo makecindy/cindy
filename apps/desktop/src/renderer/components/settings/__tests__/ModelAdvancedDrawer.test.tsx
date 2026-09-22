@@ -32,20 +32,24 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
 }));
 const imageInputMocks = vi.hoisted(() => ({
   setValue: vi.fn(async () => true),
+  target: vi.fn(),
   value: null as boolean | null,
   isCustomized: false,
   saving: false,
   loading: false,
 }));
 vi.mock('@/hooks/useModelCatalogImageInput', () => ({
-  useModelCatalogImageInput: () => ({
-    value: imageInputMocks.value,
-    isCustomized: imageInputMocks.isCustomized,
-    loading: imageInputMocks.loading,
-    saving: imageInputMocks.saving,
-    error: false,
-    setValue: imageInputMocks.setValue,
-  }),
+  useModelCatalogImageInput: (target: unknown) => {
+    imageInputMocks.target(target);
+    return {
+      value: imageInputMocks.value,
+      isCustomized: imageInputMocks.isCustomized,
+      loading: imageInputMocks.loading,
+      saving: imageInputMocks.saving,
+      error: false,
+      setValue: imageInputMocks.setValue,
+    };
+  },
 }));
 vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -348,6 +352,59 @@ describe('model advanced editor', () => {
         'settings.providers.models.advanced.imageInputOverride.saveFailed',
       ),
     );
+  });
+
+  it('covers every harness id of the row when declaring image capability', async () => {
+    // openai 行的主展示引擎是 codex（gpt-6），而运行期消费该能力的 Pi 侧 id 是 chatgpt/gpt-6。
+    // 只写主引擎的 id 时 Pi 永远读不到声明，UI 却会显示「已声明」。
+    const piModel = { ...model, id: 'chatgpt/gpt-6' };
+    render(
+      <ModelAdvancedDrawer
+        provider={provider}
+        row={{
+          id: model.id,
+          name: model.name,
+          avail: ['codex', 'pi'],
+          byAgent: { codex: model, pi: piModel },
+        }}
+        open
+        onOpenChange={vi.fn()}
+        pricePresentationOf={() => null}
+        onDisable={vi.fn()}
+        disabled={false}
+        paymentRequired={false}
+      />,
+    );
+
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
+    // 声明目标必须带上 Pi 侧 id（写盘/读取都按该 id 精确匹配）。
+    const targets = imageInputMocks.target.mock.calls.map((call) => call[0]);
+    expect(targets).toContainEqual(
+      expect.objectContaining({
+        providerId: 'openai',
+        agent: 'codex',
+        modelId: 'gpt-6',
+        relatedTargets: [expect.objectContaining({ agent: 'pi', modelId: 'chatgpt/gpt-6' })],
+      }),
+    );
+  });
+
+  it('warns when the limit exceeds a verified upstream window without a declared max', () => {
+    // 「已验证窗口但无 contextWindowMax」的模型此前不会告警：填到窗口以上也静默接受。
+    mocks.limit = 1_200_000;
+    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
+    expect(
+      screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
+    ).toBeTruthy();
   });
 
   it('does not offer the local declaration for the server-controlled gateway provider', () => {

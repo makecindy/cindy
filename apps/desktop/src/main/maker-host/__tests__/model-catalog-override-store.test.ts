@@ -100,6 +100,63 @@ describe('model-catalog-override-store / 图片输入能力声明', () => {
     await setModelCatalogImageInput({ providerId: 'a:b', modelId: 'm' }, true);
     expect(readModelCatalogOverrides().patches['a%3Ab:m']?.base?.supportsImageInput).toBe(true);
   });
+
+  it('一行多个引擎 id 一起写（桥接两端 id 不同，只写一边运行期读不到）', async () => {
+    owner.current = 'owner-image-row';
+    await setModelCatalogImageInput(
+      [
+        { providerId: 'openai', modelId: 'gpt-5.6-sol' },
+        { providerId: 'openai', modelId: 'chatgpt/gpt-5.6-sol' },
+      ],
+      true,
+    );
+    const patches = readModelCatalogOverrides().patches;
+    expect(patches['openai:gpt-5.6-sol']?.base?.supportsImageInput).toBe(true);
+    expect(patches['openai:chatgpt/gpt-5.6-sol']?.base?.supportsImageInput).toBe(true);
+  });
+
+  it('清掉 perAgent 里残留的 supportsImageInput，并让读取按 agent 算有效值', async () => {
+    // perAgent 会遮蔽 base：不清的话 UI（读 base）显示已声明、运行期（按合并语义）仍拒收。
+    owner.current = 'owner-image-peragent';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        [key]: { agents: ['pi'], perAgent: { pi: { supportsImageInput: false } } },
+      },
+    });
+    // 未写入前：读 pi 的有效值仍是显式声明（不假装「跟随目录」）。
+    expect(readModelCatalogImageInput({ ...target, agent: 'pi' })).toEqual({
+      value: false,
+      isCustomized: true,
+    });
+
+    await setModelCatalogImageInput({ ...target, agent: 'pi' }, true);
+    expect(readModelCatalogOverrides().patches[key]?.perAgent).toBeUndefined();
+    expect(readModelCatalogImageInput({ ...target, agent: 'pi' })).toEqual({
+      value: true,
+      isCustomized: true,
+    });
+  });
+
+  it('手改文件里会被 sanitize 丢弃的 patches 条目：拒绝写入而不是静默删掉', async () => {
+    owner.current = 'owner-image-lossy';
+    writeOwnerFile({
+      version: 1,
+      patches: {
+        // 未知字段 → 整条被 sanitize 隔离；写盘会把 patches 整段换成清洗后的快照。
+        'openai:typo-model': { base: { name: 'Typo', unknownField: 1 } },
+      },
+    });
+
+    await expect(setModelCatalogImageInput(target, true)).rejects.toThrow(/无法保留/);
+    // 文件没被动过：那条手改还在（修好后下一次写入自动恢复）。
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, owner.current, 'model-catalog-overrides.json'), 'utf8'),
+    ) as { patches: Record<string, unknown> };
+    expect(raw.patches['openai:typo-model']).toEqual({
+      base: { name: 'Typo', unknownField: 1 },
+    });
+  });
 });
 
 describe('model-catalog-override-store', () => {

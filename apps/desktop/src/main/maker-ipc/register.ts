@@ -5692,10 +5692,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ),
     }),
     readModelCatalogImageInput: (target) =>
-      readModelCatalogImageInput({ providerId: target.providerId, modelId: target.modelId }),
-    writeModelCatalogImageInput: async (target, value) => {
+      readModelCatalogImageInput({
+        providerId: target.providerId,
+        modelId: target.modelId,
+        agent: target.agent,
+      }),
+    writeModelCatalogImageInput: async (targets, value) => {
       await setModelCatalogImageInput(
-        { providerId: target.providerId, modelId: target.modelId },
+        targets.map((target) => ({
+          providerId: target.providerId,
+          modelId: target.modelId,
+        })),
         value,
       );
     },

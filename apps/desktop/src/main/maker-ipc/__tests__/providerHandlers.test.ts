@@ -3360,7 +3360,7 @@ describe('model catalog image input handlers', () => {
     registerProviderHandlers(harness, deps);
 
     await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, { ...target, value: true });
-    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith(target, true);
+    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith([target], true);
     // 写盘不会自动生效：必须重读 override 注入活动目录并刷新/广播。
     expect(deps.syncLocalCatalogOverrides).toHaveBeenCalledTimes(1);
     expect(deps.refreshCatalog).toHaveBeenCalledTimes(1);
@@ -3375,7 +3375,58 @@ describe('model catalog image input handlers', () => {
     registerProviderHandlers(harness, deps);
 
     await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, { ...target, value: null });
-    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith(target, null);
+    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith([target], null);
+  });
+
+  it('writes every harness id of the row so the Pi-side key is covered', async () => {
+    // 桥接投影两端 id 不同（openai 行：codex 用 gpt-5.6-sol、pi 用 chatgpt/gpt-5.6-sol）。
+    // override 按 providerId:modelId 精确匹配，只写主展示引擎的 id 时运行期（读 pi 侧 id）
+    // 完全看不到声明，UI 却会显示「已声明」。
+    const harness = new IpcHarness();
+    const deps = imageDeps({
+      listProviders: async () => [
+        catalogView('openai', { codex: ['gpt-5.6-sol'], pi: ['chatgpt/gpt-5.6-sol'] }),
+      ],
+    });
+    registerProviderHandlers(harness, deps);
+
+    const codexTarget = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-5.6-sol' };
+    const piTarget = { providerId: 'openai', agent: 'pi' as const, modelId: 'chatgpt/gpt-5.6-sol' };
+    await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, {
+      ...codexTarget,
+      relatedTargets: [piTarget],
+      value: true,
+    });
+    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith([codexTarget, piTarget], true);
+  });
+
+  it('clears a stale declaration without requiring catalog membership', async () => {
+    // value=null 是「恢复跟随目录」：目录漂移（模型下架）后 UI 仍要能清掉陈旧 override。
+    const harness = new IpcHarness();
+    const deps = imageDeps({ listProviders: async () => [] });
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, { ...target, value: null });
+    expect(deps.writeModelCatalogImageInput).toHaveBeenCalledWith([target], null);
+  });
+
+  it('rejects the gateway provider even though the button is disabled in the UI', async () => {
+    // 按钮 disable 挡不住受信 renderer 直接调 preload：网关能力由服务端目录控制。
+    const harness = new IpcHarness();
+    const deps = imageDeps({
+      listProviders: async () => [catalogView('xd', { pi: ['mimo-v2.6-flash'] })],
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, {
+        providerId: 'xd',
+        agent: 'pi',
+        modelId: 'mimo-v2.6-flash',
+        value: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.writeModelCatalogImageInput).not.toHaveBeenCalled();
   });
 
   it('reads without a catalog membership check so stale overrides stay visible and clearable', async () => {

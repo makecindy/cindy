@@ -15,12 +15,28 @@ const target = { agent: 'pi' as const, providerId: 'opencode-go', modelId: 'mimo
 const view = (value: boolean | null) => ({ value, isCustomized: value !== null });
 const get = vi.fn();
 const set = vi.fn();
+const ownerState = { current: true };
+let providersChanged: (() => void) | undefined;
+
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+  isDataOwnerGenerationCurrent: () => ownerState.current,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ownerState.current = true;
+  providersChanged = undefined;
   Object.assign(window, {
     electronAPI: {
-      maker: { getModelCatalogImageInput: get, setModelCatalogImageInput: set },
+      maker: {
+        getModelCatalogImageInput: get,
+        setModelCatalogImageInput: set,
+        onProvidersChanged: (callback: () => void) => {
+          providersChanged = callback;
+          return () => {};
+        },
+      },
     },
   });
 });
@@ -90,6 +106,46 @@ describe('model catalog image input override', () => {
       await hook.result.current.setValue(null);
     });
     expect(hook.result.current).toMatchObject({ value: null, isCustomized: false, error: true });
+  });
+
+  it('ignores broadcasts that arrive while a write is in flight', async () => {
+    // 写入成功后 main 会广播 PROVIDER_CHANGED；而其它窗口期的广播可能在写盘前就到达。
+    // 若让它触发的 GET 顶掉 generation，写入自己的回声会被丢弃，UI 停在旧值而写其实成功。
+    get.mockResolvedValue(view(null));
+    const pending = deferred<ReturnType<typeof view>>();
+    set.mockReturnValue(pending.promise);
+    const hook = renderHook(() => useModelCatalogImageInput(target));
+    await act(async () => {});
+    const callsAfterMount = get.mock.calls.length;
+
+    act(() => {
+      void hook.result.current.setValue(true);
+    });
+    expect(hook.result.current.value).toBe(true);
+
+    // 写在途时的广播：不得再发 GET（发了就会抢走写入的回声）。
+    await act(async () => {
+      providersChanged?.();
+    });
+    expect(get.mock.calls.length).toBe(callsAfterMount);
+
+    await act(async () => {
+      pending.resolve(view(true));
+    });
+    expect(hook.result.current).toMatchObject({ value: true, isCustomized: true, saving: false });
+  });
+
+  it('drops a response that lands after the data owner changed', async () => {
+    const pending = deferred<ReturnType<typeof view>>();
+    get.mockReturnValue(pending.promise);
+    const hook = renderHook(() => useModelCatalogImageInput(target));
+
+    // 切号（账号/session owner 代次变化）后旧响应不得写进状态。
+    ownerState.current = false;
+    await act(async () => {
+      pending.resolve(view(true));
+    });
+    expect(hook.result.current.value).toBeNull();
   });
 
   it('does not let a stale read for a previous model win', async () => {

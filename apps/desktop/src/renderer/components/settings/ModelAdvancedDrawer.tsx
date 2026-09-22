@@ -259,18 +259,32 @@ export function ModelAdvancedDrawer({
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
   // 图片输入能力的本地声明。与上下文上限同一个目标形状；agent 只用于目录成员校验。
-  const imageInputTarget = useMemo(
-    () =>
-      open && primaryAgent && primaryModel
-        ? { providerId: provider.id, agent: primaryAgent, modelId: primaryModel.id }
-        : null,
-    [open, primaryAgent, primaryModel, provider.id],
-  );
+  // 必须覆盖该行全部引擎的 id：运行期真正消费这个能力的只有 Pi，而桥接投影两端 id 不同
+  // （openai 行：codex 用 gpt-5.6-sol、pi 用 chatgpt/gpt-5.6-sol）—— 只写主展示引擎的 id，
+  // Pi 侧读不到（override 按 providerId:modelId 精确匹配），UI 却会显示「已声明」。
+  const imageInputTarget = useMemo(() => {
+    if (!open || !primaryAgent || !primaryModel) return null;
+    const relatedTargets = (row?.avail ?? [])
+      .filter((agent) => agent !== primaryAgent)
+      .flatMap((agent) => {
+        const model = row?.byAgent[agent];
+        return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
+      });
+    return {
+      providerId: provider.id,
+      agent: primaryAgent,
+      modelId: primaryModel.id,
+      ...(relatedTargets.length > 0 ? { relatedTargets } : {}),
+    };
+  }, [open, primaryAgent, primaryModel, provider.id, row]);
   const imageInput = useModelCatalogImageInput(imageInputTarget);
   // 'inherit' = 删除本机 override，回到跟随供应商。失败由 hook 回读真值，这里只负责提示。
   const setImageInput = async (next: string) => {
     const value = next === 'inherit' ? null : next === 'true';
-    if (imageInput.isCustomized && value === imageInput.value) return;
+    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。
+    if (value === null ? !imageInput.isCustomized : imageInput.isCustomized && value === imageInput.value) {
+      return;
+    }
     const persisted = await imageInput.setValue(value);
     if (!persisted) {
       toast.error(t('settings.providers.models.advanced.imageInputOverride.saveFailed'));
@@ -308,6 +322,10 @@ export function ModelAdvancedDrawer({
   // 说明行会先退回**旧的** effectiveLimit、回声到了再跳新值 —— 用户实测到的「闪一下旧值」。
   // 这里把「提交在途」也当成还在编辑：显示值继续取草稿，直到写入收口。
   const [ctxCommitting, setCtxCommitting] = useState(false);
+  // 提交代次：目标（模型/agent/provider）一变或又一次提交开始，旧提交的 finally 就不许再
+  // 清掉新的 committing 状态 —— 否则 A 写未完成时切到 B 并提交，A 完成会把 B 的「提交在途」
+  // 提前收掉，B 在写入期间重新显示旧的 effectiveLimit（本次修改要消除的闪回原地复活）。
+  const ctxCommitGen = useRef(0);
   const ctxDirtyRef = useRef(false);
   const defaultWindow = contextAgent === 'codex' && ctx.codexContext
     ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
@@ -336,6 +354,7 @@ export function ModelAdvancedDrawer({
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
+    ctxCommitGen.current += 1;
     setCtxCommitting(false);
     setCtxDraft('');
     setPriceDialogOpen(false);
@@ -352,15 +371,17 @@ export function ModelAdvancedDrawer({
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading) return;
     ctxDirtyRef.current = false;
+    const generation = (ctxCommitGen.current += 1);
     setCtxCommitting(true);
     // hook 的 promise 在它把新值（或失败回滚后的值）写进 state 之后才 resolve，
-    // 所以这里收口不会再产生一帧旧值。
-    void Promise.resolve(ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens)).finally(() =>
-      setCtxCommitting(false),
-    );
+    // 所以这里收口不会再产生一帧旧值。仅当没有更新的提交/重置发生时才能清状态。
+    void Promise.resolve(ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens)).finally(() => {
+      if (ctxCommitGen.current === generation) setCtxCommitting(false);
+    });
   }, [ctx, ctxDraft, ctxInvalid, parsedTokens]);
   const resetCtx = useCallback(() => {
     ctxDirtyRef.current = false;
+    ctxCommitGen.current += 1;
     setCtxCommitting(false);
     setCtxDraft(defaultWindow > 0 ? editableContextK(defaultWindow) : '');
     void ctx.reset();
@@ -424,8 +445,16 @@ export function ModelAdvancedDrawer({
       : parsedTokens
     : effectiveLimit;
   // 只有「上游声明的容量」比它小时才该告警；未声明容量时拿工作默认值当窗口会误报
-  // （自定义连接上 200K 只是兜底，不是任何人的声明）。
-  const editRouteWindow = contextModel?.contextWindowMax ?? 0;
+  // （自定义连接上 200K 只是兜底，不是任何人的声明）。来源与上方「上游最大上下文」同一套：
+  // contextWindowMax → 已验证的 contextWindow → 未声明，否则「已验证窗口但无 max」的模型
+  // 把限制填到窗口以上也不会告警。
+  const editCapacity = contextModel?.contextWindowMax ?? 0;
+  const editRouteWindow =
+    editCapacity > 0
+      ? editCapacity
+      : contextModel?.contextWindowVerified === true
+        ? (contextModel.contextWindow ?? 0)
+        : 0;
   const overRouteWindow =
     editRouteWindow > 0 &&
     displayedLimit !== null &&
