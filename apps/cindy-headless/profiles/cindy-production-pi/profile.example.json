@@ -1,0 +1,38 @@
+{
+  "id": "cindy-production-pi",
+  "version": 1,
+  "agentBackend": "pi",
+  "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
+  "agentBinaryVersion": "0.85.1",
+  "supportedModelIds": ["claude-sonnet-4-6"],
+  "model": {
+    "provider": "cindy",
+    "requestedId": "claude-sonnet-4-6",
+    "routeId": "configured-proxy",
+    "contextLimit": 200000,
+    "maxOutputTokens": 32000,
+    "effort": "high"
+  },
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "prompt.md",
+  "expectedSystemPromptDigest": "cf79194d42a19e1a00d018efbb2bc893ce746a7bcd3e022378a3b2dd77c06874",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "inputPolicy": {
+    "attachments": true,
+    "workspaceOnly": true,
+    "maxFiles": 16,
+    "maxFileBytes": 26214400
+  },
+  "mcpServers": [],
+  "piProjectSkills": {
+    "enabled": true,
+    "roots": [".pi/skills", ".agents/skills"]
+  },
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

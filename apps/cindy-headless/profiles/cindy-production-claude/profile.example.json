@@ -1,0 +1,32 @@
+{
+  "id": "cindy-production-claude",
+  "version": 1,
+  "agentBackend": "claude-code",
+  "agentBinaryPath": "/opt/cindy-headless/bin/claude",
+  "agentBinaryVersion": "2.1.259",
+  "supportedModelIds": ["claude-sonnet-4-6"],
+  "model": {
+    "provider": "anthropic",
+    "requestedId": "claude-sonnet-4-6",
+    "routeId": "configured-proxy",
+    "effort": "high"
+  },
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "prompt.md",
+  "expectedSystemPromptDigest": "003c2a8c1ab15422c50156880ca2301ff049ebecd1f666ac19057b1d12ae0c07",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "inputPolicy": {
+    "attachments": true,
+    "workspaceOnly": true,
+    "maxFiles": 16,
+    "maxFileBytes": 26214400
+  },
+  "mcpServers": [],
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "cindy-production-pi-deepseek-v4-flash",
+  "version": 1,
+  "parentProfile": "cindy-production-pi",
+  "changedDimensions": ["modelRoute", "nativeProviders"],
+  "agentBackend": "pi",
+  "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
+  "agentBinaryVersion": "0.85.1",
+  "supportedModelIds": ["deepseek/deepseek-v4-flash"],
+  "model": {
+    "provider": "example-gateway",
+    "requestedId": "deepseek/deepseek-v4-flash",
+    "routeId": "deepseek-v4-flash-primary",
+    "contextLimit": 1048576,
+    "maxOutputTokens": 32000
+  },
+  "nativeProviders": [
+    {
+      "id": "example-gateway",
+      "name": "TapSvc OpenAI-compatible benchmark gateway",
+      "baseUrl": "https://llm-proxy.example.com/v1",
+      "api": "openai-completions",
+      "apiKeyEnvVar": "CINDY_HEADLESS_API_KEY",
+      "models": [
+        {
+          "id": "deepseek/deepseek-v4-flash",
+          "contextWindow": 1048576,
+          "maxTokens": 32000,
+          "reasoning": true,
+          "input": ["text"]
+        }
+      ]
+    }
+  ],
+  "permissionMode": "bypassPermissions",
+  "systemPromptFile": "prompt.md",
+  "expectedSystemPromptDigest": "cf79194d42a19e1a00d018efbb2bc893ce746a7bcd3e022378a3b2dd77c06874",
+  "makerMemory": true,
+  "nativeMemory": false,
+  "projectContext": true,
+  "containerSandbox": true,
+  "inputPolicy": {
+    "attachments": true,
+    "workspaceOnly": true,
+    "maxFiles": 16,
+    "maxFileBytes": 26214400
+  },
+  "mcpServers": [],
+  "piProjectSkills": {
+    "enabled": true,
+    "roots": [".pi/skills", ".agents/skills"]
+  },
+  "compaction": {
+    "enabled": true,
+    "thresholdPct": 80
+  }
+}

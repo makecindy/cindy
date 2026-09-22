@@ -1,0 +1,39 @@
+{
+  "name": "cindy-headless",
+  "version": "0.4.2",
+  "cindyUpstreamCommit": "e2089e1e0d9f6f5aceed73b1d3550656d5f72359",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cindy-headless": "dist/cli.cjs",
+    "cindy-headless-eval": "dist/eval-cli.cjs"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "ensure:binaries": "node scripts/ensure-agent-binaries.mjs",
+    "bundle:linux": "pnpm ensure:binaries && node scripts/build-linux-bundle.mjs",
+    "package:release": "node scripts/package-upload.mjs",
+    "package:public-runtime": "node scripts/package-release.mjs --mode=public-runtime",
+    "package:full": "node scripts/package-release.mjs --mode=full",
+    "package:upload": "node scripts/package-upload.mjs",
+    "verify:distribution:full": "node scripts/verify-full-distribution.mjs",
+    "test:distribution": "node scripts/verify-distribution.mjs",
+    "doctor:distribution": "node scripts/distribution-doctor.mjs",
+    "verify:bundle": "node scripts/verify-bundle.mjs",
+    "profiles:freeze": "node scripts/freeze-production-profiles.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "verify": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "dependencies": {
+    "@cindy/maker-core": "workspace:*",
+    "@cindy/mcps": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}
