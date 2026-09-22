@@ -54,8 +54,11 @@ OpenAI 本机 Codex 登录与独立授权账号共享 OpenAI 公共目录及桥�
 现有协议保留两种兼容表示：Codex/Claude Code 的 Registry 根与桥接声明，及
 `providers[].models.pi` 的逐 Harness 声明。旧 Registry 的 agents 枚举不能直接加入 Pi；
 顶层 Codex/Claude Code 空数组仍由 Registry 实体化，不能解释成关闭。
-Pi 显式列表决定成员（包括空数组与撤下条目）；缺字段才使用随包兜底，不把其他 Harness
-的名单复制成 Pi 路由。服务器声明的新模型不要求先出现在 Pi SDK 名单中；有明确原生协议
+Pi 显式列表提供公共成员（包括空数组与退役条目）；缺字段才使用随包兜底。订阅账号
+发现的新型号同样进入 Pi，沿已有订阅传输执行，不要求先登记到 Pi SDK。显式空 Pi 列表
+仍关闭该公共入口，退役条目不由发现复活。Codex／Claude SDK 的发现只补 Pi 缺少的型号，
+不覆盖已有 Pi 型号的原生能力；SuperGrok 账号实报能力供三个 Harness 共用，按连接隔离。
+服务器声明的新模型不要求先出现在 Pi SDK 名单中；有明确原生协议
 即可构造 models.json。OpenAI 订阅仍使用专用 Codex Responses 认证传输。
 
 旧顶层 Pi 条目的静态资料是旧格式兜底，不能标为账号 discovery；
@@ -93,8 +96,8 @@ Pi 已识别的 OpenAI 订阅连接之间可复用同一运行时：每个账号
 | --- | --- | --- |
 | OpenAI / Anthropic 订阅的 Registry 根与发现补全 | 按对应静态/Registry 路径保留存在性，连接态另判 | 发现未返回不单独构成否定；不能用顶层 Codex/Claude 空数组禁用 Registry 实体化条目 |
 | 通用 OAuth additions-only、自定义连接刷新 | 保留已有配置 | 只新增/更新，不因本次未返回而删除已有成员 |
-| xAI 订阅账号权威发现 | null 表示尚无成功账号快照，走既有静态兼容路径 | 成功空数组也是账号成员快照；不能套 additions-only 规则。Pi 公共名单仍单独声明 |
-| `providers[].models.pi` | 字段缺失才使用随包声明 | 显式 [] 不回填，撤下项不从其他引擎复制回来 |
+| xAI 订阅账号权威发现 | null 表示尚无成功账号快照，走既有静态兼容路径 | 成功空数组也是账号成员快照；不能套 additions-only 规则。Pi 同时使用该账号发现及公共声明 |
+| `providers[].models.pi` | 字段缺失才使用随包声明 | 显式 [] 不回填；非空声明允许账号发现补新型号，退役项不复活 |
 | 内置非 Gateway 的媒体数组 | 字段缺失、允许 Registry 派生时才由媒体 routes 补成员 | 显式 [] 不由 Registry 或发现结果复活；非空列表不由 Registry 增补成员，后续账号发现按下一行处理 |
 | 已接入的图片/视频账号发现 | 没有发现快照时用静态/远端声明 | 成功快照限定该发现路径的成员，不能绕过目录显式禁用；不推广为全部音频或自定义刷新规则 |
 | Gateway 实时 `/models` | 未取得权威响应时保留未知/回退证据标记，不凭缺席下结论 | 成功清单拥有实时成员、可用性和实价；Registry 不增加 Gateway 成员 |
@@ -126,7 +129,7 @@ Pi 已识别的 OpenAI 订阅连接之间可复用同一运行时：每个账号
 }
 ```
 
-`baseModels` 是按公共 ID 的稀疏补丁；`patches` 支持已有订阅、Cindy AI、自定义供应商模型及 Pi。补丁不能凭空增加账号可用模型，尚未出现的条目静置。原有 `additions` 仍只适用于允许实体化的订阅根，不开放 Gateway 伪造。退役条目仍需完整合法 addition 才能复活。
+`baseModels` 是按公共 ID 的稀疏补丁；`patches` 支持已有订阅、Cindy AI、自定义供应商模型及 Pi。补丁不能凭空增加账号可用模型，尚未出现的条目静置。`additions` 适用于已实现传输的订阅连接，包括 Pi；显式 `agents: ["pi"]` 只新增 Pi 型号，未指定 agents 时完整公共配置也用于 Pi。旧的仅根引擎字段完整的配置仍按原方式加载。新增沿连接原有协议和凭证执行，不开放 Gateway 伪造，也不改用户自定义供应商的配置方式。退役条目仍需完整合法 addition 才能复活。
 
 键中的供应商段使用 `encodeURIComponent` 编码，模型段保持原文。例如旧自定义 xAI 的运行时 ID 是 `custom:xai`，对应键为 `custom%3Axai:grok-model`；`xai:grok-model` 仍指内置 xAI，`custom:xai:grok-model` 仍指供应商 `custom` 的模型 `xai:grok-model`，三者不混用。
 

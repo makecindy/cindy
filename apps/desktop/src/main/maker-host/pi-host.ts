@@ -1507,27 +1507,14 @@ export async function buildXaiPiNativeProvider(
 ): Promise<PiNativeProvidersResult> {
   const catalogModels =
     getActiveCatalog().providers.find((provider) => provider.id === providerId)?.models.pi ?? [];
-  const officialById = new Map(
-    (officialPiModels('xai') ?? []).map((candidate) => [candidate.id, candidate]),
-  );
-  const models = catalogModels.map((catalogModel) => ({
-    ...(officialById.get(catalogModel.id) ??
-      configuredPiModel({
-        id: catalogModel.id,
-        name: catalogModel.name,
-        supportsImageInput:
-          catalogModel.supportsImageInput === true ||
-          catalogModel.modalities?.input.includes('image') === true,
-        reasoning: catalogModel.efforts.length > 0,
-        reasoningEfforts: catalogModel.efforts.filter(
-          (effort): effort is PiReasoningEffort => effort !== 'ultra',
-        ),
-      })),
-    id: `xai/${catalogModel.id}`,
-    wireId: catalogModel.id,
-    // Keep the exact API from Pi's catalog. The host forwarder authenticates and forwards both
-    // native shapes without sending the request through the Claude Messages bridge.
-    api: catalogModel.piApi ?? officialById.get(catalogModel.id)?.api ?? 'openai-responses',
+  // Reuse the subscription projection so SSH and local xAI receive identical
+  // capacity, reasoning and input metadata, including newly discovered models.
+  const projected = buildPiSubscriptionNativeProviders(getActiveCatalog(), getClaudeEndpoint())
+    .providers.find(provider => provider.sourceProviderId === providerId);
+  const models: PiNativeModelSpec[] = (projected?.models ?? []).map(model => ({
+    ...model,
+    id: `xai/${model.wireId ?? model.id}`,
+    wireId: model.wireId ?? model.id,
   }));
   const aliases = Object.fromEntries(
     catalogModels.flatMap((candidate) => [
