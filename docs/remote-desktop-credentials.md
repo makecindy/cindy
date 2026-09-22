@@ -138,6 +138,18 @@ Submission still requires the same signed process, console account, window and
 secure field, plus an enabled same-parent submit button; the button is revalidated
 immediately before one AXPress. Recovery dialogs, user-selection and unknown password fields fail closed.
 
+Multiple displays may expose empty `login` windows alongside the interactive
+surface. The Mac helper inspects all windows within the existing shared time/node
+budget and selects exactly one recognized password-field or own-account
+presentation surface. Empty login windows are allowed; unknown siblings and
+multiple actionable surfaces fail closed. Revalidation follows the original
+window and secure field even if the window list is reordered. See
+`MacScreenUnlock.swift` and `MacUnlockProfileTests.swift` for selection and regressions.
+On a two-display Mac, the old preparation probe failed with
+`CREDENTIAL_UNLOCK_UNAVAILABLE` while the updated probe returned `fieldReady: true`
+on the same locked session. This checks field preparation only, not password
+submission or successful system unlock.
+
 The `cindy-remote-unlock-inspect --prepare` diagnostic exercises wake and field
 preparation without accepting any password or submitting login. On the test Mac,
 this probe reaches `fieldReady: true`; a separately cleared, never-submitted test
