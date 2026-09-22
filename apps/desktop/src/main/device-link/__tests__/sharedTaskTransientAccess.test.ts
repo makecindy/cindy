@@ -1,6 +1,6 @@
 import { sharedTaskGuestPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PROTOCOL_VERSION, SHARED_TASK_CAPABILITY, type SharedTaskDetail } from '@cindy/device-link';
+import { PLUGIN_OAUTH_CHANNEL, PROTOCOL_VERSION, SHARED_TASK_CAPABILITY, type SharedTaskDetail } from '@cindy/device-link';
 
 vi.mock('electron', () => ({
   app: { getAppPath: () => '/tmp/cindy-test/app', getPath: () => '/tmp/cindy-test', getVersion: () => 'test' },
@@ -16,6 +16,7 @@ import { __testing as registry } from '../invoke-registry';
 import { SharedTaskHost } from '../sharedTaskHost';
 import { setSharedTaskDispatchHost } from '../sharedTaskDispatch';
 import type { SharedTaskJournalEntry } from '../../localDb/sharedTasks';
+import * as pluginOauthRuntime from '../../plugin-oauth/runtime';
 
 const peer = sharedTaskGuestPeer('sharedTask', 'member', 'phone');
 const read = { channel: 'local-db:messages:list', args: ['task'] };
@@ -63,6 +64,29 @@ afterEach(() => {
 });
 
 describe('shared task temporary authority fences preserve membership', () => {
+  it('keeps plugin authorization owner-only without blocking guest task history', async () => {
+    const request = { op: 'hello' };
+    const reply = { accepted: true };
+    const authorize = vi.spyOn(pluginOauthRuntime, 'requestPluginOauth').mockResolvedValue(reply);
+    try {
+      expect(host.capturePeer(peer)?.isCurrent()).toBe(true);
+      for (const args of [[request], ['task', request]]) {
+        await expect(runInvoke(peer, { channel: PLUGIN_OAUTH_CHANNEL, args })).resolves.toMatchObject({
+          ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('PERMISSION_DENIED') },
+        });
+      }
+      expect(authorize).not.toHaveBeenCalled();
+      expect(host.peerStatus(peer)).toBe('available');
+      registry.register(read.channel, () => []);
+      await expect(runInvoke(peer, read)).resolves.toEqual({ ok: true, result: [] });
+      await expect(runInvoke('owner-phone', { channel: PLUGIN_OAUTH_CHANNEL, args: [request] }))
+        .resolves.toEqual({ ok: true, result: reply });
+      expect(authorize).toHaveBeenCalledExactlyOnceWith('owner-phone', request);
+    } finally {
+      authorize.mockRestore();
+    }
+  });
+
   it.each(['suspended', 'revoked'] as const)('gates admission, subscription, link-open and final send while %s', async (state) => {
     let rejectRemove!: (error: Error) => void;
     let removal: Promise<void> | undefined;
