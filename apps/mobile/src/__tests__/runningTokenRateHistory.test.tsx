@@ -70,6 +70,16 @@ it('resets the baseline for a new turn and for counter rollback', () => {
   expect(report({ outputTokens: 10, generationDurationMs: 100 })).toBe('waiting');
 });
 
+it('records the final interval when the terminal report clears the remote start', () => {
+  report();
+  expect(report({ outputTokens: 1100, generationDurationMs: 12_000 })).toBe('50');
+  expect(report({ startedAt: null, outputTokens: 1140, generationDurationMs: 14_000 })).toBe('20');
+  act(() => vi.advanceTimersByTime(600));
+  expect(report()).toBe('20');
+  // A real next turn still resets the terminal sample.
+  expect(report({ startedAt: 2, outputTokens: 0, generationDurationMs: 0 })).toBe('waiting');
+});
+
 it('discards unreliable or reconnecting measurements instead of reviving the old rate', () => {
   report();
   report({ outputTokens: 1100, generationDurationMs: 12_000 });
