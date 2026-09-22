@@ -1,6 +1,6 @@
 import { Fragment } from 'react';
 import { Button, HStack, Image, Picker, ProgressView, Spacer, Text, TextField, Toggle, VStack, useNativeState } from '@expo/ui/swift-ui';
-import { accessibilityLabel, buttonStyle, contentShape, disabled, font, foregroundStyle, frame, keyboardType, lineLimit, pickerStyle, shapes, tag, textInputAutocapitalization } from '@expo/ui/swift-ui/modifiers';
+import { accessibilityLabel, buttonStyle, contentShape, disabled, font, foregroundStyle, frame, keyboardType, lineLimit, pickerStyle, shapes, tag, textInputAutocapitalization, textSelection } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { randomUUID } from 'expo-crypto';
 import { iconSize, spacing, useTheme } from '@/theme';
@@ -74,7 +74,7 @@ export function CompanionAutomationNativeView(p: CompanionAutomationNativeViewPr
   const { t, i18n } = useTranslation();
   const { colors } = useTheme();
   const tr = (key: string) => t(`devices.companions.automation.${key}`);
-  const note = (text: string, error = false) => <Section><Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(error ? colors.statusError : colors.textSecondary)]}>{text}</Text></Section>;
+  const note = (text: string, error = false) => <Section><Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(error ? colors.statusError : colors.textSecondary), textSelection(error)]}>{text}</Text></Section>;
   const updateTrigger = (index: number, value: RoutineTrigger) => p.onChange(draft => draft && ({ ...draft, triggers: draft.triggers.map((item, i) => i === index ? value : item) }));
   const triggerText = (trigger: Record<string, unknown>) => trigger.kind === 'interval'
     ? t('devices.companions.automation.everyMinutes', { count: Number(trigger.intervalMs) / 60_000 })
@@ -130,7 +130,7 @@ export function CompanionAutomationNativeView(p: CompanionAutomationNativeViewPr
         {getRoutineActionId(p.resource, 'routine-run') ? <Section><Action label={tr(p.dirty ? 'saveAndRun' : 'run')} onPress={() => p.onAct('routine-run')} blocked={p.busy || !p.online || detail.history.some(r => r.status === 'running' || r.status === 'queued')} /></Section> : null}
         <Section title={tr('history')}>{detail.history.length ? detail.history.map(run => <VStack key={run.id} alignment="leading" spacing={spacing.sm}>
           <Text>{tr(run.status)}</Text><Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{new Date(run.createdAt).toLocaleString(i18n.language)}</Text>
-          {run.resultText ? <Text>{run.resultText}</Text> : null}{run.error ? <Text modifiers={[foregroundStyle(colors.statusError)]}>{run.error}</Text> : null}
+          {run.resultText ? <Text modifiers={[textSelection(true)]}>{run.resultText}</Text> : null}{run.error ? <Text modifiers={[foregroundStyle(colors.statusError), textSelection(true)]}>{run.error}</Text> : null}
         </VStack>) : <Text modifiers={[foregroundStyle(colors.textSecondary)]}>{tr('noRuns')}</Text>}</Section>
         {getRoutineActionId(p.resource, 'routine-delete') ? <Section><Action label={tr('delete')} onPress={p.onDelete} blocked={p.busy || p.dirty || !p.online} destructive /></Section> : null}
       </> : null}

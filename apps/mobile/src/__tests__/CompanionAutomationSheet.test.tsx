@@ -33,7 +33,7 @@ vi.mock('../session/ComposerSheet', async () => import('../session/ComposerSheet
 vi.mock('../session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ title, children }: any) => <section aria-label={title}>{children}</section> }));
 vi.mock('@expo/ui', () => ({ Host: ({ children }: any) => <div>{children}</div> }));
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({
-  ...Object.fromEntries(['accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'keyboardType', 'lineLimit', 'pickerStyle', 'tag', 'textInputAutocapitalization', 'padding', 'presentationDetents', 'interactiveDismissDisabled', 'presentationDragIndicator', 'scrollContentBackground'].map(name => [name, (value: any) => ({ name, value })])),
+  ...Object.fromEntries(['accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'keyboardType', 'lineLimit', 'pickerStyle', 'tag', 'textInputAutocapitalization', 'textSelection', 'padding', 'presentationDetents', 'interactiveDismissDisabled', 'presentationDragIndicator', 'scrollContentBackground'].map(name => [name, (value: any) => ({ name, value })])),
   shapes: { rectangle: () => ({}) },
 }));
 vi.mock('@expo/ui/swift-ui', () => {
@@ -44,7 +44,7 @@ vi.mock('@expo/ui/swift-ui', () => {
     RNHostView: () => { throw new Error('native automation form must not mount RNHostView'); },
     Form: ({ children }: any) => <div data-testid="native-form">{children}</div>,
     BottomSheet: (props: any) => { h.sheet = props; return props.isPresented ? <div>{props.children}</div> : null; },
-    Text: (props: any) => mod(props, 'tag') !== undefined ? <option value={mod(props, 'tag')}>{props.children}</option> : <span>{props.children}</span>,
+    Text: (props: any) => mod(props, 'tag') !== undefined ? <option value={mod(props, 'tag')}>{props.children}</option> : <span data-native-selectable={mod(props, 'textSelection')}>{props.children}</span>,
     Button: (props: any) => <button data-testid={props.testID} disabled={!!mod(props, 'disabled')} onClick={props.onPress}>{props.children}</button>,
     Picker: (props: any) => <select aria-label={props.label} value={props.selection} disabled={!!mod(props, 'disabled')} onChange={e => props.onSelectionChange(e.currentTarget.value)}>{props.children}</select>,
     Toggle: (props: any) => <input aria-label={props.label} type="checkbox" checked={props.isOn} disabled={!!mod(props, 'disabled')} onChange={e => props.onIsOnChange(e.currentTarget.checked)} />,
@@ -120,7 +120,8 @@ it('preserves values and shows the host error after an invalid time is rejected'
   await open(); await type('name', 'Brief'); await type('instructions', 'Summarize'); await type('hour', '123');
   h.invoke.mockRejectedValueOnce(new Error('Invalid cron hour'));
   await click('save');
-  expect(input('hour').value).toBe('123'); expect(container.textContent).toContain('Invalid cron hour');
+  expect(input('hour').value).toBe('123');
+  expect([...container.querySelectorAll('[data-native-selectable="true"]')].some(node => node.textContent === 'Invalid cron hour')).toBe(true);
   await type('hour', '12'); await click('save');
   expect(h.invoke.mock.calls[1][2].input.definition.triggers[0].expression).toBe('0 12 * * *');
 });
