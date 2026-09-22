@@ -12959,6 +12959,12 @@
     }
   },
   "cindyMake": {
+    "remote": {
+      "refresh": "Refresh status",
+      "syncing": "Syncing Cindy Make status…",
+      "offline": "Reconnect to the remote computer to continue.",
+      "failed": "Unable to update Cindy Make status. Refresh before continuing."
+    },
     "beta": "Beta",
     "preflight": {
       "closeTitle": "Close Cindy Make?",

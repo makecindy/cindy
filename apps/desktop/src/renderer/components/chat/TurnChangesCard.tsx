@@ -16,6 +16,10 @@ import { useSidebarHostSessionId } from '@/features/right-sidebar/lib/sidebarHos
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { toast } from '@/lib/toast';
+import { makerApiForSticky } from '@/lib/makerTransport';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { turnChangeReadApiFor } from '@/lib/gitReviewTransport';
 import { basename, cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
@@ -106,6 +110,13 @@ export function TurnChangesCard({
   const [workspaceStateOverride, setWorkspaceStateOverride] = useState<
     TurnChangeSetSummary['workspaceState'] | null
   >(null);
+  const activeCard = useRef<string | null>(null);
+  const cardKey = JSON.stringify([sessionId, changeSet.id]);
+  activeCard.current = cardKey;
+  useEffect(() => {
+    activeCard.current = cardKey;
+    return () => { activeCard.current = null; };
+  }, [cardKey]);
   const latestWorkspaceStateRef = useRef(changeSet.workspaceState);
   latestWorkspaceStateRef.current = changeSet.workspaceState;
   const files = changeSet.files;
@@ -116,9 +127,7 @@ export function TurnChangesCard({
   const appliesCapturedSubset = changeSet.state === 'partial' && changeSet.isReversible;
 
   useEffect(() => {
-    setWorkspaceStateOverride((current) => (
-      current === changeSet.workspaceState ? null : current
-    ));
+    setWorkspaceStateOverride(null);
   }, [changeSet.workspaceState]);
 
   useEffect(() => {
@@ -139,28 +148,53 @@ export function TurnChangesCard({
   const applyTurnChange = async (): Promise<void> => {
     if (applying || !changeSet.isReversible) return;
     const action = workspaceState === 'undone' ? 'reapply' : 'undo';
+    const owner = getDataOwnerGeneration();
+    const deviceId = getStickySessionDeviceId(sessionId);
+    const current = () => activeCard.current === cardKey &&
+      isDataOwnerGenerationCurrent(owner) && getStickySessionDeviceId(sessionId) === deviceId;
+    const notifyApplied = () => toast.success(t(
+      appliesCapturedSubset
+        ? action === 'undo'
+          ? 'chat.turnChanges.undoPartialSuccess'
+          : 'chat.turnChanges.reapplyPartialSuccess'
+        : action === 'undo'
+          ? 'chat.turnChanges.undoSuccess'
+          : 'chat.turnChanges.reapplySuccess',
+    ));
     setApplying(true);
     try {
-      const result = await window.electronAPI.maker.applyTurnChangeSet(
+      const result = await makerApiForSticky(sessionId).applyTurnChangeSet(
         sessionId,
         changeSet.id,
         action,
       );
+      if (!current()) return;
       setWorkspaceStateOverride(
         result.summary.workspaceState === latestWorkspaceStateRef.current
           ? null
           : result.summary.workspaceState,
       );
-      toast.success(t(
-        appliesCapturedSubset
-          ? action === 'undo'
-            ? 'chat.turnChanges.undoPartialSuccess'
-            : 'chat.turnChanges.reapplyPartialSuccess'
-          : action === 'undo'
-            ? 'chat.turnChanges.undoSuccess'
-            : 'chat.turnChanges.reapplySuccess',
-      ));
+      notifyApplied();
     } catch (error) {
+      if (!current()) return;
+      // A lost response does not prove the host failed to write. Reconcile once;
+      // never replay the mutation. Reconnect also refreshes the cards.
+      if (deviceId) {
+        try {
+          const summaries = await turnChangeReadApiFor(deviceId).listTurnChangeSets(sessionId);
+          const summary = summaries.find((item) => item.id === changeSet.id);
+          if (current() && summary) {
+            setWorkspaceStateOverride(
+              summary.workspaceState === latestWorkspaceStateRef.current ? null : summary.workspaceState,
+            );
+            if (summary.workspaceState === (action === 'undo' ? 'undone' : 'applied')) {
+              notifyApplied();
+              return;
+            }
+          }
+        } catch { /* Reconnect refresh in useTurnChangeSets remains authoritative. */ }
+      }
+      if (!current()) return;
       const code = extractIpcError(error)?.code;
       const key = code === 'SESSION_RUNNING'
         ? 'chat.turnChanges.actionRunning'
@@ -173,7 +207,7 @@ export function TurnChangesCard({
             : 'chat.turnChanges.actionFailed';
       toast.error(t(key));
     } finally {
-      setApplying(false);
+      if (current()) setApplying(false);
     }
   };
 

@@ -1460,7 +1460,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
             desc={
               error === REVIEW_TURN_LOCAL_ONLY_ERROR
                 ? t('rightSidebar.review.turn.localOnly')
-                : error
+                : localizeReviewError(error)
             }
             actionLabel={t('rightSidebar.review.refresh')}
             onAction={refreshAll}

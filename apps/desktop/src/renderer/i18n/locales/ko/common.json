@@ -12942,6 +12942,12 @@
     }
   },
   "cindyMake": {
+    "remote": {
+      "refresh": "상태 새로고침",
+      "syncing": "Cindy Make 상태 동기화 중…",
+      "offline": "계속하려면 원격 컴퓨터에 다시 연결하세요.",
+      "failed": "Cindy Make 상태를 업데이트하지 못했습니다. 새로고침한 후 계속하세요."
+    },
     "beta": "Beta",
     "preflight": {
       "closeTitle": "Cindy Make를 닫을까요?",

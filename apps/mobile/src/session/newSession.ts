@@ -292,6 +292,7 @@ export function buildRecentWorkspaceOptions(
     if (deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== deviceId) continue;
     if (session.status === 'deleted') continue;
     if (session.workspaceKind !== 'project') continue;
+    if (session.orcaRole === 'worker') continue;
     const rawWorkingDir = session.workingDir?.trim();
     if (!rawWorkingDir) continue;
     const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);

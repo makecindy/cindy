@@ -69,6 +69,8 @@ import {
   getCindyMakePreparation,
 } from '@/lib/cindyMakeComposer';
 import { CindyMakeTestCard } from '@/components/cindy-make/CindyMakeTestCard';
+import { SessionResourceCards } from '@/features/device-link/SessionResourceCards';
+import { useSessionResourceCards } from '@/features/device-link/useSessionResourceCards';
 import { CindyMakeEditingActions } from '@/components/cindy-make/CindyMakeEditingActions';
 import { useCindyMakeEditing } from '@/components/cindy-make/useCindyMakeEditing';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
@@ -1781,6 +1783,16 @@ export function CCAgentSessionView({
     updateQueueItem,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  const remoteMakeCards = useSessionResourceCards({
+    deviceId: session?.source === 'cindy-make' && session.status === 'active' && !session.clearedAt
+      ? remoteDeviceId : undefined,
+    sessionId,
+    source: session?.source,
+    connected: remoteConn === 'connected',
+    active: chatRealtime,
+    readOnly,
+    running: isAgentBusy,
+  });
   const makeState = useCindyMakeState();
   const cindyMakePreparation = useMemo(
     () =>
@@ -1797,7 +1809,7 @@ export function CCAgentSessionView({
   );
   const cindyMakeComposerPhase = useMemo(
     () =>
-      getCindyMakeComposerPhase({
+      remoteMakeCards.handlesSession ? null : getCindyMakeComposerPhase({
         session,
         report: cindyMakePreparation?.report,
         messages,
@@ -1805,7 +1817,7 @@ export function CCAgentSessionView({
         busy: isAgentBusy,
         error,
       }),
-    [session, cindyMakePreparation, messages, historyLoaded, isAgentBusy, error],
+    [session, cindyMakePreparation, messages, historyLoaded, isAgentBusy, error, remoteMakeCards.handlesSession],
   );
   const cindyMakePendingTest = useMemo(
     () => !remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'
@@ -1826,7 +1838,7 @@ export function CCAgentSessionView({
         })
       : null;
   const cindyMakeInputLocked = Boolean(
-    cindyMakeComposerPhase || cindyMakePendingTest,
+    cindyMakeComposerPhase || cindyMakePendingTest || remoteMakeCards.blocked,
   );
   useEffect(() => {
     if (!sessionId || !isOrcaLeadSessionView || !historyLoaded) return;
@@ -3447,7 +3459,7 @@ export function CCAgentSessionView({
       },
     ) => {
       if (readOnly) return false;
-      if (cindyMakeComposerPhase || cindyMakePendingTest) return false;
+      if (cindyMakeInputLocked) return false;
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
       const navigationRequestVersion =
@@ -3730,8 +3742,7 @@ export function CCAgentSessionView({
       vendorAuthGate,
       remoteDeviceId,
       sessionHandoffPreparing,
-      cindyMakeComposerPhase,
-      cindyMakePendingTest,
+      cindyMakeInputLocked,
     ],
   );
 
@@ -4547,7 +4558,7 @@ export function CCAgentSessionView({
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
       messages={messages}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
-      cindyMakeCompletionInComposer={session?.source === 'cindy-make' && !remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'}
+      cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
       historyLoaded={historyLoaded}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
@@ -5244,6 +5255,8 @@ export function CCAgentSessionView({
                   userId={sessionBinding.identity?.userId ?? null}
                   displayName={sessionBinding.displayName}
                 />
+              ) : remoteMakeCards.blocked ? (
+                <SessionResourceCards state={remoteMakeCards} />
               ) : cindyMakeComposerPhase ? (
                 <CindyMakeComposerMask
                   phase={cindyMakeComposerPhase}
@@ -5277,7 +5290,7 @@ export function CCAgentSessionView({
                       sessionId={session.id}
                       messageId={cindyMakeRecoveryId}
                     />
-                  ) : undefined}
+                  ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                   sessionId={sessionId}

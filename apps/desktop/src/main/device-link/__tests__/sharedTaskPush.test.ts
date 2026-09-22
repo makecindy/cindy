@@ -71,6 +71,27 @@ describe('shared task metadata uses only its authorized task subscription', () =
     expect(transport.sendPush.mock.calls.every((call) => call[1] === channel && call[2].sessionId === 'task-a')).toBe(true);
   });
 
+  it.each(['online', 'reconnecting'])('keeps turn-change updates same-account only while %s', async (status) => {
+    const transport = client();
+    transport.getStatus.mockReturnValue(status);
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-task', ['session:task-a']);
+    const channel = 'maker:turn-change-set:updated';
+    const payload = { sessionId: 'task-a', changeSetId: 'change-a' };
+    __testing.forwardPush(channel, payload);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(__testing.queuedPushesFor(guestA)).toEqual([]);
+    if (status === 'online') {
+      expect(transport.sendPush).toHaveBeenCalledWith('own-task', channel, payload);
+      expect(transport.sendPush).toHaveBeenCalledTimes(1);
+    } else {
+      expect(transport.sendPush).not.toHaveBeenCalled();
+      // Same-account clients reread turn changes on reconnect instead of replaying notices.
+      expect(__testing.queuedPushesFor('own-task')).toEqual([]);
+    }
+  });
+
   it('keeps offline metadata under the task topic and replays it after that topic is restored', async () => {
     const transport = client();
     __testing.setActiveClient(transport as never);

@@ -1049,6 +1049,7 @@ import { setBusyProbe as setDeviceLinkBusyProbe } from '../device-link/index.js'
 import {
   markRemoteSettingPersistedInsideHandler,
   setSessionTextSnapshotReader,
+  setRemoteTurnChangeAction,
   setRemoteReviewInputGuard as setDeviceLinkRemoteReviewInputGuard,
   setRemoteWorkingDirGuard as setDeviceLinkRemoteWorkingDirGuard,
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
@@ -5089,59 +5090,80 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
+  const applyRecordedTurnChanges = async (
+    sessionId: unknown, id: unknown, action: unknown,
+    assertRemoteAccess?: () => Promise<void>,
+  ) => {
+    const ownerScope = captureDataOwnerBroadcastScope();
+    if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'Invalid sessionId');
+    }
+    if (typeof id !== 'string' || id.length === 0 || id.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'Invalid turn change-set id');
+    }
+    if (action !== 'undo' && action !== 'reapply') {
+      throwIpcError('INVALID_PARAMS', 'Invalid turn change-set action');
+    }
+    const meta = await maker.getSessionMeta(sessionId);
+    if (!meta) throwIpcError('NOT_FOUND', 'Task not found.');
+    if (meta.remoteHostId) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote workspace restore is not available.');
+    }
+    const normalizedWorkDir = normalizeTurnChangeSetWorkspaceKey(meta.workDir);
+    const workspaceIsBusy = (): boolean =>
+      maker.listActiveSessions().some((session) => {
+        if (session.remoteHostId) return false;
+        const currentWorkDir = normalizeTurnChangeSetWorkspaceKey(session.workDir);
+        return (
+          currentWorkDir === normalizedWorkDir &&
+          (session.isTurnRunning() || getClaudeSessionBackgroundActivity(session.id))
+        );
+      });
+    if (workspaceIsBusy() || isSessionTurnPendingCompletion(sessionId)) {
+      throwIpcError('SESSION_RUNNING', 'Wait for the current response to finish.');
+    }
+    await waitForTurnChangeSetSeal(sessionId);
+    if (workspaceIsBusy() || isSessionTurnPendingCompletion(sessionId)) {
+      throwIpcError('SESSION_RUNNING', 'Wait for the current response to finish.');
+    }
+    let accessFailure: { error: unknown } | undefined;
+    try {
+      return await applyTurnChangeSetAction(sessionId, id, action, ownerScope, async () => {
+        try {
+          await assertRemoteAccess?.();
+        } catch (error) {
+          accessFailure = { error };
+          throw error;
+        }
+        if (workspaceIsBusy() || isSessionTurnPendingCompletion(sessionId)) {
+          throw new TurnChangeSetActionError('busy', 'Wait for the current response to finish.');
+        }
+      });
+    } catch (error) {
+      // Preserve only errors from the trusted remote authorization callback; storage
+      // and Git errors still pass through the existing sanitized error mapping.
+      if (accessFailure && error === accessFailure.error) throw error;
+      if (!(error instanceof TurnChangeSetActionError)) {
+        log.warn('turn change-set action failed', { sessionId, id, action, error });
+        throwIpcError('INTERNAL', 'The recorded changes could not be applied.');
+      }
+      if (error.kind === 'not-found') throwIpcError('NOT_FOUND', error.message);
+      if (error.kind === 'busy') throwIpcError('SESSION_RUNNING', error.message);
+      if (error.kind === 'wrong-state') throwIpcError('PRECONDITION_FAILED', error.message);
+      if (error.kind === 'git-missing') {
+        throwIpcError('TURN_CHANGE_GIT_UNAVAILABLE', error.message);
+      }
+      if (error.kind === 'unsupported') throwIpcError('UNSUPPORTED_CAPABILITY', error.message);
+      if (error.kind === 'conflict') throwIpcError('STALE_DIFF', error.message);
+      throwIpcError('INTERNAL', error.message);
+    }
+  };
+  setRemoteTurnChangeAction(applyRecordedTurnChanges);
   ipcMain.handle(
     MAKER_INVOKE.TURN_CHANGE_SET_APPLY,
-    async (event, sessionId: unknown, id: unknown, action: unknown) => {
+    (event, sessionId: unknown, id: unknown, action: unknown) => {
       assertTrustedAppRendererEvent(event);
-      const ownerScope = captureDataOwnerBroadcastScope();
-      if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 256) {
-        throwIpcError('INVALID_PARAMS', 'Invalid sessionId');
-      }
-      if (typeof id !== 'string' || id.length === 0 || id.length > 256) {
-        throwIpcError('INVALID_PARAMS', 'Invalid turn change-set id');
-      }
-      if (action !== 'undo' && action !== 'reapply') {
-        throwIpcError('INVALID_PARAMS', 'Invalid turn change-set action');
-      }
-      const meta = await maker.getSessionMeta(sessionId);
-      if (!meta) throwIpcError('NOT_FOUND', 'Task not found.');
-      if (meta.remoteHostId) {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote workspace restore is not available.');
-      }
-      const normalizedWorkDir = normalizeTurnChangeSetWorkspaceKey(meta.workDir);
-      const workspaceIsBusy = (): boolean =>
-        maker.listActiveSessions().some((session) => {
-          if (session.remoteHostId) return false;
-          const currentWorkDir = normalizeTurnChangeSetWorkspaceKey(session.workDir);
-          return (
-            currentWorkDir === normalizedWorkDir &&
-            (session.isTurnRunning() || getClaudeSessionBackgroundActivity(session.id))
-          );
-        });
-      if (workspaceIsBusy() || isSessionTurnPendingCompletion(sessionId)) {
-        throwIpcError('SESSION_RUNNING', 'Wait for the current response to finish.');
-      }
-      await waitForTurnChangeSetSeal(sessionId);
-      if (workspaceIsBusy() || isSessionTurnPendingCompletion(sessionId)) {
-        throwIpcError('SESSION_RUNNING', 'Wait for the current response to finish.');
-      }
-      try {
-        return await applyTurnChangeSetAction(sessionId, id, action, ownerScope);
-      } catch (error) {
-        if (!(error instanceof TurnChangeSetActionError)) {
-          log.warn('turn change-set action failed', { sessionId, id, action, error });
-          throwIpcError('INTERNAL', 'The recorded changes could not be applied.');
-        }
-        if (error.kind === 'not-found') throwIpcError('NOT_FOUND', error.message);
-        if (error.kind === 'busy') throwIpcError('SESSION_RUNNING', error.message);
-        if (error.kind === 'wrong-state') throwIpcError('PRECONDITION_FAILED', error.message);
-        if (error.kind === 'git-missing') {
-          throwIpcError('TURN_CHANGE_GIT_UNAVAILABLE', error.message);
-        }
-        if (error.kind === 'unsupported') throwIpcError('UNSUPPORTED_CAPABILITY', error.message);
-        if (error.kind === 'conflict') throwIpcError('STALE_DIFF', error.message);
-        throwIpcError('INTERNAL', error.message);
-      }
+      return applyRecordedTurnChanges(sessionId, id, action);
     },
   );
 

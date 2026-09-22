@@ -2865,6 +2865,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
       workdir: string;
       absPath: string;
+      modifiedWindow?: { startMs: number; endMs: number | null };
     }): Promise<{ verdict: 'file' | 'directory' | 'nonfile' | 'unknown' }> =>
       ipcRenderer.invoke('maker:chat-file:stat', params),
   },

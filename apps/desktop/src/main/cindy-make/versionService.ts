@@ -13,7 +13,6 @@ import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
 } from '../device-link/broadcast-tap.js';
-import { readRelaunchBlockingActivity } from '../relaunchBusyActivityIpc.js';
 import {
   describeOriginalVersion,
   getCurrentCindyVersionId,
@@ -93,22 +92,22 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
   const current = () =>
     isDataOwnerBroadcastScopeCurrent(scope) && app.getPath('userData') === profile;
   try {
-    if (makeBusy() || isCindyVersionSwitching()) throwIpcError('PRECONDITION_FAILED', 'busy');
+    // An explicit switch may interrupt active work. Normal quit preserves Agent turn
+    // markers for continuing after startup; background jobs are not replayed.
+    // Removing the personal version still requires the busy guard below.
+    if ((action === 'remove' && makeBusy()) || isCindyVersionSwitching())
+      throwIpcError('PRECONDITION_FAILED', 'busy');
     if (action === 'switch') {
       // Old completion cards carry generation UUIDs. They now address the same personal
       // slot instead of resurrecting the application built for that historical task.
       const targetId = id === 'original' ? id : personalVersionId(profile);
       if (!targetId) throwIpcError('PRECONDITION_FAILED', 'unavailable');
       if (getCurrentCindyVersionId() === targetId) return getCindyVersions();
-      if ((await readRelaunchBlockingActivity()).busy || !current())
-        throwIpcError('PRECONDITION_FAILED', 'busy');
       await startVersionHandoff(
         targetId,
         async () =>
           current() &&
-          !makeBusy() &&
-          (targetId === 'original' || personalVersionId(profile) === targetId) &&
-          !(await readRelaunchBlockingActivity()).busy,
+          (targetId === 'original' || personalVersionId(profile) === targetId),
       );
       if (!current()) throwIpcError('PRECONDITION_FAILED', 'busy');
       // Normal quit awaits the existing Maker, plugin, credential and DB disposers.

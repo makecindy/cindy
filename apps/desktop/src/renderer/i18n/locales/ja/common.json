@@ -12942,6 +12942,12 @@
     }
   },
   "cindyMake": {
+    "remote": {
+      "refresh": "状態を再読み込み",
+      "syncing": "Cindy Make の状態を同期中…",
+      "offline": "続行するにはリモートコンピューターに再接続してください。",
+      "failed": "Cindy Make の状態を更新できませんでした。再読み込みしてから続行してください。"
+    },
     "beta": "Beta",
     "preflight": {
       "closeTitle": "Cindy Make を閉じますか？",

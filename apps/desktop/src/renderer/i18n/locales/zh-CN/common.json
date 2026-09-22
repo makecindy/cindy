@@ -12942,6 +12942,12 @@
     }
   },
   "cindyMake": {
+    "remote": {
+      "refresh": "刷新状态",
+      "syncing": "正在同步 Cindy Make 状态…",
+      "offline": "重新连接远程电脑后即可继续。",
+      "failed": "未能更新 Cindy Make 状态，请刷新后继续。"
+    },
     "beta": "Beta",
     "preflight": {
       "closeTitle": "关闭 Cindy Make？",
