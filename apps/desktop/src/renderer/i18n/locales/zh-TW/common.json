@@ -4974,7 +4974,9 @@
           "stateChanged": "操作期間帳號、插件或版本已發生變化，請確認最新狀態後重試。",
           "accessDenied": "當前插件操作不被允許，或操作已取消。",
           "notConfigured": "當前環境未提供插件市場。",
-          "invalidPackage": "該插件包無效，或當前 Cindy 版本不支援它。",
+          "invalidPackage": "插件安裝包異常，無法安裝，請聯絡釋出者。",
+          "downloadTimeout": "插件下載逾時，請稍後重試。",
+          "downloadFailed": "插件下載失敗，請檢查網路後重試。",
           "brokerRedirectPortRequired": "此插件宣告了授權 broker，但同一項 OAuth 設定缺少 redirectPort，無法從插件市場安裝。請聯絡釋出者補上該欄位並重新釋出。"
         },
         "securityTitle": "安裝與權限",

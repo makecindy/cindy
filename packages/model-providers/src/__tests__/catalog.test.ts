@@ -30,6 +30,7 @@ const DYNAMIC_PROVIDER_IDS = ["anthropic", "openai", "xd"] as const;
 
 /** xAI 随包 fallback 元数据清单。 */
 const EXPECTED_XAI_IDS = [
+  "xai/grok-4.7",
   "xai/grok-4.6",
   "xai/grok-4.5",
   "xai/grok-4.3",
@@ -44,6 +45,7 @@ const EXPECTED_XAI_PI_IDS = [
   "grok-4.3",
   "grok-4.5",
   "grok-4.6",
+  "grok-4.7",
   "grok-build-0.1",
 ];
 

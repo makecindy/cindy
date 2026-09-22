@@ -21,7 +21,9 @@
   `safeStorage` 边界。不要新增自定义明文凭证文件，也不要把秘密下放给 Renderer、插件
   或不受信任页面。
 - 可信 Node Worker 的显式例外：`node.secretBindings[].oauthSecret` 只能引用本插件
-  已声明的 OAuth key。Host 根据本次 `authAccount`（省略时为默认账号）刷新并注入
+  已声明的 OAuth key；这是调用时的凭证解析边界，不是发布或安装的能力支持门禁。
+  引用尚不可用时保留声明，在调用时返回不支持／配置错误，不读取其他插件凭证。
+  Host 根据本次 `authAccount` 刷新并注入
   短期 access token；不得注入 refresh token、返回 Renderer/Agent、写日志或落盘。
   Worker 启动第三方 CLI 时仅用该次子进程环境传递，不修改全局环境或复用他账号配置。
   这是高权限 Node 的受审查信任边界，不是系统沙箱或对恶意 Worker 的隔离保证。

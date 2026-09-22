@@ -1,6 +1,6 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-14T00:00:00.001Z",
+  "updatedAt": "2026-09-22T00:00:00.001Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -767,6 +767,22 @@
       ],
       "nativeApi": "anthropic-messages",
       "modelRef": "anthropic/claude-haiku-4-5"
+    },
+    {
+      "id": "xai/grok-4.7",
+      "name": "Grok 4.7",
+      "status": "active",
+      "sortOrder": 47,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-4.7",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.7"
     },
     {
       "id": "xai/grok-4.6",
@@ -3591,6 +3607,58 @@
                 "kind": "provider-official",
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-07-31"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai/grok-4.7",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.7",
+        "group": "grok",
+        "contextWindow": 500000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high",
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 6,
+              "cacheReadPerMtok": 0.5,
+              "maxInputTokens": 200000,
+              "effectiveFrom": "2026-09-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-22"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 1,
+              "minInputTokens": 200000,
+              "effectiveFrom": "2026-09-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-22"
               }
             }
           ]

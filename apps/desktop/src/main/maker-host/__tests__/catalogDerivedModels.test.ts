@@ -357,6 +357,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
     expect(cc.map((m) => m.id)).toEqual([
+      'xai/grok-4.7',
       'xai/grok-4.6',
       'xai/grok-4.5',
       'xai/grok-4.3',
@@ -368,6 +369,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       'xai/grok-code-fast',
     ]);
     expect(codex.map((m) => m.id)).toEqual([
+      'xai/grok-4.7',
       'xai/grok-4.6',
       'xai/grok-4.5',
       'xai/grok-4.3',
@@ -425,6 +427,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(ids).toEqual([
       'claude-opus-4-8',
       'chatgpt/gpt-5.5',
+      'xai/grok-4.7',
       'xai/grok-4.6',
       'xai/grok-4.5',
       'xai/grok-4.3',

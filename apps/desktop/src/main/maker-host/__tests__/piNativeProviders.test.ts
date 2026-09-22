@@ -46,7 +46,8 @@ import {
   resolvePiCindyGatewayModelSpec,
   type PiBundledModelInfo,
 } from '../pi-host.js';
-import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
+import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
@@ -1217,6 +1218,35 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       }),
     ]));
     expect(openai.models.pi?.some((model) => model.id.endsWith('[1m]'))).toBe(false);
+  });
+
+  it('materializes Grok 4.7 from the catalog when the pinned Pi binary has no entry', () => {
+    const { providers } = buildPiSubscriptionNativeProviders(
+      BUNDLED_CATALOG, 'http://127.0.0.1:4567/',
+      new Map([['xai', new Map()]]), new Map([['xai', new Set<string>()]]),
+    );
+    const xai = providers.find(provider => provider.id === 'xai')!;
+    expect(xai.models.find(model => model.id === 'grok-4.7')).toMatchObject({
+      wireId: 'grok-4.7', api: 'openai-responses', contextWindow: 500_000,
+      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0,
+        tiers: [{ inputTokensAbove: 199_999, input: 4, output: 12, cacheRead: 1, cacheWrite: 0 }] },
+      maxTokens: 500_000, reasoning: true, input: ['text', 'image'],
+      thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: null },
+    });
+  });
+
+  it('fills partial Pi tier rates from the base cost without mutating the catalog', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const model = catalog.providers.find(provider => provider.id === 'xai')!
+      .models.pi!.find(model => model.id === 'grok-4.7')!;
+    model.cost = { input: 2, output: 6, cacheRead: 0.5,
+      tiers: [{ inputTokensAbove: 199_999, output: 12 }] };
+    const { providers } = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567/');
+    const cost = providers.find(provider => provider.id === 'xai')!.models
+      .find(model => model.id === 'grok-4.7')!.cost!;
+    expect(cost.tiers).toEqual([{ inputTokensAbove: 199_999,
+      input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 }]);
+    expect(model.cost.tiers).toEqual([{ inputTokensAbove: 199_999, output: 12 }]);
   });
 
   it('publishes SuperGrok catalog models missing from this PI binary as catalog additions', () => {
@@ -2554,6 +2584,42 @@ describe('buildPiNativeProvidersFromConfigs', () => {
 
 
 describe('server metadata reaches every native Pi transport', () => {
+  it.each(['discovery', 'user-addition'] as const)('carries a new Grok model from %s into local and SSH Pi routes', async (source) => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    const addition = {
+      id: 'xai/grok-4.7', name: 'Grok 4.7', contextWindow: 500_000,
+      maxOutput: 64_000, efforts: ['low', 'high', 'xhigh'] as const, defaultEffort: 'high' as const,
+    };
+    if (source === 'discovery') setXaiDiscoveredModels([{ ...addition, efforts: [...addition.efforts] }]);
+    else {
+      const { id, ...base } = addition;
+      const parsed = sanitizeModelCatalogOverrides({ additions: { [`xai:${id}`]: { agents: ['pi'], base } } });
+      expect(parsed.invalid).toEqual([]);
+      setLocalCatalogOverrides(parsed.overrides);
+    }
+    try {
+      const catalog = getActiveCatalog();
+      const result = buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:4567',
+        new Map([['xai', new Map()]]));
+      expect(result.providers.find(p => p.id === 'xai')!.models.find(m => m.id === 'grok-4.7'))
+        .toMatchObject({ wireId: 'grok-4.7', api: 'openai-responses',
+          contextWindow: 500_000, maxTokens: 64_000, reasoning: true,
+          thinkingLevelMap: { high: 'high', xhigh: 'xhigh', medium: null },
+        });
+      const remote = await buildXaiPiNativeProvider('xai/grok-4.7', false, true);
+      expect(remote.providers[0]?.models.find(m => m.id === 'xai/grok-4.7'))
+        .toMatchObject({ wireId: 'grok-4.7', api: 'openai-responses', reasoning: true,
+          contextWindow: 500_000, maxTokens: 64_000,
+          thinkingLevelMap: { high: 'high', xhigh: 'xhigh', medium: null },
+        });
+      expect(remote.providers[0]?.hostProxyForward).toBeDefined();
+    } finally {
+      setXaiDiscoveredModels(null);
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it.each([
     ['openai', 'openai-codex', 'chatgpt/gpt-fixture', 'gpt-fixture', 'openai-responses', 'openai-codex-responses'],
     ['anthropic', 'anthropic', 'claude-fixture', 'claude-fixture', 'anthropic-messages', 'anthropic-messages'],

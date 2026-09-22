@@ -9,6 +9,7 @@ export interface PiImportModel {
   maxTokens?: number;
   input?: string[];
   reasoning?: boolean;
+  defaultEffort?: string;
   thinkingLevelMap?: Record<string, string | null>;
   cost?: Record<string, unknown>;
   headers?: Record<string, string>;

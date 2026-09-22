@@ -50,8 +50,12 @@ export function toCindyProviderModel(row) {
     supportsImageInput: row.input?.includes("image") ?? false,
     reasoning: row.reasoning === true,
     efforts,
-    // Same product preference as defaultEffortForCapabilities; guarded by the import test.
-    defaultEffort: ["medium", "high", "low", "xhigh", "max", "minimal", "ultra"].find(effort => efforts.includes(effort)) ?? null,
+    // Preserve a supported explicit default; otherwise use Cindy's generic preference.
+    defaultEffort: efforts.includes(row.defaultEffort)
+      ? row.defaultEffort
+      : (["medium", "high", "low", "xhigh", "max", "minimal", "ultra"].find(
+          (effort) => efforts.includes(effort),
+        ) ?? null),
     ...(Object.keys(cost).length ? { cost } : {}),
     execution: {
       pi: {

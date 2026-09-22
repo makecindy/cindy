@@ -90,7 +90,12 @@ export function CindyDeviceRow({
           options={options}
           current={current}
           onSelect={onSelect}
-          className="pointer-events-auto col-span-2 -mx-2"
+          className={cn(
+            'pointer-events-auto col-span-2 -mx-2 border-0 bg-transparent text-12 text-inherit focus-visible:ring-inset',
+            'enabled:hover:bg-sidebar-item-hover enabled:active:bg-sidebar-item-hover',
+            selected &&
+              'enabled:hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)] enabled:active:bg-[color-mix(in_srgb,currentColor_16%,transparent)]',
+          )}
         />
         <span
           className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}

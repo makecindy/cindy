@@ -4975,7 +4975,9 @@
           "stateChanged": "작업 중 계정, 플러그인 또는 릴리스가 변경되었습니다. 최신 상태를 확인한 후 다시 시도해 주세요.",
           "accessDenied": "이 플러그인 작업은 허용되지 않았거나 취소되었습니다.",
           "notConfigured": "이 환경에서는 플러그인 마켓을 사용할 수 없습니다.",
-          "invalidPackage": "이 플러그인 패키지가 올바르지 않거나 현재 Cindy 버전에서 지원되지 않습니다.",
+          "invalidPackage": "플러그인 패키지에 문제가 있어 설치할 수 없습니다. 게시자에게 문의해 주세요.",
+          "downloadTimeout": "플러그인 다운로드 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
+          "downloadFailed": "플러그인을 다운로드하지 못했습니다. 네트워크 연결을 확인한 후 다시 시도해 주세요.",
           "brokerRedirectPortRequired": "이 플러그인은 인증 broker를 선언했지만 같은 OAuth 설정에 redirectPort가 없어 플러그인 마켓에서 설치할 수 없습니다. 게시자에게 이 필드를 추가해 새 버전을 게시해 달라고 알려 주세요."
         },
         "securityTitle": "설치 및 권한",

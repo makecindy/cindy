@@ -11,6 +11,28 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 工具循环与无响应的分工
+
+工具持续返回但反复原地搜索时，复用
+`agents/shared/loop-guard.ts` 的 `ToolLoopGuard`，不能靠缩短无事件超时处理。
+Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在 `Session` 中配对
+当前产品轮次的 `tool_use` 与 `tool_result_full`，不重复统计结果摘要、后台事件或旧轮次。
+Pi / Codex 的归一事件尚无可靠模型响应批次标识，因此不启用“参数各不相同、同类契约
+错误连续被拒”的重试计数规则，避免把单批并行失败当成多次重试；重复调用检测仍保留。
+Claude Code 沿用既有按批次计数的契约错误规则。
+循环错误沿用 `tool_use_loop_detected` 和既有中断复核，Orca 消费普通终态链路；
+该 reason 不进入 interrupted-turn 自动续跑白名单，避免熔断后立即重复原循环。
+
+短窗口判据保持原样；较长的只读搜索轮转只在最近 128 次读/搜结果至多包含 32 种
+完整调用指纹，且至少 90% 的结果属于重复至少 4 次的指纹时判定。参数与输出都参与
+指纹，不修改实际工具结果；写入或命令结果打断该只读窗口，原生等待工具不计数。
+成功的简单 `tail` / PowerShell `Get-Content -Tail` 日志轮询同样不计数
+（只认字面 `.log` 路径，可串联多个日志读取）；
+失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
+这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
+回归见 `loop-guard.test.ts`、`session.tool-loop.test.ts` 和 Claude Code 的
+`upstream-idle-watchdog.test.ts`。
+
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；

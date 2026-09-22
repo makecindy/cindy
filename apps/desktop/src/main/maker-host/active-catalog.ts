@@ -80,6 +80,7 @@ import {
   applyLocalConsumerOverrides,
   hasLocalContextWindowOverride,
   applyLocalOverridesToRoot,
+  localPiAdditionModels,
   hasLocalAddition,
   EMPTY_MODEL_CATALOG_OVERRIDES,
   resolveLocalBridgeExclusions,
@@ -898,18 +899,19 @@ function applyLayeredConsumer(
 function xaiCatalogModelById(
   provider: Provider,
   id: string,
-  agent: RootAgentKind,
+  agent: AgentKind,
 ): CatalogModel | undefined {
   const bundled = BUNDLED_CATALOG.providers.find((entry) => entry.id === 'xai');
+  const catalogId = agent === 'pi' ? normalizePiModelId('xai', id) : id;
   return (
-    provider.models[agent]?.find((model) => model.id === id) ??
-    bundled?.models[agent]?.find((model) => model.id === id)
+    provider.models[agent]?.find((model) => model.id === catalogId) ??
+    bundled?.models[agent]?.find((model) => model.id === catalogId)
   );
 }
 
 function materializeXaiAccountModels(
   provider: Provider,
-  agent: RootAgentKind,
+  agent: AgentKind,
   discovered: readonly XaiDiscoveredModel[],
 ): CatalogModel[] {
   return discovered.map((entry, index) => {
@@ -986,18 +988,18 @@ function normalizePiModelId(providerId: string, modelId: string): string {
 }
 
 /**
- * An explicit per-Harness declaration owns membership, including an empty list.
- * Old snapshots without this field use the bundled declaration. Native runtime
- * catalogs supply transport compatibility, never a second public membership list.
+ * Public Pi declarations seed membership; account discovery can add new models.
+ * Explicit empty declarations disable the runtime. Missing fields use the bundled
+ * declaration, while native SDK capabilities remain independent of sibling Harnesses.
  */
-function declaredPiModels(providerId: string): CatalogModel[] {
+function declaredPiModels(providerId: string, discovered: readonly CatalogModel[] = []): CatalogModel[] {
   const bundled =
     BUNDLED_CATALOG.providers.find((provider) => provider.id === providerId)?.models.pi ?? [];
   const explicit = (piGatewayAuthorityCatalog ?? base)?.providers.find(
     (provider) => provider.id === providerId,
   )?.models.pi;
   const fallbackById = new Map(bundled.map((model) => [normalizePiModelId(providerId, model.id), model]));
-  return (explicit ?? bundled).map((model) => {
+  const declared = (explicit ?? bundled).map((model) => {
     const id = normalizePiModelId(providerId, model.id);
     return {
       ...fallbackById.get(id), ...model, id,
@@ -1008,6 +1010,27 @@ function declaredPiModels(providerId: string): CatalogModel[] {
       } : {}),
     };
   });
+  // An explicitly disabled Pi runtime stays disabled. Otherwise subscription
+  // discovery provides new account members independently of the SDK's model list.
+  if (explicit?.length === 0 || discovered.length === 0) return declared;
+  const piApi = providerId === 'openai' ? 'openai-responses' as const
+    : providerId === 'anthropic' ? 'anthropic-messages' as const : undefined;
+  if (!piApi) return declared;
+  const byId = new Map(declared.map(model => [model.id, model]));
+  for (const model of discovered) {
+    const id = normalizePiModelId(providerId, model.id);
+    // Codex/Claude SDK limits describe those Harnesses, not Pi. Discovery adds
+    // membership but cannot overwrite an existing Pi model's transport/capabilities.
+    if (byId.has(id)) continue;
+    if (model.status === 'retired' || findModelRegistryRoute(
+      (base ?? BUNDLED_CATALOG).modelRegistry, providerId, model.id,
+    )?.entry.status === 'retired') continue;
+    byId.set(id, {
+      ...model, id, piApi,
+      discoveredMetadata: model.discoveredMetadata ?? catalogModelMetadata(model),
+    });
+  }
+  return [...byId.values()];
 }
 
 function projectXdGatewayMediaModels(
@@ -1127,7 +1150,7 @@ function computeMerged(): Catalog {
   );
   if (normalized.some((p, index) => p !== providers[index])) providers = normalized;
 
-  // 规范 discovery 只进入 Codex root；Claude bridge 从最终 root 重算，Pi 另读自己的目录。
+  // Codex root 消费其发现快照；Pi 后续独立补新型号，不继承 Codex 专属能力。
   const withCodexDiscovery = providers.map((p) =>
     p.id === 'openai' ? augmentModels(p, 'codex', discoveredCodex, true) : p,
   );
@@ -1256,7 +1279,8 @@ function computeMerged(): Catalog {
             'claude-code',
             projected.models['claude-code'] ?? [],
           ),
-          pi: declaredPiModels('openai'),
+          pi: declaredPiModels('openai', p.id === 'openai'
+            ? discoveredCodex : discoveredByProvider.get(p.id)?.codex ?? []),
         },
       };
     }
@@ -1273,7 +1297,7 @@ function computeMerged(): Catalog {
         localOverrides,
         'anthropic',
       );
-      // codex bridge 受 membership 门控且 fast=false(硬约束)；Pi 不镜像 Claude root。
+      // Codex bridge 受 membership 门控且 fast=false；Pi 只用原始发现补新型号。
       const codexBridge = root
         .filter((m) => !excluded.has(m.id))
         .map((model) =>
@@ -1294,7 +1318,8 @@ function computeMerged(): Catalog {
           ...p.models,
           'claude-code': root,
           codex: codexBridge,
-          pi: declaredPiModels('anthropic'),
+          pi: declaredPiModels('anthropic', p.id === 'anthropic'
+            ? anthropicModels : discoveredByProvider.get(p.id)?.['claude-code'] ?? []),
         },
       };
     }
@@ -1330,7 +1355,30 @@ function computeMerged(): Catalog {
         delete rest.piApi;
         return rest;
       };
-      const piModels = declaredPiModels('xai');
+      const declaredPi = declaredPiModels('xai');
+      const piWireProtocol = (p.routing.pi ?? bundledXai?.routing.pi)?.wireProtocol;
+      // Discovery is account evidence shared by all Harnesses. Pi's packaged model list
+      // only supplies defaults; new account models can use the declared subscription
+      // transport without waiting for a new Pi binary or a public catalog release.
+      // Keep an explicit empty public declaration disabled and preserve retired entries.
+      const discoveredPi = declaredPi.length > 0 &&
+        (piWireProtocol === 'openai-responses' || piWireProtocol === 'openai-chat')
+        ? materializeXaiAccountModels(
+            { ...p, models: { ...p.models, pi: declaredPi } }, 'pi', accountModels,
+          ).map((model) => ({
+            ...model,
+            id: normalizePiModelId('xai', model.id),
+            piApi: model.piApi ?? (piWireProtocol === 'openai-chat'
+              ? 'openai-completions' as const : 'openai-responses' as const),
+          }))
+        : [];
+      const discoveredPiById = new Map(discoveredPi.map((model) => [model.id, model]));
+      const declaredPiIds = new Set(declaredPi.map((model) => model.id));
+      const piModels = [
+        ...declaredPi.map((model) => model.status === 'retired'
+          ? model : discoveredPiById.get(model.id) ?? model),
+        ...discoveredPi.filter((model) => !declaredPiIds.has(model.id)),
+      ];
       return {
         ...p,
         agents: p.agents.includes('pi') ? p.agents : [...p.agents, 'pi' as AgentKind],
@@ -1689,6 +1737,32 @@ function computeMerged(): Catalog {
       ]),
     ),
   }));
+  // User additions are the highest layer and may explicitly revive a subscription
+  // model. They reuse that connection's transport, never create Gateway/BYOM routes.
+  providers = providers.map(provider => {
+    const catalogId = providerCatalogId(provider);
+    if ((provider.source === 'user' && !provider.auth.native) || !provider.routing.pi) return provider;
+    const additions = localPiAdditionModels(provider.id, localOverrides, catalogId);
+    if (additions.length === 0) return provider;
+    const models = new Map((provider.models.pi ?? []).map(model => [model.id, model]));
+    for (const addition of additions) {
+      const id = normalizePiModelId(catalogId, addition.id);
+      const existing = models.get(id);
+      const wire = provider.routing.pi.wireProtocol;
+      const piApi = existing?.piApi ?? (catalogId === 'openai' ? 'openai-responses'
+        : wire === 'openai-chat' ? 'openai-completions' : wire);
+      if (!isPiModelApi(piApi)) continue;
+      const model: CatalogModel = {
+        ...applyExistingModelLocalPatch(provider.id, 'pi', addition, localOverrides),
+        id, piApi,
+        ...(existing ? { contextWindowMax: Math.max(
+          existing.contextWindowMax ?? existing.contextWindow, addition.contextWindow,
+        ) } : {}),
+      };
+      models.set(id, applyExistingModelLocalPatch(provider.id, 'pi', model, localOverrides));
+    }
+    return { ...provider, models: { ...provider.models, pi: [...models.values()] } };
+  });
   const modelRegistry = b.modelRegistry
     ? { ...b.modelRegistry, localModels: effectiveLocalModels }
     : undefined;
