@@ -127,7 +127,16 @@ export class CindyMakeHistoryStore {
     const value = JSON.parse(raw);
     if (
       !value ||
-      !['waiting', 'checking', 'merging', 'packaging', 'publishing', 'ready', 'failed'].includes(
+      ![
+        'waiting',
+        'syncing',
+        'checking',
+        'merging',
+        'packaging',
+        'publishing',
+        'ready',
+        'failed',
+      ].includes(
         value.status,
       )
     )
@@ -149,6 +158,9 @@ export class CindyMakeHistoryStore {
         : {}),
       ...(value.status === 'waiting' && ['environment', 'original'].includes(value.preparationStep)
         ? { preparationStep: value.preparationStep }
+        : {}),
+      ...(typeof value.syncLatestSource === 'boolean'
+        ? { syncLatestSource: value.syncLatestSource }
         : {}),
       ...(value.stopping === true ? { stopping: true } : {}),
       ...(Number.isFinite(value.startedAt) && value.startedAt > 0

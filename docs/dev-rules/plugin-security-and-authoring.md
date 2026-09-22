@@ -278,8 +278,29 @@
   `ghost_call` 恢复均由 Host 掌控。Secret、Token、OAuth code 和连接凭证不得进入
   Agent、Ghost、interaction / pending snapshot、会话历史、日志或分析事件。内联 Secret
   只允许短暂存在于本地 Desktop 输入组件和一次性的 trusted Renderer → Main 专用 IPC；
-  不得走通用 interaction response、device-link 或其它远程通道，也不得写入 Renderer
-  store。提交成功、取消、request / revision 替换和组件卸载时必须清空。
+  不得走通用 interaction response、通用 device-link invoke，也不得写入 Renderer
+  store。提交成功、取消、request / revision 替换和组件卸载时必须清空。远程普通 user
+  Secret 的窄例外仅为下述签名输入桥，不提供保险库读取或同步。
+- 远程设备插件 OAuth 的 [Desktop 回调桥](../remote-plugin-oauth.md) 是独立的 Host 对 Host
+  授权事务，只承接当前卡片的已声明 OAuth action。URL/code 必须在两个 Main 间加密，
+  不能暴露给 Renderer、Agent、插件或通用 invoke；token 仍由目标 Host 现有账号管理器交换保存。
+  通用设备码、浏览器确认和 CLI PKCE 回调由同一类型化适配层承接，仍须精确任务/插件/目标
+  绑定；可信 Node 的私有 CLI callback 只回 bootstrap Promise，不经 stdout、沙箱或模型。
+  Node 本来拥有系统用户权限，这不是隔离恶意 Node 的保证；不放开任意端口/URL 转发。
+  新 Node 授权卡须以 `cancelWithCall:true` 和当前 `callId` 显式启用；只带旧调用编号
+  不取得授权能力，也不改变旧 RPC/后台子进程生命周期。任务 Stop 后不得迟到启用，
+  取消只回收该调用所属子进程，不停止同一 Worker 中其它调用。
+  普通 user Secret 可由 `remoteSecret:true` 卡片通过专用本机 `plugin-oauth:submit-secret`
+  加密送到目标 Host；必须先签名握手，并比较原 Host 的完整字段展示与用户看到的字段，绑定
+  设备/插件/action/revision，在最新声明与写入边界复验。只允许写既有 executor 解析出的
+  单个 Secret；OAuth、gh-cli、oidc-token 和账号 vault 不接受此输入。Bot/旧卡片无此标记，
+  不自动获得能力。原始值不进通用 invoke、事件、会话历史、日志或 store；不增加确认窗口。
+  用户要求的设备码卡片展示是窄例外：加密 device offer 中供用户手工输入的短时
+  `userCode` 可通过本机专用 `plugin-oauth:device-code` 接口投影到发起授权的自有顶层
+  Renderer。只在当前卡片组件内存显示；按 owner、窗口/frame、设备、插件、request/action
+  绑定，支持再次复制与重新打开 Main 保管的同一授权页。过期、终态或身份失效后清除。
+  它不包含 OAuth callback code、device_code、Token、完整 URL 或 state，不进入聊天
+  snapshot、模型、持久化或通用远控；不改变原授权卡片或新增确认窗口。
 - Host 必须把每个未满足 `any_of` 组的全部可执行 item 投影到卡片，Agent plan
   不能隐藏合法配置路径。Renderer 统一按组展示选项并复用 Ask 卡片的正文限高与纵向
   滚动，不得为 Brave、Tavily、Gmail 等具体插件增加分支。

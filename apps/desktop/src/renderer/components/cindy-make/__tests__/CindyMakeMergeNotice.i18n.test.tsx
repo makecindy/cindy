@@ -29,6 +29,37 @@ afterEach(() => {
 });
 
 describe('source conflict confirmation translations', () => {
+  it.each(locales)('renders distinct local main errors in %s', async (locale, resource) => {
+    const i18n = createInstance();
+    await i18n.init({
+      lng: locale,
+      fallbackLng: false,
+      resources: { [locale]: { translation: resource } },
+    });
+    const renderError = (error: 'localMain' | 'localMainAhead') => (
+      <MemoryRouter>
+        <I18nextProvider i18n={i18n}>
+          <CindyMakeMergeNotice
+            state={{
+              id: 'merge',
+              status: 'failed',
+              ref: 'v1.2.3',
+              upstreamCommit: 'a'.repeat(40),
+              error,
+              hasWorkspace: false,
+            }}
+          />
+        </I18nextProvider>
+      </MemoryRouter>
+    );
+    const view = render(renderError('localMain'));
+    expect(screen.getByRole('status').textContent).toContain(resource.cindyMake.merge.errors.localMain);
+    view.rerender(renderError('localMainAhead'));
+    expect(screen.getByRole('status').textContent).toContain(resource.cindyMake.merge.errors.localMainAhead);
+    expect(screen.queryByText(resource.cindyMake.merge.errors.localMain)).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Cindy Make');
+    expect(screen.getByRole('status').textContent).not.toMatch(/cindyMake[.]|[?]{2,}|�/);
+  });
   it.each(locales)(
     'opens retained task records in %s without recreating a cleaned workspace',
     async (locale, resource) => {

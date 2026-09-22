@@ -23,6 +23,7 @@ import {
   actUpstreamMerge,
   waitForMakeHistoryMerge,
   finishMakeHistoryCleanup,
+  syncSourceBeforeCindyMakeBuild,
 } from './upstreamMergeRuntime.js';
 import type { CindyMakeMergeState } from '../../shared/cindyMakeMerge.js';
 import type { MakeTestContext } from './testController.js';
@@ -51,6 +52,7 @@ import {
 } from './personalBuild.js';
 import { currentVersionProfile, rememberOriginalVersion } from './versionStartup.js';
 import { hasPublishedPersonalVersionCommit } from './versionStore.js';
+import { readCindyMakeSettings } from './settingsStore.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
@@ -73,6 +75,7 @@ const ID = /^[A-Za-z0-9-]{1,128}$/;
 const HASH = /^[a-f0-9]{40,64}$/i;
 const log = createLogger('cindy-make');
 let running: (id: string) => boolean = () => true;
+let notifyHistoryChanged: () => void = () => {};
 /** Owns a source build, including its ordered history merges, independently of Settings. */
 interface HistoryBuildJob {
   id: string;
@@ -125,8 +128,12 @@ function latestUserPromptBefore(
   return;
 }
 
-export function configureMakeHistory(probe: typeof running): void {
+export function configureMakeHistory(
+  probe: typeof running,
+  notify: () => void = () => {},
+): void {
   running = probe;
+  notifyHistoryChanged = notify;
 }
 export function stopMakeHistoryBuild(): void {
   buildJob?.abort.abort();
@@ -377,7 +384,7 @@ async function readCindyMakeHistory(
       row?.status === 'active' &&
       completion &&
       (['starting', 'ready'].includes(completion.test?.status ?? '') ||
-        ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
+        ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
           completion.personal?.status ?? '',
         ))
     ) {
@@ -635,6 +642,7 @@ async function readCindyMakeHistory(
   return {
     items,
     busy: globalBusy || !!pendingMerge,
+    activeWork: globalBusy,
     canBuild: buildSourceAvailable && !globalBusy && !pendingMerge,
     build,
     batch: buildJob?.current() ? buildJob.batch : undefined,
@@ -1011,6 +1019,7 @@ export async function generateHistoryPersonalVersion(
   const abort = new AbortController();
   const buildId = randomUUID();
   const startedAt = Date.now();
+  const syncLatestSource = readCindyMakeSettings().syncLatestBeforeBuild;
   const publish = async (build: CindyMakePersonalBuildState) => {
     h.check();
     // A late step notification must not erase a requested stop.
@@ -1028,7 +1037,7 @@ export async function generateHistoryPersonalVersion(
   };
   buildJob = job;
   try {
-    await publish({ status: 'waiting' });
+    await publish({ status: 'waiting', syncLatestSource });
   } catch (error) {
     if (buildJob === job) buildJob = undefined;
     releaseBuild();
@@ -1051,6 +1060,10 @@ export async function generateHistoryPersonalVersion(
         await publish({ status: 'waiting', preparationStep: 'original' });
         await rememberOriginalVersion(node.path);
         const buildEnvironment = await personalBuildEnvironment(env, git.path);
+        if (syncLatestSource) {
+          await syncSourceBeforeCindyMakeBuild(abort.signal, publish);
+          h.check();
+        }
         if (selection) {
           if (h.store.readBuildRollback().length) await recoverHistoryBuildRollback();
           const candidates: CindyMakeHistoryItem[] = [];
@@ -1169,6 +1182,7 @@ export async function generateHistoryPersonalVersion(
     .finally(() => {
       if (buildJob === job) buildJob = undefined;
       releaseBuild();
+      if (h.current()) notifyHistoryChanged();
     });
   return getCindyMakeHistory();
 }

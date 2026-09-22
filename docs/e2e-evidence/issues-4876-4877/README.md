@@ -2,7 +2,7 @@
 
 Issues: #4876, #4877.
 
-- Environment: iOS 27 simulator, 402 × 874 points, current native development build; branch `fix-4876-4877-automation-input`, Metro served by that worktree.
+- Environment: iOS 27 simulator, 402 × 874 points, native development build from baseline `6210df89d`; branch `fix-4876-4877-automation-input`, Metro served by that worktree.
 - These are actual native controls, not design mockups. The production automation sheet was mounted with a temporary local resource fixture because the paired host timed out. The fixture and temporary route were removed before committing. No automation was created or executed on the host.
 - Chinese Pinyin composition in Name was committed as `应`; Instructions then accepted `一`, and Enabled could be toggled off.
 - Actual on-screen numeric keyboard taps: hour `9 → empty → 12 → 1 → empty → 8`; minute `0 → empty → 30 → 3 → empty → 05`. The screenshots record the full two-digit value, deletion and subsequent entry, in Light and Dark.

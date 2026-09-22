@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   launch: vi.fn(),
   probe: vi.fn(),
   verify: vi.fn(),
+  prepare: vi.fn(),
   build: vi.fn(),
   saveBuild: vi.fn(),
   artifactPath: vi.fn(),
@@ -24,6 +25,9 @@ const h = vi.hoisted(() => ({
   publishedCommit: vi.fn(() => true),
   pendingRollback: false,
   historyIntegrate: vi.fn(),
+  syncBuild: vi.fn(),
+  syncBeforeBuild: false,
+  historyChanged: vi.fn(),
   history: vi.fn(async () => ({ items: [{ runId: 'run', integration: 'integrated' }] })),
 }));
 vi.mock('../historyOwner.js', () => ({
@@ -39,6 +43,13 @@ vi.mock('../historyRuntime.js', () => ({
   getCindyMakeHistory: h.history,
   integrateCompletionForBuild: h.historyIntegrate,
   recoverHistoryBuildRollback: h.recoverBuild,
+}));
+vi.mock('../testRecovery.js', () => ({ prepareCindyMakeTest: h.prepare }));
+vi.mock('../settingsStore.js', () => ({
+  readCindyMakeSettings: () => ({ syncLatestBeforeBuild: h.syncBeforeBuild }),
+}));
+vi.mock('../upstreamMergeRuntime.js', () => ({
+  syncSourceBeforeCindyMakeBuild: h.syncBuild,
 }));
 vi.mock('../buildRollback.js', () => ({
   historyBuildRollback: (...args: [unknown, unknown, (commit: string) => boolean]) => {
@@ -159,6 +170,10 @@ beforeEach(() => {
   h.build.mockReset().mockResolvedValue(installer);
   h.recoverBuild.mockReset().mockResolvedValue(undefined);
   h.historyIntegrate.mockReset().mockResolvedValue(undefined);
+  h.syncBuild.mockReset().mockImplementation(async (_signal, publish) => {
+    await publish({ status: 'syncing', syncLatestSource: true });
+  });
+  h.syncBeforeBuild = false;
   h.artifactPath.mockReset().mockResolvedValue(path.join(os.tmpdir(), 'installer.exe'));
   h.current = true;
   h.pendingRollback = false;
@@ -184,11 +199,58 @@ beforeEach(() => {
       cindyMakeCompletion: { reportedAt: 123, changedFiles: 2, commit: 'a'.repeat(40) },
     }),
   };
-  configureCindyMakeTestRuntime(() => false);
+  configureCindyMakeTestRuntime(() => false, h.historyChanged);
 });
 afterEach(() => cindyMakeTestController.stopAll());
 
 describe('Cindy Make test IPC ownership and persistence', () => {
+  it.each(['start', 'build'] as const)(
+    'prepares a fresh result and directly runs the requested %s action',
+    async (action) => {
+      h.prepare.mockImplementationOnce(async () => {
+        h.card.clientId = 'fresh-completion';
+        return { completionId: 'fresh-completion', isCurrent: () => h.current };
+      });
+      if (action === 'start')
+        h.launch.mockResolvedValueOnce({
+          stop: vi.fn(),
+          ready: Promise.resolve(),
+          closed: Promise.resolve(),
+        });
+      const next = await actCindyMakeTest('session', 'reply', 'resume-' + action);
+      expect(h.prepare).toHaveBeenCalledWith('session', 'reply', expect.any(Function));
+      expect(next.lastAction).toBe(action === 'start' ? 'test' : 'build');
+      if (action === 'start') await vi.waitFor(() => expect(h.verify).toHaveBeenCalledOnce());
+      else await vi.waitFor(() => expect(h.historyIntegrate).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(cindyMakeTestController.hasActiveJobs()).toBe(false));
+      expect(h.historyChanged).toHaveBeenCalledTimes(action === 'build' ? 1 : 0);
+    },
+  );
+  it('runs the enabled latest-source step before integrating and packaging a completion', async () => {
+    h.syncBeforeBuild = true;
+
+    await actCindyMakeTest('session', 'completion', 'build');
+    await vi.waitFor(() => expect(cindyMakeTestController.hasActiveJobs()).toBe(false));
+
+    expect(h.syncBuild).toHaveBeenCalledOnce();
+    expect(h.syncBuild.mock.invocationCallOrder[0]).toBeLessThan(
+      h.historyIntegrate.mock.invocationCallOrder[0],
+    );
+    expect(h.historyIntegrate.mock.invocationCallOrder[0]).toBeLessThan(
+      h.build.mock.invocationCallOrder[0],
+    );
+    const personal = JSON.parse(String(h.card.agentMeta)).cindyMakeCompletion.personal;
+    expect(personal.syncLatestSource).toBe(true);
+    expect(personal.logs.map((entry: { step: string }) => entry.step)).toContain('syncing');
+  });
+  it('rejects recovery generation before capturing files while a source conflict is pending', async () => {
+    h.history.mockResolvedValueOnce({ busy: true, items: [] } as never);
+    await expect(actCindyMakeTest('session', 'reply', 'resume-build')).rejects.toThrow(
+      'unavailable',
+    );
+    expect(h.prepare).not.toHaveBeenCalled();
+    expect(h.build).not.toHaveBeenCalled();
+  });
   it('keeps the card building through conflict resolution and cleanup, then packages once', async () => {
     let resolved!: () => void;
     let cleaned!: () => void;
@@ -246,6 +308,18 @@ describe('Cindy Make test IPC ownership and persistence', () => {
       status: 'failed',
       error: 'cancelled',
     });
+  });
+  it('rejects a completion build when history retains a source conflict without active work', async () => {
+    h.history.mockResolvedValueOnce({
+      items: [],
+      busy: true,
+      activeWork: false,
+      canBuild: false,
+    } as Awaited<ReturnType<typeof h.history>>);
+    await expect(actCindyMakeTest('session', 'completion', 'build')).rejects.toThrow('unavailable');
+    expect(h.historyIntegrate).not.toHaveBeenCalled();
+    expect(h.build).not.toHaveBeenCalled();
+    expect(h.saveBuild).not.toHaveBeenCalled();
   });
   it('reports a stop failure without inspecting or modifying personal source', async () => {
     const stop = vi

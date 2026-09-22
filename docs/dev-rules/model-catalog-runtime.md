@@ -10,6 +10,13 @@ Pi 的 `thinkingLevelMap` 是稀疏映射：标准档位省略时仍支持，`nu
 `xhigh`、`max` 则需要显式映射。目录导入、客户端目录和启动快照必须共用此解释，
 不能把 `Object.keys(map)` 当成完整能力列表，导致默认档被错误替换成更高档。
 
+原生档位表只为缺少公共定义的模型补默认；公共定义存在时按
+[思考强度继承规则](../product-rules/model-metadata-precedence.md#思考强度模型默认按需覆盖)
+解析。不要将静态思考档位放入 `discoveredMetadata` 压过 Registry，也不要在能力描述符
+中追加档位。原生参数别名仍在 `thinkingLevelMap` 保留，显式通道能力及用户覆盖保持优先。
+Server 明确给出的 Pi `reasoning: false` / `reasoningEfforts` 属于通道能力约束；
+旧 Pi 条目的 `efforts` / `defaultEffort` 属于默认兜底，不能冒充实报压过公共配置。
+
 删除临时兼容补项前，必须验证随包 Pi 已原生支持相同模型、协议及参数；
 仅 Server 新增该模型不足以证明可以删除兼容代码。专项规则见 [Pi harness](pi-harness.md)。
 

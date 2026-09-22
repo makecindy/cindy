@@ -48,9 +48,9 @@ afterEach(cleanup);
 describe('Cindy Make source summary', () => {
   it.each([
     [0, 0, '与本地 main 的 SHA 相同'],
-    [0, 6, '尚缺本地 main 的 6 条修改记录'],
-    [2, 0, '已包含本地 main，另有 2 条个人修改记录'],
-    [2, 6, '尚缺本地 main 的 6 条修改记录，另有 2 条个人修改记录'],
+    [0, 6, '尚缺本地 main 中的 6 条修改记录'],
+    [2, 0, '已包含本地 main，个人版源码中另有 2 条修改记录'],
+    [2, 6, '尚缺本地 main 中的 6 条修改记录，个人版源码中另有 2 条修改记录'],
     [undefined, undefined, 'SHA 与本地 main 不同，差距未知'],
   ] as const)(
     'summarizes the verified local comparison (%s ahead, %s behind)',
@@ -66,7 +66,7 @@ describe('Cindy Make source summary', () => {
         'cindy-personal · 版本状态未确认',
       );
       expect(screen.getByRole('status').className).not.toContain('--status-success');
-      expect(screen.getAllByTitle(commit!).length).toBeGreaterThan(0);
+      expect(screen.queryByTitle(source.commit!)).toBeNull();
       expect(screen.getAllByTitle(source.mainCommit!).length).toBeGreaterThan(0);
       expect(screen.queryByText(source.baseCommit!.slice(0, 12))).toBeNull();
       expect(screen.queryByText(source.currentBranch!)).toBeNull();
@@ -122,7 +122,7 @@ describe('Cindy Make source summary', () => {
     expect(screen.getAllByTitle(source.mainCommit!)).toHaveLength(1);
     expect(screen.getByText('本地 main').className).toContain('--status-success');
     expect(hash.closest('dd')?.querySelector('svg')).toBeNull();
-    expect(screen.getByText('与线上 main 一致，落后 0 条修改记录')).toBeTruthy();
+    expect(screen.getByText('与GitHub main 一致，落后 0 条修改记录')).toBeTruthy();
     expect(screen.queryByText(/main 落后/)).toBeNull();
   });
 
@@ -148,7 +148,8 @@ describe('Cindy Make source summary', () => {
       ).toBeTruthy();
       expect(screen.getByText(copy.personalChanges.replace('{{ahead}}', '1'))).toBeTruthy();
       expect(screen.getByText('cindy-personal').closest('dt')).toBe(status.closest('dt'));
-      expect(screen.getByTitle(source.commit!).closest('dd')).toBe(
+      expect(screen.queryByTitle(source.commit!)).toBeNull();
+      expect(screen.getByText(copy.personalChanges.replace('{{ahead}}', '1')).closest('dd')).toBe(
         status.closest('dt')?.nextElementSibling,
       );
       expect(container.textContent).not.toMatch(/cindyMake[.]|[{][{]|[?][?]|�/);
@@ -292,13 +293,14 @@ describe('Cindy Make source summary', () => {
       expect(labels[0].textContent).toBe(locales[locale].cindyMake.overview.localMain);
       expect(within(labels[1]).getByText(locales[locale].cindyMake.overview.personal)).toBeTruthy();
       expect(within(labels[1]).getByRole('status')).toBeTruthy();
+      expect(labels[1].parentElement?.className).toContain('items-center');
+      expect(labels[1].nextElementSibling?.className).toContain('items-center');
       expect(container.querySelectorAll('dl > div > dd')).toHaveLength(2);
       expect(
         screen.getByText(locales[locale].cindyMake.source.details.latest.dev).closest('dd'),
       ).toBe(screen.getByTitle(source.mainCommit!).closest('dd'));
-      for (const commit of [source.commit!, source.mainCommit!]) {
-        expect(screen.getByText(commit.slice(0, 12)).title).toBe(commit);
-      }
+      expect(screen.getByText(source.mainCommit!.slice(0, 12)).title).toBe(source.mainCommit);
+      expect(screen.queryByText(source.commit!.slice(0, 12))).toBeNull();
       expect(screen.getByText('cindy-personal').closest('dt')).toBe(labels[1]);
       expect(screen.queryByText('personal')).toBeNull();
       for (const hidden of [
@@ -322,7 +324,11 @@ describe('Cindy Make source summary', () => {
       behind: 23,
     });
     expect(screen.getByRole('status', { name: 'cindy-personal · 有更新' })).toBeTruthy();
-    expect(screen.getByText('尚缺本地 main 的 2 条修改记录，另有 3 条个人修改记录')).toBeTruthy();
+    expect(
+      screen.getByText(
+        '尚缺本地 main 中的 2 条修改记录，个人版源码中另有 3 条修改记录',
+      ),
+    ).toBeTruthy();
     const online = screen.getByText('e'.repeat(12)).closest('dd')!;
     expect(online.textContent).toContain('本地 main 落后 23 条修改记录');
     expect(within(online).queryByText(/领先 2/)).toBeNull();
@@ -344,7 +350,7 @@ describe('Cindy Make source summary', () => {
     expect(screen.getByText('本地 main').nextElementSibling?.firstElementChild?.textContent).toBe(
       '未读取',
     );
-    expect(screen.getByText(source.commit!.slice(0, 12))).toBeTruthy();
+    expect(screen.queryByText(source.commit!.slice(0, 12))).toBeNull();
     expect(screen.queryByText(source.baseCommit!.slice(0, 12))).toBeNull();
     expect(screen.queryByText(source.mainRemoteCommit!.slice(0, 12))).toBeNull();
     expect(screen.queryByText(/与线上 main 一致/)).toBeNull();
@@ -358,7 +364,7 @@ describe('Cindy Make source summary', () => {
       commit: source.mainCommit!,
     });
     expect(screen.getByRole('status', { name: 'cindy-personal · 已是最新' })).toBeTruthy();
-    expect(screen.getByText('与线上 main 一致，落后 0 条修改记录')).toBeTruthy();
+    expect(screen.getByText('与GitHub main 一致，落后 0 条修改记录')).toBeTruthy();
   });
 
   it('does not claim different hashes match because of inconsistent zero counts', async () => {

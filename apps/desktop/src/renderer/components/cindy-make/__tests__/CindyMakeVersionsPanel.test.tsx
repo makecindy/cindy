@@ -44,10 +44,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('Cindy Make local versions', () => {
+  it('reports the current version inventory to its parent', async () => {
+    const onState = vi.fn();
+    render(<CindyMakeVersionsPanel onState={onState} />);
+    await waitFor(() => expect(onState).toHaveBeenLastCalledWith(versions));
+  });
+
   it('leads with the running version and reveals alternatives only on request', async () => {
     h.get.mockResolvedValue({ ...versions, currentId: 'personal', selectedId: 'personal' });
     render(<CindyMakeVersionsPanel />);
-    expect(await screen.findByText('Blue background')).toBeTruthy();
+    expect(await screen.findByText('cindyMake.versions.personal')).toBeTruthy();
+    expect(screen.queryByText('Blue background')).toBeNull();
     expect(screen.queryByText('cindyMake.versions.original')).toBeNull();
     expect(screen.queryByRole('button', { name: 'cindyMake.versions.using' })).toBeNull();
     const toggle = screen.getByRole('button', { name: 'cindyMake.overview.switchVersion' });
@@ -62,7 +69,8 @@ describe('Cindy Make local versions', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'cindyMake.overview.switchVersion' }),
     );
-    await screen.findByText('Blue background');
+    await screen.findByText('cindyMake.versions.personal');
+    expect(screen.queryByText('Blue background')).toBeNull();
     expect(screen.getByText('cindyMake.versions.original')).toBeDefined();
     expect(
       screen.getByText('cindyMake.versions.development · 0.1.99 · aaaaaaaaaaaa'),
@@ -94,10 +102,76 @@ describe('Cindy Make local versions', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'cindyMake.overview.switchVersion' }),
     );
-    await screen.findByText('cindyMake.versions.incompatible');
-    expect(
-      (screen.getByRole('button', { name: 'cindyMake.versions.switch' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    const switchButton = await screen.findByRole('button', {
+      name: 'cindyMake.versions.incompatible',
+    });
+    expect(screen.getAllByText('cindyMake.versions.incompatible')).toHaveLength(2);
+    expect((switchButton as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('updates the same personal version without adding a second personal row', async () => {
+    h.get.mockResolvedValue({
+      ...versions,
+      currentId: 'personal',
+      selectedId: 'personal',
+      personalUpdateAvailable: true,
+      currentVersion: { ...versions.versions[1], commit: 'b'.repeat(40) },
+      versions: [versions.versions[0], { ...versions.versions[1], commit: 'c'.repeat(40) }],
+    });
+    render(<CindyMakeVersionsPanel />);
+    const update = await screen.findByRole('button', { name: 'cindyMake.versions.updatePersonal' });
+    expect(screen.getByText('bbbbbbbbbbbb')).toBeTruthy();
+    expect(screen.getByText('cccccccccccc')).toBeTruthy();
+    expect(screen.getAllByText('cindyMake.versions.personal')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.overview.switchVersion' }));
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.getByText('cindyMake.versions.original')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'cindyMake.versions.remove' })).toBeNull();
+    fireEvent.click(update);
+    await waitFor(() => expect(h.act).toHaveBeenCalledWith('switch', 'personal'));
+  });
+  it('explains why an updated personal application cannot replace the running one', async () => {
+    h.get.mockResolvedValue({
+      ...versions,
+      currentId: 'personal',
+      selectedId: 'personal',
+      personalUpdateAvailable: true,
+      currentVersion: versions.versions[1],
+      versions: [versions.versions[0], { ...versions.versions[1], compatible: false }],
+    });
+    render(<CindyMakeVersionsPanel />);
+    const update = await screen.findByRole('button', {
+      name: 'cindyMake.versions.incompatible',
+    });
+    expect(screen.getAllByText('cindyMake.versions.incompatible')).toHaveLength(2);
+    expect((update as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('shows unavailable as the update action state when a personal version cannot be read', async () => {
+    h.get.mockResolvedValue({
+      ...versions,
+      currentId: 'personal',
+      selectedId: 'personal',
+      personalUpdateAvailable: true,
+      versions: [versions.versions[0], { ...versions.versions[1], available: false }],
+    });
+    render(<CindyMakeVersionsPanel />);
+    const update = await screen.findByRole('button', {
+      name: 'cindyMake.versions.unavailable',
+    });
+    expect((update as HTMLButtonElement).disabled).toBe(true);
+    expect(update.getAttribute('title')).toBe('cindyMake.versions.unavailable');
+  });
+  it('shows the busy reason while another Make operation blocks switching', async () => {
+    h.get.mockResolvedValue({
+      ...versions,
+      currentId: 'personal',
+      selectedId: 'personal',
+      personalUpdateAvailable: true,
+    });
+    render(<CindyMakeVersionsPanel busy />);
+    const update = await screen.findByRole('button', {
+      name: 'cindyMake.versions.errors.busy',
+    });
+    expect((update as HTMLButtonElement).disabled).toBe(true);
+    expect(update.getAttribute('title')).toBe('cindyMake.versions.errors.busy');
   });
 });

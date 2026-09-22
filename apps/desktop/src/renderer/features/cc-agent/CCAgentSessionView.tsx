@@ -69,6 +69,7 @@ import {
   getCindyMakePreparation,
 } from '@/lib/cindyMakeComposer';
 import { CindyMakeTestCard } from '@/components/cindy-make/CindyMakeTestCard';
+import { CindyMakeEditingActions } from '@/components/cindy-make/CindyMakeEditingActions';
 import { useCindyMakeEditing } from '@/components/cindy-make/useCindyMakeEditing';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { resolveLearnDesktopCommandFeedback } from '@/features/learn/desktopCommandFeedback';
@@ -1739,6 +1740,7 @@ export function CCAgentSessionView({
     pendingPluginSetup,
     pluginSetupViewerState,
     pluginSetupCommandInFlight,
+    pluginSetupCommandError,
     setPluginSetupViewerState,
     respondToPluginSetup,
     askUserViewerState,
@@ -1821,11 +1823,10 @@ export function CCAgentSessionView({
           messages,
           busy: isAgentBusy,
           historyLoaded,
-          dismissedId: cindyMakeEditing.dismissedId,
         })
       : null;
   const cindyMakeInputLocked = Boolean(
-    cindyMakeComposerPhase || cindyMakePendingTest || cindyMakeRecoveryId,
+    cindyMakeComposerPhase || cindyMakePendingTest,
   );
   useEffect(() => {
     if (!sessionId || !isOrcaLeadSessionView || !historyLoaded) return;
@@ -3443,16 +3444,10 @@ export function CCAgentSessionView({
         slashCommandRanges?: SlashCommandRange[];
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         onDeferredAccepted?: () => void;
-        cindyMakeRecovery?: boolean;
       },
     ) => {
       if (readOnly) return false;
-      if (
-        cindyMakeComposerPhase ||
-        cindyMakePendingTest ||
-        (cindyMakeRecoveryId && !opts?.cindyMakeRecovery)
-      )
-        return false;
+      if (cindyMakeComposerPhase || cindyMakePendingTest) return false;
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
       const navigationRequestVersion =
@@ -3737,7 +3732,6 @@ export function CCAgentSessionView({
       sessionHandoffPreparing,
       cindyMakeComposerPhase,
       cindyMakePendingTest,
-      cindyMakeRecoveryId,
     ],
   );
 
@@ -5193,8 +5187,10 @@ export function CCAgentSessionView({
                 ) : pendingPluginSetup ? (
                   <PluginSetupPrompt
                     pending={pendingPluginSetup}
+                    remoteDeviceId={remoteDeviceId ?? undefined}
                     viewerState={pluginSetupViewerState}
                     commandInFlight={pluginSetupCommandInFlight}
+                    commandError={pluginSetupCommandError}
                     remote={!!remoteDeviceId}
                     onViewerStateChange={setPluginSetupViewerState}
                     onCommand={respondToPluginSetup}
@@ -5273,27 +5269,15 @@ export function CCAgentSessionView({
                   barWidth={inputWidth}
                   getContentWidth={getMessageWidth}
                 />
-              ) : cindyMakeRecoveryId && session ? (
-                <CindyMakeTestCard
-                  key={`${session.id}:${cindyMakeRecoveryId}`}
-                  sessionId={session.id}
-                  recovery={{
-                    onContinue: () =>
-                      cindyMakeEditing.continueEditing(cindyMakeRecoveryId),
-                    onCheck: () =>
-                      handleSend(
-                        t('cindyMake.test.resume.request'),
-                        session.model,
-                        session.effort as Effort,
-                        session.permissionMode as PermissionMode,
-                        undefined,
-                        undefined,
-                        { cindyMakeRecovery: true },
-                      ),
-                  }}
-                />
               ) : (
                 <ChatInput
+                  topSlot={cindyMakeRecoveryId && session ? (
+                    <CindyMakeEditingActions
+                      key={`${session.id}:${cindyMakeRecoveryId}`}
+                      sessionId={session.id}
+                      messageId={cindyMakeRecoveryId}
+                    />
+                  ) : undefined}
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                   sessionId={sessionId}

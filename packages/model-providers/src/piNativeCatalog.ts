@@ -106,7 +106,8 @@ export function piNativeCatalogModels(
       discoveredMetadata: {
         ...(row.name ? { name: row.name } : {}),
         contextWindow: row.contextWindow,
-        efforts,
+        // Thinking tiers are imported defaults, not account discovery. Keep
+        // them on the fallback model so shared Registry efforts can replace them.
         ...(row.maxTokens ? { maxOutputTokens: row.maxTokens } : {}),
         ...(row.input
           ? { supportsImageInput: row.input.includes("image") }

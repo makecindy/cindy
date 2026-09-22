@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   merge: vi.fn(),
   waitForMerge: vi.fn(),
   finishCleanup: vi.fn(),
+  syncBuild: vi.fn(),
+  syncBeforeBuild: false,
   git: vi.fn(),
   end: vi.fn(),
   saved: vi.fn(),
@@ -32,6 +34,7 @@ const h = vi.hoisted(() => ({
   testAction: vi.fn(),
   stopTest: vi.fn(),
   retryMerge: vi.fn(),
+  historyChanged: vi.fn(),
 }));
 const store = {
   readBuildRollback: () => [],
@@ -97,6 +100,10 @@ vi.mock('../upstreamMergeRuntime.js', () => ({
   actUpstreamMerge: h.retryMerge,
   waitForMakeHistoryMerge: h.waitForMerge,
   finishMakeHistoryCleanup: h.finishCleanup,
+  syncSourceBeforeCindyMakeBuild: h.syncBuild,
+}));
+vi.mock('../settingsStore.js', () => ({
+  readCindyMakeSettings: () => ({ syncLatestBeforeBuild: h.syncBeforeBuild }),
 }));
 vi.mock('../taskManagement.js', () => ({ manageCindyMakeTask: h.end }));
 vi.mock('../testRuntime.js', () => ({
@@ -188,6 +195,10 @@ beforeEach(() => {
   h.merge.mockReset();
   h.waitForMerge.mockReset().mockResolvedValue(undefined);
   h.finishCleanup.mockReset().mockResolvedValue(undefined);
+  h.syncBuild.mockReset().mockImplementation(async (_signal, publish) => {
+    await publish({ status: 'syncing', syncLatestSource: true });
+  });
+  h.syncBeforeBuild = false;
   h.git
     .mockReset()
     .mockImplementation(async (_env: unknown, args: string[]) =>
@@ -205,7 +216,7 @@ beforeEach(() => {
   vi.spyOn(cindyMakeManager, 'hasActiveWork').mockImplementation(
     () => h.busy || realHasActiveWork(),
   );
-  configureMakeHistory(() => h.running);
+  configureMakeHistory(() => h.running, h.historyChanged);
   h.rows = [
     {
       id: 'session',
@@ -469,6 +480,35 @@ describe('history Main admission and owner boundary', () => {
     expect(state.items[0].actions).toContain('integrate');
     cindyMakeManager.forgetTask(runId);
   });
+  it('separates retained source conflicts from work that blocks version switching', async () => {
+    h.state.upstreamMerge = { id: 'update', status: 'conflict', hasWorkspace: true };
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: false,
+      canBuild: false,
+    });
+    await expect(generateHistoryPersonalVersion()).rejects.toThrow('busy');
+    expect(h.build).not.toHaveBeenCalled();
+    h.busy = true;
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: true,
+      canBuild: false,
+    });
+    h.busy = false;
+    h.testUsing = true;
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: true,
+      canBuild: false,
+    });
+    h.testUsing = false;
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: false,
+      canBuild: false,
+    });
+  });
   it('keeps builds and integrations blocked until cancellation finishes even if its directory is gone', async () => {
     h.state.upstreamMerge = {
       id: 'update',
@@ -525,7 +565,26 @@ describe('history Main admission and owner boundary', () => {
         build: { status: 'failed', error: 'checksFailed' },
       });
     });
+    expect(h.historyChanged).toHaveBeenCalledOnce();
     expect(JSON.stringify(buildState)).not.toContain('private test output');
+  });
+  it('syncs the latest official source before a global build only when the setting is on', async () => {
+    let buildState: CindyMakePersonalBuildState | undefined;
+    store.readBuild.mockImplementation(() => buildState);
+    store.saveBuild.mockImplementation((value) => {
+      buildState = value;
+    });
+    h.syncBeforeBuild = true;
+    h.build.mockResolvedValueOnce({ commit: 'b'.repeat(40), tree: 'd'.repeat(40) });
+
+    await generateHistoryPersonalVersion();
+    await vi.waitFor(() => expect(h.build).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(buildState?.status).toBe('ready'));
+
+    expect(h.syncBuild).toHaveBeenCalledOnce();
+    expect(h.syncBuild.mock.invocationCallOrder[0]).toBeLessThan(h.build.mock.invocationCallOrder[0]);
+    expect(buildState).toMatchObject({ syncLatestSource: true });
+    expect(buildState?.logs?.map((entry) => entry.step)).toContain('syncing');
   });
   it('keeps the originating history session visibly running for a source build', async () => {
     let finish!: (value: { commit: string; tree: string }) => void;
@@ -873,6 +932,7 @@ describe('one personal version from selected history', () => {
         { runId: 'bbbb', operationId: 'merge-bbbb' },
       ],
     });
+    expect(h.historyChanged).toHaveBeenCalledOnce();
     expect(store.version).toHaveBeenCalledTimes(2);
   });
   it('validates every selected workspace before merging any of them', async () => {

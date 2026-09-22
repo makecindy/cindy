@@ -26,6 +26,17 @@ import { Spinner } from '@/components/ui/spinner';
 import * as sessionService from '@/lib/sessionService';
 import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
 import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
+import {
+  getCachedProvidersSnapshot,
+  hasProvidersSnapshotLoadFailed,
+} from '@/lib/providersSnapshotStore';
+import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
+import { getProviderModelEffort, getProviderModelFast } from '@/state/providerModelMemory';
+import {
+  resolveSshSessionModelSelection,
+  sshModelSelectionErrorKeys,
+} from '@/features/cc-agent/sshSessionModelSelection';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 type AgentKind = RemoteAgentKind;
 const AGENT_KINDS: ReadonlyArray<AgentKind> = ['claude-code', 'codex', 'pi'];
@@ -364,7 +375,7 @@ interface StartRemoteSessionPanelProps {
   hostId: string;
 }
 
-function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps) {
+export function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
@@ -372,6 +383,7 @@ function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps) {
   const [busy, setBusy] = useState(false);
 
   const handleStart = useCallback(async () => {
+    if (busy) return;
     const dir = workdir.trim();
     if (!dir) {
       toast.error(t('settings.remote.startSession.errorWorkdirEmpty'));
@@ -379,6 +391,25 @@ function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps) {
     }
     setBusy(true);
     try {
+      const owner = getDataOwnerGeneration();
+      const resolveSelection = () => {
+        const snapshot = getCachedProvidersSnapshot();
+        const prefs = getDraft().lastByVendor.codex;
+        return resolveSshSessionModelSelection({
+          providers: snapshot?.providers ?? [],
+          loading: !snapshot,
+          loadFailed: hasProvidersSnapshotLoadFailed(),
+          agentKind: 'codex',
+          preferred: { ...prefs, fastMode: getFastModeForModel(prefs.model) },
+          getPresetEffort: getProviderModelEffort,
+          getPresetFast: getProviderModelFast,
+        });
+      };
+      const initialSelection = resolveSelection();
+      if (!initialSelection.ok) {
+        toast.error(t(sshModelSelectionErrorKeys[initialSelection.reason]));
+        return;
+      }
       // Step 1 (validate): probe the remote workdir BEFORE creating the session.
       //   - 'dir'     → ok, proceed
       //   - 'file'    → reject; can't put a session here
@@ -412,12 +443,23 @@ function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps) {
       //                    naming, hosts both vendors now. lazy-create maker
       //                    IPC fires on first user prompt, threading
       //                    remoteHostId + workingDir into agent.startSession.
+      // Directory validation/confirmation may take time. Re-read the catalog and
+      // preferences before inserting; never persist a stale or another owner's route.
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      const selection = resolveSelection();
+      if (!selection.ok) {
+        toast.error(t(sshModelSelectionErrorKeys[selection.reason]));
+        return;
+      }
       const session = await sessionService.create({
         agentKind: 'codex',
         workingDir: resolvedPath,
         workspaceKind: 'project',
         permissionMode: 'auto',
-        model: 'gpt-5.5-codex',
+        model: selection.model,
+        providerId: selection.providerId,
+        effort: selection.effort,
+        fastMode: selection.fastMode,
         remoteHostId: hostId,
       });
       toast.success(t('settings.remote.startSession.created', { hostId }));
@@ -429,7 +471,7 @@ function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps) {
     } finally {
       setBusy(false);
     }
-  }, [hostId, workdir, navigate, t, confirm]);
+  }, [hostId, workdir, navigate, t, confirm, busy]);
 
   return (
     <div

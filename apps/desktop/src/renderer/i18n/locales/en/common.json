@@ -647,12 +647,16 @@
         "agentProxyEnvPending": "Waiting to apply env vars → {{url}} (takes effect automatically once the host connects)"
       },
       "startSession": {
+        "unsupportedCodexSource": "SSH Codex currently supports only default OpenAI subscription models; other local provider settings are not forwarded. Select a model from that source on the new task page and sync the remote login.",
         "title": "Start a remote Codex session",
         "hint": "Create a new Maker pinned to this machine. Codex runs on the remote, you chat from here. Working directory supports ~ expansion; if it doesn't exist you'll be asked to create it.",
         "start": "Start",
         "created": "Remote session created on {{hostId}}",
         "createFailed": "Failed to create remote session",
         "errorWorkdirEmpty": "Please enter a remote working directory",
+        "modelCatalogLoading": "The model catalog is not ready yet. Try again shortly.",
+        "modelCatalogFailed": "Could not load the model catalog. Refresh it in model settings and try again.",
+        "noCompatibleModel": "No model is available for SSH. Connect a compatible provider in model settings first.",
         "errorWorkdirIsFile": "{{path}} exists but is not a directory; pick another path",
         "confirmCreateTitle": "Directory does not exist — create it?",
         "confirmCreateDescription": "{{path}} does not exist on {{hostId}}. Click confirm to run mkdir -p on the remote and then enter the session.",
@@ -5898,6 +5902,12 @@
       },
       "description": "The card below checks this computer and lets you install missing portable tools. Native compiler prerequisites show an official installation guide.",
       "checking": "Checking environment…",
+      "syncBeforeBuild": {
+        "title": "Sync latest source before building",
+        "description": "When enabled, each personal-version build first syncs the latest official source for the current channel. Off by default.",
+        "ariaLabel": "Sync latest source before building",
+        "saveFailed": "Could not save the pre-build sync setting. Try again."
+      },
       "forceManaged": {
         "title": "Test Installation: Ignore System Tools",
         "description": "Development builds only. Check portable tools in Cindy-managed copies and simulate missing Windows compiler tools. This switch only rechecks the environment; it does not start installation.",
@@ -8019,6 +8029,23 @@
       "stop": "Stop generating"
     },
     "pluginSetup": {
+      "account": {
+        "opening": "Opening authorization page",
+        "connected": "Account connected",
+        "cancelled": "Connection cancelled",
+        "expired": "Authorization expired",
+        "ended": "Authorization ended",
+        "failed": "Could not connect account",
+        "waiting": "Waiting for browser authorization",
+        "verifying": "Confirming authorization",
+        "continue": "The task will continue.",
+        "reconnectHint": "Reconnect to continue authorization.",
+        "waitingHint": "Complete authorization in your browser. The task will then continue automatically.",
+        "remoteHint": "Authorize in this computer’s browser to let Cindy on the remote device use this account.",
+        "codeInstructions": "Enter the code at {{host}}",
+        "remaining": "Expires in {{time}}",
+        "reconnect": "Reconnect"
+      },
       "reopen": "Reopen",
       "title": "{{name}} Settings",
       "assessmentReadFailed": "Couldn't read the plugin setup status.",
@@ -8027,6 +8054,16 @@
       "chooseOne": "Choose one setup method",
       "restoreAria": "Restore {{name}} settings",
       "minimizeAria": "Minimize {{name}} settings",
+      "remoteOauthHint": "Authorize in this computer’s browser to connect the account on the current remote device. Complete other settings on the remote device.",
+      "connection": {
+        "host": "Instance address",
+        "hostHint": "Enter the service’s HTTPS address, using its default port.",
+        "hostInvalid": "Enter one HTTPS domain without a path, query, or custom port.",
+        "token": "Access token",
+        "tokenInvalid": "Enter a valid access token (up to 4096 characters).",
+        "hint": "Saved only for this plugin on the current remote device. The token is sent only to the address you enter and is not included in chat history."
+      },
+      "remoteSecretHint": "Enter the key here to save it only for this plugin on the current remote device. It will not appear in chat history.",
       "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
       "cancel": "Cancel",
       "cancelling": "Cancelling…",
@@ -8034,6 +8071,8 @@
       "saveConfiguration": "Save Configuration",
       "saving": "Saving…",
       "error": {
+        "REMOTE_UNSUPPORTED": "Cindy on the remote device does not support this authorization method yet. Update it and try again.",
+        "REMOTE_FAILED": "Could not start remote authorization. Check that both devices are online and try again.",
         "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
         "ACTION_STALE": "This setup changed. Choose the setup action again.",
         "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
@@ -8087,7 +8126,20 @@
       "inlineSecretStoreFailed": "Failed to save credential",
       "targetNotFound": "The target plugin was uninstalled or is currently unavailable",
       "targetDisabled": "The target plugin has been disabled",
-      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry."
+      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry.",
+      "deviceCode": {
+        "label": "Device Code",
+        "copied": "Device code copied",
+        "copiedHint": "Device code copied automatically. You can copy it again here.",
+        "instructions": "After choosing your account on {{host}}, paste this code into the code field and continue authorizing.",
+        "copyAgain": "Copy Code Again",
+        "reopen": "Reopen Authorization Page",
+        "remaining": "Waiting for authorization · {{time}} remaining for this attempt",
+        "completed": "Account connected. Device code cleared.",
+        "expired": "This authorization attempt expired. Start a new connection in the task to get a new code.",
+        "ended": "This authorization attempt ended. Start a new connection in the task.",
+        "actionFailed": "The action did not complete. Retry, or start a new connection if authorization has ended."
+      }
     },
     "createAgent": {
       "quickStart": "Quick start",
@@ -13063,7 +13115,7 @@
       "details": {
         "unknown": "Not read",
         "latest": {
-          "dev": "Online main",
+          "dev": "GitHub main",
           "beta": "Latest Beta",
           "release": "Latest Release",
           "same": "Matches {{target}}, 0 change records behind",
@@ -13090,6 +13142,7 @@
         "waiting": "Waiting for project preparation",
         "environment": "Preparing the environment",
         "source": "Preparing personal project source",
+        "updatingSource": "Updating personal version source",
         "workspace": "Creating the task branch and worktree",
         "dependencies": "Installing task dependencies",
         "starting": "Starting your request",
@@ -13137,13 +13190,13 @@
         "updateAvailable": "Update Available",
         "unverified": "Version Status Unverified",
         "upToDateDescription": "Personal source includes all updates from {{target}}",
-        "personalChanges": "Personal change records: {{ahead}}"
+        "personalChanges": "Personal source has {{ahead}} additional change records"
       },
       "comparison": {
         "same": "Same SHA as local main",
-        "personalAhead": "Includes local main · personal change records: {{ahead}}",
-        "mainAhead": "Local main change records not yet included: {{behind}}",
-        "diverged": "Local main change records not yet included: {{behind}} · personal change records: {{ahead}}",
+        "personalAhead": "Includes local main · personal source has {{ahead}} additional change records",
+        "mainAhead": "Local main has {{behind}} change records not yet included",
+        "diverged": "Local main has {{behind}} change records not yet included · personal source has {{ahead}} additional change records",
         "different": "Different SHA from local main; difference unknown",
         "unknown": "Difference from local main unknown"
       },
@@ -13157,6 +13210,7 @@
       "development": "Development Environment",
       "current": "Current",
       "using": "In Use",
+      "updatePersonal": "Restart to Update",
       "switch": "Switch and Restart",
       "switchPersonal": "Switch to This Personal Version",
       "remove": "Delete Version",
@@ -13166,6 +13220,8 @@
       "unavailable": "The application files for this version are unavailable.",
       "incompatible": "This version is incompatible with the current data. Rebuild it from the current original version.",
       "readyHint": "Your personal version is ready. Switching restarts Cindy and keeps your accounts, settings and tasks.",
+      "updateHint": "New personal version content is ready. Restart to use it while keeping your accounts, settings and tasks.",
+      "usingHint": "You are using the latest personal version.",
       "errors": {
         "busy": "Tasks, tests or builds are still running. Finish them before switching or deleting a version.",
         "incompatible": "The data structures differ. Rebuild your personal version from the current original version before switching.",
@@ -13202,6 +13258,7 @@
       },
       "status": {
         "waiting": "Waiting to Build Personal Version…",
+        "syncing": "Syncing Latest Source…",
         "merging": "Merging Changes…",
         "checking": "Checking Personal Version…",
         "packaging": "Packaging Personal Version…",
@@ -13216,6 +13273,7 @@
           "cleaning-merge": "Clean up merge files",
           "environment": "Prepare build environment",
           "original": "Check current version",
+          "syncing": "Sync latest source",
           "merging": "Merge changes",
           "checking-dependencies": "Install build dependencies",
           "checking-tests": "Run automated tests",
@@ -13232,6 +13290,7 @@
         "changed": "The task directory or code has changed. Finish editing before building again.",
         "environment": "Build tools are not ready. Check the Cindy Make environment and retry.",
         "missingShell": "Automated checks require Git Bash. Install Git for Windows and retry.",
+        "sourceSyncFailed": "The latest source could not be synced, so packaging did not start. Check the network or resolve the sync conflict, then retry.",
         "checksFailed": "The merged code did not pass checks. Continue editing before building again.",
         "conflict": "These changes conflict with the current personal version. Continue editing to resolve the conflict.",
         "baselineChanged": "The personal version changed during the build. Build again to include the latest changes.",
@@ -13286,6 +13345,7 @@
     },
     "history": {
       "title": "Make history",
+      "taskCount": "Tasks: {{count}}",
       "batch": {
         "make": "Make Personal Version",
         "selected": "Build {{count}} Selected Changes",
@@ -13299,6 +13359,7 @@
         "restartTest": "Restart Isolated Version"
       },
       "build": "Generate personal version",
+      "regeneratePersonal": "Rebuild personal version",
       "buildDescription": "Generate a new version from the current personal source. Changes not yet integrated are excluded.",
       "building": "Generating personal version…",
       "stop": "Stop making",
@@ -13309,6 +13370,7 @@
       "stopping": "Stopping…",
       "progress": {
         "waiting": "Waiting to start",
+        "syncing": "Syncing latest source",
         "merging": "Merging changes",
         "checking": "Running checks",
         "packaging": "Packaging personal version",
@@ -13323,7 +13385,7 @@
         "busy": "Another making operation or check is running. Try again when it finishes.",
         "checking": "This making record is still being checked. Try again shortly."
       },
-      "counts": "{{total}} total · {{pending}} pending integration · {{integrated}} integrated",
+      "counts": "{{total}} make tasks · {{pending}} pending integration · {{integrated}} integrated",
       "filterLabel": "Filter make history",
       "mergeTaskTitle": "Resolve Integration Conflicts",
       "revertTaskTitle": "Resolve Undo Integration Conflicts",
@@ -13356,7 +13418,7 @@
       "cleanWorkspace": "Any remaining task branch and worktree will be removed. Uncommitted changes will be lost.",
       "cleanKeep": "Changes already integrated into your personal version and generated app versions will be kept.",
       "endConfirm": "End this build and remove its working directory? Make history and retained changes will remain available.",
-      "revertConfirm": "Undo the changes from this build in the personal source? Other builds and generated applications will be kept.",
+      "revertConfirm": "Remove this build's changes from the personal version? A new reverse change will record the removal without rewriting history. Other builds and generated applications will be kept.",
       "lifecycle": {
         "preparing": "Preparing",
         "running": "Making changes",
@@ -13379,8 +13441,8 @@
         "continue": "Continue editing",
         "test": "Launch isolated test build",
         "integrate": "Integrate into personal version",
-        "revert": "Undo integration",
-        "reapply": "Reapply integration",
+        "revert": "Remove from personal version",
+        "reapply": "Add back to personal version",
         "resolve": "Resolve conflicts",
         "retry": "Retry",
         "build": "Generate personal version",
@@ -13434,7 +13496,8 @@
       "errors": {
         "busy": "Another operation is running. Wait and retry.",
         "dirty": "The source has uncommitted changes. Save them before retrying.",
-        "localMain": "The main branch has local commits. Check them before updating.",
+        "localMain": "The local main branch in the Cindy Make source has diverged from the target version. Review the differences before syncing.",
+        "localMainAhead": "The local main branch in the Cindy Make source is ahead of the target version and cannot be moved back directly. Check the sync target.",
         "unavailable": "The source or operation record is unavailable. Refresh and retry.",
         "gitFailed": "Git could not finish the operation. Please retry.",
         "baselineChanged": "The personal source has changed. Retry using its latest state.",
@@ -13498,5 +13561,9 @@
     "presetLife": "Life",
     "presetIdeas": "Ideas",
     "presetReference": "Reference"
+  },
+  "pluginDeviceAuthorization": {
+    "title": "Authorize Plugin Login",
+    "description": "Open {{host}} on this device to authorize the plugin running this task. Its credentials stay on the originating device."
   }
 }

@@ -893,13 +893,41 @@ describe('统一面板 · 会话内形态', () => {
       providerId: 'xd',
       modelId: 'gpt-5.5',
       targetAgent: 'claude-code',
-      effort: 'medium',
+      // 当前行实际为 high，切 Harness 不恢复成 Claude 的默认 medium。
+      effort: 'high',
       // 浮层展示的目标配置里的 Fast(cc 那条无 Fast 能力 → false)。
       fast: false,
       // 改的是**模型行**的引擎,与收藏无关 → 显式清锚点(2026-08-17 review K3:三类调用点
       // 的传值语义各不相同,一律显式给,不靠调用方的缺省)。
       favoriteUid: null,
     });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+
+  it.each(['low', 'high'])('切换同模型 Harness 保留当前 %s 档，不改成目标默认中档', async (effort) => {
+    renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5', effort });
+    const flyout = await openRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'gpt-5.5', targetAgent: 'claude-code', effort,
+    }));
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+
+  it('切换 Harness 时只因目标能力限制适配当前档位', async () => {
+    renderPanel({
+      sessionEngineFilter: { ...sessionEngineFilter, currentAgent: 'claude-code', runtimeAgent: 'claude-code' },
+      currentProviderId: 'xd', modelId: 'gpt-5.5', effort: 'medium',
+    });
+    const flyout = await openRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'gpt-5.5', targetAgent: 'codex', effort: 'low',
+    }));
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
   });
 

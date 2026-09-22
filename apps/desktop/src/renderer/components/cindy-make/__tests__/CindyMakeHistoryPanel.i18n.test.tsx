@@ -26,51 +26,51 @@ const cases = [
   {
     locale: 'en',
     resource: en,
-    title: 'Make history',
+    title: 'Make history · Tasks: 1',
     conflict: 'Resolving conflicts…',
-    build: 'Generate personal version',
+    build: 'Rebuild personal version',
     integrate: 'Integrate into personal version',
-    counts: '1 total · 1 pending integration · 0 integrated',
+    counts: '1 make tasks · 1 pending integration · 0 integrated',
     script: /[a-z]/i,
   },
   {
     locale: 'zh-CN',
     resource: zhCN,
-    title: '制作历史',
+    title: '制作历史 · 1 个任务',
     conflict: '正在处理冲突…',
-    build: '生成个人版',
+    build: '重新生成个人版',
     integrate: '合入个人版',
-    counts: '共 1 次 · 待合入 1 次 · 已合入 0 次',
+    counts: '共 1 个制作任务 · 待合入 1 个 · 已合入 0 个',
     script: /\p{Script=Han}/u,
   },
   {
     locale: 'zh-TW',
     resource: zhTW,
-    title: '製作歷史',
+    title: '製作歷史 · 1 個任務',
     conflict: '正在處理衝突…',
-    build: '產生個人版',
+    build: '重新產生個人版',
     integrate: '合入個人版',
-    counts: '共 1 次 · 待合入 1 次 · 已合入 0 次',
+    counts: '共 1 個製作任務 · 待合入 1 個 · 已合入 0 個',
     script: /\p{Script=Han}/u,
   },
   {
     locale: 'ja',
     resource: ja,
-    title: '制作履歴',
+    title: '制作履歴 · 1 件のタスク',
     conflict: '競合を解決中…',
-    build: '個人版を生成',
+    build: '個人版を再生成',
     integrate: '個人版に取り込む',
-    counts: '合計 1 件 · 未取り込み 1 件 · 取り込み済み 0 件',
+    counts: '制作タスク 1 件 · 取り込み待ち 1 件 · 取り込み済み 0 件',
     script: /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u,
   },
   {
     locale: 'ko',
     resource: ko,
-    title: '제작 기록',
+    title: '제작 기록 · 작업 1개',
     conflict: '충돌 해결 중…',
-    build: '개인 버전 생성',
+    build: '개인 버전 다시 생성',
     integrate: '개인 버전에 반영',
-    counts: '전체 1회 · 반영 대기 1회 · 반영 완료 0회',
+    counts: '제작 작업 1개 · 반영 대기 1개 · 반영 완료 0개',
     script: /\p{Script=Hangul}/u,
   },
 ];
@@ -139,7 +139,7 @@ describe('Cindy Make history with real translations', () => {
       const view = render(
         <MemoryRouter>
           <I18nextProvider i18n={i18n}>
-            <CindyMakeHistoryPanel />
+            <CindyMakeHistoryPanel hasPersonalVersion />
           </I18nextProvider>
         </MemoryRouter>,
       );
@@ -197,7 +197,7 @@ describe('Cindy Make history with real translations', () => {
       const view = render(
         <MemoryRouter>
           <I18nextProvider i18n={i18n}>
-            <CindyMakeHistoryPanel />
+            <CindyMakeHistoryPanel hasPersonalVersion />
           </I18nextProvider>
         </MemoryRouter>,
       );
@@ -233,11 +233,11 @@ describe('Cindy Make history with real translations', () => {
       render(
         <MemoryRouter>
           <I18nextProvider i18n={i18n}>
-            <CindyMakeHistoryPanel />
+            <CindyMakeHistoryPanel hasPersonalVersion />
           </I18nextProvider>
         </MemoryRouter>,
       );
-      expect(await screen.findByRole('heading', { name: title + ' · 1' })).toBeTruthy();
+      expect(await screen.findByRole('heading', { name: title })).toBeTruthy();
       expect(screen.getByRole('button', { name: build })).toBeTruthy();
       expect(screen.queryByRole('button', { name: integrate })).toBeNull();
       expect(screen.getByText(counts)).toBeTruthy();
@@ -301,7 +301,7 @@ describe('Cindy Make history with real translations', () => {
         <MemoryRouter>
           <I18nextProvider i18n={i18n}>
             <CindyMakeVersionsPanel />
-            <CindyMakeHistoryPanel />
+            <CindyMakeHistoryPanel hasPersonalVersion />
             <CindyMakeMergeNotice
               state={{
                 id: 'merge',
@@ -316,7 +316,7 @@ describe('Cindy Make history with real translations', () => {
         </MemoryRouter>,
       );
       expect(
-        await screen.findByRole('button', { name: resource.cindyMake.history.actions.build }),
+        await screen.findByRole('button', { name: resource.cindyMake.history.regeneratePersonal }),
       ).toBeTruthy();
       expect(
         await screen.findByText(

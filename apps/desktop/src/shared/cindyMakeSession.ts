@@ -67,11 +67,21 @@ export type CindyMakeTestStep =
   'waiting' | 'environment' | 'workspace' | 'stopping' | 'dependencies' | 'assets' | 'launching';
 
 export interface CindyMakePersonalBuildState {
-  status: 'waiting' | 'checking' | 'merging' | 'packaging' | 'publishing' | 'ready' | 'failed';
+  status:
+    | 'waiting'
+    | 'syncing'
+    | 'checking'
+    | 'merging'
+    | 'packaging'
+    | 'publishing'
+    | 'ready'
+    | 'failed';
   /** Retained for navigation after the disposable merge workspace is reclaimed. */
   mergeSessionId?: string;
   /** Optional preparation detail; older clients still display waiting. */
   preparationStep?: 'environment' | 'original';
+  /** Snapshot of the build preference; later progress updates retain it. */
+  syncLatestSource?: boolean;
   /** Native conflict handling and cleanup remain part of the same build. */
   mergeStep?: 'conflicts' | 'cleanup';
   /** Optional detail within checking; old records/clients retain the broad status. */
@@ -103,6 +113,7 @@ export interface CindyMakePersonalBuildState {
     | 'changed'
     | 'environment'
     | 'missingShell'
+    | 'sourceSyncFailed'
     | 'checksFailed'
     | 'conflict'
     | 'baselineChanged'
@@ -115,6 +126,7 @@ export interface CindyMakePersonalBuildState {
 export type CindyMakeBuildLogStep =
   | 'environment'
   | 'original'
+  | 'syncing'
   | 'merging'
   | 'resolving-conflicts'
   | 'cleaning-merge'
@@ -135,6 +147,7 @@ export interface CindyMakeBuildLogEntry {
 const CINDY_MAKE_BUILD_LOG_STEPS = new Set<CindyMakeBuildLogStep>([
   'environment',
   'original',
+  'syncing',
   'merging',
   'resolving-conflicts',
   'cleaning-merge',
@@ -180,6 +193,13 @@ export function appendCindyMakeBuildLog(
     previous.mergeSessionId
   )
     next = { ...next, mergeSessionId: previous.mergeSessionId };
+  if (
+    next.buildId &&
+    next.buildId === previous?.buildId &&
+    next.syncLatestSource === undefined &&
+    previous.syncLatestSource !== undefined
+  )
+    next = { ...next, syncLatestSource: previous.syncLatestSource };
   const step: CindyMakeBuildLogStep | undefined =
     next.status === 'waiting'
       ? next.preparationStep
@@ -214,6 +234,7 @@ export function parseCindyMakeBuildError(
     case 'changed':
     case 'environment':
     case 'missingShell':
+    case 'sourceSyncFailed':
     case 'checksFailed':
     case 'conflict':
     case 'baselineChanged':
@@ -226,4 +247,5 @@ export function parseCindyMakeBuildError(
   }
 }
 
-export type CindyMakeTestAction = 'start' | 'continue' | 'status' | 'build' | 'open-build';
+export type CindyMakeTestAction =
+  'start' | 'continue' | 'status' | 'build' | 'open-build' | 'resume-start' | 'resume-build';

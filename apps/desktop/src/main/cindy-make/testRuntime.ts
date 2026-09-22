@@ -44,11 +44,19 @@ import { hasPublishedPersonalVersionCommit } from './versionStore.js';
 import { captureMakeHistoryStore } from './historyOwner.js';
 import { captureMakeHistoryCompletion } from './historyCapture.js';
 import { broadcastMakeRemoteChanged } from './remoteBroadcast.js';
+import { prepareCindyMakeTest } from './testRecovery.js';
+import { readCindyMakeSettings } from './settingsStore.js';
+import { syncSourceBeforeCindyMakeBuild } from './upstreamMergeRuntime.js';
 
 let isRunning: (sessionId: string) => boolean = () => true;
+let notifyHistoryChanged: () => void = () => {};
 const log = createLogger('cindy-make-test');
-export function configureCindyMakeTestRuntime(probe: typeof isRunning): void {
+export function configureCindyMakeTestRuntime(
+  probe: typeof isRunning,
+  notify: () => void = () => {},
+): void {
   isRunning = probe;
+  notifyHistoryChanged = notify;
 }
 
 interface StoredContext extends MakeTestContext {
@@ -232,6 +240,9 @@ export const cindyMakeTestController = createMakeTestController({
         });
     }
   },
+  onBuildSettled: (context) => {
+    if (context.isCurrent()) notifyHistoryChanged();
+  },
   withUse: (context, run) => cindyMakeManager.withProjectUse(makeSourceRoot(context.userData), run),
   build: (context, signal, publish) => {
     let entered = false;
@@ -272,6 +283,10 @@ export const cindyMakeTestController = createMakeTestController({
         const buildEnv = await personalBuildEnvironment(env, git.path);
         await publish({ status: 'waiting', preparationStep: 'original' });
         await rememberOriginalVersion(node.path);
+        if (readCindyMakeSettings().syncLatestBeforeBuild) {
+          await syncSourceBeforeCindyMakeBuild(signal, publish);
+          if (!context.isCurrent()) throw makeTestError('unavailable');
+        }
         await integrateCompletionForBuild(context, signal, publish);
         signal.throwIfAborted();
         if (!context.isCurrent()) throw makeTestError('unavailable');
@@ -409,13 +424,38 @@ export async function actCindyMakeTest(
     typeof completionId !== 'string' ||
     !/^[A-Za-z0-9-]{1,128}$/.test(completionId) ||
     typeof action !== 'string' ||
-    !['start', 'continue', 'status', 'build', 'open-build'].includes(action)
+    ![
+      'start',
+      'continue',
+      'status',
+      'build',
+      'open-build',
+      'resume-start',
+      'resume-build',
+    ].includes(action)
   )
     throwIpcError('INVALID_PARAMS', 'Invalid Cindy Make test action');
+  let targetCompletionId = completionId;
   try {
+    if (action === 'resume-start' || action === 'resume-build') {
+      const scope = captureDataOwnerBroadcastScope();
+      const client = getDbClient();
+      if (action === 'resume-build' && (await getCindyMakeHistory()).busy)
+        throw makeTestError('unavailable');
+      if (!isDataOwnerBroadcastScopeCurrent(scope) || getDbClient() !== client)
+        throw makeTestError('unavailable');
+      const prepared = await prepareCindyMakeTest(
+        sessionId,
+        completionId,
+        (id) => isRunning(id) || cindyMakeTestController.isUsingSession(id),
+      );
+      if (!prepared.isCurrent()) throw makeTestError('unavailable');
+      targetCompletionId = prepared.completionId;
+      action = action === 'resume-build' ? 'build' : 'start';
+    }
     if (action === 'build' && !cindyMakeTestController.isBuilding(sessionId)) {
       await cindyMakeTestController.stopTestForBuild(sessionId);
-      const context = await load(sessionId, completionId);
+      const context = await load(sessionId, targetCompletionId);
       let history = await getCindyMakeHistory(context.runId);
       if (!context.isCurrent()) throw makeTestError('unavailable');
       if (history.busy) throw makeTestError('unavailable');
@@ -427,7 +467,7 @@ export async function actCindyMakeTest(
     }
     return await cindyMakeTestController.act(
       sessionId,
-      completionId,
+      targetCompletionId,
       action as CindyMakeTestAction,
     );
   } catch (error) {
