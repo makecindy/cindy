@@ -6,6 +6,7 @@ import {
   commitModelPlaneFromCatalog,
   getActiveCatalog,
   getActiveCatalogRevision,
+  projectCustomProviderConfig,
   setActiveCatalog,
   setActiveCatalogChangedListener,
   setAnthropicDiscoveredModels,
@@ -47,6 +48,28 @@ describe('active catalog revision', () => {
     expect(listener).toHaveBeenCalledOnce();
     expect(listener.mock.results[0]?.value).toMatchObject({ revision: start + 1 });
     expect(listener.mock.results[0]?.value.ids).toContain('gpt-next-live');
+  });
+
+  it.each(['preset', 'registry'])('projects acknowledged configs using current %s defaults without changing the active snapshot', (source) => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = { schemaVersion: 5, updatedAt: '2099-09-17T00:00:00Z', models: [],
+      baseModels: [{ id: 'new-live-model', aliases: [], defaults: source === 'registry' ? { name: 'Live model', supportsImageInput: true } : { name: 'Live model' } }],
+    };
+    catalog.presets = [{ id: 'live', name: 'Live', runtimes: { pi: {
+      baseUrl: 'https://live.example/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'new-live-model', name: 'Live model', ...(source === 'preset' ? { supportsImageInput: true } : {}) }],
+    } } }];
+    setActiveCatalog(catalog);
+    const config = { id: 'custom-live', name: 'Custom live', runtimes: { pi: {
+      catalogPresetId: 'live', baseUrl: 'https://live.example/v1', wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'new-live-model', name: 'Live model' }],
+    } } };
+    const revision = getActiveCatalogRevision();
+    const projected = projectCustomProviderConfig(config);
+    expect(projected.models.pi![0].supportsImageInput).toBe(true);
+    expect(projected.models.pi![0].userModelConfig).not.toHaveProperty('supportsImageInput');
+    expect(getActiveCatalogRevision()).toBe(revision);
+    expect(getActiveCatalog().providers.some(p => p.id === config.id)).toBe(false);
   });
 
   it('keeps legacy custom xai isolated across catalog refresh and owner config reload', () => {

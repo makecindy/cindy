@@ -1009,6 +1009,23 @@ describe('provider OAuth sender boundary', () => {
 });
 
 describe('provider:custom:* CRUD handlers', () => {
+  it('returns the committed model projection even when catalog refresh fails', async () => {
+    mountDb();
+    const config = imageProviderConfig('projection');
+    await createCustomProvider(config);
+    const harness = new IpcHarness();
+    const models: ProviderView['models'] = { pi: [{ id: 'live-model', name: 'Live model',
+      contextWindow: 1000, efforts: [], defaultEffort: null, supportsImageInput: true }] };
+    const projectCustomProviderModels = vi.fn(() => models);
+    registerProviderHandlers(harness, makeDeps({
+      refreshCatalog: vi.fn(async () => { throw new Error('catalog unavailable'); }),
+      projectCustomProviderModels,
+    }));
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config);
+    expect(result).toEqual({ ok: true, models });
+    expect(projectCustomProviderModels).toHaveBeenCalledWith(await getCustomProvider(config.id));
+  });
+
   it('consumes an import whose save succeeded even if post-commit runtime refresh fails', async () => {
     mountDb();
     const harness = new IpcHarness();

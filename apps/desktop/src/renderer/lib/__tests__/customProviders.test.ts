@@ -111,7 +111,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     ).toBeUndefined();
   });
 
-  it('clears the marker after any model metadata is edited', () => {
+  it('clears the marker after catalog metadata edits but preserves image overrides', () => {
     const withModels: {
       baseUrl: string;
       wireProtocol: 'anthropic-messages';
@@ -132,10 +132,14 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       ],
     };
     expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, withModels)).toBe('example');
+    for (const supportsImageInput of [false, undefined]) {
+      expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+        ...withModels, models: [{ ...withModels.models[0], supportsImageInput }],
+      })).toBe('example');
+    }
     const editedModels: ProviderRuntimeModelConfig[] = [
       { ...withModels.models[0], name: 'Renamed' },
       { ...withModels.models[0], contextWindow: 64_000 },
-      { ...withModels.models[0], supportsImageInput: false },
       { ...withModels.models[0], reasoningEfforts: ['low'] },
     ];
     for (const model of editedModels) {

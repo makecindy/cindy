@@ -6,7 +6,7 @@ export interface CustomProviderUpdateOptions {
 }
 
 export type CustomProviderUpdateResult =
-  | { ok: true }
+  | { ok: true; models?: import('@cindy/model-providers').Provider['models'] }
   | {
       ok: false;
       confirmationRequired: 'codex-image-generation-reload';
