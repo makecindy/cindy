@@ -174,6 +174,7 @@ describe('resolveSessionContextWindowBounds', () => {
       defaultEffectiveWindow: 800_000,
       // 物理上限 = contextWindowMax（1M）。
       maxEffectiveWindow: 1_000_000,
+      effectiveWindowsReported: true,
     });
   });
 
@@ -194,6 +195,7 @@ describe('resolveSessionContextWindowBounds', () => {
       // 默认档刻意不带这条预算：它是「勾选模型默认（写 null）之后」的运行窗口。
       defaultEffectiveWindow: 200_000,
       maxEffectiveWindow: 1_000_000,
+      effectiveWindowsReported: true,
     });
   });
 

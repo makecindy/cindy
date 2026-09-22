@@ -50,6 +50,15 @@ export interface SessionContextWindowBounds {
    * main 算好下发，避免档位表给出运行期根本达不到的档。
    */
   maxEffectiveWindow: number | null;
+  /**
+   * 该响应是否**申报过**上面两个生效窗口字段。
+   *
+   * 用来区分两种「null」：新主进程/新被控端会显式申报（未核实路由就诚实地申报 `null` = 没有这道
+   * 物理夹），而**老被控端**根本没有这两个字段。后者必须退回保守口径（只允许收紧），否则一旦目录
+   * 没声明 `contextWindowMax`，`modelLimit` 会被误当成档位上限 —— 但被控端运行期还会被
+   * `contextWindow` 夹一次（实测：200K 的路由，远程菜单却给出 800K 档）。
+   */
+  effectiveWindowsReported: boolean;
 }
 
 /** 被控端/主进程返回值的形状收敛：缺字段或非法值一律按「未知」处理（不猜上限）。 */
@@ -72,6 +81,8 @@ export function normalizeSessionContextWindowBounds(
     budgetCustomized: raw.budgetCustomized === true,
     defaultEffectiveWindow: positive(raw.defaultEffectiveWindow),
     maxEffectiveWindow: positive(raw.maxEffectiveWindow),
+    effectiveWindowsReported:
+      'defaultEffectiveWindow' in raw || 'maxEffectiveWindow' in raw,
   };
 }
 

@@ -148,7 +148,7 @@ function triggerLabel(chip: Element | null): string {
 function boundsView(
   over: Partial<
     Record<
-      "budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit" | "defaultEffectiveWindow" | "maxEffectiveWindow",
+      "budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit" | "defaultEffectiveWindow" | "maxEffectiveWindow" | "effectiveWindowsReported",
       unknown
     >
   > = {},
@@ -162,6 +162,8 @@ function boundsView(
     budgetCustomized: false,
     defaultEffectiveWindow: null,
     maxEffectiveWindow: null,
+    // 新主进程/新被控端会显式申报；老端没有这两个字段（用例里显式传 false 模拟）。
+    effectiveWindowsReported: true,
     ...over,
   };
 }
@@ -388,6 +390,28 @@ function chipText(): string {
       maxEffectiveWindow: 200_000,
       defaultEffectiveWindow: 200_000,
     })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    expect(tierTokens()).not.toContain('800000');
+    expect(options.find((el) => el.textContent?.includes('optionDefault'))?.getAttribute('data-token'))
+      .toBe('200000');
+  });
+
+  it('falls back to the conservative (tighten-only) ladder when an old controlled device reports nothing', async () => {
+    // Greptile 复审 P1：老被控端不申报生效窗口时，目录没声明 contextWindowMax 也不能把
+    // modelLimit 当成物理上限 —— 被控端运行期还会被 contextWindow 夹一次（200K），
+    // 本地却按 800K 出档会给出运行期根本达不到的档位与价带。
+    installElectronApi(vi.fn().mockResolvedValue({
+      providerId: 'xd',
+      defaultWindow: 200_000,
+      maxWindow: null,
+      modelLimit: 800_000,
+      budget: null,
+      budgetCustomized: false,
+      // 老端：没有 defaultEffectiveWindow / maxEffectiveWindow。
+      effectiveWindowsReported: false,
+    }));
 
     renderChip({ providers: null });
     const options = await openTierCard();

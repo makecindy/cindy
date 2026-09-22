@@ -122,6 +122,9 @@ export function resolveSessionContextWindowBounds(input: {
     maxEffectiveWindow: resolveVerifiedContextWindow(
       input.catalog, input.agent, source, input.modelId, Number.MAX_SAFE_INTEGER,
     ),
+    // 本进程就是这两个字段的权威来源：显式申报，调用方据此区分「未核实 → 无这道夹」与
+    // 「老被控端根本没申报 → 必须退回只允许收紧」。
+    effectiveWindowsReported: true,
     modelLimit: typeof modelLimit === 'number' && Number.isFinite(modelLimit) && modelLimit > 0
       ? modelLimit : null,
     budget,

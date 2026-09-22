@@ -16,7 +16,7 @@ describe('normalizeSessionContextWindowBounds', () => {
     ).toEqual({
       providerId: 'xd', defaultWindow: 200_000, maxWindow: 1_000_000, modelLimit: 100_000,
       budget: 250_000, budgetCustomized: true, defaultEffectiveWindow: 100_000,
-      maxEffectiveWindow: 1_000_000,
+      maxEffectiveWindow: 1_000_000, effectiveWindowsReported: true,
     });
     // 任务预算随边界一起回来（偏好文件里的条目），缂少/非法时按「未自定义」处理。
     expect(
@@ -26,6 +26,7 @@ describe('normalizeSessionContextWindowBounds', () => {
     ).toEqual({
       providerId: 'xd', defaultWindow: 200_000, maxWindow: null, modelLimit: null,
       budget: null, budgetCustomized: false, defaultEffectiveWindow: null, maxEffectiveWindow: null,
+      effectiveWindowsReported: false,
     });
     expect(
       normalizeSessionContextWindowBounds({
@@ -35,6 +36,7 @@ describe('normalizeSessionContextWindowBounds', () => {
     ).toEqual({
       providerId: 'xd', defaultWindow: 200_000, maxWindow: null, modelLimit: null,
       budget: null, budgetCustomized: false, defaultEffectiveWindow: null, maxEffectiveWindow: null,
+      effectiveWindowsReported: true,
     });
   });
 
@@ -54,6 +56,7 @@ describe('normalizeSessionContextWindowBounds', () => {
     ).toEqual({
       providerId: null, defaultWindow: null, maxWindow: 400_000, modelLimit: null,
       budget: null, budgetCustomized: false, defaultEffectiveWindow: null, maxEffectiveWindow: null,
+      effectiveWindowsReported: false,
     });
     expect(normalizeSessionContextWindowBounds({ defaultWindow: 0, maxWindow: Number.NaN })).toBeNull();
   });

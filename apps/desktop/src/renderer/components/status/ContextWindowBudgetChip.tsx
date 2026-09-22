@@ -245,16 +245,27 @@ export function ContextWindowBudgetChip({
   // 刻意不按目录夹），只有它为空时才落到目录默认窗口。所以这里不能用 min(默认, 上限)：
   // 自定义连接未声明窗口时目录默认只有 200K 兜底，而会话实际跑在模型级上限 1.05M 上，
   // 用 min 会让 chip 报 200K、与圆环和运行期打架（用户实测报障）。
-  // 物理上限以 main 下发的为准（已核实路由即使没声明 contextWindowMax 也会被 contextWindow 夹住）；
-  // 老被控端不返回时退回目录声明的 maxWindow。
-  const effectiveMaxWindow = authoritativeBounds?.maxEffectiveWindow ?? maxWindow;
+  // 生效窗口以 main / 被控端**申报**的为准（同一套 resolveConfiguredContextWindow 的结果）。
+  //
+  // **老被控端根本不申报这两个字段**（`effectiveWindowsReported === false`）：不能把「缺省」
+  // 读成「无上限」—— 目录没声明 contextWindowMax 时那样会让 modelLimit 顶成物理上限，而被控端
+  // 运行期还会被 `contextWindow` 夹一次（实测：200K 的路由，远程菜单却给出 800K 档）。所以
+  // 老端退回保守口径「只允许收紧」：默认档 = min(目录默认, 模型级上限)，物理上限 = 目录默认。
+  const effectiveWindowsReported = authoritativeBounds?.effectiveWindowsReported === true;
+  const conservativeWindow = defaultWindow !== null && modelLimit !== null
+    ? Math.min(defaultWindow, modelLimit)
+    : (modelLimit ?? defaultWindow);
+  const effectiveMaxWindow = effectiveWindowsReported
+    ? (authoritativeBounds?.maxEffectiveWindow ?? maxWindow)
+    : (maxWindow ?? defaultWindow);
   const ceiling = [effectiveMaxWindow, modelLimit]
     .filter((value): value is number => typeof value === 'number' && value > 0)
     .reduce<number | null>((min, value) => (min === null || value < min ? value : min), null);
-  // 「模型默认」档的真实含义 = 清掉任务预算后跟随默认会得到的窗口，由 main / 被控端按同一套
-  // resolveConfiguredContextWindow 算好下发（已核实路由会被物理上限夹一次，未核实路由才直接用
-  // 模型级上限）。老被控端不返回该字段时退回本地推导（模型级上限 ?? 目录默认）。
-  const effectiveDefaultWindow = authoritativeBounds?.defaultEffectiveWindow ?? (modelLimit ?? defaultWindow);
+  // 「模型默认」档的真实含义 = 清掉任务预算后跟随默认会得到的窗口，由 main / 被控端算好下发；
+  // 老被控端不申报时取保守值（见上）。
+  const effectiveDefaultWindow = effectiveWindowsReported
+    ? (authoritativeBounds?.defaultEffectiveWindow ?? (modelLimit ?? defaultWindow))
+    : conservativeWindow;
 
   // 已存值可能来自手改偏好文件（写入口拦不住已存在的数据）：先按同一口径归一化，
   // 否则会在选项里补出一个「点了必失败」的档（update 入口对非整数直接拒绝）。
@@ -293,8 +304,12 @@ export function ContextWindowBudgetChip({
   // 每行显示的百分比都按**同一个基准**算（与档位推导同源）：默认档因此显示 `100% · 1.05M`
   // 而不是「绝对值在前」，旧值补的当前档也有百分比 —— 行的形态与颜色在整列里保持一个样式。
   const tierBase = useMemo(
-    () => resolveContextWindowBudgetBase({ defaultWindow: effectiveDefaultWindow, maxWindow, modelLimit }),
-    [effectiveDefaultWindow, maxWindow, modelLimit],
+    () => resolveContextWindowBudgetBase({
+      defaultWindow: effectiveDefaultWindow,
+      maxWindow: effectiveMaxWindow,
+      modelLimit,
+    }),
+    [effectiveDefaultWindow, effectiveMaxWindow, modelLimit],
   );
 
   const options = useMemo(() => {
