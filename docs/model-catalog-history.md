@@ -50,6 +50,14 @@ MiMo 2.6 Pro 被 400 拒绝；Pi 的 `mimo-v2.6-pro` 被标成仅文本输入、
   UltraSpeed $4.35/$8.7（命中 $0.036）。两组均出自官方计费页「按量付费」实时推理表
   （同页国内/海外两表，单位分别为元/美元每百万 tokens），2026-09-22 核验。缓存写入限时
   免费未记；批量推理（半价）等其它计费项未收录，与国内组口径保持一致。
+- 在线生效性核验（2026-09-22，#4865 review 跟进）：Server 正本 `catalog/providers.json`
+  当前 12 个预设无任何 `xiaomi-mimo-*`（两处 Server 仓只读核验、全文零命中）；
+  `mergeWithBundled` 对无同 ID 远端的 bundled 预设原样采用，故 V2.6 推荐名单在线
+  同样生效，不是只有离线兜底。Registry 整份快照按 revision（`updatedAt` instant）
+  比较，Server 当前 `2026-09-22T00:00:00.000Z` 低于客户端 `.002Z`，随包 Registry
+  （含 MiMo 公共条目）胜出，两个修复在线生效。Server 同步待办的实义是防将来反遮：
+  一旦 Server 上线同 ID 预设或更高 revision 快照即远端优先，需把本批内容并入
+  Server 正本。生产部署态未直连核验，以 Server 正本仓为源。
 - 预设模型行（pi）保留 `supportsImageInput: true`（新连接快照；cc/codex 行不攃能力
   字段，由 Registry 公共投影供片）；不把推理档位写进预设模型，
   免得旧快照盖住 Registry 后续修订。V2.5 推荐清单下架事项见前一条记录。
