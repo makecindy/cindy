@@ -10133,7 +10133,8 @@
         "openInFileBrowser": "在檔案瀏覽器檢視",
         "showInFolder": "在資料夾中顯示",
         "copyFilePath": "複製檔案路徑",
-        "deleteFile": "刪除檔案"
+        "deleteFile": "刪除檔案",
+        "addToChatUnavailable": "輸入框暫時不可用，請稍後重試"
       },
       "searchPanel": {
         "headingSearch": "搜尋",

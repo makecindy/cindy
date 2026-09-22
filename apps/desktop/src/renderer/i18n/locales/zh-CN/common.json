@@ -10133,7 +10133,8 @@
         "openInFileBrowser": "在文件浏览器查看",
         "showInFolder": "在文件夹中显示",
         "copyFilePath": "复制文件路径",
-        "deleteFile": "删除文件"
+        "deleteFile": "删除文件",
+        "addToChatUnavailable": "输入框暂时不可用，请稍后重试"
       },
       "searchPanel": {
         "headingSearch": "搜索",

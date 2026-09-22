@@ -10148,7 +10148,8 @@
         "openInFileBrowser": "Open in file browser",
         "showInFolder": "Show In Folder",
         "copyFilePath": "Copy File Path",
-        "deleteFile": "Delete File"
+        "deleteFile": "Delete File",
+        "addToChatUnavailable": "Input is unavailable right now, please try again later"
       },
       "searchPanel": {
         "headingSearch": "Search",

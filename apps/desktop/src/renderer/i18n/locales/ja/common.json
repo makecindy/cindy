@@ -10133,7 +10133,8 @@
         "openInFileBrowser": "ファイルブラウザで開く",
         "showInFolder": "フォルダで表示",
         "copyFilePath": "ファイルパスをコピー",
-        "deleteFile": "ファイルを削除"
+        "deleteFile": "ファイルを削除",
+        "addToChatUnavailable": "入力欄は現在利用できません。しばらくしてから再試行してください"
       },
       "searchPanel": {
         "headingSearch": "検索",

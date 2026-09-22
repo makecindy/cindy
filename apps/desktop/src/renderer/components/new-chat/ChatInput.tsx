@@ -114,6 +114,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import {
   insertPromptIntoEditor,
+  subscribeFileMentionInsert,
   subscribePromptInsert,
   subscribeSessionLinkInsert,
 } from '@/lib/composerActionsBus';
@@ -2879,6 +2880,21 @@ export function ChatInput({
       if (targetSessionId !== sessionId || editor.isDestroyed) return false;
       if (composerMutationLockedRef.current) return false;
       insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });
+      lastComposerSelectionFromRef.current = editor.state.selection.from;
+      return true;
+    });
+  }, [editor, sessionId]);
+
+  // 文件树右键「添加到对话」:把文件引用 chip 插入当前任务输入框,复用拖拽
+  // 落点的同一条 mention chip 路径。发送中 / 语音占用等输入锁期间拒绝写入,
+  // 返回 false 让调用方决定提示,绝不静默缓存到稍后写入其它任务的待办。
+  useEffect(() => {
+    if (!editor || !sessionId) return;
+    return subscribeFileMentionInsert(sessionId, ({ targetSessionId, relPath, name }) => {
+      if (targetSessionId !== sessionId || editor.isDestroyed) return false;
+      if (composerMutationLockedRef.current) return false;
+      const at = lastComposerSelectionFromRef.current ?? editor.state.selection.from;
+      appendMentionChip(editor, { kind: 'file', label: name, path: relPath }, { at });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       return true;
     });
