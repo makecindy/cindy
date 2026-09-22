@@ -72,6 +72,7 @@ import {
 import {
   CINDY_MAKE_GROUP_KEY,
   getMainListEntrySessions,
+  sortSessionsForMainList,
   holdViewedPriorityRank,
   onlineDeviceSectionIds,
   splitEntriesByDevice,
@@ -115,6 +116,7 @@ import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
+import { loadManualSessionOrder, persistManualSessionOrder, reconcileManualSessionOrder } from '../sessionOrder';
 
 /** 手动排序只从项目标题行起手。点击折叠仍走标题行；SortableJS 的
  *  fallbackTolerance + ignoreNextClick 把点击和拖拽分开。 */
@@ -195,6 +197,11 @@ export interface ProjectsSectionProps {
   allProjectKeysForOrder: readonly string[];
   /** F-PJ-10：filter 完整对象传给 Popover；段内不直接读取，仅透传给子组件。 */
   filter: UseSidebarFilterReturn;
+  /**
+   * 当前数据 owner（来自 sidebar settings snapshot）。
+   * 项目内手动排序按 owner 分区落 localStorage，与侧栏折叠态同源同口径。
+   */
+  dataOwnerId: string | null;
   collapsed: Set<string>;
   isAllCollapsed: boolean;
   activeSessionId?: string;
@@ -267,6 +274,7 @@ export function ProjectsSection({
   dialogueCount = 0,
   allProjectKeysForOrder,
   filter,
+  dataOwnerId,
   collapsed,
   activeSessionId,
   viewedSessionId,
@@ -343,6 +351,28 @@ export function ProjectsSection({
   const [expandedDeviceSections, setExpandedDeviceSections] = useState<ReadonlySet<string>>(
     new Set(),
   );
+  const [manualSessionOrders, setManualSessionOrders] = useState<Record<string, string[]>>({});
+
+  const sessionOrderFor = useCallback((project: ProjectNodeData): string[] | undefined => {
+    const source =
+      manualSessionOrders[project.projectKey] ??
+      loadManualSessionOrder(dataOwnerId, project.projectKey);
+    return source.length > 0 ? reconcileManualSessionOrder(source, project.sessions) : undefined;
+  }, [dataOwnerId, manualSessionOrders]);
+
+  const initialSessionOrderFor = useCallback(
+    (project: ProjectNodeData): string[] =>
+      sortSessionsForMainList(project.sessions, filter.sortBy).map(
+        (session) => session.id,
+      ),
+    [filter.sortBy],
+  );
+
+  const handleSessionReorder = useCallback((project: ProjectNodeData, orderedIds: string[]) => {
+    const next = reconcileManualSessionOrder(orderedIds, project.sessions);
+    setManualSessionOrders((previous) => ({ ...previous, [project.projectKey]: next }));
+    persistManualSessionOrder(dataOwnerId, project.projectKey, next);
+  }, [dataOwnerId]);
 
   const getProjectId = useCallback((p: ProjectNodeData) => p.projectKey, []);
 
@@ -853,10 +883,14 @@ export function ProjectsSection({
     dialogues.length > 0 ||
     filter.isFilterActive;
 
-  const renderProjectNode = (project: ProjectNodeData): ReactNode => (
-    <ProjectNode
-      key={project.projectKey}
-      project={project}
+  const renderProjectNode = (project: ProjectNodeData): ReactNode => {
+    const fullProject =
+      allKnownProjects.find((candidate) => candidate.projectKey === project.projectKey) ?? project;
+    return (
+      <ProjectNode
+        key={project.projectKey}
+        project={fullProject}
+        displaySessions={project.sessions}
       statusFilter={filter.status}
       isCollapsed={collapsed.has(project.projectKey)}
       collapsedAttentionTone={
@@ -900,8 +934,18 @@ export function ProjectsSection({
       linkingCodexProject={linkingCodexProject === project.projectKey}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
-    />
-  );
+      manualSessionOrder={filter.sortBy === 'recency' ? sessionOrderFor(fullProject) : undefined}
+      initialSessionOrder={
+        filter.sortBy === 'recency' ? initialSessionOrderFor(fullProject) : undefined
+      }
+      onSessionReorder={
+        filter.sortBy === 'recency'
+          ? (orderedIds) => handleSessionReorder(fullProject, orderedIds)
+          : undefined
+      }
+      />
+    );
+  };
 
   // 散排任务行 / 自动任务组 / 「对话」组行。散排行与自动任务组带来源标签(hover);
   // 对话组行 = 可折叠的分组头 + 组内会话(折叠上限与对话段旧口径一致)。dialogueGroupKey 标识

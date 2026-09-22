@@ -23,7 +23,23 @@ vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
   useRemoteHostProjectOrders: () => ({ orders: new Map() }),
 }));
 vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
-vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: () => null }));
+// 项目内会话排序会把会话行交给 SortableList 渲染;本文件只关心哪些行可见,
+// 因此按真实渲染路径就地渲染 items(而不是把整棵子树 mock 成 null)。
+vi.mock('@/components/sidebar/SortableList', () => ({
+  SortableList: ({
+    items,
+    renderItem,
+  }: {
+    items: readonly unknown[];
+    renderItem: (item: never, index: number) => ReactNode;
+  }) => (
+    <>
+      {items.map((item, index) => (
+        <div key={index}>{renderItem(item as never, index)}</div>
+      ))}
+    </>
+  ),
+}));
 // main 633e27c76 起设备段头包了远程桌面快捷入口(挂 device-link presence 订阅,需要
 // preload 桥);本文件只验证段头灯语与折叠豁免,段头壳层直接透传子节点。
 vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
@@ -46,6 +62,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
   } as Session));
   return {
     unclassified: [], projects: [], dialogues: [], allKnownProjects: [], allProjectKeysForOrder: ['local:known-project'],
+    dataOwnerId: null,
     bots: [{ botId: 'demo', displayName: 'Demo Bot', avatar: '', avatarColor: '', sessions, latestActivityAt: sessions[0].updatedAt }],
     filter: {
       groupBy: 'project', groupDialogue: true, groupDevice, sortBy: 'recency',
