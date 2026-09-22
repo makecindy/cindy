@@ -29,6 +29,88 @@ import { readAtomicFileSync } from './utils/atomicWriteFile.js';
 const CLAIM_MARKER = '.owner-namespace-claim-v1.json';
 const LEGACY_GHOST_RECOVERY_MARKER = '.legacy-ghost-recovery-v1.json';
 const BUILTIN_PROVISIONING_STATE_FILE = '.builtin-provisioning.json';
+// Historical enterprise installs may retain this id only when Host-owned
+// provisioning or market state independently attests its source.
+const LEGACY_OFFICIAL_RECOVERY_IDS = new Set(['haoplay-feishu']);
+
+export type LegacyOfficialProvenance = (id: string, dir: string) => boolean;
+
+function hasLegacySeedProvenance(root: string, id: string): boolean {
+  try {
+    const rootRealPath = fsSync.realpathSync.native(root);
+    const bytes = readBoundedFileNoFollowSync(
+      path.join(root, BUILTIN_PROVISIONING_STATE_FILE),
+      64 * 1024,
+      { containWithin: rootRealPath },
+    );
+    if (bytes === null) return false;
+    const parsed = JSON.parse(bytes.toString('utf8')) as {
+      removed?: unknown;
+      seeded?: unknown;
+    };
+    if (
+      !Array.isArray(parsed.seeded) ||
+      parsed.seeded.some((value) => typeof value !== 'string' || !isValidGhostId(value)) ||
+      (parsed.removed !== undefined &&
+        (!Array.isArray(parsed.removed) ||
+          parsed.removed.some((value) => typeof value !== 'string' || !isValidGhostId(value))))
+    ) {
+      return false;
+    }
+    return parsed.seeded.includes(id) && !(parsed.removed ?? []).includes(id);
+  } catch {
+    return false;
+  }
+}
+
+function hasLegacyOfficialProvenance(
+  root: string,
+  id: string,
+  dir: string,
+  verify?: LegacyOfficialProvenance,
+): boolean {
+  return hasLegacySeedProvenance(root, id) || verify?.(id, dir) === true;
+}
+
+function legacyRecoveryAllowed(
+  id: string,
+  sources: readonly { id: string; dir: string; root: string }[],
+  targetRoot: string,
+  targetIds: ReadonlySet<string>,
+  rejectReservedIds?: boolean,
+  verify?: LegacyOfficialProvenance,
+): boolean {
+  if (!rejectReservedIds || !isOfficialGhostId(id)) return true;
+  if (!LEGACY_OFFICIAL_RECOVERY_IDS.has(id)) return false;
+  return sources.some((source) =>
+    source.id === id &&
+    hasLegacyOfficialProvenance(source.root, id, source.dir, verify)
+  ) || (
+    targetIds.has(id) &&
+    hasLegacyOfficialProvenance(targetRoot, id, path.join(targetRoot, id), verify)
+  );
+}
+
+function hasPotentialLegacyRecoveryCandidate(
+  id: string,
+  sources: readonly { id: string; dir: string; root: string }[],
+  sourceRoots: readonly string[],
+  targetRoot: string,
+  rejectReservedIds?: boolean,
+  verify?: LegacyOfficialProvenance,
+): boolean {
+  if (!rejectReservedIds || !isOfficialGhostId(id)) return true;
+  if (!LEGACY_OFFICIAL_RECOVERY_IDS.has(id)) return false;
+  return sources.some((source) =>
+    source.id === id &&
+    hasLegacyOfficialProvenance(source.root, id, source.dir, verify)
+  ) ||
+    sourceRoots.some((root) =>
+      hasLegacyOfficialProvenance(root, id, path.join(root, id), verify)
+    ) ||
+    hasLegacyOfficialProvenance(targetRoot, id, path.join(targetRoot, id), verify);
+}
+
 const LEGACY_PATHS = [
   'ghost-kv',
   'ghost-fs',
@@ -1197,6 +1279,7 @@ export function getLegacyGhostRecoveryStatus(
   options: {
     reservedCommands?: ReadonlySet<string>;
     rejectReservedIds?: boolean;
+    verifyLegacyOfficialProvenance?: LegacyOfficialProvenance;
   } = {},
   isPidAlive: (pid: number) => boolean = isPidAliveDefault,
   readProcessIdentity?: ProcessIdentityReader,
@@ -1208,42 +1291,70 @@ export function getLegacyGhostRecoveryStatus(
 
   const root = userDataDir ?? app.getPath('userData');
   const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
-  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedLegacyGhostRootDirs(root));
-  const scopedDiscovery = scanLegacyGhostDirsInRoots([
-    ownerScopedLegacyGhostRootDir(root, ownerKey),
-  ]);
+  const sharedRoots = sharedLegacyGhostRootDirs(root);
+  const scopedRoots = [ownerScopedLegacyGhostRootDir(root, ownerKey)];
+  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedRoots);
+  const scopedDiscovery = scanLegacyGhostDirsInRoots(scopedRoots);
   const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
   const sharedLegacyGhosts = sharedDiscovery.ghosts;
   const scopedLegacyGhosts = scopedDiscovery.ghosts;
-  const legacyGhosts = options.rejectReservedIds
-    ? [...sharedLegacyGhosts, ...scopedLegacyGhosts].filter((ghost) => !isOfficialGhostId(ghost.id))
-    : [...sharedLegacyGhosts, ...scopedLegacyGhosts];
+  const sourceGhosts = [...sharedLegacyGhosts, ...scopedLegacyGhosts];
   const recoveryMarkerRead = readLegacyGhostRecoveryMarkerSync(root, ownerKey);
-  const recoveryMarker = recoveryMarkerRead.kind === 'ready'
-    ? recoveryMarkerRead.marker
-    : null;
+  const recoveryMarker = recoveryMarkerRead.kind === 'ready' ? recoveryMarkerRead.marker : null;
+  const sourceRoots = [...sharedRoots, ...scopedRoots];
+  const hasPotentialSourceCandidate = [
+    ...sourceGhosts.map((ghost) => ghost.id),
+    ...sharedDiscovery.deferredIds,
+    ...sharedDiscovery.invalidIds,
+    ...scopedDiscovery.deferredIds,
+    ...scopedDiscovery.invalidIds,
+  ].some((id) => hasPotentialLegacyRecoveryCandidate(
+    id,
+    sourceGhosts,
+    sourceRoots,
+    targetRoot,
+    options.rejectReservedIds,
+    options.verifyLegacyOfficialProvenance,
+  ));
+  const hasPotentialPendingCandidate = (recoveryMarker?.pendingIds ?? []).some((id) =>
+    hasPotentialLegacyRecoveryCandidate(
+      id,
+      sourceGhosts,
+      sourceRoots,
+      targetRoot,
+      options.rejectReservedIds,
+      options.verifyLegacyOfficialProvenance,
+    )
+  );
+  const targetDiscovery = hasPotentialSourceCandidate || hasPotentialPendingCandidate
+    ? scanLegacyGhostDirsInRoots([targetRoot])
+    : { ghosts: [], deferredIds: [], invalidIds: [], deferredRoots: [] };
+  const targetIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
+  const isRecoverableId = (id: string): boolean => legacyRecoveryAllowed(
+    id, sourceGhosts, targetRoot, targetIds,
+    options.rejectReservedIds, options.verifyLegacyOfficialProvenance,
+  );
+  const legacyGhosts = options.rejectReservedIds
+    ? sourceGhosts.filter((ghost) => isRecoverableId(ghost.id))
+    : sourceGhosts;
   // Defer the target-root scan until we know there are legacy sources or
   // pending recovery ids.  Scanning beforehand wastes work in a healthy
   // profile and, worse, can block the recovery-status IPC or report a
   // spurious deferred status when an unrelated installed plugin has a
   // corrupt ghost.json (e.g. leftover FIFO after a sync conflict).
-  const hasRecoveryCandidates =
-    legacyGhosts.length > 0 || (recoveryMarker?.pendingIds?.length ?? 0) > 0;
-  const targetDiscovery = hasRecoveryCandidates
-    ? scanLegacyGhostDirsInRoots([targetRoot])
-    : { ghosts: [], deferredIds: [], invalidIds: [], deferredRoots: [] };
   const sourceDiscoveryProblemIds = new Set(
     [
       ...sharedDiscovery.deferredIds,
       ...sharedDiscovery.invalidIds,
       ...scopedDiscovery.deferredIds,
       ...scopedDiscovery.invalidIds,
-    ].filter((id) => !options.rejectReservedIds || !isOfficialGhostId(id)),
+    ].filter(isRecoverableId),
   );
   // Filter reserved IDs from pending marker ids so they don't inflate
   // status counts in packaged builds (P2, PRRT_kwDOTgdRUs6YbtXr).
   const visiblePendingIds = options.rejectReservedIds
-    ? (recoveryMarker?.pendingIds ?? []).filter((id) => !isOfficialGhostId(id))
+    ? (recoveryMarker?.pendingIds ?? [])
+      .filter(isRecoverableId)
     : (recoveryMarker?.pendingIds ?? []);
   // A marker containing only reserved ids has no applicable recovery
   // whitelist in packaged builds; treat it as empty for fresh legacy sources.
@@ -1257,7 +1368,7 @@ export function getLegacyGhostRecoveryStatus(
   // and can't be id-filtered.
   const sourceDeferredIds = options.rejectReservedIds
     ? [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds]
-      .filter((id) => !isOfficialGhostId(id))
+      .filter(isRecoverableId)
     : [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds];
   // Filter target deferred IDs by pendingIds so an unrelated installed
   // plugin's transient read error doesn't make the status report deferred
@@ -1305,7 +1416,7 @@ export function getLegacyGhostRecoveryStatus(
     installedTargetIds.has(id) &&
     !legacySourceIds.has(id) &&
     recoveryMarker?.approvalProjectionSha256ById?.[id] !== undefined &&
-    (!options.rejectReservedIds || !isOfficialGhostId(id)),
+    isRecoverableId(id),
   );
   const unexpectedFrozenIds = recoveryMarker
     ? (hasVisibleFrozenWhitelist
@@ -1401,6 +1512,7 @@ export async function recoverLegacyGhostPlugins(
     shouldAbort?: () => boolean;
     reservedCommands?: ReadonlySet<string>;
     rejectReservedIds?: boolean;
+    verifyLegacyOfficialProvenance?: LegacyOfficialProvenance;
   } = {},
 ): Promise<OwnerNamespaceMigrationResult> {
   const ownerId = verifiedCloudOwner(state);
@@ -1428,18 +1540,54 @@ export async function recoverLegacyGhostPlugins(
   // (e.g. leftover FIFO after a sync conflict).  Pattern from
   // getLegacyGhostRecoveryStatusForActiveSession (checklist item 6.5a).
   const targetRoot = path.join(userDataDir, 'owners', ownerKey, 'cindy-brain');
+  const sharedRoots = sharedLegacyGhostRootDirs(userDataDir);
+  const scopedRoots = [ownerScopedLegacyGhostRootDir(userDataDir, ownerKey)];
   const earlyRecoveryMarkerRead = readLegacyGhostRecoveryMarkerSync(
     userDataDir,
     ownerKey,
   );
+  const sourceRoots = [...sharedRoots, ...scopedRoots];
   const hasRecoveryCandidates =
     sharedLegacyGhosts.length > 0 ||
     scopedLegacyGhosts.length > 0 ||
     (earlyRecoveryMarkerRead.kind === 'ready' &&
       (earlyRecoveryMarkerRead.marker?.pendingIds?.length ?? 0) > 0);
+  const sourceGhosts = [...sharedLegacyGhosts, ...scopedLegacyGhosts];
+  const hasPotentialSourceCandidate = [
+    ...sourceGhosts.map((ghost) => ghost.id),
+    ...sharedDiscovery.deferredIds,
+    ...sharedDiscovery.invalidIds,
+    ...scopedDiscovery.deferredIds,
+    ...scopedDiscovery.invalidIds,
+  ].some((id) => hasPotentialLegacyRecoveryCandidate(
+    id,
+    sourceGhosts,
+    sourceRoots,
+    targetRoot,
+    options.rejectReservedIds,
+    options.verifyLegacyOfficialProvenance,
+  ));
+  const hasPotentialPendingCandidate =
+    earlyRecoveryMarkerRead.kind === 'ready' &&
+    (earlyRecoveryMarkerRead.marker?.pendingIds ?? []).some((id) =>
+      hasPotentialLegacyRecoveryCandidate(
+        id,
+        sourceGhosts,
+        sourceRoots,
+        targetRoot,
+        options.rejectReservedIds,
+        options.verifyLegacyOfficialProvenance,
+      )
+    );
   const targetDiscovery = hasRecoveryCandidates
+    && (hasPotentialSourceCandidate || hasPotentialPendingCandidate)
     ? scanLegacyGhostDirsInRoots([targetRoot])
     : { ghosts: [], deferredIds: [], invalidIds: [], deferredRoots: [] };
+  const targetIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
+  const isRecoverableId = (id: string): boolean => legacyRecoveryAllowed(
+    id, sourceGhosts, targetRoot, targetIds,
+    options.rejectReservedIds, options.verifyLegacyOfficialProvenance,
+  );
   // Filter reserved IDs from per-id counts so they don't force a spurious
   // deferred that blocks valid legacy plugins from being moved (P1,
   // PRRT_kwDOTgdRUs6YSU-u).  Match the filter already applied in
@@ -1453,9 +1601,9 @@ export async function recoverLegacyGhostPlugins(
     scopedDiscovery.deferredRoots.length > 0 ||
     targetDiscovery.deferredRoots.length > 0 ||
     [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds]
-      .some((id) => !options.rejectReservedIds || !isOfficialGhostId(id)) ||
+      .some(isRecoverableId) ||
     targetDiscovery.deferredIds.some((id) =>
-      (!options.rejectReservedIds || !isOfficialGhostId(id)) &&
+      isRecoverableId(id) &&
       (earlyRecoveryMarkerRead.kind === 'ready' &&
         earlyRecoveryMarkerRead.marker?.pendingIds?.includes(id)),
     );
@@ -1541,8 +1689,6 @@ export async function recoverLegacyGhostPlugins(
   // bookkeeping. Apply the packaged-build reserved-id policy at this queue
   // boundary so neither fresh discovery nor an older dirty marker can retain
   // an official namespace id for later recovery.
-  const isRecoverableId = (id: string): boolean =>
-    !options.rejectReservedIds || !isOfficialGhostId(id);
   const sourceDiscoveryIds = new Set([...discoveredSourceIds].filter(isRecoverableId));
   const targetDiscoveryIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
   const visiblePendingIds = (recoveryMarker?.pendingIds ?? []).filter(isRecoverableId);
@@ -1622,7 +1768,7 @@ export async function recoverLegacyGhostPlugins(
     discoveryInvalidCount + unexpectedFrozenIds.length;
   const movableById = new Map<string, ReturnType<typeof listLegacyGhostDirs>>();
   for (const legacy of [...eligibleSharedGhosts, ...scopedLegacyGhosts]) {
-    if (options.rejectReservedIds && isOfficialGhostId(legacy.id)) {
+    if (!isRecoverableId(legacy.id)) {
       conflicts += 1;
       continue;
     }

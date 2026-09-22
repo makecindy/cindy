@@ -1693,9 +1693,21 @@ export const GHOST_OFFICIAL_ID_PREFIXES: readonly string[] = [
   'xd-',
 ];
 
-/** id 是否属于官方保留命名空间。静态命名空间与不可逆恢复能力继续用这个。 */
+/**
+ * 不适合扩成整段前缀、但仍需保护历史身份的官方插件 id。
+ * `haoplay-feishu` 是已存在的官方企业插件；只保护精确 id，避免未来
+ * 误把其它 `haoplay-*` 插件纳入不可逆恢复/凭证别名保护。
+ */
+export const GHOST_OFFICIAL_ID_EXACT_IDS: ReadonlySet<string> = new Set([
+  'haoplay-feishu',
+]);
+
+/** id 是否属于官方保留命名空间或官方精确身份。 */
 export function isOfficialGhostId(id: string): boolean {
-  return GHOST_OFFICIAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
+  return (
+    GHOST_OFFICIAL_ID_EXACT_IDS.has(id) ||
+    GHOST_OFFICIAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix))
+  );
 }
 
 /**
@@ -1708,18 +1720,20 @@ export function isUserInstallReservedGhostId(id: string): boolean {
 
 /**
  * 该 id 是否命中 `oauth.tokenBroker` 的静态官方前缀资格。
- * 非官方资格由运行时 first-party 判据增量放行，不改这张静态表。
+ * 精确历史 id（例如 haoplay-feishu）只用于保护存量身份和 recovery，
+ * 不在没有 provenance 的情况下直接获得服务端 OAuth 权限。
  */
 export function isBrokerEligibleGhostId(id: string): boolean {
-  return isOfficialGhostId(id);
+  return GHOST_OFFICIAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
 }
 
 /**
  * 该 id 能否拿宿主原语：OAuth 端口回收、身份头像代下载。
- * 仅认静态官方前缀；本轮不随 Broker 资格放宽。
+ * 仅认静态官方前缀；精确历史 id 必须通过 first-party provenance
+ *（builtin / market）判定，不能仅凭目录名获得原语。
  */
 export function isFirstPartyHostPrivilegeGhostId(id: string): boolean {
-  return isOfficialGhostId(id);
+  return GHOST_OFFICIAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
 }
 
 /**

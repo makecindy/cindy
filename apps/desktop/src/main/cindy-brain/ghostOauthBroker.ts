@@ -32,6 +32,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import {
   EXPIRY_SAFETY_MARGIN_MS,
   type GhostOauthBrokerClient,
+  type GhostOauthBrokerBootstrapResult,
   type GhostOauthBrokerResult,
   type GhostOauthLogger,
   type GhostOauthTokenBundle,
@@ -65,6 +66,13 @@ interface BrokerTokenResponse {
   scope?: unknown;
 }
 
+interface BrokerBootstrapResponse {
+  clientId?: unknown;
+  transactionId?: unknown;
+  redirectUri?: unknown;
+  expiresAt?: unknown;
+}
+
 /** apiPost 抛出的错误最小面(生产 = serverApiClient.ServerApiError 的字段)。 */
 export interface GhostOauthBrokerApiError {
   code: string;
@@ -74,11 +82,17 @@ export interface GhostOauthBrokerApiError {
 
 export interface GhostOauthBrokerDeps {
   /** POST JSON 到 XDT server(生产注入 serverApiFetch;失败 throw ServerApiError)。 */
-  apiPost(path: string, body: Record<string, unknown>): Promise<unknown>;
+  apiPost(
+    path: string,
+    body: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown>;
   /** 当前是否有登录态(生产 = authManager.getAccessToken() 非空)。 */
   hasLoginToken(): boolean;
   logger?: GhostOauthLogger;
 }
+
+export const BROKER_REQUEST_TIMEOUT_MS = 10_000;
 
 function toBundle(raw: unknown): GhostOauthTokenBundle | null {
   if (typeof raw !== 'object' || raw === null) return null;
@@ -107,6 +121,61 @@ function isApiError(err: unknown): err is GhostOauthBrokerApiError {
 }
 
 export function createGhostOauthBrokerClient(deps: GhostOauthBrokerDeps): GhostOauthBrokerClient {
+  const bootstrap = async (
+    slug: string,
+    params: { redirectUri: string; scopes: readonly string[] },
+  ): Promise<GhostOauthBrokerBootstrapResult> => {
+    if (!SUPPORTED_TOKEN_BROKERS.has(slug)) {
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: `不支持的 tokenBroker:${slug}` };
+    }
+    if (!deps.hasLoginToken()) {
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: `需要先登录 ${BRAND_NAME}` };
+    }
+    let raw: unknown;
+    try {
+      raw = await deps.apiPost(
+        `/api/integrations/${slug}/oauth/bootstrap`,
+        {
+          redirectUri: params.redirectUri,
+          scopes: [...params.scopes],
+        },
+        { timeoutMs: BROKER_REQUEST_TIMEOUT_MS },
+      );
+    } catch (err) {
+      if (isApiError(err)) {
+        if (err.statusCode === 0 || err.code === 'NETWORK_ERROR') {
+          return { ok: false, error: 'NETWORK', detail: err.message };
+        }
+        if (err.statusCode === 404 || err.statusCode >= 500) {
+          return { ok: false, error: 'SERVICE_UNAVAILABLE' };
+        }
+        return { ok: false, error: 'EXCHANGE_FAILED', detail: `${err.code} ${err.message}`.slice(0, 200) };
+      }
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: String(err) };
+    }
+    if (typeof raw !== 'object' || raw === null) {
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: 'broker 响应不是对象' };
+    }
+    const parsed = raw as BrokerBootstrapResponse;
+    if (
+      typeof parsed.clientId !== 'string'
+      || parsed.clientId.length === 0
+      || typeof parsed.transactionId !== 'string'
+      || parsed.transactionId.length === 0
+      || typeof parsed.redirectUri !== 'string'
+      || typeof parsed.expiresAt !== 'string'
+    ) {
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: 'broker 动态授权响应字段不完整' };
+    }
+    return {
+      ok: true,
+      clientId: parsed.clientId,
+      transactionId: parsed.transactionId,
+      redirectUri: parsed.redirectUri,
+      expiresAt: parsed.expiresAt,
+    };
+  };
+
   const call = async (
     slug: string,
     action: 'exchange' | 'refresh',
@@ -125,7 +194,11 @@ export function createGhostOauthBrokerClient(deps: GhostOauthBrokerDeps): GhostO
     }
     let raw: unknown;
     try {
-      raw = await deps.apiPost(`/api/integrations/${slug}/oauth/${action}`, body);
+      raw = await deps.apiPost(
+        `/api/integrations/${slug}/oauth/${action}`,
+        body,
+        { timeoutMs: BROKER_REQUEST_TIMEOUT_MS },
+      );
     } catch (err) {
       if (isApiError(err)) {
         if (err.statusCode === 0 || err.code === 'NETWORK_ERROR') {
@@ -170,12 +243,19 @@ export function createGhostOauthBrokerClient(deps: GhostOauthBrokerDeps): GhostO
   return {
     // codeVerifier:PKCE 流(feishu)由 broker 端点透传上游;不吃 PKCE 的
     // provider(jira/slack)声明 pkce:false,不会带到这里。
-    exchange: (slug, { code, redirectUri, codeVerifier }) =>
+    bootstrap,
+    exchange: (slug, { code, redirectUri, codeVerifier, transactionId, clientId }) =>
       call(slug, 'exchange', {
         code,
         redirectUri,
         ...(codeVerifier !== undefined ? { codeVerifier } : {}),
+        ...(transactionId !== undefined ? { transactionId } : {}),
+        ...(clientId !== undefined ? { clientId } : {}),
       }),
-    refresh: (slug, { refreshToken }) => call(slug, 'refresh', { refreshToken }),
+    refresh: (slug, { refreshToken, clientId }) =>
+      call(slug, 'refresh', {
+        refreshToken,
+        ...(clientId !== undefined ? { clientId } : {}),
+      }),
   };
 }

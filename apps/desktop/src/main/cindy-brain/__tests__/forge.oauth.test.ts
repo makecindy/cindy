@@ -80,4 +80,19 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
       expect(FORGE_GUIDE).toContain(marker);
     }
   });
+
+  it('动态 broker 说明 clientId 可由服务端 bootstrap 下发', () => {
+    for (const marker of [
+      'tokenBroker 模式可省略',
+      '服务端 bootstrap',
+      '一次性授权事务',
+      'transaction ID',
+      '插件包无需固化 App ID',
+      '后台更换飞书应用也不需要',
+      'clientConfigured:true',
+      '不表示插件清单内含 clientId',
+    ]) {
+      expect(FORGE_GUIDE).toContain(marker);
+    }
+  });
 });

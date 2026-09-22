@@ -119,11 +119,11 @@ describe('ghostInstallErrorKey', () => {
   it.each([
     {
       locale: 'zh-CN',
-      fragment: 'id 使用官方保留前缀（{{reservedGhostIdPrefixes}}）',
+      fragment: 'id 使用官方保留命名空间或 ID（{{reservedGhostIdPrefixes}}）',
     },
     {
       locale: 'zh-TW',
-      fragment: 'id 使用官方保留字首（{{reservedGhostIdPrefixes}}）',
+      fragment: 'id 使用官方保留命名空間或 ID（{{reservedGhostIdPrefixes}}）',
     },
   ])('puts the reserved-prefix category before its id list in $locale', ({ locale, fragment }) => {
     const rawMessage = i18n.getResource(

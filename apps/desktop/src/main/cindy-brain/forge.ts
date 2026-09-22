@@ -1936,7 +1936,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
     "oauth": {                                      // source:"oauth" 时必填(其它来源禁写):主机托管 OAuth 授权详单(见 §4.7)
       "authorizeUrl": "https://accounts.example.com/authorize",  // 授权页(https;域名必须命中 hosts 白名单)
       "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)。注:个别服务商(如 xAI)的新版 consent 页不再 302 回 loopback,而是页面 JS 跨源投递授权 code——主机允许的投递来源 = authorizeUrl/tokenUrl 的 origin + hosts 白名单命中的 https 域;consent 页与授权端点不同域时,把 consent 域(如 accounts.x.ai)也声明进 hosts 即可
-      "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
+      "clientId": "xxx.apps.example.com",           // 可选:非 broker 可内置 OAuth 客户端 ID;tokenBroker 模式可省略,由服务端 bootstrap 为本次授权事务下发
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;意识按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
       "scopes": ["read.a", "write.b"],              // 可选 ≤256 条:申请的权限范围(详情页逐条展示给用户)
@@ -3130,7 +3130,7 @@ POST 一个交换端点换临时令牌(令牌才进 Authorization)。在凭证�
 流程由主机可信代码执行:拉系统浏览器、本机回调、code 换 token、到期刷新、
 refresh token 保管——**你的代码全程无感也无从插手**,照常 cindy.fetch,主机出网时
 现取新鲜 access token 按 \`inject.format\` 注入(上游 401 自动作废重刷、整链重试
-一次)。client 凭证(clientId / clientSecret)两种给法:**内置在 oauth 详单里**
+一次)。非 broker 模式的 client 凭证(clientId / clientSecret)两种给法:**内置在 oauth 详单里**
 (用户零配置,点连接就走——桌面应用的 client 凭证按服务商官方口径本非机密,
 写进包里不引入泄露面;授权仍需用户在浏览器亲自同意),或**留空让用户在你的
 settingsHtml 里自填**(用户用自己注册的 OAuth 应用,配额风控归用户)。两者可
@@ -3197,11 +3197,17 @@ identity.displayTemplate 时,\`/oauth\` 回查与连接结果里 account.label �
   同 id 市场记录不影响这条自测路径。后两路不接受个人身份或别的组织前缀，且只给 Broker
   与 oidc-token，不给宿主原语；手动导入不属于 Forge 路径。
   code/refresh 交换改经 Cindy 服务端 broker 完成,client secret 由服务端持有、不随包
-  分发,且要求用户已登录 Cindy。声明它时必须同时声明 redirectPort,并与 clientSecret
+  分发,且要求用户已登录 Cindy。声明它时可以省略 \`clientId\`:连接开始后，主机会先调用
+  broker bootstrap，由服务端为这次一次性授权事务下发 App ID 与 transaction ID，再把
+  transaction ID 绑定到 code exchange；插件包无需固化 App ID，后台更换飞书应用也不需要
+  更新插件。只有同一模板确实需要按 region 选择多个公开 App ID 时，才同时声明默认
+  \`clientId\` 与 \`clientIdAlternatives\`，并在 connect body 传白名单内的选择值。
+  声明 tokenBroker 时必须同时声明 redirectPort,并与 clientSecret
   互斥;PKCE 缺省开(verifier
   经 broker exchange 透传服务端),不吃 PKCE 的服务商显式 \`"pkce": false\`;
   设置页的 \`/oauth/<key>/client\` 自填通道返回 405(settingsHtml 不要再画
-  client 输入区)。
+  client 输入区)；\`/oauth\` 返回的 \`clientConfigured:true\` 表示该 broker 已受当前
+  Host 支持并会在连接时动态取配置，不表示插件清单内含 clientId。
 - \`brokerBounce\`:双地址弹跳回调(随 tokenBroker,资格与 tokenBroker 相同)。部分
   服务商后台只收 https redirect、不收 http loopback——声明后报给服务商的
   redirect_uri 是「broker 服务的 https 弹跳路由」(主机用 broker 基地址 + \`path\`
