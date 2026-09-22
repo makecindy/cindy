@@ -3,7 +3,7 @@
  *
  * 蓝本是 right-sidebar-window/window.ts,差异:
  *  - 按 ghostId 多实例:窗口位置记忆每插件一份
- *    (ghost-panel-window-state-<id>.json,id 字符集 [a-z0-9-] 文件名安全);
+ *    (ghost-panel-window-state-<id>.json,id 为 storage part,文件名安全);
  *  - webPreferences 按 electron-security-and-process-boundaries §3 显式带全量
  *    安全项(该规则晚于主窗/RSB 窗,新窗口必须逐项写明,不吃默认值);
  *  - `webviewTag: true`:面板体就是 <webview>(cindy-ghost:// 分区)。附加闸/

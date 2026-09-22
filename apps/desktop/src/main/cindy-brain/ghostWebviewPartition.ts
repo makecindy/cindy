@@ -1,4 +1,5 @@
-import { GHOST_PARTITION_PREFIX, isValidGhostId, parseGhostPartition } from '../../shared/ghost.js';
+import { GHOST_PARTITION_PREFIX, parseGhostPartition } from '../../shared/ghost.js';
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity.js';
 import { dataOwnerStorageKey, type ActiveAppSession } from '../appSessionState.js';
 
 const GHOST_OWNER_PARTITION_PREFIX = `${GHOST_PARTITION_PREFIX}owner:`;
@@ -13,7 +14,7 @@ export function ownerScopedGhostPartition(
   ghostId: string,
   owner: Pick<ActiveAppSession, 'mode' | 'dataOwnerId'>,
 ): string | null {
-  if (!isValidGhostId(ghostId) || owner.mode === 'signed-out' || !owner.dataOwnerId) return null;
+  if (!isValidPluginStoragePart(ghostId) || owner.mode === 'signed-out' || !owner.dataOwnerId) return null;
   return `${GHOST_OWNER_PARTITION_PREFIX}${owner.mode}:${dataOwnerStorageKey(owner.dataOwnerId)}:${ghostId}`;
 }
 

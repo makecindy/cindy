@@ -46,8 +46,6 @@ import {
 } from './ghostOauthFlow.js';
 import {
   changedBuiltinOauthClientSecretKeys,
-  isBrokerEligibleGhostId,
-  isFirstPartyHostPrivilegeGhostId,
   type GhostManifest,
   type GhostSecretOauthDecl,
 } from '../../shared/ghost.js';
@@ -158,10 +156,12 @@ export interface GhostOauthAccountManagerDeps {
   /** 延时器(仅 invalid_grant 轮换探测用;测试注入即时假体,生产缺省 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
   /**
-   * tokenBroker 资格复核。官方前缀命中照今天放行；否则问 first-party 判据。
-   * 缺省只认静态官方前缀，存量单测零行为变化。
+   * tokenBroker 资格复核。按可信安装事实判定，名称前缀不放行。
+   * 缺省拒绝。
    */
   isTokenBrokerAuthorized?: (ghostId: string) => boolean;
+  /** Port reclaim / identity avatar. Missing = deny. */
+  isHostPrimitiveAuthorized?: (ghostId: string) => boolean;
 }
 
 /**
@@ -437,8 +437,13 @@ export class GhostOauthAccountManager {
   expireAccountsForChangedClients(
     previousManifest: GhostManifest,
     currentManifest: GhostManifest,
+    vaultId = currentManifest.id,
   ): number {
-    const migration = this.prepareAccountsForChangedClients(previousManifest, currentManifest);
+    const migration = this.prepareAccountsForChangedClients(
+      previousManifest,
+      currentManifest,
+      vaultId,
+    );
     migration.commit();
     return migration.expiredCount;
   }
@@ -453,8 +458,9 @@ export class GhostOauthAccountManager {
   prepareAccountsForChangedClients(
     previousManifest: GhostManifest,
     currentManifest: GhostManifest,
+    vaultId = currentManifest.id,
   ): GhostOauthClientMigration {
-    const ghostId = currentManifest.id;
+    const ghostId = vaultId;
     const applied: Array<{
       secretKey: string;
       beforeRaw: string;
@@ -626,11 +632,14 @@ export class GhostOauthAccountManager {
    * the update-crash half state and incorrectly reusing that token for a third
    * client introduced by a later update.
    */
-  reconcileAccountsForInstalledManifestWithResult(currentManifest: GhostManifest): {
+  reconcileAccountsForInstalledManifestWithResult(
+    currentManifest: GhostManifest,
+    vaultId = currentManifest.id,
+  ): {
     restored: number;
     retryPending: boolean;
   } {
-    const ghostId = currentManifest.id;
+    const ghostId = vaultId;
     let restoredCount = 0;
     let retryPending = false;
     for (const secret of currentManifest.network?.secrets ?? []) {
@@ -688,8 +697,11 @@ export class GhostOauthAccountManager {
   }
 
   /** Compatibility wrapper for callers that only need the restored count. */
-  reconcileAccountsForInstalledManifest(currentManifest: GhostManifest): number {
-    return this.reconcileAccountsForInstalledManifestWithResult(currentManifest).restored;
+  reconcileAccountsForInstalledManifest(
+    currentManifest: GhostManifest,
+    vaultId = currentManifest.id,
+  ): number {
+    return this.reconcileAccountsForInstalledManifestWithResult(currentManifest, vaultId).restored;
   }
 
   /** 返回仍未完成重新授权的 clientId 迁移账号数；普通撤销授权不计入。 */
@@ -846,7 +858,7 @@ export class GhostOauthAccountManager {
    * client 凭证未填直接拒;授权流程失败原样透传结构化错误(设置页据此提示)。
    */
   private isTokenBrokerAuthorized(ghostId: string): boolean {
-    return this.deps.isTokenBrokerAuthorized?.(ghostId) ?? isBrokerEligibleGhostId(ghostId);
+    return this.deps.isTokenBrokerAuthorized?.(ghostId) === true;
   }
 
   async connectAccount(
@@ -934,7 +946,7 @@ export class GhostOauthAccountManager {
       // 回收 = 强杀占用进程,而"杀谁"由 redirectPort 决定——第三方 manifest
       // 可声明任意端口(如 5432),放开等于让任意意识借「连接账号」之手
       // 强杀用户本地服务(Postgres 等),故第三方一律回落"占用即报错"。
-      reclaimPort: isFirstPartyHostPrivilegeGhostId(ghostId) ? this.deps.reclaimPort : undefined,
+      reclaimPort: this.deps.isHostPrimitiveAuthorized?.(ghostId) ? this.deps.reclaimPort : undefined,
     });
     if (!flow.ok) return { ok: false, error: flow.error, detail: flow.detail };
     opts?.remote?.assertCurrent();
@@ -969,7 +981,7 @@ export class GhostOauthAccountManager {
       // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束——放开
       // 等于给第三方意识一个"主机代发 GET + 小图字节回沙箱"的 SSRF 读原语。
       // 下载本身不带任何凭证(CDN 域名不在注入白名单);失败降级无头像。
-      if (identity.avatarUrl !== null && isFirstPartyHostPrivilegeGhostId(ghostId)) {
+      if (identity.avatarUrl !== null && this.deps.isHostPrimitiveAuthorized?.(ghostId)) {
         avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
           fetchImpl: this.deps.fetchImpl,
@@ -1373,7 +1385,7 @@ export class GhostOauthAccountManager {
       // 头像回填同样只对第一方官方意识放行(connectAccount 处的 SSRF 口径)。
       const needAvatar =
         decl.identity.avatarPath !== undefined &&
-        isFirstPartyHostPrivilegeGhostId(ghostId) &&
+        this.deps.isHostPrimitiveAuthorized?.(ghostId) === true &&
         this.readAvatar(ghostId, secretKey, accountId) === null;
       if (!needDisplay && !needAvatar) return;
       const identity = await fetchGhostOauthIdentity({

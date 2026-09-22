@@ -16,7 +16,12 @@ import {
 import { isValidPluginResourceId } from './internal/pluginResourceId.js';
 import { isValidPluginNamespace, parseOptionalNamespace } from './internal/namespace.js';
 
-export { isValidPluginNamespace } from './internal/namespace.js';
+export {
+  AUTHOR_DECLARED_NAMESPACE_REASON,
+  authorDeclaredNamespaceReason,
+  authorManifestDeclaresNamespace,
+  isValidPluginNamespace,
+} from './internal/namespace.js';
 export { PluginProtocolError } from './internal/parse.js';
 export { isValidPluginResourceId } from './internal/pluginResourceId.js';
 

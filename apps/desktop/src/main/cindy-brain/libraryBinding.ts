@@ -22,6 +22,8 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity.js';
+
 /** 单个插件的自定义位置记录。 */
 export interface LibraryBindingRecord {
   /** 用户所选父目录(裁决时刻的 canonical realpath)。 */
@@ -235,7 +237,7 @@ export class LibraryBindingStore {
     getDiskFreeBytes?: (root: string) => Promise<number | null>,
     opts?: { allowInsideManagedRoot?: boolean },
   ): Promise<{ ok: true; record: LibraryBindingRecord; warnings: string[] } | LocationValidationFailure> {
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(ghostId)) {
+    if (!isValidPluginStoragePart(ghostId)) {
       return { ok: false, errorCode: 'PATH_INVALID', message: 'ghostId 非法' };
     }
     return this.runSerialized(async () => {

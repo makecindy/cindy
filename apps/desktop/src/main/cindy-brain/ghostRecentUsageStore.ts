@@ -8,7 +8,7 @@
 
 import Store from 'electron-store';
 
-import { isValidGhostId } from '../../shared/ghost.js';
+import { isGhostInstanceId } from '../../shared/pluginIdentity.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 
 interface GhostRecentUsageShape {
@@ -41,7 +41,7 @@ export function normalizeGhostRecentIds(value: unknown): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const candidate of value) {
-    if (typeof candidate !== 'string' || !isValidGhostId(candidate) || seen.has(candidate)) {
+    if (typeof candidate !== 'string' || !isGhostInstanceId(candidate) || seen.has(candidate)) {
       continue;
     }
     seen.add(candidate);

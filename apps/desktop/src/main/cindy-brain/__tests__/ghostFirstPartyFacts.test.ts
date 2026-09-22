@@ -93,6 +93,59 @@ describe('loadGhostFirstPartyFactsLoader', () => {
     }
   });
 
+  it('uses logical ghostId for privilege matching and install rel id for receipt lookups', () => {
+    const seen = {
+      builtin: [] as string[],
+      origin: [] as string[],
+      approved: [] as string[],
+      market: [] as string[],
+    };
+    const factsLoader = loader({
+      readInstalledBuiltin: (id) => {
+        seen.builtin.push(id);
+        return false;
+      },
+      readInstallOrigin: (id) => {
+        seen.origin.push(id);
+        return 'manual';
+      },
+      readApprovedPackageSha256: (id) => {
+        seen.approved.push(id);
+        return 'a'.repeat(64);
+      },
+      readMarketInstallation: (id) => {
+        seen.market.push(id);
+        return MARKET_ROW;
+      },
+      lookupOrganizationPrefix: () => ({ kind: 'known', pluginPrefix: 'acme' }),
+    });
+
+    const loaded = factsLoader.load('_ns__acme__acme-tool', 'runtime', ORG_A);
+    expect(loaded.kind).toBe('ready');
+    if (loaded.kind !== 'ready') return;
+    expect(loaded.facts.ghostId).toBe('acme-tool');
+    expect(seen.builtin).toEqual(['_ns__acme__acme-tool']);
+    expect(seen.origin).toEqual(['_ns/acme/acme-tool']);
+    expect(seen.approved).toEqual(['_ns/acme/acme-tool']);
+    expect(seen.market).toEqual(['acme-tool']);
+    expect(resolveGhostFirstPartyPrivilege(loaded.facts)).toEqual({
+      brokerEligible: true,
+      hostPrimitiveEligible: false,
+      basis: 'market-organization-current',
+    });
+
+    seen.builtin.length = 0;
+    seen.origin.length = 0;
+    seen.approved.length = 0;
+    seen.market.length = 0;
+    const fromRel = factsLoader.load('_ns/acme/acme-tool', 'runtime', ORG_A);
+    expect(fromRel.kind).toBe('ready');
+    if (fromRel.kind !== 'ready') return;
+    expect(fromRel.facts.ghostId).toBe('acme-tool');
+    expect(seen.origin).toEqual(['_ns/acme/acme-tool']);
+    expect(seen.approved).toEqual(['_ns/acme/acme-tool']);
+  });
+
   it('re-evaluates the current organization prefix after an org switch and keeps the previous key', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-first-party-facts-'));
     const store = createOrganizationPrefixStore(path.join(tempDir, 'organization.v1.json'));

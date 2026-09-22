@@ -1105,6 +1105,7 @@ import {
   suspendAllGhosts,
   waitForGhostMutations,
 } from './cindy-brain/index.js';
+import { installedGhostStoragePart } from '../shared/pluginIdentity.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
 import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
@@ -2432,14 +2433,14 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
   createWindow: (ghostId) => {
     const ghost = getGhostManager()
       .list()
-      .find((g) => g.manifest.id === ghostId);
+      .find((g) => installedGhostStoragePart(g) === ghostId);
     const title = ghost?.manifest.panel?.title ?? ghost?.manifest.name ?? ghostId;
     return createGhostPanelWindow(ghostId, title);
   },
   isGhostDetachable: (ghostId) => {
     const ghost = getGhostManager()
       .list()
-      .find((g) => g.manifest.id === ghostId);
+      .find((g) => installedGhostStoragePart(g) === ghostId);
     return (
       ghost !== undefined &&
       ghost.enabled !== false &&

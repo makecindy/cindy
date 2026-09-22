@@ -163,6 +163,7 @@ describe('shouldOpenInstalledDetailAfterMarketSuccess', () => {
 
 const commandPlugin: GhostPluginListItem = {
   id: 'filo-google',
+  ghostId: 'filo-google',
   name: 'Filo Google',
   description: 'Google services',
   version: '1.0.0',

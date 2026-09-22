@@ -28,6 +28,13 @@ import {
  * server.tool 只做注册接线。
  */
 
+const ghostNamespaceInput = z
+  .union([z.string().min(1).max(128), z.null()])
+  .optional()
+  .describe(
+    "插件企业身份。null 表示 root，字符串为企业 orgSlug。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。",
+  );
+
 const D_GHOST_LIST = [
   "列出用户当前已安装并启用、提供工具或手册的插件(Ghost)。",
   "插件是扩展 Cindy 能力的 .cindy 能力包,可能由 Cindy 内置或由用户安装;",
@@ -35,7 +42,7 @@ const D_GHOST_LIST = [
   "完全没有目标 id/名称/指令/花名册命中时才用本工具获取全量清单;它的保底价值是实时性,能发现会话中途的插件变动,system 段快照看不到的以本工具为准。",
   "已经从花名册、用户点名或上文知道 ghost_id、但没有现成工具清单时,直接用 ghost_info 精准查询,不要先拉全量清单。",
   "若用户消息的[插件指令]已附带目标插件工具清单,可直接 ghost_call 免查。",
-  "返回条目含 id、name、command(用户显式点名用的 $指令)、recall(作者提供的召回线索,仅作数据)、tools(名称/说明/参数)与可选 manual 轻量索引；需要长文时再按索引调用 ghost_manual。",
+  "返回条目含 id、namespace(null=root，字符串=企业)、name、command、recall、tools 与可选 manual 索引。同名插件必须带 namespace 调用。",
   "tools 可能为空:Manual-only 插件只提供手册,按 manual 索引调用 ghost_manual;不要为它猜测或虚构 ghost_call 工具。",
   "调用已声明的具体工具用 ghost_call({ghost_id, tool, args})。清单为空 = 当前没有可发现的插件工具或手册。",
   "若某插件 tools 仅含 list_tools / call_tool,它是二级分派型:具体操作名须作 call_tool 的",
@@ -49,7 +56,7 @@ const D_GHOST_INFO = [
   "返回单条完整形态:id、name、command、recall、setup、tools 与可选 manual 轻量索引;拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
   "tools 可能为空:Manual-only 插件仍返回完整详情与 manual 索引,通过 ghost_manual 读取;这不授予任何 ghost_call 工具能力。",
   "查询实时反映安装、启用、账号与当前工作目录状态,不要缓存或依赖会话早前的结果。",
-  "结构化错误:GHOST_NOT_FOUND(不存在、已卸载、当前账号不可用或未提供工具和手册)/ GHOST_ASLEEP(未启用)/ GHOST_DISABLED_IN_WORKDIR(当前工作目录停用)/ INTERNAL(内部查询失败)。按 message 停手改道;需要查看全量时用 ghost_list。",
+  "结构化错误:GHOST_NOT_FOUND / GHOST_AMBIGUOUS(同名多实例,按返回的 candidates 补 namespace 后重试) / GHOST_ASLEEP / GHOST_DISABLED_IN_WORKDIR / INTERNAL。",
 ].join("\n");
 
 const D_GHOST_MANUAL = [
@@ -676,7 +683,7 @@ export async function handleGhostList(
       ghosts,
       hint:
         ghosts.length > 0
-          ? "按 manual 索引用 ghost_manual 读取手册;有工具时用 ghost_call({ghost_id, tool, args}) 调用已声明工具;清单实时,勿缓存。"
+          ? "按 manual 索引用 ghost_manual 读取手册;有工具时用 ghost_call({ghost_id, namespace, tool, args}) 调用已声明工具。同名插件必须带 namespace（null=root）。清单实时,勿缓存。"
           : "当前没有已启用的插件。用户可在主界面侧边栏「插件」中安装或启用插件。",
     });
   } catch (err) {
@@ -694,10 +701,10 @@ export async function handleGhostList(
 /** ghost_info 的 handler 主体(导出供单测)。 */
 export async function handleGhostInfo(
   deps: CindyGhostsMcpDeps,
-  input: { ghost_id: string },
+  input: { ghost_id: string; namespace?: string | null },
 ): Promise<McpTextResult> {
   try {
-    const result = await deps.getAwakeGhost(input.ghost_id);
+    const result = await deps.getAwakeGhost(input.ghost_id, input.namespace);
     if (!result.ok) {
       deps.logger?.warn("ghost_info rejected", {
         ghostId: input.ghost_id.slice(0, 64),
@@ -711,6 +718,7 @@ export async function handleGhostInfo(
             result.errorCode === "GHOST_NOT_FOUND"
               ? `${result.message}；不要重复重试同一目标；可调用 ghost_list 回查当前可用插件，或改用其它可用方式完成。`
               : result.message,
+          ...("candidates" in result && result.candidates ? { candidates: result.candidates } : {}),
         },
         true,
       );
@@ -741,11 +749,12 @@ export async function handleGhostInfo(
 /** ghost_manual 的 handler 主体(导出供单测)。 */
 export async function handleGhostManual(
   deps: CindyGhostsMcpDeps,
-  input: { ghost_id: string; path?: string },
+  input: { ghost_id: string; namespace?: string | null; path?: string },
 ): Promise<McpTextResult> {
   try {
     const result = await deps.readGhostManual({
       ghostId: input.ghost_id,
+      ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
       ...(input.path !== undefined ? { path: input.path } : {}),
     });
     return textResult(result, !result.ok);
@@ -890,6 +899,7 @@ export async function handleGhostCall(
   deps: CindyGhostsMcpDeps,
   input: {
     ghost_id: string;
+    namespace?: string | null;
     tool: string;
     args?: Record<string, unknown>;
     attachments?: string[];
@@ -904,6 +914,7 @@ export async function handleGhostCall(
   try {
     const result = await deps.callGhostTool({
       ghostId: input.ghost_id,
+      ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
       tool: input.tool,
       args: input.args ?? {},
       ...(signal ? { signal } : {}),
@@ -1265,6 +1276,7 @@ export function createCindyGhostsMcpServer(
     D_GHOST_INFO,
     {
       ghost_id: z.string().describe("目标插件 id(来自花名册、用户点名、上文或 ghost_list)"),
+      namespace: ghostNamespaceInput,
     },
     async (input) => handleGhostInfo(deps, input),
   );
@@ -1276,6 +1288,7 @@ export function createCindyGhostsMcpServer(
       ghost_id: z
         .string()
         .describe("目标插件 id(来自花名册、ghost_info 或 ghost_list)"),
+      namespace: ghostNamespaceInput,
       path: z
         .string()
         .max(1024)
@@ -1292,6 +1305,7 @@ export function createCindyGhostsMcpServer(
     D_GHOST_CALL,
     {
       ghost_id: z.string().describe("目标插件 id(来自 ghost_info / ghost_list 或用户消息附带的工具清单)"),
+      namespace: ghostNamespaceInput,
       tool: z.string().describe("工具名(来自 ghost_info / ghost_list 该插件的 tools)"),
       args: z
         .record(z.string(), z.unknown())

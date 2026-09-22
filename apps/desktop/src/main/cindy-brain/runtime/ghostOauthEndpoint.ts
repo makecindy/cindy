@@ -28,7 +28,6 @@
  * 产生的全部令牌只存在主机保险库与内存缓存,本端点没有任何读回动作。
  */
 
-import { isBrokerEligibleGhostId } from '../../../shared/ghost.js';
 import { GhostKvError } from '../ghostKvStore.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from './ghostSecretsEndpoint.js';
 import type {
@@ -207,9 +206,9 @@ export async function handleGhostOauthRequest(args: {
 
   if (action === 'connect' && segments.length === 2) {
     if (method !== 'POST') return { status: 405 };
-    // tokenBroker 第一方门控·连接闸。官方前缀命中照今天放行；否则问接线处判据。
+    // tokenBroker 第一方门控·连接闸。接线处按可信安装事实判定，缺省拒绝。
     const brokerAuthorized =
-      args.isTokenBrokerAuthorized?.(ghostId) ?? isBrokerEligibleGhostId(ghostId);
+      args.isTokenBrokerAuthorized?.(ghostId) === true;
     if (decl.tokenBroker !== undefined && !brokerAuthorized) {
       return {
         status: 200,

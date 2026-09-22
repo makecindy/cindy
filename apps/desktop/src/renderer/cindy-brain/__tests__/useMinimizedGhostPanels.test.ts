@@ -53,4 +53,19 @@ describe('selectMinimizedGhostPanels', () => {
       ).map((item) => item.manifest.id),
     ).toEqual(['ready']);
   });
+
+  it('企业实例按 storage part 认最小化,不和 root 同名抢条目', () => {
+    const rootGhost = ghost('helper');
+    const orgGhost = { ...ghost('helper'), namespace: 'acme', dir: '/fake/_ns/acme/helper' };
+    expect(
+      selectMinimizedGhostPanels(
+        [rootGhost, orgGhost],
+        {
+          helper: { minimized: false },
+          '_ns__acme__helper': { minimized: true },
+        },
+        {},
+      ).map((item) => [item.namespace ?? null, item.manifest.id]),
+    ).toEqual([['acme', 'helper']]);
+  });
 });

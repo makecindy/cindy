@@ -4,6 +4,7 @@ import {
   canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
+  marketItemMatchesInstalledGhost,
   orderPluginCatalogItems,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
@@ -202,6 +203,45 @@ describe('orderPluginCatalogItems', () => {
     expect(
       ordered.map(({ kind, item }) => `${kind}:${kind === 'installed' ? item.id : item.ghostId}`),
     ).toEqual(['market:first', 'installed:third']);
+  });
+
+  it('does not attach a root market row to a same-name enterprise install', () => {
+    const publicHelper = marketItem('plugin-helper', 'helper', 'installed');
+    publicHelper.namespace = null;
+    const ordered = orderPluginCatalogItems(
+      [publicHelper],
+      [
+        { id: '_ns__xd__helper', ghostId: 'helper' },
+        { id: 'helper', ghostId: 'helper' },
+      ],
+      [],
+    );
+    expect(
+      ordered.map(({ kind, item }) => `${kind}:${kind === 'installed' ? item.id : item.ghostId}`),
+    ).toEqual(['installed:helper', 'installed:_ns__xd__helper']);
+  });
+});
+
+describe('marketItemMatchesInstalledGhost', () => {
+  it('requires namespace agreement once both sides are known', () => {
+    expect(
+      marketItemMatchesInstalledGhost(
+        { ghostId: 'helper', namespace: null },
+        { manifest: { id: 'helper' }, namespace: null },
+      ),
+    ).toBe(true);
+    expect(
+      marketItemMatchesInstalledGhost(
+        { ghostId: 'helper', namespace: null },
+        { manifest: { id: 'helper' }, namespace: 'xd' },
+      ),
+    ).toBe(false);
+    expect(
+      marketItemMatchesInstalledGhost(
+        { ghostId: 'helper' },
+        { manifest: { id: 'helper' }, namespace: 'xd' },
+      ),
+    ).toBe(true);
   });
 });
 

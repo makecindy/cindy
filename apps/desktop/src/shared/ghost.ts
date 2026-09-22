@@ -67,11 +67,18 @@ export function ghostPartition(id: string): string {
   return `${GHOST_PARTITION_PREFIX}${id}`;
 }
 
-/** 从 Renderer claim 解析意识 id；不是合法 claim 返回 null。 */
+/**
+ * Keep in sync with parsePluginStoragePart in pluginIdentity.ts.
+ * This file cannot import pluginIdentity (pluginIdentity imports isValidGhostId here).
+ */
+const GHOST_PARTITION_ID_RE =
+  /^(?:[a-z0-9][a-z0-9-]{0,31}|_ns__[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?__[a-z0-9][a-z0-9-]{0,31})$/;
+
+/** 从 Renderer claim 解析实例 storage part；不是合法 claim 返回 null。 */
 export function parseGhostPartition(partition: unknown): string | null {
   if (typeof partition !== 'string' || !partition.startsWith(GHOST_PARTITION_PREFIX)) return null;
   const id = partition.slice(GHOST_PARTITION_PREFIX.length);
-  return isValidGhostId(id) ? id : null;
+  return GHOST_PARTITION_ID_RE.test(id) ? id : null;
 }
 
 /**
@@ -850,9 +857,9 @@ export interface GhostSecretOauthDecl {
    * 可选:XDT server token broker 的 provider slug(2026-07-14,xd-atlassian
    * 意识化前置)。声明后 code 换 token 与 refresh 不直连 tokenUrl,改经主机
    * 调 XDT server 的授权 broker(带登录 JWT;client secret 在服务端,不随包
-   * 分发)。必须同时声明 redirectPort，并与 clientSecret 互斥。静态官方前缀照旧
-   * 放行；其余资格由装入来源与当前组织事实共同判定。校验层保持纯函数不感知
-   * 装入语境，门控在装入闸与连接闸。
+   * 分发)。必须同时声明 redirectPort，并与 clientSecret 互斥。资格按可信安装
+   * 事实判定，名称前缀不放行。校验层保持纯函数不感知装入语境，门控在装入闸
+   * 与连接闸。
    */
   tokenBroker?: string;
   /**
@@ -1601,8 +1608,18 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
 /** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
   manifest: GhostManifest;
-  /** 安装目录绝对路径(userData/brain/<id>)。 */
+  /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
+  /**
+   * Host-verified install namespace. Missing is a pre-namespace directory;
+   * null is root; a string is an organization slug.
+   */
+  namespace?: string | null;
+  /**
+   * First-entry census captured this pre-namespace install. Missing namespace
+   * is not confirmed root while pending.
+   */
+  namespaceMigration?: 'pending';
   /**
    * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但插件仍装着、
    * 布局位置保留;重新启用即恢复。批准安装的真身在 Host receipt 中；
@@ -1732,16 +1749,16 @@ export function isUserInstallReservedGhostId(id: string): boolean {
 }
 
 /**
- * 该 id 是否命中 `oauth.tokenBroker` 的静态官方前缀资格。
- * 非官方资格由运行时 first-party 判据增量放行，不改这张静态表。
+ * 保留命名空间谓词，与 `isOfficialGhostId` 同口径。
+ * **不是** tokenBroker 授权：运行时资格见 ghostFirstPartyPrivilege。
  */
 export function isBrokerEligibleGhostId(id: string): boolean {
   return isOfficialGhostId(id);
 }
 
 /**
- * 该 id 能否拿宿主原语：OAuth 端口回收、身份头像代下载。
- * 仅认静态官方前缀；本轮不随 Broker 资格放宽。
+ * 保留命名空间谓词，与 `isOfficialGhostId` 同口径。
+ * **不是** 宿主原语授权：端口回收 / 头像代下载见 ghostFirstPartyPrivilege。
  */
 export function isFirstPartyHostPrivilegeGhostId(id: string): boolean {
   return isOfficialGhostId(id);
@@ -2870,10 +2887,14 @@ export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
  * - 否则停在聊天区左侧,宽度占比/最小宽取清单声明。
  * 卸下时**不做**逆操作 —— 树数据保留正是"重装复活"的记忆来源(§6 规则 5)。
  */
-export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): Layout | null {
+export function layoutWithGhostPanel(
+  layout: Layout,
+  manifest: GhostManifest,
+  instanceId: string = manifest.id,
+): Layout | null {
   if (!manifest.panel) return null;
   if (manifest.panel.position === 'tab') return null;
-  const kind = ghostPanelKind(manifest.id);
+  const kind = ghostPanelKind(instanceId);
   if (findSplitChildByPanelKind(layout, kind)) return null;
   // 停靠位置(相对主聊天窗):按 chat-main 的实际下标定插入点,不写死
   // 序号(未来树形态变化不至于错位)。停靠恒在聊天区左侧(2026-07-25 Lizi
@@ -2889,7 +2910,7 @@ export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): L
   const result = insertRootSplitPane(
     layout,
     {
-      id: `ghost-${manifest.id}`,
+      id: `ghost-${instanceId}`,
       panelKind: kind,
       ...(manifest.panel.minWidth !== undefined ? { minWidth: manifest.panel.minWidth } : {}),
     },

@@ -20,7 +20,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { LocalThemesResult } from '../shared/local-themes';
 import type { GhostPanelWindowsState } from '../shared/ghostPanelWindow';
-import { isValidGhostId } from '../shared/ghost';
+import { isValidPluginStoragePart } from '../shared/pluginIdentity';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import {
   GHOST_PANEL_WINDOW_CLOSE_REQUESTED_CHANNEL,
@@ -54,7 +54,7 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const currentGhostPanelId = (() => {
   const raw = new URLSearchParams(window.location.search).get('ghostPanelWindow');
-  return isValidGhostId(raw) ? raw : null;
+  return isValidPluginStoragePart(raw) ? raw : null;
 })();
 
 function mutationErrorForGhostPanel(id: string): Error | null {

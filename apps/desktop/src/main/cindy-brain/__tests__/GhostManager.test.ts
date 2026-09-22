@@ -2537,6 +2537,43 @@ describe('GhostManager · install', () => {
     expect(onChanged.mock.calls[0][0].map((c: InstalledGhost) => c.manifest.id)).toEqual(['hello']);
   });
 
+  it('installs an organization instance beside a root plugin with the same ghostId', async () => {
+    const rootCindy = await makeCindy('hello-root.cindy', goodManifest());
+    await expect(manager.install(rootCindy)).resolves.toMatchObject({
+      ghost: { manifest: { id: 'hello' }, dir: path.join(rootDir, 'hello') },
+    });
+    const orgCindy = await makeCindy('hello-org.cindy', goodManifest());
+    const orgResult = await manager.install(orgCindy, { namespace: 'acme' });
+    expect(orgResult).toMatchObject({
+      ghost: {
+        manifest: { id: 'hello' },
+        namespace: 'acme',
+        dir: path.join(rootDir, '_ns', 'acme', 'hello'),
+      },
+    });
+    expect(fs.existsSync(path.join(rootDir, 'hello', 'ghost.json'))).toBe(true);
+    expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello', 'ghost.json'))).toBe(true);
+    const listed = manager.list();
+    expect(listed).toHaveLength(2);
+    expect(listed.map((item) => [item.namespace ?? null, item.manifest.id])).toEqual(
+      expect.arrayContaining([
+        [null, 'hello'],
+        ['acme', 'hello'],
+      ]),
+    );
+
+    await expect(manager.setEnabled('_ns/acme/hello', false)).resolves.toEqual({ ok: true });
+    expect(manager.list().find((item) => item.namespace === 'acme')?.enabled).toBe(false);
+    expect(manager.list().find((item) => item.namespace == null)?.enabled).toBe(true);
+
+    await expect(manager.uninstall('_ns/acme/hello')).resolves.toEqual({ ok: true });
+    expect(fs.existsSync(path.join(rootDir, 'hello', 'ghost.json'))).toBe(true);
+    expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello'))).toBe(false);
+    expect(manager.list().map((item) => [item.namespace ?? null, item.manifest.id])).toEqual([
+      [null, 'hello'],
+    ]);
+  });
+
   it('returns the quarantined projection when install journal cleanup fails', async () => {
     const store = (
       manager as unknown as {
@@ -2662,6 +2699,15 @@ describe('GhostManager · install', () => {
     const out = path.join(workDir, 'badjson.cindy');
     await fs.promises.writeFile(out, await zip.generateAsync({ type: 'nodebuffer' }));
     await expectRejection(await manager.install(out), 'file-invalid');
+  });
+
+  it('作者声明 namespace → file-invalid, v2 规范化前拒绝', async () => {
+    const cindy = await makeCindy('ns.cindy', { ...goodManifest(), namespace: 'xd' });
+    const result = await manager.install(cindy);
+    await expectRejection(result, 'file-invalid');
+    expect(result).toMatchObject({
+      rejection: { reason: 'ghost.json 不允许作者声明 namespace' },
+    });
   });
 
   it('清单不合格(老声明型格式,已移除)→ file-invalid', async () => {

@@ -29,28 +29,28 @@ function manifest(oauth: Record<string, unknown> = {}): GhostManifest {
 }
 
 describe('withFiloGoogleBuildClientConfig', () => {
-  it('只在 main 内存 manifest 补构建环境 client，不修改原对象', () => {
+  it('does not inject build-env OAuth client based on the filo-google name', () => {
     const source = manifest();
     const hydrated = withFiloGoogleBuildClientConfig(source, {
       clientId: ' build-client ',
       clientSecret: ' build-secret ',
     });
-    const oauth = hydrated.network?.secrets?.[0]?.oauth;
-    expect(oauth).toMatchObject({ clientId: 'build-client', clientSecret: 'build-secret' });
+    expect(hydrated).toBe(source);
     expect(source.network?.secrets?.[0]?.oauth?.clientId).toBeUndefined();
   });
 
-  it('非 Filo Google 或未配置环境变量时原样返回', () => {
+  it('returns the original manifest for any id', () => {
     const source = manifest();
     expect(withFiloGoogleBuildClientConfig(source, {})).toBe(source);
-    expect(withFiloGoogleBuildClientConfig({ ...source, id: 'other' }, { clientId: 'x' }).id).toBe('other');
+    const other = { ...source, id: 'other' };
+    expect(withFiloGoogleBuildClientConfig(other, { clientId: 'x' })).toBe(other);
   });
 
-  it('发布环境只给 clientId 时按纯 PKCE 处理，不混用旧 secret', () => {
+  it('does not rewrite a manifest that already has a client', () => {
     const source = manifest({ clientId: 'old-client', clientSecret: 'old-secret' });
-    const oauth = withFiloGoogleBuildClientConfig(source, { clientId: 'new-client' })
-      .network?.secrets?.[0]?.oauth;
-    expect(oauth?.clientId).toBe('new-client');
-    expect(oauth?.clientSecret).toBeUndefined();
+    const hydrated = withFiloGoogleBuildClientConfig(source, { clientId: 'new-client' });
+    expect(hydrated).toBe(source);
+    expect(hydrated.network?.secrets?.[0]?.oauth?.clientId).toBe('old-client');
+    expect(hydrated.network?.secrets?.[0]?.oauth?.clientSecret).toBe('old-secret');
   });
 });

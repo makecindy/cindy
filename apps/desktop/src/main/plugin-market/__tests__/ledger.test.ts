@@ -66,6 +66,37 @@ describe('PluginMarketLedger', () => {
     ).toEqual([]);
   });
 
+  it('persists known namespace and drops invalid namespace records as unreadable', () => {
+    const { filePath, ledger } = harness();
+    ledger.upsertInstallation(record({ namespace: null }));
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ namespace: null });
+    ledger.upsertInstallation(record({ ghostId: 'org-helper', namespace: 'acme' }));
+    expect(ledger.installationForGhost('org-helper')).toMatchObject({ namespace: 'acme' });
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as {
+      schemaVersion: number;
+      installations: Record<string, Record<string, unknown>>;
+      defaultInstallOptOuts: Record<string, string[]>;
+    };
+    parsed.installations['cindy-test'] = {
+      ...parsed.installations['cindy-test'],
+      namespace: 'Bad Namespace',
+    };
+    fs.writeFileSync(filePath, JSON.stringify(parsed));
+    expect(ledger.installationForGhost('cindy-test')).toBeNull();
+    expect(ledger.installationForGhost('org-helper')).toMatchObject({ namespace: 'acme' });
+  });
+
+  it('stamps namespace onto a pre-namespace row and refuses to overwrite a known value', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record({ ghostId: 'helper' }));
+    expect(ledger.stampNamespaceIfAbsent('helper', 'acme')).toBe(true);
+    expect(ledger.installationForGhost('helper')).toMatchObject({ namespace: 'acme' });
+    expect(ledger.stampNamespaceIfAbsent('helper', 'acme')).toBe(true);
+    expect(ledger.stampNamespaceIfAbsent('helper', null)).toBe(false);
+    expect(ledger.installationForGhost('helper')).toMatchObject({ namespace: 'acme' });
+    expect(ledger.stampNamespaceIfAbsent('missing', 'acme')).toBe(false);
+  });
+
   it('backfills raw manifest identity without changing legacy routing fields', () => {
     const { ledger } = harness();
     const legacy = record({ manifestDigest: 'c'.repeat(64) });

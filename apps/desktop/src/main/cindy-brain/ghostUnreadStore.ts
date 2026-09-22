@@ -14,7 +14,8 @@
 
 import Store from 'electron-store';
 
-import { GHOST_BADGE_SUMMARY_MAX_CHARS, isValidGhostId } from '../../shared/ghost.js';
+import { GHOST_BADGE_SUMMARY_MAX_CHARS } from '../../shared/ghost.js';
+import { isGhostInstanceId } from '../../shared/pluginIdentity.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 
 /** 一条未读记录(ghostId → 最近一次点亮的摘要与时刻)。 */
@@ -60,7 +61,7 @@ export function normalizeGhostUnreadEntries(value: unknown): GhostUnreadEntry[] 
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
   const entries: GhostUnreadEntry[] = [];
   for (const [ghostId, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (!isValidGhostId(ghostId)) continue;
+    if (!isGhostInstanceId(ghostId)) continue;
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
     const at = (raw as { at?: unknown }).at;
     if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) continue;

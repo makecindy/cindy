@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { ghostPanelKind, type GhostManifest, type InstalledGhost } from '../../shared/ghost';
+import { ghostPanelKind, type InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { minimizeGhostPanel, reconcileGhostPanelBubbles } from '../lib/ghostPanelBubbleState';
 import { toast } from '../lib/toast';
 import { usePanelMaximize } from '../layout/panelMaximize';
@@ -55,8 +56,12 @@ const PANEL_ENTER_ARMED_AT = Date.now() + 1500;
 const PANEL_EXIT_MS = 180;
 
 /** 意识面板宿主:标准头(PanelChrome)+ 沙箱自绘面板体(崩溃时错误接管)。 */
-function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifest }): ReactNode {
-  const kind = ghostPanelKind(manifest.id);
+function GhostPanel({
+  ghost,
+}: PanelComponentProps & { ghost: InstalledGhost }): ReactNode {
+  const { manifest } = ghost;
+  const instanceId = installedGhostStoragePart(ghost);
+  const kind = ghostPanelKind(instanceId);
   const fillContainer = usePaneFill();
   const atWindowTop = usePaneAtWindowTop();
   // 宽度由引擎下发(fraction × 可用宽,缝把手可拖);兜底用清单 minWidth。
@@ -74,7 +79,7 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
     if (!maximizeEnabled && isMaximized) maximize?.toggle(kind);
   }, [maximizeEnabled, isMaximized, maximize, kind]);
   // 沙箱崩了 → 面板原地进入错误接管态。
-  const runtimeState = useGhostRuntimeState(manifest.id);
+  const runtimeState = useGhostRuntimeState(instanceId);
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
   // 挂载即定(useState 初始化跑一次):启动首屏后出现的面板播宽度展开。
   const [enter] = useState(() => Date.now() >= PANEL_ENTER_ARMED_AT);
@@ -88,11 +93,11 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
     if (closing) return;
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
     if (reduced || isMaximized) {
-      minimizeGhostPanel(manifest.id);
+      minimizeGhostPanel(instanceId);
       return;
     }
     setClosing(true);
-    closeTimerRef.current = window.setTimeout(() => minimizeGhostPanel(manifest.id), PANEL_EXIT_MS);
+    closeTimerRef.current = window.setTimeout(() => minimizeGhostPanel(instanceId), PANEL_EXIT_MS);
   };
   // 标准头「关闭」= 二次确认后停用整个插件(setEnabled false):面板、工具、
   // 沙箱一并休眠,与插件页全局开关同一条链路(ghosts:changed 广播回来时
@@ -108,7 +113,7 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
     });
     if (!approved) return;
     try {
-      await window.electronAPI?.ghosts?.setEnabled(manifest.id, false);
+      await window.electronAPI?.ghosts?.setEnabled(instanceId, false);
     } catch (error) {
       toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
     }
@@ -145,15 +150,15 @@ function GhostPanel({ manifest }: PanelComponentProps & { manifest: GhostManifes
           onMinimize={minimizeEnabled ? beginMinimize : undefined}
           onDetach={
             detachEnabled
-              ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(manifest.id, true)
+              ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(instanceId, true)
               : undefined
           }
           onClose={() => void beginClose()}
         />
         {broken ? (
-          <GhostPanelError manifest={manifest} state={runtimeState} />
+          <GhostPanelError ghost={ghost} state={runtimeState} />
         ) : (
-          <GhostChipPanelBody manifest={manifest} />
+          <GhostChipPanelBody ghost={ghost} />
         )}
       </section>
     </div>
@@ -182,17 +187,18 @@ export function syncGhostPanelRegistrations(ghosts: InstalledGhost[]): void {
   // 气泡是"面板不可见 + 唯一恢复入口",失格后必须回停靠,不留死角。
   reconcileGhostPanelBubbles(ghosts);
   const seen = new Set<string>();
-  for (const { manifest, enabled } of ghosts) {
+  for (const ghost of ghosts) {
+    const { manifest, enabled } = ghost;
     if (!manifest.panel) continue; // 无面板的意识(未来纯工具卡)不进注册表
     if (manifest.panel.position === 'tab') continue; // 页签形态由插件页承载(面板收束)
     if (enabled === false) continue; // 停用 = 休眠,不注册(注销走下方 seen 差集)
-    const kind = ghostPanelKind(manifest.id);
+    const kind = ghostPanelKind(installedGhostStoragePart(ghost));
     seen.add(kind);
-    const fingerprint = JSON.stringify(manifest);
+    const fingerprint = JSON.stringify({ manifest, namespace: ghost.namespace ?? null });
     if (registeredFingerprints.get(kind) === fingerprint) continue;
     registeredFingerprints.set(kind, fingerprint);
     const Component = (props: PanelComponentProps): ReactNode => (
-      <GhostPanel {...props} manifest={manifest} />
+      <GhostPanel {...props} ghost={ghost} />
     );
     registerPanelKind({ kind, Component, collapseMemory: 'global' });
   }
