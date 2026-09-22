@@ -290,7 +290,16 @@ export function ModelAdvancedDrawer({
     }
     const persisted = await imageInput.setValue(value);
     if (!persisted) {
-      toast.error(t('settings.providers.models.advanced.imageInputOverride.saveFailed'));
+      // main 在这条路径上会给出可执行指引（手改文件里有无法保留的条目时要先修文件）：
+      // 把它带进提示，否则用户反复保存失败却看不到唯一的修复方式。
+      const reason = imageInput.errorReason;
+      toast.error(
+        reason
+          ? t('settings.providers.models.advanced.imageInputOverride.saveFailedWithReason', {
+              message: reason,
+            })
+          : t('settings.providers.models.advanced.imageInputOverride.saveFailed'),
+      );
     }
   };
   const setModelApi = async (agent: AgentKind, api: PiModelApi) => {

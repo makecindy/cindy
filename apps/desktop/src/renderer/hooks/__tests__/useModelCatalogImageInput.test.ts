@@ -167,6 +167,57 @@ describe('model catalog image input override', () => {
     hook.unmount();
   });
 
+  it('re-reads the row when the user comes back while its write is still in flight', async () => {
+    // 写 A 未完成 → 切 B → 切回 A：A 的首次读取当时被跳过，旧写入回声又被 generation 守卫
+    // 丢弃。不补读的话 A 会永远停在 loading 占位（显示成「跟随供应商」且点击无效）。
+    const pendingWrite = deferred<ReturnType<typeof view>>();
+    get.mockResolvedValue(view(null));
+    set.mockReturnValue(pendingWrite.promise);
+    const hook = renderHook(({ modelId }) => useModelCatalogImageInput({ ...target, modelId }), {
+      initialProps: { modelId: 'mimo-v2.6-flash' },
+    });
+    await act(async () => {});
+    act(() => {
+      void hook.result.current.setValue(true);
+    });
+
+    await act(async () => {
+      hook.rerender({ modelId: 'gpt-6' });
+    });
+    get.mockResolvedValue(view(false));
+    await act(async () => {
+      hook.rerender({ modelId: 'mimo-v2.6-flash' });
+    });
+
+    const readsBefore = get.mock.calls.length;
+    await act(async () => {
+      pendingWrite.resolve(view(true));
+    });
+    // 写入落定时回声已被丢弃：必须补一次读取，界面不能停在 loading。
+    expect(get.mock.calls.length).toBeGreaterThan(readsBefore);
+    expect(hook.result.current).toMatchObject({ loading: false });
+    hook.unmount();
+  });
+
+  it('surfaces the main-side failure reason instead of only reporting false', async () => {
+    // main 在这条路径上带可执行指引（手改文件里有无法保留的条目时要先修文件）；
+    // 只回 false 会让用户反复保存失败却看不到唯一的修复方式。
+    get.mockResolvedValue(view(null));
+    set.mockRejectedValue(
+      Object.assign(
+        new Error('[PRECONDITION_FAILED] 请先修正 model-catalog-overrides.json'),
+        { code: 'PRECONDITION_FAILED' },
+      ),
+    );
+    const hook = renderHook(() => useModelCatalogImageInput(target));
+    await act(async () => {});
+    await act(async () => {
+      await hook.result.current.setValue(true);
+    });
+    // 展示用文案去掉机器码前缀。
+    expect(hook.result.current.errorReason).toBe('请先修正 model-catalog-overrides.json');
+  });
+
   it('drops a response that lands after the data owner changed', async () => {
     const pending = deferred<ReturnType<typeof view>>();
     get.mockReturnValue(pending.promise);

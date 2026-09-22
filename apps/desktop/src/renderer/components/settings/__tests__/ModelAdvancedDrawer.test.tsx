@@ -36,6 +36,7 @@ const imageInputMocks = vi.hoisted(() => ({
   value: null as boolean | null,
   isCustomized: false,
   diverged: false,
+  errorReason: undefined as string | undefined,
   saving: false,
   loading: false,
 }));
@@ -46,6 +47,7 @@ vi.mock('@/hooks/useModelCatalogImageInput', () => ({
       value: imageInputMocks.value,
       isCustomized: imageInputMocks.isCustomized,
       diverged: imageInputMocks.diverged,
+      errorReason: imageInputMocks.errorReason,
       loading: imageInputMocks.loading,
       saving: imageInputMocks.saving,
       error: false,
@@ -125,6 +127,7 @@ beforeEach(() => {
   imageInputMocks.value = null;
   imageInputMocks.isCustomized = false;
   imageInputMocks.diverged = false;
+  imageInputMocks.errorReason = undefined;
   imageInputMocks.saving = false;
   imageInputMocks.loading = false;
   vi.mocked(getProviderModelEffort).mockReset();
@@ -388,6 +391,29 @@ describe('model advanced editor', () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
         'settings.providers.models.advanced.imageInputOverride.saveFailed',
+      ),
+    );
+  });
+
+  it('shows the actionable reason from main when a hand-edited file blocks the write', async () => {
+    // store 拒绝写入时给出「先修正 model-catalog-overrides.json」的指引；只显示通用
+    // 「保存失败」会让用户反复失败却看不到唯一的修复方式。
+    const { toast } = await import('@/lib/toast');
+    imageInputMocks.setValue.mockResolvedValueOnce(false);
+    imageInputMocks.errorReason = '请先修正 model-catalog-overrides.json';
+    draw();
+    const trigger = screen.getByRole('button', {
+      name: 'settings.providers.models.advanced.imageInputOverride.label',
+    });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', {
+        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
+      }),
+    );
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'settings.providers.models.advanced.imageInputOverride.saveFailedWithReason',
       ),
     );
   });

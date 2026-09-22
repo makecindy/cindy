@@ -2158,7 +2158,8 @@
             "inherit": "제공자 따르기",
             "declaredTrue": "이미지 입력 지원",
             "declaredFalse": "이미지 입력 미지원",
-            "saveFailed": "이미지 입력 능력 저장 실패"
+            "saveFailed": "이미지 입력 능력 저장 실패",
+            "saveFailedWithReason": "이미지 입력 능력 저장 실패: {{message}}"
           },
           "supported": "지원",
           "unsupported": "지원 안 함",

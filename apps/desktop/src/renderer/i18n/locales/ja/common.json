@@ -2158,7 +2158,8 @@
             "inherit": "プロバイダーに従う",
             "declaredTrue": "画像入力に対応",
             "declaredFalse": "画像入力に非対応",
-            "saveFailed": "画像入力能力の保存に失敗しました"
+            "saveFailed": "画像入力能力の保存に失敗しました",
+            "saveFailedWithReason": "画像入力能力の保存に失敗しました：{{message}}"
           },
           "supported": "対応",
           "unsupported": "非対応",

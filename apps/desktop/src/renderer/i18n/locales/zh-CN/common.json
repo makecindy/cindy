@@ -2158,7 +2158,8 @@
             "inherit": "跟随供应商",
             "declaredTrue": "支持图片输入",
             "declaredFalse": "不支持图片输入",
-            "saveFailed": "保存图片输入能力失败"
+            "saveFailed": "保存图片输入能力失败",
+            "saveFailedWithReason": "保存图片输入能力失败：{{message}}"
           },
           "supported": "支持",
           "unsupported": "不支持",

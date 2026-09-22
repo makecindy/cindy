@@ -2159,7 +2159,8 @@
             "inherit": "Follow provider",
             "declaredTrue": "Supports image input",
             "declaredFalse": "No image input",
-            "saveFailed": "Failed to save image input capability"
+            "saveFailed": "Failed to save image input capability",
+            "saveFailedWithReason": "Failed to save image input capability: {{message}}"
           },
           "supported": "Supported",
           "unsupported": "Not supported",

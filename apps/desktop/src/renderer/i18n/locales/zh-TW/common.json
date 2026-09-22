@@ -2158,7 +2158,8 @@
             "inherit": "跟隨供應商",
             "declaredTrue": "支援圖片輸入",
             "declaredFalse": "不支援圖片輸入",
-            "saveFailed": "儲存圖片輸入能力失敗"
+            "saveFailed": "儲存圖片輸入能力失敗",
+            "saveFailedWithReason": "儲存圖片輸入能力失敗：{{message}}"
           },
           "supported": "支援",
           "unsupported": "不支援",
