@@ -148,7 +148,7 @@ function triggerLabel(chip: Element | null): string {
 function boundsView(
   over: Partial<
     Record<
-      "budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit" | "effectiveWindow",
+      "budget" | "budgetCustomized" | "defaultWindow" | "maxWindow" | "modelLimit" | "defaultEffectiveWindow",
       unknown
     >
   > = {},
@@ -160,7 +160,7 @@ function boundsView(
     modelLimit: null,
     budget: null,
     budgetCustomized: false,
-    effectiveWindow: null,
+    defaultEffectiveWindow: null,
     ...over,
   };
 }
@@ -317,7 +317,7 @@ function chipText(): string {
       defaultWindow: 200_000,
       maxWindow: null,
       modelLimit: 1_048_000,
-      effectiveWindow: 1_048_000,
+      defaultEffectiveWindow: 1_048_000,
     })));
 
     // providers=null：模拟真实形态里 renderer 侧也拿不到该路由的目录上限（只有 main 的权威边界）。
@@ -338,7 +338,7 @@ function chipText(): string {
       defaultWindow: 200_000,
       maxWindow: 200_000,
       modelLimit: 1_048_000,
-      effectiveWindow: 200_000,
+      defaultEffectiveWindow: 200_000,
     })));
 
     renderChip({ providers: null });
@@ -349,6 +349,30 @@ function chipText(): string {
     await waitFor(() => {
       expect(chipText()).toContain('optionPercent#{"percent":100}');
     });
+  });
+
+  it('labels the model-default tier with the window after clearing the task budget', async () => {
+    // Greptile 复审 P1：默认档不能带当前任务预算。目录默认 200K、模型级上限 800K、当前预算是
+    // 500K 时，菜单里的「模型默认」必须是清掉预算后的 200K（选它写 null → 运行期就回到 200K），
+    // 而 500K 只能作为「当前档」出现。
+    // 路由未声明物理上限（自定义连接）：目录默认 200K 只是兜底，模型级上限 800K 才是上限。
+    installElectronApi(vi.fn(async () => boundsView({
+      defaultWindow: 200_000,
+      maxWindow: null,
+      modelLimit: 800_000,
+      budget: 500_000,
+      budgetCustomized: true,
+      defaultEffectiveWindow: 800_000,
+    })));
+
+    renderChip({ providers: null });
+    const options = await openTierCard();
+    const defaultOption = options.find((el) => el.textContent?.includes('optionDefault'));
+    expect(defaultOption?.getAttribute('data-token')).toBe('800000');
+    // 当前档（500K）仍在，且**不是**「模型默认」——点默认档会写 null，运行期回到 800K。
+    expect(tierTokens()).toContain('500000');
+    expect(options.find((el) => el.getAttribute('data-token') === '500000')?.textContent)
+      .not.toContain('optionDefault');
   });
 
   it('lets a post-save authoritative answer override the optimistic tier', async () => {

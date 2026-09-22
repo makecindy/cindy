@@ -31,15 +31,15 @@ export interface SessionContextWindowBounds {
   /** 用户是否显式设过（区分「跟随默认」与「设了一个刚好等于默认的值」）。 */
   budgetCustomized: boolean;
   /**
-   * 这条路由**实际生效的窗口**（= main 的 `resolveConfiguredContextWindow`：任务预算与模型级上限
-   * 取更紧者、再按已核实路由的物理上限 `contextWindowMax ?? contextWindow` 夹一次）。
+   * **清掉任务预算后**「跟随默认」会得到的窗口（= main 的 `resolveConfiguredContextWindow`，
+   * 传 `sessionBudget = null`：模型级上限再按已核实路由的物理上限 `contextWindowMax ?? contextWindow`
+   * 夹一次）。它是档位表里「模型默认」那一档的真实含义 —— 选中它会上报 `null`，运行期回到这个值。
    *
-   * 调用方不要自己用 defaultWindow/modelLimit 重推「跟随默认会得到多少」：那套推导已经在
-   * `resolveVerifiedContextWindow` / `declaredMax` 里做过一次，重推必与运行期分叉（实测：自定义
-   * 连接未声明窗口时目录只剩 200K 兜底，而会话实际跑在模型级上限 1.05M 上；另一种形态是模型级
-   * 上限高于物理上限，运行期被夹回物理上限而 renderer 没夹）。
+   * 刻意不带当前任务预算：把「当前生效窗口」当成默认档会让菜单显示 500K、点下去却变成 800K
+   * （任务预算被清除）。调用方也不要自己用 defaultWindow/modelLimit 重推：那套推导已经在
+   * `resolveVerifiedContextWindow` / `declaredMax` 里做过一次，重推必与运行期分叉。
    */
-  effectiveWindow: number | null;
+  defaultEffectiveWindow: number | null;
 }
 
 /** 被控端/主进程返回值的形状收敛：缺字段或非法值一律按「未知」处理（不猜上限）。 */
@@ -60,7 +60,7 @@ export function normalizeSessionContextWindowBounds(
     modelLimit: positive(raw.modelLimit),
     budget: positive(raw.budget),
     budgetCustomized: raw.budgetCustomized === true,
-    effectiveWindow: positive(raw.effectiveWindow),
+    defaultEffectiveWindow: positive(raw.defaultEffectiveWindow),
   };
 }
 

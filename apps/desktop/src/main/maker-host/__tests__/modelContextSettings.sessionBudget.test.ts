@@ -170,8 +170,8 @@ describe('resolveSessionContextWindowBounds', () => {
       modelLimit: 800_000,
       budget: null,
       budgetCustomized: false,
-      // 生效窗口 = min(模型级上限 800K, 物理上限 1M) —— 已核实路由由 main 夹一次。
-      effectiveWindow: 800_000,
+      // 默认档（清掉任务预算）= min(模型级上限 800K, 物理上限 1M)；已核实路由由 main 夹一次。
+      defaultEffectiveWindow: 800_000,
     });
   });
 
@@ -189,7 +189,8 @@ describe('resolveSessionContextWindowBounds', () => {
       modelLimit: null,
       budget: 262_144,
       budgetCustomized: true,
-      effectiveWindow: 262_144,
+      // 默认档刻意不带这条预算：它是「勾选模型默认（写 null）之后」的运行窗口。
+      defaultEffectiveWindow: 200_000,
     });
   });
 
